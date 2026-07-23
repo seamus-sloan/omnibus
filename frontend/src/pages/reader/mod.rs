@@ -42,8 +42,8 @@ use prefs::init_reader_prefs;
 use search_panel::SearchResult;
 use selection::SelectionData;
 use signals::{
-    format_contents_progress, format_progress_labels, format_title_sub, use_book_metadata,
-    ReaderStatus, RelocateData,
+    format_ambient_page, format_contents_progress, format_progress_labels, format_title_sub,
+    use_book_metadata, ReaderStatus, RelocateData,
 };
 use toc_drawer::TocEntry;
 
@@ -124,6 +124,7 @@ pub fn BookReadPage(uuid: String) -> Element {
     let ReaderDisplay {
         page_str,
         chapter_str,
+        ambient_page,
         title_sub,
         contents_progress,
         pct,
@@ -148,6 +149,7 @@ pub fn BookReadPage(uuid: String) -> Element {
             progress: ReaderProgress {
                 page_str,
                 chapter_str,
+                ambient_page,
                 title_sub,
                 pct,
                 status: status(),
@@ -229,10 +231,12 @@ fn use_reader_signals(uuid: &str, theme: Signal<Theme>) -> ReaderSignals {
     let show_annotations = use_signal(|| false);
     let loc = use_signal(RelocateData::default);
     let book_meta = use_book_metadata(uuid.to_string());
-    // Chrome starts visible; a centre tap (glue → `__omnibusOnToggleChrome`)
-    // flips this. Seeded identically so SSR and the first WASM paint match,
-    // keeping hydration stable — the class only appears after a post-mount tap.
-    let chrome_hidden = use_signal(|| false);
+    // Chrome starts hidden on the native app (Books-style: opening a book
+    // lands on the clean page; a centre tap summons the menus) and visible
+    // everywhere else. `cfg!` is a compile-time constant, so SSR and the web
+    // client both seed `false` — first-paint markup still matches and
+    // hydration stays stable (rule 07); mobile has no SSR to mismatch.
+    let chrome_hidden = use_signal(|| cfg!(feature = "mobile"));
 
     // Record reading time against this book while the reader is open (and,
     // on web, the tab visible) — the rows behind the `/stats` aggregates.
@@ -306,6 +310,7 @@ fn use_reader_signals(uuid: &str, theme: Signal<Theme>) -> ReaderSignals {
 struct ReaderDisplay {
     page_str: String,
     chapter_str: String,
+    ambient_page: String,
     title_sub: String,
     contents_progress: String,
     pct: u32,
@@ -324,6 +329,7 @@ fn derive_reader_display(
     // One read: every derived label comes from the same relocate snapshot.
     let loc_now = loc.read();
     let (page_str, chapter_str) = format_progress_labels(&loc_now);
+    let ambient_page = format_ambient_page(&loc_now);
     let title_sub = format_title_sub(&loc_now);
     let contents_progress = format_contents_progress(&loc_now);
     let pct = loc_now.pct;
@@ -347,6 +353,7 @@ fn derive_reader_display(
     ReaderDisplay {
         page_str,
         chapter_str,
+        ambient_page,
         title_sub,
         contents_progress,
         pct,
@@ -376,6 +383,10 @@ pub(super) struct ReaderMeta {
 pub(super) struct ReaderProgress {
     pub page_str: String,
     pub chapter_str: String,
+    /// Phone minimal-chrome footer: the bare page number ("142"). Rendered
+    /// on every target, shown only by the phone breakpoint while the
+    /// chrome is hidden (the richer labels swap in with the chrome).
+    pub ambient_page: String,
     /// Phone top-bar sub-line ("Ch. 14 · 68%") — rendered on every target,
     /// shown only by the phone breakpoint.
     pub title_sub: String,
@@ -430,6 +441,7 @@ fn ReaderLayout(
     let ReaderProgress {
         page_str,
         chapter_str,
+        ambient_page,
         title_sub,
         pct,
         status,
@@ -470,6 +482,11 @@ fn ReaderLayout(
 
             div { class: "rd-wash" }
 
+            // Ambient minimal-chrome label: the book title that fades in where
+            // the toolbar was while the chrome is hidden (phone breakpoint
+            // only; displayed purely by CSS so every target renders it — rule 07).
+            div { class: "rd-ambient-title", "{book_title}" }
+
             ReaderTopBar {
                 book_title: book_title.clone(),
                 chapter_title: chapter_title.clone(),
@@ -485,12 +502,16 @@ fn ReaderLayout(
             div {
                 class: "rd-bottom",
                 "data-testid": "reader-footer",
-                span { style: "color:var(--ink-2);", "{page_str}" }
+                span { class: "rd-bottom-page", style: "color:var(--ink-2);", "{page_str}" }
                 div { style: "flex:1; text-align:center; letter-spacing:.08em;", "{chapter_str}" }
                 // The phone footer moves the chapter position to the right
                 // edge (the centred div above is hidden there) — rendered on
                 // every target, shown only by the phone breakpoint (rule 07).
                 span { class: "rd-bottom-ch", "{chapter_str}" }
+                // Phone minimal-chrome swap: the bare centred page number the
+                // footer shows while the chrome is hidden (CSS-only display,
+                // rendered on every target — rule 07).
+                span { class: "rd-ambient-page", "{ambient_page}" }
             }
             div { class: "rd-ribbon", i { style: "width:{pct}%;" } }
 

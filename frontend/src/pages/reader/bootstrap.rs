@@ -17,6 +17,8 @@ pub(crate) struct BootstrapArgs<'a> {
     pub max_width_lit: &'a str,
     pub justify_val: bool,
     pub spread_lit: &'a str,
+    /// Book uuid, the glue's per-book locations-cache key.
+    pub locations_key_lit: &'a str,
 }
 
 /// Build the JS IIFE that mounts the reader once the vendored scripts are
@@ -34,9 +36,10 @@ pub(crate) fn reader_bootstrap_js(args: &BootstrapArgs<'_>) -> String {
         max_width_lit,
         justify_val,
         spread_lit,
+        locations_key_lit,
     } = *args;
     format!(
-        r#"(function(){{ var n=0; (function go(){{ if (window.OmnibusReader && window.ePub) {{ window.OmnibusReader.init("omnibus-viewer", {url_lit}, {{ cfi: {cfi_arg}, fontSize: {font_size}, theme: {theme_lit}, fontFamily: {font_family_lit}, lineHeight: {line_height_lit}, maxWidth: {max_width_lit}, justify: {justify_val}, spread: {spread_lit} }}); }} else if (n++ < 200) {{ setTimeout(go, 50); }} else if (typeof window.__omnibusOnStatus === "function") {{ window.__omnibusOnStatus("error"); }} }})(); }})();"#
+        r#"(function(){{ var n=0; (function go(){{ if (window.OmnibusReader && window.ePub) {{ window.OmnibusReader.init("omnibus-viewer", {url_lit}, {{ cfi: {cfi_arg}, fontSize: {font_size}, theme: {theme_lit}, fontFamily: {font_family_lit}, lineHeight: {line_height_lit}, maxWidth: {max_width_lit}, justify: {justify_val}, spread: {spread_lit}, locationsKey: {locations_key_lit} }}); }} else if (n++ < 200) {{ setTimeout(go, 50); }} else if (typeof window.__omnibusOnStatus === "function") {{ window.__omnibusOnStatus("error"); }} }})(); }})();"#
     )
 }
 
@@ -56,6 +59,7 @@ mod tests {
             max_width_lit: "null",
             justify_val: false,
             spread_lit: "\"auto\"",
+            locations_key_lit: "\"x\"",
         });
         assert!(js.contains("window.OmnibusReader.init"));
         assert!(js.contains("window.ePub"));
@@ -63,6 +67,7 @@ mod tests {
         assert!(js.contains("theme: \"dark\""));
         assert!(js.contains("justify: false"));
         assert!(js.contains("spread: \"auto\""));
+        assert!(js.contains("locationsKey: \"x\""));
         assert!(js.contains("__omnibusOnStatus"));
     }
 
@@ -78,6 +83,7 @@ mod tests {
             max_width_lit: "\"42rem\"",
             justify_val: true,
             spread_lit: "\"none\"",
+            locations_key_lit: "\"book-uuid\"",
         });
         assert!(js.contains("spread: \"none\""));
         assert!(js.contains("cfi: \"epubcfi(/6/2)\""));
