@@ -315,23 +315,26 @@ test("restores the exact reading position when the reader is reopened", async ({
   const start = await footerPageLabel(page);
 
   // Turn eight spreads — far enough past the front matter to be in prose —
-  // then keep turning (bounded) until the position is mid-section. Leaving
-  // from the title/contents pages or a section's first page would under-test
-  // the restore: TOC-anchor and section-boundary CFIs restore at coarser
-  // granularity in epub.js (a pre-existing display() limitation), while
-  // mid-prose CFIs restore exactly. Each turn's save is awaited via
+  // then keep turning (bounded) until the viewport start sits mid-paragraph:
+  // a text-position CFI with a non-zero character offset (`…:469)`). Leaving
+  // from the title/contents pages or an element boundary would under-test
+  // the restore, since boundary CFIs restore at coarser granularity in
+  // epub.js (a pre-existing display() limitation) while mid-text CFIs
+  // restore exactly. The offset check is fixture- and version-agnostic, and
+  // an environment that never yields one fails the guard below loudly
+  // instead of silently under-testing. Each turn's save is awaited via
   // expectMutation so the 400 ms relocate debounce never coalesces two
   // turns into one save.
-  const sectionStartCfi = /\]\/2\/1:0\)$/;
+  const midTextCfi = /:[1-9]\d*\)$/;
   let leftCfi = "";
   for (let turn = 0; turn < 12; turn++) {
     const saved = await expectMutation(page, PROGRESS_POST, async () =>
       page.getByTestId("reader-next").click(),
     );
     leftCfi = saved.request.postDataJSON().update.epub_cfi as string;
-    if (turn >= 7 && !sectionStartCfi.test(leftCfi)) break;
+    if (turn >= 7 && midTextCfi.test(leftCfi)) break;
   }
-  expect(leftCfi, "should reach a mid-section position").not.toMatch(sectionStartCfi);
+  expect(leftCfi, "should reach a mid-paragraph position").toMatch(midTextCfi);
   const leftAt = await footerPageLabel(page);
   expect(leftAt, "the turns should move the page label").not.toBe(start);
 
