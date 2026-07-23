@@ -43,6 +43,12 @@
   --warn: oklch(0.78 0.13 75);
   --bad:  oklch(0.72 0.16 25);
 
+  /* Reader page ground — must match the epub.js body background the glue
+     registers per theme (`rendition.themes.register` in
+     `vendor/epub-reader-glue.js`), so the reader surface around the prose
+     is seamless with the page itself. */
+  --rd-page: #201e1b;
+
   --serif: 'Instrument Serif', 'EB Garamond', Georgia, serif;
   --sans:  'Geist', ui-sans-serif, -apple-system, system-ui, sans-serif;
   --mono:  'Geist Mono', ui-monospace, 'SF Mono', monospace;
@@ -77,6 +83,7 @@
   --accent-ink: oklch(0.99 0 0);
   --cover-fallback-bg:  oklch(0.86 0.004 70);
   --cover-fallback-ink: oklch(0.28 0.006 70);
+  --rd-page: #fcfbfa;
   color-scheme: light;
 }
 
@@ -100,6 +107,7 @@
   --accent-ink:  oklch(0.98 0.012 80);
   --cover-fallback-bg:  oklch(0.80 0.030 72);
   --cover-fallback-ink: oklch(0.30 0.036 55);
+  --rd-page: #ede4d0;
   color-scheme: light;
 }
 
@@ -3329,7 +3337,7 @@ a.idx-letter-on:focus-visible {
    the full-width bar at the very bottom edge (no collision offset needed —
    the reader's bottom bar becomes a slim footer pinned above the dock),
    while mobile keeps the base 68px floating-bar values. */
-.rd-host { --rd-dock-h: 68px; --rd-dock-gap: 8px; }
+.rd-host { --rd-dock-h: 68px; --rd-dock-gap: 8px; --rd-bottom-h: 54px; }
 .rd-dock-full { --rd-dock-h: 78px; --rd-foot-h: 40px; }
 
 /* LEFT cluster — cover + title/meta. Capped so it can't run under the
@@ -5134,8 +5142,12 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .ratings-slot, .suggestions-slot { min-height: 1px; }
 
 /* ── Reader chrome (F2.4) ─────────────────────────────────────── */
+/* The surface shares the page ground `--rd-page`, not the app `--bg-0` —
+   Apple-Books-style: when the chrome slides away the freed strips are
+   indistinguishable from the page. The bars keep their own `--bg-0` tint so
+   visible chrome still reads as chrome, slightly distinct from the page. */
 .rd-surface { position: relative; height: 100vh; width: 100%; overflow: hidden;
-  background: var(--bg-0); color: var(--ink-0); font-family: var(--sans); }
+  background: var(--rd-page); color: var(--ink-0); font-family: var(--sans); }
 .rd-top, .rd-bottom { position: absolute; left: 0; right: 0; z-index: 6;
   display: flex; align-items: center; gap: 16px; padding: 0 26px;
   background: color-mix(in oklch, var(--bg-0) 80%, transparent);
@@ -5148,7 +5160,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
    insets non-zero. */
 .rd-top { top: 0; height: calc(60px + env(safe-area-inset-top));
   padding-top: env(safe-area-inset-top); border-bottom: 1px solid var(--line-2); }
-.rd-bottom { bottom: 0; height: calc(54px + env(safe-area-inset-bottom));
+.rd-bottom { bottom: 0; height: calc(var(--rd-bottom-h, 54px) + env(safe-area-inset-bottom));
   padding-bottom: env(safe-area-inset-bottom); border-top: 1px solid var(--line-2);
   font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
 .rd-tool { display: inline-flex; align-items: center; justify-content: center; gap: 7px;
@@ -5164,7 +5176,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
    indicator). Matches the bar heights above; env insets are 0 on desktop. */
 .rd-stage { position: absolute; left: 0; right: 0;
   top: calc(60px + env(safe-area-inset-top));
-  bottom: calc(54px + env(safe-area-inset-bottom));
+  bottom: calc(var(--rd-bottom-h, 54px) + env(safe-area-inset-bottom));
   overflow: hidden; }
 /* Immersive reflow: while the audiobook bar is docked (`rd-immersive` set by
    the /read route), the stage's bottom inset grows by the bar's height plus
@@ -5173,7 +5185,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
    clickable beneath it. Shares --rd-dock-h/--rd-dock-gap with the dock rules
    in the mini-dock section — one source of truth for the reserved band. */
 .rd-immersive .rd-stage {
-  bottom: calc(54px + env(safe-area-inset-bottom) + var(--rd-dock-h) + 2 * var(--rd-dock-gap));
+  bottom: calc(var(--rd-bottom-h, 54px) + env(safe-area-inset-bottom) + var(--rd-dock-h) + 2 * var(--rd-dock-gap));
 }
 /* Web immersive (`rd-dock-full`, set by the web /read route): the full-width
    AudioDockBar sits at the bottom edge, the reader's own bottom bar becomes
@@ -5212,20 +5224,31 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 @media (max-width: 480px), (hover: none) and (pointer: coarse) { .rd-turn { display: none; } }
 /* Tap-center hides the chrome for a distraction-free page view — a centre tap
    flips the host's `chrome_hidden` signal, which adds `rd-chrome-hidden` to the
-   surface; the bars slide out and the progress ribbon fades. */
+   surface; the bars slide out and the progress ribbon fades.
+   The hidden-state rules only apply where a tap can bring the chrome back —
+   phones and coarse-pointer (touch) screens, the same gate as the page-turn
+   gutters above. On a mouse-only viewport the bars stay pinned regardless of
+   the signal, so resizing a phone-width window (chrome hidden) up to desktop
+   can never strand the reader with no way to summon the menus. */
 .rd-top, .rd-bottom { transition: transform .22s ease; }
-.rd-chrome-hidden .rd-top { transform: translateY(-100%); }
-.rd-chrome-hidden .rd-bottom { transform: translateY(100%); }
-.rd-chrome-hidden .rd-ribbon { opacity: 0; transition: opacity .22s ease; }
+@media (max-width: 480px), (hover: none) and (pointer: coarse) {
+  .rd-chrome-hidden .rd-top { transform: translateY(-100%); }
+  .rd-chrome-hidden .rd-bottom { transform: translateY(100%); }
+  .rd-chrome-hidden .rd-ribbon { opacity: 0; transition: opacity .22s ease; }
+  .rd-chrome-hidden .rd-wash { opacity: 0; }
+}
 .rd-ribbon { position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
   background: var(--bg-2); z-index: 7; }
 .rd-ribbon > i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
 .rd-overlay { position: absolute; inset: 0; z-index: 8; display: flex;
-  align-items: center; justify-content: center; color: var(--ink-2); background: var(--bg-0); }
+  align-items: center; justify-content: center; color: var(--ink-2); background: var(--rd-page); }
+/* The accent wash rides with the chrome: hidden-chrome mode is pure page
+   color edge to edge, so the tint fades out alongside the bars (the fade
+   rule lives in the tap-to-hide media block above). */
 .rd-wash { position: absolute; top: 0; left: 0; right: 0; height: 200px; z-index: 0;
   background: radial-gradient(70% 120% at 50% -20%,
     color-mix(in oklch, var(--accent) 16%, transparent), transparent 70%);
-  pointer-events: none; }
+  pointer-events: none; transition: opacity .22s ease; }
 .rd-title-center { flex: 1; text-align: center; min-width: 0; overflow: hidden;
   white-space: nowrap; text-overflow: ellipsis; }
 .rd-title-book { font-family: var(--serif); font-style: italic; font-size: 16px;
@@ -5240,6 +5263,27 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
    buttons) across the same breakpoint. */
 .rd-title-sub { display: none; font-family: var(--mono); font-size: 9.5px;
   color: var(--ink-3); }
+/* Ambient book-title label for the phone minimal-chrome state: occupies the
+   same band as the toolbar and fades in as it slides away (Books-style —
+   hidden chrome still names the book up top and the page down below).
+   Rendered on every target for hydration parity; only the phone breakpoint
+   displays it. */
+.rd-ambient-title { display: none; position: absolute; top: 0; left: 0; right: 0;
+  z-index: 5; height: calc(60px + env(safe-area-inset-top));
+  padding: env(safe-area-inset-top) 32px 0; align-items: center;
+  justify-content: center; pointer-events: none; overflow: hidden;
+  white-space: nowrap; font-size: 13px; color: var(--ink-3);
+  /* `visibility` rides the fade so the inactive label leaves the
+     accessibility tree (opacity alone keeps it exposed and screen readers
+     would announce the title twice); the markup is `aria-hidden` too since
+     the label only mirrors the toolbar title visually. */
+  opacity: 0; visibility: hidden;
+  transition: opacity .22s ease, visibility .22s; }
+.rd-chrome-hidden .rd-ambient-title { opacity: 1; visibility: visible; }
+/* Phone minimal-chrome footer counterpart to `.rd-ambient-title`: the bare
+   centred page number, displayed only by the phone breakpoint while the
+   chrome is hidden. */
+.rd-ambient-page { display: none; }
 .rd-bottom-ch { display: none; }
 .rd-grabber { display: none; }
 .rd-drawer-sub { display: none; font-family: var(--mono); font-size: 10px;
@@ -5478,6 +5522,20 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
  * second `@media` later in the file, whose equal specificity would win the
  * cascade and silently override these. */
 @media (max-width: 480px) {
+  /* Apple-Books-style minimal chrome: the bands stay reserved (prose never
+     slides under the chrome), but the bottom band slims to fit its tiny
+     mono label, and hiding the chrome swaps content instead of leaving
+     empty strips — the footer stays put as the ambient page indicator
+     (its rule and blur tint dropped so it reads as part of the page) and
+     the small `rd-ambient-title` fades in up top where the toolbar was. */
+  .rd-host { --rd-bottom-h: 30px; }
+  .rd-chrome-hidden .rd-bottom { transform: none; border-top-color: transparent;
+    background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .rd-ambient-title { display: flex; }
+  /* Footer content swap: hidden chrome shows only the bare page number,
+     centred; the richer position/chapter readout rides with the chrome. */
+  .rd-chrome-hidden .rd-bottom-page, .rd-chrome-hidden .rd-bottom-ch { display: none; }
+  .rd-chrome-hidden .rd-ambient-page { display: block; flex: 1; text-align: center; }
   /* Only tighten the horizontal padding here — the vertical padding is the
      safe-area inset set on the base rules, and a `padding: 0 14px` shorthand
      would zero it back out and re-hide the bars under the notch. */
@@ -6802,7 +6860,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
    layout lets the transport row fill the pinned height with no dead space. */
 .rd-host .m-mini {
   left: 8px; right: 8px;
-  bottom: calc(54px + env(safe-area-inset-bottom) + var(--rd-dock-gap));
+  bottom: calc(var(--rd-bottom-h, 54px) + env(safe-area-inset-bottom) + var(--rd-dock-gap));
   height: var(--rd-dock-h);
   display: flex; flex-direction: column;
 }

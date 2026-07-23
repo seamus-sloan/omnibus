@@ -19,7 +19,8 @@
  *   init(elementId, fileUrl, opts)  opts = { cfi?, fontSize?, theme?,
  *                                           fontFamily?, lineHeight?,
  *                                           maxWidth?, justify?,
- *                                           allowScriptedContent? }
+ *                                           allowScriptedContent?,
+ *                                           locationsKey? }
  *   next()
  *   prev()
  *   setFontSize(px)
@@ -227,6 +228,9 @@
       installContentLinkNav();
       installStageResizeWatch(elementId);
 
+      // These body backgrounds are mirrored by the per-theme `--rd-page`
+      // token in atrium.css (the reader-surface ground) — change both
+      // together or the chrome strips stop matching the page.
       rendition.themes.register("light", {
         body: { background: "#fcfbfa", color: "#2a2725" },
       });
@@ -252,6 +256,14 @@
       return;
     }
 
+    // Page numbers come from epub.js "locations" — a whole-book pagination
+    // pass that takes seconds on desktop and much longer in the mobile
+    // WebView. Cache the result per book (keyed by the host-supplied
+    // `locationsKey`, the book uuid) so only the very first open pays it.
+    // Storage failures (quota, private mode) and corrupt entries just fall
+    // back to regeneration. Caveat: replacing a book's file under the same
+    // uuid can leave slightly stale page numbers until the entry is cleared.
+    var locationsCacheKey = opts.locationsKey ? "omn.locs::" + opts.locationsKey : null;
     book.ready
       .then(function () {
         tocFlat = [];
@@ -259,7 +271,25 @@
           flattenToc(book.navigation.toc, tocFlat);
         }
         emitToc();
-        return book.locations.generate(1024);
+        var cached = null;
+        if (locationsCacheKey) {
+          try {
+            cached = window.localStorage.getItem(locationsCacheKey);
+          } catch (e) { /* storage unavailable */ }
+        }
+        if (cached) {
+          try {
+            book.locations.load(cached);
+            return null;
+          } catch (e) { /* corrupt cache — regenerate below */ }
+        }
+        return book.locations.generate(1024).then(function () {
+          if (locationsCacheKey) {
+            try {
+              window.localStorage.setItem(locationsCacheKey, book.locations.save());
+            } catch (e) { /* quota/unavailable — regenerate next open */ }
+          }
+        });
       })
       .then(function () {
         locationsReady = true;

@@ -57,6 +57,20 @@ pub(crate) fn format_progress_labels(loc: &RelocateData) -> (String, String) {
     (page, chapter)
 }
 
+/// Format the phone minimal-chrome footer: just the page number (or the
+/// percent, before pagination resolves) — no "of total", no chapter. The
+/// richer [`format_progress_labels`] readout is what the visible footer
+/// shows; this is deliberately the bare number for the hidden-chrome state.
+pub(crate) fn format_ambient_page(loc: &RelocateData) -> String {
+    if loc.total_pages > 0 {
+        loc.page.to_string()
+    } else if loc.pct > 0 {
+        format!("{}%", loc.pct)
+    } else {
+        String::new()
+    }
+}
+
 /// Format the phone top-bar sub-line under the book title: "Ch. 3 · 14%".
 /// Falls back to the percent alone before the TOC resolves; empty until
 /// epub.js has produced a relocation. Rendered on every target (rule 07);
@@ -151,6 +165,28 @@ mod tests {
         assert!(chapter.contains("Ch"));
         assert!(chapter.contains("3"));
         assert!(chapter.contains("24"));
+    }
+
+    #[test]
+    fn format_ambient_page_returns_bare_page_number_when_paginated() {
+        let data = RelocateData {
+            page: 142,
+            total_pages: 300,
+            pct: 47,
+            ..Default::default()
+        };
+        assert_eq!(format_ambient_page(&data), "142");
+    }
+
+    #[test]
+    fn format_ambient_page_falls_back_to_pct_then_empty() {
+        let mut data = RelocateData {
+            pct: 47,
+            ..Default::default()
+        };
+        assert_eq!(format_ambient_page(&data), "47%");
+        data.pct = 0;
+        assert_eq!(format_ambient_page(&data), "");
     }
 
     #[test]

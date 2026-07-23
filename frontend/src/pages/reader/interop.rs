@@ -241,6 +241,7 @@ async fn spawn_bootstrap_and_highlights(
         .and_then(|r| r.epub_cfi);
     let chosen = server_cfi.or(local_saved);
     let cfi_arg = json_literal(&chosen);
+    let locations_key_lit = json_literal(&uuid);
     let js = reader_bootstrap_js(&BootstrapArgs {
         url_lit: &lits.url_lit,
         cfi_arg: &cfi_arg,
@@ -251,6 +252,7 @@ async fn spawn_bootstrap_and_highlights(
         max_width_lit: &lits.max_width_lit,
         justify_val: lits.justify_val,
         spread_lit: &lits.spread_lit,
+        locations_key_lit: &locations_key_lit,
     });
     let _ = dioxus::document::eval(&js);
 

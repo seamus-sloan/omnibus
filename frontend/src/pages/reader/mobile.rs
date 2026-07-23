@@ -133,7 +133,7 @@ async fn mount_and_drain(
     };
     let eval = interop::install_reader_surface(
         &file_url,
-        &init_opts(prefs, cfi),
+        &init_opts(&uuid, prefs, cfi),
         &scripts,
         crate::native_share::supported(),
     );
@@ -149,7 +149,7 @@ async fn mount_and_drain(
 
 /// Build the glue `init` options bag from the current reader prefs and the
 /// resume CFI. Field names match the vendored glue's `opts` keys.
-fn init_opts(prefs: ReaderPrefs, cfi: Option<String>) -> serde_json::Value {
+fn init_opts(uuid: &str, prefs: ReaderPrefs, cfi: Option<String>) -> serde_json::Value {
     serde_json::json!({
         "cfi": cfi,
         "fontSize": *prefs.font_size.peek(),
@@ -159,6 +159,10 @@ fn init_opts(prefs: ReaderPrefs, cfi: Option<String>) -> serde_json::Value {
         "maxWidth": prefs.margins.peek().to_css(),
         "justify": *prefs.justify.peek(),
         "spread": prefs.spread.peek().to_css(),
+        // Per-book locations-cache key: page numbers appear instantly on
+        // re-opens instead of waiting out the WebView's slow whole-book
+        // pagination pass (see the glue's locations cache).
+        "locationsKey": uuid,
         // WKWebView dispatches no events to listeners inside a sandboxed
         // iframe without `allow-scripts` — swipe/tap page turns and the
         // `selected` relay never fire without this. Mobile-only; the web
