@@ -18,8 +18,8 @@ use crate::suggestions::filter::{
     filter_candidates, is_entry_point, is_same_author, is_same_series, Candidate,
 };
 use crate::suggestions::hardcover::{
-    co_listed_counts, curated_list_ids, fetch_candidates, resolve_book, HardcoverConfig,
-    HardcoverError,
+    book_description, co_listed_counts, curated_list_ids, fetch_candidates, resolve_book,
+    HardcoverConfig, HardcoverError,
 };
 use crate::test_support::seed_synced_ebook;
 
@@ -466,6 +466,71 @@ async fn fetch_candidates_preserves_rank_order_and_attaches_counts() {
     assert_eq!(cands[0].hardcover_id, 200);
     assert_eq!(cands[0].list_count, 5);
     assert_eq!(cands[1].hardcover_id, 201);
+}
+
+// ── book_description ──────────────────────────────────────────────
+
+#[tokio::test]
+async fn book_description_returns_trimmed_description_for_a_resolved_book_id() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(body_string_contains("description"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": { "books": [{ "description": "  A clever fox outwits three farmers.  " }] }
+        })))
+        .mount(&server)
+        .await;
+
+    let cfg = config_for(&server);
+    let got = book_description(&cfg, 714600).await.unwrap();
+    assert_eq!(got.as_deref(), Some("A clever fox outwits three farmers."));
+}
+
+#[tokio::test]
+async fn book_description_returns_none_when_resolved_book_has_a_blank_description() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(body_string_contains("description"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": { "books": [{ "description": "   " }] }
+        })))
+        .mount(&server)
+        .await;
+
+    let cfg = config_for(&server);
+    let got = book_description(&cfg, 714600).await.unwrap();
+    assert!(got.is_none());
+}
+
+#[tokio::test]
+async fn book_description_propagates_http_error_when_server_returns_500() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    let cfg = config_for(&server);
+    let err = book_description(&cfg, 714600).await.unwrap_err();
+    assert!(matches!(err, HardcoverError::Http(_)));
+}
+
+#[tokio::test]
+async fn book_description_propagates_graphql_error_when_response_carries_errors_array() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "errors": [{ "message": "field 'description' not found" }]
+        })))
+        .mount(&server)
+        .await;
+
+    let cfg = config_for(&server);
+    let err = book_description(&cfg, 714600).await.unwrap_err();
+    assert!(
+        matches!(&err, HardcoverError::Graphql(msg) if msg.contains("field 'description' not found")),
+        "got {err:?}"
+    );
 }
 
 // ── cascade end-to-end ───────────────────────────────────────────

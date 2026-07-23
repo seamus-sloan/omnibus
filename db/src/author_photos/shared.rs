@@ -10,10 +10,7 @@ use std::sync::OnceLock;
 
 /// Return the crate's default `User-Agent` header value.
 pub(super) fn default_user_agent() -> String {
-    format!(
-        "omnibus/{} (https://github.com/sloansa/omnibus)",
-        env!("CARGO_PKG_VERSION")
-    )
+    crate::http_client::default_user_agent()
 }
 
 /// Process-wide shared `reqwest::Client`.
@@ -41,11 +38,8 @@ pub(super) fn shared_client() -> reqwest::Result<reqwest::Client> {
     if let Some(c) = CLIENT.get() {
         return Ok(c.clone());
     }
-    let new = reqwest::Client::builder()
-        .user_agent(default_user_agent())
-        .build()?;
-    // First-write wins. A concurrent caller may have built its own client
-    // already; in that case `set` returns Err and we discard ours.
-    let _ = CLIENT.set(new.clone());
-    Ok(CLIENT.get().cloned().unwrap_or(new))
+    let new = crate::http_client::build_client(&default_user_agent())?;
+    // First-write wins: `get_or_init` returns the existing value if a
+    // concurrent caller already initialized `CLIENT`, discarding ours.
+    Ok(CLIENT.get_or_init(|| new).clone())
 }

@@ -22,14 +22,8 @@ fn hardcover_client() -> reqwest::Result<reqwest::Client> {
     if let Some(c) = CLIENT.get() {
         return Ok(c.clone());
     }
-    let new = reqwest::Client::builder()
-        .user_agent(format!(
-            "omnibus/{} (https://github.com/sloansa/omnibus)",
-            env!("CARGO_PKG_VERSION")
-        ))
-        .build()?;
-    let _ = CLIENT.set(new.clone());
-    Ok(CLIENT.get().cloned().unwrap_or(new))
+    let new = crate::http_client::build_client(&crate::http_client::default_user_agent())?;
+    Ok(CLIENT.get_or_init(|| new).clone())
 }
 
 /// Hardcover's per-query row cap (verified live: a `limit: 5000` returns 2000).
