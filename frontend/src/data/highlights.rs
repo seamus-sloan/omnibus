@@ -92,7 +92,13 @@ pub async fn update_highlight_color(
                 .then_some(())
         },
     )
-    .await
+    .await?;
+    // Keep the replica coherent when the write went straight to the server;
+    // the queued path patches inside `queue_update_highlight_color`.
+    if let Some(book_uuid) = crate::offline::outbox::apply::find_highlight_book(id).await {
+        crate::offline::outbox::apply::highlight_color_changed(&book_uuid, id, color).await;
+    }
+    Ok(())
 }
 
 #[cfg(feature = "mobile")]
@@ -132,7 +138,13 @@ pub async fn update_highlight_note(
                 .then_some(())
         },
     )
-    .await
+    .await?;
+    // Keep the replica coherent when the write went straight to the server;
+    // the queued path patches inside `queue_update_highlight_note`.
+    if let Some(book_uuid) = crate::offline::outbox::apply::find_highlight_book(id).await {
+        crate::offline::outbox::apply::highlight_note_changed(&book_uuid, id, note).await;
+    }
+    Ok(())
 }
 
 #[cfg(feature = "mobile")]

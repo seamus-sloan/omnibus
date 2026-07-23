@@ -74,23 +74,23 @@ async fn run_inner(
         .map_err(|e| format!("Could not create download dir: {e}"))?;
 
     // Merge prior completion state (resume of a partly-finished download).
+    // Stat asynchronously — this future shares the loopback runtime with the
+    // media server, so blocking std::fs calls here would stall playback.
     let prior = super::get_entry(uuid, format)
         .map(|e| e.files)
         .unwrap_or_default();
-    let mut files: Vec<PlannedFile> = plan
-        .into_iter()
-        .map(|mut f| {
-            f.done = prior
-                .iter()
-                .any(|p| p.rel == f.rel && p.done && dir.join(&f.rel).is_file());
-            if f.done {
-                f.bytes = std::fs::metadata(dir.join(&f.rel))
-                    .ok()
-                    .map(|m| m.len() as i64);
+    let mut files: Vec<PlannedFile> = Vec::with_capacity(plan.len());
+    for mut f in plan {
+        if prior.iter().any(|p| p.rel == f.rel && p.done) {
+            if let Ok(meta) = tokio::fs::metadata(dir.join(&f.rel)).await {
+                if meta.is_file() {
+                    f.done = true;
+                    f.bytes = Some(meta.len() as i64);
+                }
             }
-            f
-        })
-        .collect();
+        }
+        files.push(f);
+    }
 
     let mut downloaded: i64 = files.iter().filter_map(|f| f.bytes).sum();
     publish(

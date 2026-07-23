@@ -87,7 +87,13 @@ pub async fn update_bookmark(
                 .then_some(())
         },
     )
-    .await
+    .await?;
+    // Keep the replica coherent when the write went straight to the server;
+    // the queued path patches inside `queue_update_bookmark`.
+    if let Some(book_uuid) = crate::offline::outbox::apply::find_bookmark_book(id).await {
+        crate::offline::outbox::apply::bookmark_renamed(&book_uuid, id, title).await;
+    }
+    Ok(())
 }
 
 #[cfg(feature = "mobile")]
