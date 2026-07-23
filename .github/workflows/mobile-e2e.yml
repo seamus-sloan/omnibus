@@ -4,47 +4,28 @@ name: Mobile E2E
 # drives iOS and Android.
 #
 # - The iOS job gates the PR/push path (#1034). `server/**` + `db/**` are in
-#   the path filter because the job boots the real native server and the flows
-#   probe `GET /api/_health` — a server or boot regression can fail these runs
-#   even when nothing mobile changed.
+#   the `changes` filter because the job boots the real native server and the
+#   flows probe `GET /api/_health` — a server or boot regression can fail
+#   these runs even when nothing mobile changed.
 # - The Android job is manual-only behind the `android` dispatch input until
 #   its flows are green on the emulator (#1035).
 # - The `stress` dispatch input fans the iOS job into N identical matrix
 #   instances (e.g. `[1,2,3,4,5]`) to smoke out flakiness — every instance
 #   must pass. Warm the caches with a normal run first so the stress
 #   instances measure the suite, not a cold rebuild.
-# The two paths lists below are duplicates — keep them in sync.
 on:
   push:
     branches: [main]
-    paths:
-      - "mobile/**"
-      - "frontend/**"
-      - "shared/**"
-      - "server/**"
-      - "db/**"
-      - "ui_tests/maestro/**"
-      - "**/Cargo.toml"
-      - "Cargo.lock"
-      - "**/Dioxus.toml"
-      - "flake.lock"
-      - "flake.nix"
-      - ".github/workflows/mobile-e2e.yml"
+  # No workflow-level `paths:` filter: this workflow must run on EVERY PR so
+  # its `🔒 Mobile E2E Required` gate always reports a status (a required
+  # check keyed on a path-filtered workflow never resolves on a PR that
+  # doesn't match, which blocks the merge forever — see `rust.yml`/`e2e.yml`
+  # for the same fix). Path gating moved into the `changes` job below;
+  # `maestro-ios` skips when nothing mobile-relevant changed, and the gate
+  # treats skipped as pass. `workflow_dispatch` stays the force-run escape
+  # hatch for a PR that touches none of the filtered paths.
   pull_request:
     types: [opened, synchronize, reopened]
-    paths:
-      - "mobile/**"
-      - "frontend/**"
-      - "shared/**"
-      - "server/**"
-      - "db/**"
-      - "ui_tests/maestro/**"
-      - "**/Cargo.toml"
-      - "Cargo.lock"
-      - "**/Dioxus.toml"
-      - "flake.lock"
-      - "flake.nix"
-      - ".github/workflows/mobile-e2e.yml"
   workflow_dispatch:
     inputs:
       stress:
@@ -61,7 +42,45 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Detect whether this push/PR touches anything mobile-relevant. On push /
+  # workflow_dispatch the real jobs run unconditionally, so this output is
+  # only consulted for pull_request events. Keep the filter list in sync with
+  # the `.github/workflows/mobile-e2e.yml` self-reference below.
+  changes:
+    name: detect changes
+    runs-on: ubuntu-latest
+    # `pull-requests: read` so `dorny/paths-filter` can list the PR's changed
+    # files via the API under restrictive permissions (matches e2e.yml).
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      mobile: ${{ steps.filter.outputs.mobile }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            mobile:
+              - "mobile/**"
+              - "frontend/**"
+              - "shared/**"
+              - "server/**"
+              - "db/**"
+              - "ui_tests/maestro/**"
+              - "**/Cargo.toml"
+              - "Cargo.lock"
+              - "**/Dioxus.toml"
+              - "flake.lock"
+              - "flake.nix"
+              - ".github/workflows/mobile-e2e.yml"
+              - ".github/actions/ci-gate/action.yml"
+
   maestro-ios:
+    needs: changes
+    if: ${{ needs.changes.outputs.mobile == 'true' || github.event_name != 'pull_request' }}
     # Single runs keep the bare name (stable check name); stress repeats > 1
     # get a suffix so the instances are tellable apart in the checks UI.
     name: maestro (iOS simulator${{ matrix.repeat != 1 && format(', repeat {0}', matrix.repeat) || '' }})
@@ -389,14 +408,17 @@ jobs:
 
   # The required status check for this workflow. Always runs (`if: always()`),
   # so branch protection gets a resolved status whenever mobile-e2e triggers —
-  # green when maestro-ios passed, red when it failed or was cancelled. Only
-  # `maestro-ios` is in `needs` — `maestro-android` is manual-dispatch-only
-  # (#1035) and must not block the gate. Mark ONLY `🔒 Mobile E2E Required` as
-  # required in branch protection; do not require `maestro-ios` directly (its
-  # matrix-repeat check name varies with `stress` and would hang the merge).
+  # green when maestro-ios passed (or was skipped by the `changes` filter),
+  # red when it failed or was cancelled. `maestro-android` is included too so
+  # that an opted-in `workflow_dispatch` run (`inputs.android: true`) that
+  # fails Android also fails the gate; on the normal PR/push path Android is
+  # skipped by its own `if:` (#1035) and skipped counts as pass, so it never
+  # blocks those runs. Mark ONLY `🔒 Mobile E2E Required` as required in
+  # branch protection; do not require `maestro-ios` directly (its matrix-repeat
+  # check name varies with `stress` and would hang the merge).
   mobile-e2e-required:
     name: 🔒 Mobile E2E Required
-    needs: [maestro-ios]
+    needs: [changes, maestro-ios, maestro-android]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     permissions:
