@@ -17,10 +17,15 @@ pub fn TagCloudPage() -> Element {
     let mut error: Signal<Option<String>> = use_signal(|| None);
 
     let url = server_url.clone();
+    let generation = crate::use_cache_generation();
     use_effect(move || {
+        // Re-run on cache-revalidation bumps; the refetch is a cache hit.
+        let _ = generation();
         let url = url.clone();
         spawn(async move {
-            loading.set(true);
+            if tags.peek().is_empty() {
+                loading.set(true);
+            }
             match data::get_tag_cloud(&url).await {
                 Ok(t) => {
                     tags.set(t);

@@ -15,10 +15,10 @@ use super::{drain_error, http_client, note_status, with_bearer};
 /// GET `/api/authors/{id}` — fetch one author detail, `Ok(None)` on 404.
 #[cfg(feature = "mobile")]
 pub async fn get_author(server_url: &str, id: i64) -> Result<Option<AuthorDetail>, DataError> {
-    crate::offline::cache::read_through(
-        crate::offline::cache::keys::author(id),
-        get_author_online(server_url, id),
-    )
+    let url = server_url.to_string();
+    crate::offline::cache::read_through(crate::offline::cache::keys::author(id), async move {
+        get_author_online(&url, id).await
+    })
     .await
 }
 
@@ -112,10 +112,10 @@ pub async fn refetch_author_photos(server_url: &str) -> Result<(), DataError> {
 /// GET `/api/authors` — fetch the full authors index for browse / autocomplete.
 #[cfg(feature = "mobile")]
 pub async fn list_authors(server_url: &str) -> Result<Vec<AuthorSummary>, DataError> {
-    crate::offline::cache::read_through(
-        crate::offline::cache::keys::authors(),
-        list_authors_online(server_url),
-    )
+    let url = server_url.to_string();
+    crate::offline::cache::read_through(crate::offline::cache::keys::authors(), async move {
+        list_authors_online(&url).await
+    })
     .await
 }
 

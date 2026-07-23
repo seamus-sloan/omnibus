@@ -14,9 +14,10 @@ use super::{drain_error, http_client, note_status, with_bearer};
 /// GET `/api/stats?range=…` — fetch the current user's stats summary.
 #[cfg(feature = "mobile")]
 pub async fn fetch_stats(server_url: &str, range: StatsRange) -> Result<StatsSummary, DataError> {
+    let url = server_url.to_string();
     crate::offline::cache::read_through(
         crate::offline::cache::keys::stats(range.as_query()),
-        fetch_stats_online(server_url, range),
+        async move { fetch_stats_online(&url, range).await },
     )
     .await
 }

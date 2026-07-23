@@ -29,9 +29,11 @@ pub async fn get_suggestions(
     server_url: &str,
     uuid: &str,
 ) -> Result<SuggestionsResponse, DataError> {
+    let url = server_url.to_string();
+    let uuid = uuid.to_string();
     crate::offline::cache::read_through(
-        crate::offline::cache::keys::suggestions(uuid),
-        get_suggestions_online(server_url, uuid),
+        crate::offline::cache::keys::suggestions(&uuid),
+        async move { get_suggestions_online(&url, &uuid).await },
     )
     .await
 }

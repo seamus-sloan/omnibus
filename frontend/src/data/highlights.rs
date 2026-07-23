@@ -50,9 +50,11 @@ pub async fn list_highlights(
     server_url: &str,
     book_uuid: &str,
 ) -> Result<Vec<Highlight>, DataError> {
+    let url = server_url.to_string();
+    let book_uuid = book_uuid.to_string();
     crate::offline::cache::read_through(
-        crate::offline::cache::keys::highlights(book_uuid),
-        list_highlights_online(server_url, book_uuid),
+        crate::offline::cache::keys::highlights(&book_uuid),
+        async move { list_highlights_online(&url, &book_uuid).await },
     )
     .await
 }

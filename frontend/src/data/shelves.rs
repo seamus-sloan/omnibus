@@ -19,10 +19,10 @@ use super::{drain_error, http_client, note_status, with_bearer};
 /// GET `/api/shelves` — the caller's visible shelves.
 #[cfg(feature = "mobile")]
 pub async fn list_shelves(server_url: &str) -> Result<Vec<ShelfSummary>, DataError> {
-    crate::offline::cache::read_through(
-        crate::offline::cache::keys::shelves(),
-        list_shelves_online(server_url),
-    )
+    let url = server_url.to_string();
+    crate::offline::cache::read_through(crate::offline::cache::keys::shelves(), async move {
+        list_shelves_online(&url).await
+    })
     .await
 }
 
@@ -41,10 +41,10 @@ pub(crate) async fn list_shelves_online(server_url: &str) -> Result<Vec<ShelfSum
 /// GET `/api/shelves/{id}` — one shelf's detail.
 #[cfg(feature = "mobile")]
 pub async fn get_shelf(server_url: &str, id: i64) -> Result<Shelf, DataError> {
-    crate::offline::cache::read_through(
-        crate::offline::cache::keys::shelf(id),
-        get_shelf_online(server_url, id),
-    )
+    let url = server_url.to_string();
+    crate::offline::cache::read_through(crate::offline::cache::keys::shelf(id), async move {
+        get_shelf_online(&url, id).await
+    })
     .await
 }
 
@@ -170,9 +170,10 @@ pub async fn shelf_page(
     sort_key: SortKey,
     sort_dir: SortDir,
 ) -> Result<ShelfPage, DataError> {
+    let url = server_url.to_string();
     crate::offline::cache::read_through(
         crate::offline::cache::keys::shelf_page(id, sort_key.as_wire(), sort_dir.as_wire()),
-        shelf_page_online(server_url, id, sort_key, sort_dir),
+        async move { shelf_page_online(&url, id, sort_key, sort_dir).await },
     )
     .await
 }

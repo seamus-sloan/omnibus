@@ -1,18 +1,27 @@
-//! Typed access to the replica cache plus the network-first read policy.
+//! Typed access to the replica cache plus the cache-first read policy.
 //!
 //! `read_through` is the single read policy for the mobile data layer:
-//! always try the server first (fresh data wins — a just-uploaded book must
-//! appear), refresh the cache on success, and serve the cached copy only
-//! when the failure was connectivity-class. HTTP errors, 401s, and decode
-//! failures propagate untouched — the server was reachable, so masking its
-//! answer with stale data would be wrong.
+//! serve the cached copy immediately (local-first — offline or slow
+//! networks never block a paint), and when the row is stale, revalidate
+//! against the server in the background, bumping [`subscribe`]'s
+//! generation channel when the payload actually changed so rendered pages
+//! re-read. A cache miss falls back to a foreground fetch — or fails fast
+//! with [`DataError::Offline`] while known-offline. Server answers are
+//! never masked: HTTP errors, 401s, and decode failures on the foreground
+//! path propagate untouched, and a failed revalidation writes nothing.
+//! `read_through_network_first` remains for the few reads where acting on
+//! a stale answer would be a correctness bug (identity, progress LWW).
+
+use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock};
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use tokio::sync::watch;
 
 use crate::data::DataError;
 
-use super::{store, sync};
+use super::{media, store, sync};
 
 /// Cache keys for every replicated endpoint. One builder per entity so the
 /// readers, the optimistic-apply code, and the download engine can never
@@ -46,9 +55,9 @@ pub mod keys {
     pub fn progress(uuid: &str, format: &str) -> String {
         format!("progress:{uuid}:{format}")
     }
-    /// `GET /api/progress/recent`.
-    pub fn recent_progress() -> String {
-        "recent_progress".into()
+    /// `GET /api/progress/recent?limit=`.
+    pub fn recent_progress(limit: i64) -> String {
+        format!("recent_progress:{limit}")
     }
     /// `GET /api/audiobooks/{uuid}/playback-rate`.
     pub fn playback_rate(uuid: &str) -> String {
@@ -166,13 +175,102 @@ where
     put_json(key, &value);
 }
 
-/// Network-first read with offline fallback (see module docs). The cache
+/// Serve-from-cache freshness window: a row younger than this is returned
+/// without spawning a revalidation — which is also what terminates the
+/// revalidate → generation-bump → page-refetch cycle.
+const FRESH_WINDOW_SECS: i64 = 30;
+
+/// Generation counter bumped whenever a background revalidation (or the
+/// outbox drain) lands changed data; pages subscribe via
+/// `use_cache_generation` and re-run their fetch effects, which are then
+/// served from the fresh cache with zero network.
+fn channel() -> &'static (watch::Sender<u64>, watch::Receiver<u64>) {
+    static CH: OnceLock<(watch::Sender<u64>, watch::Receiver<u64>)> = OnceLock::new();
+    CH.get_or_init(|| watch::channel(0))
+}
+
+/// Subscribe to cache-change generations.
+pub fn subscribe() -> watch::Receiver<u64> {
+    channel().0.subscribe()
+}
+
+/// Bump the generation channel (revalidation landed changed data, or the
+/// drain rewrote cache rows).
+pub(crate) fn notify_changed() {
+    channel().0.send_modify(|g| *g += 1);
+}
+
+/// Keys with a revalidation currently in flight — one per key at a time.
+fn revalidating() -> &'static Mutex<HashSet<String>> {
+    static SET: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    SET.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// One cached row, decoded, plus its age and raw payload. Mirrors
+/// [`get_json`]'s handling of undecodable rows (warn + drop).
+async fn get_row<T: DeserializeOwned>(key: &str) -> Option<(T, i64, String)> {
+    let row = store::store()?.kv_get(key).await?;
+    match serde_json::from_str(&row.payload) {
+        Ok(v) => Some((v, row.fetched_at, row.payload)),
+        Err(e) => {
+            tracing::warn!(error = %e, key, "offline cache payload failed to decode; dropping");
+            store::store()?.kv_delete(key);
+            None
+        }
+    }
+}
+
+/// Cache-first read (stale-while-revalidate; see module docs). The cache
 /// key must be a `keys::*` builder output.
 pub async fn read_through<T, Fut>(key: String, fetch: Fut) -> Result<T, DataError>
+where
+    T: Serialize + DeserializeOwned + Send + 'static,
+    Fut: std::future::Future<Output = Result<T, DataError>> + Send + 'static,
+{
+    match get_row::<T>(&key).await {
+        Some((value, fetched_at, payload)) => {
+            if store::now_secs() - fetched_at >= FRESH_WINDOW_SECS {
+                spawn_revalidation(key, payload, fetch);
+            }
+            Ok(value)
+        }
+        None if sync::is_offline() => Err(DataError::Offline),
+        None => match fetch.await {
+            Ok(value) => {
+                sync::note_online();
+                put_json(&key, &value);
+                Ok(value)
+            }
+            Err(e) if sync::is_offline_error(&e) => {
+                sync::note_offline();
+                Err(e)
+            }
+            Err(e) => {
+                // The server answered (4xx/5xx/decode) — we're online;
+                // don't mask its answer with stale data.
+                sync::note_online();
+                Err(e)
+            }
+        },
+    }
+}
+
+/// Network-first read with offline cache fallback, for flows that must not
+/// act on a stale answer (identity for the account-switch wipe, progress
+/// for the cross-device LWW reconcile). While known-offline it serves the
+/// cache immediately — or fails fast — instead of waiting out a doomed
+/// connect.
+pub async fn read_through_network_first<T, Fut>(key: String, fetch: Fut) -> Result<T, DataError>
 where
     T: Serialize + DeserializeOwned,
     Fut: std::future::Future<Output = Result<T, DataError>>,
 {
+    if sync::is_offline() {
+        return match get_json::<T>(&key).await {
+            Some(cached) => Ok(cached),
+            None => Err(DataError::Offline),
+        };
+    }
     match fetch.await {
         Ok(value) => {
             sync::note_online();
@@ -187,11 +285,92 @@ where
             }
         }
         Err(e) => {
-            // The server answered (4xx/5xx/decode) — we're online; don't
-            // mask its answer with stale data.
             sync::note_online();
             Err(e)
         }
+    }
+}
+
+/// Kick a background revalidation of `key`. Skipped while offline (the
+/// fetch is doomed; the reconnect path re-triggers reads) or while outbox
+/// ops are pending (a server read would clobber optimistic patches — the
+/// drain-completion bump re-triggers reads once the server has them).
+fn spawn_revalidation<T, Fut>(key: String, prior_payload: String, fetch: Fut)
+where
+    T: Serialize + DeserializeOwned + Send + 'static,
+    Fut: std::future::Future<Output = Result<T, DataError>> + Send + 'static,
+{
+    if sync::is_offline() || sync::state().pending_ops > 0 {
+        return;
+    }
+    {
+        let Ok(mut in_flight) = revalidating().lock() else {
+            return;
+        };
+        if !in_flight.insert(key.clone()) {
+            return;
+        }
+    }
+    let task_key = key.clone();
+    let spawned = spawn_task(async move {
+        revalidate::<T, Fut>(key, prior_payload, fetch).await;
+    });
+    if !spawned {
+        if let Ok(mut in_flight) = revalidating().lock() {
+            in_flight.remove(&task_key);
+        }
+    }
+}
+
+async fn revalidate<T, Fut>(key: String, prior_payload: String, fetch: Fut)
+where
+    T: Serialize,
+    Fut: std::future::Future<Output = Result<T, DataError>>,
+{
+    match fetch.await {
+        Ok(value) => {
+            sync::note_online();
+            if let (Some(st), Ok(payload)) = (store::store(), serde_json::to_string(&value)) {
+                let changed = payload != prior_payload;
+                // Re-stamp fetched_at even when unchanged, so the fresh
+                // window keeps unchanged keys quiet.
+                st.kv_put(&key, payload);
+                if changed {
+                    notify_changed();
+                }
+            }
+        }
+        Err(e) if sync::is_offline_error(&e) => sync::note_offline(),
+        Err(e) => {
+            // Server answered but rejected/garbled — keep the stale-but-
+            // valid render, write nothing. A 401 already cleared the token
+            // inside the `_online` fetcher (note_status), so the login
+            // redirect still fires.
+            sync::note_online();
+            tracing::debug!(error = %e, key, "background revalidation failed; keeping cached copy");
+        }
+    }
+    if let Ok(mut in_flight) = revalidating().lock() {
+        in_flight.remove(&key);
+    }
+}
+
+/// Spawn a revalidation: the loopback runtime when up (it outlives Dioxus
+/// scopes, like downloads), else the ambient tokio runtime (tests, and
+/// reads racing ahead of `media::start` at boot).
+fn spawn_task<F>(fut: F) -> bool
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    if media::runtime_available() {
+        return media::spawn_on_runtime(fut);
+    }
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            handle.spawn(fut);
+            true
+        }
+        Err(_) => false,
     }
 }
 

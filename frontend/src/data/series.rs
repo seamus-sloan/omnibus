@@ -15,10 +15,10 @@ use super::{drain_error, http_client, note_status, with_bearer};
 /// GET `/api/series/{id}` — fetch one series detail, `Ok(None)` on 404.
 #[cfg(feature = "mobile")]
 pub async fn get_series(server_url: &str, id: i64) -> Result<Option<SeriesDetail>, DataError> {
-    crate::offline::cache::read_through(
-        crate::offline::cache::keys::series(id),
-        get_series_online(server_url, id),
-    )
+    let url = server_url.to_string();
+    crate::offline::cache::read_through(crate::offline::cache::keys::series(id), async move {
+        get_series_online(&url, id).await
+    })
     .await
 }
 
@@ -42,10 +42,10 @@ pub(crate) async fn get_series_online(
 /// GET `/api/series` — fetch the full series index for browse / autocomplete.
 #[cfg(feature = "mobile")]
 pub async fn list_series(server_url: &str) -> Result<Vec<SeriesSummary>, DataError> {
-    crate::offline::cache::read_through(
-        crate::offline::cache::keys::series_index(),
-        list_series_online(server_url),
-    )
+    let url = server_url.to_string();
+    crate::offline::cache::read_through(crate::offline::cache::keys::series_index(), async move {
+        list_series_online(&url).await
+    })
     .await
 }
 

@@ -87,10 +87,15 @@ fn use_series_data(
     let mut loading = use_signal(|| true);
     let mut error: Signal<Option<String>> = use_signal(|| None);
 
+    let generation = crate::use_cache_generation();
     use_effect(move || {
+        // Re-run on cache-revalidation bumps; the refetch is a cache hit.
+        let _ = generation();
         let url = server_url.clone();
         spawn(async move {
-            loading.set(true);
+            if series.peek().is_empty() {
+                loading.set(true);
+            }
             match data::list_series(&url).await {
                 Ok(s) => {
                     series.set(s);

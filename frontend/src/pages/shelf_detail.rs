@@ -191,11 +191,17 @@ fn use_shelf_effects(
     // (not a signal), so it must be wrapped in `use_reactive!` to re-arm this
     // effect on navigation between shelves — see `BookDetailPage` for why.
     let shelf_url = server_url.clone();
+    let generation = crate::use_cache_generation();
     use_effect(use_reactive!(|id| {
         let url = shelf_url.clone();
         let _ = reload();
+        // Re-run on cache-revalidation bumps; the refetch is a cache hit.
+        let _ = generation();
         spawn(async move {
-            loading.set(true);
+            let same_shelf = shelf.peek().as_ref().map(|s| s.id) == Some(id);
+            if !same_shelf {
+                loading.set(true);
+            }
             match data::get_shelf(&url, id).await {
                 Ok(s) => {
                     shelf.set(Some(s));
@@ -218,6 +224,8 @@ fn use_shelf_effects(
         let url = page_url.clone();
         let key = sort_key();
         let _ = reload();
+        // Re-run on cache-revalidation bumps; the refetch is a cache hit.
+        let _ = generation();
         spawn(async move {
             let dir = default_dir_for(key);
             match data::shelf_page(&url, id, key, dir).await {

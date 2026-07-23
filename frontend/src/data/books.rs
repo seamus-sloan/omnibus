@@ -45,13 +45,13 @@ pub async fn save_settings(server_url: &str, settings: Settings) -> Result<Setti
 }
 
 /// GET `/api/library` — fetch the high-level library section listing.
-/// Network-first with offline cache fallback.
+/// Cache-first with background revalidation.
 #[cfg(feature = "mobile")]
 pub async fn get_library(server_url: &str) -> Result<LibraryContents, DataError> {
-    crate::offline::cache::read_through(
-        crate::offline::cache::keys::library(),
-        get_library_online(server_url),
-    )
+    let url = server_url.to_string();
+    crate::offline::cache::read_through(crate::offline::cache::keys::library(), async move {
+        get_library_online(&url).await
+    })
     .await
 }
 
@@ -67,10 +67,14 @@ pub(crate) async fn get_library_online(server_url: &str) -> Result<LibraryConten
 }
 
 /// GET `/api/ebooks` — fetch the full ebook library payload.
-/// Network-first with offline cache fallback.
+/// Cache-first with background revalidation.
 #[cfg(feature = "mobile")]
 pub async fn get_ebooks(server_url: &str) -> Result<EbookLibrary, DataError> {
-    crate::offline::cache::read_through("ebooks".to_string(), get_ebooks_online(server_url)).await
+    let url = server_url.to_string();
+    crate::offline::cache::read_through("ebooks".to_string(), async move {
+        get_ebooks_online(&url).await
+    })
+    .await
 }
 
 #[cfg(feature = "mobile")]
@@ -100,6 +104,49 @@ pub async fn get_ebooks_page(
     cursor: Option<String>,
     limit: i64,
 ) -> Result<LibraryPage, DataError> {
+    if crate::offline::sync::is_offline() {
+        // Known-offline fast path: serve the full replica directly — its
+        // `off:` cursors keep pagination consistent with zero network.
+        return crate::offline::replica::page_from_cache(
+            sort_key,
+            sort_dir,
+            &filters,
+            cursor.as_deref(),
+            limit,
+        )
+        .await
+        .ok_or(DataError::Offline);
+    }
+    // Replica freshness no longer rides the landing fetch outcome — kick
+    // the TTL-gated background sync on every online browse.
+    crate::offline::replica::ensure_fresh(server_url.to_string());
+    if cursor.is_none() {
+        // First page: cache-first via the SWR policy, so landing paints
+        // instantly (server-exact ordering as of the last visit) and
+        // revalidates in the background.
+        let key = crate::offline::cache::keys::ebooks_first(
+            sort_key.as_wire(),
+            sort_dir.as_wire(),
+            &filters.formats.join(","),
+        );
+        let url = server_url.to_string();
+        let f = filters.clone();
+        let result = crate::offline::cache::read_through(key, async move {
+            get_ebooks_page_online(&url, sort_key, sort_dir, f, None, limit).await
+        })
+        .await;
+        return match result {
+            // Went offline mid-request with a cold first-page cache — the
+            // full replica may still save the paint.
+            Err(e) if crate::offline::sync::is_offline_error(&e) => {
+                crate::offline::replica::page_from_cache(sort_key, sort_dir, &filters, None, limit)
+                    .await
+                    .ok_or(e)
+            }
+            r => r,
+        };
+    }
+    // Cursor pages ("load more"): network-first with replica fallback.
     let attempt = get_ebooks_page_online(
         server_url,
         sort_key,
@@ -112,11 +159,6 @@ pub async fn get_ebooks_page(
     match attempt {
         Ok(page) => {
             crate::offline::sync::note_online();
-            // A fresh first page is the signal to (re)build the full-library
-            // replica in the background for complete offline browsing.
-            if cursor.is_none() {
-                crate::offline::replica::ensure_fresh(server_url.to_string());
-            }
             Ok(page)
         }
         Err(e) if crate::offline::sync::is_offline_error(&e) => {
@@ -196,6 +238,15 @@ pub(crate) async fn get_ebooks_page_online(
 /// Offline, degrades to a substring match over the local library replica.
 #[cfg(feature = "mobile")]
 pub async fn search_ebooks(server_url: &str, q: &str) -> Result<EbookLibrary, DataError> {
+    if crate::offline::sync::is_offline() {
+        // Known-offline fast path: substring match over the replica, no
+        // doomed network attempt. Online search stays network-first —
+        // search wants fresh data and per-query caching would bloat the
+        // store.
+        return crate::offline::replica::search_from_cache(q)
+            .await
+            .ok_or(DataError::Offline);
+    }
     match search_ebooks_online(server_url, q).await {
         Ok(lib) => {
             crate::offline::sync::note_online();
@@ -263,13 +314,14 @@ pub async fn search_palette(server_url: &str, q: &str) -> Result<PaletteResults,
 }
 
 /// GET `/api/ebooks/{uuid}` — fetch one ebook by uuid, `Ok(None)` on 404.
-/// Network-first with offline cache fallback.
+/// Cache-first with background revalidation.
 #[cfg(feature = "mobile")]
 pub async fn get_ebook(server_url: &str, uuid: &str) -> Result<Option<EbookMetadata>, DataError> {
-    crate::offline::cache::read_through(
-        crate::offline::cache::keys::ebook(uuid),
-        get_ebook_online(server_url, uuid),
-    )
+    let url = server_url.to_string();
+    let uuid = uuid.to_string();
+    crate::offline::cache::read_through(crate::offline::cache::keys::ebook(&uuid), async move {
+        get_ebook_online(&url, &uuid).await
+    })
     .await
 }
 
@@ -299,9 +351,11 @@ pub async fn get_manifest(
     uuid: &str,
     file_id: Option<i64>,
 ) -> Result<AudiobookManifest, DataError> {
+    let url = server_url.to_string();
+    let uuid = uuid.to_string();
     crate::offline::cache::read_through(
-        crate::offline::cache::keys::manifest(uuid, file_id),
-        get_manifest_online(server_url, uuid, file_id),
+        crate::offline::cache::keys::manifest(&uuid, file_id),
+        async move { get_manifest_online(&url, &uuid, file_id).await },
     )
     .await
 }
@@ -740,3 +794,6 @@ pub async fn delete_ebook_cover(
         .await
         .map_err(note_server_fn_err)
 }
+
+#[cfg(all(test, feature = "mobile"))]
+mod tests;

@@ -26,7 +26,9 @@ pub fn ShelvesIndexPage() -> Element {
     // post-create refetch can call it.
     let load = move |url: String| {
         spawn(async move {
-            loading.set(true);
+            if shelves.peek().is_empty() {
+                loading.set(true);
+            }
             match data::list_shelves(&url).await {
                 Ok(s) => {
                     shelves.set(s);
@@ -39,7 +41,12 @@ pub fn ShelvesIndexPage() -> Element {
     };
 
     let effect_url = url.clone();
-    use_effect(move || load(effect_url.clone()));
+    let generation = crate::use_cache_generation();
+    use_effect(move || {
+        // Re-run on cache-revalidation bumps; the refetch is a cache hit.
+        let _ = generation();
+        load(effect_url.clone())
+    });
 
     let refetch_url = url.clone();
     let refetch = move || load(refetch_url.clone());

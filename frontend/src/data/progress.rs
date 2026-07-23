@@ -59,7 +59,11 @@ pub async fn get_progress(
         ProgressFormat::Epub => "epub",
         ProgressFormat::Audio => "audio",
     };
-    crate::offline::cache::read_through(
+    // Network-first on purpose: this call is the server-wins LWW reconcile
+    // at book open (the reader/player already paint instantly from the
+    // in-memory position maps). A cached answer here would silently defeat
+    // cross-device sync.
+    crate::offline::cache::read_through_network_first(
         crate::offline::cache::keys::progress(uuid, fmt),
         get_progress_online(server_url, uuid, format),
     )
@@ -129,9 +133,11 @@ pub async fn get_playback_rate(
     server_url: &str,
     uuid: &str,
 ) -> Result<Option<AudiobookPlaybackRateRecord>, DataError> {
+    let url = server_url.to_string();
+    let uuid = uuid.to_string();
     crate::offline::cache::read_through(
-        crate::offline::cache::keys::playback_rate(uuid),
-        get_playback_rate_online(server_url, uuid),
+        crate::offline::cache::keys::playback_rate(&uuid),
+        async move { get_playback_rate_online(&url, &uuid).await },
     )
     .await
 }
@@ -187,9 +193,10 @@ pub(crate) async fn record_sessions_online(
 /// Network-first with offline cache fallback.
 #[cfg(feature = "mobile")]
 pub async fn recent_progress(server_url: &str, limit: i64) -> Result<Vec<ResumePoint>, DataError> {
+    let url = server_url.to_string();
     crate::offline::cache::read_through(
-        format!("recent_progress:{limit}"),
-        recent_progress_online(server_url, limit),
+        crate::offline::cache::keys::recent_progress(limit),
+        async move { recent_progress_online(&url, limit).await },
     )
     .await
 }

@@ -120,6 +120,7 @@ fn setup_landing_signals(server_url: &str, query: Signal<String>) -> LandingSign
         loading_more,
         error,
         fetch_epoch,
+        generation: crate::use_cache_generation(),
     };
     wire_landing_effects(
         server_url, query, prefs, want_more, is_admin, pools, fetch_sigs,

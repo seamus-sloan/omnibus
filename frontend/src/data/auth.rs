@@ -85,7 +85,12 @@ fn finish_bearer_auth(resp: LoginResponse) -> Result<UserSummary, DataError> {
 /// `note_status`) so `ScreenLayout` routes back to `/login`.
 #[cfg(feature = "mobile")]
 pub async fn get_me(server_url: &str) -> Result<UserSummary, DataError> {
-    let me = crate::offline::cache::read_through(
+    // Network-first on purpose: the account-switch wipe below keys on the
+    // *fresh* identity. A cache-first answer right after a different user
+    // logs in would return the previous user's "me", skip the wipe, and
+    // leak their replicated data across accounts. Offline still serves the
+    // cached identity instantly via the network-first helper's fast path.
+    let me = crate::offline::cache::read_through_network_first(
         crate::offline::cache::keys::me(),
         get_me_online(server_url),
     )
@@ -149,10 +154,10 @@ pub async fn check_server(server_url: &str) -> Result<(), DataError> {
 /// which only probes reachability and discards the body.
 #[cfg(feature = "mobile")]
 pub async fn get_server_version(server_url: &str) -> Result<String, DataError> {
-    crate::offline::cache::read_through(
-        "server_version".to_string(),
-        get_server_version_online(server_url),
-    )
+    let url = server_url.to_string();
+    crate::offline::cache::read_through("server_version".to_string(), async move {
+        get_server_version_online(&url).await
+    })
     .await
 }
 
