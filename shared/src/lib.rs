@@ -7,6 +7,7 @@
 pub mod audiobook;
 pub mod auth;
 pub mod bookmark;
+pub mod deletion;
 pub mod discovery;
 pub mod ebook;
 pub mod highlight;
@@ -67,6 +68,7 @@ pub fn search_query_too_long(q: &str) -> bool {
 pub use audiobook::*;
 pub use auth::*;
 pub use bookmark::*;
+pub use deletion::*;
 pub use discovery::*;
 pub use ebook::*;
 pub use highlight::*;

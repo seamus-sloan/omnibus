@@ -119,6 +119,18 @@ pub fn sidecar_cover_for(ebook_path: &Path) -> Option<PathBuf> {
     find_with_extensions(parent, "cover")
 }
 
+/// The **per-stem** half of [`sidecar_cover_for`] only: `<stem>.{jpg,jpeg,png}`
+/// next to `ebook_path`, never a folder-level `cover.*`.
+///
+/// Deletion uses this rather than the full lookup: a cover named after the book
+/// dies with it, but a folder-level `cover.jpg` in a flat-dump library is
+/// shared by every book in that folder and must survive.
+pub fn per_stem_sidecar_cover(ebook_path: &Path) -> Option<PathBuf> {
+    let parent = ebook_path.parent()?;
+    let stem = ebook_path.file_stem().and_then(|s| s.to_str())?;
+    probe_direct_path(parent, stem).or_else(|| find_with_extensions(parent, stem))
+}
+
 const COVER_EXTS: &[&str] = &["jpg", "jpeg", "png"];
 
 /// Direct-path probe: stat `<base>.{jpg,jpeg,png}` directly with `is_file()`

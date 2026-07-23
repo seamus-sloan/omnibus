@@ -13,6 +13,7 @@ pub mod bookmarks;
 pub mod books;
 pub mod browse;
 pub mod covers;
+pub mod deletion;
 pub mod discovery;
 pub mod ebook;
 pub mod helpers;
@@ -69,6 +70,10 @@ pub use books::{
 };
 pub use browse::*;
 pub use covers::{covers_dir, get_cover, get_last_modified_epoch, CoversError};
+pub use deletion::{
+    book_deletion_manifest, delete_book_items, DeleteError, DeleteOutcome, DeletionImpact,
+    DeletionManifest,
+};
 pub use discovery::*;
 pub use helpers::{build_fts_match, sanitize_fts_query};
 pub use kepub::{convert_book, kepub_path, kepubify_available, warn_if_unavailable, KepubError};

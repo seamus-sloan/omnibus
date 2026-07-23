@@ -440,8 +440,19 @@ pub async fn get_book_files(
     pool: &SqlitePool,
     book_id: i64,
 ) -> Result<Vec<omnibus_shared::BookFileInfo>, super::BooksError> {
-    let rows = sqlx::query_as::<_, (i64, String, String, i64, Option<String>, i64)>(
-        "SELECT id, format, filename, ordinal, label, size_bytes FROM book_files \
+    let rows = sqlx::query_as::<
+        _,
+        (
+            i64,
+            String,
+            String,
+            i64,
+            Option<String>,
+            i64,
+            Option<String>,
+        ),
+    >(
+        "SELECT id, format, filename, ordinal, label, size_bytes, scan_key FROM book_files \
          WHERE book_id = ? ORDER BY format, ordinal",
     )
     .bind(book_id)
@@ -449,16 +460,17 @@ pub async fn get_book_files(
     .await?;
     Ok(rows
         .into_iter()
-        .map(
-            |(id, format, filename, ordinal, label, size_bytes)| omnibus_shared::BookFileInfo {
+        .map(|(id, format, filename, ordinal, label, size_bytes, path)| {
+            omnibus_shared::BookFileInfo {
                 id,
                 format,
                 filename,
                 ordinal,
                 label,
                 size_bytes,
-            },
-        )
+                path,
+            }
+        })
         .collect())
 }
 

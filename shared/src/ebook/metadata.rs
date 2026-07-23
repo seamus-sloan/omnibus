@@ -138,4 +138,10 @@ pub struct BookFileInfo {
     /// oversized EPUBs the same way the hero export menu does.
     #[serde(default)]
     pub size_bytes: i64,
+    /// Library-relative path (`book_files.scan_key`, e.g.
+    /// `clarke/piranesi.epub`) — what the delete dialog shows so an admin can
+    /// see exactly which file on disk a row stands for. `None` for rows
+    /// predating the `scan_key` backfill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }

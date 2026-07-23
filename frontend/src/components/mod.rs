@@ -83,6 +83,14 @@ pub mod merge_dialog;
 #[cfg(not(feature = "mobile"))]
 pub use merge_dialog::MergeDialog;
 
+// Admin "Delete files…" dialog, mounted by the book detail page. Web-only
+// for the same reason as the merge dialog — mobile renders no admin
+// affordances.
+#[cfg(not(feature = "mobile"))]
+pub mod delete_book_dialog;
+#[cfg(not(feature = "mobile"))]
+pub use delete_book_dialog::DeleteBookDialog;
+
 #[cfg(not(feature = "mobile"))]
 pub mod search_palette;
 

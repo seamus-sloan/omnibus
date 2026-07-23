@@ -5,8 +5,9 @@
 //! functions resolve against the page origin.
 
 use omnibus_shared::{
-    AudiobookManifest, EbookLibrary, EbookMetadata, LibraryContents, LibraryPage, MergeBooksResult,
-    MetadataOverrides, PaletteResults, Settings, SortDir, SortKey, ViewFilters, WorkerStatus,
+    AudiobookManifest, BookDeletionManifest, DeleteBookFilesResult, EbookLibrary, EbookMetadata,
+    LibraryContents, LibraryPage, MergeBooksResult, MetadataOverrides, PaletteResults, Settings,
+    SortDir, SortKey, ViewFilters, WorkerStatus,
 };
 
 #[cfg(not(feature = "mobile"))]
@@ -578,6 +579,52 @@ pub async fn undo_merge(_server_url: &str, merge_log_id: i64) -> Result<String, 
 #[cfg(feature = "mobile")]
 pub async fn undo_merge(_server_url: &str, _merge_log_id: i64) -> Result<String, DataError> {
     Err(DataError::Other("merge is web-only".into()))
+}
+
+/// Admin: the book's deletable items plus the user data a total delete would
+/// take with them. Web-only — mobile has no admin surface.
+#[cfg(not(feature = "mobile"))]
+pub async fn book_deletion_manifest(
+    _server_url: &str,
+    uuid: &str,
+) -> Result<BookDeletionManifest, DataError> {
+    crate::rpc::rpc_book_deletion_manifest(uuid.to_string())
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Mobile stub for `book_deletion_manifest` — deletion is a web-admin-only surface.
+#[cfg(feature = "mobile")]
+pub async fn book_deletion_manifest(
+    _server_url: &str,
+    _uuid: &str,
+) -> Result<BookDeletionManifest, DataError> {
+    Err(DataError::Other("deletion is web-only".into()))
+}
+
+/// Admin: delete the given files and physical copies; when no item is left,
+/// the book goes too.
+#[cfg(not(feature = "mobile"))]
+pub async fn delete_book_files(
+    _server_url: &str,
+    uuid: &str,
+    file_ids: Vec<i64>,
+    copy_ids: Vec<i64>,
+) -> Result<DeleteBookFilesResult, DataError> {
+    crate::rpc::rpc_delete_book_files(uuid.to_string(), file_ids, copy_ids)
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Mobile stub for `delete_book_files` — deletion is a web-admin-only surface.
+#[cfg(feature = "mobile")]
+pub async fn delete_book_files(
+    _server_url: &str,
+    _uuid: &str,
+    _file_ids: Vec<i64>,
+    _copy_ids: Vec<i64>,
+) -> Result<DeleteBookFilesResult, DataError> {
+    Err(DataError::Other("deletion is web-only".into()))
 }
 
 /// Web/SSR `get_ebooks` — server-function wrapper that proxies to `rpc_get_ebooks`.
