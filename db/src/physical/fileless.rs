@@ -73,9 +73,7 @@ pub async fn create_fileless_book(
     .fetch_one(&mut *tx)
     .await?;
 
-    for (position, name) in book.authors.iter().enumerate() {
-        link_author(&mut tx, book_id, position as i64, name).await?;
-    }
+    link_authors(&mut tx, book_id, &book.authors).await?;
 
     if let Some(isbn) = book.isbn.as_deref().filter(|s| !s.is_empty()) {
         sqlx::query(
@@ -120,29 +118,59 @@ async fn ensure_physical_library(
         .await
 }
 
-/// Resolve-or-insert an author by name and link it to the book at `position`.
-async fn link_author(
+/// Resolve-or-insert every author and link them to the book in position order.
+/// Mirrors the batched-insert idiom in `db/src/sync/books/shared.rs`
+/// (`insert_tag_links`/`insert_identifier_links`) and `db/src/sync/authors.rs`:
+/// dedup by first occurrence in Rust *before* querying — SQL row-processing
+/// order for a multi-row `INSERT OR IGNORE` is not guaranteed, so relying on
+/// it to pick which duplicate's position wins would be nondeterministic —
+/// then batch the resolve-or-insert and the link write, chunked to stay under
+/// SQLite's 999-bind-parameter cap even for a pathologically long author list
+/// (fileless lists are normally 1-3 names, but nothing enforces that).
+async fn link_authors(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
-    position: i64,
-    name: &str,
+    authors: &[String],
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("INSERT OR IGNORE INTO authors (name) VALUES (?1)")
-        .bind(name)
-        .execute(&mut **tx)
-        .await?;
-    let author_id: i64 = sqlx::query_scalar("SELECT id FROM authors WHERE name = ?1")
-        .bind(name)
-        .fetch_one(&mut **tx)
-        .await?;
-    sqlx::query(
-        "INSERT OR IGNORE INTO books_authors_link (book, author, position)
-         VALUES (?1, ?2, ?3)",
-    )
-    .bind(book_id)
-    .bind(author_id)
-    .bind(position)
-    .execute(&mut **tx)
-    .await?;
+    let mut seen = std::collections::HashSet::new();
+    let entries: Vec<(&str, i64)> = authors
+        .iter()
+        .map(String::as_str)
+        .enumerate()
+        .filter(|(_, name)| seen.insert(*name))
+        .map(|(position, name)| (name, position as i64))
+        .collect();
+    if entries.is_empty() {
+        return Ok(());
+    }
+
+    // 1 bind/row for the author insert, 1 (book_id) + 2/row for the link
+    // insert; 400 keeps both comfortably under SQLite's 999-param cap.
+    for chunk in entries.chunks(400) {
+        let author_rows = std::iter::repeat_n("(?)", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let insert_sql = format!("INSERT OR IGNORE INTO authors (name) VALUES {author_rows}");
+        let mut insert_q = sqlx::query(&insert_sql);
+        for (name, _) in chunk {
+            insert_q = insert_q.bind(*name);
+        }
+        insert_q.execute(&mut **tx).await?;
+
+        let link_rows = std::iter::repeat_n("(?, ?)", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let link_sql = format!(
+            "INSERT OR IGNORE INTO books_authors_link (book, author, position)
+             SELECT ?, a.id, v.column2
+             FROM (VALUES {link_rows}) AS v
+             JOIN authors a ON a.name = v.column1"
+        );
+        let mut link_q = sqlx::query(&link_sql).bind(book_id);
+        for (name, position) in chunk {
+            link_q = link_q.bind(*name).bind(*position);
+        }
+        link_q.execute(&mut **tx).await?;
+    }
     Ok(())
 }

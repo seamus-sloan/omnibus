@@ -353,6 +353,107 @@ async fn create_fileless_book_reuses_one_physical_scan_root() {
     assert_eq!(physical_books, 2);
 }
 
+#[tokio::test]
+async fn create_fileless_book_links_multiple_authors_in_order_with_no_duplicates() {
+    let _covers = CoversTempDir::new("fileless_multi_author");
+    let pool = pool().await;
+
+    let uuid = create_fileless_book(
+        &pool,
+        FilelessBook {
+            title: "Collaborative Work".into(),
+            // "Repeat Author" appears twice — the batched insert-or-ignore
+            // must still link it only once, at its first position.
+            authors: vec![
+                "First Author".into(),
+                "Repeat Author".into(),
+                "Repeat Author".into(),
+            ],
+            isbn: None,
+            pubdate: None,
+            description: None,
+            cover: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let book_id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE uuid = ?1")
+        .bind(&uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let links: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT a.name, l.position FROM books_authors_link l
+         JOIN authors a ON a.id = l.author
+         WHERE l.book = ?1 ORDER BY l.position",
+    )
+    .bind(book_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        links,
+        vec![
+            ("First Author".to_string(), 0),
+            ("Repeat Author".to_string(), 1),
+        ]
+    );
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT COUNT(*) FROM authors WHERE name = 'Repeat Author'"
+        )
+        .await,
+        1
+    );
+}
+
+/// `link_authors` chunks its batched inserts at 400 entries to stay under
+/// SQLite's 999-bind-parameter cap; 850 authors forces three chunks (400 +
+/// 400 + 50) and must still link every one, in order, with no drops at the
+/// chunk boundary.
+#[tokio::test]
+async fn create_fileless_book_links_authors_above_the_sqlite_bind_cap() {
+    let _covers = CoversTempDir::new("fileless_bind_cap");
+    let pool = pool().await;
+    let authors: Vec<String> = (0..850).map(|i| format!("Author {i:04}")).collect();
+
+    let uuid = create_fileless_book(
+        &pool,
+        FilelessBook {
+            title: "Massive Anthology".into(),
+            authors: authors.clone(),
+            isbn: None,
+            pubdate: None,
+            description: None,
+            cover: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let book_id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE uuid = ?1")
+        .bind(&uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let linked: Vec<String> = sqlx::query_scalar(
+        "SELECT a.name FROM books_authors_link l
+         JOIN authors a ON a.id = l.author
+         WHERE l.book = ?1 ORDER BY l.position",
+    )
+    .bind(book_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(linked, authors);
+}
+
 /// Minimal valid 1x1 GIF87a — enough for `image` to sniff and write `<uuid>.gif`.
 const GIF_1X1: &[u8] = &[
     0x47, 0x49, 0x46, 0x38, 0x37, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00,
