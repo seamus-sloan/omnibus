@@ -23,7 +23,7 @@ use super::file_picker::{is_audio_book_file, BdFilePickerMenu, FilePickerKind};
 use super::immersive::BdImmersiveButton;
 use super::journal::BdJournalSection;
 use super::rating::BdRatingWidget;
-use super::{derive_loaded_view, BdFormatBadge, BdMetaRow, LoadedBookView};
+use super::{derive_loaded_view, BdFormatBadge, BdMetaRow, DescriptionSignals, LoadedBookView};
 
 /// The loaded-book data the mobile layout reflows into its single column,
 /// including the discovery blocks (author cluster + Hardcover suggestions).
@@ -33,10 +33,10 @@ pub(super) struct MobileBookView {
     pub suggestions: Option<SuggestionsResponse>,
     pub is_admin: bool,
     pub server_url: String,
-    /// Fetch Summary override, owned by [`super::BookDetailPage`] and
-    /// threaded down here — see the field comment there for why this can't
-    /// be a local `use_signal` in this fn (rule 07).
-    pub description: Signal<String>,
+    /// Fetch Summary override + epoch, owned by [`super::BookDetailPage`]
+    /// and threaded down here — see the field comment there for why this
+    /// can't be a local `use_signal` in this fn (rule 07).
+    pub description: DescriptionSignals,
 }
 
 /// Render the fully-loaded book detail for the mobile shell. A plain fn with
@@ -45,7 +45,7 @@ pub(super) struct MobileBookView {
 /// loading/error/not-found early returns, so a hook declared inside it was
 /// registered on some renders of that component and skipped on others —
 /// a hook-order violation (rule 07). It's now owned by `BookDetailPage` and
-/// threaded down as a `Signal<String>` field on [`MobileBookView`] instead.
+/// threaded down as a [`DescriptionSignals`] field on [`MobileBookView`].
 pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
     let MobileBookView {
         b,
@@ -53,7 +53,11 @@ pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
         suggestions,
         is_admin,
         server_url,
-        mut description,
+        description:
+            DescriptionSignals {
+                value: mut description,
+                epoch: description_epoch,
+            },
     } = view;
     let LoadedBookView {
         title,
@@ -75,6 +79,12 @@ pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
     let on_fetched = {
         let server_url = server_url.clone();
         let uuid = uuid.clone();
+        // Snapshot this book's epoch: if the user navigates to a different
+        // book before the save below resolves, `BookDetailPage` bumps
+        // `description_epoch` for the new book, and the mismatch tells us to
+        // drop this result instead of overwriting the new book's summary —
+        // mirrors `poll_suggestions_until_resolved`'s `is_current` guard.
+        let expected_epoch = description_epoch();
         move |text: String| {
             let url = server_url.clone();
             let uuid = uuid.clone();
@@ -83,7 +93,8 @@ pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
                     description: Some(text.clone()),
                     ..Default::default()
                 };
-                if data::save_overrides(&url, &uuid, &overrides).await.is_ok() {
+                let saved = data::save_overrides(&url, &uuid, &overrides).await.is_ok();
+                if saved && description_epoch() == expected_epoch {
                     description.set(text);
                 }
             });

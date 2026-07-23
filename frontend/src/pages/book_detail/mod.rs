@@ -73,16 +73,17 @@ pub fn BookDetailPage(uuid: String) -> Element {
     let merge_result: Signal<Option<MergeBooksResult>> = use_signal(|| None);
     let undo_error: Signal<Option<String>> = use_signal(|| None);
 
-    // Fetch Summary override (mobile only): the effective description shown
-    // after a fetch-and-save, refreshed whenever a new book loads. Declared
-    // unconditionally per rule 07, same as the merge signals above —
-    // `render_loaded_mobile` is a plain fn with no scope of its own, so a
-    // `use_signal` inside it registered against *this* component's hook list
-    // only on renders that reached past the loading/error/not-found guards
-    // below, shrinking and regrowing the hook count on every navigation. Web
-    // doesn't need this: `BdTitleCol` (hero.rs) is a real `#[component]`, so
-    // its own local `use_signal` gets a fresh scope on every mount already.
-    let description: Signal<String> = use_signal(String::new);
+    // Fetch Summary override (mobile only). Declared unconditionally per
+    // rule 07 — `render_loaded_mobile` is a plain fn with no hook scope,
+    // reached only past the early returns below. `epoch` is bumped
+    // alongside `value` on every fresh book load; the Fetch Summary save in
+    // `render_loaded_mobile` checks it's unchanged before writing, so a save
+    // left over from a since-navigated-away book can't clobber the new
+    // book's description.
+    let description = DescriptionSignals {
+        value: use_signal(String::new),
+        epoch: use_signal(|| 0u64),
+    };
 
     use_book_data_effects(
         uuid.clone(),
@@ -125,6 +126,16 @@ pub fn BookDetailPage(uuid: String) -> Element {
     )
 }
 
+/// Fetch Summary override signals (mobile only): the effective description
+/// plus the epoch that guards a pending fetch-and-save against resolving
+/// onto a different, later-navigated book. `Copy` (Dioxus signals) and
+/// grouped so call sites stay under the function-argument cap.
+#[derive(Clone, Copy)]
+struct DescriptionSignals {
+    value: Signal<String>,
+    epoch: Signal<u64>,
+}
+
 /// The book-page data signals written by the fetch effects. `Copy` (Dioxus
 /// signals), so the group is passed by value.
 #[derive(Clone, Copy)]
@@ -136,7 +147,7 @@ struct BookDataSignals {
     refresh: Signal<u32>,
     suggestions_epoch: Signal<u64>,
     suggestions: Signal<Option<SuggestionsResponse>>,
-    description: Signal<String>,
+    description: DescriptionSignals,
 }
 
 /// Install the two `uuid`-reactive fetch effects: the book + author-books load
@@ -193,7 +204,7 @@ struct MergeSignals {
 fn render_book_shell(
     b: EbookMetadata,
     merge: MergeSignals,
-    description: Signal<String>,
+    description: DescriptionSignals,
     author_books: Vec<EbookMetadata>,
     suggestions: Option<SuggestionsResponse>,
     is_admin: ReadSignal<bool>,
@@ -256,10 +267,11 @@ fn render_book_shell(
 /// Fetch the book, then (if it resolves and has a creator) the primary
 /// author's other books, filtering out the current book. `book` and
 /// `author_books` are written directly so a fast re-run (uuid change) is
-/// naturally superseded by the newer fetch's writes. `description` (mobile's
-/// Fetch Summary override) resets to the freshly-loaded book's saved summary
-/// on every call, so navigating to a different book can't leak the previous
-/// book's fetched-and-saved text.
+/// naturally superseded by the newer fetch's writes. `description.value`
+/// (mobile's Fetch Summary override) resets to the freshly-loaded book's
+/// saved summary on every call, and `description.epoch` bumps alongside it
+/// so a fetch-and-save left over from a previous book can detect it's stale
+/// and drop its result instead of overwriting the new book's description.
 fn fetch_book_and_author_books(
     server_url: String,
     uuid: String,
@@ -267,7 +279,7 @@ fn fetch_book_and_author_books(
     mut author_books: Signal<Vec<EbookMetadata>>,
     mut loading: Signal<bool>,
     mut error: Signal<Option<String>>,
-    mut description: Signal<String>,
+    mut description: DescriptionSignals,
 ) {
     spawn(async move {
         loading.set(true);
@@ -280,11 +292,12 @@ fn fetch_book_and_author_books(
                         inner.unique_identifier.clone(),
                     )
                 });
-                description.set(
+                description.value.set(
                     b.as_ref()
                         .and_then(|inner| inner.description.clone())
                         .unwrap_or_default(),
                 );
+                description.epoch.with_mut(|e| *e += 1);
                 book.set(b);
                 error.set(None);
                 loading.set(false);
@@ -507,7 +520,7 @@ fn derive_loaded_view(b: &EbookMetadata) -> LoadedBookView {
 /// Render the fully-loaded book detail view.
 fn render_loaded(
     b: EbookMetadata,
-    description: Signal<String>,
+    description: DescriptionSignals,
     author_books: Vec<EbookMetadata>,
     merge_button: Option<Element>,
     suggestions: Option<SuggestionsResponse>,
@@ -535,7 +548,7 @@ fn render_loaded(
     let out = {
         // Web keeps its own local copy inside `BdTitleCol` (hero.rs), a real
         // `#[component]` that gets a fresh scope per mount — no hook-order
-        // risk there, so this parameter is unused on this target.
+        // risk there, so this param is unused on this target.
         let _ = description;
         let LoadedBookView {
             title,
