@@ -46,6 +46,7 @@ impl From<crate::books::BooksError> for MetadataOverridesError {
 async fn upsert_overrides_row<'e, E>(
     executor: E,
     book_uuid: &str,
+    overrides: &MetadataOverrides,
     overrides_json: &str,
     has_cover_override: bool,
     user_id: i64,
@@ -54,10 +55,11 @@ where
     E: Executor<'e, Database = sqlx::Sqlite>,
 {
     // Effective match keys for Physical Check-In's fuzzy rung — derived from the
-    // same JSON we store so the columns never drift from it. NULL when the
+    // same overrides we store so the columns never drift from them. NULL when the
     // override doesn't set that field, so the resolver falls back to the scanned
-    // `books.*_norm` (see migration 0048).
-    let (title_norm, author_norm) = override_match_keys(overrides_json);
+    // `books.*_norm` (see migration 0048). Computed from the typed struct the
+    // caller already holds, so the write path never re-parses the JSON.
+    let (title_norm, author_norm) = override_match_keys(overrides);
     sqlx::query(
         "INSERT INTO metadata_overrides (book_uuid, overrides, has_cover_override, updated_by, updated_at, title_norm, author_norm)
          VALUES (?, ?, ?, ?, strftime('%s','now'), ?, ?)
@@ -80,17 +82,13 @@ where
     Ok(())
 }
 
-/// Normalized effective (title, author) match keys for an `overrides` JSON blob,
+/// Normalized effective (title, author) match keys for a set of overrides,
 /// mirroring how the sync writers derive `books.(title_norm, author_norm)` from
 /// scanned metadata: `normalize_title` of the override title, `normalize_author`
 /// of the first override creator. Either side is `None` when the override
 /// doesn't set that field (or it normalizes to empty), signalling the resolver
 /// to fall back to the scanned norm.
-fn override_match_keys(overrides_json: &str) -> (Option<String>, Option<String>) {
-    // The JSON was just serialized by us; a parse failure is not expected, but
-    // falling back to "no override keys" (both NULL → scanned norm) is the safe
-    // degradation rather than failing the whole save.
-    let ov: MetadataOverrides = serde_json::from_str(overrides_json).unwrap_or_default();
+fn override_match_keys(ov: &MetadataOverrides) -> (Option<String>, Option<String>) {
     let title_norm = ov.title.as_deref().and_then(normalize_title);
     let author_norm = ov
         .creators
@@ -117,7 +115,21 @@ pub(crate) async fn backfill_override_norm_columns(
     let stale: Vec<(String, Option<String>, Option<String>)> = rows
         .into_iter()
         .filter_map(|(uuid, json, stored_title, stored_author)| {
-            let (title_norm, author_norm) = override_match_keys(&json);
+            // A corrupt blob must not overwrite existing keys with NULL — skip it
+            // (mirroring `load_overrides_bulk`) so the data problem is logged, not
+            // silently laundered into a degraded match key.
+            let ov: MetadataOverrides = match serde_json::from_str(&json) {
+                Ok(ov) => ov,
+                Err(e) => {
+                    tracing::warn!(
+                        book_uuid = %uuid,
+                        error = %e,
+                        "corrupt metadata_overrides JSON — skipping norm backfill for row"
+                    );
+                    return None;
+                }
+            };
+            let (title_norm, author_norm) = override_match_keys(&ov);
             (title_norm != stored_title || author_norm != stored_author).then_some((
                 uuid,
                 title_norm,
@@ -171,7 +183,15 @@ pub async fn upsert_metadata_overrides(
     // `sqlx::Transaction` issues a structured ROLLBACK on any `?` early-return
     // below.
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-    upsert_overrides_row(&mut *tx, book_uuid, &json, has_cover_override, user_id).await?;
+    upsert_overrides_row(
+        &mut *tx,
+        book_uuid,
+        overrides,
+        &json,
+        has_cover_override,
+        user_id,
+    )
+    .await?;
     materialize_series_link(&mut tx, book_uuid, overrides).await?;
     tx.commit().await?;
 
@@ -220,7 +240,15 @@ pub async fn merge_metadata_overrides(
     };
 
     let json = serde_json::to_string(&merged)?;
-    upsert_overrides_row(&mut *tx, book_uuid, &json, has_cover_override, user_id).await?;
+    upsert_overrides_row(
+        &mut *tx,
+        book_uuid,
+        &merged,
+        &json,
+        has_cover_override,
+        user_id,
+    )
+    .await?;
     materialize_series_link(&mut tx, book_uuid, &merged).await?;
     tx.commit().await?;
 
@@ -327,7 +355,7 @@ pub async fn clear_cover_override(
             upsert_fts(&mut tx, book_id).await?;
         }
     } else {
-        upsert_overrides_row(&mut *tx, book_uuid, &json, false, user_id).await?;
+        upsert_overrides_row(&mut *tx, book_uuid, &overrides, &json, false, user_id).await?;
     }
     tx.commit().await?;
     Ok(())
