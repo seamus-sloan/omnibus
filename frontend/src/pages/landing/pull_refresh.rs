@@ -64,7 +64,7 @@ fn install_js(id: u64) -> String {
       n.style.opacity = String(p);
       // The disc drifts only slightly — the content curtain moving over a
       // near-stationary spinner is what reads as the native gap.
-      n.style.transform = 'translate(-50%,' + (pull * 0.25) + 'px) rotate(' + Math.round(p * 180) + 'deg)';
+      n.style.transform = 'translate(-50%,' + (pull * 0.1) + 'px) rotate(' + Math.round(p * 180) + 'deg)';
     }
     var l = lib();
     if (l) l.style.transform = pull ? 'translateY(' + pull + 'px)' : '';
@@ -78,7 +78,7 @@ fn install_js(id: u64) -> String {
       window.__omnibusPtrBusy = true;
       window.__omnibusPtrT0 = Date.now();
       n.classList.add('is-refreshing');
-      n.style.transform = 'translate(-50%, 10px)';
+      n.style.transform = 'translate(-50%, 4px)';
       settleLib(HOLD);
       try { dioxus.send(1); } catch (_e) {}
     } else {

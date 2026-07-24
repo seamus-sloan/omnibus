@@ -7846,7 +7846,10 @@ html {
    `pull_refresh.rs` drives transform/opacity during the drag; these rules
    own the resting, refreshing, and settle states. */
 .m-ptr {
-  position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 10px);
+  /* Rest just under the status bar, above the content's natural top, so
+     the sliding content reveals it in the gap instead of overlapping it
+     (the max() keeps it on-screen when there is no safe-area inset). */
+  position: fixed; left: 50%; top: max(12px, calc(env(safe-area-inset-top, 0px) - 10px));
   z-index: 40; width: 34px; height: 34px; border-radius: 50%;
   display: grid; place-items: center;
   background: var(--bg-1); border: 1px solid var(--line-2);
