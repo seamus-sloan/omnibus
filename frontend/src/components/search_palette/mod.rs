@@ -1,9 +1,8 @@
 //! Command-palette / Spotlight-style search overlay. Replaces the inline
 //! nav search input with a trigger button in the top nav; clicking it (or
 //! pressing `⌘K` / `Ctrl+K`) opens a floating palette with debounced FTS5
-//! search and grouped results (Books, Authors, Series, Tags, Inside text).
-//! The trigger mounts in `TopNav`, the overlay at the `ScreenLayout` root;
-//! web-only via `cfg(not(feature = "mobile"))`.
+//! search and grouped results. The trigger mounts in `TopNav`, the overlay
+//! at the `ScreenLayout` root; web-only via `cfg(not(feature = "mobile"))`.
 
 use dioxus::prelude::*;
 
