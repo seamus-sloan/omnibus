@@ -2704,8 +2704,16 @@ a.idx-letter-on:focus-visible {
   letter-spacing: .04em; text-transform: uppercase;
 }
 
+/* Click-outside catcher. `inset: 0` would collapse this to the header
+   strip: `.atrium-topbar` sets `backdrop-filter`, which makes it the
+   containing block for `position: fixed` descendants, and the scrim lives
+   inside it (the panel anchors to `.um-root`, so it can't move to the app
+   root the way the search palette's overlay does). The topbar is
+   `sticky; top: 0` and full-bleed, so its padding-box origin is the
+   viewport origin and explicit viewport sizing covers the page. */
 .um-scrim {
-  position: fixed; inset: 0; z-index: 60;
+  position: fixed; top: 0; left: 0;
+  width: 100vw; height: 100dvh; z-index: 60;
   background: transparent; cursor: default;
 }
 
