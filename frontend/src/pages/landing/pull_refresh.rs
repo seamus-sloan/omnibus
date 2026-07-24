@@ -1,9 +1,11 @@
-//! Pull-to-refresh for the mobile landing screen. A JS touch tracker owns
-//! the drag visuals — styling the `.m-ptr` indicator imperatively, so
-//! no per-frame WASM round trip — and fires one eval message when the pull
-//! crosses the threshold; the Rust side awaits the forced first-page
-//! refresh (`data::refresh_ebooks_first_page`) before settling the
-//! indicator. Install/cleanup mirrors `use_mobile_edge_swipe_back`.
+//! Pull-to-refresh for the mobile landing screen, in the native shape: the
+//! content (`.m-lib`) follows the finger down, the `.m-ptr` spinner sits in
+//! the gap the pull opens, and past the threshold the content holds at the
+//! gap until the refresh settles, then springs back up. A JS touch tracker
+//! owns all drag visuals imperatively (no per-frame WASM round trip) and
+//! fires one eval message on trigger; the Rust side awaits the forced
+//! first-page refresh (`data::refresh_ebooks_first_page`) before settling.
+//! Install/cleanup mirrors `use_mobile_edge_swipe_back`.
 
 use dioxus::prelude::*;
 use omnibus_shared::ViewPrefs;
@@ -32,36 +34,56 @@ fn install_js(id: u64) -> String {
   // starts usable.
   window.__omnibusPtrBusy = false;
   var startY = 0, pull = 0, active = false;
-  var THRESH = 70, MAX = 110;
+  var THRESH = 70, MAX = 110, HOLD = 64;
   function el(){ return document.querySelector('.m-ptr'); }
+  function lib(){ return document.querySelector('.m-lib'); }
   function top(){ return window.scrollY || document.documentElement.scrollTop || 0; }
+  // The native pattern: the CONTENT follows the finger down and the spinner
+  // sits in the gap it opens; past the threshold the content holds at HOLD
+  // until the refresh settles, then springs back up.
+  function settleLib(px){
+    var l = lib(); if (!l) return;
+    l.style.transition = 'transform .24s cubic-bezier(.2,.7,.3,1)';
+    l.style.transform = px ? 'translateY(' + px + 'px)' : '';
+  }
   function onStart(e){
     if (window.__omnibusPtrBusy || !e.touches || e.touches.length !== 1 || top() > 0) { active = false; return; }
     startY = e.touches[0].clientY; pull = 0; active = true;
     var n = el(); if (n) n.style.transition = 'none';
+    // Inline transition:none beats the .m-lib-ready class transition, so
+    // the drag tracks 1:1; the settle paths restore it for the return.
+    var l = lib(); if (l) { l.style.transition = 'none'; l.style.willChange = 'transform'; }
   }
   function onMove(e){
     if (!active) return;
     var dy = e.touches[0].clientY - startY;
     pull = dy > 0 && top() <= 0 ? Math.min(MAX, Math.pow(dy, 0.85)) : 0;
-    var n = el(); if (!n) return;
     var p = Math.min(1, pull / THRESH);
-    n.style.opacity = String(p);
-    n.style.transform = 'translate(-50%,' + (pull * 0.6) + 'px) rotate(' + Math.round(p * 180) + 'deg)';
+    var n = el();
+    if (n) {
+      n.style.opacity = String(p);
+      // The disc drifts only slightly — the content curtain moving over a
+      // near-stationary spinner is what reads as the native gap.
+      n.style.transform = 'translate(-50%,' + (pull * 0.25) + 'px) rotate(' + Math.round(p * 180) + 'deg)';
+    }
+    var l = lib();
+    if (l) l.style.transform = pull ? 'translateY(' + pull + 'px)' : '';
   }
   function onEnd(){
     if (!active) return;
     active = false;
-    var n = el(); if (!n) return;
-    n.style.transition = '';
-    if (pull >= THRESH) {
+    var n = el();
+    if (n) n.style.transition = '';
+    if (n && pull >= THRESH) {
       window.__omnibusPtrBusy = true;
       window.__omnibusPtrT0 = Date.now();
       n.classList.add('is-refreshing');
-      n.style.transform = 'translate(-50%, 44px)';
+      n.style.transform = 'translate(-50%, 10px)';
+      settleLib(HOLD);
       try { dioxus.send(1); } catch (_e) {}
     } else {
-      n.style.transform = ''; n.style.opacity = '';
+      if (n) { n.style.transform = ''; n.style.opacity = ''; }
+      settleLib(0);
     }
   }
   // Passive capture listeners: coordinates only, never preventDefault —
@@ -101,12 +123,23 @@ fn cleanup_js(id: u64) -> String {
 const SETTLE_JS: &str = r#"
 (function(){
   var n = document.querySelector('.m-ptr');
+  var l = document.querySelector('.m-lib');
   var wait = Math.max(0, 500 - (Date.now() - (window.__omnibusPtrT0 || 0)));
   setTimeout(function(){
     if (n) {
       n.classList.remove('is-refreshing');
       n.style.transform = '';
       n.style.opacity = '';
+    }
+    if (l) {
+      // Spring the held content back up, then hand transitions back to
+      // the .m-lib-ready class and drop the gesture's layer promotion.
+      l.style.transition = 'transform .24s cubic-bezier(.2,.7,.3,1)';
+      l.style.transform = '';
+      setTimeout(function(){
+        l.style.transition = '';
+        l.style.willChange = '';
+      }, 300);
     }
     window.__omnibusPtrBusy = false;
   }, wait);
