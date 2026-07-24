@@ -4,10 +4,12 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Releases are cut automatically on merge to `main` (see
-`.github/pull_request_template.md` — unlabeled PRs default to a patch
-release; `minor version` / `patch version` / `no release` labels
-override that), so entries here are curated manually rather than
-generated from the raw commit log.
+`.github/pull_request_template.md`): by default a merge cuts a patch
+release, and the `minor version` / `patch version` / `no release`
+labels override that default. Unlabeled PRs that only touch docs
+(`*.md`, `docs/`) or CI (`.github/`) skip the release automatically.
+Entries here are curated manually rather than generated from the raw
+commit log.
 
 ## [Unreleased]
 
