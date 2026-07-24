@@ -4,6 +4,7 @@ use axum::{
     body::{to_bytes, Body},
     http::{header::AUTHORIZATION, Request, StatusCode},
 };
+use omnibus_db::test_support::EnvVarGuard;
 use tower::ServiceExt;
 
 use crate::auth::test_support as auth_test_support;
@@ -66,7 +67,10 @@ async fn api_post_summary_fetch_requires_edit_permission() {
 async fn api_post_summary_fetch_returns_null_when_hardcover_key_is_unset() {
     // With no Hardcover key configured, `db::fetch_summary` short-circuits to
     // `Ok(None)` before making any network call — safe to exercise here
-    // without a wiremock server (that path is covered at the db layer).
+    // without a wiremock server (that path is covered at the db layer). The
+    // guard removes an ambient `HARDCOVER_API_KEY` (a developer's `.env`)
+    // that would otherwise send this test out to the real Hardcover API.
+    let _env = EnvVarGuard::set("HARDCOVER_API_KEY", None);
     let (app, _state, pool) = fixture().await;
     let (_id, uuid) = seed_book_with_uuid(&pool, "/lib", "Original").await;
     let admin = auth_test_support::create_admin(&pool, "admin").await;
@@ -86,6 +90,9 @@ async fn api_post_summary_fetch_returns_null_when_hardcover_key_is_unset() {
 
 #[tokio::test]
 async fn api_hardcover_configured_reflects_saved_key_for_any_authenticated_user() {
+    // `hardcover_key_status` falls back to `HARDCOVER_API_KEY`, so the
+    // pre-save "false" assertion below only holds with the var removed.
+    let _env = EnvVarGuard::set("HARDCOVER_API_KEY", None);
     let (app, _state, pool) = fixture().await;
     let user = auth_test_support::create_user(&pool, "reader").await;
     let token = auth_test_support::bearer_token(&pool, user.id).await;
