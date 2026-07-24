@@ -7,7 +7,7 @@ use crate::auth::test_support as auth_test_support;
 use crate::backend::test_support::*;
 
 #[tokio::test]
-async fn api_get_covers_returns_not_found_for_missing_id() {
+async fn api_get_cover_returns_404_when_book_not_found() {
     let (app, _state, pool) = fixture().await;
     let user = auth_test_support::create_user(&pool, "alice").await;
     let token = auth_test_support::bearer_token(&pool, user.id).await;
@@ -19,7 +19,7 @@ async fn api_get_covers_returns_not_found_for_missing_id() {
 }
 
 #[tokio::test]
-async fn api_covers_returns_401_when_anonymous() {
+async fn api_get_cover_returns_401_when_anonymous() {
     let (app, _, _) = fixture().await;
     let res = app.oneshot(get_anon("/api/covers/1")).await.unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
@@ -101,7 +101,7 @@ async fn api_get_cover_returns_500_when_books_table_is_missing_during_uuid_resol
 }
 
 #[tokio::test]
-async fn api_thumbs_returns_400_for_bad_size() {
+async fn api_get_thumb_returns_400_for_bad_size() {
     let (app, _, pool) = fixture().await;
     let user = auth_test_support::create_user(&pool, "alice").await;
     let token = auth_test_support::bearer_token(&pool, user.id).await;
@@ -113,7 +113,7 @@ async fn api_thumbs_returns_400_for_bad_size() {
 }
 
 #[tokio::test]
-async fn api_thumbs_returns_404_for_missing_book() {
+async fn api_get_thumb_returns_404_for_missing_book() {
     let (app, _, pool) = fixture().await;
     let user = auth_test_support::create_user(&pool, "alice").await;
     let token = auth_test_support::bearer_token(&pool, user.id).await;
@@ -125,7 +125,7 @@ async fn api_thumbs_returns_404_for_missing_book() {
 }
 
 #[tokio::test]
-async fn api_thumbs_returns_202_for_book_without_cover() {
+async fn api_get_thumb_returns_202_for_book_without_cover() {
     let (_, _, pool) = fixture().await;
     // seed_book_no_cover uses this fixed uuid; route is uuid-keyed now.
     let _ = seed_book_no_cover(&pool).await;
@@ -141,7 +141,7 @@ async fn api_thumbs_returns_202_for_book_without_cover() {
 }
 
 #[tokio::test]
-async fn api_thumbs_returns_401_when_anonymous() {
+async fn api_get_thumb_returns_401_when_anonymous() {
     let (app, _, _) = fixture().await;
     let res = app.oneshot(get_anon("/api/thumbs/1/md")).await.unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
