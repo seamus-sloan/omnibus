@@ -2,18 +2,18 @@
 //! check-in / add-physical-only / wishlist write endpoints. Mobile uses the
 //! analogous REST routes in `server::backend::scan`.
 
-use dioxus::fullstack::post;
+use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
 use omnibus_shared::{
-    AddPhysicalOnlyRequest, BookRef, CheckInRequest, ResolveRequest, ScanOutcome,
-    WishlistAddRequest,
+    AddPhysicalOnlyRequest, BookRef, CheckInRequest, GoogleBooksKeyStatus, ResolveRequest,
+    ScanOutcome, WishlistAddRequest,
 };
 
 #[cfg(feature = "server")]
 use omnibus_db as db;
 
 #[cfg(feature = "server")]
-use super::{internal_rpc_error, AuthUser, PoolExt};
+use super::{internal_rpc_error, AdminUser, AuthUser, PoolExt};
 
 /// Map a scan-flow error to a client-facing `ServerFnError`: user-actionable
 /// cases (bad ISBN, unknown book, missing wishlist target, an unreachable
@@ -41,10 +41,39 @@ fn map_scan_err(e: db::ScanError) -> ServerFnError {
 /// user may resolve; ownership is library-wide.
 #[post("/api/rpc/scan/resolve", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_resolve_scan(req: ResolveRequest) -> Result<ScanOutcome> {
-    let config = db::MetadataLookupConfig::live();
+    // Saved settings key wins over `GOOGLE_BOOKS_API_KEY`; both absent is a
+    // keyless (shared-quota) lookup.
+    let key = db::effective_google_books_api_key(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("resolve google books key", e))?;
+    let config = db::MetadataLookupConfig::live_with_key(key);
     Ok(db::resolve_scan(&pool.0, &req.isbn, &config)
         .await
         .map_err(map_scan_err)?)
+}
+
+/// Admin-only: masked status of the server-wide Google Books key for Settings.
+/// Never returns the raw key.
+#[get("/api/rpc/google-books-key", pool: PoolExt, _admin: AdminUser)]
+pub async fn rpc_get_google_books_key() -> Result<GoogleBooksKeyStatus> {
+    Ok(db::google_books_key_status(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("get google books key status", e))?)
+}
+
+/// Admin-only: save (or clear, with `None`/blank) the Google Books key in
+/// settings. Returns the new masked status — never echoes the raw key. Rejects
+/// keys longer than `GOOGLE_BOOKS_API_KEY_MAX_LEN` before the KV write,
+/// surfacing the validation message via `ServerFnError`.
+#[post("/api/rpc/google-books-key", pool: PoolExt, _admin: AdminUser)]
+pub async fn rpc_set_google_books_key(key: Option<String>) -> Result<GoogleBooksKeyStatus> {
+    match db::set_google_books_api_key(&pool.0, key.as_deref()).await {
+        Ok(()) => Ok(db::google_books_key_status(&pool.0)
+            .await
+            .map_err(|e| internal_rpc_error("get google books key status", e))?),
+        Err(db::SettingsError::Validation(msg)) => Err(ServerFnError::new(msg).into()),
+        Err(e) => Err(internal_rpc_error("set google books key", e).into()),
+    }
 }
 
 /// Check in a physical copy of a book already in the library (fulfills every

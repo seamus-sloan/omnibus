@@ -369,6 +369,12 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             post(scan::post_add_physical_only),
         )
         .route("/api/scan/wishlist", post(scan::post_wishlist_add))
+        // Google Books API key (admin) — mobile-facing REST. Web hits the
+        // analogous `/api/rpc/google-books-key` server fn.
+        .route(
+            "/api/google-books-key",
+            get(scan::get_google_books_key).post(scan::post_google_books_key),
+        )
         // F3.1 shelves — mobile-facing REST. Web hits the analogous
         // `/api/rpc/shelves*` server functions. `/preview` is registered before
         // the `{id}` param route so it can't be shadowed.
