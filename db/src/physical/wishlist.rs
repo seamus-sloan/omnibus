@@ -87,6 +87,30 @@ pub async fn remove_wishlist_entry(
     Ok(())
 }
 
+/// Fetch one user's wishlist entry for a book, or `None` when it isn't
+/// wishlisted. Folds the uuid to canonical first, matching [`add_wishlist_entry`]
+/// — book detail calls this to decide between the "Add to physical wishlist"
+/// action and the tracking card.
+pub async fn get_wishlist_entry(
+    pool: &SqlitePool,
+    user_id: i64,
+    book_uuid: &str,
+) -> Result<Option<WishlistEntry>, PhysicalError> {
+    let Some(canonical) = resolve_canonical_book_uuid(pool, book_uuid).await? else {
+        return Ok(None);
+    };
+    let row = sqlx::query_as::<_, WishlistRow>(
+        "SELECT id, user_id, book_uuid, added_at, source
+           FROM wishlist_entries
+          WHERE user_id = ?1 AND book_uuid = ?2",
+    )
+    .bind(user_id)
+    .bind(&canonical)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(map_entry))
+}
+
 /// List a user's wishlist, newest first, capped at [`LIST_WISHLIST_LIMIT`].
 pub async fn list_wishlist(
     pool: &SqlitePool,
