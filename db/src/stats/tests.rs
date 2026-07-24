@@ -253,6 +253,69 @@ async fn finished_books_come_from_hundred_percent_journal_entries() {
     assert_eq!(s.books_per_month.len(), 12);
 }
 
+/// Stamp an explicit read-status `finished` on a book at `finished_at`.
+async fn finish_read_status(pool: &SqlitePool, user: i64, uuid: &str, finished_at: i64) {
+    sqlx::query(
+        "INSERT INTO book_read_status (user_id, book_uuid, status, updated_at, finished_at)
+         VALUES (?, ?, 'finished', ?, ?)",
+    )
+    .bind(user)
+    .bind(uuid)
+    .bind(finished_at)
+    .bind(finished_at)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn finished_books_count_explicit_read_status_finishes() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 3).await;
+    let user = seed_user(&pool, "alice").await;
+
+    // book 1: finished via read-status only; book 2: journal only; book 3:
+    // read-status 'reading' (must not count).
+    finish_read_status(&pool, user, "uuid-1", T0).await;
+    finish_journal(&pool, user, "uuid-2", T0).await;
+    sqlx::query(
+        "INSERT INTO book_read_status (user_id, book_uuid, status, updated_at)
+         VALUES (?, 'uuid-3', 'reading', ?)",
+    )
+    .bind(user)
+    .bind(T0)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    assert_eq!(s.books_finished, 2);
+    let uuids: Vec<&str> = s
+        .finished_books
+        .iter()
+        .map(|b| b.book_uuid.as_str())
+        .collect();
+    assert!(uuids.contains(&"uuid-1"));
+    assert!(uuids.contains(&"uuid-2"));
+    assert!(!uuids.contains(&"uuid-3"));
+}
+
+#[tokio::test]
+async fn book_finished_both_ways_counts_once() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+
+    finish_journal(&pool, user, "uuid-1", T0).await;
+    finish_read_status(&pool, user, "uuid-1", T0 + 100).await;
+
+    let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
+    assert_eq!(s.books_finished, 1);
+    assert_eq!(s.finished_books.len(), 1);
+    // The rail's finish time is the newest completion moment across sources.
+    assert_eq!(s.finished_books[0].finished_at, T0 + 100);
+}
+
 #[tokio::test]
 async fn empty_library_returns_zeroed_summary() {
     let pool = init_db("sqlite::memory:").await.unwrap();

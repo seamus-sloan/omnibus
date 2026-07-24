@@ -23,6 +23,7 @@ use super::file_picker::{is_audio_book_file, BdFilePickerMenu, FilePickerKind};
 use super::immersive::BdImmersiveButton;
 use super::journal::BdJournalSection;
 use super::rating::BdRatingWidget;
+use super::read_status::BdReadStatusControl;
 use super::{derive_loaded_view, BdFormatBadge, BdMetaRow, DescriptionSignals, LoadedBookView};
 
 /// The loaded-book data the mobile layout reflows into its single column,
@@ -224,6 +225,12 @@ pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
                 if summary_is_sparse(&description()) {
                     FetchSummaryButton { uuid: uuid.clone(), on_fetched }
                 }
+            }
+
+            // Reading status
+            section { class: "m-section",
+                div { class: "label", "Reading status" }
+                BdReadStatusControl { uuid: uuid.clone() }
             }
 
             // Rating

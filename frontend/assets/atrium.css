@@ -911,6 +911,27 @@ html, body { overscroll-behavior: none; }
   font-size: 11px; color: var(--ink-2); margin-bottom: 6px;
 }
 
+/* Read/unread segmented control. Three equal segments in a pill; the active
+   one carries the accent. Mirrors the pbar's width but reads as a control. */
+.bd-readstatus { display: flex; flex-direction: column; gap: 8px; }
+.bd-readstatus-seg {
+  display: inline-flex; align-self: flex-start;
+  border: 1px solid var(--bg-3); border-radius: 999px;
+  overflow: hidden; background: var(--bg-2);
+}
+.bd-readstatus-btn {
+  appearance: none; border: 0; margin: 0; cursor: pointer;
+  padding: 6px 16px; font-size: 12px; line-height: 1;
+  background: transparent; color: var(--ink-2);
+  border-right: 1px solid var(--bg-3);
+}
+.bd-readstatus-btn:last-child { border-right: 0; }
+.bd-readstatus-btn:hover { color: var(--ink-1); background: var(--bg-3); }
+.bd-readstatus-btn.active {
+  background: var(--accent); color: var(--accent-ink, #fff); font-weight: 600;
+}
+.bd-readstatus-meta { font-size: 11px; color: var(--ink-3); }
+
 .bd-tag-list {
   display: flex; gap: 8px; flex-wrap: wrap;
   list-style: none; padding: 0; margin: 22px 0 0;

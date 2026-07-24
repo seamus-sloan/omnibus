@@ -38,6 +38,7 @@ pub mod physical;
 pub mod pool;
 pub mod progress;
 pub mod ratings;
+pub mod read_status;
 pub mod scan;
 pub mod scanner;
 pub mod settings;
