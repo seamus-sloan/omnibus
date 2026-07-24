@@ -15,7 +15,7 @@ use super::sleep::{format_countdown, SleepChoice, PRESETS};
 /// Reactive sleep-timer values + mutators shared by [`SleepPanel`] and
 /// [`SleepPanelBody`], so the full-player wrapper can forward them 1:1
 /// without duplicating the field list across both signatures.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub(super) struct SleepPanelState {
     pub remaining: Option<i32>,
     pub choice: SleepChoice,
