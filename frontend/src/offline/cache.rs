@@ -200,6 +200,35 @@ pub(crate) fn notify_changed() {
     channel().0.send_modify(|g| *g += 1);
 }
 
+/// Force an immediate, awaitable server round-trip for `key` (the
+/// pull-to-refresh path): bypasses the freshness window and lands the
+/// result through the same compare-put-notify flow as a background
+/// revalidation. No-ops when offline, when queued mutations are pending
+/// (same guard as [`spawn_revalidation`]), or when a revalidation for the
+/// key is already in flight.
+pub async fn refresh<T, Fut>(key: String, fetch: Fut)
+where
+    T: Serialize + DeserializeOwned + Send + 'static,
+    Fut: std::future::Future<Output = Result<T, DataError>> + Send + 'static,
+{
+    if sync::is_offline() || sync::state().pending_ops > 0 {
+        return;
+    }
+    {
+        let Ok(mut in_flight) = revalidating().lock() else {
+            return;
+        };
+        if !in_flight.insert(key.clone()) {
+            return;
+        }
+    }
+    let prior_payload = get_row::<T>(&key)
+        .await
+        .map(|(_, _, payload)| payload)
+        .unwrap_or_default();
+    revalidate::<T, Fut>(key, prior_payload, fetch).await;
+}
+
 /// Keys with a revalidation currently in flight — one per key at a time.
 fn revalidating() -> &'static Mutex<HashSet<String>> {
     static SET: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();

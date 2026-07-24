@@ -184,6 +184,30 @@ pub async fn get_ebooks_page(
     }
 }
 
+/// Pull-to-refresh: force the first browse page through a server round
+/// trip, landing it in the SWR cache — and bumping the cache generation
+/// when it changed — so every subscribed screen refetches. Awaitable so
+/// the refresh indicator can track the real network round trip.
+#[cfg(feature = "mobile")]
+pub async fn refresh_ebooks_first_page(
+    server_url: &str,
+    sort_key: SortKey,
+    sort_dir: SortDir,
+    filters: ViewFilters,
+    limit: i64,
+) {
+    let key = crate::offline::cache::keys::ebooks_first(
+        sort_key.as_wire(),
+        sort_dir.as_wire(),
+        &filters.formats.join(","),
+    );
+    let url = server_url.to_string();
+    crate::offline::cache::refresh(key, async move {
+        get_ebooks_page_online(&url, sort_key, sort_dir, filters, None, limit).await
+    })
+    .await;
+}
+
 #[cfg(feature = "mobile")]
 pub(crate) async fn get_ebooks_page_online(
     server_url: &str,
