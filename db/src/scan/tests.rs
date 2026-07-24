@@ -9,9 +9,9 @@ use omnibus_shared::physical::WishlistSource;
 use omnibus_shared::scan::ScanOutcome;
 
 use super::*;
-use crate::metadata_lookup::MetadataLookupConfig;
+use crate::metadata_lookup::{MetadataLookupConfig, MetadataLookupError};
 use crate::normalize::{normalize_author, normalize_title};
-use crate::physical::{add_physical_copy, list_physical_copies, list_wishlist};
+use crate::physical::{add_physical_copy, list_physical_copies, list_wishlist, PhysicalError};
 use serde_json::json;
 use std::time::Duration;
 use wiremock::matchers::{method, path};
@@ -113,6 +113,16 @@ async fn mount_ol_hit(server: &MockServer, title: &str, author: &str) {
                 "authors": [{ "name": author }],
             }
         })))
+        .mount(server)
+        .await;
+}
+
+/// Mount Open Library to cleanly miss, leaving Google Books unmounted so the
+/// caller can wire its own (error) response.
+async fn mount_ol_miss(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path("/api/books"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
         .mount(server)
         .await;
 }
@@ -408,4 +418,56 @@ async fn wishlist_add_errors_without_target() {
         .await
         .unwrap_err();
     assert!(matches!(err, ScanError::MissingWishlistTarget));
+}
+
+// ── remaining ScanError variants (#1263) ───────────────────────────
+
+#[tokio::test]
+async fn resolve_scan_surfaces_lookup_error_when_both_providers_fail() {
+    let pool = pool().await;
+    let server = MockServer::start().await;
+    mount_ol_miss(&server).await;
+    // A non-retryable Google Books status fails the fallback immediately,
+    // rather than a clean miss — the real code path behind ScanError::Lookup.
+    Mock::given(method("GET"))
+        .and(path("/books/v1/volumes"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    let err = resolve_scan(&pool, ISBN, &config_for(&server))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, ScanError::Lookup(MetadataLookupError::Provider(_))),
+        "got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn wishlist_add_surfaces_physical_error_when_book_uuid_is_unresolvable() {
+    let pool = pool().await;
+    let user = seed_user(&pool, "reader").await;
+
+    // No book carries this uuid, so add_wishlist_entry's canonical-uuid
+    // resolution fails — the real code path behind ScanError::Physical.
+    let err = wishlist_add(&pool, user, Some("nope"), None, WishlistSource::Manual)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, ScanError::Physical(PhysicalError::BookNotFound)),
+        "got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn resolve_scan_surfaces_sqlx_error_when_pool_is_closed() {
+    let pool = pool().await;
+    pool.close().await;
+    let server = MockServer::start().await; // must not be hit — the exact rung fails first
+
+    let err = resolve_scan(&pool, ISBN, &config_for(&server))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ScanError::Sqlx(_)), "got {err:?}");
 }
