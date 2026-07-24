@@ -1,11 +1,7 @@
-//! Pull-to-refresh for the mobile landing screen, in the native shape: the
-//! content (`.m-lib`) follows the finger down, the `.m-ptr` spinner sits in
-//! the gap the pull opens, and past the threshold the content holds at the
-//! gap until the refresh settles, then springs back up. A JS touch tracker
-//! owns all drag visuals imperatively (no per-frame WASM round trip) and
-//! fires one eval message on trigger; the Rust side awaits the forced
-//! first-page refresh (`data::refresh_ebooks_first_page`) before settling.
-//! Install/cleanup mirrors `use_mobile_edge_swipe_back`.
+//! Pull-to-refresh for the mobile landing screen. A JS touch tracker moves
+//! `.m-lib` and `.m-ptr` without per-frame WASM work, then asks Rust to refresh
+//! the first page and settle the indicator. Install and cleanup mirror the
+//! mobile edge-swipe hook so remounts cannot remove a newer listener.
 
 use dioxus::prelude::*;
 use omnibus_shared::ViewPrefs;

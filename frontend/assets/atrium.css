@@ -7801,6 +7801,13 @@ html {
     -webkit-user-select: text;
     user-select: text;
   }
+  .rd-viewer img,
+  .bd-desc img,
+  .m-bd-desc img,
+  .bd-journal-entry-body img {
+    -webkit-touch-callout: default;
+    -webkit-user-drag: auto;
+  }
 }
 
 /* ── Motion (mobile) ────────────────────────────────────────────────

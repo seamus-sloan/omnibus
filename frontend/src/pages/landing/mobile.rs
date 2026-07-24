@@ -24,7 +24,7 @@ const COVERS_DECODE_JS: &str = r#"
   function imgs(){
     return Array.prototype.slice.call(document.querySelectorAll('.m-lib img'), 0, 12);
   }
-  var appear = Date.now() + 600;
+  var appear = Date.now() + 800;
   while (imgs().length === 0 && Date.now() < appear) {
     await new Promise(function(r){ requestAnimationFrame(r); });
   }
