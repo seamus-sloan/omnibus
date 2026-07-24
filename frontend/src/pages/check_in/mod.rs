@@ -11,7 +11,7 @@ mod screens;
 mod tests;
 
 use dioxus::prelude::*;
-use dioxus_router::use_navigator;
+use dioxus_router::{use_navigator, Link};
 use omnibus_shared::{
     isbn::normalize_isbn, AddPhysicalOnlyRequest, CheckInRequest, ExternalBookMeta, ResolveRequest,
     ScanBook, ScanOutcome, WishlistAddRequest, WishlistSource,
@@ -145,6 +145,17 @@ pub fn CheckInPage() -> Element {
 
     rsx! {
         section { class: "card check-in", "data-testid": "check-in",
+            // Always-available escape hatch out of the multi-step flow, back to
+            // the library. Present on every stage so a mid-flow abort never
+            // strands the reader.
+            Link {
+                to: Route::Landing {},
+                class: "check-in-close",
+                "data-testid": "check-in-close",
+                "aria-label": "Cancel check-in",
+                title: "Cancel",
+                "\u{00d7}"
+            }
             CheckInStage {
                 state,
                 on_resolve: EventHandler::new(on_resolve),

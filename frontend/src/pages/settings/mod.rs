@@ -9,14 +9,12 @@
 // route yet).
 #[cfg(not(feature = "mobile"))]
 mod metadata_precedence;
+mod secret_key_field;
 mod smtp;
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
-use omnibus_shared::{
-    GoogleBooksKeyStatus, HardcoverKeyStatus, LibraryContents, LibrarySection, Settings,
-    SCAN_INTERVAL_MIN_HOURS,
-};
+use omnibus_shared::{LibraryContents, LibrarySection, Settings, SCAN_INTERVAL_MIN_HOURS};
 
 #[cfg(not(feature = "mobile"))]
 use crate::components::worker_status::WorkerStatusIndicator;
@@ -24,6 +22,7 @@ use crate::{data, use_server_url, Route};
 
 #[cfg(not(feature = "mobile"))]
 use metadata_precedence::MetadataPrecedenceField;
+use secret_key_field::{SecretKeyField, SecretKeyKind};
 use smtp::SmtpConfigField;
 
 /// Library paths settings form + live recursive file-count summaries.
@@ -111,8 +110,8 @@ pub fn SettingsPage() -> Element {
         }
         if is_admin() {
             {metadata_precedence_slot()}
-            HardcoverKeyField {}
-            GoogleBooksKeyField {}
+            SecretKeyField { kind: SecretKeyKind::Hardcover }
+            SecretKeyField { kind: SecretKeyKind::GoogleBooks }
             SmtpConfigField {}
             section { class: "card", "data-testid": "logs-link-card",
                 h2 { "Server logs" }
@@ -411,292 +410,6 @@ fn MaintenanceActions(
                 });
             },
             "Extract Audiobook Chapters"
-        }
-    }
-}
-
-/// Admin field to set/clear the server-wide Hardcover API key. Loads the
-/// masked status on mount; the raw key is never read back to the client.
-#[component]
-fn HardcoverKeyField() -> Element {
-    let server_url = use_server_url();
-    let mut status: Signal<Option<HardcoverKeyStatus>> = use_signal(|| None);
-    let mut key_input = use_signal(String::new);
-    let mut msg = use_signal(|| None::<String>);
-    let mut msg_is_error = use_signal(|| false);
-    let mut in_flight = use_signal(|| false);
-
-    let load_url = server_url.clone();
-    use_effect(move || {
-        let url = load_url.clone();
-        spawn(async move {
-            if let Ok(s) = data::get_hardcover_key(&url).await {
-                status.set(Some(s));
-            }
-        });
-    });
-
-    let save_url = server_url.clone();
-    let on_save = move |_| {
-        let value = key_input().trim().to_string();
-        // Empty Save is a no-op with a hint — clearing is the "Clear" button's
-        // job, so we never silently wipe the key and report "saved".
-        if value.is_empty() {
-            msg.set(Some("Enter a Hardcover key to save.".to_string()));
-            msg_is_error.set(true);
-            return;
-        }
-        let url = save_url.clone();
-        in_flight.set(true);
-        spawn(async move {
-            match data::set_hardcover_key(&url, Some(value)).await {
-                Ok(s) => {
-                    status.set(Some(s));
-                    key_input.set(String::new());
-                    msg.set(Some("Hardcover key saved.".to_string()));
-                    msg_is_error.set(false);
-                }
-                Err(_) => {
-                    msg.set(Some("Failed to save Hardcover key.".to_string()));
-                    msg_is_error.set(true);
-                }
-            }
-            in_flight.set(false);
-        });
-    };
-
-    let clear_url = server_url.clone();
-    let on_clear = move |_| {
-        let url = clear_url.clone();
-        in_flight.set(true);
-        spawn(async move {
-            match data::set_hardcover_key(&url, None).await {
-                Ok(s) => {
-                    status.set(Some(s));
-                    key_input.set(String::new());
-                    msg.set(Some("Hardcover key cleared.".to_string()));
-                    msg_is_error.set(false);
-                }
-                Err(_) => {
-                    msg.set(Some("Failed to clear Hardcover key.".to_string()));
-                    msg_is_error.set(true);
-                }
-            }
-            in_flight.set(false);
-        });
-    };
-
-    let st = status();
-    let configured = st.as_ref().map(|s| s.configured).unwrap_or(false);
-    let placeholder = st
-        .as_ref()
-        .and_then(|s| s.masked.clone())
-        .unwrap_or_else(|| "hc_live_\u{2026}".to_string());
-
-    rsx! {
-        section { class: "card", "data-testid": "hardcover-key-card",
-            h2 { "Suggestions" }
-            p { class: "subtitle", "Connect Hardcover to power \u{201c}Readers also enjoyed\u{201d}." }
-            div { class: "settings-field",
-                label { r#for: "hardcover-key", "Hardcover API Key" }
-                input {
-                    r#type: "password",
-                    id: "hardcover-key",
-                    name: "hardcover_api_key",
-                    // Server-wide secret: keep password managers / autofill /
-                    // spellcheck from storing or mangling it.
-                    autocomplete: "off",
-                    autocapitalize: "none",
-                    autocorrect: "off",
-                    spellcheck: "false",
-                    placeholder: "{placeholder}",
-                    value: "{key_input}",
-                    oninput: move |e| key_input.set(e.value()),
-                }
-            }
-            div { class: "settings-actions",
-                button {
-                    r#type: "button",
-                    class: "btn",
-                    disabled: in_flight(),
-                    "data-testid": "hardcover-save",
-                    onclick: on_save,
-                    "Save"
-                }
-                if configured {
-                    button {
-                        r#type: "button",
-                        class: "btn ghost",
-                        disabled: in_flight(),
-                        "data-testid": "hardcover-clear",
-                        onclick: on_clear,
-                        "Clear"
-                    }
-                }
-            }
-            div { class: "api-key-status mono", "data-testid": "hardcover-status",
-                if configured {
-                    span { class: "api-key-dot connected" }
-                    if let Some(s) = st.as_ref() {
-                        "Connected \u{00b7} {s.source} \u{00b7} {s.masked.clone().unwrap_or_default()}"
-                    }
-                } else {
-                    span { class: "api-key-dot" }
-                    "Not connected"
-                }
-            }
-            if let Some(m) = msg() {
-                p {
-                    role: "status",
-                    "data-testid": "hardcover-key-status",
-                    class: if msg_is_error() { "settings-status error" } else { "settings-status success" },
-                    "{m}"
-                }
-            }
-        }
-    }
-}
-
-/// Admin field to set/clear the server-wide Google Books API key. Loads the
-/// masked status on mount; the raw key is never read back to the client.
-#[component]
-fn GoogleBooksKeyField() -> Element {
-    let server_url = use_server_url();
-    let mut status: Signal<Option<GoogleBooksKeyStatus>> = use_signal(|| None);
-    let mut key_input = use_signal(String::new);
-    let mut msg = use_signal(|| None::<String>);
-    let mut msg_is_error = use_signal(|| false);
-    let mut in_flight = use_signal(|| false);
-
-    let load_url = server_url.clone();
-    use_effect(move || {
-        let url = load_url.clone();
-        spawn(async move {
-            if let Ok(s) = data::get_google_books_key(&url).await {
-                status.set(Some(s));
-            }
-        });
-    });
-
-    let save_url = server_url.clone();
-    let on_save = move |_| {
-        let value = key_input().trim().to_string();
-        // Empty Save is a no-op with a hint — clearing is the "Clear" button's
-        // job, so we never silently wipe the key and report "saved".
-        if value.is_empty() {
-            msg.set(Some("Enter a Google Books key to save.".to_string()));
-            msg_is_error.set(true);
-            return;
-        }
-        let url = save_url.clone();
-        in_flight.set(true);
-        spawn(async move {
-            match data::set_google_books_key(&url, Some(value)).await {
-                Ok(s) => {
-                    status.set(Some(s));
-                    key_input.set(String::new());
-                    msg.set(Some("Google Books key saved.".to_string()));
-                    msg_is_error.set(false);
-                }
-                Err(_) => {
-                    msg.set(Some("Failed to save Google Books key.".to_string()));
-                    msg_is_error.set(true);
-                }
-            }
-            in_flight.set(false);
-        });
-    };
-
-    let clear_url = server_url.clone();
-    let on_clear = move |_| {
-        let url = clear_url.clone();
-        in_flight.set(true);
-        spawn(async move {
-            match data::set_google_books_key(&url, None).await {
-                Ok(s) => {
-                    status.set(Some(s));
-                    key_input.set(String::new());
-                    msg.set(Some("Google Books key cleared.".to_string()));
-                    msg_is_error.set(false);
-                }
-                Err(_) => {
-                    msg.set(Some("Failed to clear Google Books key.".to_string()));
-                    msg_is_error.set(true);
-                }
-            }
-            in_flight.set(false);
-        });
-    };
-
-    let st = status();
-    let configured = st.as_ref().map(|s| s.configured).unwrap_or(false);
-    let placeholder = st
-        .as_ref()
-        .and_then(|s| s.masked.clone())
-        .unwrap_or_else(|| "AIza\u{2026}".to_string());
-
-    rsx! {
-        section { class: "card", "data-testid": "google-books-key-card",
-            h2 { "Book metadata lookup" }
-            p { class: "subtitle",
-                "Add a Google Books API key so ISBN check-ins keep resolving past the shared anonymous quota."
-            }
-            div { class: "settings-field",
-                label { r#for: "google-books-key", "Google Books API Key" }
-                input {
-                    r#type: "password",
-                    id: "google-books-key",
-                    name: "google_books_api_key",
-                    // Server-wide secret: keep password managers / autofill /
-                    // spellcheck from storing or mangling it.
-                    autocomplete: "off",
-                    autocapitalize: "none",
-                    autocorrect: "off",
-                    spellcheck: "false",
-                    placeholder: "{placeholder}",
-                    value: "{key_input}",
-                    oninput: move |e| key_input.set(e.value()),
-                }
-            }
-            div { class: "settings-actions",
-                button {
-                    r#type: "button",
-                    class: "btn",
-                    disabled: in_flight(),
-                    "data-testid": "google-books-save",
-                    onclick: on_save,
-                    "Save"
-                }
-                if configured {
-                    button {
-                        r#type: "button",
-                        class: "btn ghost",
-                        disabled: in_flight(),
-                        "data-testid": "google-books-clear",
-                        onclick: on_clear,
-                        "Clear"
-                    }
-                }
-            }
-            div { class: "api-key-status mono", "data-testid": "google-books-status",
-                if configured {
-                    span { class: "api-key-dot connected" }
-                    if let Some(s) = st.as_ref() {
-                        "Connected \u{00b7} {s.source} \u{00b7} {s.masked.clone().unwrap_or_default()}"
-                    }
-                } else {
-                    span { class: "api-key-dot" }
-                    "Not connected"
-                }
-            }
-            if let Some(m) = msg() {
-                p {
-                    role: "status",
-                    "data-testid": "google-books-key-status",
-                    class: if msg_is_error() { "settings-status error" } else { "settings-status success" },
-                    "{m}"
-                }
-            }
         }
     }
 }

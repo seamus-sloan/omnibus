@@ -58,7 +58,7 @@ In [server/src/backend.rs](../../../server/src/backend.rs):
 
 ## 5. Add the DB query (if needed)
 
-In the matching domain module under [db/src/](../../../db/src/) (`books/`, `progress.rs`, `settings.rs`, a new sibling module for a new domain — `queries.rs` was split apart):
+In the matching domain module under [db/src/](../../../db/src/) (`books/`, `progress.rs`, `settings/`, a new sibling module for a new domain — `queries.rs` was split apart):
 
 - Define a typed error variant in the module's error enum (or add one) per [02-error-handling.md](../../rules/02-error-handling.md).
 - Schema changes go as a new numbered SQL file under [db/migrations/](../../../db/migrations/) (never edit an applied file). Re-exported from `omnibus_db::` (see the flatten block in `db/src/lib.rs`) so callsites just write `omnibus_db::my_query(...)`.

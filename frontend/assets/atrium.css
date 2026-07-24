@@ -7586,9 +7586,41 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 
 /* ══ Check-in flow (/check-in) ═════════════════════════════════════════ */
 
-.check-in { max-width: 560px; margin-inline: auto; }
+.check-in { max-width: 560px; margin-inline: auto; position: relative; }
 .check-in-screen { display: flex; flex-direction: column; gap: 14px; }
 .check-in-screen h1 { margin: 0; }
+
+/* Cancel/exit affordance — top-right of the card, above every stage. */
+.check-in-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--bg-1);
+  color: var(--ink-2);
+  font-size: 20px;
+  line-height: 1;
+  text-decoration: none;
+}
+.check-in-close:hover { background: var(--bg-2); color: var(--ink-1); }
+
+/* Provider-fallback disclaimer shown under the scanner when no Google Books
+   key is configured. */
+.check-in-provider-note {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-1);
+}
 .check-in-isbn-line {
   margin: 0;
   font-size: 13px;
