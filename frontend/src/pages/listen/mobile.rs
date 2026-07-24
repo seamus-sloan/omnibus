@@ -334,12 +334,8 @@ fn render_player(p: PlayerProps) -> Element {
             persist_position(&uuid_seek, &su_seek, secs);
         }
     };
-    let mut playing_sig = ctx.playing;
-    let on_toggle = move |_| {
-        interop::toggle();
-        let now = *playing_sig.peek();
-        playing_sig.set(!now);
-    };
+    // Let audio events drive `ctx.playing`; an optimistic flip can desync the icon.
+    let on_toggle = move |_| interop::toggle();
     let on_back = move |_| interop::skip(-30.0);
     let on_fwd = move |_| interop::skip(30.0);
 
