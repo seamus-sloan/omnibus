@@ -377,6 +377,87 @@ async fn api_scan_wishlist_add_prefers_book_uuid_over_meta_when_both_given() {
 }
 
 #[tokio::test]
+async fn api_scan_check_in_returns_400_for_an_oversized_note() {
+    let (app, _state, pool) = fixture().await;
+    let uuid = seed_book_with_isbn(&pool, "Effective Java", ISBN).await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let res = app
+        .oneshot(post(
+            "/api/scan/check-in",
+            &token,
+            serde_json::json!({
+                "book_uuid": uuid,
+                "note": "x".repeat(omnibus_shared::scan::NOTE_MAX_LEN + 1),
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body = body_string(res).await;
+    assert!(body.contains("note"), "got: {body}");
+
+    // The 400 must short-circuit before any copy is recorded.
+    assert_eq!(
+        omnibus_db::list_physical_copies(&pool, &uuid)
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn api_scan_add_physical_only_returns_400_for_an_oversized_meta_title() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let oversized_title =
+        "x".repeat(omnibus_shared::metadata_lookup::ExternalBookMeta::TITLE_MAX_LEN + 1);
+    let res = app
+        .oneshot(post(
+            "/api/scan/physical-only",
+            &token,
+            serde_json::json!({ "meta": external_meta_json(&oversized_title, ISBN) }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body = body_string(res).await;
+    assert!(body.contains("title"), "got: {body}");
+
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0, "an invalid request must not create a book");
+}
+
+#[tokio::test]
+async fn api_scan_wishlist_add_returns_400_for_an_oversized_book_uuid() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let res = app
+        .oneshot(post(
+            "/api/scan/wishlist",
+            &token,
+            serde_json::json!({
+                "book_uuid": "u".repeat(omnibus_shared::BOOK_UUID_MAX_LEN + 1),
+                "source": "scan",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body = body_string(res).await;
+    assert!(body.contains("bytes"), "got: {body}");
+}
+
+#[tokio::test]
 async fn api_scan_wishlist_add_returns_400_when_neither_uuid_nor_meta_given() {
     let (app, _state, pool) = fixture().await;
     let user = auth_test_support::create_user(&pool, "alice").await;
