@@ -1,12 +1,8 @@
 //! Shared test fixtures and helpers for `/api/*` REST integration tests.
 //!
-//! The `*DirGuard` types below hold a `std::sync::MutexGuard` across
-//! `.await` points in their callers (#1169) — sound only because
-//! `#[tokio::test]` defaults to the current-thread runtime, so this OS
-//! thread never contends with another task for the same lock; a
-//! multi-threaded runtime blocking a worker on a std `Mutex` mid-`.await`
-//! could stall or deadlock unrelated tasks. `auth::boot::tests::EnvGuard`
-//! relies on the same invariant.
+//! The `*DirGuard` types hold a `std::sync::MutexGuard` across `.await` in
+//! their callers — sound only on tokio's current-thread runtime, which
+//! `assert_current_thread_test_runtime` below enforces.
 use axum::{
     body::Body,
     http::{header::AUTHORIZATION, Request},
@@ -16,16 +12,19 @@ use super::*;
 
 /// Asserts the calling test runs on tokio's current-thread flavor — the
 /// invariant every `*DirGuard` in this module (and `EnvGuard` in
-/// `auth::boot::tests`) relies on to hold its lock across `.await` (#1169).
-/// Call this as the first line of a guard's constructor rather than only
+/// `auth::boot::tests`) relies on to hold its lock across `.await`. Call
+/// this as the first line of a guard's constructor rather than only
 /// documenting the assumption, so a future switch to a multi-threaded test
 /// runtime fails loudly instead of silently reintroducing a deadlock risk.
+/// Plain `assert_eq!` (not `debug_assert_eq!`): this module is
+/// `#[cfg(test)]`-only, but `debug_assert!` also compiles out under
+/// `cargo test --release`, which would silently defeat the check.
 pub(crate) fn assert_current_thread_test_runtime() {
-    debug_assert_eq!(
+    assert_eq!(
         tokio::runtime::Handle::current().runtime_flavor(),
         tokio::runtime::RuntimeFlavor::CurrentThread,
         "holding a std::sync::MutexGuard across .await is only sound on tokio's \
-         current-thread runtime — see backend::test_support module doc (#1169)"
+         current-thread runtime — see backend::test_support module doc"
     );
 }
 

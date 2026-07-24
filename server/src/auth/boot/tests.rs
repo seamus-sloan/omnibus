@@ -21,8 +21,8 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 /// only under tokio's current-thread runtime (see the module doc on
 /// `backend::test_support` for the full rationale, and
 /// `assert_current_thread_test_runtime` there, which `set`/`unset` call
-/// below to make the assumption an enforced `debug_assert` rather than a
-/// comment (#1169).
+/// below to make the assumption an enforced assertion rather than a
+/// comment.
 struct EnvGuard {
     key: &'static str,
     prev: Option<String>,
