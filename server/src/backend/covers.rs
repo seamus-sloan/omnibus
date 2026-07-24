@@ -16,6 +16,16 @@ use omnibus_db::{self as db};
 use super::{internal, AppState};
 use crate::auth::MediaAuthUser;
 
+/// `Vary` value shared by every response these handlers return (200s *and*
+/// the 304s in [`not_modified`]). [`MediaAuthUser`] accepts either a
+/// session cookie or an `Authorization: Bearer` header, so a
+/// shared/intermediate cache keying only on `Cookie` could hand one
+/// bearer-authenticated user's cached response — including a 304 validator
+/// match — back to a different bearer-authenticated user who shares the
+/// same (or no) cookie state. Defined once so the 200 and 304 paths can
+/// never drift apart.
+const MEDIA_VARY: &str = "Cookie, Authorization";
+
 pub(super) async fn get_cover(
     _user: MediaAuthUser,
     State(state): State<AppState>,
@@ -60,13 +70,14 @@ pub(super) async fn get_cover(
                     // browser never even asks. `no-cache` forces a
                     // conditional GET on every load; the `ETag` below makes
                     // that revalidation a cheap 304 whenever the cover
-                    // hasn't actually changed. `private` + `Vary: Cookie`
-                    // keep a shared proxy from serving one user's covers to
-                    // an unauthenticated request on the same URL now that
-                    // the endpoint is gated.
+                    // hasn't actually changed. `private` + `Vary` (see
+                    // [`MEDIA_VARY`]) keep a shared proxy from serving one
+                    // user's covers to an unauthenticated (or differently
+                    // bearer-authenticated) request on the same URL now
+                    // that the endpoint is gated.
                     (header::CACHE_CONTROL, "private, no-cache"),
                     (header::ETAG, etag.as_str()),
-                    (header::VARY, "Cookie"),
+                    (header::VARY, MEDIA_VARY),
                     // Prevent browsers from MIME-sniffing a cover into an
                     // executable type (e.g. an SVG disguised as JPEG).
                     (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
@@ -83,9 +94,15 @@ pub(super) async fn get_cover(
     }
 }
 
-/// Cheap content-derived `ETag` for a served image. Not cryptographic —
-/// an accidental collision only costs a redundant full transfer, no worse
-/// than not caching at all.
+/// Cheap content-derived `ETag` for a served image. Not cryptographic, so
+/// a hash collision between two genuinely different byte sequences is
+/// possible — that's a *correctness* failure, not a benign inefficiency:
+/// [`if_none_match_hits`] would treat a stale `If-None-Match` as current,
+/// the handler would return a bodyless 304, and the client would keep
+/// showing the old image indefinitely instead of fetching the real
+/// update. A stronger digest would shrink that (already astronomically
+/// small) probability further, but isn't applied here since collisions
+/// self-heal on the next byte change anyway.
 fn content_etag(bytes: &[u8]) -> String {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -103,16 +120,17 @@ fn if_none_match_hits(headers: &HeaderMap, etag: &str) -> bool {
         .is_some_and(|v| v == etag)
 }
 
-/// Build a `304 Not Modified` response carrying the same cache headers as
-/// the 200 it stands in for, so a hit doesn't reset the client's notion of
-/// freshness.
+/// Build a `304 Not Modified` response carrying the same `Cache-Control` /
+/// `Vary` a 200 from these handlers would, so a hit doesn't reset the
+/// client's notion of freshness or open the cross-user cache gap
+/// [`MEDIA_VARY`] documents.
 fn not_modified(etag: &str) -> Response {
     (
         axum::http::StatusCode::NOT_MODIFIED,
         [
             (header::CACHE_CONTROL, "private, no-cache"),
             (header::ETAG, etag),
-            (header::VARY, "Cookie"),
+            (header::VARY, MEDIA_VARY),
         ],
         (),
     )
@@ -210,7 +228,7 @@ pub(super) async fn get_thumb(
                     (header::CONTENT_TYPE, "image/webp"),
                     (header::CACHE_CONTROL, "private, no-cache"),
                     (header::ETAG, etag.as_str()),
-                    (header::VARY, "Cookie"),
+                    (header::VARY, MEDIA_VARY),
                     (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
                 ],
                 bytes,
@@ -240,7 +258,7 @@ pub(super) async fn get_thumb(
                     (header::CONTENT_TYPE, mime.as_str()),
                     // Short TTL: browser will re-fetch after ~5 s when the WebP is ready.
                     (header::CACHE_CONTROL, "private, max-age=5"),
-                    (header::VARY, "Cookie"),
+                    (header::VARY, MEDIA_VARY),
                     (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
                 ],
                 bytes,

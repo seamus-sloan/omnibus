@@ -110,8 +110,69 @@ async fn api_get_cover_returns_304_when_if_none_match_matches_the_current_etag()
         .unwrap();
     assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
     assert_eq!(second.headers().get(header::ETAG).unwrap(), etag.as_str());
+    // The 304 must carry the same revalidation-forcing Cache-Control as the
+    // 200 it stands in for — a regression that dropped it here would let a
+    // client silently fall back to caching this response for a full day.
+    assert_eq!(
+        second.headers().get(header::CACHE_CONTROL).unwrap(),
+        "private, no-cache"
+    );
     let bytes = to_bytes(second.into_body(), usize::MAX).await.unwrap();
     assert!(bytes.is_empty());
+}
+
+#[tokio::test]
+async fn api_get_cover_sets_identical_cookie_and_authorization_vary_on_the_200_and_304() {
+    let (app, _, pool) = fixture().await;
+    let (id, uuid) = seed_book_with_uuid(&pool, "/lib", "Cover Book").await;
+    sqlx::query("UPDATE books SET has_cover = 1 WHERE id = ?")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let _covers_guard = CoversDirGuard::new("get_cover_vary");
+    std::fs::write(db::covers_dir().join(format!("{uuid}.png")), TINY_PNG)
+        .expect("write cover fixture");
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let first = app
+        .clone()
+        .oneshot(get_with_bearer(&format!("/api/covers/{uuid}"), &token))
+        .await
+        .unwrap();
+    // `MediaAuthUser` accepts a session cookie *or* a bearer header, so a
+    // shared/intermediate cache that varies only on `Cookie` could serve
+    // one bearer-authenticated user's response to another. Both `Cookie`
+    // and `Authorization` must be present here.
+    assert_eq!(
+        first.headers().get(header::VARY).unwrap(),
+        "Cookie, Authorization"
+    );
+    let etag = first
+        .headers()
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let second = app
+        .oneshot(get_with_bearer_and_if_none_match(
+            &format!("/api/covers/{uuid}"),
+            &token,
+            &etag,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    // The regression this guards against: a 304 path that forgot to carry
+    // the same `Vary` as its 200 counterpart would silently reopen the
+    // cross-user cache gap even though the 200 path looks correct.
+    assert_eq!(
+        second.headers().get(header::VARY).unwrap(),
+        first.headers().get(header::VARY).unwrap()
+    );
 }
 
 #[tokio::test]
@@ -171,7 +232,7 @@ async fn api_get_cover_serves_fresh_bytes_and_a_new_etag_after_the_cover_changes
 }
 
 #[tokio::test]
-async fn api_get_cover_sets_no_cache_control_so_clients_always_revalidate() {
+async fn api_get_cover_sets_private_no_cache_cache_control_so_clients_always_revalidate() {
     let (app, _, pool) = fixture().await;
     let (id, uuid) = seed_book_with_uuid(&pool, "/lib", "Cover Book").await;
     sqlx::query("UPDATE books SET has_cover = 1 WHERE id = ?")
@@ -352,6 +413,14 @@ async fn api_get_thumb_returns_304_when_if_none_match_matches_the_cached_webps_e
         .await
         .unwrap();
     assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    // Same regression guard as the cover 304 test: the 304 must repeat the
+    // 200's `ETag` and revalidation-forcing `Cache-Control`, not just its
+    // status code.
+    assert_eq!(second.headers().get(header::ETAG).unwrap(), etag.as_str());
+    assert_eq!(
+        second.headers().get(header::CACHE_CONTROL).unwrap(),
+        "private, no-cache"
+    );
     let bytes = to_bytes(second.into_body(), usize::MAX).await.unwrap();
     assert!(bytes.is_empty());
 }
