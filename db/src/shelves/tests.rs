@@ -292,6 +292,95 @@ async fn rating_rule_resolves_against_shelf_owner() {
 }
 
 #[tokio::test]
+async fn status_rule_resolves_against_shelf_owner() {
+    let (pool, _covers) = seed_discovery_fixture().await;
+    let owner = make_user(&pool, "owner", false).await;
+    let other = make_user(&pool, "other", false).await;
+    let saga = uuid_by_title(&pool, "Saga: Book One").await;
+    let standalone = uuid_by_title(&pool, "Standalone").await;
+
+    // Owner finishes Saga; the other user finishes Standalone.
+    let finish = |user: i64, uuid: String| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                "INSERT INTO book_read_status (user_id, book_uuid, status, finished_at)
+                 VALUES (?, ?, 'finished', strftime('%s','now'))",
+            )
+            .bind(user)
+            .bind(uuid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+    };
+    finish(owner, saga).await;
+    finish(other, standalone).await;
+
+    let rule = ShelfRule {
+        field: RuleField::Status,
+        op: RuleOp::Is,
+        value: "finished".into(),
+    };
+    let shelf = create_shelf(
+        &pool,
+        owner,
+        &smart_req("Finished", MatchMode::Any, vec![rule]),
+    )
+    .await
+    .unwrap();
+    // Only the owner's finished book qualifies — the other user's is invisible.
+    assert_eq!(shelf.book_count, 1);
+    let page = shelf_page(&pool, &shelf, SortKey::Title, SortDir::Asc)
+        .await
+        .unwrap();
+    assert_eq!(page.books[0].title.as_deref(), Some("Saga: Book One"));
+}
+
+#[tokio::test]
+async fn unread_status_rule_matches_books_with_no_row() {
+    let (pool, _covers) = seed_discovery_fixture().await;
+    let owner = make_user(&pool, "owner", false).await;
+    let saga = uuid_by_title(&pool, "Saga: Book One").await;
+
+    // Finish exactly one book; every other fixture book is unread (no row).
+    sqlx::query(
+        "INSERT INTO book_read_status (user_id, book_uuid, status, finished_at)
+         VALUES (?, ?, 'finished', strftime('%s','now'))",
+    )
+    .bind(owner)
+    .bind(&saga)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let rule = ShelfRule {
+        field: RuleField::Status,
+        op: RuleOp::Is,
+        value: "unread".into(),
+    };
+    let shelf = create_shelf(
+        &pool,
+        owner,
+        &smart_req("To read", MatchMode::Any, vec![rule]),
+    )
+    .await
+    .unwrap();
+    let page = shelf_page(&pool, &shelf, SortKey::Title, SortDir::Asc)
+        .await
+        .unwrap();
+    // The finished book is excluded; the rest (no row) all count as unread.
+    assert!(shelf.book_count >= 1);
+    assert!(
+        !page
+            .books
+            .iter()
+            .any(|b| b.title.as_deref() == Some("Saga: Book One")),
+        "finished book must not appear in the unread shelf"
+    );
+}
+
+#[tokio::test]
 async fn create_manual_shelf_keeps_added_order() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_minimal_books(&pool, 3).await;

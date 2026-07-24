@@ -18,6 +18,7 @@ mod journal;
 mod journal_editor;
 mod merge;
 mod rating;
+mod read_status;
 
 // Web renders the split hero + body-grid; mobile re-flows the same loaded-book
 // data into a single-column surface. The web-only sections aren't compiled on

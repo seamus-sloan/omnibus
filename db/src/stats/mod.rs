@@ -54,6 +54,19 @@ const SESSION_TIME_SECS: &str = "\
     SELECT started_at, seconds_listened FROM listening_sessions \
         WHERE user_id = ? AND started_at >= ?";
 
+/// Book-level completion events for a user, unioned across the two ways a book
+/// can be "finished": a 100% journal entry (keyed on `created_at`) and an
+/// explicit read-status `finished` (keyed on `finished_at`). One
+/// `(book_uuid, finished_at)` row per source; callers window on `finished_at`
+/// and `COUNT(DISTINCT book_uuid)` so a book finished both ways counts once.
+/// Bind order is `user_id, user_id`.
+const FINISHED_EVENTS: &str = "\
+    SELECT book_uuid, created_at AS finished_at FROM journal_entries \
+        WHERE user_id = ? AND progress = 100 \
+    UNION ALL \
+    SELECT book_uuid, finished_at FROM book_read_status \
+        WHERE user_id = ? AND status = 'finished' AND finished_at IS NOT NULL";
+
 /// Failure space of the aggregation layer. Wraps `sqlx::Error` at the module
 /// boundary so no raw DB error leaks to callers. `Books` and `PagesTask` only
 /// surface from the Pages tile's on-demand estimate ([`pages::pages_read`]):
@@ -458,51 +471,58 @@ async fn as_of_day(pool: &SqlitePool) -> Result<String, StatsError> {
 /// Total completions in the window under the same definition as
 /// [`finished_books`], uncapped — the rail is limited to
 /// [`FINISHED_BOOKS_LIMIT`] rows but `books_finished` must reflect the
-/// real count.
+/// real count. Counts distinct live books finished via either a 100% journal
+/// entry or an explicit read-status `finished` (see [`FINISHED_EVENTS`]).
 async fn finished_count(pool: &SqlitePool, user_id: i64, start: i64) -> Result<i64, StatsError> {
-    Ok(sqlx::query_scalar(
-        "SELECT COUNT(DISTINCT b.uuid)
-         FROM journal_entries j
-         JOIN books b ON b.uuid = j.book_uuid
-         WHERE j.user_id = ? AND j.progress = 100 AND j.created_at >= ?",
-    )
-    .bind(user_id)
-    .bind(start)
-    .fetch_one(pool)
-    .await?)
+    let sql = format!(
+        "SELECT COUNT(DISTINCT f.book_uuid)
+         FROM ({FINISHED_EVENTS}) f
+         JOIN books b ON b.uuid = f.book_uuid
+         WHERE f.finished_at >= ?"
+    );
+    Ok(sqlx::query_scalar(&sql)
+        .bind(user_id)
+        .bind(user_id)
+        .bind(start)
+        .fetch_one(pool)
+        .await?)
 }
 
-/// Books completed in the window — sourced from `journal_entries.progress = 100`
-/// (the only progress fraction persisted today). Ghosted books (no live `books`
-/// row for the journal's `book_uuid`) are omitted from the rail and the count.
-/// Capped at [`FINISHED_BOOKS_LIMIT`] newest completions.
+/// Books completed in the window — sourced from either a 100% journal entry or
+/// an explicit read-status `finished` (see [`FINISHED_EVENTS`]). A book finished
+/// both ways collapses to one row with the newest completion moment. Ghosted
+/// books (no live `books` row for the `book_uuid`) are omitted from the rail and
+/// the count. Capped at [`FINISHED_BOOKS_LIMIT`] newest completions.
 async fn finished_books(
     pool: &SqlitePool,
     user_id: i64,
     start: i64,
 ) -> Result<Vec<FinishedBook>, StatsError> {
-    let rows = sqlx::query(
+    let sql = format!(
         "SELECT b.uuid AS uuid,
                 COALESCE(b.title, 'Untitled') AS title,
                 a.name AS author,
-                MAX(j.created_at) AS finished_at,
+                MAX(f.finished_at) AS finished_at,
                 MAX(b.has_cover) AS has_cover,
                 MAX(ur.half_stars) AS half_stars
-         FROM journal_entries j
-         JOIN books b ON b.uuid = j.book_uuid
+         FROM ({FINISHED_EVENTS}) f
+         JOIN books b ON b.uuid = f.book_uuid
          LEFT JOIN books_authors_link bal ON bal.book = b.id AND bal.position = 0
          LEFT JOIN authors a ON a.id = bal.author
-         LEFT JOIN user_ratings ur ON ur.user_id = j.user_id AND ur.book_uuid = b.uuid
-         WHERE j.user_id = ? AND j.progress = 100 AND j.created_at >= ?
+         LEFT JOIN user_ratings ur ON ur.user_id = ? AND ur.book_uuid = b.uuid
+         WHERE f.finished_at >= ?
          GROUP BY b.uuid
          ORDER BY finished_at DESC
-         LIMIT ?",
-    )
-    .bind(user_id)
-    .bind(start)
-    .bind(FINISHED_BOOKS_LIMIT)
-    .fetch_all(pool)
-    .await?;
+         LIMIT ?"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(user_id)
+        .bind(user_id)
+        .bind(user_id)
+        .bind(start)
+        .bind(FINISHED_BOOKS_LIMIT)
+        .fetch_all(pool)
+        .await?;
 
     Ok(rows
         .into_iter()
@@ -623,23 +643,25 @@ async fn avg_stars_bounded(
     .await?)
 }
 
-/// Count of distinct books finished (100% journal entry) with `created_at` in
-/// `[start, end)`.
+/// Count of distinct books finished (either source, see [`FINISHED_EVENTS`])
+/// with the completion moment in `[start, end)`.
 async fn finished_count_bounded(
     pool: &SqlitePool,
     user_id: i64,
     start: i64,
     end: i64,
 ) -> Result<i64, StatsError> {
-    Ok(sqlx::query_scalar(
-        "SELECT COUNT(DISTINCT book_uuid) FROM journal_entries
-         WHERE user_id = ? AND progress = 100 AND created_at >= ? AND created_at < ?",
-    )
-    .bind(user_id)
-    .bind(start)
-    .bind(end)
-    .fetch_one(pool)
-    .await?)
+    let sql = format!(
+        "SELECT COUNT(DISTINCT f.book_uuid) FROM ({FINISHED_EVENTS}) f
+         WHERE f.finished_at >= ? AND f.finished_at < ?"
+    );
+    Ok(sqlx::query_scalar(&sql)
+        .bind(user_id)
+        .bind(user_id)
+        .bind(start)
+        .bind(end)
+        .fetch_one(pool)
+        .await?)
 }
 
 /// Daily listening seconds within the window — the Listening tile's drill-in
@@ -709,13 +731,13 @@ async fn rating_monthly(pool: &SqlitePool, user_id: i64) -> Result<Vec<TrendPoin
 /// Books finished per calendar month over the trailing 12 months (oldest
 /// first, ending at the current month), independent of any windowing —
 /// the all-time trend chart is never scoped to the period switcher. Uses the
-/// same completion definition as [`finished_books`]
-/// (`journal_entries.progress = 100`). A recursive CTE generates the 12-month
-/// spine and `LEFT JOIN`s it against the journal in one query, so a month
-/// with no finishes still comes back as zero rather than being omitted, and
-/// a 10k-event library never pays an N+1.
+/// same completion definition as [`finished_books`] (either source, see
+/// [`FINISHED_EVENTS`]). A recursive CTE generates the 12-month spine and
+/// `LEFT JOIN`s it against the unified completion events in one query, so a
+/// month with no finishes still comes back as zero rather than being omitted,
+/// and a 10k-event library never pays an N+1.
 async fn books_per_month(pool: &SqlitePool, user_id: i64) -> Result<Vec<MonthCount>, StatsError> {
-    let rows = sqlx::query(
+    let sql = format!(
         "WITH RECURSIVE months(month) AS (
              SELECT strftime('%Y-%m', 'now', '-11 months')
              UNION ALL
@@ -723,17 +745,18 @@ async fn books_per_month(pool: &SqlitePool, user_id: i64) -> Result<Vec<MonthCou
              FROM months
              WHERE month < strftime('%Y-%m', 'now')
          )
-         SELECT months.month AS month, COUNT(DISTINCT j.book_uuid) AS books
+         SELECT months.month AS month, COUNT(DISTINCT f.book_uuid) AS books
          FROM months
-         LEFT JOIN journal_entries j
-                ON j.user_id = ? AND j.progress = 100
-               AND strftime('%Y-%m', j.created_at, 'unixepoch') = months.month
+         LEFT JOIN ({FINISHED_EVENTS}) f
+               ON strftime('%Y-%m', f.finished_at, 'unixepoch') = months.month
          GROUP BY months.month
-         ORDER BY months.month",
-    )
-    .bind(user_id)
-    .fetch_all(pool)
-    .await?;
+         ORDER BY months.month"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(user_id)
+        .bind(user_id)
+        .fetch_all(pool)
+        .await?;
 
     Ok(rows
         .into_iter()
