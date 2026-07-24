@@ -20,8 +20,12 @@ use super::view::part_token_url;
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(tag = "kind")]
 pub enum AudioEvent {
-    /// Current absolute (cross-part) position, in seconds.
-    Time { seconds: f64 },
+    /// Current absolute (cross-part) position, in seconds, plus the element's
+    /// authoritative `paused` state. The `paused` flag lets the drain
+    /// reconcile the transport icon on every tick — WKWebView can resume after
+    /// an audio interruption without re-dispatching a `play` event, so the
+    /// discrete `Play`/`Pause` events alone can leave the button stuck.
+    Time { seconds: f64, paused: bool },
     /// Playback started.
     Play,
     /// Playback paused (carries the position at pause).
@@ -286,7 +290,7 @@ fn surface_js(parts_json: &str, resume_lit: &str, rate_lit: &str, meta_lit: &str
     setH('seekto', function(d){{ if (d && d.seekTime != null) oa.seek(d.seekTime); }});
   }}
 
-  el.addEventListener('timeupdate', function(){{ dioxus.send({{ kind: 'Time', seconds: absTime() }}); updatePositionState(); }});
+  el.addEventListener('timeupdate', function(){{ dioxus.send({{ kind: 'Time', seconds: absTime(), paused: el.paused }}); updatePositionState(); }});
   el.addEventListener('play',  function(){{ dioxus.send({{ kind: 'Play' }}); if (hasMediaSession) navigator.mediaSession.playbackState = 'playing'; updatePositionState(); }});
   el.addEventListener('pause', function(){{ dioxus.send({{ kind: 'Pause', seconds: absTime() }}); if (hasMediaSession) navigator.mediaSession.playbackState = 'paused'; }});
   // Cross-part auto-advance: chain to the next part on natural end.
@@ -347,6 +351,12 @@ mod tests {
         );
         assert!(js.contains("window.OmnibusMobileAudio"));
         assert!(js.contains("dioxus.send"));
+        // The timeupdate tick carries the element's paused state so the drain
+        // can reconcile the transport icon (issue #1250).
+        assert!(
+            js.contains("kind: 'Time', seconds: absTime(), paused: el.paused"),
+            "timeupdate must report the element's paused state"
+        );
         // Media Session wiring landed.
         assert!(js.contains("new MediaMetadata"), "media session missing");
         assert!(js.contains("setActionHandler"), "action handlers missing");
@@ -393,6 +403,19 @@ mod tests {
         assert_eq!(v["artist"], "A");
         assert_eq!(v["album"], "Omnibus");
         assert_eq!(v["artwork"], "http://h/c?token=t");
+    }
+
+    #[test]
+    fn audio_event_time_deserializes_with_paused_flag() {
+        let ev: AudioEvent =
+            serde_json::from_str(r#"{"kind":"Time","seconds":42.5,"paused":false}"#).unwrap();
+        match ev {
+            AudioEvent::Time { seconds, paused } => {
+                assert_eq!(seconds, 42.5);
+                assert!(!paused);
+            }
+            other => panic!("expected Time, got {other:?}"),
+        }
     }
 
     #[test]

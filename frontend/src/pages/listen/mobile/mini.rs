@@ -68,12 +68,9 @@ pub fn MobileMiniPlayer() -> Element {
         .map(|a| format!("--accent: {a};"))
         .unwrap_or_default();
 
-    let mut playing_sig = ctx.playing;
-    let on_toggle = move |_| {
-        interop::toggle();
-        let now = *playing_sig.peek();
-        playing_sig.set(!now);
-    };
+    // No optimistic flip — the JS surface + `play`/`pause`/`Time` events are
+    // the source of truth for `ctx.playing` (issue #1250).
+    let on_toggle = move |_| interop::toggle();
 
     rsx! {
         div { class: "m-mini", style: "{accent_style}", "data-testid": "mobile-miniplayer",

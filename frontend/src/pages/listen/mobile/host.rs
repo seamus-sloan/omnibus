@@ -238,6 +238,13 @@ async fn load_and_drain(
     }
 }
 
+/// Whether the transport icon (`playing`) disagrees with the element's real
+/// `paused` state and must be flipped. `playing` should always be the negation
+/// of `paused`; equality means they've drifted (a missed `play`/`pause` event).
+fn playing_out_of_sync(playing: bool, paused: bool) -> bool {
+    playing == paused
+}
+
 /// `true` when direct playback of `uuid` is doomed: the app is known-offline
 /// and no completed audio download exists to serve the parts locally.
 fn audio_blocked_offline(uuid: &str) -> bool {
@@ -344,8 +351,15 @@ async fn drain_audio_events(
     let mut last_saved = 0.0_f64;
     loop {
         match eval.recv::<interop::AudioEvent>().await {
-            Ok(interop::AudioEvent::Time { seconds }) => {
+            Ok(interop::AudioEvent::Time { seconds, paused }) => {
                 elapsed.set(seconds);
+                // Reconcile the transport icon against the element's real
+                // paused state: WKWebView can resume after an audio
+                // interruption without re-firing `play`, which would otherwise
+                // leave the button stuck on "play" while playback advances.
+                if playing_out_of_sync(*playing.peek(), paused) {
+                    playing.set(!paused);
+                }
                 let armed = *sleep.peek();
                 if let SleepState::EndOfChapter { at_seconds } = armed {
                     if seconds >= at_seconds {
@@ -372,8 +386,19 @@ async fn drain_audio_events(
 
 #[cfg(test)]
 mod tests {
-    use super::{audio_blocked_offline, first_audio_file_id};
+    use super::{audio_blocked_offline, first_audio_file_id, playing_out_of_sync};
     use omnibus_shared::BookFileInfo;
+
+    #[test]
+    fn playing_out_of_sync_flags_only_drifted_state() {
+        // Agreement: playing == !paused — nothing to reconcile.
+        assert!(!playing_out_of_sync(true, false));
+        assert!(!playing_out_of_sync(false, true));
+        // Drift: the icon and the element disagree (the issue #1250 case where
+        // audio resumed but the button stayed on "play").
+        assert!(playing_out_of_sync(false, false));
+        assert!(playing_out_of_sync(true, true));
+    }
 
     #[test]
     fn audio_blocked_offline_only_while_offline_without_a_download() {
