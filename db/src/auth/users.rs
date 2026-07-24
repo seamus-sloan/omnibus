@@ -62,6 +62,14 @@ pub async fn create_user(pool: &SqlitePool, username: &str, password: &str) -> A
             .await?;
     }
 
+    // Give the new user their built-in Wishlist shelf in the same transaction,
+    // so a registration either lands complete or not at all (#1187). A shelf
+    // error folds to the opaque `AuthError::Internal` — the caller only
+    // branches on auth-specific failures.
+    crate::shelves::provision_wishlist_shelf(&mut *tx, id)
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
+
     tx.commit().await?;
 
     Ok(User {

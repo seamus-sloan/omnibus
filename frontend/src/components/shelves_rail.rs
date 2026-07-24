@@ -123,6 +123,7 @@ fn render_shelf_row(s: &ShelfSummary, active: RailActive, viewer_id: Option<i64>
             span { class: "shelf-row-marker",
                 match s.kind {
                     ShelfKind::Smart => rsx! { {cog_icon()} },
+                    ShelfKind::Wishlist => rsx! { {heart_icon()} },
                     ShelfKind::Manual => rsx! {
                         span {
                             class: "shelf-row-swatch",
@@ -170,6 +171,18 @@ fn cog_icon() -> Element {
             stroke_linecap: "round", stroke_linejoin: "round",
             circle { cx: "12", cy: "12", r: "3" }
             path { d: "M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" }
+        }
+    }
+}
+
+/// Heart glyph marking the built-in Wishlist shelf.
+fn heart_icon() -> Element {
+    rsx! {
+        svg {
+            width: "13", height: "13", view_box: "0 0 24 24",
+            fill: "none", stroke: "currentColor", stroke_width: "2",
+            stroke_linecap: "round", stroke_linejoin: "round",
+            path { d: "M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" }
         }
     }
 }

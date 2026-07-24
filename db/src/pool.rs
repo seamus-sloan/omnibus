@@ -31,6 +31,8 @@ pub enum InitDbError {
     SortKeys(#[from] crate::sort_keys::SortKeysError),
     #[error(transparent)]
     MissingFiles(#[from] MissingFilesError),
+    #[error(transparent)]
+    Shelves(#[from] crate::shelves::ShelfError),
 }
 
 /// Initialize or open the SQLite pool at `database_url`, apply per-connection PRAGMAs, run pending
@@ -100,6 +102,9 @@ async fn run_boot_backfills(pool: &SqlitePool) -> Result<(), InitDbError> {
     // F10 missing-files flags for rows already fileless before migration 0029,
     // starting their GC clock at boot time.
     crate::missing_files::backfill_missing_files_flags(pool).await?;
+    // #1187 built-in Wishlist shelf for any user missing one (migration 0047
+    // seeds existing users; this catches gaps and future rows).
+    crate::shelves::provision_wishlist_shelves(pool).await?;
     Ok(())
 }
 

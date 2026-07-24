@@ -73,6 +73,9 @@ pub async fn list_visible_shelves(
         match kind {
             ShelfKind::Smart => smart_ids.push(id),
             ShelfKind::Manual => manual_ids.push(id),
+            // Wishlist counts come from `wishlist_entries` (per owner), handled
+            // below — no shelf-id list needed.
+            ShelfKind::Wishlist => {}
         }
         parsed.push(VisibleShelfRow {
             id,
@@ -107,6 +110,7 @@ pub async fn list_visible_shelves(
         let book_count = match row.kind {
             ShelfKind::Smart => smart_counts.get(&row.id).copied().unwrap_or(0),
             ShelfKind::Manual => manual_counts.get(&row.id).copied().unwrap_or(0),
+            ShelfKind::Wishlist => count_wishlist(pool, row.owner_user_id).await?,
         };
         out.push(ShelfSummary {
             id: row.id,
@@ -146,7 +150,7 @@ pub async fn get_shelf(pool: &SqlitePool, id: i64) -> Result<Option<Shelf>, Shel
         .and_then(MatchMode::from_str);
     let rules = match kind {
         ShelfKind::Smart => load_rules(pool, id).await?,
-        ShelfKind::Manual => Vec::new(),
+        ShelfKind::Manual | ShelfKind::Wishlist => Vec::new(),
     };
     let book_count = match kind {
         ShelfKind::Smart => {
@@ -159,6 +163,7 @@ pub async fn get_shelf(pool: &SqlitePool, id: i64) -> Result<Option<Shelf>, Shel
             .await?
         }
         ShelfKind::Manual => count_manual(pool, id).await?,
+        ShelfKind::Wishlist => count_wishlist(pool, owner_user_id).await?,
     };
 
     Ok(Some(Shelf {
@@ -198,6 +203,9 @@ pub async fn shelf_page(
             .await?
         }
         ShelfKind::Manual => fetch_manual(pool, shelf.id, MAX_BOOKS_RETURNED).await?,
+        ShelfKind::Wishlist => {
+            fetch_wishlist(pool, shelf.owner_user_id, MAX_BOOKS_RETURNED).await?
+        }
     };
     Ok(ShelfPage { books })
 }
@@ -370,6 +378,42 @@ async fn count_manual(pool: &SqlitePool, shelf_id: i64) -> Result<i64, ShelfErro
             .fetch_one(pool)
             .await?,
     )
+}
+
+/// Count the owner's wishlist. Membership is the user's `wishlist_entries`, not
+/// `shelf_books` — the join to `books` is what keeps the count consistent with
+/// [`fetch_wishlist`], which can only render entries that resolve to a row.
+async fn count_wishlist(pool: &SqlitePool, owner_id: i64) -> Result<i64, ShelfError> {
+    Ok(sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM wishlist_entries we
+           JOIN books b ON b.uuid = we.book_uuid
+          WHERE we.user_id = ?",
+    )
+    .bind(owner_id)
+    .fetch_one(pool)
+    .await?)
+}
+
+/// One page of the owner's wishlist, newest-added first. Deliberately **omits**
+/// the `FILE_EXISTS` gate the smart/manual reads apply: a wishlist-only
+/// (fileless) book is hidden from All Books but must appear inside its own
+/// wishlist shelf (#1187, AC4).
+async fn fetch_wishlist(
+    pool: &SqlitePool,
+    owner_id: i64,
+    limit: i64,
+) -> Result<Vec<EbookMetadata>, ShelfError> {
+    let sql = format!(
+        "SELECT {BOOK_COLUMNS} FROM books b \
+         JOIN wishlist_entries we ON we.book_uuid = b.uuid \
+         WHERE we.user_id = ? ORDER BY we.added_at DESC, we.id DESC LIMIT ?"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(owner_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
+    hydrate(pool, &rows).await
 }
 
 async fn fetch_smart(

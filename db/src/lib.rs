@@ -97,7 +97,8 @@ pub use scan::{add_physical_only, resolve_scan, wishlist_add, ScanError};
 pub use settings::*;
 pub use shelves::{
     add_books, can_edit, can_view, create_shelf, delete_shelf, get_shelf, list_visible_shelves,
-    preview_rule, remove_book, shelf_page, update_shelf, ShelfError,
+    preview_rule, provision_wishlist_shelf, provision_wishlist_shelves, remove_book, shelf_page,
+    update_shelf, ShelfError,
 };
 pub use sort_keys::{backfill_series_sort, series_sort_value, SortKeysError};
 pub use stats::{user_stats, StatsError, STATS_TTL_SECS};
