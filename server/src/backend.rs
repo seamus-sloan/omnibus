@@ -34,6 +34,7 @@ mod kindle;
 mod overrides;
 mod progress;
 mod ratings;
+mod read_status;
 mod scan;
 mod search;
 mod series;
@@ -360,6 +361,10 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             "/api/ratings/{uuid}",
             get(ratings::get_rating).delete(ratings::delete_rating),
         )
+        // F3.4 read/unread state — mobile-facing REST. Web hits the analogous
+        // `/api/rpc/read-status/*` server functions.
+        .route("/api/read-status", put(read_status::put_read_status))
+        .route("/api/read-status/{uuid}", get(read_status::get_read_status))
         // Physical Check-In scan flow — mobile-facing REST. Web hits the
         // analogous `/api/rpc/scan/*` server functions.
         .route("/api/scan/resolve", post(scan::post_resolve))

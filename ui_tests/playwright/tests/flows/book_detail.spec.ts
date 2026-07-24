@@ -51,6 +51,11 @@ const WIRTH_OTHERS = FIXTURE_BOOKS.filter(
   (b) => b.authors[0] === "Niklaus Wirth" && b.slug !== WIRTH_LEAD.slug,
 );
 
+// Reserved for the read/unread-status tests: read state is per-(user, book)
+// server state, so this book must be read by no other spec. `standalone-canyon`
+// (Annie Easley) appears in no other flow.
+const READ_STATUS_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "standalone-canyon")!;
+
 // ---------------------------------------------------------------------------
 // Layout
 // ---------------------------------------------------------------------------
@@ -544,6 +549,91 @@ test("surfaces an error and leaves the rating unchanged when the save fails", as
 
   // The optimistic pick rolls back and the status line reports the failure.
   await expect(page.getByTestId("rating-meta")).toHaveText("Couldn't save rating — try again");
+});
+
+test("renders the read-status control with three segments", async ({ page, request }) => {
+  const uuid = await fetchBookUuidByTitle(request, READ_STATUS_BOOK.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  const control = page.getByTestId("read-status-control");
+  await expect(control).toBeVisible();
+  await expect(control.getByTestId("read-status-unread")).toBeVisible();
+  await expect(control.getByTestId("read-status-reading")).toBeVisible();
+  await expect(control.getByTestId("read-status-finished")).toBeVisible();
+});
+
+test("marks a book finished, persists across reload, then resets to unread", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, READ_STATUS_BOOK.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  const control = page.getByTestId("read-status-control");
+  // Mark finished → POST set, the Finished segment activates, meta updates.
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/read-status/set", expectedStatus: 200 },
+    async () => control.getByTestId("read-status-finished").click(),
+  );
+  await expect(control.getByTestId("read-status-finished")).toHaveClass(/active/);
+  await expect(page.getByTestId("read-status-meta")).toContainText("Finished");
+
+  // The saved state survives a reload (the post-mount effect refetches it).
+  await gotoReady(page, `/books/${uuid}`);
+  await expect(
+    page.getByTestId("read-status-control").getByTestId("read-status-finished"),
+  ).toHaveClass(/active/);
+
+  // Reset to unread so the shared server state is clean for the next run.
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/read-status/set", expectedStatus: 200 },
+    async () =>
+      page
+        .getByTestId("read-status-control")
+        .getByTestId("read-status-unread")
+        .click(),
+  );
+  await expect(page.getByTestId("read-status-meta")).toHaveText("Not started");
+});
+
+test("reverts the read status and reports an error when the save fails", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, READ_STATUS_BOOK.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  // Establish a known baseline (reading), then force the next save to fail.
+  const control = page.getByTestId("read-status-control");
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/read-status/set", expectedStatus: 200 },
+    async () => control.getByTestId("read-status-reading").click(),
+  );
+  await expect(control.getByTestId("read-status-reading")).toHaveClass(/active/);
+
+  await page.route("**/api/rpc/read-status/set", (route) =>
+    route.fulfill({ status: 500, contentType: "text/plain", body: "read-status exploded" }),
+  );
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/read-status/set", expectedStatus: 500 },
+    async () => control.getByTestId("read-status-finished").click(),
+  );
+
+  // The optimistic pick rolls back to reading and the status line reports it.
+  await expect(control.getByTestId("read-status-reading")).toHaveClass(/active/);
+  await expect(page.getByTestId("read-status-meta")).toHaveText("Couldn't save — try again");
+
+  // Clean up shared state: drop the route override and reset to unread.
+  await page.unroute("**/api/rpc/read-status/set");
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/read-status/set", expectedStatus: 200 },
+    async () => control.getByTestId("read-status-unread").click(),
+  );
 });
 
 test("breadcrumb author segment links to the author page", async ({ page, request }) => {

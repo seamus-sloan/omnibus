@@ -777,7 +777,7 @@ fn field_label(field: RuleField) -> &'static str {
         RuleField::Author => "Author",
         RuleField::Series => "Series",
         RuleField::Rating => "Rating",
-        RuleField::Status => "Status",
+        RuleField::Status => "Reading status",
         RuleField::Format => "Format",
         RuleField::Year => "Year",
         RuleField::DateAdded => "Date added",
