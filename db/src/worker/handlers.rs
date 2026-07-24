@@ -51,10 +51,10 @@ fn kindle_outcome(result: Result<(), crate::kindle::KindleError>) -> TaskOutcome
 }
 
 /// Variant-aware mapping for [`crate::kepub::KepubError`]: a bad book id or
-/// a missing source EPUB are safe, specific messages; a non-zero
-/// `kepubify` exit carries subprocess stderr, and the remaining variants
-/// wrap I/O or a lower module's internals, so all of those go through
-/// [`sanitized_err`].
+/// a missing source EPUB are safe, specific messages; the collapsed
+/// `Failed` variant (DB lookups, I/O, a non-zero kepubify exit — all
+/// foreign-system failures) carries subprocess stderr / lower-level
+/// internals, so it goes through [`sanitized_err`].
 fn kepub_outcome(result: Result<std::path::PathBuf, crate::kepub::KepubError>) -> TaskOutcome {
     use crate::kepub::KepubError;
     match result {

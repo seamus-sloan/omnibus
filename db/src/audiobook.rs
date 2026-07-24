@@ -24,8 +24,7 @@ pub use chapters::{extract_chapters, RawChapter};
 pub use codec::{classify_filenames, is_direct_playable, mime_for_filename, PlaybackMode};
 pub use group::{group_into_books, AudiobookGroup};
 pub use parse::{
-    parse_audiobook_targets, parse_groups, AudiobookError, AudiobookParseTarget, AudiobookPart,
-    IndexedAudiobook,
+    parse_audiobook_targets, parse_groups, AudiobookParseTarget, AudiobookPart, IndexedAudiobook,
 };
 pub use stat::{stat_audiobook_library, AudiobookStatEntry, AudiobookStatScanResult};
 
@@ -52,7 +51,7 @@ pub type IndexedBook = crate::ebook::IndexedBook;
 /// Build the [`IndexedBook`] for a single audiobook file. Extracted as a
 /// pub helper so the tests can exercise the parse path directly without
 /// the full stat-and-diff machinery.
-pub fn build_indexed_book(path: &Path, filename: String) -> Result<IndexedBook, AudiobookError> {
+pub fn build_indexed_book(path: &Path, filename: String) -> anyhow::Result<IndexedBook> {
     let meta = parse::extract_metadata(path)?;
     let cover = cover::extract_cover(path)?;
     let creators = match meta.artist {
@@ -113,9 +112,9 @@ pub struct InspectedAudiobook {
 /// for `.m4b`/`.m4a` or the ordered `.mp3` parts of a multi-file audiobook.
 ///
 /// Per-part tag failures are tolerated (logged, skipped) so one corrupt file
-/// doesn't sink the inspect; [`AudiobookError::Unsupported`] is returned only
-/// when *no* part yields readable tags.
-pub fn inspect_audiobook_files(paths: &[PathBuf]) -> Result<InspectedAudiobook, AudiobookError> {
+/// doesn't sink the inspect; an error is returned only when *no* part yields
+/// readable tags.
+pub fn inspect_audiobook_files(paths: &[PathBuf]) -> anyhow::Result<InspectedAudiobook> {
     let multi = paths.len() > 1;
     let mut album_title: Option<String> = None;
     let mut first_title: Option<String> = None;
@@ -155,9 +154,7 @@ pub fn inspect_audiobook_files(paths: &[PathBuf]) -> Result<InspectedAudiobook, 
     }
 
     if !any_readable {
-        return Err(AudiobookError::Unsupported(
-            "no readable audio tags in upload".to_string(),
-        ));
+        anyhow::bail!("no readable audio tags in upload");
     }
 
     // Multi-file: the book title lives in the album tag; single-file: the

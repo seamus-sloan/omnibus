@@ -234,7 +234,7 @@ async fn convert_book_errors_when_kepubify_binary_absent() {
     let _env = EnvVarGuard::set_os("OMNIBUS_DATA_DIR", Some(cache.path().as_os_str()))
         .also_set("OMNIBUS_KEPUBIFY_PATH", Some("/no/such/kepubify"));
     let err = convert_book(&pool, book_id).await.unwrap_err();
-    assert!(matches!(err, KepubError::Io(_)), "got {err:?}");
+    assert!(matches!(err, KepubError::Failed(_)), "got {err:?}");
 }
 
 #[tokio::test]
@@ -257,7 +257,7 @@ async fn convert_book_returns_non_zero_when_kepubify_exits_non_zero() {
 
     let err = convert_book(&pool, book_id).await.unwrap_err();
     assert!(
-        matches!(&err, KepubError::NonZero { stderr, .. } if stderr.contains("boom")),
+        matches!(&err, KepubError::Failed(e) if e.to_string().contains("boom")),
         "got {err:?}"
     );
     // No cache file left behind on failure.
@@ -269,9 +269,9 @@ async fn convert_book_propagates_db_error_when_pool_is_closed() {
     let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
     pool.close().await;
     // `convert_book` reads `last_modified` via `crate::covers::CoversError`
-    // first, so a closed pool surfaces as the wrapped `Covers` variant.
+    // first, so a closed pool surfaces as the collapsed `Failed` variant.
     let err = convert_book(&pool, 1).await.unwrap_err();
-    assert!(matches!(err, KepubError::Covers(_)));
+    assert!(matches!(err, KepubError::Failed(_)));
 }
 
 /// Write a fake `kepubify` at `path` that answers `--version` (so detection
