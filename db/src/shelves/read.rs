@@ -67,15 +67,17 @@ pub async fn list_visible_shelves(
     let mut parsed = Vec::with_capacity(rows.len());
     let mut smart_ids = Vec::new();
     let mut manual_ids = Vec::new();
+    let mut wishlist_owner_ids = Vec::new();
     for r in &rows {
         let id: i64 = r.try_get("id")?;
+        let owner_user_id: i64 = r.try_get("owner_user_id")?;
         let kind = parse_kind(&r.try_get::<String, _>("kind")?)?;
         match kind {
             ShelfKind::Smart => smart_ids.push(id),
             ShelfKind::Manual => manual_ids.push(id),
-            // Wishlist counts come from `wishlist_entries` (per owner), handled
-            // below — no shelf-id list needed.
-            ShelfKind::Wishlist => {}
+            // Wishlist counts come from `wishlist_entries` keyed by owner, batched
+            // below (one GROUP BY) rather than a query per visible wishlist.
+            ShelfKind::Wishlist => wishlist_owner_ids.push(owner_user_id),
         }
         parsed.push(VisibleShelfRow {
             id,
@@ -91,6 +93,7 @@ pub async fn list_visible_shelves(
 
     let mut rules_by_shelf = load_rules_batch(pool, &smart_ids).await?;
     let manual_counts = count_manual_batch(pool, &manual_ids).await?;
+    let wishlist_counts = count_wishlist_batch(pool, &wishlist_owner_ids).await?;
 
     // Each smart shelf's membership predicate is unique, so unlike the manual
     // counts above these can't fold into one `GROUP BY` — fan them out
@@ -110,7 +113,10 @@ pub async fn list_visible_shelves(
         let book_count = match row.kind {
             ShelfKind::Smart => smart_counts.get(&row.id).copied().unwrap_or(0),
             ShelfKind::Manual => manual_counts.get(&row.id).copied().unwrap_or(0),
-            ShelfKind::Wishlist => count_wishlist(pool, row.owner_user_id).await?,
+            ShelfKind::Wishlist => wishlist_counts
+                .get(&row.owner_user_id)
+                .copied()
+                .unwrap_or(0),
         };
         out.push(ShelfSummary {
             id: row.id,
@@ -392,6 +398,35 @@ async fn count_wishlist(pool: &SqlitePool, owner_id: i64) -> Result<i64, ShelfEr
     .bind(owner_id)
     .fetch_one(pool)
     .await?)
+}
+
+/// Batched wishlist counts keyed by owner id, in one `GROUP BY we.user_id` pass
+/// — the [`count_wishlist`] analogue for [`list_visible_shelves`], so a rail
+/// showing many public wishlists isn't one query per shelf. An owner with an
+/// empty wishlist has no row; callers default a missing id to 0.
+async fn count_wishlist_batch(
+    pool: &SqlitePool,
+    owner_ids: &[i64],
+) -> Result<HashMap<i64, i64>, ShelfError> {
+    let mut out = HashMap::new();
+    if owner_ids.is_empty() {
+        return Ok(out);
+    }
+    let placeholders = owner_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT we.user_id AS uid, COUNT(*) AS cnt FROM wishlist_entries we \
+           JOIN books b ON b.uuid = we.book_uuid \
+          WHERE we.user_id IN ({placeholders}) GROUP BY we.user_id"
+    );
+    let mut q = sqlx::query(&sql);
+    for id in owner_ids {
+        q = q.bind(id);
+    }
+    let rows = q.fetch_all(pool).await?;
+    for r in &rows {
+        out.insert(r.try_get("uid")?, r.try_get("cnt")?);
+    }
+    Ok(out)
 }
 
 /// One page of the owner's wishlist, newest-added first. Deliberately **omits**
