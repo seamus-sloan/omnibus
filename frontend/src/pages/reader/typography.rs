@@ -86,13 +86,7 @@ pub(crate) enum Margins {
 
 #[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 impl Margins {
-    /// A plain percentage lets `Narrow` reach edge-to-edge on a mid-width
-    /// desktop viewport, sliding the prose column under the `.rd-turn`
-    /// page-turn buttons (`left`/`right: 22px`, 48px wide, in
-    /// `atrium.css`). `min(pct, calc(100% - 172px))` caps the column so it
-    /// can never leave less than 86px clear on either side — comfortably
-    /// past the button's 70px reach — regardless of viewport width or which
-    /// margin preset is active (#1236).
+    /// The column's max-width, clamped to keep it clear of the `.rd-turn` buttons.
     pub(crate) fn to_css(self) -> &'static str {
         match self {
             Self::Narrow => "min(95%, calc(100% - 172px))",
@@ -207,13 +201,12 @@ mod tests {
 
     #[test]
     fn margins_to_css_reserves_a_fixed_gutter_for_every_variant() {
-        // Regression guard for #1236: every preset must keep the `calc(100%
-        // - 172px)` clamp so the reading column can never slide under the
-        // `.rd-turn` page-turn buttons, no matter how wide its own percentage
-        // allowance is.
-        for variant in [Margins::Narrow, Margins::Normal, Margins::Wide] {
-            assert!(variant.to_css().contains("calc(100% - 172px)"));
-        }
+        // Regression guard for #1236: pins the exact clamped value per
+        // variant so a regressed percentage (not just a dropped clamp)
+        // fails here too.
+        assert_eq!(Margins::Narrow.to_css(), "min(95%, calc(100% - 172px))");
+        assert_eq!(Margins::Normal.to_css(), "min(80%, calc(100% - 172px))");
+        assert_eq!(Margins::Wide.to_css(), "min(65%, calc(100% - 172px))");
     }
 
     #[test]
