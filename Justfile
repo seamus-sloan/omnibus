@@ -76,14 +76,18 @@ lint-css:
     scripts/with-dev-env.sh default stylelint 'frontend/assets/**/*.css'
 
 # Format check + clippy, including the crate/feature combos a bare
-# `cargo clippy` (default-members, default features) misses. Depends on
-# `lint-css` so the CSS structural guard rides the same gate as fmt/clippy.
+# `cargo clippy` (default-members, default features) misses. `-D warnings` on
+# every invocation and the wasm32 `frontend-web` variant mirror CI's clippy
+# matrix (.github/workflows/rust.yml) so a clean local run can't go on to fail
+# in CI. Depends on `lint-css` so the CSS structural guard rides the same gate
+# as fmt/clippy.
 lint: lint-css
     scripts/with-dev-env.sh default bash -ec '\
         cargo fmt --check && \
-        cargo clippy --all-targets && \
-        cargo clippy -p omnibus-frontend --features server --all-targets && \
-        cargo clippy -p omnibus-mobile --all-targets'
+        cargo clippy --all-targets -- -D warnings && \
+        cargo clippy -p omnibus-frontend --features server --all-targets -- -D warnings && \
+        cargo clippy -p omnibus-mobile --all-targets -- -D warnings'
+    scripts/with-dev-env.sh web cargo clippy -p omnibus-frontend --features web --all-targets --target wasm32-unknown-unknown -- -D warnings
 
 # Lint then test — the pre-push gate referenced by rule 99.
 check: lint test
