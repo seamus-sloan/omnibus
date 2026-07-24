@@ -168,34 +168,36 @@ impl ReaderPrefs {
 /// app-wide atrium signal so changes here flip both reader and the
 /// surrounding chrome.
 pub(crate) fn init_reader_prefs(theme: Signal<Theme>) -> ReaderPrefs {
-    let font_size = use_signal(default_font_size);
-    let typeface = use_signal(default_typeface);
-    let line_spacing = use_signal(default_line_spacing);
-    let margins = use_signal(default_margins);
-    let justify = use_signal(default_justify);
-    let spread = use_signal(default_spread);
+    let mut font_size = use_signal(default_font_size);
+    let mut typeface = use_signal(default_typeface);
+    let mut line_spacing = use_signal(default_line_spacing);
+    let mut margins = use_signal(default_margins);
+    let mut justify = use_signal(default_justify);
+    let mut spread = use_signal(default_spread);
 
+    // Unconditional (not `#[cfg(feature = "web")]`-gated): `load_persisted_*`
+    // itself carries the cfg and returns `None` on every non-web target, so
+    // these `.set()` calls compile — and stay real no-ops — on every target.
+    // Gating the block instead would make each `mut` binding unused (and
+    // clippy `-D warnings` deny it) whenever `web` is off.
     use_effect(move || {
-        #[cfg(feature = "web")]
-        {
-            if let Some(v) = load_persisted_font_size() {
-                font_size.set(v);
-            }
-            if let Some(v) = load_persisted_typeface() {
-                typeface.set(v);
-            }
-            if let Some(v) = load_persisted_line_spacing() {
-                line_spacing.set(v);
-            }
-            if let Some(v) = load_persisted_margins() {
-                margins.set(v);
-            }
-            if let Some(v) = load_persisted_justify() {
-                justify.set(v);
-            }
-            if let Some(v) = load_persisted_spread() {
-                spread.set(v);
-            }
+        if let Some(v) = load_persisted_font_size() {
+            font_size.set(v);
+        }
+        if let Some(v) = load_persisted_typeface() {
+            typeface.set(v);
+        }
+        if let Some(v) = load_persisted_line_spacing() {
+            line_spacing.set(v);
+        }
+        if let Some(v) = load_persisted_margins() {
+            margins.set(v);
+        }
+        if let Some(v) = load_persisted_justify() {
+            justify.set(v);
+        }
+        if let Some(v) = load_persisted_spread() {
+            spread.set(v);
         }
     });
 
@@ -221,6 +223,11 @@ fn load_persisted_font_size() -> Option<i32> {
         .map(|n| n.clamp(FONT_SIZE_MIN, FONT_SIZE_MAX))
 }
 
+#[cfg(not(feature = "web"))]
+fn load_persisted_font_size() -> Option<i32> {
+    None
+}
+
 fn default_typeface() -> Typeface {
     Typeface::Editorial
 }
@@ -228,6 +235,11 @@ fn default_typeface() -> Typeface {
 #[cfg(feature = "web")]
 fn load_persisted_typeface() -> Option<Typeface> {
     super::typography::load_reader_pref("omn.typeface").and_then(|s| Typeface::from_storage(&s))
+}
+
+#[cfg(not(feature = "web"))]
+fn load_persisted_typeface() -> Option<Typeface> {
+    None
 }
 
 fn default_line_spacing() -> LineSpacing {
@@ -240,6 +252,11 @@ fn load_persisted_line_spacing() -> Option<LineSpacing> {
         .and_then(|s| LineSpacing::from_storage(&s))
 }
 
+#[cfg(not(feature = "web"))]
+fn load_persisted_line_spacing() -> Option<LineSpacing> {
+    None
+}
+
 fn default_margins() -> Margins {
     Margins::Normal
 }
@@ -247,6 +264,11 @@ fn default_margins() -> Margins {
 #[cfg(feature = "web")]
 fn load_persisted_margins() -> Option<Margins> {
     super::typography::load_reader_pref("omn.margins").and_then(|s| Margins::from_storage(&s))
+}
+
+#[cfg(not(feature = "web"))]
+fn load_persisted_margins() -> Option<Margins> {
+    None
 }
 
 fn default_justify() -> bool {
@@ -258,6 +280,11 @@ fn load_persisted_justify() -> Option<bool> {
     super::typography::load_reader_pref("omn.justify").map(|s| s == "true")
 }
 
+#[cfg(not(feature = "web"))]
+fn load_persisted_justify() -> Option<bool> {
+    None
+}
+
 fn default_spread() -> Spread {
     Spread::Double
 }
@@ -265,6 +292,11 @@ fn default_spread() -> Spread {
 #[cfg(feature = "web")]
 fn load_persisted_spread() -> Option<Spread> {
     super::typography::load_reader_pref("omn.spread").and_then(|s| Spread::from_storage(&s))
+}
+
+#[cfg(not(feature = "web"))]
+fn load_persisted_spread() -> Option<Spread> {
+    None
 }
 
 #[cfg(test)]
