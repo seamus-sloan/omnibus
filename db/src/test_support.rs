@@ -131,17 +131,13 @@ impl Drop for EnvVarGuard {
 // Covers env guard
 // ---------------------------------------------------------------------------
 
-/// Process-wide lock for `OMNIBUS_COVERS_DIR`. Tests that touch the
-/// covers directory must serialize, since the env var is global.
-///
-/// Prefer `EnvVarGuard` + `ENV_LOCK` for new callers. This alias is
-/// retained for test code that still references it directly.
-pub static COVERS_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 /// RAII guard that points `OMNIBUS_COVERS_DIR` at a unique temp dir for
 /// the lifetime of the test, then restores the previous value (and
-/// removes the temp dir) on drop. Holds `COVERS_ENV_LOCK` so parallel
-/// `cargo test` runs don't stomp on each other.
+/// removes the temp dir) on drop. Holds the shared [`ENV_LOCK`] — the
+/// same lock `EnvVarGuard` uses — so it serializes against *every* other
+/// env-var mutation in the crate, not just other `CoversTempDir`s. A
+/// prior split lock let a test setting `OMNIBUS_COVERS_DIR` via
+/// `EnvVarGuard` run concurrently with one here and stomp the value.
 pub struct CoversTempDir {
     pub path: PathBuf,
     prev: Option<String>,
@@ -150,7 +146,7 @@ pub struct CoversTempDir {
 
 impl CoversTempDir {
     pub fn new(tag: &str) -> Self {
-        let guard = COVERS_ENV_LOCK
+        let guard = ENV_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let pid = std::process::id();
@@ -161,7 +157,7 @@ impl CoversTempDir {
         let path = std::env::temp_dir().join(format!("omnibus_covers_{tag}_{pid}_{seq}"));
         let _ = std::fs::remove_dir_all(&path);
         let prev = std::env::var("OMNIBUS_COVERS_DIR").ok();
-        // SAFETY: COVERS_ENV_LOCK is held; no other thread mutates the env.
+        // SAFETY: ENV_LOCK is held; no other thread mutates the env.
         unsafe {
             std::env::set_var("OMNIBUS_COVERS_DIR", &path);
         }
@@ -176,7 +172,7 @@ impl CoversTempDir {
 impl Drop for CoversTempDir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.path);
-        // SAFETY: COVERS_ENV_LOCK is still held via `_guard`.
+        // SAFETY: ENV_LOCK is still held via `_guard`.
         unsafe {
             match self.prev.take() {
                 Some(v) => std::env::set_var("OMNIBUS_COVERS_DIR", v),
