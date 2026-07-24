@@ -26,6 +26,11 @@ fn install_js(id: u64) -> String {
     document.removeEventListener('touchend', prev.onEnd, true);
     document.removeEventListener('touchcancel', prev.onEnd, true);
   }
+  // A replaced install's in-flight refresh can never settle (its Rust
+  // future died with the unmount, so SETTLE_JS never runs) and the old
+  // cleanup no-ops on the id check — reset the gate so this mount always
+  // starts usable.
+  window.__omnibusPtrBusy = false;
   var startY = 0, pull = 0, active = false;
   var THRESH = 70, MAX = 110;
   function el(){ return document.querySelector('.m-ptr'); }
