@@ -27,13 +27,20 @@ All tests use `sqlite::memory:` for isolation — never the on-disk DB.
 
 ## Shared helpers
 
-Every crate has a `test_support` module
-(`<crate>/src/test_support.rs`, gated
-`#[cfg(any(test, feature = "test-support"))]`) for cross-cutting
-helpers: in-memory pool init, seed factories, fixture builders. No
-duplicated `make_test_dir()` / `seed_minimal_books()` across files.
+Cross-cutting helpers — in-memory pool init, seed factories, fixture
+builders — live in a `test_support` module, never duplicated across
+files (no per-file `make_test_dir()` / `seed_minimal_books()`). Put it
+at the scope its helpers serve:
 
-Another crate reuses these by depending on it with the feature on —
+- **Crate-wide** → `<crate>/src/test_support.rs`, gated
+  `#[cfg(any(test, feature = "test-support"))]`, as in
+  [db/src/test_support.rs](../../db/src/test_support.rs). Only this
+  shape is reusable from another crate.
+- **One module tree** → a sibling `test_support.rs` next to the code
+  it serves, e.g. `server/src/backend/test_support.rs` (REST fixtures)
+  and `server/src/auth/test_support.rs` (user + token factories).
+
+To reuse a crate-wide one elsewhere, depend on it with the feature on —
 `omnibus-db = { path = "../db", features = ["test-support"] }` under
 `[dev-dependencies]`, which cargo unifies into test builds only.
 
