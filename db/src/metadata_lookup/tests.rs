@@ -1,5 +1,6 @@
-//! ISBN metadata-lookup tests: the Open Library → Google Books provider chain
-//! (against `wiremock`) and the both-miss unresolved signal. Normalization
+//! ISBN metadata-lookup tests: the key-dependent provider chain (Open Library
+//! first when keyless, Google Books first when a key is configured), run
+//! against `wiremock`, plus the both-miss unresolved signal. Normalization
 //! itself is tested in `omnibus_shared::isbn`, which owns it.
 
 use std::time::Duration;
@@ -130,6 +131,51 @@ async fn lookup_falls_through_to_google_books_on_open_library_error() {
 }
 
 #[tokio::test]
+async fn lookup_prefers_google_books_when_a_key_is_configured() {
+    // Both providers would answer; the key makes Google Books the primary.
+    let server = MockServer::start().await;
+    mount_ol(&server, ol_hit()).await;
+    mount_gb(&server, gb_hit()).await;
+
+    let config = MetadataLookupConfig {
+        googlebooks_api_key: Some("k".into()),
+        ..config_for(&server)
+    };
+    let meta = lookup_isbn(&config, ISBN13).await.unwrap().unwrap();
+    assert_eq!(meta.source, MetadataProvider::GoogleBooks);
+}
+
+#[tokio::test]
+async fn lookup_prefers_open_library_when_no_key_is_configured() {
+    // The keyless default: Open Library leads even when Google Books would hit.
+    let server = MockServer::start().await;
+    mount_ol(&server, ol_hit()).await;
+    mount_gb(&server, gb_hit()).await;
+
+    let meta = lookup_isbn(&config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(meta.source, MetadataProvider::OpenLibrary);
+}
+
+#[tokio::test]
+async fn lookup_with_key_falls_back_to_open_library_when_google_books_misses() {
+    // Keyed Google Books is primary; on its miss the ladder still reaches
+    // Open Library rather than giving up.
+    let server = MockServer::start().await;
+    mount_gb(&server, json!({ "totalItems": 0 })).await;
+    mount_ol(&server, ol_hit()).await;
+
+    let config = MetadataLookupConfig {
+        googlebooks_api_key: Some("k".into()),
+        ..config_for(&server)
+    };
+    let meta = lookup_isbn(&config, ISBN13).await.unwrap().unwrap();
+    assert_eq!(meta.source, MetadataProvider::OpenLibrary);
+}
+
+#[tokio::test]
 async fn lookup_returns_unresolved_when_both_providers_miss() {
     let server = MockServer::start().await;
     mount_ol(&server, json!({})).await;
@@ -225,9 +271,13 @@ fn googlebooks_url_appends_the_key_only_when_configured() {
 async fn googlebooks_failure_never_renders_the_api_key() {
     // The key rides in the query string, and a `reqwest::Error` renders the
     // request URL in its Display — so an un-stripped error would write the key
-    // into the on-disk JSON log on every 429.
+    // into the on-disk JSON log on every 429. Call the provider directly: under
+    // the key-dependent ladder a keyed Google Books is the *primary*, so its
+    // error is swallowed to a warn and a full `lookup_isbn` would fall through
+    // to Open Library instead of returning it. This error object is what both
+    // the warn log and any terminal Provider error render, so it's the leak
+    // surface to guard.
     let server = MockServer::start().await;
-    mount_ol(&server, json!({})).await;
     Mock::given(method("GET"))
         .and(path(GB_PATH))
         .respond_with(ResponseTemplate::new(429))
@@ -238,7 +288,9 @@ async fn googlebooks_failure_never_renders_the_api_key() {
         googlebooks_api_key: Some("super-secret-key".into()),
         ..config_for(&server)
     };
-    let err = lookup_isbn(&config, ISBN13).await.unwrap_err();
+    let err = super::providers::googlebooks_lookup(&config, ISBN13)
+        .await
+        .unwrap_err();
     // Walk the whole source chain — that's what `{:#}`/`{:?}` logging renders.
     let rendered = format!("{err:?} {err:#}");
     assert!(

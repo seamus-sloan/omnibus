@@ -17,7 +17,7 @@ mod upsert;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use upsert::{apply_overrides, load_overrides_bulk};
+pub(crate) use upsert::{apply_overrides, backfill_override_norm_columns, load_overrides_bulk};
 pub use upsert::{
     clear_cover_override, delete_metadata_overrides, delete_override_cover, get_book_uuid,
     get_metadata_overrides, merge_metadata_overrides, upsert_metadata_overrides,

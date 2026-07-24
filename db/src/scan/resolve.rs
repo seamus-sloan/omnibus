@@ -174,6 +174,21 @@ async fn find_book_by_isbn(
 /// Fuzzy rung: a single library book whose normalized (title, author) matches
 /// the resolved metadata. `None` unless exactly one candidate matches — an
 /// ambiguous or absent match is not a close match.
+///
+/// Matches on the **effective** norm — `COALESCE(mo.title_norm, b.title_norm)`
+/// — so a user's title/author edit (which lives only in `metadata_overrides`, a
+/// read-time overlay; `books.*_norm` keep the scanned values) is what's compared
+/// (#checkin-match-effective-title). A physical copy's barcode ISBN is a
+/// different edition from the ebook's, so this norm rung — not the exact-ISBN
+/// rung — is the only bridge between a scanned physical copy and an existing
+/// ebook.
+///
+/// Two passes, each keeping the exactly-one-candidate guard:
+/// 1. **Exact** effective-norm equality on both title and author.
+/// 2. **Subtitle-tolerant** fallback (only when the exact pass found nothing):
+///    author still exact, but one effective title may be a word-boundary prefix
+///    of the other — so `"the name of the wind"` matches
+///    `"the name of the wind the kingkiller chronicle book 1"`.
 async fn find_book_by_norm(
     pool: &SqlitePool,
     meta: &ExternalBookMeta,
@@ -184,7 +199,37 @@ async fn find_book_by_norm(
     ) else {
         return Ok(None);
     };
-    let rows = sqlx::query(
+
+    if let Some(book) = query_norm_candidate(pool, &title_norm, &author_norm, false).await? {
+        return Ok(Some(book));
+    }
+    query_norm_candidate(pool, &title_norm, &author_norm, true).await
+}
+
+/// Run one pass of the norm rung, returning the sole matching book or `None`
+/// when zero or more than one candidate matches. `tolerant` widens the title
+/// predicate from exact equality to word-boundary prefix in either direction;
+/// author stays an exact effective-norm match in both modes.
+async fn query_norm_candidate(
+    pool: &SqlitePool,
+    title_norm: &str,
+    author_norm: &str,
+    tolerant: bool,
+) -> Result<Option<ScanBook>, sqlx::Error> {
+    // `COALESCE(mo.title_norm, b.title_norm)` is the effective title key: the
+    // override norm when the user edited the title, else the scanned norm. Norm
+    // strings are `[a-z0-9 ]` only (see `normalize`), so `?1` carries no LIKE
+    // wildcards and the ` %` suffix asserts a word boundary — a prefix match
+    // can't span mid-word. The predicate is a static string, not user input, so
+    // interpolating it into the SQL is injection-safe.
+    let title_pred = if tolerant {
+        "(COALESCE(mo.title_norm, b.title_norm) = ?1
+          OR COALESCE(mo.title_norm, b.title_norm) LIKE ?1 || ' %'
+          OR ?1 LIKE COALESCE(mo.title_norm, b.title_norm) || ' %')"
+    } else {
+        "COALESCE(mo.title_norm, b.title_norm) = ?1"
+    };
+    let sql = format!(
         "SELECT b.uuid, b.title, b.has_cover,
                 (SELECT group_concat(a.name, ', ')
                    FROM books_authors_link bal JOIN authors a ON a.id = bal.author
@@ -197,13 +242,15 @@ async fn find_book_by_norm(
                         GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'
                   ORDER BY bi2.rowid LIMIT 1) AS isbn
            FROM books b
-          WHERE b.title_norm = ?1 AND b.author_norm = ?2
-          ORDER BY b.id LIMIT 2",
-    )
-    .bind(title_norm)
-    .bind(author_norm)
-    .fetch_all(pool)
-    .await?;
+           LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+          WHERE COALESCE(mo.author_norm, b.author_norm) = ?2 AND {title_pred}
+          ORDER BY b.id LIMIT 2"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(title_norm)
+        .bind(author_norm)
+        .fetch_all(pool)
+        .await?;
     // Exactly one candidate is a close match; zero or many is not.
     Ok(if rows.len() == 1 {
         rows.into_iter().next().map(|r| {
