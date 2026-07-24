@@ -334,10 +334,7 @@ fn render_player(p: PlayerProps) -> Element {
             persist_position(&uuid_seek, &su_seek, secs);
         }
     };
-    // No optimistic flip: the JS surface toggles off the element's real
-    // `paused` state and the resulting `play`/`pause` events (plus the
-    // per-tick `Time` reconciliation) drive `ctx.playing`. Guessing here can
-    // desync the icon from actual playback (issue #1250).
+    // Let audio events drive `ctx.playing`; an optimistic flip can desync the icon.
     let on_toggle = move |_| interop::toggle();
     let on_back = move |_| interop::skip(-30.0);
     let on_fwd = move |_| interop::skip(30.0);

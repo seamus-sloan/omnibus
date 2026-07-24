@@ -351,8 +351,7 @@ mod tests {
         );
         assert!(js.contains("window.OmnibusMobileAudio"));
         assert!(js.contains("dioxus.send"));
-        // The timeupdate tick carries the element's paused state so the drain
-        // can reconcile the transport icon (issue #1250).
+        // The timeupdate tick must carry the element's paused state for the drain to reconcile.
         assert!(
             js.contains("kind: 'Time', seconds: absTime(), paused: el.paused"),
             "timeupdate must report the element's paused state"

@@ -68,8 +68,7 @@ pub fn MobileMiniPlayer() -> Element {
         .map(|a| format!("--accent: {a};"))
         .unwrap_or_default();
 
-    // No optimistic flip — the JS surface + `play`/`pause`/`Time` events are
-    // the source of truth for `ctx.playing` (issue #1250).
+    // Let audio events drive `ctx.playing`; an optimistic flip can desync the icon.
     let on_toggle = move |_| interop::toggle();
 
     rsx! {

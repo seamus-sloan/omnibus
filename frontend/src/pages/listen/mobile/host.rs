@@ -353,10 +353,7 @@ async fn drain_audio_events(
         match eval.recv::<interop::AudioEvent>().await {
             Ok(interop::AudioEvent::Time { seconds, paused }) => {
                 elapsed.set(seconds);
-                // Reconcile the transport icon against the element's real
-                // paused state: WKWebView can resume after an audio
-                // interruption without re-firing `play`, which would otherwise
-                // leave the button stuck on "play" while playback advances.
+                // WKWebView can resume after an interruption without re-firing `play`; reconcile the icon.
                 if playing_out_of_sync(*playing.peek(), paused) {
                     playing.set(!paused);
                 }
@@ -394,8 +391,7 @@ mod tests {
         // Agreement: playing == !paused — nothing to reconcile.
         assert!(!playing_out_of_sync(true, false));
         assert!(!playing_out_of_sync(false, true));
-        // Drift: the icon and the element disagree (the issue #1250 case where
-        // audio resumed but the button stayed on "play").
+        // Drift: the icon and the element disagree and must be flipped.
         assert!(playing_out_of_sync(false, false));
         assert!(playing_out_of_sync(true, true));
     }
