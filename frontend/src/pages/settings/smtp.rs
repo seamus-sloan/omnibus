@@ -362,14 +362,14 @@ fn SmtpTestActions(
                 }
             }
         }
-        div { class: "hardcover-status mono", "data-testid": "smtp-status",
+        div { class: "api-key-status mono", "data-testid": "smtp-status",
             if configured {
-                span { class: "hardcover-dot connected" }
+                span { class: "api-key-dot connected" }
                 if let Some(s) = status.as_ref() {
                     "Configured \u{00b7} {s.source}"
                 }
             } else {
-                span { class: "hardcover-dot" }
+                span { class: "api-key-dot" }
                 "Not configured"
             }
         }

@@ -37,13 +37,27 @@ pub struct MetadataLookupConfig {
 impl MetadataLookupConfig {
     /// Config pointing at the live provider endpoints, with the Google Books
     /// key taken from the environment when set.
+    ///
+    /// Prefer [`live_with_key`](Self::live_with_key) from a request path that
+    /// has a DB pool: the saved Settings key takes precedence over the env var
+    /// (see `effective_google_books_api_key`). This env-only form is the
+    /// fallback for contexts without a pool (`Default`, tests).
     pub fn live() -> Self {
+        Self::live_with_key(
+            std::env::var(GOOGLE_BOOKS_API_KEY_ENV)
+                .ok()
+                .filter(|k| !k.trim().is_empty()),
+        )
+    }
+
+    /// Config pointing at the live provider endpoints with an already-resolved
+    /// Google Books key. Callers pass the effective key from settings so the
+    /// saved value wins over the env var without this crate needing a pool.
+    pub fn live_with_key(googlebooks_api_key: Option<String>) -> Self {
         Self {
             openlibrary_base: "https://openlibrary.org".to_string(),
             googlebooks_base: "https://www.googleapis.com".to_string(),
-            googlebooks_api_key: std::env::var(GOOGLE_BOOKS_API_KEY_ENV)
-                .ok()
-                .filter(|k| !k.trim().is_empty()),
+            googlebooks_api_key,
             timeout: LOOKUP_TIMEOUT,
         }
     }
