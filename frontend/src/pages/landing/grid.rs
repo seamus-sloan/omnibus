@@ -34,6 +34,9 @@ fn GridTile(book: EbookMetadata, server_url: String) -> Element {
     let display_title = book.title.as_deref().unwrap_or(&book.filename).to_string();
     let tile_testid = format!("ebook-tile-{}", row_slug(&book.filename));
     let authors = contributor_names(&book.creators);
+    // Read before `book` moves into `Cover`. Mirrors the table's formats cell,
+    // which carries the same badge (#1181).
+    let has_physical = book.has_physical;
     let nav = use_navigator();
 
     // Prefer the responsive `/api/thumbs/:uuid/{sm,md,lg}` endpoint over the
@@ -72,6 +75,14 @@ fn GridTile(book: EbookMetadata, server_url: String) -> Element {
                     "(max-width: 640px) 160px, (max-width: 1280px) 200px, 240px"
                         .to_string(),
                 ),
+            }
+            if has_physical {
+                span {
+                    class: "lib-tile-phys format-badge format-badge--physical",
+                    "data-testid": "format-badge-physical",
+                    title: "In your physical collection",
+                    "PHYS"
+                }
             }
             div { class: "lib-tile-title", "{display_title}" }
             if !authors.is_empty() {

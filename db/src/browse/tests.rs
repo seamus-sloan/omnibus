@@ -1,6 +1,6 @@
 //! Unit tests for the `browse` module — `/authors` and `/series` index
 //! pages: alpha-ordering, override-aware counts, audiobook-library scope,
-//! and `has_photo` propagation.
+//! `has_photo` propagation, and physical-only vs wishlist-only visibility.
 
 use omnibus_shared::{Contributor, MetadataOverrides};
 
@@ -8,6 +8,7 @@ use super::*;
 use crate::author_photos_data::{upsert_author_photo, AuthorPhotoSource};
 use crate::books::list_books;
 use crate::metadata_overrides::upsert_metadata_overrides;
+use crate::physical::{add_physical_copy, create_fileless_book, FilelessBook};
 use crate::pool::init_db;
 use crate::test_support::*;
 
@@ -503,4 +504,118 @@ async fn list_authors_propagates_db_error_when_pool_is_closed() {
     pool.close().await;
     let err = list_authors(&pool, &["/lib"]).await.unwrap_err();
     assert!(matches!(err, BrowseError::Db(_)));
+}
+
+// -----------------------------------------------------------------
+// Physical-only visibility — #1181
+// -----------------------------------------------------------------
+
+/// Mint a fileless book (synthetic `physical://local` root) with one author.
+async fn seed_fileless(pool: &SqlitePool, title: &str, author: &str) -> String {
+    create_fileless_book(
+        pool,
+        FilelessBook {
+            title: title.to_string(),
+            authors: vec![author.to_string()],
+            isbn: None,
+            pubdate: None,
+            description: None,
+            cover: None,
+        },
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn list_authors_includes_an_author_whose_only_book_is_a_physical_copy() {
+    let _guard = CoversTempDir::new("browse_physical_author");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let uuid = seed_fileless(&pool, "Paper Only", "Ada Lovelace").await;
+    add_physical_copy(&pool, &uuid, Some("9780000000001"), None, None)
+        .await
+        .unwrap();
+
+    // "/lib" is the configured scan root; the book lives under the synthetic
+    // physical root, so only the physical arm can surface it.
+    let authors = list_authors(&pool, &["/lib"]).await.unwrap();
+    assert_eq!(
+        authors.len(),
+        1,
+        "physical-only book must surface its author"
+    );
+    assert_eq!(authors[0].name, "Ada Lovelace");
+    assert_eq!(authors[0].book_count, 1);
+}
+
+#[tokio::test]
+async fn list_authors_hides_an_author_whose_only_book_is_wishlist_only() {
+    let _guard = CoversTempDir::new("browse_wishlist_author");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_fileless(&pool, "Someday", "Grace Hopper").await;
+
+    let authors = list_authors(&pool, &["/lib"]).await.unwrap();
+    assert!(
+        authors.is_empty(),
+        "a wishlist-only book has no copy and no files — it belongs to no author index"
+    );
+}
+
+#[tokio::test]
+async fn list_series_includes_a_series_whose_only_book_is_a_physical_copy() {
+    let _guard = CoversTempDir::new("browse_physical_series");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let uuid = seed_fileless(&pool, "Paper Saga #1", "Ada Lovelace").await;
+    link_series(&pool, &uuid, "Paper Saga").await;
+    add_physical_copy(&pool, &uuid, None, None, None)
+        .await
+        .unwrap();
+
+    let series = list_series(&pool, &["/lib"]).await.unwrap();
+    assert_eq!(
+        series.len(),
+        1,
+        "physical-only book must surface its series"
+    );
+    assert_eq!(series[0].name, "Paper Saga");
+    assert_eq!(series[0].book_count, 1);
+}
+
+#[tokio::test]
+async fn list_series_hides_a_series_whose_only_book_is_wishlist_only() {
+    let _guard = CoversTempDir::new("browse_wishlist_series");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let uuid = seed_fileless(&pool, "Someday Saga #1", "Grace Hopper").await;
+    link_series(&pool, &uuid, "Someday Saga").await;
+
+    let series = list_series(&pool, &["/lib"]).await.unwrap();
+    assert!(
+        series.is_empty(),
+        "wishlist-only book must not surface a series"
+    );
+}
+
+/// Attach `uuid`'s book to a (created-on-demand) series.
+async fn link_series(pool: &SqlitePool, uuid: &str, name: &str) {
+    let book_id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE uuid = ?1")
+        .bind(uuid)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT OR IGNORE INTO series (name) VALUES (?1)")
+        .bind(name)
+        .execute(pool)
+        .await
+        .unwrap();
+    let series_id: i64 = sqlx::query_scalar("SELECT id FROM series WHERE name = ?1")
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO books_series_link (book, series) VALUES (?1, ?2)")
+        .bind(book_id)
+        .bind(series_id)
+        .execute(pool)
+        .await
+        .unwrap();
 }

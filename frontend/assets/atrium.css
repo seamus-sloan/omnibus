@@ -5171,6 +5171,16 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   display: block;
   text-decoration: none;
   cursor: pointer;
+  position: relative;
+}
+/* Pins to the cover's top-right — the Cover is the tile's first child, so the
+   tile box starts at the artwork. Opaque ground because `.format-badge` is
+   transparent by default and would be unreadable over cover art. */
+.lib-tile-phys {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: var(--bg-0);
 }
 .lib-tile:focus-visible {
   outline: 2px solid var(--accent);
