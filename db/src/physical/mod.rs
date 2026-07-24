@@ -16,7 +16,7 @@ mod tests;
 
 pub use copies::{add_physical_copy, delete_physical_copy, list_physical_copies};
 pub use fileless::{create_fileless_book, FilelessBook, FilelessCover};
-pub use wishlist::{add_wishlist_entry, list_wishlist, remove_wishlist_entry};
+pub use wishlist::{add_wishlist_entry, list_wishlist, remove_wishlist_entry, LIST_WISHLIST_LIMIT};
 
 /// Errors from the physical ownership data layer.
 #[derive(Debug, thiserror::Error)]
