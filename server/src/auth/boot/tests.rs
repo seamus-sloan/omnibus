@@ -15,18 +15,14 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 /// prior value on drop.
 ///
 /// `EnvGuard::set` / `EnvGuard::unset` acquire `ENV_LOCK` themselves and
-/// store the `MutexGuard` inside the struct.  The guard is released when
-/// the `EnvGuard` is dropped (after the env var is restored), so it is
-/// structurally impossible to mutate the environment without holding the
-/// lock — no documentation contract for callers to misunderstand.
-///
-/// The `MutexGuard` is held across `.await` points in the tests that use
-/// this helper, which clippy flags.  The `#[allow]` is on the individual
-/// tests that do so (rather than the whole module) so it is scoped as
-/// tightly as possible.  An async mutex is not appropriate here: the lock
-/// guards the process-global environment, not just a single coroutine
-/// turn, so we must use a `std::sync::Mutex` and intentionally hold it
-/// across yield points to prevent other tests from racing on env.
+/// store the `MutexGuard` inside the struct, so it is structurally
+/// impossible to mutate the environment without holding the lock. That
+/// `MutexGuard` is then held across `.await` in every test below — sound
+/// only under tokio's current-thread runtime (see the module doc on
+/// `backend::test_support` for the full rationale, and
+/// `assert_current_thread_test_runtime` there, which `set`/`unset` call
+/// below to make the assumption an enforced `debug_assert` rather than a
+/// comment (#1169).
 struct EnvGuard {
     key: &'static str,
     prev: Option<String>,
@@ -38,6 +34,7 @@ struct EnvGuard {
 
 impl EnvGuard {
     fn set(key: &'static str, value: &str) -> Self {
+        crate::backend::test_support::assert_current_thread_test_runtime();
         // Recover from a poisoned lock (a prior test panicked while
         // holding it) instead of cascading the panic into every
         // subsequent env-var test — matches the repo's other ENV_LOCK
@@ -60,6 +57,7 @@ impl EnvGuard {
     }
 
     fn unset(key: &'static str) -> Self {
+        crate::backend::test_support::assert_current_thread_test_runtime();
         // Recover from a poisoned lock (a prior test panicked while
         // holding it) instead of cascading the panic into every
         // subsequent env-var test — matches the repo's other ENV_LOCK
@@ -97,7 +95,6 @@ impl Drop for EnvGuard {
     }
 }
 
-#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn unset_env_is_noop() {
     let _g = EnvGuard::unset("OMNIBUS_INITIAL_ADMIN");
@@ -114,7 +111,6 @@ async fn unset_env_is_noop() {
     assert!(u.is_admin);
 }
 
-#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn env_promotes_existing_non_admin() {
     let pool = db::init_db("sqlite::memory:").await.unwrap();
@@ -144,7 +140,6 @@ async fn env_promotes_existing_non_admin() {
     assert!(bob.is_admin);
 }
 
-#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn env_for_unknown_user_is_noop_no_error() {
     let pool = db::init_db("sqlite::memory:").await.unwrap();
@@ -154,7 +149,6 @@ async fn env_for_unknown_user_is_noop_no_error() {
 
 // ----- seed_dev_user -----
 
-#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn seed_unset_env_is_noop() {
     let _g = EnvGuard::unset("OMNIBUS_DEV_SEED_USER");
@@ -166,7 +160,6 @@ async fn seed_unset_env_is_noop() {
         .is_none());
 }
 
-#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn seed_creates_admin_when_user_absent() {
     let _g = EnvGuard::set("OMNIBUS_DEV_SEED_USER", "admin:omnibus-dev");
@@ -179,7 +172,6 @@ async fn seed_creates_admin_when_user_absent() {
     assert!(u.is_admin, "seeded user should be admin");
 }
 
-#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn seed_is_idempotent_when_user_exists() {
     let pool = db::init_db("sqlite::memory:").await.unwrap();
@@ -198,7 +190,6 @@ async fn seed_is_idempotent_when_user_exists() {
         .expect("original password should still authenticate");
 }
 
-#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn seed_malformed_env_is_noop_no_error() {
     let pool = db::init_db("sqlite::memory:").await.unwrap();
@@ -211,7 +202,6 @@ async fn seed_malformed_env_is_noop_no_error() {
         .is_none());
 }
 
-#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn seed_works_when_other_users_already_exist() {
     let pool = db::init_db("sqlite::memory:").await.unwrap();
@@ -230,7 +220,6 @@ async fn seed_works_when_other_users_already_exist() {
     assert!(u.is_admin);
 }
 
-#[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn seed_restores_prior_registration_enabled_flag() {
     // Reviewer PR #71 / boot.rs:94 — seed_dev_user used to leave
