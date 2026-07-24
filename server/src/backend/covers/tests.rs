@@ -68,6 +68,134 @@ async fn api_get_cover_returns_200_with_image_bytes_for_existing_cover() {
 }
 
 #[tokio::test]
+async fn api_get_cover_returns_304_when_if_none_match_matches_the_current_etag() {
+    let (app, _, pool) = fixture().await;
+    let (id, uuid) = seed_book_with_uuid(&pool, "/lib", "Cover Book").await;
+    sqlx::query("UPDATE books SET has_cover = 1 WHERE id = ?")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let _covers_guard = CoversDirGuard::new("get_cover_304");
+    std::fs::write(db::covers_dir().join(format!("{uuid}.png")), TINY_PNG)
+        .expect("write cover fixture");
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let first = app
+        .clone()
+        .oneshot(get_with_bearer(&format!("/api/covers/{uuid}"), &token))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let etag = first
+        .headers()
+        .get(header::ETAG)
+        .expect("first response should carry an ETag")
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    // Same bytes on disk: a client that already cached this ETag should
+    // get a bodyless 304, not a fresh copy of the image (#1086 — the
+    // revalidation itself must be cheap even though every load now
+    // triggers one).
+    let second = app
+        .oneshot(get_with_bearer_and_if_none_match(
+            &format!("/api/covers/{uuid}"),
+            &token,
+            &etag,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(second.headers().get(header::ETAG).unwrap(), etag.as_str());
+    let bytes = to_bytes(second.into_body(), usize::MAX).await.unwrap();
+    assert!(bytes.is_empty());
+}
+
+#[tokio::test]
+async fn api_get_cover_serves_fresh_bytes_and_a_new_etag_after_the_cover_changes() {
+    let (app, _, pool) = fixture().await;
+    let (id, uuid) = seed_book_with_uuid(&pool, "/lib", "Cover Book").await;
+    sqlx::query("UPDATE books SET has_cover = 1 WHERE id = ?")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let _covers_guard = CoversDirGuard::new("get_cover_etag_changes");
+    let cover_path = db::covers_dir().join(format!("{uuid}.png"));
+    std::fs::write(&cover_path, TINY_PNG).expect("write cover fixture");
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let first = app
+        .clone()
+        .oneshot(get_with_bearer(&format!("/api/covers/{uuid}"), &token))
+        .await
+        .unwrap();
+    let stale_etag = first
+        .headers()
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    // Simulate a book-editor cover replace: new bytes land at the same
+    // uuid-keyed path. A request still carrying the pre-change ETag must
+    // NOT be told "not modified" — it needs the new image (this is the
+    // regression this fix targets: reloading/revisiting after a cover
+    // update must show the update, per #1086 AC2).
+    std::fs::write(&cover_path, [TINY_PNG, b"-changed"].concat()).expect("overwrite cover fixture");
+
+    let second = app
+        .oneshot(get_with_bearer_and_if_none_match(
+            &format!("/api/covers/{uuid}"),
+            &token,
+            &stale_etag,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::OK);
+    let fresh_etag = second
+        .headers()
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(fresh_etag, stale_etag);
+    let bytes = to_bytes(second.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&bytes[..], [TINY_PNG, b"-changed"].concat().as_slice());
+}
+
+#[tokio::test]
+async fn api_get_cover_sets_no_cache_control_so_clients_always_revalidate() {
+    let (app, _, pool) = fixture().await;
+    let (id, uuid) = seed_book_with_uuid(&pool, "/lib", "Cover Book").await;
+    sqlx::query("UPDATE books SET has_cover = 1 WHERE id = ?")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let _covers_guard = CoversDirGuard::new("get_cover_cache_control");
+    std::fs::write(db::covers_dir().join(format!("{uuid}.png")), TINY_PNG)
+        .expect("write cover fixture");
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let res = app
+        .oneshot(get_with_bearer(&format!("/api/covers/{uuid}"), &token))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers().get(header::CACHE_CONTROL).unwrap(),
+        "private, no-cache"
+    );
+}
+
+#[tokio::test]
 async fn api_get_cover_returns_500_when_metadata_overrides_table_is_missing() {
     let (app, _, pool) = fixture().await;
     let (_id, uuid) = seed_book_with_uuid(&pool, "/lib", "Cover Book").await;
@@ -173,8 +301,59 @@ async fn api_get_thumb_returns_200_and_serves_cached_webp_on_cache_hit() {
         res.headers().get(header::CONTENT_TYPE).unwrap(),
         "image/webp"
     );
+    assert_eq!(
+        res.headers().get(header::CACHE_CONTROL).unwrap(),
+        "private, no-cache"
+    );
     let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
     assert_eq!(&bytes[..], thumb_bytes);
+}
+
+#[tokio::test]
+async fn api_get_thumb_returns_304_when_if_none_match_matches_the_cached_webps_etag() {
+    let (app, _, pool) = fixture().await;
+    let (id, uuid) = seed_book_with_uuid(&pool, "/lib", "Thumb Book").await;
+    sqlx::query("UPDATE books SET last_modified = 0 WHERE id = ?")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let _thumbs_guard = ThumbsDirGuard::new("thumb_cache_hit_304");
+    std::fs::write(
+        db::thumb_path_for(id, db::ThumbSize::Md),
+        b"fake-cached-webp-bytes",
+    )
+    .expect("write thumb fixture");
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let first = app
+        .clone()
+        .oneshot(get_with_bearer(&format!("/api/thumbs/{uuid}/md"), &token))
+        .await
+        .unwrap();
+    let etag = first
+        .headers()
+        .get(header::ETAG)
+        .expect("cache-hit response should carry an ETag")
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    // Same rationale as the cover 304 test: a client revisiting/reloading
+    // with an up-to-date thumb should get a bodyless 304, not a refetch of
+    // bytes it already has (#1086).
+    let second = app
+        .oneshot(get_with_bearer_and_if_none_match(
+            &format!("/api/thumbs/{uuid}/md"),
+            &token,
+            &etag,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    let bytes = to_bytes(second.into_body(), usize::MAX).await.unwrap();
+    assert!(bytes.is_empty());
 }
 
 #[tokio::test]
