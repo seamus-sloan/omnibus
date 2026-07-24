@@ -245,9 +245,10 @@ skip = [
 # platform crates). These are old pinned versions carried by the native webview
 # stack (e.g. bitflags 1, derive_more 0.99, heck 0.4, html5ever/markup5ever,
 # string_cache, jni, png, raw-window-handle, siphasher, the
-# windows-sys/windows-targets family — spot-checked with `cargo tree -p
-# omnibus` / `-p omnibus-frontend`, #1276). None of these link into the
-# shipped `omnibus` server binary — they exist only under the native shell.
+# windows-sys/windows-targets family). Spot-checked against the default-build
+# packages with `cargo tree -p omnibus` and `cargo tree -p omnibus-frontend`
+# (see #1276). None of these link into the shipped `omnibus` server binary —
+# they exist only under the native shell.
 # Exception: `rustc-hash` also duplicates via `dioxus-core` in the default
 # (non-mobile) build, so it's deliberately left off this list — see
 # docs/dependency-audit.md's rustc-hash row. Collapsing the rest requires
