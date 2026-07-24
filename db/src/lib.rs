@@ -88,9 +88,9 @@ pub use missing_files::{
 };
 pub use palette::*;
 pub use physical::{
-    add_physical_copy, add_wishlist_entry, create_fileless_book, delete_physical_copy,
-    list_physical_copies, list_wishlist, remove_wishlist_entry, FilelessBook, FilelessCover,
-    PhysicalError,
+    add_physical_copy, add_wishlist_entry, create_fileless_book, delete_fileless_book,
+    delete_physical_copy, get_wishlist_entry, list_physical_copies, list_wishlist,
+    remove_wishlist_entry, update_physical_copy_note, FilelessBook, FilelessCover, PhysicalError,
 };
 pub use pool::*;
 pub use scan::{add_physical_only, resolve_scan, wishlist_add, ScanError};

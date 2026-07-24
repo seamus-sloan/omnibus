@@ -5,7 +5,7 @@
 //! when every item does. Split into [`purge`] (SQL) and [`fs`] (filesystem).
 
 mod fs;
-mod purge;
+pub(crate) mod purge;
 
 #[cfg(test)]
 mod tests;

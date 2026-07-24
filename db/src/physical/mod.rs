@@ -9,14 +9,21 @@
 
 mod copies;
 mod fileless;
+mod remove;
 mod wishlist;
 
 #[cfg(test)]
 mod tests;
 
-pub use copies::{add_physical_copy, delete_physical_copy, list_physical_copies};
+pub use copies::{
+    add_physical_copy, delete_physical_copy, list_physical_copies, update_physical_copy_note,
+};
 pub use fileless::{create_fileless_book, FilelessBook, FilelessCover};
-pub use wishlist::{add_wishlist_entry, list_wishlist, remove_wishlist_entry, LIST_WISHLIST_LIMIT};
+pub use remove::delete_fileless_book;
+pub use wishlist::{
+    add_wishlist_entry, get_wishlist_entry, list_wishlist, remove_wishlist_entry,
+    LIST_WISHLIST_LIMIT,
+};
 
 /// Errors from the physical ownership data layer.
 #[derive(Debug, thiserror::Error)]
@@ -27,6 +34,9 @@ pub enum PhysicalError {
     /// The physical copy id does not exist.
     #[error("physical copy not found")]
     CopyNotFound,
+    /// Refused: the book still has digital files, so the reindex diff owns it.
+    #[error("book still has files")]
+    BookHasFiles,
     /// A cover file could not be written for a fileless book.
     #[error("cover write failed: {0}")]
     Cover(#[from] std::io::Error),

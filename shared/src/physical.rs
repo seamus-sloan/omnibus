@@ -52,6 +52,14 @@ impl WishlistSource {
     }
 }
 
+/// Body of the copy-note edit (`PATCH /api/physical/copies/{id}`). `None` — and
+/// any blank string — clears the note.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct UpdateCopyNoteRequest {
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
 /// A book on one user's physical wishlist. Unique per `(user_id, book_uuid)`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WishlistEntry {
