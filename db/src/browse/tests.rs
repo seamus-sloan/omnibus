@@ -619,3 +619,47 @@ async fn link_series(pool: &SqlitePool, uuid: &str, name: &str) {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn list_authors_surfaces_physical_only_books_with_no_scan_roots_configured() {
+    let _guard = CoversTempDir::new("browse_no_roots_author");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let uuid = seed_fileless(&pool, "Paper Only", "Ada Lovelace").await;
+    add_physical_copy(&pool, &uuid, None, None, None)
+        .await
+        .unwrap();
+
+    // A library that has only ever checked in print copies has no ebook or
+    // audiobook path set — the physical arm must still carry the index.
+    let authors = list_authors(&pool, &[]).await.unwrap();
+
+    assert_eq!(authors.len(), 1);
+    assert_eq!(authors[0].name, "Ada Lovelace");
+    assert_eq!(authors[0].book_count, 1);
+}
+
+#[tokio::test]
+async fn list_series_surfaces_physical_only_books_with_no_scan_roots_configured() {
+    let _guard = CoversTempDir::new("browse_no_roots_series");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let uuid = seed_fileless(&pool, "Paper Saga #1", "Ada Lovelace").await;
+    link_series(&pool, &uuid, "Paper Saga").await;
+    add_physical_copy(&pool, &uuid, None, None, None)
+        .await
+        .unwrap();
+
+    let series = list_series(&pool, &[]).await.unwrap();
+
+    assert_eq!(series.len(), 1);
+    assert_eq!(series[0].name, "Paper Saga");
+}
+
+#[tokio::test]
+async fn list_authors_returns_empty_with_no_scan_roots_and_no_physical_books() {
+    let _guard = CoversTempDir::new("browse_no_roots_empty");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_fileless(&pool, "Someday", "Grace Hopper").await;
+
+    // `(NULL)` matches no path, so a wishlist-only book stays hidden.
+    assert!(list_authors(&pool, &[]).await.unwrap().is_empty());
+}

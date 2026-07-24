@@ -8,7 +8,7 @@ use dioxus::prelude::*;
 use dioxus_router::use_navigator;
 use omnibus_shared::EbookMetadata;
 
-use super::super::sorting::{contributor_names, row_slug};
+use super::super::sorting::{contributor_names, row_ident};
 use super::cells::{
     build_save_authors, build_save_field, AuthorsCell, CellEditCtx, EbookRowCoverCell,
     EbookRowFormatsCell, RowContext, RowScalarCell, RowScalarCellDisplay, RowSeriesCell,
@@ -131,7 +131,7 @@ fn derive_row_display(
     uuid: &str,
     cover_bust: u32,
 ) -> RowDisplay {
-    let row_testid = format!("ebook-row-{}", row_slug(&book.filename));
+    let row_testid = format!("ebook-row-{}", row_ident(book));
     // Per-variant URLs (not a shared base) so mobile's `?token=` attaches to
     // each `srcset` candidate; see `crate::thumb_url`.
     let bust = |url: String| crate::contexts::append_cache_bust(url, cover_bust);

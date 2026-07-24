@@ -8,7 +8,7 @@ use dioxus::prelude::*;
 use dioxus_router::use_navigator;
 use omnibus_shared::EbookMetadata;
 
-use super::sorting::{contributor_names, row_slug};
+use super::sorting::{contributor_names, row_ident};
 use crate::Route;
 
 #[component]
@@ -17,7 +17,7 @@ pub(super) fn BookGrid(books: Vec<EbookMetadata>, server_url: String) -> Element
         div { class: "lib-grid", "data-testid": "lib-grid", role: "list",
             for book in books.into_iter() {
                 GridTile {
-                    key: "{book.filename}",
+                    key: "{row_ident(&book)}",
                     book: book,
                     server_url: server_url.clone(),
                 }
@@ -32,7 +32,7 @@ fn GridTile(book: EbookMetadata, server_url: String) -> Element {
     // (see `Route::BookDetail`).
     let uuid = book.unique_identifier.clone().unwrap_or_default();
     let display_title = book.title.as_deref().unwrap_or(&book.filename).to_string();
-    let tile_testid = format!("ebook-tile-{}", row_slug(&book.filename));
+    let tile_testid = format!("ebook-tile-{}", row_ident(&book));
     let authors = contributor_names(&book.creators);
     // Read before `book` moves into `Cover`. Mirrors the table's formats cell,
     // which carries the same badge (#1181).

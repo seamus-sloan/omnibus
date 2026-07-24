@@ -25,7 +25,15 @@ const INDEX_LIMIT: i64 = 10_000;
 /// Build a `VALUES (?)` list for a CTE that materializes the library-path
 /// set once. At most two entries (ebook + audiobook), so the bind count
 /// stays trivial.
+///
+/// With no configured scan roots the CTE still needs a row to be valid SQL, so
+/// `n == 0` yields `(NULL)` — a path no book matches, leaving the physical arm
+/// of [`visible`] as the only way in. That's the physical-only library: books
+/// checked in before any ebook/audiobook path was set must still browse.
 fn placeholders(n: usize) -> String {
+    if n == 0 {
+        return "(NULL)".to_string();
+    }
     std::iter::repeat_n("(?)", n).collect::<Vec<_>>().join(", ")
 }
 
@@ -51,8 +59,8 @@ fn visible(book: &str, root: &str) -> String {
 
 /// Return every author with their book count and an optional cover-derived
 /// accent, scoped to books `visible` under `library_paths`, ordered by name
-/// ascending and capped at [`INDEX_LIMIT`]. Empty list when no paths match or
-/// the slice is empty.
+/// ascending and capped at [`INDEX_LIMIT`]. An empty `library_paths` is not an
+/// empty result: physical-only books still browse (see [`placeholders`]).
 ///
 /// Currently returns results across all users (single-tenant). When F4.x
 /// per-user ACL lands, add a `user_id: i64` parameter and scope the query
@@ -61,9 +69,6 @@ pub async fn list_authors(
     pool: &SqlitePool,
     library_paths: &[&str],
 ) -> Result<Vec<AuthorSummary>, BrowseError> {
-    if library_paths.is_empty() {
-        return Ok(Vec::new());
-    }
     let ph = placeholders(library_paths.len());
     let vis = visible("b", "l");
     let vis2 = visible("b2", "l2");
@@ -155,8 +160,9 @@ pub async fn list_authors(
 }
 
 /// Return every series with book count, primary author, and an optional
-/// accent, scoped to `library_paths`, ordered by name ascending and capped
-/// at [`INDEX_LIMIT`]. Empty list when no paths match or the slice is empty.
+/// accent, scoped to books `visible` under `library_paths`, ordered by name
+/// ascending and capped at [`INDEX_LIMIT`]. An empty `library_paths` is not an
+/// empty result: physical-only books still browse (see [`placeholders`]).
 ///
 /// Currently returns results across all users (single-tenant). When F4.x
 /// per-user ACL lands, add a `user_id: i64` parameter and scope the query
@@ -165,9 +171,6 @@ pub async fn list_series(
     pool: &SqlitePool,
     library_paths: &[&str],
 ) -> Result<Vec<SeriesSummary>, BrowseError> {
-    if library_paths.is_empty() {
-        return Ok(Vec::new());
-    }
     let sql = series_index_sql(library_paths.len());
     let mut q = sqlx::query(&sql);
     for path in library_paths {
