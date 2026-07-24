@@ -35,44 +35,10 @@ fn write_fake_kepubify(path: &Path, counter: &Path) {
 }
 
 /// Seed one EPUB book whose `book_file_path` resolves to a real file on disk
-/// under `lib`. Returns the new `books.id`.
+/// under `lib`. Returns the new `books.id`. Delegates to the shared
+/// `test_support` seeder (also used by the OPF-export tests).
 async fn seed_epub_book(pool: &SqlitePool, lib: &Path) -> i64 {
-    let lib_str = lib.to_string_lossy().to_string();
-    sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
-        .bind(&lib_str)
-        .execute(pool)
-        .await
-        .unwrap();
-    let lib_id: i64 = sqlx::query_scalar("SELECT id FROM scan_roots WHERE path = ?")
-        .bind(&lib_str)
-        .fetch_one(pool)
-        .await
-        .unwrap();
-    // Old `last_modified` so a freshly-written cache always reads as fresh.
-    sqlx::query(
-        "INSERT INTO books (uuid, scan_key, library_id, path, title, last_modified)
-         VALUES ('uuid-1', 'sub/book.epub', ?, 'sub', 'Title', '2000-01-01 00:00:00')",
-    )
-    .bind(lib_id)
-    .execute(pool)
-    .await
-    .unwrap();
-    let book_id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE uuid = 'uuid-1'")
-        .fetch_one(pool)
-        .await
-        .unwrap();
-    sqlx::query(
-        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch)
-         VALUES (?, 'EPUB', 'book', 4, 1)",
-    )
-    .bind(book_id)
-    .execute(pool)
-    .await
-    .unwrap();
-    // The real EPUB the fake kepubify will copy.
-    std::fs::create_dir_all(lib.join("sub")).unwrap();
-    std::fs::write(lib.join("sub").join("book.epub"), b"epub").unwrap();
-    book_id
+    crate::test_support::seed_epub_book_at(pool, lib).await.0
 }
 
 #[test]
