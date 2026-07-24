@@ -33,6 +33,8 @@ pub enum InitDbError {
     MissingFiles(#[from] MissingFilesError),
     #[error(transparent)]
     Shelves(#[from] crate::shelves::ShelfError),
+    #[error(transparent)]
+    Overrides(#[from] crate::metadata_overrides::MetadataOverridesError),
 }
 
 /// Initialize or open the SQLite pool at `database_url`, apply per-connection PRAGMAs, run pending
@@ -88,6 +90,9 @@ async fn run_boot_backfills(pool: &SqlitePool) -> Result<(), InitDbError> {
     repair_ghosted_audiobook_attachments(pool).await?;
     // Auto-attach match key for rows indexed before migration 0016.
     crate::normalize::backfill_norm_columns(pool).await?;
+    // Effective (override) match keys for Check-In on rows edited before
+    // migration 0048 (and self-heals any drift from the overrides JSON).
+    crate::metadata_overrides::backfill_override_norm_columns(pool).await?;
     // F2 `scan_key` diff key for rows indexed before migration 0026,
     // reconstructed from stored columns (also fills `book_files.scan_key`,
     // migration 0043).

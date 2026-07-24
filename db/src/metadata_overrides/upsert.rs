@@ -9,6 +9,7 @@ use omnibus_shared::{EbookMetadata, MetadataOverrides, MetadataSource};
 use sqlx::{Executor, SqlitePool};
 
 use crate::books::resolve_book_id_by_uuid_exec;
+use crate::normalize::{normalize_author, normalize_title};
 use crate::sync::upsert_fts;
 
 use super::fts::rebuild_fts_for_book;
@@ -52,21 +53,94 @@ async fn upsert_overrides_row<'e, E>(
 where
     E: Executor<'e, Database = sqlx::Sqlite>,
 {
+    // Effective match keys for Physical Check-In's fuzzy rung — derived from the
+    // same JSON we store so the columns never drift from it. NULL when the
+    // override doesn't set that field, so the resolver falls back to the scanned
+    // `books.*_norm` (see migration 0048).
+    let (title_norm, author_norm) = override_match_keys(overrides_json);
     sqlx::query(
-        "INSERT INTO metadata_overrides (book_uuid, overrides, has_cover_override, updated_by, updated_at)
-         VALUES (?, ?, ?, ?, strftime('%s','now'))
+        "INSERT INTO metadata_overrides (book_uuid, overrides, has_cover_override, updated_by, updated_at, title_norm, author_norm)
+         VALUES (?, ?, ?, ?, strftime('%s','now'), ?, ?)
          ON CONFLICT(book_uuid) DO UPDATE SET
            overrides = excluded.overrides,
            has_cover_override = excluded.has_cover_override,
            updated_by = excluded.updated_by,
-           updated_at = strftime('%s','now')",
+           updated_at = strftime('%s','now'),
+           title_norm = excluded.title_norm,
+           author_norm = excluded.author_norm",
     )
     .bind(book_uuid)
     .bind(overrides_json)
     .bind(i64::from(has_cover_override))
     .bind(user_id)
+    .bind(title_norm)
+    .bind(author_norm)
     .execute(executor)
     .await?;
+    Ok(())
+}
+
+/// Normalized effective (title, author) match keys for an `overrides` JSON blob,
+/// mirroring how the sync writers derive `books.(title_norm, author_norm)` from
+/// scanned metadata: `normalize_title` of the override title, `normalize_author`
+/// of the first override creator. Either side is `None` when the override
+/// doesn't set that field (or it normalizes to empty), signalling the resolver
+/// to fall back to the scanned norm.
+fn override_match_keys(overrides_json: &str) -> (Option<String>, Option<String>) {
+    // The JSON was just serialized by us; a parse failure is not expected, but
+    // falling back to "no override keys" (both NULL → scanned norm) is the safe
+    // degradation rather than failing the whole save.
+    let ov: MetadataOverrides = serde_json::from_str(overrides_json).unwrap_or_default();
+    let title_norm = ov.title.as_deref().and_then(normalize_title);
+    let author_norm = ov
+        .creators
+        .as_ref()
+        .and_then(|c| c.first())
+        .and_then(|c| normalize_author(&c.name));
+    (title_norm, author_norm)
+}
+
+/// Backfill `metadata_overrides.(title_norm, author_norm)` for rows written
+/// before migration 0048, and self-heal any row whose stored keys disagree with
+/// its current `overrides` JSON. Recomputes from each row's blob and writes only
+/// the rows that differ, so it's a no-op once caught up. The table holds one row
+/// per manually-edited book (small), so a full scan each boot is cheap.
+pub(crate) async fn backfill_override_norm_columns(
+    pool: &SqlitePool,
+) -> Result<(), MetadataOverridesError> {
+    let rows: Vec<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT book_uuid, overrides, title_norm, author_norm FROM metadata_overrides",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let stale: Vec<(String, Option<String>, Option<String>)> = rows
+        .into_iter()
+        .filter_map(|(uuid, json, stored_title, stored_author)| {
+            let (title_norm, author_norm) = override_match_keys(&json);
+            (title_norm != stored_title || author_norm != stored_author).then_some((
+                uuid,
+                title_norm,
+                author_norm,
+            ))
+        })
+        .collect();
+    if stale.is_empty() {
+        return Ok(());
+    }
+
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    for (uuid, title_norm, author_norm) in &stale {
+        sqlx::query(
+            "UPDATE metadata_overrides SET title_norm = ?, author_norm = ? WHERE book_uuid = ?",
+        )
+        .bind(title_norm)
+        .bind(author_norm)
+        .bind(uuid)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
     Ok(())
 }
 

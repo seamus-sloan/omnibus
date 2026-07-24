@@ -12,6 +12,7 @@ use super::*;
 use crate::metadata_lookup::{MetadataLookupConfig, MetadataLookupError};
 use crate::normalize::{normalize_author, normalize_title};
 use crate::physical::{add_physical_copy, list_physical_copies, list_wishlist, PhysicalError};
+use omnibus_shared::{Contributor, MetadataOverrides};
 use serde_json::json;
 use std::time::Duration;
 use wiremock::matchers::{method, path};
@@ -45,7 +46,9 @@ async fn seed_book(pool: &SqlitePool, uuid: &str, title: &str, author: &str, isb
     .fetch_one(pool)
     .await
     .unwrap();
-    sqlx::query("INSERT INTO authors (name) VALUES (?1)")
+    // OR IGNORE so a second book by the same author (norm-ambiguity /
+    // exact-vs-tolerant tests) doesn't trip the UNIQUE(name) constraint.
+    sqlx::query("INSERT OR IGNORE INTO authors (name) VALUES (?1)")
         .bind(author)
         .execute(pool)
         .await
@@ -79,6 +82,32 @@ async fn seed_book(pool: &SqlitePool, uuid: &str, title: &str, author: &str, isb
         .await
         .unwrap();
     }
+}
+
+/// Apply a title/author override to a seeded book via the real save path
+/// (which populates `metadata_overrides.(title_norm, author_norm)`).
+async fn override_title_author(
+    pool: &SqlitePool,
+    uuid: &str,
+    user_id: i64,
+    title: Option<&str>,
+    author: Option<&str>,
+) {
+    let overrides = MetadataOverrides {
+        title: title.map(str::to_string),
+        creators: author.map(|a| {
+            vec![Contributor {
+                name: a.to_string(),
+                role: None,
+                file_as: None,
+                id: None,
+            }]
+        }),
+        ..Default::default()
+    };
+    crate::merge_metadata_overrides(pool, uuid, &overrides, user_id)
+        .await
+        .unwrap();
 }
 
 async fn seed_user(pool: &SqlitePool, username: &str) -> i64 {
@@ -304,6 +333,173 @@ async fn resolve_leaves_the_isbn_unset_when_the_book_has_no_thirteen_digit_one()
         ScanOutcome::CloseMatch { book, .. } => assert!(book.isbn.is_none()),
         other => panic!("expected CloseMatch, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn resolve_close_match_uses_edited_override_title_not_scanned() {
+    // The scanned OPF title is unrelated garbage, so the norm rung can only
+    // match via the user's edit — the exact bug in #checkin-match-effective-title.
+    let pool = pool().await;
+    seed_book(
+        &pool,
+        "u1",
+        "Garbled OPF Title",
+        "Wrong Scanned Author",
+        None,
+    )
+    .await;
+    let user = seed_user(&pool, "editor").await;
+    override_title_author(
+        &pool,
+        "u1",
+        user,
+        Some("The Name of the Wind"),
+        Some("Patrick Rothfuss"),
+    )
+    .await;
+    let server = MockServer::start().await;
+    mount_ol_hit(&server, "The Name of the Wind", "Patrick Rothfuss").await;
+
+    let outcome = resolve_scan(&pool, ISBN, &config_for(&server))
+        .await
+        .unwrap();
+    assert!(
+        matches!(outcome, ScanOutcome::CloseMatch { book, .. } if book.uuid == "u1"),
+        "edited title should feed the check-in match"
+    );
+}
+
+#[tokio::test]
+async fn resolve_close_match_tolerates_series_subtitle_on_scanned_title() {
+    // No override: the scanned title carries the series subtitle the provider's
+    // bare title lacks. The subtitle-tolerant fallback bridges the two.
+    let pool = pool().await;
+    seed_book(
+        &pool,
+        "u1",
+        "The Name of the Wind (The Kingkiller Chronicle, Book 1)",
+        "Patrick Rothfuss",
+        None,
+    )
+    .await;
+    let server = MockServer::start().await;
+    mount_ol_hit(&server, "The Name of the Wind", "Patrick Rothfuss").await;
+
+    let outcome = resolve_scan(&pool, ISBN, &config_for(&server))
+        .await
+        .unwrap();
+    assert!(
+        matches!(outcome, ScanOutcome::CloseMatch { book, .. } if book.uuid == "u1"),
+        "a trailing series subtitle should still be a close match"
+    );
+}
+
+#[tokio::test]
+async fn resolve_norm_prefers_exact_over_ambiguous_tolerant_matches() {
+    // Two same-author books: one is an exact title match, the other only a
+    // tolerant (subtitle) superset. The exact pass isolates the single exact
+    // candidate rather than falling through to an ambiguous tolerant pass.
+    let pool = pool().await;
+    seed_book(
+        &pool,
+        "exact",
+        "The Name of the Wind",
+        "Patrick Rothfuss",
+        None,
+    )
+    .await;
+    seed_book(
+        &pool,
+        "super",
+        "The Name of the Wind Companion Guide",
+        "Patrick Rothfuss",
+        None,
+    )
+    .await;
+    let server = MockServer::start().await;
+    mount_ol_hit(&server, "The Name of the Wind", "Patrick Rothfuss").await;
+
+    let outcome = resolve_scan(&pool, ISBN, &config_for(&server))
+        .await
+        .unwrap();
+    assert!(
+        matches!(outcome, ScanOutcome::CloseMatch { book, .. } if book.uuid == "exact"),
+        "the exact title match must win over the tolerant superset"
+    );
+}
+
+#[tokio::test]
+async fn resolve_not_in_library_when_two_books_share_the_norm() {
+    // Two library books normalize to the same (title, author): ambiguous, so the
+    // guard declines rather than guessing.
+    let pool = pool().await;
+    seed_book(&pool, "u1", "Effective Java", "Joshua Bloch", None).await;
+    seed_book(&pool, "u2", "Effective Java", "Joshua Bloch", None).await;
+    let server = MockServer::start().await;
+    mount_ol_hit(&server, "Effective Java", "Joshua Bloch").await;
+
+    let outcome = resolve_scan(&pool, ISBN, &config_for(&server))
+        .await
+        .unwrap();
+    assert!(matches!(outcome, ScanOutcome::NotInLibrary { .. }));
+}
+
+#[tokio::test]
+async fn backfill_override_norms_repairs_a_row_written_before_migration_0048() {
+    // Simulate a pre-0048 override: overrides JSON present, norm columns NULL.
+    // The boot backfill must populate them so the renamed book matches on
+    // check-in without the user re-editing it.
+    let pool = pool().await;
+    seed_book(
+        &pool,
+        "u1",
+        "Garbled OPF Title",
+        "Wrong Scanned Author",
+        None,
+    )
+    .await;
+    let overrides = serde_json::to_string(&MetadataOverrides {
+        title: Some("The Name of the Wind".into()),
+        creators: Some(vec![Contributor {
+            name: "Patrick Rothfuss".into(),
+            role: None,
+            file_as: None,
+            id: None,
+        }]),
+        ..Default::default()
+    })
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO metadata_overrides (book_uuid, overrides, title_norm, author_norm)
+         VALUES ('u1', ?1, NULL, NULL)",
+    )
+    .bind(&overrides)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    crate::metadata_overrides::backfill_override_norm_columns(&pool)
+        .await
+        .unwrap();
+
+    let (tn, an): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT title_norm, author_norm FROM metadata_overrides WHERE book_uuid = 'u1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(tn.as_deref(), Some("the name of the wind"));
+    assert_eq!(an.as_deref(), Some("patrick rothfuss"));
+
+    let server = MockServer::start().await;
+    mount_ol_hit(&server, "The Name of the Wind", "Patrick Rothfuss").await;
+    let outcome = resolve_scan(&pool, ISBN, &config_for(&server))
+        .await
+        .unwrap();
+    assert!(
+        matches!(outcome, ScanOutcome::CloseMatch { book, .. } if book.uuid == "u1"),
+        "backfilled override norm should make the renamed book matchable"
+    );
 }
 
 #[tokio::test]
