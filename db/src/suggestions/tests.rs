@@ -8,7 +8,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::author_photos::RemoteImageConfig;
 use crate::pool::init_db;
-use crate::suggestions::cascade::resolve_with;
+use crate::suggestions::cascade::{extract_isbns, resolve_with};
 use crate::suggestions::data::{
     decide, delete_suggestions, get_suggestion_cover, get_suggestions, mark_pending,
     replace_suggestions, suggestion_state, NewSuggestion, SuggestionState, SuggestionsDataError,
@@ -871,5 +871,58 @@ async fn resolve_book_propagates_an_earlier_isbn_error_even_when_a_later_isbn_in
         book_777_fetches, 1,
         "isbn[2] must have fully resolved to book 777 in the background, even though \
          the earlier isbn[1] error is what the walk actually surfaces"
+    );
+}
+
+// ── extract_isbns(): candidate ISBN extraction from identifiers ──
+
+#[test]
+fn extract_isbns_matches_identifiers_whose_scheme_names_isbn() {
+    let book = omnibus_shared::EbookMetadata {
+        identifiers: vec![
+            omnibus_shared::Identifier {
+                value: "978-0-13-468599-1".into(),
+                scheme: Some("ISBN".into()),
+            },
+            // A differently-schemed identifier with no digits at all must
+            // still be excluded (cleaned value is empty).
+            omnibus_shared::Identifier {
+                value: "not-an-isbn".into(),
+                scheme: Some("mobi-asin".into()),
+            },
+        ],
+        ..Default::default()
+    };
+    let isbns = extract_isbns(&book);
+    assert_eq!(
+        isbns,
+        vec!["9780134685991".to_string()],
+        "scheme-named ISBN identifier should survive with hyphens stripped"
+    );
+}
+
+#[test]
+fn extract_isbns_matches_bare_digit_values_via_heuristic_when_scheme_is_unrecognized() {
+    let book = omnibus_shared::EbookMetadata {
+        identifiers: vec![
+            // Common `scheme = "unknown"` case: no "isbn" in the scheme name,
+            // but the value is a bare 10-digit string.
+            omnibus_shared::Identifier {
+                value: "0141439513".into(),
+                scheme: Some("unknown".into()),
+            },
+            // Too short to look like an ISBN and not scheme-named — excluded.
+            omnibus_shared::Identifier {
+                value: "12345".into(),
+                scheme: None,
+            },
+        ],
+        ..Default::default()
+    };
+    let isbns = extract_isbns(&book);
+    assert_eq!(
+        isbns,
+        vec!["0141439513".to_string()],
+        "10-digit bare value should be picked up by the length heuristic alone"
     );
 }
