@@ -2,7 +2,7 @@
 
 use dioxus::fullstack::post;
 use dioxus::prelude::*;
-use omnibus_shared::{EbookMetadata, MetadataOverrides};
+use omnibus_shared::{EbookMetadata, MetadataOverrides, OpfExportResult};
 
 #[cfg(feature = "server")]
 use omnibus_db as db;
@@ -33,6 +33,33 @@ pub async fn rpc_save_overrides(
     Ok(db::get_book_by_uuid(&pool.0, &uuid)
         .await
         .map_err(|e| internal_rpc_error("get ebook", e))?)
+}
+
+/// Export a book's merged metadata to its `metadata.opf` sidecar. Requires
+/// `can_edit` or admin. Returns the written path and whether an existing
+/// sidecar was backed up.
+#[post("/api/rpc/ebook/export-opf", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_export_opf(uuid: String) -> Result<OpfExportResult> {
+    if !user.is_admin && !user.can_edit {
+        return Err(ServerFnError::new("forbidden: edit permission required").into());
+    }
+    let Some(book_id) = db::resolve_book_id_by_uuid(&pool.0, &uuid)
+        .await
+        .map_err(|e| internal_rpc_error("resolve book id", e))?
+    else {
+        return Err(ServerFnError::new("book not found").into());
+    };
+    match db::export_opf(&pool.0, book_id).await {
+        Ok(export) => Ok(OpfExportResult {
+            path: export.path.display().to_string(),
+            backed_up: export.backed_up,
+        }),
+        // These are user-renderable resource-state errors, not internal faults.
+        Err(e @ (db::OpfExportError::BookNotFound(_) | db::OpfExportError::NoEpubFile(_))) => {
+            Err(ServerFnError::new(e.to_string()).into())
+        }
+        Err(e) => Err(internal_rpc_error("export opf", e).into()),
+    }
 }
 
 /// Delete metadata overrides for a book, reverting to scanned values.

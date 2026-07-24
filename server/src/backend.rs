@@ -26,6 +26,7 @@ mod authors;
 mod bookmarks;
 mod covers;
 mod ebooks;
+mod export_opf;
 mod health;
 mod highlights;
 mod image_upload;
@@ -306,6 +307,10 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
         .route(
             "/api/ebooks/{uuid}/overrides",
             post(overrides::post_ebook_overrides).delete(overrides::delete_ebook_overrides),
+        )
+        .route(
+            "/api/ebooks/{uuid}/export-opf",
+            post(export_opf::post_export_opf),
         )
         // Cover-only revert. Carries no upload body (unlike the POST in
         // `upload_router`), so it stays outside the upload rate limiter —
