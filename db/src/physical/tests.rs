@@ -200,6 +200,43 @@ async fn remove_wishlist_entry_deletes_and_is_a_noop_when_absent() {
     remove_wishlist_entry(&pool, user, "uuid-1").await.unwrap();
 }
 
+/// Raw bulk insert bypassing `add_wishlist_entry` — the CRUD helper resolves
+/// the book uuid on every call, too slow for a 1500-row response-cap
+/// fixture. `wishlist_entries` uniques on `(user_id, book_uuid)`, so each
+/// row needs a distinct synthetic uuid; the soft-reference (no FK) means
+/// these need not resolve to real `books` rows for this query-shape test.
+async fn seed_wishlist_raw(pool: &SqlitePool, user_id: i64, count: i64) {
+    sqlx::query(
+        r"
+        WITH RECURSIVE n(i) AS (
+            SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?
+        )
+        INSERT INTO wishlist_entries (user_id, book_uuid, added_at, source)
+        SELECT ?, 'seed-uuid-' || i, i, 'manual' FROM n
+        ",
+    )
+    .bind(count)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn list_wishlist_caps_response_at_hard_limit() {
+    let pool = pool().await;
+    let user = seed_user(&pool, "alice").await;
+    let over_cap = LIST_WISHLIST_LIMIT + 500;
+    seed_wishlist_raw(&pool, user, over_cap).await;
+
+    let list = list_wishlist(&pool, user).await.unwrap();
+    assert_eq!(
+        list.len() as i64,
+        LIST_WISHLIST_LIMIT,
+        "list_wishlist must not return more than LIST_WISHLIST_LIMIT rows",
+    );
+}
+
 #[tokio::test]
 async fn list_wishlist_is_scoped_per_user() {
     let pool = pool().await;
