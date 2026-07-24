@@ -91,4 +91,21 @@ fn external_book_meta_validate_rejects_an_oversized_cover_url() {
         .validate()
         .expect_err("oversized cover_url must be rejected");
     assert!(err.contains("cover_url"), "got: {err}");
+    assert!(err.contains("bytes"), "got: {err}");
+}
+
+#[test]
+fn external_book_meta_validate_rejects_a_cover_url_over_the_byte_cap_even_with_few_chars() {
+    // `COVER_URL_MAX_LEN` is a byte cap: a 2-byte-per-char string can exceed
+    // it in bytes while staying under it in `chars().count()`, so validation
+    // must measure bytes here (unlike every other field on this type).
+    let mut meta = valid_meta();
+    let two_byte_char = "é";
+    let char_count = (ExternalBookMeta::COVER_URL_MAX_LEN / 2) + 1;
+    assert!(char_count < ExternalBookMeta::COVER_URL_MAX_LEN);
+    meta.cover_url = Some(two_byte_char.repeat(char_count));
+    let err = meta
+        .validate()
+        .expect_err("a cover_url over the byte cap must be rejected");
+    assert!(err.contains("cover_url"), "got: {err}");
 }

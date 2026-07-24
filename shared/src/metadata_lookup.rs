@@ -58,8 +58,10 @@ impl ExternalBookMeta {
     /// Maximum length (in chars) for the `description` field. Mirrors
     /// `MetadataOverrides::DESCRIPTION_MAX_LEN`.
     pub const DESCRIPTION_MAX_LEN: usize = 50_000;
-    /// Maximum byte length for `cover_url`. Mirrors
-    /// `crate::AUTHOR_PHOTO_URL_MAX_LEN`.
+    /// Maximum **byte** length for `cover_url`. Mirrors
+    /// `crate::AUTHOR_PHOTO_URL_MAX_LEN`, which is itself a byte cap — unlike
+    /// every other field cap on this type, `cover_url` is validated with
+    /// `.len()` (bytes), not `.chars().count()`.
     pub const COVER_URL_MAX_LEN: usize = crate::AUTHOR_PHOTO_URL_MAX_LEN;
     /// Maximum number of authors.
     pub(crate) const MAX_AUTHORS: usize = 32;
@@ -71,7 +73,8 @@ impl ExternalBookMeta {
     /// with a human-readable message on the first field that exceeds its cap.
     ///
     /// Length caps are measured in Unicode scalar values (`chars`), not UTF-8
-    /// bytes, matching `MetadataOverrides::validate`.
+    /// bytes, matching `MetadataOverrides::validate` — **except** `cover_url`,
+    /// whose cap is byte-based (see [`Self::COVER_URL_MAX_LEN`]).
     pub fn validate(&self) -> Result<(), String> {
         if self.title.chars().count() > Self::TITLE_MAX_LEN {
             return Err(format!("title exceeds {} characters", Self::TITLE_MAX_LEN));
@@ -98,7 +101,14 @@ impl ExternalBookMeta {
         check("year", &self.year, Self::NAME_MAX_LEN)?;
         check("publisher", &self.publisher, Self::NAME_MAX_LEN)?;
         check("description", &self.description, Self::DESCRIPTION_MAX_LEN)?;
-        check("cover_url", &self.cover_url, Self::COVER_URL_MAX_LEN)?;
+        if let Some(ref cover_url) = self.cover_url {
+            if cover_url.len() > Self::COVER_URL_MAX_LEN {
+                return Err(format!(
+                    "cover_url exceeds {} bytes",
+                    Self::COVER_URL_MAX_LEN
+                ));
+            }
+        }
         Ok(())
     }
 }

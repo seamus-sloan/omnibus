@@ -454,7 +454,7 @@ async fn api_scan_wishlist_add_returns_400_for_an_oversized_book_uuid() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     let body = body_string(res).await;
-    assert!(body.contains("book_uuid"), "got: {body}");
+    assert!(body.contains("bytes"), "got: {body}");
 }
 
 #[tokio::test]

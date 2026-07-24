@@ -50,7 +50,7 @@ fn check_in_request_validate_rejects_an_oversized_book_uuid() {
     let err = req
         .validate()
         .expect_err("oversized book_uuid must be rejected");
-    assert!(err.contains("book_uuid"), "got: {err}");
+    assert!(err.contains("bytes"), "got: {err}");
 }
 
 #[test]
@@ -158,7 +158,7 @@ fn wishlist_add_request_validate_rejects_an_oversized_book_uuid() {
     let err = req
         .validate()
         .expect_err("oversized book_uuid must be rejected");
-    assert!(err.contains("book_uuid"), "got: {err}");
+    assert!(err.contains("bytes"), "got: {err}");
 }
 
 #[test]
@@ -172,4 +172,19 @@ fn wishlist_add_request_validate_rejects_an_invalid_meta() {
     };
     let err = req.validate().expect_err("invalid meta must be rejected");
     assert!(err.contains("title"), "got: {err}");
+}
+
+#[test]
+fn wishlist_add_request_validate_ignores_an_invalid_meta_when_book_uuid_is_present() {
+    // `book_uuid` wins over `meta` per the struct's documented precedence, so
+    // a junk `meta` alongside a valid `book_uuid` must not be validated —
+    // it would never be used.
+    let mut meta = valid_meta();
+    meta.title = "x".repeat(ExternalBookMeta::TITLE_MAX_LEN + 1);
+    let req = WishlistAddRequest {
+        book_uuid: Some("book-1".into()),
+        meta: Some(meta),
+        source: WishlistSource::Scan,
+    };
+    assert!(req.validate().is_ok());
 }

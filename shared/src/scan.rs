@@ -90,7 +90,7 @@ impl CheckInRequest {
         }
         if self.book_uuid.len() > crate::BOOK_UUID_MAX_LEN {
             return Err(format!(
-                "book_uuid exceeds {} characters",
+                "book uuid must be ≤ {} bytes",
                 crate::BOOK_UUID_MAX_LEN
             ));
         }
@@ -135,8 +135,12 @@ pub struct WishlistAddRequest {
 
 impl WishlistAddRequest {
     /// Reject an oversized `book_uuid` or a `meta` that fails its own
-    /// validation. Handlers translate `Err(_)` into 400. Whether at least one
-    /// of `book_uuid`/`meta` is set is a domain rule enforced downstream
+    /// validation. `meta` is only validated when `book_uuid` is absent —
+    /// mirroring the "book_uuid wins, meta is ignored" precedence documented
+    /// on the struct — so a valid `book_uuid` alongside a junk `meta` isn't
+    /// spuriously rejected for a field that would never be used. Handlers
+    /// translate `Err(_)` into 400. Whether at least one of `book_uuid`/`meta`
+    /// is set is a domain rule enforced downstream
     /// (`ScanError::MissingWishlistTarget`), not a shape check here.
     pub fn validate(&self) -> Result<(), String> {
         if let Some(ref uuid) = self.book_uuid {
@@ -145,12 +149,11 @@ impl WishlistAddRequest {
             }
             if uuid.len() > crate::BOOK_UUID_MAX_LEN {
                 return Err(format!(
-                    "book_uuid exceeds {} characters",
+                    "book uuid must be ≤ {} bytes",
                     crate::BOOK_UUID_MAX_LEN
                 ));
             }
-        }
-        if let Some(ref meta) = self.meta {
+        } else if let Some(ref meta) = self.meta {
             meta.validate()?;
         }
         Ok(())
