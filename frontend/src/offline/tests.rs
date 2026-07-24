@@ -1,11 +1,9 @@
 //! Account-switch regression test for `note_user`: the wipe over
 //! `USER_SCOPED_PREFIXES` must not also erase the fresh `"me"` row the
-//! switch itself is keyed on (#1249).
+//! switch itself is keyed on.
 
-// The state-lock guard is deliberately held across awaits: it serializes
-// this test's process-global store/meta state against the other offline
-// test modules, and each test owns its own thread + runtime, so there is no
-// interleaving to deadlock on.
+// Held across awaits to serialize against other offline test modules' use of
+// the same process-global store; safe since each test owns its own thread + runtime.
 #![allow(clippy::await_holding_lock)]
 
 use omnibus_shared::UserSummary;
