@@ -152,20 +152,53 @@ impl ReaderPrefs {
     }
 }
 
-/// Construct the reader-prefs signals, seeding each from localStorage on
-/// web (with a target-agnostic default fallback). Mobile seeds the same
-/// defaults here and overwrites them asynchronously once
-/// `mobile::prefs_storage::load_and_apply_reader_prefs` resolves the
-/// WebView's `localStorage` (see that function's doc for the first-paint
-/// timing tradeoff). `theme` is borrowed from the app-wide atrium signal so
-/// changes here flip both reader and the surrounding chrome.
+/// Construct the reader-prefs signals.
+///
+/// SSR-safe by construction: every signal starts at the same
+/// target-agnostic default on every target (server, web, mobile) so the
+/// first paint matches on every target — no hydration mismatch. A
+/// target-agnostic `use_effect` then reads any persisted `localStorage`
+/// values back in (web only; a no-op everywhere else) after the component
+/// mounts and updates the signals that have a saved preference, triggering
+/// a single re-render to apply it. Mobile overwrites the same defaults
+/// asynchronously once `mobile::prefs_storage::load_and_apply_reader_prefs`
+/// resolves the WebView's `localStorage` (see that function's doc for the
+/// first-paint timing tradeoff). Mirrors the `init_theme` hydration pattern
+/// in `frontend/src/components/atrium.rs`. `theme` is borrowed from the
+/// app-wide atrium signal so changes here flip both reader and the
+/// surrounding chrome.
 pub(crate) fn init_reader_prefs(theme: Signal<Theme>) -> ReaderPrefs {
-    let font_size = use_signal(load_font_size_or_default);
-    let typeface = use_signal(load_typeface_or_default);
-    let line_spacing = use_signal(load_line_spacing_or_default);
-    let margins = use_signal(load_margins_or_default);
-    let justify = use_signal(load_justify_or_default);
-    let spread = use_signal(load_spread_or_default);
+    let font_size = use_signal(default_font_size);
+    let typeface = use_signal(default_typeface);
+    let line_spacing = use_signal(default_line_spacing);
+    let margins = use_signal(default_margins);
+    let justify = use_signal(default_justify);
+    let spread = use_signal(default_spread);
+
+    use_effect(move || {
+        #[cfg(feature = "web")]
+        {
+            if let Some(v) = load_persisted_font_size() {
+                font_size.set(v);
+            }
+            if let Some(v) = load_persisted_typeface() {
+                typeface.set(v);
+            }
+            if let Some(v) = load_persisted_line_spacing() {
+                line_spacing.set(v);
+            }
+            if let Some(v) = load_persisted_margins() {
+                margins.set(v);
+            }
+            if let Some(v) = load_persisted_justify() {
+                justify.set(v);
+            }
+            if let Some(v) = load_persisted_spread() {
+                spread.set(v);
+            }
+        }
+    });
+
     ReaderPrefs {
         theme,
         font_size,
@@ -177,100 +210,62 @@ pub(crate) fn init_reader_prefs(theme: Signal<Theme>) -> ReaderPrefs {
     }
 }
 
-fn load_font_size_or_default() -> i32 {
-    #[cfg(feature = "web")]
-    {
-        super::typography::load_reader_pref("omn.fontSize")
-            .and_then(|s| s.parse::<i32>().ok())
-            .map(|n| n.clamp(FONT_SIZE_MIN, FONT_SIZE_MAX))
-            .unwrap_or(18)
-    }
-    #[cfg(not(feature = "web"))]
+fn default_font_size() -> i32 {
     18
 }
 
-fn load_typeface_or_default() -> Typeface {
-    #[cfg(feature = "web")]
-    {
-        super::typography::load_reader_pref("omn.typeface")
-            .and_then(|s| Typeface::from_storage(&s))
-            .unwrap_or(Typeface::Editorial)
-    }
-    #[cfg(not(feature = "web"))]
+#[cfg(feature = "web")]
+fn load_persisted_font_size() -> Option<i32> {
+    super::typography::load_reader_pref("omn.fontSize")
+        .and_then(|s| s.parse::<i32>().ok())
+        .map(|n| n.clamp(FONT_SIZE_MIN, FONT_SIZE_MAX))
+}
+
+fn default_typeface() -> Typeface {
     Typeface::Editorial
 }
 
-fn load_line_spacing_or_default() -> LineSpacing {
-    #[cfg(feature = "web")]
-    {
-        super::typography::load_reader_pref("omn.lineSpacing")
-            .and_then(|s| LineSpacing::from_storage(&s))
-            .unwrap_or(LineSpacing::Cozy)
-    }
-    #[cfg(not(feature = "web"))]
+#[cfg(feature = "web")]
+fn load_persisted_typeface() -> Option<Typeface> {
+    super::typography::load_reader_pref("omn.typeface").and_then(|s| Typeface::from_storage(&s))
+}
+
+fn default_line_spacing() -> LineSpacing {
     LineSpacing::Cozy
 }
 
-fn load_margins_or_default() -> Margins {
-    #[cfg(feature = "web")]
-    {
-        super::typography::load_reader_pref("omn.margins")
-            .and_then(|s| Margins::from_storage(&s))
-            .unwrap_or(Margins::Normal)
-    }
-    #[cfg(not(feature = "web"))]
+#[cfg(feature = "web")]
+fn load_persisted_line_spacing() -> Option<LineSpacing> {
+    super::typography::load_reader_pref("omn.lineSpacing")
+        .and_then(|s| LineSpacing::from_storage(&s))
+}
+
+fn default_margins() -> Margins {
     Margins::Normal
 }
 
-fn load_justify_or_default() -> bool {
-    #[cfg(feature = "web")]
-    {
-        super::typography::load_reader_pref("omn.justify").as_deref() == Some("true")
-    }
-    #[cfg(not(feature = "web"))]
+#[cfg(feature = "web")]
+fn load_persisted_margins() -> Option<Margins> {
+    super::typography::load_reader_pref("omn.margins").and_then(|s| Margins::from_storage(&s))
+}
+
+fn default_justify() -> bool {
     false
 }
 
-fn load_spread_or_default() -> Spread {
-    #[cfg(feature = "web")]
-    {
-        super::typography::load_reader_pref("omn.spread")
-            .and_then(|s| Spread::from_storage(&s))
-            .unwrap_or(Spread::Double)
-    }
-    #[cfg(not(feature = "web"))]
+#[cfg(feature = "web")]
+fn load_persisted_justify() -> Option<bool> {
+    super::typography::load_reader_pref("omn.justify").map(|s| s == "true")
+}
+
+fn default_spread() -> Spread {
     Spread::Double
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // `Signal::new` needs a Dioxus runtime, so this runs inside a `VirtualDom` (see `contexts::tests`).
-    #[test]
-    fn font_pct_maps_font_size_bounds_and_midpoint_to_expected_percentage() {
-        #[component]
-        fn AssertFontPct() -> Element {
-            let prefs = ReaderPrefs {
-                theme: Signal::new(Theme::Dark),
-                font_size: Signal::new(FONT_SIZE_MIN),
-                typeface: Signal::new(Typeface::Editorial),
-                line_spacing: Signal::new(LineSpacing::Cozy),
-                margins: Signal::new(Margins::Normal),
-                justify: Signal::new(false),
-                spread: Signal::new(Spread::Single),
-            };
-            assert_eq!(prefs.font_pct(), 0.0, "min font size maps to 0%");
-
-            let mut font_size = prefs.font_size;
-            font_size.set(FONT_SIZE_MAX);
-            assert_eq!(prefs.font_pct(), 100.0, "max font size maps to 100%");
-
-            font_size.set((FONT_SIZE_MIN + FONT_SIZE_MAX) / 2);
-            assert_eq!(prefs.font_pct(), 50.0, "midpoint font size maps to 50%");
-
-            rsx! {}
-        }
-        VirtualDom::new(AssertFontPct).rebuild_in_place();
-    }
+#[cfg(feature = "web")]
+fn load_persisted_spread() -> Option<Spread> {
+    super::typography::load_reader_pref("omn.spread").and_then(|s| Spread::from_storage(&s))
 }
+
+#[cfg(test)]
+mod tests;
