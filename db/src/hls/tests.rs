@@ -424,3 +424,34 @@ async fn get_parts_propagates_db_error_when_pool_is_closed() {
     let err = get_parts(&pool, 1).await.unwrap_err();
     assert!(matches!(err, HlsError::Db(_)));
 }
+
+/// Mirrors `thumbs::tests::evict_if_over_cap_removes_oldest_files`'s shape:
+/// FIFO-by-mtime eviction, but scoped to whole `<book_id>/<profile>/` segment
+/// directories rather than individual thumbnail files.
+#[test]
+fn evict_if_over_cap_removes_oldest_book_directory() {
+    let (_guard, _dir) = data_dir_guard();
+    let base = hls_dir();
+
+    // Three book directories with staggered mtimes (we can only guarantee
+    // ordering, not specific times, so create sequentially and trust OS
+    // mtime, as the thumbs test does).
+    for i in 0u8..3 {
+        let book_dir = base.join(i.to_string()).join(AUDIO64);
+        std::fs::create_dir_all(&book_dir).unwrap();
+        std::fs::write(book_dir.join("seg0.ts"), vec![0u8; 100]).unwrap();
+        // Small sleep to ensure distinct mtimes on coarse-resolution filesystems.
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // Cap at 200 bytes → should delete the 1 oldest book dir (100 bytes each,
+    // 3x100 = 300 total).
+    evict_if_over_cap(200).unwrap();
+
+    let remaining: Vec<_> = std::fs::read_dir(&base).unwrap().flatten().collect();
+    assert_eq!(remaining.len(), 2, "should have evicted 1 oldest book dir");
+    assert!(
+        !base.join("0").exists(),
+        "the oldest book dir (0) should be evicted"
+    );
+}

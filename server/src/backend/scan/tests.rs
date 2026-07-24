@@ -58,6 +58,11 @@ async fn json_body<T: serde::de::DeserializeOwned>(res: axum::response::Response
     serde_json::from_slice(&bytes).unwrap()
 }
 
+async fn body_string(res: axum::response::Response) -> String {
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    String::from_utf8(bytes.to_vec()).unwrap()
+}
+
 #[tokio::test]
 async fn api_scan_resolve_requires_auth() {
     let (app, _state, _pool) = fixture().await;
@@ -372,6 +377,87 @@ async fn api_scan_wishlist_add_prefers_book_uuid_over_meta_when_both_given() {
 }
 
 #[tokio::test]
+async fn api_scan_check_in_returns_400_for_an_oversized_note() {
+    let (app, _state, pool) = fixture().await;
+    let uuid = seed_book_with_isbn(&pool, "Effective Java", ISBN).await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let res = app
+        .oneshot(post(
+            "/api/scan/check-in",
+            &token,
+            serde_json::json!({
+                "book_uuid": uuid,
+                "note": "x".repeat(omnibus_shared::scan::NOTE_MAX_LEN + 1),
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body = body_string(res).await;
+    assert!(body.contains("note"), "got: {body}");
+
+    // The 400 must short-circuit before any copy is recorded.
+    assert_eq!(
+        omnibus_db::list_physical_copies(&pool, &uuid)
+            .await
+            .unwrap()
+            .len(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn api_scan_add_physical_only_returns_400_for_an_oversized_meta_title() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let oversized_title =
+        "x".repeat(omnibus_shared::metadata_lookup::ExternalBookMeta::TITLE_MAX_LEN + 1);
+    let res = app
+        .oneshot(post(
+            "/api/scan/physical-only",
+            &token,
+            serde_json::json!({ "meta": external_meta_json(&oversized_title, ISBN) }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body = body_string(res).await;
+    assert!(body.contains("title"), "got: {body}");
+
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0, "an invalid request must not create a book");
+}
+
+#[tokio::test]
+async fn api_scan_wishlist_add_returns_400_for_an_oversized_book_uuid() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let res = app
+        .oneshot(post(
+            "/api/scan/wishlist",
+            &token,
+            serde_json::json!({
+                "book_uuid": "u".repeat(omnibus_shared::BOOK_UUID_MAX_LEN + 1),
+                "source": "scan",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body = body_string(res).await;
+    assert!(body.contains("bytes"), "got: {body}");
+}
+
+#[tokio::test]
 async fn api_scan_wishlist_add_returns_400_when_neither_uuid_nor_meta_given() {
     let (app, _state, pool) = fixture().await;
     let user = auth_test_support::create_user(&pool, "alice").await;
@@ -386,6 +472,100 @@ async fn api_scan_wishlist_add_returns_400_when_neither_uuid_nor_meta_given() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+// ── Google Books API key (admin) ─────────────────────────────────
+
+#[tokio::test]
+async fn api_google_books_key_get_requires_admin() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let res = app
+        .oneshot(get_with_bearer("/api/google-books-key", &token))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn api_google_books_key_post_requires_admin() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let res = app
+        .oneshot(post(
+            "/api/google-books-key",
+            &token,
+            serde_json::json!({ "key": "AIzaSecret" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn api_google_books_key_post_returns_422_when_key_exceeds_max_len() {
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "boss").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    let over_limit = "a".repeat(omnibus_shared::GOOGLE_BOOKS_API_KEY_MAX_LEN + 1);
+    let res = app
+        .oneshot(post(
+            "/api/google-books-key",
+            &token,
+            serde_json::json!({ "key": over_limit }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = body_string(res).await;
+    assert!(
+        body.contains(&omnibus_shared::GOOGLE_BOOKS_API_KEY_MAX_LEN.to_string()),
+        "error body should name the limit: {body}"
+    );
+
+    // 422 must short-circuit before the KV write.
+    assert_eq!(
+        omnibus_db::get_google_books_api_key(&pool).await.unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn api_google_books_key_set_then_get_returns_masked_never_raw() {
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "boss").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    let raw = "AIzaSySupersecretKeyValue1234";
+    let set_res = app
+        .clone()
+        .oneshot(post(
+            "/api/google-books-key",
+            &token,
+            serde_json::json!({ "key": raw }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(set_res.status(), StatusCode::OK);
+    let set_body = body_string(set_res).await;
+    // The raw key must never be echoed back to the client.
+    assert!(!set_body.contains(raw));
+    assert!(set_body.contains("\"configured\":true"));
+    assert!(set_body.contains("\"source\":\"settings\""));
+
+    let get_res = app
+        .oneshot(get_with_bearer("/api/google-books-key", &token))
+        .await
+        .unwrap();
+    assert_eq!(get_res.status(), StatusCode::OK);
+    let get_body = body_string(get_res).await;
+    assert!(!get_body.contains(raw));
+    assert!(get_body.contains("\"configured\":true"));
+    // Masked preview keeps the first/last 4 chars around an ellipsis.
+    assert!(get_body.contains("AIza\u{2026}1234"));
 }
 
 #[test]

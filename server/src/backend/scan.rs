@@ -16,9 +16,10 @@ use omnibus_db::{self as db, MetadataLookupError, PhysicalError, ScanError};
 use omnibus_shared::{
     AddPhysicalOnlyRequest, BookRef, CheckInRequest, ResolveRequest, WishlistAddRequest,
 };
+use serde::Deserialize;
 
 use super::{internal, AppState};
-use crate::auth::AuthUser;
+use crate::auth::{AdminUser, AuthUser};
 
 /// Map a scan-flow error to a response: user-actionable cases become 400/404,
 /// an unreachable metadata provider becomes 503, DB failures become 500.
@@ -49,10 +50,55 @@ pub(super) async fn post_resolve(
     State(state): State<AppState>,
     Json(req): Json<ResolveRequest>,
 ) -> Response {
-    let config = db::MetadataLookupConfig::live();
+    // Saved settings key wins over `GOOGLE_BOOKS_API_KEY`; both absent is a
+    // keyless (shared-quota) lookup.
+    let key = match db::effective_google_books_api_key(&state.pool).await {
+        Ok(k) => k,
+        Err(e) => return internal("scan_resolve_google_books_key", e),
+    };
+    let config = db::MetadataLookupConfig::live_with_key(key);
     match db::resolve_scan(&state.pool, &req.isbn, &config).await {
         Ok(outcome) => Json(outcome).into_response(),
         Err(e) => scan_error("scan_resolve", e),
+    }
+}
+
+/// Admin-only: masked status of the server-wide Google Books key.
+pub(super) async fn get_google_books_key(
+    _admin: AdminUser,
+    State(state): State<AppState>,
+) -> Response {
+    match db::google_books_key_status(&state.pool).await {
+        Ok(s) => Json(s).into_response(),
+        Err(e) => internal("read google books key", e),
+    }
+}
+
+/// Body for `POST /api/google-books-key`. A `null`/absent/blank key clears it.
+#[derive(Debug, Deserialize)]
+pub(super) struct SetGoogleBooksKey {
+    #[serde(default)]
+    key: Option<String>,
+}
+
+/// Admin-only: save or clear the Google Books key; returns the new masked
+/// status. A value over `GOOGLE_BOOKS_API_KEY_MAX_LEN` returns 422 with the
+/// typed validation message so an admin sees a per-case error rather than a 500.
+pub(super) async fn post_google_books_key(
+    _admin: AdminUser,
+    State(state): State<AppState>,
+    Json(body): Json<SetGoogleBooksKey>,
+) -> Response {
+    match db::set_google_books_api_key(&state.pool, body.key.as_deref()).await {
+        Ok(()) => {}
+        Err(db::SettingsError::Validation(msg)) => {
+            return (StatusCode::UNPROCESSABLE_ENTITY, msg).into_response();
+        }
+        Err(e) => return internal("save google books key", e),
+    }
+    match db::google_books_key_status(&state.pool).await {
+        Ok(s) => Json(s).into_response(),
+        Err(e) => internal("read google books key", e),
     }
 }
 
@@ -62,6 +108,9 @@ pub(super) async fn post_check_in(
     State(state): State<AppState>,
     Json(req): Json<CheckInRequest>,
 ) -> Response {
+    if let Err(msg) = req.validate() {
+        return (StatusCode::BAD_REQUEST, msg).into_response();
+    }
     match db::add_physical_copy(
         &state.pool,
         &req.book_uuid,
@@ -85,6 +134,9 @@ pub(super) async fn post_add_physical_only(
     State(state): State<AppState>,
     Json(req): Json<AddPhysicalOnlyRequest>,
 ) -> Response {
+    if let Err(msg) = req.validate() {
+        return (StatusCode::BAD_REQUEST, msg).into_response();
+    }
     match db::add_physical_only(&state.pool, &req.meta, req.note.as_deref(), Some(user.id)).await {
         Ok(book_uuid) => Json(BookRef { book_uuid }).into_response(),
         Err(e) => scan_error("scan_add_physical_only", e),
@@ -97,6 +149,9 @@ pub(super) async fn post_wishlist_add(
     State(state): State<AppState>,
     Json(req): Json<WishlistAddRequest>,
 ) -> Response {
+    if let Err(msg) = req.validate() {
+        return (StatusCode::BAD_REQUEST, msg).into_response();
+    }
     match db::wishlist_add(
         &state.pool,
         user.id,

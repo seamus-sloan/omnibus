@@ -368,3 +368,58 @@ async fn api_add_book_to_manual_shelf_returns_204() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
 }
+
+/// The owner's provisioned wishlist shelf id (server test users are inserted
+/// raw, so provision it explicitly like `create_user` / the boot backfill do).
+async fn wishlist_shelf_id(pool: &sqlx::SqlitePool, owner: i64) -> i64 {
+    omnibus_db::provision_wishlist_shelf(pool, owner)
+        .await
+        .unwrap();
+    sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM shelves WHERE owner_user_id = ? AND kind = 'wishlist'",
+    )
+    .bind(owner)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn api_delete_wishlist_system_shelf_returns_403() {
+    let (app, _s, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let id = wishlist_shelf_id(&pool, user.id).await;
+
+    let res = app
+        .oneshot(req(
+            "DELETE",
+            &format!("/api/shelves/{id}"),
+            Some(&token),
+            None,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn api_update_wishlist_system_shelf_returns_403() {
+    let (app, _s, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let id = wishlist_shelf_id(&pool, user.id).await;
+
+    let res = app
+        .oneshot(req(
+            "PATCH",
+            &format!("/api/shelves/{id}"),
+            Some(&token),
+            Some(serde_json::json!({ "name": "Renamed" })),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}

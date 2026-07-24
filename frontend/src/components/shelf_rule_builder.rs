@@ -9,17 +9,26 @@ use omnibus_shared::{MatchMode, RuleField, RuleOp, RulePreview, ShelfRule};
 use crate::components::{CoverTile, CoverTileKind};
 use crate::data;
 
-/// Field/op/date-unit choices exposed in the smart-rule editor. `Status` is
-/// deliberately omitted — unsupported in v1.
+/// Field/op/date-unit choices exposed in the smart-rule editor.
 const FIELDS: &[(RuleField, &str)] = &[
     (RuleField::Tag, "Tag"),
     (RuleField::Author, "Author"),
     (RuleField::Series, "Series"),
     (RuleField::Rating, "Rating"),
+    (RuleField::Status, "Reading status"),
     (RuleField::Format, "Format"),
     (RuleField::Year, "Year"),
     (RuleField::DateAdded, "Date added"),
     (RuleField::DateUpdated, "Date updated"),
+];
+
+/// The read-status values a `Status` condition can match, in the order the
+/// dropdown offers them. First entry is the default a newly-picked `Status`
+/// field snaps to.
+const STATUS_VALUES: &[(&str, &str)] = &[
+    ("finished", "finished"),
+    ("reading", "reading"),
+    ("unread", "unread"),
 ];
 
 const OPS: &[(RuleOp, &str)] = &[
@@ -260,6 +269,13 @@ fn ConditionRow(
                     .find(|o| f.accepts(*o))
                     .unwrap_or(RuleOp::Is);
             }
+            // `Status` uses a fixed dropdown; seed a valid default so the row is
+            // complete without the user having to open the select.
+            if f == RuleField::Status
+                && omnibus_shared::ReadStatus::from_str(d.value.trim()).is_none()
+            {
+                d.value = STATUS_VALUES[0].0.to_string();
+            }
             on_change.call(d);
         }
     };
@@ -363,6 +379,22 @@ fn condition_value_input(
             _ => rsx! {
                 input { r#type: "date", class: "shelf-value", value: "{value}", oninput: on_val }
             },
+        };
+    }
+
+    // Status is a closed set — a dropdown, not free text.
+    if matches!(draft.field, RuleField::Status) {
+        let selected = if value.is_empty() {
+            STATUS_VALUES[0].0.to_string()
+        } else {
+            value.clone()
+        };
+        return rsx! {
+            select { class: "shelf-select", value: "{selected}", onchange: on_val,
+                for (v, label) in STATUS_VALUES.iter() {
+                    option { key: "{v}", value: *v, "{label}" }
+                }
+            }
         };
     }
 

@@ -13,6 +13,31 @@ use crate::Route;
 
 use super::mobile_filter_sheet::{dir_arrow, sort_pill_label, MobileSortFilterSheet};
 
+/// Wait (bounded) for the above-the-fold cover images to decode, then ping
+/// Rust so the settled reveal doesn't flash placeholder tiles that covers
+/// pop over a few frames later. The 12-image cap keeps the below-the-fold
+/// grid out of the gate; the two timeouts bound the whole wait (imgs that
+/// never appear — an empty library — and covers that are slow to decode)
+/// so this can only delay the reveal, never hold it past the floor.
+const COVERS_DECODE_JS: &str = r#"
+(async function(){
+  function imgs(){
+    return Array.prototype.slice.call(document.querySelectorAll('.m-lib img'), 0, 12);
+  }
+  var appear = Date.now() + 800;
+  while (imgs().length === 0 && Date.now() < appear) {
+    await new Promise(function(r){ requestAnimationFrame(r); });
+  }
+  await Promise.race([
+    Promise.all(imgs().map(function(i){
+      return i.decode ? i.decode().catch(function(){}) : Promise.resolve();
+    })),
+    new Promise(function(r){ setTimeout(r, 700); })
+  ]);
+  try { dioxus.send(1); } catch (_e) {}
+})();
+"#;
+
 /// Props for [`MobileLanding`] — the already-derived view state handed
 /// down from [`super::LandingPage`].
 #[derive(Props, Clone, PartialEq)]
@@ -74,8 +99,40 @@ pub(super) fn MobileLanding(props: MobileLandingProps) -> Element {
     let pill_arrow = dir_arrow(prefs.sort_dir);
     let filter_count = prefs.filters.formats.len();
 
+    // Settled reveal: hold the screen invisible until the first page fetch
+    // lands (the offline cache answers within tens of ms) AND the
+    // above-the-fold cover images have decoded, so the enter transition
+    // plays once over finished content — no cold "Loading" skeleton fading
+    // in, no covers popping over placeholder tiles mid-flight. Every wait
+    // is bounded: the decode eval times out internally, and the floor
+    // reveals unconditionally so a slow first load falls back to the
+    // ordinary Loading state updating in place.
+    let mut reveal_floor = use_signal(|| false);
+    use_future(move || async move {
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        reveal_floor.set(true);
+    });
+    let mut covers_ready = use_signal(|| false);
+    let mut decode_eval = use_hook(|| dioxus::document::eval(COVERS_DECODE_JS));
+    use_future(move || async move {
+        if decode_eval.recv::<i32>().await.is_ok() {
+            covers_ready.set(true);
+        }
+    });
+    let settled = (!is_loading && (covers_ready() || books.is_empty())) || reveal_floor();
+    let root_class = if settled {
+        "m-lib m-lib-ready"
+    } else {
+        "m-lib"
+    };
+
     rsx! {
-        div { class: "m-lib", "data-testid": "mobile-landing",
+        div { class: "{root_class}", "data-testid": "mobile-landing",
+            // Pull-to-refresh indicator — dragged/spun imperatively by the
+            // JS tracker in `super::pull_refresh`; markup-only here.
+            div { class: "m-ptr", "aria-hidden": "true",
+                span { class: "m-ptr-arrow", "↓" }
+            }
             header { class: "m-lib-head",
                 div { class: "omn-brand-word m-lib-brand", "Omnibus" }
                 div { class: "m-lib-head-actions",

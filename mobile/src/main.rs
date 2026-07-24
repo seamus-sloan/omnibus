@@ -29,7 +29,13 @@ fn main() {
     // run before launch so first renders can serve cached data offline.
     omnibus_frontend::offline::init();
 
-    dioxus::launch(Root);
+    // Paint the WebView itself in the dark theme's `--bg-0` so the cold
+    // start never flashes the platform-default white. The first frame is
+    // always Theme::Dark regardless of the persisted theme (see
+    // `atrium::init_theme`), so this matches the first paint for everyone.
+    dioxus::LaunchBuilder::new()
+        .with_cfg(dioxus::mobile::Config::new().with_background_color((10, 8, 6, 255)))
+        .launch(Root);
 }
 
 #[component]

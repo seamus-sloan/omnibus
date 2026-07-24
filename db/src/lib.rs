@@ -38,6 +38,7 @@ pub mod physical;
 pub mod pool;
 pub mod progress;
 pub mod ratings;
+pub mod read_status;
 pub mod scan;
 pub mod scanner;
 pub mod settings;
@@ -87,16 +88,17 @@ pub use missing_files::{
 };
 pub use palette::*;
 pub use physical::{
-    add_physical_copy, add_wishlist_entry, create_fileless_book, delete_physical_copy,
-    list_physical_copies, list_wishlist, remove_wishlist_entry, FilelessBook, FilelessCover,
-    PhysicalError,
+    add_physical_copy, add_wishlist_entry, create_fileless_book, delete_fileless_book,
+    delete_physical_copy, get_wishlist_entry, list_physical_copies, list_wishlist,
+    remove_wishlist_entry, update_physical_copy_note, FilelessBook, FilelessCover, PhysicalError,
 };
 pub use pool::*;
 pub use scan::{add_physical_only, resolve_scan, wishlist_add, ScanError};
 pub use settings::*;
 pub use shelves::{
     add_books, can_edit, can_view, create_shelf, delete_shelf, get_shelf, list_visible_shelves,
-    preview_rule, remove_book, shelf_page, update_shelf, ShelfError,
+    preview_rule, provision_wishlist_shelf, provision_wishlist_shelves, remove_book, shelf_page,
+    update_shelf, ShelfError,
 };
 pub use sort_keys::{backfill_series_sort, series_sort_value, SortKeysError};
 pub use stats::{user_stats, StatsError, STATS_TTL_SECS};

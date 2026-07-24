@@ -4,10 +4,11 @@
 //! alias; the rule set combines with `OR` (match any) or `AND` (match all).
 //! Text fields (tag/author/series/format) match by **name**, case-insensitively
 //! — equality via `COLLATE NOCASE`, substring/prefix via `LIKE` (`contains` /
-//! `starts with`). Owner-scoped fields (`rating`) bind the shelf owner's id.
-//! `status` is not supported yet (the schema records no read-completion signal).
+//! `starts with`). Owner-scoped fields (`rating`, `status`) bind the shelf
+//! owner's id: `status` matches the owner's read state in `book_read_status`,
+//! treating a missing row as `unread`.
 
-use omnibus_shared::{MatchMode, RuleField, RuleOp, ShelfRule};
+use omnibus_shared::{MatchMode, ReadStatus, RuleField, RuleOp, ShelfRule};
 
 use super::ShelfError;
 
@@ -114,10 +115,30 @@ fn condition_sql(rule: &ShelfRule, owner_id: i64) -> Result<(String, Vec<Bind>),
             ))
         }
         RuleField::DateAdded | RuleField::DateUpdated => date_condition(rule, v),
-        RuleField::Status => Err(ShelfError::InvalidRule(
-            "status rules are not supported yet".into(),
-        )),
+        RuleField::Status => status_condition(v, owner_id),
     }
+}
+
+/// Read-state condition over the owner's `book_read_status` rows. `unread`
+/// matches both an explicit `unread` row and the absence of any row (the
+/// convention everywhere read state is consumed), so it is a `NOT EXISTS` over
+/// the two "touched" states; `reading` / `finished` are a plain `EXISTS` on the
+/// matching status. Only the `is` op reaches here (the field accepts no other).
+fn status_condition(v: &str, owner_id: i64) -> Result<(String, Vec<Bind>), ShelfError> {
+    let status = ReadStatus::from_str(v.trim())
+        .ok_or_else(|| ShelfError::InvalidRule(format!("unknown read status {v:?}")))?;
+    let sql = match status {
+        ReadStatus::Unread => "NOT EXISTS (SELECT 1 FROM book_read_status rs \
+             WHERE rs.book_uuid = b.uuid AND rs.user_id = ? \
+               AND rs.status IN ('reading', 'finished'))"
+            .to_string(),
+        ReadStatus::Reading | ReadStatus::Finished => format!(
+            "EXISTS (SELECT 1 FROM book_read_status rs \
+             WHERE rs.book_uuid = b.uuid AND rs.user_id = ? AND rs.status = '{}')",
+            status.as_str()
+        ),
+    };
+    Ok((sql, vec![Bind::Int(owner_id)]))
 }
 
 /// Date-field conditions over `books.timestamp` / `books.last_modified`, which
@@ -372,9 +393,42 @@ mod rule_tests {
     }
 
     #[test]
-    fn status_field_is_rejected() {
-        assert!(membership_predicate(
+    fn status_finished_builds_exists_bound_to_owner() {
+        let p = membership_predicate(
             &[rule(RuleField::Status, RuleOp::Is, "finished")],
+            MatchMode::Any,
+            42,
+        )
+        .unwrap();
+        assert!(p.sql.contains("EXISTS"), "sql was {}", p.sql);
+        assert!(
+            p.sql.contains("rs.status = 'finished'"),
+            "sql was {}",
+            p.sql
+        );
+        assert_eq!(p.binds, vec![Bind::Int(42)]);
+    }
+
+    #[test]
+    fn status_unread_negates_the_touched_states() {
+        let p = membership_predicate(
+            &[rule(RuleField::Status, RuleOp::Is, "unread")],
+            MatchMode::Any,
+            1,
+        )
+        .unwrap();
+        assert!(p.sql.contains("NOT EXISTS"), "sql was {}", p.sql);
+        assert!(
+            p.sql.contains("('reading', 'finished')"),
+            "sql was {}",
+            p.sql
+        );
+    }
+
+    #[test]
+    fn status_rejects_unknown_value() {
+        assert!(membership_predicate(
+            &[rule(RuleField::Status, RuleOp::Is, "done")],
             MatchMode::Any,
             1
         )

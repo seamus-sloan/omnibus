@@ -12,9 +12,9 @@ use std::path::Path;
 use sqlx::{SqlitePool, Transaction};
 
 pub use omnibus_shared::{
-    is_plausible_email, HardcoverKeyStatus, Settings, SmtpConfigStatus, SmtpConfigUpdate,
-    SmtpSecurity, EMAIL_MAX_LEN, HARDCOVER_API_KEY_MAX_LEN, SMTP_FIELD_MAX_LEN,
-    SMTP_PASSWORD_MAX_LEN,
+    is_plausible_email, GoogleBooksKeyStatus, HardcoverKeyStatus, Settings, SmtpConfigStatus,
+    SmtpConfigUpdate, SmtpSecurity, EMAIL_MAX_LEN, GOOGLE_BOOKS_API_KEY_MAX_LEN,
+    HARDCOVER_API_KEY_MAX_LEN, SMTP_FIELD_MAX_LEN, SMTP_PASSWORD_MAX_LEN,
 };
 use omnibus_shared::{is_valid_metadata_precedence, MetadataSource, DEFAULT_METADATA_PRECEDENCE};
 
@@ -30,6 +30,10 @@ const SCAN_INTERVAL_HOURS_KEY: &str = "scan_interval_hours";
 /// the [`Settings`] struct) so saving it never triggers the scan-root
 /// reconciliation `set_settings` runs.
 const HARDCOVER_API_KEY_KEY: &str = "hardcover_api_key";
+/// `settings` KV key for the Google Books API key. Stored directly (not via
+/// the [`Settings`] struct) so saving it never triggers the scan-root
+/// reconciliation `set_settings` runs.
+const GOOGLE_BOOKS_API_KEY_KEY: &str = "google_books_api_key";
 /// `settings` KV keys for the server-wide SMTP config. Stored as discrete
 /// rows (not via the [`Settings`] struct) so saving them never triggers the
 /// scan-root reconciliation `set_settings` runs. The password is masked before
@@ -429,6 +433,110 @@ pub async fn seed_hardcover_key_from_env(pool: &SqlitePool) -> Result<(), Settin
     if let Ok(env_key) = std::env::var("HARDCOVER_API_KEY") {
         if !env_key.trim().is_empty() {
             set_hardcover_api_key(pool, Some(&env_key)).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Read the Google Books API key saved in `settings`, or `None` when
+/// unset/blank. This is the raw secret — callers serving it to a client MUST
+/// mask it.
+pub async fn get_google_books_api_key(pool: &SqlitePool) -> Result<Option<String>, SettingsError> {
+    let v = sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
+        .bind(GOOGLE_BOOKS_API_KEY_KEY)
+        .fetch_optional(pool)
+        .await?;
+    Ok(v.filter(|s| !s.trim().is_empty()))
+}
+
+/// Persist (or clear, when `None`/blank) the Google Books API key in
+/// `settings`. Rejects keys longer than [`GOOGLE_BOOKS_API_KEY_MAX_LEN`] with
+/// [`SettingsError::Validation`] before the write so no admin write path can
+/// spill an unbounded blob into the `settings` KV table.
+pub async fn set_google_books_api_key(
+    pool: &SqlitePool,
+    key: Option<&str>,
+) -> Result<(), SettingsError> {
+    match key.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(v) if v.len() > GOOGLE_BOOKS_API_KEY_MAX_LEN => {
+            return Err(SettingsError::Validation(format!(
+                "google books api key exceeds {GOOGLE_BOOKS_API_KEY_MAX_LEN} bytes"
+            )));
+        }
+        Some(v) => {
+            sqlx::query("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
+                .bind(GOOGLE_BOOKS_API_KEY_KEY)
+                .bind(v)
+                .execute(pool)
+                .await?;
+        }
+        None => {
+            sqlx::query("DELETE FROM settings WHERE key = ?")
+                .bind(GOOGLE_BOOKS_API_KEY_KEY)
+                .execute(pool)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+/// The effective Google Books key: the saved settings value wins; the
+/// `GOOGLE_BOOKS_API_KEY` env var is the fallback when no value is saved.
+/// Returns `None` (keyless, shared anonymous quota) when neither is set.
+pub async fn effective_google_books_api_key(
+    pool: &SqlitePool,
+) -> Result<Option<String>, SettingsError> {
+    if let Some(saved) = get_google_books_api_key(pool).await? {
+        return Ok(Some(saved));
+    }
+    Ok(std::env::var("GOOGLE_BOOKS_API_KEY")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty()))
+}
+
+/// Masked status of the server-wide Google Books key: the saved settings value
+/// wins (`source = "settings"`), then the `GOOGLE_BOOKS_API_KEY` env var
+/// (`source = "env"`), else unset (`source = "none"`). Never returns the raw
+/// key — only a short masked preview. Shared by the REST handler and the RPC
+/// server function so the fallback + masking live once.
+pub async fn google_books_key_status(
+    pool: &SqlitePool,
+) -> Result<GoogleBooksKeyStatus, SettingsError> {
+    if let Some(k) = get_google_books_api_key(pool).await? {
+        return Ok(GoogleBooksKeyStatus {
+            configured: true,
+            masked: Some(mask_key(&k)),
+            source: "settings".to_string(),
+        });
+    }
+    if let Ok(env_key) = std::env::var("GOOGLE_BOOKS_API_KEY") {
+        let env_key = env_key.trim();
+        if !env_key.is_empty() {
+            return Ok(GoogleBooksKeyStatus {
+                configured: true,
+                masked: Some(mask_key(env_key)),
+                source: "env".to_string(),
+            });
+        }
+    }
+    Ok(GoogleBooksKeyStatus {
+        configured: false,
+        masked: None,
+        source: "none".to_string(),
+    })
+}
+
+/// Boot hook: seed the Google Books key from `GOOGLE_BOOKS_API_KEY` **only**
+/// when no value is already saved, so the env var works out of the box without
+/// clobbering a key set through Settings on every restart (settings wins).
+pub async fn seed_google_books_key_from_env(pool: &SqlitePool) -> Result<(), SettingsError> {
+    if get_google_books_api_key(pool).await?.is_some() {
+        return Ok(());
+    }
+    if let Ok(env_key) = std::env::var("GOOGLE_BOOKS_API_KEY") {
+        if !env_key.trim().is_empty() {
+            set_google_books_api_key(pool, Some(&env_key)).await?;
         }
     }
     Ok(())

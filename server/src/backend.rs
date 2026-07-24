@@ -32,8 +32,10 @@ mod image_upload;
 mod journals;
 mod kindle;
 mod overrides;
+mod physical;
 mod progress;
 mod ratings;
+mod read_status;
 mod scan;
 mod search;
 mod series;
@@ -360,6 +362,10 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             "/api/ratings/{uuid}",
             get(ratings::get_rating).delete(ratings::delete_rating),
         )
+        // F3.4 read/unread state — mobile-facing REST. Web hits the analogous
+        // `/api/rpc/read-status/*` server functions.
+        .route("/api/read-status", put(read_status::put_read_status))
+        .route("/api/read-status/{uuid}", get(read_status::get_read_status))
         // Physical Check-In scan flow — mobile-facing REST. Web hits the
         // analogous `/api/rpc/scan/*` server functions.
         .route("/api/scan/resolve", post(scan::post_resolve))
@@ -369,6 +375,27 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             post(scan::post_add_physical_only),
         )
         .route("/api/scan/wishlist", post(scan::post_wishlist_add))
+        // Google Books API key (admin) — mobile-facing REST. Web hits the
+        // analogous `/api/rpc/google-books-key` server fn.
+        .route(
+            "/api/google-books-key",
+            get(scan::get_google_books_key).post(scan::post_google_books_key),
+        )
+        // F Physical Check-In — book-detail collection + wishlist reads/edits.
+        // The literal `copies` routes are registered before `/{uuid}` so the
+        // param route can't shadow them.
+        .route(
+            "/api/physical/copies/{copy_id}",
+            patch(physical::patch_copy_note).delete(physical::delete_copy),
+        )
+        .route("/api/physical/{uuid}/copies", get(physical::get_copies))
+        .route(
+            "/api/physical/{uuid}/wishlist",
+            get(physical::get_wishlist_entry)
+                .post(physical::post_wishlist_entry)
+                .delete(physical::delete_wishlist_entry),
+        )
+        .route("/api/physical/{uuid}", delete(physical::delete_book))
         // F3.1 shelves — mobile-facing REST. Web hits the analogous
         // `/api/rpc/shelves*` server functions. `/preview` is registered before
         // the `{id}` param route so it can't be shadowed.

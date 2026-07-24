@@ -185,6 +185,19 @@ async fn lookup_rejects_invalid_isbn_without_calling_a_provider() {
 // ── Google Books API key ─────────────────────────────────────────
 
 #[test]
+fn live_with_key_uses_live_endpoints_and_carries_the_supplied_key() {
+    let config = MetadataLookupConfig::live_with_key(Some("resolved-key".into()));
+    assert_eq!(config.openlibrary_base, "https://openlibrary.org");
+    assert_eq!(config.googlebooks_base, "https://www.googleapis.com");
+    assert_eq!(config.googlebooks_api_key.as_deref(), Some("resolved-key"));
+    // None means a keyless (shared-quota) lookup.
+    assert_eq!(
+        MetadataLookupConfig::live_with_key(None).googlebooks_api_key,
+        None
+    );
+}
+
+#[test]
 fn googlebooks_url_appends_the_key_only_when_configured() {
     let server_base = "http://gb.test";
     let keyless = MetadataLookupConfig {

@@ -80,9 +80,17 @@ test("opens and closes the user menu", async ({ page }) => {
   await expect(page.getByTestId("user-menu-version")).toBeVisible();
   await expect(page.getByTestId("user-menu-version")).toHaveText(/^v\d+\.\d+\.\d+$/);
 
-  // Close via the transparent scrim (click outside the panel).
-  await page.getByTestId("user-menu-scrim").click();
+  // Close by clicking a real viewport coordinate well below the header,
+  // not the scrim locator's centre. `.atrium-topbar` sets
+  // `backdrop-filter`, which makes it the containing block for the
+  // `position: fixed` scrim nested inside it — a scrim that collapsed to
+  // the header strip still satisfies a centre-click while leaving the rest
+  // of the page uncovered, so only mouse coordinates catch the regression.
+  await page.mouse.click(40, 500);
   await expect(page.getByTestId("logout-button")).toHaveCount(0);
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  // The scrim swallows the click — it must not fall through to the page.
+  await expect.poll(async () => new URL(page.url()).pathname).toBe("/");
 
   // Re-open and close via ESC. Dispatch the keypress directly to the
   // panel locator so the test doesn't race the onmounted focus call.

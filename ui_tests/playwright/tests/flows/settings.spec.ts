@@ -24,6 +24,13 @@ const hardcoverSaveButton = (page: Page) => page.getByTestId("hardcover-save");
 const hardcoverClearButton = (page: Page) => page.getByTestId("hardcover-clear");
 const hardcoverStatus = (page: Page) => page.getByTestId("hardcover-status");
 const hardcoverMessage = (page: Page) => page.getByTestId("hardcover-key-status");
+// Google Books key card controls — testid-scoped for the same reason as the
+// Hardcover card (its own Save/Clear buttons would collide otherwise).
+const googleBooksKeyInput = (page: Page) => page.getByLabel("Google Books API Key");
+const googleBooksSaveButton = (page: Page) => page.getByTestId("google-books-save");
+const googleBooksClearButton = (page: Page) => page.getByTestId("google-books-clear");
+const googleBooksStatus = (page: Page) => page.getByTestId("google-books-status");
+const googleBooksMessage = (page: Page) => page.getByTestId("google-books-key-status");
 
 test("renders the settings page layout", async ({ page }) => {
   await page.goto("/settings");
@@ -39,6 +46,8 @@ test("renders the settings page layout", async ({ page }) => {
   await expect(page.getByTestId("audiobook-library-summary")).toBeAttached();
   // F3.3 — the Hardcover suggestions key card renders on the settings page.
   await expect(page.getByTestId("hardcover-key-card")).toBeVisible();
+  // The Google Books metadata-lookup key card renders too.
+  await expect(page.getByTestId("google-books-key-card")).toBeVisible();
   // F4.3 — the admin SMTP (Send-to-Kindle) config card renders too.
   await expect(page.getByTestId("smtp-card")).toBeVisible();
   await expectNavVisible(page);
@@ -324,4 +333,77 @@ test("shows an error status when saving the Hardcover key fails", async ({ page 
   await expect(hardcoverMessage(page)).toHaveClass(/error/);
   // The failed save must not clear the admin's typed-in draft.
   await expect(hardcoverKeyInput(page)).toHaveValue(key);
+});
+
+test("saves a Google Books key, shows a connected status, then clears it", async ({ page }) => {
+  await gotoReady(page, "/settings");
+
+  const key = `AIza_test_${Date.now()}`;
+
+  await googleBooksKeyInput(page).fill(key);
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/google-books-key",
+      expectedBody: { key },
+      expectedStatus: 200,
+    },
+    async () => googleBooksSaveButton(page).click(),
+  );
+
+  await expect(googleBooksMessage(page)).toHaveText("Google Books key saved.");
+  await expect(googleBooksMessage(page)).toHaveClass(/success/);
+  await expect(googleBooksStatus(page)).toContainText("Connected");
+  // The raw key is never echoed back to the client.
+  await expect(googleBooksKeyInput(page)).toHaveValue("");
+  await expect(googleBooksClearButton(page)).toBeVisible();
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/google-books-key",
+      expectedBody: { key: null },
+      expectedStatus: 200,
+    },
+    async () => googleBooksClearButton(page).click(),
+  );
+
+  await expect(googleBooksMessage(page)).toHaveText("Google Books key cleared.");
+  await expect(googleBooksMessage(page)).toHaveClass(/success/);
+  await expect(googleBooksStatus(page)).toContainText("Not connected");
+  await expect(googleBooksClearButton(page)).toHaveCount(0);
+});
+
+test("shows an error status when saving the Google Books key fails", async ({ page }) => {
+  await gotoReady(page, "/settings");
+
+  // Only fail the write — the mount-time GET status fetch must still pass
+  // through, otherwise the card never renders the fields under test.
+  await page.route("**/api/rpc/google-books-key", (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({ status: 500, contentType: "text/plain", body: "forced failure" });
+    }
+    return route.continue();
+  });
+
+  const key = `AIza_test_error_${Date.now()}`;
+  await googleBooksKeyInput(page).fill(key);
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/google-books-key",
+      expectedBody: { key },
+      expectedStatus: 500,
+    },
+    async () => googleBooksSaveButton(page).click(),
+  );
+
+  await expect(googleBooksMessage(page)).toHaveText("Failed to save Google Books key.");
+  await expect(googleBooksMessage(page)).toHaveClass(/error/);
+  // The failed save must not clear the admin's typed-in draft.
+  await expect(googleBooksKeyInput(page)).toHaveValue(key);
 });

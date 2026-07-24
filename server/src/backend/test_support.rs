@@ -1,10 +1,32 @@
 //! Shared test fixtures and helpers for `/api/*` REST integration tests.
+//!
+//! The `*DirGuard` types hold a `std::sync::MutexGuard` across `.await` in
+//! their callers — sound only on tokio's current-thread runtime, which
+//! `assert_current_thread_test_runtime` below enforces.
 use axum::{
     body::Body,
     http::{header::AUTHORIZATION, Request},
 };
 
 use super::*;
+
+/// Asserts the calling test runs on tokio's current-thread flavor — the
+/// invariant every `*DirGuard` in this module (and `EnvGuard` in
+/// `auth::boot::tests`) relies on to hold its lock across `.await`. Call
+/// this as the first line of a guard's constructor rather than only
+/// documenting the assumption, so a future switch to a multi-threaded test
+/// runtime fails loudly instead of silently reintroducing a deadlock risk.
+/// Plain `assert_eq!` (not `debug_assert_eq!`): this module is
+/// `#[cfg(test)]`-only, but `debug_assert!` also compiles out under
+/// `cargo test --release`, which would silently defeat the check.
+pub(crate) fn assert_current_thread_test_runtime() {
+    assert_eq!(
+        tokio::runtime::Handle::current().runtime_flavor(),
+        tokio::runtime::RuntimeFlavor::CurrentThread,
+        "holding a std::sync::MutexGuard across .await is only sound on tokio's \
+         current-thread runtime — see backend::test_support module doc"
+    );
+}
 
 /// Build a router + AppState wired against a fresh in-memory DB.
 pub(crate) async fn fixture() -> (Router, AppState, sqlx::SqlitePool) {
@@ -47,6 +69,22 @@ pub(crate) fn get_with_bearer(uri: &str, token: &str) -> Request<Body> {
 /// Convenience: anonymous GET (no auth header).
 pub(crate) fn get_anon(uri: &str) -> Request<Body> {
     Request::builder().uri(uri).body(Body::empty()).unwrap()
+}
+
+/// Convenience: GET request with a bearer auth header plus an
+/// `If-None-Match` conditional header, for exercising the cover/thumb
+/// 304-revalidation path.
+pub(crate) fn get_with_bearer_and_if_none_match(
+    uri: &str,
+    token: &str,
+    etag: &str,
+) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .header(axum::http::header::IF_NONE_MATCH, etag)
+        .body(Body::empty())
+        .unwrap()
 }
 
 /// Seed a book row with `has_cover = 0`. Returns the inserted book id.
@@ -165,6 +203,7 @@ pub(crate) struct CoversDirGuard {
 
 impl CoversDirGuard {
     pub(crate) fn new(tag: &str) -> Self {
+        assert_current_thread_test_runtime();
         let guard = COVER_DIR_ENV_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -196,6 +235,54 @@ impl Drop for CoversDirGuard {
     }
 }
 
+/// Process-global `OMNIBUS_THUMBS_DIR` lock — the thumb-serving tests each
+/// install their own scratch dir via `set_var`, so they must serialize with
+/// each other. Mirrors [`COVER_DIR_ENV_LOCK`].
+pub(crate) static THUMBS_DIR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// RAII guard that points `OMNIBUS_THUMBS_DIR` at a fresh scratch dir for
+/// the duration of a single test and restores the previous value (or
+/// removes the var) on drop. Mirrors [`CoversDirGuard`].
+pub(crate) struct ThumbsDirGuard {
+    path: std::path::PathBuf,
+    prev: Option<String>,
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+
+impl ThumbsDirGuard {
+    pub(crate) fn new(tag: &str) -> Self {
+        assert_current_thread_test_runtime();
+        let guard = THUMBS_DIR_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!("omnibus_rest_thumbs_{tag}_{pid}_{nanos}"));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("create thumbs scratch dir");
+        let prev = std::env::var("OMNIBUS_THUMBS_DIR").ok();
+        std::env::set_var("OMNIBUS_THUMBS_DIR", &path);
+        Self {
+            path,
+            prev,
+            _guard: guard,
+        }
+    }
+}
+
+impl Drop for ThumbsDirGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+        match self.prev.take() {
+            Some(v) => std::env::set_var("OMNIBUS_THUMBS_DIR", v),
+            None => std::env::remove_var("OMNIBUS_THUMBS_DIR"),
+        }
+    }
+}
+
 /// Process-global `OMNIBUS_DATA_DIR` lock — the KEPUB-download tests point
 /// the cache root at a scratch dir via `set_var`, so they must serialize with
 /// each other. Mirrors [`COVER_DIR_ENV_LOCK`].
@@ -204,7 +291,8 @@ pub(crate) static DATA_DIR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::ne
 /// RAII guard that points `OMNIBUS_DATA_DIR` (the KEPUB cache root lives at
 /// `<data_dir>/kepub/`) at a fresh scratch dir for one test and restores the
 /// previous value on drop. `path` is public so a test can pre-populate the
-/// cache. Holds [`DATA_DIR_ENV_LOCK`] so parallel tests serialize their writes.
+/// cache. Holds [`DATA_DIR_ENV_LOCK`] so parallel tests serialize their
+/// writes (module doc explains why holding it across `.await` is safe).
 pub(crate) struct DataDirGuard {
     pub(crate) path: std::path::PathBuf,
     prev: Option<String>,
@@ -213,6 +301,7 @@ pub(crate) struct DataDirGuard {
 
 impl DataDirGuard {
     pub(crate) fn new(tag: &str) -> Self {
+        assert_current_thread_test_runtime();
         let guard = DATA_DIR_ENV_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);

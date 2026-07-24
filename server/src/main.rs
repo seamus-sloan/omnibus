@@ -98,6 +98,9 @@ mod server {
         // Seed the F3.3 Hardcover key from HARDCOVER_API_KEY only when none is
         // saved (settings wins; env is the out-of-the-box fallback).
         omnibus_db::seed_hardcover_key_from_env(&pool).await?;
+        // Seed the Google Books key from GOOGLE_BOOKS_API_KEY only when none is
+        // saved (settings wins; env is the out-of-the-box fallback).
+        omnibus_db::seed_google_books_key_from_env(&pool).await?;
         // Seed the F4.3 SMTP config from SMTP_* only when no host is saved
         // (settings wins; env is the out-of-the-box fallback).
         omnibus_db::seed_smtp_from_env(&pool).await?;

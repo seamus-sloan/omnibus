@@ -15,6 +15,7 @@ mod kindle;
 mod logs;
 mod progress;
 mod ratings;
+mod read_status;
 mod scan;
 mod series;
 mod shelves;
@@ -39,6 +40,7 @@ pub use kindle::*;
 pub use logs::*;
 pub use progress::*;
 pub use ratings::*;
+pub use read_status::*;
 pub use scan::*;
 pub use series::*;
 pub use shelves::*;
@@ -806,5 +808,24 @@ mod tests {
         let err = DataError::Other("missing value field".into());
         assert!(!err.is_unauthorized());
         assert_eq!(err.to_string(), "missing value field");
+    }
+
+    // `Decode` only exists on the web/mobile builds that link `serde_json`
+    // for direct body deserialization (see the variant's doc comment); gated
+    // to match so this test simply doesn't compile into a server-only build.
+    #[cfg(any(feature = "mobile", feature = "web"))]
+    #[test]
+    fn decode_wraps_a_malformed_json_body_parse_failure() {
+        // A truncated/invalid body run through the same `serde_json`
+        // deserializer the web/SSR path uses, surfaced through `#[from]` as
+        // `DataError::Decode`.
+        let src = serde_json::from_str::<serde_json::Value>("{not valid json").unwrap_err();
+        let err: DataError = src.into();
+        assert!(matches!(err, DataError::Decode(_)), "got {err:?}");
+        assert!(
+            err.to_string()
+                .starts_with("response deserialization failed"),
+            "got {err}"
+        );
     }
 }
