@@ -613,6 +613,14 @@ async fn delete_fileless_book_removes_the_book_and_its_soft_refs() {
     add_wishlist_entry(&pool, user, &uuid, WishlistSource::Detail)
         .await
         .unwrap();
+    // A uuid-keyed row *outside* the physical/wishlist/override trio, to prove
+    // the delete sweeps the full canonical set rather than a hand-picked few.
+    sqlx::query("INSERT INTO user_ratings (user_id, book_uuid, half_stars) VALUES (?1, ?2, 8)")
+        .bind(user)
+        .bind(&uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
 
     delete_fileless_book(&pool, &uuid).await.unwrap();
 
@@ -625,6 +633,8 @@ async fn delete_fileless_book_removes_the_book_and_its_soft_refs() {
         count(&pool, "SELECT COUNT(*) FROM wishlist_entries").await,
         0
     );
+    // The wider uuid-keyed sweep: the rating must go too.
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM user_ratings").await, 0);
     // The FTS twin has no FK, so it only goes when the book is hard-deleted.
     assert_eq!(count(&pool, "SELECT COUNT(*) FROM books_fts").await, 0);
     // Its now-bookless author goes with it (orphan taxonomy sweep).

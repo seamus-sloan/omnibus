@@ -1,10 +1,7 @@
-//! Physical-collection REST handlers for the mobile client
-//! (`/api/physical/*`).
-//!
-//! Reads and edits a book's library-wide physical copies plus the caller's own
-//! wishlist entry for it, and removes a fileless book outright. Check-in itself
-//! lives in [`super::scan`]. Web clients use the `/api/rpc/physical*` server
-//! functions in `omnibus_frontend::rpc`.
+//! Physical-collection REST handlers for the mobile client (`/api/physical/*`):
+//! a book's library-wide copies, the caller's wishlist entry, and fileless-book
+//! removal. Check-in lives in [`super::scan`]; web uses the `/api/rpc/physical*`
+//! server functions.
 
 use axum::{
     extract::{Path, State},
@@ -13,7 +10,7 @@ use axum::{
     Json,
 };
 use omnibus_db::{self as db, PhysicalError};
-use omnibus_shared::physical::UpdateCopyNoteRequest;
+use omnibus_shared::physical::{UpdateCopyNoteRequest, WishlistSource};
 
 use super::{internal, AppState};
 use crate::auth::AuthUser;
@@ -95,6 +92,21 @@ pub(super) async fn get_wishlist_entry(
     match db::get_wishlist_entry(&state.pool, user.id, &uuid).await {
         Ok(entry) => Json(entry).into_response(),
         Err(e) => physical_error("get_wishlist_entry", e),
+    }
+}
+
+/// Add a book already in the library to the caller's wishlist from its detail
+/// page. Idempotent — a second add returns the existing entry unchanged. (The
+/// scan flow's `/api/scan/wishlist` is the other door, for a book the library
+/// doesn't hold yet; that one carries external metadata, this one a bare uuid.)
+pub(super) async fn post_wishlist_entry(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Path(uuid): Path<String>,
+) -> Response {
+    match db::add_wishlist_entry(&state.pool, user.id, &uuid, WishlistSource::Detail).await {
+        Ok(entry) => Json(entry).into_response(),
+        Err(e) => physical_error("add_wishlist_entry", e),
     }
 }
 

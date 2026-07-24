@@ -254,6 +254,35 @@ async fn api_get_wishlist_entry_returns_the_callers_own_entry() {
 }
 
 #[tokio::test]
+async fn api_post_wishlist_entry_adds_the_book_for_the_caller() {
+    let _covers = CoversDirGuard::new("phys_wish_add");
+    let (app, _state, pool) = fixture().await;
+    let (uuid, _) = seed_physical_only(&pool, "Paper Only").await;
+    let user = auth_test_support::create_user(&pool, "reader").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let res = app
+        .oneshot(req(
+            "POST",
+            &format!("/api/physical/{uuid}/wishlist"),
+            &token,
+            Some(serde_json::json!({})),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let entry: WishlistEntry = json_body(res).await;
+    assert_eq!(entry.user_id, user.id);
+    assert_eq!(entry.source, WishlistSource::Detail);
+    // The wishlist add is ungated — a plain reader can wishlist a book.
+    assert!(db::get_wishlist_entry(&pool, user.id, &uuid)
+        .await
+        .unwrap()
+        .is_some());
+}
+
+#[tokio::test]
 async fn api_delete_wishlist_entry_is_idempotent() {
     let _covers = CoversDirGuard::new("phys_wish_del");
     let (app, _state, pool) = fixture().await;

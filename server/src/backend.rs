@@ -391,7 +391,9 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
         .route("/api/physical/{uuid}/copies", get(physical::get_copies))
         .route(
             "/api/physical/{uuid}/wishlist",
-            get(physical::get_wishlist_entry).delete(physical::delete_wishlist_entry),
+            get(physical::get_wishlist_entry)
+                .post(physical::post_wishlist_entry)
+                .delete(physical::delete_wishlist_entry),
         )
         .route("/api/physical/{uuid}", delete(physical::delete_book))
         // F3.1 shelves — mobile-facing REST. Web hits the analogous

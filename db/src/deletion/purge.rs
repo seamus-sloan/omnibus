@@ -102,7 +102,10 @@ pub(super) async fn delete_copy_rows(
 /// Hard-delete the book: every uuid-keyed row, any remaining `merged_uuids`
 /// guard, the `books` row, its search twin, and any taxonomy the delete
 /// orphaned. Link tables and identifiers cascade from `books`.
-pub(super) async fn purge_book(
+///
+/// `pub(crate)` so `physical::delete_fileless_book` reuses the same
+/// [`UUID_KEYED_TABLES`] sweep instead of hand-rolling a partial one.
+pub(crate) async fn purge_book(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
     uuid: &str,

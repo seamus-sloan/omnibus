@@ -9,8 +9,10 @@ use crate::books::resolve_canonical_book_uuid;
 use crate::covers::delete_cover_files_for;
 use crate::metadata_overrides::delete_override_cover;
 
-/// Hard-delete a book that has no `book_files`, along with its physical copies,
-/// wishlist entries, overrides, FTS twin, and cover files.
+/// Hard-delete a book that has no `book_files`, taking **every** uuid-keyed row
+/// with it (ratings, shelves, progress, journals, …) via the canonical
+/// [`purge_book`] sweep — not just the physical/wishlist/override rows — plus
+/// the `books` row, its FTS twin, orphan taxonomy, and cover files.
 ///
 /// Refuses a file-backed book with [`PhysicalError::BookHasFiles`]: those are
 /// owned by the reindex diff, and deleting one here would resurrect it on the
@@ -41,28 +43,11 @@ pub async fn delete_fileless_book(pool: &SqlitePool, book_uuid: &str) -> Result<
         return Err(PhysicalError::BookHasFiles);
     }
 
-    // Soft-ref user data (no FK, no cascade) has to go by hand; the `books`
-    // delete cascades the link tables on its own.
-    for sql in [
-        "DELETE FROM physical_copies    WHERE book_uuid = ?1",
-        "DELETE FROM wishlist_entries   WHERE book_uuid = ?1",
-        "DELETE FROM metadata_overrides WHERE book_uuid = ?1",
-    ] {
-        sqlx::query(sql).bind(&canonical).execute(&mut *tx).await?;
-    }
-
-    sqlx::query("DELETE FROM books WHERE id = ?1")
-        .bind(book_id)
-        .execute(&mut *tx)
-        .await?;
-    // `books_fts` has no FK to `books`, so its twin (rowid = book id) only
-    // leaves the index here.
-    sqlx::query("DELETE FROM books_fts WHERE rowid = ?1")
-        .bind(book_id)
-        .execute(&mut *tx)
-        .await?;
-
-    crate::taxonomy::delete_orphan_taxonomy(&mut tx).await?;
+    // One canonical sweep of every uuid-keyed table + the books row + FTS twin +
+    // orphan taxonomy, shared with the admin delete path.
+    crate::deletion::purge::purge_book(&mut tx, book_id, &canonical)
+        .await
+        .map_err(map_delete_error)?;
     tx.commit().await?;
 
     let uuids = vec![canonical];
@@ -75,4 +60,16 @@ pub async fn delete_fileless_book(pool: &SqlitePool, book_uuid: &str) -> Result<
         tracing::error!("delete_fileless_book: cover cleanup spawn_blocking failed: {join_err}");
     }
     Ok(())
+}
+
+/// Fold a `deletion::DeleteError` from the shared purge into `PhysicalError`.
+/// `purge_book` only ever emits `Sqlx` here (the book is already resolved and
+/// fileless), so the other variants collapse defensively onto `Sqlx`.
+fn map_delete_error(e: crate::deletion::DeleteError) -> PhysicalError {
+    match e {
+        crate::deletion::DeleteError::Sqlx(inner) => PhysicalError::Sqlx(inner),
+        crate::deletion::DeleteError::Physical(inner) => inner,
+        crate::deletion::DeleteError::Books(inner) => PhysicalError::Books(inner),
+        other => PhysicalError::Sqlx(sqlx::Error::Protocol(other.to_string())),
+    }
 }
