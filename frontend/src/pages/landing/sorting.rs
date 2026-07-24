@@ -277,6 +277,67 @@ mod tests {
         assert_eq!(row_slug("plain"), "plain");
     }
 
+    // contributor_names cases.
+    #[test]
+    fn contributor_names_joins_multiple_creators_with_comma_space() {
+        let creators = vec![
+            Contributor {
+                name: "First Author".into(),
+                role: None,
+                file_as: None,
+                id: None,
+            },
+            Contributor {
+                name: "Second Author".into(),
+                role: None,
+                file_as: None,
+                id: None,
+            },
+        ];
+        assert_eq!(contributor_names(&creators), "First Author, Second Author");
+    }
+
+    #[test]
+    fn contributor_names_returns_empty_string_for_no_creators() {
+        assert_eq!(contributor_names(&[]), "");
+    }
+
+    // toggle_dir cases.
+    #[test]
+    fn toggle_dir_flips_asc_and_desc() {
+        assert_eq!(toggle_dir(SortDir::Asc), SortDir::Desc);
+        assert_eq!(toggle_dir(SortDir::Desc), SortDir::Asc);
+    }
+
+    // sort_key_value / sort_key_label / sort_key_from_value cases.
+    #[test]
+    fn sort_key_value_delegates_to_the_shared_wire_vocabulary() {
+        for key in SORT_KEYS {
+            assert_eq!(sort_key_value(key), key.as_wire());
+        }
+    }
+
+    #[test]
+    fn sort_key_label_names_every_sort_key() {
+        assert_eq!(sort_key_label(SortKey::Title), "Title");
+        assert_eq!(sort_key_label(SortKey::Author), "Author");
+        assert_eq!(sort_key_label(SortKey::Series), "Series");
+        assert_eq!(sort_key_label(SortKey::LastUpdated), "Last Updated");
+        assert_eq!(sort_key_label(SortKey::NewestAdded), "Newest Added");
+    }
+
+    #[test]
+    fn sort_key_from_value_round_trips_every_sort_key_through_its_wire_value() {
+        for key in SORT_KEYS {
+            assert_eq!(sort_key_from_value(sort_key_value(key)), Some(key));
+        }
+    }
+
+    #[test]
+    fn sort_key_from_value_returns_none_for_unrecognized_token() {
+        assert_eq!(sort_key_from_value("not-a-real-key"), None);
+    }
+
     // sort_books cases.
     fn sample() -> Vec<EbookMetadata> {
         vec![

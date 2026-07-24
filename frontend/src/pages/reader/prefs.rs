@@ -241,3 +241,38 @@ fn load_spread_or_default() -> Spread {
     #[cfg(not(feature = "web"))]
     Spread::Double
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `Signal::new` requires an active Dioxus runtime, so the assertions run
+    // inside a throwaway component driven by a bare `VirtualDom` rebuild —
+    // mirrors `contexts::tests::bump_cover_cache_bust_is_observed_by_other_readers_of_the_same_signal`.
+    #[test]
+    fn font_pct_maps_font_size_bounds_and_midpoint_to_expected_percentage() {
+        #[component]
+        fn AssertFontPct() -> Element {
+            let prefs = ReaderPrefs {
+                theme: Signal::new(Theme::Dark),
+                font_size: Signal::new(FONT_SIZE_MIN),
+                typeface: Signal::new(Typeface::Editorial),
+                line_spacing: Signal::new(LineSpacing::Cozy),
+                margins: Signal::new(Margins::Normal),
+                justify: Signal::new(false),
+                spread: Signal::new(Spread::Single),
+            };
+            assert_eq!(prefs.font_pct(), 0.0, "min font size maps to 0%");
+
+            let mut font_size = prefs.font_size;
+            font_size.set(FONT_SIZE_MAX);
+            assert_eq!(prefs.font_pct(), 100.0, "max font size maps to 100%");
+
+            font_size.set((FONT_SIZE_MIN + FONT_SIZE_MAX) / 2);
+            assert_eq!(prefs.font_pct(), 50.0, "midpoint font size maps to 50%");
+
+            rsx! {}
+        }
+        VirtualDom::new(AssertFontPct).rebuild_in_place();
+    }
+}
