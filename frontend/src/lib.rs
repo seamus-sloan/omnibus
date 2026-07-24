@@ -96,6 +96,12 @@ fn ScreenLayout(children: Element) -> Element {
             // absent on the full player. Renders an empty host until a book
             // is playing — see `pages::MiniDock`.
             pages::MiniDock {}
+            // Search palette overlay. Mounted here rather than beside its
+            // trigger in `TopNav` — the topbar's `backdrop-filter` makes it
+            // the containing block for `position: fixed` children, which
+            // shrank the scrim to the header strip. See
+            // `components::search_palette::SearchPaletteOverlay`.
+            components::search_palette::SearchPaletteOverlay {}
             // Phone-width section switcher. Always rendered on web (SSR +
             // WASM, so hydration markup matches); CSS hides it above the
             // phone breakpoint so the desktop chrome is unchanged.

@@ -65,14 +65,23 @@ test("palette closes on Escape", async ({ page }) => {
   await expect(page.getByTestId("sp-panel")).toHaveCount(0);
 });
 
-test("palette closes on scrim click", async ({ page }) => {
+test("palette closes on a click outside the panel", async ({ page }) => {
   await gotoReady(page, "/");
   await page.getByTestId("search-trigger").click();
   await expect(page.getByTestId("sp-panel")).toBeVisible();
 
-  // Click the scrim (outside the panel). The scrim fills the viewport.
-  await page.getByTestId("sp-scrim").click({ position: { x: 10, y: 10 } });
+  // Click a real viewport coordinate well below the header, not a position
+  // relative to the scrim's own box. `.atrium-topbar` sets
+  // `backdrop-filter`, which makes it the containing block for
+  // `position: fixed` descendants — an overlay rendered inside the nav
+  // collapses its `inset: 0` scrim to the header strip, which still
+  // satisfies a scrim-relative click while leaving the page below
+  // uncovered. Mouse coordinates catch that; scrim-relative ones don't.
+  await page.mouse.click(40, 500);
+
   await expect(page.getByTestId("sp-panel")).toHaveCount(0);
+  // The scrim swallows the click — it must not fall through to the page.
+  await expect.poll(async () => new URL(page.url()).pathname).toBe("/");
 });
 
 // ── Autofocus ─────────────────────────────────────────────────────────

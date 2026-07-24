@@ -2,7 +2,8 @@
 //! nav search input with a trigger button in the top nav; clicking it (or
 //! pressing `⌘K` / `Ctrl+K`) opens a floating palette with debounced FTS5
 //! search and grouped results (Books, Authors, Series, Tags, Inside text).
-//! Mounted by `TopNav`; web-only via `cfg(not(feature = "mobile"))`.
+//! The trigger mounts in `TopNav`, the overlay at the `ScreenLayout` root;
+//! web-only via `cfg(not(feature = "mobile"))`.
 
 use dioxus::prelude::*;
 
@@ -24,28 +25,45 @@ use overlay::SpOverlay;
 #[derive(Copy, Clone, PartialEq)]
 pub struct PaletteOpen(pub Signal<bool>);
 
-/// Top-level host: renders the trigger button and (when open) the overlay.
-/// Mount this in `TopNav` in place of the old `NavSearch`.
+/// The search button in the top nav. Mount this in `TopNav` in place of
+/// the old `NavSearch`.
+///
+/// The overlay is deliberately **not** a child of this component — see
+/// [`SearchPaletteOverlay`].
+//
+// Hotkey lives at App scope (see `use_palette_global_shortcut`): `TopNav`
+// re-mounts on every route, so registering here would leak a fresh
+// listener per visit and flip the signal multiple times per press.
+#[component]
+pub fn SearchPaletteTrigger() -> Element {
+    let open = use_context::<PaletteOpen>();
+    rsx! {
+        SpTriggerButton { open }
+    }
+}
+
+/// The palette overlay (scrim + panel), mounted once at the `ScreenLayout`
+/// root rather than next to the trigger.
+///
+/// Root placement is load-bearing, not cosmetic: `.atrium-topbar` sets
+/// `backdrop-filter`, which makes it the containing block for
+/// `position: fixed` descendants. Rendered inside the nav, the scrim's
+/// `inset: 0` resolved to the topbar's box — it dimmed only the header
+/// strip and clicks below it never reached the scrim, so click-outside
+/// couldn't close. Mounting at the root also keeps `⌘K` working on
+/// `/settings`, where `TopNav` hides the trigger.
 //
 // Component tree:
-//   SearchPaletteHost          — mounted in TopNav, replaces NavSearch
-//   ├─ SpTriggerButton         — search button (icon + "Search" + ⌘K kbd hint)
-//   └─ (open) SpOverlay        — portal: scrim + panel
+//   SearchPaletteOverlay        — mounted in ScreenLayout
+//   └─ (open) SpOverlay         — scrim + panel
 //              ├─ SpInput       — autofocused serif italic input
 //              ├─ SpMeta        — "5 results · 18ms"
 //              ├─ SpResultsList — scrollable grouped results
 //              └─ SpFooter      — keyboard hints + "fts5 · ranked"
 #[component]
-pub fn SearchPaletteHost() -> Element {
+pub fn SearchPaletteOverlay() -> Element {
     let open = use_context::<PaletteOpen>();
-
-    // Hotkey lives at App scope (see `use_palette_global_shortcut`):
-    // `TopNav` re-mounts on every route, so registering here would leak
-    // a fresh listener per visit and flip the signal multiple times per
-    // press.
-
     rsx! {
-        SpTriggerButton { open }
         if open.0() {
             SpOverlay { open }
         }
