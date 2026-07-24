@@ -110,6 +110,8 @@
       }
       stageResizeObserver = null;
     }
+    cancelTurnAnim();
+    endSectionTurn();
     locationsReady = false;
     tocFlat = [];
     if (rendition) {
@@ -443,12 +445,162 @@
 
   function next() {
     if (!rendition) return;
-    rendition.next();
+    return rendition.next();
   }
 
   function prev() {
     if (!rendition) return;
-    rendition.prev();
+    return rendition.prev();
+  }
+
+  var sectionTurnStyleInstalled = false;
+
+  // Keep the outgoing section's pixels over epub.js while it clears the old
+  // iframe, lays out the adjacent section, and positions its landing page.
+  // Without this atomic hand-off, a previous-section turn briefly exposes the
+  // first page of that section before manager.prev() scrolls to its last page.
+  function installSectionTurnStyle() {
+    if (sectionTurnStyleInstalled || !document.head) return;
+    sectionTurnStyleInstalled = true;
+    var style = document.createElement("style");
+    style.id = "__omnibus_section_turn";
+    style.textContent =
+      "::view-transition-old(root),::view-transition-new(root){animation:none;}" +
+      "::view-transition-new(omnibus-page){animation:none;z-index:1;}" +
+      "html.omn-section-next::view-transition-old(omnibus-page){" +
+        "animation:omn-section-next 240ms cubic-bezier(.22,.72,.18,1) both;z-index:2;}" +
+      "html.omn-section-prev::view-transition-old(omnibus-page){" +
+        "animation:omn-section-prev 240ms cubic-bezier(.22,.72,.18,1) both;z-index:2;}" +
+      "@keyframes omn-section-next{to{transform:translateX(-100%);}}" +
+      "@keyframes omn-section-prev{to{transform:translateX(100%);}}" +
+      "@media(prefers-reduced-motion:reduce){" +
+        "html.omn-section-next::view-transition-old(omnibus-page)," +
+        "html.omn-section-prev::view-transition-old(omnibus-page){animation:none;}}";
+    document.head.appendChild(style);
+  }
+
+  function reportSectionLocation(result) {
+    if (result && result.then && rendition && rendition.reportLocation) {
+      result.then(rendition.reportLocation.bind(rendition));
+    } else if (rendition && rendition.reportLocation) {
+      rendition.reportLocation();
+    }
+  }
+
+  var sectionTurnInFlight = false;
+  var sectionTurnToken = 0;
+
+  // Mark a section turn in flight so new gestures can't capture a scroll
+  // base mid-layout (or fight the View Transition overlay). Returns the
+  // matching release; a fail-open timeout clears a turn whose promises
+  // never settle so gestures can't end up permanently disabled.
+  function beginSectionTurn() {
+    var token = ++sectionTurnToken;
+    sectionTurnInFlight = true;
+    var release = function () {
+      if (sectionTurnToken === token) sectionTurnInFlight = false;
+    };
+    setTimeout(release, 1500);
+    return release;
+  }
+
+  // Reset every bit of section-turn state (teardown, or a book swap while
+  // a turn was mid-flight): the gesture gate, the direction classes, and
+  // the container's view-transition-name, so a later mount starts clean
+  // and no other future View Transition accidentally captures the page.
+  function endSectionTurn() {
+    sectionTurnToken++;
+    sectionTurnInFlight = false;
+    document.documentElement.classList.remove("omn-section-next", "omn-section-prev");
+    if (rendition && rendition.manager && rendition.manager.container) {
+      rendition.manager.container.style.viewTransitionName = "";
+    }
+  }
+
+  // Whether the spine has a section on the `dir` side of the one being
+  // shown. Defaults to true on any surprise so the manager keeps the last
+  // word — callers only use `false` to skip a turn entirely.
+  function hasAdjacentSection(manager, dir) {
+    try {
+      var view = manager.views && manager.views.last && manager.views.last();
+      var section = view && view.section;
+      if (!section) return true;
+      return !!(dir > 0 ? section.next() : section.prev());
+    } catch (e) {
+      return true;
+    }
+  }
+
+  // Cross a spine boundary explicitly. A requestAnimationFrame hand-off is
+  // unreliable here because WKWebView can stop scheduling frames immediately
+  // after the final compositor transform is cleared. Returns false without
+  // turning when there is no adjacent section (the book's first/last page):
+  // the manager call would be a no-op there, stranding the resisted drag
+  // offset on screen — and the View Transition would slide a snapshot of
+  // the page over an identical copy of itself.
+  function turnAcrossSection(dir) {
+    if (!rendition || !rendition.manager) return false;
+    var manager = rendition.manager;
+    if (!hasAdjacentSection(manager, dir)) return false;
+    var release = beginSectionTurn();
+    var runTurn = function () {
+      return dir > 0 ? manager.next() : manager.prev();
+    };
+
+    // A same-document View Transition captures the old iframe before
+    // manager.prev()/next() synchronously clears it, waits for the returned
+    // layout promise, then reveals only the fully positioned destination.
+    // The named page snapshot continues in the swipe direction; everything
+    // else renders as a static snapshot of the settled destination for the
+    // ~240ms transition (the page counter catches up when reportLocation
+    // fires after the update).
+    if (typeof document.startViewTransition === "function" && manager.container) {
+      installSectionTurnStyle();
+      manager.container.style.viewTransitionName = "omnibus-page";
+      var turnClass = dir > 0 ? "omn-section-next" : "omn-section-prev";
+      document.documentElement.classList.add(turnClass);
+      var transition = null;
+      try {
+        transition = document.startViewTransition(runTurn);
+      } catch (e) {
+        document.documentElement.classList.remove(turnClass);
+      }
+      if (transition) {
+        var updated = transition.updateCallbackDone;
+        if (updated && updated.then) {
+          updated.then(function () {
+            if (rendition && rendition.reportLocation) rendition.reportLocation();
+          }, function () {
+            /* manager failure is reported by epub.js */
+          });
+        }
+        var finished = transition.finished;
+        if (finished && finished.then) {
+          finished.then(function () {
+            document.documentElement.classList.remove(turnClass);
+            release();
+          }, function () {
+            document.documentElement.classList.remove(turnClass);
+            release();
+          });
+        } else {
+          release();
+        }
+        return true;
+      }
+    }
+
+    // Call the manager immediately instead of queueing through rendition.
+    // Its built-in prev() waits for layout before positioning the last page of
+    // the prior section; its next() similarly lands at the next section start.
+    var result = runTurn();
+    reportSectionLocation(result);
+    if (result && result.then) {
+      result.then(release, release);
+    } else {
+      release();
+    }
+    return true;
   }
 
   // Emit `__omnibusOnSelectionCleared` (debounced) when the iframe selection
@@ -622,57 +774,405 @@
     });
   }
 
-  // Touch page-turn for mobile: a horizontal swipe turns the page, and a tap in
-  // the outer 20% gutters pages forward (right) / back (left). Registered on
-  // every rendered section's iframe document via epub.js's content hook, so it
-  // covers the prose the reader actually shows. Touch-only, so desktop (mouse +
-  // the visible gutter buttons) is untouched; mobile CSS hides those buttons.
+  // ── Books-style page-turn (touch) ──────────────────────────────────
+  // The default paginated manager pages by moving `container.scrollLeft`
+  // in steps of `layout.delta`, with the whole section rendered as
+  // adjacent columns — so the neighbouring page's pixels already exist.
+  // Motion never touches scrollLeft directly though: every scrollLeft
+  // write fires the manager's scroll listener and its layout-reading
+  // location machinery, which visibly stutters a slow drag. Instead the
+  // drag and the snap animate a translateX on the container's children
+  // (compositor-only, invisible to epub.js) and the landing commits ONE
+  // scrollLeft assignment + transform clear in the same frame — one
+  // scroll event, one relocation, so the page counter and progress
+  // persistence ride the existing path exactly once per turn.
+  // Section boundaries (first/last page of a chapter) have no adjacent
+  // pixels, so a View Transition keeps the outgoing raster over epub.js while
+  // the adjacent section lays out, then completes the slide over the ready
+  // destination page.
+
+  var turnAnim = null; // in-flight snap animation
+
+  function pageContainer() {
+    return (rendition && rendition.manager && rendition.manager.container) || null;
+  }
+
+  function pageDelta() {
+    var m = rendition && rendition.manager;
+    if (m && m.layout && m.layout.delta) return m.layout.delta;
+    var c = pageContainer();
+    return c ? c.clientWidth : 0;
+  }
+
+  function maxScroll(c) {
+    return Math.max(0, c.scrollWidth - c.clientWidth);
+  }
+
+  // The drag/snap offset, as a translateX on every view child of the
+  // scroll container (visually identical to scrolling the clipped box).
+  function setViewOffset(c, px) {
+    var scale = window.devicePixelRatio || 1;
+    var aligned = Math.round(px * scale) / scale;
+    for (var i = 0; i < c.children.length; i++) {
+      c.children[i].style.transform = aligned ? "translate3d(" + aligned + "px,0,0)" : "";
+    }
+  }
+
+  // Promote the views to their own compositor layer for the duration of a
+  // gesture. Without this WebKit rasterizes the section iframe lazily
+  // (visible strip only), so a slow drag exposes not-yet-painted content
+  // popping in at the leading edge frame by frame; with a promoted layer
+  // the section is rasterized once and the drag just shifts a texture.
+  function armViews(c, on) {
+    for (var i = 0; i < c.children.length; i++) {
+      c.children[i].style.willChange = on ? "transform" : "";
+    }
+  }
+
+  // Land the visual offset: one scrollLeft assignment + transform clear
+  // in the same frame, so epub.js sees a single settled scroll.
+  function commitOffset(c, base, px) {
+    c.scrollLeft = Math.max(0, Math.min(maxScroll(c), base - px));
+    setViewOffset(c, 0);
+    armViews(c, false);
+  }
+
+  function cancelTurnAnim() {
+    if (!turnAnim) return;
+    var a = turnAnim;
+    turnAnim = null;
+    if (a.raf) cancelAnimationFrame(a.raf);
+    setViewOffset(a.container, 0);
+    armViews(a.container, false);
+  }
+
+  // Land an in-flight snap instantly (its target is already the settled
+  // page edge, so this is a fast-forward, never a visual glitch).
+  function finishTurnAnim() {
+    if (!turnAnim) return;
+    var a = turnAnim;
+    turnAnim = null;
+    if (a.raf) cancelAnimationFrame(a.raf);
+    commitOffset(a.container, a.base, a.targetPx);
+  }
+
+  function animateOffsetTo(c, base, fromPx, toPx, ms) {
+    finishTurnAnim();
+    var reduced = window.matchMedia &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (fromPx === toPx || reduced) {
+      commitOffset(c, base, toPx);
+      return;
+    }
+    armViews(c, true);
+    var a = { container: c, base: base, targetPx: toPx, raf: 0 };
+    var start = null;
+    turnAnim = a;
+    function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+    function step(ts) {
+      if (turnAnim !== a) return;
+      if (start === null) start = ts;
+      var t = Math.min(1, (ts - start) / ms);
+      if (t < 1) {
+        setViewOffset(c, fromPx + (toPx - fromPx) * easeOutCubic(t));
+        a.raf = requestAnimationFrame(step);
+      } else {
+        turnAnim = null;
+        commitOffset(c, base, toPx);
+      }
+    }
+    a.raf = requestAnimationFrame(step);
+  }
+
+  // Animate one page forward/back when the neighbouring page is rendered
+  // in this section; use the atomic section hand-off at a boundary.
+  function turnAnimated(dir) {
+    var c = pageContainer();
+    var d = pageDelta();
+    if (!c || !d) {
+      if (dir > 0) next(); else prev();
+      return;
+    }
+    finishTurnAnim();
+    var base = c.scrollLeft;
+    var target = base + dir * d;
+    if (target < -0.5 || target > maxScroll(c) + 0.5) {
+      // A false return means the book's edge; the tap pulled nothing, so
+      // there is no offset to settle — just don't turn.
+      turnAcrossSection(dir);
+      return;
+    }
+    animateOffsetTo(c, base, 0, -dir * d, 260);
+  }
+
+  // Touch page-turn for mobile: a horizontal drag slides the page under the
+  // finger and snaps on release (past 30% of a page, or a flick), and a tap
+  // in the outer 20% gutters plays the same animated turn. Attached to each
+  // section iframe's document and the host reading surface, which also covers
+  // the margins around the iframe. Touch-only, so desktop mouse navigation is
+  // untouched; mobile CSS hides the visible gutter buttons.
   function installGestureNav() {
-    if (!rendition || !rendition.hooks || !rendition.hooks.content) return;
-    rendition.hooks.content.register(function (contents) {
-      var doc = contents.document;
-      var win = contents.window || window;
-      var sx = 0, sy = 0, st = 0, hadSel = false;
-      doc.addEventListener("touchstart", function (e) {
-        var t = e.changedTouches[0];
-        sx = t.clientX; sy = t.clientY; st = Date.now();
-        // Snapshot whether a selection was live when the touch began: the
-        // tap that *dismisses* a selection clears it before touchend fires,
-        // and must not double as a page turn.
-        hadSel = !!(win.getSelection && String(win.getSelection()).length > 0);
-      }, { passive: true });
-      doc.addEventListener("touchend", function (e) {
-        // Never hijack a gesture that made — or just dismissed — a text
-        // selection; that's the highlight/note flow, not a page turn.
-        var sel = win.getSelection && win.getSelection();
-        if (hadSel || (sel && String(sel).length > 0)) return;
-        var t = e.changedTouches[0];
-        var dx = t.clientX - sx, dy = t.clientY - sy, dt = Date.now() - st;
-        // A dominant horizontal swipe turns a page (swipe left = forward).
-        if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.5) {
-          if (dx < 0) next(); else prev();
+    if (!rendition) return;
+    var attachAll = function () {
+      var list = (rendition.getContents && rendition.getContents()) || [];
+      if (!Array.isArray(list)) list = list && list.document ? [list] : [];
+      for (var i = 0; i < list.length; i++) {
+        installGestureHandlers(list[i].document, false);
+      }
+      return list.length;
+    };
+    // Attach inside each rendered section. Re-run idempotently after every
+    // relocation because chapter changes swap the iframe document.
+    rendition.on("rendered", attachAll);
+    rendition.on("relocated", attachAll);
+    // The host listener covers stage margins and the passive bottom bar. A
+    // touch belongs to one document tree, so this cannot double-handle events
+    // received by the section iframe.
+    installGestureHandlers(document, true);
+  }
+
+  // The content window whose text selection gates page-turn gestures: the
+  // host install can't close over a specific section's window, so resolve
+  // the currently rendered one at event time.
+  function currentContentsWindow() {
+    var list = (rendition && rendition.getContents && rendition.getContents()) || [];
+    if (!Array.isArray(list)) list = list && list.document ? [list] : [];
+    return (list[0] && list[0].window) || null;
+  }
+
+  function installGestureHandlers(doc, isHost) {
+    if (!doc || doc.__omnibusGestures) return;
+    doc.__omnibusGestures = true;
+    var sx = 0, sy = 0, st = 0, hadSel = false;
+    var dragAxis = null, dragBase = 0, dragVx = 0;
+    var dragPx = 0, dragIntentPx = 0, dragPending = null, dragRaf = 0;
+    var velocitySamples = [];
+
+    // The selection that gates page turns lives in the section iframe's
+    // window regardless of which document caught the touch.
+    function selWin() {
+      return isHost ? currentContentsWindow() : (doc.defaultView || window);
+    }
+    function selText(w) {
+      return w && w.getSelection ? String(w.getSelection()) : "";
+    }
+    function nowMs() {
+      return window.performance && performance.now ? performance.now() : Date.now();
+    }
+    // `clientX` is relative to the moving iframe on iOS, so using it creates
+    // a feedback loop: each transform changes the next gesture coordinate.
+    function stableX(t) {
+      if (typeof t.screenX === "number" && isFinite(t.screenX)) return t.screenX;
+      var x = t.clientX;
+      if (!isHost) {
+        try {
+          var fe = (doc.defaultView || {}).frameElement;
+          if (fe) x += fe.getBoundingClientRect().left;
+        } catch (err) { /* cross-origin safety */ }
+      }
+      return x;
+    }
+    function sampleVelocity(x, now) {
+      velocitySamples.push({ x: x, t: now });
+      while (velocitySamples.length > 2 && velocitySamples[1].t < now - 100) {
+        velocitySamples.shift();
+      }
+      var first = velocitySamples[0];
+      dragVx = now > first.t ? (x - first.x) / (now - first.t) : 0;
+    }
+    function stopDragRaf(flush) {
+      if (dragRaf) {
+        cancelAnimationFrame(dragRaf);
+        dragRaf = 0;
+      }
+      if (flush && dragPending !== null) {
+        var c = pageContainer();
+        if (c) setViewOffset(c, dragPending);
+      }
+      dragPending = null;
+    }
+    // Apply at most one drag offset per frame — touchmove can outpace the
+    // display, and per-event writes are wasted work.
+    function applyDrag() {
+      dragRaf = 0;
+      if (dragAxis !== "x" || dragPending === null) return;
+      var c = pageContainer();
+      if (c) setViewOffset(c, dragPending);
+    }
+    function springBack() {
+      stopDragRaf(true);
+      if (dragAxis === "x") {
+        var c = pageContainer();
+        if (c) animateOffsetTo(c, dragBase, dragPx, 0, 180);
+      }
+      dragAxis = null;
+    }
+
+    // RTL books page with negative scroll offsets in some engines; keep
+    // the classic instant swipe there rather than mis-dragging.
+    var rtl = !!(book && book.packaging && book.packaging.metadata &&
+      String(book.packaging.metadata.direction || "").toLowerCase() === "rtl");
+    var skipTap = false;
+
+    doc.addEventListener("touchstart", function (e) {
+      // A section turn is still laying out (or its View Transition is
+      // holding the screen): a gesture started now would capture a stale
+      // scroll base and fight the hand-off. Ignore the touch entirely.
+      if (sectionTurnInFlight) {
+        dragAxis = "none";
+        skipTap = true;
+        return;
+      }
+      // Host install: gestures over the reading surface (stage incl.
+      // its margins, and the passive bottom bar) are page gestures;
+      // buttons, links, sheets, and drawers keep their own touch
+      // semantics untouched.
+      if (isHost) {
+        var tg = e.target;
+        var onSurface = tg && tg.closest && tg.closest(".rd-stage, .rd-bottom");
+        var onControl = tg && tg.closest && tg.closest("button, a, [role=\"button\"], input, textarea, .rd-drawer, .rd-aa-panel, .rd-note-composer, .rd-search-drawer, .m-sheet, .m-sheet-scrim");
+        if (!onSurface || onControl) { dragAxis = "none"; skipTap = true; return; }
+      }
+      skipTap = false;
+      if (!e.touches || e.touches.length !== 1) { dragAxis = "none"; return; }
+      var t = e.touches[0];
+      sx = stableX(t);
+      sy = t.clientY;
+      st = nowMs();
+      dragAxis = null;
+      dragPx = 0;
+      dragIntentPx = 0;
+      dragVx = 0;
+      velocitySamples = [];
+      // Snapshot whether a selection was live when the touch began: the
+      // tap that dismisses a selection clears it before touchend fires.
+      hadSel = selText(selWin()).length > 0;
+      // A new touch catches a settling page at its destination.
+      finishTurnAnim();
+      var c = pageContainer();
+      dragBase = c ? c.scrollLeft : 0;
+    }, { passive: true });
+
+    doc.addEventListener("touchmove", function (e) {
+      if (rtl || hadSel || dragAxis === "none") return;
+      if (e.touches.length !== 1) { springBack(); return; }
+      var t = e.touches[0];
+      var x = stableX(t);
+      var dx = x - sx;
+      if (dragAxis === null) {
+        // The dead zone protects taps and long-press selection. The reader is
+        // paginated, so late horizontal intent may engage despite vertical
+        // finger drift.
+        if (Math.abs(dx) < 8) return;
+        dragAxis = "x";
+        sx = x;
+        sy = t.clientY;
+        dx = 0;
+        velocitySamples = [{ x: x, t: nowMs() }];
+        var ac = pageContainer();
+        if (ac) armViews(ac, true);
+      }
+      if (selText(selWin()).length > 0) { springBack(); return; }
+      e.preventDefault();
+
+      var now = nowMs();
+      sampleVelocity(x, now);
+      var c = pageContainer();
+      if (!c) return;
+      var d = pageDelta();
+      var lo = Math.max(dragBase - maxScroll(c), d ? -d : -Infinity);
+      var hi = Math.min(dragBase, d ? d : Infinity);
+      dragIntentPx = d ? Math.max(-d, Math.min(d, dx)) : dx;
+
+      // Within a section the page tracks the finger exactly. At a chapter
+      // edge, a short resisted pull communicates the boundary while the full
+      // gesture intent remains available to choose the next section.
+      var resisted = dx;
+      if (resisted < lo) resisted = lo + (resisted - lo) * 0.18;
+      if (resisted > hi) resisted = hi + (resisted - hi) * 0.18;
+      var edge = d ? Math.min(48, d * 0.12) : 48;
+      dragPx = Math.max(lo - edge, Math.min(hi + edge, resisted));
+      dragPending = dragPx;
+      if (!dragRaf) dragRaf = requestAnimationFrame(applyDrag);
+    }, { passive: false });
+
+    doc.addEventListener("touchcancel", function () {
+      springBack();
+    }, { passive: true });
+
+    doc.addEventListener("touchend", function (e) {
+      var axis = dragAxis;
+      stopDragRaf(axis === "x");
+      dragAxis = null;
+      if (skipTap) { skipTap = false; return; }
+      // Never hijack a gesture that made — or just dismissed — a text
+      // selection; that's the highlight/note flow, not a page turn.
+      if (hadSel || selText(selWin()).length > 0) {
+        if (axis === "x") {
+          var cs = pageContainer();
+          if (cs) animateOffsetTo(cs, dragBase, dragPx, 0, 180);
+        }
+        return;
+      }
+      if (!e.changedTouches || !e.changedTouches.length) return;
+      var t = e.changedTouches[0];
+      var endX = stableX(t);
+      var endAt = nowMs();
+      var dx = endX - sx;
+      var dy = t.clientY - sy;
+      var dt = endAt - st;
+
+      if (axis === "x") {
+        var c = pageContainer(), d = pageDelta();
+        if (!c || !d) return;
+        sampleVelocity(endX, endAt);
+        var dir = 0;
+        // Synthesized and real slow drags can reverse slightly at lift-off;
+        // velocity only overrides position for an actual short flick.
+        if (Math.abs(dragVx) > 0.45 && dt < 650) dir = dragVx < 0 ? 1 : -1;
+        else if (Math.abs(dragIntentPx) > d * 0.3) dir = dragIntentPx < 0 ? 1 : -1;
+        if (dir === 0) {
+          animateOffsetTo(c, dragBase, dragPx, 0, 180);
           return;
         }
-        // Otherwise a stationary tap in the outer 20% gutters turns the page.
-        // The section iframe is the whole multi-column spine item translated
-        // as you page, so `clientX`/`innerWidth` are content coordinates —
-        // map the tap into the app viewport through the iframe's rect and
-        // compare against the app window's width instead.
-        if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && dt < 500) {
-          var x = t.clientX;
-          try {
-            var fe = win.frameElement;
-            if (fe) x += fe.getBoundingClientRect().left;
-          } catch (err) { /* cross-origin safety */ }
-          var w = window.innerWidth || 360;
-          if (x > w * 0.8) next();
-          else if (x < w * 0.2) prev();
-          // A tap in the centre 60% toggles the reader chrome (top/bottom bars)
-          // for a distraction-free page view.
-          else emitToggleChrome();
+        var target = dragBase + dir * d;
+        if (target < -0.5 || target > maxScroll(c) + 0.5) {
+          // Preserve the resisted drag in the outgoing snapshot so it
+          // continues smoothly instead of flashing back to centre first.
+          // At the book's first/last page there is nothing to turn to —
+          // settle the pulled page back instead of stranding the offset.
+          if (!turnAcrossSection(dir)) {
+            animateOffsetTo(c, dragBase, dragPx, 0, 180);
+          }
+          return;
         }
-      }, { passive: true });
-    });
+        var remaining = Math.abs((-dir * d) - dragPx) / d;
+        animateOffsetTo(c, dragBase, dragPx, -dir * d, 150 + remaining * 120);
+        return;
+      }
+
+      // RTL fallback: the classic swipe-at-release turn.
+      if (rtl && Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+        if (dx < 0) next(); else prev();
+        return;
+      }
+
+      // Otherwise a stationary tap in the outer 20% gutters turns the page.
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && dt < 500) {
+        var tapX = t.clientX;
+        if (!isHost) {
+          try {
+            var fe = (doc.defaultView || {}).frameElement;
+            if (fe) tapX += fe.getBoundingClientRect().left;
+          } catch (err) { /* cross-origin safety */ }
+        }
+        var w = window.innerWidth || 360;
+        if (tapX > w * 0.8) turnAnimated(1);
+        else if (tapX < w * 0.2) turnAnimated(-1);
+        // A centre tap toggles the reader chrome for distraction-free reading.
+        else emitToggleChrome();
+      }
+    }, { passive: true });
   }
 
   // Ask the host to toggle the reader chrome (top/bottom bars). The bars are
