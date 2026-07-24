@@ -1,13 +1,8 @@
-//! Per-user read/unread state CRUD. One row per `(user, book)`, last-write-wins
-//! on the status, soft-referencing the durable `books.uuid` (no FK/cascade)
-//! through the merged-uuid-aware canonical resolver — mirroring `ratings`. A
-//! pruned book detaches its read state rather than deleting it; the
-//! missing-files GC keeps any book a read-status row references.
-//!
-//! `finished_at` is stamped the moment a book becomes `finished` and preserved
-//! while it stays finished, so the reading-stats "finished" aggregations can
-//! window completions the same way the journal path windows `created_at`.
-//! Setting any non-finished status clears it back to NULL.
+//! Per-user read/unread state CRUD — one row per `(user, book)`, last-write-wins,
+//! soft-referencing `books.uuid` via the merged-uuid resolver (mirrors `ratings`,
+//! so a pruned book detaches rather than deleting). `finished_at` is stamped when
+//! a book becomes `finished` and cleared otherwise, so the stats "finished"
+//! aggregations can window completions like the journal path windows `created_at`.
 
 use omnibus_shared::{ReadStatus, ReadStatusRecord, SetReadStatus};
 use sqlx::{Row, SqlitePool};

@@ -1,12 +1,8 @@
-//! Read/unread control for the book-detail hero — a first-class way to mark a
-//! book unread / reading / finished without writing a journal entry.
-//!
-//! A three-segment control plus a status line. The first paint matches SSR
-//! (all-`Unread`, "Not started"); a post-mount effect loads the saved state and
-//! reconciles, keeping hydration stable (rule 07). Clicks write optimistically
-//! and reconcile with the server, reverting on error — mirroring the rating
-//! widget's op-sequence guard so an out-of-order response can't clobber a newer
-//! click.
+//! Read/unread control for the book-detail hero — mark a book unread / reading /
+//! finished without a journal entry. A three-segment control whose first paint
+//! matches SSR (`Unread`, "Not started"); a post-mount effect loads saved state
+//! and reconciles (rule 07), and clicks write optimistically with an op-sequence
+//! guard, reverting on error — mirroring the rating widget.
 
 use dioxus::prelude::*;
 use omnibus_shared::{ReadStatus, ReadStatusRecord, SetReadStatus};

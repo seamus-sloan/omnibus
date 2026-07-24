@@ -1,10 +1,8 @@
 //! Per-user read/unread state wire types shared between web and mobile clients.
-//!
 //! A book carries one [`ReadStatus`] per user — `unread` / `reading` /
-//! `finished` — settable directly from book detail without writing a journal
-//! entry. The absence of a stored row reads as `Unread` everywhere, so a book a
-//! user has never touched needs no row. `finished` completions feed the
-//! reading-stats aggregations alongside journal-sourced completions.
+//! `finished` — settable from book detail without a journal entry; a missing
+//! stored row reads as `Unread` everywhere. `finished` completions feed the
+//! reading-stats aggregations alongside journal-sourced ones.
 
 use serde::{Deserialize, Serialize};
 

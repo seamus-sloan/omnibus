@@ -1,12 +1,8 @@
-//! Read/unread-state transport. Wraps set/get for mobile (`/api/read-status*`
-//! via reqwest) and web/SSR (RPC server functions in `crate::rpc`). Mobile and
-//! web/SSR variants share each function's public signature so callers stay
-//! platform-agnostic; the `#[cfg]` gates carry the split.
-//!
-//! Unlike ratings, the mobile path talks to the server directly (no offline
-//! outbox / cache): read state is a low-frequency deliberate toggle, so a
-//! failed write surfaces as an error the control reverts rather than being
-//! queued.
+//! Read/unread-state transport: mobile calls `/api/read-status*` via reqwest,
+//! web/SSR the `crate::rpc` server functions, sharing each public signature so
+//! callers stay platform-agnostic. Unlike ratings the mobile path talks to the
+//! server directly (no offline outbox) — read state is a low-frequency toggle,
+//! so a failed write surfaces as a revert rather than being queued.
 
 use omnibus_shared::{ReadStatusRecord, SetReadStatus};
 

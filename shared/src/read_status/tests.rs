@@ -1,3 +1,5 @@
+//! Serde, token round-trip, and validation tests for the read-status wire types.
+
 use super::*;
 
 #[test]
