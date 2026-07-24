@@ -246,9 +246,7 @@ fn load_spread_or_default() -> Spread {
 mod tests {
     use super::*;
 
-    // `Signal::new` requires an active Dioxus runtime, so the assertions run
-    // inside a throwaway component driven by a bare `VirtualDom` rebuild —
-    // mirrors `contexts::tests::bump_cover_cache_bust_is_observed_by_other_readers_of_the_same_signal`.
+    // `Signal::new` needs a Dioxus runtime, so this runs inside a `VirtualDom` (see `contexts::tests`).
     #[test]
     fn font_pct_maps_font_size_bounds_and_midpoint_to_expected_percentage() {
         #[component]

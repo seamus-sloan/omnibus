@@ -151,10 +151,7 @@ fn local_storage() -> Option<web_sys::Storage> {
     web_sys::window().and_then(|w| w.local_storage().ok().flatten())
 }
 
-// `save_reader_pref`/`load_reader_pref` are thin `web_sys::Storage` wrappers
-// with no branching logic of their own — and `web_sys::window()` only
-// resolves inside a real browser, so there's no host to unit-test against.
-// No test needed per the coverage rule's thin-wrapper carve-out.
+// Thin `web_sys::Storage` wrappers, no browser to test against — no test per the thin-wrapper carve-out.
 
 /// Persist a single reader preference under its `omn.*` key.
 #[cfg(feature = "web")]

@@ -440,6 +440,7 @@ fn evict_if_over_cap_removes_oldest_book_directory() {
         let book_dir = base.join(i.to_string()).join(AUDIO64);
         std::fs::create_dir_all(&book_dir).unwrap();
         std::fs::write(book_dir.join("seg0.ts"), vec![0u8; 100]).unwrap();
+        // Small sleep to ensure distinct mtimes on coarse-resolution filesystems.
         std::thread::sleep(Duration::from_millis(50));
     }
 
