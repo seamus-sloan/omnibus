@@ -244,13 +244,18 @@ skip = [
 # on Linux, muda/tray-icon, plus the windows-* and core-foundation/core-graphics
 # platform crates). These are old pinned versions carried by the native webview
 # stack (e.g. bitflags 1, derive_more 0.99, heck 0.4, html5ever/markup5ever,
-# string_cache, jni, png, raw-window-handle, rustc-hash, siphasher, the
-# windows-sys/windows-targets family). None link into the shipped `omnibus`
-# server binary — they exist only under the native shell. Collapsing them
-# requires upstream wry/tao to migrate off gtk-rs 0.18 / bitflags 1 etc., which
-# is gated on the Dioxus pin (see [patch.crates-io] in root Cargo.toml). We
-# skip the whole subtree rather than enumerate ~40 leaf crates that all share
-# this single root cause. Revisit when Dioxus upgrades wry/tao.
+# string_cache, jni, png, raw-window-handle, siphasher, the
+# windows-sys/windows-targets family). Spot-checked against the default-build
+# packages with `cargo tree -p omnibus` and `cargo tree -p omnibus-frontend`
+# (see #1276). None of these link into the shipped `omnibus` server binary —
+# they exist only under the native shell.
+# Exception: `rustc-hash` also duplicates via `dioxus-core` in the default
+# (non-mobile) build, so it's deliberately left off this list — see
+# docs/dependency-audit.md's rustc-hash row. Collapsing the rest requires
+# upstream wry/tao to migrate off gtk-rs 0.18 / bitflags 1 etc., which is
+# gated on the Dioxus pin (see [patch.crates-io] in root Cargo.toml). We skip
+# the whole subtree rather than enumerate ~40 leaf crates that all share this
+# single root cause. Revisit when Dioxus upgrades wry/tao.
 skip-tree = [
     { name = "wry" },
     { name = "tao" },
