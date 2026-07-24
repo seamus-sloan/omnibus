@@ -111,6 +111,7 @@
       stageResizeObserver = null;
     }
     cancelTurnAnim();
+    endSectionTurn();
     locationsReady = false;
     tocFlat = [];
     if (rendition) {
@@ -486,12 +487,62 @@
     }
   }
 
+  var sectionTurnInFlight = false;
+  var sectionTurnToken = 0;
+
+  // Mark a section turn in flight so new gestures can't capture a scroll
+  // base mid-layout (or fight the View Transition overlay). Returns the
+  // matching release; a fail-open timeout clears a turn whose promises
+  // never settle so gestures can't end up permanently disabled.
+  function beginSectionTurn() {
+    var token = ++sectionTurnToken;
+    sectionTurnInFlight = true;
+    var release = function () {
+      if (sectionTurnToken === token) sectionTurnInFlight = false;
+    };
+    setTimeout(release, 1500);
+    return release;
+  }
+
+  // Reset every bit of section-turn state (teardown, or a book swap while
+  // a turn was mid-flight): the gesture gate, the direction classes, and
+  // the container's view-transition-name, so a later mount starts clean
+  // and no other future View Transition accidentally captures the page.
+  function endSectionTurn() {
+    sectionTurnToken++;
+    sectionTurnInFlight = false;
+    document.documentElement.classList.remove("omn-section-next", "omn-section-prev");
+    if (rendition && rendition.manager && rendition.manager.container) {
+      rendition.manager.container.style.viewTransitionName = "";
+    }
+  }
+
+  // Whether the spine has a section on the `dir` side of the one being
+  // shown. Defaults to true on any surprise so the manager keeps the last
+  // word — callers only use `false` to skip a turn entirely.
+  function hasAdjacentSection(manager, dir) {
+    try {
+      var view = manager.views && manager.views.last && manager.views.last();
+      var section = view && view.section;
+      if (!section) return true;
+      return !!(dir > 0 ? section.next() : section.prev());
+    } catch (e) {
+      return true;
+    }
+  }
+
   // Cross a spine boundary explicitly. A requestAnimationFrame hand-off is
   // unreliable here because WKWebView can stop scheduling frames immediately
-  // after the final compositor transform is cleared.
+  // after the final compositor transform is cleared. Returns false without
+  // turning when there is no adjacent section (the book's first/last page):
+  // the manager call would be a no-op there, stranding the resisted drag
+  // offset on screen — and the View Transition would slide a snapshot of
+  // the page over an identical copy of itself.
   function turnAcrossSection(dir) {
-    if (!rendition || !rendition.manager) return;
+    if (!rendition || !rendition.manager) return false;
     var manager = rendition.manager;
+    if (!hasAdjacentSection(manager, dir)) return false;
+    var release = beginSectionTurn();
     var runTurn = function () {
       return dir > 0 ? manager.next() : manager.prev();
     };
@@ -499,8 +550,10 @@
     // A same-document View Transition captures the old iframe before
     // manager.prev()/next() synchronously clears it, waits for the returned
     // layout promise, then reveals only the fully positioned destination.
-    // The named page snapshot continues in the swipe direction; the rest of
-    // the reader chrome stays live and stationary.
+    // The named page snapshot continues in the swipe direction; everything
+    // else renders as a static snapshot of the settled destination for the
+    // ~240ms transition (the page counter catches up when reportLocation
+    // fires after the update).
     if (typeof document.startViewTransition === "function" && manager.container) {
       installSectionTurnStyle();
       manager.container.style.viewTransitionName = "omnibus-page";
@@ -525,18 +578,29 @@
         if (finished && finished.then) {
           finished.then(function () {
             document.documentElement.classList.remove(turnClass);
+            release();
           }, function () {
             document.documentElement.classList.remove(turnClass);
+            release();
           });
+        } else {
+          release();
         }
-        return;
+        return true;
       }
     }
 
     // Call the manager immediately instead of queueing through rendition.
     // Its built-in prev() waits for layout before positioning the last page of
     // the prior section; its next() similarly lands at the next section start.
-    reportSectionLocation(runTurn());
+    var result = runTurn();
+    reportSectionLocation(result);
+    if (result && result.then) {
+      result.then(release, release);
+    } else {
+      release();
+    }
+    return true;
   }
 
   // Emit `__omnibusOnSelectionCleared` (debounced) when the iframe selection
@@ -833,6 +897,8 @@
     var base = c.scrollLeft;
     var target = base + dir * d;
     if (target < -0.5 || target > maxScroll(c) + 0.5) {
+      // A false return means the book's edge; the tap pulled nothing, so
+      // there is no offset to settle — just don't turn.
       turnAcrossSection(dir);
       return;
     }
@@ -949,6 +1015,14 @@
     var skipTap = false;
 
     doc.addEventListener("touchstart", function (e) {
+      // A section turn is still laying out (or its View Transition is
+      // holding the screen): a gesture started now would capture a stale
+      // scroll base and fight the hand-off. Ignore the touch entirely.
+      if (sectionTurnInFlight) {
+        dragAxis = "none";
+        skipTap = true;
+        return;
+      }
       // Host install: gestures over the reading surface (stage incl.
       // its margins, and the passive bottom bar) are page gestures;
       // buttons, links, sheets, and drawers keep their own touch
@@ -1065,7 +1139,11 @@
         if (target < -0.5 || target > maxScroll(c) + 0.5) {
           // Preserve the resisted drag in the outgoing snapshot so it
           // continues smoothly instead of flashing back to centre first.
-          turnAcrossSection(dir);
+          // At the book's first/last page there is nothing to turn to —
+          // settle the pulled page back instead of stranding the offset.
+          if (!turnAcrossSection(dir)) {
+            animateOffsetTo(c, dragBase, dragPx, 0, 180);
+          }
           return;
         }
         var remaining = Math.abs((-dir * d) - dragPx) / d;
