@@ -8,6 +8,7 @@
 
 use crate::books::BooksError;
 
+mod provision;
 mod read;
 mod rules;
 mod write;
@@ -15,6 +16,7 @@ mod write;
 #[cfg(test)]
 mod tests;
 
+pub use provision::{provision_wishlist_shelf, provision_wishlist_shelves};
 pub use read::{get_shelf, list_visible_shelves, preview_rule, shelf_page, LIST_SHELVES_LIMIT};
 pub use write::{add_books, create_shelf, delete_shelf, remove_book, update_shelf};
 
@@ -31,6 +33,10 @@ pub enum ShelfError {
     /// A smart rule couldn't be translated (bad value, unsupported field/op).
     #[error("invalid rule: {0}")]
     InvalidRule(String),
+    /// The target is a system shelf (e.g. the built-in Wishlist): it can't be
+    /// renamed, deleted, reconfigured, or have its membership edited by hand.
+    #[error("system shelves cannot be modified")]
+    SystemShelf,
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
 }

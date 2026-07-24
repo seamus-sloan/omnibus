@@ -345,7 +345,13 @@ fn web_shelf_body(
                     }
                 }
 
-                {member_grid(books, server_url, is_smart, move |_| show_add.set(true))}
+                {
+                    // Only hand-picked (manual) shelves get the "Add books"
+                    // tile — smart membership is computed and wishlist
+                    // membership is derived from `wishlist_entries`.
+                    let allow_add = current.kind == ShelfKind::Manual;
+                    member_grid(books, server_url, allow_add, move |_| show_add.set(true))
+                }
             }
         }
     }
@@ -356,7 +362,7 @@ fn web_shelf_body(
 fn member_grid(
     books: &[EbookMetadata],
     server_url: &str,
-    is_smart: bool,
+    allow_add: bool,
     on_add: impl FnMut(()) + Clone + 'static,
 ) -> Element {
     rsx! {
@@ -380,7 +386,7 @@ fn member_grid(
                     }
                 }
             }
-            if !is_smart {
+            if allow_add {
                 {
                     let mut on_add = on_add.clone();
                     rsx! {
@@ -421,9 +427,13 @@ fn ShelfHeader(
     // server enforces the same rule (`shelf_for_edit`).
     let viewer = crate::use_current_user_summary()();
     let owner_id = shelf.owner_user_id;
-    let can_manage = viewer
-        .as_ref()
-        .is_some_and(|u| u.id == owner_id || u.is_admin);
+    // A system shelf (Wishlist) is locked even for its owner/admin: no rename,
+    // delete, visibility toggle, or rule edit. Mirrors the server-side
+    // `ShelfError::SystemShelf` rejection so the UI never offers a 403 action.
+    let can_manage = !shelf.kind.is_system()
+        && viewer
+            .as_ref()
+            .is_some_and(|u| u.id == owner_id || u.is_admin);
     let show_attribution = viewer.as_ref().is_some_and(|u| u.id != owner_id);
 
     let id = shelf.id;
@@ -431,6 +441,7 @@ fn ShelfHeader(
     let kind_label = match shelf.kind {
         ShelfKind::Smart => "Smart",
         ShelfKind::Manual => "Hand-picked",
+        ShelfKind::Wishlist => "Wishlist",
     };
     let vis_label = match shelf.visibility {
         Visibility::Private => "Private",
