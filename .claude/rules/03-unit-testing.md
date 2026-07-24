@@ -33,6 +33,21 @@ Every crate has a `test_support` module
 helpers: in-memory pool init, seed factories, fixture builders. No
 duplicated `make_test_dir()` / `seed_minimal_books()` across files.
 
+Another crate reuses these by depending on it with the feature on —
+`omnibus-db = { path = "../db", features = ["test-support"] }` under
+`[dev-dependencies]`, which cargo unifies into test builds only.
+
+## No ambient environment
+
+A test must never depend on an env var it didn't set. Every var with an
+`effective_*` / seeds-if-unset fallback (`HARDCOVER_API_KEY`, `SMTP_*`,
+`EBOOK_LIBRARY_PATH`, …) is set in a developer's gitignored `.env` and
+absent in CI, so a test that assumes "unset" passes in CI and fails
+locally. Pin it with `EnvVarGuard` from `omnibus_db::test_support` —
+`EnvVarGuard::set("HARDCOVER_API_KEY", None)` removes the var for the
+test and restores it on drop, under a process-wide lock. Never
+hand-roll a set/restore guard.
+
 ## Coverage expectations
 
 - **Every `pub` fn:** one happy-path test, plus one test per

@@ -57,6 +57,10 @@ omnibus-db = { path = "../db", optional = true }
 
 [dev-dependencies]
 tower = "0.5"
+# Test-only view of the same db crate, with `test-support` on so integration
+# tests can reuse `EnvVarGuard` instead of hand-rolling env isolation. Cargo
+# unifies this with the optional `omnibus-db` above for test builds only.
+omnibus-db = { path = "../db", features = ["test-support"] }
 # RAII temp directories so panicking integration tests don't leak fixture
 # copies under /tmp. Already a transitive dep elsewhere — explicit here only
 # for the backend integration tests.
