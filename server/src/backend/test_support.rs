@@ -71,6 +71,22 @@ pub(crate) fn get_anon(uri: &str) -> Request<Body> {
     Request::builder().uri(uri).body(Body::empty()).unwrap()
 }
 
+/// Convenience: GET request with a bearer auth header plus an
+/// `If-None-Match` conditional header, for exercising the cover/thumb
+/// 304-revalidation path.
+pub(crate) fn get_with_bearer_and_if_none_match(
+    uri: &str,
+    token: &str,
+    etag: &str,
+) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .header(axum::http::header::IF_NONE_MATCH, etag)
+        .body(Body::empty())
+        .unwrap()
+}
+
 /// Seed a book row with `has_cover = 0`. Returns the inserted book id.
 pub(crate) async fn seed_book_no_cover(pool: &sqlx::SqlitePool) -> i64 {
     // Insert a minimal scan_roots row first (FK requirement).
