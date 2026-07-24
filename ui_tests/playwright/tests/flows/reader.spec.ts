@@ -85,6 +85,27 @@ test("renders the reader layout", async ({ page, request }) => {
   await expect(page.getByTestId("reader-spread-double")).toBeVisible();
 });
 
+test("black theme overrides a publisher color on the EPUB body", async ({
+  page,
+  request,
+}) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("omn.theme", "black");
+  });
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/read/${uuid}`);
+
+  // Intentional exception: this regression must inspect rendered EPUB prose
+  // to verify a publisher body colour cannot override the reader theme.
+  const prose = page
+    .frameLocator("#omnibus-viewer iframe")
+    .getByText("Synthetic test content.");
+  await expect(prose).toBeVisible();
+  await expect
+    .poll(() => prose.evaluate((el) => getComputedStyle(el).color))
+    .toBe("rgb(255, 255, 255)");
+});
+
 test("opens the search and bookmarks drawers from the top chrome", async ({
   page,
   request,

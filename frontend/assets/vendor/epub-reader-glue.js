@@ -238,18 +238,18 @@
       // token in atrium.css (the reader-surface ground) — change both
       // together or the chrome strips stop matching the page.
       rendition.themes.register("light", {
-        body: { background: "#fcfbfa", color: "#2a2725" },
+        body: { background: "#fcfbfa", color: foregroundColorForTheme("light") },
       });
       rendition.themes.register("dark", {
-        body: { background: "#201e1b", color: "#f5f3f0" },
+        body: { background: "#201e1b", color: foregroundColorForTheme("dark") },
       });
       // Matches Apple Books' dark reading theme on macOS: a pure-black
       // #000000 page with bright #ffffff text.
       rendition.themes.register("black", {
-        body: { background: "#000000", color: "#ffffff" },
+        body: { background: "#000000", color: foregroundColorForTheme("black") },
       });
       rendition.themes.register("sepia", {
-        body: { background: "#ede4d0", color: "#3b3029" },
+        body: { background: "#ede4d0", color: foregroundColorForTheme("sepia") },
       });
       rendition.themes.select(opts.theme || "dark");
       currentTheme = opts.theme || "dark";
@@ -704,10 +704,30 @@
     }
   }
 
-  // Push the current theme's link colour into a section as a CSS var the
-  // baseline stylesheet reads. Runs per section and again on every theme swap.
-  function applyLinkColor(doc) {
+  // Reader-owned foreground. Publisher styles often put `color` directly on a
+  // classed body (e.g. Calibre's `.calibre{color:#000}`), whose specificity
+  // beats epub.js's plain `body` theme rule.
+  function foregroundColorForTheme(name) {
+    switch (name) {
+      case "light":
+        return "#2a2725";
+      case "black":
+        return "#ffffff";
+      case "sepia":
+        return "#3b3029";
+      default:
+        return "#f5f3f0";
+    }
+  }
+
+  // Push the current theme's reader-owned colours into a section as CSS vars
+  // the baseline stylesheet reads. Runs per section and on every theme swap.
+  function applyThemeColors(doc) {
     if (doc && doc.documentElement) {
+      doc.documentElement.style.setProperty(
+        "--omn-fg",
+        foregroundColorForTheme(currentTheme)
+      );
       doc.documentElement.style.setProperty(
         "--omn-link",
         linkColorForTheme(currentTheme)
@@ -744,7 +764,7 @@
         doc.head.appendChild(link);
       }
 
-      applyLinkColor(doc);
+      applyThemeColors(doc);
 
       // Reader baseline / override layer. The split mirrors Apple Books and
       // Kindle: the reading system owns colour (and font, size, spacing,
@@ -752,21 +772,18 @@
       // structure — weight, style, headings, alignment, indents, small-caps.
       //
       // Appended last, and `!important` on colour so a publisher hue can't
-      // override the theme: `body *` forces every element to the theme
-      // foreground (killing clashes like Project Gutenberg's `a:hover{color:
-      // red}` and keeping dark/sepia legible), and only *real* links — `a`
-      // with an `href` — get the reader's accent. Confirmed against Apple
-      // Books: it styles/hovers only real links, ignoring publisher `:hover`
-      // on ordinary elements. Scoping to `[href]` also spares body text that
-      // Gutenberg wraps in a self-closing *named* anchor (`<a id="chapN"/>`,
-      // no href) which the HTML parser leaves open across the chapter — that
-      // text stays inert, theme-coloured prose (cursor included).
+      // override the theme. Include `body` itself: descendants inheriting from
+      // a publisher-coloured, classed body otherwise stay black in Black/Dark
+      // themes. Only *real* links — `a` with an `href` — get the reader's
+      // accent. Scoping to `[href]` also spares body text that Gutenberg wraps
+      // in a self-closing *named* anchor (`<a id="chapN"/>`, no href), which
+      // the HTML parser leaves open across the chapter.
       if (!doc.getElementById("__omnibus_baseline")) {
         var style = doc.createElement("style");
         style.id = "__omnibus_baseline";
         style.textContent =
           "html,body{-webkit-hyphens:auto;-ms-hyphens:auto;hyphens:auto;}" +
-          "body *{color:inherit!important;}" +
+          "body,body *{color:var(--omn-fg,#f5f3f0)!important;}" +
           "a:not([href]){cursor:auto;}" +
           "a[href]{color:var(--omn-link,#4a86d8)!important;text-decoration:none;}";
         doc.head.appendChild(style);
@@ -1195,10 +1212,10 @@
     if (!rendition) return;
     rendition.themes.select(name);
     currentTheme = name;
-    // Re-tint links in every already-rendered section for the new ground.
+    // Re-tint reader-owned colours in every rendered section for the new ground.
     try {
       rendition.getContents().forEach(function (c) {
-        applyLinkColor(c.document);
+        applyThemeColors(c.document);
       });
     } catch (e) {
       /* no rendered sections yet */

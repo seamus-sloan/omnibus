@@ -35,6 +35,8 @@ interface EpubInput {
   withCover?: boolean;
   /** Stable identifier used in the OPF and as the unique-identifier. */
   id: string;
+  /** Optional publisher colour applied through a class on the chapter body. */
+  publisherBodyColor?: string;
 }
 
 const FIXTURES: EpubInput[] = [
@@ -47,6 +49,9 @@ const FIXTURES: EpubInput[] = [
     published: "1843-10-01",
     language: "en",
     withCover: true,
+    // Mirrors Calibre EPUBs such as The Debt of Time: the class selector beats
+    // epub.js's plain body selector unless the reader owns the root foreground.
+    publisherBodyColor: "#000000",
   },
   {
     filename: "beta.epub",
@@ -436,6 +441,9 @@ function buildOpf(input: EpubInput): string {
   const coverManifestItem = input.withCover
     ? `\n    <item id="cover-image" href="cover.png" media-type="image/png" properties="cover-image"/>`
     : "";
+  const styleManifestItem = input.publisherBodyColor
+    ? `\n    <item id="publisher-style" href="publisher.css" media-type="text/css"/>`
+    : "";
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid">
@@ -448,7 +456,7 @@ ${creators}${series}
   </metadata>
   <manifest>
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
-    <item id="chap1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>${coverManifestItem}
+    <item id="chap1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>${coverManifestItem}${styleManifestItem}
   </manifest>
   <spine>
     <itemref idref="chap1"/>
@@ -474,11 +482,15 @@ const NAV_XHTML = `<?xml version="1.0" encoding="UTF-8"?>
 </html>
 `;
 
-function buildChapter(title: string): string {
+function buildChapter(input: EpubInput): string {
+  const stylesheet = input.publisherBodyColor
+    ? `<link href="publisher.css" rel="stylesheet" type="text/css"/>`
+    : "";
+  const bodyClass = input.publisherBodyColor ? ` class="calibre"` : "";
   return `<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml">
-<head><title>${escapeXml(title)}</title></head>
-<body><h1>${escapeXml(title)}</h1><p>Synthetic test content.</p></body>
+<head><title>${escapeXml(input.title)}</title>${stylesheet}</head>
+<body${bodyClass}><h1>${escapeXml(input.title)}</h1><p>Synthetic test content.</p></body>
 </html>
 `;
 }
@@ -497,7 +509,14 @@ async function buildEpub(input: EpubInput): Promise<Buffer> {
   zip.file("META-INF/container.xml", CONTAINER_XML, { date: FIXED_DATE });
   zip.file("OEBPS/content.opf", buildOpf(input), { date: FIXED_DATE });
   zip.file("OEBPS/nav.xhtml", NAV_XHTML, { date: FIXED_DATE });
-  zip.file("OEBPS/chapter1.xhtml", buildChapter(input.title), { date: FIXED_DATE });
+  zip.file("OEBPS/chapter1.xhtml", buildChapter(input), { date: FIXED_DATE });
+  if (input.publisherBodyColor) {
+    zip.file(
+      "OEBPS/publisher.css",
+      `.calibre { color: ${input.publisherBodyColor}; }\n`,
+      { date: FIXED_DATE },
+    );
+  }
   if (input.withCover) {
     zip.file("OEBPS/cover.png", TINY_PNG, { date: FIXED_DATE });
   }
