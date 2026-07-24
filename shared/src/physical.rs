@@ -61,3 +61,28 @@ pub struct WishlistEntry {
     pub added_at: i64,
     pub source: WishlistSource,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wishlist_source_round_trips_through_the_db_string_for_every_variant() {
+        for variant in [
+            WishlistSource::Scan,
+            WishlistSource::Detail,
+            WishlistSource::Manual,
+        ] {
+            assert_eq!(
+                WishlistSource::from_db(variant.as_str()),
+                Some(variant),
+                "variant {variant:?} did not round-trip through as_str/from_db"
+            );
+        }
+    }
+
+    #[test]
+    fn wishlist_source_from_db_returns_none_for_unrecognized_token() {
+        assert_eq!(WishlistSource::from_db("bogus"), None);
+    }
+}
