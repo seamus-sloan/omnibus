@@ -181,3 +181,88 @@ async fn send_propagates_db_error_when_pool_is_closed() {
         .unwrap_err();
     assert!(matches!(err, KindleError::Settings(_)));
 }
+
+#[test]
+fn kindle_error_io_wraps_filesystem_error() {
+    // `send` surfaces a failed metadata/read on the resolved EPUB path
+    // through `#[from] std::io::Error` as `KindleError::Io`. Constructing
+    // one directly via the `From` bridge asserts that mapping without
+    // needing a real vanished file mid-send.
+    let src = std::io::Error::new(std::io::ErrorKind::NotFound, "epub vanished");
+    let err: KindleError = src.into();
+    assert!(matches!(err, KindleError::Io(_)), "got {err:?}");
+    assert!(
+        err.to_string().starts_with("failed to read the EPUB file"),
+        "got {err}"
+    );
+}
+
+#[test]
+fn kindle_error_books_wraps_books_error() {
+    // `book_file_path`/`book_file_path_by_id` return `crate::books::BooksError`,
+    // surfaced through `#[from]` as `KindleError::Books`.
+    let src = crate::books::BooksError::Db(sqlx::Error::RowNotFound);
+    let err: KindleError = src.into();
+    assert!(matches!(err, KindleError::Books(_)), "got {err:?}");
+}
+
+#[tokio::test]
+async fn send_returns_smtp_error_when_relay_connection_is_refused() {
+    let _env = EnvVarGuard::set("SMTP_HOST", None).also_set("SMTP_FROM_EMAIL", None);
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    // Bind an ephemeral port and drop the listener immediately so the SMTP
+    // config points at a definitely-closed port: the connection attempt
+    // inside `deliver` fails fast with a transport error (`KindleError::Smtp`)
+    // instead of hanging for the full `SEND_TIMEOUT`.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+
+    set_smtp_config(
+        &pool,
+        &SmtpConfigUpdate {
+            host: "127.0.0.1".into(),
+            port,
+            username: String::new(),
+            from_email: "library@example.com".into(),
+            security: SmtpSecurity::Starttls,
+            password: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let lib = dir.path().to_str().unwrap();
+    let epub = dir.path().join("small.epub");
+    std::fs::write(&epub, b"epub-bytes").unwrap();
+
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
+        .bind(lib)
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    let book_id = sqlx::query(
+        "INSERT INTO books (uuid, library_id, path, title) VALUES ('uuid-small', ?, '', 'Small')",
+    )
+    .bind(lib_id)
+    .execute(&pool)
+    .await
+    .unwrap()
+    .last_insert_rowid();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES (?, 'EPUB', 'small', 0)",
+    )
+    .bind(book_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let err = send(&pool, book_id, None, "reader@kindle.com")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, KindleError::Smtp(_)), "got {err:?}");
+}

@@ -151,6 +151,8 @@ fn local_storage() -> Option<web_sys::Storage> {
     web_sys::window().and_then(|w| w.local_storage().ok().flatten())
 }
 
+// Thin `web_sys::Storage` wrappers, no browser to test against — no test per the thin-wrapper carve-out.
+
 /// Persist a single reader preference under its `omn.*` key.
 #[cfg(feature = "web")]
 pub(crate) fn save_reader_pref(key: &str, value: &str) {
