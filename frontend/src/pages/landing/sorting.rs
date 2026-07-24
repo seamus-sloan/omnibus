@@ -211,6 +211,20 @@ pub(crate) fn row_slug(filename: &str) -> String {
     out
 }
 
+/// Stable per-book identity for a row/tile `key` and testid slug.
+///
+/// A fileless book (physical-only, or a ghost) has no `book_files` row, and
+/// `row_to_ebook` leaves its `filename` empty — slugging that alone would
+/// collapse every such book onto the same key and testid, breaking Dioxus
+/// diffing and making Playwright selectors ambiguous. Fall back to the uuid,
+/// which is always present and unique.
+pub(crate) fn row_ident(book: &EbookMetadata) -> String {
+    if book.filename.is_empty() {
+        return row_slug(book.unique_identifier.as_deref().unwrap_or_default());
+    }
+    row_slug(&book.filename)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -336,6 +350,32 @@ mod tests {
     #[test]
     fn sort_key_from_value_returns_none_for_unrecognized_token() {
         assert_eq!(sort_key_from_value("not-a-real-key"), None);
+    }
+
+    /// A book carrying just the two fields `row_ident` reads.
+    fn ident_book(filename: &str, uuid: &str) -> EbookMetadata {
+        EbookMetadata {
+            filename: filename.into(),
+            unique_identifier: Some(uuid.into()),
+            ..EbookMetadata::default()
+        }
+    }
+
+    #[test]
+    fn row_ident_uses_the_filename_slug_for_a_file_backed_book() {
+        let b = ident_book("Alpha.epub", "11111111-2222-3333-4444-555555555555");
+        assert_eq!(row_ident(&b), "alpha");
+    }
+
+    #[test]
+    fn row_ident_falls_back_to_the_uuid_for_a_fileless_book() {
+        // Two physical-only books both have an empty `filename`; keying on it
+        // would collide, so each must fall back to its own uuid.
+        let a = ident_book("", "aaaaaaaa-0000-0000-0000-000000000000");
+        let b = ident_book("", "bbbbbbbb-0000-0000-0000-000000000000");
+
+        assert_eq!(row_ident(&a), "aaaaaaaa-0000-0000-0000-000000000000");
+        assert_ne!(row_ident(&a), row_ident(&b));
     }
 
     // sort_books cases.
