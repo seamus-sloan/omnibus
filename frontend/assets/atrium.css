@@ -4588,6 +4588,78 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   flex-direction: column;
   gap: 1.5rem;
 }
+
+/* Unified settings: permission-gated left sidebar + a content column that
+   holds the active section's card(s). (#1324) */
+.settings-layout {
+  display: grid;
+  grid-template-columns: 232px 1fr;
+  gap: 2rem;
+  align-items: start;
+}
+.settings-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  min-width: 0;
+}
+.settings-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  position: sticky;
+  top: 1.5rem;
+}
+.settings-sidebar-head h1 { margin: 0; }
+.settings-sidebar-head .subtitle { margin: 0.25rem 0 0; }
+.settings-sidebar-note {
+  color: var(--ink-2);
+  font-size: 0.8rem;
+  margin: 0.5rem 0 0;
+}
+.settings-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.settings-nav-group-label {
+  color: var(--ink-2);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin: 0.35rem 0 0.25rem 0.75rem;
+}
+.settings-nav-item {
+  align-items: center;
+  border-radius: 8px;
+  color: var(--ink-1);
+  display: flex;
+  gap: 0.65rem;
+  padding: 0.55rem 0.75rem;
+  text-decoration: none;
+}
+@media (hover: hover) {
+  .settings-nav-item:hover { background: var(--bg-1); color: var(--ink-0); }
+}
+.settings-nav-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.settings-nav-icon {
+  flex: none;
+  font-size: 0.95rem;
+  width: 1.1rem;
+  text-align: center;
+}
+.settings-nav-label { font-size: 0.95rem; }
+
+@media (max-width: 720px) {
+  .settings-layout { grid-template-columns: 1fr; gap: 1.25rem; }
+  .settings-sidebar { position: static; top: auto; }
+}
+
 .settings-form {
   display: flex;
   flex-direction: column;

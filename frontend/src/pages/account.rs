@@ -115,15 +115,21 @@ impl ThemeKind {
 
 /// The Account screen. Web/SSR renders the Send-to-Kindle destination form;
 /// the native shell renders the mobile "You" tab.
+///
+/// `embedded` is set when the web body is rendered as the Account section of
+/// `/settings`: the sidebar already owns the page `h1`, so the card heading
+/// drops to `h2` to avoid a second top-level heading (the standalone
+/// `/account` route keeps its `h1`).
 #[component]
-pub fn AccountPage() -> Element {
+pub fn AccountPage(#[props(default)] embedded: bool) -> Element {
     #[cfg(feature = "mobile")]
     {
+        let _ = embedded;
         account_body()
     }
     #[cfg(not(feature = "mobile"))]
     {
-        kindle_account_body()
+        kindle_account_body(embedded)
     }
 }
 
@@ -131,7 +137,7 @@ pub fn AccountPage() -> Element {
 /// saved address from `/api/auth/me`; saving/clearing round-trips through
 /// `data::set_kindle_email`.
 #[cfg(not(feature = "mobile"))]
-fn kindle_account_body() -> Element {
+fn kindle_account_body(embedded: bool) -> Element {
     let server_url = use_server_url();
     let mut email_input = use_signal(String::new);
     let mut saved_email = use_signal(|| None::<String>);
@@ -206,7 +212,11 @@ fn kindle_account_body() -> Element {
 
     rsx! {
         section { class: "card", "data-testid": "account-kindle-card",
-            h1 { "Account" }
+            if embedded {
+                h2 { "Account" }
+            } else {
+                h1 { "Account" }
+            }
             p { class: "subtitle", "Configure your Send-to-Kindle delivery address." }
 
             form {
@@ -460,10 +470,10 @@ fn AccountRows() -> Element {
 
     rsx! {
         div { class: "m-account-rows",
-            AccountLinkRow { to: Route::Settings {}, label: "Settings" }
+            AccountLinkRow { to: Route::Settings { section: None }, label: "Settings" }
             // No dedicated admin route exists; the Settings page hosts the
             // admin-only library-path controls, so route there.
-            AccountLinkRow { to: Route::Settings {}, label: "Admin \u{00b7} server" }
+            AccountLinkRow { to: Route::Settings { section: None }, label: "Admin \u{00b7} server" }
             AccountLinkRow { to: Route::AddBooks {}, label: "Add books" }
             AccountLinkRow { to: Route::CheckIn {}, label: "Check in a book" }
             button {

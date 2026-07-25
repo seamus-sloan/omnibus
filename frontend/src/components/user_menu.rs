@@ -120,11 +120,6 @@ fn UserMenuPanel(user: UserSummary, open: Signal<bool>) -> Element {
     let nav = use_navigator();
     let theme = use_context::<Signal<Theme>>();
     let on_signout = build_on_signout(open, nav);
-    // `/logs` is admin-gated (both the `LogsPage` chrome and the `rpc_get_logs`
-    // extractor), so only surface the admin row to admins — matching how the
-    // Settings page hides its log-viewer card. Non-admins would otherwise hit a
-    // dead-end "administrator access required" screen.
-    let is_admin = user.is_admin;
 
     let on_keydown = move |evt: Event<KeyboardData>| {
         if evt.key() == Key::Escape {
@@ -165,7 +160,7 @@ fn UserMenuPanel(user: UserSummary, open: Signal<bool>) -> Element {
                 UmStat { label: "Goals", detail: "12 / 24 books" }
             }
 
-            UmAccountRows { open, is_admin }
+            UmAccountRows { open }
             UmSessionRows { on_signout }
 
             UmThemeSeg { theme }
@@ -317,48 +312,21 @@ fn um_now_reading_row(point: ResumePoint) -> Element {
     }
 }
 
-/// Account-scoped linear rows: Account and Settings (real, each closes the
-/// menu), the admin-only Admin log-viewer link, plus the stubbed Notifications
-/// row. The admin row only renders for admins, since `/logs` is admin-gated.
+/// Account-scoped linear rows. Everything an account needs now lives under
+/// Settings (Account, server config, and Logs are all sections there), so this
+/// is a single Settings row that closes the menu on click.
 #[cfg(any(feature = "web", feature = "server"))]
 #[component]
-fn UmAccountRows(open: Signal<bool>, is_admin: bool) -> Element {
+fn UmAccountRows(open: Signal<bool>) -> Element {
     let mut open = open;
     rsx! {
         div { class: "um-rows",
             Link {
-                to: Route::Account {},
-                class: "um-row",
-                onclick: move |_| open.set(false),
-                span { class: "um-row-icon", "◐" }
-                span { class: "um-row-label", "Account" }
-            }
-            Link {
-                to: Route::Settings {},
+                to: Route::Settings { section: None },
                 class: "um-row",
                 onclick: move |_| open.set(false),
                 span { class: "um-row-icon", "⚙" }
                 span { class: "um-row-label", "Settings" }
-            }
-            if is_admin {
-                Link {
-                    to: Route::Logs {},
-                    class: "um-row",
-                    onclick: move |_| open.set(false),
-                    span { class: "um-row-icon", "▣" }
-                    span { class: "um-row-label", "Admin · server health" }
-                    span { class: "um-row-aside", "logs" }
-                }
-            }
-            a {
-                class: "um-row",
-                href: "#",
-                "aria-disabled": "true",
-                tabindex: "-1",
-                onclick: move |evt| evt.prevent_default(),
-                span { class: "um-row-icon", "◔" }
-                span { class: "um-row-label", "Notifications" }
-                span { class: "um-row-badge", "2" }
             }
         }
     }

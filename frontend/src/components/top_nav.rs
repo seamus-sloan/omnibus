@@ -23,7 +23,7 @@ pub fn TopNav() -> Element {
     // Hide the search trigger on `/settings` — the page has its own dense
     // form layout and a search button wedged into the nav above it just
     // clutters the chrome.
-    let on_settings = matches!(route, Route::Settings {});
+    let on_settings = matches!(route, Route::Settings { .. });
     let is_library = matches!(route, Route::Landing {});
     let is_authors = matches!(route, Route::AuthorsIndex {} | Route::AuthorDetail { .. });
     let is_series = matches!(route, Route::SeriesIndex {} | Route::SeriesDetail { .. });

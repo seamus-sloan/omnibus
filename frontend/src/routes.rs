@@ -15,8 +15,8 @@ use crate::{use_page_title, ScreenLayout};
 pub enum Route {
     #[route("/")]
     Landing {},
-    #[route("/settings")]
-    Settings {},
+    #[route("/settings?:section")]
+    Settings { section: Option<String> },
     #[route("/logs")]
     Logs {},
     #[route("/account")]
@@ -70,25 +70,31 @@ pub fn Landing() -> Element {
     }
 }
 
-/// Route target for `/settings` — wraps [`SettingsPage`] in the platform screen layout.
+/// Route target for `/settings` — wraps [`SettingsPage`] in the platform screen
+/// layout. `section` (the `?section=` query param) selects the active sidebar
+/// section on web; the mobile shell ignores it.
 #[component]
-pub fn Settings() -> Element {
+pub fn Settings(section: Option<String>) -> Element {
     use_page_title(|| Some("Settings".into()));
     rsx! {
-        ScreenLayout { SettingsPage {} }
+        ScreenLayout { SettingsPage { section } }
     }
 }
 
-/// Route target for `/logs` — the admin-only server log viewer. Web wraps
-/// [`LogsPage`] in the screen layout; mobile has no log viewer, so — like the
-/// web `/search` stub — it redirects to the landing page.
+/// Route target for `/logs` — the server log viewer now lives inside Settings
+/// as the admin-only Logs section, so the standalone route is a redirect that
+/// keeps old bookmarks working. Mobile has no log viewer, so it redirects to
+/// the landing page instead.
 #[cfg(not(feature = "mobile"))]
 #[component]
 pub fn Logs() -> Element {
-    use_page_title(|| Some("Server logs".into()));
-    rsx! {
-        ScreenLayout { LogsPage {} }
-    }
+    let nav = dioxus_router::use_navigator();
+    use_effect(move || {
+        nav.replace(Route::Settings {
+            section: Some("logs".into()),
+        });
+    });
+    rsx! {}
 }
 
 /// Mobile stub for `/logs`: redirect to the landing page (no log viewer on
