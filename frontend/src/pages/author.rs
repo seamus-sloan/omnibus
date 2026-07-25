@@ -6,7 +6,7 @@ use dioxus::prelude::*;
 #[cfg(not(feature = "mobile"))]
 use dioxus_router::use_navigator;
 use dioxus_router::Link;
-use omnibus_shared::{AuthorDetail, EbookMetadata};
+use omnibus_shared::{display_title, AuthorDetail, EbookMetadata};
 
 use crate::components::atrium::Cover;
 use crate::components::author_photo_edit::AuthorPhotoEditOverlay;
@@ -352,7 +352,7 @@ fn author_body(series_groups: SeriesGroups, standalone: Vec<EbookMetadata>) -> E
 fn author_series_tile(book: EbookMetadata) -> Element {
     let uuid = book.unique_identifier.clone().unwrap_or_default();
     let series_index = book.series_index.clone();
-    let title = book.title.clone().unwrap_or_else(|| book.filename.clone());
+    let title = display_title(book.title.as_deref(), &book.filename);
     let book_id = book.id;
     rsx! {
         Link {
@@ -373,7 +373,7 @@ fn author_series_tile(book: EbookMetadata) -> Element {
 /// One book tile within the standalone / "Other works" section.
 fn author_standalone_tile(book: EbookMetadata) -> Element {
     let uuid = book.unique_identifier.clone().unwrap_or_default();
-    let title = book.title.clone().unwrap_or_else(|| book.filename.clone());
+    let title = display_title(book.title.as_deref(), &book.filename);
     let book_id = book.id;
     rsx! {
         Link {

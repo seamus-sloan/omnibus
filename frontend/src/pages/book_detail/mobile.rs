@@ -8,7 +8,8 @@ use dioxus::prelude::*;
 use dioxus_router::Link;
 use omnibus_shared::summary::summary_is_sparse;
 use omnibus_shared::{
-    BookFileInfo, BookSuggestion, EbookMetadata, MetadataOverrides, SuggestionsResponse,
+    display_title, BookFileInfo, BookSuggestion, EbookMetadata, MetadataOverrides,
+    SuggestionsResponse,
 };
 
 use crate::components::atrium::Cover;
@@ -429,7 +430,7 @@ fn files_list(b: &EbookMetadata) -> Element {
                     div { key: "{f.id}", class: "m-bd-file",
                         BdFormatBadge { fmt: f.format.clone() }
                         div { class: "m-bd-file-body",
-                            div { class: "m-bd-file-name", "{f.label.clone().unwrap_or_else(|| f.filename.clone())}" }
+                            div { class: "m-bd-file-name", "{display_title(f.label.as_deref(), &f.filename)}" }
                             div { class: "mono m-bd-file-path", "{f.filename}" }
                         }
                     }

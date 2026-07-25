@@ -4,7 +4,7 @@
 //! the rewrite-in-place and cross-format attach paths, and the
 //! post-commit cover materialization + missing-files marker helper.
 
-use omnibus_shared::EbookMetadata;
+use omnibus_shared::{display_title, EbookMetadata};
 use sqlx::Transaction;
 
 use crate::covers::write_cover_file;
@@ -89,7 +89,7 @@ pub(super) async fn try_attach_new_ebook(
         return Ok(false);
     }
 
-    let title = m.title.clone().unwrap_or_else(|| m.filename.clone());
+    let title = display_title(m.title.as_deref(), &m.filename);
     let (Some(title_norm), Some(author_norm)) = (
         normalize_title(&title),
         m.creators.first().and_then(|c| normalize_author(&c.name)),
@@ -224,7 +224,7 @@ async fn update_book_row(
 ) -> Result<(), sqlx::Error> {
     let m = &b.metadata;
     let (book_path, _, _) = split_filename(&m.filename);
-    let title = m.title.clone().unwrap_or_else(|| m.filename.clone());
+    let title = display_title(m.title.as_deref(), &m.filename);
     let series_index_num = m.series_index.as_deref().and_then(parse_series_index);
     let author_sort = m
         .creators
@@ -285,7 +285,7 @@ pub(super) async fn insert_book_row(
     let uuid = mint_uuid();
     let scan_key = scan_key_for(&m.filename);
     let (book_path, file_stem, file_ext) = split_filename(&m.filename);
-    let title = m.title.clone().unwrap_or_else(|| m.filename.clone());
+    let title = display_title(m.title.as_deref(), &m.filename);
     let series_index_num = m.series_index.as_deref().and_then(parse_series_index);
     let author_sort = m
         .creators

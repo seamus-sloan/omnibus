@@ -7,6 +7,18 @@ fn contributor(name: &str) -> Contributor {
     }
 }
 
+// --- display_title() ----------------------------------------------------
+
+#[test]
+fn display_title_returns_title_when_set() {
+    assert_eq!(display_title(Some("A Title"), "file.epub"), "A Title");
+}
+
+#[test]
+fn display_title_falls_back_to_filename_when_title_is_none() {
+    assert_eq!(display_title(None, "file.epub"), "file.epub");
+}
+
 // --- validate() --------------------------------------------------------
 
 #[test]

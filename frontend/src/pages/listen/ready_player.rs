@@ -7,7 +7,7 @@
 #![cfg(not(feature = "mobile"))]
 
 use dioxus::prelude::*;
-use omnibus_shared::{ChapterInfo, EbookMetadata};
+use omnibus_shared::{display_title, ChapterInfo, EbookMetadata};
 
 use super::bookmarks::use_bookmarks;
 use super::bookmarks_drawer::BookmarksDrawer;
@@ -118,7 +118,7 @@ pub(super) fn ReadyPlayer(
         bookmarks.create(*elapsed.peek(), &chs_now);
     };
 
-    let title = book.title.clone().unwrap_or_else(|| book.filename.clone());
+    let title = display_title(book.title.as_deref(), &book.filename);
     let author = book
         .creators
         .first()
