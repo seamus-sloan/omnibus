@@ -1,7 +1,7 @@
-import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
-import { expectNavVisible, gotoReady } from "../utils/nav";
+import { expect, test } from "../fixtures/test";
 import { expectRowMatches } from "../utils/ebooks";
+import { expectNavVisible, gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
 
 // Seed the running server against the committed EPUB fixtures before any
@@ -21,7 +21,9 @@ test.beforeAll(async ({ request }) => {
 test("renders the landing page layout", async ({ page }) => {
   await gotoReady(page, "/");
 
-  await expect(page.getByRole("heading", { level: 1, name: "Your Library" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Your Library" }),
+  ).toBeVisible();
   await expect(page.getByTestId("ebook-table")).toBeVisible();
   await expect(page.getByTestId("lib-toolbar")).toBeVisible();
   // F3.1: the shelves rail replaced the old filter sidebar. "All books" is the
@@ -31,7 +33,9 @@ test("renders the landing page layout", async ({ page }) => {
   await expectNavVisible(page);
 });
 
-test("renders every fixture book with the expected metadata", async ({ page }) => {
+test("renders every fixture book with the expected metadata", async ({
+  page,
+}) => {
   await gotoReady(page, "/");
 
   // Every ebook fixture must appear; audiobooks may also be present when
@@ -46,7 +50,9 @@ test("renders every fixture book with the expected metadata", async ({ page }) =
   }
 });
 
-test("browse fits the fixture library in one keyset page (no Load more)", async ({ page }) => {
+test("browse fits the fixture library in one keyset page (no Load more)", async ({
+  page,
+}) => {
   await gotoReady(page, "/");
 
   // F5b: browse is keyset-paginated, but the fixtures are far under the
@@ -69,7 +75,10 @@ test("toggles to grid view and persists across reload", async ({ page }) => {
   await expect(page.getByTestId("ebook-table")).toHaveCount(0);
   const tileCount = await page.getByTestId(/^ebook-tile-/).count();
   expect(tileCount).toBeGreaterThanOrEqual(FIXTURE_BOOKS.length);
-  await expect(page.getByTestId("view-toggle-grid")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("view-toggle-grid")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
 
   await page.reload();
   await page.waitForLoadState("networkidle");
@@ -77,7 +86,9 @@ test("toggles to grid view and persists across reload", async ({ page }) => {
   await expect(page.getByTestId("ebook-table")).toHaveCount(0);
 });
 
-test("sorts by title descending when the Title header is clicked", async ({ page }) => {
+test("sorts by title descending when the Title header is clicked", async ({
+  page,
+}) => {
   await gotoReady(page, "/");
 
   // Default sort is title asc — click once to flip to desc.
@@ -90,10 +101,13 @@ test("sorts by title descending when the Title header is clicked", async ({ page
   const titles = [...FIXTURE_BOOKS.map((b) => b.title)].sort((a, b) =>
     a.toLowerCase().localeCompare(b.toLowerCase()),
   );
-  const lastTitle = titles[titles.length - 1];
-  await expect(page.getByTestId(/^ebook-row-/).first().getByTestId("ebook-cell-title")).toHaveText(
-    lastTitle,
-  );
+  const lastTitle = titles[titles.length - 1]!;
+  await expect(
+    page
+      .getByTestId(/^ebook-row-/)
+      .first()
+      .getByTestId("ebook-cell-title"),
+  ).toHaveText(lastTitle);
 });
 
 // F3.1 removed the home-page facet filters (format chips + author/series/tag

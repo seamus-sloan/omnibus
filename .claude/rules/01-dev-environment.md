@@ -14,8 +14,8 @@ The flake exposes five purpose-built shells so daily cargo work doesn't pay for 
 | Shell | Headline tools | When to use |
 |---|---|---|
 | `default` (slim) | rust core + sqlite + openssl + just + zellij + process-compose + stylelint | Daily `cargo test`/`clippy`/`fmt`, editor, rust-analyzer, `just lint-css` — this is what direnv auto-loads via `.envrc` |
-| `web` | default + dioxus-cli + matched `wasm-bindgen` + node | `dx serve --platform web`, `just dev-up`, anything that bundles the WASM client |
-| `e2e` | web + Playwright Chromium bundle | `npx playwright test`, the `playwright` pane in the multiplexer, CI's E2E job |
+| `web` | default + dioxus-cli + matched `wasm-bindgen` + node + pnpm | `dx serve --platform web`, `just dev-up`, `just lint-ts`, anything that bundles the WASM client or drives the Playwright npm project |
+| `e2e` | web + Playwright Chromium bundle | `pnpm exec playwright test`, the `playwright` pane in the multiplexer, CI's E2E job |
 | `mobile` | default + dioxus-cli (`dx`) + maestro + Android + iOS rust-std targets + JDK 21 + Xcode/Android SDK auto-detect (+ GTK 3 / WebKitGTK on Linux) | `dx serve --platform ios`/`android`, `cargo build -p omnibus-mobile`, `just e2e-mobile` (Maestro mobile E2E); CI's `cargo clippy (mobile)` host-target lint |
 | `audit` | default + cargo-audit + cargo-deny | Local `cargo audit` / `cargo deny`, mirrors CI's security job |
 
@@ -58,7 +58,8 @@ Every shell sets:
 
 Shell-specific additions:
 
-- `e2e` only — `PLAYWRIGHT_BROWSERS_PATH` → Nix-provided Chromium (don't run `npx playwright install`)
+- `web`/`e2e` — `pnpm` is the package manager for the Playwright npm project (`ui_tests/playwright`); do **not** use `npm`. The version is pinned via the project's `packageManager` field and provisioned by Nix; the project's `.npmrc` sets `manage-package-manager-versions=false` so that field never triggers a network pnpm fetch, and `pnpm-workspace.yaml` allowlists esbuild's build script. Run tools with `pnpm exec <bin>` (e.g. `pnpm exec playwright test`, `pnpm exec tsx tools/make_epub.ts`).
+- `e2e` only — `PLAYWRIGHT_BROWSERS_PATH` → Nix-provided Chromium (don't run `pnpm exec playwright install`)
 - `mobile` only — `ANDROID_HOME`, `ANDROID_NDK_HOME` (auto-detected from standard Android Studio install paths), plus the Xcode `DEVELOPER_DIR`/`SDKROOT`/`PATH` shim on macOS
 
 Override `PORT` (default `3000`) if you need a different port. Playwright targets `$PLAYWRIGHT_BASE_URL` (set by `scripts/dev-server-up.sh`); it falls back to `http://127.0.0.1:3000` when unset.

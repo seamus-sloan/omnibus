@@ -62,7 +62,7 @@ change. You only need to regenerate when you edit `make_epub.ts`:
 
 ```bash
 cd ui_tests/playwright
-npx tsx tools/make_epub.ts
+pnpm exec tsx tools/make_epub.ts
 ```
 
 Then commit the updated `.epub` files alongside the generator change.

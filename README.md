@@ -114,7 +114,7 @@ it (the `just` recipes above pick the right one for you):
 |---|---|
 | `default` | Daily `cargo` / `clippy` / `test` / editor — what direnv auto-loads |
 | `.#web` | `dx serve --platform web`, `just dev-up`, anything that bundles WASM |
-| `.#e2e` | `npx playwright test` (the Chromium bundle lives here) |
+| `.#e2e` | `pnpm exec playwright test` (the Chromium bundle lives here) |
 | `.#mobile` | Android / iOS builds (Rust cross-targets + JDK + Android NDK detect) |
 | `.#audit` | `cargo audit` / `cargo deny` |
 
@@ -178,9 +178,11 @@ cargo test -p omnibus-frontend --features server   # rpc + page tests (server fe
 cargo test -p omnibus-shared                       # shared serde / ebook / progress tests
 
 # Web E2E (Playwright — server must be running; Chromium comes from Nix)
+# Uses pnpm (not npm) + TypeScript 7; Biome is the linter/formatter.
 cd ui_tests/playwright
-npm install                 # first time only; do NOT run `npx playwright install`
-npx playwright test
+pnpm install                # first time only; do NOT run `pnpm exec playwright install`
+pnpm exec playwright test
+pnpm run lint               # biome check (or `just lint-ts` for biome + tsc)
 ```
 
 Mobile tests are using [Maestro](https://maestro.dev/) to allow for writing a test once

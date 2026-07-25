@@ -1,5 +1,5 @@
-import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { fetchBookIdByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
@@ -25,7 +25,9 @@ test.beforeAll(async ({ request }) => {
 // standard "small fixture" target used by metadata_edit.spec.ts.
 const TARGET = FIXTURE_BOOKS.find((b) => b.slug === "alpha")!;
 
-test("renders editable cell affordances on the landing table for admins", async ({ page }) => {
+test("renders editable cell affordances on the landing table for admins", async ({
+  page,
+}) => {
   await gotoReady(page, "/");
 
   const titleCell = page
@@ -81,7 +83,9 @@ test("edits a title inline and saves the override via rpc_save_overrides", async
   expect(revertResp.status(), "cleanup revert must succeed").toBe(200);
 });
 
-test("inline edit save error keeps the row showing the prior value", async ({ page }) => {
+test("inline edit save error keeps the row showing the prior value", async ({
+  page,
+}) => {
   await gotoReady(page, "/");
 
   const row = page.getByTestId(`ebook-row-${TARGET.slug}`);
@@ -95,7 +99,11 @@ test("inline edit save error keeps the row showing the prior value", async ({ pa
   // Force the save mutation to fail.
   await page.route("**/api/rpc/ebook/overrides", (route) => {
     if (route.request().method() === "POST") {
-      return route.fulfill({ status: 500, contentType: "text/plain", body: "forced failure" });
+      return route.fulfill({
+        status: 500,
+        contentType: "text/plain",
+        body: "forced failure",
+      });
     }
     return route.continue();
   });
@@ -118,7 +126,9 @@ test("inline edit save error keeps the row showing the prior value", async ({ pa
   await expect(titleCell).toContainText(originalText);
 });
 
-test("clicking the Authors cell renders the chip editor inline", async ({ page }) => {
+test("clicking the Authors cell renders the chip editor inline", async ({
+  page,
+}) => {
   await gotoReady(page, "/");
 
   const row = page.getByTestId(`ebook-row-${TARGET.slug}`);
@@ -149,7 +159,9 @@ test("clicking the Authors cell renders the chip editor inline", async ({ page }
 // #992 — the Authors cell's ChipEditor only closed on Escape; blurring away
 // (clicking elsewhere) left the amber `ebook-cell-editing` highlight stuck.
 
-test("clicking away from an open Authors cell editor closes it", async ({ page }) => {
+test("clicking away from an open Authors cell editor closes it", async ({
+  page,
+}) => {
   await gotoReady(page, "/");
 
   const row = page.getByTestId(`ebook-row-${TARGET.slug}`);
@@ -217,10 +229,16 @@ test("selecting an author suggestion keeps the editor open; a later click away c
   // editor — the admin can keep adding authors.
   await expectMutation(
     page,
-    { method: "POST", url: /\/api\/rpc\/ebook\/overrides$/, expectedStatus: 200 },
+    {
+      method: "POST",
+      url: /\/api\/rpc\/ebook\/overrides$/,
+      expectedStatus: 200,
+    },
     async () => suggestion.click(),
   );
-  await expect(authorsCell.getByText("Grace Hopper", { exact: true })).toBeVisible();
+  await expect(
+    authorsCell.getByText("Grace Hopper", { exact: true }),
+  ).toBeVisible();
   await expect(chipInput).toBeVisible();
   await expect(authorsCell).toHaveClass(/ebook-cell-editing/);
 

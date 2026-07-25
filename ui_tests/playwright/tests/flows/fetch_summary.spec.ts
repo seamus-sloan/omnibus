@@ -1,5 +1,5 @@
-import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { fetchBookIdByTitle, fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
@@ -29,12 +29,17 @@ const FETCH_URL = "**/api/rpc/ebook/summary/fetch";
  * don't race the network (per `.claude/rules/04-playwright.md`). */
 function waitForFetch(page: Parameters<typeof gotoReady>[0]) {
   return page.waitForResponse(
-    (r) => r.url().includes("/api/rpc/ebook/summary/fetch") && r.request().method() === "POST",
+    (r) =>
+      r.url().includes("/api/rpc/ebook/summary/fetch") &&
+      r.request().method() === "POST",
   );
 }
 
 /** Mock the Hardcover-configured flag (drives which source the cascade starts on). */
-async function mockConfigured(page: Parameters<typeof gotoReady>[0], configured: boolean) {
+async function mockConfigured(
+  page: Parameters<typeof gotoReady>[0],
+  configured: boolean,
+) {
   await page.route(CONFIGURED_URL, (route) =>
     route.request().method() === "POST"
       ? route.fulfill({
@@ -47,7 +52,10 @@ async function mockConfigured(page: Parameters<typeof gotoReady>[0], configured:
 }
 
 /** Mock the summary fetch. `text` → `Ok(Some(text))`; `null` → `Ok(None)` (a miss). */
-async function mockFetch(page: Parameters<typeof gotoReady>[0], text: string | null) {
+async function mockFetch(
+  page: Parameters<typeof gotoReady>[0],
+  text: string | null,
+) {
   await page.route(FETCH_URL, (route) =>
     route.request().method() === "POST"
       ? route.fulfill({
@@ -63,17 +71,24 @@ async function mockFetch(page: Parameters<typeof gotoReady>[0], text: string | n
 // Editor — the button is always present, fills the field, and doesn't save.
 // ---------------------------------------------------------------------------
 
-test("metadata editor always shows the Fetch Summary button", async ({ page, request }) => {
+test("metadata editor always shows the Fetch Summary button", async ({
+  page,
+  request,
+}) => {
   const id = await fetchBookIdByTitle(request, TARGET.title);
   await gotoReady(page, `/books/${id}/edit`);
   await expect(page.getByTestId("fetch-summary")).toBeVisible();
 });
 
-test("Fetch Summary fills the editor Description without saving", async ({ page, request }) => {
+test("Fetch Summary fills the editor Description without saving", async ({
+  page,
+  request,
+}) => {
   const id = await fetchBookIdByTitle(request, TARGET.title);
   await gotoReady(page, `/books/${id}/edit`);
 
-  const SUMMARY = "A mocked summary fetched from OpenLibrary for the editor fill test.";
+  const SUMMARY =
+    "A mocked summary fetched from OpenLibrary for the editor fill test.";
   await mockConfigured(page, false); // no key → straight to OpenLibrary
   await mockFetch(page, SUMMARY);
 
@@ -102,7 +117,9 @@ test("Fetch Summary surfaces an error when neither source has a summary", async 
   await page.getByTestId("fetch-summary").click();
   await fetched;
 
-  await expect(page.getByTestId("fetch-summary-error")).toHaveText("No summary found.");
+  await expect(page.getByTestId("fetch-summary-error")).toHaveText(
+    "No summary found.",
+  );
   await expect(page.locator("#me-description")).toHaveValue("");
 });
 
@@ -110,7 +127,10 @@ test("Fetch Summary surfaces an error when neither source has a summary", async 
 // Detail page — button only when sparse; a fetch saves + refreshes in place.
 // ---------------------------------------------------------------------------
 
-test("detail page fetch saves the summary and hides the button", async ({ page, request }) => {
+test("detail page fetch saves the summary and hides the button", async ({
+  page,
+  request,
+}) => {
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
   await gotoReady(page, `/books/${uuid}`);
 
@@ -118,14 +138,19 @@ test("detail page fetch saves the summary and hides the button", async ({ page, 
   await expect(page.getByTestId("fetch-summary")).toBeVisible();
 
   // 14 words, so once saved the summary is no longer sparse and the button hides.
-  const SUMMARY = "A sufficiently long mocked summary with more than ten words to enrich the book.";
+  const SUMMARY =
+    "A sufficiently long mocked summary with more than ten words to enrich the book.";
   await mockConfigured(page, false);
   await mockFetch(page, SUMMARY);
   // Mock the override save so no real DB write leaks across specs; `null` decodes
   // as `Ok(None)`, which the client treats as a successful save.
   await page.route("**/api/rpc/ebook/overrides", (route) =>
     route.request().method() === "POST"
-      ? route.fulfill({ status: 200, contentType: "application/json", body: "null" })
+      ? route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: "null",
+        })
       : route.continue(),
   );
 

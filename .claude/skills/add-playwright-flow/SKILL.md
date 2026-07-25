@@ -72,8 +72,10 @@ Helpers used only by this spec (e.g. `fillSettingsForm`) live inside the spec fi
 just dev-up                            # idempotent, identity-checked, fast on reuse
 source .claude/runtime/env.sh          # picks up PLAYWRIGHT_BASE_URL for the chosen port
 cd ui_tests/playwright
-npx playwright test
+pnpm exec playwright test              # pnpm, not npm/npx
 ```
+
+Before pushing, lint + typecheck the TS: `just lint-ts` (Biome check + `tsc --noEmit`), or `pnpm run lint` / `pnpm run typecheck` from `ui_tests/playwright`.
 
 If you need to drive the same page manually (for snapshots / debugging while iterating on the spec), use the [`ui-validate`](../ui-validate/SKILL.md) skill — same server, same login, Claude Preview (`mcp__Claude_Preview__preview_*`) by default.
 

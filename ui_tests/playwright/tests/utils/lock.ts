@@ -24,7 +24,10 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * even if `fn` throws — callers must leave shared state restored before
  * returning so the next holder sees a clean fixture.
  */
-export async function withLock<T>(name: string, fn: () => Promise<T>): Promise<T> {
+export async function withLock<T>(
+  name: string,
+  fn: () => Promise<T>,
+): Promise<T> {
   const dir = join(tmpdir(), `omnibus-e2e-lock-${name}`);
   for (;;) {
     try {

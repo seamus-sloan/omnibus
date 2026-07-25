@@ -1,4 +1,4 @@
-import { expect, type APIRequestContext } from "@playwright/test";
+import { type APIRequestContext, expect } from "@playwright/test";
 
 // When `OMNIBUS_DEV_SEED_USER` is set (local dev via `just dev-up`), the
 // seeded user is the first registered account and therefore admin. Playwright
@@ -14,15 +14,19 @@ function resolveTestCredentials(): { username: string; password: string } {
   return { username: "playwright", password: "playwright-test-pw-00" };
 }
 
-const { username: TEST_USERNAME, password: TEST_PASSWORD } = resolveTestCredentials();
-export { TEST_USERNAME, TEST_PASSWORD };
+const { username: TEST_USERNAME, password: TEST_PASSWORD } =
+  resolveTestCredentials();
+
+export { TEST_PASSWORD, TEST_USERNAME };
 
 /**
  * Ensure the shared test user is logged in on `request`. Registers the user
  * if registration is open; logs in otherwise. Throws if neither works — the
  * usual fix is to wipe `omnibus.db` and retry so registration re-opens.
  */
-export async function ensureLoggedIn(request: APIRequestContext): Promise<void> {
+export async function ensureLoggedIn(
+  request: APIRequestContext,
+): Promise<void> {
   const registerResp = await request.post("/api/auth/register", {
     data: {
       username: TEST_USERNAME,
@@ -71,7 +75,9 @@ export async function loginBearer(request: APIRequestContext): Promise<string> {
   expect(resp.status(), "bearer login failed").toBe(200);
   const body = (await resp.json()) as { token?: string };
   if (!body.token) {
-    throw new Error("bearer login: response missing `token` — server did not honor client_kind");
+    throw new Error(
+      "bearer login: response missing `token` — server did not honor client_kind",
+    );
   }
   return body.token;
 }

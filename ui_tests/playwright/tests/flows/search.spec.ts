@@ -1,5 +1,5 @@
-import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expect, test } from "../fixtures/test";
 import { gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
 
@@ -23,7 +23,9 @@ async function openPaletteAndType(
   await input.fill(query);
 }
 
-test("search input shows matching book results in palette", async ({ page }) => {
+test("search input shows matching book results in palette", async ({
+  page,
+}) => {
   await gotoReady(page, "/");
 
   await openPaletteAndType(page, "dracula");
@@ -99,7 +101,9 @@ test("renders the /search results page layout", async ({ page }) => {
 
   // Heading echoes the query, and the summary stat line shows the engine +
   // timing once the RPC settles.
-  await expect(page.getByRole("heading", { level: 1 })).toContainText(/dracula/i);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(
+    /dracula/i,
+  );
   await expect
     .poll(async () => page.getByTestId("search-result-count").count())
     .toBe(1);

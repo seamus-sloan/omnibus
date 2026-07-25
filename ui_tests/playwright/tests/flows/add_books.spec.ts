@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
-import { gotoReady, expectNavVisible } from "../utils/nav";
+import { expectNavVisible, gotoReady } from "../utils/nav";
 import { audiobookFixturesDir, fixturesDir } from "../utils/seed";
 
 // A committed EPUB fixture to feed the file input. Any valid EPUB works — the
@@ -80,7 +80,9 @@ test("surfaces an error when inspect fails", async ({ page }) => {
   await expect(page.getByTestId("add-books-submit")).toHaveCount(0);
 });
 
-test("auto-fills the form from a multi-part MP3 audiobook", async ({ page }) => {
+test("auto-fills the form from a multi-part MP3 audiobook", async ({
+  page,
+}) => {
   await gotoReady(page, "/add-books");
 
   // Switch to the audiobook type, then pick both .mp3 parts at once.
@@ -88,7 +90,11 @@ test("auto-fills the form from a multi-part MP3 audiobook", async ({ page }) => 
 
   await expectMutation(
     page,
-    { method: "POST", url: "/api/uploads/audiobooks/inspect", expectedStatus: 200 },
+    {
+      method: "POST",
+      url: "/api/uploads/audiobooks/inspect",
+      expectedStatus: 200,
+    },
     async () => fileInput(page).setInputFiles(AUDIOBOOK_PARTS),
   );
 
