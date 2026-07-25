@@ -13,6 +13,7 @@ mod journals;
 mod kindle;
 #[cfg(not(feature = "mobile"))]
 mod logs;
+mod physical;
 mod progress;
 mod ratings;
 mod read_status;
@@ -41,6 +42,7 @@ pub use journals::*;
 pub use kindle::*;
 #[cfg(not(feature = "mobile"))]
 pub use logs::*;
+pub use physical::*;
 pub use progress::*;
 pub use ratings::*;
 pub use read_status::*;

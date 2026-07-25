@@ -729,6 +729,45 @@ html, body { overscroll-behavior: none; }
   border: 1px solid var(--line-2); border-radius: 4px;
   padding: 2px 6px;
 }
+.bd-fmt-badge--physical { color: var(--accent); border-color: var(--accent); }
+
+/* Physical collection + wishlist panel (F Physical Check-In, issue #1186) */
+.bd-physical-panel {
+  max-width: var(--content-w, 1120px);
+  margin: 0 auto; padding: 0 24px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.bd-phys-pill-row { display: flex; }
+.bd-phys-pill {
+  color: var(--accent); border-color: var(--accent);
+}
+.bd-phys-copies { display: flex; flex-direction: column; gap: 10px; }
+.bd-phys-copy { padding: 14px 16px; }
+.bd-phys-copy-head {
+  display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+}
+.bd-phys-copy-date { font-weight: 600; }
+.bd-phys-copy-isbn { font-size: 12px; color: var(--ink-2); }
+.bd-phys-copy-note { margin: 8px 0 0; color: var(--ink-1); }
+.bd-phys-copy-actions { display: flex; gap: 8px; margin-top: 10px; }
+.bd-phys-danger { color: var(--bad); }
+.bd-phys-note-editor { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.bd-phys-note-input {
+  width: 100%; resize: vertical; padding: 8px 10px;
+  background: var(--bg-2); color: var(--ink-1);
+  border: 1px solid var(--line); border-radius: 8px;
+  font-family: inherit; font-size: 14px;
+}
+.bd-phys-note-actions { display: flex; gap: 8px; }
+.bd-phys-error { color: var(--bad); margin: 0; }
+
+.bd-wishlist-card, .bd-wishlist-add { padding: 14px 16px; }
+.bd-wishlist-meta { margin: 0 0 10px; color: var(--ink-2); }
+.bd-wishlist-actions, .bd-wishlist-add {
+  display: flex; gap: 8px; align-items: center;
+}
+.bd-wishlist-add { justify-content: space-between; flex-wrap: wrap; }
+.bd-wishlist-add-blurb { margin: 4px 0 0; color: var(--ink-2); }
 
 /* Title column */
 .bd-title-col { min-width: 0; }
