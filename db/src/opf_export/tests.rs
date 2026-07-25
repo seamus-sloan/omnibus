@@ -154,10 +154,7 @@ fn render_opf_strips_xml_illegal_control_chars_while_keeping_tab_lf_cr() {
     assert!(xml.contains(">AuthorName</dc:creator>"));
     // The document as a whole stays well-formed: no illegal control chars
     // survive anywhere in the output.
-    assert!(!xml.chars().any(|c| matches!(
-        c,
-        '\u{0}'..='\u{8}' | '\u{B}'..='\u{C}' | '\u{E}'..='\u{1F}'
-    )));
+    assert!(!xml.chars().any(is_xml_illegal_control_char));
 }
 
 #[test]
