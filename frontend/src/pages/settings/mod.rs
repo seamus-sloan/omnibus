@@ -118,7 +118,7 @@ fn parse_section(raw: Option<&str>, is_admin: bool) -> SettingsSection {
 #[cfg(not(feature = "mobile"))]
 fn section_content(active: SettingsSection) -> Element {
     match active {
-        SettingsSection::Account => rsx! { super::AccountPage {} },
+        SettingsSection::Account => rsx! { super::AccountPage { embedded: true } },
         SettingsSection::Library => rsx! { LibraryLocationSection {} },
         SettingsSection::Metadata => rsx! {
             metadata_precedence::MetadataPrecedenceField {}

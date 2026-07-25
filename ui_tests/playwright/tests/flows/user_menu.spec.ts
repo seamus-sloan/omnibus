@@ -120,13 +120,15 @@ test("the dropdown no longer surfaces the folded-in rows (#1324)", async ({
 }) => {
   await gotoReady(page, "/");
   await page.getByTestId("user-menu-trigger").click();
-  await expect(page.getByTestId("user-menu-panel")).toBeVisible();
+  const panel = page.getByTestId("user-menu-panel");
+  await expect(panel).toBeVisible();
   // Account / Admin · server health / Notifications now live under Settings.
-  await expect(page.getByRole("link", { name: "Account" })).toHaveCount(0);
+  // Scope to the open panel so unrelated page text can't flake the assertion.
+  await expect(panel.getByRole("link", { name: "Account" })).toHaveCount(0);
   await expect(
-    page.getByRole("link", { name: "Admin · server health" }),
+    panel.getByRole("link", { name: "Admin · server health" }),
   ).toHaveCount(0);
-  await expect(page.getByText("Notifications")).toHaveCount(0);
+  await expect(panel.getByText("Notifications")).toHaveCount(0);
 });
 
 for (const sample of [
