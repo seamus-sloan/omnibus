@@ -6,6 +6,7 @@
 
 use dioxus::prelude::*;
 
+use crate::components::image_upload::use_file_upload;
 use crate::data;
 
 /// The live-editor JS module (defines `window.OmnibusJournalEditor`, then
@@ -219,9 +220,27 @@ fn BdJournalImageButton(
     server_url: String,
     error: Signal<Option<String>>,
 ) -> Element {
-    let mut error = error;
-    let mut uploading = use_signal(|| false);
+    let uploading = use_signal(|| false);
     let input_id = format!("{target_id}-image-input");
+
+    let onchange = use_file_upload(
+        uploading,
+        error,
+        |_filename| None,
+        move |filename, mime, bytes| {
+            let server_url = server_url.clone();
+            async move { data::upload_journal_image(&server_url, filename, mime, bytes).await }
+        },
+        {
+            let target_id = target_id.clone();
+            move |image_url| {
+                editor_insert(
+                    &target_id,
+                    &format!("\n\n![{IMAGE_CAPTION_PLACEHOLDER}]({image_url})\n"),
+                );
+            }
+        },
+    );
 
     rsx! {
         label {
@@ -252,34 +271,7 @@ fn BdJournalImageButton(
             accept: "image/jpeg,image/png,image/webp,image/gif",
             "data-testid": "journal-image-input",
             disabled: uploading(),
-            onchange: move |evt| {
-                let Some(file) = evt.files().into_iter().next() else { return };
-                let filename = file.name();
-                let mime = file
-                    .content_type()
-                    .unwrap_or_else(|| "application/octet-stream".into());
-                let url = server_url.clone();
-                let target = target_id.clone();
-                uploading.set(true);
-                error.set(None);
-                spawn(async move {
-                    match file.read_bytes().await {
-                        Ok(bytes) => {
-                            match data::upload_journal_image(&url, filename, mime, bytes.to_vec())
-                                .await
-                            {
-                                Ok(image_url) => editor_insert(
-                                    &target,
-                                    &format!("\n\n![{IMAGE_CAPTION_PLACEHOLDER}]({image_url})\n"),
-                                ),
-                                Err(e) => error.set(Some(format!("Image upload failed: {e}"))),
-                            }
-                        }
-                        Err(e) => error.set(Some(format!("Could not read image: {e:?}"))),
-                    }
-                    uploading.set(false);
-                });
-            },
+            onchange,
         }
     }
 }

@@ -6,8 +6,7 @@ use dioxus::prelude::*;
 use dioxus_router::Link;
 use omnibus_shared::{AuthorSummary, IndexSort};
 
-use crate::components::{PageError, PageLoading};
-use crate::scroll_restore::use_scroll_restore;
+use super::index_shell::{index_page_early_return, use_index_page_shell, IndexPageState};
 use crate::{data, index_prefs, use_server_url, Route};
 
 /// Library-wide totals rendered in the header's subtitle. Grouped so the
@@ -37,34 +36,24 @@ struct AuthorIndexFilter {
 pub fn AuthorsIndexPage() -> Element {
     let server_url = use_server_url();
     let server_url_for_cards = server_url.clone();
-    let authors: Signal<Vec<AuthorSummary>> = use_signal(Vec::new);
-    let loading = use_signal(|| true);
-    let error: Signal<Option<String>> = use_signal(|| None);
-    let mut filter = use_signal(String::new);
-    let mut sort = use_signal(IndexSort::default);
+    let fetch_url = server_url;
+    let shell = use_index_page_shell(
+        move || {
+            let url = fetch_url.clone();
+            async move { data::list_authors(&url).await }
+        },
+        || index_prefs::load().authors_sort,
+    );
+    let IndexPageState {
+        items: authors,
+        loading,
+        error,
+        mut filter,
+        mut sort,
+    } = shell;
 
-    use_authors_fetch_effect(server_url.clone(), authors, loading, error);
-
-    // Reconcile the sort axis from persisted prefs after mount. Seeded to the
-    // default above so SSR and first-hydration markup match (rule 07); the sort
-    // toolbar only renders post-fetch, so this reconcile can't cause a flash.
-    use_effect(move || {
-        let stored = index_prefs::load().authors_sort;
-        if stored != *sort.peek() {
-            sort.set(stored);
-        }
-    });
-
-    // Restore scroll once the (full) list has painted, so returning from an
-    // author detail lands back where the reader left off.
-    let ready = use_memo(move || !loading());
-    use_scroll_restore(ready);
-
-    if loading() {
-        return rsx! { PageLoading {} };
-    }
-    if let Some(msg) = error() {
-        return rsx! { PageError { message: msg, back_to: Route::Landing {} } };
+    if let Some(early) = index_page_early_return(loading, error) {
+        return early;
     }
 
     // Borrow the signal's contents instead of cloning. The list can hold
@@ -126,34 +115,6 @@ pub fn AuthorsIndexPage() -> Element {
             {authors_index_body(&filtered, &letters, show_letters, any_in_library, &server_url_for_cards)}
         }
     }
-}
-
-/// Fetches the full author list on mount and whenever `server_url` changes.
-fn use_authors_fetch_effect(
-    server_url: String,
-    mut authors: Signal<Vec<AuthorSummary>>,
-    mut loading: Signal<bool>,
-    mut error: Signal<Option<String>>,
-) {
-    let generation = crate::use_cache_generation();
-    use_effect(move || {
-        // Re-run on cache-revalidation bumps; the refetch is a cache hit.
-        let _ = generation();
-        let url = server_url.clone();
-        spawn(async move {
-            if authors.peek().is_empty() {
-                loading.set(true);
-            }
-            match data::list_authors(&url).await {
-                Ok(a) => {
-                    authors.set(a);
-                    error.set(None);
-                }
-                Err(e) => error.set(Some(e.to_string())),
-            }
-            loading.set(false);
-        });
-    });
 }
 
 /// Client-side name filter (case-insensitive substring match).
