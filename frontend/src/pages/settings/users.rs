@@ -23,6 +23,9 @@ enum Modal {
 pub fn UsersSection() -> Element {
     let mut users = use_signal(Vec::<AdminUserRow>::new);
     let mut load_error = use_signal(|| None::<String>);
+    // Errors from inline row actions (currently Unlock) — surfaced in the
+    // section banner rather than swallowed.
+    let mut action_error = use_signal(|| None::<String>);
     let mut reload = use_signal(|| 0u32);
     let mut modal = use_signal(|| Modal::None);
     let current = crate::use_current_user_summary();
@@ -62,6 +65,9 @@ pub fn UsersSection() -> Element {
             if let Some(err) = load_error() {
                 p { role: "alert", class: "settings-status error", "data-testid": "users-load-error", "{err}" }
             }
+            if let Some(err) = action_error() {
+                p { role: "alert", class: "settings-status error", "data-testid": "users-action-error", "{err}" }
+            }
 
             table { class: "users-table", "data-testid": "users-table",
                 thead {
@@ -82,7 +88,8 @@ pub fn UsersSection() -> Element {
                             is_self: Some(u.id) == current_id,
                             on_edit: move |row| modal.set(Modal::Edit(row)),
                             on_delete: move |row| modal.set(Modal::Delete(row)),
-                            on_unlocked: move |_| { reload.with_mut(|n| *n += 1); },
+                            on_unlocked: move |_| { action_error.set(None); reload.with_mut(|n| *n += 1); },
+                            on_error: move |msg| action_error.set(Some(msg)),
                         }
                     }
                 }
@@ -128,6 +135,7 @@ fn UserRow(
     on_edit: EventHandler<AdminUserRow>,
     on_delete: EventHandler<AdminUserRow>,
     on_unlocked: EventHandler<()>,
+    on_error: EventHandler<String>,
 ) -> Element {
     let mut unlocking = use_signal(|| false);
     let uid = user.id;
@@ -142,9 +150,14 @@ fn UserRow(
         }
         unlocking.set(true);
         spawn(async move {
-            let _ = data::unlock_user(uid).await;
+            // Only reload on success; a failed unlock surfaces in the section
+            // banner instead of being swallowed (an admin must be able to tell
+            // a still-locked account from a successful unlock).
+            match data::unlock_user(uid).await {
+                Ok(()) => on_unlocked.call(()),
+                Err(e) => on_error.call(e),
+            }
             unlocking.set(false);
-            on_unlocked.call(());
         });
     };
 

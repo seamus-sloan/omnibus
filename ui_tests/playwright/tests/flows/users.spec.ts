@@ -10,7 +10,9 @@ import { expectNavVisible, gotoReady } from "../utils/nav";
 // was found. The last-admin / non-admin guards are covered by the server
 // integration tests (they'd mutate or depend on the shared admin here).
 const USERS = "/settings?section=users";
-const TEMP_USER = "e2e_usermgmt_temp";
+// Per-run unique suffix so a run that dies before its cleanup delete doesn't
+// 409 the next run's create against the shared dev server.
+const TEMP_USER = `e2e_usermgmt_${Date.now()}`;
 const TEMP_PASSWORD = "Temp-E2E-Pass-9x";
 
 const table = (page: Page) => page.getByTestId("users-table");
