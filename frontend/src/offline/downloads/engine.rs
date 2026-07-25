@@ -6,6 +6,8 @@
 
 use omnibus_shared::{AudiobookManifest, EbookMetadata, ManifestPart};
 
+use anyhow::Context;
+
 use crate::data;
 use crate::offline::{cache, media};
 
@@ -14,12 +16,45 @@ use super::{DlFormat, DownloadEntry, DownloadStatus, PlannedFile};
 /// Flush registry progress every this many streamed bytes.
 const PROGRESS_FLUSH_BYTES: i64 = 1024 * 1024;
 
+/// Fixed, user-safe download failure reasons. Every other fallible step in
+/// this module (filesystem, network I/O) is wrapped with a safe
+/// `.context(...)` message instead, so no raw `io`/`reqwest` `Display` ever
+/// reaches [`DownloadStatus::Error`] — see
+/// `.claude/rules/02-error-handling.md`'s boundary rule.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+enum DownloadError {
+    #[error("You're offline — connect to download")]
+    Offline,
+    #[error("Book not found")]
+    NotFound,
+    #[error("This audiobook's format isn't supported offline")]
+    UnsupportedFormat,
+    #[error("Nothing to download for this format")]
+    NothingToDownload,
+    #[error("Offline storage unavailable")]
+    StorageUnavailable,
+    #[error("Connection lost")]
+    ConnectionLost,
+    #[error("Server returned an unexpected response")]
+    ServerError,
+    #[error("Network error — check your connection and try again")]
+    NetworkError,
+    #[error("You need to sign in again")]
+    Unauthorized,
+    #[error("Download was interrupted — tap to resume")]
+    Interrupted,
+}
+
 /// Run one download to completion (or error). The registry entry was
 /// already put in `Downloading` by `downloads::start`.
 pub(super) async fn run(server_url: String, uuid: String, format: DlFormat, file_id: Option<i64>) {
-    match run_inner(&server_url, &uuid, format, file_id).await {
-        Ok(()) => {}
-        Err(message) => super::set_error(&uuid, format, message),
+    if let Err(err) = run_inner(&server_url, &uuid, format, file_id).await {
+        // `err`'s `Display` is always a safe, pre-authored message (see
+        // `DownloadError` and the `.context(...)` calls below); the full
+        // chain — which can include raw io/reqwest text — is logged here
+        // for diagnosis and never forwarded to the UI.
+        tracing::warn!(error = ?err, book_uuid = %uuid, "offline download failed");
+        super::set_error(&uuid, format, err.to_string());
     }
 }
 
@@ -28,13 +63,13 @@ async fn run_inner(
     uuid: &str,
     format: DlFormat,
     file_id: Option<i64>,
-) -> Result<(), String> {
+) -> anyhow::Result<()> {
     // The raw `_online` variant: starting a download while offline must
     // fail loudly, never silently plan from a stale cached book.
     let book = data::get_ebook_online(server_url, uuid)
         .await
         .map_err(|e| friendly(&e))?
-        .ok_or_else(|| "Book not found".to_string())?;
+        .ok_or(DownloadError::NotFound)?;
     cache::put_json(&cache::keys::ebook(uuid), &book);
     let title = book
         .title
@@ -54,7 +89,7 @@ async fn run_inner(
                 AudiobookManifest::Hls { .. } => {
                     // The mobile player can't play HLS-only books either, so
                     // there is nothing useful to store.
-                    return Err("This audiobook's format isn't supported offline".into());
+                    return Err(DownloadError::UnsupportedFormat.into());
                 }
             };
             // The offline player reads the manifest from this cache row.
@@ -63,15 +98,15 @@ async fn run_inner(
         }
     };
     if plan.is_empty() {
-        return Err("Nothing to download for this format".into());
+        return Err(DownloadError::NothingToDownload.into());
     }
 
     let dir = media::downloads_root()
         .map(|r| r.join(uuid))
-        .ok_or_else(|| "Offline storage unavailable".to_string())?;
+        .ok_or(DownloadError::StorageUnavailable)?;
     tokio::fs::create_dir_all(&dir)
         .await
-        .map_err(|e| format!("Could not create download dir: {e}"))?;
+        .context("Offline storage unavailable")?;
 
     // Merge prior completion state (resume of a partly-finished download).
     // Stat asynchronously — this future shares the loopback runtime with the
@@ -155,7 +190,7 @@ async fn download_file(
     dir: &std::path::Path,
     file: &PlannedFile,
     on_delta: &mut (dyn FnMut(i64) + Send),
-) -> Result<i64, String> {
+) -> anyhow::Result<i64> {
     use tokio::io::AsyncWriteExt;
 
     let part_path = dir.join(format!("{}.part", file.rel));
@@ -172,13 +207,14 @@ async fn download_file(
     if resumed > 0 {
         req = req.header(reqwest::header::RANGE, format!("bytes={resumed}-"));
     }
-    let mut resp = req
-        .send()
-        .await
-        .map_err(|_| "Connection lost".to_string())?;
+    let mut resp = req.send().await.map_err(|e| {
+        tracing::warn!(error = %e, url = %file.url_path, "offline download: request failed");
+        DownloadError::ConnectionLost
+    })?;
     let status = resp.status();
     if !status.is_success() {
-        return Err(format!("Server returned {}", status.as_u16()));
+        tracing::warn!(status = status.as_u16(), url = %file.url_path, "offline download: server returned a non-success status");
+        return Err(DownloadError::ServerError.into());
     }
 
     // 206 → append after the existing bytes; 200 → the server ignored the
@@ -194,7 +230,7 @@ async fn download_file(
         .truncate(!appending)
         .open(&part_path)
         .await
-        .map_err(|e| format!("Could not write download: {e}"))?;
+        .context("Could not save the download to this device")?;
     if appending {
         on_delta(0);
     } else if resumed > 0 {
@@ -206,33 +242,36 @@ async fn download_file(
         let chunk = match resp.chunk().await {
             Ok(Some(chunk)) => chunk,
             Ok(None) => break,
-            Err(_) => return Err("Connection lost".into()),
+            Err(e) => {
+                tracing::warn!(error = %e, url = %file.url_path, "offline download: chunk read failed");
+                return Err(DownloadError::ConnectionLost.into());
+            }
         };
         out.write_all(&chunk)
             .await
-            .map_err(|e| format!("Could not write download: {e}"))?;
+            .context("Could not save the download to this device")?;
         on_delta(chunk.len() as i64);
     }
     out.flush()
         .await
-        .map_err(|e| format!("Could not write download: {e}"))?;
+        .context("Could not save the download to this device")?;
     out.sync_all()
         .await
-        .map_err(|e| format!("Could not write download: {e}"))?;
+        .context("Could not save the download to this device")?;
     drop(out);
 
     let written = tokio::fs::metadata(&part_path)
         .await
         .map(|m| m.len() as i64)
-        .map_err(|e| format!("Could not verify download: {e}"))?;
+        .context("Could not verify the downloaded file")?;
     if let Some(expected) = expected_total {
         if written != expected as i64 {
-            return Err("Download was interrupted — tap to resume".into());
+            return Err(DownloadError::Interrupted.into());
         }
     }
     tokio::fs::rename(&part_path, &final_path)
         .await
-        .map_err(|e| format!("Could not finalize download: {e}"))?;
+        .context("Could not finalize the download")?;
     Ok(written)
 }
 
@@ -359,11 +398,28 @@ fn publish_progress(uuid: &str, format: DlFormat, downloaded: i64, total: Option
     super::upsert(entry);
 }
 
-/// Short, user-facing message for a download failure.
-fn friendly(e: &crate::data::DataError) -> String {
+/// Maps a [`crate::data::DataError`] to a fixed, user-safe [`DownloadError`].
+/// The original error's `Display` (which can carry raw `reqwest`/
+/// `serde_json` transport/decode text) is logged via `tracing::warn!` for
+/// diagnosis but never returned — only the fixed variant reaches the UI.
+fn friendly(e: &crate::data::DataError) -> DownloadError {
+    tracing::warn!(error = %e, "offline download: data fetch failed");
     if crate::offline::sync::is_offline_error(e) {
-        "You're offline — connect to download".into()
-    } else {
-        e.to_string()
+        return DownloadError::Offline;
+    }
+    use crate::data::DataError;
+    match e {
+        DataError::Offline => DownloadError::Offline,
+        DataError::Unauthorized => DownloadError::Unauthorized,
+        // A `Network` variant that *is* a decode failure means the server
+        // was reachable but returned a malformed body — same bucket as an
+        // explicit `Decode`/`Http`, not a connectivity problem.
+        DataError::Network(re) if re.is_decode() => DownloadError::ServerError,
+        DataError::Network(_) => DownloadError::NetworkError,
+        DataError::Http { .. } | DataError::Decode(_) => DownloadError::ServerError,
+        DataError::Other(_) => DownloadError::NetworkError,
     }
 }
+
+#[cfg(test)]
+mod tests;

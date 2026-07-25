@@ -27,6 +27,7 @@ commit log.
 ### Fixed
 
 - Scanning a book already on your wishlist now opens its detail page instead of the "you already have this one digitally" check-in screen
+- The account Downloads page no longer surfaces a raw transport/decode error message on a failed download; it now shows a fixed, user-safe reason while the original error is logged for diagnosis (#1308)
 
 ## [v0.11.4] - 2026-07-24
 
