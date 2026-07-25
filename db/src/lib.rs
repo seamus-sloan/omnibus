@@ -33,6 +33,7 @@ pub mod metadata_lookup;
 pub mod metadata_overrides;
 pub mod missing_files;
 pub mod normalize;
+pub mod opf_export;
 pub mod palette;
 pub mod physical;
 pub mod pool;
@@ -86,6 +87,7 @@ pub use missing_files::{
     backfill_missing_files_flags, gc_books_missing_files, MissingFilesError,
     MISSING_FILES_RETENTION_DAYS,
 };
+pub use opf_export::{export_opf, OpfExport, OpfExportError};
 pub use palette::*;
 pub use physical::{
     add_physical_copy, add_wishlist_entry, create_fileless_book, delete_fileless_book,
