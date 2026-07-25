@@ -79,6 +79,13 @@ pub enum Task {
     /// `audiobooks:{library_path}` (mutual exclusion with scans on the same
     /// library). Does not consume the scan semaphore (lightweight IO).
     BackfillChapters { library_path: String },
+    /// Backfill `books.word_count` for EPUB books indexed before the
+    /// word-count column existed (migration `0049`). Posted by the
+    /// [`Task::Scan`] handler on success so it always runs after the ebook
+    /// scan completes. Keyed on `library_path` (mutual exclusion with the
+    /// scan on the same library); does not consume the scan semaphore
+    /// (light per-file IO, mirrors [`Task::BackfillChapters`]).
+    BackfillWordCounts { library_path: String },
     /// Rebuild the entire `books_fts` search index from `books` via
     /// `crate::sync::rebuild_all_fts`. Admin-triggered repair for any drift
     /// left by a failed post-commit FTS refresh. Keyed on a fixed resource
@@ -132,6 +139,7 @@ impl Task {
             } => Some(format!("hls:{book_id}:{profile}")),
             Task::RefetchAuthorPhotos => Some("refetch-author-photos".into()),
             Task::BackfillChapters { library_path } => Some(format!("audiobooks:{library_path}")),
+            Task::BackfillWordCounts { library_path } => Some(library_path.clone()),
             Task::RebuildFtsIndex => Some("rebuild-fts".into()),
             Task::ResolveSuggestions { book_uuid } => Some(format!("suggestions:{book_uuid}")),
             Task::KepubConvert { book_id } => Some(format!("kepub:{book_id}")),
@@ -150,6 +158,7 @@ impl Task {
             Task::HlsTranscode { .. } => false,
             Task::RefetchAuthorPhotos => false,
             Task::BackfillChapters { .. } => false,
+            Task::BackfillWordCounts { .. } => false,
             Task::RebuildFtsIndex => false,
             Task::ResolveSuggestions { .. } => false,
             Task::KepubConvert { .. } => false,
@@ -179,6 +188,9 @@ impl Task {
             Task::ResolveAuthorPhoto { .. } => TaskKind::ResolveAuthorPhoto,
             Task::RefetchAuthorPhotos => TaskKind::RefetchAuthorPhotos,
             Task::BackfillChapters { .. } => TaskKind::BackfillChapters,
+            // Reuse Scan kind — a scan-follow-up with no dedicated progress
+            // widget, mirroring HLS/FTS/KEPUB below.
+            Task::BackfillWordCounts { .. } => TaskKind::Scan,
             // Reuse Scan kind for UI display until a dedicated HLS progress
             // widget is added.
             Task::HlsTranscode { .. } => TaskKind::Scan,

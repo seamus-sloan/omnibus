@@ -147,6 +147,7 @@ async fn api_get_ebooks_sets_total_count_header_with_indexed_library() {
                 cover: None,
                 mtime_epoch: 0,
                 size_bytes: 0,
+                word_count: None,
             },
             db::ebook::IndexedBook {
                 metadata: omnibus_shared::EbookMetadata {
@@ -157,6 +158,7 @@ async fn api_get_ebooks_sets_total_count_header_with_indexed_library() {
                 cover: None,
                 mtime_epoch: 0,
                 size_bytes: 0,
+                word_count: None,
             },
         ],
     )
@@ -284,6 +286,7 @@ async fn api_get_ebook_returns_200_with_metadata() {
             cover: None,
             mtime_epoch: 0,
             size_bytes: 0,
+            word_count: None,
         }],
     )
     .await
@@ -852,6 +855,7 @@ async fn seed_titled_books(pool: &sqlx::SqlitePool, path: &str, count: usize) {
             cover: None,
             mtime_epoch: 0,
             size_bytes: 0,
+            word_count: None,
         })
         .collect();
     db::replace_books(pool, path, books).await.unwrap();
@@ -1056,6 +1060,7 @@ async fn api_get_ebooks_formats_param_filters_page_and_total() {
                 cover: None,
                 mtime_epoch: 0,
                 size_bytes: 0,
+                word_count: None,
             },
             db::ebook::IndexedBook {
                 metadata: omnibus_shared::EbookMetadata {
@@ -1066,6 +1071,7 @@ async fn api_get_ebooks_formats_param_filters_page_and_total() {
                 cover: None,
                 mtime_epoch: 0,
                 size_bytes: 0,
+                word_count: None,
             },
         ],
     )

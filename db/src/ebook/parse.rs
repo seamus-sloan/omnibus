@@ -57,6 +57,7 @@ fn extract_metadata(path: &Path, filename: String, opts: &ScanOptions) -> Indexe
                 // before the writer sees this struct.
                 mtime_epoch: 0,
                 size_bytes: 0,
+                word_count: None,
             };
         }
     };
@@ -75,6 +76,12 @@ fn extract_metadata(path: &Path, filename: String, opts: &ScanOptions) -> Indexe
     let accent = cover
         .as_ref()
         .and_then(|(_mime, bytes)| extract_accent(bytes));
+
+    // Estimate the word count while the EPUB is already open, so
+    // `books.word_count` is populated at index time and the stats Pages tile
+    // never has to reopen the file. Walks the spine text — heavier than the
+    // OPF read above, but paid only for new/changed files, once each.
+    let word_count = super::estimate_word_count(&mut doc);
 
     IndexedBook {
         metadata: EbookMetadata {
@@ -120,6 +127,7 @@ fn extract_metadata(path: &Path, filename: String, opts: &ScanOptions) -> Indexe
         // writer sees this struct.
         mtime_epoch: 0,
         size_bytes: 0,
+        word_count,
     }
 }
 

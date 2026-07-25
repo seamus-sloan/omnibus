@@ -1,46 +1,51 @@
-//! Estimated-pages aggregation for the stats page's Pages tile. No page or
-//! word data is persisted anywhere, so this resolves each window-finished
-//! book's EPUB path and estimates its word count on demand at stats-query
-//! time, converting to pages via [`WORDS_PER_PAGE`]. Degrades to `None`
-//! (the tile's em-dash state) only when nothing in the window yields an estimate.
+//! Estimated-pages aggregation for the stats page's Pages tile. The per-book
+//! word count is persisted on `books.word_count` at index time (see
+//! [`crate::ebook::estimate_word_count`] and migration `0049`), so this is a
+//! single `SUM` over the books finished in the window — no EPUB is opened at
+//! query time. The word total converts to pages via [`WORDS_PER_PAGE`].
+//! Degrades to `None` (the tile's em-dash state) when no finished book in the
+//! window has a stored word count.
 
-use std::path::PathBuf;
+use sqlx::SqlitePool;
 
-use sqlx::{Row, SqlitePool};
-
-use super::StatsError;
+use super::{StatsError, FINISHED_EVENTS};
 
 /// Words per printed page, the standard prose estimate (the same ballpark
 /// self-publishing/KDP page-count calculators use for a 6x9 trade
-/// paperback). Not exact — spine text length is itself an estimate — but
-/// documented and consistent, which is what AC1's "clearly-labelled
-/// estimated-page count" asks for.
+/// paperback). Not exact — the stored word count is itself a spine-text
+/// estimate — but documented and consistent, which is what the tile's
+/// "clearly-labelled estimated-page count" asks for.
 const WORDS_PER_PAGE: f64 = 275.0;
 
-/// Estimated pages read in the window: the word-count sum over every book
-/// finished within it (see the module doc for the full model), divided by
-/// [`WORDS_PER_PAGE`]. `None` when nothing in the window yielded an
-/// estimate — no finished books, none with a resolvable EPUB, or every
-/// resolvable one failed to parse.
+/// Estimated pages read in the window: the persisted word-count sum over
+/// every distinct book finished within it (same completion definition as
+/// [`super::finished_books`] — a 100% journal entry or an explicit
+/// read-status `finished`), divided by [`WORDS_PER_PAGE`]. A book finished
+/// twice counts once. `None` when no finished book in the window has a stored
+/// word count — none finished, or every finished one is audio-only /
+/// not-yet-backfilled (NULL `word_count`).
 pub(super) async fn pages_read(
     pool: &SqlitePool,
     user_id: i64,
     start: i64,
 ) -> Result<Option<i64>, StatsError> {
-    let book_ids = finished_book_ids(pool, user_id, start).await?;
-    let paths: Vec<PathBuf> = crate::book_file_paths(pool, &book_ids, "EPUB")
-        .await?
-        .into_values()
-        .collect();
-    if paths.is_empty() {
-        return Ok(None);
-    }
-    // EPUB parsing is blocking zip/XML work — run it off the async runtime
-    // rather than stalling other in-flight requests, same convention as
-    // `sync::books::reconcile_covers` and friends. `?` propagates a panic or
-    // cancellation as `StatsError::PagesTask` rather than masking it as "no
-    // data" — a spurious em-dash would hide a real bug.
-    let total_words = tokio::task::spawn_blocking(move || sum_word_counts(&paths)).await?;
+    // DISTINCT-book subquery first so a book finished both ways (or with
+    // multiple journal entries) contributes its word count once; `SUM` over
+    // zero rows is SQL NULL, which maps straight to the em-dash `None`.
+    let sql = format!(
+        "SELECT SUM(word_count) FROM (
+             SELECT DISTINCT b.uuid AS uuid, b.word_count AS word_count
+             FROM ({FINISHED_EVENTS}) f
+             JOIN books b ON b.uuid = f.book_uuid
+             WHERE f.finished_at >= ? AND b.word_count IS NOT NULL
+         )"
+    );
+    let total_words: Option<i64> = sqlx::query_scalar(&sql)
+        .bind(user_id)
+        .bind(user_id)
+        .bind(start)
+        .fetch_one(pool)
+        .await?;
     Ok(total_words.map(words_to_pages))
 }
 
@@ -49,47 +54,6 @@ pub(super) async fn pages_read(
 /// is one page, not zero).
 fn words_to_pages(words: i64) -> i64 {
     (words as f64 / WORDS_PER_PAGE).round() as i64
-}
-
-/// Distinct `books.id` for the user's hundred-percent journal entries in the
-/// window — the same finished-book set [`super::finished_books`] surfaces,
-/// but ids (for [`crate::book_file_paths`]) rather than display rows.
-async fn finished_book_ids(
-    pool: &SqlitePool,
-    user_id: i64,
-    start: i64,
-) -> Result<Vec<i64>, StatsError> {
-    let rows = sqlx::query(
-        "SELECT DISTINCT b.id AS id
-         FROM journal_entries j
-         JOIN books b ON b.uuid = j.book_uuid
-         WHERE j.user_id = ? AND j.progress = 100 AND j.created_at >= ?",
-    )
-    .bind(user_id)
-    .bind(start)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows.into_iter().map(|r| r.get("id")).collect())
-}
-
-/// Sum word-count estimates across `paths`, skipping any file that fails to
-/// open or parse. `None` when every path failed — distinguishes "zero
-/// finished books had readable text" from "every finished book is a
-/// zero-word epub" (the latter never happens in practice, but the `Option`
-/// keeps the em-dash state honest rather than overloading `0`).
-fn sum_word_counts(paths: &[PathBuf]) -> Option<i64> {
-    let mut total = 0i64;
-    let mut any = false;
-    for path in paths {
-        let Ok(mut doc) = epub::doc::EpubDoc::new(path) else {
-            continue;
-        };
-        if let Some(words) = crate::ebook::estimate_word_count(&mut doc) {
-            total += words;
-            any = true;
-        }
-    }
-    any.then_some(total)
 }
 
 #[cfg(test)]

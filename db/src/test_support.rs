@@ -261,6 +261,7 @@ pub fn indexed(
         cover: cover.map(|(m, b)| (m.into(), b.to_vec())),
         mtime_epoch: 0,
         size_bytes: 0,
+        word_count: None,
     }
 }
 
@@ -282,6 +283,7 @@ pub fn indexed_with_stat(
         cover: None,
         mtime_epoch,
         size_bytes,
+        word_count: None,
     }
 }
 
