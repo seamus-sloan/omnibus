@@ -212,7 +212,7 @@ pub async fn delete_book_items(
 async fn selection_total_delete(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
-    uuid: &str,
+    canonical_uuid: &str,
     file_ids: &[i64],
     copy_ids: &[i64],
 ) -> Result<Option<bool>, DeleteError> {
@@ -223,7 +223,8 @@ async fn selection_total_delete(
     {
         return Err(DeleteError::FileNotFound(*unknown));
     }
-    let existing_copies = list_physical_copies_by_canonical_uuid_exec(&mut **tx, uuid).await?;
+    let existing_copies =
+        list_physical_copies_by_canonical_uuid_exec(&mut **tx, canonical_uuid).await?;
     if let Some(unknown) = copy_ids
         .iter()
         .find(|id| !existing_copies.iter().any(|c| c.id == **id))

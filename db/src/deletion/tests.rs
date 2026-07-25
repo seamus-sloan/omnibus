@@ -394,37 +394,54 @@ async fn delete_book_items_never_orphans_a_zero_item_book_row_under_concurrent_d
     // the RESERVED write lock, so whichever runs second recomputes the count
     // fresh (against the first call's already-committed delete) and sees the
     // true remaining total.
+    //
+    // `tokio::spawn` scheduling isn't guaranteed to interleave the two calls
+    // at the exact snapshot-vs-commit window a regression would need to slip
+    // through — a single run could pass by luck even on a reintroduced bug.
+    // Repeating the race against a fresh book each time makes a regression
+    // extremely likely to surface within the loop.
     let dir = temp_dir("concurrent");
     let _env = cache_env(&dir);
     let pool = pool().await;
     let lib = seed_root(&pool, "/lib").await;
-    let book = seed_book(&pool, lib, "uuid-a", "Raced").await;
-    let a = seed_file(&pool, book, "/lib", "a", "a", "EPUB").await;
-    let b = seed_file(&pool, book, "/lib", "a", "a", "M4B").await;
 
-    let p1 = pool.clone();
-    let p2 = pool.clone();
-    let t1 = tokio::spawn(async move { delete_book_items(&p1, "uuid-a", &[a], &[]).await });
-    let t2 = tokio::spawn(async move { delete_book_items(&p2, "uuid-a", &[b], &[]).await });
+    for i in 0..25 {
+        let uuid = format!("uuid-race-{i}");
+        let book = seed_book(&pool, lib, &uuid, "Raced").await;
+        let a = seed_file(&pool, book, "/lib", "a", &format!("a{i}"), "EPUB").await;
+        let b = seed_file(&pool, book, "/lib", "a", &format!("a{i}"), "M4B").await;
 
-    let r1 = t1.await.unwrap().unwrap();
-    let r2 = t2.await.unwrap().unwrap();
+        let p1 = pool.clone();
+        let p2 = pool.clone();
+        let u1 = uuid.clone();
+        let u2 = uuid.clone();
+        let t1 = tokio::spawn(async move { delete_book_items(&p1, &u1, &[a], &[]).await });
+        let t2 = tokio::spawn(async move { delete_book_items(&p2, &u2, &[b], &[]).await });
 
-    // Whichever call ran second sees the other's file already gone, so
-    // exactly one of the two — never both, never neither — purges the book.
-    assert_eq!(
-        [r1.book_deleted, r2.book_deleted]
-            .iter()
-            .filter(|d| **d)
-            .count(),
-        1,
-        "exactly one of the two racing deletes must purge the now-empty book"
-    );
-    assert_eq!(count_rows(&pool, "SELECT COUNT(*) FROM books").await, 0);
-    assert_eq!(
-        count_rows(&pool, "SELECT COUNT(*) FROM book_files").await,
-        0
-    );
+        let r1 = t1.await.unwrap().unwrap();
+        let r2 = t2.await.unwrap().unwrap();
+
+        // Whichever call ran second sees the other's file already gone, so
+        // exactly one of the two — never both, never neither — purges the
+        // book.
+        assert_eq!(
+            [r1.book_deleted, r2.book_deleted]
+                .iter()
+                .filter(|d| **d)
+                .count(),
+            1,
+            "exactly one of the two racing deletes must purge the now-empty book (iteration {i})"
+        );
+        assert_eq!(
+            count_rows(
+                &pool,
+                &format!("SELECT COUNT(*) FROM books WHERE uuid = '{uuid}'")
+            )
+            .await,
+            0,
+            "iteration {i}"
+        );
+    }
     std::fs::remove_dir_all(&dir).ok();
 }
 
