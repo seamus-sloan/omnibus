@@ -138,6 +138,31 @@ async fn api_scan_resolve_exact_hit_returns_in_library_unowned() {
 }
 
 #[tokio::test]
+async fn api_scan_resolve_exact_hit_returns_on_wishlist_for_wishlister() {
+    let (app, _state, pool) = fixture().await;
+    let uuid = seed_book_with_isbn(&pool, "Effective Java", ISBN).await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    omnibus_db::add_wishlist_entry(&pool, user.id, &uuid, WishlistSource::Manual)
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(post(
+            "/api/scan/resolve",
+            &token,
+            serde_json::json!({ "isbn": ISBN }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    match json_body::<ScanOutcome>(res).await {
+        ScanOutcome::OnWishlist { book } => assert_eq!(book.uuid, uuid),
+        other => panic!("expected OnWishlist, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn api_scan_check_in_returns_404_for_unknown_book() {
     let (app, _state, pool) = fixture().await;
     let user = auth_test_support::create_user(&pool, "alice").await;

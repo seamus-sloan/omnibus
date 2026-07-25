@@ -46,7 +46,7 @@ fn scan_error(context: &'static str, e: ScanError) -> Response {
 /// Resolve an ISBN. Always 200 with a `ScanOutcome` (including `Unresolved`);
 /// 400 only for an invalid ISBN.
 pub(super) async fn post_resolve(
-    _user: AuthUser,
+    user: AuthUser,
     State(state): State<AppState>,
     Json(req): Json<ResolveRequest>,
 ) -> Response {
@@ -57,7 +57,7 @@ pub(super) async fn post_resolve(
         Err(e) => return internal("scan_resolve_google_books_key", e),
     };
     let config = db::MetadataLookupConfig::live_with_key(key);
-    match db::resolve_scan(&state.pool, &req.isbn, &config).await {
+    match db::resolve_scan(&state.pool, user.id, &req.isbn, &config).await {
         Ok(outcome) => Json(outcome).into_response(),
         Err(e) => scan_error("scan_resolve", e),
     }

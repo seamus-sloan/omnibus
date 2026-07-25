@@ -54,12 +54,12 @@ pub(crate) enum Stage {
 
 /// Map a resolved outcome onto the screen it opens.
 ///
-/// [`ScanOutcome::AlreadyOwned`] has no stage of its own: the design routes an
-/// already-owned book straight to its detail page, so the caller navigates and
-/// this returns `None`.
+/// [`ScanOutcome::AlreadyOwned`] and [`ScanOutcome::OnWishlist`] have no stage
+/// of their own: the design routes an already-owned or already-wishlisted book
+/// straight to its detail page, so the caller navigates and this returns `None`.
 pub(crate) fn stage_for(outcome: ScanOutcome, isbn: &str) -> Option<Stage> {
     match outcome {
-        ScanOutcome::AlreadyOwned { .. } => None,
+        ScanOutcome::AlreadyOwned { .. } | ScanOutcome::OnWishlist { .. } => None,
         ScanOutcome::InLibraryUnowned { book } => Some(Stage::Confirm {
             book,
             isbn: isbn.to_string(),
@@ -302,7 +302,7 @@ fn make_on_resolve(
         spawn(async move {
             let req = ResolveRequest { isbn: isbn.clone() };
             match data::resolve_scan(&server_url, req).await {
-                Ok(ScanOutcome::AlreadyOwned { book }) => {
+                Ok(ScanOutcome::AlreadyOwned { book }) | Ok(ScanOutcome::OnWishlist { book }) => {
                     nav.push(Route::BookDetail { uuid: book.uuid });
                 }
                 Ok(outcome) => {

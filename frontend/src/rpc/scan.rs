@@ -39,7 +39,7 @@ fn map_scan_err(e: db::ScanError) -> ServerFnError {
 
 /// Resolve a scanned/typed ISBN down the matching ladder. Any authenticated
 /// user may resolve; ownership is library-wide.
-#[post("/api/rpc/scan/resolve", pool: PoolExt, _user: AuthUser)]
+#[post("/api/rpc/scan/resolve", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_resolve_scan(req: ResolveRequest) -> Result<ScanOutcome> {
     // Saved settings key wins over `GOOGLE_BOOKS_API_KEY`; both absent is a
     // keyless (shared-quota) lookup.
@@ -47,7 +47,7 @@ pub async fn rpc_resolve_scan(req: ResolveRequest) -> Result<ScanOutcome> {
         .await
         .map_err(|e| internal_rpc_error("resolve google books key", e))?;
     let config = db::MetadataLookupConfig::live_with_key(key);
-    Ok(db::resolve_scan(&pool.0, &req.isbn, &config)
+    Ok(db::resolve_scan(&pool.0, user.id, &req.isbn, &config)
         .await
         .map_err(map_scan_err)?)
 }

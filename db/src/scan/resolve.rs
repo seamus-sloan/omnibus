@@ -11,8 +11,8 @@ use crate::author_photos::fetch_remote_image;
 use crate::metadata_lookup::{lookup_isbn, MetadataLookupConfig, MetadataLookupError};
 use crate::normalize::{normalize_author, normalize_title};
 use crate::physical::{
-    add_physical_copy, add_wishlist_entry, create_fileless_book, FilelessBook, FilelessCover,
-    PhysicalError,
+    add_physical_copy, add_wishlist_entry, create_fileless_book, get_wishlist_entry, FilelessBook,
+    FilelessCover, PhysicalError,
 };
 
 /// Errors from the scan flow.
@@ -37,20 +37,34 @@ pub enum ScanError {
 /// Resolve a scanned/typed ISBN down the matching ladder.
 ///
 /// 1. Normalize the ISBN (→ [`ScanError::Isbn`] on a bad input).
-/// 2. Exact `book_identifiers` ISBN hit → `AlreadyOwned` / `InLibraryUnowned`.
+/// 2. Exact `book_identifiers` ISBN hit → `AlreadyOwned` / `OnWishlist` /
+///    `InLibraryUnowned`.
 /// 3. Otherwise online lookup; a normalized (title, author) hit is a
 ///    `CloseMatch` (never auto-resolved), else `NotInLibrary`; a provider miss
 ///    is `Unresolved`.
+///
+/// `user_id` scopes the wishlist check: a book the caller already wishlists (no
+/// physical copy yet) resolves to `OnWishlist` so the flow opens its detail page
+/// rather than the "own it digitally" confirm screen. Checking in a copy clears
+/// the book from every user's wishlist, so a book with a physical copy is never
+/// also wishlisted — the wishlist check only bites the no-physical branch.
 pub async fn resolve_scan(
     pool: &SqlitePool,
+    user_id: i64,
     raw_isbn: &str,
     config: &MetadataLookupConfig,
 ) -> Result<ScanOutcome, ScanError> {
     let isbn13 = normalize_isbn(raw_isbn)?;
 
     if let Some(book) = find_book_by_isbn(pool, &isbn13).await? {
-        return Ok(if book.has_physical {
-            ScanOutcome::AlreadyOwned { book }
+        if book.has_physical {
+            return Ok(ScanOutcome::AlreadyOwned { book });
+        }
+        let on_wishlist = get_wishlist_entry(pool, user_id, &book.uuid)
+            .await?
+            .is_some();
+        return Ok(if on_wishlist {
+            ScanOutcome::OnWishlist { book }
         } else {
             ScanOutcome::InLibraryUnowned { book }
         });
