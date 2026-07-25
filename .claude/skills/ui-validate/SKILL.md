@@ -89,7 +89,7 @@ Then reload via `mcp__Claude_Preview__preview_eval` with `location.reload()`.
 
 ```bash
 source .claude/runtime/env.sh   # if not already sourced
-cd ui_tests/playwright && npx playwright test
+cd ui_tests/playwright && pnpm exec playwright test
 ```
 
 `PLAYWRIGHT_BASE_URL` makes the suite hit the walked-up port — both `baseURL` and the `Origin` header are derived from it, so the CSRF `origin_check` middleware stays happy.

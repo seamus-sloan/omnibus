@@ -75,6 +75,19 @@ test: fixtures
 lint-css:
     scripts/with-dev-env.sh default stylelint 'frontend/assets/**/*.css'
 
+# TypeScript lint + format-check + typecheck for the Playwright project.
+# Biome (formatter + linter, config in ui_tests/playwright/biome.json) is the
+# single source of truth, pinned as a pnpm devDependency; `tsc --noEmit` runs
+# the TypeScript 7 compiler. Runs in `.#e2e` (which carries pnpm) and installs
+# the frozen lockfile first so the toolchain matches CI. Separate from the
+# slim `just lint` so daily cargo work doesn't pull the node toolchain.
+lint-ts:
+    scripts/with-dev-env.sh e2e bash -ec '\
+        cd ui_tests/playwright && \
+        pnpm install --frozen-lockfile && \
+        pnpm exec biome check . && \
+        pnpm exec tsc --noEmit'
+
 # Format check + clippy, including the crate/feature combos a bare
 # `cargo clippy` (default-members, default features) misses. `-D warnings` on
 # every invocation and the wasm32 `frontend-web` variant mirror CI's clippy

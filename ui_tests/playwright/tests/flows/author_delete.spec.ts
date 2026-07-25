@@ -1,10 +1,10 @@
-import { expect, test } from "../fixtures/test";
+import type { APIRequestContext } from "@playwright/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
-import type { APIRequestContext } from "@playwright/test";
 
 // F5.9-lite PR 5 — admin "Delete author" button on /authors/:id.
 //
@@ -61,7 +61,11 @@ async function restoreDeletedAuthor(
       data: {
         uuid,
         overrides: {
-          creators: book.authors.map((name) => ({ name, role: null, file_as: null })),
+          creators: book.authors.map((name) => ({
+            name,
+            role: null,
+            file_as: null,
+          })),
         },
       },
     });
@@ -80,7 +84,9 @@ async function restoreDeletedAuthor(
         const body = (await r.json()) as {
           books: { creators: { name: string }[] }[];
         };
-        return body.books.some((b) => b.creators.some((c) => c.name === authorName));
+        return body.books.some((b) =>
+          b.creators.some((c) => c.name === authorName),
+        );
       },
       {
         message: `author ${JSON.stringify(authorName)} should be restored via override`,
@@ -91,7 +97,10 @@ async function restoreDeletedAuthor(
     .toBe(true);
 }
 
-test("renders Delete author button for admin viewers", async ({ page, request }) => {
+test("renders Delete author button for admin viewers", async ({
+  page,
+  request,
+}) => {
   // Pick a fixture-only author so a failing test never wipes a real
   // author from the live library, and so other specs in this file can
   // use different authors without racing.
@@ -181,7 +190,11 @@ test("surfaces an error and stays on the page when delete fails", async ({
 
   await page.route("**/api/rpc/author/delete", (route) => {
     if (route.request().method() === "POST") {
-      return route.fulfill({ status: 500, contentType: "text/plain", body: "forced failure" });
+      return route.fulfill({
+        status: 500,
+        contentType: "text/plain",
+        body: "forced failure",
+      });
     }
     return route.continue();
   });

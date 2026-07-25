@@ -15,9 +15,7 @@ test("renders the login page layout", async ({ page }) => {
   ).toBeVisible();
   await expect(page.getByLabel("Username")).toBeVisible();
   await expect(page.getByLabel("Password")).toBeVisible();
-  await expect(
-    page.getByLabel("Keep me signed in for 30 days"),
-  ).toBeVisible();
+  await expect(page.getByLabel("Keep me signed in for 30 days")).toBeVisible();
   await expect(page.getByRole("button", { name: "Log in" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Register" })).toBeVisible();
 });
@@ -40,7 +38,9 @@ test("renders the register page layout", async ({ page }) => {
   await expect(page.getByRole("link", { name: "Log in" })).toBeVisible();
 });
 
-test("logs in with correct credentials and redirects to landing", async ({ page }) => {
+test("logs in with correct credentials and redirects to landing", async ({
+  page,
+}) => {
   await gotoReady(page, "/login");
 
   await page.getByLabel("Username").fill(TEST_USERNAME);
@@ -88,7 +88,9 @@ test("shows an error when submitting an empty form", async ({ page }) => {
   await expect(page.getByRole("alert")).toContainText(/username and password/i);
 });
 
-test("tab from Username focuses Password (skipping the Forgot? link)", async ({ page }) => {
+test("tab from Username focuses Password (skipping the Forgot? link)", async ({
+  page,
+}) => {
   // The Forgot? link sits visually beside the Password label. It must
   // not intercept the tab path between Username and Password — otherwise
   // a user typing "name <Tab> password <Enter>" lands on the link with
@@ -120,7 +122,9 @@ test("Enter from Password submits the login form", async ({ page }) => {
   await expect(page).toHaveURL(/\/$/);
 });
 
-test("register routes a password error to the password Field", async ({ page }) => {
+test("register routes a password error to the password Field", async ({
+  page,
+}) => {
   await gotoReady(page, "/register");
 
   await page.route("**/api/auth/register", async (route) => {
@@ -144,8 +148,7 @@ test("register routes a password error to the password Field", async ({ page }) 
       url: "/api/auth/register",
       expectedStatus: 400,
     },
-    async () =>
-      page.getByRole("button", { name: "Create account" }).click(),
+    async () => page.getByRole("button", { name: "Create account" }).click(),
   );
 
   // Prove the routing: the password input flips to aria-invalid, and
@@ -153,12 +156,17 @@ test("register routes a password error to the password Field", async ({ page }) 
   // top-level Banner, which would also carry role=alert).
   const passwordInput = page.getByLabel("Password", { exact: true });
   await expect(passwordInput).toHaveAttribute("aria-invalid", "true");
-  await expect(page.getByLabel("Username")).toHaveAttribute("aria-invalid", "false");
+  await expect(page.getByLabel("Username")).toHaveAttribute(
+    "aria-invalid",
+    "false",
+  );
   // `<Field>` exposes `data-testid="<input_id>-field"` on its wrapper —
   // scope the alert to that field rather than walking the DOM with
   // XPath (per `.claude/rules/04-playwright.md`).
   const passwordField = page.getByTestId("register-password-field");
-  await expect(passwordField.getByRole("alert")).toContainText("password is too short");
+  await expect(passwordField.getByRole("alert")).toContainText(
+    "password is too short",
+  );
   await expect(
     page.getByRole("button", { name: /fix to continue/i }),
   ).toBeDisabled();

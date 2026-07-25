@@ -6,10 +6,11 @@
 // that survive re-seeding, so a leaked merge would silently re-attach on a
 // later reindex and corrupt other specs' format counts. Never remove the
 // undo step without re-thinking that.
-import { expect, test } from "../fixtures/test";
+
 import { AUDIOBOOK_BOOK_COUNT, MERGE_PRIMARY } from "../fixtures/audiobooks";
 import { AUTO_ATTACHED_PAIRS } from "../fixtures/dual_format";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { withLock } from "../utils/lock";
@@ -79,7 +80,9 @@ test("renders the merge affordance on the book detail layout", async ({
   const mergeWith = page.getByTestId("merge-with");
   await expect(mergeWith).toBeVisible();
   await mergeWith.click();
-  await expect(page.getByRole("dialog", { name: "Merge with another book" })).toBeVisible();
+  await expect(
+    page.getByRole("dialog", { name: "Merge with another book" }),
+  ).toBeVisible();
   await expect(page.getByTestId("merge-search")).toBeVisible();
   await page.getByTestId("merge-cancel").click();
   await expect(page.getByTestId("merge-search")).not.toBeVisible();
@@ -97,7 +100,11 @@ test("surfaces a server error in the dialog and leaves the book unchanged", asyn
   await gotoReady(page, `/books/${uuid}`);
 
   await page.route("**/api/rpc/merge-books", (route) =>
-    route.fulfill({ status: 500, contentType: "text/plain", body: "merge exploded" }),
+    route.fulfill({
+      status: 500,
+      contentType: "text/plain",
+      body: "merge exploded",
+    }),
   );
 
   await openDialogAndPickSource(page);
@@ -141,7 +148,9 @@ test("merges an audiobook into the ebook and undoes it from the toast", async ({
 
     // Refetch lands: both format badges, both CTAs, and the undo toast.
     await expect(page.getByTestId("bd-format-badge")).toHaveCount(2);
-    await expect(page.getByTestId("bd-format-badge").filter({ hasText: SOURCE.format })).toBeVisible();
+    await expect(
+      page.getByTestId("bd-format-badge").filter({ hasText: SOURCE.format }),
+    ).toBeVisible();
     await expect(page.getByTestId("start-reading")).toBeVisible();
     await expect(page.getByTestId("listen-secondary")).toBeVisible();
     const toast = page.getByRole("status").filter({ hasText: "Books merged." });

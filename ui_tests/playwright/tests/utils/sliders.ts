@@ -5,7 +5,10 @@ import type { Locator } from "@playwright/test";
 // event a real drag emits and the one Dioxus's `oninput` handler listens
 // for. Shared by the full player's volume slider and the mini-dock's
 // compact one so both flows exercise the control the same way.
-export async function setRangeValue(slider: Locator, value: number): Promise<void> {
+export async function setRangeValue(
+  slider: Locator,
+  value: number,
+): Promise<void> {
   await slider.evaluate((el, v) => {
     const input = el as HTMLInputElement;
     input.value = String(v);

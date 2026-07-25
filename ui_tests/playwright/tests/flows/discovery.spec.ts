@@ -1,9 +1,9 @@
-import { expect, test } from "../fixtures/test";
+import type { APIRequestContext } from "@playwright/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expect, test } from "../fixtures/test";
 import { fetchBookIdByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
-import type { APIRequestContext } from "@playwright/test";
 
 // Seed before all tests so the indexer has populated authors/series/tags.
 test.beforeAll(async ({ request }) => {
@@ -44,7 +44,9 @@ async function fetchSeriesIdByName(
   const body = (await resp.json()) as {
     books: { series: string | null; series_id: number | null }[];
   };
-  const match = body.books.find((b) => b.series === name && b.series_id != null);
+  const match = body.books.find(
+    (b) => b.series === name && b.series_id != null,
+  );
   if (!match?.series_id) {
     throw new Error(`no indexed series named ${JSON.stringify(name)}`);
   }
@@ -63,7 +65,9 @@ test("renders the author page layout", async ({ page, request }) => {
 
   // H1 contains the author's name (split first/last with italic)
   await expect(page.getByRole("heading", { level: 1 })).toContainText("Ada");
-  await expect(page.getByRole("heading", { level: 1 })).toContainText("Lovelace");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(
+    "Lovelace",
+  );
 
   // Book count stat is visible
   await expect(page.getByText("In your library")).toBeVisible();
@@ -85,7 +89,10 @@ test("author page shows books by the author", async ({ page, request }) => {
   await expect(page.getByText("Quartet I: Lexer")).toBeVisible();
 });
 
-test("author series section heading links to the series page", async ({ page, request }) => {
+test("author series section heading links to the series page", async ({
+  page,
+  request,
+}) => {
   // Niklaus Wirth's four books all belong to "Code Quartet", so the author
   // page renders a single series section whose heading is a router Link to
   // /series/:id, and it's the only "Code Quartet" link role on the page.
@@ -98,7 +105,9 @@ test("author series section heading links to the series page", async ({ page, re
 
   await expect(page).toHaveURL(/\/series\/\d+$/);
   // Destination renders: series page H1 + book-count label.
-  await expect(page.getByRole("heading", { level: 1 })).toContainText("Code Quartet");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(
+    "Code Quartet",
+  );
   await expect(page.getByText(/in library/)).toBeVisible();
 });
 
@@ -106,7 +115,10 @@ test("author series section heading links to the series page", async ({ page, re
 // Book detail → series
 // ---------------------------------------------------------------------------
 
-test("book detail series rail link navigates to the series page", async ({ page, request }) => {
+test("book detail series rail link navigates to the series page", async ({
+  page,
+  request,
+}) => {
   // `beta` ("Beta in the Series") is Pioneers #1, so the book detail rail
   // renders a Series card whose body is a Link to /series/:id. Both the rail
   // link and the breadcrumb series segment share the "Pioneers #1" text, so
@@ -121,7 +133,9 @@ test("book detail series rail link navigates to the series page", async ({ page,
   await railLink.click();
 
   await expect(page).toHaveURL(/\/series\/\d+$/);
-  await expect(page.getByRole("heading", { level: 1 })).toContainText("Pioneers");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(
+    "Pioneers",
+  );
   await expect(page.getByText(/in library/)).toBeVisible();
 });
 

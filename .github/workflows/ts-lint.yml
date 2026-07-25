@@ -1,0 +1,120 @@
+name: TS Lint
+
+# Lint + format-check + typecheck for the Playwright TypeScript project
+# (ui_tests/playwright). Biome (config: ui_tests/playwright/biome.json) is the
+# formatter + linter — pinned as a pnpm devDependency so the version matches
+# the config schema — and `tsc --noEmit` runs the TypeScript 7 compiler for
+# type errors the Rust build can't see. Mirrors css-lint.yml's structure so
+# the required gate always resolves. Runs in the lighter `.#web` shell (pnpm +
+# node, no Chromium bundle).
+
+on:
+  # No workflow-level `paths:` filter: this workflow must run on EVERY PR so
+  # its `ts-lint-required` gate always reports a status (a required check keyed
+  # on a path-filtered workflow never resolves on a PR that doesn't match,
+  # blocking the merge forever). Path gating moved into the `changes` job below;
+  # `ts-lint` skips when no TS input changed, and the gate treats skipped as
+  # pass.
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ts-lint-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # Detect whether this PR touches anything the TS lint cares about. On push
+  # (and any non-PR event) `ts-lint` runs unconditionally, so this output is
+  # only consulted for pull_request events.
+  changes:
+    name: detect changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      ts: ${{ steps.filter.outputs.ts }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            ts:
+              - "ui_tests/playwright/**"
+              - ".github/workflows/ts-lint.yml"
+              - ".github/actions/ci-gate/action.yml"
+              - "flake.nix"
+              - "flake.lock"
+
+  ts-lint:
+    name: biome + tsc
+    needs: changes
+    if: ${{ needs.changes.outputs.ts == 'true' || github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # See rust.yml: id-token for the Nix installer's FlakeHub OIDC auth,
+      # actions:write for cache-nix-action's `purge: true` self-eviction.
+      id-token: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v22
+
+      # Distinct nix cache prefix from rust.yml/e2e.yml/css-lint.yml so the
+      # workflows don't clobber each other. The `.#web` shell realizes node +
+      # pnpm (no Chromium bundle).
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-ts-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-prefixes-first-match: nix-ts-${{ runner.os }}-
+          purge: true
+          purge-prefixes: nix-ts-${{ runner.os }}-
+          purge-last-accessed: 604800
+          purge-primary-key: never
+          gc-max-store-size-linux: 2G
+
+      - name: Cache Playwright node_modules
+        uses: actions/cache@v4
+        with:
+          path: ui_tests/playwright/node_modules
+          key: playwright-node-modules-${{ runner.os }}-${{ hashFiles('ui_tests/playwright/pnpm-lock.yaml') }}
+          restore-keys: |
+            playwright-node-modules-${{ runner.os }}-
+
+      - name: biome check + tsc --noEmit
+        run: |
+          nix develop .#web --command bash -c '
+            set -euo pipefail
+            cd ui_tests/playwright
+            pnpm install --frozen-lockfile
+            pnpm exec biome check .
+            pnpm exec tsc --noEmit
+          '
+
+  # The required status check for this workflow. Always runs (no paths filter +
+  # `if: always()`), so branch protection gets a resolved status on every PR —
+  # green when `ts-lint` passed or was skipped, red when it failed. Mark ONLY
+  # `🔒 TS Lint Required` as required in branch protection; do not require the
+  # `ts-lint` job directly (it skips on non-TS PRs and would hang the merge).
+  ts-lint-required:
+    name: 🔒 TS Lint Required
+    needs: [changes, ts-lint]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/ci-gate
+        with:
+          needs: ${{ toJSON(needs) }}

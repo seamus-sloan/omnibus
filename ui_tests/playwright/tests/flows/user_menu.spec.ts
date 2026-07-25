@@ -1,5 +1,5 @@
-import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
@@ -19,16 +19,20 @@ async function recentPoint(
   request: import("@playwright/test").APIRequestContext,
   format: "epub" | "audio",
 ) {
-  const target = FIXTURE_BOOKS[1];
+  const target = FIXTURE_BOOKS[1]!;
   const uuid = await fetchBookUuidByTitle(request, target.title);
   const response = await request.get("/api/rpc/ebooks");
   expect(response.status()).toBe(200);
-  const books = ((await response.json()) as {
-    books: Record<string, unknown>[];
-  }).books;
+  const books = (
+    (await response.json()) as {
+      books: Record<string, unknown>[];
+    }
+  ).books;
   const book = books.find((candidate) => candidate.unique_identifier === uuid);
   if (!book) {
-    throw new Error(`book ${JSON.stringify(target.title)} disappeared after lookup`);
+    throw new Error(
+      `book ${JSON.stringify(target.title)} disappeared after lookup`,
+    );
   }
 
   return {
@@ -78,7 +82,9 @@ test("opens and closes the user menu", async ({ page }) => {
   // Version line at the bottom of the panel (#1055) — a compile-time
   // constant, so it's always present regardless of OMNIBUS_VERSION.
   await expect(page.getByTestId("user-menu-version")).toBeVisible();
-  await expect(page.getByTestId("user-menu-version")).toHaveText(/^v\d+\.\d+\.\d+$/);
+  await expect(page.getByTestId("user-menu-version")).toHaveText(
+    /^v\d+\.\d+\.\d+$/,
+  );
 
   // Close by clicking a real viewport coordinate well below the header,
   // not the scrim locator's centre. `.atrium-topbar` sets
@@ -108,12 +114,16 @@ test("Settings link routes to the settings page", async ({ page }) => {
   await expect(page).toHaveURL(/\/settings$/);
 });
 
-test("Admin · server health link routes to the log viewer", async ({ page }) => {
+test("Admin · server health link routes to the log viewer", async ({
+  page,
+}) => {
   await gotoReady(page, "/");
   await page.getByTestId("user-menu-trigger").click();
   await page.getByRole("link", { name: "Admin · server health" }).click();
   await expect(page).toHaveURL(/\/logs$/);
-  await expect(page.getByRole("heading", { level: 1, name: "Server logs" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Server logs" }),
+  ).toBeVisible();
 });
 
 for (const sample of [
@@ -165,7 +175,9 @@ test("surfaces a recent-progress fetch failure", async ({ page }) => {
   await gotoReady(page, "/");
   await page.getByTestId("user-menu-trigger").click();
 
-  await expect(page.getByRole("alert")).toHaveText("Unable to load reading progress.");
+  await expect(page.getByRole("alert")).toHaveText(
+    "Unable to load reading progress.",
+  );
 });
 
 test("Sign out clears the session and routes to /login", async ({ page }) => {

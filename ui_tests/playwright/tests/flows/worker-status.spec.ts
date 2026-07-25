@@ -52,7 +52,9 @@ async function mockWorkerStatus(
 
 const now = () => Date.now();
 
-test("worker-status indicator stays hidden when the worker is idle", async ({ page }) => {
+test("worker-status indicator stays hidden when the worker is idle", async ({
+  page,
+}) => {
   await mockWorkerStatus(page, { active: [], recent_complete: [] });
   await gotoReady(page, "/settings");
   // The indicator renders nothing — no element with the testid is in the DOM.
@@ -79,7 +81,9 @@ test("worker-status indicator surfaces an active scan", async ({ page }) => {
   await expect(indicator(page)).toContainText("Scanning library");
 });
 
-test("worker-status indicator shows processed/total when total is known", async ({ page }) => {
+test("worker-status indicator shows processed/total when total is known", async ({
+  page,
+}) => {
   await mockWorkerStatus(page, {
     active: [
       {
@@ -130,7 +134,9 @@ test("worker-status indicator transitions from active to done and lets the user 
       },
     ],
   });
-  await expect(indicator(page)).toContainText("Library scan", { timeout: 3_500 });
+  await expect(indicator(page)).toContainText("Library scan", {
+    timeout: 3_500,
+  });
 
   // Dismiss the terminal row; the indicator collapses because nothing
   // active is left and the only terminal is suppressed client-side.
@@ -138,7 +144,9 @@ test("worker-status indicator transitions from active to done and lets the user 
   await expect(indicator(page)).toHaveCount(0);
 });
 
-test("worker-status indicator surfaces a failed scan with the error message", async ({ page }) => {
+test("worker-status indicator surfaces a failed scan with the error message", async ({
+  page,
+}) => {
   await mockWorkerStatus(page, {
     active: [],
     recent_complete: [

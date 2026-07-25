@@ -1,0 +1,5 @@
+# pnpm 10+ reads settings from here rather than package.json's `pnpm` field.
+# esbuild (pulled in by tsx) ships a postinstall that fetches its platform
+# binary; allow its build so `pnpm install` is clean and non-interactive in CI.
+allowBuilds:
+  esbuild: true

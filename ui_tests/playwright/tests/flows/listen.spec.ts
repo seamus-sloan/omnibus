@@ -1,9 +1,9 @@
-import { expect, test } from "../fixtures/test";
 import {
-  AUDIOBOOK_BOOKS,
   AUDIOBOOK_BOOK_COUNT,
+  AUDIOBOOK_BOOKS,
   MERGE_ONLY_TITLES,
 } from "../fixtures/audiobooks";
+import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
@@ -27,7 +27,9 @@ const MP3_BOOK = AUDIOBOOK_BOOKS.find(
     !MERGE_ONLY_TITLES.includes(b.title),
 )!;
 const M4B_BOOK = AUDIOBOOK_BOOKS.find((b) => b.format === "M4B")!;
-const MULTIPART_MP3_BOOK = AUDIOBOOK_BOOKS.find((b) => b.format === "MP3" && b.parts > 1)!;
+const MULTIPART_MP3_BOOK = AUDIOBOOK_BOOKS.find(
+  (b) => b.format === "MP3" && b.parts > 1,
+)!;
 const LOCAL_SEED_BOOK = AUDIOBOOK_BOOKS.find(
   (b) => b.format === "MP3" && b.source === "public_domain",
 )!;
@@ -39,18 +41,22 @@ const LOCAL_SEED_BOOK = AUDIOBOOK_BOOKS.find(
  * mode it flips true as soon as the manifest fetch returns, so its
  * absence is the canonical "player is ready to drive" signal.
  */
-async function waitForPlayerReady(page: import("@playwright/test").Page): Promise<void> {
+async function waitForPlayerReady(
+  page: import("@playwright/test").Page,
+): Promise<void> {
   await expect(page.getByTestId("listen-preparing")).toHaveCount(0);
   await expect
     .poll(
       async () =>
         page.evaluate(() => {
-          const audio = (window as unknown as { OmnibusAudio?: { _mode?: string | null } })
-            .OmnibusAudio;
+          const audio = (
+            window as unknown as { OmnibusAudio?: { _mode?: string | null } }
+          ).OmnibusAudio;
           return audio?._mode ?? null;
         }),
       {
-        message: "OmnibusAudio.initDirect should have run after the manifest fetch",
+        message:
+          "OmnibusAudio.initDirect should have run after the manifest fetch",
         timeout: 10_000,
         intervals: [50, 100, 250, 500],
       },
@@ -84,15 +90,25 @@ test("renders the listen page layout for an mp3 audiobook", async ({
   await expect(page.getByText("Now playing")).toBeVisible();
 
   // Book metadata in the player stage.
-  await expect(page.getByRole("heading", { name: MP3_BOOK.title })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: MP3_BOOK.title }),
+  ).toBeVisible();
   await expect(page.getByText(`by ${MP3_BOOK.author}`)).toBeVisible();
 
   // Transport: chapter map + skip-back / play / skip-forward / rate / volume.
   await expect(page.getByTestId("chapter-map")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Back 30 seconds" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Forward 30 seconds" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Play", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Playback speed" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Back 30 seconds" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Forward 30 seconds" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Play", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Playback speed" }),
+  ).toBeVisible();
   await expect(page.getByRole("slider", { name: "Volume" })).toBeVisible();
 });
 
@@ -107,8 +123,12 @@ test("renders the listen page layout for an m4b audiobook", async ({
   const uuid = await fetchBookUuidByTitle(request, M4B_BOOK.title);
   await gotoReady(page, `/listen/${uuid}`);
 
-  await expect(page.getByRole("button", { name: "Play", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: M4B_BOOK.title })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Play", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: M4B_BOOK.title }),
+  ).toBeVisible();
   await expect(page.getByText(`by ${M4B_BOOK.author}`)).toBeVisible();
 
   await waitForPlayerReady(page);
@@ -157,10 +177,9 @@ test("seeds an empty server preference from the account-scoped local speed", asy
   expect(meResponse.status()).toBe(200);
   const user = (await meResponse.json()) as { id: number };
   const storageKey = `omn.listening.rate::${user.id}::${uuid}`;
-  await page.addInitScript(
-    ({ key }) => localStorage.setItem(key, "1.8"),
-    { key: storageKey },
-  );
+  await page.addInitScript(({ key }) => localStorage.setItem(key, "1.8"), {
+    key: storageKey,
+  });
 
   await expectMutation(
     page,
@@ -237,7 +256,9 @@ test("opens the listen page from the book detail Listen action", async ({
   // Dioxus serializes the optional `?file_id=` route param as a bare trailing
   // `?` when unset, so allow it (functionally `/listen/:uuid`).
   await expect(page).toHaveURL(new RegExp(`/listen/${uuid}\\??$`));
-  await expect(page.getByRole("button", { name: "Play", exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Play", exact: true }),
+  ).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------
@@ -253,7 +274,9 @@ test("SPA-nav between audiobooks resets player signals (#369)", async ({
 
   // Navigate to the first audiobook and wait for the player to render.
   await gotoReady(page, `/listen/${uuid1}`);
-  await expect(page.getByRole("heading", { name: MP3_BOOK.title })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: MP3_BOOK.title }),
+  ).toBeVisible();
   await waitForPlayerReady(page);
 
   // Delay the second audiobook's manifest fetch so the preparing overlay
@@ -293,9 +316,11 @@ test("SPA-nav between audiobooks resets player signals (#369)", async ({
   await page.locator("#__test-spa-nav").click();
 
   // Wait for the second book's title to appear.
-  await expect(page.getByRole("heading", { name: M4B_BOOK.title })).toBeVisible({
-    timeout: 10_000,
-  });
+  await expect(page.getByRole("heading", { name: M4B_BOOK.title })).toBeVisible(
+    {
+      timeout: 10_000,
+    },
+  );
 
   // The preparing overlay MUST be visible while the manifest is held —
   // this is the positive proof that hls_ready was reset to false. If the
@@ -309,7 +334,9 @@ test("SPA-nav between audiobooks resets player signals (#369)", async ({
 
   // After init completes: no failure overlay, toggle says "Play".
   await expect(page.getByTestId("listen-failed")).not.toBeVisible();
-  await expect(page.getByRole("button", { name: "Play", exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Play", exact: true }),
+  ).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------
@@ -345,7 +372,9 @@ test("persists listening progress when the audio element pauses", async ({
 
   // Player chrome stays mounted, no failure overlay.
   await expect(page.getByTestId("listen-failed")).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: MP3_BOOK.title })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: MP3_BOOK.title }),
+  ).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------
@@ -393,7 +422,9 @@ test("surfaces a 5xx progress POST without crashing the player", async ({
   // Player stays up — fire-and-forget progress uses the local cache as
   // the safety net, not the server response.
   await expect(page.getByTestId("listen-failed")).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: MP3_BOOK.title })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: MP3_BOOK.title }),
+  ).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------
@@ -439,7 +470,9 @@ test("opens sleep panel and shows preset duration rail", async ({
   await expect(panel.getByRole("button", { name: "2 hours" })).toBeVisible();
   await expect(panel.getByRole("button", { name: "3 hours" })).toBeVisible();
   await expect(panel.getByRole("button", { name: "4 hours" })).toBeVisible();
-  await expect(panel.getByRole("button", { name: "End of chapter" })).toBeVisible();
+  await expect(
+    panel.getByRole("button", { name: "End of chapter" }),
+  ).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------
@@ -525,14 +558,19 @@ test("arms a sleep preset and shows a live countdown", async ({
   await expect(page.getByTestId("sleep-status")).toHaveText(/^1[45]:\d\d$/);
 
   // The toolbar Sleep button reflects the live countdown.
-  await expect(page.getByRole("button", { name: /^Sleep · 1[45]:/ })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /^Sleep · 1[45]:/ }),
+  ).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------
 // 9c. Volume slider (#989)
 // ---------------------------------------------------------------------------
 
-test("adjusts volume via the full player's slider", async ({ page, request }) => {
+test("adjusts volume via the full player's slider", async ({
+  page,
+  request,
+}) => {
   const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
   await gotoReady(page, `/listen/${uuid}`);
   await waitForPlayerReady(page);
