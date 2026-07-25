@@ -35,9 +35,9 @@ pub(crate) struct RelocateData {
     #[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
     pub(crate) cfi: Option<String>,
     // Visual page within the *current spine section* (epub.js
-    // `location.start.displayed`), not a whole-book count: it advances by
-    // exactly one per page turn, at the cost of resetting at each chapter
-    // boundary. `pct` below is the whole-book position.
+    // `location.start.displayed`), not a whole-book count: it increments by
+    // one per turn within a chapter, and resets to 1 on crossing into the
+    // next chapter. `pct` below is the whole-book position.
     pub(crate) page: u32,
     pub(crate) total_pages: u32,
     pub(crate) pct: u32,
@@ -48,8 +48,8 @@ pub(crate) struct RelocateData {
 
 /// Format the bottom-bar `page` and `chapter` strings from a relocate
 /// event. `page`/`total_pages` are scoped to the current chapter (see
-/// [`RelocateData`]), so `page` always advances by exactly one per turn.
-/// Returns `("", "")` until epub.js has produced a relocation.
+/// [`RelocateData`]). Returns `("", "")` until epub.js has produced a
+/// relocation.
 pub(crate) fn format_progress_labels(loc: &RelocateData) -> (String, String) {
     let page = if loc.total_pages > 0 {
         format!(
@@ -226,17 +226,10 @@ mod tests {
         assert_eq!(format_contents_progress(&RelocateData::default()), "");
     }
 
-    // Regression for the bug in issue #1234: `page`/`total_pages` used to
-    // come from whole-book ~1024-char location chunks, so a single visual
-    // page turn could jump by several chunks (dense screen) or by zero
-    // (sparse screen, e.g. a chapter heading) depending on content density —
-    // completely decoupled from the actual page turn. Now that they're
-    // sourced from epub.js's per-render `displayed` figure, a page turn
-    // always advances `page` by exactly one, even when it also crosses into
-    // a chapter with a different total (simulated here by `total_pages`
-    // changing between the two relocate events).
+    // Regression for issue #1234: a page turn must never render a stalled
+    // (unchanged) figure, even across a chapter boundary where `page` resets.
     #[test]
-    fn format_progress_labels_advances_page_by_exactly_one_across_chapter_boundary() {
+    fn format_progress_labels_resets_page_and_total_on_crossing_a_chapter_boundary() {
         let before = RelocateData {
             page: 22,
             total_pages: 22,
