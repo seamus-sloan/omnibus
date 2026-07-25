@@ -118,6 +118,7 @@
     endSectionTurn();
     endSettleFade();
     locationsReady = false;
+    sectionRanges = null;
     tocFlat = [];
     if (rendition) {
       try {
@@ -157,14 +158,56 @@
     return null;
   }
 
+  // First and last whole-book location index of each spine section, derived
+  // once the locations pass lands. epub.js knows how the whole book paginates
+  // but not where a section begins and ends inside that, which is what
+  // "N pages left in this chapter" needs.
+  var sectionRanges = null;
+
+  function buildSectionRanges() {
+    sectionRanges = null;
+    if (!book || !book.locations) return;
+    var list = book.locations._locations;
+    if (!list || !list.length) {
+      // `save()` is the public form of the same array — used when a future
+      // epub.js drops the private field.
+      try {
+        list = JSON.parse(book.locations.save());
+      } catch (e) {
+        return;
+      }
+    }
+    if (!list || !list.length) return;
+    var ranges = {};
+    for (var i = 0; i < list.length; i++) {
+      // Everything before the "!" step of a location CFI is its spine base.
+      var base = String(list[i]).split("!")[0];
+      if (ranges[base]) ranges[base].last = i;
+      else ranges[base] = { first: i, last: i };
+    }
+    sectionRanges = ranges;
+  }
+
+  // Pages between this one and the end of its section. 0 means "unknown or
+  // already on the last page", which the host renders as no label at all.
+  function pagesLeftInSection(cfi, index) {
+    if (!sectionRanges || !cfi) return 0;
+    var range = sectionRanges[String(cfi).split("!")[0]];
+    if (!range) return 0;
+    var left = range.last - index;
+    return left > 0 ? left : 0;
+  }
+
   function buildRelocateData(location) {
     var cfi = location && location.start ? location.start.cfi : undefined;
     var pct = location && location.start ? Math.round((location.start.percentage || 0) * 100) : 0;
     var page = 0;
     var totalPages = 0;
+    var pagesLeft = 0;
     if (locationsReady && book && book.locations) {
       page = book.locations.locationFromCfi(cfi) || 0;
       totalPages = book.locations.total || 0;
+      pagesLeft = pagesLeftInSection(cfi, page);
     }
     var ch = location && location.start ? findChapter(location.start.href) : null;
     return {
@@ -175,6 +218,7 @@
       chapter: ch ? ch.index : 0,
       totalChapters: ch ? ch.total : tocFlat.length,
       chapterTitle: ch ? ch.title : "",
+      chapterPagesLeft: pagesLeft,
     };
   }
 
@@ -259,6 +303,7 @@
       });
       rendition.themes.select(opts.theme || "dark");
       currentTheme = opts.theme || "dark";
+      applyHostGround(currentTheme);
 
       if (opts.fontSize) {
         rendition.themes.fontSize(opts.fontSize + "px");
@@ -310,6 +355,9 @@
       })
       .then(function () {
         locationsReady = true;
+        buildSectionRanges();
+        // Re-emit now that each entry can carry its page and percent.
+        emitToc();
         // Re-emit current location now that locations are resolved so the
         // Rust side gets real page numbers on first load.
         if (rendition && rendition.location) {
@@ -412,11 +460,13 @@
         x: r.left + iframeRect.x,
         y: r.top + iframeRect.y,
         width: r.width,
+        height: r.height,
       };
       window.__omnibusOnSelection(JSON.stringify({
         cfiRange: cfiRange,
         text: sel.toString(),
         rect: rect,
+        existing: overlappingAnnotation(range),
       }));
     });
 
@@ -963,6 +1013,25 @@
     return (list[0] && list[0].window) || null;
   }
 
+  // Drop the live text selection.
+  //
+  // The selection belongs to the *section iframe*, so clearing only the host
+  // window leaves it on screen: the passage stays visibly selected after it has
+  // been highlighted, and the glue's own touchend then spends the next tap
+  // dismissing it (`hadSel`) instead of acting — which is what made closing the
+  // highlight menu feel like it took two taps.
+  function clearSelection() {
+    var windows = [currentContentsWindow(), window];
+    for (var i = 0; i < windows.length; i++) {
+      try {
+        var w = windows[i];
+        if (w && w.getSelection) w.getSelection().removeAllRanges();
+      } catch (e) {
+        /* a section torn down mid-clear has nothing to clear */
+      }
+    }
+  }
+
   function installGestureHandlers(doc, isHost) {
     if (!doc || doc.__omnibusGestures) return;
     doc.__omnibusGestures = true;
@@ -1203,6 +1272,9 @@
   // could clobber it, and it splits state across two owners), we signal through
   // the same `__omnibusOn*` bridge the rest of the glue uses and let the host
   // flip a `chrome_hidden` signal — the single source of truth on both targets.
+  // A tap on a highlight also reaches the document as a page tap. Which of the
+  // two the host hears first depends on DOM listener order, so the pair is
+  // matched on the host side (`ReaderController`) rather than here.
   function emitToggleChrome() {
     if (typeof window.__omnibusOnToggleChrome === "function") {
       window.__omnibusOnToggleChrome("");
@@ -1214,10 +1286,32 @@
     rendition.themes.fontSize(px + "px");
   }
 
+  // Page grounds, keyed by theme token. Mirrors the `themes.register` bodies
+  // above — change both together.
+  var HOST_GROUNDS = {
+    light: "#fcfbfa",
+    dark: "#201e1b",
+    black: "#000000",
+    sepia: "#ede4d0",
+  };
+
+  // Paint the *host* document the same ground as the page.
+  //
+  // The stage is inset from the safe areas, so the bands above and below it are
+  // host document, not book. Left on the stylesheet's dark fallback they stay
+  // dark behind a white page — which reads as a broken frame around the prose
+  // now that the chrome floats over those bands instead of covering them.
+  function applyHostGround(name) {
+    var ground = HOST_GROUNDS[name];
+    if (!ground || !document.documentElement) return;
+    document.documentElement.style.setProperty("--page", ground);
+  }
+
   function setTheme(name) {
     if (!rendition) return;
     rendition.themes.select(name);
     currentTheme = name;
+    applyHostGround(name);
     // Re-tint reader-owned colours in every rendered section for the new ground.
     try {
       rendition.getContents().forEach(function (c) {
@@ -1271,19 +1365,98 @@
     violet: "rgb(139, 92, 246)",
   };
 
-  function addAnnotation(cfiRange, color) {
+  // The cfiRange of a highlight the selection runs through, if any, so the
+  // host can offer "Remove Highlight" the way Apple Books does when your
+  // selection touches one.
+  //
+  // Compared as live DOM ranges rather than by parsing CFI strings: epub.js
+  // can hand back the range for a stored annotation, and boundary-point
+  // comparison is then exact and standard.
+  function overlappingAnnotation(range) {
+    if (!rendition || !rendition.annotations) return null;
+    var store = rendition.annotations._annotations;
+    if (!store || !range) return null;
+    var keys = Object.keys(store);
+    for (var i = 0; i < keys.length; i++) {
+      var entry = store[keys[i]];
+      if (!entry || entry.type !== "highlight") continue;
+      try {
+        var other = rendition.getRange(entry.cfiRange);
+        if (!other) continue;
+        // Overlap iff each range begins before the other ends.
+        var otherStartsBeforeThisEnds =
+          range.compareBoundaryPoints(Range.START_TO_END, other) < 0;
+        var thisStartsBeforeOtherEnds =
+          other.compareBoundaryPoints(Range.START_TO_END, range) < 0;
+        if (otherStartsBeforeThisEnds && thisStartsBeforeOtherEnds) {
+          return entry.cfiRange;
+        }
+      } catch (e) {
+        /* a stored range in another section can't be resolved here */
+      }
+    }
+    return null;
+  }
+
+  // Report a tap on an existing highlight so the host can offer the same
+  // menu Apple Books does — recolour, note, remove. epub.js renders marks
+  // into a pane in the HOST document (not the section iframe), so these
+  // coordinates need no iframe offset, unlike the selection rect above.
+  function emitAnnotationTap(cfiRange, e) {
+    if (typeof window.__omnibusOnAnnotationTap !== "function") return;
+    var rect = null;
+    try {
+      var target = e && (e.currentTarget || e.target);
+      var r = target && target.getBoundingClientRect && target.getBoundingClientRect();
+      if (r && r.width) {
+        rect = { x: r.left, y: r.top, width: r.width, height: r.height };
+      } else if (e && typeof e.clientX === "number") {
+        rect = { x: e.clientX, y: e.clientY, width: 0, height: 0 };
+      }
+    } catch (err) {
+      /* best effort — the host falls back to a centred menu */
+    }
+    window.__omnibusOnAnnotationTap(
+      JSON.stringify({ cfiRange: cfiRange, rect: rect })
+    );
+  }
+
+  function addAnnotation(cfiRange, color, hasNote) {
     if (!rendition) return;
     var fill = HIGHLIGHT_COLORS[color] || HIGHLIGHT_COLORS.amber;
+    var onTap = function (e) {
+      emitAnnotationTap(cfiRange, e);
+    };
     rendition.annotations.add(
-      "highlight", cfiRange, {}, undefined,
+      "highlight", cfiRange, {}, onTap,
       "hl-" + color,
       { fill: fill, "fill-opacity": "0.3", "mix-blend-mode": "multiply" }
     );
+    // A note is otherwise invisible on the page: without a cue, the only way
+    // to find your own annotation is to remember where you left it.
+    if (hasNote) {
+      rendition.annotations.add(
+        "underline", cfiRange, {}, onTap,
+        "hl-note",
+        { stroke: fill, "stroke-opacity": "0.95", "stroke-width": "2" }
+      );
+    }
   }
 
   function removeAnnotation(cfiRange) {
     if (!rendition) return;
-    rendition.annotations.remove(cfiRange, "highlight");
+    removeMark(cfiRange, "highlight");
+    removeMark(cfiRange, "underline");
+  }
+
+  // `annotations.remove` throws when the mark isn't there, and the note
+  // underline only exists for some highlights.
+  function removeMark(cfiRange, type) {
+    try {
+      rendition.annotations.remove(cfiRange, type);
+    } catch (e) {
+      /* not present */
+    }
   }
 
   function clearAnnotations() {
@@ -1293,8 +1466,8 @@
     var keys = Object.keys(store);
     for (var i = 0; i < keys.length; i++) {
       var entry = store[keys[i]];
-      if (entry && entry.type === "highlight") {
-        rendition.annotations.remove(entry.cfiRange, "highlight");
+      if (entry && (entry.type === "highlight" || entry.type === "underline")) {
+        removeMark(entry.cfiRange, entry.type);
       }
     }
   }
@@ -1307,14 +1480,45 @@
   // Walk the nested TOC into a flat [{label, href, level}] list and hand it
   // to the Rust side. Level is the nesting depth (0 = top), used to indent
   // the contents drawer. Re-emittable on demand via requestToc().
+  // Where a TOC entry starts, in whole-book pages and percent.
+  //
+  // Only resolvable once the locations pass has run, which is why the toc is
+  // emitted twice — once bare so the contents list is usable immediately, then
+  // again with positions. Backs the page numbers in the contents list and the
+  // "which chapter is this?" readout while scrubbing.
+  function tocEntryPosition(href) {
+    if (!sectionRanges || !book || !book.spine || !href) return null;
+    var section;
+    try {
+      section = book.spine.get(String(href).split("#")[0]);
+    } catch (e) {
+      return null;
+    }
+    if (!section || typeof section.cfiBase !== "string") return null;
+    var range = sectionRanges["epubcfi(" + section.cfiBase];
+    if (!range) return null;
+    var total = (book.locations && book.locations.total) || 0;
+    return {
+      page: range.first + 1,
+      pct: total > 0 ? Math.round((range.first / total) * 100) : 0,
+    };
+  }
+
   function collectToc(items, level, out) {
     if (!items) return;
     for (var i = 0; i < items.length; i++) {
-      out.push({
+      var href = items[i].href || "";
+      var entry = {
         label: (items[i].label || "").trim(),
-        href: items[i].href || "",
+        href: href,
         level: level,
-      });
+      };
+      var at = tocEntryPosition(href);
+      if (at) {
+        entry.page = at.page;
+        entry.pct = at.pct;
+      }
+      out.push(entry);
       if (items[i].subitems) collectToc(items[i].subitems, level + 1, out);
     }
   }
@@ -1527,6 +1731,17 @@
       }
     }
     displaySettled(t);
+  }
+
+  // Jump to a fraction (0–1) of the whole book — the scrubber's contract.
+  // Positions come from the locations pass, so this no-ops until page numbers
+  // exist rather than guessing and landing somewhere arbitrary.
+  function seek(fraction) {
+    if (!rendition || !book || !book.locations || !locationsReady) return;
+    var f = Number(fraction);
+    if (!isFinite(f)) return;
+    var cfi = book.locations.cfiFromPercentage(Math.max(0, Math.min(1, f)));
+    if (cfi) display(cfi);
   }
 
   function copyText(text) {
@@ -1769,6 +1984,8 @@
     clearAnnotations: clearAnnotations,
     requestToc: requestToc,
     display: display,
+    seek: seek,
+    clearSelection: clearSelection,
     copyText: copyText,
     shareText: shareText,
     search: search,

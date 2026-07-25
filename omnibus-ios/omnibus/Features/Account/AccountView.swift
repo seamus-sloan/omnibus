@@ -1,0 +1,526 @@
+//  AccountView.swift
+//  The "You" tab: identity, appearance, offline storage, and sign-out.
+//
+//  Was a stock inset-grouped `List` with system section headers, which made the
+//  one tab that isn't about books look like it belonged to a different app —
+//  grey sans headers against the editorial face everywhere else. It is built
+//  from the same masthead, section label, and record-row vocabulary the rest of
+//  the app uses.
+
+import SwiftUI
+
+struct AccountView: View {
+    @Environment(AppState.self) private var app
+    @Environment(\.palette) private var palette
+
+    @State private var showSignOutConfirm = false
+    @State private var showAddBooks = false
+    @State private var kindleEmail = ""
+    @State private var kindleSaved = false
+    private var downloads = DownloadManager.shared
+    private var connectivity = Connectivity.shared
+
+    private var downloadCount: Int {
+        downloads.records.values.filter { $0.state == .complete }.count
+    }
+
+    var body: some View {
+        @Bindable var app = app
+
+        NavigationStack {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 30) {
+                    Masthead(title: "You")
+
+                    identityCard
+
+                    appearance($app)
+                    library
+                    offline
+                    sendToKindle
+                    session
+                    colophon
+                }
+                .padding(.bottom, 40)
+            }
+            .scrollIndicators(.hidden)
+            .scrollDismissesKeyboard(.interactively)
+            .background(ScreenBackground())
+            .toolbar(.hidden, for: .navigationBar)
+            .topEdgeScrim()
+            .withDestinations()
+            .sheet(isPresented: $showAddBooks) { AddBooksSheet() }
+            .confirmationDialog(
+                "Sign out of Omnibus?", isPresented: $showSignOutConfirm, titleVisibility: .visible
+            ) {
+                Button("Sign out", role: .destructive) {
+                    Task { await app.signOut() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Downloaded books stay on this device.")
+            }
+        }
+        .task {
+            kindleEmail = app.user?.kindleEmail ?? ""
+            await connectivity.refreshPendingCount()
+        }
+        .onChange(of: kindleEmail) { _, _ in kindleSaved = false }
+    }
+
+    // MARK: - Identity
+
+    /// The account, given the weight a name deserves rather than a 44pt row.
+    private var identityCard: some View {
+        HStack(spacing: Spacing.lg) {
+            Circle()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            palette.accentColor.opacity(0.85),
+                            palette.accentSoftColor,
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .frame(width: 58, height: 58)
+                .overlay {
+                    Text((app.user?.username.prefix(1) ?? "?").uppercased())
+                        .font(.display(26, weight: .semibold))
+                        .foregroundStyle(palette.accentInk.color)
+                }
+                .overlay(Circle().strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
+                .shadow(color: palette.accentColor.opacity(0.25), radius: 12, y: 4)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(app.user?.username ?? "Signed in")
+                    .font(.display(24))
+                    .foregroundStyle(palette.ink0Color)
+                    .lineLimit(1)
+
+                Text(roleLine)
+                    .font(.monoUI(10, weight: .medium))
+                    .tracking(0.7)
+                    .textCase(.uppercase)
+                    .foregroundStyle(app.user?.isAdmin == true ? palette.accentColor : palette.ink3Color)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .screenPadding()
+    }
+
+    private var roleLine: String {
+        guard let user = app.user else { return "Signed in" }
+        return user.isAdmin ? "Administrator" : "Reader"
+    }
+
+    // MARK: - Sections
+
+    private func appearance(_ app: Bindable<AppState>) -> some View {
+        group("Appearance") {
+            // Themes are the one setting whose whole point is how it looks, so
+            // each option carries its own ground and ink rather than a label in
+            // a menu you have to commit to before you can see it.
+            HStack(spacing: Spacing.md) {
+                ForEach(ThemeName.allCases, id: \.self) { name in
+                    ThemeSwatch(name: name, isOn: app.wrappedValue.theme == name) {
+                        guard app.wrappedValue.theme != name else { return }
+                        Haptics.select()
+                        withAnimation(Motion.settle) { app.wrappedValue.theme = name }
+                    }
+                }
+            }
+        }
+    }
+
+    private var library: some View {
+        group("Library") {
+            VStack(spacing: 0) {
+                actionRow("Add books", icon: "plus.circle", isFirst: true) {
+                    Haptics.tap()
+                    showAddBooks = true
+                }
+                linkRow("Shelves", icon: "square.stack", to: .shelves)
+                linkRow("Authors", icon: "person.2", to: .authorsIndex)
+                linkRow("Series", icon: "square.grid.2x2", to: .seriesIndex)
+                linkRow("Tags", icon: "tag", to: .tags)
+                if app.user?.isAdmin == true {
+                    linkRow("Server settings", icon: "gearshape", to: .settings)
+                }
+                RecordRule()
+            }
+        }
+    }
+
+    private var offline: some View {
+        group("Offline") {
+            VStack(spacing: 0) {
+                NavigationLink(value: Destination.downloads) {
+                    rowShell(isFirst: true) {
+                        icon("arrow.down.circle")
+                        rowTitle("Downloads")
+                        Spacer(minLength: 0)
+                        Text("\(downloadCount)")
+                            .font(.monoUI(13))
+                            .foregroundStyle(palette.ink3Color)
+                        chevron
+                    }
+                }
+                .buttonStyle(PressableStyle())
+
+                rowShell {
+                    icon("internaldrive")
+                    rowTitle("Storage used")
+                    Spacer(minLength: 0)
+                    Text(Format.bytes(downloads.totalBytesOnDisk()))
+                        .font(.monoUI(13))
+                        .foregroundStyle(palette.ink3Color)
+                }
+
+                if connectivity.pendingWrites > 0 {
+                    rowShell {
+                        icon("arrow.triangle.2.circlepath")
+                        rowTitle("Waiting to sync")
+                        Spacer(minLength: 0)
+                        Text("\(connectivity.pendingWrites)")
+                            .font(.monoUI(13))
+                            .foregroundStyle(palette.warnColor)
+                        Button("Sync now") {
+                            Task {
+                                await SyncEngine.shared.drain()
+                                await connectivity.refreshPendingCount()
+                            }
+                        }
+                        .font(.ui(13, weight: .medium))
+                        .foregroundStyle(palette.accentColor)
+                        .disabled(!connectivity.isOnline)
+                    }
+                }
+
+                actionRow("Clear cached covers", icon: "trash", tint: palette.ink1Color) {
+                    Task {
+                        await ImageCache.shared.clearDisk()
+                        Haptics.success()
+                    }
+                }
+
+                RecordRule()
+            }
+        }
+    }
+
+    private var sendToKindle: some View {
+        group("Send to Kindle") {
+            VStack(alignment: .leading, spacing: Spacing.md) {
+                Plate {
+                    PlateField(
+                        label: "Kindle email",
+                        text: $kindleEmail,
+                        isFirst: true,
+                        hint: "Optional",
+                        keyboard: .emailAddress
+                    )
+                }
+
+                HStack(spacing: Spacing.md) {
+                    Text("Where “Send to Kindle” delivers a book.")
+                        .font(.ui(12))
+                        .foregroundStyle(palette.ink3Color)
+
+                    Spacer(minLength: 0)
+
+                    Button(kindleSaved ? "Saved" : "Save") {
+                        Task {
+                            try? await AuthService.setKindleEmail(kindleEmail.nilIfBlank)
+                            kindleSaved = true
+                            Haptics.success()
+                        }
+                    }
+                    .font(.ui(13.5, weight: .semibold))
+                    .foregroundStyle(kindleSaved ? palette.okColor : palette.accentColor)
+                    .disabled(kindleSaved)
+                    .contentTransition(.numericText())
+                    .animation(Motion.snap, value: kindleSaved)
+                }
+            }
+        }
+    }
+
+    private var session: some View {
+        VStack(spacing: 0) {
+            actionRow("Change server", icon: "server.rack", tint: palette.ink1Color, isFirst: true) {
+                Task { await app.changeServer() }
+            }
+            actionRow("Sign out", icon: "rectangle.portrait.and.arrow.right", tint: palette.badColor) {
+                showSignOutConfirm = true
+            }
+            RecordRule()
+        }
+        .screenPadding()
+    }
+
+    private var colophon: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("Omnibus \(app.appVersion)")
+            if let server = app.serverVersion {
+                Text("Server \(server)")
+            }
+            if let url = app.serverURL {
+                Text(url)
+            }
+        }
+        .font(.monoUI(10.5))
+        .foregroundStyle(palette.ink3Color.opacity(0.8))
+        .screenPadding()
+    }
+
+    // MARK: - Row vocabulary
+
+    private func group<Content: View>(
+        _ title: String, @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            SectionLabel(title)
+            content()
+        }
+        .screenPadding()
+    }
+
+    private func linkRow(_ label: String, icon glyph: String, to destination: Destination) -> some View {
+        NavigationLink(value: destination) {
+            rowShell {
+                icon(glyph)
+                rowTitle(label)
+                Spacer(minLength: 0)
+                chevron
+            }
+        }
+        .buttonStyle(PressableStyle())
+    }
+
+    private func actionRow(
+        _ label: String, icon glyph: String, tint: Color? = nil,
+        isFirst: Bool = false, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            rowShell(isFirst: isFirst) {
+                icon(glyph, tint: tint)
+                rowTitle(label, tint: tint)
+                Spacer(minLength: 0)
+            }
+        }
+        .buttonStyle(PressableStyle())
+    }
+
+    private func rowShell<Content: View>(
+        isFirst: Bool = false, @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(spacing: 0) {
+            if !isFirst { Hairline() }
+            HStack(spacing: Spacing.md) {
+                content()
+            }
+            .padding(.vertical, 13)
+            .contentShape(Rectangle())
+        }
+    }
+
+    private func icon(_ name: String, tint: Color? = nil) -> some View {
+        Image(systemName: name)
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(tint ?? palette.accentColor)
+            .frame(width: 24, alignment: .leading)
+    }
+
+    private func rowTitle(_ text: String, tint: Color? = nil) -> some View {
+        Text(text)
+            .font(.ui(15.5))
+            .foregroundStyle(tint ?? palette.ink0Color)
+    }
+
+    private var chevron: some View {
+        Image(systemName: "chevron.right")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(palette.ink3Color.opacity(0.7))
+    }
+}
+
+/// One theme, shown in its own colours.
+private struct ThemeSwatch: View {
+    let name: ThemeName
+    let isOn: Bool
+    let action: () -> Void
+
+    @Environment(\.palette) private var palette
+
+    private var swatch: Palette { Palette.named(name) }
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 7) {
+                RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                    .fill(swatch.bg0Color)
+                    .aspectRatio(1, contentMode: .fit)
+                    .overlay {
+                        VStack(spacing: 4) {
+                            Capsule()
+                                .fill(swatch.ink0Color)
+                                .frame(width: 24, height: 3)
+                            Capsule()
+                                .fill(swatch.ink2Color)
+                                .frame(width: 17, height: 3)
+                            Capsule()
+                                .fill(swatch.accentColor)
+                                .frame(width: 11, height: 3)
+                        }
+                    }
+                    // A dark swatch on a dark page needs a real edge to read as
+                    // an object — at `line2` the Pure Black tile had none.
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                            .strokeBorder(
+                                isOn ? palette.accentColor : palette.lineColor,
+                                lineWidth: isOn ? 2 : 0.75
+                            )
+                    )
+
+                Text(name.label)
+                    .font(.ui(11, weight: isOn ? .semibold : .regular))
+                    .foregroundStyle(isOn ? palette.ink0Color : palette.ink3Color)
+                    .lineLimit(1)
+            }
+        }
+        .buttonStyle(PressableStyle())
+        .accessibilityLabel(name.label)
+        .accessibilityAddTraits(isOn ? [.isSelected, .isButton] : .isButton)
+    }
+}
+
+struct DownloadsView: View {
+    @Environment(\.palette) private var palette
+    private var downloads = DownloadManager.shared
+
+    @State private var books: [String: Book] = [:]
+
+    private var records: [DownloadRecord] {
+        downloads.records.values.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    var body: some View {
+        Group {
+            if records.isEmpty {
+                EmptyStateView(
+                    icon: "arrow.down.circle",
+                    title: "Nothing downloaded",
+                    message: "Download a book from its detail screen to read or listen offline."
+                )
+            } else {
+                // Record rows on the page ground rather than a `List`: a
+                // two-row list drew a filled slab that stopped halfway down an
+                // otherwise black screen, and its rows led nowhere.
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(Array(records.enumerated()), id: \.element.id) { index, record in
+                            NavigationLink(value: Destination.book(uuid: record.bookUUID)) {
+                                row(record, isFirst: index == 0)
+                            }
+                            .buttonStyle(PressableStyle())
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    Task { await downloads.remove(record.bookUUID) }
+                                } label: {
+                                    Label("Remove download", systemImage: "trash")
+                                }
+                            }
+                        }
+                        RecordRule()
+
+                        Text("\(Format.bytes(downloads.totalBytesOnDisk())) on this device")
+                            .font(.monoUI(11))
+                            .foregroundStyle(palette.ink3Color)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, Spacing.md)
+                    }
+                    .screenPadding()
+                    .padding(.top, Spacing.sm)
+                    .padding(.bottom, 40)
+                }
+                .scrollIndicators(.hidden)
+            }
+        }
+        .background(ScreenBackground())
+        .navigationTitle("Downloads")
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            // Titles come from the replica so this screen works offline too.
+            for record in records where books[record.bookUUID] == nil {
+                if let book: Book = await Cache.cachedOnly(CacheKey.book(record.bookUUID)) {
+                    books[record.bookUUID] = book
+                }
+            }
+        }
+    }
+
+    private func row(_ record: DownloadRecord, isFirst: Bool) -> some View {
+        let book = books[record.bookUUID]
+
+        return VStack(spacing: 0) {
+            if !isFirst { Hairline() }
+
+            HStack(spacing: Spacing.md) {
+                BookCover(
+                    identity: CoverIdentity(
+                        uuid: record.bookUUID,
+                        title: book?.displayTitle ?? "?",
+                        author: book?.creators.first?.name,
+                        accent: book?.accent,
+                        hasCover: book?.coverURL != nil
+                    ),
+                    size: .sm
+                )
+                .frame(width: 38)
+                .coverShadow(0.6)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(book?.displayTitle ?? record.bookUUID)
+                        .font(.ui(14.5, weight: .medium))
+                        .foregroundStyle(palette.ink0Color)
+                        .lineLimit(1)
+
+                    HStack(spacing: 6) {
+                        Badge(text: record.format)
+                        Text(statusLabel(record))
+                            .font(.ui(11.5))
+                            .foregroundStyle(
+                                record.state == .failed ? palette.badColor : palette.ink3Color
+                            )
+                    }
+
+                    if record.state == .running {
+                        ProgressBar(fraction: record.fraction, tint: palette.accentColor)
+                            .frame(width: 140)
+                    }
+                }
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(palette.ink3Color.opacity(0.7))
+            }
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
+        }
+    }
+
+    private func statusLabel(_ record: DownloadRecord) -> String {
+        switch record.state {
+        case .complete: Format.bytes(record.totalBytes)
+        case .running: "\(Int(record.fraction * 100))%"
+        case .queued: "Queued"
+        case .failed: record.error ?? "Failed"
+        }
+    }
+}

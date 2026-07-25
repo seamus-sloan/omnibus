@@ -83,3 +83,20 @@ test_data/.fixtures-version
 # Python bytecode (scripts/*.py)
 __pycache__/
 *.pyc
+
+# Xcode / Swift (the native iOS app)
+# Per-user IDE state — window layout, selected scheme, breakpoints. Xcode
+# rewrites these on open and on every build, so tracking them leaves the tree
+# dirty after merely opening the project. `xcshareddata/` is the shared
+# counterpart and stays committed.
+**/xcuserdata/
+# Build output. Builds normally land in DerivedData outside the tree, but an
+# in-tree copy appears whenever xcodebuild runs without -derivedDataPath.
+DerivedData/
+*.xcarchive
+*.ipa
+*.dSYM
+*.dSYM.zip
+# Swift Package Manager local state (Package.resolved stays committed).
+.swiftpm/
+.build/
