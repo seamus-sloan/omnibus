@@ -119,7 +119,6 @@ pub(super) struct TransportState {
 /// Transport-row event handlers wired through to the scrubber + play/skip/rate buttons.
 #[derive(Clone, PartialEq)]
 pub(super) struct PlayerCallbacks {
-    pub on_seek: EventHandler<Event<FormData>>,
     pub on_toggle: EventHandler<MouseEvent>,
     pub on_skip_back: EventHandler<MouseEvent>,
     pub on_skip_forward: EventHandler<MouseEvent>,
