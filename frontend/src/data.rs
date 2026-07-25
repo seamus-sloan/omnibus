@@ -767,16 +767,18 @@ pub mod web_auth_state {
 /// skip the redirect ping — there's no client to redirect.
 #[cfg(not(feature = "mobile"))]
 pub(crate) fn note_server_fn_err(e: dioxus::CapturedError) -> DataError {
-    if let Some(sfn_err) = e.0.downcast_ref::<dioxus::fullstack::ServerFnError>() {
-        let code = match sfn_err {
-            dioxus::fullstack::ServerFnError::ServerError { code, .. } => *code,
-            _ => 0,
-        };
-        if code == 401 {
+    if let Some(dioxus::fullstack::ServerFnError::ServerError { code, message, .. }) =
+        e.0.downcast_ref::<dioxus::fullstack::ServerFnError>()
+    {
+        if *code == 401 {
             #[cfg(feature = "web")]
             web_auth_state::notify_unauthorized();
             return DataError::Unauthorized;
         }
+        // Surface the handler's own `ServerFnError::new(msg)` text rather than
+        // the `CapturedError` Display, which wraps it as "error running server
+        // function: <msg> (details: None)" — noise for an inline form error.
+        return DataError::Other(message.clone());
     }
     DataError::Other(e.to_string())
 }

@@ -2,7 +2,7 @@
 
 use sqlx::{SqliteConnection, SqlitePool};
 
-use super::password::{hash_password, validate_password, validate_username};
+use super::password::{hash_password, validate_password, validate_username, verify_password};
 use super::{row_to_user, AuthError, AuthResult, User};
 
 /// Atomically create a user. The first user created becomes admin; the
@@ -180,6 +180,55 @@ pub async fn get_kindle_email(pool: &SqlitePool, user_id: i64) -> AuthResult<Opt
         .await?
         .flatten();
     Ok(v.filter(|s| !s.trim().is_empty()))
+}
+
+/// Change a user's password. Verifies `current` against the stored hash to
+/// authorize the change, validates `new` against the password policy, then
+/// re-hashes with Argon2id and stamps `password_changed_at` — all in one
+/// transaction so an interrupted call never leaves a half-applied state.
+///
+/// Errors with [`AuthError::InvalidCredentials`] when the current password is
+/// wrong (or the user id no longer exists) and [`AuthError::Validation`] when
+/// the new password fails policy (min length / common-password reject-list).
+/// Only ever touches the row identified by `user_id`.
+pub async fn change_password(
+    pool: &SqlitePool,
+    user_id: i64,
+    current: &str,
+    new: &str,
+) -> AuthResult<()> {
+    let mut tx = pool.begin().await?;
+
+    let phc: Option<String> = sqlx::query_scalar("SELECT password_hash FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let Some(phc) = phc else {
+        return Err(AuthError::InvalidCredentials);
+    };
+    if !verify_password(current, &phc)? {
+        return Err(AuthError::InvalidCredentials);
+    }
+
+    // Validate only after authorizing, so an unauthenticated caller can't
+    // probe the policy — and reject before hashing to avoid wasted argon2 work.
+    validate_password(new)?;
+    let new_phc = hash_password(new)?;
+
+    // Stamp `password_changed_at` alongside the new hash (the standing
+    // INVARIANT in `create_user`): downstream "invalidate sessions older than
+    // last password change" logic reads this column.
+    sqlx::query(
+        "UPDATE users SET password_hash = ?, password_changed_at = strftime('%s','now')
+         WHERE id = ?",
+    )
+    .bind(&new_phc)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(())
 }
 
 /// `OMNIBUS_INITIAL_ADMIN` boot hook: if a user by this username exists,

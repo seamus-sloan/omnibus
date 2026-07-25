@@ -28,8 +28,8 @@ pub use token::{
     SESSION_COOKIE_NAME_HOST_PREFIXED,
 };
 pub use users::{
-    create_user, get_kindle_email, get_user_by_id, get_user_by_username, promote_to_admin,
-    registration_enabled, set_kindle_email, set_registration_enabled,
+    change_password, create_user, get_kindle_email, get_user_by_id, get_user_by_username,
+    promote_to_admin, registration_enabled, set_kindle_email, set_registration_enabled,
 };
 
 use sqlx::Row;

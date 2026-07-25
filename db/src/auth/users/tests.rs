@@ -183,3 +183,85 @@ async fn set_kindle_email_rejects_malformed_address() {
     let err = set_kindle_email(&p, u.id, Some("nope")).await.unwrap_err();
     assert!(matches!(err, AuthError::Validation(_)));
 }
+
+#[tokio::test]
+async fn change_password_updates_hash_and_stamp_and_new_password_logs_in() {
+    use crate::auth::verify_login;
+
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let before: i64 = sqlx::query_scalar("SELECT password_changed_at FROM users WHERE id = ?")
+        .bind(u.id)
+        .fetch_one(&p)
+        .await
+        .unwrap();
+
+    change_password(&p, u.id, "hunter2-real-long", "brand-new-longpass")
+        .await
+        .unwrap();
+
+    // Old password no longer authenticates; the new one does.
+    assert!(matches!(
+        verify_login(&p, "alice", "hunter2-real-long")
+            .await
+            .unwrap_err(),
+        AuthError::InvalidCredentials
+    ));
+    verify_login(&p, "alice", "brand-new-longpass")
+        .await
+        .unwrap();
+
+    // The stamp advanced (or held steady within the same wall-clock second);
+    // it must never regress.
+    let after: i64 = sqlx::query_scalar("SELECT password_changed_at FROM users WHERE id = ?")
+        .bind(u.id)
+        .fetch_one(&p)
+        .await
+        .unwrap();
+    assert!(after >= before, "password_changed_at must not regress");
+}
+
+#[tokio::test]
+async fn change_password_rejects_wrong_current_and_leaves_hash_intact() {
+    use crate::auth::verify_login;
+
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+
+    let err = change_password(&p, u.id, "wrong-current-pass", "brand-new-longpass")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AuthError::InvalidCredentials));
+
+    // Nothing changed: the original password still logs in.
+    verify_login(&p, "alice", "hunter2-real-long")
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn change_password_rejects_invalid_new_password() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+
+    // Too short.
+    let err = change_password(&p, u.id, "hunter2-real-long", "short")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AuthError::Validation(_)));
+
+    // Common-password reject-list.
+    let err = change_password(&p, u.id, "hunter2-real-long", "password123")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AuthError::Validation(_)));
+}
+
+#[tokio::test]
+async fn change_password_rejects_unknown_user() {
+    let p = pool().await;
+    let err = change_password(&p, 9999, "anything-here-long", "brand-new-longpass")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AuthError::InvalidCredentials));
+}
