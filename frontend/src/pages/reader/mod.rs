@@ -60,18 +60,12 @@ fn reader_call(method: &str, arg_js: &str) {
     let _ = dioxus::document::eval(&js);
 }
 
-/// Encode `value` as a JS literal, falling back to `null` on the
-/// unreachable-in-practice encode failure (every caller passes a
-/// `str`/enum/bool, none of which can fail to serialize).
-#[cfg(any(feature = "web", feature = "mobile"))]
-fn json_literal<T: serde::Serialize + ?Sized>(value: &T) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "null".into())
-}
-
 /// [`reader_call`] with a single JSON-encoded argument — the common case.
+/// JSON-literal encoding lives in [`crate::js_interop`], shared with the
+/// other JS-bridge modules (barcode scanner, mobile audio).
 #[cfg(any(feature = "web", feature = "mobile"))]
 fn reader_call_json<T: serde::Serialize + ?Sized>(method: &str, value: &T) {
-    reader_call(method, &json_literal(value));
+    reader_call(method, &crate::js_interop::json_literal(value));
 }
 
 /// [`reader_call`] with two JSON-encoded arguments, e.g.
@@ -82,7 +76,14 @@ fn reader_call_json2<A: serde::Serialize + ?Sized, B: serde::Serialize + ?Sized>
     a: &A,
     b: &B,
 ) {
-    reader_call(method, &format!("{}, {}", json_literal(a), json_literal(b)));
+    reader_call(
+        method,
+        &format!(
+            "{}, {}",
+            crate::js_interop::json_literal(a),
+            crate::js_interop::json_literal(b)
+        ),
+    );
 }
 
 /// Full-screen EPUB reader page (web-feature interop, all-target chrome).

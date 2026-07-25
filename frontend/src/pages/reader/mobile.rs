@@ -190,9 +190,11 @@ fn init_opts(uuid: &str, prefs: ReaderPrefs, cfi: Option<String>) -> serde_json:
 
 /// Drain the JS→Rust reader event channel forever, updating the reader signals
 /// and persisting position on relocate. Returns when the channel closes
-/// (surface torn down / navigation).
+/// (surface torn down / navigation). The drain loop itself is
+/// [`crate::js_interop::drain_events`], shared with the barcode scanner and
+/// mobile audio interop.
 async fn drain_reader_events(
-    mut eval: dioxus::document::Eval,
+    eval: dioxus::document::Eval,
     uuid: String,
     server_url: String,
     sigs: InteropSignals,
@@ -208,72 +210,70 @@ async fn drain_reader_events(
         mut chrome_hidden,
     } = sigs;
     let mut last_cfi: Option<String> = None;
-    loop {
-        match eval.recv::<ReaderEvent>().await {
-            Ok(ReaderEvent::Relocate { json }) => {
-                if let Ok(data) = serde_json::from_str::<RelocateData>(&json) {
-                    if let Some(cfi) = data.cfi.clone() {
-                        crate::reader_progress::save(&uuid, &cfi);
-                        // Only POST on an actual position change (the glue
-                        // debounces, but re-renders can re-emit the same CFI).
-                        if last_cfi.as_deref() != Some(cfi.as_str()) {
-                            last_cfi = Some(cfi.clone());
-                            persist_progress(&uuid, &server_url, cfi);
-                        }
+    crate::js_interop::drain_events(eval, move |event: ReaderEvent| match event {
+        ReaderEvent::Relocate { json } => {
+            if let Ok(data) = serde_json::from_str::<RelocateData>(&json) {
+                if let Some(cfi) = data.cfi.clone() {
+                    crate::reader_progress::save(&uuid, &cfi);
+                    // Only POST on an actual position change (the glue
+                    // debounces, but re-renders can re-emit the same CFI).
+                    if last_cfi.as_deref() != Some(cfi.as_str()) {
+                        last_cfi = Some(cfi.clone());
+                        persist_progress(&uuid, &server_url, cfi);
                     }
-                    loc.set(data);
                 }
+                loc.set(data);
             }
-            Ok(ReaderEvent::Status { state }) => {
-                let st = match state.as_str() {
-                    "ready" => ReaderStatus::Ready,
-                    "error" => ReaderStatus::Failed,
-                    _ => ReaderStatus::Loading,
-                };
-                status.set(st);
-                // Replay saved highlights into the freshly-mounted rendition.
-                if matches!(st, ReaderStatus::Ready) && highlights.peek().is_empty() {
-                    for h in &saved_highlights {
-                        reader_call_json2("addAnnotation", &h.epub_cfi_range, h.color.as_str());
-                    }
-                    highlights.set(saved_highlights.clone());
-                }
-            }
-            Ok(ReaderEvent::Selection { json }) => {
-                if let Ok(data) = serde_json::from_str::<SelectionData>(&json) {
-                    selection.set(Some(data));
-                }
-            }
-            // The selection collapsed (tap-away / adjusted to nothing):
-            // dismiss the popover. This is the only dismiss path on mobile —
-            // no scrim overlays the prose, so native handle drags get through.
-            Ok(ReaderEvent::SelectionCleared) => selection.set(None),
-            // Native share bridge: the glue routes Share actions here (instead
-            // of the Web Share API, absent in WKWebView) and iOS presents the
-            // real sheet. Shims are only installed when `supported()`.
-            Ok(ReaderEvent::ShareText { text }) => crate::native_share::share_text(&text),
-            Ok(ReaderEvent::ShareImage { json }) => {
-                if let Ok(p) = serde_json::from_str::<ShareImagePayload>(&json) {
-                    crate::native_share::share_png_data_url(&p.name, &p.data_url);
-                }
-            }
-            Ok(ReaderEvent::Toc { json }) => {
-                if let Ok(entries) = serde_json::from_str::<Vec<TocEntry>>(&json) {
-                    toc.set(entries);
-                }
-            }
-            Ok(ReaderEvent::Search { json }) => {
-                if let Ok(rs) = serde_json::from_str::<Vec<SearchResult>>(&json) {
-                    search_results.set(rs);
-                }
-            }
-            // Centre tap: flip chrome visibility. The signal is the single
-            // source of truth (the glue signals rather than mutating the
-            // Dioxus-owned bar DOM directly); the class drives the CSS.
-            Ok(ReaderEvent::ToggleChrome) => chrome_hidden.toggle(),
-            Err(_) => return,
         }
-    }
+        ReaderEvent::Status { state } => {
+            let st = match state.as_str() {
+                "ready" => ReaderStatus::Ready,
+                "error" => ReaderStatus::Failed,
+                _ => ReaderStatus::Loading,
+            };
+            status.set(st);
+            // Replay saved highlights into the freshly-mounted rendition.
+            if matches!(st, ReaderStatus::Ready) && highlights.peek().is_empty() {
+                for h in &saved_highlights {
+                    reader_call_json2("addAnnotation", &h.epub_cfi_range, h.color.as_str());
+                }
+                highlights.set(saved_highlights.clone());
+            }
+        }
+        ReaderEvent::Selection { json } => {
+            if let Ok(data) = serde_json::from_str::<SelectionData>(&json) {
+                selection.set(Some(data));
+            }
+        }
+        // The selection collapsed (tap-away / adjusted to nothing): dismiss
+        // the popover. This is the only dismiss path on mobile — no scrim
+        // overlays the prose, so native handle drags get through.
+        ReaderEvent::SelectionCleared => selection.set(None),
+        // Native share bridge: the glue routes Share actions here (instead of
+        // the Web Share API, absent in WKWebView) and iOS presents the real
+        // sheet. Shims are only installed when `supported()`.
+        ReaderEvent::ShareText { text } => crate::native_share::share_text(&text),
+        ReaderEvent::ShareImage { json } => {
+            if let Ok(p) = serde_json::from_str::<ShareImagePayload>(&json) {
+                crate::native_share::share_png_data_url(&p.name, &p.data_url);
+            }
+        }
+        ReaderEvent::Toc { json } => {
+            if let Ok(entries) = serde_json::from_str::<Vec<TocEntry>>(&json) {
+                toc.set(entries);
+            }
+        }
+        ReaderEvent::Search { json } => {
+            if let Ok(rs) = serde_json::from_str::<Vec<SearchResult>>(&json) {
+                search_results.set(rs);
+            }
+        }
+        // Centre tap: flip chrome visibility. The signal is the single source
+        // of truth (the glue signals rather than mutating the Dioxus-owned
+        // bar DOM directly); the class drives the CSS.
+        ReaderEvent::ToggleChrome => chrome_hidden.toggle(),
+    })
+    .await;
 }
 
 /// Persist the latest CFI to the server (fire-and-forget); the local in-memory
