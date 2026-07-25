@@ -95,6 +95,8 @@ jobs:
     permissions:
       contents: read
       actions: write
+      # Codecov's tokenless OIDC upload path (test-results-action below).
+      id-token: write
     env:
       CARGO_TARGET_DIR: ./target
       # Seeds a known admin on server boot — not needed by the current
@@ -243,6 +245,15 @@ jobs:
           annotate_only: true
           detailed_summary: true
           include_passed: true
+
+      # Same JUnit report → Codecov Test Analytics. Best-effort; never gates.
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() && hashFiles('maestro-report.xml') != '' }}
+        uses: codecov/test-results-action@v1
+        with:
+          files: maestro-report.xml
+          flags: mobile
+          token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Report suite attempts
         if: ${{ always() && steps.maestro.outputs.attempts != '' }}

@@ -144,6 +144,8 @@ jobs:
     permissions:
       contents: read
       actions: write
+      # Codecov's tokenless OIDC upload path (test-results-action below).
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -223,12 +225,26 @@ jobs:
           '
 
       - name: Run Playwright tests
+        # `junit` (per-shard output file) feeds Codecov Test Analytics; `blob`
+        # feeds the merged HTML report; `list` is the console stream.
+        env:
+          PLAYWRIGHT_JUNIT_OUTPUT_NAME: results-${{ matrix.shard }}.xml
         run: |
           nix develop .#e2e --command bash -c '
             set -euo pipefail
             cd ui_tests/playwright
-            pnpm exec playwright test --shard=${{ matrix.shard }}/${{ env.TOTAL_SHARDS }} --reporter=list,blob
+            pnpm exec playwright test --shard=${{ matrix.shard }}/${{ env.TOTAL_SHARDS }} --reporter=list,blob,junit
           '
+
+      # Test results → Codecov Test Analytics. `!cancelled()` so a shard's
+      # failures still upload; best-effort, never gates the suite.
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() && hashFiles('ui_tests/playwright/results-*.xml') != '' }}
+        uses: codecov/test-results-action@v1
+        with:
+          files: ui_tests/playwright/results-${{ matrix.shard }}.xml
+          flags: e2e
+          token: ${{ secrets.CODECOV_TOKEN }}
 
       # Blob reports (one per shard, attachments embedded) are the input the
       # `publish-report` job stitches into a single hosted HTML report.

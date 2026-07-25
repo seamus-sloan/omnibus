@@ -42,6 +42,9 @@ ui_tests/**/blob-report/
 ui_tests/**/.playwright/
 # Top-level Playwright `test-results` written when invoked from the repo root.
 /test-results/
+# Playwright JUnit reports (`junit` reporter) — uploaded to Codecov Test
+# Analytics in CI, regenerated every run, never committed.
+ui_tests/playwright/results*.xml
 
 # F0.6 cover sidecars materialized next to fixture EPUBs by the indexer.
 # The .epub files themselves are committed (regenerated via tools/make_epub.ts);
