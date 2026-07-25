@@ -218,7 +218,7 @@ pub async fn change_password(
     // Stamp `password_changed_at` alongside the new hash (the standing
     // INVARIANT in `create_user`): downstream "invalidate sessions older than
     // last password change" logic reads this column.
-    sqlx::query(
+    let updated = sqlx::query(
         "UPDATE users SET password_hash = ?, password_changed_at = strftime('%s','now')
          WHERE id = ?",
     )
@@ -226,6 +226,13 @@ pub async fn change_password(
     .bind(user_id)
     .execute(&mut *tx)
     .await?;
+
+    // The transaction pins the row we verified above, so a 0-row update
+    // shouldn't happen — but never commit a no-op as success. Treat it as
+    // `InvalidCredentials`, consistent with the missing-user path.
+    if updated.rows_affected() == 0 {
+        return Err(AuthError::InvalidCredentials);
+    }
 
     tx.commit().await?;
     Ok(())
