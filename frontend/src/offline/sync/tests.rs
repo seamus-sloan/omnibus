@@ -157,6 +157,10 @@ async fn mock_server() -> String {
             post(|| async { axum::http::StatusCode::BAD_REQUEST }),
         )
         .route(
+            "/api/account/kindle-email",
+            post(|| async { axum::http::StatusCode::INTERNAL_SERVER_ERROR }),
+        )
+        .route(
             "/api/shelves",
             post(
                 |axum::Json(req): axum::Json<omnibus_shared::CreateShelfRequest>| async move {
@@ -393,6 +397,80 @@ async fn drain_remaps_temp_shelf_ids_across_later_ops() {
             .iter()
             .any(|s| s.id == 55 && s.name == "Drain Shelf"),
         "cache must hold the server-assigned shelf id"
+    );
+    note_online();
+}
+
+#[tokio::test]
+async fn drain_lets_other_ops_through_when_one_gets_a_server_error() {
+    store::init_global_for_tests();
+    let _guard = test_state_lock().lock().unwrap();
+    clear_ops().await;
+    let base = mock_server().await;
+    set_server_url(&base);
+
+    enqueue_raw(&Op::SetKindleEmail {
+        email: Some("reader@example.com".into()),
+    });
+    enqueue_raw(&progress_op("drain-book-server-error"));
+    drain().await;
+
+    let st = store::store().expect("store");
+    let remaining = st.ops_list().await;
+    assert_eq!(
+        remaining.len(),
+        1,
+        "the 5xx op stays queued but must not block the other op"
+    );
+    assert_eq!(remaining[0].kind, "SetKindleEmail");
+    assert_eq!(
+        remaining[0].attempts, 1,
+        "a server-error attempt must be recorded"
+    );
+    let cached: Option<Option<ProgressRecord>> =
+        cache::get_json(&cache::keys::progress("drain-book-server-error", "epub")).await;
+    assert!(
+        cached.flatten().is_some(),
+        "the unrelated op behind the stuck one must still drain"
+    );
+    assert!(
+        state().online,
+        "a 5xx from one op's target must not flip the device offline"
+    );
+    clear_ops().await;
+    note_online();
+}
+
+#[tokio::test]
+async fn drain_drops_a_stuck_op_after_exhausting_its_retry_budget() {
+    store::init_global_for_tests();
+    let _guard = test_state_lock().lock().unwrap();
+    clear_ops().await;
+    let base = mock_server().await;
+    set_server_url(&base);
+
+    let stuck_before = state().stuck_ops;
+    enqueue_raw(&Op::SetKindleEmail {
+        email: Some("reader@example.com".into()),
+    });
+    for _ in 0..super::MAX_SERVER_ERROR_ATTEMPTS {
+        drain().await;
+    }
+
+    let st = store::store().expect("store");
+    assert_eq!(
+        st.ops_count().await,
+        0,
+        "an op that never stops 5xx'ing must eventually be dropped"
+    );
+    assert_eq!(
+        state().stuck_ops,
+        stuck_before + 1,
+        "an exhausted retry budget must count as stuck, not silently vanish"
+    );
+    assert!(
+        state().online,
+        "exhausting a retry budget is still not a connectivity failure"
     );
     note_online();
 }

@@ -33,6 +33,11 @@ pub struct NetState {
     /// Ops dropped this session because the server permanently rejected
     /// them (4xx) — surfaced as "N changes couldn't sync".
     pub dropped_ops: usize,
+    /// Ops dropped this session after exhausting their retry budget on
+    /// repeated server errors (5xx) — distinct from `dropped_ops`: these
+    /// were never permanently rejected, they just never got a good answer
+    /// after [`MAX_SERVER_ERROR_ATTEMPTS`] tries. Surfaced next to it.
+    pub stuck_ops: usize,
 }
 
 impl NetState {
@@ -41,6 +46,7 @@ impl NetState {
             online: true,
             pending_ops: 0,
             dropped_ops: 0,
+            stuck_ops: 0,
         }
     }
 }
@@ -104,6 +110,13 @@ pub(crate) async fn refresh_pending() {
 pub(crate) fn note_dropped(n: usize) {
     if n > 0 {
         update(|s| s.dropped_ops += n);
+    }
+}
+
+/// Record ops dropped after exhausting their server-error retry budget.
+pub(crate) fn note_stuck(n: usize) {
+    if n > 0 {
+        update(|s| s.stuck_ops += n);
     }
 }
 
@@ -284,13 +297,31 @@ pub(crate) fn request_drain() {
 enum Outcome {
     /// Replayed (or made moot) — delete the op row.
     Done,
-    /// Permanently rejected by the server — delete and count as dropped.
+    /// Permanently rejected by the server (4xx) — delete and count as
+    /// dropped.
     Rejected,
-    /// Connectivity/5xx failure — keep the op, stop the drain.
+    /// This op's target errored (5xx) or its response failed to decode.
+    /// Unlike [`Outcome::Halt`], this does NOT mean the device is offline —
+    /// keep the op queued, bump its attempt count, and keep draining the
+    /// rest of the queue.
+    ServerError,
+    /// A [`Outcome::ServerError`] that has exhausted
+    /// [`MAX_SERVER_ERROR_ATTEMPTS`] retries — delete and count as stuck
+    /// rather than let it wedge every future drain forever.
+    Stuck,
+    /// Connectivity failure — keep the op, flip the device offline, and
+    /// stop the drain (every other queued op would fail the same way).
     Halt,
     /// Session expired — keep every op for after re-login, stop the drain.
     HaltAuth,
 }
+
+/// Consecutive server-error attempts an op gets before it's treated as
+/// permanently stuck and dropped. Drains are already externally triggered
+/// (reconnect, periodic tick, manual probe) rather than tight-looped, so a
+/// small fixed budget is enough to distinguish "flaky, retry it" from
+/// "this op will never succeed" without needing real exponential backoff.
+const MAX_SERVER_ERROR_ATTEMPTS: i64 = 5;
 
 /// Replay the outbox in enqueue order. One pass per invocation; ops that
 /// arrive mid-drain are picked up by the next trigger.
@@ -301,6 +332,7 @@ async fn drain() {
         return;
     };
     let mut dropped = 0usize;
+    let mut stuck = 0usize;
     let mut resolved = 0usize;
     for row in st.ops_list().await {
         let Ok(op) = serde_json::from_str::<Op>(&row.payload) else {
@@ -310,18 +342,37 @@ async fn drain() {
             dropped += 1;
             continue;
         };
-        match execute_op(&url, op).await {
+        let id = row.id;
+        // A ServerError that has exhausted its retry budget is promoted to
+        // Stuck here (rather than inside `classify`), since only the drain
+        // loop knows the op's attempt history.
+        let outcome = match execute_op(&url, op).await {
+            Outcome::ServerError if row.attempts + 1 >= MAX_SERVER_ERROR_ATTEMPTS => Outcome::Stuck,
+            other => other,
+        };
+        match outcome {
             Outcome::Done => {
-                st.ops_delete_many(vec![row.id]).await;
+                st.ops_delete_many(vec![id]).await;
                 resolved += 1;
             }
             Outcome::Rejected => {
-                st.ops_delete_many(vec![row.id]).await;
+                st.ops_delete_many(vec![id]).await;
                 dropped += 1;
                 resolved += 1;
             }
+            // This op's own target is unhappy — not the device's
+            // connectivity — so keep going rather than break the loop and
+            // wedge every op queued behind it.
+            Outcome::ServerError => {
+                st.ops_bump_attempts(id);
+            }
+            Outcome::Stuck => {
+                st.ops_delete_many(vec![id]).await;
+                stuck += 1;
+                resolved += 1;
+            }
             Outcome::Halt => {
-                st.ops_bump_attempts(row.id);
+                st.ops_bump_attempts(id);
                 note_offline();
                 break;
             }
@@ -329,6 +380,7 @@ async fn drain() {
         }
     }
     note_dropped(dropped);
+    note_stuck(stuck);
     refresh_pending().await;
     if let Some(st) = store::store() {
         st.meta_put("last_sync_at", store::now_secs().to_string());
@@ -347,7 +399,7 @@ fn classify(e: &DataError, target_may_be_gone: bool) -> Outcome {
     match e {
         DataError::Unauthorized => Outcome::HaltAuth,
         DataError::Http { status: 404, .. } if target_may_be_gone => Outcome::Done,
-        DataError::Http { status, .. } if *status >= 500 => Outcome::Halt,
+        DataError::Http { status, .. } if *status >= 500 => Outcome::ServerError,
         DataError::Http { .. } => Outcome::Rejected,
         e if is_offline_error(e) => Outcome::Halt,
         // Decode-class network errors: the server acted but the response

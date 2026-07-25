@@ -63,6 +63,7 @@ mod tests {
             online,
             pending_ops,
             dropped_ops: 0,
+            stuck_ops: 0,
         }
     }
 
