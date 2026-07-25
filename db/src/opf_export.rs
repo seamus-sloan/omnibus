@@ -87,6 +87,26 @@ pub async fn export_opf(pool: &SqlitePool, book_id: i64) -> Result<OpfExport, Op
 /// place. A concurrent reader never sees a torn document (the final step is a
 /// single atomic rename).
 async fn write_sidecar(book_dir: &Path, xml: &str) -> Result<bool, std::io::Error> {
+    write_sidecar_inner(book_dir, xml, false).await
+}
+
+/// Test-only seam: identical to [`write_sidecar`] but forces the final
+/// promotion rename to fail, so a test can assert the `.bak` rollback
+/// actually restores the pre-existing sidecar. A real filesystem fault can't
+/// be injected between the two renames without racing, hence the flag.
+#[cfg(test)]
+async fn write_sidecar_forcing_promote_failure(
+    book_dir: &Path,
+    xml: &str,
+) -> Result<bool, std::io::Error> {
+    write_sidecar_inner(book_dir, xml, true).await
+}
+
+async fn write_sidecar_inner(
+    book_dir: &Path,
+    xml: &str,
+    force_promote_failure: bool,
+) -> Result<bool, std::io::Error> {
     let opf = book_dir.join("metadata.opf");
     let bak = book_dir.join("metadata.opf.bak");
     let tmp = book_dir.join(".metadata.opf.tmp");
@@ -102,7 +122,15 @@ async fn write_sidecar(book_dir: &Path, xml: &str) -> Result<bool, std::io::Erro
         }
     };
 
-    if let Err(e) = tokio::fs::rename(&tmp, &opf).await {
+    let promoted = if force_promote_failure {
+        Err(std::io::Error::other(
+            "forced promotion failure (test seam)",
+        ))
+    } else {
+        tokio::fs::rename(&tmp, &opf).await
+    };
+
+    if let Err(e) = promoted {
         // Promotion failed after the backup — restore the original so the
         // book isn't left without a sidecar.
         if backed_up {
