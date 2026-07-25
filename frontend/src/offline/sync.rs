@@ -300,10 +300,9 @@ enum Outcome {
     /// Permanently rejected by the server (4xx) — delete and count as
     /// dropped.
     Rejected,
-    /// This op's target errored (5xx) or its response failed to decode.
-    /// Unlike [`Outcome::Halt`], this does NOT mean the device is offline —
-    /// keep the op queued, bump its attempt count, and keep draining the
-    /// rest of the queue.
+    /// This op's target errored (5xx). Unlike [`Outcome::Halt`], this does
+    /// NOT mean the device is offline — keep the op queued, bump its
+    /// attempt count, and keep draining the rest of the queue.
     ServerError,
     /// A [`Outcome::ServerError`] that has exhausted
     /// [`MAX_SERVER_ERROR_ATTEMPTS`] retries — delete and count as stuck
@@ -371,8 +370,11 @@ async fn drain() {
                 stuck += 1;
                 resolved += 1;
             }
+            // A connectivity halt says nothing about this op's own
+            // reliability — don't consume its ServerError retry budget for
+            // an outage unrelated to its target. It gets retried fresh once
+            // the device is back online.
             Outcome::Halt => {
-                st.ops_bump_attempts(id);
                 note_offline();
                 break;
             }
