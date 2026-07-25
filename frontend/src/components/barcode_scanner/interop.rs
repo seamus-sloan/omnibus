@@ -40,7 +40,9 @@ pub(super) enum ScannerEvent {
 /// web without adding markup that SSR would have to match. Each script is
 /// skipped when its global already exists (re-entry after "Enter ISBN
 /// instead"), and each load has a 10 s timeout so a stalled request surfaces
-/// the error state instead of a permanently black viewfinder.
+/// the error state instead of a permanently black viewfinder. `start`'s own
+/// promise is returned into this chain too, so a decoder-init failure it
+/// already reports via `status()` also reaches this outer `.catch`.
 pub(super) fn install_scanner_js(video_id: &str, scripts: &ScannerScripts) -> String {
     let video_lit = json_lit(video_id);
     let decoder = json_lit(&scripts.decoder);
@@ -62,7 +64,7 @@ pub(super) fn install_scanner_js(video_id: &str, scripts: &ScannerScripts) -> St
   ensure(function(){{return !!window.ZXingWASM;}},{decoder})
     .then(function(){{return ensure(function(){{return !!window.OmnibusScanner;}},{glue});}})
     .then(function(){{
-      window.OmnibusScanner.start({video_lit},{{wasmUrl:{wasm}}});
+      return window.OmnibusScanner.start({video_lit},{{wasmUrl:{wasm}}});
     }})
     .catch(function(){{dioxus.send({{kind:"Status",state:"error"}});}});
 }})();"#
