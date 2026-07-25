@@ -84,8 +84,10 @@ test("renders the physical panel with the add-to-wishlist default state", async 
   page,
   request,
 }) => {
-  // No mocks: a plain ebook with no copies and no wishlist entry loads the
-  // real RPCs and settles into the "add to physical wishlist" affordance.
+  // Mock the load reads empty so the default state is deterministic — a real
+  // physical copy or wishlist entry for this fixture (from ambient server
+  // state) must not flake this assertion.
+  await mockPhysicalLoad(page, [], null);
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
   await gotoReady(page, `/books/${uuid}`);
   await expectNavVisible(page);
@@ -174,6 +176,27 @@ test("surfaces an error when the wishlist add fails", async ({
   await expect(page.getByTestId("add-to-wishlist")).toBeVisible();
 });
 
+test("surfaces an error when the initial copies load fails", async ({
+  page,
+  request,
+}) => {
+  // A failed read must not silently masquerade as the empty state.
+  await page.route("**/api/rpc/physical/copies", (route) =>
+    route.fulfill({ status: 500, contentType: "text/plain", body: "boom" }),
+  );
+  await page.route("**/api/rpc/physical/wishlist/get", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: "null",
+    }),
+  );
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  await expect(page.getByTestId("physical-error")).toBeVisible();
+});
+
 test("shows the physical copy card for a checked-in book", async ({
   page,
   request,
@@ -245,10 +268,8 @@ test("deletes a copy through the I-sold-it confirm", async ({
       body: "null",
     }),
   );
-  // Deleting the last copy bumps the page refresh, which refetches the book.
-  await page.route("**/api/rpc/physical/copies", (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
-  );
+  // The panel drops the copy from local state on delete; the page refresh
+  // refetches the book (not the copies list), so no copies re-route is needed.
   await expectMutation(
     page,
     {

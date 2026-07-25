@@ -57,11 +57,12 @@ pub(super) fn BdPhysicalPanel(
     let mut copies = use_signal(Vec::<PhysicalCopy>::new);
     let mut wishlist = use_signal(|| None::<WishlistEntry>);
     let mut loaded = use_signal(|| false);
+    let mut err = use_signal(|| None::<String>);
     let state = PhysPanelState {
         copies,
         wishlist,
         busy: use_signal(|| false),
-        err: use_signal(|| None::<String>),
+        err,
         editing: use_signal(|| None::<i64>),
         note_draft: use_signal(String::new),
         delete_target: use_signal(|| None::<DeleteTarget>),
@@ -70,20 +71,28 @@ pub(super) fn BdPhysicalPanel(
 
     let load_url = server_url.clone();
     use_effect(use_reactive!(|uuid| {
+        // Reset on (re)navigation so a previous book's copies/wishlist don't
+        // flash under the new book before its load resolves.
+        copies.set(Vec::new());
+        wishlist.set(None);
+        err.set(None);
+        loaded.set(false);
         if uuid.is_empty() {
             return;
         }
         let load_url = load_url.clone();
         let uuid = uuid.clone();
         spawn(async move {
-            let c = data::list_physical_copies(&load_url, &uuid)
-                .await
-                .unwrap_or_default();
-            let w = data::get_wishlist_entry(&load_url, &uuid)
-                .await
-                .unwrap_or(None);
-            copies.set(c);
-            wishlist.set(w);
+            // Surface a read failure rather than silently degrading to the
+            // empty "add to wishlist" state (which would mask a 500/transient).
+            match data::list_physical_copies(&load_url, &uuid).await {
+                Ok(c) => copies.set(c),
+                Err(e) => err.set(Some(e.to_string())),
+            }
+            match data::get_wishlist_entry(&load_url, &uuid).await {
+                Ok(w) => wishlist.set(w),
+                Err(e) => err.set(Some(e.to_string())),
+            }
             loaded.set(true);
         });
     }));
@@ -451,9 +460,13 @@ fn delete_copy_only(state: PhysPanelState, url: String, copy_id: i64) {
 }
 
 /// Last-copy "Remove from library": delete the copy, then the now-fileless
-/// book. Bumps `refresh`; the book is gone, so the page re-renders not-found.
+/// book. The copy is dropped from local state — and the modal closed — the
+/// instant its delete succeeds, so a failed follow-up book-delete can't leave a
+/// phantom card the user would retry into a 404. Bumps `refresh` only on full
+/// success (book gone → the page re-renders not-found).
 fn delete_last_and_remove(state: PhysPanelState, url: String, uuid: String, copy_id: i64) {
     let PhysPanelState {
+        mut copies,
         mut busy,
         mut err,
         mut delete_target,
@@ -463,23 +476,27 @@ fn delete_last_and_remove(state: PhysPanelState, url: String, uuid: String, copy
     busy.set(true);
     err.set(None);
     spawn(async move {
-        let result = async {
-            data::delete_physical_copy(&url, copy_id).await?;
-            data::delete_fileless_book(&url, &uuid).await
+        if let Err(e) = data::delete_physical_copy(&url, copy_id).await {
+            err.set(Some(e.to_string()));
+            busy.set(false);
+            return;
         }
-        .await;
-        match result {
-            Ok(()) => {
-                delete_target.set(None);
-                refresh.with_mut(|r| *r += 1);
-            }
+        // Copy is gone server-side — reflect that locally before the book
+        // delete, whose failure must not resurrect the card.
+        copies.with_mut(|l| l.retain(|c| c.id != copy_id));
+        delete_target.set(None);
+        match data::delete_fileless_book(&url, &uuid).await {
+            Ok(()) => refresh.with_mut(|r| *r += 1),
             Err(e) => err.set(Some(e.to_string())),
         }
         busy.set(false);
     });
 }
 
-/// Last-copy "Move to wishlist": delete the copy, then wishlist the book.
+/// Last-copy "Move to wishlist": delete the copy, then wishlist the book. Same
+/// contract as [`delete_last_and_remove`] — the copy leaves local state as soon
+/// as its delete succeeds, so a failed wishlist-add drops the panel into its
+/// "add to wishlist" state (a clean retry) rather than showing a stale card.
 fn delete_last_and_wishlist(state: PhysPanelState, url: String, uuid: String, copy_id: i64) {
     let PhysPanelState {
         mut copies,
@@ -487,24 +504,20 @@ fn delete_last_and_wishlist(state: PhysPanelState, url: String, uuid: String, co
         mut busy,
         mut err,
         mut delete_target,
-        mut refresh,
         ..
     } = state;
     busy.set(true);
     err.set(None);
     spawn(async move {
-        let result = async {
-            data::delete_physical_copy(&url, copy_id).await?;
-            data::add_wishlist_entry(&url, &uuid).await
+        if let Err(e) = data::delete_physical_copy(&url, copy_id).await {
+            err.set(Some(e.to_string()));
+            busy.set(false);
+            return;
         }
-        .await;
-        match result {
-            Ok(entry) => {
-                copies.with_mut(|l| l.retain(|c| c.id != copy_id));
-                wishlist.set(Some(entry));
-                delete_target.set(None);
-                refresh.with_mut(|r| *r += 1);
-            }
+        copies.with_mut(|l| l.retain(|c| c.id != copy_id));
+        delete_target.set(None);
+        match data::add_wishlist_entry(&url, &uuid).await {
+            Ok(entry) => wishlist.set(Some(entry)),
             Err(e) => err.set(Some(e.to_string())),
         }
         busy.set(false);
