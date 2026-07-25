@@ -451,14 +451,15 @@ fn QuickGrid() -> Element {
     }
 }
 
-/// Account list rows: Settings, Admin · server, Add books, Sign out. The
-/// first three navigate to existing routes; "Sign out" clears the token and
-/// returns to the login screen.
+/// Account list rows: Settings, Admin · server (admins only), Add books,
+/// Sign out. The link rows navigate to existing routes; "Sign out" clears
+/// the token and returns to the login screen.
 #[cfg(feature = "mobile")]
 #[component]
 fn AccountRows() -> Element {
     let server_url = use_server_url();
     let nav = use_navigator();
+    let is_admin = crate::use_is_admin();
 
     let on_sign_out = move |_| {
         let url = server_url.clone();
@@ -471,9 +472,15 @@ fn AccountRows() -> Element {
     rsx! {
         div { class: "m-account-rows",
             AccountLinkRow { to: Route::Settings { section: None }, label: "Settings" }
-            // Deep-links straight to the admin-only library-path section,
-            // distinct from the plain "Settings" row above.
-            AccountLinkRow { to: Route::Settings { section: Some("library".into()) }, label: "Admin \u{00b7} server" }
+            if is_admin() {
+                // Mobile's SettingsPage ignores `section` (it renders one flat
+                // form, gated by is_admin internally), so this lands on the
+                // same page as "Settings" above — the row exists to give
+                // admins a labeled shortcut, not a distinct destination, so
+                // it's hidden from non-admins who'd otherwise land somewhere
+                // identical to "Settings" under a misleading label.
+                AccountLinkRow { to: Route::Settings { section: Some("library".into()) }, label: "Admin \u{00b7} server" }
+            }
             AccountLinkRow { to: Route::AddBooks {}, label: "Add books" }
             AccountLinkRow { to: Route::CheckIn {}, label: "Check in a book" }
             button {
