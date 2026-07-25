@@ -54,7 +54,7 @@ pub async fn rpc_resolve_scan(req: ResolveRequest) -> Result<ScanOutcome> {
 
 // This key's RPC pair mirrors the Hardcover pair in `rpc/settings.rs`; kept per
 // feature module rather than unified — the shared logic already lives once in
-// db's `SecretKeySpec`, so these stay thin route wrappers (#1300 AC-2).
+// db's `SecretKeySpec`, so these stay thin route wrappers.
 /// Admin-only: masked status of the server-wide Google Books key for Settings.
 /// Never returns the raw key.
 #[get("/api/rpc/google-books-key", pool: PoolExt, _admin: AdminUser)]

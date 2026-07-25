@@ -145,9 +145,7 @@ pub fn CheckInPage() -> Element {
 
     rsx! {
         section { class: "card check-in", "data-testid": "check-in",
-            // Always-available escape hatch out of the multi-step flow, back to
-            // the library. Present on every stage so a mid-flow abort never
-            // strands the reader.
+            // Present on every stage so a mid-flow abort never strands the reader.
             Link {
                 to: Route::Landing {},
                 class: "check-in-close",

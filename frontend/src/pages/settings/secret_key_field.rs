@@ -1,12 +1,8 @@
-//! Admin-only "server-wide secret key" card for the settings page.
-//!
-//! One parameterized component behind both the Hardcover and Google Books API
-//! keys: loads the masked status on mount, saves/clears the stored secret, and
-//! never reads the raw key back to the client. The two keys differ only in
-//! labels, testids, and which `data::*` transport they call — all carried by
-//! [`SecretKeyKind`] so the card renders once (mirrors the DB layer's shared
-//! `SecretKeySpec`). SSR and the first WASM paint both start unconfigured, so
-//! hydration parity holds (rule 07).
+//! Admin-only "server-wide secret key" card for the settings page. One
+//! parameterized component ([`SecretKeyField`] over [`SecretKeyKind`]) behind
+//! both the Hardcover and Google Books keys — they differ only in labels,
+//! testids, and transport. Loads the masked status on mount; the raw key never
+//! comes back to the client. SSR/first-paint start unconfigured (rule 07).
 
 use dioxus::prelude::*;
 

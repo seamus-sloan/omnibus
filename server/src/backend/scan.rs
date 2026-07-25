@@ -65,7 +65,7 @@ pub(super) async fn post_resolve(
 
 // This key's REST handlers mirror the Hardcover handlers in
 // `backend/suggestions.rs`; kept per feature module rather than unified — the
-// shared logic already lives once in db's `SecretKeySpec` (#1300 AC-2).
+// shared logic already lives once in db's `SecretKeySpec`.
 /// Admin-only: masked status of the server-wide Google Books key.
 pub(super) async fn get_google_books_key(
     _admin: AdminUser,
