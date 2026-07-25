@@ -11,6 +11,7 @@ pub mod outbox;
 pub mod replica;
 pub mod store;
 pub mod sync;
+mod test_support;
 
 /// Initialize the offline layer. Called once from the native shell's
 /// `main()` before `dioxus::launch`, right after `token_store::load_from_disk`.

@@ -4514,6 +4514,7 @@ dependencies = [
 name = "omnibus-frontend"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "axum",
  "base64",
  "dioxus",
