@@ -316,11 +316,10 @@ like `search_books_finds_by_title_and_ranks_by_bm25`,
 
 **Anti-pattern.** [db/src/journals/markdown/tests.rs](../db/src/journals/markdown/tests.rs)
 names like `strips_script_tags` and `strips_event_handler_attributes`
-elide the function-under-test convention entirely — both test `render`
-(the module's sole public function), but neither name says so. Compare
-`renders_basic_markdown` and `render_emits_del_for_strikethrough` a few
-lines above in the same file, which correctly prefix with the function
-they test.
+elide the function-under-test convention entirely — both test `render`,
+the function whose behavior they're checking, but neither name says so.
+Compare `render_emits_del_for_strikethrough` a few lines above in the
+same file, which correctly prefixes with the function it tests.
 
 ---
 
