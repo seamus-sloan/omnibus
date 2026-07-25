@@ -240,7 +240,7 @@
     state.errors = 0;
   }
 
-  function start(videoElementId, opts) {
+  async function start(videoElementId, opts) {
     stop();
     var video = document.getElementById(videoElementId);
     if (!video) return status("error");
@@ -248,23 +248,30 @@
 
     status("starting");
     // Idempotent: zxing-wasm caches the instantiated module, so a re-entry
-    // (scan → manual → scan) reuses it instead of re-fetching 1 MB.
-    window.ZXingWASM.prepareZXingModule({
-      overrides: {
-        locateFile: function (path, prefix) {
-          return path.endsWith(".wasm") && opts && opts.wasmUrl
-            ? opts.wasmUrl
-            : prefix + path;
+    // (scan → manual → scan) reuses it instead of re-fetching 1 MB. Awaited so
+    // an init failure (e.g. wasm fetch/compile error) reports immediately
+    // instead of surfacing ~2.7s later via the tick() retry counter.
+    try {
+      await window.ZXingWASM.prepareZXingModule({
+        overrides: {
+          locateFile: function (path, prefix) {
+            return path.endsWith(".wasm") && opts && opts.wasmUrl
+              ? opts.wasmUrl
+              : prefix + path;
+          },
         },
-      },
-    });
+      });
+    } catch (e) {
+      status(classifyError(e));
+      return;
+    }
 
     state.video = video;
     state.canvas = state.canvas || document.createElement("canvas");
     state.ctx =
       state.ctx || state.canvas.getContext("2d", { willReadFrequently: true });
 
-    openCamera()
+    return openCamera()
       .then(function (stream) {
         state.stream = stream;
         state.track = stream.getVideoTracks()[0] || null;
