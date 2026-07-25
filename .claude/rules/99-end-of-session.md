@@ -7,7 +7,6 @@ Before ending a session where code changed, run this checklist:
    - New dependency in `Cargo.toml` → call it out wherever it's relevant (CLAUDE.md if it affects build commands, the matching rule file if it shifts a convention).
    - New environment variable or configuration key → [.claude/rules/01-dev-environment.md](01-dev-environment.md) and [.env.example](../../.env.example).
    - New or changed convention (error handling, test patterns, etc.) → the matching rule file under [.claude/rules/](.) and the [CLAUDE.md](../../CLAUDE.md) rules index if it's a new file.
-   - Notable user-facing or architectural change landing in the next release → add a bullet under `## [Unreleased]` in [CHANGELOG.md](../../CHANGELOG.md).
 2. **Skill freshness.** Run [98-keep-skills-fresh.md](98-keep-skills-fresh.md) — verify no skill file got stale.
 3. **Nix sync.** If a new system dependency was added, update [flake.nix](../../flake.nix). If the shellHook changed, update [01-dev-environment.md](01-dev-environment.md).
 4. **Format & lint.** Run `just lint` (`cargo fmt --check` + clippy across the crate/feature matrix), or `cargo fmt` + `cargo clippy` on the crates you touched.
