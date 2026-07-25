@@ -94,6 +94,24 @@ fn render_opf_omits_absent_optional_elements_and_falls_back_to_filename_title() 
 }
 
 #[test]
+fn render_opf_uses_filename_as_package_identifier_when_uuid_absent() {
+    // `render_opf` is pub and `unique_identifier` is `Option`; a directly
+    // built book with `None` must still emit the `id="uuid_id"` element the
+    // package's `unique-identifier` references, or the OPF is invalid.
+    let book = EbookMetadata {
+        filename: "no-uuid.epub".into(),
+        title: Some("T".into()),
+        ..Default::default()
+    };
+
+    let xml = render_opf(&book);
+    assert!(xml.contains("unique-identifier=\"uuid_id\""));
+    assert!(xml.contains(
+        "<dc:identifier opf:scheme=\"uuid\" id=\"uuid_id\">no-uuid.epub</dc:identifier>"
+    ));
+}
+
+#[test]
 fn render_opf_escapes_xml_special_characters_in_text_and_attributes() {
     let book = EbookMetadata {
         filename: "x.epub".into(),

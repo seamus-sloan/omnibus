@@ -78,22 +78,39 @@ pub async fn export_opf(pool: &SqlitePool, book_id: i64) -> Result<OpfExport, Op
     })
 }
 
-/// Back up any existing `metadata.opf`, then atomically write `xml` to it.
-/// Returns whether a backup was made. Writes via a hidden temp file + rename
-/// so a concurrent reader never sees a torn document.
+/// Write `xml` to `{book_dir}/metadata.opf`, backing up any existing sidecar
+/// to `metadata.opf.bak` first. Returns whether a backup was made.
+///
+/// The new content is staged to a hidden temp file *before* the original is
+/// disturbed, so a failed write can never leave the book without a
+/// `metadata.opf`. On a promotion failure the backup is rolled back into
+/// place. A concurrent reader never sees a torn document (the final step is a
+/// single atomic rename).
 async fn write_sidecar(book_dir: &Path, xml: &str) -> Result<bool, std::io::Error> {
     let opf = book_dir.join("metadata.opf");
     let bak = book_dir.join("metadata.opf.bak");
+    let tmp = book_dir.join(".metadata.opf.tmp");
+
+    tokio::fs::write(&tmp, xml.as_bytes()).await?;
 
     let backed_up = match tokio::fs::rename(&opf, &bak).await {
         Ok(()) => true,
         Err(e) if e.kind() == ErrorKind::NotFound => false,
-        Err(e) => return Err(e),
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return Err(e);
+        }
     };
 
-    let tmp = book_dir.join(".metadata.opf.tmp");
-    tokio::fs::write(&tmp, xml.as_bytes()).await?;
-    tokio::fs::rename(&tmp, &opf).await?;
+    if let Err(e) = tokio::fs::rename(&tmp, &opf).await {
+        // Promotion failed after the backup — restore the original so the
+        // book isn't left without a sidecar.
+        if backed_up {
+            let _ = tokio::fs::rename(&bak, &opf).await;
+        }
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(e);
+    }
     Ok(backed_up)
 }
 
@@ -155,13 +172,19 @@ pub fn render_opf(book: &EbookMetadata) -> String {
     );
 
     // Package unique identifier (the durable books.uuid), anchored by
-    // `unique-identifier="uuid_id"` above. Calibre convention.
-    if let Some(uuid) = book.unique_identifier.as_deref().filter(|s| !s.is_empty()) {
-        out.push_str(&format!(
-            "    <dc:identifier opf:scheme=\"uuid\" id=\"uuid_id\">{}</dc:identifier>\n",
-            xml_escape(uuid)
-        ));
-    }
+    // `unique-identifier="uuid_id"` above. Always emitted so that attribute
+    // reference resolves — OPF 2.0 requires it. `unique_identifier` is always
+    // present via `get_book`; the filename fallback keeps a directly-built
+    // `EbookMetadata` (uuid `None`) valid rather than dangling the reference.
+    let package_id = book
+        .unique_identifier
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&book.filename);
+    out.push_str(&format!(
+        "    <dc:identifier opf:scheme=\"uuid\" id=\"uuid_id\">{}</dc:identifier>\n",
+        xml_escape(package_id)
+    ));
 
     // Scanned identifiers (projection order is deterministic).
     for ident in &book.identifiers {
