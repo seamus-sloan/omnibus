@@ -314,10 +314,13 @@ find.
 like `search_books_finds_by_title_and_ranks_by_bm25`,
 `list_books_populates_formats_from_book_files`.
 
-**Anti-pattern.** [db/src/scanner.rs](../db/src/scanner.rs) names
-like `list_files_with_no_path_returns_empty` are *close* but elide
-the function-under-test convention; some tests in the file omit it
-entirely.
+**Anti-pattern.** [db/src/journals/markdown/tests.rs](../db/src/journals/markdown/tests.rs)
+names like `strips_script_tags` and `strips_event_handler_attributes`
+elide the function-under-test convention entirely — both test `render`
+(the module's sole public function), but neither name says so. Compare
+`renders_basic_markdown` and `render_emits_del_for_strikethrough` a few
+lines above in the same file, which correctly prefix with the function
+they test.
 
 ---
 

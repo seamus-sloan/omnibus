@@ -572,7 +572,7 @@ async fn delete_metadata_overrides_restores_fts() {
         .is_empty());
 }
 #[tokio::test]
-async fn delete_overrides_reverts_to_scanned() {
+async fn delete_metadata_overrides_reverts_to_scanned() {
     let _covers = CoversTempDir::new("revert");
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
@@ -888,7 +888,7 @@ async fn apply_overrides_unaffected_by_precedence_of_a_different_library() {
 /// Verify that `MetadataOverrides::merge` correctly layers a second edit
 /// on top of a first without losing the first edit's fields.
 #[tokio::test]
-async fn merge_preserves_prior_overrides() {
+async fn metadata_overrides_merge_preserves_prior_overrides() {
     let first = MetadataOverrides {
         title: Some("Edited Title".into()),
         publisher: Some("Edited Publisher".into()),
@@ -908,7 +908,7 @@ async fn merge_preserves_prior_overrides() {
     assert_eq!(merged.language, None);
 }
 #[tokio::test]
-async fn upsert_overrides_materializes_series_link_for_new_series() {
+async fn upsert_metadata_overrides_materializes_series_link_for_new_series() {
     let _covers = CoversTempDir::new("materialize_series");
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
@@ -1115,7 +1115,7 @@ fn write_override_cover_returns_typed_error_when_stale_cleanup_hits_a_directory(
 /// the same transaction as the override row, so the book detail page
 /// never observes a fresh override against a stale link.
 #[tokio::test]
-async fn upsert_overrides_persists_books_series_link_row_for_new_series() {
+async fn upsert_metadata_overrides_persists_books_series_link_row_for_new_series() {
     let _covers = CoversTempDir::new("series_link_row");
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
