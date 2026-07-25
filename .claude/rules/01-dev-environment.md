@@ -13,10 +13,10 @@ The flake exposes five purpose-built shells so daily cargo work doesn't pay for 
 
 | Shell | Headline tools | When to use |
 |---|---|---|
-| `default` (slim) | rust core + sqlite + openssl + just + zellij + process-compose + stylelint | Daily `cargo test`/`clippy`/`fmt`, editor, rust-analyzer, `just lint-css` — this is what direnv auto-loads via `.envrc` |
+| `default` (slim) | rust core (+ `llvm-tools-preview`) + sqlite + openssl + just + zellij + process-compose + stylelint + cargo-llvm-cov | Daily `cargo test`/`clippy`/`fmt`, editor, rust-analyzer, `just lint-css`, `just coverage` — this is what direnv auto-loads via `.envrc` |
 | `web` | default + dioxus-cli + matched `wasm-bindgen` + node + pnpm | `dx serve --platform web`, `just dev-up`, `just lint-ts`, anything that bundles the WASM client or drives the Playwright npm project |
 | `e2e` | web + Playwright Chromium bundle | `pnpm exec playwright test`, the `playwright` pane in the multiplexer, CI's E2E job |
-| `mobile` | default + dioxus-cli (`dx`) + maestro + Android + iOS rust-std targets + JDK 21 + Xcode/Android SDK auto-detect (+ GTK 3 / WebKitGTK on Linux) | `dx serve --platform ios`/`android`, `cargo build -p omnibus-mobile`, `just e2e-mobile` (Maestro mobile E2E); CI's `cargo clippy (mobile)` host-target lint |
+| `mobile` | own package set (not `default`-based) — rust core (mobile targets) + sqlite + openssl + just + zellij + process-compose + sccache + dioxus-cli (`dx`) + maestro + Android + iOS rust-std targets + JDK 21 + Xcode/Android SDK auto-detect (+ GTK 3 / WebKitGTK on Linux) | `dx serve --platform ios`/`android`, `cargo build -p omnibus-mobile`, `just e2e-mobile` (Maestro mobile E2E); CI's `cargo clippy (mobile)` host-target lint |
 | `audit` | default + cargo-audit + cargo-deny | Local `cargo audit` / `cargo deny`, mirrors CI's security job |
 
 One-shot pattern for any non-default shell:
@@ -46,6 +46,10 @@ just fixtures    # one-time download; instant no-op thereafter
 ## CSS structural lint
 
 `stylelint` lives in the slim shell so `just lint` (which runs `just lint-css`) and the `css-lint.yml` CI job both guard `frontend/assets/**.css` against structural errors — chiefly an unclosed `}`, which under CSS nesting silently reparents every following rule as a descendant of the unclosed selector and breaks layouts the Rust/web build never exercises. The ruleset ([`.stylelintrc.json`](../../.stylelintrc.json)) is parse/structural-only, so it errors on broken CSS but never nags about pre-existing style. Run `just lint-css` to check just the CSS.
+
+## Code coverage
+
+`cargo-llvm-cov` (backed by the `llvm-tools-preview` toolchain component, both in the slim shell) drives LLVM source-based coverage over the same crate/feature matrix as `just test`. Run `just coverage` for an lcov + per-file summary, or `just coverage-html` for a browsable per-line report. The `coverage` job in [`rust.yml`](../../.github/workflows/rust.yml) uploads lcov to Codecov, configured report-only via [`codecov.yml`](../../codecov.yml) (informational status, never a merge gate). Two deliberate blind spots: the wasm32 `web` frontend can't be instrumented, and the E2E suites aren't included — so read the absolute number as a floor, and lean on **patch coverage** (did this PR test its new logic?) rather than the project total. Publishing coverage reliably wants a `CODECOV_TOKEN` repo secret; tokenless upload works for the public repo but is rate-limited.
 
 ## Common environment
 
