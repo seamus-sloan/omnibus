@@ -2,13 +2,14 @@ import {
   AUDIOBOOK_BOOK_COUNT,
   AUDIOBOOK_BOOKS,
   MERGE_ONLY_TITLES,
+  SCRUB_BOOK,
 } from "../fixtures/audiobooks";
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
 import { audiobookFixturesDir, seedAudiobookLibrary } from "../utils/seed";
-import { setRangeValue } from "../utils/sliders";
+import { commitRangeValue, setRangeValue } from "../utils/sliders";
 
 test.beforeAll(async ({ request }) => {
   await seedAudiobookLibrary(
@@ -95,8 +96,9 @@ test("renders the listen page layout for an mp3 audiobook", async ({
   ).toBeVisible();
   await expect(page.getByText(`by ${MP3_BOOK.author}`)).toBeVisible();
 
-  // Transport: chapter map + skip-back / play / skip-forward / rate / volume.
+  // Transport: chapter map + seek scrubber + skip-back / play / skip-forward / rate / volume.
   await expect(page.getByTestId("chapter-map")).toBeVisible();
+  await expect(page.getByRole("slider", { name: "Seek" })).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Back 30 seconds" }),
   ).toBeVisible();
@@ -592,6 +594,85 @@ test("adjusts volume via the full player's slider", async ({
     )
     .toBeCloseTo(0.3, 2);
   await expect(slider).toHaveValue("0.3");
+});
+
+// ---------------------------------------------------------------------------
+// 9d. Seek scrubber (YouTube-style drag-to-seek)
+// ---------------------------------------------------------------------------
+
+// The scrubber previews on drag (`input`) but only seeks + persists on release
+// (`change`). Dragging must not move the audio; releasing must seek to the
+// exact target and POST the new position.
+test("scrubs to an arbitrary position and seeks only on release", async ({
+  page,
+  request,
+}) => {
+  // SCRUB_BOOK is reserved for this spec: seeking persists a position, so no
+  // other spec may read it (see fixtures/audiobooks.ts).
+  const uuid = await fetchBookUuidByTitle(request, SCRUB_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+
+  const seek = page.getByRole("slider", { name: "Seek" });
+  await expect(seek).toBeVisible();
+
+  const audioPos = () =>
+    page.evaluate(
+      () =>
+        (document.getElementById("omnibus-audio") as HTMLAudioElement | null)
+          ?.currentTime ?? -1,
+    );
+
+  // Normalize the start position. Scrubbing persists a per-(user, book)
+  // position, so a previous run — or a CI retry — can resume this book
+  // mid-way, which would defeat the "preview doesn't move the audio" baseline
+  // below. Poke the shim to seek back to 0 and wait for it to settle.
+  await page.evaluate(() => {
+    (
+      window as unknown as { OmnibusAudio?: { seek(s: number): void } }
+    ).OmnibusAudio?.seek(0);
+  });
+  await expect.poll(audioPos).toBeLessThan(1);
+
+  // Target ~60% in — a clear mid-book position. SCRUB_BOOK is single-part, so
+  // the audio element's currentTime is already the absolute position.
+  const max = Number(await seek.getAttribute("max"));
+  const target = Math.round(max * 0.6);
+
+  // Drag-preview (input only): the bar previews but the audio must NOT seek.
+  await setRangeValue(seek, target);
+  // Let any (incorrect) async seek settle before asserting — a bare
+  // synchronous read could let a next-tick seek slip through as a false pass.
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  expect(await audioPos(), "preview must not move the audio").toBeLessThan(1);
+
+  // Release (input + change): now it seeks and persists the new position. The
+  // POST body isn't asserted exactly — MP3 seeks snap to frame boundaries, so
+  // the persisted position is target ± a frame — but the request must fire.
+  const { request: progressReq } = await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: /\/api\/rpc\/progress(?:\?|$)/,
+      expectedStatus: 200,
+    },
+    async () => commitRangeValue(seek, target),
+  );
+  const body = progressReq.postDataJSON() as {
+    update: { format: string; audio_position_seconds: number };
+  };
+  expect(body.update.format).toBe("audio");
+  expect(Math.abs(body.update.audio_position_seconds - target)).toBeLessThan(2);
+
+  // The audio element actually moved to (near) the target.
+  await expect
+    .poll(async () => Math.abs((await audioPos()) - target))
+    .toBeLessThan(2);
 });
 
 // ---------------------------------------------------------------------------

@@ -13,6 +13,13 @@ commit log.
 
 ## [Unreleased]
 
+### Added
+
+- YouTube-style drag-to-seek scrubbing on the audiobook player. The desktop
+  chapter bar and the mobile scrubber now let you click or drag anywhere on
+  the timeline to seek to that exact position, previewing the target as you
+  drag and committing the seek on release.
+
 ### Changed
 
 - Settings is now a single page with a permission-gated left sidebar: non-admins see only their Account, while admins also get Library Location, Metadata Lookup, Email delivery, and Logs sections. The standalone `/logs` page is folded in as the Logs section (old links redirect), and the profile dropdown is trimmed to Settings / Switch user / Sign out (#1324)

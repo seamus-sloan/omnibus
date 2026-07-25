@@ -224,11 +224,6 @@ pub(super) fn PlayerStageBinding(
     let on_toggle = super::helpers::on_toggle_playback();
     let on_skip_back = super::helpers::on_skip_back_30();
     let on_skip_forward = super::helpers::on_skip_forward_30();
-    let on_seek = move |evt: Event<FormData>| {
-        if let Ok(secs) = evt.value().parse::<f64>() {
-            super::helpers::seek_to(secs);
-        }
-    };
     let on_volume = move |v: f64| super::helpers::apply_volume(&mut volume, v);
     let on_rate = move |_: MouseEvent| {
         let cur = *speed_panel_open.peek();
@@ -282,7 +277,6 @@ pub(super) fn PlayerStageBinding(
                 volume: volume(),
             },
             callbacks: PlayerCallbacks {
-                on_seek: EventHandler::new(on_seek),
                 on_toggle: EventHandler::new(on_toggle),
                 on_skip_back: EventHandler::new(on_skip_back),
                 on_skip_forward: EventHandler::new(on_skip_forward),

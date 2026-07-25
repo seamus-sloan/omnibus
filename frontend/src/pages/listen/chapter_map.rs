@@ -1,14 +1,18 @@
-//! Segmented chapter progress bar replacing the old range-input scrubber.
+//! Segmented chapter progress bar doubling as a draggable seek scrubber.
 //!
-//! Each chapter is a flex segment sized by `flex: {duration_seconds}`. The
-//! played portion within each segment fills proportionally with accent colour.
-//! Clicking a segment seeks to its start time.
+//! Each chapter is a flex segment sized by `flex: {duration_seconds}`; the
+//! played portion fills proportionally with accent colour. A transparent
+//! full-width `<input type="range">` layered on top captures click / drag /
+//! keyboard seeking (the visible playhead is drawn separately). Dragging
+//! previews the target position on the bar and only seeks the audio on
+//! release, so a scrub across a multi-part book doesn't thrash `el.src`.
 
 #![cfg(not(feature = "mobile"))]
 
 use dioxus::prelude::*;
 use omnibus_shared::ChapterInfo;
 
+use super::chapter_nav::chapter_index_for_elapsed;
 use super::helpers::format_hms;
 
 /// Fill percentage for a chapter segment in the progress bar.
@@ -36,6 +40,16 @@ pub(super) fn chapter_fill_pct(
 pub(super) fn no_chapter_fill_pct(elapsed: f64, duration: f64) -> f64 {
     if duration > 0.0 {
         (elapsed / duration * 100.0).min(100.0)
+    } else {
+        0.0
+    }
+}
+
+/// Horizontal position (0–100%) of the playhead thumb for `effective` seconds
+/// against the scrub `max`. Clamped to the bar; 0 when `max` is non-positive.
+pub(super) fn thumb_pct(effective: f64, max: f64) -> f64 {
+    if max > 0.0 {
+        (effective / max * 100.0).clamp(0.0, 100.0)
     } else {
         0.0
     }
@@ -80,6 +94,24 @@ mod tests {
     fn no_chapter_fill_pct_returns_zero_when_duration_is_zero() {
         assert!((no_chapter_fill_pct(0.0, 0.0)).abs() < f64::EPSILON);
     }
+
+    #[test]
+    fn thumb_pct_is_proportional_within_range() {
+        assert!((thumb_pct(0.0, 200.0)).abs() < f64::EPSILON);
+        assert!((thumb_pct(100.0, 200.0) - 50.0).abs() < 0.001);
+        assert!((thumb_pct(200.0, 200.0) - 100.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn thumb_pct_clamps_past_the_end_and_below_zero() {
+        assert!((thumb_pct(999.0, 200.0) - 100.0).abs() < f64::EPSILON);
+        assert!((thumb_pct(-5.0, 200.0)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn thumb_pct_returns_zero_when_max_non_positive() {
+        assert!((thumb_pct(10.0, 0.0)).abs() < f64::EPSILON);
+    }
 }
 
 /// Props for the [`ChapterMap`] component.
@@ -95,11 +127,12 @@ pub(super) struct ChapterMapProps {
     pub remaining: f64,
     /// Index of the currently-playing chapter.
     pub current_chapter_index: usize,
-    /// Fired with the target time in seconds when a segment is clicked.
+    /// Fired with the target time in seconds when the bar is clicked or a
+    /// drag is released.
     pub on_seek: EventHandler<f64>,
 }
 
-/// The chapter progress map component.
+/// The chapter progress map / seek scrubber component.
 #[component]
 pub(super) fn ChapterMap(props: ChapterMapProps) -> Element {
     let ChapterMapProps {
@@ -110,76 +143,129 @@ pub(super) fn ChapterMap(props: ChapterMapProps) -> Element {
         current_chapter_index,
         on_seek,
     } = props;
-    if chapters.is_empty() {
-        let fill_pct = no_chapter_fill_pct(elapsed, duration);
-        return rsx! {
-            div { class: "lp-chapter-map",
-                div { class: "lp-chapter-seg-row",
-                    div {
-                        class: "lp-chapter-seg",
-                        style: "flex: 1;",
-                        div {
-                            class: "lp-chapter-seg-fill",
-                            style: "width: {fill_pct:.1}%;",
-                        }
-                    }
-                }
-                div { class: "lp-scrub-times",
-                    span { "{format_hms(elapsed)}" }
-                    span { class: "lp-scrub-remaining",
-                        "\u{00b7} {format_hms(remaining)} remaining"
-                    }
-                    span { "{format_hms(duration)}" }
-                }
-            }
-        };
-    }
+
+    // Local scrub state. While the user drags, the segments / thumb / time
+    // readouts preview `scrub_secs`; the audio element is only seeked on
+    // release so dragging across a multi-part book doesn't thrash `el.src`.
+    let mut scrubbing = use_signal(|| false);
+    let mut scrub_secs = use_signal(|| 0.0_f64);
+
+    let max = if duration > 0.0 { duration } else { 1.0 };
+    let is_scrubbing = scrubbing();
+    let effective = if is_scrubbing {
+        scrub_secs().clamp(0.0, max)
+    } else {
+        elapsed
+    };
+    // Track the current chapter from the preview so segment fills follow the
+    // thumb mid-drag; fall back to the parent's index at rest.
+    let eff_current = if is_scrubbing {
+        chapter_index_for_elapsed(&chapters, effective)
+    } else {
+        current_chapter_index
+    };
+    let eff_remaining = if is_scrubbing {
+        (duration - effective).max(0.0)
+    } else {
+        remaining
+    };
+    let thumb = thumb_pct(effective, max);
+
+    let on_input = move |evt: Event<FormData>| {
+        if let Ok(v) = evt.value().parse::<f64>() {
+            scrub_secs.set(v);
+            scrubbing.set(true);
+        }
+    };
+    let on_change = move |evt: Event<FormData>| {
+        if let Ok(v) = evt.value().parse::<f64>() {
+            on_seek.call(v);
+        }
+        scrubbing.set(false);
+    };
+
+    let scrub_class = if is_scrubbing {
+        "lp-chapter-scrub scrubbing"
+    } else {
+        "lp-chapter-scrub"
+    };
 
     rsx! {
         div { class: "lp-chapter-map",
-            div { class: "lp-chapter-seg-row", "data-testid": "chapter-map",
-                for (i, ch) in chapters.iter().enumerate() {
-                    {
-                        let flex_val = ch.duration_seconds.max(0.1);
-                        let is_current = i == current_chapter_index;
-
-                        let fill_pct = chapter_fill_pct(
-                            i,
-                            current_chapter_index,
-                            elapsed,
-                            ch.start_seconds,
-                            ch.duration_seconds,
-                        );
-
-                        let class_name = if is_current {
-                            "lp-chapter-seg current"
-                        } else {
-                            "lp-chapter-seg"
-                        };
-
-                        let ch_start = ch.start_seconds;
-                        let title = ch.title.clone();
-
-                        rsx! {
+            div { class: "{scrub_class}",
+                // Segmented bar — pure visual; the range overlay owns pointer
+                // interaction (`pointer-events: none` in CSS).
+                div { class: "lp-chapter-seg-row", "data-testid": "chapter-map",
+                    if chapters.is_empty() {
+                        div { class: "lp-chapter-seg", style: "flex: 1;",
                             div {
-                                key: "{ch.ordinal}",
-                                class: "{class_name}",
-                                style: "flex: {flex_val};",
-                                title: "{title}",
-                                onclick: move |_| on_seek.call(ch_start),
-                                div {
-                                    class: "lp-chapter-seg-fill",
-                                    style: "width: {fill_pct:.1}%;",
+                                class: "lp-chapter-seg-fill",
+                                style: "width: {no_chapter_fill_pct(effective, duration):.1}%;",
+                            }
+                        }
+                    } else {
+                        for (i, ch) in chapters.iter().enumerate() {
+                            {
+                                let flex_val = ch.duration_seconds.max(0.1);
+                                let fill = chapter_fill_pct(
+                                    i,
+                                    eff_current,
+                                    effective,
+                                    ch.start_seconds,
+                                    ch.duration_seconds,
+                                );
+                                let class_name = if i == eff_current {
+                                    "lp-chapter-seg current"
+                                } else {
+                                    "lp-chapter-seg"
+                                };
+                                let title = ch.title.clone();
+                                rsx! {
+                                    div {
+                                        key: "{ch.ordinal}",
+                                        class: "{class_name}",
+                                        style: "flex: {flex_val};",
+                                        title: "{title}",
+                                        div {
+                                            class: "lp-chapter-seg-fill",
+                                            style: "width: {fill:.1}%;",
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
+
+                // Visible playhead + drag-time bubble.
+                div { class: "lp-chapter-thumb", style: "left: {thumb:.3}%;" }
+                if is_scrubbing {
+                    div {
+                        class: "lp-chapter-bubble",
+                        style: "left: {thumb:.3}%;",
+                        "{format_hms(effective)}"
+                    }
+                }
+
+                // Transparent range that captures click / drag / keyboard.
+                input {
+                    class: "lp-chapter-range",
+                    r#type: "range",
+                    "data-testid": "listen-seek",
+                    "aria-label": "Seek",
+                    min: "0",
+                    max: "{max}",
+                    step: "1",
+                    value: "{effective}",
+                    oninput: on_input,
+                    onchange: on_change,
+                }
             }
+
             div { class: "lp-scrub-times",
-                span { "{format_hms(elapsed)}" }
+                span { "{format_hms(effective)}" }
                 span { class: "lp-scrub-remaining",
-                    "\u{00b7} {format_hms(remaining)} remaining"
+                    "\u{00b7} {format_hms(eff_remaining)} remaining"
                 }
                 span { "{format_hms(duration)}" }
             }

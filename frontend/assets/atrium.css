@@ -2971,25 +2971,83 @@ a.idx-letter-on:focus-visible {
 }
 .lp-scrub-remaining { color: var(--ink-3); }
 
-/* Chapter map */
+/* Chapter map / seek scrubber */
 .lp-chapter-map { margin-top: 32px; }
+/* Interactive band: the segmented bar sits centred, a transparent range
+   input overlays it to capture click/drag/keyboard, and a drawn playhead
+   thumb tracks the current (or dragged) position. */
+.lp-chapter-scrub {
+  position: relative; display: flex; align-items: center;
+  height: 18px;
+}
 .lp-chapter-seg-row {
-  display: flex; gap: 2px; height: 6px;
+  display: flex; gap: 2px; height: 6px; width: 100%;
   border-radius: 3px; overflow: hidden;
+  pointer-events: none;
 }
 .lp-chapter-seg {
   position: relative; background: var(--bg-3);
-  cursor: pointer; transition: opacity .15s;
   min-width: 3px;
 }
-@media (hover: hover) { .lp-chapter-seg:hover { opacity: .8; } }
 .lp-chapter-seg.current {
   box-shadow: inset 0 2px 0 var(--accent);
 }
 .lp-chapter-seg-fill {
   position: absolute; inset: 0; right: auto;
   background: var(--accent); border-radius: inherit;
-  transition: width .3s ease;
+  transition: width .25s linear;
+}
+/* Transparent range that owns all pointer/keyboard interaction. Its native
+   track + thumb are invisible; the visible playhead is `.lp-chapter-thumb`. */
+.lp-chapter-range {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  margin: 0; padding: 0; background: transparent;
+  -webkit-appearance: none; appearance: none; outline: none;
+  cursor: pointer;
+}
+.lp-chapter-range::-webkit-slider-runnable-track {
+  height: 100%; background: transparent;
+}
+.lp-chapter-range::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 22px; height: 22px;
+  opacity: 0; cursor: grab;
+}
+.lp-chapter-range::-moz-range-track { height: 100%; background: transparent; }
+.lp-chapter-range::-moz-range-thumb {
+  width: 22px; height: 22px; border: none; opacity: 0; cursor: grab;
+}
+.lp-chapter-range:active { cursor: grabbing; }
+/* Keyboard focus ring — the native track/thumb are transparent, so a focused
+   Seek slider would otherwise be invisible. Ring the whole scrub band. */
+.lp-chapter-range:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+.lp-chapter-thumb {
+  position: absolute; top: 50%; left: 0;
+  transform: translate(-50%, -50%);
+  width: 13px; height: 13px; border-radius: 50%;
+  background: var(--ink-0); border: 2px solid var(--bg-0);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .4);
+  pointer-events: none;
+  transition: left .2s linear, transform .15s ease;
+}
+@media (hover: hover) {
+  .lp-chapter-map:hover .lp-chapter-thumb { transform: translate(-50%, -50%) scale(1.15); }
+}
+.lp-chapter-scrub.scrubbing .lp-chapter-thumb {
+  transform: translate(-50%, -50%) scale(1.15);
+  transition: transform .15s ease;
+}
+.lp-chapter-scrub.scrubbing .lp-chapter-seg-fill { transition: none; }
+.lp-chapter-bubble {
+  position: absolute; bottom: calc(100% + 6px); left: 0;
+  transform: translateX(-50%);
+  padding: 2px 7px; border-radius: 6px; white-space: nowrap;
+  background: var(--bg-0); border: 1px solid var(--line-2);
+  font-family: var(--mono); font-size: 11px; color: var(--ink-0);
+  pointer-events: none; box-shadow: 0 2px 8px rgba(0, 0, 0, .35);
 }
 
 /* Drawer rows */

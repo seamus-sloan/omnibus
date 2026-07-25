@@ -109,6 +109,22 @@ const FIXTURES: AudiobookInput[] = [
     track: 1,
     frames: 80,
   },
+
+  // Reserved for the seek-scrubber spec (listen.spec.ts). Scrubbing seeks the
+  // audio and PERSISTS a per-(user,book) position, which is globally visible on
+  // the shared server — so nothing else may read this book (same isolation
+  // rationale as the merge-only pair). Longer than the other fixtures (~30s) so
+  // a mid-book seek is meaningful, and the author is absent from make_epub.ts +
+  // every other audiobook fixture → no auto-attach and no author-scoped count
+  // shift. See `tests/fixtures/audiobooks.ts` (SCRUB_BOOK).
+  {
+    filename: "shafi_goldwasser_solo/the_scrubbable_saga.mp3",
+    title: "The Scrubbable Saga",
+    artist: "Shafi Goldwasser",
+    album: "The Scrubbable Saga",
+    track: 1,
+    frames: 1150,
+  },
 ];
 
 // ---------------------------------------------------------------------------
