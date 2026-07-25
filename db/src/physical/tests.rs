@@ -520,6 +520,11 @@ async fn create_fileless_book_returns_cover_error_when_cover_dir_path_is_a_file(
     // The whole transaction rolls back rather than leaving a `has_cover` row
     // with no file on disk.
     assert_eq!(count(&pool, "SELECT COUNT(*) FROM books").await, 0);
+
+    // `covers.path` is a regular file here, not a directory, so
+    // `CoversTempDir`'s `Drop` (`remove_dir_all`) can't clean it up — remove
+    // it explicitly to avoid leaking a stray file into the OS temp dir.
+    let _ = std::fs::remove_file(&covers.path);
 }
 
 #[tokio::test]
