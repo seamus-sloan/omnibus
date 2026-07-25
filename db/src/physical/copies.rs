@@ -83,14 +83,30 @@ pub async fn list_physical_copies(
     let Some(canonical) = resolve_canonical_book_uuid(pool, book_uuid).await? else {
         return Ok(Vec::new());
     };
+    list_physical_copies_by_canonical_uuid_exec(pool, &canonical).await
+}
+
+/// Executor-generic counterpart to [`list_physical_copies`] for a uuid
+/// already resolved to canonical, so a caller holding an open transaction
+/// (e.g. book deletion's count-inside-the-tx fix) reads on the same
+/// connection its writes will run on, without a second `merged_uuids`
+/// resolution. Pass `&pool` for a standalone read or `&mut *tx` from within
+/// a transaction.
+pub async fn list_physical_copies_by_canonical_uuid_exec<'e, E>(
+    executor: E,
+    canonical_uuid: &str,
+) -> Result<Vec<PhysicalCopy>, PhysicalError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     let rows = sqlx::query_as::<_, CopyRow>(
         "SELECT id, book_uuid, isbn, added_by_user_id, checked_in_at, note
            FROM physical_copies
           WHERE book_uuid = ?1
           ORDER BY checked_in_at, id",
     )
-    .bind(&canonical)
-    .fetch_all(pool)
+    .bind(canonical_uuid)
+    .fetch_all(executor)
     .await?;
     Ok(rows.into_iter().map(map_copy).collect())
 }

@@ -16,7 +16,8 @@ mod wishlist;
 mod tests;
 
 pub use copies::{
-    add_physical_copy, delete_physical_copy, list_physical_copies, update_physical_copy_note,
+    add_physical_copy, delete_physical_copy, list_physical_copies,
+    list_physical_copies_by_canonical_uuid_exec, update_physical_copy_note,
 };
 pub use fileless::{create_fileless_book, FilelessBook, FilelessCover};
 pub use remove::delete_fileless_book;
