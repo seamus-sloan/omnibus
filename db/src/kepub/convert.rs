@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
+use anyhow::Context;
 use sqlx::SqlitePool;
 
 use super::detect::kepubify_bin;
@@ -19,7 +20,8 @@ use super::KepubError;
 /// the caller then falls back to serving the plain EPUB.
 pub async fn convert_book(pool: &SqlitePool, book_id: i64) -> Result<PathBuf, KepubError> {
     let last_modified = crate::get_last_modified_epoch(pool, book_id)
-        .await?
+        .await
+        .context("look up book last_modified")?
         .ok_or(KepubError::BookNotFound(book_id))?;
 
     let out_path = kepub_path(book_id);
@@ -29,11 +31,14 @@ pub async fn convert_book(pool: &SqlitePool, book_id: i64) -> Result<PathBuf, Ke
     }
 
     let src = crate::book_file_path(pool, book_id, "EPUB")
-        .await?
+        .await
+        .context("look up book's EPUB source path")?
         .ok_or(KepubError::SourceMissing(book_id))?;
 
     let dir = kepub_dir();
-    tokio::fs::create_dir_all(&dir).await?;
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .with_context(|| format!("create kepub cache dir {}", dir.display()))?;
     // Hidden, per-book temp so a crashed run leaves no half-written cache and
     // different books never collide. `.kepub.epub` suffix keeps kepubify happy.
     let tmp = dir.join(format!(".{book_id}.tmp.kepub.epub"));
@@ -41,16 +46,18 @@ pub async fn convert_book(pool: &SqlitePool, book_id: i64) -> Result<PathBuf, Ke
 
     tracing::info!(target: "omnibus::kepub", book_id, ?src, "converting epub to kepub");
     run_kepubify(&src, &tmp).await?;
-    tokio::fs::rename(&tmp, &out_path).await?;
+    tokio::fs::rename(&tmp, &out_path)
+        .await
+        .context("move converted kepub into cache")?;
     tracing::info!(target: "omnibus::kepub", book_id, "kepub conversion complete");
 
     Ok(out_path)
 }
 
-/// Run `kepubify -o <out> -- <src>` and map a non-zero exit to `NonZero`. The
-/// `--` terminates flag parsing so a source path beginning with `-` is always
-/// treated as the positional input, never a flag.
-async fn run_kepubify(src: &Path, out: &Path) -> Result<(), KepubError> {
+/// Run `kepubify -o <out> -- <src>` and bail on a non-zero exit, carrying the
+/// captured stderr. The `--` terminates flag parsing so a source path
+/// beginning with `-` is always treated as the positional input, never a flag.
+async fn run_kepubify(src: &Path, out: &Path) -> anyhow::Result<()> {
     let bin = kepubify_bin();
     tracing::debug!(target: "omnibus::kepub", %bin, ?src, ?out, "spawning kepubify");
     let output = tokio::process::Command::new(&bin)
@@ -59,12 +66,11 @@ async fn run_kepubify(src: &Path, out: &Path) -> Result<(), KepubError> {
         .arg("--")
         .arg(src)
         .output()
-        .await?;
+        .await
+        .with_context(|| format!("spawn kepubify ({bin})"))?;
     if !output.status.success() {
-        return Err(KepubError::NonZero {
-            status: output.status.to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        });
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        anyhow::bail!("kepubify exited with {}: {stderr}", output.status);
     }
     Ok(())
 }

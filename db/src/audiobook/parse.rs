@@ -3,9 +3,10 @@
 //! Opens each file's primary tag and lifts the small set of fields the
 //! basic player cares about: title, primary artist (one author — the
 //! basic player has no UI for narrator vs. author roles), album, and
-//! duration in seconds. Failures roll up as [`AudiobookError`] so the
+//! duration in seconds. Failures roll up as `anyhow::Error` so the
 //! indexer surfaces the per-file error in the same shape the EPUB path
-//! uses.
+//! uses — a foreign-system (codec/I/O) failure space with no caller
+//! branching on the specific cause (rule 02).
 //!
 //! Phase B for multi-file audiobooks is handled by [`parse_groups`], which
 //! reads ID3 tags for every part, sorts by (track, filename), and assembles
@@ -13,24 +14,11 @@
 
 use std::path::{Path, PathBuf};
 
+use anyhow::Context;
 use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::tag::Accessor;
 
 use crate::ebook::extract_accent;
-
-/// Predictable failure space for the audiobook parse + indexer dispatch.
-/// `Io` covers "could not open file"; `Tag` covers any lofty decode /
-/// container error; `Unsupported` is reserved for files whose extension
-/// we accepted but lofty can't probe.
-#[derive(Debug, thiserror::Error)]
-pub enum AudiobookError {
-    #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("tag decode failed: {0}")]
-    Tag(#[from] lofty::error::LoftyError),
-    #[error("unsupported audiobook format: {0}")]
-    Unsupported(String),
-}
 
 /// Tag-only metadata view used by [`super::build_indexed_book`]. Empty
 /// strings collapse to `None` so downstream defaults (filename-stem fall-
@@ -47,8 +35,9 @@ pub struct AudiobookMetadata {
 /// supplies the extension check upstream (via [`super::AUDIOBOOK_EXTENSIONS`]
 /// in the scanner), so this never sees a non-audio file under normal
 /// operation.
-pub(super) fn extract_metadata(path: &Path) -> Result<AudiobookMetadata, AudiobookError> {
-    let tagged = lofty::read_from_path(path)?;
+pub(super) fn extract_metadata(path: &Path) -> anyhow::Result<AudiobookMetadata> {
+    let tagged = lofty::read_from_path(path)
+        .with_context(|| format!("could not read audio tags from {}", path.display()))?;
     Ok(metadata_from_tagged(&tagged))
 }
 
