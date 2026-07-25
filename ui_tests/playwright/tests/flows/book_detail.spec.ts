@@ -1,13 +1,13 @@
-import { expect, test } from "../fixtures/test";
-import { expectMutation } from "../utils/api";
 import {
-  AUDIOBOOK_BOOKS,
   AUDIOBOOK_BOOK_COUNT,
+  AUDIOBOOK_BOOKS,
   MERGE_ONLY_TITLES,
   MERGE_PRIMARY,
   MERGE_SECONDARY,
 } from "../fixtures/audiobooks";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expect, test } from "../fixtures/test";
+import { expectMutation } from "../utils/api";
 import { fetchBookUuidByTitle, getRow } from "../utils/ebooks";
 import { withLock } from "../utils/lock";
 import { gotoReady } from "../utils/nav";
@@ -51,6 +51,13 @@ const WIRTH_OTHERS = FIXTURE_BOOKS.filter(
   (b) => b.authors[0] === "Niklaus Wirth" && b.slug !== WIRTH_LEAD.slug,
 );
 
+// Reserved for the read/unread-status tests: read state is per-(user, book)
+// server state, so this book must be read by no other spec. `standalone-canyon`
+// (Annie Easley) appears in no other flow.
+const READ_STATUS_BOOK = FIXTURE_BOOKS.find(
+  (b) => b.slug === "standalone-canyon",
+)!;
+
 // ---------------------------------------------------------------------------
 // Layout
 // ---------------------------------------------------------------------------
@@ -60,7 +67,9 @@ test("renders the book detail layout", async ({ page, request }) => {
   await gotoReady(page, `/books/${uuid}`);
 
   // Hero — title heading is the H1.
-  await expect(page.getByRole("heading", { level: 1, name: TARGET.title })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 1, name: TARGET.title }),
+  ).toBeVisible();
 
   // Hero — author appears in the dedicated authors line as a router link
   // (creators[0] has an id in the seeded DB). Scoped to `book-authors`
@@ -81,7 +90,10 @@ test("renders the book detail layout", async ({ page, request }) => {
   // must be present and href into the /read/:uuid reader route.
   const startReading = page.getByTestId("start-reading");
   await expect(startReading).toBeVisible();
-  await expect(startReading).toHaveAttribute("href", new RegExp(`/read/${uuid}$`));
+  await expect(startReading).toHaveAttribute(
+    "href",
+    new RegExp(`/read/${uuid}$`),
+  );
 
   // Hero — breadcrumb landmark with Home link.
   const crumb = page.getByRole("navigation", { name: "breadcrumb" });
@@ -89,10 +101,14 @@ test("renders the book detail layout", async ({ page, request }) => {
   await expect(crumb.getByRole("link", { name: "Home" })).toBeVisible();
 
   // Body — "From the same hand" section heading is always rendered.
-  await expect(page.getByRole("heading", { name: "From the same hand" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "From the same hand" }),
+  ).toBeVisible();
 
   // Footer — Back to library link.
-  await expect(page.getByRole("link", { name: "Back to library" })).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Back to library" }),
+  ).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------
@@ -176,7 +192,9 @@ test("From the same hand shows empty state for single-book authors", async ({
   await gotoReady(page, `/books/${uuid}`);
 
   // Wait for the heading to confirm the section rendered.
-  await expect(page.getByRole("heading", { name: "From the same hand" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "From the same hand" }),
+  ).toBeVisible();
 
   // Empty-state card must be visible; the populated row must be absent.
   await expect(page.getByTestId("from-same-hand-empty")).toBeVisible();
@@ -189,7 +207,9 @@ test("From the same hand shows empty state for single-book authors", async ({
 // from #297; the new tests above were added for #385.
 // ---------------------------------------------------------------------------
 
-test("navigates from a landing row to the detail page and back", async ({ page }) => {
+test("navigates from a landing row to the detail page and back", async ({
+  page,
+}) => {
   await gotoReady(page, "/");
 
   // Click the row's cover cell to follow the SPA navigation. We target the
@@ -215,7 +235,10 @@ test("navigates from a landing row to the detail page and back", async ({ page }
   await expect(page.getByTestId("ebook-table")).toBeVisible();
 });
 
-test("renders the detail contents for the selected book", async ({ page, request }) => {
+test("renders the detail contents for the selected book", async ({
+  page,
+  request,
+}) => {
   // Resolve the backend uuid the same way a real click would: read it out
   // of the same RPC the landing page consumes. Deep-linking by uuid keeps
   // this test independent of the landing page's row order.
@@ -224,16 +247,22 @@ test("renders the detail contents for the selected book", async ({ page, request
   await gotoReady(page, `/books/${uuid}`);
 
   // Title heading matches the fixture
-  await expect(page.getByRole("heading", { level: 1, name: TARGET.title })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 1, name: TARGET.title }),
+  ).toBeVisible();
 
   // At least the first author is visible. Scoped to the dedicated authors
   // line because the breadcrumb falls back to the first author when the book
   // has no series, so a bare getByText(...) matches twice.
-  await expect(page.getByTestId("book-authors")).toContainText(TARGET.authors[0]);
+  await expect(page.getByTestId("book-authors")).toContainText(
+    TARGET.authors[0]!,
+  );
 
   // Breadcrumb navigation: "Home" link must be present inside the breadcrumb nav
   await expect(
-    page.getByRole("navigation", { name: "breadcrumb" }).getByRole("link", { name: "Home" }),
+    page
+      .getByRole("navigation", { name: "breadcrumb" })
+      .getByRole("link", { name: "Home" }),
   ).toBeVisible();
 
   // Format switcher renders one row per available format (F1.4).
@@ -269,7 +298,10 @@ test("renders the detail contents for the selected book", async ({ page, request
   const exportPanel = page.getByTestId("hero-export-panel");
   await expect(exportPanel).toBeVisible();
   const downloadEpub = exportPanel.getByTestId("export-download-epub");
-  await expect(downloadEpub).toHaveAttribute("href", /\/api\/ebooks\/.+\/download$/);
+  await expect(downloadEpub).toHaveAttribute(
+    "href",
+    /\/api\/ebooks\/.+\/download$/,
+  );
   await expect(downloadEpub).toHaveAttribute("download");
   const heroKindleBtn = exportPanel.getByTestId("hero-send-kindle");
   await expect(heroKindleBtn).toBeVisible();
@@ -286,7 +318,9 @@ test("renders the detail contents for the selected book", async ({ page, request
   // The scrim fills the viewport, so click a corner clear of the panel
   // (a center click lands on the panel and is intercepted).
   await expect(exportPanel.getByTestId("export-download-audio")).toHaveCount(0);
-  await page.getByTestId("hero-export-scrim").click({ position: { x: 10, y: 10 } });
+  await page
+    .getByTestId("hero-export-scrim")
+    .click({ position: { x: 10, y: 10 } });
   await expect(page.getByTestId("hero-export-panel")).toHaveCount(0);
 
   // No M4B fixture in the ebook seed — the per-format Listen CTA must NOT
@@ -316,7 +350,10 @@ test("renders the detail contents for the selected book", async ({ page, request
 // Action — Send to Kobo (F4.1 KEPUB direct write / download fallback)
 // ---------------------------------------------------------------------------
 
-test("Send to Kobo delivers the book with a uuid-named file", async ({ page, request }) => {
+test("Send to Kobo delivers the book with a uuid-named file", async ({
+  page,
+  request,
+}) => {
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
 
   // Force the download fallback path: without the File System Access API the
@@ -332,7 +369,9 @@ test("Send to Kobo delivers the book with a uuid-named file", async ({ page, req
   });
   await gotoReady(page, `/books/${uuid}`);
 
-  const epubRow = page.getByTestId("format-switcher").getByTestId("format-row-epub");
+  const epubRow = page
+    .getByTestId("format-switcher")
+    .getByTestId("format-row-epub");
   const koboBtn = epubRow.getByTestId("action-kobo");
   await expect(koboBtn).toBeVisible();
   await expect(koboBtn).toBeEnabled();
@@ -354,7 +393,10 @@ test("Send to Kobo delivers the book with a uuid-named file", async ({ page, req
 // Action — Send to Kindle (F4.3)
 // ---------------------------------------------------------------------------
 
-test("sends the EPUB to Kindle and shows a sent status", async ({ page, request }) => {
+test("sends the EPUB to Kindle and shows a sent status", async ({
+  page,
+  request,
+}) => {
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
   await gotoReady(page, `/books/${uuid}`);
 
@@ -368,7 +410,11 @@ test("sends the EPUB to Kindle and shows a sent status", async ({ page, request 
   // relay or a configured Kindle email.
   await page.route("**/api/rpc/kindle/send", (route) => {
     if (route.request().method() === "POST") {
-      return route.fulfill({ status: 200, contentType: "application/json", body: "1" });
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: "1",
+      });
     }
     return route.continue();
   });
@@ -394,7 +440,9 @@ test("sends the EPUB to Kindle and shows a sent status", async ({ page, request 
     async () => kindleBtn.click(),
   );
 
-  await expect(page.getByTestId("kindle-send-status")).toHaveText("Sent to your Kindle.");
+  await expect(page.getByTestId("kindle-send-status")).toHaveText(
+    "Sent to your Kindle.",
+  );
   await expect(page.getByTestId("kindle-send-status")).toHaveClass(/success/);
 });
 
@@ -411,7 +459,11 @@ test("shows an error when the Kindle send fails", async ({ page, request }) => {
   // button on "Sending…" instead of ever raising an error.
   await page.route("**/api/rpc/kindle/send", (route) => {
     if (route.request().method() === "POST") {
-      return route.fulfill({ status: 200, contentType: "application/json", body: "7" });
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: "7",
+      });
     }
     return route.continue();
   });
@@ -420,7 +472,10 @@ test("shows an error when the Kindle send fails", async ({ page, request }) => {
       return route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ status: "failed", message: "SMTP delivery failed" }),
+        body: JSON.stringify({
+          status: "failed",
+          message: "SMTP delivery failed",
+        }),
       });
     }
     return route.continue();
@@ -440,7 +495,9 @@ test("shows an error when the Kindle send fails", async ({ page, request }) => {
   // The error surfaces as a persistent toast (it does not auto-dismiss like the
   // success toast) and can be cleared via its dismiss button.
   await expect(page.getByTestId("kindle-send-status")).toHaveClass(/error/);
-  await expect(page.getByTestId("kindle-send-status")).toContainText("SMTP delivery failed");
+  await expect(page.getByTestId("kindle-send-status")).toContainText(
+    "SMTP delivery failed",
+  );
   await page.getByTestId("kindle-toast-dismiss").click();
   await expect(page.getByTestId("kindle-send-status")).toHaveCount(0);
 });
@@ -449,7 +506,10 @@ test("shows an error when the Kindle send fails", async ({ page, request }) => {
 // Action — star rating (F3.2)
 // ---------------------------------------------------------------------------
 
-test("hides other ratings when no one else has rated the book", async ({ page, request }) => {
+test("hides other ratings when no one else has rated the book", async ({
+  page,
+  request,
+}) => {
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
   await page.route("**/api/rpc/ratings/others", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
@@ -483,12 +543,20 @@ test("shows attributed ratings from other users", async ({ page, request }) => {
   const row = page.getByTestId("other-rating-row");
   await expect(row).toBeVisible();
   await expect(row).toContainText("R");
-  await expect(row.getByTestId("other-rating-byline")).toHaveText("reader rated 2 days ago");
-  await expect(row.getByTestId("other-rating-content")).toHaveCSS("flex-direction", "column");
+  await expect(row.getByTestId("other-rating-byline")).toHaveText(
+    "reader rated 2 days ago",
+  );
+  await expect(row.getByTestId("other-rating-content")).toHaveCSS(
+    "flex-direction",
+    "column",
+  );
   await expect(row.getByLabel("4.5 out of 5 stars")).toBeVisible();
 });
 
-test("rates a book a half-star, persists across reload, then un-rates", async ({ page, request }) => {
+test("rates a book a half-star, persists across reload, then un-rates", async ({
+  page,
+  request,
+}) => {
   // Use a Wirth book so the rating never collides with the alpha-focused
   // assertions elsewhere in this serial file.
   const uuid = await fetchBookUuidByTitle(request, WIRTH_LEAD.title);
@@ -532,7 +600,11 @@ test("surfaces an error and leaves the rating unchanged when the save fails", as
   await gotoReady(page, `/books/${uuid}`);
 
   await page.route("**/api/rpc/ratings/set", (route) =>
-    route.fulfill({ status: 500, contentType: "text/plain", body: "rating exploded" }),
+    route.fulfill({
+      status: 500,
+      contentType: "text/plain",
+      body: "rating exploded",
+    }),
   );
 
   const stars = page.getByTestId("rating-stars");
@@ -543,10 +615,115 @@ test("surfaces an error and leaves the rating unchanged when the save fails", as
   );
 
   // The optimistic pick rolls back and the status line reports the failure.
-  await expect(page.getByTestId("rating-meta")).toHaveText("Couldn't save rating — try again");
+  await expect(page.getByTestId("rating-meta")).toHaveText(
+    "Couldn't save rating — try again",
+  );
 });
 
-test("breadcrumb author segment links to the author page", async ({ page, request }) => {
+test("renders the read-status control with three segments", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, READ_STATUS_BOOK.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  const control = page.getByTestId("read-status-control");
+  await expect(control).toBeVisible();
+  await expect(control.getByTestId("read-status-unread")).toBeVisible();
+  await expect(control.getByTestId("read-status-reading")).toBeVisible();
+  await expect(control.getByTestId("read-status-finished")).toBeVisible();
+});
+
+test("marks a book finished, persists across reload, then resets to unread", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, READ_STATUS_BOOK.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  const control = page.getByTestId("read-status-control");
+  // Mark finished → POST set, the Finished segment activates, meta updates.
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/read-status/set", expectedStatus: 200 },
+    async () => control.getByTestId("read-status-finished").click(),
+  );
+  await expect(control.getByTestId("read-status-finished")).toHaveClass(
+    /active/,
+  );
+  await expect(page.getByTestId("read-status-meta")).toContainText("Finished");
+
+  // The saved state survives a reload (the post-mount effect refetches it).
+  await gotoReady(page, `/books/${uuid}`);
+  await expect(
+    page.getByTestId("read-status-control").getByTestId("read-status-finished"),
+  ).toHaveClass(/active/);
+
+  // Reset to unread so the shared server state is clean for the next run.
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/read-status/set", expectedStatus: 200 },
+    async () =>
+      page
+        .getByTestId("read-status-control")
+        .getByTestId("read-status-unread")
+        .click(),
+  );
+  await expect(page.getByTestId("read-status-meta")).toHaveText("Not started");
+});
+
+test("reverts the read status and reports an error when the save fails", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, READ_STATUS_BOOK.title);
+  await gotoReady(page, `/books/${uuid}`);
+
+  // Establish a known baseline (reading), then force the next save to fail.
+  const control = page.getByTestId("read-status-control");
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/read-status/set", expectedStatus: 200 },
+    async () => control.getByTestId("read-status-reading").click(),
+  );
+  await expect(control.getByTestId("read-status-reading")).toHaveClass(
+    /active/,
+  );
+
+  await page.route("**/api/rpc/read-status/set", (route) =>
+    route.fulfill({
+      status: 500,
+      contentType: "text/plain",
+      body: "read-status exploded",
+    }),
+  );
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/read-status/set", expectedStatus: 500 },
+    async () => control.getByTestId("read-status-finished").click(),
+  );
+
+  // The optimistic pick rolls back to reading and the status line reports it.
+  await expect(control.getByTestId("read-status-reading")).toHaveClass(
+    /active/,
+  );
+  await expect(page.getByTestId("read-status-meta")).toHaveText(
+    "Couldn't save — try again",
+  );
+
+  // Clean up shared state: drop the route override and reset to unread.
+  await page.unroute("**/api/rpc/read-status/set");
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/read-status/set", expectedStatus: 200 },
+    async () => control.getByTestId("read-status-unread").click(),
+  );
+});
+
+test("breadcrumb author segment links to the author page", async ({
+  page,
+  request,
+}) => {
   // `alpha` has a single author (Ada Lovelace) and no series, so the
   // breadcrumb shape is Home > Ada Lovelace > Alpha and the author segment
   // must be a router link to /authors/:id.
@@ -560,7 +737,10 @@ test("breadcrumb author segment links to the author page", async ({ page, reques
   await expect(page).toHaveURL(/\/authors\/\d+$/);
 });
 
-test("breadcrumb series segment links to the series page", async ({ page, request }) => {
+test("breadcrumb series segment links to the series page", async ({
+  page,
+  request,
+}) => {
   // `beta` is "Beta in the Series" #1 of "Pioneers" — so the breadcrumb is
   // Home > Grace Hopper > Pioneers #1 > Beta in the Series. The series
   // segment must be a router link to /series/:id.
@@ -653,7 +833,10 @@ test.describe("audiobook-only seed", () => {
     // covers the worst case of waiting out the other holder plus this run.
     test.slow();
     await withLock("audiobook-merge", async () => {
-      const primaryUuid = await fetchBookUuidByTitle(request, PRIMARY_MP3.title);
+      const primaryUuid = await fetchBookUuidByTitle(
+        request,
+        PRIMARY_MP3.title,
+      );
       const secondUuid = await fetchBookUuidByTitle(request, SECOND_MP3.title);
 
       // Arrange: merge SECOND into PRIMARY via the RPC directly (the merge
@@ -676,13 +859,15 @@ test.describe("audiobook-only seed", () => {
         const trigger = page.getByTestId("listen-file-picker-trigger");
         await expect(trigger).toBeVisible();
         await expect(trigger).toHaveText(/Start listening\s*▾/);
-        await expect(page.getByTestId("listen-file-picker-panel")).toHaveCount(0);
+        await expect(page.getByTestId("listen-file-picker-panel")).toHaveCount(
+          0,
+        );
         await trigger.click();
         const panel = page.getByTestId("listen-file-picker-panel");
         await expect(panel).toBeVisible();
-        await expect(
-          page.getByTestId("listen-file-picker-heading"),
-        ).toHaveText("2 files · choose one");
+        await expect(page.getByTestId("listen-file-picker-heading")).toHaveText(
+          "2 files · choose one",
+        );
         await expect(panel.getByRole("link")).toHaveCount(2);
         await expect(panel.getByRole("link").first()).toContainText(
           "Audiobook ·",
@@ -695,7 +880,9 @@ test.describe("audiobook-only seed", () => {
         // with that file's id, and the manifest fetch carries the same id.
         const [manifestReq] = await Promise.all([
           page.waitForRequest((req) =>
-            req.url().includes(`/api/audiobooks/${primaryUuid}/manifest?file_id=`),
+            req
+              .url()
+              .includes(`/api/audiobooks/${primaryUuid}/manifest?file_id=`),
           ),
           panel.getByRole("link").nth(1).click(),
         ]);
@@ -712,7 +899,9 @@ test.describe("audiobook-only seed", () => {
         const undoResp = await request.post("/api/rpc/merge-books/undo", {
           data: { merge_log_id: mergeLogId },
         });
-        expect(undoResp.status(), "POST /api/rpc/merge-books/undo failed").toBe(200);
+        expect(undoResp.status(), "POST /api/rpc/merge-books/undo failed").toBe(
+          200,
+        );
       }
     });
   });
@@ -731,7 +920,10 @@ test.describe("audiobook-only seed", () => {
   }) => {
     test.slow();
     await withLock("audiobook-merge", async () => {
-      const primaryUuid = await fetchBookUuidByTitle(request, PRIMARY_MP3.title);
+      const primaryUuid = await fetchBookUuidByTitle(
+        request,
+        PRIMARY_MP3.title,
+      );
       const secondUuid = await fetchBookUuidByTitle(request, SECOND_MP3.title);
 
       const mergeResp = await request.post("/api/rpc/merge-books", {
@@ -769,10 +961,14 @@ test.describe("audiobook-only seed", () => {
         // listener, so an injected anchor full-page-loads and defeats the
         // sentinel. The real picker links are the only faithful in-app nav.)
         const manifestFor = (fid: string) =>
-          new RegExp(`/api/audiobooks/${primaryUuid}/manifest\\?file_id=${fid}$`);
+          new RegExp(
+            `/api/audiobooks/${primaryUuid}/manifest\\?file_id=${fid}$`,
+          );
         const pickerLinks = async () => {
           await page.getByTestId("listen-file-picker-trigger").click();
-          await expect(page.getByTestId("listen-file-picker-panel")).toBeVisible();
+          await expect(
+            page.getByTestId("listen-file-picker-panel"),
+          ).toBeVisible();
           return page.getByTestId("listen-file-picker-panel").getByRole("link");
         };
         const fileIdOf = (manifestUrl: string) =>
@@ -780,7 +976,9 @@ test.describe("audiobook-only seed", () => {
 
         await gotoReady(page, `/books/${primaryUuid}`);
         await page.evaluate(() => {
-          (window as unknown as { __repickSentinel?: boolean }).__repickSentinel = true;
+          (
+            window as unknown as { __repickSentinel?: boolean }
+          ).__repickSentinel = true;
         });
 
         // Pick the FIRST part via the picker → SPA-navigate to /listen and make
@@ -791,7 +989,9 @@ test.describe("audiobook-only seed", () => {
           (await pickerLinks()).nth(0).click(),
         ]);
         const firstFileId = fileIdOf(firstManifest.url());
-        await expect(page).toHaveURL(new RegExp(`/listen/${primaryUuid}\\?file_id=\\d+$`));
+        await expect(page).toHaveURL(
+          new RegExp(`/listen/${primaryUuid}\\?file_id=\\d+$`),
+        );
 
         // Back to the detail page in-app (history popstate — no full load).
         await page.goBack();
@@ -807,21 +1007,29 @@ test.describe("audiobook-only seed", () => {
           (await pickerLinks()).nth(1).click(),
         ]);
         const secondFileId = fileIdOf(secondManifest.url());
-        expect(secondFileId, "re-pick must reboot onto a different part").not.toBe(
-          firstFileId,
-        );
+        expect(
+          secondFileId,
+          "re-pick must reboot onto a different part",
+        ).not.toBe(firstFileId);
 
         // The whole session stayed client-side — if any hop fully reloaded, the
         // manifest fetch above would prove nothing.
         const stayedInApp = await page.evaluate(
-          () => (window as unknown as { __repickSentinel?: boolean }).__repickSentinel === true,
+          () =>
+            (window as unknown as { __repickSentinel?: boolean })
+              .__repickSentinel === true,
         );
-        expect(stayedInApp, "re-pick nav must stay in-app (no full page load)").toBe(true);
+        expect(
+          stayedInApp,
+          "re-pick nav must stay in-app (no full page load)",
+        ).toBe(true);
       } finally {
         const undoResp = await request.post("/api/rpc/merge-books/undo", {
           data: { merge_log_id: mergeLogId },
         });
-        expect(undoResp.status(), "POST /api/rpc/merge-books/undo failed").toBe(200);
+        expect(undoResp.status(), "POST /api/rpc/merge-books/undo failed").toBe(
+          200,
+        );
       }
     });
   });

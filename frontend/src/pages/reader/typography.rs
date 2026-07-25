@@ -86,11 +86,12 @@ pub(crate) enum Margins {
 
 #[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 impl Margins {
+    /// The column's max-width, clamped to keep it clear of the `.rd-turn` buttons.
     pub(crate) fn to_css(self) -> &'static str {
         match self {
-            Self::Narrow => "95%",
-            Self::Normal => "80%",
-            Self::Wide => "65%",
+            Self::Narrow => "min(95%, calc(100% - 172px))",
+            Self::Normal => "min(80%, calc(100% - 172px))",
+            Self::Wide => "min(65%, calc(100% - 172px))",
         }
     }
 
@@ -151,6 +152,8 @@ fn local_storage() -> Option<web_sys::Storage> {
     web_sys::window().and_then(|w| w.local_storage().ok().flatten())
 }
 
+// Thin `web_sys::Storage` wrappers, no browser to test against — no test per the thin-wrapper carve-out.
+
 /// Persist a single reader preference under its `omn.*` key.
 #[cfg(feature = "web")]
 pub(crate) fn save_reader_pref(key: &str, value: &str) {
@@ -196,6 +199,16 @@ mod tests {
         for variant in [Margins::Narrow, Margins::Normal, Margins::Wide] {
             assert_eq!(Margins::from_storage(variant.to_storage()), Some(variant));
         }
+    }
+
+    #[test]
+    fn margins_to_css_reserves_a_fixed_gutter_for_every_variant() {
+        // Regression guard for #1236: pins the exact clamped value per
+        // variant so a regressed percentage (not just a dropped clamp)
+        // fails here too.
+        assert_eq!(Margins::Narrow.to_css(), "min(95%, calc(100% - 172px))");
+        assert_eq!(Margins::Normal.to_css(), "min(80%, calc(100% - 172px))");
+        assert_eq!(Margins::Wide.to_css(), "min(65%, calc(100% - 172px))");
     }
 
     #[test]

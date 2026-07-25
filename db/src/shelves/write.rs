@@ -77,6 +77,11 @@ pub async fn update_shelf(
     let Some(existing) = get_shelf(pool, id).await? else {
         return Err(ShelfError::NotFound);
     };
+    // A system shelf (Wishlist) is locked: no rename, description, visibility,
+    // or rule edits. Rejected here so both web and mobile mutation paths hit it.
+    if existing.kind.is_system() {
+        return Err(ShelfError::SystemShelf);
+    }
     // Keep the kind invariant: a manual shelf can't take a match mode or rules,
     // and a smart shelf can't be emptied to zero conditions. Without this an
     // update could leave a manual shelf reporting `match_mode: Some(...)`.
@@ -127,8 +132,15 @@ pub async fn update_shelf(
     get_shelf(pool, id).await?.ok_or(ShelfError::NotFound)
 }
 
-/// Delete a shelf (cascades its rules + membership). `NotFound` if absent.
+/// Delete a shelf (cascades its rules + membership). `NotFound` if absent,
+/// `SystemShelf` if it's the built-in Wishlist. The kind check reads the row
+/// first so a delete can't slip past the guard a raw `DELETE` would miss.
 pub async fn delete_shelf(pool: &SqlitePool, id: i64) -> Result<(), ShelfError> {
+    match get_shelf(pool, id).await? {
+        None => return Err(ShelfError::NotFound),
+        Some(s) if s.kind.is_system() => return Err(ShelfError::SystemShelf),
+        Some(_) => {}
+    }
     let res = sqlx::query("DELETE FROM shelves WHERE id = ?")
         .bind(id)
         .execute(pool)
@@ -137,6 +149,17 @@ pub async fn delete_shelf(pool: &SqlitePool, id: i64) -> Result<(), ShelfError> 
         return Err(ShelfError::NotFound);
     }
     Ok(())
+}
+
+/// Reject a hand-picked membership edit against a system shelf, whose members
+/// are derived (Wishlist ← `wishlist_entries`). `NotFound` if the shelf is
+/// absent. Shared by [`add_books`] and [`remove_book`].
+async fn reject_system_membership_edit(pool: &SqlitePool, shelf_id: i64) -> Result<(), ShelfError> {
+    match get_shelf(pool, shelf_id).await? {
+        None => Err(ShelfError::NotFound),
+        Some(s) if s.kind.is_system() => Err(ShelfError::SystemShelf),
+        Some(_) => Ok(()),
+    }
 }
 
 /// Append books to a hand-picked shelf. Each uuid is resolved to canonical
@@ -149,6 +172,7 @@ pub async fn add_books(
     uuids: &[String],
     added_by: i64,
 ) -> Result<(), ShelfError> {
+    reject_system_membership_edit(pool, shelf_id).await?;
     let resolved = resolve_all(pool, uuids).await?;
     let start = next_book_position(pool, shelf_id).await?;
 
@@ -160,6 +184,7 @@ pub async fn add_books(
 
 /// Remove a book from a hand-picked shelf. A no-op when it isn't on the shelf.
 pub async fn remove_book(pool: &SqlitePool, shelf_id: i64, uuid: &str) -> Result<(), ShelfError> {
+    reject_system_membership_edit(pool, shelf_id).await?;
     let Some(canonical) = resolve_canonical_book_uuid(pool, uuid).await? else {
         return Ok(());
     };

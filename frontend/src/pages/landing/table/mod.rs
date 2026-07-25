@@ -104,7 +104,7 @@ pub(super) fn BookTable(
                 tbody {
                     for book in books.into_iter() {
                         EbookRow {
-                            key: "{book.filename}",
+                            key: "{super::sorting::row_ident(&book)}",
                             book: book,
                             ctx: ctx.clone(),
                         }

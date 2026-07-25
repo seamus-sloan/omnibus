@@ -12,18 +12,23 @@ use dioxus::prelude::*;
 
 use super::sleep::{format_countdown, SleepChoice, PRESETS};
 
+/// Reactive sleep-timer values + mutators shared by [`SleepPanel`] and
+/// [`SleepPanelBody`], so the full-player wrapper can forward them 1:1
+/// without duplicating the field list across both signatures.
+#[derive(Clone, PartialEq)]
+pub(super) struct SleepPanelState {
+    pub remaining: Option<i32>,
+    pub choice: SleepChoice,
+    pub fade: bool,
+    pub has_chapters: bool,
+    pub on_select: EventHandler<i32>,
+    pub on_end_of_chapter: EventHandler<()>,
+    pub on_toggle_fade: EventHandler<()>,
+}
+
 /// Full-player sleep overlay: scrim + panel chrome around [`SleepPanelBody`].
 #[component]
-pub(super) fn SleepPanel(
-    remaining: Option<i32>,
-    choice: SleepChoice,
-    fade: bool,
-    has_chapters: bool,
-    on_select: EventHandler<i32>,
-    on_end_of_chapter: EventHandler<()>,
-    on_toggle_fade: EventHandler<()>,
-    on_close: EventHandler<()>,
-) -> Element {
+pub(super) fn SleepPanel(state: SleepPanelState, on_close: EventHandler<()>) -> Element {
     rsx! {
         div {
             class: "lp-scrim",
@@ -31,15 +36,7 @@ pub(super) fn SleepPanel(
         }
 
         div { class: "lp-panel lp-sleep-panel", "data-testid": "sleep-panel",
-            SleepPanelBody {
-                remaining,
-                choice,
-                fade,
-                has_chapters,
-                on_select,
-                on_end_of_chapter,
-                on_toggle_fade,
-            }
+            SleepPanelBody { state }
         }
     }
 }
@@ -48,15 +45,16 @@ pub(super) fn SleepPanel(
 /// of positioning chrome so the full player and the mini-dock popover can
 /// both host it.
 #[component]
-pub(super) fn SleepPanelBody(
-    remaining: Option<i32>,
-    choice: SleepChoice,
-    fade: bool,
-    has_chapters: bool,
-    on_select: EventHandler<i32>,
-    on_end_of_chapter: EventHandler<()>,
-    on_toggle_fade: EventHandler<()>,
-) -> Element {
+pub(super) fn SleepPanelBody(state: SleepPanelState) -> Element {
+    let SleepPanelState {
+        remaining,
+        choice,
+        fade,
+        has_chapters,
+        on_select,
+        on_end_of_chapter,
+        on_toggle_fade,
+    } = state;
     let status = match remaining {
         Some(s) if s > 0 => format_countdown(s),
         _ => "\u{2014}".to_string(),

@@ -1,5 +1,5 @@
-import { expect, type APIRequestContext } from "@playwright/test";
 import { resolve } from "node:path";
+import { type APIRequestContext, expect } from "@playwright/test";
 
 /**
  * Absolute path to the committed EPUB fixtures (`<repo>/test_data/epubs`).
@@ -45,7 +45,9 @@ export async function seedLibrary(
   if (audiobookLibraryPath === null) {
     const current = await request.get("/api/rpc/settings");
     if (current.status() === 200) {
-      const body = (await current.json()) as { audiobook_library_path?: string | null };
+      const body = (await current.json()) as {
+        audiobook_library_path?: string | null;
+      };
       audiobookLibraryPath = body.audiobook_library_path ?? null;
     }
   }
@@ -74,9 +76,10 @@ export async function seedAudiobookLibrary(
   expectedCount: number,
 ): Promise<void> {
   const current = await request.get("/api/rpc/settings");
-  const currentSettings = current.status() === 200
-    ? ((await current.json()) as { ebook_library_path?: string | null })
-    : {};
+  const currentSettings =
+    current.status() === 200
+      ? ((await current.json()) as { ebook_library_path?: string | null })
+      : {};
 
   const settingsResp = await request.post("/api/rpc/settings", {
     data: {

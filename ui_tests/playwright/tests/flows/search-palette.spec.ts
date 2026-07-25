@@ -1,5 +1,5 @@
-import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expect, test } from "../fixtures/test";
 import { expectNavVisible, gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
 
@@ -65,14 +65,23 @@ test("palette closes on Escape", async ({ page }) => {
   await expect(page.getByTestId("sp-panel")).toHaveCount(0);
 });
 
-test("palette closes on scrim click", async ({ page }) => {
+test("palette closes on a click outside the panel", async ({ page }) => {
   await gotoReady(page, "/");
   await page.getByTestId("search-trigger").click();
   await expect(page.getByTestId("sp-panel")).toBeVisible();
 
-  // Click the scrim (outside the panel). The scrim fills the viewport.
-  await page.getByTestId("sp-scrim").click({ position: { x: 10, y: 10 } });
+  // Click a real viewport coordinate well below the header, not a position
+  // relative to the scrim's own box. `.atrium-topbar` sets
+  // `backdrop-filter`, which makes it the containing block for
+  // `position: fixed` descendants — an overlay rendered inside the nav
+  // collapses its `inset: 0` scrim to the header strip, which still
+  // satisfies a scrim-relative click while leaving the page below
+  // uncovered. Mouse coordinates catch that; scrim-relative ones don't.
+  await page.mouse.click(40, 500);
+
   await expect(page.getByTestId("sp-panel")).toHaveCount(0);
+  // The scrim swallows the click — it must not fall through to the page.
+  await expect.poll(async () => new URL(page.url()).pathname).toBe("/");
 });
 
 // ── Autofocus ─────────────────────────────────────────────────────────
@@ -167,9 +176,9 @@ test.describe("with seeded library", () => {
     await page.getByTestId("sp-book-row").first().click();
 
     // Should navigate to /books/:uuid
-    await expect.poll(async () => new URL(page.url()).pathname).toMatch(
-      /^\/books\/[0-9a-fA-F-]{36}$/,
-    );
+    await expect
+      .poll(async () => new URL(page.url()).pathname)
+      .toMatch(/^\/books\/[0-9a-fA-F-]{36}$/);
   });
 
   test("keyboard navigation highlights results", async ({ page }) => {
@@ -185,7 +194,9 @@ test.describe("with seeded library", () => {
 
     // Arrow down should select the first book row.
     await page.keyboard.press("ArrowDown");
-    await expect(page.getByTestId("sp-book-row").first()).toHaveClass(/selected/);
+    await expect(page.getByTestId("sp-book-row").first()).toHaveClass(
+      /selected/,
+    );
   });
 
   test("inside text shows coming soon", async ({ page }) => {
@@ -203,7 +214,9 @@ test.describe("with seeded library", () => {
     await expect(page.getByTestId("sp-coming-soon")).toHaveText("Coming soon");
   });
 
-  test("clicking author result navigates to author detail page", async ({ page }) => {
+  test("clicking author result navigates to author detail page", async ({
+    page,
+  }) => {
     await gotoReady(page, "/");
     await page.getByTestId("search-trigger").click();
     await page.getByTestId("sp-input").fill("stoker");
@@ -213,12 +226,14 @@ test.describe("with seeded library", () => {
       .toBeGreaterThanOrEqual(1);
 
     await page.getByTestId("sp-author-row").first().click();
-    await expect.poll(async () => new URL(page.url()).pathname).toMatch(
-      /^\/authors\/\d+$/,
-    );
+    await expect
+      .poll(async () => new URL(page.url()).pathname)
+      .toMatch(/^\/authors\/\d+$/);
   });
 
-  test("clicking series result navigates to series detail page", async ({ page }) => {
+  test("clicking series result navigates to series detail page", async ({
+    page,
+  }) => {
     await gotoReady(page, "/");
     await page.getByTestId("search-trigger").click();
     await page.getByTestId("sp-input").fill("pioneers");
@@ -228,12 +243,14 @@ test.describe("with seeded library", () => {
       .toBeGreaterThanOrEqual(1);
 
     await page.getByTestId("sp-series-row").first().click();
-    await expect.poll(async () => new URL(page.url()).pathname).toMatch(
-      /^\/series\/\d+$/,
-    );
+    await expect
+      .poll(async () => new URL(page.url()).pathname)
+      .toMatch(/^\/series\/\d+$/);
   });
 
-  test("pressing Enter without arrow-key navigation goes to /search", async ({ page }) => {
+  test("pressing Enter without arrow-key navigation goes to /search", async ({
+    page,
+  }) => {
     await gotoReady(page, "/");
     await page.getByTestId("search-trigger").click();
     const input = page.getByTestId("sp-input");
@@ -247,13 +264,15 @@ test.describe("with seeded library", () => {
       .toBeGreaterThanOrEqual(1);
 
     await input.press("Enter");
-    await expect.poll(async () => new URL(page.url()).pathname).toMatch(
-      /^\/search\/dracula$/,
-    );
+    await expect
+      .poll(async () => new URL(page.url()).pathname)
+      .toMatch(/^\/search\/dracula$/);
     await expect(page.getByTestId("search-back")).toBeVisible();
   });
 
-  test("Enter after arrow-key selection drills into the highlighted result", async ({ page }) => {
+  test("Enter after arrow-key selection drills into the highlighted result", async ({
+    page,
+  }) => {
     await gotoReady(page, "/");
     await page.getByTestId("search-trigger").click();
     const input = page.getByTestId("sp-input");
@@ -267,8 +286,8 @@ test.describe("with seeded library", () => {
     await page.keyboard.press("ArrowDown");
     await page.keyboard.press("Enter");
 
-    await expect.poll(async () => new URL(page.url()).pathname).toMatch(
-      /^\/books\/[0-9a-fA-F-]{36}$/,
-    );
+    await expect
+      .poll(async () => new URL(page.url()).pathname)
+      .toMatch(/^\/books\/[0-9a-fA-F-]{36}$/);
   });
 });

@@ -1,5 +1,5 @@
-import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expect, test } from "../fixtures/test";
 import { gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
 
@@ -19,37 +19,63 @@ test("authors sort choice persists across a reload", async ({ page }) => {
   await gotoReady(page, "/authors");
 
   // Default axis is surname A–Z; switch to "Most books" and persist it.
-  await expect(page.getByTestId("authors-sort-name")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("authors-sort-name")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   await page.getByTestId("authors-sort-count").click();
-  await expect(page.getByTestId("authors-sort-count")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("authors-sort-count")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
 
   await page.reload();
   await page.waitForLoadState("networkidle");
 
   // The chosen axis is reloaded from storage after the fetch resolves.
-  await expect(page.getByTestId("authors-sort-count")).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByTestId("authors-sort-name")).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByTestId("authors-sort-count")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(page.getByTestId("authors-sort-name")).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
 });
 
 test("series sort choice persists across a reload", async ({ page }) => {
   await gotoReady(page, "/series");
 
-  await expect(page.getByTestId("series-sort-name")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("series-sort-name")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   await page.getByTestId("series-sort-count").click();
-  await expect(page.getByTestId("series-sort-count")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("series-sort-count")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
 
   await page.reload();
   await page.waitForLoadState("networkidle");
 
-  await expect(page.getByTestId("series-sort-count")).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByTestId("series-sort-name")).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByTestId("series-sort-count")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(page.getByTestId("series-sort-name")).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
 });
 
 // ---------------------------------------------------------------------------
 // Scroll restoration — back-navigation lands where you left off
 // ---------------------------------------------------------------------------
 
-test("authors index scroll position is restored after visiting a detail", async ({ page }) => {
+test("authors index scroll position is restored after visiting a detail", async ({
+  page,
+}) => {
   // A short viewport guarantees the index overflows and is scrollable even for
   // the small fixture set.
   await page.setViewportSize({ width: 1000, height: 320 });
@@ -81,7 +107,9 @@ test("authors index scroll position is restored after visiting a detail", async 
     .toBeGreaterThan(savedY * 0.6);
 });
 
-test("library scroll position is restored after opening a book", async ({ page }) => {
+test("library scroll position is restored after opening a book", async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 1000, height: 320 });
   await gotoReady(page, "/");
 
@@ -98,7 +126,10 @@ test("library scroll position is restored after opening a book", async ({ page }
   expect(savedY).toBeGreaterThan(0);
 
   // Open the last tile (visible at the bottom) so the click doesn't scroll.
-  await page.getByTestId(/^ebook-tile-/).last().click();
+  await page
+    .getByTestId(/^ebook-tile-/)
+    .last()
+    .click();
   await expect(page).toHaveURL(/\/books\//);
 
   await page.goBack();

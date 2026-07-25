@@ -51,7 +51,9 @@ pub fn CreateShelfModal(on_close: EventHandler<()>, on_created: EventHandler<She
                     book_uuids: Vec::new(),
                 }
             }
-            ShelfKind::Manual => CreateShelfRequest {
+            // The modal's toggle only offers Smart/Manual — Wishlist is a
+            // system shelf, never user-created — so it falls in with Manual.
+            ShelfKind::Manual | ShelfKind::Wishlist => CreateShelfRequest {
                 kind: ShelfKind::Manual,
                 name: name(),
                 description: None,
@@ -76,8 +78,9 @@ pub fn CreateShelfModal(on_close: EventHandler<()>, on_created: EventHandler<She
 
     let picked_count = picked.read().len();
     let create_label = match kind() {
-        ShelfKind::Manual => format!("Create \u{b7} {picked_count}"),
         ShelfKind::Smart => "Create".to_string(),
+        // Wishlist can't be reached by the toggle; grouped with Manual.
+        ShelfKind::Manual | ShelfKind::Wishlist => format!("Create \u{b7} {picked_count}"),
     };
 
     rsx! {
@@ -129,7 +132,7 @@ pub fn CreateShelfModal(on_close: EventHandler<()>, on_created: EventHandler<She
                                 server_url: server_url.clone(),
                             }
                         },
-                        ShelfKind::Manual => rsx! {
+                        ShelfKind::Manual | ShelfKind::Wishlist => rsx! {
                             PickerBody { picked, server_url: server_url.clone() }
                         },
                     }

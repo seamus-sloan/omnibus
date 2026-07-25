@@ -9,6 +9,12 @@ use omnibus_shared::physical::{WishlistEntry, WishlistSource};
 use super::PhysicalError;
 use crate::books::resolve_canonical_book_uuid;
 
+/// Hard cap on how many entries `list_wishlist` returns for a single user.
+/// Practical usage stays well under this; the cap exists so a pathological
+/// or automated wishlist pipeline can't produce an unbounded REST response,
+/// mirroring `bookmarks::LIST_BOOKMARKS_LIMIT`.
+pub const LIST_WISHLIST_LIMIT: i64 = 1_000;
+
 /// A `wishlist_entries` row as read back from the DB, in column order.
 type WishlistRow = (i64, i64, String, i64, String);
 
@@ -81,7 +87,31 @@ pub async fn remove_wishlist_entry(
     Ok(())
 }
 
-/// List a user's wishlist, newest first.
+/// Fetch one user's wishlist entry for a book, or `None` when it isn't
+/// wishlisted. Folds the uuid to canonical first, matching [`add_wishlist_entry`]
+/// — book detail calls this to decide between the "Add to physical wishlist"
+/// action and the tracking card.
+pub async fn get_wishlist_entry(
+    pool: &SqlitePool,
+    user_id: i64,
+    book_uuid: &str,
+) -> Result<Option<WishlistEntry>, PhysicalError> {
+    let Some(canonical) = resolve_canonical_book_uuid(pool, book_uuid).await? else {
+        return Ok(None);
+    };
+    let row = sqlx::query_as::<_, WishlistRow>(
+        "SELECT id, user_id, book_uuid, added_at, source
+           FROM wishlist_entries
+          WHERE user_id = ?1 AND book_uuid = ?2",
+    )
+    .bind(user_id)
+    .bind(&canonical)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(map_entry))
+}
+
+/// List a user's wishlist, newest first, capped at [`LIST_WISHLIST_LIMIT`].
 pub async fn list_wishlist(
     pool: &SqlitePool,
     user_id: i64,
@@ -90,9 +120,11 @@ pub async fn list_wishlist(
         "SELECT id, user_id, book_uuid, added_at, source
            FROM wishlist_entries
           WHERE user_id = ?1
-          ORDER BY added_at DESC, id DESC",
+          ORDER BY added_at DESC, id DESC
+          LIMIT ?2",
     )
     .bind(user_id)
+    .bind(LIST_WISHLIST_LIMIT)
     .fetch_all(pool)
     .await?;
     Ok(rows.into_iter().map(map_entry).collect())

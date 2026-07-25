@@ -1,6 +1,6 @@
-import { request as apiRequest, type FullConfig } from "@playwright/test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { request as apiRequest, type FullConfig } from "@playwright/test";
 
 import { ensureLoggedIn, loginBearer } from "./tests/utils/auth";
 
@@ -35,7 +35,9 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
   const baseURL = projectUse.baseURL ?? "http://127.0.0.1:3000";
   const extraHTTPHeaders = projectUse.extraHTTPHeaders;
   const storageStatePath =
-    typeof projectUse.storageState === "string" ? projectUse.storageState : STORAGE_STATE_PATH;
+    typeof projectUse.storageState === "string"
+      ? projectUse.storageState
+      : STORAGE_STATE_PATH;
   const ctx = await apiRequest.newContext({ baseURL, extraHTTPHeaders });
   try {
     await ensureLoggedIn(ctx);

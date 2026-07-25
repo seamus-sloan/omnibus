@@ -63,6 +63,9 @@ pub(super) async fn post_resolve(
     }
 }
 
+// This key's REST handlers mirror the Hardcover handlers in
+// `backend/suggestions.rs`; kept per feature module rather than unified — the
+// shared logic already lives once in db's `SecretKeySpec`.
 /// Admin-only: masked status of the server-wide Google Books key.
 pub(super) async fn get_google_books_key(
     _admin: AdminUser,
@@ -108,6 +111,9 @@ pub(super) async fn post_check_in(
     State(state): State<AppState>,
     Json(req): Json<CheckInRequest>,
 ) -> Response {
+    if let Err(msg) = req.validate() {
+        return (StatusCode::BAD_REQUEST, msg).into_response();
+    }
     match db::add_physical_copy(
         &state.pool,
         &req.book_uuid,
@@ -131,6 +137,9 @@ pub(super) async fn post_add_physical_only(
     State(state): State<AppState>,
     Json(req): Json<AddPhysicalOnlyRequest>,
 ) -> Response {
+    if let Err(msg) = req.validate() {
+        return (StatusCode::BAD_REQUEST, msg).into_response();
+    }
     match db::add_physical_only(&state.pool, &req.meta, req.note.as_deref(), Some(user.id)).await {
         Ok(book_uuid) => Json(BookRef { book_uuid }).into_response(),
         Err(e) => scan_error("scan_add_physical_only", e),
@@ -143,6 +152,9 @@ pub(super) async fn post_wishlist_add(
     State(state): State<AppState>,
     Json(req): Json<WishlistAddRequest>,
 ) -> Response {
+    if let Err(msg) = req.validate() {
+        return (StatusCode::BAD_REQUEST, msg).into_response();
+    }
     match db::wishlist_add(
         &state.pool,
         user.id,

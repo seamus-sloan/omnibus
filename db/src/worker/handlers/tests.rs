@@ -94,10 +94,9 @@ fn kepub_outcome_passes_through_the_safe_book_id_variants() {
 
 #[test]
 fn kepub_outcome_sanitizes_subprocess_stderr() {
-    let msg = err_text(kepub_outcome(Err(KepubError::NonZero {
-        status: "1".to_string(),
-        stderr: "panic: invalid EPUB structure at offset 0xdeadbeef".to_string(),
-    })));
+    let msg = err_text(kepub_outcome(Err(KepubError::Failed(anyhow::anyhow!(
+        "kepubify exited with exit status: 1: panic: invalid EPUB structure at offset 0xdeadbeef"
+    )))));
     assert!(!msg.contains("0xdeadbeef"));
     assert!(msg.contains("kepub conversion"));
 }

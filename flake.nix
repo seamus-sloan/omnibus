@@ -146,18 +146,23 @@
           pkgs.stylelint
         ];
 
-        # Web-build extras: dioxus-cli + matched wasm-bindgen + node + ffmpeg.
-        # Node is here (not in `e2e`) because some web-only workflows shell
-        # out to `npm`/`npx` (e.g. tooling under `ui_tests/playwright/tools/`).
-        # ffmpeg is the runtime backend for the F2.3 audiobook HLS pipeline
-        # (`db::hls` shells out via OMNIBUS_FFMPEG_PATH); kept out of slim
-        # `default` since daily cargo work doesn't need it. kepubify is the
+        # Web-build extras: dioxus-cli + matched wasm-bindgen + node + pnpm +
+        # ffmpeg. Node + pnpm are here (not in `e2e`) because some web-only
+        # workflows shell out to them (e.g. tooling under
+        # `ui_tests/playwright/tools/`, run via `pnpm exec tsx …`). pnpm is the
+        # package manager for the Playwright npm project (`packageManager` field
+        # pins the matching version); its build-script allowlist and version
+        # self-management are configured in that project's `pnpm-workspace.yaml`
+        # / `.npmrc`. ffmpeg is the runtime backend for the F2.3 audiobook HLS
+        # pipeline (`db::hls` shells out via OMNIBUS_FFMPEG_PATH); kept out of
+        # slim `default` since daily cargo work doesn't need it. kepubify is the
         # EPUB→KEPUB converter for the F4.1 "Send to Kobo" download
         # (`db::kepub` shells out via OMNIBUS_KEPUBIFY_PATH).
         webExtras = [
           wasm-bindgen-cli-0_2_122
           pkgs-unstable.dioxus-cli
           pkgs-unstable.nodejs_22
+          pkgs-unstable.pnpm
           pkgs.ffmpeg-headless
           pkgs.kepubify
           pkgs.binaryen

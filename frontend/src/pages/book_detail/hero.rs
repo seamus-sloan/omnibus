@@ -13,6 +13,7 @@ use super::export_menu::BdExportMenu;
 use super::file_picker::{is_audio_book_file, BdFilePickerMenu, FilePickerKind};
 use super::immersive::BdImmersiveButton;
 use super::rating::BdRatingWidget;
+use super::read_status::BdReadStatusControl;
 use super::{BdCrumb, BdCrumbItem, BdFormatBadge};
 
 /// Which formats this book has, driving the hero's CTA buttons and format badges.
@@ -66,10 +67,6 @@ pub(super) fn BdHeroSection(
                         }
                         button { class: "btn ghost bd-action-row", disabled: true,
                             span { "Add a highlight" }
-                            span { class: "bd-action-row-arrow", "\u{2192}" }
-                        }
-                        button { class: "btn ghost bd-action-row", disabled: true,
-                            span { "Mark as finished" }
                             span { class: "bd-action-row-arrow", "\u{2192}" }
                         }
                         button { class: "btn ghost bd-action-row", disabled: true,
@@ -181,12 +178,8 @@ fn BdTitleCol(
                     book_files: b.book_files.clone(),
                 },
             }
-            div { class: "bd-progress-meta", aria_hidden: "true",
-                div { class: "bd-progress-line",
-                    span { class: "mono", "Not started" }
-                    span { class: "mono", "0%" }
-                }
-                div { class: "pbar", i { style: "width: 0%;" } }
+            div { class: "bd-progress-meta",
+                BdReadStatusControl { uuid: uuid.clone() }
             }
             if !b.subjects.is_empty() {
                 ul { class: "bd-tag-list",

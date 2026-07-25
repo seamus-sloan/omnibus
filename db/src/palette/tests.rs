@@ -14,7 +14,7 @@ use crate::test_support::{indexed, CoversTempDir};
 
 // ── search_palette ───────────────────────────────────────────────
 #[tokio::test]
-async fn palette_books_match_title() {
+async fn search_palette_books_match_title() {
     let _covers = CoversTempDir::new("palette_books");
     let pool = init_db("sqlite::memory:").await.unwrap();
     replace_books(
@@ -49,7 +49,7 @@ async fn palette_books_match_title() {
     assert!(results.books[0].formats.contains(&"EPUB".to_string()));
 }
 #[tokio::test]
-async fn palette_authors_match_substring() {
+async fn search_palette_authors_match_substring() {
     let _covers = CoversTempDir::new("palette_authors");
     let pool = init_db("sqlite::memory:").await.unwrap();
     replace_books(
@@ -80,7 +80,7 @@ async fn palette_authors_match_substring() {
     );
 }
 #[tokio::test]
-async fn palette_series_match() {
+async fn search_palette_series_match() {
     let _covers = CoversTempDir::new("palette_series");
     let pool = init_db("sqlite::memory:").await.unwrap();
     replace_books(
@@ -121,7 +121,7 @@ async fn palette_series_match() {
     );
 }
 #[tokio::test]
-async fn palette_tags_match() {
+async fn search_palette_tags_match() {
     let _covers = CoversTempDir::new("palette_tags");
     let pool = init_db("sqlite::memory:").await.unwrap();
     replace_books(
@@ -148,7 +148,7 @@ async fn palette_tags_match() {
 /// not the canonical scanned `b.title`, so what the user clicks matches
 /// what they searched for.
 #[tokio::test]
-async fn palette_book_hit_uses_overridden_title() {
+async fn search_palette_book_hit_uses_overridden_title() {
     let _covers = CoversTempDir::new("palette_override_title");
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
@@ -195,7 +195,7 @@ async fn palette_book_hit_uses_overridden_title() {
 /// comma-joined `author_display` so the palette subtitle matches the
 /// detail page.
 #[tokio::test]
-async fn palette_book_hit_uses_overridden_author_display() {
+async fn search_palette_book_hit_uses_overridden_author_display() {
     let _covers = CoversTempDir::new("palette_override_authors");
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
@@ -254,7 +254,7 @@ async fn palette_book_hit_uses_overridden_author_display() {
 /// scanned book had no cover. Mirrors `apply_overrides` so the palette
 /// row doesn't go cover-less for an override-only cover.
 #[tokio::test]
-async fn palette_book_hit_uses_overridden_cover() {
+async fn search_palette_book_hit_uses_overridden_cover() {
     let _covers = CoversTempDir::new("palette_override_cover");
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
@@ -297,7 +297,7 @@ async fn palette_book_hit_uses_overridden_cover() {
 // silently break palette tag:/author:/series: queries without any
 // palette test failing.
 #[tokio::test]
-async fn palette_book_matches_tag_facet() {
+async fn search_palette_book_matches_tag_facet() {
     let _covers = CoversTempDir::new("palette_tag_facet");
     let pool = init_db("sqlite::memory:").await.unwrap();
     replace_books(
@@ -337,7 +337,7 @@ async fn palette_book_matches_tag_facet() {
     );
 }
 #[tokio::test]
-async fn palette_book_matches_author_facet() {
+async fn search_palette_book_matches_author_facet() {
     let _covers = CoversTempDir::new("palette_author_facet");
     let pool = init_db("sqlite::memory:").await.unwrap();
     replace_books(
@@ -379,7 +379,7 @@ async fn palette_book_matches_author_facet() {
     );
 }
 #[tokio::test]
-async fn palette_book_matches_series_facet() {
+async fn search_palette_book_matches_series_facet() {
     let _covers = CoversTempDir::new("palette_series_facet");
     let pool = init_db("sqlite::memory:").await.unwrap();
     replace_books(
@@ -414,7 +414,7 @@ async fn palette_book_matches_series_facet() {
     );
 }
 #[tokio::test]
-async fn palette_empty_query_returns_empty() {
+async fn search_palette_empty_query_returns_empty() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let results = search_palette(&pool, "/lib", "   ").await.unwrap();
     assert!(results.books.is_empty());
@@ -424,7 +424,7 @@ async fn palette_empty_query_returns_empty() {
     assert_eq!(results.query, "");
 }
 #[tokio::test]
-async fn palette_no_results() {
+async fn search_palette_no_results() {
     let _covers = CoversTempDir::new("palette_no_results");
     let pool = init_db("sqlite::memory:").await.unwrap();
     replace_books(
@@ -444,7 +444,7 @@ async fn palette_no_results() {
     assert!(results.tags.is_empty());
 }
 #[tokio::test]
-async fn palette_scoped_to_library() {
+async fn search_palette_scoped_to_library() {
     let _covers = CoversTempDir::new("palette_scoped");
     let pool = init_db("sqlite::memory:").await.unwrap();
     replace_books(
@@ -484,7 +484,7 @@ async fn palette_scoped_to_library() {
     assert_eq!(results.authors[0].book_count, 1);
 }
 #[tokio::test]
-async fn palette_duration_populated() {
+async fn search_palette_duration_populated() {
     let _covers = CoversTempDir::new("palette_duration");
     let pool = init_db("sqlite::memory:").await.unwrap();
     replace_books(
@@ -508,7 +508,7 @@ async fn palette_duration_populated() {
 /// /lib-b for the same author/series/tag, and the rare "Sole" author
 /// only appears in /lib-b, so it must be absent from /lib-a results.
 #[tokio::test]
-async fn palette_taxonomy_counts_scoped_per_library() {
+async fn search_palette_taxonomy_counts_scoped_per_library() {
     let _covers = CoversTempDir::new("palette_taxonomy_scoped");
     let pool = init_db("sqlite::memory:").await.unwrap();
 
@@ -625,7 +625,7 @@ async fn palette_taxonomy_counts_scoped_per_library() {
     assert_eq!(tag_b.book_count, 2);
 }
 #[tokio::test]
-async fn palette_author_count_reflects_overrides() {
+async fn search_palette_author_count_reflects_overrides() {
     // F5.1: the palette author count must match the merged
     // (override-aware) view, not the raw `books_authors_link` count.
     // Repro of the "Sanderson, Brandon still says 4 books" report:
@@ -703,7 +703,7 @@ async fn palette_author_count_reflects_overrides() {
     );
 }
 #[tokio::test]
-async fn palette_tag_count_reflects_overrides() {
+async fn search_palette_tag_count_reflects_overrides() {
     // F5.1: same shape for tags. `overrides.subjects` replaces the
     // canonical tag list wholesale, so a book moved between tags
     // must shift both counts.
@@ -759,8 +759,8 @@ async fn palette_tag_count_reflects_overrides() {
     );
 }
 #[tokio::test]
-async fn palette_series_count_reflects_overrides() {
-    // F5.1: same shape as palette_author_count_reflects_overrides
+async fn search_palette_series_count_reflects_overrides() {
+    // F5.1: same shape as search_palette_author_count_reflects_overrides
     // but for the series tile. Books moved into a series via
     // `overrides.series` must add to the destination count; books
     // moved out drop from the source count.
@@ -838,7 +838,7 @@ async fn palette_series_count_reflects_overrides() {
     );
 }
 #[tokio::test]
-async fn palette_series_author_display_reflects_override() {
+async fn search_palette_series_author_display_reflects_override() {
     // F5.1: the "by X" line on a series tile must follow the first
     // book's effective creator, not the canonical one — otherwise
     // renaming the author through the metadata edit form leaves the
@@ -900,7 +900,7 @@ async fn palette_series_author_display_reflects_override() {
 /// loudly if any of the link tables fall back to a full SCAN, which
 /// would defeat the whole point of this optimization.
 #[tokio::test]
-async fn palette_taxonomy_query_plans_use_indexes() {
+async fn search_palette_taxonomy_query_plans_use_indexes() {
     let pool = init_db("sqlite::memory:").await.unwrap();
 
     async fn plan_text(pool: &SqlitePool, sql: &str) -> String {
@@ -1040,7 +1040,7 @@ async fn palette_taxonomy_query_plans_use_indexes() {
 /// but `book_total` is 7, while `author_total`/`tag_total` (under the cap)
 /// equal their vec lengths. `total_count()` sums the true totals.
 #[tokio::test]
-async fn palette_totals_report_uncapped_counts() {
+async fn search_palette_totals_report_uncapped_counts() {
     let _covers = CoversTempDir::new("palette_totals");
     let pool = init_db("sqlite::memory:").await.unwrap();
     let books: Vec<_> = (0..7)
@@ -1329,4 +1329,456 @@ async fn search_palette_propagates_db_error_when_pool_is_closed() {
     pool.close().await;
     let err = search_palette(&pool, "/lib", "query").await.unwrap_err();
     assert!(matches!(err, PaletteError::Db(_)));
+}
+
+// ── `_for_paths` multi-library scoping (issue #1264) ─────────────
+// Each `*_for_paths` arm accepts a slice of library paths (the single-path
+// helpers above just forward `&[library_path]`); these seed three distinct
+// libraries and scope each call to a two-path subset, asserting the third
+// library's rows are excluded.
+
+#[tokio::test]
+async fn search_palette_for_paths_scopes_to_given_library_paths() {
+    let _covers = CoversTempDir::new("for_paths_palette");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    replace_books(
+        &pool,
+        "/lib-a",
+        vec![indexed(
+            "a.epub",
+            Some("Shared Alpha"),
+            &["Author"],
+            &[],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+    replace_books(
+        &pool,
+        "/lib-b",
+        vec![indexed(
+            "b.epub",
+            Some("Shared Beta"),
+            &["Author"],
+            &[],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+    replace_books(
+        &pool,
+        "/lib-c",
+        vec![indexed(
+            "c.epub",
+            Some("Shared Gamma"),
+            &["Author"],
+            &[],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+
+    let results = search_palette_for_paths(&pool, &["/lib-a", "/lib-b"], "Shared")
+        .await
+        .unwrap();
+    let titles: Vec<&str> = results.books.iter().map(|b| b.title.as_str()).collect();
+    assert!(titles.contains(&"Shared Alpha"));
+    assert!(titles.contains(&"Shared Beta"));
+    assert!(
+        !titles.contains(&"Shared Gamma"),
+        "book from the unlisted /lib-c must not appear, got {titles:?}"
+    );
+}
+
+#[tokio::test]
+async fn search_authors_for_paths_scopes_to_given_library_paths() {
+    let _covers = CoversTempDir::new("for_paths_authors");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    replace_books(
+        &pool,
+        "/lib-a",
+        vec![indexed(
+            "a.epub",
+            Some("A"),
+            &["Match Author"],
+            &[],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+    replace_books(
+        &pool,
+        "/lib-b",
+        vec![indexed(
+            "b.epub",
+            Some("B"),
+            &["Match Author"],
+            &[],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+    replace_books(
+        &pool,
+        "/lib-c",
+        vec![indexed(
+            "c.epub",
+            Some("C"),
+            &["Match Author"],
+            &[],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+
+    let hits = search_authors_for_paths(&pool, &["/lib-a", "/lib-b"], "%match%", LIMIT)
+        .await
+        .unwrap();
+    assert_eq!(hits.len(), 1, "one author, aggregated across the two paths");
+    assert_eq!(
+        hits[0].book_count, 2,
+        "count should include /lib-a and /lib-b but not /lib-c"
+    );
+}
+
+#[tokio::test]
+async fn count_authors_for_paths_counts_across_given_library_paths() {
+    let _covers = CoversTempDir::new("for_paths_count_authors");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    replace_books(
+        &pool,
+        "/lib-a",
+        vec![indexed(
+            "a.epub",
+            Some("A"),
+            &["Match One"],
+            &[],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+    replace_books(
+        &pool,
+        "/lib-b",
+        vec![indexed(
+            "b.epub",
+            Some("B"),
+            &["Match Two"],
+            &[],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+    replace_books(
+        &pool,
+        "/lib-c",
+        vec![indexed(
+            "c.epub",
+            Some("C"),
+            &["Match Three"],
+            &[],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+
+    let total = count_authors_for_paths(&pool, &["/lib-a", "/lib-b"], "%match%")
+        .await
+        .unwrap();
+    assert_eq!(total, 2, "should count /lib-a and /lib-b but not /lib-c");
+}
+
+#[tokio::test]
+async fn search_books_for_paths_scopes_to_given_library_paths() {
+    let _covers = CoversTempDir::new("for_paths_books");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    replace_books(
+        &pool,
+        "/lib-a",
+        vec![indexed(
+            "a.epub",
+            Some("Quest Alpha"),
+            &["Author"],
+            &[],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+    replace_books(
+        &pool,
+        "/lib-b",
+        vec![indexed(
+            "b.epub",
+            Some("Quest Beta"),
+            &["Author"],
+            &[],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+    replace_books(
+        &pool,
+        "/lib-c",
+        vec![indexed(
+            "c.epub",
+            Some("Quest Gamma"),
+            &["Author"],
+            &[],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+
+    let (hits, total) = search_books_for_paths(&pool, &["/lib-a", "/lib-b"], "quest", LIMIT)
+        .await
+        .unwrap();
+    assert_eq!(total, 2, "match total scoped to /lib-a and /lib-b");
+    let titles: Vec<&str> = hits.iter().map(|b| b.title.as_str()).collect();
+    assert!(titles.contains(&"Quest Alpha"));
+    assert!(titles.contains(&"Quest Beta"));
+    assert!(!titles.contains(&"Quest Gamma"));
+}
+
+#[tokio::test]
+async fn search_series_for_paths_scopes_to_given_library_paths() {
+    let _covers = CoversTempDir::new("for_paths_series");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    replace_books(
+        &pool,
+        "/lib-a",
+        vec![indexed(
+            "a.epub",
+            Some("A"),
+            &["Author"],
+            &[],
+            Some(("Match Series", "1")),
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+    replace_books(
+        &pool,
+        "/lib-b",
+        vec![indexed(
+            "b.epub",
+            Some("B"),
+            &["Author"],
+            &[],
+            Some(("Match Series", "2")),
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+    replace_books(
+        &pool,
+        "/lib-c",
+        vec![indexed(
+            "c.epub",
+            Some("C"),
+            &["Author"],
+            &[],
+            Some(("Match Series", "3")),
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+
+    let hits = search_series_for_paths(&pool, &["/lib-a", "/lib-b"], "%match%", LIMIT)
+        .await
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(
+        hits[0].book_count, 2,
+        "count should include /lib-a and /lib-b but not /lib-c"
+    );
+}
+
+#[tokio::test]
+async fn count_series_for_paths_counts_across_given_library_paths() {
+    let _covers = CoversTempDir::new("for_paths_count_series");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    replace_books(
+        &pool,
+        "/lib-a",
+        vec![indexed(
+            "a.epub",
+            Some("A"),
+            &["X"],
+            &[],
+            Some(("Match Alpha", "1")),
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+    replace_books(
+        &pool,
+        "/lib-b",
+        vec![indexed(
+            "b.epub",
+            Some("B"),
+            &["X"],
+            &[],
+            Some(("Match Beta", "1")),
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+    replace_books(
+        &pool,
+        "/lib-c",
+        vec![indexed(
+            "c.epub",
+            Some("C"),
+            &["X"],
+            &[],
+            Some(("Match Gamma", "1")),
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+
+    let total = count_series_for_paths(&pool, &["/lib-a", "/lib-b"], "%match%")
+        .await
+        .unwrap();
+    assert_eq!(total, 2, "should count /lib-a and /lib-b but not /lib-c");
+}
+
+#[tokio::test]
+async fn search_tags_for_paths_scopes_to_given_library_paths() {
+    let _covers = CoversTempDir::new("for_paths_tags");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    replace_books(
+        &pool,
+        "/lib-a",
+        vec![indexed(
+            "a.epub",
+            Some("A"),
+            &["Author"],
+            &["Match Tag"],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+    replace_books(
+        &pool,
+        "/lib-b",
+        vec![indexed(
+            "b.epub",
+            Some("B"),
+            &["Author"],
+            &["Match Tag"],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+    replace_books(
+        &pool,
+        "/lib-c",
+        vec![indexed(
+            "c.epub",
+            Some("C"),
+            &["Author"],
+            &["Match Tag"],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+
+    let hits = search_tags_for_paths(&pool, &["/lib-a", "/lib-b"], "%match%", LIMIT)
+        .await
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(
+        hits[0].book_count, 2,
+        "count should include /lib-a and /lib-b but not /lib-c"
+    );
+}
+
+#[tokio::test]
+async fn count_tags_for_paths_counts_across_given_library_paths() {
+    let _covers = CoversTempDir::new("for_paths_count_tags");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    replace_books(
+        &pool,
+        "/lib-a",
+        vec![indexed(
+            "a.epub",
+            Some("A"),
+            &["X"],
+            &["Match One"],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+    replace_books(
+        &pool,
+        "/lib-b",
+        vec![indexed(
+            "b.epub",
+            Some("B"),
+            &["X"],
+            &["Match Two"],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+    replace_books(
+        &pool,
+        "/lib-c",
+        vec![indexed(
+            "c.epub",
+            Some("C"),
+            &["X"],
+            &["Match Three"],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+
+    let total = count_tags_for_paths(&pool, &["/lib-a", "/lib-b"], "%match%")
+        .await
+        .unwrap();
+    assert_eq!(total, 2, "should count /lib-a and /lib-b but not /lib-c");
 }

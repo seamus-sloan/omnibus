@@ -7,9 +7,8 @@
 // file from `test_data/` and break every other flow on the shared server.
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
-
-import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { expectNavVisible, gotoReady } from "../utils/nav";
@@ -101,7 +100,10 @@ async function bookExists(
 // Layout
 // ---------------------------------------------------------------------------
 
-test("renders the delete affordance on the book detail layout", async ({ page, request }) => {
+test("renders the delete affordance on the book detail layout", async ({
+  page,
+  request,
+}) => {
   const uuid = await fetchBookUuidByTitle(request, FIXTURE.title);
   await gotoReady(page, `/books/${uuid}`);
   await expectNavVisible(page);
@@ -128,7 +130,10 @@ test("renders the delete affordance on the book detail layout", async ({ page, r
 // Action — confirm copy (no mutation; the fixture book must survive)
 // ---------------------------------------------------------------------------
 
-test("warns that deleting every file also removes the book", async ({ page, request }) => {
+test("warns that deleting every file also removes the book", async ({
+  page,
+  request,
+}) => {
   const uuid = await fetchBookUuidByTitle(request, FIXTURE.title);
   await gotoReady(page, `/books/${uuid}`);
 
@@ -151,12 +156,19 @@ test("warns that deleting every file also removes the book", async ({ page, requ
 // Action — error path (intercepted, so nothing is actually deleted)
 // ---------------------------------------------------------------------------
 
-test("surfaces a server error and leaves the book in place", async ({ page, request }) => {
+test("surfaces a server error and leaves the book in place", async ({
+  page,
+  request,
+}) => {
   const uuid = await fetchBookUuidByTitle(request, FIXTURE.title);
   await gotoReady(page, `/books/${uuid}`);
 
   await page.route("**/api/rpc/books/delete-files", (route) =>
-    route.fulfill({ status: 500, contentType: "text/plain", body: "delete exploded" }),
+    route.fulfill({
+      status: 500,
+      contentType: "text/plain",
+      body: "delete exploded",
+    }),
   );
 
   await page.getByTestId("delete-files").click();
@@ -178,7 +190,10 @@ test("surfaces a server error and leaves the book in place", async ({ page, requ
 // Action — real deletes, on books this spec created
 // ---------------------------------------------------------------------------
 
-test("deletes an uploaded ebook, its record, and its file on disk", async ({ page, request }) => {
+test("deletes an uploaded ebook, its record, and its file on disk", async ({
+  page,
+  request,
+}) => {
   test.slow();
   const uuid = await uploadDeletableBook(request);
   await gotoReady(page, `/books/${uuid}`);
@@ -203,7 +218,10 @@ test("deletes an uploaded ebook, its record, and its file on disk", async ({ pag
   expect(existsSync(UPLOAD_AUTHOR_DIR)).toBe(false);
 });
 
-test("deletes a physical-only book by un-recording its copy", async ({ page, request }) => {
+test("deletes a physical-only book by un-recording its copy", async ({
+  page,
+  request,
+}) => {
   const uuid = await createPhysicalOnlyBook(request, "Deletable Physical Copy");
   await gotoReady(page, `/books/${uuid}`);
 

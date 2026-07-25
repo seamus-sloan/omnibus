@@ -9,7 +9,7 @@
 #![cfg(any(test, feature = "test-support"))]
 
 use std::ffi::{OsStr, OsString};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use omnibus_shared::{Contributor, EbookMetadata};
@@ -131,17 +131,13 @@ impl Drop for EnvVarGuard {
 // Covers env guard
 // ---------------------------------------------------------------------------
 
-/// Process-wide lock for `OMNIBUS_COVERS_DIR`. Tests that touch the
-/// covers directory must serialize, since the env var is global.
-///
-/// Prefer `EnvVarGuard` + `ENV_LOCK` for new callers. This alias is
-/// retained for test code that still references it directly.
-pub static COVERS_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 /// RAII guard that points `OMNIBUS_COVERS_DIR` at a unique temp dir for
 /// the lifetime of the test, then restores the previous value (and
-/// removes the temp dir) on drop. Holds `COVERS_ENV_LOCK` so parallel
-/// `cargo test` runs don't stomp on each other.
+/// removes the temp dir) on drop. Holds the shared [`ENV_LOCK`] — the
+/// same lock `EnvVarGuard` uses — so it serializes against *every* other
+/// env-var mutation in the crate, not just other `CoversTempDir`s. A
+/// prior split lock let a test setting `OMNIBUS_COVERS_DIR` via
+/// `EnvVarGuard` run concurrently with one here and stomp the value.
 pub struct CoversTempDir {
     pub path: PathBuf,
     prev: Option<String>,
@@ -150,7 +146,7 @@ pub struct CoversTempDir {
 
 impl CoversTempDir {
     pub fn new(tag: &str) -> Self {
-        let guard = COVERS_ENV_LOCK
+        let guard = ENV_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let pid = std::process::id();
@@ -161,7 +157,7 @@ impl CoversTempDir {
         let path = std::env::temp_dir().join(format!("omnibus_covers_{tag}_{pid}_{seq}"));
         let _ = std::fs::remove_dir_all(&path);
         let prev = std::env::var("OMNIBUS_COVERS_DIR").ok();
-        // SAFETY: COVERS_ENV_LOCK is held; no other thread mutates the env.
+        // SAFETY: ENV_LOCK is held; no other thread mutates the env.
         unsafe {
             std::env::set_var("OMNIBUS_COVERS_DIR", &path);
         }
@@ -176,7 +172,7 @@ impl CoversTempDir {
 impl Drop for CoversTempDir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.path);
-        // SAFETY: COVERS_ENV_LOCK is still held via `_guard`.
+        // SAFETY: ENV_LOCK is still held via `_guard`.
         unsafe {
             match self.prev.take() {
                 Some(v) => std::env::set_var("OMNIBUS_COVERS_DIR", v),
@@ -531,4 +527,47 @@ pub async fn uuid_by_scan_key(pool: &SqlitePool, scan_key: &str) -> String {
 /// One-scalar COUNT helper for table-shape assertions.
 pub async fn count_rows(pool: &SqlitePool, sql: &str) -> i64 {
     sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
+}
+
+/// Seed one EPUB book whose `book_file_path` resolves to a real file at
+/// `lib/sub/book.epub`, so exporters/converters that write next to the EPUB
+/// land inside `lib`. Returns `(books.id, books.uuid)`. Raw SQL (not the
+/// `sync` path) so the caller controls the library root — `seed_synced_ebook`
+/// hard-codes `/ebooks` and can't point at a tempdir.
+pub async fn seed_epub_book_at(pool: &SqlitePool, lib: &Path) -> (i64, String) {
+    let lib_str = lib.to_string_lossy().to_string();
+    sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
+        .bind(&lib_str)
+        .execute(pool)
+        .await
+        .unwrap();
+    let lib_id: i64 = sqlx::query_scalar("SELECT id FROM scan_roots WHERE path = ?")
+        .bind(&lib_str)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    // Old `last_modified` so a freshly-written cache always reads as fresh.
+    sqlx::query(
+        "INSERT INTO books (uuid, scan_key, library_id, path, title, last_modified)
+         VALUES ('uuid-1', 'sub/book.epub', ?, 'sub', 'Title', '2000-01-01 00:00:00')",
+    )
+    .bind(lib_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    let book_id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE uuid = 'uuid-1'")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch)
+         VALUES (?, 'EPUB', 'book', 4, 1)",
+    )
+    .bind(book_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    std::fs::create_dir_all(lib.join("sub")).unwrap();
+    std::fs::write(lib.join("sub").join("book.epub"), b"epub").unwrap();
+    (book_id, "uuid-1".to_string())
 }

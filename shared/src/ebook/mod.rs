@@ -5,11 +5,13 @@
 //! layer persisted in `metadata_overrides.overrides` and merged on read.
 //! Re-exports flatten so callers keep `omnibus_shared::EbookMetadata` etc.
 
+mod export;
 mod metadata;
 mod overrides;
 
 #[cfg(test)]
 mod tests;
 
+pub use export::OpfExportResult;
 pub use metadata::{BookFileInfo, Contributor, EbookMetadata, Identifier};
 pub use overrides::MetadataOverrides;

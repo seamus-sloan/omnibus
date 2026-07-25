@@ -1,5 +1,5 @@
-import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expect, test } from "../fixtures/test";
 import { gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
 
@@ -18,7 +18,10 @@ test("renders book grid with srcset cover images", async ({ page }) => {
   // testid (covered or not) so the filter was a no-op and the chosen row
   // depended on sort order.
   const bookWithCover = FIXTURE_BOOKS.find((b) => b.hasCover);
-  expect(bookWithCover, "expected at least one fixture book with hasCover=true").toBeTruthy();
+  expect(
+    bookWithCover,
+    "expected at least one fixture book with hasCover=true",
+  ).toBeTruthy();
 
   const coverImg = page
     .getByTestId(`ebook-row-${bookWithCover!.slug}`)
@@ -84,7 +87,10 @@ test("books without covers render fallback dash", async ({ page }) => {
 
   // "gamma" is the fixture book with hasCover=false.
   const bookWithoutCover = FIXTURE_BOOKS.find((b) => !b.hasCover);
-  expect(bookWithoutCover, "expected at least one fixture book with hasCover=false").toBeTruthy();
+  expect(
+    bookWithoutCover,
+    "expected at least one fixture book with hasCover=false",
+  ).toBeTruthy();
 
   const row = page.getByTestId(`ebook-row-${bookWithoutCover!.slug}`);
   await expect(row).toBeVisible();

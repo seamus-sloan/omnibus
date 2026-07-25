@@ -9,8 +9,8 @@
  * identical run-to-run. Generated files are committed under
  * `test_data/epubs/generated/` so CI does not need to run this tool.
  *
- * Usage:
- *   npx tsx ui_tests/playwright/tools/make_epub.ts
+ * Usage (from the pnpm project dir):
+ *   cd ui_tests/playwright && pnpm exec tsx tools/make_epub.ts
  *
  * To add a new fixture, edit FIXTURES below and re-run.
  */
@@ -430,7 +430,9 @@ function buildOpf(input: EpubInput): string {
   const publisher = input.publisher
     ? `\n    <dc:publisher>${escapeXml(input.publisher)}</dc:publisher>`
     : "";
-  const date = input.published ? `\n    <dc:date>${escapeXml(input.published)}</dc:date>` : "";
+  const date = input.published
+    ? `\n    <dc:date>${escapeXml(input.published)}</dc:date>`
+    : "";
   const series = input.series
     ? `\n    <meta property="belongs-to-collection" id="c01">${escapeXml(input.series)}</meta>` +
       `\n    <meta refines="#c01" property="collection-type">series</meta>` +
@@ -537,7 +539,9 @@ async function main() {
     const buf = await buildEpub(fx);
     const path = resolve(outDir, fx.filename);
     writeFileSync(path, buf);
-    console.log(`wrote ${path} (${buf.length} bytes, slug=${slugFromFilename(fx.filename)})`);
+    console.log(
+      `wrote ${path} (${buf.length} bytes, slug=${slugFromFilename(fx.filename)})`,
+    );
   }
 }
 

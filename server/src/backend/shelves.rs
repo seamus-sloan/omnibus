@@ -202,6 +202,9 @@ fn map_err(e: ShelfError) -> Response {
             .into_response(),
         ShelfError::BookNotFound => (StatusCode::NOT_FOUND, "book not found").into_response(),
         ShelfError::InvalidRule(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg).into_response(),
+        ShelfError::SystemShelf => {
+            (StatusCode::FORBIDDEN, "system shelves cannot be modified").into_response()
+        }
         ShelfError::Sqlx(e) => internal("shelf operation", e),
     }
 }

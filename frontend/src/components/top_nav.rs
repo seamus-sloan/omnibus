@@ -7,7 +7,7 @@
 use dioxus::prelude::*;
 use dioxus_router::{use_navigator, use_route, Link};
 
-use crate::components::search_palette::SearchPaletteHost;
+use crate::components::search_palette::SearchPaletteTrigger;
 use crate::components::user_menu::UserMenu;
 use crate::Route;
 
@@ -60,7 +60,7 @@ pub fn TopNav() -> Element {
                 }
             }
             if !on_settings {
-                SearchPaletteHost {}
+                SearchPaletteTrigger {}
             }
             div { class: "atrium-actions",
                 button {

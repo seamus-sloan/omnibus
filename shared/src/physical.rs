@@ -52,6 +52,14 @@ impl WishlistSource {
     }
 }
 
+/// Body of the copy-note edit (`PATCH /api/physical/copies/{id}`). `None` — and
+/// any blank string — clears the note.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct UpdateCopyNoteRequest {
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
 /// A book on one user's physical wishlist. Unique per `(user_id, book_uuid)`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WishlistEntry {
@@ -60,4 +68,29 @@ pub struct WishlistEntry {
     pub book_uuid: String,
     pub added_at: i64,
     pub source: WishlistSource,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wishlist_source_round_trips_through_the_db_string_for_every_variant() {
+        for variant in [
+            WishlistSource::Scan,
+            WishlistSource::Detail,
+            WishlistSource::Manual,
+        ] {
+            assert_eq!(
+                WishlistSource::from_db(variant.as_str()),
+                Some(variant),
+                "variant {variant:?} did not round-trip through as_str/from_db"
+            );
+        }
+    }
+
+    #[test]
+    fn wishlist_source_from_db_returns_none_for_unrecognized_token() {
+        assert_eq!(WishlistSource::from_db("bogus"), None);
+    }
 }

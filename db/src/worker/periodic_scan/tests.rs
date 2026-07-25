@@ -101,8 +101,12 @@ async fn periodic_scan_tick_posts_only_the_configured_library_path() {
     let _ = periodic_scan_tick(&p, &w).await;
 
     assert!(find_by_resource(&w, "/ebooks"));
+    // Count across both buckets: the /ebooks scan of a nonexistent path can
+    // fail fast and move from `active` to `recent_complete` before we snapshot,
+    // so asserting `active.len() == 1` alone races that completion.
+    let snap = w.progress_snapshot();
     assert_eq!(
-        w.progress_snapshot().active.len(),
+        snap.active.len() + snap.recent_complete.len(),
         1,
         "no audiobook path configured, so only one scan should be posted"
     );

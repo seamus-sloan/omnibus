@@ -95,6 +95,28 @@ pub async fn list_physical_copies(
     Ok(rows.into_iter().map(map_copy).collect())
 }
 
+/// Replace a copy's free-text note, returning the updated row. `None` clears
+/// it. Returns [`PhysicalError::CopyNotFound`] if no copy has that id.
+pub async fn update_physical_copy_note(
+    pool: &SqlitePool,
+    copy_id: i64,
+    note: Option<&str>,
+) -> Result<PhysicalCopy, PhysicalError> {
+    // Treat a blank note as a clear, so the UI's empty input doesn't persist an
+    // empty string that renders as a stray blank line on the copy card.
+    let note = note.map(str::trim).filter(|s| !s.is_empty());
+    let row = sqlx::query_as::<_, CopyRow>(
+        "UPDATE physical_copies SET note = ?2 WHERE id = ?1
+         RETURNING id, book_uuid, isbn, added_by_user_id, checked_in_at, note",
+    )
+    .bind(copy_id)
+    .bind(note)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(PhysicalError::CopyNotFound)?;
+    Ok(map_copy(row))
+}
+
 /// Delete a single physical copy ("I sold it"). Returns
 /// [`PhysicalError::CopyNotFound`] if no copy has that id.
 pub async fn delete_physical_copy(pool: &SqlitePool, copy_id: i64) -> Result<(), PhysicalError> {

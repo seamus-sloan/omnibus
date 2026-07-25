@@ -31,6 +31,10 @@ pub enum InitDbError {
     SortKeys(#[from] crate::sort_keys::SortKeysError),
     #[error(transparent)]
     MissingFiles(#[from] MissingFilesError),
+    #[error(transparent)]
+    Shelves(#[from] crate::shelves::ShelfError),
+    #[error(transparent)]
+    Overrides(#[from] crate::metadata_overrides::MetadataOverridesError),
 }
 
 /// Initialize or open the SQLite pool at `database_url`, apply per-connection PRAGMAs, run pending
@@ -86,6 +90,9 @@ async fn run_boot_backfills(pool: &SqlitePool) -> Result<(), InitDbError> {
     repair_ghosted_audiobook_attachments(pool).await?;
     // Auto-attach match key for rows indexed before migration 0016.
     crate::normalize::backfill_norm_columns(pool).await?;
+    // Effective (override) match keys for Check-In on rows edited before
+    // migration 0048 (and self-heals any drift from the overrides JSON).
+    crate::metadata_overrides::backfill_override_norm_columns(pool).await?;
     // F2 `scan_key` diff key for rows indexed before migration 0026,
     // reconstructed from stored columns (also fills `book_files.scan_key`,
     // migration 0043).
@@ -100,6 +107,9 @@ async fn run_boot_backfills(pool: &SqlitePool) -> Result<(), InitDbError> {
     // F10 missing-files flags for rows already fileless before migration 0029,
     // starting their GC clock at boot time.
     crate::missing_files::backfill_missing_files_flags(pool).await?;
+    // #1187 built-in Wishlist shelf for any user missing one (migration 0047
+    // seeds existing users; this catches gaps and future rows).
+    crate::shelves::provision_wishlist_shelves(pool).await?;
     Ok(())
 }
 

@@ -59,7 +59,7 @@ byte-identical output):
 
 ```bash
 cd ui_tests/playwright
-npx tsx tools/make_audiobook.ts
+pnpm exec tsx tools/make_audiobook.ts
 ```
 
 ## Public-domain M4B provenance

@@ -35,6 +35,18 @@ pub const MAX_PREVIEW_RULES: usize = 50;
 pub enum ShelfKind {
     Smart,
     Manual,
+    /// The built-in per-user physical wishlist. Membership derives from
+    /// `wishlist_entries`, not `shelf_books`; it is public and immutable
+    /// (no rename / delete / rule / visibility edits). One per user.
+    Wishlist,
+}
+
+impl ShelfKind {
+    /// A system shelf the user cannot rename, delete, or reconfigure. Its
+    /// membership is derived, and every mutation endpoint rejects it.
+    pub fn is_system(self) -> bool {
+        matches!(self, ShelfKind::Wishlist)
+    }
 }
 
 /// Who can see a shelf. `Private` = owner + admins; `Public` = every user.
@@ -112,7 +124,12 @@ macro_rules! wire_enum {
     };
 }
 
-wire_enum!(ShelfKind, ShelfKind::Smart => "smart", ShelfKind::Manual => "manual");
+wire_enum!(
+    ShelfKind,
+    ShelfKind::Smart => "smart",
+    ShelfKind::Manual => "manual",
+    ShelfKind::Wishlist => "wishlist",
+);
 wire_enum!(Visibility, Visibility::Private => "private", Visibility::Public => "public");
 wire_enum!(MatchMode, MatchMode::Any => "any", MatchMode::All => "all");
 wire_enum!(
@@ -280,6 +297,11 @@ impl CreateShelfRequest {
                 if !self.rules.is_empty() || self.match_mode.is_some() {
                     return Err("manual shelves cannot have rules".into());
                 }
+            }
+            // The Wishlist shelf is system-provisioned, never created via the
+            // API — reject an attempt to forge one.
+            ShelfKind::Wishlist => {
+                return Err("the Wishlist shelf cannot be created manually".into());
             }
         }
         Ok(())

@@ -25,13 +25,42 @@ const INDEX_LIMIT: i64 = 10_000;
 /// Build a `VALUES (?)` list for a CTE that materializes the library-path
 /// set once. At most two entries (ebook + audiobook), so the bind count
 /// stays trivial.
+///
+/// With no configured scan roots the CTE still needs a row to be valid SQL, so
+/// `n == 0` yields `(NULL)` — a path no book matches, leaving the physical arm
+/// of [`visible`] as the only way in. That's the physical-only library: books
+/// checked in before any ebook/audiobook path was set must still browse.
 fn placeholders(n: usize) -> String {
+    if n == 0 {
+        return "(NULL)".to_string();
+    }
     std::iter::repeat_n("(?)", n).collect::<Vec<_>>().join(", ")
 }
 
+/// "In the library" for the browse indexes: under a configured scan root, or
+/// holding at least one physical copy (#1181).
+///
+/// Deliberately *not* the landing read path's rule, which also demands a
+/// `book_files` row. Browse counts a ghosted (fileless) book so its author
+/// doesn't vanish while the file is merely missing, and that stays true here.
+/// The physical arm is what surfaces a physical-only book: those live under the
+/// synthetic `physical://local` root, which is never in `lib_paths`. A pure
+/// wishlist entry sits under that same root with no copy, so it matches
+/// neither arm and stays hidden.
+///
+/// `book` / `root` name the `books` / `scan_roots` aliases in the enclosing
+/// query, which differ per subquery here.
+fn visible(book: &str, root: &str) -> String {
+    format!(
+        "({root}.path IN (SELECT p FROM lib_paths) \
+          OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = {book}.uuid))"
+    )
+}
+
 /// Return every author with their book count and an optional cover-derived
-/// accent, scoped to `library_paths`, ordered by name ascending and capped
-/// at [`INDEX_LIMIT`]. Empty list when no paths match or the slice is empty.
+/// accent, scoped to books `visible` under `library_paths`, ordered by name
+/// ascending and capped at [`INDEX_LIMIT`]. An empty `library_paths` is not an
+/// empty result: physical-only books still browse (see [`placeholders`]).
 ///
 /// Currently returns results across all users (single-tenant). When F4.x
 /// per-user ACL lands, add a `user_id: i64` parameter and scope the query
@@ -40,10 +69,9 @@ pub async fn list_authors(
     pool: &SqlitePool,
     library_paths: &[&str],
 ) -> Result<Vec<AuthorSummary>, BrowseError> {
-    if library_paths.is_empty() {
-        return Ok(Vec::new());
-    }
     let ph = placeholders(library_paths.len());
+    let vis = visible("b", "l");
+    let vis2 = visible("b2", "l2");
     // `effective(author_id, book_id)` is the override-aware membership set,
     // built once: arm (1) canonical link rows whose book has no creators
     // override, arm (2) override-derived `(authors.id, book_id)` pairs.
@@ -61,7 +89,7 @@ pub async fn list_authors(
               JOIN books b ON b.id = bal.book
               JOIN scan_roots l ON l.id = b.library_id
               LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
-             WHERE l.path IN (SELECT p FROM lib_paths)
+             WHERE {vis}
                AND (mo.book_uuid IS NULL
                     OR json_type(mo.overrides, '$.creators') IS NULL)
             UNION
@@ -73,7 +101,7 @@ pub async fn list_authors(
               JOIN json_each(mo.overrides, '$.creators') je
               JOIN authors a2
                 ON a2.name = json_extract(je.value, '$.name') COLLATE NOCASE
-             WHERE l.path IN (SELECT p FROM lib_paths)
+             WHERE {vis}
                AND json_type(mo.overrides, '$.creators') IS NOT NULL
         ),
         counts AS (
@@ -88,7 +116,7 @@ pub async fn list_authors(
                   JOIN books b2 ON b2.id = bal2.book
                   JOIN scan_roots l2 ON l2.id = b2.library_id
                  WHERE bal2.author = a.id
-                   AND l2.path IN (SELECT p FROM lib_paths)
+                   AND {vis2}
                    AND b2.accent_color IS NOT NULL
                  ORDER BY b2.sort, b2.id
                  LIMIT 1) AS accent,
@@ -105,7 +133,7 @@ pub async fn list_authors(
               JOIN books b ON b.id = bal.book
               JOIN scan_roots l ON l.id = b.library_id
              WHERE bal.author = a.id
-               AND l.path IN (SELECT p FROM lib_paths)
+               AND {vis}
           )
         ORDER BY COALESCE(a.sort, a.name) COLLATE NOCASE ASC
         LIMIT ?
@@ -132,8 +160,9 @@ pub async fn list_authors(
 }
 
 /// Return every series with book count, primary author, and an optional
-/// accent, scoped to `library_paths`, ordered by name ascending and capped
-/// at [`INDEX_LIMIT`]. Empty list when no paths match or the slice is empty.
+/// accent, scoped to books `visible` under `library_paths`, ordered by name
+/// ascending and capped at [`INDEX_LIMIT`]. An empty `library_paths` is not an
+/// empty result: physical-only books still browse (see [`placeholders`]).
 ///
 /// Currently returns results across all users (single-tenant). When F4.x
 /// per-user ACL lands, add a `user_id: i64` parameter and scope the query
@@ -142,9 +171,6 @@ pub async fn list_series(
     pool: &SqlitePool,
     library_paths: &[&str],
 ) -> Result<Vec<SeriesSummary>, BrowseError> {
-    if library_paths.is_empty() {
-        return Ok(Vec::new());
-    }
     let sql = series_index_sql(library_paths.len());
     let mut q = sqlx::query(&sql);
     for path in library_paths {
@@ -163,6 +189,9 @@ pub async fn list_series(
 /// so the books table is scanned once instead of once per series.
 fn series_index_sql(n: usize) -> String {
     let ph = placeholders(n);
+    let vis = visible("b", "l");
+    let vis2 = visible("b2", "l2");
+    let vis3 = visible("b3", "l3");
     format!(
         r"
         WITH lib_paths(p) AS (VALUES {ph}),
@@ -173,7 +202,7 @@ fn series_index_sql(n: usize) -> String {
               JOIN books b ON b.id = bsl.book
               JOIN scan_roots l ON l.id = b.library_id
               LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
-             WHERE l.path IN (SELECT p FROM lib_paths)
+             WHERE {vis}
                AND (mo.book_uuid IS NULL
                     OR json_type(mo.overrides, '$.series') IS NULL)
             UNION
@@ -184,7 +213,7 @@ fn series_index_sql(n: usize) -> String {
               JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
               JOIN series s2
                 ON s2.name = json_extract(mo.overrides, '$.series') COLLATE NOCASE
-             WHERE l.path IN (SELECT p FROM lib_paths)
+             WHERE {vis}
                AND json_type(mo.overrides, '$.series') IS NOT NULL
         ),
         counts AS (
@@ -209,7 +238,7 @@ fn series_index_sql(n: usize) -> String {
                   JOIN scan_roots l2 ON l2.id = b2.library_id
                   LEFT JOIN metadata_overrides mo2 ON mo2.book_uuid = b2.uuid
                  WHERE bsl2.series = s.id
-                   AND l2.path IN (SELECT p FROM lib_paths)
+                   AND {vis2}
                  ORDER BY b2.series_index NULLS LAST, b2.sort, b2.id
                  LIMIT 1) AS primary_author,
                (SELECT b3.accent_color
@@ -217,7 +246,7 @@ fn series_index_sql(n: usize) -> String {
                   JOIN books b3 ON b3.id = bsl3.book
                   JOIN scan_roots l3 ON l3.id = b3.library_id
                  WHERE bsl3.series = s.id
-                   AND l3.path IN (SELECT p FROM lib_paths)
+                   AND {vis3}
                    AND b3.accent_color IS NOT NULL
                  ORDER BY b3.series_index NULLS LAST, b3.sort, b3.id
                  LIMIT 1) AS accent
@@ -228,7 +257,7 @@ fn series_index_sql(n: usize) -> String {
               JOIN books b ON b.id = bsl.book
               JOIN scan_roots l ON l.id = b.library_id
              WHERE bsl.series = s.id
-               AND l.path IN (SELECT p FROM lib_paths)
+               AND {vis}
           )
         ORDER BY COALESCE(s.sort, s.name) COLLATE NOCASE ASC
         LIMIT ?

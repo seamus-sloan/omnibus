@@ -7,7 +7,7 @@ use dioxus::prelude::*;
 
 use super::super::chapter_nav::chapter_index_for_elapsed;
 use super::super::sleep::{end_of_chapter_seconds, sleep_chip_label};
-use super::super::sleep_panel::SleepPanelBody;
+use super::super::sleep_panel::{SleepPanelBody, SleepPanelState};
 use super::super::speed_panel::SpeedPanelBody;
 use crate::use_playback;
 
@@ -148,13 +148,15 @@ pub(super) fn DockSleep(open_panel: Signal<Option<DockPanel>>) -> Element {
             }
             DockPopover { open, testid: "mini-dock-pop-sleep", class: "mini-dock-pop-sleep",
                 SleepPanelBody {
-                    remaining,
-                    choice,
-                    fade,
-                    has_chapters,
-                    on_select,
-                    on_end_of_chapter,
-                    on_toggle_fade,
+                    state: SleepPanelState {
+                        remaining,
+                        choice,
+                        fade,
+                        has_chapters,
+                        on_select: EventHandler::new(on_select),
+                        on_end_of_chapter: EventHandler::new(on_end_of_chapter),
+                        on_toggle_fade: EventHandler::new(on_toggle_fade),
+                    },
                 }
             }
         }

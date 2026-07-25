@@ -15,7 +15,7 @@ use super::chapter_nav::{chapter_index_for_elapsed, chapter_next_target, chapter
 use super::chapters_drawer::ChaptersDrawer;
 use super::overlays::{FailedOverlay, PreparingOverlay};
 use super::sleep::{end_of_chapter_seconds, sleep_toolbar_label, use_sleep, SleepChoice};
-use super::sleep_panel::SleepPanel;
+use super::sleep_panel::{SleepPanel, SleepPanelState};
 use super::speed_panel::SpeedPanel;
 use super::stage::{
     PlaybackPosition, PlayerCallbacks, PlayerContent, PlayerStage, ToolbarState, TransportState,
@@ -386,13 +386,15 @@ pub(super) fn PlayerOverlays(
         }
         if sleep_panel_open() {
             SleepPanel {
-                remaining: sleep_display.remaining,
-                choice: sleep_display.choice,
-                fade: sleep_display.fade,
-                has_chapters: sleep_display.has_chapters,
-                on_select: move |secs: i32| on_sleep_select.call(secs),
-                on_end_of_chapter: move |_| on_sleep_end_of_chapter.call(()),
-                on_toggle_fade: move |_| on_sleep_toggle_fade.call(()),
+                state: SleepPanelState {
+                    remaining: sleep_display.remaining,
+                    choice: sleep_display.choice,
+                    fade: sleep_display.fade,
+                    has_chapters: sleep_display.has_chapters,
+                    on_select: EventHandler::new(move |secs: i32| on_sleep_select.call(secs)),
+                    on_end_of_chapter: EventHandler::new(move |_| on_sleep_end_of_chapter.call(())),
+                    on_toggle_fade: EventHandler::new(move |_| on_sleep_toggle_fade.call(())),
+                },
                 on_close: move |_| sleep_panel_open.set(false),
             }
         }

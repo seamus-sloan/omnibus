@@ -26,14 +26,17 @@ mod authors;
 mod bookmarks;
 mod covers;
 mod ebooks;
+mod export_opf;
 mod health;
 mod highlights;
 mod image_upload;
 mod journals;
 mod kindle;
 mod overrides;
+mod physical;
 mod progress;
 mod ratings;
+mod read_status;
 mod scan;
 mod search;
 mod series;
@@ -305,6 +308,10 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             "/api/ebooks/{uuid}/overrides",
             post(overrides::post_ebook_overrides).delete(overrides::delete_ebook_overrides),
         )
+        .route(
+            "/api/ebooks/{uuid}/export-opf",
+            post(export_opf::post_export_opf),
+        )
         // Cover-only revert. Carries no upload body (unlike the POST in
         // `upload_router`), so it stays outside the upload rate limiter —
         // same split as the author-photo GET/DELETE vs PUT routes below.
@@ -360,6 +367,10 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             "/api/ratings/{uuid}",
             get(ratings::get_rating).delete(ratings::delete_rating),
         )
+        // F3.4 read/unread state — mobile-facing REST. Web hits the analogous
+        // `/api/rpc/read-status/*` server functions.
+        .route("/api/read-status", put(read_status::put_read_status))
+        .route("/api/read-status/{uuid}", get(read_status::get_read_status))
         // Physical Check-In scan flow — mobile-facing REST. Web hits the
         // analogous `/api/rpc/scan/*` server functions.
         .route("/api/scan/resolve", post(scan::post_resolve))
@@ -375,6 +386,21 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             "/api/google-books-key",
             get(scan::get_google_books_key).post(scan::post_google_books_key),
         )
+        // F Physical Check-In — book-detail collection + wishlist reads/edits.
+        // The literal `copies` routes are registered before `/{uuid}` so the
+        // param route can't shadow them.
+        .route(
+            "/api/physical/copies/{copy_id}",
+            patch(physical::patch_copy_note).delete(physical::delete_copy),
+        )
+        .route("/api/physical/{uuid}/copies", get(physical::get_copies))
+        .route(
+            "/api/physical/{uuid}/wishlist",
+            get(physical::get_wishlist_entry)
+                .post(physical::post_wishlist_entry)
+                .delete(physical::delete_wishlist_entry),
+        )
+        .route("/api/physical/{uuid}", delete(physical::delete_book))
         // F3.1 shelves — mobile-facing REST. Web hits the analogous
         // `/api/rpc/shelves*` server functions. `/preview` is registered before
         // the `{id}` param route so it can't be shadowed.

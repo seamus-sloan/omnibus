@@ -41,7 +41,9 @@ test("toggles dark to light, persists across reload", async ({ page }) => {
   await page.getByTestId("theme-light").click();
   await expect(root).toHaveAttribute("data-theme", "light");
 
-  const stored = await page.evaluate(() => window.localStorage.getItem("omn.theme"));
+  const stored = await page.evaluate(() =>
+    window.localStorage.getItem("omn.theme"),
+  );
   expect(stored).toBe("light");
 
   // Reload: the SSR layer still renders `dark`, then the post-hydration
@@ -62,7 +64,9 @@ test("toggles dark to black, persists across reload", async ({ page }) => {
   await page.getByTestId("theme-black").click();
   await expect(root).toHaveAttribute("data-theme", "black");
 
-  const stored = await page.evaluate(() => window.localStorage.getItem("omn.theme"));
+  const stored = await page.evaluate(() =>
+    window.localStorage.getItem("omn.theme"),
+  );
   expect(stored).toBe("black");
 
   // Reload: SSR renders `dark`, then the post-hydration effect reads
@@ -71,7 +75,9 @@ test("toggles dark to black, persists across reload", async ({ page }) => {
   await expect.poll(async () => root.getAttribute("data-theme")).toBe("black");
 });
 
-test("clicking light then dark flips back and clears divergence from default", async ({ page }) => {
+test("clicking light then dark flips back and clears divergence from default", async ({
+  page,
+}) => {
   await gotoReady(page, "/");
 
   const root = page.locator("div.atrium").first();
@@ -85,6 +91,8 @@ test("clicking light then dark flips back and clears divergence from default", a
   await page.getByTestId("theme-dark").click();
   await expect(root).toHaveAttribute("data-theme", "dark");
 
-  const stored = await page.evaluate(() => window.localStorage.getItem("omn.theme"));
+  const stored = await page.evaluate(() =>
+    window.localStorage.getItem("omn.theme"),
+  );
   expect(stored).toBe("dark");
 });

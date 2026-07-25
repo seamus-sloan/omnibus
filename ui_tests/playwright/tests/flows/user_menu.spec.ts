@@ -1,5 +1,5 @@
-import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
@@ -19,16 +19,20 @@ async function recentPoint(
   request: import("@playwright/test").APIRequestContext,
   format: "epub" | "audio",
 ) {
-  const target = FIXTURE_BOOKS[1];
+  const target = FIXTURE_BOOKS[1]!;
   const uuid = await fetchBookUuidByTitle(request, target.title);
   const response = await request.get("/api/rpc/ebooks");
   expect(response.status()).toBe(200);
-  const books = ((await response.json()) as {
-    books: Record<string, unknown>[];
-  }).books;
+  const books = (
+    (await response.json()) as {
+      books: Record<string, unknown>[];
+    }
+  ).books;
   const book = books.find((candidate) => candidate.unique_identifier === uuid);
   if (!book) {
-    throw new Error(`book ${JSON.stringify(target.title)} disappeared after lookup`);
+    throw new Error(
+      `book ${JSON.stringify(target.title)} disappeared after lookup`,
+    );
   }
 
   return {
@@ -78,11 +82,21 @@ test("opens and closes the user menu", async ({ page }) => {
   // Version line at the bottom of the panel (#1055) — a compile-time
   // constant, so it's always present regardless of OMNIBUS_VERSION.
   await expect(page.getByTestId("user-menu-version")).toBeVisible();
-  await expect(page.getByTestId("user-menu-version")).toHaveText(/^v\d+\.\d+\.\d+$/);
+  await expect(page.getByTestId("user-menu-version")).toHaveText(
+    /^v\d+\.\d+\.\d+$/,
+  );
 
-  // Close via the transparent scrim (click outside the panel).
-  await page.getByTestId("user-menu-scrim").click();
+  // Close by clicking a real viewport coordinate well below the header,
+  // not the scrim locator's centre. `.atrium-topbar` sets
+  // `backdrop-filter`, which makes it the containing block for the
+  // `position: fixed` scrim nested inside it — a scrim that collapsed to
+  // the header strip still satisfies a centre-click while leaving the rest
+  // of the page uncovered, so only mouse coordinates catch the regression.
+  await page.mouse.click(40, 500);
   await expect(page.getByTestId("logout-button")).toHaveCount(0);
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  // The scrim swallows the click — it must not fall through to the page.
+  await expect.poll(async () => new URL(page.url()).pathname).toBe("/");
 
   // Re-open and close via ESC. Dispatch the keypress directly to the
   // panel locator so the test doesn't race the onmounted focus call.
@@ -100,12 +114,16 @@ test("Settings link routes to the settings page", async ({ page }) => {
   await expect(page).toHaveURL(/\/settings$/);
 });
 
-test("Admin · server health link routes to the log viewer", async ({ page }) => {
+test("Admin · server health link routes to the log viewer", async ({
+  page,
+}) => {
   await gotoReady(page, "/");
   await page.getByTestId("user-menu-trigger").click();
   await page.getByRole("link", { name: "Admin · server health" }).click();
   await expect(page).toHaveURL(/\/logs$/);
-  await expect(page.getByRole("heading", { level: 1, name: "Server logs" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Server logs" }),
+  ).toBeVisible();
 });
 
 for (const sample of [
@@ -157,7 +175,9 @@ test("surfaces a recent-progress fetch failure", async ({ page }) => {
   await gotoReady(page, "/");
   await page.getByTestId("user-menu-trigger").click();
 
-  await expect(page.getByRole("alert")).toHaveText("Unable to load reading progress.");
+  await expect(page.getByRole("alert")).toHaveText(
+    "Unable to load reading progress.",
+  );
 });
 
 test("Sign out clears the session and routes to /login", async ({ page }) => {
