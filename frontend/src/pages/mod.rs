@@ -36,7 +36,7 @@ pub use auth::{LoginPage, RegisterPage};
 pub use author::AuthorPage;
 pub use authors_index::AuthorsIndexPage;
 pub use book_detail::BookDetailPage;
-pub use check_in::CheckInPage;
+pub use check_in::{CheckInOpen, CheckInOverlay, CheckInPage};
 pub use landing::LandingPage;
 #[cfg(feature = "web")]
 pub(crate) use listen::install_audio_bootstrap;

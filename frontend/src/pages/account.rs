@@ -22,6 +22,8 @@ use omnibus_shared::{EbookMetadata, UserSummary};
 #[cfg(feature = "mobile")]
 use crate::components::atrium::{Cover, Theme};
 #[cfg(feature = "mobile")]
+use crate::pages::CheckInOpen;
+#[cfg(feature = "mobile")]
 use crate::{data, thumb_url, use_server_url, Route};
 
 // ── Pure helpers (unit-tested) ─────────────────────────────────────
@@ -460,6 +462,7 @@ fn AccountRows() -> Element {
     let server_url = use_server_url();
     let nav = use_navigator();
     let is_admin = crate::use_is_admin();
+    let mut check_in_open = use_context::<CheckInOpen>().0;
 
     let on_sign_out = move |_| {
         let url = server_url.clone();
@@ -482,7 +485,16 @@ fn AccountRows() -> Element {
                 AccountLinkRow { to: Route::Settings { section: Some("library".into()) }, label: "Admin \u{00b7} server" }
             }
             AccountLinkRow { to: Route::AddBooks {}, label: "Add books" }
-            AccountLinkRow { to: Route::CheckIn {}, label: "Check in a book" }
+            // Check-in is a centered overlay, not a route — a button that
+            // raises it, styled like the navigable rows around it.
+            button {
+                r#type: "button",
+                class: "m-account-row",
+                "data-testid": "account-check-in",
+                onclick: move |_| check_in_open.set(true),
+                span { "Check in a book" }
+                span { class: "m-account-chevron", "aria-hidden": "true", "\u{203a}" }
+            }
             button {
                 r#type: "button",
                 class: "m-account-row m-account-row-danger",

@@ -9,6 +9,7 @@ use dioxus_router::{use_navigator, use_route, Link};
 
 use crate::components::search_palette::SearchPaletteTrigger;
 use crate::components::user_menu::UserMenu;
+use crate::pages::CheckInOpen;
 use crate::Route;
 
 /// Stoat brand mark shown next to the wordmark. Bundled + content-hashed by
@@ -20,6 +21,7 @@ const BRAND_MARK: Asset = asset!("/assets/omnibus-stoat.png");
 pub fn TopNav() -> Element {
     let route = use_route::<Route>();
     let nav = use_navigator();
+    let mut check_in_open = use_context::<CheckInOpen>().0;
     // Hide the search trigger on `/settings` — the page has its own dense
     // form layout and a search button wedged into the nav above it just
     // clutters the chrome.
@@ -67,9 +69,7 @@ pub fn TopNav() -> Element {
                     class: "btn sm",
                     r#type: "button",
                     "data-testid": "check-in-button",
-                    onclick: move |_| {
-                        nav.push(Route::CheckIn {});
-                    },
+                    onclick: move |_| check_in_open.set(true),
                     "Check in"
                 }
                 button {
