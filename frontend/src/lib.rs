@@ -24,6 +24,11 @@ pub mod routes;
 pub mod rpc;
 pub mod scroll_restore;
 pub mod session_tracker;
+// SSR render-smoke test harness. `dioxus::ssr` only exists under `server`, and
+// every consumer is a `server`-gated render test, so the module is gated on it
+// too — otherwise the wasm `web --all-targets` lint would compile it and fail.
+#[cfg(all(any(test, feature = "test-support"), feature = "server"))]
+pub mod test_support;
 pub mod version;
 pub mod view_prefs;
 
