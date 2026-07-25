@@ -198,6 +198,7 @@ fn persist_position(uuid: &str, server_url: &str, seconds: f64) {
     let server_url = server_url.to_string();
     spawn(async move {
         let update = ProgressUpdate {
+            client_updated_at: None,
             book_uuid: uuid,
             format: ProgressFormat::Audio,
             epub_cfi: None,

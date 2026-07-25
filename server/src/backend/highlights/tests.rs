@@ -334,3 +334,84 @@ async fn api_highlight_user_isolation() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn api_delete_highlight_accepts_client_minted_id() {
+    let (app, _state, pool) = fixture().await;
+    let (_, uuid) = seed_book_with_uuid(&pool, "/lib", "Book A").await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let client_id = "b2d7e510-0000-4000-8000-00000000000a";
+
+    let create = serde_json::json!({
+        "book_uuid": uuid,
+        "epub_cfi_range": "epubcfi(/6/4!/4/2)",
+        "color": "amber",
+        "client_id": client_id,
+    });
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/highlights")
+                .method("POST")
+                .header("content-type", "application/json")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(create.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // This is the offline create-then-delete replay: the queued DELETE names
+    // the uuid the device minted, never the row id the server assigned.
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/highlights/{client_id}"))
+                .method("DELETE")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/highlights/book/{uuid}"))
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let list: Vec<Highlight> = serde_json::from_slice(&bytes).unwrap();
+    assert!(list.is_empty(), "delete by client id must remove the row");
+}
+
+#[tokio::test]
+async fn api_patch_highlight_color_404s_for_unknown_client_id() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let body = serde_json::json!({ "color": "green" });
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/highlights/never-minted-handle/color")
+                .method("PATCH")
+                .header("content-type", "application/json")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}

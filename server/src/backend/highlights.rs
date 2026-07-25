@@ -48,6 +48,23 @@ pub(super) async fn get_highlights(
     }
 }
 
+/// Resolve a `{id}` path segment to a numeric highlight id.
+///
+/// The segment is either the server's own row id or the uuid the creating
+/// device minted (migration 0049). Both are valid handles: an offline client
+/// queues an edit or a delete against its own uuid long before it has heard
+/// what row id the create was assigned, and replaying that op has to land on
+/// the same annotation. A uuid can't parse as an `i64`, so the two namespaces
+/// can't collide.
+async fn resolve_id(state: &AppState, user_id: i64, raw: &str) -> Result<i64, HighlightError> {
+    if let Ok(id) = raw.parse::<i64>() {
+        return Ok(id);
+    }
+    db::highlights::highlight_id_for_client_id(&state.pool, user_id, raw)
+        .await?
+        .ok_or(HighlightError::NotFound)
+}
+
 #[derive(serde::Deserialize)]
 pub(super) struct PatchColor {
     color: HighlightColor,
@@ -57,9 +74,16 @@ pub(super) struct PatchColor {
 pub(super) async fn patch_highlight_color(
     user: AuthUser,
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Path(id): Path<String>,
     Json(body): Json<PatchColor>,
 ) -> Response {
+    let id = match resolve_id(&state, user.id, &id).await {
+        Ok(id) => id,
+        Err(HighlightError::NotFound) => {
+            return (axum::http::StatusCode::NOT_FOUND, "highlight not found").into_response()
+        }
+        Err(e) => return internal("update_highlight_color", e),
+    };
     match db::highlights::update_highlight_color(&state.pool, user.id, id, body.color).await {
         Ok(()) => axum::http::StatusCode::NO_CONTENT.into_response(),
         Err(HighlightError::NotFound) => {
@@ -74,12 +98,19 @@ pub(super) async fn patch_highlight_color(
 pub(super) async fn patch_highlight_note(
     user: AuthUser,
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Path(id): Path<String>,
     Json(body): Json<UpdateHighlightNote>,
 ) -> Response {
     if let Err(msg) = body.validate() {
         return (axum::http::StatusCode::BAD_REQUEST, msg).into_response();
     }
+    let id = match resolve_id(&state, user.id, &id).await {
+        Ok(id) => id,
+        Err(HighlightError::NotFound) => {
+            return (axum::http::StatusCode::NOT_FOUND, "highlight not found").into_response()
+        }
+        Err(e) => return internal("update_highlight_note", e),
+    };
     match db::highlights::update_highlight_note(&state.pool, user.id, id, body.note.as_deref())
         .await
     {
@@ -96,8 +127,15 @@ pub(super) async fn patch_highlight_note(
 pub(super) async fn delete_highlight(
     user: AuthUser,
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Path(id): Path<String>,
 ) -> Response {
+    let id = match resolve_id(&state, user.id, &id).await {
+        Ok(id) => id,
+        Err(HighlightError::NotFound) => {
+            return (axum::http::StatusCode::NOT_FOUND, "highlight not found").into_response()
+        }
+        Err(e) => return internal("delete_highlight", e),
+    };
     match db::highlights::delete_highlight(&state.pool, user.id, id).await {
         Ok(()) => axum::http::StatusCode::NO_CONTENT.into_response(),
         Err(HighlightError::NotFound) => {

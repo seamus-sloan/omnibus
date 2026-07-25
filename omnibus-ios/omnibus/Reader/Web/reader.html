@@ -1,0 +1,98 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        overflow: hidden;
+        background: var(--page, #201e1b);
+        -webkit-tap-highlight-color: transparent;
+        -webkit-touch-callout: none;
+      }
+      /* The stage is inset from the safe areas so prose never runs under the
+         notch, the home indicator, or the rounded corners, and so the host's
+         persistent title / page indicators have a band to sit in. `viewport-fit=cover`
+         above is what makes `env()` resolve to real values.
+
+         The bands are sized to clear the host's floating chrome — the round
+         button row above, the scrubber card below — because that chrome is
+         laid over the page rather than docked outside it, and re-paginating
+         every time the bars toggle would cost a reflow per tap. */
+      #stage {
+        position: absolute;
+        top: calc(env(safe-area-inset-top, 0px) + 58px);
+        bottom: calc(env(safe-area-inset-bottom, 0px) + 58px);
+        left: calc(env(safe-area-inset-left, 0px) + 10px);
+        right: calc(env(safe-area-inset-right, 0px) + 10px);
+      }
+      /* epub.js sizes its iframe from the container, so the container has to
+         be a definite box — not an auto-height flow element. */
+      #stage > div {
+        height: 100% !important;
+      }
+    </style>
+    <script src="jszip.min.js"></script>
+    <script src="epub.min.js"></script>
+    <script src="epub-reader-glue.js"></script>
+  </head>
+  <body>
+    <!-- `rd-stage` is the class the glue's host-level gesture handler tests for.
+         Without it, swipes and taps that land on the stage margins rather than
+         inside the section iframe are ignored. -->
+    <div id="stage" class="rd-stage"></div>
+    <script>
+      // Bridge the glue's window callbacks onto the WKWebView message handler
+      // so Swift receives them as typed events.
+      function send(type, payload) {
+        try {
+          window.webkit.messageHandlers.omnibus.postMessage({
+            type: type,
+            payload: payload === undefined ? null : payload,
+          });
+        } catch (e) {}
+      }
+
+      window.__omnibusOnStatus = function (state) {
+        send("status", state);
+      };
+      window.__omnibusOnRelocate = function (json) {
+        send("relocate", json);
+      };
+      window.__omnibusOnToc = function (json) {
+        send("toc", json);
+      };
+      window.__omnibusOnSelection = function (json) {
+        send("selection", json);
+      };
+      window.__omnibusOnSelectionCleared = function () {
+        send("selectionCleared", null);
+      };
+      // A tap on an existing highlight, so the host can offer recolour /
+      // note / remove rather than only ever creating new ones.
+      window.__omnibusOnAnnotationTap = function (json) {
+        send("annotationTap", json);
+      };
+      // Centre-tap inside the page. The glue owns tap zones and swipe-to-turn;
+      // the host only reacts to this signal so both agree on one gesture model.
+      window.__omnibusOnToggleChrome = function () {
+        send("toggleChrome", null);
+      };
+      window.__omnibusOnShareText = function (text) {
+        send("shareText", text);
+      };
+      window.__omnibusOnShareImage = function (json) {
+        send("shareImage", json);
+      };
+
+      send("hostReady", null);
+    </script>
+  </body>
+</html>

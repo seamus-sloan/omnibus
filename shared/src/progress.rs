@@ -48,6 +48,19 @@ pub struct ProgressUpdate {
     pub epub_cfi: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_position_seconds: Option<f64>,
+    /// When the *reader* moved to this position, by the writing device's
+    /// clock, in unix seconds.
+    ///
+    /// This is what makes a queued offline write safe to replay. Arrival order
+    /// says nothing about reading order: a position read on a phone at 10:00
+    /// and pushed at 18:00 would otherwise land after — and overwrite — one
+    /// read on another device at 14:00. `upsert_progress` compares this against
+    /// the stored value and keeps the later one.
+    ///
+    /// Optional so a client that doesn't set it keeps the old last-write-wins
+    /// behaviour; the server stamps its own clock in that case.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_updated_at: Option<i64>,
 }
 
 impl ProgressUpdate {
@@ -56,6 +69,9 @@ impl ProgressUpdate {
     pub fn validate(&self) -> Result<(), String> {
         if self.book_uuid.trim().is_empty() {
             return Err("book_uuid is required".into());
+        }
+        if self.client_updated_at.is_some_and(|t| t < 0) {
+            return Err("client_updated_at must be non-negative".into());
         }
         // Reject the non-discriminated field at the API boundary so a
         // cross-format payload (e.g. `{format:"epub", audio_position_seconds:…}`)
@@ -109,6 +125,20 @@ pub struct ProgressRecord {
     pub epub_cfi: Option<String>,
     pub audio_position_seconds: Option<f64>,
     pub updated_at: i64,
+    /// The reader's clock for this position — the `client_updated_at` of
+    /// whichever write won, on the device that made it.
+    ///
+    /// [`upsert_progress`](../../omnibus_db/progress/fn.upsert_progress.html)
+    /// orders conflicts on this, not on `updated_at`, so it is the only field
+    /// a client can compare its own position against. Returning just
+    /// `updated_at` — an arrival timestamp on the server's clock — left
+    /// clients comparing a server clock to a device clock and reaching for a
+    /// sync offer on the difference between two boxes' NTP drift.
+    ///
+    /// `None` only for a row written before migration 0051; callers fall back
+    /// to `updated_at` there.
+    #[serde(default)]
+    pub client_updated_at: Option<i64>,
 }
 
 /// "Pick up where you left off" entry returned by `GET /api/progress/recent` and `rpc_recent_progress`.
@@ -140,6 +170,13 @@ pub struct SessionReport {
     pub progress_units: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_id: Option<i64>,
+    /// Handle minted by the device that recorded the session, making a
+    /// replay idempotent (migration 0050). A queued report is retried
+    /// whenever the reply was lost rather than the request, and without a
+    /// handle each retry appended a second row. `None` for web clients,
+    /// which post once and never retry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
 }
 
 impl SessionReport {

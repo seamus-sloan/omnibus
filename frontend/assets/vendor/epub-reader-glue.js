@@ -76,6 +76,10 @@
   var restoreSettled = true;
   var tocFlat = [];
   var currentTheme = "dark";
+  // Whether the section iframe runs scripts. Only then can we await the
+  // iframe's `fonts.ready`, which is what makes the settle short enough to
+  // hide behind a fade rather than a long blank.
+  var scriptedContentAllowed = false;
   // Re-paginates when the viewer CONTAINER resizes without a window resize —
   // epub.js only listens for window resize, so the immersive audio dock
   // appearing/disappearing mid-read (which shrinks/grows `.rd-stage`) would
@@ -112,6 +116,7 @@
     }
     cancelTurnAnim();
     endSectionTurn();
+    endSettleFade();
     locationsReady = false;
     tocFlat = [];
     if (rendition) {
@@ -205,6 +210,7 @@
 
   function init(elementId, fileUrl, opts) {
     opts = opts || {};
+    scriptedContentAllowed = !!opts.allowScriptedContent;
 
     if (typeof ePub !== "function") {
       emitStatus("error");
@@ -1400,15 +1406,67 @@
       });
   }
 
+  // Hide the stage while a navigation corrects itself.
+  //
+  // `displaySettled` lands a first pass, waits for fonts/injected CSS, then
+  // re-displays — and that correction is a visible twitch on every chapter
+  // jump. The book-open path already hides exactly this behind the host's
+  // loading overlay; navigation had no equivalent.
+  //
+  // The stage's own opacity is the veil rather than a colour-filled overlay:
+  // the web view is transparent and the host paints the reader ground beneath
+  // it, so fading the stage out reveals the correct page colour in every
+  // theme, with nothing to keep in sync.
+  var settleFadeToken = 0;
+
+  function beginSettleFade() {
+    // Without scripts in the section iframe `fonts.ready` never settles, so
+    // the correction only lands on `redisplayWhenSettled`'s 1.5s fail-safe —
+    // far too long to hold a blank stage. Those builds keep the old visible
+    // correction rather than trading a twitch for a stall.
+    if (!scriptedContentAllowed) return function () {};
+
+    var stage = rendition && rendition.manager && rendition.manager.container;
+    if (!stage) return function () {};
+
+    var token = ++settleFadeToken;
+    // Out instantly — a fade-out would show the very frame we're hiding.
+    stage.style.transition = "none";
+    stage.style.opacity = "0";
+
+    var reveal = function () {
+      if (settleFadeToken !== token) return;
+      settleFadeToken++;
+      stage.style.transition = "opacity 180ms ease-out";
+      stage.style.opacity = "1";
+    };
+    // Fail-open: a settle chain that never resolves must not leave the reader
+    // showing a blank page forever.
+    setTimeout(reveal, 2500);
+    return reveal;
+  }
+
+  // Drop the veil outright (teardown, or a book swap mid-navigation) so a
+  // later mount can never start with a hidden stage.
+  function endSettleFade() {
+    settleFadeToken++;
+    var stage = rendition && rendition.manager && rendition.manager.container;
+    if (!stage) return;
+    stage.style.transition = "";
+    stage.style.opacity = "";
+  }
+
   function displaySettled(target) {
     if (!rendition) return;
+    var reveal = beginSettleFade();
     rendition
       .display(target)
       .then(function () {
         return redisplayWhenSettled(target);
       })
-      .catch(function () {
+      .then(reveal, function () {
         /* target may be gone after a teardown */
+        reveal();
       });
   }
 

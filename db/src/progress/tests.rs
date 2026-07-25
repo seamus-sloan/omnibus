@@ -1,8 +1,8 @@
 //! Unit tests for the `progress` module: `upsert_progress` roundtrip,
 //! last-write-wins, per-user/format isolation, `BookNotFound`,
 //! `get_progress` empty-state, `record_session` per-format dispatch and
-//! unknown-uuid skip, merged-uuid resolution, and `record_session_tx`
-//! rollback.
+//! unknown-uuid skip, merged-uuid resolution, `record_session_tx`
+//! rollback, and client-id replay idempotency.
 
 use omnibus_shared::EbookMetadata;
 
@@ -68,6 +68,7 @@ async fn upsert_round_trips_epub_position() {
     let user = seed_user(&pool, "alice").await;
     let (_, uuid) = seed(&pool, "/lib", "Book A").await;
     let upd = ProgressUpdate {
+        client_updated_at: None,
         book_uuid: uuid.clone(),
         format: ProgressFormat::Epub,
         epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
@@ -92,6 +93,7 @@ async fn upsert_is_last_write_wins() {
     let user = seed_user(&pool, "alice").await;
     let (_, uuid) = seed(&pool, "/lib", "Book A").await;
     let first = ProgressUpdate {
+        client_updated_at: None,
         book_uuid: uuid.clone(),
         format: ProgressFormat::Epub,
         epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
@@ -99,6 +101,7 @@ async fn upsert_is_last_write_wins() {
     };
     upsert_progress(&pool, user, &first).await.unwrap();
     let second = ProgressUpdate {
+        client_updated_at: None,
         book_uuid: uuid.clone(),
         format: ProgressFormat::Epub,
         epub_cfi: Some("epubcfi(/6/12!/4/8/3:7)".into()),
@@ -118,6 +121,7 @@ async fn isolates_per_user_book_format() {
         &pool,
         alice,
         &ProgressUpdate {
+            client_updated_at: None,
             book_uuid: uuid.clone(),
             format: ProgressFormat::Epub,
             epub_cfi: Some("epubcfi(alice)".into()),
@@ -130,6 +134,7 @@ async fn isolates_per_user_book_format() {
         &pool,
         alice,
         &ProgressUpdate {
+            client_updated_at: None,
             book_uuid: uuid.clone(),
             format: ProgressFormat::Audio,
             epub_cfi: None,
@@ -164,6 +169,7 @@ async fn upsert_unknown_book_is_not_found() {
         &pool,
         user,
         &ProgressUpdate {
+            client_updated_at: None,
             book_uuid: "no-such-uuid".into(),
             format: ProgressFormat::Epub,
             epub_cfi: Some("epubcfi(x)".into()),
@@ -213,6 +219,7 @@ async fn record_session_inserts_per_format_row() {
             ended_at: 460,
             progress_units: 360,
             device_id: None,
+            client_id: None,
         },
     )
     .await
@@ -237,6 +244,7 @@ async fn record_session_inserts_per_format_row() {
             ended_at: 800,
             progress_units: 600,
             device_id: None,
+            client_id: None,
         },
     )
     .await
@@ -264,6 +272,7 @@ async fn record_session_inserts_per_format_row() {
             ended_at: 10,
             progress_units: 10,
             device_id: None,
+            client_id: None,
         },
     )
     .await
@@ -288,6 +297,7 @@ async fn record_session_tx_inserts_row_when_committed() {
             ended_at: 460,
             progress_units: 360,
             device_id: None,
+            client_id: None,
         },
     )
     .await
@@ -327,6 +337,7 @@ async fn insert_session_tx_inserts_epub_row_against_pre_resolved_uuid() {
             ended_at: 460,
             progress_units: 360,
             device_id: None,
+            client_id: None,
         },
         &uuid,
     )
@@ -364,6 +375,7 @@ async fn insert_session_tx_inserts_audio_row_against_pre_resolved_uuid() {
             ended_at: 800,
             progress_units: 600,
             device_id: None,
+            client_id: None,
         },
         &uuid,
     )
@@ -403,6 +415,7 @@ async fn record_session_tx_rollback_leaves_no_rows() {
                 ended_at: 460,
                 progress_units: 360,
                 device_id: None,
+                client_id: None,
             },
         )
         .await
@@ -462,6 +475,7 @@ async fn record_session_resolves_merged_uuid_and_records_against_canonical_book(
             ended_at: 460,
             progress_units: 360,
             device_id: None,
+            client_id: None,
         },
     )
     .await
@@ -498,6 +512,7 @@ async fn record_session_resolves_merged_audio_uuid_to_canonical_book() {
             ended_at: 800,
             progress_units: 600,
             device_id: None,
+            client_id: None,
         },
     )
     .await
@@ -530,6 +545,7 @@ async fn progress_survives_hard_delete_of_book() {
         &pool,
         user,
         &ProgressUpdate {
+            client_updated_at: None,
             book_uuid: uuid.clone(),
             format: ProgressFormat::Epub,
             epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
@@ -631,6 +647,7 @@ async fn recent_progress_returns_rows_newest_first_within_limit() {
             &pool,
             user,
             &ProgressUpdate {
+                client_updated_at: None,
                 book_uuid: uuid.clone(),
                 format: ProgressFormat::Epub,
                 epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
@@ -672,6 +689,7 @@ async fn resume_points_enrich_audio_rows_with_duration_and_chapter() {
         &pool,
         user,
         &ProgressUpdate {
+            client_updated_at: None,
             book_uuid: uuid.into(),
             format: ProgressFormat::Audio,
             epub_cfi: None,
@@ -702,6 +720,7 @@ async fn resume_points_skip_rows_whose_book_is_gone_and_leave_epub_totals_empty(
             &pool,
             user,
             &ProgressUpdate {
+                client_updated_at: None,
                 book_uuid: uuid.clone(),
                 format: ProgressFormat::Epub,
                 epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
@@ -963,4 +982,319 @@ async fn set_playback_rate_propagates_db_error_when_pool_is_closed() {
     .await
     .unwrap_err();
     assert!(matches!(err, ProgressError::Sqlx(_)));
+}
+
+#[tokio::test]
+async fn record_session_replay_with_same_client_id_inserts_one_row() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+    let report = SessionReport {
+        book_uuid: uuid.clone(),
+        format: ProgressFormat::Epub,
+        started_at: 100,
+        ended_at: 460,
+        progress_units: 360,
+        device_id: None,
+        client_id: Some("session-abc".into()),
+    };
+
+    // The reply to the first post is lost, so the client replays the very
+    // same report. It must land once, not twice.
+    record_session(&pool, user, &report).await.unwrap();
+    record_session(&pool, user, &report).await.unwrap();
+
+    let (count, total): (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*), COALESCE(SUM(seconds_read), 0) FROM reading_sessions
+         WHERE user_id = ? AND book_uuid = ?",
+    )
+    .bind(user)
+    .bind(&uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 1, "a replayed report must not add a second row");
+    assert_eq!(total, 360, "reading time must not be double-counted");
+}
+
+#[tokio::test]
+async fn record_session_scopes_client_id_per_user_and_format() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let alice = seed_user(&pool, "alice").await;
+    let bob = seed_user(&pool, "bob").await;
+    let (_book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+    let report = |format| SessionReport {
+        book_uuid: uuid.clone(),
+        format,
+        started_at: 100,
+        ended_at: 460,
+        progress_units: 360,
+        device_id: None,
+        client_id: Some("shared-handle".into()),
+    };
+
+    record_session(&pool, alice, &report(ProgressFormat::Epub))
+        .await
+        .unwrap();
+    record_session(&pool, bob, &report(ProgressFormat::Epub))
+        .await
+        .unwrap();
+    // Same handle, other table: the two indexes are independent, so an
+    // audio session is never suppressed by a reading one.
+    record_session(&pool, alice, &report(ProgressFormat::Audio))
+        .await
+        .unwrap();
+
+    let reading: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM reading_sessions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let listening: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM listening_sessions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        reading, 2,
+        "one uuid per user must not collide across users"
+    );
+    assert_eq!(listening, 1);
+}
+
+#[tokio::test]
+async fn record_session_without_client_id_still_inserts_every_report() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+    // Web posts once on unmount and never retries, so it sends no handle —
+    // the partial index must leave those rows unconstrained rather than
+    // collapsing two genuine sessions into one.
+    let report = SessionReport {
+        book_uuid: uuid.clone(),
+        format: ProgressFormat::Epub,
+        started_at: 100,
+        ended_at: 460,
+        progress_units: 360,
+        device_id: None,
+        client_id: None,
+    };
+    record_session(&pool, user, &report).await.unwrap();
+    record_session(&pool, user, &report).await.unwrap();
+
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM reading_sessions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 2);
+}
+
+#[tokio::test]
+async fn upsert_keeps_the_newer_client_clock_when_a_stale_write_replays() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+
+    // The phone read to here at 10:00 but was offline, so this write is still
+    // sitting in its outbox.
+    let phone = ProgressUpdate {
+        book_uuid: uuid.clone(),
+        format: ProgressFormat::Epub,
+        epub_cfi: Some("epubcfi(phone-10am)".into()),
+        audio_position_seconds: None,
+        client_updated_at: Some(1_000),
+    };
+    // Meanwhile the web client read further at 14:00 and landed immediately.
+    let web = ProgressUpdate {
+        book_uuid: uuid.clone(),
+        format: ProgressFormat::Epub,
+        epub_cfi: Some("epubcfi(web-2pm)".into()),
+        audio_position_seconds: None,
+        client_updated_at: Some(2_000),
+    };
+    upsert_progress(&pool, user, &web).await.unwrap();
+
+    // The phone reconnects at 18:00 and replays. Arrival order would make the
+    // 10:00 position win and then stamp it as the newest thing on the server.
+    let saved = upsert_progress(&pool, user, &phone).await.unwrap();
+    assert_eq!(saved.epub_cfi.as_deref(), Some("epubcfi(web-2pm)"));
+
+    let fetched = get_progress(&pool, user, &uuid, ProgressFormat::Epub)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched.epub_cfi.as_deref(), Some("epubcfi(web-2pm)"));
+}
+
+#[tokio::test]
+async fn upsert_applies_a_write_whose_client_clock_is_newer() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+
+    for (cfi, clock) in [("epubcfi(first)", 1_000), ("epubcfi(second)", 2_000)] {
+        upsert_progress(
+            &pool,
+            user,
+            &ProgressUpdate {
+                book_uuid: uuid.clone(),
+                format: ProgressFormat::Epub,
+                epub_cfi: Some(cfi.into()),
+                audio_position_seconds: None,
+                client_updated_at: Some(clock),
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    let fetched = get_progress(&pool, user, &uuid, ProgressFormat::Epub)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched.epub_cfi.as_deref(), Some("epubcfi(second)"));
+}
+
+#[tokio::test]
+async fn upsert_reapplies_a_write_carrying_the_same_client_clock() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+
+    // The clock is whole seconds, so two positions inside one second are not a
+    // conflict — they're the same reader moving forward. Equal has to apply, or
+    // a fast reader's later position is dropped.
+    for cfi in ["epubcfi(earlier)", "epubcfi(later)"] {
+        upsert_progress(
+            &pool,
+            user,
+            &ProgressUpdate {
+                book_uuid: uuid.clone(),
+                format: ProgressFormat::Epub,
+                epub_cfi: Some(cfi.into()),
+                audio_position_seconds: None,
+                client_updated_at: Some(1_000),
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    let fetched = get_progress(&pool, user, &uuid, ProgressFormat::Epub)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched.epub_cfi.as_deref(), Some("epubcfi(later)"));
+}
+
+#[tokio::test]
+async fn upsert_without_a_client_clock_stays_last_write_wins() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+
+    // The web client sends no clock; the server stamps its own, so successive
+    // writes still win in arrival order the way they always did.
+    for cfi in ["epubcfi(first)", "epubcfi(second)"] {
+        upsert_progress(
+            &pool,
+            user,
+            &ProgressUpdate {
+                book_uuid: uuid.clone(),
+                format: ProgressFormat::Epub,
+                epub_cfi: Some(cfi.into()),
+                audio_position_seconds: None,
+                client_updated_at: None,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    let fetched = get_progress(&pool, user, &uuid, ProgressFormat::Epub)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched.epub_cfi.as_deref(), Some("epubcfi(second)"));
+}
+
+#[tokio::test]
+async fn reads_return_the_winning_write_client_clock_not_the_arrival_clock() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+
+    // A client can only judge a server answer against its own position if the
+    // two carry the same clock. `updated_at` is the server's arrival time, so
+    // comparing against it measures NTP drift between two boxes rather than
+    // which position is further along.
+    let update = ProgressUpdate {
+        book_uuid: uuid.clone(),
+        format: ProgressFormat::Epub,
+        epub_cfi: Some("epubcfi(alice)".into()),
+        audio_position_seconds: None,
+        client_updated_at: Some(1_700_000_000),
+    };
+    let saved = upsert_progress(&pool, user, &update).await.unwrap();
+    assert_eq!(saved.client_updated_at, Some(1_700_000_000));
+
+    let fetched = get_progress(&pool, user, &uuid, ProgressFormat::Epub)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched.client_updated_at, Some(1_700_000_000));
+
+    let recent = recent_progress(&pool, user, 10).await.unwrap();
+    assert_eq!(recent[0].client_updated_at, Some(1_700_000_000));
+}
+
+#[tokio::test]
+async fn a_losing_write_reads_back_the_winner_client_clock() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+
+    let winner = ProgressUpdate {
+        book_uuid: uuid.clone(),
+        format: ProgressFormat::Epub,
+        epub_cfi: Some("epubcfi(web-2pm)".into()),
+        audio_position_seconds: None,
+        client_updated_at: Some(2_000),
+    };
+    upsert_progress(&pool, user, &winner).await.unwrap();
+
+    // The replayed offline write loses. What comes back has to describe the
+    // row that stands — clock included — or the replaying device caches a
+    // position stamped with a clock no later answer can be ordered against.
+    let stale = ProgressUpdate {
+        client_updated_at: Some(1_000),
+        epub_cfi: Some("epubcfi(phone-10am)".into()),
+        ..winner.clone()
+    };
+    let saved = upsert_progress(&pool, user, &stale).await.unwrap();
+    assert_eq!(saved.epub_cfi.as_deref(), Some("epubcfi(web-2pm)"));
+    assert_eq!(saved.client_updated_at, Some(2_000));
+}
+
+#[tokio::test]
+async fn a_write_without_a_client_clock_reads_back_the_server_stamp() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+
+    // `COALESCE(?, strftime('%s','now'))` means the column is never actually
+    // NULL for a row written since migration 0051, so a client that sends no
+    // clock still gets an orderable one back rather than `None`.
+    let saved = upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Epub,
+            epub_cfi: Some("epubcfi(x)".into()),
+            audio_position_seconds: None,
+            client_updated_at: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(saved.client_updated_at.is_some_and(|c| c > 0));
 }

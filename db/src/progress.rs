@@ -1,5 +1,5 @@
 //! Server-authoritative reading/listening position sync plus batched
-//! session reports. Position upserts are last-write-wins on
+//! session reports. Position upserts keep the latest *reader* clock on
 //! `(user_id, book_uuid, format)`; session inserts go to the per-format
 //! `reading_sessions` / `listening_sessions` tables. All rows soft-reference
 //! the durable `books.uuid` (no FK, no cascade), resolved through the
@@ -63,10 +63,22 @@ fn parse_format(raw: &str) -> ProgressFormat {
     }
 }
 
-/// Upsert a position row for `(user, book, format)` and return the new
-/// server-authoritative record. Resolves the request uuid to the **canonical**
+/// Upsert a position row for `(user, book, format)` and return the
+/// server-authoritative record — which is the **winning** row, not necessarily
+/// the one just submitted. Resolves the request uuid to the **canonical**
 /// `books.uuid` (keeping the `BookNotFound` guard — you cannot record progress
 /// for a book the server has never indexed) and stores/keys on it.
+///
+/// Ordered on `ProgressUpdate::client_updated_at` — the reader's clock — rather
+/// than on arrival. A position queued offline can reach the server hours after
+/// it was read, long after another device has moved further along, and arrival
+/// order would let the stale one win and then relabel itself as newest. An
+/// update with no client clock is stamped with the server's, which reduces to
+/// the old last-write-wins for callers that don't send one.
+///
+/// Returning the winner rather than 409ing is deliberate: the caller's next act
+/// is to cache what it got back, and handing it the position that actually
+/// stands is what converges the two devices.
 pub async fn upsert_progress(
     pool: &SqlitePool,
     user_id: i64,
@@ -78,23 +90,29 @@ pub async fn upsert_progress(
     let fmt = format_str(update.format);
     sqlx::query(
         "INSERT INTO reading_progress
-            (user_id, book_uuid, format, epub_cfi, audio_position_seconds, updated_at)
-         VALUES (?, ?, ?, ?, ?, strftime('%s','now'))
+            (user_id, book_uuid, format, epub_cfi, audio_position_seconds,
+             updated_at, client_updated_at)
+         VALUES (?, ?, ?, ?, ?, strftime('%s','now'),
+                 COALESCE(?, strftime('%s','now')))
          ON CONFLICT(user_id, book_uuid, format) DO UPDATE SET
              epub_cfi = excluded.epub_cfi,
              audio_position_seconds = excluded.audio_position_seconds,
-             updated_at = strftime('%s','now')",
+             updated_at = strftime('%s','now'),
+             client_updated_at = excluded.client_updated_at
+         WHERE excluded.client_updated_at >=
+               COALESCE(reading_progress.client_updated_at, 0)",
     )
     .bind(user_id)
     .bind(&book_uuid)
     .bind(fmt)
     .bind(update.epub_cfi.as_deref())
     .bind(update.audio_position_seconds)
+    .bind(update.client_updated_at)
     .execute(pool)
     .await?;
 
     let row = sqlx::query(
-        "SELECT epub_cfi, audio_position_seconds, updated_at
+        "SELECT epub_cfi, audio_position_seconds, updated_at, client_updated_at
          FROM reading_progress
          WHERE user_id = ? AND book_uuid = ? AND format = ?",
     )
@@ -109,6 +127,7 @@ pub async fn upsert_progress(
         epub_cfi: row.try_get::<Option<String>, _>("epub_cfi")?,
         audio_position_seconds: row.try_get::<Option<f64>, _>("audio_position_seconds")?,
         updated_at: row.try_get::<i64, _>("updated_at")?,
+        client_updated_at: row.try_get::<Option<i64>, _>("client_updated_at")?,
     })
 }
 
@@ -126,7 +145,7 @@ pub async fn get_progress(
     };
     let fmt = format_str(format);
     let Some(row) = sqlx::query(
-        "SELECT format, epub_cfi, audio_position_seconds, updated_at
+        "SELECT format, epub_cfi, audio_position_seconds, updated_at, client_updated_at
          FROM reading_progress
          WHERE user_id = ? AND book_uuid = ? AND format = ?",
     )
@@ -144,6 +163,7 @@ pub async fn get_progress(
         epub_cfi: row.try_get::<Option<String>, _>("epub_cfi")?,
         audio_position_seconds: row.try_get::<Option<f64>, _>("audio_position_seconds")?,
         updated_at: row.try_get::<i64, _>("updated_at")?,
+        client_updated_at: row.try_get::<Option<i64>, _>("client_updated_at")?,
     }))
 }
 
@@ -214,7 +234,8 @@ pub async fn recent_progress(
     limit: i64,
 ) -> Result<Vec<ProgressRecord>, ProgressError> {
     let rows = sqlx::query(
-        "SELECT book_uuid, format, epub_cfi, audio_position_seconds, updated_at
+        "SELECT book_uuid, format, epub_cfi, audio_position_seconds, updated_at,
+                client_updated_at
          FROM reading_progress
          WHERE user_id = ?
          ORDER BY updated_at DESC, book_uuid
@@ -232,6 +253,7 @@ pub async fn recent_progress(
                 epub_cfi: row.try_get::<Option<String>, _>("epub_cfi")?,
                 audio_position_seconds: row.try_get::<Option<f64>, _>("audio_position_seconds")?,
                 updated_at: row.try_get::<i64, _>("updated_at")?,
+                client_updated_at: row.try_get::<Option<i64>, _>("client_updated_at")?,
             })
         })
         .collect()
@@ -349,12 +371,17 @@ pub async fn insert_session_tx(
     report: &SessionReport,
     canonical_uuid: &str,
 ) -> Result<(), ProgressError> {
+    // OR IGNORE against the partial-unique `(user_id, client_id)` index from
+    // migration 0050: a report the client replayed because it never saw the
+    // reply collapses onto the row it already wrote instead of doubling the
+    // reading time it represents. Reports without a client id are
+    // unconstrained and insert as before.
     match report.format {
         ProgressFormat::Epub => {
             sqlx::query(
-                "INSERT INTO reading_sessions
-                    (user_id, book_uuid, started_at, ended_at, seconds_read, device_id)
-                 VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO reading_sessions
+                    (user_id, book_uuid, started_at, ended_at, seconds_read, device_id, client_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(user_id)
             .bind(canonical_uuid)
@@ -362,14 +389,15 @@ pub async fn insert_session_tx(
             .bind(report.ended_at)
             .bind(report.progress_units)
             .bind(report.device_id)
+            .bind(report.client_id.as_deref())
             .execute(&mut **tx)
             .await?;
         }
         ProgressFormat::Audio => {
             sqlx::query(
-                "INSERT INTO listening_sessions
-                    (user_id, book_uuid, started_at, ended_at, seconds_listened, device_id)
-                 VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO listening_sessions
+                    (user_id, book_uuid, started_at, ended_at, seconds_listened, device_id, client_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(user_id)
             .bind(canonical_uuid)
@@ -377,6 +405,7 @@ pub async fn insert_session_tx(
             .bind(report.ended_at)
             .bind(report.progress_units)
             .bind(report.device_id)
+            .bind(report.client_id.as_deref())
             .execute(&mut **tx)
             .await?;
         }

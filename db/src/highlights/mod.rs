@@ -34,6 +34,10 @@ impl From<crate::books::BooksError> for HighlightError {
 }
 
 /// Create a highlight and return the persisted row.
+///
+/// Idempotent when `input.client_id` is set: a replayed create (the mobile
+/// outbox retrying an op whose response never made it back) resolves to the
+/// same row rather than a duplicate, and returns it unchanged.
 pub async fn create_highlight(
     pool: &SqlitePool,
     user_id: i64,
@@ -42,19 +46,47 @@ pub async fn create_highlight(
     let book_uuid = resolve_canonical_book_uuid(pool, &input.book_uuid)
         .await?
         .ok_or(HighlightError::BookNotFound)?;
+    let client_id = input.client_id.as_deref();
+    // `DO NOTHING` rather than `DO UPDATE`: the first write of a given
+    // client_id is the user's gesture, and a replay carries no newer intent.
+    // Colour and note changes arrive as their own ops.
     let id = sqlx::query_scalar::<_, i64>(
-        "INSERT INTO highlights (user_id, book_uuid, epub_cfi_range, color, text)
-         VALUES (?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO highlights (user_id, book_uuid, epub_cfi_range, color, text, client_id)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id, client_id) WHERE client_id IS NOT NULL DO NOTHING
+         RETURNING id",
     )
     .bind(user_id)
     .bind(&book_uuid)
     .bind(&input.epub_cfi_range)
     .bind(input.color.as_str())
     .bind(input.text.as_deref())
-    .fetch_one(pool)
+    .bind(client_id)
+    .fetch_optional(pool)
     .await?;
 
-    get_highlight_by_id(pool, user_id, id).await
+    match (id, client_id) {
+        (Some(id), _) => get_highlight_by_id(pool, user_id, id).await,
+        // The insert was a no-op, so this client_id is already ours.
+        (None, Some(client_id)) => get_highlight_by_client_id(pool, user_id, client_id).await,
+        (None, None) => Err(HighlightError::NotFound),
+    }
+}
+
+/// Resolve a client-minted id to the numeric row id, scoped to the owner.
+/// `Ok(None)` when this user has no highlight under that handle.
+pub async fn highlight_id_for_client_id(
+    pool: &SqlitePool,
+    user_id: i64,
+    client_id: &str,
+) -> Result<Option<i64>, HighlightError> {
+    Ok(sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM highlights WHERE user_id = ? AND client_id = ?",
+    )
+    .bind(user_id)
+    .bind(client_id)
+    .fetch_optional(pool)
+    .await?)
 }
 
 /// List all highlights for a user + book, ordered by creation time.
@@ -67,7 +99,8 @@ pub async fn list_highlights(
         return Ok(vec![]);
     };
     let rows = sqlx::query(
-        "SELECT h.id, h.book_uuid, h.epub_cfi_range, h.color, h.note, h.text, h.created_at
+        "SELECT h.id, h.book_uuid, h.epub_cfi_range, h.color, h.note, h.text,
+                h.client_id, h.created_at
          FROM highlights h
          WHERE h.user_id = ? AND h.book_uuid = ?
          ORDER BY h.created_at ASC
@@ -143,11 +176,32 @@ async fn get_highlight_by_id(
     highlight_id: i64,
 ) -> Result<Highlight, HighlightError> {
     let row = sqlx::query(
-        "SELECT h.id, h.book_uuid, h.epub_cfi_range, h.color, h.note, h.text, h.created_at
+        "SELECT h.id, h.book_uuid, h.epub_cfi_range, h.color, h.note, h.text,
+                h.client_id, h.created_at
          FROM highlights h
          WHERE h.id = ? AND h.user_id = ?",
     )
     .bind(highlight_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(HighlightError::NotFound)?;
+
+    row_to_highlight(&row)
+}
+
+async fn get_highlight_by_client_id(
+    pool: &SqlitePool,
+    user_id: i64,
+    client_id: &str,
+) -> Result<Highlight, HighlightError> {
+    let row = sqlx::query(
+        "SELECT h.id, h.book_uuid, h.epub_cfi_range, h.color, h.note, h.text,
+                h.client_id, h.created_at
+         FROM highlights h
+         WHERE h.client_id = ? AND h.user_id = ?",
+    )
+    .bind(client_id)
     .bind(user_id)
     .fetch_optional(pool)
     .await?
@@ -166,6 +220,7 @@ fn row_to_highlight(row: &sqlx::sqlite::SqliteRow) -> Result<Highlight, Highligh
         color,
         note: row.try_get("note")?,
         text: row.try_get("text")?,
+        client_id: row.try_get("client_id")?,
         created_at: row.try_get("created_at")?,
     })
 }

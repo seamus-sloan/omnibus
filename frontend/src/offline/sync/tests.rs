@@ -134,6 +134,7 @@ async fn mock_server() -> String {
         epub_cfi: update.epub_cfi,
         audio_position_seconds: update.audio_position_seconds,
         updated_at: 4242,
+        client_updated_at: update.client_updated_at,
     };
     let app = axum::Router::new()
         .route(
@@ -202,6 +203,7 @@ async fn mock_server() -> String {
 fn progress_op(uuid: &str) -> Op {
     Op::SaveProgress {
         update: ProgressUpdate {
+            client_updated_at: None,
             book_uuid: uuid.to_string(),
             format: ProgressFormat::Epub,
             epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),

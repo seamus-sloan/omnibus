@@ -49,6 +49,7 @@ async fn create_highlight_round_trips_fields() {
     let user = seed_user(&pool, "alice").await;
     let (_, uuid) = seed(&pool, "/lib", "Book A").await;
     let input = CreateHighlight {
+        client_id: None,
         book_uuid: uuid.clone(),
         epub_cfi_range: "epubcfi(/6/4!/4/2,/1:0,/1:100)".into(),
         color: HighlightColor::Blue,
@@ -68,6 +69,7 @@ async fn create_highlight_returns_book_not_found_for_unknown_uuid() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
     let input = CreateHighlight {
+        client_id: None,
         book_uuid: "no-such-uuid".into(),
         epub_cfi_range: "epubcfi(/6/4)".into(),
         color: HighlightColor::Amber,
@@ -95,12 +97,14 @@ async fn list_highlights_isolates_by_user_and_book() {
     let (_, uuid_b) = seed(&pool, "/lib-b", "Book B").await;
 
     let input_a = CreateHighlight {
+        client_id: None,
         book_uuid: uuid_a.clone(),
         epub_cfi_range: "epubcfi(/6/4)".into(),
         color: HighlightColor::Amber,
         text: None,
     };
     let input_b = CreateHighlight {
+        client_id: None,
         book_uuid: uuid_b.clone(),
         epub_cfi_range: "epubcfi(/6/8)".into(),
         color: HighlightColor::Green,
@@ -129,6 +133,7 @@ async fn update_highlight_color_changes_color() {
         &pool,
         user,
         &CreateHighlight {
+            client_id: None,
             book_uuid: uuid.clone(),
             epub_cfi_range: "epubcfi(/6/4)".into(),
             color: HighlightColor::Amber,
@@ -155,6 +160,7 @@ async fn update_highlight_color_returns_not_found_for_other_user() {
         &pool,
         alice,
         &CreateHighlight {
+            client_id: None,
             book_uuid: uuid.clone(),
             epub_cfi_range: "epubcfi(/6/4)".into(),
             color: HighlightColor::Amber,
@@ -179,6 +185,7 @@ async fn update_highlight_note_sets_and_clears() {
         &pool,
         user,
         &CreateHighlight {
+            client_id: None,
             book_uuid: uuid.clone(),
             epub_cfi_range: "epubcfi(/6/4)".into(),
             color: HighlightColor::Green,
@@ -211,6 +218,7 @@ async fn delete_highlight_removes_row() {
         &pool,
         user,
         &CreateHighlight {
+            client_id: None,
             book_uuid: uuid.clone(),
             epub_cfi_range: "epubcfi(/6/4)".into(),
             color: HighlightColor::Rose,
@@ -235,6 +243,7 @@ async fn delete_highlight_returns_not_found_for_other_user() {
         &pool,
         alice,
         &CreateHighlight {
+            client_id: None,
             book_uuid: uuid.clone(),
             epub_cfi_range: "epubcfi(/6/4)".into(),
             color: HighlightColor::Blue,
@@ -343,6 +352,7 @@ async fn create_highlight_propagates_db_error_when_pool_is_closed() {
         &pool,
         1,
         &CreateHighlight {
+            client_id: None,
             book_uuid: "any-uuid".into(),
             epub_cfi_range: "epubcfi(/6/2!/4/2)".into(),
             color: HighlightColor::Amber,
@@ -351,5 +361,121 @@ async fn create_highlight_propagates_db_error_when_pool_is_closed() {
     )
     .await
     .unwrap_err();
+    assert!(matches!(err, HighlightError::Sqlx(_)));
+}
+
+#[tokio::test]
+async fn create_highlight_is_idempotent_on_client_id() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    let input = CreateHighlight {
+        client_id: Some("3f1b0c9e-0000-4000-8000-000000000001".into()),
+        book_uuid: uuid.clone(),
+        epub_cfi_range: "epubcfi(/6/4!/4/2)".into(),
+        color: HighlightColor::Green,
+        text: Some("passage".into()),
+    };
+
+    let first = create_highlight(&pool, user, &input).await.unwrap();
+    // The outbox replaying a create whose response never made it back must
+    // resolve to the same row, not a second highlight on the same passage.
+    let second = create_highlight(&pool, user, &input).await.unwrap();
+
+    assert_eq!(first.id, second.id);
+    assert_eq!(
+        first.client_id.as_deref(),
+        Some(input.client_id.as_deref().unwrap())
+    );
+    let all = list_highlights(&pool, user, &uuid).await.unwrap();
+    assert_eq!(all.len(), 1, "replayed create must not duplicate");
+}
+
+#[tokio::test]
+async fn create_highlight_scopes_client_id_per_user() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let alice = seed_user(&pool, "alice").await;
+    let bob = seed_user(&pool, "bob").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    let input = CreateHighlight {
+        client_id: Some("shared-handle".into()),
+        book_uuid: uuid.clone(),
+        epub_cfi_range: "epubcfi(/6/4!/4/2)".into(),
+        color: HighlightColor::Amber,
+        text: None,
+    };
+
+    let a = create_highlight(&pool, alice, &input).await.unwrap();
+    let b = create_highlight(&pool, bob, &input).await.unwrap();
+
+    assert_ne!(
+        a.id, b.id,
+        "one account's handle must not claim another's row"
+    );
+}
+
+#[tokio::test]
+async fn highlight_id_for_client_id_resolves_only_the_owners_row() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let alice = seed_user(&pool, "alice").await;
+    let bob = seed_user(&pool, "bob").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    let created = create_highlight(
+        &pool,
+        alice,
+        &CreateHighlight {
+            client_id: Some("alice-handle".into()),
+            book_uuid: uuid.clone(),
+            epub_cfi_range: "epubcfi(/6/4!/4/2)".into(),
+            color: HighlightColor::Rose,
+            text: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let mine = highlight_id_for_client_id(&pool, alice, "alice-handle")
+        .await
+        .unwrap();
+    let theirs = highlight_id_for_client_id(&pool, bob, "alice-handle")
+        .await
+        .unwrap();
+    let missing = highlight_id_for_client_id(&pool, alice, "no-such-handle")
+        .await
+        .unwrap();
+
+    assert_eq!(mine, Some(created.id));
+    assert_eq!(theirs, None);
+    assert_eq!(missing, None);
+}
+
+#[tokio::test]
+async fn create_highlight_without_client_id_still_allows_duplicates() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    let input = CreateHighlight {
+        client_id: None,
+        book_uuid: uuid.clone(),
+        epub_cfi_range: "epubcfi(/6/4!/4/2)".into(),
+        color: HighlightColor::Amber,
+        text: None,
+    };
+
+    // The partial-unique index must leave NULL client_ids unconstrained —
+    // two deliberate highlights on the same passage are legal.
+    create_highlight(&pool, user, &input).await.unwrap();
+    create_highlight(&pool, user, &input).await.unwrap();
+
+    assert_eq!(list_highlights(&pool, user, &uuid).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn highlight_id_for_client_id_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = highlight_id_for_client_id(&pool, 1, "handle")
+        .await
+        .unwrap_err();
     assert!(matches!(err, HighlightError::Sqlx(_)));
 }

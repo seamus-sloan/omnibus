@@ -62,6 +62,11 @@ pub(crate) fn spawn_create_highlight(
         epub_cfi_range: cfi.clone(),
         color,
         text: if text.is_empty() { None } else { Some(text) },
+        // Web doesn't need a device-minted handle: its outbox is typed
+        // (`Op::CreateHighlight { temp_id, .. }`) and rewrites the temp id
+        // into the server's on apply. Mobile's outbox replays opaque
+        // request bytes and can't, which is what `client_id` is for.
+        client_id: None,
     };
     spawn(async move {
         match data::create_highlight(&server_url, create).await {

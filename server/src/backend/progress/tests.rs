@@ -489,6 +489,7 @@ async fn api_get_recent_progress_returns_resume_points_newest_first() {
             &pool,
             user.id,
             &omnibus_shared::ProgressUpdate {
+                client_updated_at: None,
                 book_uuid: uuid.clone(),
                 format: omnibus_shared::ProgressFormat::Epub,
                 epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),

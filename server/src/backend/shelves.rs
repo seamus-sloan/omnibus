@@ -29,6 +29,22 @@ pub(super) async fn list_shelves(user: AuthUser, State(state): State<AppState>) 
     }
 }
 
+/// `GET /api/shelves/containing/{uuid}` — ids of the visible hand-picked
+/// shelves holding this book, for a "which shelves is this on" checklist.
+///
+/// Exists so a client doesn't have to fetch every shelf's page and scan it —
+/// one request per shelf, per book displayed.
+pub(super) async fn shelves_containing(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Path(uuid): Path<String>,
+) -> Response {
+    match db::shelves::manual_shelves_containing(&state.pool, user.id, user.is_admin, &uuid).await {
+        Ok(ids) => Json(ids).into_response(),
+        Err(e) => map_err(e),
+    }
+}
+
 /// `POST /api/shelves` — create a shelf owned by the caller.
 pub(super) async fn create_shelf(
     user: AuthUser,

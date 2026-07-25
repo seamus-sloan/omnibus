@@ -423,3 +423,74 @@ async fn api_update_wishlist_system_shelf_returns_403() {
 
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn api_shelves_containing_lists_the_shelves_holding_the_book() {
+    let (app, _s, pool) = fixture().await;
+    seed_book(&pool, "bk1").await;
+    let alice = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, alice.id).await;
+
+    let created = app
+        .clone()
+        .oneshot(req(
+            "POST",
+            "/api/shelves",
+            Some(&token),
+            Some(serde_json::json!({
+                "kind": "manual", "name": "Picks", "visibility": "private",
+                "book_uuids": ["bk1"],
+            })),
+        ))
+        .await
+        .unwrap();
+    let id = shelf_from(created).await.id;
+
+    let res = app
+        .oneshot(req(
+            "GET",
+            "/api/shelves/containing/bk1",
+            Some(&token),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let ids: Vec<i64> = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(ids, vec![id]);
+}
+
+#[tokio::test]
+async fn api_shelves_containing_answers_empty_for_a_book_on_no_shelf() {
+    let (app, _s, pool) = fixture().await;
+    seed_book(&pool, "bk1").await;
+    let alice = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, alice.id).await;
+
+    let res = app
+        .oneshot(req(
+            "GET",
+            "/api/shelves/containing/bk1",
+            Some(&token),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let ids: Vec<i64> = serde_json::from_slice(&bytes).unwrap();
+    assert!(ids.is_empty());
+}
+
+#[tokio::test]
+async fn api_shelves_containing_requires_authentication() {
+    let (app, _s, pool) = fixture().await;
+    seed_book(&pool, "bk1").await;
+
+    let res = app
+        .oneshot(req("GET", "/api/shelves/containing/bk1", None, None))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}

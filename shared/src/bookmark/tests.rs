@@ -4,6 +4,7 @@ use super::*;
 
 fn ok_create(position: &str) -> CreateBookmark {
     CreateBookmark {
+        client_id: None,
         book_uuid: "uuid-1".into(),
         position: position.into(),
         title: Some("A mark".into()),
