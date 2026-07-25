@@ -1,4 +1,4 @@
-//! Wire shape for the OPF-export action result (F5.8).
+//! Wire shape for the OPF-export action result.
 
 use serde::{Deserialize, Serialize};
 

@@ -1,9 +1,7 @@
-//! Integration tests for the single-book OPF export endpoint.
-//!
-//! The RPC variant (`rpc_export_opf`) shares the same db call and is covered
-//! transitively by `db::opf_export` unit tests; these cover the REST entry
-//! point the mobile client uses — auth, permission, resolution, and the
-//! written-sidecar success path.
+//! Integration tests for the single-book OPF export REST endpoint: auth,
+//! `can_edit` permission, uuid resolution, the audiobook-only 409, and the
+//! written-sidecar success path. The `rpc_export_opf` variant shares the same
+//! db call and is covered transitively by `db::opf_export` unit tests.
 
 use axum::{
     body::{to_bytes, Body},

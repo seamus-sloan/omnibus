@@ -54,9 +54,14 @@ pub async fn rpc_export_opf(uuid: String) -> Result<OpfExportResult> {
             path: export.path.display().to_string(),
             backed_up: export.backed_up,
         }),
-        // These are user-renderable resource-state errors, not internal faults.
-        Err(e @ (db::OpfExportError::BookNotFound(_) | db::OpfExportError::NoEpubFile(_))) => {
-            Err(ServerFnError::new(e.to_string()).into())
+        // Stable, user-renderable messages that don't leak the internal
+        // numeric book id (which `OpfExportError`'s Display carries) — mirror
+        // the REST handler's strings.
+        Err(db::OpfExportError::BookNotFound(_)) => {
+            Err(ServerFnError::new("book not found").into())
+        }
+        Err(db::OpfExportError::NoEpubFile(_)) => {
+            Err(ServerFnError::new("book has no EPUB file to export next to").into())
         }
         Err(e) => Err(internal_rpc_error("export opf", e).into()),
     }
