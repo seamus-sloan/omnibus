@@ -471,9 +471,9 @@ fn AccountRows() -> Element {
     rsx! {
         div { class: "m-account-rows",
             AccountLinkRow { to: Route::Settings { section: None }, label: "Settings" }
-            // No dedicated admin route exists; the Settings page hosts the
-            // admin-only library-path controls, so route there.
-            AccountLinkRow { to: Route::Settings { section: None }, label: "Admin \u{00b7} server" }
+            // Deep-links straight to the admin-only library-path section,
+            // distinct from the plain "Settings" row above.
+            AccountLinkRow { to: Route::Settings { section: Some("library".into()) }, label: "Admin \u{00b7} server" }
             AccountLinkRow { to: Route::AddBooks {}, label: "Add books" }
             AccountLinkRow { to: Route::CheckIn {}, label: "Check in a book" }
             button {
