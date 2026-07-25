@@ -21,6 +21,7 @@ async fn seed(pool: &SqlitePool, library: &str, title: &str) -> (i64, String) {
             cover: None,
             mtime_epoch: 0,
             size_bytes: 0,
+            word_count: None,
         }],
     )
     .await

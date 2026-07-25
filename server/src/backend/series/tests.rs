@@ -27,6 +27,7 @@ async fn api_get_series_returns_200_with_detail() {
             cover: None,
             mtime_epoch: 0,
             size_bytes: 0,
+            word_count: None,
         }],
     )
     .await
@@ -108,6 +109,7 @@ async fn api_get_series_index_returns_summaries_with_primary_author() {
             cover: None,
             mtime_epoch: 0,
             size_bytes: 0,
+            word_count: None,
         }],
     )
     .await

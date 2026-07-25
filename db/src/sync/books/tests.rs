@@ -50,6 +50,7 @@ fn book_with_all_links(filename: &str, title: &str) -> IndexedBook {
         cover: None,
         mtime_epoch: 0,
         size_bytes: 0,
+        word_count: None,
     }
 }
 
@@ -407,6 +408,47 @@ async fn insert_book_row_writes_books_and_book_files_and_mints_uuid() {
         1,
         "exactly one book_files row"
     );
+}
+
+/// `word_count` round-trips through both the insert and the in-place update:
+/// `insert_book_row` persists the estimate from the `IndexedBook`, and
+/// `sync_changed` refreshes it on re-parse (a book edited to a longer text).
+#[tokio::test]
+async fn word_count_persists_on_insert_and_refreshes_on_change() {
+    let _covers = CoversTempDir::new("sync_word_count_unit");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let library_id = seed_scan_root(&pool).await;
+
+    let mut b = indexed("wc.epub", Some("Counted"), &[], &[], None, None);
+    b.word_count = Some(1000);
+    let mut tx = pool.begin().await.unwrap();
+    let inserted = insert_book_row(&mut tx, library_id, "/lib", &b)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let stored: Option<i64> = sqlx::query_scalar("SELECT word_count FROM books WHERE id = ?")
+        .bind(inserted.book_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, Some(1000), "insert persists the estimate");
+
+    // Same filename (→ same scan_key), new word count — the Changed path.
+    let mut changed = indexed("wc.epub", Some("Counted"), &[], &[], None, None);
+    changed.word_count = Some(2500);
+    let mut tx = pool.begin().await.unwrap();
+    sync_changed(&mut tx, library_id, "/lib", &[changed], || {})
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let refreshed: Option<i64> = sqlx::query_scalar("SELECT word_count FROM books WHERE id = ?")
+        .bind(inserted.book_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(refreshed, Some(2500), "the update refreshes word_count");
 }
 
 #[tokio::test]

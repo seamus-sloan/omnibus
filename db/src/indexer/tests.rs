@@ -793,6 +793,103 @@ async fn backfill_chapters_is_idempotent_after_all_books_have_chapters() {
     );
 }
 
+// ---------- word-count backfill (migration 0049) ----------
+
+/// Seed an EPUB book backed by a real fixture file on disk, with a NULL
+/// `word_count` (the pre-0049 state), so `backfill_word_counts` has a live
+/// file to open and a candidate row to fill. `dir` is the `scan_roots.path`
+/// the backfill is scoped to; the file lands at `dir/<fixture>`.
+async fn seed_ebook_missing_word_count(
+    pool: &SqlitePool,
+    dir: &std::path::Path,
+    fixture_name: &str,
+    uuid: &str,
+) -> i64 {
+    crate::ebook::test_support::copy_fixture_into(fixture_name, dir);
+    sqlx::query(
+        "INSERT INTO scan_roots (path, display_name) VALUES (?, ?) ON CONFLICT(path) DO NOTHING",
+    )
+    .bind(dir.to_str().unwrap())
+    .bind(dir.to_str().unwrap())
+    .execute(pool)
+    .await
+    .unwrap();
+    let lib_id: i64 = sqlx::query_scalar("SELECT id FROM scan_roots WHERE path = ?")
+        .bind(dir.to_str().unwrap())
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let book_id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, library_id, path, title) VALUES (?, ?, '', ?) RETURNING id",
+    )
+    .bind(uuid)
+    .bind(lib_id)
+    .bind(uuid)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let stem = fixture_name.trim_end_matches(".epub");
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) VALUES (?, 'EPUB', ?, 0)",
+    )
+    .bind(book_id)
+    .bind(stem)
+    .execute(pool)
+    .await
+    .unwrap();
+    book_id
+}
+
+async fn word_count_of(pool: &SqlitePool, book_id: i64) -> Option<i64> {
+    sqlx::query_scalar("SELECT word_count FROM books WHERE id = ?")
+        .bind(book_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn backfill_word_counts_fills_null_rows_from_the_epub_spine() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let dir = make_test_dir("wc-backfill");
+    // alpha.epub is a 4-word spine, beta.epub a 10-word spine (see
+    // `ebook::wordcount::tests`).
+    let a = seed_ebook_missing_word_count(&pool, &dir, "alpha.epub", "uuid-a").await;
+    let b = seed_ebook_missing_word_count(&pool, &dir, "beta.epub", "uuid-b").await;
+
+    let mut progress: Vec<(u32, u32)> = Vec::new();
+    backfill_word_counts(&pool, dir.to_str().unwrap(), |p, t| progress.push((p, t)))
+        .await
+        .unwrap();
+
+    assert_eq!(word_count_of(&pool, a).await, Some(4));
+    assert_eq!(word_count_of(&pool, b).await, Some(10));
+    assert_eq!(progress, vec![(1, 2), (2, 2)]);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn backfill_word_counts_is_idempotent_once_filled() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let dir = make_test_dir("wc-backfill-idempotent");
+    seed_ebook_missing_word_count(&pool, &dir, "alpha.epub", "uuid-a").await;
+
+    backfill_word_counts(&pool, dir.to_str().unwrap(), |_, _| {})
+        .await
+        .unwrap();
+
+    // Second pass: every book now has a count, so there are no candidates
+    // and `on_progress` never fires.
+    let mut calls = 0u32;
+    backfill_word_counts(&pool, dir.to_str().unwrap(), |_, _| calls += 1)
+        .await
+        .unwrap();
+    assert_eq!(calls, 0);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ---------- #1057: ReindexStats plumbed off a real scan ----------
 
 /// `reindex` returns the ghost count and pre-scan file-backed total it

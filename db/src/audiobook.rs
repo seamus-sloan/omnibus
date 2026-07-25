@@ -90,6 +90,8 @@ pub fn build_indexed_book(path: &Path, filename: String) -> anyhow::Result<Index
         // `ebook::parse_ebook_targets`.
         mtime_epoch: 0,
         size_bytes: 0,
+        // No spine to walk — word count is an EPUB-only estimate.
+        word_count: None,
     })
 }
 

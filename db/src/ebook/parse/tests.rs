@@ -386,4 +386,8 @@ fn scan_handles_calibre_shaped_tree_and_ignores_metadata_opf() {
     assert_eq!(epubs.len(), 1);
     // Title comes from the embedded OPF, not the misleading sidecar.
     assert_eq!(epubs[0].metadata.title.as_deref(), Some("Alpha"));
+    // Word count is estimated from the spine at parse time — alpha.epub's
+    // sole spine item is 4 whitespace-separated tokens (see
+    // `ebook::wordcount::tests`).
+    assert_eq!(epubs[0].word_count, Some(4));
 }

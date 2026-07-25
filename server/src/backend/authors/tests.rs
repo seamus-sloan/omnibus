@@ -31,6 +31,7 @@ async fn api_get_author_returns_200_with_detail() {
             cover: None,
             mtime_epoch: 0,
             size_bytes: 0,
+            word_count: None,
         }],
     )
     .await
@@ -116,6 +117,7 @@ async fn api_get_authors_index_returns_summaries_scoped_to_library() {
                 cover: None,
                 mtime_epoch: 0,
                 size_bytes: 0,
+                word_count: None,
             },
             db::ebook::IndexedBook {
                 metadata: omnibus_shared::EbookMetadata {
@@ -130,6 +132,7 @@ async fn api_get_authors_index_returns_summaries_scoped_to_library() {
                 cover: None,
                 mtime_epoch: 0,
                 size_bytes: 0,
+                word_count: None,
             },
         ],
     )

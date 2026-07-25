@@ -33,12 +33,18 @@ pub const EBOOK_FORMATS: &[&str] = &["EPUB"];
 /// `mtime_epoch` and `size_bytes` are the filesystem stat values captured
 /// during the walk, used by the incremental reindex diff to detect changes
 /// and by the writer to persist on `book_files`.
+///
+/// `word_count` is the spine-text estimate ([`estimate_word_count`]), computed
+/// once here while the EPUB is already open so `books.word_count` can feed the
+/// stats Pages tile without re-parsing. `None` when the estimate could not be
+/// produced (empty/unreadable spine).
 #[derive(Debug, Default)]
 pub struct IndexedBook {
     pub metadata: EbookMetadata,
     pub cover: Option<(String, Vec<u8>)>,
     pub mtime_epoch: i64,
     pub size_bytes: i64,
+    pub word_count: Option<i64>,
 }
 
 /// Result of scanning an ebook library directory. Separate from
@@ -129,6 +135,7 @@ pub fn scan_ebook_library_with(path: Option<&str>, opts: ScanOptions) -> ScanRes
             cover: None,
             mtime_epoch: 0,
             size_bytes: 0,
+            word_count: None,
         });
     }
     books.sort_by(|a, b| a.metadata.filename.cmp(&b.metadata.filename));

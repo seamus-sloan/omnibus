@@ -432,6 +432,7 @@ pub fn parse_audiobook_targets(targets: Vec<AudiobookParseTarget>) -> Vec<super:
                     cover: None,
                     mtime_epoch: 0,
                     size_bytes: 0,
+                    word_count: None,
                 },
             };
             book.mtime_epoch = t.mtime_epoch;
