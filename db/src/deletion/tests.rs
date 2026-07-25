@@ -382,6 +382,99 @@ async fn delete_book_items_resolves_a_ledger_uuid_to_its_target_book() {
     assert_eq!(count_rows(&pool, "SELECT COUNT(*) FROM books").await, 0);
 }
 
+// --- concurrency -------------------------------------------------------
+
+#[tokio::test]
+async fn delete_book_items_never_orphans_a_zero_item_book_row_under_concurrent_disjoint_deletes() {
+    // Regression test for the TOCTOU this module used to have: two concurrent
+    // calls deleting disjoint files must not both read the pre-delete item
+    // count and both decide `total_delete = false` — that would leave
+    // `book_files` at 0 rows with the `books` row never purged, a state
+    // nothing else cleans up. `BEGIN IMMEDIATE` serializes the two calls on
+    // the RESERVED write lock, so whichever runs second recomputes the count
+    // fresh (against the first call's already-committed delete) and sees the
+    // true remaining total.
+    let dir = temp_dir("concurrent");
+    let _env = cache_env(&dir);
+    let pool = pool().await;
+    let lib = seed_root(&pool, "/lib").await;
+    let book = seed_book(&pool, lib, "uuid-a", "Raced").await;
+    let a = seed_file(&pool, book, "/lib", "a", "a", "EPUB").await;
+    let b = seed_file(&pool, book, "/lib", "a", "a", "M4B").await;
+
+    let p1 = pool.clone();
+    let p2 = pool.clone();
+    let t1 = tokio::spawn(async move { delete_book_items(&p1, "uuid-a", &[a], &[]).await });
+    let t2 = tokio::spawn(async move { delete_book_items(&p2, "uuid-a", &[b], &[]).await });
+
+    let r1 = t1.await.unwrap().unwrap();
+    let r2 = t2.await.unwrap().unwrap();
+
+    // Whichever call ran second sees the other's file already gone, so
+    // exactly one of the two — never both, never neither — purges the book.
+    assert_eq!(
+        [r1.book_deleted, r2.book_deleted]
+            .iter()
+            .filter(|d| **d)
+            .count(),
+        1,
+        "exactly one of the two racing deletes must purge the now-empty book"
+    );
+    assert_eq!(count_rows(&pool, "SELECT COUNT(*) FROM books").await, 0);
+    assert_eq!(
+        count_rows(&pool, "SELECT COUNT(*) FROM book_files").await,
+        0
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+// --- DeleteError variants ------------------------------------------------
+
+#[tokio::test]
+async fn delete_book_items_wraps_a_books_error_when_the_pool_is_closed() {
+    // `resolve_book_id_by_uuid` is the first DB touch in `delete_book_items`,
+    // so closing the pool up front guarantees it's the call that fails,
+    // giving a deterministic `DeleteError::Books`.
+    let pool = pool().await;
+    let lib = seed_root(&pool, "/lib").await;
+    seed_book(&pool, lib, "uuid-a", "Doomed").await;
+    pool.close().await;
+
+    let err = delete_book_items(&pool, "uuid-a", &[], &[])
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, DeleteError::Books(_)));
+}
+
+#[tokio::test]
+async fn canonical_uuid_propagates_a_sqlx_error_when_the_pool_is_closed() {
+    let pool = pool().await;
+    pool.close().await;
+
+    let err = canonical_uuid(&pool, 1).await.unwrap_err();
+
+    assert!(matches!(err, DeleteError::Sqlx(_)));
+}
+
+#[tokio::test]
+async fn delete_error_wraps_a_physical_error_when_the_copy_lookup_fails() {
+    // Both `delete_book_items` and `book_deletion_manifest` convert a
+    // `physical::PhysicalError` via `?`. Isolating that specific call inside
+    // either multi-step orchestrator isn't possible with a closed-pool
+    // trigger alone (an earlier DB touch would fail first and mask it), so
+    // this drives the conversion directly against the same real DB failure.
+    let pool = pool().await;
+    pool.close().await;
+
+    let physical_err = crate::physical::list_physical_copies(&pool, "uuid-a")
+        .await
+        .unwrap_err();
+    let err: DeleteError = physical_err.into();
+
+    assert!(matches!(err, DeleteError::Physical(_)));
+}
+
 // --- errors ----------------------------------------------------------------
 
 #[tokio::test]
