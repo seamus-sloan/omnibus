@@ -309,7 +309,6 @@ fn um_now_reading_row(point: ResumePoint) -> Element {
                 Link {
                     to: detail,
                     class: "um-nr-info",
-                    "aria-label": "View details for {title}",
                     div { class: "um-nr-title", "{title}" }
                     if let Some(author) = author {
                         div { class: "um-nr-author", "{author}" }

@@ -252,7 +252,6 @@ fn resume_card(point: &ResumePoint, server_url: &str) -> Element {
                 Link {
                     to: Route::BookDetail { uuid: uuid.clone() },
                     class: "m-resume-info",
-                    "aria-label": "View details for {title}",
                     span { class: "m-resume-cover",
                         Cover { book, src_override: src, sizes: Some("54px".to_string()) }
                     }

@@ -149,9 +149,10 @@ for (const sample of [
 
     await gotoReady(page, "/");
     await page.getByTestId("user-menu-trigger").click();
+    const panel = page.getByTestId("user-menu-panel");
 
-    // Only the action link resumes reading/listening.
-    const action = page.getByRole("link", {
+    // Only the action button resumes reading/listening.
+    const action = panel.getByRole("link", {
       name: `${sample.action} ${latest.title}`,
     });
     await expect(action).toBeVisible();
@@ -162,14 +163,11 @@ for (const sample of [
       new RegExp(`^/${sample.path}/${latest.uuid}\\??$`),
     );
 
-    // The cover and title instead route to the book detail page.
-    const details = page.getByRole("link", {
+    // The cover instead routes to the book detail page.
+    const cover = panel.getByRole("link", {
       name: `View details for ${latest.title}`,
     });
-    await expect(details).toHaveCount(2);
-    for (const detail of await details.all()) {
-      await expect(detail).toHaveAttribute("href", `/books/${latest.uuid}`);
-    }
+    await expect(cover).toHaveAttribute("href", `/books/${latest.uuid}`);
   });
 }
 

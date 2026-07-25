@@ -2763,7 +2763,7 @@ a.idx-letter-on:focus-visible {
   border-radius: 10px; text-decoration: none; color: inherit;
 }
 @media (hover: hover) {
-  .um-now-reading:has([href]:hover) {
+  .um-now-reading:hover {
     border-color: color-mix(in oklch, var(--accent) 55%, var(--line-2));
   }
 }
