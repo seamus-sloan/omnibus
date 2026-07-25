@@ -75,3 +75,72 @@ pub(super) fn TocDrawer(
         }
     }
 }
+
+// SSR render-smoke coverage. The two `EventHandler`s must be constructed in a
+// component body, so the tests mount the drawer through a prop-only harness.
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::*;
+    use crate::test_support::render;
+
+    #[component]
+    fn TocHarness(
+        entries: Vec<TocEntry>,
+        current_title: String,
+        progress_label: String,
+    ) -> Element {
+        rsx! {
+            TocDrawer {
+                entries,
+                current_title,
+                progress_label,
+                on_navigate: move |_| {},
+                on_close: move |_| {},
+            }
+        }
+    }
+
+    fn entry(label: &str, href: &str) -> TocEntry {
+        TocEntry {
+            label: label.to_string(),
+            href: href.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn toc_drawer_lists_each_entry_and_marks_the_current_chapter() {
+        let html = render(rsx! {
+            TocHarness {
+                entries: vec![entry("Chapter One", "ch1.xhtml"), entry("Chapter Two", "ch2.xhtml")],
+                current_title: "Chapter Two".to_string(),
+                progress_label: "184 / 272 \u{00b7} 68%".to_string(),
+            }
+        });
+
+        assert!(html.contains("data-testid=\"reader-toc-drawer\""));
+        assert!(html.contains("Contents"));
+        assert!(html.contains("aria-label=\"Close\""));
+        assert!(html.contains("data-testid=\"reader-toc-row\""));
+        assert!(html.contains("Chapter One"));
+        assert!(html.contains("Chapter Two"));
+        // The current chapter's row takes the highlight class, and the phone
+        // sheet's progress line renders when non-empty.
+        assert!(html.contains("rd-toc-row current"));
+        assert!(html.contains("184 / 272 \u{00b7} 68%"));
+    }
+
+    #[test]
+    fn toc_drawer_shows_an_empty_state_without_entries() {
+        let html = render(rsx! {
+            TocHarness {
+                entries: vec![],
+                current_title: String::new(),
+                progress_label: String::new(),
+            }
+        });
+
+        assert!(html.contains("No table of contents."));
+        assert!(!html.contains("data-testid=\"reader-toc-row\""));
+    }
+}
