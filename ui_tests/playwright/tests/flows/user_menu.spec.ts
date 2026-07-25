@@ -149,17 +149,25 @@ for (const sample of [
 
     await gotoReady(page, "/");
     await page.getByTestId("user-menu-trigger").click();
+    const panel = page.getByTestId("user-menu-panel");
 
-    const card = page.getByRole("link", {
+    // Only the action button resumes reading/listening.
+    const action = panel.getByRole("link", {
       name: `${sample.action} ${latest.title}`,
     });
-    await expect(card).toBeVisible();
+    await expect(action).toBeVisible();
     // The `/listen/:uuid?:file_id` route serializes an unset file_id as a bare
     // trailing `?`, so tolerate it (the `/read` destination stays clean).
-    await expect(card).toHaveAttribute(
+    await expect(action).toHaveAttribute(
       "href",
       new RegExp(`^/${sample.path}/${latest.uuid}\\??$`),
     );
+
+    // The cover instead routes to the book detail page.
+    const cover = panel.getByRole("link", {
+      name: `View details for ${latest.title}`,
+    });
+    await expect(cover).toHaveAttribute("href", `/books/${latest.uuid}`);
   });
 }
 

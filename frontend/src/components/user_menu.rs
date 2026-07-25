@@ -286,28 +286,71 @@ fn um_now_reading_row(point: ResumePoint) -> Element {
     let uuid = point.record.book_uuid.clone();
     let to = if is_audio {
         Route::BookListen {
-            uuid,
+            uuid: uuid.clone(),
             file_id: None,
         }
     } else {
-        Route::BookRead { uuid }
+        Route::BookRead { uuid: uuid.clone() }
     };
-    let aria_label = format!("{action} {title}");
+    let detail = Route::BookDetail { uuid };
+    let action_label = format!("{action} {title}");
 
     rsx! {
-        Link {
-            to,
+        div {
             class: "um-now-reading",
             "data-testid": "user-menu-now-reading",
-            "aria-label": "{aria_label}",
-            div { class: "um-nr-cover", Cover { book: point.book } }
+            Link {
+                to: detail.clone(),
+                class: "um-nr-cover",
+                "aria-label": "View details for {title}",
+                Cover { book: point.book }
+            }
             div { class: "um-nr-meta",
-                div { class: "um-nr-title", "{title}" }
-                if let Some(author) = author {
-                    div { class: "um-nr-author", "{author}" }
+                Link {
+                    to: detail,
+                    class: "um-nr-info",
+                    div { class: "um-nr-title", "{title}" }
+                    if let Some(author) = author {
+                        div { class: "um-nr-author", "{author}" }
+                    }
                 }
                 div { class: "um-nr-action", "{action}" }
             }
+            Link {
+                to,
+                class: "um-nr-play",
+                "data-testid": "user-menu-now-reading-action",
+                "aria-label": "{action_label}",
+                if is_audio {
+                    {play_glyph()}
+                } else {
+                    {book_glyph()}
+                }
+            }
+        }
+    }
+}
+
+/// Solid play triangle for the "continue listening" affordance.
+#[cfg(any(feature = "web", feature = "server"))]
+fn play_glyph() -> Element {
+    rsx! {
+        svg {
+            width: "14", height: "14", view_box: "0 0 15 15", fill: "currentColor",
+            path { d: "M4 2.5v10l8-5z" }
+        }
+    }
+}
+
+/// Open-book outline for the "continue reading" affordance.
+#[cfg(any(feature = "web", feature = "server"))]
+fn book_glyph() -> Element {
+    rsx! {
+        svg {
+            width: "14", height: "14", view_box: "0 0 24 24", fill: "none",
+            stroke: "currentColor", stroke_width: "2", stroke_linecap: "round", stroke_linejoin: "round",
+            path { d: "M4 19.5A2.5 2.5 0 0 1 6.5 17H20" }
+            path { d: "M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" }
         }
     }
 }
