@@ -84,6 +84,12 @@ fn auth_error_to_response(e: AuthError) -> Response {
                 .into_response()
         }
         AuthError::UsernameTaken => (StatusCode::CONFLICT, "username taken").into_response(),
+        // Not reachable from login/register, but the match is exhaustive: the
+        // admin user-management surface (`backend::users`) owns these.
+        AuthError::UserNotFound => (StatusCode::NOT_FOUND, "user not found").into_response(),
+        AuthError::LastAdmin => {
+            (StatusCode::CONFLICT, "cannot remove the last administrator").into_response()
+        }
         AuthError::Validation(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
         AuthError::RegistrationDisabled => {
             (StatusCode::FORBIDDEN, "registration disabled").into_response()
