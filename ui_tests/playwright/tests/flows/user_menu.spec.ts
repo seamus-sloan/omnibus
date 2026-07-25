@@ -7,9 +7,10 @@ import { fixturesDir, seedLibrary } from "../utils/seed";
 
 // The user menu replaces the old top-bar cluster (ThemeToggle, Settings
 // link, Log out button) with a single avatar trigger that opens a dropdown.
-// Most rows in the dropdown are forward-looking stubs (disabled <a>); real
-// wiring covers recent progress, Account, Settings, the Admin log-viewer
-// link, Sign out, and theme selection.
+// Some rows are forward-looking stubs (disabled <a>); real wiring covers
+// recent progress, Settings, Switch user, Sign out, and theme selection.
+// Account, "Admin · server health", and Notifications were folded into the
+// unified Settings sidebar (#1324), so they no longer appear here.
 
 test.beforeAll(async ({ request }) => {
   await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
@@ -114,16 +115,18 @@ test("Settings link routes to the settings page", async ({ page }) => {
   await expect(page).toHaveURL(/\/settings$/);
 });
 
-test("Admin · server health link routes to the log viewer", async ({
+test("the dropdown no longer surfaces the folded-in rows (#1324)", async ({
   page,
 }) => {
   await gotoReady(page, "/");
   await page.getByTestId("user-menu-trigger").click();
-  await page.getByRole("link", { name: "Admin · server health" }).click();
-  await expect(page).toHaveURL(/\/logs$/);
+  await expect(page.getByTestId("user-menu-panel")).toBeVisible();
+  // Account / Admin · server health / Notifications now live under Settings.
+  await expect(page.getByRole("link", { name: "Account" })).toHaveCount(0);
   await expect(
-    page.getByRole("heading", { level: 1, name: "Server logs" }),
-  ).toBeVisible();
+    page.getByRole("link", { name: "Admin · server health" }),
+  ).toHaveCount(0);
+  await expect(page.getByText("Notifications")).toHaveCount(0);
 });
 
 for (const sample of [

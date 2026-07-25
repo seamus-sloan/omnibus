@@ -41,7 +41,7 @@ fn is_active(current: &Route, tab: TabKind) -> bool {
         TabKind::Stats => matches!(current, Route::Stats {}),
         TabKind::You => matches!(
             current,
-            Route::Account {} | Route::Settings {} | Route::AddBooks {} | Route::CheckIn {}
+            Route::Account {} | Route::Settings { .. } | Route::AddBooks {} | Route::CheckIn {}
         ),
     }
 }
@@ -201,7 +201,7 @@ mod tests {
     #[test]
     fn you_tab_lights_across_account_section() {
         assert!(is_active(&Route::Account {}, TabKind::You));
-        assert!(is_active(&Route::Settings {}, TabKind::You));
+        assert!(is_active(&Route::Settings { section: None }, TabKind::You));
         assert!(is_active(&Route::AddBooks {}, TabKind::You));
         assert!(is_active(&Route::CheckIn {}, TabKind::You));
         assert!(!is_active(&Route::Landing {}, TabKind::You));

@@ -13,6 +13,10 @@ commit log.
 
 ## [Unreleased]
 
+### Changed
+
+- Settings is now a single page with a permission-gated left sidebar: non-admins see only their Account, while admins also get Library Location, Metadata Lookup, Email delivery, and Logs sections. The standalone `/logs` page is folded in as the Logs section (old links redirect), and the profile dropdown is trimmed to Settings / Switch user / Sign out (#1324)
+
 ### Fixed
 
 - Scanning a book already on your wishlist now opens its detail page instead of the "you already have this one digitally" check-in screen
