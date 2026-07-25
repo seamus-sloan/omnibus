@@ -91,9 +91,10 @@ async fn api_post_summary_fetch_returns_null_when_hardcover_key_is_unset() {
 #[tokio::test]
 async fn api_summary_sources_reflects_configured_keys_for_any_authenticated_user() {
     // The plan falls back to the env keys, so the keyless assertion below only
-    // holds with both vars removed.
-    let _hc = EnvVarGuard::set("HARDCOVER_API_KEY", None);
-    let _gb = EnvVarGuard::set("GOOGLE_BOOKS_API_KEY", None);
+    // holds with both vars removed. Both clear under ONE `ENV_LOCK` acquisition
+    // via `also_set` — a second `EnvVarGuard::set` would deadlock re-locking the
+    // mutex the first guard still holds.
+    let _env = EnvVarGuard::set("HARDCOVER_API_KEY", None).also_set("GOOGLE_BOOKS_API_KEY", None);
     let (app, _state, pool) = fixture().await;
     let user = auth_test_support::create_user(&pool, "reader").await;
     let token = auth_test_support::bearer_token(&pool, user.id).await;

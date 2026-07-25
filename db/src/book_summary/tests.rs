@@ -539,11 +539,11 @@ async fn fetch_summary_with_googlebooks_resolves_via_title_search_for_a_seeded_b
 // ── summary_source_plan (cascade policy) ─────────────────────────
 
 /// Remove both provider env keys so the plan reflects only what the test saves.
-fn clear_key_env() -> (EnvVarGuard, EnvVarGuard) {
-    (
-        EnvVarGuard::set("HARDCOVER_API_KEY", None),
-        EnvVarGuard::set("GOOGLE_BOOKS_API_KEY", None),
-    )
+/// Both must clear under ONE `ENV_LOCK` acquisition — a second `EnvVarGuard::set`
+/// would deadlock re-locking the mutex the first guard still holds, so `also_set`
+/// clears the second var under the already-held lock.
+fn clear_key_env() -> EnvVarGuard {
+    EnvVarGuard::set("HARDCOVER_API_KEY", None).also_set("GOOGLE_BOOKS_API_KEY", None)
 }
 
 #[tokio::test]
