@@ -12,6 +12,8 @@ use dioxus::prelude::*;
 mod downloads;
 
 #[cfg(not(feature = "mobile"))]
+use crate::components::auth::{score_password, PasswordRequirements, StrengthMeter};
+#[cfg(not(feature = "mobile"))]
 use crate::{data, use_server_url};
 
 #[cfg(feature = "mobile")]
@@ -282,6 +284,124 @@ fn kindle_account_body(embedded: bool) -> Element {
                 p {
                     role: "status",
                     "data-testid": "kindle-email-status",
+                    class: if msg_is_error() { "settings-status error" } else { "settings-status success" },
+                    "{m}"
+                }
+            }
+        }
+
+        ChangePasswordCard {}
+    }
+}
+
+/// Self-service change-password card (web Account section). Requires the
+/// current password to authorize, validates the new one against the same
+/// policy as registration (strength meter + requirements are advisory; the
+/// server is authoritative), and surfaces the server's inline error for a
+/// wrong current password or a policy rejection without clearing the form.
+#[cfg(not(feature = "mobile"))]
+#[component]
+fn ChangePasswordCard() -> Element {
+    let server_url = use_server_url();
+    let mut current = use_signal(String::new);
+    let mut new_password = use_signal(String::new);
+    let mut msg = use_signal(|| None::<String>);
+    let mut msg_is_error = use_signal(|| false);
+    let mut in_flight = use_signal(|| false);
+
+    let pw = new_password();
+    let (score, score_label, rules) = score_password(&pw);
+
+    let on_submit = move |evt: Event<FormData>| {
+        evt.prevent_default();
+        let cur = current();
+        let next = new_password();
+        if cur.is_empty() || next.is_empty() {
+            msg.set(Some("Enter your current and new password.".to_string()));
+            msg_is_error.set(true);
+            return;
+        }
+        let url = server_url.clone();
+        in_flight.set(true);
+        spawn(async move {
+            match data::change_password(&url, cur, next).await {
+                Ok(()) => {
+                    current.set(String::new());
+                    new_password.set(String::new());
+                    msg.set(Some("Password changed.".to_string()));
+                    msg_is_error.set(false);
+                }
+                Err(e) => {
+                    msg.set(Some(e.to_string()));
+                    msg_is_error.set(true);
+                }
+            }
+            in_flight.set(false);
+        });
+    };
+
+    rsx! {
+        section { class: "card", "data-testid": "account-password-card",
+            h2 { "Password" }
+            p { class: "subtitle", "Change the password you use to sign in." }
+
+            form {
+                id: "change-password-form",
+                class: "settings-form",
+                onsubmit: on_submit,
+                div { class: "settings-field",
+                    label { r#for: "current-password", "Current password" }
+                    input {
+                        r#type: "password",
+                        id: "current-password",
+                        name: "current_password",
+                        "data-testid": "current-password-input",
+                        autocomplete: "current-password",
+                        autocapitalize: "none",
+                        autocorrect: "off",
+                        spellcheck: "false",
+                        value: "{current}",
+                        oninput: move |e| {
+                            current.set(e.value());
+                            msg.set(None);
+                        },
+                    }
+                }
+                div { class: "settings-field",
+                    label { r#for: "new-password", "New password" }
+                    input {
+                        r#type: "password",
+                        id: "new-password",
+                        name: "new_password",
+                        "data-testid": "new-password-input",
+                        autocomplete: "new-password",
+                        autocapitalize: "none",
+                        autocorrect: "off",
+                        spellcheck: "false",
+                        value: "{new_password}",
+                        oninput: move |e| {
+                            new_password.set(e.value());
+                            msg.set(None);
+                        },
+                    }
+                }
+                StrengthMeter { score, label: Some(score_label.to_string()) }
+                PasswordRequirements { rules }
+                div { class: "settings-actions",
+                    button {
+                        r#type: "submit",
+                        class: "btn",
+                        disabled: in_flight(),
+                        "data-testid": "change-password-submit",
+                        "Change password"
+                    }
+                }
+            }
+
+            if let Some(m) = msg() {
+                p {
+                    role: "status",
+                    "data-testid": "change-password-status",
                     class: if msg_is_error() { "settings-status error" } else { "settings-status success" },
                     "{m}"
                 }
