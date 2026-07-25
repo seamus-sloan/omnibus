@@ -4718,6 +4718,65 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   .settings-sidebar { position: static; top: auto; }
 }
 
+/* ── Admin Users section (F5.4) ─────────────────────────────────── */
+.users-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 1rem; margin-bottom: 1rem;
+}
+.users-table {
+  width: 100%; border-collapse: collapse; font-size: 0.9rem;
+}
+.users-table th, .users-table td {
+  text-align: left; padding: 0.55rem 0.6rem;
+  border-bottom: 1px solid var(--line-2); vertical-align: middle;
+}
+.users-table th {
+  font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--ink-2); font-weight: 600;
+}
+.users-table tbody tr:last-child td { border-bottom: none; }
+.users-name { font-weight: 600; color: var(--ink-0); }
+.users-self-tag { color: var(--ink-2); font-weight: 400; }
+.users-kindle { color: var(--ink-1); }
+.users-col-actions { text-align: right; white-space: nowrap; }
+.users-col-actions .btn { margin-left: 0.35rem; }
+.users-danger { color: var(--bad); }
+
+.users-chip, .users-chip-admin {
+  display: inline-block; margin: 0 0.25rem 0.15rem 0; padding: 0.1rem 0.5rem;
+  font-size: 0.75rem; border-radius: 999px;
+  background: var(--bg-2); border: 1px solid var(--line-2); color: var(--ink-1);
+}
+.users-chip-admin { background: var(--accent-soft); border-color: transparent; color: var(--accent); font-weight: 600; }
+.users-chip-none { color: var(--ink-2); }
+.users-badge {
+  display: inline-block; padding: 0.1rem 0.5rem; font-size: 0.75rem;
+  border-radius: 999px; color: var(--ink-2);
+}
+.users-badge-locked { color: var(--bad); background: color-mix(in oklch, var(--bad) 14%, transparent); margin-right: 0.4rem; }
+
+.users-perms { border: 1px solid var(--line-2); border-radius: 10px; padding: 0.6rem 0.8rem; }
+.users-perms legend { font-size: 0.8rem; color: var(--ink-2); padding: 0 0.35rem; }
+.users-perm-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.2rem 0; cursor: pointer; }
+
+.users-modal-overlay {
+  position: fixed; inset: 0; z-index: 120;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+  background: color-mix(in oklch, black 62%, transparent); backdrop-filter: blur(3px);
+}
+.users-modal-card {
+  width: min(460px, 100%); max-height: 88vh; overflow: auto;
+  background: var(--bg-1); border: 1px solid var(--line-2); border-radius: 16px;
+  box-shadow: 0 24px 60px color-mix(in oklch, black 55%, transparent); padding: 1.1rem 1.25rem;
+}
+.users-modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
+.users-modal-head h3 { margin: 0; font-size: 1.05rem; color: var(--ink-0); }
+.users-modal-close {
+  font-size: 1.3rem; line-height: 1; color: var(--ink-2);
+  background: transparent; border: none; cursor: pointer;
+}
+@media (hover: hover) { .users-modal-close:hover { color: var(--ink-0); } }
+
 .settings-form {
   display: flex;
   flex-direction: column;

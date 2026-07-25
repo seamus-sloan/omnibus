@@ -24,6 +24,9 @@ mod suggestions;
 mod summary;
 mod tags;
 mod uploads;
+// Admin user management (F5.4) — web (gloo REST) + SSR stubs; no mobile surface.
+#[cfg(not(feature = "mobile"))]
+mod users;
 
 // auth exports exist under web, mobile, and server-only (the last only
 // re-exports the SSR `current_user` stub so pages can call `data::current_user`
@@ -49,6 +52,8 @@ pub use suggestions::*;
 pub use summary::*;
 pub use tags::*;
 pub use uploads::*;
+#[cfg(not(feature = "mobile"))]
+pub use users::*;
 
 /// Errors surfaced by the feature-gated data transport.
 ///

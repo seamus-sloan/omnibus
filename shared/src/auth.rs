@@ -21,6 +21,55 @@ pub struct UserSummary {
     pub kindle_email: Option<String>,
 }
 
+/// The four permission booleans that define what a user can do. `is_admin`
+/// is presented in the UI as an "Administrator" permission that implies the
+/// other three; the storage layer keeps them as independent flags (there is
+/// no role enum). Used by the admin create/edit endpoints (F5.4).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UserPermissions {
+    pub is_admin: bool,
+    pub can_upload: bool,
+    pub can_edit: bool,
+    pub can_download: bool,
+}
+
+/// Admin Users-table projection of a `users` row (F5.4). Extends
+/// [`UserSummary`] with the created timestamp and locked state the admin
+/// table renders, without bloating the login-path summary. No password
+/// fields ever cross the wire.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdminUserRow {
+    pub id: i64,
+    pub username: String,
+    pub is_admin: bool,
+    pub can_upload: bool,
+    pub can_edit: bool,
+    pub can_download: bool,
+    #[serde(default)]
+    pub kindle_email: Option<String>,
+    /// Account creation time (Unix seconds).
+    pub created_at: i64,
+    /// `true` when the account is currently locked out by repeated failed
+    /// logins (`locked_until` is in the future).
+    pub locked: bool,
+}
+
+/// Request body for `POST /api/users` (admin create). See [`LoginRequest`]
+/// for why `Debug` is deliberately not derived.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct CreateUserRequest {
+    pub username: String,
+    pub password: String,
+    pub permissions: UserPermissions,
+}
+
+/// Request body for `POST /api/users/{id}/password` (admin password reset).
+/// See [`LoginRequest`] for why `Debug` is deliberately not derived.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SetPasswordRequest {
+    pub password: String,
+}
+
 /// Request body for `POST /api/auth/login`.
 ///
 /// Deliberately does not derive `Debug`: the struct holds a plaintext

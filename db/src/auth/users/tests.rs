@@ -265,3 +265,277 @@ async fn change_password_rejects_unknown_user() {
         .unwrap_err();
     assert!(matches!(err, AuthError::InvalidCredentials));
 }
+
+// ── Admin user management (F5.4) ─────────────────────────────────────
+
+use omnibus_shared::UserPermissions;
+
+const READER: UserPermissions = UserPermissions {
+    is_admin: false,
+    can_upload: false,
+    can_edit: false,
+    can_download: true,
+};
+const ADMIN: UserPermissions = UserPermissions {
+    is_admin: true,
+    can_upload: true,
+    can_edit: true,
+    can_download: true,
+};
+
+#[tokio::test]
+async fn list_users_returns_projection_ordered_oldest_first() {
+    let p = pool().await;
+    let admin = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let reader = admin_create_user(&p, "bob", "bunker9-longer-pass", READER)
+        .await
+        .unwrap();
+
+    let rows = list_users(&p).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    // Oldest first: alice (first user, admin) then bob.
+    assert_eq!(rows[0].id, admin.id);
+    assert!(rows[0].is_admin && !rows[0].locked);
+    assert_eq!(rows[1].id, reader.id);
+    assert!(!rows[1].is_admin);
+    assert!(rows[1].can_download && !rows[1].can_upload);
+}
+
+#[tokio::test]
+async fn admin_create_user_sets_permissions_and_bypasses_registration_gate() {
+    let p = pool().await;
+    create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    // Registration auto-disabled after first user — admin_create ignores it.
+    assert!(!registration_enabled(&p).await.unwrap());
+
+    let row = admin_create_user(&p, "bob", "bunker9-longer-pass", ADMIN)
+        .await
+        .unwrap();
+    assert!(row.is_admin && row.can_upload && row.can_edit && row.can_download);
+    assert!(!row.locked && row.kindle_email.is_none());
+
+    // The new user can actually authenticate.
+    crate::auth::verify_login(&p, "bob", "bunker9-longer-pass")
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn admin_create_user_rejects_duplicate_username_nocase() {
+    let p = pool().await;
+    create_user(&p, "Alice", "hunter2-real-long").await.unwrap();
+    let err = admin_create_user(&p, "alice", "bunker9-longer-pass", READER)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AuthError::UsernameTaken));
+}
+
+#[tokio::test]
+async fn admin_create_user_rejects_invalid_username_and_password() {
+    let p = pool().await;
+    create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+
+    let err = admin_create_user(&p, " bob", "bunker9-longer-pass", READER)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AuthError::Validation(_)));
+
+    let err = admin_create_user(&p, "bob", "short", READER)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AuthError::Validation(_)));
+}
+
+#[tokio::test]
+async fn update_user_permissions_replaces_flags() {
+    let p = pool().await;
+    create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let bob = admin_create_user(&p, "bob", "bunker9-longer-pass", READER)
+        .await
+        .unwrap();
+
+    update_user_permissions(
+        &p,
+        bob.id,
+        UserPermissions {
+            is_admin: false,
+            can_upload: true,
+            can_edit: true,
+            can_download: false,
+        },
+    )
+    .await
+    .unwrap();
+
+    let bob_row = list_users(&p)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|u| u.id == bob.id)
+        .unwrap();
+    assert!(bob_row.can_upload && bob_row.can_edit);
+    assert!(!bob_row.can_download && !bob_row.is_admin);
+}
+
+#[tokio::test]
+async fn update_user_permissions_refuses_to_demote_last_admin() {
+    let p = pool().await;
+    let alice = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+
+    // Alice is the only admin — demoting her is refused.
+    let err = update_user_permissions(&p, alice.id, READER)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AuthError::LastAdmin));
+
+    // Promote a second admin, then demoting alice is allowed.
+    let bob = admin_create_user(&p, "bob", "bunker9-longer-pass", ADMIN)
+        .await
+        .unwrap();
+    assert!(bob.is_admin);
+    update_user_permissions(&p, alice.id, READER).await.unwrap();
+}
+
+#[tokio::test]
+async fn update_user_permissions_rejects_unknown_user() {
+    let p = pool().await;
+    create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let err = update_user_permissions(&p, 9999, READER).await.unwrap_err();
+    assert!(matches!(err, AuthError::UserNotFound));
+}
+
+#[tokio::test]
+async fn admin_set_password_resets_and_new_password_logs_in() {
+    let p = pool().await;
+    create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let bob = admin_create_user(&p, "bob", "bunker9-longer-pass", READER)
+        .await
+        .unwrap();
+
+    admin_set_password(&p, bob.id, "reset-by-admin-99")
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        crate::auth::verify_login(&p, "bob", "bunker9-longer-pass")
+            .await
+            .unwrap_err(),
+        AuthError::InvalidCredentials
+    ));
+    crate::auth::verify_login(&p, "bob", "reset-by-admin-99")
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn admin_set_password_rejects_invalid_and_unknown() {
+    let p = pool().await;
+    let alice = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+
+    let err = admin_set_password(&p, alice.id, "short").await.unwrap_err();
+    assert!(matches!(err, AuthError::Validation(_)));
+
+    let err = admin_set_password(&p, 9999, "valid-long-pass-1")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AuthError::UserNotFound));
+}
+
+#[tokio::test]
+async fn unlock_user_clears_lockout() {
+    use crate::auth::verify_login;
+
+    let p = pool().await;
+    create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let bob = admin_create_user(&p, "bob", "bunker9-longer-pass", READER)
+        .await
+        .unwrap();
+
+    // Force a live lockout far into the future.
+    sqlx::query("UPDATE users SET failed_login_count = 5, locked_until = strftime('%s','now') + 3600 WHERE id = ?")
+        .bind(bob.id)
+        .execute(&p)
+        .await
+        .unwrap();
+    assert!(
+        list_users(&p)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|u| u.id == bob.id)
+            .unwrap()
+            .locked
+    );
+
+    unlock_user(&p, bob.id).await.unwrap();
+
+    let row = list_users(&p)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|u| u.id == bob.id)
+        .unwrap();
+    assert!(!row.locked);
+    // And login is no longer blocked by the lockout.
+    verify_login(&p, "bob", "bunker9-longer-pass")
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn unlock_user_rejects_unknown_user() {
+    let p = pool().await;
+    let err = unlock_user(&p, 9999).await.unwrap_err();
+    assert!(matches!(err, AuthError::UserNotFound));
+}
+
+#[tokio::test]
+async fn delete_user_removes_row_and_cascades() {
+    let p = pool().await;
+    create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let bob = admin_create_user(&p, "bob", "bunker9-longer-pass", READER)
+        .await
+        .unwrap();
+    // Bob got a Wishlist shelf on create — it must cascade away with him.
+    let shelves_before: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM shelves WHERE owner_user_id = ?")
+            .bind(bob.id)
+            .fetch_one(&p)
+            .await
+            .unwrap();
+    assert!(shelves_before >= 1);
+
+    delete_user(&p, bob.id).await.unwrap();
+
+    assert!(get_user_by_id(&p, bob.id).await.unwrap().is_none());
+    let shelves_after: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM shelves WHERE owner_user_id = ?")
+            .bind(bob.id)
+            .fetch_one(&p)
+            .await
+            .unwrap();
+    assert_eq!(shelves_after, 0, "owned shelves must cascade-delete");
+}
+
+#[tokio::test]
+async fn delete_user_refuses_to_delete_last_admin() {
+    let p = pool().await;
+    let alice = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+
+    let err = delete_user(&p, alice.id).await.unwrap_err();
+    assert!(matches!(err, AuthError::LastAdmin));
+
+    // With a second admin present, deleting alice is allowed.
+    admin_create_user(&p, "bob", "bunker9-longer-pass", ADMIN)
+        .await
+        .unwrap();
+    delete_user(&p, alice.id).await.unwrap();
+    assert!(get_user_by_id(&p, alice.id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn delete_user_rejects_unknown_user() {
+    let p = pool().await;
+    let err = delete_user(&p, 9999).await.unwrap_err();
+    assert!(matches!(err, AuthError::UserNotFound));
+}
