@@ -308,7 +308,7 @@ fn push_dc(out: &mut String, tag: &str, value: Option<&str>) {
 
 /// Escape the five XML metacharacters. Used for both text nodes and attribute
 /// values — over-escaping `"`/`'` in a text node is still valid XML.
-fn xml_escape(s: &str) -> String {
+pub(crate) fn xml_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {

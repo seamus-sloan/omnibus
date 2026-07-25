@@ -27,6 +27,23 @@ thiserror.workspace = true
 # elsewhere in this crate (see the comment in `suggestions/hardcover.rs`).
 futures = "0.3"
 epub = "2"
+
+# F5.8 export-with-overrides (#1372): the `epub` crate is read-only, so baking
+# DB metadata/cover overrides *into* the exported EPUB needs a zip *writer*. We
+# read-through the source archive and rewrite only the OPF + cover entries.
+# Pinned to the same 3.x already in the lock transitively via `epub`, so no new
+# major lands. Default features (deflate) are all we need.
+zip = "3"
+
+# F5.8 export-with-overrides (#1372): a real read-modify-write XML parser for
+# the in-place OPF edit. Unlike `render_opf`'s whole-document string build, the
+# in-place rewrite must preserve the existing manifest/spine/identifiers
+# byte-for-byte and only swap the descriptive `<dc:*>` elements — quick-xml's
+# event copy-through (raw `BytesStart`/`BytesText`) makes that exact and safe.
+# `xml-rs` (transitive via `epub`) re-serializes and can mangle namespaces, so
+# it's unsafe for round-tripping a user's book file.
+quick-xml = "0.37"
+
 serde.workspace = true
 serde_json.workspace = true
 

@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use omnibus_shared::{EbookMetadata, MetadataOverrides, MetadataSource};
-use sqlx::{Executor, SqlitePool};
+use sqlx::{Executor, SqliteConnection, SqlitePool};
 
 use crate::books::resolve_book_id_by_uuid_exec;
 use crate::normalize::{normalize_author, normalize_title};
@@ -79,6 +79,30 @@ where
     .bind(author_norm)
     .execute(executor)
     .await?;
+    Ok(())
+}
+
+/// Bump `books.last_modified` for `book_uuid` (merged-uuid aware) inside the
+/// caller's transaction. `last_modified` is the cache-invalidation clock for
+/// the thumbnail, KEPUB, and export-EPUB caches, so every override write must
+/// touch it — otherwise a title/cover edit leaves those caches serving the
+/// pre-edit file. A uuid with no live book row is a no-op.
+async fn touch_book_last_modified(
+    conn: &mut SqliteConnection,
+    book_uuid: &str,
+) -> Result<(), sqlx::Error> {
+    if let Some(book_id) = resolve_book_id_by_uuid_exec(&mut *conn, book_uuid)
+        .await
+        .map_err(|e| match e {
+            crate::books::BooksError::Db(inner) => inner,
+            other => sqlx::Error::Protocol(other.to_string()),
+        })?
+    {
+        sqlx::query("UPDATE books SET last_modified = strftime('%s','now') WHERE id = ?")
+            .bind(book_id)
+            .execute(&mut *conn)
+            .await?;
+    }
     Ok(())
 }
 
@@ -193,6 +217,7 @@ pub async fn upsert_metadata_overrides(
     )
     .await?;
     materialize_series_link(&mut tx, book_uuid, overrides).await?;
+    touch_book_last_modified(&mut tx, book_uuid).await?;
     tx.commit().await?;
 
     if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
@@ -250,6 +275,7 @@ pub async fn merge_metadata_overrides(
     )
     .await?;
     materialize_series_link(&mut tx, book_uuid, &merged).await?;
+    touch_book_last_modified(&mut tx, book_uuid).await?;
     tx.commit().await?;
 
     if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
@@ -309,6 +335,7 @@ pub async fn delete_metadata_overrides(
     if let Some(book_id) = resolve_book_id_by_uuid_exec(&mut *tx, book_uuid).await? {
         upsert_fts(&mut tx, book_id).await?;
     }
+    touch_book_last_modified(&mut tx, book_uuid).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -357,6 +384,7 @@ pub async fn clear_cover_override(
     } else {
         upsert_overrides_row(&mut *tx, book_uuid, &overrides, &json, false, user_id).await?;
     }
+    touch_book_last_modified(&mut tx, book_uuid).await?;
     tx.commit().await?;
     Ok(())
 }
