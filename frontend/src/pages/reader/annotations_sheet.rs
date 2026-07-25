@@ -35,18 +35,41 @@ fn format_annotation_counts(highlights: usize, bookmarks: usize) -> String {
     format!("{highlights} {h} \u{b7} {bookmarks} {b}")
 }
 
+/// Props for [`AnnotationsSheet`]: the open book's identity/position plus the
+/// highlight list and the callbacks it forwards to its rows.
+#[derive(Props, Clone, PartialEq)]
+pub(super) struct AnnotationsSheetProps {
+    /// UUID of the open book, used to load/create bookmarks.
+    pub uuid: String,
+    /// Current reader CFI, used as the position for a new bookmark.
+    pub current_cfi: String,
+    /// Current chapter label, used as the default title for a new bookmark.
+    pub current_label: String,
+    /// The open book's highlights, filterable by kind/color.
+    pub highlights: Signal<Vec<Highlight>>,
+    /// Fired with a highlight when its "Quote" action is tapped.
+    pub on_quote: EventHandler<Highlight>,
+    /// Fired with a highlight when its "Add/Edit note" action is tapped.
+    pub on_edit_note: EventHandler<Highlight>,
+    /// Fired with a CFI when a bookmark row is tapped.
+    pub on_navigate: EventHandler<String>,
+    /// Fired when the scrim or close button dismisses the sheet.
+    pub on_close: EventHandler<()>,
+}
+
 /// The combined annotations bottom sheet.
 #[component]
-pub(super) fn AnnotationsSheet(
-    uuid: String,
-    current_cfi: String,
-    current_label: String,
-    highlights: Signal<Vec<Highlight>>,
-    on_quote: EventHandler<Highlight>,
-    on_edit_note: EventHandler<Highlight>,
-    on_navigate: EventHandler<String>,
-    on_close: EventHandler<()>,
-) -> Element {
+pub(super) fn AnnotationsSheet(props: AnnotationsSheetProps) -> Element {
+    let AnnotationsSheetProps {
+        uuid,
+        current_cfi,
+        current_label,
+        highlights,
+        on_quote,
+        on_edit_note,
+        on_navigate,
+        on_close,
+    } = props;
     let mut filter = use_signal(|| AnnFilter::All);
     let bookmarks = use_signal(Vec::<Bookmark>::new);
     let server_url = crate::contexts::use_server_url();
