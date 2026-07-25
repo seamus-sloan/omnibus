@@ -112,7 +112,10 @@ test("Settings link routes to the settings page", async ({ page }) => {
   await gotoReady(page, "/");
   await page.getByTestId("user-menu-trigger").click();
   await page.getByRole("link", { name: "Settings" }).click();
-  await expect(page).toHaveURL(/\/settings$/);
+  // `Route::Settings { section: None }` serializes with a trailing `?` (dioxus
+  // renders the absent optional query param), so allow it — the section-less
+  // URL lands on the default Account section either way.
+  await expect(page).toHaveURL(/\/settings\??$/);
 });
 
 test("the dropdown no longer surfaces the folded-in rows (#1324)", async ({
