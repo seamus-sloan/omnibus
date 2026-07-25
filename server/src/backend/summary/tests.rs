@@ -89,10 +89,11 @@ async fn api_post_summary_fetch_returns_null_when_hardcover_key_is_unset() {
 }
 
 #[tokio::test]
-async fn api_hardcover_configured_reflects_saved_key_for_any_authenticated_user() {
-    // `hardcover_key_status` falls back to `HARDCOVER_API_KEY`, so the
-    // pre-save "false" assertion below only holds with the var removed.
-    let _env = EnvVarGuard::set("HARDCOVER_API_KEY", None);
+async fn api_summary_sources_reflects_configured_keys_for_any_authenticated_user() {
+    // The plan falls back to the env keys, so the keyless assertion below only
+    // holds with both vars removed.
+    let _hc = EnvVarGuard::set("HARDCOVER_API_KEY", None);
+    let _gb = EnvVarGuard::set("GOOGLE_BOOKS_API_KEY", None);
     let (app, _state, pool) = fixture().await;
     let user = auth_test_support::create_user(&pool, "reader").await;
     let token = auth_test_support::bearer_token(&pool, user.id).await;
@@ -101,7 +102,7 @@ async fn api_hardcover_configured_reflects_saved_key_for_any_authenticated_user(
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/api/summary/hardcover-configured")
+                .uri("/api/summary/sources")
                 .header(AUTHORIZATION, format!("Bearer {token}"))
                 .body(Body::empty())
                 .unwrap(),
@@ -109,7 +110,8 @@ async fn api_hardcover_configured_reflects_saved_key_for_any_authenticated_user(
         .await
         .expect("request should succeed");
     assert_eq!(res.status(), StatusCode::OK);
-    assert_eq!(body_string(res).await, "false");
+    // No keys → Google Books, then Open Library as the keyless fallback.
+    assert_eq!(body_string(res).await, r#"["GoogleBooks","OpenLibrary"]"#);
 
     omnibus_db::set_hardcover_api_key(&pool, Some("hc_test_key_1234567890"))
         .await
@@ -118,7 +120,7 @@ async fn api_hardcover_configured_reflects_saved_key_for_any_authenticated_user(
     let res = app
         .oneshot(
             Request::builder()
-                .uri("/api/summary/hardcover-configured")
+                .uri("/api/summary/sources")
                 .header(AUTHORIZATION, format!("Bearer {token}"))
                 .body(Body::empty())
                 .unwrap(),
@@ -126,16 +128,17 @@ async fn api_hardcover_configured_reflects_saved_key_for_any_authenticated_user(
         .await
         .expect("request should succeed");
     assert_eq!(res.status(), StatusCode::OK);
-    assert_eq!(body_string(res).await, "true");
+    // A key exists → Open Library is dropped.
+    assert_eq!(body_string(res).await, r#"["Hardcover","GoogleBooks"]"#);
 }
 
 #[tokio::test]
-async fn api_hardcover_configured_requires_auth() {
+async fn api_summary_sources_requires_auth() {
     let (app, _state, _pool) = fixture().await;
     let res = app
         .oneshot(
             Request::builder()
-                .uri("/api/summary/hardcover-configured")
+                .uri("/api/summary/sources")
                 .body(Body::empty())
                 .unwrap(),
         )

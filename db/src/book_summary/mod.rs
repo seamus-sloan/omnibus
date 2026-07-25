@@ -1,9 +1,11 @@
 //! "Fetch book summary" — pull a description from an external provider on
-//! demand (an explicit user action, not the background worker). Hardcover is
-//! preferred when a key is configured; OpenLibrary is the keyless fallback.
-//! The caller drives the cascade one source at a time (via [`fetch_summary`])
-//! so the UI can show a per-source status message.
+//! demand (an explicit user action, not the background worker). The cascade is
+//! Hardcover (when a key is configured) → Google Books (always) → Open Library
+//! (only when no keys are configured). [`summary_source_plan`] computes that
+//! ordered list for the current settings; the caller drives it one source at a
+//! time (via [`fetch_summary`]) so the UI can show a per-source status message.
 
+pub mod googlebooks;
 pub mod openlibrary;
 
 #[cfg(test)]
@@ -15,7 +17,36 @@ use omnibus_shared::summary::SummarySource;
 
 use crate::suggestions::cascade::extract_isbns;
 use crate::suggestions::hardcover::{book_description, resolve_book, HardcoverConfig};
+use googlebooks::GoogleBooksSummaryConfig;
 use openlibrary::OpenLibrarySummaryConfig;
+
+/// The ordered summary-source cascade for the current settings. Hardcover leads
+/// when a key is configured; Google Books is always tried (it answers keyless,
+/// on a shared quota); Open Library is the fallback *only* when no keys exist —
+/// once any provider key is present we trust the keyed providers over it.
+///
+/// The only failure is a settings read, so the typed `SettingsError`
+/// propagates directly rather than being erased into `anyhow`.
+pub async fn summary_source_plan(
+    pool: &SqlitePool,
+) -> Result<Vec<SummarySource>, crate::settings::SettingsError> {
+    let hardcover = crate::settings::hardcover_key_status(pool)
+        .await?
+        .configured;
+    let google_books = crate::settings::google_books_key_status(pool)
+        .await?
+        .configured;
+
+    let mut sources = Vec::with_capacity(3);
+    if hardcover {
+        sources.push(SummarySource::Hardcover);
+    }
+    sources.push(SummarySource::GoogleBooks);
+    if !hardcover && !google_books {
+        sources.push(SummarySource::OpenLibrary);
+    }
+    Ok(sources)
+}
 
 /// Fetch a summary for `book_uuid` from `source`. `Ok(None)` is a clean miss
 /// (the source has no summary for this book) the caller can cascade past;
@@ -37,6 +68,21 @@ pub async fn fetch_summary(
                 book_uuid,
                 source,
                 &HardcoverConfig::new(key),
+                &GoogleBooksSummaryConfig::default(),
+                &OpenLibrarySummaryConfig::default(),
+            )
+            .await
+        }
+        SummarySource::GoogleBooks => {
+            // Google Books answers with or without a key; pass the effective key
+            // (settings wins over env) so keyed instances dodge the anon quota.
+            let key = crate::settings::effective_google_books_api_key(pool).await?;
+            fetch_summary_with(
+                pool,
+                book_uuid,
+                source,
+                &HardcoverConfig::new(String::new()),
+                &GoogleBooksSummaryConfig::live(key),
                 &OpenLibrarySummaryConfig::default(),
             )
             .await
@@ -46,8 +92,10 @@ pub async fn fetch_summary(
                 pool,
                 book_uuid,
                 source,
-                // No Hardcover call is made on this branch; the config is unused.
+                // No Hardcover/Google Books call is made on this branch; those
+                // configs are unused.
                 &HardcoverConfig::new(String::new()),
+                &GoogleBooksSummaryConfig::default(),
                 &OpenLibrarySummaryConfig::default(),
             )
             .await
@@ -63,6 +111,7 @@ pub async fn fetch_summary_with(
     book_uuid: &str,
     source: SummarySource,
     hardcover: &HardcoverConfig,
+    googlebooks: &GoogleBooksSummaryConfig,
     openlibrary: &OpenLibrarySummaryConfig,
 ) -> anyhow::Result<Option<String>> {
     let Some(book) = crate::get_book_by_uuid(pool, book_uuid).await? else {
@@ -75,6 +124,9 @@ pub async fn fetch_summary_with(
     match source {
         SummarySource::Hardcover => {
             fetch_hardcover(hardcover, &isbns, &title, author.as_deref()).await
+        }
+        SummarySource::GoogleBooks => {
+            googlebooks::fetch(googlebooks, &isbns, &title, author.as_deref()).await
         }
         SummarySource::OpenLibrary => {
             openlibrary::fetch(openlibrary, &isbns, &title, author.as_deref()).await

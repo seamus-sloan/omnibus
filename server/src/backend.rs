@@ -500,10 +500,7 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             "/api/ebooks/{uuid}/summary/fetch",
             post(summary::post_ebook_summary_fetch),
         )
-        .route(
-            "/api/summary/hardcover-configured",
-            get(summary::get_hardcover_configured),
-        )
+        .route("/api/summary/sources", get(summary::get_summary_sources))
         // F4.3 Send-to-Kindle — mobile-facing REST. Web hits the analogous
         // `/api/rpc/kindle/send`, `/api/rpc/account/kindle-email`, and
         // `/api/rpc/smtp*` server fns.

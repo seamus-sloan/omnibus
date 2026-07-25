@@ -2,15 +2,16 @@
 //! (against `wiremock`) and the provider-injectable orchestrator.
 
 use serde_json::json;
-use wiremock::matchers::{body_string_contains, method, path};
+use wiremock::matchers::{body_string_contains, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use omnibus_shared::summary::SummarySource;
 
+use super::googlebooks::{self, GoogleBooksSummaryConfig};
 use super::openlibrary::{self, OpenLibrarySummaryConfig};
-use super::{fetch_summary, fetch_summary_with};
+use super::{fetch_summary, fetch_summary_with, summary_source_plan};
 use crate::pool::init_db;
-use crate::settings::set_hardcover_api_key;
+use crate::settings::{set_google_books_api_key, set_hardcover_api_key};
 use crate::suggestions::hardcover::HardcoverConfig;
 use crate::test_support::{seed_synced_ebook, EnvVarGuard};
 
@@ -19,6 +20,20 @@ fn ol_config(server: &MockServer) -> OpenLibrarySummaryConfig {
         base_url: server.uri(),
         timeout: std::time::Duration::from_secs(5),
     }
+}
+
+fn gb_config(server: &MockServer) -> GoogleBooksSummaryConfig {
+    GoogleBooksSummaryConfig {
+        base_url: server.uri(),
+        api_key: None,
+        timeout: std::time::Duration::from_secs(5),
+    }
+}
+
+/// A Google Books config pointing nowhere useful — for tests that exercise a
+/// non-Google branch and never make a Google Books call.
+fn unused_googlebooks() -> GoogleBooksSummaryConfig {
+    GoogleBooksSummaryConfig::default()
 }
 
 /// A Hardcover config whose base_url points nowhere useful — for tests that
@@ -203,6 +218,127 @@ async fn openlibrary_fetch_errors_when_work_request_returns_500() {
     assert!(err.to_string().contains("open library work"));
 }
 
+// ── Google Books client (wiremock) ───────────────────────────────
+
+#[tokio::test]
+async fn googlebooks_fetch_reads_description_for_a_matched_isbn() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/books/v1/volumes"))
+        .and(query_param("q", "isbn:9780140328721"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items": [{ "volumeInfo": { "description": "A clever fox outwits three farmers." } }]
+        })))
+        .mount(&server)
+        .await;
+
+    let got = googlebooks::fetch(
+        &gb_config(&server),
+        &["9780140328721".to_string()],
+        "Fantastic Mr Fox",
+        Some("Roald Dahl"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(got.as_deref(), Some("A clever fox outwits three farmers."));
+}
+
+#[tokio::test]
+async fn googlebooks_fetch_falls_back_to_title_author_search_when_no_isbn() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/books/v1/volumes"))
+        .and(query_param(
+            "q",
+            "intitle:A Court of Thorns and Roses inauthor:Sarah J. Maas",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items": [{ "volumeInfo": { "description": "Feyre is dragged into a faerie land." } }]
+        })))
+        .mount(&server)
+        .await;
+
+    let got = googlebooks::fetch(
+        &gb_config(&server),
+        &[],
+        "A Court of Thorns and Roses",
+        Some("Sarah J. Maas"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(got.as_deref(), Some("Feyre is dragged into a faerie land."));
+}
+
+#[tokio::test]
+async fn googlebooks_fetch_returns_none_when_no_volume_matches() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/books/v1/volumes"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "items": [] })))
+        .mount(&server)
+        .await;
+
+    let got = googlebooks::fetch(
+        &gb_config(&server),
+        &["9999999999999".to_string()],
+        "Nonexistent Book",
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(got.is_none());
+}
+
+#[tokio::test]
+async fn googlebooks_fetch_treats_blank_description_as_none() {
+    let server = MockServer::start().await;
+    // ISBN match with a blank description, and an empty title search → overall miss.
+    Mock::given(method("GET"))
+        .and(path("/books/v1/volumes"))
+        .and(query_param("q", "isbn:9780140328721"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items": [{ "volumeInfo": { "description": "   " } }]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/books/v1/volumes"))
+        .and(query_param("q", "intitle:Fantastic Mr Fox"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "items": [] })))
+        .mount(&server)
+        .await;
+
+    let got = googlebooks::fetch(
+        &gb_config(&server),
+        &["9780140328721".to_string()],
+        "Fantastic Mr Fox",
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(got.is_none());
+}
+
+#[tokio::test]
+async fn googlebooks_fetch_bails_after_retries_on_persistent_503() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/books/v1/volumes"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+
+    let err = googlebooks::fetch(
+        &gb_config(&server),
+        &["9780140328721".to_string()],
+        "Fantastic Mr Fox",
+        None,
+    )
+    .await
+    .expect_err("a persistent 503 must surface as an error after retries");
+    assert!(err.to_string().contains("google books unavailable"));
+}
+
 // ── orchestrator (fetch_summary_with, via the pool) ──────────────
 
 #[tokio::test]
@@ -232,6 +368,7 @@ async fn fetch_summary_with_openlibrary_resolves_via_search_for_a_seeded_book() 
         &uuid,
         SummarySource::OpenLibrary,
         &unused_hardcover(),
+        &unused_googlebooks(),
         &ol_config(&server),
     )
     .await
@@ -277,6 +414,7 @@ async fn fetch_summary_with_hardcover_resolves_by_title_then_reads_description()
         &uuid,
         SummarySource::Hardcover,
         &hc,
+        &unused_googlebooks(),
         &OpenLibrarySummaryConfig::default(),
     )
     .await
@@ -309,6 +447,7 @@ async fn fetch_summary_with_hardcover_returns_none_when_book_unresolved() {
         &uuid,
         SummarySource::Hardcover,
         &hc,
+        &unused_googlebooks(),
         &OpenLibrarySummaryConfig::default(),
     )
     .await
@@ -363,4 +502,101 @@ async fn fetch_summary_returns_none_for_an_unknown_book_uuid_via_openlibrary_sou
         .await
         .unwrap();
     assert!(got.is_none());
+}
+
+#[tokio::test]
+async fn fetch_summary_with_googlebooks_resolves_via_title_search_for_a_seeded_book() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let uuid = seed_synced_ebook(&pool, "src.epub", "Test Source", "Source Author").await;
+
+    let server = MockServer::start().await;
+    // Seeded book has no ISBN, so the client goes straight to the title search.
+    Mock::given(method("GET"))
+        .and(path("/books/v1/volumes"))
+        .and(query_param(
+            "q",
+            "intitle:Test Source inauthor:Source Author",
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items": [{ "volumeInfo": { "description": "The seeded book blurb." } }]
+        })))
+        .mount(&server)
+        .await;
+
+    let got = fetch_summary_with(
+        &pool,
+        &uuid,
+        SummarySource::GoogleBooks,
+        &unused_hardcover(),
+        &gb_config(&server),
+        &OpenLibrarySummaryConfig::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(got.as_deref(), Some("The seeded book blurb."));
+}
+
+// ── summary_source_plan (cascade policy) ─────────────────────────
+
+/// Remove both provider env keys so the plan reflects only what the test saves.
+fn clear_key_env() -> (EnvVarGuard, EnvVarGuard) {
+    (
+        EnvVarGuard::set("HARDCOVER_API_KEY", None),
+        EnvVarGuard::set("GOOGLE_BOOKS_API_KEY", None),
+    )
+}
+
+#[tokio::test]
+async fn summary_source_plan_is_googlebooks_then_openlibrary_when_no_keys() {
+    let _env = clear_key_env();
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let plan = summary_source_plan(&pool).await.unwrap();
+    // No keys → Open Library is the keyless fallback after Google Books.
+    assert_eq!(
+        plan,
+        vec![SummarySource::GoogleBooks, SummarySource::OpenLibrary]
+    );
+}
+
+#[tokio::test]
+async fn summary_source_plan_leads_with_hardcover_when_only_its_key_is_set() {
+    let _env = clear_key_env();
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    set_hardcover_api_key(&pool, Some("hc_test_key_1234567890"))
+        .await
+        .unwrap();
+    let plan = summary_source_plan(&pool).await.unwrap();
+    // A key exists, so Open Library is dropped.
+    assert_eq!(
+        plan,
+        vec![SummarySource::Hardcover, SummarySource::GoogleBooks]
+    );
+}
+
+#[tokio::test]
+async fn summary_source_plan_drops_openlibrary_when_only_googlebooks_key_is_set() {
+    let _env = clear_key_env();
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    set_google_books_api_key(&pool, Some("gb_test_key"))
+        .await
+        .unwrap();
+    let plan = summary_source_plan(&pool).await.unwrap();
+    assert_eq!(plan, vec![SummarySource::GoogleBooks]);
+}
+
+#[tokio::test]
+async fn summary_source_plan_uses_hardcover_and_googlebooks_when_both_keys_are_set() {
+    let _env = clear_key_env();
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    set_hardcover_api_key(&pool, Some("hc_test_key_1234567890"))
+        .await
+        .unwrap();
+    set_google_books_api_key(&pool, Some("gb_test_key"))
+        .await
+        .unwrap();
+    let plan = summary_source_plan(&pool).await.unwrap();
+    assert_eq!(
+        plan,
+        vec![SummarySource::Hardcover, SummarySource::GoogleBooks]
+    );
 }
