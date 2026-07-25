@@ -282,12 +282,17 @@ pub(crate) async fn remap_queued(temp_id: i64, real_id: i64) {
 
 /// Queue a reading/listening position write.
 pub(crate) async fn queue_save_progress(update: &ProgressUpdate) -> Option<ProgressRecord> {
+    let now = store::now_secs();
     let record = ProgressRecord {
         book_uuid: update.book_uuid.clone(),
         format: update.format,
         epub_cfi: update.epub_cfi.clone(),
         audio_position_seconds: update.audio_position_seconds,
-        updated_at: store::now_secs(),
+        updated_at: now,
+        // Optimistic local record: mirrors the server's own COALESCE (issue
+        // #1362) — the update's own client event time when it sent one,
+        // else "now".
+        client_updated_at: update.client_updated_at.unwrap_or(now),
     };
     let queued = enqueue(Op::SaveProgress {
         update: update.clone(),
