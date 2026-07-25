@@ -20,7 +20,7 @@ The `playwright-driver.browsers` package in [flake.nix](../../flake.nix) provide
 
 ## Reporters — `list` + `junit`
 
-[`playwright.config.ts`](../../ui_tests/playwright/playwright.config.ts) configures both a `list` reporter (console) and a `junit` reporter (`results.xml`). The JUnit output feeds Codecov Test Analytics — don't drop it. CI ([`e2e.yml`](../../.github/workflows/e2e.yml)) overrides the reporter on the CLI (`--reporter=list,blob,junit`), adds `blob` for the merged HTML report, and sets `PLAYWRIGHT_JUNIT_OUTPUT_NAME` per shard before uploading via `codecov/test-results-action@v1`.
+[`playwright.config.ts`](../../ui_tests/playwright/playwright.config.ts) configures both a `list` reporter (console) and a `junit` reporter (`results.xml`). The JUnit output feeds Codecov Test Analytics — don't drop it. CI ([`e2e.yml`](../../.github/workflows/e2e.yml)) overrides the reporter on the CLI (`--reporter=list,blob,junit`), adds `blob` for the merged HTML report, and sets `PLAYWRIGHT_JUNIT_OUTPUT_NAME` per shard before uploading via `codecov/codecov-action@v5` (`report_type: test_results`).
 
 ## Style — functional helpers + fixtures
 

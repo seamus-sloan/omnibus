@@ -275,10 +275,12 @@ jobs:
       # of the analytics); this never affects the gated job status.
       - name: Upload test results to Codecov
         if: ${{ !cancelled() && hashFiles('target/nextest/ci/junit.xml') != '' }}
-        uses: codecov/test-results-action@v1
+        uses: codecov/codecov-action@v5
         with:
           files: ./target/nextest/ci/junit.xml
+          report_type: test_results
           flags: unit
+          fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
 
   security:

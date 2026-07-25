@@ -95,7 +95,7 @@ jobs:
     permissions:
       contents: read
       actions: write
-      # Codecov's tokenless OIDC upload path (test-results-action below).
+      # Codecov's tokenless OIDC upload path (test-results upload below).
       id-token: write
     env:
       CARGO_TARGET_DIR: ./target
@@ -249,10 +249,12 @@ jobs:
       # Same JUnit report → Codecov Test Analytics. Best-effort; never gates.
       - name: Upload test results to Codecov
         if: ${{ !cancelled() && hashFiles('maestro-report.xml') != '' }}
-        uses: codecov/test-results-action@v1
+        uses: codecov/codecov-action@v5
         with:
           files: maestro-report.xml
+          report_type: test_results
           flags: mobile
+          fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Report suite attempts
