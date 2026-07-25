@@ -18,7 +18,10 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  reporter: "list",
+  // `list` for readable console output; `junit` for Codecov Test Analytics.
+  // CI overrides this via `--reporter=…` (it also adds `blob` for the merged
+  // HTML report and sets PLAYWRIGHT_JUNIT_OUTPUT_NAME per shard).
+  reporter: [["list"], ["junit", { outputFile: "results.xml" }]],
   // Most specs seed in a `beforeAll` that polls the indexer for up to 45s
   // (see `pollForBookCount` — cold GitHub-runner indexing of the full
   // public-domain set measured 27–36s). Hooks inherit the test timeout, so
