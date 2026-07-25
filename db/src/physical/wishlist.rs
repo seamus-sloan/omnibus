@@ -2,9 +2,8 @@
 //! a user can wishlist a book whose EPUB they already have. Unique per
 //! `(user_id, book_uuid)`, so re-wishlisting is idempotent.
 
-use sqlx::SqlitePool;
-
 use omnibus_shared::physical::{WishlistEntry, WishlistSource};
+use sqlx::SqlitePool;
 
 use super::PhysicalError;
 use crate::books::resolve_canonical_book_uuid;

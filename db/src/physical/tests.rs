@@ -491,6 +491,70 @@ async fn create_fileless_book_links_authors_above_the_sqlite_bind_cap() {
     assert_eq!(linked, authors);
 }
 
+#[tokio::test]
+async fn create_fileless_book_returns_cover_error_when_cover_dir_path_is_a_file() {
+    let covers = CoversTempDir::new("fileless_cover_error");
+    // Occupy the covers-dir path with a regular file so `write_cover_file`'s
+    // `create_dir_all` fails — the io-failure path `PhysicalError::Cover` wraps.
+    std::fs::write(&covers.path, b"not a directory").unwrap();
+    let pool = pool().await;
+
+    let err = create_fileless_book(
+        &pool,
+        FilelessBook {
+            title: "Broken Cover".into(),
+            authors: vec![],
+            isbn: None,
+            pubdate: None,
+            description: None,
+            cover: Some(FilelessCover {
+                mime: "image/gif".into(),
+                bytes: GIF_1X1.to_vec(),
+            }),
+        },
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(err, PhysicalError::Cover(_)));
+    // The whole transaction rolls back rather than leaving a `has_cover` row
+    // with no file on disk.
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM books").await, 0);
+}
+
+#[tokio::test]
+async fn create_fileless_book_is_searchable_via_fts() {
+    let _covers = CoversTempDir::new("fileless_fts");
+    let pool = pool().await;
+
+    let uuid = create_fileless_book(
+        &pool,
+        FilelessBook {
+            title: "Unsearchable No More".into(),
+            authors: vec!["Fts Author".into()],
+            isbn: None,
+            pubdate: None,
+            description: None,
+            cover: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let book_id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE uuid = ?1")
+        .bind(&uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let hits: Vec<i64> = sqlx::query_scalar("SELECT rowid FROM books_fts WHERE books_fts MATCH ?1")
+        .bind("Unsearchable")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(hits, vec![book_id]);
+}
+
 /// Minimal valid 1x1 GIF87a — enough for `image` to sniff and write `<uuid>.gif`.
 const GIF_1X1: &[u8] = &[
     0x47, 0x49, 0x46, 0x38, 0x37, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00,
