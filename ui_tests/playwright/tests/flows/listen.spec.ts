@@ -165,6 +165,31 @@ test("persists playback speed per audiobook across reloads", async ({
   await waitForPlayerReady(page);
   await expect(page.getByTestId("listen-rate")).toHaveText("1.50×");
 
+  // The UI label alone is not proof of restored speed: the regression was
+  // that the label showed 1.50× while the audio element played at 1.0,
+  // because a media load() resets playbackRate to its default. Assert the
+  // element's actual rate — it only survives if the shim re-applies the
+  // tracked rate on loadedmetadata.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            (
+              document.getElementById(
+                "omnibus-audio",
+              ) as HTMLAudioElement | null
+            )?.playbackRate ?? null,
+        ),
+      {
+        message:
+          "audio element should actually play at the restored 1.5× after reload",
+        timeout: 10_000,
+        intervals: [50, 100, 250, 500],
+      },
+    )
+    .toBe(1.5);
+
   await gotoReady(page, `/listen/${uuidB}`);
   await waitForPlayerReady(page);
   await expect(page.getByTestId("listen-rate")).toHaveText("1.00×");
