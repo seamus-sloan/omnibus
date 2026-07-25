@@ -31,6 +31,7 @@ pub(super) fn control_surface_js(rate_lit: &str, vol_lit: &str, uuid_lit: &str) 
 {hls_init}
 
       _uuid: {uuid_lit},
+      _rate: {rate_lit},
     }};
   }}
   mount();
@@ -60,7 +61,10 @@ fn transport_controls_js() -> &'static str {
       play:    function(){ var p = el.play(); if (p && p.catch) p.catch(function(){}); },
       pause:   function(){ el.pause(); },
       toggle:  function(){ if (el.paused) { this.play(); } else { this.pause(); } },
-      setRate: function(r){ try { el.playbackRate = r; } catch(_) {} },
+      // Track the rate on the shim as well as the element: a media `load()`
+      // (new src / part swap / HLS attach) resets `el.playbackRate` to 1.0,
+      // and the `loadedmetadata` listener re-applies this tracked value.
+      setRate: function(r){ try { el.playbackRate = r; this._rate = r; } catch(_) {} },
       // User volume slider + sleep-timer fade both drive this. Clamps to
       // [0,1]; the Rust countdown ramps it down over the final seconds and
       // restores the user's chosen volume (not always 1.0) on cancel/expiry.
@@ -165,6 +169,12 @@ fn listeners_js() -> &'static str {
       // duration. For direct mode we always report the book-level total
       // so a part change does not collapse the scrub bar to per-part.
       var oa = window.OmnibusAudio;
+      // A media `load()` resets playbackRate to defaultPlaybackRate (1.0),
+      // so re-apply the tracked rate on every load — otherwise a restored
+      // speed shows in the UI but plays at 1.0 until the user re-picks it.
+      if (oa && typeof oa._rate === 'number') {
+        try { el.playbackRate = oa._rate; } catch(_) {}
+      }
       if (window.__omnibusOnAudioDuration) {
         var d = (oa && oa._mode === 'direct' && oa._totalDuration > 0)
           ? oa._totalDuration
@@ -318,6 +328,16 @@ mod tests {
         assert!(js.contains("el.playbackRate = 1.25;"));
         assert!(js.contains("el.volume = 0.6;"));
         assert!(js.contains("_uuid: \"abc-123\","));
+        // The shim tracks the rate so a media `load()` reset can be undone.
+        assert!(js.contains("_rate: 1.25,"), "initial _rate seed missing");
+        assert!(
+            js.contains("el.playbackRate = oa._rate;"),
+            "loadedmetadata rate re-apply missing"
+        );
+        assert!(
+            js.contains("this._rate = r;"),
+            "setRate does not track _rate"
+        );
         // Each pure JS segment contributed its signature substring.
         assert!(
             js.contains("SPA-nav from another page"),
