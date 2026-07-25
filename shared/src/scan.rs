@@ -31,6 +31,10 @@ pub struct ScanBook {
 pub enum ScanOutcome {
     /// Exact identifier hit; the book already has a physical copy.
     AlreadyOwned { book: ScanBook },
+    /// Exact identifier hit; on the caller's physical wishlist (no physical
+    /// copy yet). Routes to the book's detail page, like [`Self::AlreadyOwned`]
+    /// — the reader already tracks this one, so don't offer to check it in blind.
+    OnWishlist { book: ScanBook },
     /// Exact identifier hit; in the library digitally, no physical copy yet.
     InLibraryUnowned { book: ScanBook },
     /// Online-resolved and (title, author)-matched a library book — needs a

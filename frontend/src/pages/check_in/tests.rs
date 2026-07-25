@@ -94,6 +94,12 @@ fn stage_for_already_owned_yields_no_stage_so_the_caller_navigates() {
 }
 
 #[test]
+fn stage_for_on_wishlist_yields_no_stage_so_the_caller_navigates() {
+    let outcome = ScanOutcome::OnWishlist { book: scan_book() };
+    assert!(stage_for(outcome, "9780441013593").is_none());
+}
+
+#[test]
 fn stage_for_in_library_unowned_opens_the_check_in_confirm() {
     let outcome = ScanOutcome::InLibraryUnowned { book: scan_book() };
     let Some(Stage::Confirm { book, isbn }) = stage_for(outcome, "9780441013593") else {

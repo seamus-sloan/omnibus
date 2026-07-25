@@ -11,7 +11,9 @@ use omnibus_shared::scan::ScanOutcome;
 use super::*;
 use crate::metadata_lookup::{MetadataLookupConfig, MetadataLookupError};
 use crate::normalize::{normalize_author, normalize_title};
-use crate::physical::{add_physical_copy, list_physical_copies, list_wishlist, PhysicalError};
+use crate::physical::{
+    add_physical_copy, add_wishlist_entry, list_physical_copies, list_wishlist, PhysicalError,
+};
 use omnibus_shared::{Contributor, MetadataOverrides};
 use serde_json::json;
 use std::time::Duration;
@@ -19,6 +21,11 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const ISBN: &str = "9780134685991";
+
+/// A resolving user for tests that don't exercise the wishlist branch. The
+/// wishlist lookup is scoped by this id; with no entry seeded it resolves to
+/// `None`, so the id needn't reference a real user for those cases.
+const USER_ID: i64 = 1;
 
 async fn pool() -> SqlitePool {
     crate::pool::init_db("sqlite::memory:").await.unwrap()
@@ -178,7 +185,7 @@ async fn resolve_exact_isbn_returns_in_library_unowned() {
     seed_book(&pool, "u1", "Effective Java", "Joshua Bloch", Some(ISBN)).await;
     let server = MockServer::start().await; // must not be hit
 
-    let outcome = resolve_scan(&pool, ISBN, &config_for(&server))
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
         .await
         .unwrap();
     match outcome {
@@ -200,7 +207,7 @@ async fn resolve_exact_isbn_returns_already_owned_when_physical_exists() {
         .unwrap();
     let server = MockServer::start().await;
 
-    let outcome = resolve_scan(&pool, ISBN, &config_for(&server))
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
         .await
         .unwrap();
     assert!(matches!(
@@ -210,13 +217,51 @@ async fn resolve_exact_isbn_returns_already_owned_when_physical_exists() {
 }
 
 #[tokio::test]
+async fn resolve_exact_isbn_returns_on_wishlist_when_caller_wishlists_it() {
+    let pool = pool().await;
+    seed_book(&pool, "u1", "Effective Java", "Joshua Bloch", Some(ISBN)).await;
+    let user = seed_user(&pool, "reader").await;
+    add_wishlist_entry(&pool, user, "u1", WishlistSource::Manual)
+        .await
+        .unwrap();
+    let server = MockServer::start().await; // must not be hit
+
+    let outcome = resolve_scan(&pool, user, ISBN, &config_for(&server))
+        .await
+        .unwrap();
+    assert!(
+        matches!(outcome, ScanOutcome::OnWishlist { book } if book.uuid == "u1"),
+        "a wishlisted book should route to its detail page, not the check-in confirm",
+    );
+}
+
+#[tokio::test]
+async fn resolve_exact_isbn_ignores_another_users_wishlist() {
+    // The wishlist is per-user: a book someone *else* wishlists is still an
+    // InLibraryUnowned confirm for this caller.
+    let pool = pool().await;
+    seed_book(&pool, "u1", "Effective Java", "Joshua Bloch", Some(ISBN)).await;
+    let owner = seed_user(&pool, "owner").await;
+    let other = seed_user(&pool, "other").await;
+    add_wishlist_entry(&pool, owner, "u1", WishlistSource::Manual)
+        .await
+        .unwrap();
+    let server = MockServer::start().await;
+
+    let outcome = resolve_scan(&pool, other, ISBN, &config_for(&server))
+        .await
+        .unwrap();
+    assert!(matches!(outcome, ScanOutcome::InLibraryUnowned { .. }));
+}
+
+#[tokio::test]
 async fn resolve_exact_isbn_leaves_book_isbn_unset() {
     // find_book_by_isbn no longer computes isbn — nothing on this rung reads it.
     let pool = pool().await;
     seed_book(&pool, "u1", "Effective Java", "Joshua Bloch", Some(ISBN)).await;
     let server = MockServer::start().await; // must not be hit
 
-    let outcome = resolve_scan(&pool, ISBN, &config_for(&server))
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
         .await
         .unwrap();
     match outcome {
@@ -244,7 +289,7 @@ async fn resolve_exact_isbn_tolerates_urn_scheme_and_separators() {
     .unwrap();
     let server = MockServer::start().await; // must not be hit
 
-    let outcome = resolve_scan(&pool, ISBN, &config_for(&server))
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
         .await
         .unwrap();
     assert!(matches!(
@@ -261,7 +306,7 @@ async fn resolve_close_match_via_online_then_norm() {
     let server = MockServer::start().await;
     mount_ol_hit(&server, "Effective Java", "Joshua Bloch").await;
 
-    let outcome = resolve_scan(&pool, ISBN, &config_for(&server))
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
         .await
         .unwrap();
     match outcome {
@@ -295,7 +340,7 @@ async fn resolve_close_match_carries_the_library_editions_isbn() {
     let server = MockServer::start().await;
     mount_ol_hit(&server, "Effective Java", "Joshua Bloch").await;
 
-    let outcome = resolve_scan(&pool, ISBN, &config_for(&server))
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
         .await
         .unwrap();
     match outcome {
@@ -326,7 +371,7 @@ async fn resolve_leaves_the_isbn_unset_when_the_book_has_no_thirteen_digit_one()
     let server = MockServer::start().await;
     mount_ol_hit(&server, "Effective Java", "Joshua Bloch").await;
 
-    let outcome = resolve_scan(&pool, ISBN, &config_for(&server))
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
         .await
         .unwrap();
     match outcome {
@@ -360,7 +405,7 @@ async fn resolve_close_match_uses_edited_override_title_not_scanned() {
     let server = MockServer::start().await;
     mount_ol_hit(&server, "The Name of the Wind", "Patrick Rothfuss").await;
 
-    let outcome = resolve_scan(&pool, ISBN, &config_for(&server))
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
         .await
         .unwrap();
     assert!(
@@ -385,7 +430,7 @@ async fn resolve_close_match_tolerates_series_subtitle_on_scanned_title() {
     let server = MockServer::start().await;
     mount_ol_hit(&server, "The Name of the Wind", "Patrick Rothfuss").await;
 
-    let outcome = resolve_scan(&pool, ISBN, &config_for(&server))
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
         .await
         .unwrap();
     assert!(
@@ -419,7 +464,7 @@ async fn resolve_norm_prefers_exact_over_ambiguous_tolerant_matches() {
     let server = MockServer::start().await;
     mount_ol_hit(&server, "The Name of the Wind", "Patrick Rothfuss").await;
 
-    let outcome = resolve_scan(&pool, ISBN, &config_for(&server))
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
         .await
         .unwrap();
     assert!(
@@ -438,7 +483,7 @@ async fn resolve_not_in_library_when_two_books_share_the_norm() {
     let server = MockServer::start().await;
     mount_ol_hit(&server, "Effective Java", "Joshua Bloch").await;
 
-    let outcome = resolve_scan(&pool, ISBN, &config_for(&server))
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
         .await
         .unwrap();
     assert!(matches!(outcome, ScanOutcome::NotInLibrary { .. }));
@@ -493,7 +538,7 @@ async fn backfill_override_norms_repairs_a_row_written_before_migration_0048() {
 
     let server = MockServer::start().await;
     mount_ol_hit(&server, "The Name of the Wind", "Patrick Rothfuss").await;
-    let outcome = resolve_scan(&pool, ISBN, &config_for(&server))
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
         .await
         .unwrap();
     assert!(
@@ -508,7 +553,7 @@ async fn resolve_not_in_library_when_online_only() {
     let server = MockServer::start().await;
     mount_ol_hit(&server, "Some Other Book", "Nobody Here").await;
 
-    let outcome = resolve_scan(&pool, ISBN, &config_for(&server))
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
         .await
         .unwrap();
     assert!(matches!(outcome, ScanOutcome::NotInLibrary { .. }));
@@ -520,7 +565,7 @@ async fn resolve_unresolved_when_both_providers_miss() {
     let server = MockServer::start().await;
     mount_both_miss(&server).await;
 
-    let outcome = resolve_scan(&pool, ISBN, &config_for(&server))
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
         .await
         .unwrap();
     assert!(matches!(outcome, ScanOutcome::Unresolved));
@@ -530,7 +575,7 @@ async fn resolve_unresolved_when_both_providers_miss() {
 async fn resolve_rejects_invalid_isbn() {
     let pool = pool().await;
     let server = MockServer::start().await;
-    let err = resolve_scan(&pool, "12345", &config_for(&server))
+    let err = resolve_scan(&pool, USER_ID, "12345", &config_for(&server))
         .await
         .unwrap_err();
     assert!(matches!(err, ScanError::Isbn(_)));
@@ -561,7 +606,7 @@ async fn add_physical_only_creates_fileless_book_with_copy() {
     assert_eq!(copies[0].isbn.as_deref(), Some(ISBN));
     // The book resolves by its ISBN now (exact rung).
     let server = MockServer::start().await;
-    let outcome = resolve_scan(&pool, ISBN, &config_for(&server))
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
         .await
         .unwrap();
     assert!(matches!(outcome, ScanOutcome::AlreadyOwned { .. }));
@@ -631,7 +676,7 @@ async fn resolve_scan_surfaces_lookup_error_when_both_providers_fail() {
         .mount(&server)
         .await;
 
-    let err = resolve_scan(&pool, ISBN, &config_for(&server))
+    let err = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
         .await
         .unwrap_err();
     assert!(
@@ -662,7 +707,7 @@ async fn resolve_scan_surfaces_sqlx_error_when_pool_is_closed() {
     pool.close().await;
     let server = MockServer::start().await; // must not be hit — the exact rung fails first
 
-    let err = resolve_scan(&pool, ISBN, &config_for(&server))
+    let err = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
         .await
         .unwrap_err();
     assert!(matches!(err, ScanError::Sqlx(_)), "got {err:?}");

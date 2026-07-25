@@ -13,6 +13,10 @@ commit log.
 
 ## [Unreleased]
 
+### Fixed
+
+- Scanning a book already on your wishlist now opens its detail page instead of the "you already have this one digitally" check-in screen
+
 ## [v0.11.4] - 2026-07-24
 
 ### Changed
