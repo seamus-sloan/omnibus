@@ -6,11 +6,20 @@
 use dioxus::prelude::*;
 use dioxus_router::use_navigator;
 
+use crate::pages::CheckInOpen;
 use crate::Route;
 
-/// One chooser row: where it routes, its highlight state, and its copy.
+/// What a chooser row does when tapped: navigate to a route, or raise the
+/// centered check-in overlay (which has no route of its own).
+#[derive(Clone)]
+enum AddAction {
+    Navigate(Route),
+    CheckIn,
+}
+
+/// One chooser row: what it does, its highlight state, and its copy.
 struct AddRow {
-    route: Route,
+    action: AddAction,
     primary: bool,
     title: &'static str,
     subtitle: &'static str,
@@ -25,23 +34,24 @@ pub(super) fn AddBooksSheet(open: Signal<bool>, on_close: EventHandler<()>) -> E
         return rsx!();
     }
     let nav = use_navigator();
+    let mut check_in_open = use_context::<CheckInOpen>().0;
     let rows = vec![
         AddRow {
-            route: Route::CheckIn {},
+            action: AddAction::CheckIn,
             primary: true,
             title: "Scan a barcode",
             subtitle: "Check in a book you own",
             icon: icon_scan(),
         },
         AddRow {
-            route: Route::AddBooks {},
+            action: AddAction::Navigate(Route::AddBooks {}),
             primary: false,
             title: "Upload a file",
             subtitle: "Add an EPUB from this device",
             icon: icon_upload(),
         },
         AddRow {
-            route: Route::CheckIn {},
+            action: AddAction::CheckIn,
             primary: false,
             title: "Enter an ISBN",
             subtitle: "Add a book by its number",
@@ -65,7 +75,7 @@ pub(super) fn AddBooksSheet(open: Signal<bool>, on_close: EventHandler<()>) -> E
                 div { class: "m-sheet-list",
                     for row in rows {
                         {
-                            let AddRow { route, primary, title, subtitle, icon } = row;
+                            let AddRow { action, primary, title, subtitle, icon } = row;
                             rsx! {
                                 button {
                                     key: "{title}",
@@ -74,7 +84,12 @@ pub(super) fn AddBooksSheet(open: Signal<bool>, on_close: EventHandler<()>) -> E
                                     "data-testid": "add-books-row",
                                     onclick: move |_| {
                                         on_close.call(());
-                                        nav.push(route.clone());
+                                        match &action {
+                                            AddAction::Navigate(route) => {
+                                                nav.push(route.clone());
+                                            }
+                                            AddAction::CheckIn => check_in_open.set(true),
+                                        }
                                     },
                                     span { class: "m-add-icon", {icon} }
                                     span { class: "m-add-body",
