@@ -1,5 +1,5 @@
 //! Unit tests for `friendly()`'s `DataError` → `DownloadError` mapping —
-//! the fix for the raw-error leak into `DownloadStatus::Error` (#1308).
+//! guards against a raw-error leak into `DownloadStatus::Error`.
 
 use super::*;
 use crate::data::DataError;

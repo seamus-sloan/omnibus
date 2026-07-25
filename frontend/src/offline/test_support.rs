@@ -1,9 +1,7 @@
 //! Shared test-only fixtures for the `offline` module tree: real `reqwest`
-//! errors produced against live sockets (a refused connect for the offline
-//! class, a garbage-body response for the decode class) so classifiers are
-//! exercised on the exact error values production sees. In-crate only (no
-//! `test-support` feature — nothing outside `omnibus-frontend` depends on
-//! this crate's test fixtures), so a plain `cfg(test)` is enough.
+//! errors produced against live sockets (refused-connect for the offline
+//! class, garbage-body for the decode class) so classifiers are exercised
+//! on the exact error values production sees.
 
 #![cfg(test)]
 

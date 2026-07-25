@@ -212,6 +212,10 @@ async fn download_file(
         DownloadError::ConnectionLost
     })?;
     let status = resp.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        tracing::warn!(status = status.as_u16(), url = %file.url_path, "offline download: request was unauthorized");
+        return Err(DownloadError::Unauthorized.into());
+    }
     if !status.is_success() {
         tracing::warn!(status = status.as_u16(), url = %file.url_path, "offline download: server returned a non-success status");
         return Err(DownloadError::ServerError.into());
