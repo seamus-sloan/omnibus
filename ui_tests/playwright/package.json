@@ -3,15 +3,21 @@
   "private": true,
   "version": "0.0.0",
   "description": "End-to-end UI tests for the omnibus server, using Playwright.",
+  "packageManager": "pnpm@11.1.2",
   "scripts": {
     "test": "playwright test",
-    "test:ui": "playwright test --ui"
+    "test:ui": "playwright test --ui",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write ."
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.5",
     "@playwright/test": "~1.59.0",
     "@types/node": "^22.10.0",
     "jszip": "^3.10.1",
     "tsx": "^4.21.0",
-    "typescript": "^5.7.0"
+    "typescript": "^7.0.0"
   }
 }

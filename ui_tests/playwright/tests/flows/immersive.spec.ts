@@ -7,6 +7,8 @@
 // one dual-format book (see `fixtures/dual_format.ts`). Both libraries are
 // therefore seeded here, as two sequential settings writes (mirroring
 // `mini-dock.spec.ts`).
+
+import type { APIRequestContext } from "@playwright/test";
 import { AUDIOBOOK_BOOK_COUNT } from "../fixtures/audiobooks";
 import { AUTO_ATTACHED_PAIRS, DUAL_FORMAT_BOOK } from "../fixtures/dual_format";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
@@ -18,7 +20,6 @@ import {
   seedAudiobookLibrary,
   seedLibrary,
 } from "../utils/seed";
-import type { APIRequestContext } from "@playwright/test";
 
 test.beforeAll(async ({ request }) => {
   // Two sequential seed polls (ebooks then audiobooks), up to 45s each, so
@@ -40,11 +41,15 @@ test.beforeAll(async ({ request }) => {
  * *and* an audio format, then return its uuid. Without this the Immersive
  * Read CTA (gated on `has_ebook && has_audio`) may not have rendered yet.
  */
-async function fetchDualFormatUuid(request: APIRequestContext): Promise<string> {
+async function fetchDualFormatUuid(
+  request: APIRequestContext,
+): Promise<string> {
   const isEbook = (f: string) => /^(epub|pdf)$/i.test(f);
   const isAudio = (f: string) => /^(mp3|m4b)$/i.test(f);
 
-  let match: { unique_identifier: string | null; formats: string[] } | undefined;
+  let match:
+    | { unique_identifier: string | null; formats: string[] }
+    | undefined;
   await expect
     .poll(
       async () => {
@@ -58,11 +63,8 @@ async function fetchDualFormatUuid(request: APIRequestContext): Promise<string> 
           }[];
         };
         match = body.books.find((b) => b.title === DUAL_FORMAT_BOOK.title);
-        return (
-          match !== undefined &&
-          match.formats.some(isEbook) &&
-          match.formats.some(isAudio)
-        );
+        if (match === undefined) return false;
+        return match.formats.some(isEbook) && match.formats.some(isAudio);
       },
       {
         message: `book ${JSON.stringify(DUAL_FORMAT_BOOK.title)} never surfaced with both an ebook and an audio format`,
@@ -73,7 +75,9 @@ async function fetchDualFormatUuid(request: APIRequestContext): Promise<string> 
     .toBe(true);
 
   if (!match?.unique_identifier) {
-    throw new Error(`dual-format book ${JSON.stringify(DUAL_FORMAT_BOOK.title)} is missing its uuid`);
+    throw new Error(
+      `dual-format book ${JSON.stringify(DUAL_FORMAT_BOOK.title)} is missing its uuid`,
+    );
   }
   return match.unique_identifier;
 }
@@ -124,7 +128,9 @@ test("Immersive Read opens the reader with the audiobook player docked", async (
   await expect(page.getByTestId("reader-viewer")).toBeVisible();
   const dock = page.getByTestId("mini-dock");
   await expect(dock).toBeVisible();
-  await expect(page.getByTestId("mini-dock-title")).toHaveText(DUAL_FORMAT_BOOK.title);
+  await expect(page.getByTestId("mini-dock-title")).toHaveText(
+    DUAL_FORMAT_BOOK.title,
+  );
 });
 
 // ---------------------------------------------------------------------------

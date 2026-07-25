@@ -1,7 +1,6 @@
 import type { Page } from "@playwright/test";
-
-import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
@@ -306,7 +305,10 @@ test("recolors an existing highlight from the drawer", async ({
   ).toHaveAttribute("aria-pressed", "false");
 });
 
-test("opens the reader from the book detail Read action", async ({ page, request }) => {
+test("opens the reader from the book detail Read action", async ({
+  page,
+  request,
+}) => {
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
   await gotoReady(page, `/books/${uuid}`);
 
@@ -377,10 +379,8 @@ test("restores the exact reading position when the reader is reopened", async ({
   // page-load triggered (hydration + epub render + settle + debounce), so
   // give the mutation waiter more room than a click gets.
   await gotoReady(page, `/books/${uuid}`);
-  await expectMutation(
-    page,
-    { ...PROGRESS_POST, timeout: 20_000 },
-    async () => gotoReady(page, `/read/${uuid}`),
+  await expectMutation(page, { ...PROGRESS_POST, timeout: 20_000 }, async () =>
+    gotoReady(page, `/read/${uuid}`),
   );
   await expect.poll(storedCfi, { timeout: 10_000 }).toBe(leftCfi);
   await expect
@@ -390,10 +390,8 @@ test("restores the exact reading position when the reader is reopened", async ({
   // And again: the first reopen must not have rewritten the stored position,
   // so a second reopen still lands on the same page (no cumulative drift).
   await gotoReady(page, `/books/${uuid}`);
-  await expectMutation(
-    page,
-    { ...PROGRESS_POST, timeout: 20_000 },
-    async () => gotoReady(page, `/read/${uuid}`),
+  await expectMutation(page, { ...PROGRESS_POST, timeout: 20_000 }, async () =>
+    gotoReady(page, `/read/${uuid}`),
   );
   await expect.poll(storedCfi, { timeout: 10_000 }).toBe(leftCfi);
   await expect
@@ -401,7 +399,10 @@ test("restores the exact reading position when the reader is reopened", async ({
     .toBe(leftAt);
 });
 
-test("keeps reading when the progress save POST fails", async ({ page, request }) => {
+test("keeps reading when the progress save POST fails", async ({
+  page,
+  request,
+}) => {
   const uuid = await fetchBookUuidByTitle(request, PROGRESS_ERR_BOOK.title);
 
   // Force 500 on every progress save from this page — armed before the first
@@ -482,7 +483,9 @@ test.describe("mobile reader (phone viewport)", () => {
     await page.getByTestId("reader-annotations").click();
     const sheet = page.getByTestId("reader-annotations-drawer");
     await expect(sheet).toBeVisible();
-    await expect(page.getByTestId("annotations-filter-bookmarks")).toBeVisible();
+    await expect(
+      page.getByTestId("annotations-filter-bookmarks"),
+    ).toBeVisible();
     await expect(page.getByTestId("reader-annotations-add")).toBeVisible();
 
     // Kind filter narrows to bookmarks (empty on the shared dev DB, so the

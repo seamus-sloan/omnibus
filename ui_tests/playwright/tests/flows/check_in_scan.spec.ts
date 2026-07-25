@@ -6,7 +6,10 @@ import { expectNavVisible, gotoReady } from "../utils/nav";
 // status (`GET /api/rpc/google-books-key`). Mock it so the note's two states
 // don't ride on ambient server config (another worker's settings save could
 // otherwise flip it mid-run).
-async function mockGoogleBooksKey(page: Page, configured: boolean): Promise<void> {
+async function mockGoogleBooksKey(
+  page: Page,
+  configured: boolean,
+): Promise<void> {
   await page.route("**/api/rpc/google-books-key", (route) => {
     if (route.request().method() !== "GET") return route.continue();
     return route.fulfill({
@@ -103,19 +106,27 @@ test.describe("check-in scanner", () => {
     await expect(page.getByTestId("check-in-scan")).toBeVisible();
   });
 
-  test("the cancel button exits the flow back to the library", async ({ page }) => {
+  test("the cancel button exits the flow back to the library", async ({
+    page,
+  }) => {
     await gotoReady(page, "/check-in");
     await expect(page.getByTestId("check-in")).toBeVisible();
 
     await page.getByTestId("check-in-close").click();
 
     await expect(page).toHaveURL(/\/$/);
-    await expect(page.getByRole("heading", { level: 1, name: "Your Library" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 1, name: "Your Library" }),
+    ).toBeVisible();
     await expect(page.getByTestId("check-in")).toHaveCount(0);
   });
 
-  test("shows the Open Library fallback note when no Google Books key is set", async ({ page }) => {
-    const responded = page.waitForResponse((r) => r.url().includes("/api/rpc/google-books-key"));
+  test("shows the Open Library fallback note when no Google Books key is set", async ({
+    page,
+  }) => {
+    const responded = page.waitForResponse((r) =>
+      r.url().includes("/api/rpc/google-books-key"),
+    );
     await mockGoogleBooksKey(page, false);
     await gotoReady(page, "/check-in");
     await responded;
@@ -128,8 +139,12 @@ test.describe("check-in scanner", () => {
     );
   });
 
-  test("hides the fallback note when a Google Books key is configured", async ({ page }) => {
-    const responded = page.waitForResponse((r) => r.url().includes("/api/rpc/google-books-key"));
+  test("hides the fallback note when a Google Books key is configured", async ({
+    page,
+  }) => {
+    const responded = page.waitForResponse((r) =>
+      r.url().includes("/api/rpc/google-books-key"),
+    );
     await mockGoogleBooksKey(page, true);
     await gotoReady(page, "/check-in");
     await responded;

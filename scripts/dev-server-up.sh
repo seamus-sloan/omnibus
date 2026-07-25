@@ -17,7 +17,7 @@
 #        .claude/runtime/port      -> "<chosen>"
 #        .claude/runtime/env.sh    -> exports OMNIBUS_PORT + PLAYWRIGHT_BASE_URL
 #      So Claude and humans can `source .claude/runtime/env.sh` before
-#      running `npx playwright test` or driving the preview.
+#      running `pnpm exec playwright test` or driving the preview.
 #
 # Re-running this script is safe — if /api/_health already says "omnibus"
 # at the chosen port, we just reuse and re-emit the runtime files.

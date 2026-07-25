@@ -12,7 +12,9 @@ const emailInput = (page: Page) => page.getByTestId("kindle-email-input");
 test("renders the account page layout", async ({ page }) => {
   await page.goto("/account");
 
-  await expect(page.getByRole("heading", { level: 1, name: "Account" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Account" }),
+  ).toBeVisible();
   await expect(page.getByTestId("account-kindle-card")).toBeVisible();
   await expect(emailInput(page)).toBeVisible();
   await expect(page.getByTestId("kindle-email-save")).toBeVisible();
@@ -37,18 +39,26 @@ test("saves the Kindle email and shows a success status", async ({ page }) => {
     async () => page.getByTestId("kindle-email-save").click(),
   );
 
-  await expect(page.getByTestId("kindle-email-status")).toHaveText("Kindle email saved.");
+  await expect(page.getByTestId("kindle-email-status")).toHaveText(
+    "Kindle email saved.",
+  );
   await expect(page.getByTestId("kindle-email-status")).toHaveClass(/success/);
 });
 
-test("shows an error status when saving the Kindle email fails", async ({ page }) => {
+test("shows an error status when saving the Kindle email fails", async ({
+  page,
+}) => {
   await gotoReady(page, "/account");
 
   await emailInput(page).fill("reader@kindle.com");
 
   await page.route("**/api/rpc/account/kindle-email", (route) => {
     if (route.request().method() === "POST") {
-      return route.fulfill({ status: 500, contentType: "text/plain", body: "forced failure" });
+      return route.fulfill({
+        status: 500,
+        contentType: "text/plain",
+        body: "forced failure",
+      });
     }
     return route.continue();
   });

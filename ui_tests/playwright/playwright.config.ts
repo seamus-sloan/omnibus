@@ -32,9 +32,9 @@ export default defineConfig({
     trace: "on-first-retry",
     screenshot: "only-on-failure",
     // Absolute path so the writer (`globalSetup`) and reader (test contexts)
-    // agree regardless of CWD — `npx playwright test -c …` from the repo
-    // root and `cd ui_tests/playwright && npx playwright test` both hit the
-    // same file.
+    // agree regardless of CWD — `pnpm exec playwright test -c …` from the
+    // repo root and `cd ui_tests/playwright && pnpm exec playwright test`
+    // both hit the same file.
     storageState: STORAGE_STATE_PATH,
     // Server-side `origin_check` middleware rejects cookie-authed
     // state-changing requests with no `Origin`/`Referer`. Playwright does

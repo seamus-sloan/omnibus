@@ -4,8 +4,10 @@ import { expectMutation } from "../utils/api";
 import { expectNavVisible, gotoReady } from "../utils/nav";
 
 const ebookInput = (page: Page) => page.getByLabel("Ebook Library Path");
-const audiobookInput = (page: Page) => page.getByLabel("Audiobook Library Path");
-const scanIntervalInput = (page: Page) => page.getByLabel("Automatic Rescan Interval (hours)");
+const audiobookInput = (page: Page) =>
+  page.getByLabel("Audiobook Library Path");
+const scanIntervalInput = (page: Page) =>
+  page.getByLabel("Automatic Rescan Interval (hours)");
 // Scope the Save button to the library-paths form — the page now also has a
 // "Suggestions (Hardcover)" card with its own Save button (F3.3), so an
 // unscoped `name: "Save"` would match both and trip Playwright strict mode.
@@ -21,21 +23,30 @@ const settingsStatus = (page: Page) => page.getByTestId("settings-status");
 // library-paths form's "Save" button (see `saveButton` above).
 const hardcoverKeyInput = (page: Page) => page.getByLabel("Hardcover API Key");
 const hardcoverSaveButton = (page: Page) => page.getByTestId("hardcover-save");
-const hardcoverClearButton = (page: Page) => page.getByTestId("hardcover-clear");
+const hardcoverClearButton = (page: Page) =>
+  page.getByTestId("hardcover-clear");
 const hardcoverStatus = (page: Page) => page.getByTestId("hardcover-status");
-const hardcoverMessage = (page: Page) => page.getByTestId("hardcover-key-status");
+const hardcoverMessage = (page: Page) =>
+  page.getByTestId("hardcover-key-status");
 // Google Books key card controls — testid-scoped for the same reason as the
 // Hardcover card (its own Save/Clear buttons would collide otherwise).
-const googleBooksKeyInput = (page: Page) => page.getByLabel("Google Books API Key");
-const googleBooksSaveButton = (page: Page) => page.getByTestId("google-books-save");
-const googleBooksClearButton = (page: Page) => page.getByTestId("google-books-clear");
-const googleBooksStatus = (page: Page) => page.getByTestId("google-books-status");
-const googleBooksMessage = (page: Page) => page.getByTestId("google-books-key-status");
+const googleBooksKeyInput = (page: Page) =>
+  page.getByLabel("Google Books API Key");
+const googleBooksSaveButton = (page: Page) =>
+  page.getByTestId("google-books-save");
+const googleBooksClearButton = (page: Page) =>
+  page.getByTestId("google-books-clear");
+const googleBooksStatus = (page: Page) =>
+  page.getByTestId("google-books-status");
+const googleBooksMessage = (page: Page) =>
+  page.getByTestId("google-books-key-status");
 
 test("renders the settings page layout", async ({ page }) => {
   await page.goto("/settings");
 
-  await expect(page.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Settings" }),
+  ).toBeVisible();
   await expect(ebookInput(page)).toBeVisible();
   await expect(audiobookInput(page)).toBeVisible();
   await expect(scanIntervalInput(page)).toBeVisible();
@@ -53,7 +64,9 @@ test("renders the settings page layout", async ({ page }) => {
   await expectNavVisible(page);
 });
 
-test("saves the SMTP config and shows a configured status", async ({ page }) => {
+test("saves the SMTP config and shows a configured status", async ({
+  page,
+}) => {
   await gotoReady(page, "/settings");
 
   await page.getByLabel("SMTP Host").fill("smtp.example.com");
@@ -89,7 +102,9 @@ test("saves the SMTP config and shows a configured status", async ({ page }) => 
     async () => page.getByTestId("smtp-save").click(),
   );
 
-  await expect(page.getByTestId("smtp-config-status")).toHaveText("SMTP settings saved.");
+  await expect(page.getByTestId("smtp-config-status")).toHaveText(
+    "SMTP settings saved.",
+  );
   await expect(page.getByTestId("smtp-status")).toContainText("Configured");
 });
 
@@ -122,7 +137,9 @@ test("saves library paths and shows a success status", async ({ page }) => {
   await expect(settingsStatus(page)).toHaveClass(/success/);
 });
 
-test("saves an automatic rescan interval alongside the library paths", async ({ page }) => {
+test("saves an automatic rescan interval alongside the library paths", async ({
+  page,
+}) => {
   await gotoReady(page, "/settings");
 
   const ebookPath = "/tmp/omnibus-test-ebooks";
@@ -213,7 +230,11 @@ test("shows an error status when saving settings fails", async ({ page }) => {
 
   await page.route("**/api/rpc/settings", (route) => {
     if (route.request().method() === "POST") {
-      return route.fulfill({ status: 500, contentType: "text/plain", body: "forced failure" });
+      return route.fulfill({
+        status: 500,
+        contentType: "text/plain",
+        body: "forced failure",
+      });
     }
     return route.continue();
   });
@@ -238,12 +259,18 @@ test("shows an error status when saving settings fails", async ({ page }) => {
   await expect(settingsStatus(page)).toHaveClass(/error/);
 });
 
-test("shows an error status when a manual library scan fails", async ({ page }) => {
+test("shows an error status when a manual library scan fails", async ({
+  page,
+}) => {
   await gotoReady(page, "/settings");
 
   await page.route("**/api/rpc/scan-library", (route) => {
     if (route.request().method() === "POST") {
-      return route.fulfill({ status: 500, contentType: "text/plain", body: "forced failure" });
+      return route.fulfill({
+        status: 500,
+        contentType: "text/plain",
+        body: "forced failure",
+      });
     }
     return route.continue();
   });
@@ -254,7 +281,9 @@ test("shows an error status when a manual library scan fails", async ({ page }) 
     async () => page.getByTestId("scan-library").click(),
   );
 
-  await expect(settingsStatus(page)).toContainText("Failed to start library scan");
+  await expect(settingsStatus(page)).toContainText(
+    "Failed to start library scan",
+  );
   await expect(settingsStatus(page)).toHaveClass(/error/);
 });
 
@@ -262,7 +291,9 @@ test("shows an error status when a manual library scan fails", async ({ page }) 
 // Action — F3.3 Hardcover key save/clear
 // ---------------------------------------------------------------------------
 
-test("saves a Hardcover key, shows a connected status, then clears it", async ({ page }) => {
+test("saves a Hardcover key, shows a connected status, then clears it", async ({
+  page,
+}) => {
   await gotoReady(page, "/settings");
 
   const key = `hc_test_${Date.now()}`;
@@ -303,14 +334,20 @@ test("saves a Hardcover key, shows a connected status, then clears it", async ({
   await expect(hardcoverClearButton(page)).toHaveCount(0);
 });
 
-test("shows an error status when saving the Hardcover key fails", async ({ page }) => {
+test("shows an error status when saving the Hardcover key fails", async ({
+  page,
+}) => {
   await gotoReady(page, "/settings");
 
   // Only fail the write — the mount-time GET status fetch must still pass
   // through, otherwise the card never renders the fields under test.
   await page.route("**/api/rpc/hardcover-key", (route) => {
     if (route.request().method() === "POST") {
-      return route.fulfill({ status: 500, contentType: "text/plain", body: "forced failure" });
+      return route.fulfill({
+        status: 500,
+        contentType: "text/plain",
+        body: "forced failure",
+      });
     }
     return route.continue();
   });
@@ -329,13 +366,17 @@ test("shows an error status when saving the Hardcover key fails", async ({ page 
     async () => hardcoverSaveButton(page).click(),
   );
 
-  await expect(hardcoverMessage(page)).toHaveText("Failed to save Hardcover key.");
+  await expect(hardcoverMessage(page)).toHaveText(
+    "Failed to save Hardcover key.",
+  );
   await expect(hardcoverMessage(page)).toHaveClass(/error/);
   // The failed save must not clear the admin's typed-in draft.
   await expect(hardcoverKeyInput(page)).toHaveValue(key);
 });
 
-test("saves a Google Books key, shows a connected status, then clears it", async ({ page }) => {
+test("saves a Google Books key, shows a connected status, then clears it", async ({
+  page,
+}) => {
   await gotoReady(page, "/settings");
 
   const key = `AIza_test_${Date.now()}`;
@@ -370,20 +411,28 @@ test("saves a Google Books key, shows a connected status, then clears it", async
     async () => googleBooksClearButton(page).click(),
   );
 
-  await expect(googleBooksMessage(page)).toHaveText("Google Books key cleared.");
+  await expect(googleBooksMessage(page)).toHaveText(
+    "Google Books key cleared.",
+  );
   await expect(googleBooksMessage(page)).toHaveClass(/success/);
   await expect(googleBooksStatus(page)).toContainText("Not connected");
   await expect(googleBooksClearButton(page)).toHaveCount(0);
 });
 
-test("shows an error status when saving the Google Books key fails", async ({ page }) => {
+test("shows an error status when saving the Google Books key fails", async ({
+  page,
+}) => {
   await gotoReady(page, "/settings");
 
   // Only fail the write — the mount-time GET status fetch must still pass
   // through, otherwise the card never renders the fields under test.
   await page.route("**/api/rpc/google-books-key", (route) => {
     if (route.request().method() === "POST") {
-      return route.fulfill({ status: 500, contentType: "text/plain", body: "forced failure" });
+      return route.fulfill({
+        status: 500,
+        contentType: "text/plain",
+        body: "forced failure",
+      });
     }
     return route.continue();
   });
@@ -402,7 +451,9 @@ test("shows an error status when saving the Google Books key fails", async ({ pa
     async () => googleBooksSaveButton(page).click(),
   );
 
-  await expect(googleBooksMessage(page)).toHaveText("Failed to save Google Books key.");
+  await expect(googleBooksMessage(page)).toHaveText(
+    "Failed to save Google Books key.",
+  );
   await expect(googleBooksMessage(page)).toHaveClass(/error/);
   // The failed save must not clear the admin's typed-in draft.
   await expect(googleBooksKeyInput(page)).toHaveValue(key);
