@@ -150,16 +150,26 @@ for (const sample of [
     await gotoReady(page, "/");
     await page.getByTestId("user-menu-trigger").click();
 
-    const card = page.getByRole("link", {
+    // Only the action link resumes reading/listening.
+    const action = page.getByRole("link", {
       name: `${sample.action} ${latest.title}`,
     });
-    await expect(card).toBeVisible();
+    await expect(action).toBeVisible();
     // The `/listen/:uuid?:file_id` route serializes an unset file_id as a bare
     // trailing `?`, so tolerate it (the `/read` destination stays clean).
-    await expect(card).toHaveAttribute(
+    await expect(action).toHaveAttribute(
       "href",
       new RegExp(`^/${sample.path}/${latest.uuid}\\??$`),
     );
+
+    // The cover and title instead route to the book detail page.
+    const details = page.getByRole("link", {
+      name: `View details for ${latest.title}`,
+    });
+    await expect(details).toHaveCount(2);
+    for (const detail of await details.all()) {
+      await expect(detail).toHaveAttribute("href", `/books/${latest.uuid}`);
+    }
   });
 }
 

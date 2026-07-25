@@ -2763,7 +2763,7 @@ a.idx-letter-on:focus-visible {
   border-radius: 10px; text-decoration: none; color: inherit;
 }
 @media (hover: hover) {
-  .um-now-reading[href]:hover {
+  .um-now-reading:has([href]:hover) {
     border-color: color-mix(in oklch, var(--accent) 55%, var(--line-2));
   }
 }
@@ -2775,6 +2775,7 @@ a.idx-letter-on:focus-visible {
 }
 .um-now-reading-state.error { color: var(--bad); }
 .um-nr-cover {
+  display: block;
   width: 44px; height: 64px; flex: 0 0 44px;
   background: color-mix(in oklch, var(--accent) 35%, var(--bg-3));
   border-radius: 3px;
@@ -2787,6 +2788,7 @@ a.idx-letter-on:focus-visible {
   height: 100%;
 }
 .um-nr-meta { display: flex; flex-direction: column; gap: 4px; flex: 1 1 auto; min-width: 0; }
+.um-nr-info { display: flex; flex-direction: column; gap: 4px; text-decoration: none; color: inherit; }
 .um-nr-title { font-family: var(--serif); font-style: italic; color: var(--ink-0); font-size: 14px; }
 .um-nr-author { color: var(--ink-2); font-size: 12px; }
 .um-nr-action {
@@ -2794,6 +2796,14 @@ a.idx-letter-on:focus-visible {
   color: var(--ink-2);
   font-family: var(--mono);
   font-size: 10px;
+}
+.um-nr-play {
+  align-self: center; flex: 0 0 34px; width: 34px; height: 34px;
+  border-radius: 999px; display: grid; place-items: center;
+  background: var(--accent); color: var(--accent-ink); text-decoration: none;
+}
+@media (hover: hover) {
+  .um-nr-play:hover { opacity: 0.9; }
 }
 
 /* Stat grid (stubs) */
@@ -4308,13 +4318,17 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 
 /* "Pick up where you left off" card. */
-.m-resume { display: block; margin-bottom: 16px; text-decoration: none; color: inherit; }
+.m-resume { display: block; margin-bottom: 16px; }
 .m-resume-kicker { display: block; margin-bottom: 8px; }
 .m-resume-card {
   display: flex; align-items: stretch; gap: 14px; padding: 12px;
   background: var(--bg-1); border: 1px solid var(--line-2); border-radius: 14px;
 }
-.m-resume:active .m-resume-card { background: var(--bg-2); }
+.m-resume-info {
+  flex: 1; min-width: 0; display: flex; align-items: stretch; gap: 14px;
+  text-decoration: none; color: inherit;
+}
+.m-resume-info:active { opacity: 0.6; }
 .m-resume-cover { width: 54px; flex: 0 0 54px; }
 .m-resume-cover .cover-caption { display: none; }
 .m-resume-body {
@@ -4339,6 +4353,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   display: grid; place-items: center;
   background: var(--accent); color: var(--accent-ink);
 }
+.m-resume-play:active { opacity: 0.85; }
 
 /* Sort & filter sheet internals. */
 .m-sheet-reset {
