@@ -133,6 +133,34 @@ fn render_opf_escapes_xml_special_characters_in_text_and_attributes() {
 }
 
 #[test]
+fn render_opf_strips_xml_illegal_control_chars_while_keeping_tab_lf_cr() {
+    let book = EbookMetadata {
+        filename: "x.epub".into(),
+        title: Some("Stray\u{1}Control".into()),
+        description: Some("Tab\tKept\nLF\rCR\u{c}Stripped".into()),
+        creators: vec![Contributor {
+            name: "Author\u{0}Name".into(),
+            role: None,
+            file_as: None,
+            id: None,
+        }],
+        unique_identifier: Some("uuid-1".into()),
+        ..Default::default()
+    };
+
+    let xml = render_opf(&book);
+    assert!(xml.contains("<dc:title>StrayControl</dc:title>"));
+    assert!(xml.contains("<dc:description>Tab\tKept\nLF\rCRStripped</dc:description>"));
+    assert!(xml.contains(">AuthorName</dc:creator>"));
+    // The document as a whole stays well-formed: no illegal control chars
+    // survive anywhere in the output.
+    assert!(!xml.chars().any(|c| matches!(
+        c,
+        '\u{0}'..='\u{8}' | '\u{B}'..='\u{C}' | '\u{E}'..='\u{1F}'
+    )));
+}
+
+#[test]
 fn render_opf_skips_duplicate_isbn_identifier_when_already_scanned() {
     let book = EbookMetadata {
         filename: "x.epub".into(),
