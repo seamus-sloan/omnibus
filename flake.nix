@@ -26,6 +26,10 @@
           fenix.packages.${system}.latest.rustfmt
           fenix.packages.${system}.latest.clippy
           fenix.packages.${system}.latest.rust-src
+          # llvm-profdata / llvm-cov backing cargo-llvm-cov (`just coverage`).
+          # Must match the rustc above — pinning both from the same fenix
+          # `latest` keeps the instrumentation and the profdata reader in lockstep.
+          fenix.packages.${system}.latest.llvm-tools-preview
           fenix.packages.${system}.targets.wasm32-unknown-unknown.latest.rust-std
         ];
 
@@ -144,6 +148,12 @@
           # in the same `just lint` shell as fmt/clippy; the nixpkgs build is
           # self-contained (bundles its own node), so this adds no npm project.
           pkgs.stylelint
+          # Coverage driver for `just coverage` / the CI coverage job. Wraps the
+          # LLVM source-based instrumentation; pairs with the llvm-tools-preview
+          # component in rustCore. In slim because it runs the same native test
+          # matrix as `just test`. From unstable because the stable-pinned
+          # nixpkgs marks cargo-llvm-cov broken.
+          pkgs-unstable.cargo-llvm-cov
         ];
 
         # Web-build extras: dioxus-cli + matched wasm-bindgen + node + pnpm +

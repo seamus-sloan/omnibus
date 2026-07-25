@@ -83,3 +83,10 @@ test_data/.fixtures-version
 # Python bytecode (scripts/*.py)
 __pycache__/
 *.pyc
+
+# Coverage report emitted by `just coverage` (cargo-llvm-cov). Uploaded to
+# Codecov in CI; regenerated on every run, never committed.
+/lcov.info
+
+# Xcode per-user state (window layout, selection) — machine-local, never tracked.
+**/xcuserdata/
