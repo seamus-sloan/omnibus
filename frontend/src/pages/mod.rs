@@ -11,6 +11,7 @@ mod author;
 mod authors_index;
 mod book_detail;
 mod check_in;
+mod index_shell;
 mod landing;
 mod listen;
 #[cfg(not(feature = "mobile"))]
