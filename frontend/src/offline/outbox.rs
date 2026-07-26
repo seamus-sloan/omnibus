@@ -2,7 +2,7 @@
 //! connectivity-class error (or is attempted while already offline) is
 //! queued here, applied optimistically to the replica cache, and replayed
 //! in enqueue order by the sync drain. Conflict stance is last-write-wins
-//! (docs/roadmap/2-1-progress-sync.md); offline-created rows carry
+//! offline-created rows carry
 //! negative client temp ids that remap to server ids on drain.
 
 use omnibus_shared::{
