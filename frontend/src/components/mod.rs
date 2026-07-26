@@ -67,6 +67,11 @@ pub use page_state::{PageError, PageLoading, PageNotFound};
 pub mod cover_tile;
 pub use cover_tile::{CoverTile, CoverTileKind};
 
+// Shared "pick books from the whole library" fetch/filter/grid, used by the
+// create-shelf hand-picked body and the shelf-detail "add books" modal.
+pub mod library_picker_grid;
+pub use library_picker_grid::{filter_library, use_library_fetch, LibraryPickerGrid};
+
 // F1.11 follow-up: hover-overlay "edit photo" affordance + modal with
 // three actions (paste URL, upload file, scan Open Library). Mounted by
 // the author detail hero only — the `/authors` index renders cached
