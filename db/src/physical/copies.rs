@@ -2,9 +2,8 @@
 //! check-in. A copy is shared by all users (like a digital file); a book can
 //! hold many, each individually deletable.
 
-use sqlx::SqlitePool;
-
 use omnibus_shared::physical::PhysicalCopy;
+use sqlx::SqlitePool;
 
 use super::PhysicalError;
 use crate::books::{resolve_canonical_book_uuid, resolve_canonical_book_uuid_exec};
