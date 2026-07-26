@@ -166,10 +166,15 @@ pub struct SessionReport {
 }
 
 impl SessionReport {
-    /// Reject empty UUIDs, inverted time ranges, and negative durations
-    /// before they reach the `reading_sessions` / `listening_sessions`
-    /// tables — these rows feed future stats / year-in-review, so a single
-    /// negative `progress_units` would skew aggregates indefinitely.
+    /// Maximum length (in chars) of a client-minted session id. Mirror of
+    /// [`CreateHighlight::CLIENT_ID_MAX_LEN`].
+    pub const CLIENT_ID_MAX_LEN: usize = CreateHighlight::CLIENT_ID_MAX_LEN;
+
+    /// Reject empty UUIDs, inverted time ranges, negative durations, and a
+    /// malformed `client_id` before they reach the `reading_sessions` /
+    /// `listening_sessions` tables — these rows feed future stats /
+    /// year-in-review, so a single negative `progress_units` would skew
+    /// aggregates indefinitely.
     pub fn validate(&self) -> Result<(), String> {
         if self.book_uuid.trim().is_empty() {
             return Err("book_uuid is required".into());
@@ -182,6 +187,20 @@ impl SessionReport {
         }
         if self.progress_units < 0 {
             return Err("progress_units must be non-negative".into());
+        }
+        // Same ceiling as the annotation handles: this one indexes a batched
+        // route, so an unbounded string would go straight into a unique
+        // index once per report in the batch.
+        if let Some(ref client_id) = self.client_id {
+            if client_id.trim().is_empty() {
+                return Err("client_id must not be blank".into());
+            }
+            if client_id.chars().count() > Self::CLIENT_ID_MAX_LEN {
+                return Err(format!(
+                    "client_id exceeds {} characters",
+                    Self::CLIENT_ID_MAX_LEN
+                ));
+            }
         }
         Ok(())
     }

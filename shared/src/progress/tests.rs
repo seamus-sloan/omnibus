@@ -117,3 +117,66 @@ fn session_report_rejects_negative_progress_units() {
         .expect_err("negative progress_units must be rejected");
     assert!(err.contains("progress_units"), "got: {err}");
 }
+
+#[test]
+fn session_report_rejects_blank_client_id() {
+    let r = SessionReport {
+        book_uuid: "x".into(),
+        format: ProgressFormat::Epub,
+        started_at: 100,
+        ended_at: 200,
+        progress_units: 10,
+        device_id: None,
+        client_id: Some("   ".into()),
+    };
+    let err = r.validate().expect_err("a blank handle must be rejected");
+    assert!(err.contains("client_id"), "got: {err}");
+}
+
+#[test]
+fn session_report_rejects_overlong_client_id() {
+    let r = SessionReport {
+        book_uuid: "x".into(),
+        format: ProgressFormat::Epub,
+        started_at: 100,
+        ended_at: 200,
+        progress_units: 10,
+        device_id: None,
+        client_id: Some("a".repeat(SessionReport::CLIENT_ID_MAX_LEN + 1)),
+    };
+    let err = r
+        .validate()
+        .expect_err("an over-length handle must be rejected");
+    assert!(err.contains("client_id"), "got: {err}");
+}
+
+#[test]
+fn session_report_accepts_a_client_id_at_the_cap() {
+    // Multibyte char: chars().count() == CLIENT_ID_MAX_LEN but len() (bytes)
+    // is double that, so a regression to a byte-length check would fail this.
+    let r = SessionReport {
+        book_uuid: "x".into(),
+        format: ProgressFormat::Epub,
+        started_at: 100,
+        ended_at: 200,
+        progress_units: 10,
+        device_id: None,
+        client_id: Some("é".repeat(SessionReport::CLIENT_ID_MAX_LEN)),
+    };
+    assert!(r.validate().is_ok());
+}
+
+#[test]
+fn session_report_accepts_a_missing_client_id() {
+    // Web posts once on unmount and never retries, so it mints no handle.
+    let r = SessionReport {
+        book_uuid: "x".into(),
+        format: ProgressFormat::Epub,
+        started_at: 100,
+        ended_at: 200,
+        progress_units: 10,
+        device_id: None,
+        client_id: None,
+    };
+    assert!(r.validate().is_ok());
+}
