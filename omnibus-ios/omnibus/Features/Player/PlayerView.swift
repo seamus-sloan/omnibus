@@ -5,9 +5,11 @@ import SwiftUI
 
 struct PlayerView: View {
     let book: Book
+    let fileID: Int64?
 
-    init(book: Book) {
+    init(book: Book, fileID: Int64? = nil) {
         self.book = book
+        self.fileID = fileID
     }
 
     @Environment(AudioPlayer.self) private var player
@@ -76,7 +78,7 @@ struct PlayerView: View {
             .containerRelativeFrame(.horizontal)
         }
         .background(ScreenBackground())
-        .task { await player.load(book: book) }
+        .task { await player.load(book: book, fileID: fileID) }
         .sheet(isPresented: $showChapters) { ChapterSheet() }
         .sheet(isPresented: $showBookmarks) { BookmarksSheet(book: book, isAudio: true) }
         .confirmationDialog("Playback speed", isPresented: $showSpeed, titleVisibility: .visible) {
@@ -393,7 +395,8 @@ struct MiniPlayerBar: View {
                 )
 
                 Button {
-                    Presentation.shared.openPlayer(book)
+                    // The file already playing, so expanding cannot reload it.
+                    Presentation.shared.openPlayer(book, fileID: player.fileID)
                 } label: {
                     HStack(spacing: 11) {
                         BookCover(identity: CoverIdentity(book), size: .sm, cornerRadius: 4)

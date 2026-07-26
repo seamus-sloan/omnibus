@@ -317,6 +317,110 @@ struct ProgressClockTests {
     }
 }
 
+// MARK: - Audiobook file selection
+
+@Suite("Progress file identity")
+struct ProgressFileIdentityTests {
+    private func encoded(_ update: ProgressUpdate) throws -> [String: Any] {
+        let data = try JSONEncoder().encode(update)
+        return try #require(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+    }
+
+    @Test("a position carries the file it was taken in")
+    func fileIdIsOnTheWire() throws {
+        // Two narrations of one book don't share a timeline; without the file
+        // id every resume lands the saved timestamp in the book's first file.
+        let update = ProgressUpdate(
+            bookUUID: "book-1", format: .audio,
+            epubCFI: nil, audioPositionSeconds: 42, bookFileID: 917
+        )
+        let object = try encoded(update)
+        #expect(object["book_file_id"] as? Int64 == 917)
+    }
+
+    @Test("an unknown file encodes as an absent field, not null")
+    func unknownFileIsOmitted() throws {
+        // A server that predates the column must see the payload it always
+        // has — the web client omits the field the same way.
+        let update = ProgressUpdate(
+            bookUUID: "book-1", format: .audio,
+            epubCFI: nil, audioPositionSeconds: 42
+        )
+        let object = try encoded(update)
+        #expect(object["book_file_id"] == nil)
+    }
+
+    @Test("a record decodes the file id, and its absence")
+    func recordDecodesTheFileId() throws {
+        let with = """
+            {"book_uuid":"b","format":"audio","audio_position_seconds":42,
+             "updated_at":7000,"book_file_id":917}
+            """
+        let without = """
+            {"book_uuid":"b","format":"audio","audio_position_seconds":42,
+             "updated_at":7000}
+            """
+        let recorded = try JSONDecoder().decode(ProgressRecord.self, from: Data(with.utf8))
+        let legacy = try JSONDecoder().decode(ProgressRecord.self, from: Data(without.utf8))
+        #expect(recorded.bookFileID == 917)
+        #expect(legacy.bookFileID == nil)
+    }
+}
+
+@Suite("Selectable audio files")
+struct AudioFileSelectionTests {
+    private func file(
+        _ id: Int64, format: String, ordinal: Int64
+    ) -> BookFileInfo {
+        BookFileInfo(
+            id: id, format: format, filename: "file-\(id).\(format.lowercased())",
+            ordinal: ordinal
+        )
+    }
+
+    @Test("only formats the manifest resolver admits are offered")
+    func onlyStreamableFormatsAreOffered() {
+        // `resolve_audiobook_file` filters on M4B / M4A / MP3 — offering a
+        // FLAC (or the epub of a dual-format book) as a choice would 404 the
+        // moment it was picked.
+        var book = Book(id: 1, filename: "b.epub")
+        book.bookFiles = [
+            file(1, format: "EPUB", ordinal: 0),
+            file(2, format: "M4B", ordinal: 0),
+            file(3, format: "FLAC", ordinal: 1),
+            file(4, format: "MP3", ordinal: 2),
+        ]
+        #expect(book.audioFiles.map(\.id) == [2, 4])
+    }
+
+    @Test("files come back in the order the server resolves them")
+    func filesAreOrderedByOrdinal() {
+        // The first of these is the server's default (no `file_id`), which is
+        // what makes "is the downloaded copy usable for this selection"
+        // answerable at all.
+        var book = Book(id: 1, filename: "b.m4b")
+        book.bookFiles = [
+            file(9, format: "M4B", ordinal: 2),
+            file(7, format: "M4B", ordinal: 0),
+            file(8, format: "M4A", ordinal: 1),
+        ]
+        #expect(book.audioFiles.map(\.id) == [7, 8, 9])
+    }
+
+    @Test("a manifest is cached per file, and the default key is unchanged")
+    func manifestKeysAreFileScoped() {
+        // One narration's timeline must never answer for another's — and the
+        // no-file key has to keep its old shape so manifests cached before
+        // selection existed (the download prefetch path) stay valid.
+        #expect(CacheKey.manifest("u") == "manifest:u")
+        #expect(CacheKey.manifest("u", fileID: nil) == "manifest:u")
+        #expect(CacheKey.manifest("u", fileID: 5) == "manifest:u:5")
+        #expect(CacheKey.manifest("u", fileID: 5) != CacheKey.manifest("u", fileID: 6))
+    }
+}
+
 // MARK: - Account scoping
 
 @Suite("User-scoped cache wipe")
@@ -366,8 +470,8 @@ struct UserScopedPrefixTests {
         // wiping them would re-download the whole mirror on every sign-in.
         for key in [
             CacheKey.library, CacheKey.authors, CacheKey.series, CacheKey.tags,
-            CacheKey.book(uuid), CacheKey.manifest(uuid), CacheKey.suggestions(uuid),
-            CacheKey.libraryPage("title.asc."),
+            CacheKey.book(uuid), CacheKey.manifest(uuid), CacheKey.manifest(uuid, fileID: 9),
+            CacheKey.suggestions(uuid), CacheKey.libraryPage("title.asc."),
         ] {
             let covered = OfflineStore.userScopedPrefixes.contains { key.hasPrefix($0) }
             #expect(!covered, "library-wide key \"\(key)\" is being wiped on account switch")

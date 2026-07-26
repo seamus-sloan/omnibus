@@ -40,7 +40,9 @@ struct ContinueReadingRail: View {
     private func open(_ point: ResumePoint) {
         switch point.record.format {
         case .audio:
-            Presentation.shared.openPlayer(point.book)
+            // Reopen the file the position was taken in, not the book's
+            // first one — two narrations don't share a timeline.
+            Presentation.shared.openPlayer(point.book, fileID: point.record.bookFileID)
         case .epub:
             Presentation.shared.openReader(point.book)
         }

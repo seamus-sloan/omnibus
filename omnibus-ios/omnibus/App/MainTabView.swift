@@ -71,7 +71,7 @@ struct MainTabView: View {
             ReaderView(book: session.book)
         }
         .fullScreenCover(item: playerBinding) { session in
-            PlayerView(book: session.book)
+            PlayerView(book: session.book, fileID: session.fileID)
         }
         // Presented here rather than at each Read/Listen button: the surfaces
         // being refused live above the tabs, and every entry point into them
@@ -129,6 +129,10 @@ final class TabReselect {
 /// A book opened into an immersive surface.
 struct ReaderSession: Identifiable, Equatable {
     let book: Book
+    /// The audiobook file to open, when a specific one was chosen or
+    /// resumed. `nil` lets the player resolve it (saved position, then the
+    /// server default). Reader sessions never set it.
+    var fileID: Int64?
     var id: String { book.uuid }
 }
 
@@ -167,13 +171,13 @@ final class Presentation {
         reader = ReaderSession(book: book)
     }
 
-    func openPlayer(_ book: Book) {
+    func openPlayer(_ book: Book, fileID: Int64? = nil) {
         guard canOpen(book, kind: .audio) else {
             unavailable = UnavailableBook(title: book.displayTitle, kind: .audio)
             return
         }
         reader = nil
-        player = ReaderSession(book: book)
+        player = ReaderSession(book: book, fileID: fileID)
     }
 
     /// Whether this format can actually be opened: the file is on the device,

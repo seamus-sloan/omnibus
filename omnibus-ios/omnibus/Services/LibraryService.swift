@@ -299,9 +299,17 @@ enum LibraryService {
     /// device goes offline — the audio file alone doesn't say how to lay it
     /// out on a timeline, so a downloaded audiobook whose manifest had never
     /// been fetched could not be opened without a network.
-    static func audiobookManifest(uuid: String) async throws -> AudiobookManifest {
-        try await Cache.settled(CacheKey.manifest(uuid)) {
-            try await APIClient.shared.get("/api/audiobooks/\(uuid)/manifest")
+    /// `fileID` targets one `book_files` row of a multi-file book; `nil` is
+    /// the server's default (first audio file by ordinal). The server 404s an
+    /// id that no longer names a file of this book — `book_files` rows churn
+    /// on reindex — and the caller decides whether to fall back.
+    static func audiobookManifest(uuid: String, fileID: Int64? = nil) async throws
+        -> AudiobookManifest
+    {
+        var query: [String: String?] = [:]
+        if let fileID { query["file_id"] = String(fileID) }
+        return try await Cache.settled(CacheKey.manifest(uuid, fileID: fileID)) {
+            try await APIClient.shared.get("/api/audiobooks/\(uuid)/manifest", query: query)
         }
     }
 
