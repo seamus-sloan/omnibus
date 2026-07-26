@@ -39,6 +39,8 @@ Do not use Chrome DevTools MCP or Claude in Chrome for routine agent verificatio
 
 Five-crate Cargo workspace: `shared/` (serde types), `db/` (data layer + indexer), `frontend/` (Dioxus UI + server functions), `server/` (fullstack binary + REST router), `mobile/` (thin native shell).
 
+Alongside it, `omnibus-ios/` is a native SwiftUI client — an Xcode project, not a Cargo crate, so no `cargo`/`just` target builds or tests it. It is the iOS surface going forward; `mobile/` remains the Android shell. It speaks the same `/api/*` REST surface.
+
 Full crate descriptions, per-crate module maps, request flow diagrams, and mobile-auth details live in [docs/architecture.md](docs/architecture.md).
 
 ## Version control

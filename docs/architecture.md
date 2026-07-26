@@ -223,3 +223,54 @@ derived from the imported cert, and zips a `Payload/` `.ipa` that
 `mobile/Dioxus.toml`. Signing is six CI-only repo secrets (distribution
 cert + password, provisioning profile, App Store Connect API key + key-id
 + issuer-id) — enumerated in the workflow file's header comment.
+
+## omnibus-ios/
+
+Native SwiftUI client, and the iOS surface going forward — an Xcode project
+(`omnibus-ios/omnibus.xcodeproj`), **not** a Cargo crate, so it is invisible to
+`cargo build` / `just lint` / `just test`. It consumes the same `/api/*` REST
+surface as `mobile/`, never the `/api/rpc/*` server functions.
+
+```
+omnibusApp.swift    — @main OmnibusApp: audio session + appearance bootstrap
+App/                — AppState (server URL, auth, theme), RootView phase router
+                      (launching → connect → login → tabs), MainTabView shell +
+                      destination routing + global reader/player presentation
+Design/             — Theme (Atrium tokens), OKLCH↔sRGB conversion for
+                      server-provided accents, Motion (shared curves), and
+                      Components/ (BookCover, RemoteImage, Plate, SearchField,
+                      OmnibusTabBar, Masthead, FlowLayout, TopEdgeScrim)
+Features/           — one directory per surface: Account, AddBooks, Auth,
+                      BookDetail, CheckIn, Discovery, Library, Player, Search,
+                      Settings, Shelves, Stats
+Models/             — Codable mirrors of the `shared/` wire DTOs
+Networking/         — APIClient, keychain-backed TokenStore
+Offline/            — Cache (read-through policies), OfflineStore (SQLite
+                      replica), DownloadManager, SyncEngine (the mutation
+                      outbox — see rule 08), Connectivity
+Reader/             — SwiftUI reader chrome + annotation menu, over Web/
+                      (vendored epub.js + JSZip + glue, hosted in a WKWebView)
+Services/           — AuthService, LibraryService, UserDataService
+```
+
+**Why the reader is a WebView.** iOS ships no EPUB renderer, and epub.js already
+produces the CFI positions the server's `epub_cfi` / `epub_cfi_range` contract
+expects — so replacing it would mean reimplementing pagination *and* CFI
+generation compatibly. Assets and book bytes are served over a custom
+`omnibus-reader://` scheme so epub.js sees one same-origin space and needs no
+cookie. Everything around it — chrome, gestures, sheets, persistence — is
+native.
+
+**The glue is forked.** `omnibus-ios/omnibus/Reader/Web/epub-reader-glue.js` is a
+copy of `frontend/assets/vendor/epub-reader-glue.js`, and the two have diverged:
+the iOS copy carries `sectionRanges` / `pagesLeftInSection`, and the web copy has
+since moved its pagination onto `location.start.displayed`. Changing one does not
+change the other — check both when touching reader behaviour.
+
+**Offline writes** follow [rule 08](../.claude/rules/08-offline-writes.md): the
+`OpKind` outbox in `Offline/SyncEngine.swift` carries per-user content state
+only, never configuration and never commands. `OutboxScope` in `Offline/Cache.swift`
+declares each kind's blast radius. `omnibusTests/OfflineSyncTests.swift` covers it;
+the rest of `omnibusTests` is still the Xcode template stub, and no CI job builds
+or tests this project (`mobile-e2e.yml` and `testflight.yml` both target
+`omnibus-mobile`).
