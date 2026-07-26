@@ -1,5 +1,12 @@
 name: TestFlight
 
+# The run title carries the version and which app(s) were dispatched, so the
+# Actions list distinguishes builds without opening the run (e.g. "TestFlight
+# v0.14.3 · swiftui"). run-name is evaluated before any job starts, so it can
+# only see the dispatch inputs — when marketing_version is left blank the
+# version job resolves it from the latest v* tag, which run-name can't know yet.
+run-name: "TestFlight ${{ inputs.marketing_version && format('v{0}', inputs.marketing_version) || 'latest tag' }} · ${{ inputs.apps }}"
+
 # Manually-triggered iOS build + TestFlight upload for both iOS clients:
 #
 #   mobile   Dioxus/WKWebView shell (omnibus-mobile crate, bundle com.omnibus.mobile)
