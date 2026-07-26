@@ -4,10 +4,11 @@
 //! empty list (rule 07); the post-mount effect loads the real rows.
 
 use dioxus::prelude::*;
+use dioxus_router::use_navigator;
 use omnibus_shared::{AdminUserRow, CreateUserRequest, UserPermissions};
 
 use crate::components::auth::{score_password, PasswordRequirements, StrengthMeter};
-use crate::data;
+use crate::{data, Route};
 
 /// Which modal, if any, is open over the Users table.
 #[derive(Clone, PartialEq)]
@@ -29,6 +30,7 @@ pub fn UsersSection() -> Element {
     let mut reload = use_signal(|| 0u32);
     let mut modal = use_signal(|| Modal::None);
     let current = crate::use_current_user_summary();
+    let nav = use_navigator();
 
     // Reload whenever the counter bumps (initial mount + after each mutation).
     use_effect(move || {
@@ -118,7 +120,15 @@ pub fn UsersSection() -> Element {
                         user: row,
                         is_self,
                         on_close: move |_| modal.set(Modal::None),
-                        on_deleted: move |_| { modal.set(Modal::None); reload.with_mut(|n| *n += 1); },
+                        on_deleted: move |_| {
+                            modal.set(Modal::None);
+                            // Self-delete invalidates the session; reloading would just 401.
+                            if is_self {
+                                nav.replace(Route::Login {});
+                            } else {
+                                reload.with_mut(|n| *n += 1);
+                            }
+                        },
                     }
                 }
             }
