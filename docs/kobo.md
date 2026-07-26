@@ -86,9 +86,14 @@ single file on the device:
 3. Eject the Kobo safely.
 
 That file holds every highlight and note on the device. Keeping a copy means a
-wipe is recoverable. Importing one back into Omnibus is planned, not yet built
-([#933](https://github.com/seamus-sloan/omnibus/issues/933)) — for now the copy
-is a backup you keep, not something Omnibus can read.
+wipe is recoverable.
+
+**If your Omnibus version offers a Kobo annotation import, run it before the
+first wireless sync** — that pulls the device's highlights and notes into your
+library, so a wipe costs you nothing. That import is still in development
+([#933](https://github.com/seamus-sloan/omnibus/issues/933)); until it ships,
+the file copy above is the backup, and it is one you keep yourself rather than
+something Omnibus can read back.
 
 The wired **Send to Kobo** transfer described above carries none of this risk and
 stays the safe choice.

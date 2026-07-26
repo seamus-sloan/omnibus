@@ -124,9 +124,7 @@ pub fn KoboDevicesCard() -> Element {
                 "The token authorizes only your library."
             }
 
-            // Rendered unconditionally and non-dismissably: the hazard applies
-            // the moment a URL is copied, so it must not be possible to see an
-            // endpoint without it (#927).
+            // Unconditional: the hazard applies the moment a URL is copied.
             div { class: "kobo-warning", "data-testid": "kobo-data-loss-warning",
                 p { class: "kobo-warning-title", "First sync can erase your Kobo's highlights" }
                 p {
