@@ -1,25 +1,46 @@
 name: TestFlight
 
-# Manually-triggered iOS build + TestFlight upload for `omnibus-mobile`.
+# Manually-triggered iOS build + TestFlight upload for both iOS clients:
 #
-# `dx` has no built-in signing, so this builds an unsigned .app with
-# `dx bundle`, then scripts/ios-package-ipa.sh signs + packages it into a .ipa
-# which `xcrun altool` uploads to App Store Connect. The Apple side (bundle ID
-# com.omnibus.mobile, app record, distribution cert, App Store Connect API
-# key) must already exist.
+#   mobile   Dioxus/WKWebView shell (omnibus-mobile crate, bundle com.omnibus.mobile)
+#   swiftui  Native SwiftUI app     (omnibus-ios/ Xcode project, bundle com.omnibus.swiftui)
 #
-# Required repository secrets (the signing identity is derived from the cert,
-# so no IOS_SIGNING_IDENTITY name secret is needed):
-#   IOS_DIST_CERT_P12_BASE64         base64 of the Apple Distribution .p12
-#   IOS_DIST_CERT_PASSWORD           password for that .p12
-#   IOS_PROVISIONING_PROFILE_BASE64  base64 of the App Store .mobileprovision
-#   ASC_API_KEY_BASE64               base64 of the App Store Connect AuthKey_*.p8
-#   ASC_KEY_ID                       App Store Connect API key ID
-#   ASC_ISSUER_ID                    App Store Connect API issuer ID
+# The `apps` dispatch input selects which to build (default: both). Each app has
+# its own App Store Connect app record; the Apple side (App IDs, app records,
+# distribution cert, App Store Connect API key, App Store provisioning profiles)
+# must already exist.
+#
+# The two builds are fundamentally different pipelines:
+#   * mobile  — `dx` has no signing, so `dx bundle` emits an unsigned .app that
+#     scripts/ios-package-ipa.sh signs + packages into a .ipa.
+#   * swiftui — a real .xcodeproj built + signed by `xcodebuild archive` +
+#     `xcodebuild -exportArchive` (manual signing against the profile below).
+# Both upload with `xcrun altool`. The shared cert-import + profile-install lives
+# in .github/actions/ios-signing.
+#
+# Required repository secrets:
+#   Shared (team/account-scoped, reused by both apps):
+#     IOS_DIST_CERT_P12_BASE64          base64 of the Apple Distribution .p12
+#     IOS_DIST_CERT_PASSWORD            password for that .p12
+#     ASC_API_KEY_BASE64                base64 of the App Store Connect AuthKey_*.p8
+#     ASC_KEY_ID                        App Store Connect API key ID
+#     ASC_ISSUER_ID                     App Store Connect API issuer ID
+#   Per-app (a profile is bound to one bundle ID, so each app needs its own):
+#     IOS_PROVISIONING_PROFILE_BASE64        App Store profile for com.omnibus.mobile
+#     IOS_SWIFTUI_PROVISION_PROFILE_BASE64   App Store profile for com.omnibus.swiftui
 
 on:
   workflow_dispatch:
     inputs:
+      apps:
+        description: "Which app(s) to build and upload."
+        required: false
+        default: both
+        type: choice
+        options:
+          - both
+          - mobile
+          - swiftui
       build_number:
         description: "CFBundleVersion to stamp (must be higher than the last uploaded build). Defaults to the workflow run number."
         required: false
@@ -37,45 +58,22 @@ permissions:
   contents: read
 
 jobs:
-  upload:
-    name: build + upload to TestFlight
-    # macos-26 ships Xcode 26 / the iOS 26 SDK. App Store Connect rejects any
-    # upload built with an older SDK ("must be built with the iOS 26 SDK or
-    # later"), so the older macos-14/15 images (Xcode 15/16) can't be used.
-    runs-on: macos-26
-    permissions:
-      contents: read
-      # nix-installer-action needs the OIDC token endpoints to auth to FlakeHub
-      # (else it falls back to anonymous fetches that intermittently 401).
-      id-token: write
-      # cache-nix-action `purge: true` deletes its own expired cache entries.
-      actions: write
-    env:
-      # Pin the target dir so the .app lands at the path the packaging script
-      # expects (target/dx/omnibus-mobile/release/ios) and so rust-cache
-      # (keyed on `. -> target`) actually caches across runs. Also disables
-      # the flake's sccache path, which is skipped when CARGO_TARGET_DIR is set.
-      CARGO_TARGET_DIR: ./target
-      BUILD_NUMBER: ${{ github.event.inputs.build_number || github.run_number }}
-      # Pin the iOS deployment target so the C crypto deps (aws-lc-sys, ring)
-      # and the final Rust link agree on the min-iOS version. Without it dx
-      # links at iOS 10.0 while the runner's SDK compiles the C objects for
-      # 17.5, leaving `___chkstk_darwin` unresolved at link time. 14.0 is the
-      # floor for the storyboard-free UILaunchScreen the iPad build needs, and
-      # matches the MinimumOSVersion the packaging script stamps. Both the `cc`
-      # crate and rustc read this env var.
-      IPHONEOS_DEPLOYMENT_TARGET: "14.0"
+  # Resolve the user-visible marketing version once so both builds stamp the same
+  # value. Prefer the dispatch input; otherwise the latest v* git tag (the same
+  # tags release.yml mints), so TestFlight tracks the server release.
+  version:
+    name: resolve marketing version
+    runs-on: ubuntu-latest
+    outputs:
+      marketing_version: ${{ steps.resolve.outputs.version }}
     steps:
-      # fetch-depth: 0 pulls full history + tags so `git describe` below can
-      # find the latest release tag (checkout fetches neither by default).
+      # fetch-depth: 0 pulls full history + tags so `git describe` can find the
+      # latest release tag (checkout fetches neither by default).
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      # Resolve the user-visible marketing version so the TestFlight build's
-      # version matches the server's release tag. Prefer the dispatch input;
-      # otherwise use the latest v* git tag (the same tags release.yml mints).
       - name: Resolve marketing version
+        id: resolve
         env:
           INPUT_VERSION: ${{ github.event.inputs.marketing_version }}
         run: |
@@ -87,14 +85,42 @@ jobs:
             [ -n "$tag" ] || { echo "::error::No v* git tag found and no marketing_version input given."; exit 1; }
             version="${tag#v}"
           fi
-          # Reject anything but digits and dots before writing to $GITHUB_ENV: a
-          # dispatch input containing a newline would otherwise inject extra env
-          # assignments into every later step. Same guard the packaging script uses.
+          # Reject anything but digits and dots before writing to $GITHUB_OUTPUT: a
+          # dispatch input containing a newline would otherwise inject extra output
+          # assignments. Same guard the packaging script uses.
           case "$version" in
             '' | *[!0-9.]*) echo "::error::marketing version must be numeric/dot-separated, got: '$version'"; exit 1 ;;
           esac
           echo "Marketing version: $version"
-          printf 'MARKETING_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
+  # ---- mobile: Dioxus/WKWebView shell (com.omnibus.mobile) --------------------
+  mobile:
+    name: mobile (WebView · com.omnibus.mobile)
+    needs: version
+    if: ${{ github.event.inputs.apps == 'both' || github.event.inputs.apps == 'mobile' }}
+    # macos-26 ships Xcode 26 / the iOS 26 SDK. App Store Connect rejects any
+    # upload built with an older SDK, so macos-14/15 (Xcode 15/16) can't be used.
+    runs-on: macos-26
+    permissions:
+      contents: read
+      # nix-installer-action needs the OIDC token endpoints to auth to FlakeHub.
+      id-token: write
+      # cache-nix-action `purge: true` deletes its own expired cache entries.
+      actions: write
+    env:
+      # Pin the target dir so the .app lands where the packaging script expects
+      # (target/dx/omnibus-mobile/release/ios) and so rust-cache actually caches.
+      CARGO_TARGET_DIR: ./target
+      BUILD_NUMBER: ${{ github.event.inputs.build_number || github.run_number }}
+      # Pin the iOS deployment target so the C crypto deps (aws-lc-sys, ring) and
+      # the final Rust link agree on the min-iOS version. 14.0 is the floor for
+      # the storyboard-free UILaunchScreen the iPad build needs, and matches the
+      # MinimumOSVersion the packaging script stamps.
+      IPHONEOS_DEPLOYMENT_TARGET: "14.0"
+      MARKETING_VERSION: ${{ needs.version.outputs.marketing_version }}
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@v22
@@ -115,81 +141,30 @@ jobs:
           workspaces: ". -> target"
           shared-key: omnibus-mobile
 
-      # Import the distribution cert into a throwaway keychain so codesign can
-      # find the identity. Cleaned up in the always() step below.
-      - name: Import signing certificate
-        env:
-          IOS_DIST_CERT_P12_BASE64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
-          IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
-        run: |
-          set -euo pipefail
-          KEYCHAIN="$RUNNER_TEMP/omnibus-signing.keychain-db"
-          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
-          CERT_P12="$RUNNER_TEMP/dist.p12"
-          # `-D` is the BSD/macOS decode flag (`--decode` is a GNU long-opt
-          # some macOS images lack); these steps run outside nix on the runner.
-          echo "$IOS_DIST_CERT_P12_BASE64" | base64 -D > "$CERT_P12"
+      - name: iOS signing setup
+        id: signing
+        uses: ./.github/actions/ios-signing
+        with:
+          cert-p12-base64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
+          cert-password: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+          profile-base64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
 
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-          security import "$CERT_P12" -k "$KEYCHAIN" -P "$IOS_DIST_CERT_PASSWORD" \
-            -T /usr/bin/codesign -T /usr/bin/security
-          # Let codesign use the key without an interactive prompt.
-          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
-          # Prepend our keychain to the user search list so codesign sees it.
-          # Intentional word-splitting: each existing keychain path is a
-          # separate -s argument.
-          # shellcheck disable=SC2046
-          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
-          rm -f "$CERT_P12"
-          echo "SIGNING_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
-
-          # Derive the signing identity's SHA-1 from the imported cert rather
-          # than trusting a hand-entered name — codesign matches the hash
-          # exactly, so a mistyped IOS_SIGNING_IDENTITY can't cause a silent
-          # "item could not be found in the keychain". Fail loudly (dumping
-          # what's present) if the cert has no usable codesigning identity —
-          # the usual cause is a .p12 exported without its private key.
-          IDENTITY_HASH="$(security find-identity -v -p codesigning "$KEYCHAIN" \
-            | awk 'match($0, /[0-9A-F]{40}/) { print substr($0, RSTART, RLENGTH); exit }')"
-          if [ -z "$IDENTITY_HASH" ]; then
-            echo "::error::No codesigning identity in the imported keychain — IOS_DIST_CERT_P12_BASE64 must be an Apple Distribution cert exported WITH its private key."
-            security find-identity -v -p codesigning "$KEYCHAIN" || true
-            exit 1
-          fi
-          echo "Using codesigning identity $IDENTITY_HASH"
-          echo "SIGNING_IDENTITY_HASH=$IDENTITY_HASH" >> "$GITHUB_ENV"
-
-      - name: Decode provisioning profile
-        env:
-          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
-        run: |
-          set -euo pipefail
-          PROFILE="$RUNNER_TEMP/omnibus.mobileprovision"
-          echo "$IOS_PROVISIONING_PROFILE_BASE64" | base64 -D > "$PROFILE"
-          echo "PROVISIONING_PROFILE=$PROFILE" >> "$GITHUB_ENV"
-
-      # Build the unsigned .app. Runs in the `.#mobile` shell for `dx` + the
+      # Build the unsigned .app. Runs in `.#mobile` for `dx` + the
       # aarch64-apple-ios rust-std + the Xcode DEVELOPER_DIR/SDKROOT shim.
-      # `--package-types ios` pins the output to the raw .app (dx can also emit
-      # a pre-zipped .ipa, but it neither embeds the provisioning profile nor
-      # patches DTPlatformName — scripts/ios-package-ipa.sh does both).
+      # `--package-types ios` pins output to the raw .app (the pre-zipped .ipa dx
+      # can emit neither embeds the profile nor patches DTPlatformName — the
+      # packaging script does both).
       - name: dx bundle (iOS release)
-        # OMNIBUS_VERSION mirrors the already-resolved MARKETING_VERSION so
-        # `frontend::version::app_version` reports the real release instead
-        # of the crate's pinned 0.1.0 fallback (#1055). Bare (no `v` prefix,
-        # e.g. "0.8.9") — CFBundleShortVersionString can't carry one; the
-        # frontend helper normalizes it to `v0.8.9` for display.
+        # OMNIBUS_VERSION mirrors MARKETING_VERSION so frontend::version::app_version
+        # reports the real release instead of the crate's pinned 0.1.0 fallback.
         env:
           OMNIBUS_VERSION: ${{ env.MARKETING_VERSION }}
         run: nix develop .#mobile --command dx bundle --platform ios --release --package omnibus-mobile --package-types ios
 
       - name: Sign and package .ipa
         env:
-          # SHA-1 derived from the imported cert above (not the secret name).
-          SIGNING_IDENTITY: ${{ env.SIGNING_IDENTITY_HASH }}
-          # Resolved from the release tag (or dispatch input) above.
+          SIGNING_IDENTITY: ${{ steps.signing.outputs.signing-identity }}
+          PROVISIONING_PROFILE: ${{ steps.signing.outputs.profile-path }}
           MARKETING_VERSION: ${{ env.MARKETING_VERSION }}
           IPA_OUT: ${{ github.workspace }}/omnibus-mobile.ipa
         run: |
@@ -220,6 +195,131 @@ jobs:
 
       - name: Clean up signing keychain
         if: always()
+        env:
+          SIGNING_KEYCHAIN: ${{ steps.signing.outputs.keychain-path }}
+        run: |
+          set -euo pipefail
+          if [ -n "${SIGNING_KEYCHAIN:-}" ] && [ -f "$SIGNING_KEYCHAIN" ]; then
+            security delete-keychain "$SIGNING_KEYCHAIN" || true
+          fi
+          rm -f "$HOME/.appstoreconnect/private_keys"/*.p8 2>/dev/null || true
+
+  # ---- swiftui: native SwiftUI app (com.omnibus.swiftui) ----------------------
+  swiftui:
+    name: swiftui (native · com.omnibus.swiftui)
+    needs: version
+    if: ${{ github.event.inputs.apps == 'both' || github.event.inputs.apps == 'swiftui' }}
+    # omnibus-ios targets iOS 26.5, so it needs the Xcode 26 / iOS 26 SDK on macos-26.
+    runs-on: macos-26
+    permissions:
+      contents: read
+      # Granted for the .ipa upload step. Belt-and-braces rather than load-bearing:
+      # upload-artifact@v4 authenticates with ACTIONS_RUNTIME_TOKEN, which is
+      # injected per-job and isn't governed by `permissions:`. The mobile job's
+      # own `actions: write` is load-bearing — cache-nix-action's `purge: true`.
+      actions: write
+    env:
+      BUILD_NUMBER: ${{ github.event.inputs.build_number || github.run_number }}
+      MARKETING_VERSION: ${{ needs.version.outputs.marketing_version }}
+      # The team the omnibus-ios project + the distribution cert belong to.
+      DEVELOPMENT_TEAM: "6T8URK7H23"
+      BUNDLE_ID: com.omnibus.swiftui
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: iOS signing setup
+        id: signing
+        uses: ./.github/actions/ios-signing
+        with:
+          cert-p12-base64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
+          cert-password: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+          profile-base64: ${{ secrets.IOS_SWIFTUI_PROVISION_PROFILE_BASE64 }}
+
+      # Archive with manual signing against the installed profile. MARKETING_VERSION
+      # + CURRENT_PROJECT_VERSION are passed as build settings so the archive is
+      # stamped without editing the pbxproj. OTHER_CODE_SIGN_FLAGS points codesign
+      # at our throwaway keychain explicitly.
+      - name: Archive
+        env:
+          PROFILE_NAME: ${{ steps.signing.outputs.profile-name }}
+          SIGNING_KEYCHAIN: ${{ steps.signing.outputs.keychain-path }}
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project omnibus-ios/omnibus.xcodeproj \
+            -scheme omnibus \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/omnibus.xcarchive" \
+            archive \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
+            MARKETING_VERSION="$MARKETING_VERSION" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            OTHER_CODE_SIGN_FLAGS="--keychain $SIGNING_KEYCHAIN"
+
+      # Build ExportOptions.plist with PlistBuddy (avoids heredoc-in-YAML
+      # indentation pitfalls). method=app-store-connect is the Xcode 26 name for
+      # an App Store export.
+      - name: Write ExportOptions.plist
+        env:
+          PROFILE_NAME: ${{ steps.signing.outputs.profile-name }}
+        run: |
+          set -euo pipefail
+          PLIST="$RUNNER_TEMP/ExportOptions.plist"
+          printf '%s\n' \
+            '<?xml version="1.0" encoding="UTF-8"?>' \
+            '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+            '<plist version="1.0"><dict/></plist>' > "$PLIST"
+          pb() { /usr/libexec/PlistBuddy -c "$1" "$PLIST"; }
+          pb "Add :method string app-store-connect"
+          pb "Add :teamID string $DEVELOPMENT_TEAM"
+          pb "Add :signingStyle string manual"
+          pb "Add :signingCertificate string Apple Distribution"
+          pb "Add :provisioningProfiles dict"
+          pb "Add :provisioningProfiles:$BUNDLE_ID string $PROFILE_NAME"
+          pb "Add :uploadSymbols bool true"
+          pb "Add :destination string export"
+
+      - name: Export .ipa
+        run: |
+          set -euo pipefail
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/omnibus.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
+          # exportArchive names the .ipa after the product; copy to a stable path.
+          IPA="$(ls "$RUNNER_TEMP"/export/*.ipa | head -n1)"
+          cp "$IPA" "$GITHUB_WORKSPACE/omnibus-swiftui.ipa"
+
+      - name: Upload to TestFlight
+        env:
+          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          echo "$ASC_API_KEY_BASE64" | base64 -D > "$KEY_PATH"
+          xcrun altool --upload-app -f "$GITHUB_WORKSPACE/omnibus-swiftui.ipa" -t ios \
+            --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+          rm -f "$KEY_PATH"
+
+      - name: Upload .ipa artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: omnibus-swiftui-ipa
+          path: omnibus-swiftui.ipa
+          if-no-files-found: ignore
+
+      - name: Clean up signing keychain
+        if: always()
+        env:
+          SIGNING_KEYCHAIN: ${{ steps.signing.outputs.keychain-path }}
         run: |
           set -euo pipefail
           if [ -n "${SIGNING_KEYCHAIN:-}" ] && [ -f "$SIGNING_KEYCHAIN" ]; then
