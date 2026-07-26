@@ -34,6 +34,10 @@ pub(crate) struct RelocateData {
     // The web + mobile progress-save paths read `cfi`; the other fields are read unconditionally by the bottom-bar render.
     #[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
     pub(crate) cfi: Option<String>,
+    // Visual page within the *current spine section* (epub.js
+    // `location.start.displayed`), not a whole-book count: it increments by
+    // one per turn within a chapter, and resets to 1 on crossing into the
+    // next chapter. `pct` below is the whole-book position.
     pub(crate) page: u32,
     pub(crate) total_pages: u32,
     pub(crate) pct: u32,
@@ -43,7 +47,9 @@ pub(crate) struct RelocateData {
 }
 
 /// Format the bottom-bar `page` and `chapter` strings from a relocate
-/// event. Returns `("", "")` until epub.js has produced a relocation.
+/// event. `page`/`total_pages` are scoped to the current chapter (see
+/// [`RelocateData`]). Returns `("", "")` until epub.js has produced a
+/// relocation.
 pub(crate) fn format_progress_labels(loc: &RelocateData) -> (String, String) {
     let page = if loc.total_pages > 0 {
         format!(
@@ -218,6 +224,36 @@ mod tests {
         };
         assert_eq!(format_contents_progress(&data), "184 / 272 \u{b7} 68%");
         assert_eq!(format_contents_progress(&RelocateData::default()), "");
+    }
+
+    // Regression for issue #1234: a page turn must never render a stalled
+    // (unchanged) figure, even across a chapter boundary where `page` resets.
+    #[test]
+    fn format_progress_labels_resets_page_and_total_on_crossing_a_chapter_boundary() {
+        let before = RelocateData {
+            page: 22,
+            total_pages: 22,
+            pct: 40,
+            chapter: 3,
+            total_chapters: 24,
+            ..Default::default()
+        };
+        let after = RelocateData {
+            page: 1,
+            total_pages: 8,
+            pct: 41,
+            chapter: 4,
+            total_chapters: 24,
+            ..Default::default()
+        };
+        let (before_page, _) = format_progress_labels(&before);
+        let (after_page, _) = format_progress_labels(&after);
+        assert_eq!(before_page, "p.\u{a0}22 of 22\u{a0}\u{b7}\u{a0}40%");
+        assert_eq!(after_page, "p.\u{a0}1 of 8\u{a0}\u{b7}\u{a0}41%");
+        assert_ne!(
+            before_page, after_page,
+            "a page turn must never render a stalled (unchanged) page figure"
+        );
     }
 
     #[test]

@@ -389,17 +389,11 @@ fn publish(
     });
 }
 
-/// Cheap mid-stream progress bump that keeps the existing file list.
+/// Cheap mid-stream progress bump that keeps the existing file list — see
+/// [`super::update_progress_bytes`] for why this avoids the full-entry
+/// clone + JSON re-serialize `publish`/`upsert` pay on a status change.
 fn publish_progress(uuid: &str, format: DlFormat, downloaded: i64, total: Option<i64>) {
-    let Some(mut entry) = super::get_entry(uuid, format) else {
-        return;
-    };
-    entry.status = DownloadStatus::Downloading {
-        downloaded: downloaded.max(0),
-        total,
-    };
-    entry.updated_at = crate::offline::store::now_secs();
-    super::upsert(entry);
+    super::update_progress_bytes(uuid, format, downloaded, total);
 }
 
 /// Maps a [`crate::data::DataError`] to a fixed, user-safe [`DownloadError`].

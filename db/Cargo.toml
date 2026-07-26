@@ -44,7 +44,8 @@ zip = { version = "3", default-features = false, features = ["deflate-flate2"] }
 # event copy-through (raw `BytesStart`/`BytesText`) makes that exact and safe.
 # `xml-rs` (transitive via `epub`) re-serializes and can mangle namespaces, so
 # it's unsafe for round-tripping a user's book file.
-quick-xml = "0.37"
+# Held at >=0.41: earlier 0.37 carries RUSTSEC-2026-0194/0195 (DoS in the reader).
+quick-xml = "0.41"
 
 serde.workspace = true
 serde_json.workspace = true

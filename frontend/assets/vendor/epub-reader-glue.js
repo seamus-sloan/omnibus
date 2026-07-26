@@ -69,7 +69,6 @@
   var book = null;
   var rendition = null;
   var relocateTimer = null;
-  var locationsReady = false;
   // False while an initial CFI restore is still settling — mutes emitRelocate
   // so the first-pass landing (a page or two off until fonts/theme reflow) is
   // never persisted as reading progress.
@@ -112,7 +111,6 @@
     }
     cancelTurnAnim();
     endSectionTurn();
-    locationsReady = false;
     tocFlat = [];
     if (rendition) {
       try {
@@ -155,16 +153,23 @@
   function buildRelocateData(location) {
     var cfi = location && location.start ? location.start.cfi : undefined;
     var pct = location && location.start ? Math.round((location.start.percentage || 0) * 100) : 0;
-    var page = 0;
-    var totalPages = 0;
-    if (locationsReady && book && book.locations) {
-      page = book.locations.locationFromCfi(cfi) || 0;
-      totalPages = book.locations.total || 0;
-    }
+    // `displayed` is the visual column epub.js just rendered in the current
+    // paginated flow — 1-indexed, and always exactly one away from the
+    // previous relocate's page after a next()/prev() turn. This replaced a
+    // `book.locations.locationFromCfi()` lookup (fixed ~1024-char chunks
+    // spanning the whole book), whose granularity didn't line up with a
+    // visual page turn: dense screens skipped several chunks, sparse ones
+    // (an image, a short trailing column) crossed none. The trade-off is
+    // that `page`/`totalPages` are now scoped to the current spine section
+    // rather than the whole book — `pct` (below) still carries the
+    // whole-book position.
+    var displayed = location && location.start ? location.start.displayed : null;
+    var page = displayed && displayed.page ? displayed.page : 0;
+    var totalPages = displayed && displayed.total ? displayed.total : 0;
     var ch = location && location.start ? findChapter(location.start.href) : null;
     return {
       cfi: cfi,
-      page: page + 1,
+      page: page,
       totalPages: totalPages,
       pct: pct,
       chapter: ch ? ch.index : 0,
@@ -267,13 +272,16 @@
       return;
     }
 
-    // Page numbers come from epub.js "locations" — a whole-book pagination
-    // pass that takes seconds on desktop and much longer in the mobile
-    // WebView. Cache the result per book (keyed by the host-supplied
-    // `locationsKey`, the book uuid) so only the very first open pays it.
-    // Storage failures (quota, private mode) and corrupt entries just fall
-    // back to regeneration. Caveat: replacing a book's file under the same
-    // uuid can leave slightly stale page numbers until the entry is cleared.
+    // The whole-book `pct` figure comes from epub.js "locations" — a
+    // whole-book pagination pass that takes seconds on desktop and much
+    // longer in the mobile WebView (the visual page/section total in
+    // `buildRelocateData` doesn't need this pass — it reads straight off
+    // the current render). Cache the result per book (keyed by the
+    // host-supplied `locationsKey`, the book uuid) so only the very first
+    // open pays it. Storage failures (quota, private mode) and corrupt
+    // entries just fall back to regeneration. Caveat: replacing a book's
+    // file under the same uuid can leave a slightly stale pct until the
+    // entry is cleared.
     var locationsCacheKey = opts.locationsKey ? "omn.locs::" + opts.locationsKey : null;
     book.ready
       .then(function () {
@@ -303,9 +311,9 @@
         });
       })
       .then(function () {
-        locationsReady = true;
         // Re-emit current location now that locations are resolved so the
-        // Rust side gets real page numbers on first load.
+        // Rust side gets a real whole-book `pct` on first load (page/total
+        // are already live off the current render — see buildRelocateData).
         if (rendition && rendition.location) {
           emitRelocate(rendition.location);
         }

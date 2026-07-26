@@ -168,6 +168,79 @@ fn registry_status_and_downloaded_uuids_reflect_upserts() {
     assert!(downloaded_uuids().contains(uuid));
 }
 
+#[test]
+fn update_progress_bytes_mutates_status_in_place_and_preserves_files() {
+    let uuid = "u-progress-update";
+    let files = vec![PlannedFile {
+        rel: "part-0.m4b".into(),
+        url_path: "/x".into(),
+        ordinal: Some(0),
+        bytes: None,
+        done: false,
+    }];
+    upsert(DownloadEntry {
+        book_uuid: uuid.into(),
+        format: DlFormat::Audio,
+        title: "T".into(),
+        file_id: None,
+        status: DownloadStatus::Downloading {
+            downloaded: 0,
+            total: Some(100),
+        },
+        files: files.clone(),
+        updated_at: 1,
+    });
+
+    update_progress_bytes(uuid, DlFormat::Audio, 42, Some(100));
+
+    assert_eq!(
+        status(uuid, DlFormat::Audio),
+        DownloadStatus::Downloading {
+            downloaded: 42,
+            total: Some(100)
+        }
+    );
+    let entry = get_entry(uuid, DlFormat::Audio).expect("entry");
+    assert_eq!(
+        entry.files, files,
+        "file list must be untouched by a progress bump"
+    );
+}
+
+#[test]
+fn update_progress_bytes_is_a_noop_when_the_entry_is_not_registered() {
+    let uuid = "u-progress-missing";
+    update_progress_bytes(uuid, DlFormat::Epub, 10, None);
+    assert_eq!(status(uuid, DlFormat::Epub), DownloadStatus::NotDownloaded);
+}
+
+#[test]
+fn update_progress_bytes_clamps_negative_downloaded_to_zero() {
+    let uuid = "u-progress-clamp";
+    upsert(DownloadEntry {
+        book_uuid: uuid.into(),
+        format: DlFormat::Epub,
+        title: "T".into(),
+        file_id: None,
+        status: DownloadStatus::Downloading {
+            downloaded: 5,
+            total: None,
+        },
+        files: vec![],
+        updated_at: 1,
+    });
+
+    update_progress_bytes(uuid, DlFormat::Epub, -3, None);
+
+    assert_eq!(
+        status(uuid, DlFormat::Epub),
+        DownloadStatus::Downloading {
+            downloaded: 0,
+            total: None
+        }
+    );
+}
+
 #[tokio::test]
 async fn remove_format_files_deletes_only_the_named_formats_files() {
     let dir = tempfile::tempdir().expect("tempdir");
