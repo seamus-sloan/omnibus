@@ -6,6 +6,9 @@
 //! re-flow via [`super::mobile`].
 
 use dioxus::prelude::*;
+// Only the web branch of `render_loaded` renders the "Back to library" Link;
+// mobile re-flows through `mobile.rs`, so an unconditional import is unused there.
+#[cfg(not(feature = "mobile"))]
 use dioxus_router::Link;
 use omnibus_shared::{EbookMetadata, SuggestionsResponse};
 
