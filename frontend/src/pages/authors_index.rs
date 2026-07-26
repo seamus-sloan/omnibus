@@ -65,9 +65,18 @@ pub fn AuthorsIndexPage() -> Element {
     let total_authors = all.len();
     let total_books: usize = all.iter().map(|a| a.book_count).sum();
 
-    let q = filter.read().to_lowercase();
-    let mut filtered = filter_authors(&all, &q);
-    sort_authors(&mut filtered, sort());
+    // Memoized so filter/sort only reruns when authors/filter/sort change, not on every render.
+    let filtered = use_memo(move || {
+        let all = authors.read();
+        let q = filter.read().to_lowercase();
+        let mut filtered = filter_authors(&all, &q);
+        sort_authors(&mut filtered, sort());
+        filtered
+            .into_iter()
+            .cloned()
+            .collect::<Vec<AuthorSummary>>()
+    });
+    let filtered = filtered();
 
     // Group by first letter of sort key (last name when available, else name).
     // Only meaningful when sorting by name.
@@ -153,10 +162,10 @@ fn sort_authors(filtered: &mut [&AuthorSummary], sort: IndexSort) {
 }
 
 /// Buckets `filtered` by first letter of `sort_key`; empty when `show_letters` is false.
-fn group_by_letter<'a>(
-    filtered: &[&'a AuthorSummary],
+fn group_by_letter(
+    filtered: &[AuthorSummary],
     show_letters: bool,
-) -> Vec<(char, Vec<&'a AuthorSummary>)> {
+) -> Vec<(char, Vec<&AuthorSummary>)> {
     let mut letters: Vec<(char, Vec<&AuthorSummary>)> = Vec::new();
     if show_letters {
         for a in filtered {
@@ -170,10 +179,10 @@ fn group_by_letter<'a>(
     letters
 }
 
-/// Body section (plain fn, not `#[component]`, so we can keep the borrow-only
-/// slices from `AuthorsIndexPage`'s signal read guard without per-render clones).
+/// Body section (plain fn, not `#[component]`, so it can borrow `filtered`
+/// and `letters` directly instead of cloning them again for a child prop).
 fn authors_index_body<'a>(
-    filtered: &[&'a AuthorSummary],
+    filtered: &'a [AuthorSummary],
     letters: &[(char, Vec<&'a AuthorSummary>)],
     show_letters: bool,
     any_in_library: bool,

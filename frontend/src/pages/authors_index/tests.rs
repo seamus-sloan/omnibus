@@ -91,3 +91,70 @@ fn is_non_alpha_key_classifies_keys() {
     assert!(is_non_alpha_key("\u{4E2D}\u{6587}"));
     assert!(is_non_alpha_key(""));
 }
+
+#[test]
+fn filter_authors_returns_all_when_query_is_empty() {
+    let all = [
+        author("Ada Lovelace", None),
+        author("Louisa May Alcott", None),
+    ];
+    let out = filter_authors(&all, "");
+    assert_eq!(out.len(), 2);
+}
+
+#[test]
+fn filter_authors_matches_lowercase_query_against_mixed_case_name() {
+    // `filter_authors` lowercases each author's name before comparing, but
+    // takes `query` as-is — callers (e.g. `AuthorsIndexPage`) are
+    // responsible for lowercasing the query first.
+    let all = [
+        author("Ada Lovelace", None),
+        author("Louisa May Alcott", None),
+    ];
+    let out = filter_authors(&all, "lovelace");
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].name, "Ada Lovelace");
+}
+
+#[test]
+fn sort_authors_by_name_orders_alpha_before_non_alpha_bucket() {
+    let all = [author("1984", None), author("Ada Lovelace", None)];
+    let mut filtered: Vec<&AuthorSummary> = all.iter().collect();
+    sort_authors(&mut filtered, IndexSort::Name);
+    assert_eq!(filtered[0].name, "Ada Lovelace");
+    assert_eq!(filtered[1].name, "1984");
+}
+
+#[test]
+fn sort_authors_by_book_count_orders_descending_then_name() {
+    let mut low = author("Alpha", None);
+    low.book_count = 3;
+    let mut high = author("Bravo", None);
+    high.book_count = 7;
+    let all = [low, high];
+    let mut filtered: Vec<&AuthorSummary> = all.iter().collect();
+    sort_authors(&mut filtered, IndexSort::BookCount);
+    assert_eq!(filtered[0].name, "Bravo");
+    assert_eq!(filtered[1].name, "Alpha");
+}
+
+#[test]
+fn group_by_letter_buckets_by_first_letter_when_shown() {
+    // `group_by_letter` only merges *consecutive* same-letter entries — it
+    // relies on the caller (the `use_memo` pipeline in `AuthorsIndexPage`)
+    // to have already run `sort_authors` first. Both surnames here
+    // ("Lovelace", "Lowe") start with 'L' and are given already in sorted
+    // order, matching that contract.
+    let all = [author("Ada Lovelace", None), author("Bob Lowe", None)];
+    let groups = group_by_letter(&all, true);
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].0, 'L');
+    assert_eq!(groups[0].1.len(), 2);
+}
+
+#[test]
+fn group_by_letter_returns_empty_when_show_letters_is_false() {
+    let all = [author("Ada Lovelace", None)];
+    let groups = group_by_letter(&all, false);
+    assert!(groups.is_empty());
+}
