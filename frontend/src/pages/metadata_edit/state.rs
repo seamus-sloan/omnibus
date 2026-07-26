@@ -128,7 +128,7 @@ fn use_field_signals(book: &EbookMetadata) -> FormFields {
 /// title, primary author name + id, and the CSS custom-property style
 /// string for the page's accent color.
 fn header_strings(book: &EbookMetadata) -> (String, String, Option<i64>, String) {
-    let display_title = book.display_title();
+    let title = book.display_title();
     let (primary_author, primary_author_id) = book
         .creators
         .first()
@@ -139,12 +139,7 @@ fn header_strings(book: &EbookMetadata) -> (String, String, Option<i64>, String)
         .as_deref()
         .map(|a| format!("--accent: {a};"))
         .unwrap_or_default();
-    (
-        display_title,
-        primary_author,
-        primary_author_id,
-        accent_style,
-    )
+    (title, primary_author, primary_author_id, accent_style)
 }
 
 /// Fetches the author/tag/series suggestion pools once on mount for the
