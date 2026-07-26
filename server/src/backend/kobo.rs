@@ -22,6 +22,7 @@ use omnibus_shared::{ReadStatus, SetReadStatus};
 
 use super::{internal, serve_download, AppState};
 
+mod analytics;
 mod dto;
 mod extractor;
 mod store_resources;
@@ -53,6 +54,14 @@ pub fn kobo_router(state: AppState) -> Router {
         .route("/kobo/{token}/v1/initialization", get(initialization))
         .route("/kobo/{token}/v1/auth/device", post(auth_device))
         .route("/kobo/{token}/v1/auth/refresh", post(auth_refresh))
+        .route(
+            "/kobo/{token}/v1/analytics/event",
+            post(analytics::analytics_event),
+        )
+        .route(
+            "/kobo/{token}/v1/analytics/gettests",
+            get(analytics::analytics_gettests),
+        )
         .route("/kobo/{token}/v1/library/sync", get(library_sync))
         .route(
             "/kobo/{token}/v1/library/{uuid}/metadata",
