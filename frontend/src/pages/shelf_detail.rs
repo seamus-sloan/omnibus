@@ -436,8 +436,7 @@ fn ShelfHeader(
         && viewer
             .as_ref()
             .is_some_and(|u| u.id == owner_id || u.is_admin);
-    // Suppressed on a wishlist: its system name already opens with the owner's
-    // username, so the badge would just repeat it.
+    // Suppressed on a wishlist: its name already opens with the owner's username.
     let show_attribution =
         viewer.as_ref().is_some_and(|u| u.id != owner_id) && shelf.kind != ShelfKind::Wishlist;
 

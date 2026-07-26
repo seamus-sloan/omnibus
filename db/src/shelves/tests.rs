@@ -1060,8 +1060,8 @@ async fn wishlist_shelf_is_public_and_named_after_its_owner() {
     assert_eq!(shelf.visibility, Visibility::Public);
 }
 
-/// Registration provisions inline, inside the same transaction that inserts the
-/// user — so the name query must see the uncommitted `users` row.
+/// Provisioning is inline in the insert transaction, so the name query must see
+/// the uncommitted `users` row.
 #[tokio::test]
 async fn create_user_provisions_a_wishlist_shelf_named_after_the_new_user() {
     let pool = init_db("sqlite::memory:").await.unwrap();

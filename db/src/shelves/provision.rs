@@ -7,10 +7,8 @@ use sqlx::{Executor, Sqlite, SqlitePool};
 
 use super::ShelfError;
 
-/// Appended to the owner's username to form the system Wishlist shelf's
-/// display name (`alice` → `alice's Wishlist`). The name is composed once at
-/// provision time and never recomputed — usernames are immutable, and migration
-/// `0054` renamed the rows seeded under the old shared `"Wishlist"` name.
+/// Appended to the owner's username for the Wishlist shelf name (`alice` →
+/// `alice's Wishlist`); migration `0054` renamed the rows seeded before it.
 pub(crate) const WISHLIST_NAME_SUFFIX: &str = "'s Wishlist";
 
 /// Ensure one user has a Wishlist shelf. Idempotent *and* race-safe: the
