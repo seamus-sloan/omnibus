@@ -124,6 +124,13 @@ pub struct EbookMetadata {
     pub epub_size_bytes: Option<i64>,
 }
 
+impl EbookMetadata {
+    /// The book's own title, or its filename when the title is unset.
+    pub fn display_title(&self) -> String {
+        self.title.clone().unwrap_or_else(|| self.filename.clone())
+    }
+}
+
 /// One `book_files` row — a single physical file on disk. Exposed to the
 /// frontend so the format switcher can offer a file picker when N > 1.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

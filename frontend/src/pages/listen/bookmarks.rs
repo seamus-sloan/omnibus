@@ -61,6 +61,7 @@ impl BookmarksController {
             let mut fresh_id = self.fresh_id;
             let mut toast = self.toast;
             let input = omnibus_shared::CreateBookmark {
+                client_id: None,
                 book_uuid: uuid,
                 position: position_secs.to_string(),
                 title: None,
@@ -170,6 +171,7 @@ mod tests {
             book_uuid: "u".into(),
             position: position.into(),
             title: None,
+            client_id: None,
             created_at: 0,
         }
     }

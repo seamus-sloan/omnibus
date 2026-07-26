@@ -18,11 +18,6 @@ mod upsert;
 mod tests;
 
 pub(crate) use upsert::{apply_overrides, backfill_override_norm_columns, load_overrides_bulk};
-// Test-only: `override_match_keys` has no caller outside `upsert.rs` itself in
-// production, but rule 03 wants direct unit coverage of this pure function
-// rather than only the three-layers-removed integration coverage above it.
-#[cfg(test)]
-pub(crate) use upsert::override_match_keys;
 pub use upsert::{
     clear_cover_override, delete_metadata_overrides, delete_override_cover, get_book_uuid,
     get_metadata_overrides, merge_metadata_overrides, upsert_metadata_overrides,

@@ -4,12 +4,11 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Which external provider a summary fetch should hit. The client drives the
-/// cascade (Hardcover first when a key exists, else OpenLibrary) by calling the
-/// fetch endpoint once per source, so it can show a per-source status message.
+/// Which external provider a summary fetch should hit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SummarySource {
     Hardcover,
+    GoogleBooks,
     OpenLibrary,
 }
 

@@ -146,6 +146,9 @@ fn build_report(uuid: &str, format: ProgressFormat, start: i64, end: i64) -> Opt
         // Active wall-clock seconds — the stats aggregates SUM this.
         progress_units: end - start,
         device_id: None,
+        // Web posts a report once, on unmount, and never retries it — there
+        // is no replay for a handle to make idempotent.
+        client_id: None,
     })
 }
 

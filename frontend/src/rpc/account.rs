@@ -28,7 +28,15 @@ pub async fn rpc_set_kindle_email(email: Option<String>) -> Result<()> {
 /// errors the form renders inline; opaque failures fold to a generic message.
 #[post("/api/rpc/account/change-password", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_change_password(current_password: String, new_password: String) -> Result<()> {
-    match db::auth::change_password(&pool.0, user.id, &current_password, &new_password).await {
+    match db::auth::change_password(
+        &pool.0,
+        user.id,
+        &current_password,
+        &new_password,
+        user.session_id,
+    )
+    .await
+    {
         Ok(()) => Ok(()),
         Err(AuthError::InvalidCredentials) => {
             Err(ServerFnError::new("current password is incorrect").into())

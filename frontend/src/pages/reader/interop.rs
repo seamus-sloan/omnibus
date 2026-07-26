@@ -39,7 +39,8 @@ type CallbackHolder =
 /// highlights into the viewer. No-op on non-web targets.
 #[cfg(feature = "web")]
 pub(crate) fn install_reader_web_interop(uuid: String, prefs: ReaderPrefs, sigs: InteropSignals) {
-    use super::{json_literal, reader_call_json};
+    use super::reader_call_json;
+    use crate::js_interop::json_literal;
 
     let cb_holder: CallbackHolder =
         use_hook(|| std::rc::Rc::new(std::cell::RefCell::new(Vec::new())));
@@ -231,8 +232,9 @@ async fn spawn_bootstrap_and_highlights(
     mut highlights: Signal<Vec<Highlight>>,
 ) {
     use super::bootstrap::{reader_bootstrap_js, BootstrapArgs};
-    use super::{json_literal, reader_call_json2};
+    use super::reader_call_json2;
     use crate::data;
+    use crate::js_interop::json_literal;
 
     let server_cfi = crate::data::get_progress("", &uuid, omnibus_shared::ProgressFormat::Epub)
         .await

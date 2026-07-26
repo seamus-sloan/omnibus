@@ -24,7 +24,7 @@ mod tests;
 /// `author_id`; `users.username` as `author_name`.
 const SELECT_ENTRY: &str = "SELECT je.id, je.book_uuid, je.user_id AS author_id,
         u.username AS author_name, je.body_md, je.progress, je.status,
-        je.created_at, je.updated_at
+        je.client_id, je.created_at, je.updated_at
    FROM journal_entries je
    JOIN users u ON u.id = je.user_id";
 
@@ -70,19 +70,50 @@ pub async fn create_journal_entry(
     let book_uuid = resolve_canonical_book_uuid(pool, &input.book_uuid)
         .await?
         .ok_or(JournalError::BookNotFound)?;
+    let client_id = input.client_id.as_deref();
     let id = sqlx::query_scalar::<_, i64>(
-        "INSERT INTO journal_entries (user_id, book_uuid, body_md, progress, status)
-         VALUES (?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO journal_entries (user_id, book_uuid, body_md, progress, status, client_id)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id, client_id) WHERE client_id IS NOT NULL DO NOTHING
+         RETURNING id",
     )
     .bind(user_id)
     .bind(&book_uuid)
     .bind(&input.body_md)
     .bind(input.progress.map(|p| p as i64))
     .bind(input.status.as_str())
-    .fetch_one(pool)
+    .bind(client_id)
+    .fetch_optional(pool)
     .await?;
 
-    get_entry_by_id(pool, id).await
+    match (id, client_id) {
+        (Some(id), _) => get_entry_by_id(pool, id).await,
+        // The insert was a no-op, so this handle is already ours: a replayed
+        // create resolves to the entry it first produced.
+        (None, Some(client_id)) => {
+            let id = journal_id_for_client_id(pool, user_id, client_id)
+                .await?
+                .ok_or(JournalError::NotFound)?;
+            get_entry_by_id(pool, id).await
+        }
+        (None, None) => Err(JournalError::NotFound),
+    }
+}
+
+/// Resolve a client-minted id to the numeric entry id, scoped to the author.
+/// `Ok(None)` when this user has no entry under that handle.
+pub async fn journal_id_for_client_id(
+    pool: &SqlitePool,
+    user_id: i64,
+    client_id: &str,
+) -> Result<Option<i64>, JournalError> {
+    Ok(sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM journal_entries WHERE user_id = ? AND client_id = ?",
+    )
+    .bind(user_id)
+    .bind(client_id)
+    .fetch_optional(pool)
+    .await?)
 }
 
 /// List a book's entries for `viewer_id`, newest first: every user's published
@@ -274,6 +305,7 @@ fn row_to_entry(row: &sqlx::sqlite::SqliteRow) -> Result<JournalEntry, JournalEr
         body_html,
         progress: progress.map(|p| p as u8),
         status: omnibus_shared::JournalStatus::from_db(&status),
+        client_id: row.try_get("client_id")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })

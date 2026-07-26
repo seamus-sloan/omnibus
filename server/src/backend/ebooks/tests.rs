@@ -838,6 +838,95 @@ async fn api_get_ebook_download_returns_200_with_attachment_disposition() {
     std::fs::remove_dir_all(&tmp).ok();
 }
 
+/// F5.8 #1372: a book with a metadata override downloads an EPUB whose
+/// *internal* OPF carries the override — proving the route runs the source
+/// through the in-place rewrite rather than shipping it verbatim.
+#[tokio::test]
+async fn api_get_ebook_download_bakes_metadata_override_into_epub() {
+    use std::io::Cursor;
+
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!("omnibus_dl_override_{pid}_{nanos}"));
+    let export = tmp.join("export");
+    std::fs::create_dir_all(&export).unwrap();
+    // Isolate the export cache so the rewrite doesn't land in ./data.
+    let _env = omnibus_db::test_support::EnvVarGuard::set_os(
+        "OMNIBUS_EXPORT_EPUB_DIR",
+        Some(export.as_os_str()),
+    );
+
+    // Copy a real fixture EPUB so the rewrite has a valid container to parse.
+    let fixture_epub = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../test_data/epubs/generated/alpha.epub");
+    let stem = "alpha";
+    std::fs::copy(&fixture_epub, tmp.join(format!("{stem}.epub"))).unwrap();
+
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
+        .bind(tmp.to_str().unwrap())
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    let uuid = "44444444-4444-4444-4444-444444444444";
+    let book_id = sqlx::query(
+        "INSERT INTO books (uuid, library_id, path, title, last_modified) \
+         VALUES (?, ?, ?, 'Alpha', 1)",
+    )
+    .bind(uuid)
+    .bind(lib_id)
+    .bind(tmp.to_str().unwrap())
+    .execute(&pool)
+    .await
+    .unwrap()
+    .last_insert_rowid();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES (?, 'EPUB', ?, 0)",
+    )
+    .bind(book_id)
+    .bind(stem)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let overrides = omnibus_shared::MetadataOverrides {
+        title: Some("Stormlight #1".into()),
+        ..Default::default()
+    };
+    db::upsert_metadata_overrides(&pool, uuid, &overrides, false, user.id)
+        .await
+        .unwrap();
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    let res = app
+        .oneshot(get_with_bearer(
+            &format!("/api/ebooks/{uuid}/download"),
+            &token,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+
+    let doc = epub::doc::EpubDoc::from_reader(Cursor::new(bytes.to_vec()))
+        .expect("downloaded bytes are a valid EPUB");
+    assert_eq!(
+        doc.mdata("title").map(|m| m.value.clone()),
+        Some("Stormlight #1".to_string()),
+        "download must carry the baked title override"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
 // -------------------------------------------------------------------
 // F5b — keyset pagination on GET /api/ebooks
 // -------------------------------------------------------------------

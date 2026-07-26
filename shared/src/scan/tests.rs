@@ -188,3 +188,27 @@ fn wishlist_add_request_validate_ignores_an_invalid_meta_when_book_uuid_is_prese
     };
     assert!(req.validate().is_ok());
 }
+
+#[test]
+fn resolve_request_validate_accepts_a_well_formed_isbn() {
+    let req = ResolveRequest {
+        isbn: "9780141439518".into(),
+    };
+    assert!(req.validate().is_ok());
+}
+
+#[test]
+fn resolve_request_validate_rejects_a_blank_isbn() {
+    let req = ResolveRequest { isbn: "   ".into() };
+    let err = req.validate().expect_err("blank isbn must be rejected");
+    assert!(err.contains("isbn"), "got: {err}");
+}
+
+#[test]
+fn resolve_request_validate_rejects_an_oversized_isbn() {
+    let req = ResolveRequest {
+        isbn: "1".repeat(ISBN_MAX_LEN + 1),
+    };
+    let err = req.validate().expect_err("oversized isbn must be rejected");
+    assert!(err.contains("isbn"), "got: {err}");
+}

@@ -7,6 +7,7 @@ fn progress_update_rejects_cross_format_audio_field_on_epub() {
         format: ProgressFormat::Epub,
         epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
         audio_position_seconds: Some(12.0),
+        client_updated_at: None,
     };
     let err = u
         .validate()
@@ -21,6 +22,7 @@ fn progress_update_rejects_cross_format_cfi_on_audio() {
         format: ProgressFormat::Audio,
         epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
         audio_position_seconds: Some(12.0),
+        client_updated_at: None,
     };
     let err = u
         .validate()
@@ -35,6 +37,7 @@ fn progress_update_rejects_overlong_epub_cfi() {
         format: ProgressFormat::Epub,
         epub_cfi: Some("a".repeat(EPUB_CFI_MAX_LEN + 1)),
         audio_position_seconds: None,
+        client_updated_at: None,
     };
     let err = u
         .validate()
@@ -51,8 +54,36 @@ fn progress_update_accepts_epub_cfi_at_cap() {
         format: ProgressFormat::Epub,
         epub_cfi: Some("é".repeat(EPUB_CFI_MAX_LEN)),
         audio_position_seconds: None,
+        client_updated_at: None,
     };
     assert!(u.validate().is_ok());
+}
+
+#[test]
+fn progress_update_rejects_negative_client_updated_at() {
+    let u = ProgressUpdate {
+        book_uuid: "x".into(),
+        format: ProgressFormat::Epub,
+        epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
+        audio_position_seconds: None,
+        client_updated_at: Some(-1),
+    };
+    let err = u
+        .validate()
+        .expect_err("negative client_updated_at must be rejected");
+    assert!(err.contains("client_updated_at"), "got: {err}");
+}
+
+#[test]
+fn progress_update_accepts_missing_client_updated_at() {
+    let u = ProgressUpdate {
+        book_uuid: "x".into(),
+        format: ProgressFormat::Epub,
+        epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
+        audio_position_seconds: None,
+        client_updated_at: None,
+    };
+    assert!(u.validate().is_ok(), "older clients must still validate");
 }
 
 #[test]
@@ -64,6 +95,7 @@ fn session_report_rejects_inverted_time_range() {
         ended_at: 200,
         progress_units: 0,
         device_id: None,
+        client_id: None,
     };
     let err = r.validate().expect_err("ended < started must be rejected");
     assert!(err.contains("ended_at"), "got: {err}");
@@ -78,9 +110,73 @@ fn session_report_rejects_negative_progress_units() {
         ended_at: 200,
         progress_units: -5,
         device_id: None,
+        client_id: None,
     };
     let err = r
         .validate()
         .expect_err("negative progress_units must be rejected");
     assert!(err.contains("progress_units"), "got: {err}");
+}
+
+#[test]
+fn session_report_rejects_blank_client_id() {
+    let r = SessionReport {
+        book_uuid: "x".into(),
+        format: ProgressFormat::Epub,
+        started_at: 100,
+        ended_at: 200,
+        progress_units: 10,
+        device_id: None,
+        client_id: Some("   ".into()),
+    };
+    let err = r.validate().expect_err("a blank handle must be rejected");
+    assert!(err.contains("client_id"), "got: {err}");
+}
+
+#[test]
+fn session_report_rejects_overlong_client_id() {
+    let r = SessionReport {
+        book_uuid: "x".into(),
+        format: ProgressFormat::Epub,
+        started_at: 100,
+        ended_at: 200,
+        progress_units: 10,
+        device_id: None,
+        client_id: Some("a".repeat(SessionReport::CLIENT_ID_MAX_LEN + 1)),
+    };
+    let err = r
+        .validate()
+        .expect_err("an over-length handle must be rejected");
+    assert!(err.contains("client_id"), "got: {err}");
+}
+
+#[test]
+fn session_report_accepts_a_client_id_at_the_cap() {
+    // Multibyte char: chars().count() == CLIENT_ID_MAX_LEN but len() (bytes)
+    // is double that, so a regression to a byte-length check would fail this.
+    let r = SessionReport {
+        book_uuid: "x".into(),
+        format: ProgressFormat::Epub,
+        started_at: 100,
+        ended_at: 200,
+        progress_units: 10,
+        device_id: None,
+        client_id: Some("é".repeat(SessionReport::CLIENT_ID_MAX_LEN)),
+    };
+    assert!(r.validate().is_ok());
+}
+
+#[test]
+fn session_report_accepts_a_missing_client_id() {
+    // Web posts once on unmount and never retries, so it mints no handle.
+    let r = SessionReport {
+        book_uuid: "x".into(),
+        format: ProgressFormat::Epub,
+        started_at: 100,
+        ended_at: 200,
+        progress_units: 10,
+        device_id: None,
+        client_id: None,
+    };
+    assert!(r.validate().is_ok());
 }

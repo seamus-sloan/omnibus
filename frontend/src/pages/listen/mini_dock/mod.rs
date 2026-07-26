@@ -59,7 +59,7 @@ pub fn MiniDock() -> Element {
     let idx = chapter_index_for_elapsed(&chapters, elapsed);
     let chapter_sub = chapter_sub_text(&chapters, idx);
     let sub = dock_sub_text(chapter_sub, elapsed, duration, rate);
-    let title = book.title.clone().unwrap_or_else(|| book.filename.clone());
+    let title = book.display_title();
     let fill = format!("width: {:.1}%", progress_pct(elapsed, duration));
     // Book-accent theming, mirroring the full player's `accent_style`.
     let accent_style = book

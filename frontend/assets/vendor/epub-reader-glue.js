@@ -69,13 +69,16 @@
   var book = null;
   var rendition = null;
   var relocateTimer = null;
-  var locationsReady = false;
   // False while an initial CFI restore is still settling — mutes emitRelocate
   // so the first-pass landing (a page or two off until fonts/theme reflow) is
   // never persisted as reading progress.
   var restoreSettled = true;
   var tocFlat = [];
   var currentTheme = "dark";
+  // Whether the section iframe runs scripts. Only then can we await the
+  // iframe's `fonts.ready`, which is what makes the settle short enough to
+  // hide behind a fade rather than a long blank.
+  var scriptedContentAllowed = false;
   // Re-paginates when the viewer CONTAINER resizes without a window resize —
   // epub.js only listens for window resize, so the immersive audio dock
   // appearing/disappearing mid-read (which shrinks/grows `.rd-stage`) would
@@ -112,7 +115,7 @@
     }
     cancelTurnAnim();
     endSectionTurn();
-    locationsReady = false;
+    endSettleFade();
     tocFlat = [];
     if (rendition) {
       try {
@@ -155,16 +158,23 @@
   function buildRelocateData(location) {
     var cfi = location && location.start ? location.start.cfi : undefined;
     var pct = location && location.start ? Math.round((location.start.percentage || 0) * 100) : 0;
-    var page = 0;
-    var totalPages = 0;
-    if (locationsReady && book && book.locations) {
-      page = book.locations.locationFromCfi(cfi) || 0;
-      totalPages = book.locations.total || 0;
-    }
+    // `displayed` is the visual column epub.js just rendered in the current
+    // paginated flow — 1-indexed, and always exactly one away from the
+    // previous relocate's page after a next()/prev() turn. This replaced a
+    // `book.locations.locationFromCfi()` lookup (fixed ~1024-char chunks
+    // spanning the whole book), whose granularity didn't line up with a
+    // visual page turn: dense screens skipped several chunks, sparse ones
+    // (an image, a short trailing column) crossed none. The trade-off is
+    // that `page`/`totalPages` are now scoped to the current spine section
+    // rather than the whole book — `pct` (below) still carries the
+    // whole-book position.
+    var displayed = location && location.start ? location.start.displayed : null;
+    var page = displayed && displayed.page ? displayed.page : 0;
+    var totalPages = displayed && displayed.total ? displayed.total : 0;
     var ch = location && location.start ? findChapter(location.start.href) : null;
     return {
       cfi: cfi,
-      page: page + 1,
+      page: page,
       totalPages: totalPages,
       pct: pct,
       chapter: ch ? ch.index : 0,
@@ -205,6 +215,7 @@
 
   function init(elementId, fileUrl, opts) {
     opts = opts || {};
+    scriptedContentAllowed = !!opts.allowScriptedContent;
 
     if (typeof ePub !== "function") {
       emitStatus("error");
@@ -267,13 +278,16 @@
       return;
     }
 
-    // Page numbers come from epub.js "locations" — a whole-book pagination
-    // pass that takes seconds on desktop and much longer in the mobile
-    // WebView. Cache the result per book (keyed by the host-supplied
-    // `locationsKey`, the book uuid) so only the very first open pays it.
-    // Storage failures (quota, private mode) and corrupt entries just fall
-    // back to regeneration. Caveat: replacing a book's file under the same
-    // uuid can leave slightly stale page numbers until the entry is cleared.
+    // The whole-book `pct` figure comes from epub.js "locations" — a
+    // whole-book pagination pass that takes seconds on desktop and much
+    // longer in the mobile WebView (the visual page/section total in
+    // `buildRelocateData` doesn't need this pass — it reads straight off
+    // the current render). Cache the result per book (keyed by the
+    // host-supplied `locationsKey`, the book uuid) so only the very first
+    // open pays it. Storage failures (quota, private mode) and corrupt
+    // entries just fall back to regeneration. Caveat: replacing a book's
+    // file under the same uuid can leave a slightly stale pct until the
+    // entry is cleared.
     var locationsCacheKey = opts.locationsKey ? "omn.locs::" + opts.locationsKey : null;
     book.ready
       .then(function () {
@@ -303,9 +317,9 @@
         });
       })
       .then(function () {
-        locationsReady = true;
         // Re-emit current location now that locations are resolved so the
-        // Rust side gets real page numbers on first load.
+        // Rust side gets a real whole-book `pct` on first load (page/total
+        // are already live off the current render — see buildRelocateData).
         if (rendition && rendition.location) {
           emitRelocate(rendition.location);
         }
@@ -1400,15 +1414,67 @@
       });
   }
 
+  // Hide the stage while a navigation corrects itself.
+  //
+  // `displaySettled` lands a first pass, waits for fonts/injected CSS, then
+  // re-displays — and that correction is a visible twitch on every chapter
+  // jump. The book-open path already hides exactly this behind the host's
+  // loading overlay; navigation had no equivalent.
+  //
+  // The stage's own opacity is the veil rather than a colour-filled overlay:
+  // the web view is transparent and the host paints the reader ground beneath
+  // it, so fading the stage out reveals the correct page colour in every
+  // theme, with nothing to keep in sync.
+  var settleFadeToken = 0;
+
+  function beginSettleFade() {
+    // Without scripts in the section iframe `fonts.ready` never settles, so
+    // the correction only lands on `redisplayWhenSettled`'s 1.5s fail-safe —
+    // far too long to hold a blank stage. Those builds keep the old visible
+    // correction rather than trading a twitch for a stall.
+    if (!scriptedContentAllowed) return function () {};
+
+    var stage = rendition && rendition.manager && rendition.manager.container;
+    if (!stage) return function () {};
+
+    var token = ++settleFadeToken;
+    // Out instantly — a fade-out would show the very frame we're hiding.
+    stage.style.transition = "none";
+    stage.style.opacity = "0";
+
+    var reveal = function () {
+      if (settleFadeToken !== token) return;
+      settleFadeToken++;
+      stage.style.transition = "opacity 180ms ease-out";
+      stage.style.opacity = "1";
+    };
+    // Fail-open: a settle chain that never resolves must not leave the reader
+    // showing a blank page forever.
+    setTimeout(reveal, 2500);
+    return reveal;
+  }
+
+  // Drop the veil outright (teardown, or a book swap mid-navigation) so a
+  // later mount can never start with a hidden stage.
+  function endSettleFade() {
+    settleFadeToken++;
+    var stage = rendition && rendition.manager && rendition.manager.container;
+    if (!stage) return;
+    stage.style.transition = "";
+    stage.style.opacity = "";
+  }
+
   function displaySettled(target) {
     if (!rendition) return;
+    var reveal = beginSettleFade();
     rendition
       .display(target)
       .then(function () {
         return redisplayWhenSettled(target);
       })
-      .catch(function () {
+      .then(reveal, function () {
         /* target may be gone after a teardown */
+        reveal();
       });
   }
 

@@ -768,6 +768,7 @@ async fn merge_moves_highlights_to_target() {
         &pool,
         user,
         &omnibus_shared::CreateHighlight {
+            client_id: None,
             book_uuid: source.clone(),
             epub_cfi_range: "epubcfi(/6/4!/4/2,/1:0,/1:100)".into(),
             color: omnibus_shared::HighlightColor::Blue,

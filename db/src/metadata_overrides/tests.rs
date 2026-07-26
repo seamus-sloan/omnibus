@@ -4,6 +4,7 @@
 
 use omnibus_shared::{Contributor, MetadataOverrides, MetadataSource};
 
+use super::upsert::override_match_keys;
 use super::*;
 use crate::books::{get_book, list_books, search_books};
 use crate::palette::search_palette;
@@ -105,6 +106,94 @@ async fn merge_metadata_overrides_creates_row_when_absent() {
     assert_eq!(loaded.title, Some("Fresh".into()));
     assert!(!has_cover, "a brand-new merged row has no cover override");
 }
+
+/// A grid quick-edit "clear this field" save must land as a real clear,
+/// not a silent no-op. `merge_metadata_overrides` reads an incoming
+/// `None` as "untouched — keep whatever override already exists" (that's
+/// what lets an edit that only touches one field preserve the rest), so
+/// a caller that represents "the user cleared series/publisher" as
+/// `None` can never actually clear it — the prior override value
+/// survives forever. The correct clear payload is `Some("")`:
+/// `Option::or` always prefers a `Some`, even an empty one, so the merge
+/// overwrites the prior override value. Unlike `isbn13` — which
+/// `apply_overrides` special-cases to read back as `None` — series and
+/// publisher have no such special-casing, so the field reads back as a
+/// literal empty string (`Some("")`), not `None`; that's still what the
+/// UI (and the full metadata-edit page's `build_overrides`) treats as
+/// "cleared". This is what
+/// `frontend::pages::landing::table::cells::field_override` now sends
+/// for the grid's quick-edit cells.
+#[tokio::test]
+async fn merge_metadata_overrides_treats_none_as_untouched_but_empty_string_as_clear() {
+    let _covers = CoversTempDir::new("clear_field_1085");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+
+    replace_books(
+        &pool,
+        "/lib",
+        vec![indexed(
+            "clear.epub",
+            Some("Scanned Title"),
+            &["Author"],
+            &[],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+    let books = list_books(&pool, "/lib").await.unwrap();
+    let uuid = books[0].unique_identifier.clone().unwrap();
+    let id = books[0].id;
+
+    let initial = MetadataOverrides {
+        series: Some("Foundation".into()),
+        publisher: Some("Gnome Press".into()),
+        ..Default::default()
+    };
+    merge_metadata_overrides(&pool, &uuid, &initial, user_id)
+        .await
+        .unwrap();
+    let with_overrides = get_book(&pool, id).await.unwrap().unwrap();
+    assert_eq!(with_overrides.series.as_deref(), Some("Foundation"));
+    assert_eq!(with_overrides.publisher.as_deref(), Some("Gnome Press"));
+
+    // A `None`-based "clear" (the pre-fix grid payload) is a no-op: the
+    // prior override values survive the merge untouched.
+    let none_clear = MetadataOverrides::default();
+    merge_metadata_overrides(&pool, &uuid, &none_clear, user_id)
+        .await
+        .unwrap();
+    let after_none = get_book(&pool, id).await.unwrap().unwrap();
+    assert_eq!(
+        after_none.series.as_deref(),
+        Some("Foundation"),
+        "a None-based clear payload must not be able to clear series (#1085)"
+    );
+    assert_eq!(
+        after_none.publisher.as_deref(),
+        Some("Gnome Press"),
+        "a None-based clear payload must not be able to clear publisher (#1085)"
+    );
+
+    // The `Some("")` sentinel actually clears.
+    let real_clear = MetadataOverrides {
+        series: Some(String::new()),
+        publisher: Some(String::new()),
+        ..Default::default()
+    };
+    merge_metadata_overrides(&pool, &uuid, &real_clear, user_id)
+        .await
+        .unwrap();
+    let after_clear = get_book(&pool, id).await.unwrap().unwrap();
+    assert_eq!(after_clear.series.as_deref(), Some(""));
+    assert_eq!(after_clear.publisher.as_deref(), Some(""));
+}
+
 /// Two concurrent saves to the same book (e.g. the edit form open in two
 /// tabs, or a network retry firing twice) each touch a different field.
 /// Because the rpc/REST save paths route through `merge_metadata_overrides`
@@ -1237,4 +1326,76 @@ fn override_match_keys_returns_none_for_both_when_no_override_set() {
     let (title_norm, author_norm) = override_match_keys(&ov);
     assert_eq!(title_norm, None);
     assert_eq!(author_norm, None);
+}
+
+// -----------------------------------------------------------------
+// F5.8 export-with-overrides (#1372): override writes must invalidate the
+// cache clock so exports (thumb / KEPUB / rewritten EPUB) rebuild after an edit
+// -----------------------------------------------------------------
+#[tokio::test]
+async fn upsert_metadata_overrides_bumps_book_last_modified() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let uuid = crate::test_support::seed_synced_ebook(&pool, "b.epub", "T", "A").await;
+    // Force an old clock so the post-write bump is unambiguously observable.
+    sqlx::query("UPDATE books SET last_modified = 1 WHERE uuid = ?")
+        .bind(&uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let ov = MetadataOverrides {
+        title: Some("Baked".into()),
+        ..Default::default()
+    };
+    upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+        .await
+        .unwrap();
+
+    let last_modified: i64 = sqlx::query_scalar("SELECT last_modified FROM books WHERE uuid = ?")
+        .bind(&uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        last_modified > 1,
+        "override save must bump books.last_modified (cache clock), got {last_modified}"
+    );
+}
+
+#[tokio::test]
+async fn delete_metadata_overrides_bumps_book_last_modified() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let uuid = crate::test_support::seed_synced_ebook(&pool, "b.epub", "T", "A").await;
+    let ov = MetadataOverrides {
+        title: Some("Baked".into()),
+        ..Default::default()
+    };
+    upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE books SET last_modified = 1 WHERE uuid = ?")
+        .bind(&uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    delete_metadata_overrides(&pool, &uuid).await.unwrap();
+
+    let last_modified: i64 = sqlx::query_scalar("SELECT last_modified FROM books WHERE uuid = ?")
+        .bind(&uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        last_modified > 1,
+        "reverting overrides must bump last_modified so exports drop back to source, got {last_modified}"
+    );
 }

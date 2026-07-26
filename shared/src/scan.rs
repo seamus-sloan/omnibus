@@ -55,6 +55,20 @@ pub struct ResolveRequest {
     pub isbn: String,
 }
 
+impl ResolveRequest {
+    /// Reject an empty/oversized `isbn`, mirroring the same cap applied to
+    /// [`CheckInRequest::isbn`]. Handlers translate `Err(_)` into 400.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.isbn.trim().is_empty() {
+            return Err("isbn is required".into());
+        }
+        if self.isbn.chars().count() > ISBN_MAX_LEN {
+            return Err(format!("isbn exceeds {ISBN_MAX_LEN} characters"));
+        }
+        Ok(())
+    }
+}
+
 /// Maximum length (in chars) for a free-text physical check-in `note` field.
 /// Mirrors `omnibus_shared::highlight::UpdateHighlightNote::NOTE_MAX_LEN`.
 pub const NOTE_MAX_LEN: usize = 4096;

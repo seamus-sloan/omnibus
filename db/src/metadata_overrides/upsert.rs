@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use omnibus_shared::{EbookMetadata, MetadataOverrides, MetadataSource};
-use sqlx::{Executor, SqlitePool};
+use sqlx::{Executor, SqliteConnection, SqlitePool};
 
 use crate::books::resolve_book_id_by_uuid_exec;
 use crate::normalize::{normalize_author, normalize_title};
@@ -82,13 +82,42 @@ where
     Ok(())
 }
 
+/// Bump `books.last_modified` for `book_uuid` (merged-uuid aware) inside the
+/// caller's transaction. `last_modified` is the cache-invalidation clock for
+/// the thumbnail, KEPUB, and export-EPUB caches, so every override write must
+/// touch it — otherwise a title/cover edit leaves those caches serving the
+/// pre-edit file. A uuid with no live book row is a no-op.
+async fn touch_book_last_modified(
+    conn: &mut SqliteConnection,
+    book_uuid: &str,
+) -> Result<(), sqlx::Error> {
+    // Resolve uuid→id (merged-uuid aware, same UNION as
+    // `resolve_book_id_by_uuid_exec`) inline so the write stays on `sqlx::Error`
+    // — a bare id lookup can't produce the `BooksError::OverridesJson` variant,
+    // so routing through the typed resolver would only add a misleading map_err.
+    // A uuid with no live book row updates zero rows (a no-op).
+    sqlx::query(
+        "UPDATE books SET last_modified = strftime('%s','now')
+         WHERE id = (
+             SELECT id FROM books WHERE uuid = ?1
+             UNION ALL
+             SELECT book_id FROM merged_uuids WHERE uuid = ?1
+             LIMIT 1
+         )",
+    )
+    .bind(book_uuid)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
 /// Normalized effective (title, author) match keys for a set of overrides,
 /// mirroring how the sync writers derive `books.(title_norm, author_norm)` from
 /// scanned metadata: `normalize_title` of the override title, `normalize_author`
 /// of the first override creator. Either side is `None` when the override
 /// doesn't set that field (or it normalizes to empty), signalling the resolver
 /// to fall back to the scanned norm.
-pub(crate) fn override_match_keys(ov: &MetadataOverrides) -> (Option<String>, Option<String>) {
+pub(super) fn override_match_keys(ov: &MetadataOverrides) -> (Option<String>, Option<String>) {
     let title_norm = ov.title.as_deref().and_then(normalize_title);
     let author_norm = ov
         .creators
@@ -193,6 +222,7 @@ pub async fn upsert_metadata_overrides(
     )
     .await?;
     materialize_series_link(&mut tx, book_uuid, overrides).await?;
+    touch_book_last_modified(&mut tx, book_uuid).await?;
     tx.commit().await?;
 
     if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
@@ -250,6 +280,7 @@ pub async fn merge_metadata_overrides(
     )
     .await?;
     materialize_series_link(&mut tx, book_uuid, &merged).await?;
+    touch_book_last_modified(&mut tx, book_uuid).await?;
     tx.commit().await?;
 
     if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
@@ -309,6 +340,7 @@ pub async fn delete_metadata_overrides(
     if let Some(book_id) = resolve_book_id_by_uuid_exec(&mut *tx, book_uuid).await? {
         upsert_fts(&mut tx, book_id).await?;
     }
+    touch_book_last_modified(&mut tx, book_uuid).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -357,6 +389,7 @@ pub async fn clear_cover_override(
     } else {
         upsert_overrides_row(&mut *tx, book_uuid, &overrides, &json, false, user_id).await?;
     }
+    touch_book_last_modified(&mut tx, book_uuid).await?;
     tx.commit().await?;
     Ok(())
 }

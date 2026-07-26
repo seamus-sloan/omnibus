@@ -44,10 +44,10 @@ pub(super) enum ScannerEvent {
 /// promise is returned into this chain too, so a decoder-init failure it
 /// already reports via `status()` also reaches this outer `.catch`.
 pub(super) fn install_scanner_js(video_id: &str, scripts: &ScannerScripts) -> String {
-    let video_lit = json_lit(video_id);
-    let decoder = json_lit(&scripts.decoder);
-    let glue = json_lit(&scripts.glue);
-    let wasm = json_lit(&scripts.wasm);
+    let video_lit = js_str(video_id);
+    let decoder = js_str(&scripts.decoder);
+    let glue = js_str(&scripts.glue);
+    let wasm = js_str(&scripts.wasm);
     format!(
         r#"(function(){{
   window.__omnibusOnScanResult=function(t){{dioxus.send({{kind:"Result",text:t}});}};
@@ -82,9 +82,12 @@ pub(super) fn set_torch_js(on: bool) -> String {
     format!("window.OmnibusScanner && window.OmnibusScanner.setTorch({on});")
 }
 
-/// JSON-quote `s` for embedding as a JS literal.
-fn json_lit(s: &str) -> String {
-    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into())
+/// JSON-quote `s` for embedding as a JS literal, falling back to an empty
+/// string literal (rather than [`crate::js_interop::json_literal`]'s `null`)
+/// since every caller here interpolates directly into a JS string-typed
+/// argument position.
+fn js_str(s: &str) -> String {
+    crate::js_interop::json_literal_or(s, "\"\"")
 }
 
 /// Eval the install script and return the persistent [`Eval`] the caller drains

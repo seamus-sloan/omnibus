@@ -1,0 +1,21 @@
+-- Most-recent-wins position sync must order on client EVENT time, not
+-- server RECEIPT time (issue #1362). `reading_progress.updated_at` records
+-- when the server heard about a write, which is latency-dependent — a
+-- device that reconnects late after an offline read can stamp a stale
+-- position with a fresh `updated_at` and win over a genuinely newer write
+-- from another device.
+--
+-- `client_updated_at` carries the device's own clock at write time (clamped
+-- to server-now for forward clock skew, defaulted to server-now for a
+-- client that sends none — see `db::progress::upsert_progress`). Backfilled
+-- from `updated_at` for existing rows: a straight copy is all pre-migration
+-- rows can carry, since their actual client event time was never recorded.
+-- Unlike the `_norm` pattern (rule 06), this backfill needs no app-side
+-- normalization logic, so it runs inline here instead of at boot.
+--
+-- `updated_at` is untouched and keeps its existing meaning (server receipt
+-- time); `db::progress::recent_progress` switches its ORDER BY to
+-- `COALESCE(client_updated_at, updated_at)` so a queued offline replay
+-- can't reorder the Continue Reading rail.
+ALTER TABLE reading_progress ADD COLUMN client_updated_at INTEGER;
+UPDATE reading_progress SET client_updated_at = updated_at WHERE client_updated_at IS NULL;

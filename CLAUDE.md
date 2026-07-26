@@ -2,7 +2,7 @@
 
 Guidance for Claude Code when working in this repo. This file is an index — detailed rules and recipes live in [.claude/](.claude/).
 
-Omnibus is a self-hosted ebook/audiobook library (see [docs/roadmap/0-0-summary.md](docs/roadmap/0-0-summary.md)). Foundations and browse/discovery have shipped; reading/listening is in progress — the UI is a real library app (landing grid + table, EPUB reader, audiobook player, command-palette search, auth, author/series/tag discovery).
+Omnibus is a self-hosted ebook/audiobook library. Foundations and browse/discovery have shipped; reading/listening is in progress — the UI is a real library app (landing grid + table, EPUB reader, audiobook player, command-palette search, auth, author/series/tag discovery).
 
 ## Rules
 
@@ -15,6 +15,7 @@ Numbered rules in [.claude/rules/](.claude/rules/), applied in order. Follow the
 - [05-rust-style.md](.claude/rules/05-rust-style.md) — Rust style guide: comments, function/file shape, errors, tests, mechanics. Long-form rationale in [docs/style-guide.md](docs/style-guide.md).
 - [06-migrations.md](.claude/rules/06-migrations.md) — authoring SQL migrations: `NNNN_` naming, never-edit-applied, the `_norm` backfill pattern, testing against `sqlite::memory:`, and the dev-bounce step.
 - [07-hydration.md](.claude/rules/07-hydration.md) — SSR/WASM hydration parity: never feature-gate a component body on `web`; how to confirm and fix a hydration mismatch.
+- [08-offline-writes.md](.claude/rules/08-offline-writes.md) — what the mutation outbox may queue: content state only, never configuration or commands; the four tests, and what each excludes.
 - [98-keep-skills-fresh.md](.claude/rules/98-keep-skills-fresh.md) — update skills when the code they reference changes.
 - [99-end-of-session.md](.claude/rules/99-end-of-session.md) — end-of-session checklist (docs sync, fmt/clippy, coverage, line-count cap).
 
@@ -37,6 +38,8 @@ Do not use Chrome DevTools MCP or Claude in Chrome for routine agent verificatio
 ## Architecture
 
 Five-crate Cargo workspace: `shared/` (serde types), `db/` (data layer + indexer), `frontend/` (Dioxus UI + server functions), `server/` (fullstack binary + REST router), `mobile/` (thin native shell).
+
+Alongside it, `omnibus-ios/` is a native SwiftUI client — an Xcode project, not a Cargo crate, so no `cargo`/`just` target builds or tests it. It is the iOS surface going forward; `mobile/` remains the Android shell. It speaks the same `/api/*` REST surface.
 
 Full crate descriptions, per-crate module maps, request flow diagrams, and mobile-auth details live in [docs/architecture.md](docs/architecture.md).
 
@@ -105,4 +108,4 @@ just e2e-mobile                                             # port from dev-up e
 
 ## Project direction
 
-See [docs/roadmap/0-0-summary.md](docs/roadmap/0-0-summary.md) for the phased roadmap (foundations, browse/discovery, reading/listening, personalization, device sync, admin, mobile).
+See the [roadmap project board](https://github.com/users/seamus-sloan/projects/2/views/9) for the phased plan (foundations, browse/discovery, reading/listening, personalization, device sync, admin, mobile).

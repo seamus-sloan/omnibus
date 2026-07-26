@@ -11,11 +11,13 @@ async function mockGoogleBooksKey(
   configured: boolean,
 ): Promise<void> {
   await page.route("**/api/rpc/scan/google-books-configured", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(configured),
-    }),
+    route.request().method() === "POST"
+      ? route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(configured),
+        })
+      : route.continue(),
   );
 }
 

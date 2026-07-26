@@ -35,6 +35,9 @@ impl From<crate::books::BooksError> for BookmarkError {
 }
 
 /// Create a bookmark and return the persisted row.
+///
+/// Idempotent when `input.client_id` is set, so a replayed create from the
+/// mobile outbox resolves to the same row rather than a duplicate.
 pub async fn create_bookmark(
     pool: &SqlitePool,
     user_id: i64,
@@ -43,18 +46,44 @@ pub async fn create_bookmark(
     let book_uuid = resolve_canonical_book_uuid(pool, &input.book_uuid)
         .await?
         .ok_or(BookmarkError::BookNotFound)?;
+    let client_id = input.client_id.as_deref();
     let id = sqlx::query_scalar::<_, i64>(
-        "INSERT INTO bookmarks (user_id, book_uuid, position, title)
-         VALUES (?, ?, ?, ?) RETURNING id",
+        "INSERT INTO bookmarks (user_id, book_uuid, position, title, client_id)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(user_id, client_id) WHERE client_id IS NOT NULL DO NOTHING
+         RETURNING id",
     )
     .bind(user_id)
     .bind(&book_uuid)
     .bind(&input.position)
     .bind(input.title.as_deref())
-    .fetch_one(pool)
+    .bind(client_id)
+    .fetch_optional(pool)
     .await?;
 
-    get_bookmark_by_id(pool, user_id, id).await
+    match (id, client_id) {
+        (Some(id), _) => get_bookmark_by_id(pool, user_id, id).await,
+        (None, Some(client_id)) => get_bookmark_by_client_id(pool, user_id, client_id).await,
+        (None, None) => Err(BookmarkError::NotFound),
+    }
+}
+
+/// Resolve a client-minted id to the numeric row id, scoped to the owner.
+/// `Ok(None)` when this user has no bookmark under that handle.
+pub async fn bookmark_id_for_client_id(
+    pool: &SqlitePool,
+    user_id: i64,
+    client_id: &str,
+) -> Result<Option<i64>, BookmarkError> {
+    Ok(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT id FROM bookmarks WHERE user_id = ? AND client_id = ?",
+        )
+        .bind(user_id)
+        .bind(client_id)
+        .fetch_optional(pool)
+        .await?,
+    )
 }
 
 /// List all bookmarks for a user + book, ordered by creation time (oldest first).
@@ -67,7 +96,7 @@ pub async fn list_bookmarks(
         return Ok(vec![]);
     };
     let rows = sqlx::query(
-        "SELECT id, book_uuid, position, title, created_at
+        "SELECT id, book_uuid, position, title, client_id, created_at
          FROM bookmarks
          WHERE user_id = ? AND book_uuid = ?
          ORDER BY created_at ASC
@@ -124,11 +153,30 @@ async fn get_bookmark_by_id(
     bookmark_id: i64,
 ) -> Result<Bookmark, BookmarkError> {
     let row = sqlx::query(
-        "SELECT id, book_uuid, position, title, created_at
+        "SELECT id, book_uuid, position, title, client_id, created_at
          FROM bookmarks
          WHERE id = ? AND user_id = ?",
     )
     .bind(bookmark_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(BookmarkError::NotFound)?;
+
+    row_to_bookmark(&row)
+}
+
+async fn get_bookmark_by_client_id(
+    pool: &SqlitePool,
+    user_id: i64,
+    client_id: &str,
+) -> Result<Bookmark, BookmarkError> {
+    let row = sqlx::query(
+        "SELECT id, book_uuid, position, title, client_id, created_at
+         FROM bookmarks
+         WHERE client_id = ? AND user_id = ?",
+    )
+    .bind(client_id)
     .bind(user_id)
     .fetch_optional(pool)
     .await?
@@ -143,6 +191,7 @@ fn row_to_bookmark(row: &sqlx::sqlite::SqliteRow) -> Result<Bookmark, BookmarkEr
         book_uuid: row.try_get::<String, _>("book_uuid")?,
         position: row.try_get("position")?,
         title: row.try_get("title")?,
+        client_id: row.try_get("client_id")?,
         created_at: row.try_get("created_at")?,
     })
 }

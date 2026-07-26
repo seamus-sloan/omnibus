@@ -125,6 +125,11 @@ tokio = { workspace = true, features = ["macros", "rt"] }
 
 [features]
 default = []
+# Exposes the SSR render-smoke harness (`test_support`) to dependents. Pulls in
+# `server`, since the harness uses `dioxus::ssr`, which only exists there. The
+# crate's own render tests reach the harness through `cfg(test)` and don't need
+# this feature; it's here so another crate could consume the helper (rule 03).
+test-support = ["server"]
 # Web client (WASM): uses dioxus-fullstack server-function client stubs.
 # tokio/sync (sync-only, WASM-safe) backs `data::web_auth_state` — a watch
 # channel that lets data-layer 401s notify the router to redirect to /login

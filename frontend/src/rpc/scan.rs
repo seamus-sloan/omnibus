@@ -41,6 +41,9 @@ fn map_scan_err(e: db::ScanError) -> ServerFnError {
 /// user may resolve; ownership is library-wide.
 #[post("/api/rpc/scan/resolve", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_resolve_scan(req: ResolveRequest) -> Result<ScanOutcome> {
+    if let Err(msg) = req.validate() {
+        return Err(ServerFnError::new(msg).into());
+    }
     // Saved settings key wins over `GOOGLE_BOOKS_API_KEY`; both absent is a
     // keyless (shared-quota) lookup.
     let key = db::effective_google_books_api_key(&pool.0)

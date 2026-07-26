@@ -49,16 +49,37 @@ pub(super) async fn get_bookmarks(
     }
 }
 
+/// Resolve a `{id}` path segment to a numeric bookmark id.
+///
+/// Accepts either the server's row id or the uuid the creating device minted
+/// (migration 0051), so an offline client can address a bookmark it created
+/// but has not yet synced. See `highlights::resolve_id` for the full rationale.
+async fn resolve_id(state: &AppState, user_id: i64, raw: &str) -> Result<i64, BookmarkError> {
+    if let Ok(id) = raw.parse::<i64>() {
+        return Ok(id);
+    }
+    db::bookmarks::bookmark_id_for_client_id(&state.pool, user_id, raw)
+        .await?
+        .ok_or(BookmarkError::NotFound)
+}
+
 /// Update the title/note on an existing bookmark.
 pub(super) async fn put_bookmark(
     user: AuthUser,
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Path(id): Path<String>,
     Json(body): Json<UpdateBookmark>,
 ) -> Response {
     if let Err(msg) = body.validate() {
         return (axum::http::StatusCode::BAD_REQUEST, msg).into_response();
     }
+    let id = match resolve_id(&state, user.id, &id).await {
+        Ok(id) => id,
+        Err(BookmarkError::NotFound) => {
+            return (axum::http::StatusCode::NOT_FOUND, "bookmark not found").into_response()
+        }
+        Err(e) => return internal("update_bookmark", e),
+    };
     match db::bookmarks::update_bookmark(&state.pool, user.id, id, body.title.as_deref()).await {
         Ok(()) => axum::http::StatusCode::NO_CONTENT.into_response(),
         Err(BookmarkError::NotFound) => {
@@ -73,8 +94,15 @@ pub(super) async fn put_bookmark(
 pub(super) async fn delete_bookmark(
     user: AuthUser,
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Path(id): Path<String>,
 ) -> Response {
+    let id = match resolve_id(&state, user.id, &id).await {
+        Ok(id) => id,
+        Err(BookmarkError::NotFound) => {
+            return (axum::http::StatusCode::NOT_FOUND, "bookmark not found").into_response()
+        }
+        Err(e) => return internal("delete_bookmark", e),
+    };
     match db::bookmarks::delete_bookmark(&state.pool, user.id, id).await {
         Ok(()) => axum::http::StatusCode::NO_CONTENT.into_response(),
         Err(BookmarkError::NotFound) => {

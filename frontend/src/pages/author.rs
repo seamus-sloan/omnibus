@@ -355,7 +355,7 @@ fn author_body(series_groups: SeriesGroups, standalone: Vec<EbookMetadata>) -> E
 /// before `book` moves into `Cover`, which needs ownership.
 fn author_book_tile(book: EbookMetadata, series_index: Option<String>) -> Element {
     let uuid = book.unique_identifier.clone().unwrap_or_default();
-    let title = book.title.clone().unwrap_or_else(|| book.filename.clone());
+    let title = book.display_title();
     let book_id = book.id;
     rsx! {
         Link {

@@ -190,6 +190,7 @@ mod tests {
             ended_at: 1,
             progress_units: 1,
             device_id: None,
+            client_id: None,
         }
     }
 
