@@ -2,26 +2,21 @@ import type { Page } from "@playwright/test";
 import { expect, test } from "../fixtures/test";
 import { expectNavVisible, gotoReady } from "../utils/nav";
 
-// The scanner's Google Books disclaimer keys off the admin-only masked key
-// status (`GET /api/rpc/google-books-key`). Mock it so the note's two states
-// don't ride on ambient server config (another worker's settings save could
-// otherwise flip it mid-run).
+// The scanner's Google Books disclaimer keys off the non-admin-gated
+// configured flag (`POST /api/rpc/scan/google-books-configured`). Mock it so
+// the note's two states don't ride on ambient server config (another
+// worker's settings save could otherwise flip it mid-run).
 async function mockGoogleBooksKey(
   page: Page,
   configured: boolean,
 ): Promise<void> {
-  await page.route("**/api/rpc/google-books-key", (route) => {
-    if (route.request().method() !== "GET") return route.continue();
-    return route.fulfill({
+  await page.route("**/api/rpc/scan/google-books-configured", (route) =>
+    route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(
-        configured
-          ? { configured: true, masked: "AIza…f3a9", source: "settings" }
-          : { configured: false, masked: null, source: "none" },
-      ),
-    });
-  });
+      body: JSON.stringify(configured),
+    }),
+  );
 }
 
 // Headless Chromium refuses `getUserMedia` without a fake device, so every run
@@ -125,7 +120,7 @@ test.describe("check-in scanner", () => {
     page,
   }) => {
     const responded = page.waitForResponse((r) =>
-      r.url().includes("/api/rpc/google-books-key"),
+      r.url().includes("/api/rpc/scan/google-books-configured"),
     );
     await mockGoogleBooksKey(page, false);
     await gotoReady(page, "/check-in");
@@ -143,7 +138,7 @@ test.describe("check-in scanner", () => {
     page,
   }) => {
     const responded = page.waitForResponse((r) =>
-      r.url().includes("/api/rpc/google-books-key"),
+      r.url().includes("/api/rpc/scan/google-books-configured"),
     );
     await mockGoogleBooksKey(page, true);
     await gotoReady(page, "/check-in");

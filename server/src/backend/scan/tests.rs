@@ -7,6 +7,7 @@ use axum::{
     body::{to_bytes, Body},
     http::{header::AUTHORIZATION, Request, StatusCode},
 };
+use omnibus_db::test_support::EnvVarGuard;
 use omnibus_shared::physical::WishlistSource;
 use omnibus_shared::{BookRef, ScanOutcome};
 use tower::ServiceExt;
@@ -591,6 +592,64 @@ async fn api_google_books_key_set_then_get_returns_masked_never_raw() {
     assert!(get_body.contains("\"configured\":true"));
     // Masked preview keeps the first/last 4 chars around an ellipsis.
     assert!(get_body.contains("AIza\u{2026}1234"));
+}
+
+// ── Google Books configured flag (any authenticated user) ────────
+
+#[tokio::test]
+async fn api_google_books_configured_reflects_saved_key_for_any_authenticated_user() {
+    // `google_books_key_status` falls back to `GOOGLE_BOOKS_API_KEY`, so the
+    // pre-save "false" assertion below only holds with the var removed.
+    let _env = EnvVarGuard::set("GOOGLE_BOOKS_API_KEY", None);
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "reader").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/scan/google-books-configured")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_string(res).await, "false");
+
+    omnibus_db::set_google_books_api_key(&pool, Some("AIzaSySupersecretKeyValue1234"))
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/scan/google-books-configured")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_string(res).await, "true");
+}
+
+#[tokio::test]
+async fn api_google_books_configured_requires_auth() {
+    let (app, _state, _pool) = fixture().await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/scan/google-books-configured")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[test]

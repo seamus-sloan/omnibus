@@ -71,6 +71,20 @@ pub async fn get_google_books_key(server_url: &str) -> Result<GoogleBooksKeyStat
     Ok(response.json::<GoogleBooksKeyStatus>().await?)
 }
 
+/// Mobile: GET `/api/scan/google-books-configured` — whether a server-wide
+/// Google Books key is configured, without the admin-only masked status
+/// [`get_google_books_key`] fetches (see `check_in::scan::ScanScreen`).
+#[cfg(feature = "mobile")]
+pub async fn google_books_configured(server_url: &str) -> Result<bool, DataError> {
+    let url = format!("{server_url}/api/scan/google-books-configured");
+    let response = with_bearer(http_client().get(&url)).send().await?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    Ok(response.json::<bool>().await?)
+}
+
 /// Mobile: POST `/api/google-books-key` with `{ "key": ... }` (save or clear).
 #[cfg(feature = "mobile")]
 pub async fn set_google_books_key(
@@ -137,6 +151,16 @@ pub async fn wishlist_add(
 #[cfg(not(feature = "mobile"))]
 pub async fn get_google_books_key(_server_url: &str) -> Result<GoogleBooksKeyStatus, DataError> {
     crate::rpc::rpc_get_google_books_key()
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Web/SSR: whether a server-wide Google Books key is configured, via
+/// `rpc_google_books_configured` — no admin gate, unlike
+/// [`get_google_books_key`] (see `check_in::scan::ScanScreen`).
+#[cfg(not(feature = "mobile"))]
+pub async fn google_books_configured(_server_url: &str) -> Result<bool, DataError> {
+    crate::rpc::rpc_google_books_configured()
         .await
         .map_err(note_server_fn_err)
 }

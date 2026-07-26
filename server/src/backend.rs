@@ -390,6 +390,14 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             post(scan::post_add_physical_only),
         )
         .route("/api/scan/wishlist", post(scan::post_wishlist_add))
+        // Whether a server-wide Google Books key is configured — any
+        // authenticated user may read this non-sensitive flag (mirrors
+        // `/api/summary/hardcover-configured`). Drives the check-in scan
+        // screen's provider note without the admin-only masked-status route.
+        .route(
+            "/api/scan/google-books-configured",
+            get(scan::get_google_books_configured),
+        )
         // Google Books API key (admin) — mobile-facing REST. Web hits the
         // analogous `/api/rpc/google-books-key` server fn.
         .route(
