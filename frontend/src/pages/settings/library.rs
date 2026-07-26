@@ -270,6 +270,37 @@ fn ScanIntervalField(mut scan_interval_hours: Signal<String>) -> Element {
     }
 }
 
+/// Returns the "Scan Library" button's `onclick` handler: flips
+/// `scan_in_flight` immediately (so the button disables before the request
+/// even lands), then reports the queued scan — or its failure — once the
+/// request resolves.
+fn scan_library_handler(
+    url: String,
+    mut status: Signal<Option<String>>,
+    mut status_is_error: Signal<bool>,
+    mut scan_in_flight: Signal<bool>,
+    mut library_refresh: Signal<u32>,
+) -> impl FnMut(MouseEvent) {
+    move |_evt: MouseEvent| {
+        let url = url.clone();
+        scan_in_flight.set(true);
+        spawn(async move {
+            match data::scan_library(&url).await {
+                Ok(()) => {
+                    status.set(Some("Library scan queued.".into()));
+                    status_is_error.set(false);
+                    library_refresh.set(library_refresh() + 1);
+                }
+                Err(e) => {
+                    status.set(Some(format!("Failed to start library scan: {e}")));
+                    status_is_error.set(true);
+                }
+            }
+            scan_in_flight.set(false);
+        });
+    }
+}
+
 /// Ghost buttons for one-off maintenance jobs (library rescan, author photo
 /// refetch, chapter backfill).
 #[component]
@@ -278,13 +309,19 @@ fn MaintenanceActions(
     mut status_is_error: Signal<bool>,
     mut refetch_in_flight: Signal<bool>,
     mut backfill_in_flight: Signal<bool>,
-    mut scan_in_flight: Signal<bool>,
-    mut library_refresh: Signal<u32>,
+    scan_in_flight: Signal<bool>,
+    library_refresh: Signal<u32>,
 ) -> Element {
     let server_url = use_server_url();
-    let url_for_scan = server_url.clone();
     let url_for_refetch = server_url.clone();
-    let url_for_backfill = server_url;
+    let url_for_backfill = server_url.clone();
+    let on_scan = scan_library_handler(
+        server_url,
+        status,
+        status_is_error,
+        scan_in_flight,
+        library_refresh,
+    );
 
     rsx! {
         button {
@@ -292,24 +329,7 @@ fn MaintenanceActions(
             class: "btn ghost",
             disabled: scan_in_flight(),
             "data-testid": "scan-library",
-            onclick: move |_| {
-                let url = url_for_scan.clone();
-                scan_in_flight.set(true);
-                spawn(async move {
-                    match data::scan_library(&url).await {
-                        Ok(()) => {
-                            status.set(Some("Library scan queued.".into()));
-                            status_is_error.set(false);
-                            library_refresh.set(library_refresh() + 1);
-                        }
-                        Err(e) => {
-                            status.set(Some(format!("Failed to start library scan: {e}")));
-                            status_is_error.set(true);
-                        }
-                    }
-                    scan_in_flight.set(false);
-                });
-            },
+            onclick: on_scan,
             "Scan Library"
         }
         button {
@@ -409,28 +429,4 @@ fn LibrarySummary(testid: String, section: LibrarySection) -> Element {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn section(total: usize, counts: &[(&str, usize)]) -> LibrarySection {
-        LibrarySection {
-            path: Some("/lib".into()),
-            total_files: total,
-            counts_by_ext: counts.iter().map(|(e, c)| (e.to_string(), *c)).collect(),
-            error: None,
-        }
-    }
-
-    #[test]
-    fn summary_line_reports_total_only_when_no_ext_breakdown() {
-        assert_eq!(library_summary_line(&section(3, &[])), "3 file(s) found.");
-    }
-
-    #[test]
-    fn summary_line_appends_a_clause_per_extension() {
-        let line = library_summary_line(&section(5, &[("epub", 4), ("pdf", 1)]));
-        assert!(line.starts_with("5 file(s) found."));
-        assert!(line.contains("4 .epub found."));
-        assert!(line.contains("1 .pdf found."));
-    }
-}
+mod tests;

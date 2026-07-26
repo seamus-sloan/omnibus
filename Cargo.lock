@@ -4523,6 +4523,7 @@ dependencies = [
  "axum",
  "base64",
  "dioxus",
+ "dioxus-html",
  "dioxus-router",
  "getrandom 0.2.17",
  "gloo-net 0.7.0",

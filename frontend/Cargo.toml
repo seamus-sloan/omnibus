@@ -112,6 +112,12 @@ ndk-context = { version = "0.1", optional = true }
 [dev-dependencies]
 # Sandboxed temp dirs for the mobile `token_store` / `app_dirs` file tests.
 tempfile.workspace = true
+# `SerializedFormData`/`SerializedMouseData` — synthetic `FormEvent`/`MouseEvent`
+# construction for tests that call a signal-driven handler directly (e.g.
+# `settings::library`'s `save_settings_handler`/`scan_library_handler`). Not a
+# target-gated dev-dep: `VirtualDom`-backed handler tests compile and run on
+# wasm32 too, so this needs to be in the unification unit for every target.
+dioxus-html = { version = "0.7", features = ["serialize"] }
 
 # In-memory pool + seed fixtures for the `server`-gated rpc tests. Gated off
 # wasm32: those tests only compile under the (native) `server` feature, and an
