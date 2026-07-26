@@ -205,6 +205,23 @@ async fn auth_device_returns_a_bearer_envelope() {
     }
 }
 
+#[test]
+fn auth_envelope_values_are_pinned_to_a_fixed_digest() {
+    // Hard-coded rather than recomputed: the whole point is that these values
+    // survive a toolchain bump. A hash-function swap that silently rotated
+    // every device's envelope would pass a self-consistent test but fail here.
+    let env = dto::auth_envelope("tok123");
+
+    // == sha256(b"access" + b"\x00" + b"tok123"), verified independently.
+    assert_eq!(
+        env.access_token,
+        "ecaf3802245d9f7c9914df62bdb3baa89388b6a6cb08d4b703dcb696c6bcd220"
+    );
+    assert_eq!(env.token_type, "Bearer");
+    assert_ne!(env.access_token, env.refresh_token);
+    assert_ne!(env.tracking_id, env.user_key);
+}
+
 #[tokio::test]
 async fn auth_refresh_returns_the_same_envelope_as_the_initial_exchange() {
     // The device refreshes on a schedule; a value that changed between the two

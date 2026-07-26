@@ -44,12 +44,22 @@ pub fn auth_envelope(token: &str) -> AuthEnvelope {
 
 /// A stable opaque hex value for `(token, purpose)`. Not a secret and not
 /// treated as one — it exists to fill a field shape the device requires.
+///
+/// SHA-256 rather than `DefaultHasher`: the latter's output is explicitly not
+/// stable across Rust toolchain versions, so a compiler bump would silently
+/// rotate every device's envelope and defeat the stability this function
+/// exists to provide. `db::helpers::stable_uuid` documents the same trap after
+/// a `DefaultHasher` rotation once orphaned every cover file on disk.
 fn derive_opaque(token: &str, purpose: &str) -> String {
-    use std::hash::{DefaultHasher, Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    purpose.hash(&mut hasher);
-    token.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    // NUL can't appear in either input, so it's an unambiguous separator — no
+    // other `(purpose, token)` split can produce the same pre-image.
+    hasher.update(purpose.as_bytes());
+    hasher.update([0u8]);
+    hasher.update(token.as_bytes());
+    let digest = hasher.finalize();
+    digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// One element of the `library/sync` array. Externally tagged, so it

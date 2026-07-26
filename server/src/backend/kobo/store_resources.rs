@@ -1,10 +1,6 @@
-//! Kobo's `v1/initialization` resources map, and the small set of entries
-//! Omnibus redirects at itself.
-//!
-//! The map ships verbatim from Kobo: a device that reads it keeps talking to
-//! Kobo for store browse, search, and recommendations, so the server never
-//! becomes a party to that traffic. Only the entries listed in
-//! [`OVERRIDDEN_KEYS`] point back here.
+//! Kobo's `v1/initialization` resources map. Ships verbatim from Kobo so the
+//! device keeps talking to Kobo for store browse and search — the server never
+//! joins that traffic. Only [`OVERRIDDEN_KEYS`] point back here.
 
 use std::sync::LazyLock;
 
