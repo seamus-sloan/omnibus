@@ -86,7 +86,8 @@ async fn library_sync_rejects_an_invalid_token() {
 }
 
 #[tokio::test]
-async fn library_sync_streams_every_book_with_no_cap() {
+async fn library_sync_delivers_every_book_across_the_continue_loop() {
+    // 150 books > SYNC_PAGE_SIZE (100): exercises the real continue loop, unlike Calibre-Web's SYNC_ITEM_LIMIT nothing is dropped.
     let (app, pool, token, uid) = fixture().await;
     let mut uuids = Vec::new();
     for i in 0..150 {
@@ -101,16 +102,46 @@ async fn library_sync_streams_every_book_with_no_cap() {
         );
     }
     opt_in(&pool, uid, &uuids).await;
+
+    let mut total = 0;
+    let mut pages = 0;
+    loop {
+        let res = app
+            .clone()
+            .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.headers().get("x-kobo-synctoken").unwrap(), "omnibus");
+        let more = res.headers().get("x-kobo-sync").is_some();
+        if more {
+            assert_eq!(res.headers().get("x-kobo-sync").unwrap(), "continue");
+        }
+        total += body_json(res).await.as_array().unwrap().len();
+        pages += 1;
+        assert!(pages <= 3, "continue loop failed to terminate");
+        if !more {
+            break;
+        }
+    }
+
+    assert_eq!(total, 150);
+    assert_eq!(pages, 2, "150 books should page as 100 + 50");
+}
+
+#[tokio::test]
+async fn library_sync_omits_the_continue_header_when_one_page_suffices() {
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    opt_in(&pool, uid, std::slice::from_ref(&uuid)).await;
+
     let res = app
         .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
         .await
         .unwrap();
 
-    assert_eq!(res.status(), StatusCode::OK);
-    assert_eq!(res.headers().get("x-kobo-synctoken").unwrap(), "omnibus");
-    let json = body_json(res).await;
-    // Deliberately never adopts Calibre-Web's SYNC_ITEM_LIMIT=100 cap.
-    assert_eq!(json.as_array().unwrap().len(), 150);
+    assert!(res.headers().get("x-kobo-sync").is_none());
+    assert_eq!(body_json(res).await.as_array().unwrap().len(), 1);
 }
 
 #[tokio::test]
