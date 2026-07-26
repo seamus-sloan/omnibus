@@ -24,7 +24,14 @@ const SELECT_COLS: &str = "b.uuid,
                     ORDER BY bal.position ASC, a.name ASC
                     LIMIT 1
                 ), '') AS author,
-                CAST(COALESCE(b.last_modified, 0) AS INTEGER) AS last_modified_epoch";
+                CAST(COALESCE(b.last_modified, 0) AS INTEGER) AS last_modified_epoch,
+                COALESCE((
+                    SELECT bf.size_bytes
+                    FROM book_files bf
+                    WHERE bf.book_id = b.id AND bf.format = 'EPUB'
+                    ORDER BY bf.ordinal ASC
+                    LIMIT 1
+                ), 0) AS epub_size_bytes";
 
 /// One book shaped for the Kobo sync endpoint: durable uuid, display title, a
 /// best-effort author line, and the last-modified epoch that drives the
@@ -35,6 +42,11 @@ pub struct KoboBookRow {
     pub title: String,
     pub author: String,
     pub last_modified_epoch: i64,
+    /// Size of the lowest-ordinal EPUB file, `0` when the book has none.
+    /// Advertised on the download entitlement — a best-effort figure (the
+    /// served KEPUB differs slightly), consumed only by device-side progress
+    /// UI, never for validation.
+    pub epub_size_bytes: i64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -144,6 +156,7 @@ fn row_to_book(row: &sqlx::sqlite::SqliteRow) -> KoboBookRow {
         title: row.get("title"),
         author: row.get("author"),
         last_modified_epoch: row.get("last_modified_epoch"),
+        epub_size_bytes: row.get("epub_size_bytes"),
     }
 }
 

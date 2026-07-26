@@ -670,6 +670,153 @@ async fn analytics_rejects_an_invalid_token() {
 }
 
 #[tokio::test]
+async fn image_returns_304_when_the_if_none_match_etag_is_current() {
+    // The 304 path fires before the cover bytes are ever loaded, so a current
+    // validator answers bodyless even while the book has no stored cover.
+    let (app, pool, token, _uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    let (id, lm): (i64, i64) = sqlx::query_as(
+        "SELECT id, CAST(COALESCE(last_modified, 0) AS INTEGER) FROM books WHERE uuid = ?",
+    )
+    .bind(&uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let etag = format!("W/\"{id}-{lm}\"");
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/kobo/{token}/v1/books/{uuid}/thumbnail/400/600/100/false/image.jpg"
+                ))
+                .header("host", "omni.test")
+                .header("if-none-match", &etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(res.headers().get("etag").unwrap().to_str().unwrap(), etag);
+}
+
+#[tokio::test]
+async fn image_serves_the_body_when_the_etag_is_stale() {
+    // A stale validator falls through to the normal serve path — here a 404,
+    // since the fixture book has no stored cover. The point is that it did NOT
+    // answer 304 against a stale tag.
+    let (app, pool, token, _uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/kobo/{token}/v1/books/{uuid}/thumbnail/400/600/100/false/image.jpg"
+                ))
+                .header("host", "omni.test")
+                .header("if-none-match", "W/\"stale\"")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn library_sync_advertises_the_source_epub_size() {
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    sqlx::query(
+        "UPDATE book_files SET size_bytes = 123456
+          WHERE book_id = (SELECT id FROM books WHERE uuid = ?)",
+    )
+    .bind(&uuid)
+    .execute(&pool)
+    .await
+    .unwrap();
+    opt_in(&pool, uid, std::slice::from_ref(&uuid)).await;
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
+        .await
+        .unwrap();
+    let json = body_json(res).await;
+    let ent = &json.as_array().unwrap()[0]["NewEntitlement"];
+
+    assert_eq!(ent["BookMetadata"]["DownloadUrls"][0]["Size"], 123456);
+}
+
+#[tokio::test]
+async fn put_state_accepts_a_statistics_block() {
+    // Statistics is parsed but deliberately unwritten (cumulative totals would
+    // double-count against the LeaveContent sessions) — the contract here is
+    // that a payload carrying it still round-trips as Success.
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "solaris.epub", "Solaris", "Lem").await;
+    let body = serde_json::json!({
+        "ReadingStates": [{
+            "StatusInfo": { "Status": "Reading" },
+            "Statistics": { "SpentReadingMinutes": 42, "RemainingTimeMinutes": 90 }
+        }]
+    });
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/kobo/{token}/v1/library/{uuid}/state"))
+                .method("PUT")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["RequestResult"], "Success");
+    let rec = db::read_status::get_read_status(&pool, uid, &uuid)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rec.status, ReadStatus::Reading);
+}
+
+#[tokio::test]
+async fn uuid_routes_reject_an_oversized_path_uuid() {
+    let (app, _pool, token, _uid) = fixture().await;
+    let oversized = "a".repeat(omnibus_shared::BOOK_UUID_MAX_LEN + 1);
+
+    for uri in [
+        format!("/kobo/{token}/v1/library/{oversized}/metadata"),
+        format!("/kobo/{token}/v1/download/{oversized}"),
+        format!("/kobo/{token}/v1/books/{oversized}/thumbnail/400/600/100/false/image.jpg"),
+    ] {
+        let res = app.clone().oneshot(get(uri.clone())).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "GET {uri}");
+    }
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/kobo/{token}/v1/library/{oversized}/state"))
+                .method("PUT")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "ReadingStates": [] }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn metadata_returns_the_book() {
     let (app, pool, token, _uid) = fixture().await;
     let uuid = seed_synced_ebook(&pool, "gatsby.epub", "The Great Gatsby", "Fitzgerald").await;
