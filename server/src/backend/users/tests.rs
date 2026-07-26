@@ -169,6 +169,36 @@ async fn create_user_returns_422_on_weak_password() {
 // ── Permissions ──────────────────────────────────────────────────
 
 #[tokio::test]
+async fn patch_permissions_returns_401_when_anonymous() {
+    let (app, _, _) = fixture().await;
+    let res = app
+        .oneshot(anon("PATCH", "/api/users/1/permissions"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn patch_permissions_returns_403_for_non_admin() {
+    let (app, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "reader").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let bob = auth_test_support::create_user(&pool, "bob").await;
+    let res = app
+        .oneshot(req(
+            "PATCH",
+            &format!("/api/users/{}/permissions", bob.id),
+            &token,
+            Some(serde_json::json!({
+                "is_admin": false, "can_upload": true, "can_edit": true, "can_download": false,
+            })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn patch_permissions_updates_flags() {
     let (app, _, pool) = fixture().await;
     let token = admin_token(&pool, "alice").await;
@@ -233,6 +263,34 @@ async fn patch_permissions_returns_404_for_unknown_user() {
 // ── Password reset ───────────────────────────────────────────────
 
 #[tokio::test]
+async fn post_password_returns_401_when_anonymous() {
+    let (app, _, _) = fixture().await;
+    let res = app
+        .oneshot(anon("POST", "/api/users/1/password"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn post_password_returns_403_for_non_admin() {
+    let (app, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "reader").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let bob = auth_test_support::create_user(&pool, "bob").await;
+    let res = app
+        .oneshot(req(
+            "POST",
+            &format!("/api/users/{}/password", bob.id),
+            &token,
+            Some(serde_json::json!({ "password": "reset-by-admin-99" })),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn reset_password_succeeds_and_rejects_weak() {
     let (app, _, pool) = fixture().await;
     let token = admin_token(&pool, "alice").await;
@@ -265,6 +323,34 @@ async fn reset_password_succeeds_and_rejects_weak() {
 // ── Unlock ───────────────────────────────────────────────────────
 
 #[tokio::test]
+async fn post_unlock_returns_401_when_anonymous() {
+    let (app, _, _) = fixture().await;
+    let res = app
+        .oneshot(anon("POST", "/api/users/1/unlock"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn post_unlock_returns_403_for_non_admin() {
+    let (app, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "reader").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let bob = auth_test_support::create_user(&pool, "bob").await;
+    let res = app
+        .oneshot(req(
+            "POST",
+            &format!("/api/users/{}/unlock", bob.id),
+            &token,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn unlock_clears_lockout() {
     let (app, _, pool) = fixture().await;
     let token = admin_token(&pool, "alice").await;
@@ -292,6 +378,31 @@ async fn unlock_clears_lockout() {
 }
 
 // ── Delete ───────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn delete_user_returns_401_when_anonymous() {
+    let (app, _, _) = fixture().await;
+    let res = app.oneshot(anon("DELETE", "/api/users/1")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn delete_user_returns_403_for_non_admin() {
+    let (app, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "reader").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let bob = auth_test_support::create_user(&pool, "bob").await;
+    let res = app
+        .oneshot(req(
+            "DELETE",
+            &format!("/api/users/{}", bob.id),
+            &token,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
 
 #[tokio::test]
 async fn delete_user_succeeds() {
