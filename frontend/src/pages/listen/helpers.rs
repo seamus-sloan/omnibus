@@ -208,14 +208,18 @@ pub(super) fn format_hms(seconds: f64) -> String {
 #[cfg(feature = "web")]
 pub(super) fn post_audio_progress(uuid: String, file_id: Option<i64>, seconds: f64) {
     wasm_bindgen_futures::spawn_local(async move {
-        let body = serde_json::json!({
-            "update": {
-                "book_uuid": uuid,
-                "format": "audio",
-                "audio_position_seconds": seconds,
-                "book_file_id": file_id,
-            }
+        let mut update = serde_json::json!({
+            "book_uuid": uuid,
+            "format": "audio",
+            "audio_position_seconds": seconds,
         });
+        // Insert only when known, so this hand-built payload matches how
+        // `ProgressUpdate` itself serializes (every optional field carries
+        // `skip_serializing_if`) rather than sending an explicit null.
+        if let (Some(file_id), Some(map)) = (file_id, update.as_object_mut()) {
+            map.insert("book_file_id".into(), file_id.into());
+        }
+        let body = serde_json::json!({ "update": update });
         if let Ok(req) = gloo_net::http::Request::post("/api/rpc/progress").json(&body) {
             let _ = req.send().await;
         }
