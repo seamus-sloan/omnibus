@@ -14,6 +14,44 @@ pub fn rfc3339(epoch: i64) -> String {
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned())
 }
 
+/// The `v1/auth/device` / `v1/auth/refresh` response envelope.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct AuthEnvelope {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub token_type: String,
+    pub tracking_id: String,
+    pub user_key: String,
+}
+
+/// Build the auth envelope for a device.
+///
+/// The values are **derived from the path token, not random**. Nothing ever
+/// validates them — the `/kobo/<TOKEN>/` path token is the real credential —
+/// and the device re-runs this handshake on a refresh schedule, so a stable
+/// answer is the honest one: it needs no storage and cannot drift between the
+/// initial exchange and a later refresh.
+pub fn auth_envelope(token: &str) -> AuthEnvelope {
+    AuthEnvelope {
+        access_token: derive_opaque(token, "access"),
+        refresh_token: derive_opaque(token, "refresh"),
+        token_type: "Bearer".to_owned(),
+        tracking_id: derive_opaque(token, "tracking"),
+        user_key: derive_opaque(token, "user"),
+    }
+}
+
+/// A stable opaque hex value for `(token, purpose)`. Not a secret and not
+/// treated as one — it exists to fill a field shape the device requires.
+fn derive_opaque(token: &str, purpose: &str) -> String {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    purpose.hash(&mut hasher);
+    token.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
 /// One element of the `library/sync` array. Externally tagged, so it
 /// serializes as `{"NewEntitlement": { … }}` — the shape the device parses.
 #[derive(Debug, Serialize)]

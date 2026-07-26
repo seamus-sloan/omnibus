@@ -109,6 +109,134 @@ async fn library_sync_emits_new_entitlement_pointing_at_download() {
 }
 
 #[tokio::test]
+async fn initialization_returns_the_resources_map_with_the_api_token_header() {
+    // AC1: the header is load-bearing — without it the device rejects the
+    // payload and never adopts the map.
+    let (app, _pool, token, _uid) = fixture().await;
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/initialization")))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers().get("x-kobo-apitoken").unwrap(), "e30=");
+    let json = body_json(res).await;
+    assert!(json["Resources"].is_object());
+}
+
+#[tokio::test]
+async fn initialization_points_sync_and_covers_at_this_server() {
+    // AC2: the overridden entries resolve to the request origin and carry the
+    // caller's path token.
+    let (app, _pool, token, _uid) = fixture().await;
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/initialization")))
+        .await
+        .unwrap();
+    let json = body_json(res).await;
+    let r = &json["Resources"];
+
+    assert_eq!(
+        r["library_sync"].as_str().unwrap(),
+        format!("http://omni.test/kobo/{token}/v1/library/sync")
+    );
+    assert_eq!(r["image_host"].as_str().unwrap(), "http://omni.test");
+    assert!(r["image_url_template"].as_str().unwrap().contains(&token));
+    assert_eq!(
+        r["reading_services_host"].as_str().unwrap(),
+        "http://omni.test"
+    );
+}
+
+#[tokio::test]
+async fn initialization_leaves_the_store_endpoints_pointed_at_kobo() {
+    // AC3 (the pass-through half): store browse/search stay Kobo's, which is
+    // what keeps them working without this server proxying anything.
+    let (app, _pool, token, _uid) = fixture().await;
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/initialization")))
+        .await
+        .unwrap();
+    let json = body_json(res).await;
+
+    assert_eq!(
+        json["Resources"]["products"].as_str().unwrap(),
+        "https://storeapi.kobo.com/v1/products"
+    );
+}
+
+#[tokio::test]
+async fn initialization_rejects_an_invalid_token() {
+    let (app, _pool, _token, _uid) = fixture().await;
+    let res = app
+        .oneshot(get("/kobo/not-a-real-token/v1/initialization".to_owned()))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn auth_device_returns_a_bearer_envelope() {
+    let (app, _pool, token, _uid) = fixture().await;
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/kobo/{token}/v1/auth/device"))
+                .method("POST")
+                .header("host", "omni.test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let json = body_json(res).await;
+    assert_eq!(json["TokenType"], "Bearer");
+    for field in ["AccessToken", "RefreshToken", "TrackingId", "UserKey"] {
+        assert!(
+            json[field].as_str().is_some_and(|s| !s.is_empty()),
+            "{field} should be present and non-empty"
+        );
+    }
+}
+
+#[tokio::test]
+async fn auth_refresh_returns_the_same_envelope_as_the_initial_exchange() {
+    // The device refreshes on a schedule; a value that changed between the two
+    // would look like a rotated credential it needs to act on.
+    let (app, _pool, token, _uid) = fixture().await;
+
+    let device = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/kobo/{token}/v1/auth/device"))
+                .method("POST")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let refresh = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/kobo/{token}/v1/auth/refresh"))
+                .method("POST")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(body_json(device).await, body_json(refresh).await);
+}
+
+#[tokio::test]
 async fn metadata_returns_the_book() {
     let (app, pool, token, _uid) = fixture().await;
     let uuid = seed_synced_ebook(&pool, "gatsby.epub", "The Great Gatsby", "Fitzgerald").await;
