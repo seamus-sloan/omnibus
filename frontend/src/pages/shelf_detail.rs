@@ -456,9 +456,18 @@ fn ShelfHeader(
         Visibility::Public => Visibility::Private,
     };
 
+    let syncs_to_kobo = shelf.sync_to_kobo;
+
     let on_delete = build_on_delete(server_url.clone(), id, nav);
     let on_toggle_vis =
         build_on_toggle_vis(server_url.clone(), id, next_vis, menu_open, on_changed);
+    let on_toggle_kobo = build_on_toggle_kobo(
+        server_url.clone(),
+        id,
+        !syncs_to_kobo,
+        menu_open,
+        on_changed,
+    );
     let on_rename_save =
         build_on_rename_save(server_url.clone(), id, renaming, draft_name, on_changed);
 
@@ -468,6 +477,13 @@ fn ShelfHeader(
             div { class: "shelf-badges",
                 span { class: "shelf-badge", "{kind_label}" }
                 span { class: "shelf-badge shelf-badge--vis", "{vis_label}" }
+                if syncs_to_kobo {
+                    span {
+                        class: "shelf-badge shelf-badge--kobo",
+                        "data-testid": "shelf-kobo-badge",
+                        "Syncs to Kobo"
+                    }
+                }
                 if show_attribution {
                     span {
                         class: "shelf-badge shelf-badge--owner",
@@ -496,11 +512,15 @@ fn ShelfHeader(
                     if can_manage {
                         {shelf_actions_menu(
                             is_smart,
+                            syncs_to_kobo,
                             menu_open,
                             renaming,
-                            on_edit_rules,
-                            on_toggle_vis,
-                            on_delete,
+                            ShelfMenuActions {
+                                edit_rules: on_edit_rules,
+                                toggle_vis: on_toggle_vis,
+                                toggle_kobo: on_toggle_kobo,
+                                delete: on_delete,
+                            },
                         )}
                     }
                 }
@@ -548,6 +568,32 @@ fn build_on_toggle_vis(
     })
 }
 
+/// Builds the Kobo sync-opt-in handler: flips `sync_to_kobo` and refetches on
+/// success. Toggling immediately changes what the next device sync returns —
+/// there is no separate publish step (#924 AC2).
+#[cfg(not(feature = "mobile"))]
+fn build_on_toggle_kobo(
+    server_url: String,
+    id: i64,
+    next: bool,
+    mut menu_open: Signal<bool>,
+    on_changed: EventHandler<()>,
+) -> EventHandler<()> {
+    EventHandler::new(move |()| {
+        let url = server_url.clone();
+        menu_open.set(false);
+        spawn(async move {
+            let req = UpdateShelfRequest {
+                sync_to_kobo: Some(next),
+                ..Default::default()
+            };
+            if data::update_shelf(&url, id, req).await.is_ok() {
+                on_changed.call(());
+            }
+        });
+    })
+}
+
 /// Builds the rename-save handler: saves the draft name and refetches on
 /// success.
 #[cfg(not(feature = "mobile"))]
@@ -574,18 +620,39 @@ fn build_on_rename_save(
     })
 }
 
+/// The actions-menu handlers, bundled so [`shelf_actions_menu`] stays inside
+/// clippy's argument-count limit.
+#[cfg(not(feature = "mobile"))]
+struct ShelfMenuActions {
+    edit_rules: EventHandler<()>,
+    toggle_vis: EventHandler<()>,
+    toggle_kobo: EventHandler<()>,
+    delete: EventHandler<()>,
+}
+
 /// Owner-only actions trigger + dropdown: edit rules (smart shelves only),
-/// rename, toggle visibility, delete. Split out of [`ShelfHeader`] to keep
-/// it under the line cap, mirroring `member_grid`'s plain-fn split.
+/// rename, toggle visibility, toggle Kobo sync, delete. Split out of
+/// [`ShelfHeader`] to keep it under the line cap, mirroring `member_grid`'s
+/// plain-fn split.
 #[cfg(not(feature = "mobile"))]
 fn shelf_actions_menu(
     is_smart: bool,
+    syncs_to_kobo: bool,
     mut menu_open: Signal<bool>,
     mut renaming: Signal<bool>,
-    on_edit_rules: EventHandler<()>,
-    on_toggle_vis: EventHandler<()>,
-    on_delete: EventHandler<()>,
+    actions: ShelfMenuActions,
 ) -> Element {
+    let ShelfMenuActions {
+        edit_rules: on_edit_rules,
+        toggle_vis: on_toggle_vis,
+        toggle_kobo: on_toggle_kobo,
+        delete: on_delete,
+    } = actions;
+    let kobo_label = if syncs_to_kobo {
+        "Stop syncing to Kobo"
+    } else {
+        "Sync to Kobo"
+    };
     rsx! {
         div { class: "shelf-actions",
             button {
@@ -617,6 +684,13 @@ fn shelf_actions_menu(
                         "data-testid": "shelf-toggle-visibility",
                         onclick: move |_| on_toggle_vis.call(()),
                         "Change visibility"
+                    }
+                    button {
+                        r#type: "button", class: "shelf-menu-item",
+                        "data-testid": "shelf-toggle-kobo",
+                        "aria-pressed": if syncs_to_kobo { "true" } else { "false" },
+                        onclick: move |_| on_toggle_kobo.call(()),
+                        "{kobo_label}"
                     }
                     button {
                         r#type: "button", class: "shelf-menu-item shelf-menu-item--danger",

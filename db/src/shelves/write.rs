@@ -111,17 +111,19 @@ pub async fn update_shelf(
 
     sqlx::query(
         "UPDATE shelves SET
-            name        = COALESCE(?, name),
-            description = COALESCE(?, description),
-            visibility  = COALESCE(?, visibility),
-            match_mode  = COALESCE(?, match_mode),
-            updated_at  = strftime('%s','now')
+            name         = COALESCE(?, name),
+            description  = COALESCE(?, description),
+            visibility   = COALESCE(?, visibility),
+            match_mode   = COALESCE(?, match_mode),
+            sync_to_kobo = COALESCE(?, sync_to_kobo),
+            updated_at   = strftime('%s','now')
          WHERE id = ?",
     )
     .bind(req.name.as_deref().map(str::trim))
     .bind(req.description.as_deref())
     .bind(req.visibility.map(Visibility::as_str))
     .bind(req.match_mode.map(MatchMode::as_str))
+    .bind(req.sync_to_kobo.map(i64::from))
     .bind(id)
     .execute(&mut *tx)
     .await

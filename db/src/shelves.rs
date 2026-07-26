@@ -18,8 +18,8 @@ mod tests;
 
 pub use provision::{provision_wishlist_shelf, provision_wishlist_shelves};
 pub use read::{
-    get_shelf, list_visible_shelves, manual_shelves_containing, preview_rule, shelf_page,
-    LIST_SHELVES_LIMIT,
+    get_shelf, kobo_synced_book_uuids, list_visible_shelves, manual_shelves_containing,
+    preview_rule, shelf_page, LIST_SHELVES_LIMIT,
 };
 pub use write::{add_books, create_shelf, delete_shelf, remove_book, update_shelf};
 
