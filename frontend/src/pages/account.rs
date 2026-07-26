@@ -10,6 +10,9 @@ use dioxus::prelude::*;
 
 #[cfg(feature = "mobile")]
 mod downloads;
+// Web-only Kobo wireless-sync device card, rendered under the Account section.
+#[cfg(not(feature = "mobile"))]
+mod kobo;
 
 #[cfg(not(feature = "mobile"))]
 use crate::components::auth::{score_password, PasswordRequirements, StrengthMeter};
@@ -291,6 +294,8 @@ fn kindle_account_body(embedded: bool) -> Element {
         }
 
         ChangePasswordCard {}
+
+        kobo::KoboDevicesCard {}
     }
 }
 

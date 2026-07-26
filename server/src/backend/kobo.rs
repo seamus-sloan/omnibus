@@ -194,7 +194,7 @@ async fn put_state(
                 book_uuid: uuid.clone(),
                 status: map_status(&info.status),
             };
-            match db::read_status::set_read_status(state.pool(), auth.user.id, &update).await {
+            match db::read_status::set_read_status(state.pool(), auth.user_id, &update).await {
                 Ok(_) => {}
                 // A state push for a book the server never indexed is not fatal
                 // to the sync — log and keep the success envelope.

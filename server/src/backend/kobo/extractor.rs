@@ -1,24 +1,28 @@
 //! `KoboAuthUser` — path-token extractor for the wireless Kobo routes.
 //!
 //! Kobo devices carry their credential in the URL path (`/kobo/<TOKEN>/v1/…`),
-//! a channel none of the `/api/*` extractors read. The token is validated as a
-//! session token via [`crate::auth::resolve_session_token`].
+//! a channel none of the `/api/*` extractors read. The token is a persistent,
+//! per-device `kobo_devices` credential (not a session token), resolved via
+//! [`db::kobo_devices::resolve_device_by_token`].
 
 use axum::{
     extract::FromRequestParts,
     http::{request::Parts, StatusCode},
     response::{IntoResponse, Response},
 };
-use omnibus_db::auth::SessionAuthError;
+use omnibus_db as db;
 use sqlx::SqlitePool;
 
-use crate::auth::{resolve_session_token, AuthUser};
-
-/// Authenticated principal resolved from the `/kobo/<TOKEN>/…` path segment.
-/// Carries the raw token too, so handlers can build device-facing absolute
-/// URLs (download / image) that echo the same path prefix.
+/// Authenticated principal resolved from the `/kobo/<TOKEN>/…` path segment:
+/// the owning user, the resolved device row, and the raw token (so handlers can
+/// build device-facing absolute URLs — download / image — that echo the same
+/// path prefix).
 pub struct KoboAuthUser {
-    pub user: AuthUser,
+    pub user_id: i64,
+    /// The resolved device row id. Not yet read by a handler — it's the hook
+    /// the per-device delta cursor (#926) hangs off — so allow it to be unused.
+    #[allow(dead_code)]
+    pub device_id: i64,
     pub token: String,
 }
 
@@ -37,11 +41,33 @@ where
             .get::<SqlitePool>()
             .cloned()
             .ok_or_else(|| internal("missing SqlitePool extension on kobo route"))?;
-        match resolve_session_token(&pool, &token).await {
-            Ok(user) => Ok(KoboAuthUser { user, token }),
-            Err(SessionAuthError::Unauthenticated) => Err(unauthorized()),
-            Err(SessionAuthError::Internal(e)) => Err(internal(e)),
+
+        let resolved = match db::kobo_devices::resolve_device_by_token(&pool, &token).await {
+            Ok(Some(r)) => r,
+            Ok(None) => return Err(unauthorized()),
+            Err(e) => return Err(internal(e)),
+        };
+
+        // Learn the `x-kobo-deviceid` hardware id on first sight (write-once,
+        // best-effort — a failure here must not block an otherwise-valid sync).
+        if let Some(hw) = parts
+            .headers
+            .get("x-kobo-deviceid")
+            .and_then(|v| v.to_str().ok())
+            .filter(|s| !s.is_empty())
+        {
+            if let Err(e) =
+                db::kobo_devices::learn_kobo_device_id(&pool, resolved.device_id, hw).await
+            {
+                tracing::warn!(error = %e, "failed to persist x-kobo-deviceid");
+            }
         }
+
+        Ok(KoboAuthUser {
+            user_id: resolved.user_id,
+            device_id: resolved.device_id,
+            token,
+        })
     }
 }
 
@@ -54,7 +80,7 @@ fn internal<E: std::fmt::Display>(e: E) -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
 }
 
-/// Extract the `<TOKEN>` segment from a `/kobo/<TOKEN>/v1/…` path. Session
+/// Extract the `<TOKEN>` segment from a `/kobo/<TOKEN>/v1/…` path. Kobo device
 /// tokens are URL-safe base64 (no `/`), so plain segment splitting is safe.
 fn kobo_path_token(path: &str) -> Option<&str> {
     let mut segs = path.split('/').filter(|s| !s.is_empty());
