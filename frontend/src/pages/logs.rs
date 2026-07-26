@@ -283,7 +283,7 @@ fn LogResults(
 fn LogStream(records: Vec<LogRecord>) -> Element {
     rsx! {
         div { class: "logs-stream mono", "data-testid": "logs-table", role: "region", "aria-label": "Server log stream",
-            for (i , record) in records.into_iter().enumerate() {
+            for (i, record) in records.into_iter().enumerate() {
                 LogLine { key: "{record.timestamp}-{i}", record }
             }
         }

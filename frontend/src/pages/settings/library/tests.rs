@@ -1,17 +1,10 @@
 //! Tests for the pure library-summary formatter, the settings-save
-//! rescan-interval guard, and the "Scan Library" maintenance handler.
-//!
-//! `Signal::new`/`spawn` need a live Dioxus runtime, and `save_settings_handler`
-//! takes a real `FormEvent` (`scan_library_handler` a real `MouseEvent`), so
-//! those two run inside a throwaway zero-prop component driven by
-//! `VirtualDom::new(...).rebuild_in_place()` — the pattern established in
-//! `frontend/src/pages/reader/prefs/tests.rs` and `frontend/src/contexts.rs`.
-//! The handlers only ever call `prevent_default()`/ignore the event, so a
-//! bare `SerializedFormData`/`SerializedMouseData` is enough — no real
-//! browser event is needed. Neither test lets the spawned save/scan future
-//! run (it's queued but never polled), so no network call actually fires;
-//! each test only observes the synchronous guard/in-flight behavior before
-//! the request would be sent.
+//! rescan-interval guard, and the "Scan Library" maintenance handler. The
+//! latter two run inside a `VirtualDom::new(...).rebuild_in_place()` (the
+//! pattern in `frontend/src/pages/reader/prefs/tests.rs`) so `Signal::new`
+//! has a runtime, driven by a synthetic `FormEvent`/`MouseEvent` built from
+//! `SerializedFormData`/`SerializedMouseData` — the futures they spawn are
+//! never polled, so no network call actually fires.
 
 use std::rc::Rc;
 
