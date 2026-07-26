@@ -71,17 +71,47 @@ final class AudioPlayer {
     /// reconcile was still in the middle of correcting, and win.
     private var positionSettled = false
 
+    /// Chapter geometry for the book that's open. Rebuilt once per load — every
+    /// lookup on it runs off a half-second time observer, so it can't afford to
+    /// re-sort per tick.
+    private(set) var timeline = ChapterTimeline()
+
     private init() {
         configureRemoteCommands()
     }
 
-    var chapters: [ChapterInfo] { manifest?.chapters ?? [] }
+    var isActive: Bool { book != nil }
 
-    var currentChapter: ChapterInfo? {
-        chapters.last { position >= $0.startSeconds }
+    // MARK: - Chapters
+
+    var chapters: [ChapterInfo] { timeline.chapters }
+
+    var hasChapters: Bool { !timeline.isEmpty }
+
+    var currentChapterIndex: Int? { timeline.index(at: position) }
+
+    var currentChapter: ChapterInfo? { timeline.chapter(at: position) }
+
+    /// Start of the span the scrubber covers: the current chapter, or the whole
+    /// book when there are no chapters to scope it to.
+    var chapterStart: Double { timeline.span(at: position).start }
+
+    /// Length of that span.
+    var chapterDuration: Double { timeline.span(at: position).duration }
+
+    /// How far into the span playback has got.
+    var chapterOffset: Double { max(0, position - chapterStart) }
+
+    func chapterLength(at index: Int) -> Double { timeline.length(at: index) }
+
+    var canGoNextChapter: Bool {
+        guard let index = currentChapterIndex else { return false }
+        return index + 1 < timeline.count
     }
 
-    var isActive: Bool { book != nil }
+    /// Previous is available in the first chapter too — there it restarts,
+    /// which is the verb the button has in every other player.
+    var canGoPreviousChapter: Bool { hasChapters }
 
     // MARK: - Loading
 
@@ -136,6 +166,16 @@ final class AudioPlayer {
                 duration = 0
             }
             if !duration.isFinite { duration = 0 }
+
+            // Built after `duration`, not with the manifest: a chapter that ships
+            // no length of its own measures to the next chapter's start, and the
+            // last one has only the end of the book to measure to.
+            timeline = ChapterTimeline(chapters: manifest.chapters, bookDuration: duration)
+            // A lock screen offering chapter skip on a book with no chapter marks
+            // gives two buttons that do nothing.
+            let center = MPRemoteCommandCenter.shared()
+            center.nextTrackCommand.isEnabled = hasChapters
+            center.previousTrackCommand.isEnabled = hasChapters
 
             adoptRate(await loadRate(uuid: book.uuid))
 
@@ -332,21 +372,29 @@ final class AudioPlayer {
     }
 
     func seekToChapter(_ chapter: ChapterInfo) {
+        Haptics.tap()
         Task { await seek(to: chapter.startSeconds) }
     }
 
+    /// Seek to an offset inside the current chapter — what the chapter-scoped
+    /// scrubber hands back.
+    func seekWithinChapter(to offset: Double) async {
+        await seek(to: chapterStart + offset)
+    }
+
     func nextChapter() {
-        guard let next = chapters.first(where: { $0.startSeconds > position + 1 }) else { return }
-        seekToChapter(next)
+        guard let index = currentChapterIndex, index + 1 < chapters.count else { return }
+        seekToChapter(chapters[index + 1])
     }
 
     func previousChapter() {
         // Within the first few seconds of a chapter, go to the one before it;
         // otherwise restart the current chapter — the usual player convention.
-        guard let current = currentChapter else { return }
-        if position - current.startSeconds > 3 {
+        guard let index = currentChapterIndex else { return }
+        let current = chapters[index]
+        if position - current.startSeconds > 3 || index == 0 {
             seekToChapter(current)
-        } else if let index = chapters.firstIndex(where: { $0.ordinal == current.ordinal }), index > 0 {
+        } else {
             seekToChapter(chapters[index - 1])
         }
     }
@@ -427,6 +475,10 @@ final class AudioPlayer {
         // checkpoint first, and anything left is not the next book's.
         sessionStart = nil
         listenedSeconds = 0
+        // Cleared with the player, not with the book: `load` awaits the next
+        // manifest, and leaving this up means the chapter bar spends that window
+        // offering to seek inside the book that was just closed.
+        timeline = ChapterTimeline()
         // Closed again so the next book cannot be written to before its own
         // opening position has been settled — this is the one flag whose stale
         // value would be silently destructive rather than merely wrong.
@@ -573,6 +625,10 @@ final class AudioPlayer {
             MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? rate : 0,
             MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
         ]
+        if let index = currentChapterIndex {
+            info[MPNowPlayingInfoPropertyChapterNumber] = index + 1
+            info[MPNowPlayingInfoPropertyChapterCount] = chapters.count
+        }
         if let artwork = currentArtwork {
             info[MPMediaItemPropertyArtwork] = artwork
         }
@@ -626,10 +682,14 @@ final class AudioPlayer {
             Task { @MainActor in self?.skip(-15) }
             return .success
         }
+        // Both start disabled and `load` turns them on once it knows whether
+        // this book has chapter marks at all.
+        center.nextTrackCommand.isEnabled = false
         center.nextTrackCommand.addTarget { [weak self] _ in
             Task { @MainActor in self?.nextChapter() }
             return .success
         }
+        center.previousTrackCommand.isEnabled = false
         center.previousTrackCommand.addTarget { [weak self] _ in
             Task { @MainActor in self?.previousChapter() }
             return .success
