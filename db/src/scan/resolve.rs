@@ -224,27 +224,43 @@ async fn find_book_by_norm(
 /// when zero or more than one candidate matches. `tolerant` widens the title
 /// predicate from exact equality to word-boundary prefix in either direction;
 /// author stays an exact effective-norm match in both modes.
+///
+/// Two-step lookup (#1343): every book falls into exactly one of two disjoint
+/// arms, so their `UNION ALL` is exact.
+///
+/// 1. **No override row** — the common case. The effective norm *is* the
+///    scanned norm here, so this arm compares `b.title_norm`/`b.author_norm`
+///    directly, servable by `idx_books_norm` (an index seek, not a `books`
+///    scan).
+/// 2. **Has an override row** — rare. `metadata_overrides` is small, so
+///    joining it and comparing the `COALESCE`d effective norm costs a small
+///    table's worth of work rather than a full `books` scan.
 async fn query_norm_candidate(
     pool: &SqlitePool,
     title_norm: &str,
     author_norm: &str,
     tolerant: bool,
 ) -> Result<Option<ScanBook>, sqlx::Error> {
-    // `COALESCE(mo.title_norm, b.title_norm)` is the effective title key: the
-    // override norm when the user edited the title, else the scanned norm. Norm
-    // strings are `[a-z0-9 ]` only (see `normalize`), so `?1` carries no LIKE
-    // wildcards and the ` %` suffix asserts a word boundary — a prefix match
-    // can't span mid-word. The predicate is a static string, not user input, so
-    // interpolating it into the SQL is injection-safe.
-    let title_pred = if tolerant {
-        "(COALESCE(mo.title_norm, b.title_norm) = ?1
-          OR COALESCE(mo.title_norm, b.title_norm) LIKE ?1 || ' %'
-          OR ?1 LIKE COALESCE(mo.title_norm, b.title_norm) || ' %')"
+    // Norm strings are `[a-z0-9 ]` only (see `normalize`), so `?1` carries no
+    // LIKE wildcards and the ` %` suffix asserts a word boundary — a prefix
+    // match can't span mid-word. The predicates are static strings, not user
+    // input, so interpolating them into the SQL is injection-safe.
+    let (title_pred_books, title_pred_effective) = if tolerant {
+        (
+            "(b.title_norm = ?1
+              OR b.title_norm LIKE ?1 || ' %'
+              OR ?1 LIKE b.title_norm || ' %')",
+            "(COALESCE(mo.title_norm, b.title_norm) = ?1
+              OR COALESCE(mo.title_norm, b.title_norm) LIKE ?1 || ' %'
+              OR ?1 LIKE COALESCE(mo.title_norm, b.title_norm) || ' %')",
+        )
     } else {
-        "COALESCE(mo.title_norm, b.title_norm) = ?1"
+        (
+            "b.title_norm = ?1",
+            "COALESCE(mo.title_norm, b.title_norm) = ?1",
+        )
     };
-    let sql = format!(
-        "SELECT b.uuid, b.title, b.has_cover,
+    let candidate_cols = "b.uuid, b.title, b.has_cover,
                 (SELECT group_concat(a.name, ', ')
                    FROM books_authors_link bal JOIN authors a ON a.id = bal.author
                   WHERE bal.book = b.id ORDER BY bal.position) AS authors,
@@ -254,11 +270,18 @@ async fn query_norm_candidate(
                   WHERE bi2.book_id = b.id AND bi2.scheme LIKE '%isbn%'
                     AND REPLACE(REPLACE(bi2.value, '-', ''), ' ', '')
                         GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'
-                  ORDER BY bi2.rowid LIMIT 1) AS isbn
+                  ORDER BY bi2.rowid LIMIT 1) AS isbn";
+    let sql = format!(
+        "SELECT {candidate_cols}
            FROM books b
-           LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
-          WHERE COALESCE(mo.author_norm, b.author_norm) = ?2 AND {title_pred}
-          ORDER BY b.id LIMIT 2"
+          WHERE {title_pred_books} AND b.author_norm = ?2
+            AND NOT EXISTS (SELECT 1 FROM metadata_overrides mo WHERE mo.book_uuid = b.uuid)
+         UNION ALL
+         SELECT {candidate_cols}
+           FROM books b
+           JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+          WHERE {title_pred_effective} AND COALESCE(mo.author_norm, b.author_norm) = ?2
+          ORDER BY uuid LIMIT 2"
     );
     let rows = sqlx::query(&sql)
         .bind(title_norm)
