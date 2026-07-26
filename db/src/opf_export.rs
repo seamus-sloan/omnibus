@@ -14,9 +14,9 @@ use omnibus_shared::EbookMetadata;
 /// Result of a successful export.
 #[derive(Debug)]
 pub struct OpfExport {
-    /// Library-relative path of the written `metadata.opf` (the owning scan
-    /// root's absolute filesystem prefix stripped) — callers must not echo
-    /// the server's absolute directory layout back to a `can_edit`-but-not-
+    /// Scan-root-relative path of the written `metadata.opf`, as stored in
+    /// the DB (`book_file_relative_dir`) — callers must not echo the
+    /// server's absolute directory layout back to a `can_edit`-but-not-
     /// admin client.
     pub path: PathBuf,
     /// Whether a pre-existing `metadata.opf` was renamed to
@@ -65,8 +65,9 @@ pub async fn export_opf(pool: &SqlitePool, book_id: i64) -> Result<OpfExport, Op
     let book_dir = epub_path
         .parent()
         .ok_or(OpfExportError::NoEpubFile(book_id))?;
-    // Library-relative directory for the *returned* path — never expose the
-    // server's absolute filesystem layout to a can_edit-but-not-admin client.
+    // Scan-root-relative directory (as stored in the DB) for the *returned*
+    // path — never expose the server's absolute filesystem layout to a
+    // can_edit-but-not-admin client.
     let relative_dir = crate::books::book_file_relative_dir(pool, book_id, "EPUB")
         .await?
         .unwrap_or_default();
