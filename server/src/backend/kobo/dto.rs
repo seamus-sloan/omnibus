@@ -1,9 +1,6 @@
 //! Wire DTOs for the Kobo wireless protocol, PascalCase-shaped to match what
-//! the device sends and expects. Slice A models the load-bearing envelopes
-//! (`NewEntitlement`, `ReadingState`, and the `state` PUT request/response);
-//! the change/removal envelopes (`ChangedProductMetadata`,
-//! `ChangedEntitlement{IsRemoved}`) arrive with the per-device delta in #923,
-//! and the field set is reconciled against a golden device fixture in #928.
+//! the device sends and expects. Models the entitlement envelope emitted by
+//! `library/sync` plus the request/response for the `state` PUT.
 
 use omnibus_db::kobo::KoboBookRow;
 use serde::{Deserialize, Serialize};

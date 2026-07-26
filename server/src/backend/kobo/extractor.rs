@@ -1,10 +1,8 @@
 //! `KoboAuthUser` — path-token extractor for the wireless Kobo routes.
 //!
 //! Kobo devices carry their credential in the URL path (`/kobo/<TOKEN>/v1/…`),
-//! a channel none of the `/api/*` extractors read. Slice A treats the path
-//! token as an ordinary session token (validated via
-//! [`crate::auth::resolve_session_token`]); #923 swaps this for a dedicated,
-//! persistent `kobo_auth_tokens` device token.
+//! a channel none of the `/api/*` extractors read. The token is validated as a
+//! session token via [`crate::auth::resolve_session_token`].
 
 use axum::{
     extract::FromRequestParts,

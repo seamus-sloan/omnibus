@@ -1,7 +1,6 @@
 //! Read-only book listing that feeds native Kobo wireless sync
-//! (`/kobo/v1/library/sync`). Slice A enumerates the whole library; the
-//! per-shelf opt-in filter (#924) and the per-device delta cursor (#923)
-//! layer on top of this query when those tickets land.
+//! (`/kobo/v1/library/sync`). Enumerates the whole library; a per-shelf
+//! opt-in filter layers on top of this query later.
 
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};

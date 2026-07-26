@@ -1,7 +1,7 @@
 //! HTTP-layer contract tests for the wireless Kobo routes, driving
 //! `kobo_router` via `oneshot` against an in-memory DB. The device sequence
 //! (sync → metadata → state) is replayed at the HTTP layer because Playwright
-//! can't drive a Kobo (see #928 for the golden-fixture / real-device gate).
+//! can't drive a Kobo.
 
 use axum::{
     body::{to_bytes, Body},

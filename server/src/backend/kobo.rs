@@ -1,11 +1,8 @@
 //! Native Kobo wireless sync (`/kobo/<TOKEN>/v1/*`).
 //!
-//! Mounted OUTSIDE the `/api/*` auth gate (see `main.rs`); every route
-//! authenticates via the path token ([`KoboAuthUser`]). Slice A implements the
-//! core surface — `library/sync` (streamed, no item cap), `library/<uuid>/
-//! metadata`, `download`, `library/<uuid>/state` (PUT), `library/tags`, and the
-//! cover image route. The per-device delta cursor (#923), per-shelf opt-in
-//! (#924), analytics, and the annotation channel (#927) layer on later.
+//! Mounted outside the `/api/*` auth gate; each route authenticates via its
+//! path token ([`KoboAuthUser`]). Serves the library enumeration, per-book
+//! metadata, KEPUB download, the read-state PUT, tags, and cover images.
 
 use axum::{
     body::{Body, Bytes},
@@ -72,35 +69,69 @@ async fn library_sync(
     };
     let base = origin_from_headers(&headers);
 
-    // One JSON chunk per entitlement, framed as an array. No cap.
-    let mut chunks: Vec<Result<Bytes, std::io::Error>> = Vec::with_capacity(books.len() + 2);
-    chunks.push(Ok(Bytes::from_static(b"[")));
-    for (i, book) in books.iter().enumerate() {
-        let item = dto::new_entitlement(&base, &auth.token, book, 0);
-        let json = match serde_json::to_vec(&item) {
-            Ok(v) => v,
-            Err(e) => return internal("kobo serialize entitlement", e),
-        };
-        let mut piece = if i > 0 { vec![b','] } else { Vec::new() };
-        piece.extend_from_slice(&json);
-        chunks.push(Ok(Bytes::from(piece)));
-    }
-    chunks.push(Ok(Bytes::from_static(b"]")));
+    // Serialize each entitlement lazily as the device drains the body — no
+    // second buffer of the whole payload. (`sync_books` still materializes the
+    // row set; streaming rows straight from SQLx is a later optimization.)
+    let stream = stream::unfold(
+        (books, base, auth.token, SyncPhase::Open),
+        |(books, base, token, phase)| async move {
+            let chunk: Bytes = match phase {
+                SyncPhase::Open => {
+                    let next = if books.is_empty() {
+                        SyncPhase::Close
+                    } else {
+                        SyncPhase::Item(0)
+                    };
+                    return Some((ok(Bytes::from_static(b"[")), (books, base, token, next)));
+                }
+                SyncPhase::Item(i) => {
+                    let item = dto::new_entitlement(&base, &token, &books[i], 0);
+                    // These DTOs are owned Strings/primitives, so serialization
+                    // is infallible; default to empty on the impossible error.
+                    let json = serde_json::to_vec(&item).unwrap_or_default();
+                    let mut piece = if i > 0 { vec![b','] } else { Vec::new() };
+                    piece.extend_from_slice(&json);
+                    let next = if i + 1 < books.len() {
+                        SyncPhase::Item(i + 1)
+                    } else {
+                        SyncPhase::Close
+                    };
+                    return Some((ok(Bytes::from(piece)), (books, base, token, next)));
+                }
+                SyncPhase::Close => Bytes::from_static(b"]"),
+                SyncPhase::End => return None,
+            };
+            Some((ok(chunk), (books, base, token, SyncPhase::End)))
+        },
+    );
 
     (
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, "application/json"),
             // Opaque per-device cursor; the device echoes it back but we never
-            // parse it (the real per-device snapshot cursor is #923).
+            // parse it (the real per-device snapshot cursor lands with #923).
             (
                 header::HeaderName::from_static("x-kobo-synctoken"),
                 "slice-a",
             ),
         ],
-        Body::from_stream(stream::iter(chunks)),
+        Body::from_stream(stream),
     )
         .into_response()
+}
+
+/// Streaming position for [`library_sync`]'s JSON-array body.
+enum SyncPhase {
+    Open,
+    Item(usize),
+    Close,
+    End,
+}
+
+/// Wrap a chunk as the infallible `Result` item `Body::from_stream` expects.
+fn ok(bytes: Bytes) -> Result<Bytes, std::io::Error> {
+    Ok(bytes)
 }
 
 /// `GET library/<uuid>/metadata` — the single-book metadata array Kobo fetches
@@ -249,14 +280,20 @@ fn map_status(kobo: &str) -> ReadStatus {
     }
 }
 
-/// Reconstruct the request origin (`scheme://host`) from headers, so the
-/// device-facing download URLs are absolute. Honors `X-Forwarded-Proto` when a
-/// reverse proxy sets it; defaults to `http`.
+/// Reconstruct the request origin (`scheme://host`) so download/image URLs are
+/// absolute. Prefers `X-Forwarded-Host` (reverse proxy) over `Host`, and
+/// `X-Forwarded-Proto` over a `http` default. When no host is resolvable,
+/// returns an empty string so callers emit host-relative URLs rather than an
+/// invalid `http:///…`.
 fn origin_from_headers(headers: &HeaderMap) -> String {
     let host = headers
-        .get(header::HOST)
+        .get("x-forwarded-host")
+        .or_else(|| headers.get(header::HOST))
         .and_then(|v| v.to_str().ok())
-        .unwrap_or_default();
+        .filter(|h| !h.is_empty());
+    let Some(host) = host else {
+        return String::new();
+    };
     let scheme = headers
         .get("x-forwarded-proto")
         .and_then(|v| v.to_str().ok())
