@@ -10,7 +10,7 @@ use crate::books::{get_book, list_books, search_books};
 use crate::palette::search_palette;
 use crate::pool::init_db;
 use crate::sync::replace_books;
-use crate::test_support::{indexed, CoversTempDir};
+use crate::test_support::{indexed, CoversTempDir, EnvVarGuard};
 
 // -----------------------------------------------------------------
 // F5.1 Metadata overrides
@@ -419,6 +419,85 @@ async fn clear_cover_override_deletes_row_when_no_overrides_remain() {
         "an override row with nothing left active must be deleted, not left empty"
     );
 }
+/// #1395: mirrors `delete_metadata_overrides_removes_stale_export_epub_cache`
+/// — clearing a cover-only override deletes the whole row (nothing left
+/// active), so the stale export cache must go too.
+#[tokio::test]
+async fn clear_cover_override_removes_stale_export_epub_cache_when_nothing_remains() {
+    let export = tempfile::tempdir().unwrap();
+    let _env = EnvVarGuard::set_os("OMNIBUS_EXPORT_EPUB_DIR", Some(export.path().as_os_str()));
+
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let uuid = crate::test_support::seed_synced_ebook(&pool, "b.epub", "T", "A").await;
+    let id = crate::resolve_book_id_by_uuid(&pool, &uuid)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // A cover-only override: clearing it empties the row entirely.
+    upsert_metadata_overrides(&pool, &uuid, &MetadataOverrides::default(), true, user_id)
+        .await
+        .unwrap();
+
+    let cache_path = crate::epub_rewrite::export_epub_path(id);
+    std::fs::write(&cache_path, b"stale rewritten epub").unwrap();
+
+    clear_cover_override(&pool, &uuid, user_id).await.unwrap();
+
+    assert!(
+        !cache_path.exists(),
+        "clearing the last active (cover) override must delete the export cache file"
+    );
+}
+
+/// Counterpart: a cover clear that leaves a text override in place must NOT
+/// delete the export cache, since the book still needs a rewrite (just
+/// without the cover swap) — the `last_modified` bump already forces
+/// `rewritten_epub_path` to regenerate rather than serve a torn-down file.
+#[tokio::test]
+async fn clear_cover_override_keeps_export_epub_cache_when_text_overrides_remain() {
+    let export = tempfile::tempdir().unwrap();
+    let _env = EnvVarGuard::set_os("OMNIBUS_EXPORT_EPUB_DIR", Some(export.path().as_os_str()));
+
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let uuid = crate::test_support::seed_synced_ebook(&pool, "b.epub", "T", "A").await;
+    let id = crate::resolve_book_id_by_uuid(&pool, &uuid)
+        .await
+        .unwrap()
+        .unwrap();
+
+    upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &MetadataOverrides {
+            title: Some("Kept Title".into()),
+            ..Default::default()
+        },
+        true,
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    let cache_path = crate::epub_rewrite::export_epub_path(id);
+    std::fs::write(&cache_path, b"stale rewritten epub").unwrap();
+
+    clear_cover_override(&pool, &uuid, user_id).await.unwrap();
+
+    assert!(
+        cache_path.exists(),
+        "a text override still active means the export cache isn't dead weight yet"
+    );
+}
+
 #[tokio::test]
 async fn clear_cover_override_returns_serialization_error_for_corrupt_blob() {
     let pool = init_db("sqlite::memory:").await.unwrap();
@@ -1363,6 +1442,53 @@ async fn upsert_metadata_overrides_bumps_book_last_modified() {
     assert!(
         last_modified > 1,
         "override save must bump books.last_modified (cache clock), got {last_modified}"
+    );
+}
+
+/// #1395: once every override is gone, a previously-cached rewritten export
+/// EPUB has nothing left to bake — `delete_metadata_overrides` must remove
+/// it eagerly rather than leaving it orphaned on disk until (if ever) the
+/// book is exported again.
+#[tokio::test]
+async fn delete_metadata_overrides_removes_stale_export_epub_cache() {
+    let export = tempfile::tempdir().unwrap();
+    let _env = EnvVarGuard::set_os("OMNIBUS_EXPORT_EPUB_DIR", Some(export.path().as_os_str()));
+
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let uuid = crate::test_support::seed_synced_ebook(&pool, "b.epub", "T", "A").await;
+    let id = crate::resolve_book_id_by_uuid(&pool, &uuid)
+        .await
+        .unwrap()
+        .unwrap();
+
+    upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &MetadataOverrides {
+            title: Some("Baked".into()),
+            ..Default::default()
+        },
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    // Stand in for a cache file a prior export would have written — the
+    // rewrite itself is exercised elsewhere (`epub_rewrite::tests`).
+    let cache_path = crate::epub_rewrite::export_epub_path(id);
+    std::fs::write(&cache_path, b"stale rewritten epub").unwrap();
+    assert!(cache_path.exists());
+
+    delete_metadata_overrides(&pool, &uuid).await.unwrap();
+
+    assert!(
+        !cache_path.exists(),
+        "clearing the last override must delete the now-stale export cache file"
     );
 }
 

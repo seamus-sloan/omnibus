@@ -392,3 +392,126 @@ async fn rewritten_epub_path_bakes_title_override_into_export() {
 async fn is_stale_returns_true_when_export_missing() {
     assert!(super::is_stale(std::path::Path::new("/nonexistent/x.epub"), 0).await);
 }
+
+/// #1395: once a book's last override clears, `rewritten_epub_path` must
+/// remove any cache file left behind rather than leaving it orphaned. This
+/// exercises the belt-and-suspenders cleanup on the early-return path
+/// directly — the eager cleanup in `metadata_overrides::delete_metadata_overrides`
+/// / `clear_cover_override` is covered separately in that module's tests.
+#[tokio::test]
+async fn rewritten_epub_path_removes_a_leftover_cache_file_when_no_override_is_active() {
+    let export = tempfile::tempdir().unwrap();
+    let _env = EnvVarGuard::set_os("OMNIBUS_EXPORT_EPUB_DIR", Some(export.path().as_os_str()));
+
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    let uuid =
+        crate::test_support::seed_synced_ebook(&pool, "wok.epub", "The Way of Kings", "Sanderson")
+            .await;
+    let id = crate::resolve_book_id_by_uuid(&pool, &uuid)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // Simulate an orphan left behind by a pre-#1395 build: a cache file with
+    // no override active to justify it.
+    let cache_path = super::export_epub_path(id);
+    std::fs::write(&cache_path, b"orphaned rewritten epub").unwrap();
+
+    let src = fixture("alpha.epub");
+    let out = super::rewritten_epub_path(&pool, id, &src).await.unwrap();
+
+    assert!(out.is_none(), "no overrides → serve source, no rewrite");
+    assert!(
+        !cache_path.exists(),
+        "the orphaned cache file must be cleaned up rather than left on disk"
+    );
+}
+
+// --- cap_bytes / evict_if_over_cap / invalidate_export_epub_cache -----
+
+// Note: `EnvVarGuard` holds the process-wide `ENV_LOCK` for its lifetime and
+// that mutex is not reentrant, so each test below keeps at most one guard
+// alive at a time — two in one scope self-deadlocks the test binary.
+
+#[test]
+fn cap_bytes_falls_back_to_default_when_env_is_unset() {
+    let _env = EnvVarGuard::set("OMNIBUS_EXPORT_EPUB_CAP_BYTES", None);
+    assert_eq!(super::cap_bytes(), 5 * 1024 * 1024 * 1024);
+}
+
+#[test]
+fn cap_bytes_falls_back_to_default_when_env_is_unparseable() {
+    let _env = EnvVarGuard::set("OMNIBUS_EXPORT_EPUB_CAP_BYTES", Some("not-a-number"));
+    assert_eq!(super::cap_bytes(), 5 * 1024 * 1024 * 1024);
+}
+
+#[test]
+fn cap_bytes_reads_the_configured_env_var() {
+    let _env = EnvVarGuard::set("OMNIBUS_EXPORT_EPUB_CAP_BYTES", Some("1024"));
+    assert_eq!(super::cap_bytes(), 1024);
+}
+
+#[test]
+fn invalidate_export_epub_cache_removes_an_existing_file_and_is_a_noop_when_absent() {
+    let export = tempfile::tempdir().unwrap();
+    let _env = EnvVarGuard::set_os("OMNIBUS_EXPORT_EPUB_DIR", Some(export.path().as_os_str()));
+
+    let path = super::export_epub_path(42);
+    std::fs::write(&path, b"cached").unwrap();
+    assert!(path.exists());
+
+    super::invalidate_export_epub_cache(42);
+    assert!(!path.exists());
+
+    // A second call with nothing left to remove must not panic or error.
+    super::invalidate_export_epub_cache(42);
+}
+
+#[test]
+fn evict_if_over_cap_removes_oldest_entries_until_under_the_cap() {
+    let export = tempfile::tempdir().unwrap();
+    let _env = EnvVarGuard::set_os("OMNIBUS_EXPORT_EPUB_DIR", Some(export.path().as_os_str()));
+
+    // Three 10-byte entries, oldest (book 1) to newest (book 3).
+    for (book_id, age_secs) in [(1, 30), (2, 20), (3, 10)] {
+        let path = super::export_epub_path(book_id);
+        std::fs::write(&path, b"0123456789").unwrap();
+        let mtime = std::time::SystemTime::now() - std::time::Duration::from_secs(age_secs);
+        let file = std::fs::File::open(&path).unwrap();
+        file.set_modified(mtime).unwrap();
+    }
+
+    // Cap fits only the newest two entries (20 bytes).
+    super::evict_if_over_cap(20).unwrap();
+
+    assert!(
+        !super::export_epub_path(1).exists(),
+        "oldest entry should have been evicted"
+    );
+    assert!(super::export_epub_path(2).exists());
+    assert!(super::export_epub_path(3).exists());
+}
+
+#[test]
+fn evict_if_over_cap_ignores_in_flight_temp_files() {
+    let export = tempfile::tempdir().unwrap();
+    let _env = EnvVarGuard::set_os("OMNIBUS_EXPORT_EPUB_DIR", Some(export.path().as_os_str()));
+
+    // A temp file mid-rewrite (dot-prefixed, per `rewritten_epub_path`'s
+    // naming scheme) must not be counted or deleted by eviction.
+    let tmp = export.path().join(".7.12345.0.tmp.epub");
+    std::fs::write(&tmp, b"in-flight").unwrap();
+
+    super::evict_if_over_cap(0).unwrap();
+
+    assert!(tmp.exists(), "in-flight temp file must survive eviction");
+}
+
+#[test]
+fn evict_if_over_cap_is_a_noop_when_the_export_dir_does_not_exist() {
+    let export = tempfile::tempdir().unwrap();
+    let missing = export.path().join("does-not-exist");
+    let _env = EnvVarGuard::set_os("OMNIBUS_EXPORT_EPUB_DIR", Some(missing.as_os_str()));
+
+    super::evict_if_over_cap(0).unwrap();
+}

@@ -21,6 +21,7 @@ fn cache_env(dir: &Path) -> EnvVarGuard {
         .also_set_os("OMNIBUS_COVERS_DIR", Some(d))
         .also_set_os("OMNIBUS_THUMBS_DIR", Some(d))
         .also_set_os("OMNIBUS_KEPUB_DIR", Some(d))
+        .also_set_os("OMNIBUS_EXPORT_EPUB_DIR", Some(d))
         .also_set_os("OMNIBUS_JOURNAL_IMAGES_DIR", Some(d))
 }
 
@@ -167,6 +168,32 @@ async fn delete_book_items_purges_the_book_and_its_user_data_when_every_item_goe
         let sql = format!("SELECT COUNT(*) FROM {table}");
         assert_eq!(count_rows(&pool, &sql).await, 0, "{table} not purged");
     }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// #1395: a total delete must also remove the book's cached rewritten
+/// export EPUB, alongside the thumbnail / HLS / KEPUB caches it already
+/// cleans up — otherwise the file lingers on disk unreferenced forever.
+#[tokio::test]
+async fn delete_book_items_removes_the_export_epub_cache_on_total_delete() {
+    let dir = temp_dir("export_epub");
+    let _env = cache_env(&dir);
+    let pool = pool().await;
+    let lib = seed_root(&pool, "/lib").await;
+    let book = seed_book(&pool, lib, "uuid-a", "Doomed").await;
+    let file = seed_file(&pool, book, "/lib", "a", "a", "EPUB").await;
+
+    let cache_path = crate::epub_rewrite::export_epub_path(book);
+    std::fs::write(&cache_path, b"stale rewritten epub").unwrap();
+
+    delete_book_items(&pool, "uuid-a", &[file], &[])
+        .await
+        .unwrap();
+
+    assert!(
+        !cache_path.exists(),
+        "total delete must remove the cached export EPUB"
+    );
     std::fs::remove_dir_all(&dir).ok();
 }
 
