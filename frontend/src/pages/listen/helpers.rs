@@ -1,17 +1,46 @@
 //! Shared helpers for the listen page: timestamp formatting, the audio
 //! progress POST shim, the audited `window.OmnibusAudio` poke, the
-//! transport click-handler builders, and the volume load/save/apply trio
-//! shared by the mini-dock and full player. Consumed by `listen.rs`,
-//! `controls`, `speed_panel`, `sleep`, `ready_player`, and `bootstrap`.
+//! transport click-handler builders, the volume load/save/apply trio
+//! shared by the mini-dock and full player, and the scrub-drag preview
+//! math shared by the web and mobile players.
 
 // Imported for `Asset`/`MouseEvent`; the audio helpers below that use it are
 // all gated to non-mobile targets, so the import is too (unused on mobile).
 #[cfg(not(feature = "mobile"))]
 use dioxus::prelude::*;
+use omnibus_shared::ChapterInfo;
 #[cfg(not(feature = "mobile"))]
 use omnibus_shared::{
     MAX_AUDIOBOOK_PLAYBACK_RATE as MAX_RATE, MIN_AUDIOBOOK_PLAYBACK_RATE as MIN_RATE,
 };
+
+/// Effective (position, chapter index, remaining) derivation shared by the
+/// web and mobile players' scrub bars: while dragging (`scrub` is `Some`)
+/// every readout previews the target position instead of the real playback
+/// state; at rest (`None`) `elapsed` / `current_chapter_index` / `remaining`
+/// pass through unchanged. `chapter_index_fn` is threaded in rather than
+/// called directly because each target keeps its own
+/// `chapter_index_for_elapsed` under its own cfg gate (`chapter_nav` on web,
+/// `mobile::view` on mobile) — this is the one place the "preview while
+/// dragging, commit on release" math itself lives, so the two can't diverge.
+pub(super) fn effective_scrub_position(
+    chapters: &[ChapterInfo],
+    elapsed: f64,
+    duration: f64,
+    current_chapter_index: usize,
+    remaining: f64,
+    scrub: Option<f64>,
+    chapter_index_fn: impl Fn(&[ChapterInfo], f64) -> usize,
+) -> (f64, usize, f64) {
+    let Some(target) = scrub else {
+        return (elapsed, current_chapter_index, remaining);
+    };
+    let max = if duration > 0.0 { duration } else { 1.0 };
+    let effective = target.clamp(0.0, max);
+    let eff_current = chapter_index_fn(chapters, effective);
+    let eff_remaining = (duration - effective).max(0.0);
+    (effective, eff_current, eff_remaining)
+}
 
 /// Vendored hls.js for the HLS fallback path.
 #[cfg(feature = "web")]
@@ -217,7 +246,70 @@ pub(super) fn post_audio_progress(uuid: String, seconds: f64) {
 
 #[cfg(test)]
 mod tests {
-    use super::format_hms;
+    use omnibus_shared::ChapterInfo;
+
+    use super::{effective_scrub_position, format_hms};
+
+    fn ch(ordinal: i64, title: &str, start: f64, dur: f64) -> ChapterInfo {
+        ChapterInfo {
+            ordinal,
+            title: title.into(),
+            start_seconds: start,
+            duration_seconds: dur,
+        }
+    }
+
+    /// Mirrors the shape of the real per-target `chapter_index_for_elapsed`
+    /// implementations (`chapter_nav` / `mobile::view`) without depending on
+    /// either — this module compiles on both cfg configurations.
+    fn idx_of(chapters: &[ChapterInfo], elapsed: f64) -> usize {
+        chapters
+            .partition_point(|c| c.start_seconds <= elapsed)
+            .saturating_sub(1)
+    }
+
+    #[test]
+    fn effective_scrub_position_passes_through_when_not_scrubbing() {
+        let chs = vec![ch(1, "Intro", 0.0, 300.0), ch(2, "Part 1", 300.0, 600.0)];
+        let (effective, idx, remaining) =
+            effective_scrub_position(&chs, 120.0, 900.0, 0, 780.0, None, idx_of);
+        assert!((effective - 120.0).abs() < f64::EPSILON);
+        assert_eq!(idx, 0);
+        assert!((remaining - 780.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn effective_scrub_position_overrides_with_drag_target_when_scrubbing() {
+        let chs = vec![ch(1, "Intro", 0.0, 300.0), ch(2, "Part 1", 300.0, 600.0)];
+        // Parent still reports elapsed=120/chapter 0/remaining=780, but the
+        // drag is previewing 500s — every readout should follow the drag.
+        let (effective, idx, remaining) =
+            effective_scrub_position(&chs, 120.0, 900.0, 0, 780.0, Some(500.0), idx_of);
+        assert!((effective - 500.0).abs() < f64::EPSILON);
+        assert_eq!(idx, 1);
+        assert!((remaining - 400.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn effective_scrub_position_recomputes_chapter_at_a_boundary() {
+        let chs = vec![ch(1, "Intro", 0.0, 300.0), ch(2, "Part 1", 300.0, 600.0)];
+        // Dragging to exactly the chapter-2 boundary should flip the index.
+        let (_, idx_before, _) =
+            effective_scrub_position(&chs, 0.0, 900.0, 0, 900.0, Some(299.9), idx_of);
+        let (_, idx_after, _) =
+            effective_scrub_position(&chs, 0.0, 900.0, 0, 900.0, Some(300.0), idx_of);
+        assert_eq!(idx_before, 0);
+        assert_eq!(idx_after, 1);
+    }
+
+    #[test]
+    fn effective_scrub_position_clamps_drag_target_to_the_book_bounds() {
+        let chs = vec![ch(1, "Intro", 0.0, 300.0)];
+        let (effective, _, remaining) =
+            effective_scrub_position(&chs, 0.0, 300.0, 0, 300.0, Some(999.0), idx_of);
+        assert!((effective - 300.0).abs() < f64::EPSILON);
+        assert!((remaining - 0.0).abs() < f64::EPSILON);
+    }
 
     #[test]
     fn format_hms_under_one_hour_renders_mm_ss() {
