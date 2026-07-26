@@ -493,22 +493,28 @@ async fn api_get_recent_progress_returns_resume_points_newest_first() {
                 format: omnibus_shared::ProgressFormat::Epub,
                 epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
                 audio_position_seconds: None,
+                client_updated_at: None,
             },
         )
         .await
         .unwrap();
     }
-    // Same-second upserts tie on updated_at; force Book B newest.
-    sqlx::query("UPDATE reading_progress SET updated_at = 200 WHERE book_uuid = ?")
-        .bind(&uuid_b)
-        .execute(&pool)
-        .await
-        .unwrap();
-    sqlx::query("UPDATE reading_progress SET updated_at = 100 WHERE book_uuid = ?")
-        .bind(&uuid_a)
-        .execute(&pool)
-        .await
-        .unwrap();
+    // Same-second upserts tie on client_updated_at (the recency column
+    // `recent_progress` now orders on); force Book B newest on both columns.
+    sqlx::query(
+        "UPDATE reading_progress SET updated_at = 200, client_updated_at = 200 WHERE book_uuid = ?",
+    )
+    .bind(&uuid_b)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE reading_progress SET updated_at = 100, client_updated_at = 100 WHERE book_uuid = ?",
+    )
+    .bind(&uuid_a)
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let res = app
         .oneshot(

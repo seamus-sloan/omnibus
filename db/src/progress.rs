@@ -1,10 +1,8 @@
 //! Server-authoritative reading/listening position sync plus batched
-//! session reports. Position upserts are last-write-wins on
-//! `(user_id, book_uuid, format)`; session inserts go to the per-format
-//! `reading_sessions` / `listening_sessions` tables. All rows soft-reference
-//! the durable `books.uuid` (no FK, no cascade), resolved through the
-//! same merged-uuid-aware canonical resolver so a format-merged uuid stores
-//! the surviving book's identity.
+//! session reports. Position upserts are most-recent-wins on
+//! `(user_id, book_uuid, format)` by client event time, not server receipt
+//! time. Session inserts go to the per-format `reading_sessions` /
+//! `listening_sessions` tables; all rows soft-reference `books.uuid`.
 
 use omnibus_shared::{
     AudiobookPlaybackRateRecord, AudiobookPlaybackRateUpdate, ChapterInfo, ProgressFormat,
@@ -63,10 +61,21 @@ fn parse_format(raw: &str) -> ProgressFormat {
     }
 }
 
-/// Upsert a position row for `(user, book, format)` and return the new
-/// server-authoritative record. Resolves the request uuid to the **canonical**
-/// `books.uuid` (keeping the `BookNotFound` guard — you cannot record progress
-/// for a book the server has never indexed) and stores/keys on it.
+/// Upsert a position row for `(user, book, format)` and return the
+/// **surviving** server-authoritative record. Resolves the request uuid to
+/// the **canonical** `books.uuid` (keeping the `BookNotFound` guard — you
+/// cannot record progress for a book the server has never indexed) and
+/// stores/keys on it.
+///
+/// The conflict resolution is conditional on `client_updated_at`, not
+/// unconditional last-write-wins on receipt order (issue #1362): the stored
+/// `MIN(update.client_updated_at, now)` — clamping a fast client clock so it
+/// can't pin itself as permanently newest — only overwrites the row when it
+/// is `>=` the value already stored. A write with no `client_updated_at`
+/// (older client) is treated as "now", matching the pre-#1362 behaviour. A
+/// rejected (older) write still re-reads and returns the row that won, so
+/// the caller learns it is behind rather than seeing its own rejected
+/// payload echoed back.
 pub async fn upsert_progress(
     pool: &SqlitePool,
     user_id: i64,
@@ -76,25 +85,39 @@ pub async fn upsert_progress(
         .await?
         .ok_or(ProgressError::BookNotFound)?;
     let fmt = format_str(update.format);
+    // `strftime('%s','now')` returns TEXT; SQLite's default storage-class
+    // sort order ranks every INTEGER below every TEXT value regardless of
+    // magnitude, so `MIN(<int param>, <text now>)` would always pick the
+    // (unclamped) integer side without an explicit CAST here.
     sqlx::query(
         "INSERT INTO reading_progress
-            (user_id, book_uuid, format, epub_cfi, audio_position_seconds, updated_at)
-         VALUES (?, ?, ?, ?, ?, strftime('%s','now'))
+            (user_id, book_uuid, format, epub_cfi, audio_position_seconds,
+             updated_at, client_updated_at)
+         VALUES (?, ?, ?, ?, ?, strftime('%s','now'),
+             MIN(
+                 COALESCE(?, CAST(strftime('%s','now') AS INTEGER)),
+                 CAST(strftime('%s','now') AS INTEGER)
+             ))
          ON CONFLICT(user_id, book_uuid, format) DO UPDATE SET
              epub_cfi = excluded.epub_cfi,
              audio_position_seconds = excluded.audio_position_seconds,
-             updated_at = strftime('%s','now')",
+             updated_at = strftime('%s','now'),
+             client_updated_at = excluded.client_updated_at
+         WHERE excluded.client_updated_at >=
+             COALESCE(reading_progress.client_updated_at, reading_progress.updated_at)",
     )
     .bind(user_id)
     .bind(&book_uuid)
     .bind(fmt)
     .bind(update.epub_cfi.as_deref())
     .bind(update.audio_position_seconds)
+    .bind(update.client_updated_at)
     .execute(pool)
     .await?;
 
     let row = sqlx::query(
-        "SELECT epub_cfi, audio_position_seconds, updated_at
+        "SELECT epub_cfi, audio_position_seconds, updated_at,
+                COALESCE(client_updated_at, updated_at) AS client_updated_at
          FROM reading_progress
          WHERE user_id = ? AND book_uuid = ? AND format = ?",
     )
@@ -109,6 +132,7 @@ pub async fn upsert_progress(
         epub_cfi: row.try_get::<Option<String>, _>("epub_cfi")?,
         audio_position_seconds: row.try_get::<Option<f64>, _>("audio_position_seconds")?,
         updated_at: row.try_get::<i64, _>("updated_at")?,
+        client_updated_at: row.try_get::<i64, _>("client_updated_at")?,
     })
 }
 
@@ -126,7 +150,8 @@ pub async fn get_progress(
     };
     let fmt = format_str(format);
     let Some(row) = sqlx::query(
-        "SELECT format, epub_cfi, audio_position_seconds, updated_at
+        "SELECT format, epub_cfi, audio_position_seconds, updated_at,
+                COALESCE(client_updated_at, updated_at) AS client_updated_at
          FROM reading_progress
          WHERE user_id = ? AND book_uuid = ? AND format = ?",
     )
@@ -144,6 +169,7 @@ pub async fn get_progress(
         epub_cfi: row.try_get::<Option<String>, _>("epub_cfi")?,
         audio_position_seconds: row.try_get::<Option<f64>, _>("audio_position_seconds")?,
         updated_at: row.try_get::<i64, _>("updated_at")?,
+        client_updated_at: row.try_get::<i64, _>("client_updated_at")?,
     }))
 }
 
@@ -206,18 +232,22 @@ pub async fn get_playback_rate(
     }))
 }
 
-/// The user's most recent progress rows across both formats, newest first.
-/// Feeds the "pick up where you left off" surfaces via [`resume_points`].
+/// The user's most recent progress rows across both formats, newest first
+/// by **client event time** — `COALESCE(client_updated_at, updated_at)`, so
+/// a queued offline replay landing late doesn't jump a week-old book to the
+/// top (issue #1362). Feeds the "pick up where you left off" surfaces via
+/// [`resume_points`].
 pub async fn recent_progress(
     pool: &SqlitePool,
     user_id: i64,
     limit: i64,
 ) -> Result<Vec<ProgressRecord>, ProgressError> {
     let rows = sqlx::query(
-        "SELECT book_uuid, format, epub_cfi, audio_position_seconds, updated_at
+        "SELECT book_uuid, format, epub_cfi, audio_position_seconds, updated_at,
+                COALESCE(client_updated_at, updated_at) AS client_updated_at
          FROM reading_progress
          WHERE user_id = ?
-         ORDER BY updated_at DESC, book_uuid
+         ORDER BY COALESCE(client_updated_at, updated_at) DESC, book_uuid
          LIMIT ?",
     )
     .bind(user_id)
@@ -232,6 +262,7 @@ pub async fn recent_progress(
                 epub_cfi: row.try_get::<Option<String>, _>("epub_cfi")?,
                 audio_position_seconds: row.try_get::<Option<f64>, _>("audio_position_seconds")?,
                 updated_at: row.try_get::<i64, _>("updated_at")?,
+                client_updated_at: row.try_get::<i64, _>("client_updated_at")?,
             })
         })
         .collect()

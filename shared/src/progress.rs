@@ -48,14 +48,26 @@ pub struct ProgressUpdate {
     pub epub_cfi: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_position_seconds: Option<f64>,
+    /// Unix seconds when the client observed this position — used to
+    /// resolve most-recent-wins by **event** time rather than server
+    /// receipt time (issue #1362). `#[serde(default)]` so an older client
+    /// that never sends this field still parses; `upsert_progress` treats a
+    /// missing value as "use server now", preserving prior last-write-wins
+    /// behaviour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_updated_at: Option<i64>,
 }
 
 impl ProgressUpdate {
-    /// Reject empty UUIDs and missing format-specific positions. Mirrors
-    /// `MetadataOverrides::validate` — handlers translate `Err(_)` into 400.
+    /// Reject empty UUIDs, missing format-specific positions, and a
+    /// negative `client_updated_at`. Mirrors `MetadataOverrides::validate`
+    /// — handlers translate `Err(_)` into 400.
     pub fn validate(&self) -> Result<(), String> {
         if self.book_uuid.trim().is_empty() {
             return Err("book_uuid is required".into());
+        }
+        if self.client_updated_at.is_some_and(|ts| ts < 0) {
+            return Err("client_updated_at must be non-negative".into());
         }
         // Reject the non-discriminated field at the API boundary so a
         // cross-format payload (e.g. `{format:"epub", audio_position_seconds:…}`)
@@ -101,7 +113,10 @@ impl ProgressUpdate {
 /// Server-authoritative position returned by `POST /api/progress` and
 /// `GET /api/progress/{uuid}`. The non-discriminated field for the other
 /// format is always `None`. `updated_at` is unix seconds (SQLite
-/// `strftime('%s')`).
+/// `strftime('%s')`) — server receipt time. `client_updated_at` is the
+/// event time the most-recent-wins ordering actually resolves on (clamped
+/// to server now for a client with a fast clock; defaulted to server now
+/// when the write carried none).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProgressRecord {
     pub book_uuid: String,
@@ -109,6 +124,7 @@ pub struct ProgressRecord {
     pub epub_cfi: Option<String>,
     pub audio_position_seconds: Option<f64>,
     pub updated_at: i64,
+    pub client_updated_at: i64,
 }
 
 /// "Pick up where you left off" entry returned by `GET /api/progress/recent` and `rpc_recent_progress`.

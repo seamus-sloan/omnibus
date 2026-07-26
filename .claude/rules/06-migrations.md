@@ -13,7 +13,7 @@ works in production.
 
 1. **Name it `NNNN_short_description.sql`.** Take the next zero-padded
    number after the highest existing file (latest is
-   `0049_books_word_count.sql`). The number is the version
+   `0050_reading_progress_client_time.sql`). The number is the version
    `_sqlx_migrations` records; renumbering or renaming an applied file
    breaks the applied-version bookkeeping.
 2. **Never edit an applied migration.** Once a file has run anywhere
