@@ -23,6 +23,20 @@ pub(super) struct Availability {
     pub has_audio: bool,
 }
 
+/// Accent-colored "Physical" badge shown in the format-badge row when the book
+/// has at least one checked-in physical copy.
+#[component]
+fn BdPhysBadge() -> Element {
+    rsx! {
+        span {
+            class: "bd-fmt-badge bd-fmt-badge--physical",
+            "data-testid": "format-badge-physical",
+            title: "In your physical collection",
+            "Physical"
+        }
+    }
+}
+
 /// Hero section: breadcrumb, cover + format badges, title + CTAs, rating card.
 #[component]
 pub(super) fn BdHeroSection(
@@ -39,10 +53,13 @@ pub(super) fn BdHeroSection(
             div { class: "bd-hero-grid",
                 div { class: "bd-cover-col",
                     Cover { book: b.clone() }
-                    if !b.formats.is_empty() {
+                    if !b.formats.is_empty() || b.has_physical {
                         div { class: "bd-format-badges",
                             for f in b.formats.iter() {
                                 BdFormatBadge { key: "{f}", fmt: f.clone() }
+                            }
+                            if b.has_physical {
+                                BdPhysBadge {}
                             }
                         }
                     }
@@ -216,8 +233,18 @@ fn BdCtaRow(has_ebook: bool, has_audio: bool, meta: BookActionMeta) -> Element {
         .cloned()
         .collect();
 
+    // A fileless book (no ebook/audiobook files — physical-only or wishlist)
+    // has nothing to read, listen to, or export, so the reading CTAs give way
+    // to a disclaimer.
+    let is_fileless = !has_ebook && !has_audio;
+
     rsx! {
         div { class: "bd-cta-row",
+            if is_fileless {
+                p { class: "bd-no-files", "data-testid": "no-files-disclaimer",
+                    "No ebook or audiobook files in your library yet \u{2014} this title is tracked from your physical collection or wishlist."
+                }
+            } else {
             if has_ebook {
                 BdFilePickerMenu {
                     uuid: uuid.clone(),
@@ -282,6 +309,7 @@ fn BdCtaRow(has_ebook: bool, has_audio: bool, meta: BookActionMeta) -> Element {
                 book_title: book_title.clone(),
                 epub_size_bytes,
             }
+            }
         }
     }
 }
@@ -321,5 +349,27 @@ mod tests {
     fn immersive_cta_absent_when_book_has_audio_only() {
         let html = render_cta_row(false, true);
         assert!(!html.contains("data-testid=\"immersive-read\""));
+    }
+
+    #[test]
+    fn fileless_book_shows_no_files_disclaimer_and_hides_reading_ctas() {
+        let html = render_cta_row(false, false);
+        assert!(html.contains("data-testid=\"no-files-disclaimer\""));
+        // No reading CTAs and no export menu for a book with no files.
+        assert!(!html.contains("data-testid=\"start-reading\""));
+        assert!(!html.contains("data-testid=\"start-listening\""));
+    }
+
+    #[test]
+    fn book_with_files_shows_no_disclaimer() {
+        let html = render_cta_row(true, false);
+        assert!(!html.contains("data-testid=\"no-files-disclaimer\""));
+    }
+
+    #[test]
+    fn phys_badge_renders_its_testid_and_label() {
+        let html = dioxus::ssr::render_element(rsx! { BdPhysBadge {} });
+        assert!(html.contains("data-testid=\"format-badge-physical\""));
+        assert!(html.contains("Physical"));
     }
 }
