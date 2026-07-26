@@ -1,15 +1,16 @@
 //! Native Kobo wireless sync (`/kobo/<TOKEN>/v1/*`).
 //!
 //! Mounted outside the `/api/*` auth gate; each route authenticates via its
-//! path token ([`KoboAuthUser`]). Serves the library enumeration, per-book
-//! metadata, KEPUB download, the read-state PUT, tags, and cover images.
+//! path token ([`KoboAuthUser`]). Serves the initialization handshake, the
+//! library enumeration, per-book metadata, KEPUB download, the read-state PUT,
+//! tags, and cover images.
 
 use axum::{
     body::{Body, Bytes},
     extract::{Path, Request, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, put},
+    routing::{get, post, put},
     Extension, Json, Router,
 };
 use futures_util::stream;
@@ -23,6 +24,7 @@ use super::{internal, serve_download, AppState};
 
 mod dto;
 mod extractor;
+mod store_resources;
 #[cfg(test)]
 mod tests;
 
@@ -32,12 +34,19 @@ use extractor::KoboAuthUser;
 /// falling back to plain EPUB. Mirrors the USB sideload path's budget.
 const KEPUB_CONVERT_BUDGET: std::time::Duration = std::time::Duration::from_secs(25);
 
+/// Required on the `v1/initialization` response — base64 `{}`. Without it the
+/// device treats the payload as malformed and never adopts the resources map.
+const KOBO_API_TOKEN: &str = "e30=";
+
 /// Build the wireless Kobo router. `Extension(pool)` is layered here so the
 /// router is self-contained for integration tests; the live server adds the
 /// same one at the top (harmless overlap, mirroring `rest_router`).
 pub fn kobo_router(state: AppState) -> Router {
     let pool = state.pool().clone();
     Router::new()
+        .route("/kobo/{token}/v1/initialization", get(initialization))
+        .route("/kobo/{token}/v1/auth/device", post(auth_device))
+        .route("/kobo/{token}/v1/auth/refresh", post(auth_refresh))
         .route("/kobo/{token}/v1/library/sync", get(library_sync))
         .route(
             "/kobo/{token}/v1/library/{uuid}/metadata",
@@ -52,6 +61,43 @@ pub fn kobo_router(state: AppState) -> Router {
         )
         .with_state(state)
         .layer(Extension(pool))
+}
+
+/// `GET v1/initialization` — the handshake that redirects a device at this
+/// server. Returns Kobo's own resources map with only the sync/download/cover/
+/// annotation entries repointed here, so store browse and search keep working
+/// against Kobo directly and this server never proxies that traffic.
+///
+/// `reading_services_host` is advertised even though the annotation channel
+/// isn't implemented yet: advertising-then-not-answering is the wipe mechanism
+/// the settings-card warning covers, and the channel can't be adopted at all
+/// until the host is published.
+async fn initialization(auth: KoboAuthUser, headers: HeaderMap) -> Response {
+    let base = origin_from_headers(&headers);
+    let resources = store_resources::resources_for(&base, &auth.token);
+    (
+        StatusCode::OK,
+        [(
+            header::HeaderName::from_static("x-kobo-apitoken"),
+            KOBO_API_TOKEN,
+        )],
+        Json(serde_json::json!({ "Resources": resources })),
+    )
+        .into_response()
+}
+
+/// `POST v1/auth/device` — the device's initial token exchange. The values are
+/// generated locally and never validated afterwards: the `/kobo/<TOKEN>/` path
+/// token is the real credential, so this is a well-formed envelope by design,
+/// not a stub standing in for verification.
+async fn auth_device(auth: KoboAuthUser) -> Response {
+    Json(dto::auth_envelope(&auth.token)).into_response()
+}
+
+/// `POST v1/auth/refresh` — same envelope as [`auth_device`]; the device
+/// refreshes on a schedule and expects the same shape back.
+async fn auth_refresh(auth: KoboAuthUser) -> Response {
+    Json(dto::auth_envelope(&auth.token)).into_response()
 }
 
 /// `GET library/sync` — enumerate the caller's opted-in books as

@@ -38,6 +38,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"], optio
 tracing-appender = { version = "0.2", optional = true }
 time = { version = "0.3", features = ["formatting"], optional = true }
 futures-util = { version = "0.3", optional = true }
+# Fixed-digest derivation for the Kobo auth envelope. Deliberately not
+# `DefaultHasher`, whose output is not stable across toolchain versions —
+# a rotation there would drift the values a device caches across a deploy
+# (the same trap `db::helpers::stable_uuid` documents).
+sha2 = { version = "0.10", optional = true }
 # Re-exported by dioxus::serve as the return error type, and used by the
 # native startup helpers in main.rs that previously lived inside an inline
 # closure (where `?` upgraded any error via type inference).
@@ -94,6 +99,7 @@ server = [
     "dep:tracing-appender",
     "dep:time",
     "dep:futures-util",
+    "dep:sha2",
     "dep:anyhow",
     "dep:tempfile",
     "dep:omnibus-db",
