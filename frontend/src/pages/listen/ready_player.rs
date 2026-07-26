@@ -118,7 +118,7 @@ pub(super) fn ReadyPlayer(
         bookmarks.create(*elapsed.peek(), &chs_now);
     };
 
-    let title = book.title.clone().unwrap_or_else(|| book.filename.clone());
+    let title = book.display_title();
     let author = book
         .creators
         .first()

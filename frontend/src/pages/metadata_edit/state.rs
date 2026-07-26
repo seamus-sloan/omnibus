@@ -128,7 +128,7 @@ fn use_field_signals(book: &EbookMetadata) -> FormFields {
 /// title, primary author name + id, and the CSS custom-property style
 /// string for the page's accent color.
 fn header_strings(book: &EbookMetadata) -> (String, String, Option<i64>, String) {
-    let display_title = book.title.clone().unwrap_or_else(|| book.filename.clone());
+    let display_title = book.display_title();
     let (primary_author, primary_author_id) = book
         .creators
         .first()

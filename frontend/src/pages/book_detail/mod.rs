@@ -297,7 +297,7 @@ fn render_book_shell(
         delete_open,
         merge.refresh,
         b.unique_identifier.clone().unwrap_or_default(),
-        b.title.clone().unwrap_or_else(|| b.filename.clone()),
+        b.display_title(),
     );
     #[cfg(feature = "mobile")]
     let delete_ui: Option<Element> = {
@@ -545,7 +545,7 @@ struct LoadedBookView {
 
 /// Compute the per-section display fields from the loaded book.
 fn derive_loaded_view(b: &EbookMetadata) -> LoadedBookView {
-    let title = b.title.clone().unwrap_or_else(|| b.filename.clone());
+    let title = b.display_title();
     let primary_author = b
         .creators
         .first()

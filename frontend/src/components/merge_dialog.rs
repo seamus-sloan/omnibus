@@ -45,10 +45,7 @@ pub fn MergeDialog(
 ) -> Element {
     let server_url = use_server_url();
     let target_uuid = target.unique_identifier.clone().unwrap_or_default();
-    let target_title = target
-        .title
-        .clone()
-        .unwrap_or_else(|| target.filename.clone());
+    let target_title = target.display_title();
 
     let signals = use_merge_dialog_signals();
     let busy = signals.busy;
@@ -356,7 +353,7 @@ fn render_candidate(
     target_series: Option<String>,
     mut selected: Signal<Option<EbookMetadata>>,
 ) -> Element {
-    let title = book.title.clone().unwrap_or_else(|| book.filename.clone());
+    let title = book.display_title();
     // Primary author only — joining every creator surfaces calibre's
     // book-producer contributor ("calibre (x.y) [url]") as junk, and the
     // keeper rail above already shows just the lead author.
@@ -425,10 +422,7 @@ fn render_confirm(
 ) -> Element {
     let mut on_confirm = on_confirm;
     let mut on_back = on_back;
-    let source_title = source
-        .title
-        .clone()
-        .unwrap_or_else(|| source.filename.clone());
+    let source_title = source.display_title();
     rsx! {
         div { class: "mg-confirm",
             p { class: "mg-confirm-copy",
