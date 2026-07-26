@@ -116,6 +116,11 @@ async fn ingest_session(
         device_id: None,
         client_id: (!event.id.is_empty()).then(|| format!("kobo:{}", event.id)),
     };
+    // Same validator the web/mobile session-report path runs — rejects a
+    // pre-epoch device clock (`started_at < 0`) or an oversized `SecondsRead`
+    // before the row reaches `reading_sessions`, where it would skew
+    // aggregates indefinitely (see the validator's own doc comment).
+    report.validate()?;
     match db::progress::record_session(state.pool(), user_id, &report).await {
         Ok(_recorded) => Ok(()),
         Err(e) => Err(e.to_string()),

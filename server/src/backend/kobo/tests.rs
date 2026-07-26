@@ -545,6 +545,43 @@ async fn analytics_leave_content_records_a_reading_session() {
 }
 
 #[tokio::test]
+async fn analytics_leave_content_rejects_a_pre_epoch_device_clock() {
+    // A device clock stuck before 1970 combined with a large SecondsRead makes
+    // `started_at = ended_at - seconds` negative. SessionReport::validate()
+    // must catch this before the row reaches `reading_sessions` — a session
+    // that skipped validation would silently corrupt future stats aggregates.
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+
+    let body = serde_json::json!({
+        "Events": [{
+            "Id": "evt-bad-clock",
+            "EventType": "LeaveContent",
+            "Timestamp": "1970-01-01T00:00:05Z",
+            "Metrics": { "SecondsRead": 600 },
+            "Attributes": { "volumeid": uuid }
+        }]
+    });
+    let res = app
+        .oneshot(post_json(format!("/kobo/{token}/v1/analytics/event"), body))
+        .await
+        .unwrap();
+
+    // The batch contract still answers Success (per-event failures are
+    // logged and skipped, never surfaced as a 4xx that makes the device
+    // re-queue) — but no row must have been written.
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["Result"], "Success");
+
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM reading_sessions WHERE user_id = ?")
+        .bind(uid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0, "an invalid session must not be persisted");
+}
+
+#[tokio::test]
 async fn analytics_replayed_batch_does_not_double_count_a_session() {
     // The event Id rides as the session client_id, so a device that never saw
     // the ack and re-posts the batch collapses onto the existing row (0052).
