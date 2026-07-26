@@ -2,8 +2,9 @@
 //! its FTS rebuild, and the series-link materialization. Mirrors the
 //! pre-split inline `#[cfg(test)] mod tests` block.
 
-use omnibus_shared::{MetadataOverrides, MetadataSource};
+use omnibus_shared::{Contributor, MetadataOverrides, MetadataSource};
 
+use super::upsert::override_match_keys;
 use super::*;
 use crate::books::{get_book, list_books, search_books};
 use crate::palette::search_palette;
@@ -1258,6 +1259,73 @@ async fn upsert_metadata_overrides_persists_books_series_link_row_for_new_series
         Some("Linked Series"),
         "books_series_link should reflect the new override series after upsert commits"
     );
+}
+
+// -----------------------------------------------------------------
+// `override_match_keys` (Physical Check-In's fuzzy-rung match keys)
+// -----------------------------------------------------------------
+
+/// A normal override with both a title and a first creator normalizes both
+/// sides, mirroring the sync writer's derivation of `books.(title_norm,
+/// author_norm)` from scanned metadata.
+#[test]
+fn override_match_keys_normalizes_title_and_first_creator_when_both_set() {
+    let ov = MetadataOverrides {
+        title: Some("The Great Gatsby".into()),
+        creators: Some(vec![
+            Contributor {
+                name: "F. Scott Fitzgerald".into(),
+                role: Some("aut".into()),
+                file_as: None,
+                id: None,
+            },
+            Contributor {
+                name: "Someone Else".into(),
+                role: Some("edt".into()),
+                file_as: None,
+                id: None,
+            },
+        ]),
+        ..Default::default()
+    };
+    let (title_norm, author_norm) = override_match_keys(&ov);
+    assert_eq!(title_norm.as_deref(), Some("the great gatsby"));
+    assert_eq!(
+        author_norm.as_deref(),
+        Some("f scott fitzgerald"),
+        "only the first creator should feed the author match key"
+    );
+}
+
+/// `title: Some("")` is the documented "clear" sentinel (mirrors
+/// `apply_overrides`'s ISBN handling): it must normalize to `None`, not
+/// `Some("")`, so the resolver falls back to the scanned `title_norm`
+/// instead of matching against an empty string.
+#[test]
+fn override_match_keys_normalizes_empty_string_clear_sentinel_to_none() {
+    let ov = MetadataOverrides {
+        title: Some(String::new()),
+        creators: Some(vec![Contributor {
+            name: String::new(),
+            role: None,
+            file_as: None,
+            id: None,
+        }]),
+        ..Default::default()
+    };
+    let (title_norm, author_norm) = override_match_keys(&ov);
+    assert_eq!(title_norm, None);
+    assert_eq!(author_norm, None);
+}
+
+/// No override set for either field passes through as `(None, None)`,
+/// signalling the resolver to fall back entirely to the scanned norms.
+#[test]
+fn override_match_keys_returns_none_for_both_when_no_override_set() {
+    let ov = MetadataOverrides::default();
+    let (title_norm, author_norm) = override_match_keys(&ov);
+    assert_eq!(title_norm, None);
+    assert_eq!(author_norm, None);
 }
 
 // -----------------------------------------------------------------

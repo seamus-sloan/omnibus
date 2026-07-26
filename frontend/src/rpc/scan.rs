@@ -82,6 +82,19 @@ pub async fn rpc_set_google_books_key(key: Option<String>) -> Result<GoogleBooks
     }
 }
 
+/// Whether a server-wide Google Books key is configured. Any authenticated
+/// user may read this non-sensitive flag; it drives the check-in scan
+/// screen's provider note, without needing the admin-only masked-status
+/// [`rpc_get_google_books_key`] (mirrors `rpc_hardcover_configured` in
+/// `rpc::summary`).
+#[post("/api/rpc/scan/google-books-configured", pool: PoolExt, _user: AuthUser)]
+pub async fn rpc_google_books_configured() -> Result<bool> {
+    let status = db::google_books_key_status(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("get google books key status", e))?;
+    Ok(status.configured)
+}
+
 /// Check in a physical copy of a book already in the library (fulfills every
 /// user's wishlist for it).
 #[post("/api/rpc/scan/check-in", pool: PoolExt, user: AuthUser)]

@@ -66,6 +66,21 @@ pub(super) async fn post_resolve(
     }
 }
 
+/// Whether a server-wide Google Books key is configured. Any authenticated
+/// user may read this non-sensitive flag; it drives the check-in scan
+/// screen's provider note (mirrors `backend::summary::get_hardcover_configured`).
+/// Distinct from the admin-only [`get_google_books_key`], which also carries
+/// a masked key preview.
+pub(super) async fn get_google_books_configured(
+    _user: AuthUser,
+    State(state): State<AppState>,
+) -> Response {
+    match db::google_books_key_status(&state.pool).await {
+        Ok(status) => Json(status.configured).into_response(),
+        Err(e) => internal("google books key status", e),
+    }
+}
+
 // This key's REST handlers mirror the Hardcover handlers in
 // `backend/suggestions.rs`; kept per feature module rather than unified — the
 // shared logic already lives once in db's `SecretKeySpec`.

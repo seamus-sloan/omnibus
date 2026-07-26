@@ -117,7 +117,7 @@ async fn touch_book_last_modified(
 /// of the first override creator. Either side is `None` when the override
 /// doesn't set that field (or it normalizes to empty), signalling the resolver
 /// to fall back to the scanned norm.
-fn override_match_keys(ov: &MetadataOverrides) -> (Option<String>, Option<String>) {
+pub(super) fn override_match_keys(ov: &MetadataOverrides) -> (Option<String>, Option<String>) {
     let title_norm = ov.title.as_deref().and_then(normalize_title);
     let author_norm = ov
         .creators
