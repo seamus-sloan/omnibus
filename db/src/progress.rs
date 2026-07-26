@@ -380,12 +380,17 @@ pub async fn insert_session_tx(
     report: &SessionReport,
     canonical_uuid: &str,
 ) -> Result<(), ProgressError> {
+    // OR IGNORE against the partial-unique `(user_id, client_id)` index from
+    // migration 0052: a report the client replayed because it never saw the
+    // reply collapses onto the row it already wrote instead of doubling the
+    // reading time it represents. Reports without a client id are
+    // unconstrained and insert as before.
     match report.format {
         ProgressFormat::Epub => {
             sqlx::query(
-                "INSERT INTO reading_sessions
-                    (user_id, book_uuid, started_at, ended_at, seconds_read, device_id)
-                 VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO reading_sessions
+                    (user_id, book_uuid, started_at, ended_at, seconds_read, device_id, client_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(user_id)
             .bind(canonical_uuid)
@@ -393,14 +398,15 @@ pub async fn insert_session_tx(
             .bind(report.ended_at)
             .bind(report.progress_units)
             .bind(report.device_id)
+            .bind(report.client_id.as_deref())
             .execute(&mut **tx)
             .await?;
         }
         ProgressFormat::Audio => {
             sqlx::query(
-                "INSERT INTO listening_sessions
-                    (user_id, book_uuid, started_at, ended_at, seconds_listened, device_id)
-                 VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO listening_sessions
+                    (user_id, book_uuid, started_at, ended_at, seconds_listened, device_id, client_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(user_id)
             .bind(canonical_uuid)
@@ -408,6 +414,7 @@ pub async fn insert_session_tx(
             .bind(report.ended_at)
             .bind(report.progress_units)
             .bind(report.device_id)
+            .bind(report.client_id.as_deref())
             .execute(&mut **tx)
             .await?;
         }

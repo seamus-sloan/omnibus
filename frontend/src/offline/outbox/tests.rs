@@ -88,6 +88,7 @@ fn remap_id_rewrites_only_matching_references() {
     let mut create = Op::CreateHighlight {
         temp_id: -3,
         input: CreateHighlight {
+            client_id: None,
             book_uuid: "u1".into(),
             epub_cfi_range: "epubcfi(/6/4!/4/2,/1:0,/1:5)".into(),
             color: HighlightColor::Amber,
@@ -104,6 +105,7 @@ async fn queue_create_highlight_synthesizes_temp_record_and_caches_it() {
     clear_ops().await;
 
     let input = CreateHighlight {
+        client_id: None,
         book_uuid: "outbox-book-1".into(),
         epub_cfi_range: "epubcfi(/6/4!/4/2,/1:0,/1:5)".into(),
         color: HighlightColor::Green,
@@ -136,6 +138,7 @@ async fn deleting_a_temp_highlight_cancels_its_create_and_edits() {
     clear_ops().await;
 
     let input = CreateHighlight {
+        client_id: None,
         book_uuid: "outbox-book-2".into(),
         epub_cfi_range: "epubcfi(/6/4!/4/2,/1:0,/1:5)".into(),
         color: HighlightColor::Amber,
@@ -226,6 +229,7 @@ async fn queue_create_shelf_uses_cached_identity_for_owner_fields() {
 
 fn create_bookmark(uuid: &str) -> CreateBookmark {
     CreateBookmark {
+        client_id: None,
         book_uuid: uuid.to_string(),
         position: "epubcfi(/6/4!/4/2/1:0)".into(),
         title: Some("Chapter 1".into()),
@@ -234,6 +238,7 @@ fn create_bookmark(uuid: &str) -> CreateBookmark {
 
 fn create_journal(uuid: &str) -> CreateJournalEntry {
     CreateJournalEntry {
+        client_id: None,
         book_uuid: uuid.to_string(),
         body_md: "Loved this chapter".into(),
         progress: Some(42),
@@ -340,6 +345,7 @@ async fn bookmark_remapped_replaces_the_temp_record_with_the_server_copy() {
         position: "epubcfi(/6/4!/4/2/1:0)".into(),
         title: None,
         created_at: 1,
+        client_id: None,
     };
     apply::bookmark_created(&temp).await;
 
@@ -349,6 +355,7 @@ async fn bookmark_remapped_replaces_the_temp_record_with_the_server_copy() {
         position: "epubcfi(/6/4!/4/2/1:0)".into(),
         title: Some("Server title".into()),
         created_at: 2,
+        client_id: None,
     };
     apply::bookmark_remapped(-11, &real).await;
 
@@ -377,6 +384,7 @@ async fn highlight_remapped_replaces_the_temp_record_with_the_server_copy() {
         note: None,
         text: None,
         created_at: 1,
+        client_id: None,
     };
     apply::highlight_created(&temp).await;
 
@@ -677,6 +685,7 @@ async fn journal_remapped_replaces_the_temp_record_with_the_server_copy() {
         status: omnibus_shared::JournalStatus::Published,
         created_at: 1,
         updated_at: 1,
+        client_id: None,
     };
     apply::journal_created(&temp).await;
 

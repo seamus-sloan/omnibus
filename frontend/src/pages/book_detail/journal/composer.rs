@@ -433,6 +433,7 @@ async fn autosave_draft(url: &str, uuid: &str, body_md: String, state: JournalCo
         None => data::create_journal_entry(
             url,
             CreateJournalEntry {
+                client_id: None,
                 book_uuid: uuid.to_string(),
                 body_md,
                 progress: state.progress_payload(),
@@ -514,6 +515,7 @@ fn BdJournalComposerFoot(
                 None => data::create_journal_entry(
                     &url,
                     CreateJournalEntry {
+                        client_id: None,
                         book_uuid: uuid,
                         body_md: body(),
                         progress: state.progress_payload(),

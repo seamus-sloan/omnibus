@@ -59,6 +59,11 @@ pub struct Highlight {
     /// column shipped (migration 0030).
     #[serde(default)]
     pub text: Option<String>,
+    /// The device-minted identity this highlight was created under, when the
+    /// creating client supplied one. `None` for rows predating migration 0051
+    /// and for clients that don't mint one.
+    #[serde(default)]
+    pub client_id: Option<String>,
     pub created_at: i64,
 }
 
@@ -72,6 +77,12 @@ pub struct CreateHighlight {
     /// the mobile REST body) can omit it.
     #[serde(default)]
     pub text: Option<String>,
+    /// Identity minted on the device at the moment of the gesture, so an
+    /// offline client can address this highlight before the server has
+    /// assigned it a numeric id. Creates are idempotent on it, which also
+    /// makes a replayed create safe to retry.
+    #[serde(default)]
+    pub client_id: Option<String>,
 }
 
 impl CreateHighlight {
@@ -83,6 +94,11 @@ impl CreateHighlight {
     /// Maximum length (in chars) of the stored highlighted text. A single
     /// selection is at most a few paragraphs; 8 KiB is a generous ceiling.
     pub const TEXT_MAX_LEN: usize = 8192;
+
+    /// Maximum length (in chars) of a client-minted annotation id. Clients
+    /// send a UUID (36 chars); the cap leaves room for a prefixed scheme
+    /// without letting an authed client index arbitrary blobs.
+    pub const CLIENT_ID_MAX_LEN: usize = 64;
 
     /// Validate field lengths and required-ness. Call at the handler
     /// boundary before persisting so over-long inputs surface as 400
@@ -106,6 +122,17 @@ impl CreateHighlight {
         if let Some(ref text) = self.text {
             if text.chars().count() > Self::TEXT_MAX_LEN {
                 return Err(format!("text exceeds {} characters", Self::TEXT_MAX_LEN));
+            }
+        }
+        if let Some(ref client_id) = self.client_id {
+            if client_id.trim().is_empty() {
+                return Err("client_id must not be blank".into());
+            }
+            if client_id.chars().count() > Self::CLIENT_ID_MAX_LEN {
+                return Err(format!(
+                    "client_id exceeds {} characters",
+                    Self::CLIENT_ID_MAX_LEN
+                ));
             }
         }
         Ok(())

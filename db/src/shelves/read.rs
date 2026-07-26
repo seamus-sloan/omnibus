@@ -33,6 +33,47 @@ pub const LIST_SHELVES_LIMIT: i64 = 500;
 // Max concurrent `count_smart` queries `list_visible_shelves` runs at once.
 const SMART_COUNT_CONCURRENCY: usize = 8;
 
+/// Ids of the hand-picked shelves `viewer_id` can see that hold `uuid`.
+///
+/// The membership answer for one book in one request. Without it a client has
+/// to fetch every visible shelf's page and scan them — one request per shelf,
+/// on every book it displays — which is what the mobile book screen was doing.
+///
+/// Smart shelves are excluded because their membership is derived from a rule
+/// and cannot be toggled; the only caller is a "which shelves is this on"
+/// checklist. Returns an empty vec for an unknown uuid rather than erroring —
+/// a book the server has never indexed is on no shelf, which is the same
+/// answer.
+pub async fn manual_shelves_containing(
+    pool: &SqlitePool,
+    viewer_id: i64,
+    is_admin: bool,
+    uuid: &str,
+) -> Result<Vec<i64>, ShelfError> {
+    let Some(canonical) = crate::resolve_canonical_book_uuid(pool, uuid).await? else {
+        return Ok(Vec::new());
+    };
+    let rows = sqlx::query(
+        "SELECT s.id
+           FROM shelves s
+           JOIN shelf_books sb ON sb.shelf_id = s.id
+          WHERE sb.book_uuid = ?
+            AND s.kind = 'manual'
+            AND (s.owner_user_id = ? OR s.visibility = 'public' OR ?)
+          ORDER BY s.position, s.id
+          LIMIT ?",
+    )
+    .bind(&canonical)
+    .bind(viewer_id)
+    .bind(is_admin)
+    .bind(LIST_SHELVES_LIMIT)
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|r| r.try_get::<i64, _>("id").map_err(ShelfError::from))
+        .collect()
+}
+
 /// Every shelf `viewer_id` can see: own + public, or all when `is_admin`.
 pub async fn list_visible_shelves(
     pool: &SqlitePool,

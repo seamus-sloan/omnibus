@@ -381,6 +381,9 @@ pub(crate) async fn queue_create_highlight(input: &CreateHighlight) -> Option<Hi
         color: input.color,
         note: None,
         text: input.text.clone(),
+        // Web addresses this row by its temp id and rewrites it on apply;
+        // `client_id` is the mobile outbox's handle, not this one's.
+        client_id: None,
         created_at: store::now_secs(),
     };
     let queued = enqueue(Op::CreateHighlight {
@@ -452,6 +455,7 @@ pub(crate) async fn queue_create_bookmark(input: &CreateBookmark) -> Option<Book
         book_uuid: input.book_uuid.clone(),
         position: input.position.clone(),
         title: input.title.clone(),
+        client_id: None,
         created_at: store::now_secs(),
     };
     let queued = enqueue(Op::CreateBookmark {
@@ -599,6 +603,7 @@ pub(crate) async fn queue_create_journal(input: &CreateJournalEntry) -> Option<J
         body_html: fallback_html(&input.body_md),
         progress: input.progress,
         status: input.status,
+        client_id: None,
         created_at: now,
         updated_at: now,
     };

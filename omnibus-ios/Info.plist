@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Omnibus is self-hosted: the server is whatever machine the reader runs
+	     it on, usually plain http on a LAN address, a private hostname, or a
+	     box behind a home router. There is no fixed domain to pin an exception
+	     to, so ATS has to be off entirely for the app to connect at all.
+
+	     NSAllowsArbitraryLoads must be the ONLY key here. iOS 10 and later
+	     *ignore* it whenever NSAllowsLocalNetworking (or the ForMedia /
+	     InWebContent variants) is also present, falling back to those narrower
+	     keys instead — which silently re-enables ATS for every address that
+	     isn't link-local. The symptom is a self-hosted server over http
+	     failing with "the resource could not be loaded because the App
+	     Transport Security policy requires the use of a secure connection"
+	     while a LAN address keeps working. Arbitrary loads already covers
+	     local networking, so nothing is lost by dropping the narrower key. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+		<!-- Whispersync's defining trick is that picking up another device just
+		     works — the position moved while the app wasn't running. Without
+		     `fetch` the app can only ever sync when someone opens it, so a
+		     phone left in a pocket is stale until it's next unlocked. -->
+		<string>fetch</string>
+	</array>
+	<!-- Must list every identifier passed to BGTaskScheduler.register; an
+	     unlisted one throws at registration time rather than failing quietly. -->
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>app.omnibus.sync</string>
+	</array>
+</dict>
+</plist>

@@ -69,6 +69,7 @@ async fn seed_merged_uuid(pool: &SqlitePool, uuid: &str, book_uuid: &str, format
 
 fn create(uuid: &str, body: &str, progress: Option<u8>) -> CreateJournalEntry {
     CreateJournalEntry {
+        client_id: None,
         book_uuid: uuid.to_string(),
         body_md: body.to_string(),
         progress,
@@ -78,6 +79,7 @@ fn create(uuid: &str, body: &str, progress: Option<u8>) -> CreateJournalEntry {
 
 fn create_draft(uuid: &str, body: &str) -> CreateJournalEntry {
     CreateJournalEntry {
+        client_id: None,
         status: JournalStatus::Draft,
         ..create(uuid, body, None)
     }
@@ -582,4 +584,69 @@ async fn unreferenced_image_names_skips_the_query_when_candidates_is_empty() {
         .unwrap();
 
     assert!(unreferenced.is_empty());
+}
+
+#[tokio::test]
+async fn create_journal_entry_is_idempotent_on_client_id() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let uuid = seed(&pool, "/lib", "Book A").await;
+    let input = CreateJournalEntry {
+        client_id: Some("c7f0a911-0000-4000-8000-00000000000b".into()),
+        book_uuid: uuid.clone(),
+        body_md: "First thoughts.".into(),
+        progress: Some(10),
+        status: JournalStatus::Published,
+    };
+
+    let first = create_journal_entry(&pool, user, &input).await.unwrap();
+    let second = create_journal_entry(&pool, user, &input).await.unwrap();
+
+    assert_eq!(first.id, second.id);
+    let all = list_journal_entries(&pool, user, &uuid).await.unwrap();
+    assert_eq!(all.len(), 1, "replayed create must not duplicate the entry");
+}
+
+#[tokio::test]
+async fn journal_id_for_client_id_resolves_only_the_authors_row() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let alice = seed_user(&pool, "alice").await;
+    let bob = seed_user(&pool, "bob").await;
+    let uuid = seed(&pool, "/lib", "Book A").await;
+    let created = create_journal_entry(
+        &pool,
+        alice,
+        &CreateJournalEntry {
+            client_id: Some("alice-entry".into()),
+            book_uuid: uuid,
+            body_md: "Mine.".into(),
+            progress: None,
+            status: JournalStatus::Published,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        journal_id_for_client_id(&pool, alice, "alice-entry")
+            .await
+            .unwrap(),
+        Some(created.id)
+    );
+    assert_eq!(
+        journal_id_for_client_id(&pool, bob, "alice-entry")
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn journal_id_for_client_id_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = journal_id_for_client_id(&pool, 1, "handle")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, JournalError::Sqlx(_)));
 }

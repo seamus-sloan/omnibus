@@ -46,6 +46,7 @@ async fn seed_user(pool: &SqlitePool, name: &str) -> i64 {
 
 fn input(uuid: &str, position: &str, title: Option<&str>) -> CreateBookmark {
     CreateBookmark {
+        client_id: None,
         book_uuid: uuid.into(),
         position: position.into(),
         title: title.map(str::to_string),
@@ -274,6 +275,7 @@ async fn create_bookmark_propagates_db_error_when_pool_is_closed() {
         &pool,
         1,
         &CreateBookmark {
+            client_id: None,
             book_uuid: "any-uuid".into(),
             position: "0".into(),
             title: None,
@@ -281,5 +283,67 @@ async fn create_bookmark_propagates_db_error_when_pool_is_closed() {
     )
     .await
     .unwrap_err();
+    assert!(matches!(err, BookmarkError::Sqlx(_)));
+}
+
+#[tokio::test]
+async fn create_bookmark_is_idempotent_on_client_id() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    let payload = CreateBookmark {
+        client_id: Some("9a2c1d44-0000-4000-8000-000000000002".into()),
+        book_uuid: uuid.clone(),
+        position: "1234.5".into(),
+        title: Some("A mark".into()),
+    };
+
+    let first = create_bookmark(&pool, user, &payload).await.unwrap();
+    let second = create_bookmark(&pool, user, &payload).await.unwrap();
+
+    assert_eq!(first.id, second.id);
+    assert_eq!(list_bookmarks(&pool, user, &uuid).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn bookmark_id_for_client_id_resolves_only_the_owners_row() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let alice = seed_user(&pool, "alice").await;
+    let bob = seed_user(&pool, "bob").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    let created = create_bookmark(
+        &pool,
+        alice,
+        &CreateBookmark {
+            client_id: Some("alice-handle".into()),
+            book_uuid: uuid.clone(),
+            position: "12.0".into(),
+            title: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        bookmark_id_for_client_id(&pool, alice, "alice-handle")
+            .await
+            .unwrap(),
+        Some(created.id)
+    );
+    assert_eq!(
+        bookmark_id_for_client_id(&pool, bob, "alice-handle")
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn bookmark_id_for_client_id_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = bookmark_id_for_client_id(&pool, 1, "handle")
+        .await
+        .unwrap_err();
     assert!(matches!(err, BookmarkError::Sqlx(_)));
 }

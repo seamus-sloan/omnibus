@@ -33,6 +33,7 @@ impl MobileBookmarks {
         let mut toast = self.toast;
         let label = toast_label(position_secs, chapters);
         let input = CreateBookmark {
+            client_id: None,
             book_uuid: uuid,
             position: position_secs.to_string(),
             title: None,
@@ -290,6 +291,7 @@ mod tests {
             position: position.into(),
             title: None,
             created_at: 0,
+            client_id: None,
         }
     }
 

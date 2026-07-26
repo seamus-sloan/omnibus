@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::highlight::CreateHighlight;
+
 /// A persisted bookmark.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Bookmark {
@@ -12,6 +14,10 @@ pub struct Bookmark {
     pub book_uuid: String,
     pub position: String,
     pub title: Option<String>,
+    /// The device-minted identity this bookmark was created under, when the
+    /// creating client supplied one. `None` for rows predating migration 0051.
+    #[serde(default)]
+    pub client_id: Option<String>,
     pub created_at: i64,
 }
 
@@ -21,6 +27,11 @@ pub struct CreateBookmark {
     pub book_uuid: String,
     pub position: String,
     pub title: Option<String>,
+    /// Identity minted on the device at the moment of the gesture, so an
+    /// offline client can address this bookmark before the server has assigned
+    /// it a numeric id. Creates are idempotent on it.
+    #[serde(default)]
+    pub client_id: Option<String>,
 }
 
 impl CreateBookmark {
@@ -30,6 +41,10 @@ impl CreateBookmark {
     pub const POSITION_MAX_LEN: usize = 4096;
     /// Maximum length (in chars) of the user-entered title/note.
     pub const TITLE_MAX_LEN: usize = 512;
+
+    /// Mirror of [`CreateHighlight::CLIENT_ID_MAX_LEN`] — both hold the same
+    /// kind of device-minted handle, so the two ceilings can't drift apart.
+    pub const CLIENT_ID_MAX_LEN: usize = CreateHighlight::CLIENT_ID_MAX_LEN;
 
     /// Validate field lengths and required-ness. Call at the handler boundary
     /// before persisting so over-long inputs surface as 400 instead of falling
@@ -50,6 +65,17 @@ impl CreateBookmark {
         if let Some(ref title) = self.title {
             if title.chars().count() > Self::TITLE_MAX_LEN {
                 return Err(format!("title exceeds {} characters", Self::TITLE_MAX_LEN));
+            }
+        }
+        if let Some(ref client_id) = self.client_id {
+            if client_id.trim().is_empty() {
+                return Err("client_id must not be blank".into());
+            }
+            if client_id.chars().count() > Self::CLIENT_ID_MAX_LEN {
+                return Err(format!(
+                    "client_id exceeds {} characters",
+                    Self::CLIENT_ID_MAX_LEN
+                ));
             }
         }
         Ok(())

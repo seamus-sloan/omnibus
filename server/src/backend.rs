@@ -422,6 +422,12 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             get(shelves::list_shelves).post(shelves::create_shelf),
         )
         .route("/api/shelves/preview", post(shelves::preview_rule))
+        // Also ahead of `{id}`, and for the same reason — `containing` is not
+        // a shelf id.
+        .route(
+            "/api/shelves/containing/{uuid}",
+            get(shelves::shelves_containing),
+        )
         .route(
             "/api/shelves/{id}",
             get(shelves::get_shelf)

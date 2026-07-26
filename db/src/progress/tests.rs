@@ -2,7 +2,7 @@
 //! by client event time (rejection/acceptance/clamping/NULL handling),
 //! per-user/format isolation, `get_progress`/`recent_progress` ordering and
 //! empty-state, `record_session` dispatch and merged-uuid resolution, and
-//! `record_session_tx` rollback.
+//! `record_session_tx` rollback, and client-id replay idempotency.
 
 use omnibus_shared::EbookMetadata;
 
@@ -504,6 +504,7 @@ async fn record_session_inserts_per_format_row() {
             ended_at: 460,
             progress_units: 360,
             device_id: None,
+            client_id: None,
         },
     )
     .await
@@ -528,6 +529,7 @@ async fn record_session_inserts_per_format_row() {
             ended_at: 800,
             progress_units: 600,
             device_id: None,
+            client_id: None,
         },
     )
     .await
@@ -555,6 +557,7 @@ async fn record_session_inserts_per_format_row() {
             ended_at: 10,
             progress_units: 10,
             device_id: None,
+            client_id: None,
         },
     )
     .await
@@ -579,6 +582,7 @@ async fn record_session_tx_inserts_row_when_committed() {
             ended_at: 460,
             progress_units: 360,
             device_id: None,
+            client_id: None,
         },
     )
     .await
@@ -618,6 +622,7 @@ async fn insert_session_tx_inserts_epub_row_against_pre_resolved_uuid() {
             ended_at: 460,
             progress_units: 360,
             device_id: None,
+            client_id: None,
         },
         &uuid,
     )
@@ -655,6 +660,7 @@ async fn insert_session_tx_inserts_audio_row_against_pre_resolved_uuid() {
             ended_at: 800,
             progress_units: 600,
             device_id: None,
+            client_id: None,
         },
         &uuid,
     )
@@ -694,6 +700,7 @@ async fn record_session_tx_rollback_leaves_no_rows() {
                 ended_at: 460,
                 progress_units: 360,
                 device_id: None,
+                client_id: None,
             },
         )
         .await
@@ -753,6 +760,7 @@ async fn record_session_resolves_merged_uuid_and_records_against_canonical_book(
             ended_at: 460,
             progress_units: 360,
             device_id: None,
+            client_id: None,
         },
     )
     .await
@@ -789,6 +797,7 @@ async fn record_session_resolves_merged_audio_uuid_to_canonical_book() {
             ended_at: 800,
             progress_units: 600,
             device_id: None,
+            client_id: None,
         },
     )
     .await
@@ -1264,4 +1273,107 @@ async fn set_playback_rate_propagates_db_error_when_pool_is_closed() {
     .await
     .unwrap_err();
     assert!(matches!(err, ProgressError::Sqlx(_)));
+}
+
+#[tokio::test]
+async fn record_session_replay_with_same_client_id_inserts_one_row() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+    let report = SessionReport {
+        book_uuid: uuid.clone(),
+        format: ProgressFormat::Epub,
+        started_at: 100,
+        ended_at: 460,
+        progress_units: 360,
+        device_id: None,
+        client_id: Some("session-abc".into()),
+    };
+
+    // The reply to the first post is lost, so the client replays the very
+    // same report. It must land once, not twice.
+    record_session(&pool, user, &report).await.unwrap();
+    record_session(&pool, user, &report).await.unwrap();
+
+    let (count, total): (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*), COALESCE(SUM(seconds_read), 0) FROM reading_sessions
+         WHERE user_id = ? AND book_uuid = ?",
+    )
+    .bind(user)
+    .bind(&uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 1, "a replayed report must not add a second row");
+    assert_eq!(total, 360, "reading time must not be double-counted");
+}
+
+#[tokio::test]
+async fn record_session_scopes_client_id_per_user_and_format() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let alice = seed_user(&pool, "alice").await;
+    let bob = seed_user(&pool, "bob").await;
+    let (_book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+    let report = |format| SessionReport {
+        book_uuid: uuid.clone(),
+        format,
+        started_at: 100,
+        ended_at: 460,
+        progress_units: 360,
+        device_id: None,
+        client_id: Some("shared-handle".into()),
+    };
+
+    record_session(&pool, alice, &report(ProgressFormat::Epub))
+        .await
+        .unwrap();
+    record_session(&pool, bob, &report(ProgressFormat::Epub))
+        .await
+        .unwrap();
+    // Same handle, other table: the two indexes are independent, so an
+    // audio session is never suppressed by a reading one.
+    record_session(&pool, alice, &report(ProgressFormat::Audio))
+        .await
+        .unwrap();
+
+    let reading: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM reading_sessions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let listening: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM listening_sessions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        reading, 2,
+        "one uuid per user must not collide across users"
+    );
+    assert_eq!(listening, 1);
+}
+
+#[tokio::test]
+async fn record_session_without_client_id_still_inserts_every_report() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+    // Web posts once on unmount and never retries, so it sends no handle —
+    // the partial index must leave those rows unconstrained rather than
+    // collapsing two genuine sessions into one.
+    let report = SessionReport {
+        book_uuid: uuid.clone(),
+        format: ProgressFormat::Epub,
+        started_at: 100,
+        ended_at: 460,
+        progress_units: 360,
+        device_id: None,
+        client_id: None,
+    };
+    record_session(&pool, user, &report).await.unwrap();
+    record_session(&pool, user, &report).await.unwrap();
+
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM reading_sessions")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 2);
 }

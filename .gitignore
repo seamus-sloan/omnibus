@@ -93,5 +93,19 @@ __pycache__/
 # Codecov in CI; regenerated on every run, never committed.
 /lcov.info
 
-# Xcode per-user state (window layout, selection) — machine-local, never tracked.
+# Xcode / Swift (the native iOS app)
+# Per-user IDE state — window layout, selected scheme, breakpoints. Xcode
+# rewrites these on open and on every build, so tracking them leaves the tree
+# dirty after merely opening the project. `xcshareddata/` is the shared
+# counterpart and stays committed.
 **/xcuserdata/
+# Build output. Builds normally land in DerivedData outside the tree, but an
+# in-tree copy appears whenever xcodebuild runs without -derivedDataPath.
+DerivedData/
+*.xcarchive
+*.ipa
+*.dSYM
+*.dSYM.zip
+# Swift Package Manager local state (Package.resolved stays committed).
+.swiftpm/
+.build/
