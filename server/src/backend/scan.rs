@@ -50,6 +50,9 @@ pub(super) async fn post_resolve(
     State(state): State<AppState>,
     Json(req): Json<ResolveRequest>,
 ) -> Response {
+    if let Err(msg) = req.validate() {
+        return (StatusCode::BAD_REQUEST, msg).into_response();
+    }
     // Saved settings key wins over `GOOGLE_BOOKS_API_KEY`; both absent is a
     // keyless (shared-quota) lookup.
     let key = match db::effective_google_books_api_key(&state.pool).await {

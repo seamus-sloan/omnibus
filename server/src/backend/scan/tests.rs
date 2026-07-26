@@ -116,6 +116,23 @@ async fn api_scan_resolve_rejects_invalid_isbn() {
 }
 
 #[tokio::test]
+async fn api_scan_resolve_rejects_an_oversized_isbn() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let oversized = "1".repeat(omnibus_shared::scan::ISBN_MAX_LEN + 1);
+    let res = app
+        .oneshot(post(
+            "/api/scan/resolve",
+            &token,
+            serde_json::json!({ "isbn": oversized }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn api_scan_resolve_exact_hit_returns_in_library_unowned() {
     let (app, _state, pool) = fixture().await;
     let uuid = seed_book_with_isbn(&pool, "Effective Java", ISBN).await;

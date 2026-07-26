@@ -54,6 +54,22 @@ async fn api_put_read_status_rejects_blank_uuid() {
 }
 
 #[tokio::test]
+async fn api_put_read_status_rejects_an_oversized_uuid() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let oversized = "u".repeat(omnibus_shared::BOOK_UUID_MAX_LEN + 1);
+    let res = app
+        .oneshot(put_status_req(
+            &token,
+            serde_json::json!({ "book_uuid": oversized, "status": "reading" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn api_put_read_status_returns_404_for_unknown_book() {
     let (app, _state, pool) = fixture().await;
     let user = auth_test_support::create_user(&pool, "alice").await;
