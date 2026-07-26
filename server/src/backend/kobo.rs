@@ -107,9 +107,11 @@ async fn auth_refresh(auth: KoboAuthUser) -> Response {
 /// `ChangedReadingState` for modified books and `ChangedEntitlement
 /// {IsRemoved:true}` for books that left the opted-in set (#922).
 ///
-/// The device's snapshot advances in the stream's final step — after the
-/// closing `]` is written — so a connection dropped mid-body replays the same
-/// delta on the next sync instead of silently losing books.
+/// The device's snapshot advances in the stream's final poll — the same one
+/// that emits the closing `]`, so commit and completion are a single step the
+/// transport can't split. A connection dropped mid-body never reaches that
+/// poll, and the device replays the same delta on the next sync instead of
+/// silently losing books.
 async fn library_sync(
     auth: KoboAuthUser,
     State(state): State<AppState>,
@@ -146,13 +148,24 @@ async fn library_sync(
                         let items = dto::sync_items(&base, &token, &changes[change]);
                         let mut piece = Vec::new();
                         for item in &items {
+                            // These DTOs are owned Strings/primitives, so this
+                            // never fails in practice — but if it ever does,
+                            // abort the body rather than emit malformed JSON:
+                            // the stream jumps to End, `record_synced` never
+                            // runs, and the device retries the same delta.
+                            let json = match serde_json::to_vec(item) {
+                                Ok(j) => j,
+                                Err(e) => {
+                                    return Some((
+                                        Err(std::io::Error::other(e)),
+                                        (changes, base, token, SyncPhase::End),
+                                    ));
+                                }
+                            };
                             if emitted > 0 || !piece.is_empty() {
                                 piece.push(b',');
                             }
-                            // These DTOs are owned Strings/primitives, so
-                            // serialization is infallible; default to empty on
-                            // the impossible error.
-                            piece.extend_from_slice(&serde_json::to_vec(item).unwrap_or_default());
+                            piece.extend_from_slice(&json);
                         }
                         let next = if change + 1 < changes.len() {
                             SyncPhase::Item {
