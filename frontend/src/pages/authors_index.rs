@@ -65,11 +65,7 @@ pub fn AuthorsIndexPage() -> Element {
     let total_authors = all.len();
     let total_books: usize = all.iter().map(|a| a.book_count).sum();
 
-    // Filter/sort is recomputed only when `authors`, `filter`, or `sort`
-    // actually change, not on every unrelated re-render (e.g. a keystroke
-    // elsewhere on the page). The memo owns its output — `filter_authors`
-    // borrows from the `authors.read()` guard, which can't outlive this
-    // closure, so the result is cloned out before returning.
+    // Memoized so filter/sort only reruns when authors/filter/sort change, not on every render.
     let filtered = use_memo(move || {
         let all = authors.read();
         let q = filter.read().to_lowercase();
@@ -183,8 +179,8 @@ fn group_by_letter(
     letters
 }
 
-/// Body section (plain fn, not `#[component]`, so we can keep the borrow-only
-/// slices from `AuthorsIndexPage`'s signal read guard without per-render clones).
+/// Body section (plain fn, not `#[component]`, so it can borrow `filtered`
+/// and `letters` directly instead of cloning them again for a child prop).
 fn authors_index_body<'a>(
     filtered: &'a [AuthorSummary],
     letters: &[(char, Vec<&'a AuthorSummary>)],

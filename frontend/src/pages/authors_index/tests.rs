@@ -103,7 +103,10 @@ fn filter_authors_returns_all_when_query_is_empty() {
 }
 
 #[test]
-fn filter_authors_matches_name_case_insensitively() {
+fn filter_authors_matches_lowercase_query_against_mixed_case_name() {
+    // `filter_authors` lowercases each author's name before comparing, but
+    // takes `query` as-is — callers (e.g. `AuthorsIndexPage`) are
+    // responsible for lowercasing the query first.
     let all = [
         author("Ada Lovelace", None),
         author("Louisa May Alcott", None),

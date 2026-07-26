@@ -658,11 +658,7 @@ fn AddBooksModal(shelf_id: i64, on_close: EventHandler<()>, on_added: EventHandl
         });
     };
 
-    // Recomputed only when `library` or `query` actually change, not on
-    // every unrelated re-render (e.g. a keystroke in another field, or the
-    // `picked` selection changing). `filter_library` borrows from the
-    // `library.read()` guard, which can't outlive this closure, so the
-    // result is cloned out before returning.
+    // Memoized so filter only reruns when library/query change, not on every render.
     let filtered = use_memo(move || {
         let library_books = library.read();
         filter_library(&library_books, &query.read())

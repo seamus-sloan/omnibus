@@ -43,11 +43,7 @@ pub fn SeriesIndexPage() -> Element {
 
     let filter_text = filter();
     let current_sort = sort();
-    // Filter/sort is recomputed only when `series`, `filter`, or `sort`
-    // actually change, not on every unrelated re-render. The memo owns its
-    // output — `apply_filter_and_sort` borrows from the `series.read()`
-    // guard, which can't outlive this closure, so the result is cloned out
-    // before returning.
+    // Memoized so filter/sort only reruns when series/filter/sort change, not on every render.
     let filtered = use_memo(move || {
         let all = series.read();
         let q = filter();
