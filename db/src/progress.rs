@@ -76,6 +76,13 @@ fn parse_format(raw: &str) -> ProgressFormat {
 /// rejected (older) write still re-reads and returns the row that won, so
 /// the caller learns it is behind rather than seeing its own rejected
 /// payload echoed back.
+///
+/// The position fields **merge** rather than replace (`COALESCE(excluded, …)`)
+/// because different surfaces carry different halves of a position: a Kobo
+/// sends a percent and an opaque location but no CFI, the web reader sends a
+/// CFI and no percent. Plain assignment would make each write null out the
+/// other surface's anchor. The tradeoff is that no caller can *clear* a
+/// field by sending `None` — nothing needs to today.
 pub async fn upsert_progress(
     pool: &SqlitePool,
     user_id: i64,
@@ -92,15 +99,19 @@ pub async fn upsert_progress(
     sqlx::query(
         "INSERT INTO reading_progress
             (user_id, book_uuid, format, epub_cfi, audio_position_seconds,
-             updated_at, client_updated_at)
-         VALUES (?, ?, ?, ?, ?, strftime('%s','now'),
+             progress_percent, kobo_location, updated_at, client_updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%s','now'),
              MIN(
                  COALESCE(?, CAST(strftime('%s','now') AS INTEGER)),
                  CAST(strftime('%s','now') AS INTEGER)
              ))
          ON CONFLICT(user_id, book_uuid, format) DO UPDATE SET
-             epub_cfi = excluded.epub_cfi,
+             epub_cfi = COALESCE(excluded.epub_cfi, reading_progress.epub_cfi),
              audio_position_seconds = excluded.audio_position_seconds,
+             progress_percent =
+                 COALESCE(excluded.progress_percent, reading_progress.progress_percent),
+             kobo_location =
+                 COALESCE(excluded.kobo_location, reading_progress.kobo_location),
              updated_at = strftime('%s','now'),
              client_updated_at = excluded.client_updated_at
          WHERE excluded.client_updated_at >=
@@ -111,13 +122,15 @@ pub async fn upsert_progress(
     .bind(fmt)
     .bind(update.epub_cfi.as_deref())
     .bind(update.audio_position_seconds)
+    .bind(update.progress_percent)
+    .bind(update.kobo_location.as_deref())
     .bind(update.client_updated_at)
     .execute(pool)
     .await?;
 
     let row = sqlx::query(
-        "SELECT epub_cfi, audio_position_seconds, updated_at,
-                COALESCE(client_updated_at, updated_at) AS client_updated_at
+        "SELECT epub_cfi, audio_position_seconds, progress_percent, kobo_location,
+                updated_at, COALESCE(client_updated_at, updated_at) AS client_updated_at
          FROM reading_progress
          WHERE user_id = ? AND book_uuid = ? AND format = ?",
     )
@@ -131,6 +144,8 @@ pub async fn upsert_progress(
         format: update.format,
         epub_cfi: row.try_get::<Option<String>, _>("epub_cfi")?,
         audio_position_seconds: row.try_get::<Option<f64>, _>("audio_position_seconds")?,
+        progress_percent: row.try_get::<Option<i64>, _>("progress_percent")?,
+        kobo_location: row.try_get::<Option<String>, _>("kobo_location")?,
         updated_at: row.try_get::<i64, _>("updated_at")?,
         client_updated_at: row.try_get::<i64, _>("client_updated_at")?,
     })
@@ -150,8 +165,8 @@ pub async fn get_progress(
     };
     let fmt = format_str(format);
     let Some(row) = sqlx::query(
-        "SELECT format, epub_cfi, audio_position_seconds, updated_at,
-                COALESCE(client_updated_at, updated_at) AS client_updated_at
+        "SELECT format, epub_cfi, audio_position_seconds, progress_percent, kobo_location,
+                updated_at, COALESCE(client_updated_at, updated_at) AS client_updated_at
          FROM reading_progress
          WHERE user_id = ? AND book_uuid = ? AND format = ?",
     )
@@ -168,6 +183,8 @@ pub async fn get_progress(
         format: parse_format(row.try_get::<String, _>("format")?.as_str()),
         epub_cfi: row.try_get::<Option<String>, _>("epub_cfi")?,
         audio_position_seconds: row.try_get::<Option<f64>, _>("audio_position_seconds")?,
+        progress_percent: row.try_get::<Option<i64>, _>("progress_percent")?,
+        kobo_location: row.try_get::<Option<String>, _>("kobo_location")?,
         updated_at: row.try_get::<i64, _>("updated_at")?,
         client_updated_at: row.try_get::<i64, _>("client_updated_at")?,
     }))
@@ -243,7 +260,8 @@ pub async fn recent_progress(
     limit: i64,
 ) -> Result<Vec<ProgressRecord>, ProgressError> {
     let rows = sqlx::query(
-        "SELECT book_uuid, format, epub_cfi, audio_position_seconds, updated_at,
+        "SELECT book_uuid, format, epub_cfi, audio_position_seconds,
+                progress_percent, kobo_location, updated_at,
                 COALESCE(client_updated_at, updated_at) AS client_updated_at
          FROM reading_progress
          WHERE user_id = ?
@@ -261,6 +279,8 @@ pub async fn recent_progress(
                 format: parse_format(row.try_get::<String, _>("format")?.as_str()),
                 epub_cfi: row.try_get::<Option<String>, _>("epub_cfi")?,
                 audio_position_seconds: row.try_get::<Option<f64>, _>("audio_position_seconds")?,
+                progress_percent: row.try_get::<Option<i64>, _>("progress_percent")?,
+                kobo_location: row.try_get::<Option<String>, _>("kobo_location")?,
                 updated_at: row.try_get::<i64, _>("updated_at")?,
                 client_updated_at: row.try_get::<i64, _>("client_updated_at")?,
             })

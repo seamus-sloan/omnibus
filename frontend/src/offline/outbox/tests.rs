@@ -23,6 +23,8 @@ fn progress_update(uuid: &str) -> ProgressUpdate {
         format: ProgressFormat::Epub,
         epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
         audio_position_seconds: None,
+        progress_percent: None,
+        kobo_location: None,
         client_updated_at: None,
     }
 }

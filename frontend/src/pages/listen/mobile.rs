@@ -209,6 +209,8 @@ fn persist_position(uuid: &str, server_url: &str, seconds: f64) {
             format: ProgressFormat::Audio,
             epub_cfi: None,
             audio_position_seconds: Some(seconds),
+            progress_percent: None,
+            kobo_location: None,
             client_updated_at: Some(now_unix()),
         };
         let _ = data::save_progress(&server_url, update).await;

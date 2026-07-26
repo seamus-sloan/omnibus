@@ -273,3 +273,116 @@ async fn sync_delta_propagates_db_error_when_pool_is_closed() {
         Err(KoboError::Sqlx(_))
     ));
 }
+
+#[tokio::test]
+async fn sync_delta_emits_a_state_change_when_read_status_moves_elsewhere() {
+    // A book marked Finished on the web must be re-announced to a device that
+    // already holds it — its metadata never changed, so the `Changed` arm
+    // alone would stay silent forever.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = make_user(&pool, "reader").await;
+    let device = make_device(&pool, user, "Clara").await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    synced_shelf(&pool, user, "Kobo", std::slice::from_ref(&uuid)).await;
+    sync_once(&pool, user, device).await;
+    assert!(sync_delta(&pool, user, device).await.unwrap().is_empty());
+
+    // `synced_at` has 1-second granularity, so age the snapshot rather than
+    // racing it — the assertion is about the comparison, not the clock.
+    sqlx::query("UPDATE kobo_device_books SET synced_at = 1 WHERE device_id = ?")
+        .bind(device)
+        .execute(&pool)
+        .await
+        .unwrap();
+    crate::read_status::set_read_status(
+        &pool,
+        user,
+        &omnibus_shared::SetReadStatus {
+            book_uuid: uuid.clone(),
+            status: omnibus_shared::ReadStatus::Finished,
+        },
+    )
+    .await
+    .unwrap();
+
+    let delta = sync_delta(&pool, user, device).await.unwrap();
+
+    assert_eq!(delta.len(), 1);
+    assert!(matches!(&delta.changes[0], SyncChange::StateChanged(b) if b.uuid == uuid));
+}
+
+#[tokio::test]
+async fn recording_a_state_change_preserves_last_modified_seen() {
+    // The state watermark and the metadata watermark are independent: bumping
+    // the former must not mark unsent metadata as already delivered.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = make_user(&pool, "reader").await;
+    let device = make_device(&pool, user, "Clara").await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    synced_shelf(&pool, user, "Kobo", std::slice::from_ref(&uuid)).await;
+    sync_once(&pool, user, device).await;
+    let seen_before: i64 = sqlx::query_scalar(
+        "SELECT last_modified_seen FROM kobo_device_books WHERE device_id = ? AND book_uuid = ?",
+    )
+    .bind(device)
+    .bind(&uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let row = crate::kobo::book_for_sync(&pool, &uuid)
+        .await
+        .unwrap()
+        .unwrap();
+    record_synced(&pool, device, &[SyncChange::StateChanged(row)])
+        .await
+        .unwrap();
+
+    let seen_after: i64 = sqlx::query_scalar(
+        "SELECT last_modified_seen FROM kobo_device_books WHERE device_id = ? AND book_uuid = ?",
+    )
+    .bind(device)
+    .bind(&uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(seen_after, seen_before, "metadata watermark must not move");
+}
+
+#[tokio::test]
+async fn sync_delta_prefers_a_metadata_change_over_a_state_change() {
+    // When both moved, the device needs the full `Changed` pair — a bare
+    // reading-state item would leave its metadata stale.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = make_user(&pool, "reader").await;
+    let device = make_device(&pool, user, "Clara").await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    synced_shelf(&pool, user, "Kobo", std::slice::from_ref(&uuid)).await;
+    sync_once(&pool, user, device).await;
+
+    sqlx::query("UPDATE kobo_device_books SET synced_at = 1 WHERE device_id = ?")
+        .bind(device)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE books SET last_modified = 9999999999 WHERE uuid = ?")
+        .bind(&uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+    crate::read_status::set_read_status(
+        &pool,
+        user,
+        &omnibus_shared::SetReadStatus {
+            book_uuid: uuid.clone(),
+            status: omnibus_shared::ReadStatus::Reading,
+        },
+    )
+    .await
+    .unwrap();
+
+    let delta = sync_delta(&pool, user, device).await.unwrap();
+
+    assert_eq!(delta.len(), 1);
+    assert!(matches!(&delta.changes[0], SyncChange::Changed(_)));
+}

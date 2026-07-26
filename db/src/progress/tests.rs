@@ -73,6 +73,8 @@ async fn upsert_round_trips_epub_position() {
         format: ProgressFormat::Epub,
         epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
         audio_position_seconds: None,
+        progress_percent: None,
+        kobo_location: None,
         client_updated_at: None,
     };
     let saved = upsert_progress(&pool, user, &upd).await.unwrap();
@@ -89,6 +91,128 @@ async fn upsert_round_trips_epub_position() {
 }
 
 #[tokio::test]
+async fn upsert_round_trips_a_percent_only_epub_position() {
+    // The Kobo shape: a percent and an opaque location, no CFI. Before #925
+    // the row CHECK made this row impossible to store at all.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    let loc = r#"{"Source":"c1.xhtml","Type":"KoboSpan","Value":"kobo.9.1"}"#;
+    let upd = ProgressUpdate {
+        book_uuid: uuid.clone(),
+        format: ProgressFormat::Epub,
+        epub_cfi: None,
+        audio_position_seconds: None,
+        progress_percent: Some(37),
+        kobo_location: Some(loc.into()),
+        client_updated_at: None,
+    };
+
+    let saved = upsert_progress(&pool, user, &upd).await.unwrap();
+
+    assert_eq!(saved.progress_percent, Some(37));
+    assert_eq!(saved.kobo_location.as_deref(), Some(loc));
+    assert_eq!(saved.epub_cfi, None);
+    let fetched = get_progress(&pool, user, &uuid, ProgressFormat::Epub)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched.progress_percent, Some(37));
+    assert_eq!(fetched.kobo_location.as_deref(), Some(loc));
+}
+
+#[tokio::test]
+async fn upsert_merges_a_kobo_percent_into_an_existing_web_cfi_row() {
+    // Different surfaces carry different halves of a position. Plain
+    // assignment would have the Kobo write null out the web reader's CFI.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    let cfi = "epubcfi(/6/4!/4/2/1:0)";
+    upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Epub,
+            epub_cfi: Some(cfi.into()),
+            audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
+            client_updated_at: Some(100),
+        },
+    )
+    .await
+    .unwrap();
+
+    let merged = upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Epub,
+            epub_cfi: None,
+            audio_position_seconds: None,
+            progress_percent: Some(55),
+            kobo_location: Some("{}".into()),
+            client_updated_at: Some(200),
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        merged.epub_cfi.as_deref(),
+        Some(cfi),
+        "web CFI must survive"
+    );
+    assert_eq!(merged.progress_percent, Some(55));
+}
+
+#[tokio::test]
+async fn upsert_merges_a_web_cfi_into_an_existing_kobo_percent_row() {
+    // The mirror of the above — a later web write must not drop the percent.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Epub,
+            epub_cfi: None,
+            audio_position_seconds: None,
+            progress_percent: Some(20),
+            kobo_location: Some("{}".into()),
+            client_updated_at: Some(100),
+        },
+    )
+    .await
+    .unwrap();
+
+    let merged = upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Epub,
+            epub_cfi: Some("epubcfi(/6/12!/4/8/3:7)".into()),
+            audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
+            client_updated_at: Some(200),
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(merged.progress_percent, Some(20), "percent must survive");
+    assert_eq!(merged.kobo_location.as_deref(), Some("{}"));
+    assert_eq!(merged.epub_cfi.as_deref(), Some("epubcfi(/6/12!/4/8/3:7)"));
+}
+
+#[tokio::test]
 async fn upsert_is_last_write_wins() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
@@ -98,6 +222,8 @@ async fn upsert_is_last_write_wins() {
         format: ProgressFormat::Epub,
         epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
         audio_position_seconds: None,
+        progress_percent: None,
+        kobo_location: None,
         client_updated_at: None,
     };
     upsert_progress(&pool, user, &first).await.unwrap();
@@ -106,6 +232,8 @@ async fn upsert_is_last_write_wins() {
         format: ProgressFormat::Epub,
         epub_cfi: Some("epubcfi(/6/12!/4/8/3:7)".into()),
         audio_position_seconds: None,
+        progress_percent: None,
+        kobo_location: None,
         client_updated_at: None,
     };
     let saved = upsert_progress(&pool, user, &second).await.unwrap();
@@ -134,6 +262,8 @@ async fn upsert_rejects_older_client_write_and_returns_the_stored_newer_record()
         format: ProgressFormat::Epub,
         epub_cfi: Some("epubcfi(newer)".into()),
         audio_position_seconds: None,
+        progress_percent: None,
+        kobo_location: None,
         client_updated_at: Some(2000),
     };
     upsert_progress(&pool, user, &newer).await.unwrap();
@@ -143,6 +273,8 @@ async fn upsert_rejects_older_client_write_and_returns_the_stored_newer_record()
         format: ProgressFormat::Epub,
         epub_cfi: Some("epubcfi(stale-offline-replay)".into()),
         audio_position_seconds: None,
+        progress_percent: None,
+        kobo_location: None,
         client_updated_at: Some(1000),
     };
     let result = upsert_progress(&pool, user, &stale_replay).await.unwrap();
@@ -176,6 +308,8 @@ async fn upsert_accepts_a_write_with_a_strictly_newer_client_timestamp() {
             format: ProgressFormat::Epub,
             epub_cfi: Some("epubcfi(older)".into()),
             audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
             client_updated_at: Some(1000),
         },
     )
@@ -190,6 +324,8 @@ async fn upsert_accepts_a_write_with_a_strictly_newer_client_timestamp() {
             format: ProgressFormat::Epub,
             epub_cfi: Some("epubcfi(newer)".into()),
             audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
             client_updated_at: Some(2000),
         },
     )
@@ -216,6 +352,8 @@ async fn upsert_clamps_a_future_client_timestamp_to_server_now() {
             format: ProgressFormat::Epub,
             epub_cfi: Some("epubcfi(fast-clock)".into()),
             audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
             client_updated_at: Some(far_future),
         },
     )
@@ -251,6 +389,8 @@ async fn upsert_defaults_missing_client_timestamp_to_server_now() {
             format: ProgressFormat::Epub,
             epub_cfi: Some("epubcfi(no-client-ts)".into()),
             audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
             client_updated_at: None,
         },
     )
@@ -284,6 +424,8 @@ async fn recent_progress_orders_by_client_event_time_not_server_receipt_time() {
             format: ProgressFormat::Epub,
             epub_cfi: Some("epubcfi(recent)".into()),
             audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
             client_updated_at: Some(5000),
         },
     )
@@ -300,6 +442,8 @@ async fn recent_progress_orders_by_client_event_time_not_server_receipt_time() {
             format: ProgressFormat::Epub,
             epub_cfi: Some("epubcfi(week-old)".into()),
             audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
             client_updated_at: Some(1000),
         },
     )
@@ -382,6 +526,8 @@ async fn upsert_overwrites_a_row_whose_stored_client_updated_at_is_null() {
             format: ProgressFormat::Epub,
             epub_cfi: Some("epubcfi(overwritten)".into()),
             audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
             client_updated_at: Some(200),
         },
     )
@@ -410,6 +556,8 @@ async fn isolates_per_user_book_format() {
             format: ProgressFormat::Epub,
             epub_cfi: Some("epubcfi(alice)".into()),
             audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
             client_updated_at: None,
         },
     )
@@ -423,6 +571,8 @@ async fn isolates_per_user_book_format() {
             format: ProgressFormat::Audio,
             epub_cfi: None,
             audio_position_seconds: Some(42.5),
+            progress_percent: None,
+            kobo_location: None,
             client_updated_at: None,
         },
     )
@@ -458,6 +608,8 @@ async fn upsert_unknown_book_is_not_found() {
             format: ProgressFormat::Epub,
             epub_cfi: Some("epubcfi(x)".into()),
             audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
             client_updated_at: None,
         },
     )
@@ -834,6 +986,8 @@ async fn progress_survives_hard_delete_of_book() {
             format: ProgressFormat::Epub,
             epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
             audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
             client_updated_at: None,
         },
     )
@@ -936,6 +1090,8 @@ async fn recent_progress_returns_rows_newest_first_within_limit() {
                 format: ProgressFormat::Epub,
                 epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
                 audio_position_seconds: None,
+                progress_percent: None,
+                kobo_location: None,
                 client_updated_at: None,
             },
         )
@@ -985,6 +1141,8 @@ async fn resume_points_enrich_audio_rows_with_duration_and_chapter() {
             epub_cfi: None,
             // 450 s → inside chapter 2 (starts at 400 s).
             audio_position_seconds: Some(450.0),
+            progress_percent: None,
+            kobo_location: None,
             client_updated_at: None,
         },
     )
@@ -1015,6 +1173,8 @@ async fn resume_points_skip_rows_whose_book_is_gone_and_leave_epub_totals_empty(
                 format: ProgressFormat::Epub,
                 epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
                 audio_position_seconds: None,
+                progress_percent: None,
+                kobo_location: None,
                 client_updated_at: None,
             },
         )

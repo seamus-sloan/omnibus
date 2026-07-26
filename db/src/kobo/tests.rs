@@ -322,3 +322,101 @@ async fn book_for_sync_propagates_db_error_when_pool_is_closed() {
         Err(KoboError::Sqlx(_))
     ));
 }
+
+#[tokio::test]
+async fn reading_state_for_returns_status_and_position_per_book() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = make_user(&pool, "reader").await;
+    let read = seed_synced_ebook(&pool, "read.epub", "Read", "A").await;
+    let positioned = seed_synced_ebook(&pool, "pos.epub", "Positioned", "B").await;
+    let untouched = seed_synced_ebook(&pool, "new.epub", "Untouched", "C").await;
+
+    crate::read_status::set_read_status(
+        &pool,
+        user,
+        &omnibus_shared::SetReadStatus {
+            book_uuid: read.clone(),
+            status: ReadStatus::Finished,
+        },
+    )
+    .await
+    .unwrap();
+    crate::progress::upsert_progress(
+        &pool,
+        user,
+        &omnibus_shared::ProgressUpdate {
+            book_uuid: positioned.clone(),
+            format: omnibus_shared::ProgressFormat::Epub,
+            epub_cfi: None,
+            audio_position_seconds: None,
+            progress_percent: Some(64),
+            kobo_location: Some("{\"Value\":\"kobo.4.2\"}".into()),
+            client_updated_at: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let states = reading_state_for(
+        &pool,
+        user,
+        &[read.clone(), positioned.clone(), untouched.clone()],
+    )
+    .await
+    .unwrap();
+
+    let finished = states.get(&read).expect("status-only book present");
+    assert_eq!(finished.status, ReadStatus::Finished);
+    assert_eq!(finished.percent, None);
+    assert!(finished.state_updated_at > 0);
+
+    let pos = states.get(&positioned).expect("position-only book present");
+    assert_eq!(pos.status, ReadStatus::Unread, "no row ⇒ default unread");
+    assert_eq!(pos.percent, Some(64));
+    assert_eq!(
+        pos.kobo_location.as_deref(),
+        Some("{\"Value\":\"kobo.4.2\"}")
+    );
+
+    // A book with neither row is absent rather than a defaulted entry — the
+    // caller reads a miss as "unread, no position".
+    assert!(!states.contains_key(&untouched));
+}
+
+#[tokio::test]
+async fn reading_state_for_is_scoped_to_the_requesting_user() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let alice = make_user(&pool, "alice").await;
+    let bob = make_user(&pool, "bob").await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    crate::read_status::set_read_status(
+        &pool,
+        bob,
+        &omnibus_shared::SetReadStatus {
+            book_uuid: uuid.clone(),
+            status: ReadStatus::Finished,
+        },
+    )
+    .await
+    .unwrap();
+
+    let alice_states = reading_state_for(&pool, alice, std::slice::from_ref(&uuid))
+        .await
+        .unwrap();
+
+    assert!(
+        !alice_states.contains_key(&uuid),
+        "another user's read state must not leak"
+    );
+}
+
+#[tokio::test]
+async fn reading_state_for_returns_empty_for_no_uuids() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = make_user(&pool, "reader").await;
+
+    assert!(reading_state_for(&pool, user, &[])
+        .await
+        .unwrap()
+        .is_empty());
+}

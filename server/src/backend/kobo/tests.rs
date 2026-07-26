@@ -999,3 +999,191 @@ async fn image_returns_404_for_unknown_uuid() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn put_state_persists_the_current_bookmark_position() {
+    // #925: the device's percent + opaque KoboSpan location now land in
+    // `reading_progress` instead of being logged and dropped.
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    let body = serde_json::json!({
+        "ReadingStates": [{
+            "CurrentBookmark": {
+                "ProgressPercent": 43,
+                "Location": { "Source": "c1.xhtml", "Type": "KoboSpan", "Value": "kobo.9.1" }
+            }
+        }]
+    });
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/kobo/{token}/v1/library/{uuid}/state"))
+                .method("PUT")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let rec = db::progress::get_progress(&pool, uid, &uuid, omnibus_shared::ProgressFormat::Epub)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rec.progress_percent, Some(43));
+    assert_eq!(
+        rec.epub_cfi, None,
+        "a KoboSpan must never be written as a CFI"
+    );
+    let loc = rec.kobo_location.expect("location stored");
+    assert!(loc.contains("kobo.9.1"), "got: {loc}");
+}
+
+#[tokio::test]
+async fn put_state_ignores_a_bookmark_with_no_position() {
+    // The device sends the field either way; an empty one is a no-op, not a
+    // validation failure that would 500 the sync.
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    let body = serde_json::json!({
+        "ReadingStates": [{ "CurrentBookmark": {} }]
+    });
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/kobo/{token}/v1/library/{uuid}/state"))
+                .method("PUT")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(
+        db::progress::get_progress(&pool, uid, &uuid, omnibus_shared::ProgressFormat::Epub)
+            .await
+            .unwrap()
+            .is_none(),
+        "an empty bookmark must not create a row"
+    );
+}
+
+#[tokio::test]
+async fn library_sync_reports_real_read_status_and_position() {
+    // AC1/AC2: a book finished and positioned on another surface syncs to a
+    // fresh device carrying that status and percent, not the hardcoded default.
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    opt_in(&pool, uid, std::slice::from_ref(&uuid)).await;
+    db::read_status::set_read_status(
+        &pool,
+        uid,
+        &omnibus_shared::SetReadStatus {
+            book_uuid: uuid.clone(),
+            status: omnibus_shared::ReadStatus::Finished,
+        },
+    )
+    .await
+    .unwrap();
+    db::progress::upsert_progress(
+        &pool,
+        uid,
+        &omnibus_shared::ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: omnibus_shared::ProgressFormat::Epub,
+            epub_cfi: None,
+            audio_position_seconds: None,
+            progress_percent: Some(88),
+            kobo_location: Some(r#"{"Value":"kobo.12.4"}"#.into()),
+            client_updated_at: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
+        .await
+        .unwrap();
+
+    let json = body_json(res).await;
+    let rs = &json.as_array().unwrap()[0]["NewEntitlement"]["ReadingState"];
+    assert_eq!(rs["StatusInfo"]["Status"], "Finished");
+    assert_eq!(rs["CurrentBookmark"]["ProgressPercent"], 88);
+    assert_eq!(rs["CurrentBookmark"]["Location"]["Value"], "kobo.12.4");
+}
+
+#[tokio::test]
+async fn library_sync_reports_ready_to_read_for_an_untouched_book() {
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    opt_in(&pool, uid, std::slice::from_ref(&uuid)).await;
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
+        .await
+        .unwrap();
+
+    let json = body_json(res).await;
+    let rs = &json.as_array().unwrap()[0]["NewEntitlement"]["ReadingState"];
+    assert_eq!(rs["StatusInfo"]["Status"], "ReadyToRead");
+    // `CurrentBookmark` serializes its fields only when set, so an untouched
+    // book emits an empty object rather than invented zeroes.
+    assert!(rs["CurrentBookmark"]["ProgressPercent"].is_null());
+}
+
+#[tokio::test]
+async fn library_sync_re_announces_a_status_change_to_a_device_that_holds_the_book() {
+    // The state-only delta: metadata never moved, so without it a book
+    // finished on the web would never reach a device that already has it.
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    opt_in(&pool, uid, std::slice::from_ref(&uuid)).await;
+    let first = app
+        .clone()
+        .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
+        .await
+        .unwrap();
+    assert_eq!(body_json(first).await.as_array().unwrap().len(), 1);
+
+    // Age the snapshot past `synced_at`'s 1-second granularity.
+    sqlx::query("UPDATE kobo_device_books SET synced_at = 1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    db::read_status::set_read_status(
+        &pool,
+        uid,
+        &omnibus_shared::SetReadStatus {
+            book_uuid: uuid.clone(),
+            status: omnibus_shared::ReadStatus::Finished,
+        },
+    )
+    .await
+    .unwrap();
+
+    let second = app
+        .clone()
+        .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
+        .await
+        .unwrap();
+    let json = body_json(second).await;
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "a state change emits one bare item");
+    assert_eq!(
+        arr[0]["ChangedReadingState"]["ReadingState"]["StatusInfo"]["Status"],
+        "Finished"
+    );
+
+    // And once delivered, the device is current again.
+    let third = app
+        .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
+        .await
+        .unwrap();
+    assert!(body_json(third).await.as_array().unwrap().is_empty());
+}

@@ -288,6 +288,8 @@ pub(crate) async fn queue_save_progress(update: &ProgressUpdate) -> Option<Progr
         format: update.format,
         epub_cfi: update.epub_cfi.clone(),
         audio_position_seconds: update.audio_position_seconds,
+        progress_percent: update.progress_percent,
+        kobo_location: update.kobo_location.clone(),
         updated_at: now,
         // Optimistic local record: mirrors the server's own COALESCE (issue
         // #1362) — the update's own client event time when it sent one,
