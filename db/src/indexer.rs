@@ -751,5 +751,97 @@ pub(crate) async fn backfill_chapters(
     Ok(())
 }
 
+/// Fill `books.word_count` for EPUB-backed books under `library_path` that
+/// have none yet (NULL `word_count`).
+///
+/// Word counts were added after the initial ebook indexer, so books indexed
+/// before migration `0049` carry a NULL. The normal diff-based reindex only
+/// re-parses new/changed files, so it never revisits them; this backfill runs
+/// as a separate worker task posted after each library scan (mirroring
+/// [`backfill_chapters`]) and is a no-op once every EPUB book has a count.
+/// `on_progress(processed, total)` is called per book for the UI.
+///
+/// Each candidate's EPUB is opened and word-counted on the blocking pool
+/// (zip/XML work), and updates commit in batches of 250 to bound WAL flushes.
+/// A book whose spine can't be estimated stays NULL and is retried on the next
+/// scan — rare, and cheaper than persisting a sentinel that lies about the
+/// estimate.
+pub(crate) async fn backfill_word_counts(
+    pool: &SqlitePool,
+    library_path: &str,
+    mut on_progress: impl FnMut(u32, u32),
+) -> anyhow::Result<()> {
+    let ids = fetch_word_count_candidates(pool, library_path).await?;
+    if ids.is_empty() {
+        return Ok(());
+    }
+
+    let total = u32::try_from(ids.len()).unwrap_or(u32::MAX);
+    tracing::info!(count = total, "backfilling word counts for existing ebooks");
+
+    // One batched path lookup up front (chunked internally), same helper the
+    // stats read path used to call per-request.
+    let paths = crate::book_file_paths(pool, &ids, "EPUB").await?;
+
+    let mut processed = 0u32;
+    for chunk in ids.chunks(250) {
+        let mut tx = pool.begin().await?;
+        for &id in chunk {
+            processed = processed.saturating_add(1);
+            on_progress(processed, total);
+
+            let Some(path) = paths.get(&id).cloned() else {
+                continue;
+            };
+            let words = tokio::task::spawn_blocking(move || {
+                epub::doc::EpubDoc::new(&path)
+                    .ok()
+                    .and_then(|mut doc| ebook::estimate_word_count(&mut doc))
+            })
+            .await
+            .unwrap_or_else(|join_err| {
+                tracing::warn!(
+                    book_id = id,
+                    %join_err,
+                    is_panic = join_err.is_panic(),
+                    "word-count task failed; leaving word_count NULL"
+                );
+                None
+            });
+
+            let Some(words) = words else { continue };
+            sqlx::query("UPDATE books SET word_count = ? WHERE id = ?")
+                .bind(words)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+    }
+
+    Ok(())
+}
+
+/// `books.id` for every EPUB-backed book under `library_path` still missing a
+/// `word_count` — the [`backfill_word_counts`] work set. Scoped to the scanned
+/// library so the follow-up task's cost tracks that scan.
+async fn fetch_word_count_candidates(
+    pool: &SqlitePool,
+    library_path: &str,
+) -> anyhow::Result<Vec<i64>> {
+    let ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT DISTINCT b.id \
+         FROM books b \
+         JOIN scan_roots l ON b.library_id = l.id \
+         JOIN book_files bf ON bf.book_id = b.id AND bf.format = 'EPUB' COLLATE NOCASE \
+         WHERE l.path = ? AND b.word_count IS NULL \
+         ORDER BY b.id",
+    )
+    .bind(library_path)
+    .fetch_all(pool)
+    .await?;
+    Ok(ids)
+}
+
 #[cfg(test)]
 mod tests;

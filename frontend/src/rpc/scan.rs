@@ -39,19 +39,25 @@ fn map_scan_err(e: db::ScanError) -> ServerFnError {
 
 /// Resolve a scanned/typed ISBN down the matching ladder. Any authenticated
 /// user may resolve; ownership is library-wide.
-#[post("/api/rpc/scan/resolve", pool: PoolExt, _user: AuthUser)]
+#[post("/api/rpc/scan/resolve", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_resolve_scan(req: ResolveRequest) -> Result<ScanOutcome> {
+    if let Err(msg) = req.validate() {
+        return Err(ServerFnError::new(msg).into());
+    }
     // Saved settings key wins over `GOOGLE_BOOKS_API_KEY`; both absent is a
     // keyless (shared-quota) lookup.
     let key = db::effective_google_books_api_key(&pool.0)
         .await
         .map_err(|e| internal_rpc_error("resolve google books key", e))?;
     let config = db::MetadataLookupConfig::live_with_key(key);
-    Ok(db::resolve_scan(&pool.0, &req.isbn, &config)
+    Ok(db::resolve_scan(&pool.0, user.id, &req.isbn, &config)
         .await
         .map_err(map_scan_err)?)
 }
 
+// This key's RPC pair mirrors the Hardcover pair in `rpc/settings.rs`; kept per
+// feature module rather than unified — the shared logic already lives once in
+// db's `SecretKeySpec`, so these stay thin route wrappers.
 /// Admin-only: masked status of the server-wide Google Books key for Settings.
 /// Never returns the raw key.
 #[get("/api/rpc/google-books-key", pool: PoolExt, _admin: AdminUser)]

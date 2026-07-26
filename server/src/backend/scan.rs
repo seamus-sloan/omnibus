@@ -46,10 +46,13 @@ fn scan_error(context: &'static str, e: ScanError) -> Response {
 /// Resolve an ISBN. Always 200 with a `ScanOutcome` (including `Unresolved`);
 /// 400 only for an invalid ISBN.
 pub(super) async fn post_resolve(
-    _user: AuthUser,
+    user: AuthUser,
     State(state): State<AppState>,
     Json(req): Json<ResolveRequest>,
 ) -> Response {
+    if let Err(msg) = req.validate() {
+        return (StatusCode::BAD_REQUEST, msg).into_response();
+    }
     // Saved settings key wins over `GOOGLE_BOOKS_API_KEY`; both absent is a
     // keyless (shared-quota) lookup.
     let key = match db::effective_google_books_api_key(&state.pool).await {
@@ -57,12 +60,15 @@ pub(super) async fn post_resolve(
         Err(e) => return internal("scan_resolve_google_books_key", e),
     };
     let config = db::MetadataLookupConfig::live_with_key(key);
-    match db::resolve_scan(&state.pool, &req.isbn, &config).await {
+    match db::resolve_scan(&state.pool, user.id, &req.isbn, &config).await {
         Ok(outcome) => Json(outcome).into_response(),
         Err(e) => scan_error("scan_resolve", e),
     }
 }
 
+// This key's REST handlers mirror the Hardcover handlers in
+// `backend/suggestions.rs`; kept per feature module rather than unified — the
+// shared logic already lives once in db's `SecretKeySpec`.
 /// Admin-only: masked status of the server-wide Google Books key.
 pub(super) async fn get_google_books_key(
     _admin: AdminUser,

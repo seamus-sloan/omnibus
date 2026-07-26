@@ -60,7 +60,7 @@ pub struct Highlight {
     #[serde(default)]
     pub text: Option<String>,
     /// The device-minted identity this highlight was created under, when the
-    /// creating client supplied one. `None` for rows predating migration 0049
+    /// creating client supplied one. `None` for rows predating migration 0051
     /// and for clients that don't mint one.
     #[serde(default)]
     pub client_id: Option<String>,

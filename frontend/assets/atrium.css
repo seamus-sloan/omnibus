@@ -729,6 +729,45 @@ html, body { overscroll-behavior: none; }
   border: 1px solid var(--line-2); border-radius: 4px;
   padding: 2px 6px;
 }
+.bd-fmt-badge--physical { color: var(--accent); border-color: var(--accent); }
+
+/* Physical collection + wishlist panel (F Physical Check-In, issue #1186) */
+.bd-physical-panel {
+  max-width: var(--content-w, 1120px);
+  margin: 0 auto; padding: 0 24px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.bd-phys-pill-row { display: flex; }
+.bd-phys-pill {
+  color: var(--accent); border-color: var(--accent);
+}
+.bd-phys-copies { display: flex; flex-direction: column; gap: 10px; }
+.bd-phys-copy { padding: 14px 16px; }
+.bd-phys-copy-head {
+  display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+}
+.bd-phys-copy-date { font-weight: 600; }
+.bd-phys-copy-isbn { font-size: 12px; color: var(--ink-2); }
+.bd-phys-copy-note { margin: 8px 0 0; color: var(--ink-1); }
+.bd-phys-copy-actions { display: flex; gap: 8px; margin-top: 10px; }
+.bd-phys-danger { color: var(--bad); }
+.bd-phys-note-editor { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.bd-phys-note-input {
+  width: 100%; resize: vertical; padding: 8px 10px;
+  background: var(--bg-2); color: var(--ink-1);
+  border: 1px solid var(--line); border-radius: 8px;
+  font-family: inherit; font-size: 14px;
+}
+.bd-phys-note-actions { display: flex; gap: 8px; }
+.bd-phys-error { color: var(--bad); margin: 0; }
+
+.bd-wishlist-card, .bd-wishlist-add { padding: 14px 16px; }
+.bd-wishlist-meta { margin: 0 0 10px; color: var(--ink-2); }
+.bd-wishlist-actions, .bd-wishlist-add {
+  display: flex; gap: 8px; align-items: center;
+}
+.bd-wishlist-add { justify-content: space-between; flex-wrap: wrap; }
+.bd-wishlist-add-blurb { margin: 4px 0 0; color: var(--ink-2); }
 
 /* Title column */
 .bd-title-col { min-width: 0; }
@@ -2763,7 +2802,7 @@ a.idx-letter-on:focus-visible {
   border-radius: 10px; text-decoration: none; color: inherit;
 }
 @media (hover: hover) {
-  .um-now-reading[href]:hover {
+  .um-now-reading:hover {
     border-color: color-mix(in oklch, var(--accent) 55%, var(--line-2));
   }
 }
@@ -2775,6 +2814,7 @@ a.idx-letter-on:focus-visible {
 }
 .um-now-reading-state.error { color: var(--bad); }
 .um-nr-cover {
+  display: block;
   width: 44px; height: 64px; flex: 0 0 44px;
   background: color-mix(in oklch, var(--accent) 35%, var(--bg-3));
   border-radius: 3px;
@@ -2787,6 +2827,7 @@ a.idx-letter-on:focus-visible {
   height: 100%;
 }
 .um-nr-meta { display: flex; flex-direction: column; gap: 4px; flex: 1 1 auto; min-width: 0; }
+.um-nr-info { display: flex; flex-direction: column; gap: 4px; text-decoration: none; color: inherit; }
 .um-nr-title { font-family: var(--serif); font-style: italic; color: var(--ink-0); font-size: 14px; }
 .um-nr-author { color: var(--ink-2); font-size: 12px; }
 .um-nr-action {
@@ -2794,6 +2835,14 @@ a.idx-letter-on:focus-visible {
   color: var(--ink-2);
   font-family: var(--mono);
   font-size: 10px;
+}
+.um-nr-play {
+  align-self: center; flex: 0 0 34px; width: 34px; height: 34px;
+  border-radius: 999px; display: grid; place-items: center;
+  background: var(--accent); color: var(--accent-ink); text-decoration: none;
+}
+@media (hover: hover) {
+  .um-nr-play:hover { opacity: 0.9; }
 }
 
 /* Stat grid (stubs) */
@@ -2971,25 +3020,83 @@ a.idx-letter-on:focus-visible {
 }
 .lp-scrub-remaining { color: var(--ink-3); }
 
-/* Chapter map */
+/* Chapter map / seek scrubber */
 .lp-chapter-map { margin-top: 32px; }
+/* Interactive band: the segmented bar sits centred, a transparent range
+   input overlays it to capture click/drag/keyboard, and a drawn playhead
+   thumb tracks the current (or dragged) position. */
+.lp-chapter-scrub {
+  position: relative; display: flex; align-items: center;
+  height: 18px;
+}
 .lp-chapter-seg-row {
-  display: flex; gap: 2px; height: 6px;
+  display: flex; gap: 2px; height: 6px; width: 100%;
   border-radius: 3px; overflow: hidden;
+  pointer-events: none;
 }
 .lp-chapter-seg {
   position: relative; background: var(--bg-3);
-  cursor: pointer; transition: opacity .15s;
   min-width: 3px;
 }
-@media (hover: hover) { .lp-chapter-seg:hover { opacity: .8; } }
 .lp-chapter-seg.current {
   box-shadow: inset 0 2px 0 var(--accent);
 }
 .lp-chapter-seg-fill {
   position: absolute; inset: 0; right: auto;
   background: var(--accent); border-radius: inherit;
-  transition: width .3s ease;
+  transition: width .25s linear;
+}
+/* Transparent range that owns all pointer/keyboard interaction. Its native
+   track + thumb are invisible; the visible playhead is `.lp-chapter-thumb`. */
+.lp-chapter-range {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  margin: 0; padding: 0; background: transparent;
+  -webkit-appearance: none; appearance: none; outline: none;
+  cursor: pointer;
+}
+.lp-chapter-range::-webkit-slider-runnable-track {
+  height: 100%; background: transparent;
+}
+.lp-chapter-range::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 22px; height: 22px;
+  opacity: 0; cursor: grab;
+}
+.lp-chapter-range::-moz-range-track { height: 100%; background: transparent; }
+.lp-chapter-range::-moz-range-thumb {
+  width: 22px; height: 22px; border: none; opacity: 0; cursor: grab;
+}
+.lp-chapter-range:active { cursor: grabbing; }
+/* Keyboard focus ring — the native track/thumb are transparent, so a focused
+   Seek slider would otherwise be invisible. Ring the whole scrub band. */
+.lp-chapter-range:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+.lp-chapter-thumb {
+  position: absolute; top: 50%; left: 0;
+  transform: translate(-50%, -50%);
+  width: 13px; height: 13px; border-radius: 50%;
+  background: var(--ink-0); border: 2px solid var(--bg-0);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .4);
+  pointer-events: none;
+  transition: left .2s linear, transform .15s ease;
+}
+@media (hover: hover) {
+  .lp-chapter-map:hover .lp-chapter-thumb { transform: translate(-50%, -50%) scale(1.15); }
+}
+.lp-chapter-scrub.scrubbing .lp-chapter-thumb {
+  transform: translate(-50%, -50%) scale(1.15);
+  transition: transform .15s ease;
+}
+.lp-chapter-scrub.scrubbing .lp-chapter-seg-fill { transition: none; }
+.lp-chapter-bubble {
+  position: absolute; bottom: calc(100% + 6px); left: 0;
+  transform: translateX(-50%);
+  padding: 2px 7px; border-radius: 6px; white-space: nowrap;
+  background: var(--bg-0); border: 1px solid var(--line-2);
+  font-family: var(--mono); font-size: 11px; color: var(--ink-0);
+  pointer-events: none; box-shadow: 0 2px 8px rgba(0, 0, 0, .35);
 }
 
 /* Drawer rows */
@@ -4250,13 +4357,17 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 
 /* "Pick up where you left off" card. */
-.m-resume { display: block; margin-bottom: 16px; text-decoration: none; color: inherit; }
+.m-resume { display: block; margin-bottom: 16px; }
 .m-resume-kicker { display: block; margin-bottom: 8px; }
 .m-resume-card {
   display: flex; align-items: stretch; gap: 14px; padding: 12px;
   background: var(--bg-1); border: 1px solid var(--line-2); border-radius: 14px;
 }
-.m-resume:active .m-resume-card { background: var(--bg-2); }
+.m-resume-info {
+  flex: 1; min-width: 0; display: flex; align-items: stretch; gap: 14px;
+  text-decoration: none; color: inherit;
+}
+.m-resume-info:active { opacity: 0.6; }
 .m-resume-cover { width: 54px; flex: 0 0 54px; }
 .m-resume-cover .cover-caption { display: none; }
 .m-resume-body {
@@ -4281,6 +4392,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   display: grid; place-items: center;
   background: var(--accent); color: var(--accent-ink);
 }
+.m-resume-play:active { opacity: 0.85; }
 
 /* Sort & filter sheet internals. */
 .m-sheet-reset {
@@ -4588,6 +4700,137 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   flex-direction: column;
   gap: 1.5rem;
 }
+
+/* Unified settings: permission-gated left sidebar + a content column that
+   holds the active section's card(s). (#1324) */
+.settings-layout {
+  display: grid;
+  grid-template-columns: 232px 1fr;
+  gap: 2rem;
+  align-items: start;
+}
+.settings-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  min-width: 0;
+}
+.settings-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  position: sticky;
+  top: 1.5rem;
+}
+.settings-sidebar-head h1 { margin: 0; }
+.settings-sidebar-head .subtitle { margin: 0.25rem 0 0; }
+.settings-sidebar-note {
+  color: var(--ink-2);
+  font-size: 0.8rem;
+  margin: 0.5rem 0 0;
+}
+.settings-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.settings-nav-group-label {
+  color: var(--ink-2);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin: 0.35rem 0 0.25rem 0.75rem;
+}
+.settings-nav-item {
+  align-items: center;
+  border-radius: 8px;
+  color: var(--ink-1);
+  display: flex;
+  gap: 0.65rem;
+  padding: 0.55rem 0.75rem;
+  text-decoration: none;
+}
+@media (hover: hover) {
+  .settings-nav-item:hover { background: var(--bg-1); color: var(--ink-0); }
+}
+.settings-nav-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.settings-nav-icon {
+  flex: none;
+  font-size: 0.95rem;
+  width: 1.1rem;
+  text-align: center;
+}
+.settings-nav-label { font-size: 0.95rem; }
+
+@media (max-width: 720px) {
+  .settings-layout { grid-template-columns: 1fr; gap: 1.25rem; }
+  .settings-sidebar { position: static; top: auto; }
+}
+
+/* ── Admin Users section (F5.4) ─────────────────────────────────── */
+.users-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 1rem; margin-bottom: 1rem;
+}
+.users-table {
+  width: 100%; border-collapse: collapse; font-size: 0.9rem;
+}
+.users-table th, .users-table td {
+  text-align: left; padding: 0.55rem 0.6rem;
+  border-bottom: 1px solid var(--line-2); vertical-align: middle;
+}
+.users-table th {
+  font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--ink-2); font-weight: 600;
+}
+.users-table tbody tr:last-child td { border-bottom: none; }
+.users-name { font-weight: 600; color: var(--ink-0); }
+.users-self-tag { color: var(--ink-2); font-weight: 400; }
+.users-kindle { color: var(--ink-1); }
+.users-col-actions { text-align: right; white-space: nowrap; }
+.users-col-actions .btn { margin-left: 0.35rem; }
+.users-danger { color: var(--bad); }
+
+.users-chip, .users-chip-admin {
+  display: inline-block; margin: 0 0.25rem 0.15rem 0; padding: 0.1rem 0.5rem;
+  font-size: 0.75rem; border-radius: 999px;
+  background: var(--bg-2); border: 1px solid var(--line-2); color: var(--ink-1);
+}
+.users-chip-admin { background: var(--accent-soft); border-color: transparent; color: var(--accent); font-weight: 600; }
+.users-chip-none { color: var(--ink-2); }
+.users-badge {
+  display: inline-block; padding: 0.1rem 0.5rem; font-size: 0.75rem;
+  border-radius: 999px; color: var(--ink-2);
+}
+.users-badge-locked { color: var(--bad); background: color-mix(in oklch, var(--bad) 14%, transparent); margin-right: 0.4rem; }
+
+.users-perms { border: 1px solid var(--line-2); border-radius: 10px; padding: 0.6rem 0.8rem; }
+.users-perms legend { font-size: 0.8rem; color: var(--ink-2); padding: 0 0.35rem; }
+.users-perm-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.2rem 0; cursor: pointer; }
+
+.users-modal-overlay {
+  position: fixed; inset: 0; z-index: 120;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+  background: color-mix(in oklch, black 62%, transparent); backdrop-filter: blur(3px);
+}
+.users-modal-card {
+  width: min(460px, 100%); max-height: 88vh; overflow: auto;
+  background: var(--bg-1); border: 1px solid var(--line-2); border-radius: 16px;
+  box-shadow: 0 24px 60px color-mix(in oklch, black 55%, transparent); padding: 1.1rem 1.25rem;
+}
+.users-modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
+.users-modal-head h3 { margin: 0; font-size: 1.05rem; color: var(--ink-0); }
+.users-modal-close {
+  font-size: 1.3rem; line-height: 1; color: var(--ink-2);
+  background: transparent; border: none; cursor: pointer;
+}
+@media (hover: hover) { .users-modal-close:hover { color: var(--ink-0); } }
+
 .settings-form {
   display: flex;
   flex-direction: column;
@@ -7586,9 +7829,109 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 
 /* ══ Check-in flow (/check-in) ═════════════════════════════════════════ */
 
-.check-in { max-width: 560px; margin-inline: auto; }
+.check-in { max-width: 560px; margin-inline: auto; position: relative; }
+
+/* ── Centered overlay presentation ────────────────────────────────────
+   The flow renders full-page at `/check-in` (deep-link fallback) and, from
+   every in-app entry point, floats centered over the current page. The scrim
+   is `position: fixed` at the ScreenLayout root, so its blur covers the whole
+   app (nav included). */
+.check-in-overlay-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: color-mix(in oklch, var(--bg-0) 70%, transparent);
+  backdrop-filter: blur(6px);
+  animation: sp-fade-in .12s ease-out;
+}
+.check-in-overlay-panel {
+  position: relative;
+  width: min(560px, 100%);
+  max-height: calc(100vh - 48px);
+  display: flex;
+  animation: check-in-overlay-in .16s ease-out;
+}
+/* The card fills the panel and scrolls inside itself when a screen (scanner,
+   confirm + note) runs taller than the viewport, instead of the scrim. */
+.check-in-overlay-panel .check-in {
+  margin: 0;
+  max-width: none;
+  width: 100%;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  box-shadow: 0 24px 60px color-mix(in oklch, black 55%, transparent);
+}
+.check-in-overlay-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.check-in-overlay-close:hover {
+  background: var(--bg-2);
+  color: var(--ink-0);
+}
+/* The flow's own cancel `×` (a Link to /) is redundant inside the overlay —
+   the panel's close button dismisses in place without navigating away. Hide
+   it here so the overlay shows a single close affordance. */
+.check-in-overlay-panel .check-in-close {
+  display: none;
+}
+
+@keyframes check-in-overlay-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 .check-in-screen { display: flex; flex-direction: column; gap: 14px; }
 .check-in-screen h1 { margin: 0; }
+
+/* Cancel/exit affordance — top-right of the card, above every stage. */
+.check-in-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--bg-1);
+  color: var(--ink-2);
+  font-size: 20px;
+  line-height: 1;
+  text-decoration: none;
+}
+.check-in-close:hover { background: var(--bg-2); color: var(--ink-1); }
+
+/* Provider-fallback disclaimer shown under the scanner when no Google Books
+   key is configured. */
+.check-in-provider-note {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-1);
+}
 .check-in-isbn-line {
   margin: 0;
   font-size: 13px;

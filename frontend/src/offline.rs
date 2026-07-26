@@ -11,6 +11,7 @@ pub mod outbox;
 pub mod replica;
 pub mod store;
 pub mod sync;
+mod test_support;
 
 /// Initialize the offline layer. Called once from the native shell's
 /// `main()` before `dioxus::launch`, right after `token_store::load_from_disk`.
@@ -54,11 +55,19 @@ const USER_SCOPED_PREFIXES: [&str; 16] = [
 /// user signs in, wipe the previous user's replicated data and queued
 /// mutations so nothing leaks across accounts (books/covers stay — the
 /// library is server-wide).
-pub(crate) async fn note_user(username: &str) {
+///
+/// Takes the fresh `me` the caller just fetched (rather than a bare
+/// username) so that, on a detected switch, the wipe below — whose
+/// `kv_delete_prefix` over `USER_SCOPED_PREFIXES` matches the `"me"` cache
+/// key — can be followed by re-seeding that same row. Without this, the
+/// prior cache write `get_me` made for the new user's identity would be
+/// deleted by this function's own wipe, forcing a redundant network
+/// re-fetch on the very next read.
+pub(crate) async fn note_user(user: &omnibus_shared::UserSummary) {
     let Some(st) = store::store() else { return };
     let previous = st.meta_get("last_user").await;
     match previous.as_deref() {
-        Some(prev) if prev == username => {}
+        Some(prev) if prev == user.username => {}
         Some(_) => {
             tracing::info!("account switch detected; clearing user-scoped offline data");
             for prefix in USER_SCOPED_PREFIXES {
@@ -67,8 +76,13 @@ pub(crate) async fn note_user(username: &str) {
             let ids: Vec<i64> = st.ops_list().await.into_iter().map(|o| o.id).collect();
             st.ops_delete_many(ids).await;
             sync::refresh_pending().await;
-            st.meta_put("last_user", username.to_string());
+            st.meta_put("last_user", user.username.clone());
+            // Restore the identity row the wipe above just deleted.
+            cache::put_json(&cache::keys::me(), user);
         }
-        None => st.meta_put("last_user", username.to_string()),
+        None => st.meta_put("last_user", user.username.clone()),
     }
 }
+
+#[cfg(test)]
+mod tests;

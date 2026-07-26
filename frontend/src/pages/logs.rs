@@ -1,4 +1,5 @@
-//! Admin-only log viewer (`/logs`).
+//! Admin-only log viewer — the Logs section of `/settings` (`/logs` redirects
+//! here).
 //!
 //! Paginated, newest-first view over the on-disk JSON logs with
 //! level/module/time-range filters. Web/SSR-only — not a mobile surface — and
@@ -8,10 +9,9 @@
 #![cfg(not(feature = "mobile"))]
 
 use dioxus::prelude::*;
-use dioxus_router::Link;
 use omnibus_shared::logs::{LogPage, LogQuery, LogRecord};
 
-use crate::{data, use_server_url, Route};
+use crate::{data, use_server_url};
 
 /// The `/logs` admin log viewer page.
 #[component]
@@ -45,14 +45,13 @@ pub fn LogsPage() -> Element {
     let on_apply = apply_filters_handler(filters, applied);
 
     rsx! {
-        div { class: "settings-page logs-page", "data-testid": "logs-page",
+        div { class: "logs-page", "data-testid": "logs-page",
             section { class: "card",
                 div { class: "logs-head",
                     div {
-                        h1 { "Server logs" }
+                        h2 { "Server logs" }
                         p { class: "subtitle", "Browse the on-disk structured logs." }
                     }
-                    Link { to: Route::Settings {}, class: "btn ghost", "Back to settings" }
                 }
                 if is_admin() {
                     LogFilterBar { filters, on_apply: EventHandler::new(on_apply) }

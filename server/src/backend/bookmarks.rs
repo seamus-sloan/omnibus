@@ -52,7 +52,7 @@ pub(super) async fn get_bookmarks(
 /// Resolve a `{id}` path segment to a numeric bookmark id.
 ///
 /// Accepts either the server's row id or the uuid the creating device minted
-/// (migration 0049), so an offline client can address a bookmark it created
+/// (migration 0051), so an offline client can address a bookmark it created
 /// but has not yet synced. See `highlights::resolve_id` for the full rationale.
 async fn resolve_id(state: &AppState, user_id: i64, raw: &str) -> Result<i64, BookmarkError> {
     if let Ok(id) = raw.parse::<i64>() {

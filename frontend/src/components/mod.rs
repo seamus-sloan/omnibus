@@ -75,6 +75,10 @@ pub use cover_tile::{CoverTile, CoverTileKind};
 // without duplicating the form.
 pub mod author_photo_edit;
 
+// Shared file-picker upload `onchange` builder used by `author_photo_edit`'s
+// file section and the journal composer's image-insert toolbar button.
+pub(crate) mod image_upload;
+
 // F5.10 admin "Merge with…" dialog, mounted by the book detail page.
 // Web-only: merge is an admin surface and mobile renders no admin
 // affordances.

@@ -1,6 +1,6 @@
+import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
-import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { expectNavVisible, gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
@@ -50,9 +50,12 @@ async function publish(page: Page, body: string) {
  * and no draft leaks into later tests' feeds.
  */
 async function cancelComposerDiscardingDraft(page: Page) {
-  await expect(page.getByTestId("journal-autosaved")).toContainText("Auto-saved", {
-    timeout: 10_000,
-  });
+  await expect(page.getByTestId("journal-autosaved")).toContainText(
+    "Auto-saved",
+    {
+      timeout: 10_000,
+    },
+  );
   await expectMutation(
     page,
     { method: "POST", url: "/api/rpc/journals/delete", expectedStatus: 200 },
@@ -62,14 +65,19 @@ async function cancelComposerDiscardingDraft(page: Page) {
 }
 
 /** Delete the entry whose rendered body contains `marker`. */
-async function deleteEntry(page: import("@playwright/test").Page, marker: string) {
+async function deleteEntry(
+  page: import("@playwright/test").Page,
+  marker: string,
+) {
   const card = page.getByTestId("journal-entry").filter({ hasText: marker });
   await expectMutation(
     page,
     { method: "POST", url: "/api/rpc/journals/delete", expectedStatus: 200 },
     async () => card.getByTestId("journal-delete").click(),
   );
-  await expect(page.getByTestId("journal-entry").filter({ hasText: marker })).toHaveCount(0);
+  await expect(
+    page.getByTestId("journal-entry").filter({ hasText: marker }),
+  ).toHaveCount(0);
 }
 
 // ---------------------------------------------------------------------------
@@ -84,7 +92,9 @@ test("renders the journal section layout", async ({ page, request }) => {
 
   // Section heading + shared-log blurb + collapsed composer prompt.
   await expect(page.getByTestId("journal-section")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "What readers have written" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "What readers have written" }),
+  ).toBeVisible();
   await expect(page.getByTestId("journal-open-composer")).toBeVisible();
 
   // Expanding the composer reveals the live editor, the spoiler-syntax hint,
@@ -117,13 +127,19 @@ test("wraps the selected text in markdown when a toolbar button is clicked", asy
   // Select the whole draft, then Bold → the markdown source is wrapped (read
   // back from the hidden mirror), so the stored format stays plain markdown.
   await editor(page).selectText();
-  await page.getByTestId("journal-toolbar").getByRole("button", { name: "Bold" }).click();
+  await page
+    .getByTestId("journal-toolbar")
+    .getByRole("button", { name: "Bold" })
+    .click();
   await expect(editorMarkdown(page)).toHaveValue("**hello world**");
 
   // A line-prefix command (Quote) prefixes the line rather than wrapping.
   await editor(page).fill("a thought");
   await editor(page).selectText();
-  await page.getByTestId("journal-toolbar").getByRole("button", { name: "Quote" }).click();
+  await page
+    .getByTestId("journal-toolbar")
+    .getByRole("button", { name: "Quote" })
+    .click();
   await expect(editorMarkdown(page)).toHaveValue("> a thought");
 
   await cancelComposerDiscardingDraft(page);
@@ -133,7 +149,10 @@ test("wraps the selected text in markdown when a toolbar button is clicked", asy
 // Action — insert a saved highlight as a blockquote
 // ---------------------------------------------------------------------------
 
-test("inserts a saved highlight into the draft as a blockquote", async ({ page, request }) => {
+test("inserts a saved highlight into the draft as a blockquote", async ({
+  page,
+  request,
+}) => {
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
 
   // Seed a highlight via the REST API (bearer-authed request fixture); a unique
@@ -156,7 +175,10 @@ test("inserts a saved highlight into the draft as a blockquote", async ({ page, 
   // with attribution, and the popover closes.
   await page.getByTestId("journal-insert-highlight").click();
   await expect(page.getByTestId("journal-highlights-pop")).toBeVisible();
-  await page.getByTestId("journal-highlight-item").filter({ hasText: quote }).click();
+  await page
+    .getByTestId("journal-highlight-item")
+    .filter({ hasText: quote })
+    .click();
 
   await expect(editorMarkdown(page)).toHaveValue(
     new RegExp(`> ${quote}[\\s\\S]*saved from highlights`),
@@ -190,14 +212,18 @@ test("publishes an entry attributed to the current user, edits it, then deletes 
   // matching (the editor's text isn't the rendered body) — target the single
   // open editor at page level instead.
   await card.getByTestId("journal-edit").click();
-  await page.getByTestId("journal-edit-editor").fill(`Revised thoughts ${marker}`);
+  await page
+    .getByTestId("journal-edit-editor")
+    .fill(`Revised thoughts ${marker}`);
   await expectMutation(
     page,
     { method: "POST", url: "/api/rpc/journals/update", expectedStatus: 200 },
     async () => page.getByTestId("journal-edit-save").click(),
   );
   await expect(
-    page.getByTestId("journal-entry").filter({ hasText: `Revised thoughts ${marker}` }),
+    page
+      .getByTestId("journal-entry")
+      .filter({ hasText: `Revised thoughts ${marker}` }),
   ).toBeVisible();
 
   await deleteEntry(page, marker);
@@ -207,7 +233,10 @@ test("publishes an entry attributed to the current user, edits it, then deletes 
 // Action — markdown preview + spoiler reveal
 // ---------------------------------------------------------------------------
 
-test("renders a markdown preview and blurs spoilers until clicked", async ({ page, request }) => {
+test("renders a markdown preview and blurs spoilers until clicked", async ({
+  page,
+  request,
+}) => {
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
   await gotoReady(page, `/books/${uuid}`);
 
@@ -219,7 +248,9 @@ test("renders a markdown preview and blurs spoilers until clicked", async ({ pag
     { method: "POST", url: "/api/rpc/journals/preview", expectedStatus: 200 },
     async () => page.getByTestId("journal-preview-toggle").click(),
   );
-  await expect(page.getByTestId("journal-preview").locator("strong")).toHaveText("bold preview");
+  await expect(
+    page.getByTestId("journal-preview").locator("strong"),
+  ).toHaveText("bold preview");
 
   // Publish an entry containing a spoiler; it renders blurred until clicked.
   const marker = `e2e-spoiler-${Date.now()}`;
@@ -251,7 +282,10 @@ test("renders a markdown preview and blurs spoilers until clicked", async ({ pag
 // Action — keyboard users can reveal a spoiler with Enter or Space
 // ---------------------------------------------------------------------------
 
-test("reveals a spoiler with Enter and toggles it back with Space", async ({ page, request }) => {
+test("reveals a spoiler with Enter and toggles it back with Space", async ({
+  page,
+  request,
+}) => {
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
   await gotoReady(page, `/books/${uuid}`);
 
@@ -323,7 +357,10 @@ test("saves a draft that stays marked Draft until published from its card", asyn
 // Action — debounced autosave while typing, discarded on cancel
 // ---------------------------------------------------------------------------
 
-test("autosaves the draft while typing and discards it on cancel", async ({ page, request }) => {
+test("autosaves the draft while typing and discards it on cancel", async ({
+  page,
+  request,
+}) => {
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
   await gotoReady(page, `/books/${uuid}`);
 
@@ -337,7 +374,9 @@ test("autosaves the draft while typing and discards it on cancel", async ({ page
     { method: "POST", url: "/api/rpc/journals/create", expectedStatus: 200 },
     async () => editor(page).fill(`Autosaved thoughts ${marker}`),
   );
-  await expect(page.getByTestId("journal-autosaved")).toContainText("Auto-saved");
+  await expect(page.getByTestId("journal-autosaved")).toContainText(
+    "Auto-saved",
+  );
 
   // Cancel discards the autosaved draft row and closes the composer; nothing
   // is left behind in the feed.
@@ -347,7 +386,9 @@ test("autosaves the draft while typing and discards it on cancel", async ({ page
     async () => page.getByRole("button", { name: "Cancel" }).click(),
   );
   await expect(page.getByTestId("journal-composer")).toHaveCount(0);
-  await expect(page.getByTestId("journal-entry").filter({ hasText: marker })).toHaveCount(0);
+  await expect(
+    page.getByTestId("journal-entry").filter({ hasText: marker }),
+  ).toHaveCount(0);
 });
 
 // ---------------------------------------------------------------------------
@@ -379,13 +420,16 @@ test("uploads an image from the toolbar and renders it as a captioned figure", a
     page,
     { method: "POST", url: "/api/journals/images", expectedStatus: 200 },
     async () =>
-      page
-        .getByTestId("journal-image-input")
-        .first()
-        .setInputFiles({ name: "figure.png", mimeType: "image/png", buffer: TINY_PNG }),
+      page.getByTestId("journal-image-input").first().setInputFiles({
+        name: "figure.png",
+        mimeType: "image/png",
+        buffer: TINY_PNG,
+      }),
   );
   await expect(editorMarkdown(page)).toHaveValue(
-    new RegExp(`figure test ${marker}[\\s\\S]*!\\[Add a caption\\]\\(/api/journals/images/`),
+    new RegExp(
+      `figure test ${marker}[\\s\\S]*!\\[Add a caption\\]\\(/api/journals/images/`,
+    ),
   );
 
   // Published, the lone image renders as a captioned <figure> (the alt text
@@ -397,7 +441,9 @@ test("uploads an image from the toolbar and renders it as a captioned figure", a
   );
   const card = page.getByTestId("journal-entry").filter({ hasText: marker });
   await expect(card.locator(".journal-figure img")).toBeVisible();
-  await expect(card.locator(".journal-figure figcaption")).toHaveText("Add a caption");
+  await expect(card.locator(".journal-figure figcaption")).toHaveText(
+    "Add a caption",
+  );
 
   await deleteEntry(page, marker);
 });
@@ -406,7 +452,10 @@ test("uploads an image from the toolbar and renders it as a captioned figure", a
 // Action — markers are revealed only on the caret's line (editor-only)
 // ---------------------------------------------------------------------------
 
-test("hides markdown markers on lines away from the caret", async ({ page, request }) => {
+test("hides markdown markers on lines away from the caret", async ({
+  page,
+  request,
+}) => {
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
   await gotoReady(page, `/books/${uuid}`);
 
@@ -429,15 +478,23 @@ test("hides markdown markers on lines away from the caret", async ({ page, reque
   await lines.nth(1).click();
   await expect(lines.nth(1)).toHaveClass(/cm-active/);
   await expect(lines.nth(0)).not.toHaveClass(/cm-active/);
-  await expect(lines.nth(1).locator(".cm-mark").first()).toHaveCSS("opacity", "0.38");
-  await expect(lines.nth(0).locator(".cm-mark").first()).toHaveCSS("opacity", "0");
+  await expect(lines.nth(1).locator(".cm-mark").first()).toHaveCSS(
+    "opacity",
+    "0.38",
+  );
+  await expect(lines.nth(0).locator(".cm-mark").first()).toHaveCSS(
+    "opacity",
+    "0",
+  );
 
   // Moving the caret to line 1 swaps which line's markers are revealed, and
   // the mirrored markdown is untouched by the class toggling.
   await lines.nth(0).click();
   await expect(lines.nth(0)).toHaveClass(/cm-active/);
   await expect(lines.nth(1)).not.toHaveClass(/cm-active/);
-  await expect(editorMarkdown(page)).toHaveValue("# Heading line\n**bold line**");
+  await expect(editorMarkdown(page)).toHaveValue(
+    "# Heading line\n**bold line**",
+  );
 
   await cancelComposerDiscardingDraft(page);
 });
@@ -446,17 +503,28 @@ test("hides markdown markers on lines away from the caret", async ({ page, reque
 // Error path — failed publish surfaces an error, composer stays open
 // ---------------------------------------------------------------------------
 
-test("surfaces an error and keeps the draft when publishing fails", async ({ page, request }) => {
+test("surfaces an error and keeps the draft when publishing fails", async ({
+  page,
+  request,
+}) => {
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
   await gotoReady(page, `/books/${uuid}`);
 
   // Fail both save routes — the debounced autosave may have already created
   // the draft row, turning the publish click into an update.
   await page.route("**/api/rpc/journals/create", (route) =>
-    route.fulfill({ status: 500, contentType: "text/plain", body: "journal exploded" }),
+    route.fulfill({
+      status: 500,
+      contentType: "text/plain",
+      body: "journal exploded",
+    }),
   );
   await page.route("**/api/rpc/journals/update", (route) =>
-    route.fulfill({ status: 500, contentType: "text/plain", body: "journal exploded" }),
+    route.fulfill({
+      status: 500,
+      contentType: "text/plain",
+      body: "journal exploded",
+    }),
   );
 
   await page.getByTestId("journal-open-composer").click();
@@ -471,7 +539,9 @@ test("surfaces an error and keeps the draft when publishing fails", async ({ pag
   // and an inline error.
   await expect(page.getByTestId("journal-composer")).toBeVisible();
   await expect(editorMarkdown(page)).toHaveValue("this will fail");
-  await expect(page.getByTestId("journal-composer").getByRole("alert")).toBeVisible();
+  await expect(
+    page.getByTestId("journal-composer").getByRole("alert"),
+  ).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------
@@ -492,7 +562,11 @@ test("surfaces an error on the entry card when the owner's delete fails", async 
   await expect(card).toBeVisible();
 
   await page.route("**/api/rpc/journals/delete", (route) =>
-    route.fulfill({ status: 500, contentType: "text/plain", body: "delete exploded" }),
+    route.fulfill({
+      status: 500,
+      contentType: "text/plain",
+      body: "delete exploded",
+    }),
   );
   await expectMutation(
     page,

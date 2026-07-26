@@ -1,8 +1,9 @@
 //! Reading-stats aggregation over the `reading_sessions` /
-//! `listening_sessions` tables plus `journal_entries` for completion; no new
-//! schema. Every metric is computed in SQL and cached process-wide per user
-//! for 60s, except the Pages tile ([`pages`]), which parses EPUB files on
-//! demand — see that module's doc comment for the sourcing model.
+//! `listening_sessions` tables plus `journal_entries` / `book_read_status`
+//! for completion; no new query-time schema. Every metric is computed in SQL
+//! and cached process-wide per user for 60s. The Pages tile ([`pages`]) sums
+//! the `books.word_count` estimate persisted at index time — see that
+//! module's doc comment for the sourcing model.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -67,19 +68,13 @@ const FINISHED_EVENTS: &str = "\
     SELECT book_uuid, finished_at FROM book_read_status \
         WHERE user_id = ? AND status = 'finished' AND finished_at IS NOT NULL";
 
-/// Failure space of the aggregation layer. Wraps `sqlx::Error` at the module
-/// boundary so no raw DB error leaks to callers. `Books` and `PagesTask` only
-/// surface from the Pages tile's on-demand estimate ([`pages::pages_read`]):
-/// `Books` from the EPUB-path lookup, `PagesTask` when the `spawn_blocking`
-/// word-count task panics or is cancelled.
+/// Failure space of the aggregation layer. Every metric is a SQL query, so a
+/// wrapped `sqlx::Error` is the only failure — kept as an enum (rather than a
+/// bare `sqlx::Error`) so no raw DB error leaks across the module boundary.
 #[derive(Debug, thiserror::Error)]
 pub enum StatsError {
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
-    #[error(transparent)]
-    Books(#[from] crate::books::BooksError),
-    #[error(transparent)]
-    PagesTask(#[from] tokio::task::JoinError),
 }
 
 type Cache = Mutex<HashMap<(i64, StatsRange), (i64, StatsSummary)>>;

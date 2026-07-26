@@ -18,7 +18,10 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  reporter: "list",
+  // `list` for readable console output; `junit` for Codecov Test Analytics.
+  // CI overrides this via `--reporter=…` (it also adds `blob` for the merged
+  // HTML report and sets PLAYWRIGHT_JUNIT_OUTPUT_NAME per shard).
+  reporter: [["list"], ["junit", { outputFile: "results.xml" }]],
   // Most specs seed in a `beforeAll` that polls the indexer for up to 45s
   // (see `pollForBookCount` — cold GitHub-runner indexing of the full
   // public-domain set measured 27–36s). Hooks inherit the test timeout, so
@@ -32,9 +35,9 @@ export default defineConfig({
     trace: "on-first-retry",
     screenshot: "only-on-failure",
     // Absolute path so the writer (`globalSetup`) and reader (test contexts)
-    // agree regardless of CWD — `npx playwright test -c …` from the repo
-    // root and `cd ui_tests/playwright && npx playwright test` both hit the
-    // same file.
+    // agree regardless of CWD — `pnpm exec playwright test -c …` from the
+    // repo root and `cd ui_tests/playwright && pnpm exec playwright test`
+    // both hit the same file.
     storageState: STORAGE_STATE_PATH,
     // Server-side `origin_check` middleware rejects cookie-authed
     // state-changing requests with no `Origin`/`Referer`. Playwright does

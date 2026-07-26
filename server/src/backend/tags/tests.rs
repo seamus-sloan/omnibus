@@ -26,6 +26,7 @@ async fn api_get_tags_returns_200_with_tag_weights() {
             cover: None,
             mtime_epoch: 0,
             size_bytes: 0,
+            word_count: None,
         }],
     )
     .await

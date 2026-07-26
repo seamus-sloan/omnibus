@@ -1,9 +1,10 @@
 //! User CRUD.
 
-use sqlx::{SqliteConnection, SqlitePool};
+use omnibus_shared::{AdminUserRow, UserPermissions};
+use sqlx::{Row, SqliteConnection, SqlitePool};
 
-use super::password::{hash_password, validate_password, validate_username};
-use super::{row_to_user, AuthError, AuthResult, User};
+use super::password::{hash_password, validate_password, validate_username, verify_password};
+use super::{now_unix, row_to_user, AuthError, AuthResult, User};
 
 /// Atomically create a user. The first user created becomes admin; the
 /// `registration_enabled` setting is flipped to '0' in the same
@@ -182,6 +183,62 @@ pub async fn get_kindle_email(pool: &SqlitePool, user_id: i64) -> AuthResult<Opt
     Ok(v.filter(|s| !s.trim().is_empty()))
 }
 
+/// Change a user's password. Verifies `current` against the stored hash to
+/// authorize the change, validates `new` against the password policy, then
+/// re-hashes with Argon2id and stamps `password_changed_at` — all in one
+/// transaction so an interrupted call never leaves a half-applied state.
+///
+/// Errors with [`AuthError::InvalidCredentials`] when the current password is
+/// wrong (or the user id no longer exists) and [`AuthError::Validation`] when
+/// the new password fails policy (min length / common-password reject-list).
+/// Only ever touches the row identified by `user_id`.
+pub async fn change_password(
+    pool: &SqlitePool,
+    user_id: i64,
+    current: &str,
+    new: &str,
+) -> AuthResult<()> {
+    let mut tx = pool.begin().await?;
+
+    let phc: Option<String> = sqlx::query_scalar("SELECT password_hash FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let Some(phc) = phc else {
+        return Err(AuthError::InvalidCredentials);
+    };
+    if !verify_password(current, &phc)? {
+        return Err(AuthError::InvalidCredentials);
+    }
+
+    // Validate only after authorizing, so an unauthenticated caller can't
+    // probe the policy — and reject before hashing to avoid wasted argon2 work.
+    validate_password(new)?;
+    let new_phc = hash_password(new)?;
+
+    // Stamp `password_changed_at` alongside the new hash (the standing
+    // INVARIANT in `create_user`): downstream "invalidate sessions older than
+    // last password change" logic reads this column.
+    let updated = sqlx::query(
+        "UPDATE users SET password_hash = ?, password_changed_at = strftime('%s','now')
+         WHERE id = ?",
+    )
+    .bind(&new_phc)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+
+    // The transaction pins the row we verified above, so a 0-row update
+    // shouldn't happen — but never commit a no-op as success. Treat it as
+    // `InvalidCredentials`, consistent with the missing-user path.
+    if updated.rows_affected() == 0 {
+        return Err(AuthError::InvalidCredentials);
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
 /// `OMNIBUS_INITIAL_ADMIN` boot hook: if a user by this username exists,
 /// set `is_admin = 1`. Never auto-creates — the env var is recovery, not
 /// provisioning. Returns true if a row was updated.
@@ -213,6 +270,223 @@ pub async fn registration_enabled(pool: &SqlitePool) -> AuthResult<bool> {
             .fetch_optional(pool)
             .await?;
     Ok(v.as_deref() == Some("1"))
+}
+
+// ── Admin user management (F5.4) ─────────────────────────────────────
+
+/// Map a `users` row to the admin-table [`AdminUserRow`] projection,
+/// resolving `locked` against `now` (a `locked_until` in the past is not a
+/// live lockout).
+fn row_to_admin_user(row: &sqlx::sqlite::SqliteRow, now: i64) -> AdminUserRow {
+    let locked_until: Option<i64> = row.get("locked_until");
+    AdminUserRow {
+        id: row.get("id"),
+        username: row.get("username"),
+        is_admin: row.get::<i64, _>("is_admin") != 0,
+        can_upload: row.get::<i64, _>("can_upload") != 0,
+        can_edit: row.get::<i64, _>("can_edit") != 0,
+        can_download: row.get::<i64, _>("can_download") != 0,
+        kindle_email: row.get("kindle_email"),
+        created_at: row.get("created_at"),
+        locked: locked_until.is_some_and(|until| until > now),
+    }
+}
+
+/// List every user for the admin Users table, oldest first. Returns the
+/// safe [`AdminUserRow`] projection (no password material) with per-row
+/// created time and live locked state.
+pub async fn list_users(pool: &SqlitePool) -> AuthResult<Vec<AdminUserRow>> {
+    let rows = sqlx::query(
+        "SELECT id, username, is_admin, can_upload, can_edit, can_download,
+                kindle_email, created_at, locked_until
+         FROM users ORDER BY created_at ASC, id ASC",
+    )
+    .fetch_all(pool)
+    .await?;
+    let now = now_unix();
+    Ok(rows.iter().map(|r| row_to_admin_user(r, now)).collect())
+}
+
+/// Admin-create a user with explicit permissions. Unlike [`create_user`]
+/// (self-registration), this bypasses the `registration_enabled` gate and the
+/// first-user-admin logic — an admin is always the caller — and sets the four
+/// permission flags directly. Validates username/password, provisions the
+/// built-in Wishlist shelf (like `create_user`, #1187), and returns the new
+/// row. Errors with [`AuthError::UsernameTaken`] on a case-insensitive
+/// collision.
+pub async fn admin_create_user(
+    pool: &SqlitePool,
+    username: &str,
+    password: &str,
+    perms: UserPermissions,
+) -> AuthResult<AdminUserRow> {
+    validate_username(username)?;
+    validate_password(password)?;
+    let phc = hash_password(password)?;
+
+    // BEGIN IMMEDIATE takes the write lock up front so the uniqueness check and
+    // the insert can't race a concurrent create of the same name.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+
+    let existing: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM users WHERE username = ? COLLATE NOCASE")
+            .bind(username)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if existing.is_some() {
+        return Err(AuthError::UsernameTaken);
+    }
+
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO users (username, password_hash, is_admin, can_upload, can_edit, can_download)
+         VALUES (?, ?, ?, ?, ?, ?)
+         RETURNING id",
+    )
+    .bind(username)
+    .bind(&phc)
+    .bind(perms.is_admin as i64)
+    .bind(perms.can_upload as i64)
+    .bind(perms.can_edit as i64)
+    .bind(perms.can_download as i64)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    crate::shelves::provision_wishlist_shelf(&mut *tx, id)
+        .await
+        .map_err(|e| AuthError::Internal(e.to_string()))?;
+
+    tx.commit().await?;
+
+    Ok(AdminUserRow {
+        id,
+        username: username.to_string(),
+        is_admin: perms.is_admin,
+        can_upload: perms.can_upload,
+        can_edit: perms.can_edit,
+        can_download: perms.can_download,
+        kindle_email: None,
+        created_at: now_unix(),
+        locked: false,
+    })
+}
+
+/// Replace a user's four permission flags. Refuses to demote the last
+/// remaining admin ([`AuthError::LastAdmin`]) and errors with
+/// [`AuthError::UserNotFound`] for an unknown id. Runs under `BEGIN
+/// IMMEDIATE` so the admin-count guard can't race a concurrent demotion of a
+/// different admin down to zero admins.
+pub async fn update_user_permissions(
+    pool: &SqlitePool,
+    user_id: i64,
+    perms: UserPermissions,
+) -> AuthResult<()> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+
+    let current_is_admin = admin_flag_for_update(&mut tx, user_id).await?;
+
+    // Demoting the only admin would lock everyone out of the admin panel.
+    if current_is_admin && !perms.is_admin && admin_count(&mut tx).await? <= 1 {
+        return Err(AuthError::LastAdmin);
+    }
+
+    sqlx::query(
+        "UPDATE users SET is_admin = ?, can_upload = ?, can_edit = ?, can_download = ?
+         WHERE id = ?",
+    )
+    .bind(perms.is_admin as i64)
+    .bind(perms.can_upload as i64)
+    .bind(perms.can_edit as i64)
+    .bind(perms.can_download as i64)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Admin-reset a user's password: validate + re-hash + stamp
+/// `password_changed_at`. No current-password check — this is the admin
+/// override path, distinct from the self-service [`change_password`].
+/// [`AuthError::UserNotFound`] for an unknown id; [`AuthError::Validation`]
+/// when the new password fails policy.
+pub async fn admin_set_password(
+    pool: &SqlitePool,
+    user_id: i64,
+    new_password: &str,
+) -> AuthResult<()> {
+    validate_password(new_password)?;
+    let phc = hash_password(new_password)?;
+    let updated = sqlx::query(
+        "UPDATE users SET password_hash = ?, password_changed_at = strftime('%s','now')
+         WHERE id = ?",
+    )
+    .bind(&phc)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+    if updated.rows_affected() == 0 {
+        return Err(AuthError::UserNotFound);
+    }
+    Ok(())
+}
+
+/// Clear a user's lockout: reset `failed_login_count` and `locked_until`.
+/// A no-op unlock of an already-unlocked user still succeeds;
+/// [`AuthError::UserNotFound`] only for an unknown id.
+pub async fn unlock_user(pool: &SqlitePool, user_id: i64) -> AuthResult<()> {
+    let updated =
+        sqlx::query("UPDATE users SET failed_login_count = 0, locked_until = NULL WHERE id = ?")
+            .bind(user_id)
+            .execute(pool)
+            .await?;
+    if updated.rows_affected() == 0 {
+        return Err(AuthError::UserNotFound);
+    }
+    Ok(())
+}
+
+/// Delete a user. Their owned rows cascade away via the schema's
+/// `ON DELETE CASCADE` foreign keys (sessions, devices, progress, shelves,
+/// ratings, journals, …); audit references (`updated_by`/`merged_by`/
+/// `added_by`) null out. Refuses to delete the last remaining admin
+/// ([`AuthError::LastAdmin`]); [`AuthError::UserNotFound`] for an unknown id.
+/// Runs under `BEGIN IMMEDIATE` so the admin-count guard is race-free.
+pub async fn delete_user(pool: &SqlitePool, user_id: i64) -> AuthResult<()> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+
+    let is_admin = admin_flag_for_update(&mut tx, user_id).await?;
+    if is_admin && admin_count(&mut tx).await? <= 1 {
+        return Err(AuthError::LastAdmin);
+    }
+
+    sqlx::query("DELETE FROM users WHERE id = ?")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Read a user's current `is_admin` flag inside a write transaction, erroring
+/// with [`AuthError::UserNotFound`] when the id is unknown. Shared by the
+/// permission-update and delete guards.
+async fn admin_flag_for_update(conn: &mut SqliteConnection, user_id: i64) -> AuthResult<bool> {
+    let flag: Option<i64> = sqlx::query_scalar("SELECT is_admin FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_optional(&mut *conn)
+        .await?;
+    flag.map(|v| v != 0).ok_or(AuthError::UserNotFound)
+}
+
+/// Count admin users on the transaction's connection (for the last-admin guard).
+async fn admin_count(conn: &mut SqliteConnection) -> AuthResult<i64> {
+    Ok(
+        sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE is_admin = 1")
+            .fetch_one(&mut *conn)
+            .await?,
+    )
 }
 
 #[cfg(test)]

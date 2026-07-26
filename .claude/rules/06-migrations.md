@@ -13,7 +13,7 @@ works in production.
 
 1. **Name it `NNNN_short_description.sql`.** Take the next zero-padded
    number after the highest existing file (latest is
-   `0051_progress_client_clock.sql`). The number is the version
+   `0052_session_client_ids.sql`). The number is the version
    `_sqlx_migrations` records; renumbering or renaming an applied file
    breaks the applied-version bookkeeping.
 2. **Never edit an applied migration.** Once a file has run anywhere
@@ -45,8 +45,7 @@ attach/merge, migration `0016`): resolve uuids through
 a bare `SELECT id FROM books WHERE uuid = ?`. Durable user-data tables
 should soft-reference `book_uuid TEXT` (no FK, no cascade), like
 `metadata_overrides` — not a cascading `book_id` FK that wipes user data
-on reindex (see
-[docs/roadmap/3-2-ratings-journaling.md](../../docs/roadmap/3-2-ratings-journaling.md)).
+on reindex.
 
 ## Testing
 
@@ -64,7 +63,3 @@ A running dev server applies migrations only at startup, so a live
 `dx serve` won't pick up a new file until it restarts. Run
 **`just dev-bounce`** to restart it cleanly (see
 [01-dev-environment.md](01-dev-environment.md) and the `justfile`).
-
-> [docs/roadmap/0-2-migrations.md](../../docs/roadmap/0-2-migrations.md)
-> is a planning doc about migration *strategy*, not a how-to — this rule
-> is the authoring recipe.

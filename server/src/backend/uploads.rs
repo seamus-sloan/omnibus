@@ -261,6 +261,21 @@ async fn stream_upload_to_tempfile(
             .map_err(|e| UploadError::internal("write upload chunk", e))?;
     }
 
+    // Flush + fsync before the path is handed to a separate reader (`EpubDoc`
+    // in a `spawn_blocking`, or `std::fs::copy` on commit). `tokio::fs::File`
+    // batches writes on a background thread pool and does NOT flush on drop, so
+    // without this the parser can reopen the tempfile before the streamed writes
+    // are durably visible and reads a truncated ZIP → a spurious 415. Mirrors
+    // the audiobook path's `stream_audio_to_tempfile`, which already fixed the
+    // same race (surfaced under CI's Linux filesystem timing).
+    f.flush()
+        .await
+        .map_err(|e| UploadError::internal("flush upload tempfile", e))?;
+    f.sync_all()
+        .await
+        .map_err(|e| UploadError::internal("sync upload tempfile", e))?;
+    drop(f);
+
     if magic_prefix.is_empty() {
         return Err(UploadError::MissingFile);
     }

@@ -108,6 +108,18 @@ export const AUDIOBOOK_BOOKS: readonly ExpectedAudiobook[] = [
     hasCover: true,
     source: "generated",
   },
+
+  // Seek-scrubber-only book — see SCRUB_BOOK below. ~30s so a mid-book seek is
+  // meaningful; appended last for the same reason as the merge pair (keeps the
+  // `.find(MP3 && generated)` selectors resolving to "The Analytical Audiobook").
+  {
+    title: "The Scrubbable Saga",
+    author: "Shafi Goldwasser",
+    format: "MP3",
+    parts: 1,
+    hasCover: true,
+    source: "generated",
+  },
 ] as const;
 
 /**
@@ -141,6 +153,16 @@ function requireAudiobook(title: string): ExpectedAudiobook {
 
 export const MERGE_PRIMARY = requireAudiobook("The Mergeable Manuscript");
 export const MERGE_SECONDARY = requireAudiobook("The Severable Sequel");
+
+/**
+ * The audiobook reserved for the seek-scrubber spec (`listen.spec.ts`).
+ * Scrubbing seeks the audio and PERSISTS a per-(user, book) position that is
+ * globally visible on the shared server, so — exactly like the merge pair —
+ * **no other spec may read this book.** Its author (`Shafi Goldwasser`) is
+ * absent from `make_epub.ts` and every other audiobook fixture, so it adds no
+ * auto-attach and shifts no author-scoped count.
+ */
+export const SCRUB_BOOK = requireAudiobook("The Scrubbable Saga");
 
 /**
  * Titles the reader specs must exclude when they pick "some generated MP3".

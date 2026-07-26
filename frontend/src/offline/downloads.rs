@@ -359,6 +359,59 @@ pub(super) fn get_entry(uuid: &str, format: DlFormat) -> Option<DownloadEntry> {
         .and_then(|m| m.get(&(uuid.to_string(), format)).cloned())
 }
 
+/// Mid-stream progress bump: mutates the byte-count fields on the existing
+/// registry entry in place (no full-entry/`Vec<PlannedFile>` clone) and
+/// mirrors just those columns to SQLite via a targeted `UPDATE`, skipping
+/// the JSON `files` re-serialize a full [`upsert`] pays. No-op if the entry
+/// isn't registered yet (a progress tick racing a `remove`).
+pub(super) fn update_progress_bytes(
+    uuid: &str,
+    format: DlFormat,
+    downloaded: i64,
+    total: Option<i64>,
+) {
+    let downloaded = downloaded.max(0);
+    let now = store::now_secs();
+    let found = registry()
+        .write()
+        .ok()
+        .map(
+            |mut guard| match guard.get_mut(&(uuid.to_string(), format)) {
+                Some(entry) => {
+                    entry.status = DownloadStatus::Downloading { downloaded, total };
+                    entry.updated_at = now;
+                    true
+                }
+                None => false,
+            },
+        )
+        .unwrap_or(false);
+    if !found {
+        return;
+    }
+    persist_progress(uuid, format, downloaded, total, now);
+    bump();
+}
+
+fn persist_progress(
+    uuid: &str,
+    format: DlFormat,
+    downloaded: i64,
+    total: Option<i64>,
+    updated_at: i64,
+) {
+    let Some(store) = store::store() else { return };
+    let uuid = uuid.to_string();
+    let format = format.as_str();
+    store.run_detached(move |conn| {
+        let _ = conn.execute(
+            "UPDATE downloads SET downloaded_bytes = ?1, total_bytes = ?2, updated_at = ?3
+             WHERE book_uuid = ?4 AND format = ?5",
+            rusqlite::params![downloaded, total, updated_at, uuid, format],
+        );
+    });
+}
+
 pub(super) fn set_error(uuid: &str, format: DlFormat, message: String) {
     let Some(mut entry) = get_entry(uuid, format) else {
         return;

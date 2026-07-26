@@ -51,10 +51,10 @@ fn kindle_outcome(result: Result<(), crate::kindle::KindleError>) -> TaskOutcome
 }
 
 /// Variant-aware mapping for [`crate::kepub::KepubError`]: a bad book id or
-/// a missing source EPUB are safe, specific messages; a non-zero
-/// `kepubify` exit carries subprocess stderr, and the remaining variants
-/// wrap I/O or a lower module's internals, so all of those go through
-/// [`sanitized_err`].
+/// a missing source EPUB are safe, specific messages; the collapsed
+/// `Failed` variant (DB lookups, I/O, a non-zero kepubify exit — all
+/// foreign-system failures) carries subprocess stderr / lower-level
+/// internals, so it goes through [`sanitized_err`].
 fn kepub_outcome(result: Result<std::path::PathBuf, crate::kepub::KepubError>) -> TaskOutcome {
     use crate::kepub::KepubError;
     match result {
@@ -79,7 +79,15 @@ impl Worker {
                 )
                 .await
                 {
-                    Ok(stats) => TaskOutcome::Ok(stats.ghost_warning()),
+                    Ok(stats) => {
+                        // Fill word counts for any pre-0049 rows this library
+                        // still carries. Same resource key as the scan, so it
+                        // waits for this task to fully finish; the post itself
+                        // is instant. Mirrors the audiobook chapter backfill.
+                        let warning = stats.ghost_warning();
+                        self.post(Task::BackfillWordCounts { library_path });
+                        TaskOutcome::Ok(warning)
+                    }
                     Err(e) => sanitized_err("library scan", e),
                 }
             }
@@ -121,6 +129,17 @@ impl Worker {
                 crate::indexer::backfill_chapters(&self.pool, &library_path, |processed, total| {
                     self.report_progress(id, processed, Some(total));
                 })
+                .await,
+            ),
+            Task::BackfillWordCounts { library_path } => anyhow_outcome(
+                "word-count backfill",
+                crate::indexer::backfill_word_counts(
+                    &self.pool,
+                    &library_path,
+                    |processed, total| {
+                        self.report_progress(id, processed, Some(total));
+                    },
+                )
                 .await,
             ),
             Task::RebuildFtsIndex => anyhow_outcome(

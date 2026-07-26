@@ -7,8 +7,9 @@
 // shared test user. The session recorder skips uuids that don't resolve to an
 // indexed book, so the library is seeded first and sessions ride a real
 // fixture uuid.
-import { expect, test } from "../fixtures/test";
+
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { expectNavVisible, gotoReady } from "../utils/nav";
@@ -24,7 +25,7 @@ const OLD_SESSION_AT = 1_700_000_000;
 
 test.beforeAll(async ({ request }) => {
   await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
-  const uuid = await fetchBookUuidByTitle(request, FIXTURE_BOOKS[0].title);
+  const uuid = await fetchBookUuidByTitle(request, FIXTURE_BOOKS[0]!.title);
 
   // Dracula is a tagged public-domain fixture — its session feeds the genre
   // donut, which shares by book count over *tagged* active books.
@@ -61,7 +62,11 @@ test.beforeAll(async ({ request }) => {
   });
   expect(rating.status(), "seeding a rating failed").toBe(200);
   const journal = await request.post("/api/journals", {
-    data: { book_uuid: uuid, body_md: "Finished it — stats spec seed.", progress: 100 },
+    data: {
+      book_uuid: uuid,
+      body_md: "Finished it — stats spec seed.",
+      progress: 100,
+    },
   });
   expect(journal.status(), "seeding a finished journal failed").toBe(200);
 });
@@ -69,19 +74,27 @@ test.beforeAll(async ({ request }) => {
 test("renders the stats page layout", async ({ page }) => {
   await gotoReady(page, "/");
   await expectNavVisible(page);
-  await page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Stats" }).click();
+  await page
+    .getByRole("navigation", { name: "Primary" })
+    .getByRole("link", { name: "Stats" })
+    .click();
   await expect(page).toHaveURL(/\/stats$/);
   await page.waitForLoadState("networkidle");
 
   // Title carries the default period word (Month is the default range).
-  await expect(page.getByRole("heading", { name: "Your reading month" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Your reading month" }),
+  ).toBeVisible();
 
   // The switcher offers all four periods with Month pre-selected.
   const seg = page.getByRole("group", { name: "Period" });
   for (const label of ["Week", "Month", "Year", "Lifetime"]) {
     await expect(seg.getByRole("button", { name: label })).toBeVisible();
   }
-  await expect(seg.getByRole("button", { name: "Month" })).toHaveAttribute("aria-pressed", "true");
+  await expect(seg.getByRole("button", { name: "Month" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
 
   // Period-scoped section above, explicitly divided all-time section below.
   await expect(page.getByTestId("stats-period-section")).toBeVisible();
@@ -89,24 +102,34 @@ test("renders the stats page layout", async ({ page }) => {
   await expect(page.getByTestId("stats-alltime-section")).toBeVisible();
 });
 
-test("headline tiles render finished, avg rating, pages, and listening", async ({ page }) => {
+test("headline tiles render finished, avg rating, pages, and listening", async ({
+  page,
+}) => {
   await gotoReady(page, "/stats");
 
   // Values are asserted by shape, not exact numbers — other specs sharing the
   // test user can add sessions/ratings/journals; the arithmetic is covered by
   // the db::stats unit tests.
   await expect(page.getByTestId("stats-tile-finished")).toContainText(/\d/);
-  await expect(page.getByTestId("stats-tile-finished")).toContainText("Finished");
-  await expect(page.getByTestId("stats-tile-avg-rating")).toContainText(/\d\.\d\s*★/);
+  await expect(page.getByTestId("stats-tile-finished")).toContainText(
+    "Finished",
+  );
+  await expect(page.getByTestId("stats-tile-avg-rating")).toContainText(
+    /\d\.\d\s*★/,
+  );
   // #1029: the finished journal seeded in beforeAll gives the Pages tile a
   // real (spine-word-count-derived) estimate — a digit, not the em-dash
   // placeholder. The exact count depends on fixture text length, covered by
   // db::stats unit tests instead of pinned here.
   await expect(page.getByTestId("stats-tile-pages")).toContainText(/\d/);
-  await expect(page.getByTestId("stats-tile-listening")).toContainText(/\d+\s*(m|h)/);
+  await expect(page.getByTestId("stats-tile-listening")).toContainText(
+    /\d+\s*(m|h)/,
+  );
 });
 
-test("a tile's grip opens its drill-in and the close button dismisses it", async ({ page }) => {
+test("a tile's grip opens its drill-in and the close button dismisses it", async ({
+  page,
+}) => {
   await gotoReady(page, "/stats");
 
   await page.getByTestId("stats-tile-avg-rating").click();
@@ -122,26 +145,31 @@ test("a tile's grip opens its drill-in and the close button dismisses it", async
   await expect(drillIn).toHaveCount(0);
 
   // The period switcher underneath is untouched by opening/closing (AC4).
-  await expect(page.getByRole("group", { name: "Period" }).getByRole("button", { name: "Month" })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
+  await expect(
+    page
+      .getByRole("group", { name: "Period" })
+      .getByRole("button", { name: "Month" }),
+  ).toHaveAttribute("aria-pressed", "true");
 });
 
-test("the Finished drill-in lists the books completed in the window", async ({ page }) => {
+test("the Finished drill-in lists the books completed in the window", async ({
+  page,
+}) => {
   await gotoReady(page, "/stats");
 
   await page.getByTestId("stats-tile-finished").click();
   const list = page.getByTestId("stats-drill-finished-list");
   await expect(list).toBeVisible();
-  await expect(list).toContainText(FIXTURE_BOOKS[0].title);
+  await expect(list).toContainText(FIXTURE_BOOKS[0]!.title);
 
   // Clicking the scrim (outside the sheet/modal) also dismisses it.
   await page.getByTestId("stats-drill-in").click({ position: { x: 4, y: 4 } });
   await expect(page.getByTestId("stats-drill-in")).toHaveCount(0);
 });
 
-test("switching the period re-queries and updates the period section", async ({ page }) => {
+test("switching the period re-queries and updates the period section", async ({
+  page,
+}) => {
   await gotoReady(page, "/stats");
   const seg = page.getByRole("group", { name: "Period" });
 
@@ -156,12 +184,22 @@ test("switching the period re-queries and updates the period section", async ({ 
     async () => seg.getByRole("button", { name: "Week" }).click(),
   );
 
-  await expect(seg.getByRole("button", { name: "Week" })).toHaveAttribute("aria-pressed", "true");
-  await expect(seg.getByRole("button", { name: "Month" })).toHaveAttribute("aria-pressed", "false");
-  await expect(page.getByRole("heading", { name: "Your reading week" })).toBeVisible();
+  await expect(seg.getByRole("button", { name: "Week" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(seg.getByRole("button", { name: "Month" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  await expect(
+    page.getByRole("heading", { name: "Your reading week" }),
+  ).toBeVisible();
 });
 
-test("the heatmap and genre donut render from seeded activity", async ({ page }) => {
+test("the heatmap and genre donut render from seeded activity", async ({
+  page,
+}) => {
   await gotoReady(page, "/stats");
 
   // Heatmap: trailing-year grid with the streak figure in the card header and
@@ -200,7 +238,9 @@ test("the books-per-month chart renders twelve bars with the current month highl
   await expect(bars.last()).toHaveClass(/st-mo-current/);
 });
 
-test("the all-time section does not change with the switcher", async ({ page }) => {
+test("the all-time section does not change with the switcher", async ({
+  page,
+}) => {
   await gotoReady(page, "/stats");
   const allTime = page.getByTestId("stats-heatmap");
   await expect(allTime).toBeVisible();
@@ -218,11 +258,15 @@ test("the all-time section does not change with the switcher", async ({ page }) 
     async () => seg.getByRole("button", { name: "Year" }).click(),
   );
 
-  await expect(page.getByRole("heading", { name: "Your reading year" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Your reading year" }),
+  ).toBeVisible();
   await expect.poll(() => allTime.textContent()).toBe(before);
 });
 
-test("a user with no activity sees the friendly empty state", async ({ page }) => {
+test("a user with no activity sees the friendly empty state", async ({
+  page,
+}) => {
   // Forcing an all-zero summary through the rpc route is the deterministic
   // stand-in for a fresh user — self-registration is disabled after the first
   // account, and the shared test user has seeded sessions.

@@ -131,6 +131,24 @@ pub(crate) async fn set_kindle_email_online(
     Ok(())
 }
 
+// ── Change password ──────────────────────────────────────────────
+
+/// Web/SSR: change the authenticated user's password. The returned
+/// [`DataError`] carries the server's message (wrong current password / policy
+/// rejection) so the Account form can surface it inline. Web-only — the change
+/// happens through the same `/api/rpc` server function; mobile has no Account
+/// section (its Settings shell is a flat admin form).
+#[cfg(not(feature = "mobile"))]
+pub async fn change_password(
+    _server_url: &str,
+    current: String,
+    new: String,
+) -> Result<(), DataError> {
+    crate::rpc::rpc_change_password(current, new)
+        .await
+        .map_err(note_server_fn_err)
+}
+
 // ── SMTP config (admin settings) ─────────────────────────────────
 
 /// Web/SSR: read the masked SMTP config status.

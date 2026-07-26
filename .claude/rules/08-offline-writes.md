@@ -50,7 +50,7 @@ The device must be able to name what it is changing and fill in the whole
 payload without asking the server.
 
 - **Nameable.** Client-minted `client_id`s are what make this true for
-  annotations (migration `0049`): a highlight created offline and edited
+  annotations (migration `0051`): a highlight created offline and edited
   moments later has both ops naming the same handle. A shelf create has no such
   handle, so the iOS client refuses it rather than queueing every later op
   against an id that does not exist — see `createShelf` in

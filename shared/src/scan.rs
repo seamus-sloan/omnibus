@@ -31,6 +31,10 @@ pub struct ScanBook {
 pub enum ScanOutcome {
     /// Exact identifier hit; the book already has a physical copy.
     AlreadyOwned { book: ScanBook },
+    /// Exact identifier hit; on the caller's physical wishlist (no physical
+    /// copy yet). Routes to the book's detail page, like [`Self::AlreadyOwned`]
+    /// — the reader already tracks this one, so don't offer to check it in blind.
+    OnWishlist { book: ScanBook },
     /// Exact identifier hit; in the library digitally, no physical copy yet.
     InLibraryUnowned { book: ScanBook },
     /// Online-resolved and (title, author)-matched a library book — needs a
@@ -49,6 +53,20 @@ pub enum ScanOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolveRequest {
     pub isbn: String,
+}
+
+impl ResolveRequest {
+    /// Reject an empty/oversized `isbn`, mirroring the same cap applied to
+    /// [`CheckInRequest::isbn`]. Handlers translate `Err(_)` into 400.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.isbn.trim().is_empty() {
+            return Err("isbn is required".into());
+        }
+        if self.isbn.chars().count() > ISBN_MAX_LEN {
+            return Err(format!("isbn exceeds {ISBN_MAX_LEN} characters"));
+        }
+        Ok(())
+    }
 }
 
 /// Maximum length (in chars) for a free-text physical check-in `note` field.

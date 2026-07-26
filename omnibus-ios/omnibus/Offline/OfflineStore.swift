@@ -1007,7 +1007,10 @@ actor OfflineStore {
     }
 
     private func bind(_ stmt: OpaquePointer?, _ index: Int32, _ value: Data) {
-        value.withUnsafeBytes { buffer in
+        // The bind result code is discarded like every other bind here: a
+        // failure surfaces on the following sqlite3_step, which is where the
+        // callers already handle it.
+        _ = value.withUnsafeBytes { buffer in
             sqlite3_bind_blob(stmt, index, buffer.baseAddress, Int32(buffer.count), SQLITE_TRANSIENT)
         }
     }

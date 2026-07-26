@@ -43,17 +43,17 @@ pub(super) async fn post_ebook_summary_fetch(
     }
 }
 
-/// Whether a server-wide Hardcover key is configured. Any authenticated user
-/// may read this non-sensitive flag; it drives the client's source cascade
-/// (Hardcover first when configured, else OpenLibrary). Distinct from the
-/// admin-only `/api/hardcover-key`, which also carries a masked key preview.
-pub(super) async fn get_hardcover_configured(
+/// The ordered summary-source cascade for the current settings (Hardcover when
+/// keyed → Google Books always → Open Library only when no keys). Any
+/// authenticated user may read this non-sensitive plan; it drives which sources
+/// the client attempts, and in what order.
+pub(super) async fn get_summary_sources(
     _user: AuthUser,
     State(state): State<AppState>,
 ) -> Response {
-    match db::hardcover_key_status(&state.pool).await {
-        Ok(status) => Json(status.configured).into_response(),
-        Err(e) => internal("hardcover key status", e),
+    match db::summary_source_plan(&state.pool).await {
+        Ok(sources) => Json(sources).into_response(),
+        Err(e) => internal("summary source plan", e),
     }
 }
 

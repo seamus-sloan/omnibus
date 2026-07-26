@@ -27,7 +27,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 }
 
 @main
-struct omnibusApp: App {
+struct OmnibusApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var appState = AppState()
     @Environment(\.scenePhase) private var scenePhase

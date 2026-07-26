@@ -34,7 +34,9 @@ export async function expectMutation<T>(
       ? null
       : new RegExp(opts.url.source, opts.url.flags.replace(/[gy]/g, ""));
   const matchesUrl = (candidate: string) =>
-    urlPattern === null ? candidate.includes(opts.url as string) : urlPattern.test(candidate);
+    urlPattern === null
+      ? candidate.includes(opts.url as string)
+      : urlPattern.test(candidate);
 
   const requestPromise = page.waitForRequest(
     (r) => r.method() === opts.method && matchesUrl(r.url()),

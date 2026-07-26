@@ -4,16 +4,16 @@
 
 use std::path::Path;
 
+use anyhow::Context;
 use lofty::file::TaggedFileExt;
 use lofty::picture::MimeType;
-
-use super::parse::AudiobookError;
 
 /// Best-effort embedded-cover read. `None` when the file has no embedded
 /// artwork; the indexer treats that as "no cover, render the typographic
 /// plate" — same fallback ebooks without embedded covers take.
-pub(super) fn extract_cover(path: &Path) -> Result<Option<(String, Vec<u8>)>, AudiobookError> {
-    let tagged = lofty::read_from_path(path)?;
+pub(super) fn extract_cover(path: &Path) -> anyhow::Result<Option<(String, Vec<u8>)>> {
+    let tagged = lofty::read_from_path(path)
+        .with_context(|| format!("could not read audio tags from {}", path.display()))?;
     Ok(cover_from_tagged(&tagged))
 }
 
@@ -98,15 +98,15 @@ mod tests {
     fn extract_cover_errors_when_path_does_not_exist() {
         // A missing file can't be probed by lofty, so the read surfaces as
         // an `Err` (not `Ok(None)`); the caller in `parse.rs` logs a WARN
-        // and proceeds with no cover. lofty maps the missing file to either
-        // a bare `Io` or a `LoftyError`-wrapped `Tag` depending on platform,
-        // so accept either error variant rather than pinning one.
+        // and proceeds with no cover. The `with_context` wrapper names the
+        // path regardless of whether lofty's underlying failure was a bare
+        // `io::Error` or a `LoftyError` (platform-dependent).
         let dir = tempfile::tempdir().expect("should create tempdir");
         let missing = dir.path().join("omnibus_cover_test_missing.mp3");
         let err = extract_cover(&missing).expect_err("missing path should error");
         assert!(
-            matches!(err, AudiobookError::Io(_) | AudiobookError::Tag(_)),
-            "got {err:?}"
+            err.to_string().contains("omnibus_cover_test_missing.mp3"),
+            "got {err}"
         );
     }
 }

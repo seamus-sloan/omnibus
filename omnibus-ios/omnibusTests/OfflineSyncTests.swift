@@ -296,7 +296,7 @@ struct ProgressClockTests {
 
     @Test("a record from a server too old to send the clock still orders")
     func orderingFallsBackToTheArrivalClock() {
-        // `client_updated_at` arrived with migration 0051; against anything
+        // `client_updated_at` arrived with migration 0050; against anything
         // older the field is absent and `updatedAt` is the only clock there is.
         let old = ProgressRecord(
             bookUUID: "book-1", format: .epub, epubCFI: "epubcfi(/6/4)",

@@ -244,27 +244,33 @@ fn resume_card(point: &ResumePoint, server_url: &str) -> Element {
     let (src, _srcset) = thumb_srcs(&book, &uuid, server_url);
 
     rsx! {
-        Link {
-            to,
+        div {
             class: "m-resume",
             "data-testid": "mobile-resume-card",
-            "aria-label": "Pick up where you left off: {title}",
             span { class: "label m-resume-kicker", "Pick up where you left off" }
             span { class: "m-resume-card",
-                span { class: "m-resume-cover",
-                    Cover { book, src_override: src, sizes: Some("54px".to_string()) }
-                }
-                span { class: "m-resume-body",
-                    span { class: "m-resume-title m-em", "{title}" }
-                    if !author.is_empty() {
-                        span { class: "m-resume-author", "{author}" }
+                Link {
+                    to: Route::BookDetail { uuid: uuid.clone() },
+                    class: "m-resume-info",
+                    span { class: "m-resume-cover",
+                        Cover { book, src_override: src, sizes: Some("54px".to_string()) }
                     }
-                    span { class: "mono m-resume-meta", "{meta}" }
-                    if let Some(pct) = pct {
-                        span { class: "m-resume-bar", i { style: "width:{pct}%" } }
+                    span { class: "m-resume-body",
+                        span { class: "m-resume-title m-em", "{title}" }
+                        if !author.is_empty() {
+                            span { class: "m-resume-author", "{author}" }
+                        }
+                        span { class: "mono m-resume-meta", "{meta}" }
+                        if let Some(pct) = pct {
+                            span { class: "m-resume-bar", i { style: "width:{pct}%" } }
+                        }
                     }
                 }
-                span { class: "m-resume-play",
+                Link {
+                    to,
+                    class: "m-resume-play",
+                    "data-testid": "mobile-resume-play",
+                    "aria-label": "Pick up where you left off: {title}",
                     if is_audio {
                         {play_glyph()}
                     } else {

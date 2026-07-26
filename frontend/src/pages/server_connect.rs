@@ -132,7 +132,7 @@ fn server_connect_mobile() -> Element {
                 }
                 p { class: "auth-footer",
                     "Don't have a server? "
-                    // TODO: point at dedicated hosting docs once they exist.
+                    // TODO(#1118): point at dedicated hosting docs once they exist.
                     a {
                         class: "auth-field-action-link",
                         href: "https://github.com/seamus-sloan/omnibus",

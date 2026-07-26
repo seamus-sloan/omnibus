@@ -24,6 +24,11 @@ pub mod routes;
 pub mod rpc;
 pub mod scroll_restore;
 pub mod session_tracker;
+// SSR render-smoke test harness. `dioxus::ssr` only exists under `server`, and
+// every consumer is a `server`-gated render test, so the module is gated on it
+// too — otherwise the wasm `web --all-targets` lint would compile it and fail.
+#[cfg(all(any(test, feature = "test-support"), feature = "server"))]
+pub mod test_support;
 pub mod version;
 pub mod view_prefs;
 
@@ -102,6 +107,10 @@ fn ScreenLayout(children: Element) -> Element {
             // shrank the scrim to the header strip. See
             // `components::search_palette::SearchPaletteOverlay`.
             components::search_palette::SearchPaletteOverlay {}
+            // Centered check-in overlay. Root-mounted (not beside its trigger
+            // in `TopNav`) for the same containing-block reason as the search
+            // palette; renders nothing until opened.
+            pages::CheckInOverlay {}
             // Phone-width section switcher. Always rendered on web (SSR +
             // WASM, so hydration markup matches); CSS hides it above the
             // phone breakpoint so the desktop chrome is unchanged.
@@ -184,6 +193,9 @@ fn ScreenLayout(children: Element) -> Element {
             // "You're offline" sheet raised when a reader/player route
             // bounces (book not downloaded). Renders nothing until then.
             components::OfflineGuardModal {}
+            // Centered check-in overlay — raised by the add-books sheet and
+            // the "You" tab's check-in row. Renders nothing until opened.
+            pages::CheckInOverlay {}
             Nav {}
         }
     }
@@ -484,6 +496,11 @@ pub fn App() -> Element {
     use_context_provider(|| PageTitle(page_title));
     // Cover cache-bust registry — see `contexts::CoverCacheBust`.
     use_context_provider(|| CoverCacheBust(Signal::new(std::collections::HashMap::new())));
+    // Check-in overlay open/closed. Provided above both `ScreenLayout`
+    // variants so every entry point can raise the centered modal and the
+    // root-mounted `CheckInOverlay` can read it. Starts closed for SSR/WASM
+    // hydration parity (rule 07).
+    use_context_provider(|| pages::CheckInOpen(Signal::new(false)));
     // Hook calls in App() are unconditional — the feature gates live inside
     // the helper bodies (mobile compiles them to no-op stubs). This keeps
     // rule 07's SSR-vs-WASM hydration parity within the not(mobile) build,

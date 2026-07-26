@@ -1,15 +1,16 @@
-import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { fetchBookIdByTitle, fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
 
-// The "Fetch Summary" button pulls a book blurb from Hardcover/OpenLibrary on
-// demand. The generated fixtures ship no descriptions, so every fixture book
-// is "sparse" (< 10 words) — the condition under which the detail-page button
-// appears. All three external endpoints are mocked via `page.route` so CI
-// never touches a live Hardcover/OpenLibrary API.
+// The "Fetch Summary" button pulls a book blurb from the configured source
+// cascade (Hardcover → Google Books → Open Library) on demand. The generated
+// fixtures ship no descriptions, so every fixture book is "sparse" (< 10 words)
+// — the condition under which the detail-page button appears. The source-plan
+// and fetch endpoints are mocked via `page.route` so CI never touches a live
+// external API.
 
 const TARGET = FIXTURE_BOOKS.find((b) => b.slug === "alpha")!;
 
@@ -22,32 +23,40 @@ test.beforeAll(async ({ request }) => {
   await request.delete(`/api/ebooks/${uuid}/overrides`);
 });
 
-const CONFIGURED_URL = "**/api/rpc/ebook/summary/hardcover-configured";
+const SOURCES_URL = "**/api/rpc/ebook/summary/sources";
 const FETCH_URL = "**/api/rpc/ebook/summary/fetch";
 
 /** Await the summary-fetch POST that a button click fires, so DOM assertions
  * don't race the network (per `.claude/rules/04-playwright.md`). */
 function waitForFetch(page: Parameters<typeof gotoReady>[0]) {
   return page.waitForResponse(
-    (r) => r.url().includes("/api/rpc/ebook/summary/fetch") && r.request().method() === "POST",
+    (r) =>
+      r.url().includes("/api/rpc/ebook/summary/fetch") &&
+      r.request().method() === "POST",
   );
 }
 
-/** Mock the Hardcover-configured flag (drives which source the cascade starts on). */
-async function mockConfigured(page: Parameters<typeof gotoReady>[0], configured: boolean) {
-  await page.route(CONFIGURED_URL, (route) =>
+/** Mock the ordered source plan the client walks (e.g. `["OpenLibrary"]`). */
+async function mockSources(
+  page: Parameters<typeof gotoReady>[0],
+  sources: string[],
+) {
+  await page.route(SOURCES_URL, (route) =>
     route.request().method() === "POST"
       ? route.fulfill({
           status: 200,
           contentType: "application/json",
-          body: JSON.stringify(configured),
+          body: JSON.stringify(sources),
         })
       : route.continue(),
   );
 }
 
 /** Mock the summary fetch. `text` → `Ok(Some(text))`; `null` → `Ok(None)` (a miss). */
-async function mockFetch(page: Parameters<typeof gotoReady>[0], text: string | null) {
+async function mockFetch(
+  page: Parameters<typeof gotoReady>[0],
+  text: string | null,
+) {
   await page.route(FETCH_URL, (route) =>
     route.request().method() === "POST"
       ? route.fulfill({
@@ -63,18 +72,25 @@ async function mockFetch(page: Parameters<typeof gotoReady>[0], text: string | n
 // Editor — the button is always present, fills the field, and doesn't save.
 // ---------------------------------------------------------------------------
 
-test("metadata editor always shows the Fetch Summary button", async ({ page, request }) => {
+test("metadata editor always shows the Fetch Summary button", async ({
+  page,
+  request,
+}) => {
   const id = await fetchBookIdByTitle(request, TARGET.title);
   await gotoReady(page, `/books/${id}/edit`);
   await expect(page.getByTestId("fetch-summary")).toBeVisible();
 });
 
-test("Fetch Summary fills the editor Description without saving", async ({ page, request }) => {
+test("Fetch Summary fills the editor Description without saving", async ({
+  page,
+  request,
+}) => {
   const id = await fetchBookIdByTitle(request, TARGET.title);
   await gotoReady(page, `/books/${id}/edit`);
 
-  const SUMMARY = "A mocked summary fetched from OpenLibrary for the editor fill test.";
-  await mockConfigured(page, false); // no key → straight to OpenLibrary
+  const SUMMARY =
+    "A mocked summary fetched from OpenLibrary for the editor fill test.";
+  await mockSources(page, ["OpenLibrary"]); // no keys → single-source plan
   await mockFetch(page, SUMMARY);
 
   const fetched = waitForFetch(page);
@@ -95,14 +111,16 @@ test("Fetch Summary surfaces an error when neither source has a summary", async 
   const id = await fetchBookIdByTitle(request, TARGET.title);
   await gotoReady(page, `/books/${id}/edit`);
 
-  await mockConfigured(page, false);
+  await mockSources(page, ["OpenLibrary"]);
   await mockFetch(page, null); // OpenLibrary miss → Ok(None)
 
   const fetched = waitForFetch(page);
   await page.getByTestId("fetch-summary").click();
   await fetched;
 
-  await expect(page.getByTestId("fetch-summary-error")).toHaveText("No summary found.");
+  await expect(page.getByTestId("fetch-summary-error")).toHaveText(
+    "No summary found.",
+  );
   await expect(page.locator("#me-description")).toHaveValue("");
 });
 
@@ -110,7 +128,10 @@ test("Fetch Summary surfaces an error when neither source has a summary", async 
 // Detail page — button only when sparse; a fetch saves + refreshes in place.
 // ---------------------------------------------------------------------------
 
-test("detail page fetch saves the summary and hides the button", async ({ page, request }) => {
+test("detail page fetch saves the summary and hides the button", async ({
+  page,
+  request,
+}) => {
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
   await gotoReady(page, `/books/${uuid}`);
 
@@ -118,14 +139,19 @@ test("detail page fetch saves the summary and hides the button", async ({ page, 
   await expect(page.getByTestId("fetch-summary")).toBeVisible();
 
   // 14 words, so once saved the summary is no longer sparse and the button hides.
-  const SUMMARY = "A sufficiently long mocked summary with more than ten words to enrich the book.";
-  await mockConfigured(page, false);
+  const SUMMARY =
+    "A sufficiently long mocked summary with more than ten words to enrich the book.";
+  await mockSources(page, ["OpenLibrary"]);
   await mockFetch(page, SUMMARY);
   // Mock the override save so no real DB write leaks across specs; `null` decodes
   // as `Ok(None)`, which the client treats as a successful save.
   await page.route("**/api/rpc/ebook/overrides", (route) =>
     route.request().method() === "POST"
-      ? route.fulfill({ status: 200, contentType: "application/json", body: "null" })
+      ? route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: "null",
+        })
       : route.continue(),
   );
 

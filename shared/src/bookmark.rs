@@ -15,7 +15,7 @@ pub struct Bookmark {
     pub position: String,
     pub title: Option<String>,
     /// The device-minted identity this bookmark was created under, when the
-    /// creating client supplied one. `None` for rows predating migration 0049.
+    /// creating client supplied one. `None` for rows predating migration 0051.
     #[serde(default)]
     pub client_id: Option<String>,
     pub created_at: i64,

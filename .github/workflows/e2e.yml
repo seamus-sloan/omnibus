@@ -144,6 +144,8 @@ jobs:
     permissions:
       contents: read
       actions: write
+      # Codecov's tokenless OIDC upload path (test-results upload below).
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -193,7 +195,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ui_tests/playwright/node_modules
-          key: playwright-node-modules-${{ runner.os }}-${{ hashFiles('ui_tests/playwright/package-lock.json') }}
+          key: playwright-node-modules-${{ runner.os }}-${{ hashFiles('ui_tests/playwright/pnpm-lock.yaml') }}
           restore-keys: |
             playwright-node-modules-${{ runner.os }}-
 
@@ -208,7 +210,7 @@ jobs:
           fail-on-cache-miss: true
 
       - name: Install Playwright npm deps
-        run: nix develop .#e2e --command bash -c 'set -euo pipefail; cd ui_tests/playwright && npm ci'
+        run: nix develop .#e2e --command bash -c 'set -euo pipefail; cd ui_tests/playwright && pnpm install --frozen-lockfile'
 
       # Backgrounded with `nohup ... &` + `disown` so the server survives the
       # step's shell exit and the next step can poll it.
@@ -219,16 +221,32 @@ jobs:
             chmod +x ./target/dx/omnibus/release/web/server
             nohup env PORT=3000 ./target/dx/omnibus/release/web/server >server.log 2>&1 &
             disown
-            npx --yes wait-on -t 60000 http://127.0.0.1:3000
+            pnpm dlx wait-on -t 60000 http://127.0.0.1:3000
           '
 
       - name: Run Playwright tests
+        # `junit` (per-shard output file) feeds Codecov Test Analytics; `blob`
+        # feeds the merged HTML report; `list` is the console stream.
+        env:
+          PLAYWRIGHT_JUNIT_OUTPUT_NAME: results-${{ matrix.shard }}.xml
         run: |
           nix develop .#e2e --command bash -c '
             set -euo pipefail
             cd ui_tests/playwright
-            npx playwright test --shard=${{ matrix.shard }}/${{ env.TOTAL_SHARDS }} --reporter=list,blob
+            pnpm exec playwright test --shard=${{ matrix.shard }}/${{ env.TOTAL_SHARDS }} --reporter=list,blob,junit
           '
+
+      # Test results → Codecov Test Analytics. `!cancelled()` so a shard's
+      # failures still upload; best-effort, never gates the suite.
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() && hashFiles('ui_tests/playwright/results-*.xml') != '' }}
+        uses: codecov/codecov-action@v5
+        with:
+          files: ui_tests/playwright/results-${{ matrix.shard }}.xml
+          report_type: test_results
+          flags: e2e
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
 
       # Blob reports (one per shard, attachments embedded) are the input the
       # `publish-report` job stitches into a single hosted HTML report.
@@ -278,13 +296,22 @@ jobs:
       group: gh-pages-publish
       cancel-in-progress: false
     steps:
-      # Checkout so the local composite action is on disk and `npm ci` can find
-      # the Playwright project.
+      # Checkout so the local composite action is on disk and `pnpm install`
+      # can find the Playwright project. This job runs on the runner's own
+      # Node (not the Nix shell), so pnpm is provisioned via pnpm/action-setup
+      # (reads the `packageManager` pin in ui_tests/playwright/package.json).
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ui_tests/playwright/package.json
+
+      # Node 22 (matches the flake's nodejs_22): the pinned pnpm 11.1.2
+      # requires Node >= 22.13 and pulls in `node:sqlite`, so Node 20 crashes
+      # with ERR_UNKNOWN_BUILTIN_MODULE before it can merge the reports.
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Download all blob reports
         uses: actions/download-artifact@v4
@@ -300,8 +327,8 @@ jobs:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
         run: |
           cd ui_tests/playwright
-          npm ci
-          npx playwright merge-reports --reporter html "$GITHUB_WORKSPACE/all-blob-reports"
+          pnpm install --frozen-lockfile
+          pnpm exec playwright merge-reports --reporter html "$GITHUB_WORKSPACE/all-blob-reports"
 
       - uses: ./.github/actions/publish-playwright-report
         with:

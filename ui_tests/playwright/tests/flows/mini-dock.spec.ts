@@ -1,21 +1,21 @@
-import { expect, test } from "../fixtures/test";
 import {
-  AUDIOBOOK_BOOKS,
   AUDIOBOOK_BOOK_COUNT,
+  AUDIOBOOK_BOOKS,
   MERGE_ONLY_TITLES,
 } from "../fixtures/audiobooks";
 import { AUTO_ATTACHED_PAIRS } from "../fixtures/dual_format";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
-import { setRangeValue } from "../utils/sliders";
 import {
   audiobookFixturesDir,
   fixturesDir,
   seedAudiobookLibrary,
   seedLibrary,
 } from "../utils/seed";
+import { setRangeValue } from "../utils/sliders";
 
 // Both libraries seeded: the reader-visibility test needs an EPUB to read
 // alongside an audiobook playing in the background. Exactly one fixture pair
@@ -57,7 +57,8 @@ const MULTIPART_MP3_BOOK = AUDIOBOOK_BOOKS.find(
 const READER_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "gamma")!;
 
 // The web speed control posts through the `rpc_set_playback_rate` server fn.
-const PLAYBACK_RATE_SET_URL = /\/api\/rpc\/audiobooks\/playback-rate\/set(?:\?|$)/;
+const PLAYBACK_RATE_SET_URL =
+  /\/api\/rpc\/audiobooks\/playback-rate\/set(?:\?|$)/;
 
 /**
  * Wait until the App-level playback driver has run `OmnibusAudio.initDirect`
@@ -233,7 +234,9 @@ test("dock is a full-width single-row bar and adjusts volume via its popover", a
 
   // Clicking outside (the scrim) closes the popover. (Corner click — the
   // scrim's center can sit under an open panel.)
-  await page.getByTestId("mini-dock-scrim").click({ position: { x: 10, y: 10 } });
+  await page
+    .getByTestId("mini-dock-scrim")
+    .click({ position: { x: 10, y: 10 } });
   await expect(volPop).not.toHaveClass(/open/);
 });
 
@@ -272,7 +275,9 @@ test("dock speed popover sets playback rate and reaches the shared audio + full 
       expectedBody: { uuid, update: { playback_rate: next } },
     },
     async () =>
-      pop.getByRole("button", { name: `${next.toFixed(1)}×`, exact: true }).click(),
+      pop
+        .getByRole("button", { name: `${next.toFixed(1)}×`, exact: true })
+        .click(),
   );
   await expect(speed).toContainText(`${next.toFixed(1)}×`);
 
@@ -291,7 +296,9 @@ test("dock speed popover sets playback rate and reaches the shared audio + full 
   // Clicking outside closes the popover; expanding back to the full player
   // must show the same rate — proof both controls share one signal. Click the
   // scrim's top-left corner — its center can sit under the open panel.
-  await page.getByTestId("mini-dock-scrim").click({ position: { x: 10, y: 10 } });
+  await page
+    .getByTestId("mini-dock-scrim")
+    .click({ position: { x: 10, y: 10 } });
   await expect(pop).not.toHaveClass(/open/);
   await page.getByTestId("mini-dock-expand-btn").click();
   await expect(page).toHaveURL(new RegExp(`/listen/${uuid}\\??$`));
@@ -328,7 +335,9 @@ test("dock sleep popover arms a countdown that the full player then shows", asyn
   // The controller is app-scoped: expanding to the full player shows the
   // same running countdown in its sleep status. (Corner click — the scrim's
   // center can sit under the open panel.)
-  await page.getByTestId("mini-dock-scrim").click({ position: { x: 10, y: 10 } });
+  await page
+    .getByTestId("mini-dock-scrim")
+    .click({ position: { x: 10, y: 10 } });
   await page.getByTestId("mini-dock-expand-btn").click();
   await expect(page).toHaveURL(new RegExp(`/listen/${uuid}\\??$`));
   await page.getByRole("button", { name: /^sleep/i }).click();

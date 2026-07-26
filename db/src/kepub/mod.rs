@@ -15,24 +15,20 @@ pub use fs::{is_stale, kepub_dir, kepub_path};
 
 /// Errors from the EPUB→KEPUB conversion path.
 ///
-/// The DB lookups (`get_last_modified_epoch`, `book_file_path`) surface as
-/// their owning module's typed error; process spawn / filesystem failures
-/// surface as `Io`; a kepubify run that exits non-zero surfaces as `NonZero`
-/// so the caller can log stderr and fall back to plain EPUB.
+/// `BookNotFound`/`SourceMissing` stay distinct variants because
+/// `worker::handlers::kepub_outcome` branches on them to decide whether the
+/// message is safe to hand back verbatim. Everything else — DB lookup
+/// failures, process spawn / filesystem errors, and a non-zero kepubify exit
+/// — is foreign-system failure with no caller branching on the specific
+/// cause, so it collapses into `Failed` (rule 02: anyhow-territory).
 #[derive(Debug, thiserror::Error)]
 pub enum KepubError {
     #[error("book {0} not found")]
     BookNotFound(i64),
     #[error("book {0} has no EPUB file to convert")]
     SourceMissing(i64),
-    #[error("kepubify exited with {status}: {stderr}")]
-    NonZero { status: String, stderr: String },
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-    #[error(transparent)]
-    Books(#[from] crate::books::BooksError),
-    #[error(transparent)]
-    Covers(#[from] crate::CoversError),
+    #[error("kepub conversion failed: {0}")]
+    Failed(#[from] anyhow::Error),
 }
 
 #[cfg(test)]

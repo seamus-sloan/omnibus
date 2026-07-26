@@ -9,39 +9,7 @@
 #![allow(clippy::await_holding_lock)]
 
 use super::*;
-
-/// A real connect-refused `DataError::Network` (port 1 is never listening).
-async fn connect_refused_error() -> DataError {
-    let err = crate::data::http_client()
-        .get("http://127.0.0.1:1/nope")
-        .send()
-        .await
-        .expect_err("connect must fail");
-    DataError::from(err)
-}
-
-/// A real decode-class `DataError::Network`: the server answers 200 with a
-/// body that isn't the expected JSON shape.
-async fn decode_error() -> DataError {
-    use axum::routing::get;
-    let app = axum::Router::new().route("/j", get(|| async { "not-json" }));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
-    let port = listener.local_addr().expect("addr").port();
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, app).await;
-    });
-    let err = crate::data::http_client()
-        .get(format!("http://127.0.0.1:{port}/j"))
-        .send()
-        .await
-        .expect("send")
-        .json::<Vec<i64>>()
-        .await
-        .expect_err("decode must fail");
-    DataError::from(err)
-}
+use crate::offline::test_support::{connect_refused_error, decode_error};
 
 #[tokio::test]
 async fn is_offline_error_accepts_connect_failures() {
@@ -134,7 +102,7 @@ async fn mock_server() -> String {
         epub_cfi: update.epub_cfi,
         audio_position_seconds: update.audio_position_seconds,
         updated_at: 4242,
-        client_updated_at: update.client_updated_at,
+        client_updated_at: update.client_updated_at.unwrap_or(4242),
     };
     let app = axum::Router::new()
         .route(
@@ -203,11 +171,11 @@ async fn mock_server() -> String {
 fn progress_op(uuid: &str) -> Op {
     Op::SaveProgress {
         update: ProgressUpdate {
-            client_updated_at: None,
             book_uuid: uuid.to_string(),
             format: ProgressFormat::Epub,
             epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
             audio_position_seconds: None,
+            client_updated_at: None,
         },
         captured_at: 100,
     }

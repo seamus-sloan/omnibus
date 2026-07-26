@@ -456,7 +456,7 @@ struct SessionReport: Codable, Sendable {
     /// Minted here so a replay is idempotent. A report whose reply was lost
     /// stays queued and is retried; without a handle the server appended a
     /// second row each time and the reading time it represents was counted
-    /// twice. Resolved server-side against a unique index (migration 0050).
+    /// twice. Resolved server-side against a unique index (migration 0052).
     var clientID: String = AnnotationID.mint()
 
     enum CodingKeys: String, CodingKey {

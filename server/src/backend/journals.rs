@@ -57,7 +57,7 @@ pub(super) async fn get_journal_entries(
 /// Resolve a `{id}` path segment to a numeric entry id.
 ///
 /// Accepts either the server's row id or the uuid the composing device minted
-/// (migration 0049), so an offline client can edit or delete an entry it wrote
+/// (migration 0051), so an offline client can edit or delete an entry it wrote
 /// but has not yet synced. See `highlights::resolve_id` for the full rationale.
 async fn resolve_id(state: &AppState, user_id: i64, raw: &str) -> Result<i64, JournalError> {
     if let Ok(id) = raw.parse::<i64>() {

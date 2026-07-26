@@ -73,8 +73,7 @@ hand-roll a set/restore guard.
   transitively by db tests; only add a direct test if the wrapper
   composes multiple db calls non-trivially.
 - **New features** must not ship without tests covering their
-  acceptance criteria from the relevant initiative under
-  [docs/roadmap/](../../docs/roadmap/).
+  acceptance criteria from the relevant roadmap initiative.
 
 ## Naming
 

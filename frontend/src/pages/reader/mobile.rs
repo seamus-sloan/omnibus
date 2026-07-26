@@ -283,12 +283,24 @@ fn persist_progress(uuid: &str, server_url: &str, cfi: String) {
     let server_url = server_url.to_string();
     spawn(async move {
         let update = ProgressUpdate {
-            client_updated_at: None,
             book_uuid: uuid,
             format: ProgressFormat::Epub,
             epub_cfi: Some(cfi),
             audio_position_seconds: None,
+            client_updated_at: Some(now_unix()),
         };
         let _ = data::save_progress(&server_url, update).await;
     });
+}
+
+/// Current unix time in seconds from the device clock — stamped onto every
+/// `ProgressUpdate` so most-recent-wins resolves on client event time
+/// rather than server receipt time (issue #1362). This module only
+/// compiles under `feature = "mobile"` (native, not wasm32), so the
+/// platform clock is always `std::time::SystemTime`.
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }

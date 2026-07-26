@@ -12,6 +12,8 @@ use dioxus::prelude::*;
 mod downloads;
 
 #[cfg(not(feature = "mobile"))]
+use crate::components::auth::{score_password, PasswordRequirements, StrengthMeter};
+#[cfg(not(feature = "mobile"))]
 use crate::{data, use_server_url};
 
 #[cfg(feature = "mobile")]
@@ -21,6 +23,8 @@ use omnibus_shared::{EbookMetadata, UserSummary};
 
 #[cfg(feature = "mobile")]
 use crate::components::atrium::{Cover, Theme};
+#[cfg(feature = "mobile")]
+use crate::pages::CheckInOpen;
 #[cfg(feature = "mobile")]
 use crate::{data, thumb_url, use_server_url, Route};
 
@@ -115,15 +119,21 @@ impl ThemeKind {
 
 /// The Account screen. Web/SSR renders the Send-to-Kindle destination form;
 /// the native shell renders the mobile "You" tab.
+///
+/// `embedded` is set when the web body is rendered as the Account section of
+/// `/settings`: the sidebar already owns the page `h1`, so the card heading
+/// drops to `h2` to avoid a second top-level heading (the standalone
+/// `/account` route keeps its `h1`).
 #[component]
-pub fn AccountPage() -> Element {
+pub fn AccountPage(#[props(default)] embedded: bool) -> Element {
     #[cfg(feature = "mobile")]
     {
+        let _ = embedded;
         account_body()
     }
     #[cfg(not(feature = "mobile"))]
     {
-        kindle_account_body()
+        kindle_account_body(embedded)
     }
 }
 
@@ -131,7 +141,7 @@ pub fn AccountPage() -> Element {
 /// saved address from `/api/auth/me`; saving/clearing round-trips through
 /// `data::set_kindle_email`.
 #[cfg(not(feature = "mobile"))]
-fn kindle_account_body() -> Element {
+fn kindle_account_body(embedded: bool) -> Element {
     let server_url = use_server_url();
     let mut email_input = use_signal(String::new);
     let mut saved_email = use_signal(|| None::<String>);
@@ -206,7 +216,11 @@ fn kindle_account_body() -> Element {
 
     rsx! {
         section { class: "card", "data-testid": "account-kindle-card",
-            h1 { "Account" }
+            if embedded {
+                h2 { "Account" }
+            } else {
+                h1 { "Account" }
+            }
             p { class: "subtitle", "Configure your Send-to-Kindle delivery address." }
 
             form {
@@ -270,6 +284,124 @@ fn kindle_account_body() -> Element {
                 p {
                     role: "status",
                     "data-testid": "kindle-email-status",
+                    class: if msg_is_error() { "settings-status error" } else { "settings-status success" },
+                    "{m}"
+                }
+            }
+        }
+
+        ChangePasswordCard {}
+    }
+}
+
+/// Self-service change-password card (web Account section). Requires the
+/// current password to authorize, validates the new one against the same
+/// policy as registration (strength meter + requirements are advisory; the
+/// server is authoritative), and surfaces the server's inline error for a
+/// wrong current password or a policy rejection without clearing the form.
+#[cfg(not(feature = "mobile"))]
+#[component]
+fn ChangePasswordCard() -> Element {
+    let server_url = use_server_url();
+    let mut current = use_signal(String::new);
+    let mut new_password = use_signal(String::new);
+    let mut msg = use_signal(|| None::<String>);
+    let mut msg_is_error = use_signal(|| false);
+    let mut in_flight = use_signal(|| false);
+
+    let pw = new_password();
+    let (score, score_label, rules) = score_password(&pw);
+
+    let on_submit = move |evt: Event<FormData>| {
+        evt.prevent_default();
+        let cur = current();
+        let next = new_password();
+        if cur.is_empty() || next.is_empty() {
+            msg.set(Some("Enter your current and new password.".to_string()));
+            msg_is_error.set(true);
+            return;
+        }
+        let url = server_url.clone();
+        in_flight.set(true);
+        spawn(async move {
+            match data::change_password(&url, cur, next).await {
+                Ok(()) => {
+                    current.set(String::new());
+                    new_password.set(String::new());
+                    msg.set(Some("Password changed.".to_string()));
+                    msg_is_error.set(false);
+                }
+                Err(e) => {
+                    msg.set(Some(e.to_string()));
+                    msg_is_error.set(true);
+                }
+            }
+            in_flight.set(false);
+        });
+    };
+
+    rsx! {
+        section { class: "card", "data-testid": "account-password-card",
+            h2 { "Password" }
+            p { class: "subtitle", "Change the password you use to sign in." }
+
+            form {
+                id: "change-password-form",
+                class: "settings-form",
+                onsubmit: on_submit,
+                div { class: "settings-field",
+                    label { r#for: "current-password", "Current password" }
+                    input {
+                        r#type: "password",
+                        id: "current-password",
+                        name: "current_password",
+                        "data-testid": "current-password-input",
+                        autocomplete: "current-password",
+                        autocapitalize: "none",
+                        autocorrect: "off",
+                        spellcheck: "false",
+                        value: "{current}",
+                        oninput: move |e| {
+                            current.set(e.value());
+                            msg.set(None);
+                        },
+                    }
+                }
+                div { class: "settings-field",
+                    label { r#for: "new-password", "New password" }
+                    input {
+                        r#type: "password",
+                        id: "new-password",
+                        name: "new_password",
+                        "data-testid": "new-password-input",
+                        autocomplete: "new-password",
+                        autocapitalize: "none",
+                        autocorrect: "off",
+                        spellcheck: "false",
+                        value: "{new_password}",
+                        oninput: move |e| {
+                            new_password.set(e.value());
+                            msg.set(None);
+                        },
+                    }
+                }
+                StrengthMeter { score, label: Some(score_label.to_string()) }
+                PasswordRequirements { rules }
+                div { class: "settings-actions",
+                    button {
+                        r#type: "submit",
+                        class: "btn",
+                        disabled: in_flight(),
+                        "data-testid": "change-password-submit",
+                        "Change password"
+                    }
+                }
+            }
+
+            if let Some(m) = msg() {
+                p {
+                    role: "status",
+                    "data-testid": "change-password-status",
                     class: if msg_is_error() { "settings-status error" } else { "settings-status success" },
                     "{m}"
                 }
@@ -441,14 +573,16 @@ fn QuickGrid() -> Element {
     }
 }
 
-/// Account list rows: Settings, Admin · server, Add books, Sign out. The
-/// first three navigate to existing routes; "Sign out" clears the token and
-/// returns to the login screen.
+/// Account list rows: Settings, Admin · server (admins only), Add books,
+/// Sign out. The link rows navigate to existing routes; "Sign out" clears
+/// the token and returns to the login screen.
 #[cfg(feature = "mobile")]
 #[component]
 fn AccountRows() -> Element {
     let server_url = use_server_url();
     let nav = use_navigator();
+    let is_admin = crate::use_is_admin();
+    let mut check_in_open = use_context::<CheckInOpen>().0;
 
     let on_sign_out = move |_| {
         let url = server_url.clone();
@@ -460,12 +594,27 @@ fn AccountRows() -> Element {
 
     rsx! {
         div { class: "m-account-rows",
-            AccountLinkRow { to: Route::Settings {}, label: "Settings" }
-            // No dedicated admin route exists; the Settings page hosts the
-            // admin-only library-path controls, so route there.
-            AccountLinkRow { to: Route::Settings {}, label: "Admin \u{00b7} server" }
+            AccountLinkRow { to: Route::Settings { section: None }, label: "Settings" }
+            if is_admin() {
+                // Mobile's SettingsPage ignores `section` (it renders one flat
+                // form, gated by is_admin internally), so this lands on the
+                // same page as "Settings" above — the row exists to give
+                // admins a labeled shortcut, not a distinct destination, so
+                // it's hidden from non-admins who'd otherwise land somewhere
+                // identical to "Settings" under a misleading label.
+                AccountLinkRow { to: Route::Settings { section: Some("library".into()) }, label: "Admin \u{00b7} server" }
+            }
             AccountLinkRow { to: Route::AddBooks {}, label: "Add books" }
-            AccountLinkRow { to: Route::CheckIn {}, label: "Check in a book" }
+            // Check-in is a centered overlay, not a route — a button that
+            // raises it, styled like the navigable rows around it.
+            button {
+                r#type: "button",
+                class: "m-account-row",
+                "data-testid": "account-check-in",
+                onclick: move |_| check_in_open.set(true),
+                span { "Check in a book" }
+                span { class: "m-account-chevron", "aria-hidden": "true", "\u{203a}" }
+            }
             button {
                 r#type: "button",
                 class: "m-account-row m-account-row-danger",

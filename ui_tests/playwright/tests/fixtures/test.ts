@@ -7,8 +7,9 @@
 // Playwright's undici client is in the mobile/CLI bucket since it doesn't
 // honor Chromium's `http://localhost` secure-context exception for Secure
 // cookies. The bearer is provisioned by globalSetup.
-import { test as base, expect } from "@playwright/test";
+
 import { existsSync, readFileSync } from "node:fs";
+import { test as base, expect } from "@playwright/test";
 
 import { BEARER_TOKEN_PATH } from "../../globalSetup";
 

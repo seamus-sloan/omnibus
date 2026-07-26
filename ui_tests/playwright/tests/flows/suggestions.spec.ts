@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
-import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expect, test } from "../fixtures/test";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
@@ -42,7 +42,10 @@ function mockSuggestion(rank: number): MockSuggestion {
 }
 
 /** Intercept the suggestions fetch and reply with a fixed `SuggestionsResponse`. */
-async function mockSuggestionsResponse(page: Page, body: unknown): Promise<void> {
+async function mockSuggestionsResponse(
+  page: Page,
+  body: unknown,
+): Promise<void> {
   await page.route("**/api/rpc/ebook-suggestions", (route) =>
     route.fulfill({
       status: 200,
@@ -65,9 +68,13 @@ async function mockSuggestionsResponse(page: Page, body: unknown): Promise<void>
  * hydration — which, on a fresh navigation, can take meaningfully longer
  * than a warm in-page action.
  */
-async function gotoBookAwaitingSuggestions(page: Page, uuid: string): Promise<void> {
+async function gotoBookAwaitingSuggestions(
+  page: Page,
+  uuid: string,
+): Promise<void> {
   const requestPromise = page.waitForRequest(
-    (r) => r.method() === "POST" && r.url().includes("/api/rpc/ebook-suggestions"),
+    (r) =>
+      r.method() === "POST" && r.url().includes("/api/rpc/ebook-suggestions"),
     { timeout: 30_000 },
   );
   await gotoReady(page, `/books/${uuid}`);
@@ -80,7 +87,10 @@ async function gotoBookAwaitingSuggestions(page: Page, uuid: string): Promise<vo
 // State — not configured (no Hardcover key)
 // ---------------------------------------------------------------------------
 
-test("shows a connect prompt when no Hardcover key is configured", async ({ page, request }) => {
+test("shows a connect prompt when no Hardcover key is configured", async ({
+  page,
+  request,
+}) => {
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
   await mockSuggestionsResponse(page, { status: "not_configured" });
   await gotoBookAwaitingSuggestions(page, uuid);
@@ -89,25 +99,36 @@ test("shows a connect prompt when no Hardcover key is configured", async ({ page
   await expect(strip).toBeVisible();
   await expect(page.getByTestId("suggestions-not-configured")).toBeVisible();
   await expect(
-    page.getByText("Add a Hardcover API key to pull read-alikes for this book."),
+    page.getByText(
+      "Add a Hardcover API key to pull read-alikes for this book.",
+    ),
   ).toBeVisible();
-  // The seeded dev user is an admin, so the connect card links to Settings.
+  // The seeded dev user is an admin, so the connect card deep-links to the
+  // Metadata Lookup settings section where the Hardcover key lives (#1324).
   const connectLink = page.getByTestId("suggestions-connect-link");
   await expect(connectLink).toBeVisible();
-  await expect(connectLink).toHaveAttribute("href", "/settings");
+  await expect(connectLink).toHaveAttribute(
+    "href",
+    "/settings?section=metadata",
+  );
 });
 
 // ---------------------------------------------------------------------------
 // State — pending (resolution enqueued, nothing cached yet)
 // ---------------------------------------------------------------------------
 
-test("shows a pending placeholder while a resolution is enqueued", async ({ page, request }) => {
+test("shows a pending placeholder while a resolution is enqueued", async ({
+  page,
+  request,
+}) => {
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
   await mockSuggestionsResponse(page, { status: "pending" });
   await gotoBookAwaitingSuggestions(page, uuid);
 
   await expect(page.getByTestId("suggestions-pending")).toBeVisible();
-  await expect(page.getByText("Looking for read-alikes via Hardcover…")).toBeVisible();
+  await expect(
+    page.getByText("Looking for read-alikes via Hardcover…"),
+  ).toBeVisible();
   await expect(page.getByTestId("suggestions-spinner")).toBeVisible();
 });
 
@@ -115,13 +136,18 @@ test("shows a pending placeholder while a resolution is enqueued", async ({ page
 // State — ready, no matches (sticky negative)
 // ---------------------------------------------------------------------------
 
-test("shows an empty note when the cache resolved with no matches", async ({ page, request }) => {
+test("shows an empty note when the cache resolved with no matches", async ({
+  page,
+  request,
+}) => {
   const uuid = await fetchBookUuidByTitle(request, TARGET.title);
   await mockSuggestionsResponse(page, { status: "ready", items: [] });
   await gotoBookAwaitingSuggestions(page, uuid);
 
   await expect(page.getByTestId("suggestions-empty")).toBeVisible();
-  await expect(page.getByText("No read-alikes found for this book yet.")).toBeVisible();
+  await expect(
+    page.getByText("No read-alikes found for this book yet."),
+  ).toBeVisible();
 });
 
 // ---------------------------------------------------------------------------

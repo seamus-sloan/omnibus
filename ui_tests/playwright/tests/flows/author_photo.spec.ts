@@ -1,8 +1,8 @@
-import { expect, test } from "../fixtures/test";
+import type { APIRequestContext } from "@playwright/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expect, test } from "../fixtures/test";
 import { gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
-import type { APIRequestContext } from "@playwright/test";
 
 // Minimal valid 1x1 PNG. detect_image_format only inspects magic bytes,
 // so the body can be tiny — duplicates the constant from the Rust tests.
@@ -44,7 +44,9 @@ test.afterEach(async ({ request }) => {
   // Clean up any uploaded photo so reruns start from a known-empty state.
   // Discovery tests rely on the same authors being present, so we must not
   // touch the author row itself — only the cached photo.
-  const ada = await fetchAuthorIdByName(request, "Ada Lovelace").catch(() => null);
+  const ada = await fetchAuthorIdByName(request, "Ada Lovelace").catch(
+    () => null,
+  );
   if (ada !== null) {
     await request.delete(`/api/authors/${ada}/photo`);
   }

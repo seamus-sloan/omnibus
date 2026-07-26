@@ -81,11 +81,15 @@ jobs:
   # Cache buckets (Swatinem/rust-cache `shared-key`; GHA keys are write-once
   # per lockfile, so the first variant in a bucket populates it and the rest
   # restore it):
-  #   - `omnibus`        — native host closure, shared with e2e.yml's bundle job
-  #   - `omnibus-wasm`   — wasm32 closure (only `clippy (frontend-web)`)
-  #   - `omnibus-mobile` — GTK/wry closure (only `clippy (mobile)`), kept
-  #                        separate so mobile-only artifacts don't bloat the hot
-  #                        `omnibus` restore that every native variant pays.
+  #   - `omnibus`          — native host closure, shared with e2e.yml's bundle
+  #   - `omnibus-wasm`     — wasm32 closure (only `clippy (frontend-web)`)
+  #   - `omnibus-mobile`   — GTK/wry closure (only `clippy (mobile)`), kept
+  #                          separate so mobile-only artifacts don't bloat the
+  #                          hot `omnibus` restore that every native variant pays.
+  #   - `omnibus-coverage` — the `test` matrix's instrumented native closure.
+  #                          `-C instrument-coverage` rustflags make these
+  #                          artifacts unusable by the plain `omnibus` bucket, so
+  #                          they get their own to avoid mutual eviction.
   clippy:
     name: clippy (${{ matrix.name }})
     needs: changes
@@ -161,6 +165,11 @@ jobs:
       - name: Clippy
         run: nix develop ${{ matrix.shell }} --command ${{ matrix.cmd }}
 
+  # Runs the unit/integration suite once, under `cargo llvm-cov`, so coverage
+  # falls out of the same pass that gates correctness — no separate re-run. Test
+  # failures still fail this (required) job; only the per-variant Codecov upload
+  # is best-effort. wasm32 `web` is absent from the matrix because llvm-cov can't
+  # instrument it, so coverage measures server + mobile-feature Rust only.
   test:
     name: test (${{ matrix.name }})
     needs: changes
@@ -177,23 +186,23 @@ jobs:
       matrix:
         include:
           - name: server
-            cmd: cargo test -p omnibus
-          # `cargo test -p omnibus-db` needs the public-domain fixtures (the
+            args: -p omnibus
+          # The `omnibus-db` suite needs the public-domain fixtures (the
           # public_domain_epubs regression suite + audiobook cover tests); no
           # other variant does, so only this one fetches them.
           - name: db
             fixtures: true
-            cmd: cargo test -p omnibus-db
+            args: -p omnibus-db
           - name: frontend
-            cmd: cargo test -p omnibus-frontend --features server
+            args: -p omnibus-frontend --features server
           # `--features mobile` exercises a distinct cfg-split path from
           # `server` (`data::token_store` / `app_dirs` native token
           # persistence). Only needs reqwest/tokio (no GTK/wry), so it runs in
           # the default shell rather than `.#mobile`.
           - name: frontend-mobile
-            cmd: cargo test -p omnibus-frontend --features mobile
+            args: -p omnibus-frontend --features mobile
           - name: shared
-            cmd: cargo test -p omnibus-shared
+            args: -p omnibus-shared
     steps:
       - uses: actions/checkout@v4
 
@@ -230,16 +239,49 @@ jobs:
           purge-primary-key: never
           gc-max-store-size-linux: 5G
 
-      # All test variants build native crates, so they share the `omnibus`
-      # bucket (also shared with clippy's native variants and e2e.yml's bundle).
+      # Instrumented builds carry `-C instrument-coverage` in RUSTFLAGS, so they
+      # can't reuse the plain `omnibus` bucket the clippy/e2e native variants
+      # share — a separate bucket keeps the two closures from evicting each other.
       - name: Cache cargo registry and target
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
-          shared-key: omnibus
+          shared-key: omnibus-coverage
 
-      - name: Test
-        run: nix develop --command ${{ matrix.cmd }}
+      # `cargo llvm-cov nextest` runs the tests under instrumentation and writes
+      # lcov in one pass; the `ci` nextest profile also drops a JUnit report at
+      # target/nextest/ci/junit.xml for Codecov Test Analytics. A test failure
+      # fails this required job; the reports are still written for whatever ran,
+      # and both uploads below are best-effort.
+      - name: Test + coverage
+        run: nix develop --command cargo llvm-cov nextest --profile ci --lcov --output-path lcov.info ${{ matrix.args }}
+
+      # Per-variant upload; Codecov merges same-flag reports across the matrix.
+      # Best-effort — `fail_ci_if_error: false` (belt-and-suspenders with the
+      # `if` guard) keeps an upload hiccup from ever failing the gated job.
+      # Tokenless OIDC works on public repos but is rate-limited; add a
+      # CODECOV_TOKEN repo secret to make it reliable.
+      - name: Upload coverage to Codecov
+        if: always() && hashFiles('lcov.info') != ''
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./lcov.info
+          flags: unit
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      # Test results → Codecov Test Analytics (flaky/failure-rate tracking).
+      # `!cancelled()` so results still upload when tests fail (that's the point
+      # of the analytics); this never affects the gated job status.
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() && hashFiles('target/nextest/ci/junit.xml') != '' }}
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./target/nextest/ci/junit.xml
+          report_type: test_results
+          flags: unit
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   security:
     name: cargo audit

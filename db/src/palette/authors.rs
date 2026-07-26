@@ -14,9 +14,10 @@ use super::PaletteError;
 /// `?3 = limit`.
 ///
 /// Library scoping (`l.path = ?1`) is applied before aggregation so
-/// book_count stays library-correct (covered by `palette_scoped_to_library`
-/// and `palette_taxonomy_counts_scoped_per_library`). The join plan is locked
-/// in by `palette_taxonomy_query_plans_use_indexes`.
+/// book_count stays library-correct (covered by
+/// `search_palette_scoped_to_library` and
+/// `search_palette_taxonomy_counts_scoped_per_library`). The join plan is
+/// locked in by `search_palette_taxonomy_query_plans_use_indexes`.
 ///
 /// The count uses the effective (override-aware) creator set, not the
 /// raw `books_authors_link` rows — otherwise an author whose books were all

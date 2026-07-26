@@ -3,10 +3,12 @@ import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { expectNavVisible, gotoReady } from "../utils/nav";
 
-// The admin log viewer (`/logs`, F5.2). The layout test runs against the real
-// on-disk logs the server is already writing (proving AC1 end-to-end); the
-// filter / error / pagination tests mock `/api/rpc/logs` after the initial
-// load so the rows under assertion are deterministic.
+// The admin log viewer — now the Logs section of Settings (#1324); the legacy
+// `/logs` route redirects here. The layout test runs against the real on-disk
+// logs the server is already writing (proving AC1 end-to-end); the filter /
+// error / pagination tests mock `/api/rpc/logs` after the initial load so the
+// rows under assertion are deterministic.
+const LOGS = "/settings?section=logs";
 
 const levelFilter = (page: Page) => page.getByLabel("Level");
 const moduleFilter = (page: Page) => page.getByLabel("Module");
@@ -15,7 +17,12 @@ const rows = (page: Page) => page.getByTestId("logs-row");
 
 // Build a `LogPage` JSON body for a mocked response.
 function logPage(
-  records: Array<{ level: string; target: string; message: string; fields?: string }>,
+  records: Array<{
+    level: string;
+    target: string;
+    message: string;
+    fields?: string;
+  }>,
   opts: { page?: number; per_page?: number; has_more?: boolean } = {},
 ) {
   return JSON.stringify({
@@ -37,27 +44,38 @@ function mockLogs(page: Page, body: string | ((route: Route) => string)) {
   return page.route("**/api/rpc/logs", (route) => {
     if (route.request().method() !== "POST") return route.continue();
     const payload = typeof body === "function" ? body(route) : body;
-    return route.fulfill({ status: 200, contentType: "application/json", body: payload });
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: payload,
+    });
   });
 }
 
-test("renders the log viewer layout from the on-disk logs", async ({ page }) => {
+test("renders the log viewer layout from the on-disk logs", async ({
+  page,
+}) => {
   // The page fires a POST /api/rpc/logs on mount (the framework routes the
   // arg-bearing read as POST); await it explicitly per rule 04 rather than
   // leaning on networkidle.
   await expectMutation(
     page,
     { method: "POST", url: "/api/rpc/logs", expectedStatus: 200 },
-    async () => gotoReady(page, "/logs"),
+    async () => gotoReady(page, LOGS),
   );
 
-  await expect(page.getByRole("heading", { level: 1, name: "Server logs" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { level: 2, name: "Server logs" }),
+  ).toBeVisible();
+  await expect(page.getByTestId("settings-nav-logs")).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
   await expect(levelFilter(page)).toBeVisible();
   await expect(moduleFilter(page)).toBeVisible();
   await expect(page.getByLabel("From")).toBeVisible();
   await expect(page.getByLabel("To")).toBeVisible();
   await expect(applyButton(page)).toBeVisible();
-  await expect(page.getByRole("link", { name: "Back to settings" })).toBeVisible();
   // The server is continuously logging its own request handling, so the
   // real on-disk logs are non-empty — the table renders actual records.
   await expect(page.getByTestId("logs-table")).toBeVisible();
@@ -68,13 +86,17 @@ test("renders the log viewer layout from the on-disk logs", async ({ page }) => 
 test("filtering by level narrows the results and sends the level in the query", async ({
   page,
 }) => {
-  await gotoReady(page, "/logs");
+  await gotoReady(page, LOGS);
 
   // Mock only the post-Apply request so the rendered rows are deterministic.
   await mockLogs(
     page,
     logPage([
-      { level: "ERROR", target: "omnibus_db::worker::queue", message: "worker: task failed" },
+      {
+        level: "ERROR",
+        target: "omnibus_db::worker::queue",
+        message: "worker: task failed",
+      },
     ]),
   );
 
@@ -93,12 +115,20 @@ test("filtering by level narrows the results and sends the level in the query", 
   await expect(page.getByText("ERROR", { exact: true })).toBeVisible();
 });
 
-test("filtering by module sends the module substring in the query", async ({ page }) => {
-  await gotoReady(page, "/logs");
+test("filtering by module sends the module substring in the query", async ({
+  page,
+}) => {
+  await gotoReady(page, LOGS);
 
   await mockLogs(
     page,
-    logPage([{ level: "INFO", target: "omnibus::backend::covers", message: "served cover" }]),
+    logPage([
+      {
+        level: "INFO",
+        target: "omnibus::backend::covers",
+        message: "served cover",
+      },
+    ]),
   );
 
   await moduleFilter(page).fill("omnibus::backend");
@@ -107,14 +137,16 @@ test("filtering by module sends the module substring in the query", async ({ pag
     { method: "POST", url: "/api/rpc/logs", expectedStatus: 200 },
     async () => applyButton(page).click(),
   );
-  expect(request.postDataJSON()).toMatchObject({ query: { module: "omnibus::backend" } });
+  expect(request.postDataJSON()).toMatchObject({
+    query: { module: "omnibus::backend" },
+  });
 
   await expect(rows(page)).toHaveCount(1);
   await expect(rows(page).first()).toContainText("omnibus::backend::covers");
 });
 
 test("paginates to older records and back", async ({ page }) => {
-  await gotoReady(page, "/logs");
+  await gotoReady(page, LOGS);
 
   // Page 0 has a further page; page 1 is the last. Branch on the requested
   // page so Older/Newer render distinct, deterministic rows.
@@ -181,11 +213,15 @@ test("rejects an unauthenticated request to the log endpoint (AC4)", async ({
 });
 
 test("shows an error status when the log read fails", async ({ page }) => {
-  await gotoReady(page, "/logs");
+  await gotoReady(page, LOGS);
 
   await page.route("**/api/rpc/logs", (route) => {
     if (route.request().method() === "POST") {
-      return route.fulfill({ status: 500, contentType: "text/plain", body: "forced failure" });
+      return route.fulfill({
+        status: 500,
+        contentType: "text/plain",
+        body: "forced failure",
+      });
     }
     return route.continue();
   });
@@ -197,16 +233,32 @@ test("shows an error status when the log read fails", async ({ page }) => {
   );
 
   await expect(page.getByTestId("logs-error")).toBeVisible();
-  await expect(page.getByTestId("logs-error")).toContainText("Failed to load logs");
+  await expect(page.getByTestId("logs-error")).toContainText(
+    "Failed to load logs",
+  );
 });
 
-test("reaches the log viewer from the settings admin card", async ({ page }) => {
+test("reaches the log viewer from the sidebar Logs item (AC3)", async ({
+  page,
+}) => {
   await gotoReady(page, "/settings");
 
-  const card = page.getByTestId("logs-link-card");
-  await expect(card).toBeVisible();
-  await page.getByTestId("logs-link").click();
+  await page.getByTestId("settings-nav-logs").click();
 
-  await expect(page).toHaveURL(/\/logs$/);
-  await expect(page.getByRole("heading", { level: 1, name: "Server logs" })).toBeVisible();
+  await expect(page).toHaveURL(/\/settings\?section=logs$/);
+  await expect(
+    page.getByRole("heading", { level: 2, name: "Server logs" }),
+  ).toBeVisible();
+  await expect(page.getByTestId("logs-page")).toBeVisible();
+});
+
+test("the legacy /logs route redirects into the Logs section", async ({
+  page,
+}) => {
+  await gotoReady(page, "/logs");
+
+  await expect(page).toHaveURL(/\/settings\?section=logs$/);
+  await expect(
+    page.getByRole("heading", { level: 2, name: "Server logs" }),
+  ).toBeVisible();
 });

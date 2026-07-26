@@ -10,8 +10,8 @@
  * identical run-to-run. Generated files are committed under
  * `test_data/audiobooks/generated/` so CI does not need to run this tool.
  *
- * Usage:
- *   npx tsx ui_tests/playwright/tools/make_audiobook.ts
+ * Usage (from the pnpm project dir):
+ *   cd ui_tests/playwright && pnpm exec tsx tools/make_audiobook.ts
  *
  * To add a new fixture, edit FIXTURES below and re-run.
  *
@@ -109,6 +109,22 @@ const FIXTURES: AudiobookInput[] = [
     track: 1,
     frames: 80,
   },
+
+  // Reserved for the seek-scrubber spec (listen.spec.ts). Scrubbing seeks the
+  // audio and PERSISTS a per-(user,book) position, which is globally visible on
+  // the shared server — so nothing else may read this book (same isolation
+  // rationale as the merge-only pair). Longer than the other fixtures (~30s) so
+  // a mid-book seek is meaningful, and the author is absent from make_epub.ts +
+  // every other audiobook fixture → no auto-attach and no author-scoped count
+  // shift. See `tests/fixtures/audiobooks.ts` (SCRUB_BOOK).
+  {
+    filename: "shafi_goldwasser_solo/the_scrubbable_saga.mp3",
+    title: "The Scrubbable Saga",
+    artist: "Shafi Goldwasser",
+    album: "The Scrubbable Saga",
+    track: 1,
+    frames: 1150,
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -139,15 +155,72 @@ function buildSilentMp3Body(nFrames: number): Buffer {
  * 8-byte PNG signature and the thumbnail pipeline decodes it via `image`.
  */
 const COVER_PNG = Buffer.from([
-  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, // PNG signature
-  0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
-  0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-  0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
-  0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, // IDAT chunk
-  0x54, 0x78, 0x9c, 0x62, 0x00, 0x00, 0x00, 0x02,
-  0x00, 0x01, 0xe5, 0x27, 0xde, 0xfc, 0x00, 0x00,
-  0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, // IEND chunk
-  0x60, 0x82,
+  0x89,
+  0x50,
+  0x4e,
+  0x47,
+  0x0d,
+  0x0a,
+  0x1a,
+  0x0a, // PNG signature
+  0x00,
+  0x00,
+  0x00,
+  0x0d,
+  0x49,
+  0x48,
+  0x44,
+  0x52, // IHDR chunk
+  0x00,
+  0x00,
+  0x00,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x01,
+  0x08,
+  0x06,
+  0x00,
+  0x00,
+  0x00,
+  0x1f,
+  0x15,
+  0xc4,
+  0x89,
+  0x00,
+  0x00,
+  0x00,
+  0x0a,
+  0x49,
+  0x44,
+  0x41, // IDAT chunk
+  0x54,
+  0x78,
+  0x9c,
+  0x62,
+  0x00,
+  0x00,
+  0x00,
+  0x02,
+  0x00,
+  0x01,
+  0xe5,
+  0x27,
+  0xde,
+  0xfc,
+  0x00,
+  0x00,
+  0x00,
+  0x00,
+  0x49,
+  0x45,
+  0x4e,
+  0x44,
+  0xae,
+  0x42, // IEND chunk
+  0x60,
+  0x82,
 ]);
 
 // ---------------------------------------------------------------------------
@@ -195,10 +268,10 @@ function apicFrame(imageData: Buffer, mime: string): Buffer {
   // picture_type=0x03 (Cover front)
   // description="" (just a NUL terminator)
   const payload = Buffer.concat([
-    Buffer.from([0x00]),      // encoding
-    mimeBytes,                // mime + NUL
-    Buffer.from([0x03]),      // picture type: Cover (front)
-    Buffer.from([0x00]),      // description (empty, NUL-terminated)
+    Buffer.from([0x00]), // encoding
+    mimeBytes, // mime + NUL
+    Buffer.from([0x03]), // picture type: Cover (front)
+    Buffer.from([0x00]), // description (empty, NUL-terminated)
     imageData,
   ]);
   const flags = Buffer.from([0, 0]);

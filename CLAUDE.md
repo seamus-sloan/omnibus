@@ -2,7 +2,7 @@
 
 Guidance for Claude Code when working in this repo. This file is an index — detailed rules and recipes live in [.claude/](.claude/).
 
-Omnibus is a self-hosted ebook/audiobook library (see [docs/roadmap/0-0-summary.md](docs/roadmap/0-0-summary.md)). Foundations and browse/discovery have shipped; reading/listening is in progress — the UI is a real library app (landing grid + table, EPUB reader, audiobook player, command-palette search, auth, author/series/tag discovery).
+Omnibus is a self-hosted ebook/audiobook library. Foundations and browse/discovery have shipped; reading/listening is in progress — the UI is a real library app (landing grid + table, EPUB reader, audiobook player, command-palette search, auth, author/series/tag discovery).
 
 ## Rules
 
@@ -75,6 +75,7 @@ cargo run -p omnibus                                        # start at http://0.
 just test                                                   # db + server + frontend(server + mobile features) + shared
 just lint                                                   # cargo fmt --check + clippy -D warnings (incl. mobile + frontend-server + frontend-web wasm32) + stylelint
 just lint-css                                               # structural CSS lint only (stylelint; catches unclosed rules in frontend/assets)
+just lint-ts                                                # Playwright TS: biome check + tsc --noEmit (TypeScript 7), in .#e2e
 just check                                                  # lint then test
 # …or per-crate (note: `cargo test --workspace` SKIPS frontend rpc/page tests
 #  and mobile — the rpc/page tests need --features server to compile the
@@ -87,8 +88,11 @@ cargo clippy                                                # lint default-membe
 cargo fmt                                                   # format all crates
 
 # Playwright E2E (server must be running; baseURL = $PLAYWRIGHT_BASE_URL or :3000)
-cd ui_tests/playwright && npm install                       # first time
-cd ui_tests/playwright && npx playwright test               # run all
+# The Playwright project uses pnpm (not npm) and TypeScript 7; Biome is its
+# linter/formatter. `just lint-ts` runs biome check + tsc --noEmit.
+cd ui_tests/playwright && pnpm install                      # first time
+cd ui_tests/playwright && pnpm exec playwright test         # run all
+just lint-ts                                                # biome + typecheck (TS project)
 
 # Mobile
 cargo build -p omnibus-mobile
@@ -102,4 +106,4 @@ just e2e-mobile                                             # port from dev-up e
 
 ## Project direction
 
-See [docs/roadmap/0-0-summary.md](docs/roadmap/0-0-summary.md) for the phased roadmap (foundations, browse/discovery, reading/listening, personalization, device sync, admin, mobile).
+See the [roadmap project board](https://github.com/users/seamus-sloan/projects/2/views/9) for the phased plan (foundations, browse/discovery, reading/listening, personalization, device sync, admin, mobile).

@@ -1,5 +1,5 @@
-import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expect, test } from "../fixtures/test";
 import { expectNavVisible, gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
 
@@ -176,9 +176,9 @@ test.describe("with seeded library", () => {
     await page.getByTestId("sp-book-row").first().click();
 
     // Should navigate to /books/:uuid
-    await expect.poll(async () => new URL(page.url()).pathname).toMatch(
-      /^\/books\/[0-9a-fA-F-]{36}$/,
-    );
+    await expect
+      .poll(async () => new URL(page.url()).pathname)
+      .toMatch(/^\/books\/[0-9a-fA-F-]{36}$/);
   });
 
   test("keyboard navigation highlights results", async ({ page }) => {
@@ -194,7 +194,9 @@ test.describe("with seeded library", () => {
 
     // Arrow down should select the first book row.
     await page.keyboard.press("ArrowDown");
-    await expect(page.getByTestId("sp-book-row").first()).toHaveClass(/selected/);
+    await expect(page.getByTestId("sp-book-row").first()).toHaveClass(
+      /selected/,
+    );
   });
 
   test("inside text shows coming soon", async ({ page }) => {
@@ -212,7 +214,9 @@ test.describe("with seeded library", () => {
     await expect(page.getByTestId("sp-coming-soon")).toHaveText("Coming soon");
   });
 
-  test("clicking author result navigates to author detail page", async ({ page }) => {
+  test("clicking author result navigates to author detail page", async ({
+    page,
+  }) => {
     await gotoReady(page, "/");
     await page.getByTestId("search-trigger").click();
     await page.getByTestId("sp-input").fill("stoker");
@@ -222,12 +226,14 @@ test.describe("with seeded library", () => {
       .toBeGreaterThanOrEqual(1);
 
     await page.getByTestId("sp-author-row").first().click();
-    await expect.poll(async () => new URL(page.url()).pathname).toMatch(
-      /^\/authors\/\d+$/,
-    );
+    await expect
+      .poll(async () => new URL(page.url()).pathname)
+      .toMatch(/^\/authors\/\d+$/);
   });
 
-  test("clicking series result navigates to series detail page", async ({ page }) => {
+  test("clicking series result navigates to series detail page", async ({
+    page,
+  }) => {
     await gotoReady(page, "/");
     await page.getByTestId("search-trigger").click();
     await page.getByTestId("sp-input").fill("pioneers");
@@ -237,12 +243,14 @@ test.describe("with seeded library", () => {
       .toBeGreaterThanOrEqual(1);
 
     await page.getByTestId("sp-series-row").first().click();
-    await expect.poll(async () => new URL(page.url()).pathname).toMatch(
-      /^\/series\/\d+$/,
-    );
+    await expect
+      .poll(async () => new URL(page.url()).pathname)
+      .toMatch(/^\/series\/\d+$/);
   });
 
-  test("pressing Enter without arrow-key navigation goes to /search", async ({ page }) => {
+  test("pressing Enter without arrow-key navigation goes to /search", async ({
+    page,
+  }) => {
     await gotoReady(page, "/");
     await page.getByTestId("search-trigger").click();
     const input = page.getByTestId("sp-input");
@@ -256,13 +264,15 @@ test.describe("with seeded library", () => {
       .toBeGreaterThanOrEqual(1);
 
     await input.press("Enter");
-    await expect.poll(async () => new URL(page.url()).pathname).toMatch(
-      /^\/search\/dracula$/,
-    );
+    await expect
+      .poll(async () => new URL(page.url()).pathname)
+      .toMatch(/^\/search\/dracula$/);
     await expect(page.getByTestId("search-back")).toBeVisible();
   });
 
-  test("Enter after arrow-key selection drills into the highlighted result", async ({ page }) => {
+  test("Enter after arrow-key selection drills into the highlighted result", async ({
+    page,
+  }) => {
     await gotoReady(page, "/");
     await page.getByTestId("search-trigger").click();
     const input = page.getByTestId("sp-input");
@@ -276,8 +286,8 @@ test.describe("with seeded library", () => {
     await page.keyboard.press("ArrowDown");
     await page.keyboard.press("Enter");
 
-    await expect.poll(async () => new URL(page.url()).pathname).toMatch(
-      /^\/books\/[0-9a-fA-F-]{36}$/,
-    );
+    await expect
+      .poll(async () => new URL(page.url()).pathname)
+      .toMatch(/^\/books\/[0-9a-fA-F-]{36}$/);
   });
 });

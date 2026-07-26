@@ -48,29 +48,25 @@ pub struct ProgressUpdate {
     pub epub_cfi: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_position_seconds: Option<f64>,
-    /// When the *reader* moved to this position, by the writing device's
-    /// clock, in unix seconds.
-    ///
-    /// This is what makes a queued offline write safe to replay. Arrival order
-    /// says nothing about reading order: a position read on a phone at 10:00
-    /// and pushed at 18:00 would otherwise land after — and overwrite — one
-    /// read on another device at 14:00. `upsert_progress` compares this against
-    /// the stored value and keeps the later one.
-    ///
-    /// Optional so a client that doesn't set it keeps the old last-write-wins
-    /// behaviour; the server stamps its own clock in that case.
+    /// Unix seconds when the client observed this position — used to
+    /// resolve most-recent-wins by **event** time rather than server
+    /// receipt time (issue #1362). `#[serde(default)]` so an older client
+    /// that never sends this field still parses; `upsert_progress` treats a
+    /// missing value as "use server now", preserving prior last-write-wins
+    /// behaviour.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_updated_at: Option<i64>,
 }
 
 impl ProgressUpdate {
-    /// Reject empty UUIDs and missing format-specific positions. Mirrors
-    /// `MetadataOverrides::validate` — handlers translate `Err(_)` into 400.
+    /// Reject empty UUIDs, missing format-specific positions, and a
+    /// negative `client_updated_at`. Mirrors `MetadataOverrides::validate`
+    /// — handlers translate `Err(_)` into 400.
     pub fn validate(&self) -> Result<(), String> {
         if self.book_uuid.trim().is_empty() {
             return Err("book_uuid is required".into());
         }
-        if self.client_updated_at.is_some_and(|t| t < 0) {
+        if self.client_updated_at.is_some_and(|ts| ts < 0) {
             return Err("client_updated_at must be non-negative".into());
         }
         // Reject the non-discriminated field at the API boundary so a
@@ -117,7 +113,10 @@ impl ProgressUpdate {
 /// Server-authoritative position returned by `POST /api/progress` and
 /// `GET /api/progress/{uuid}`. The non-discriminated field for the other
 /// format is always `None`. `updated_at` is unix seconds (SQLite
-/// `strftime('%s')`).
+/// `strftime('%s')`) — server receipt time. `client_updated_at` is the
+/// event time the most-recent-wins ordering actually resolves on (clamped
+/// to server now for a client with a fast clock; defaulted to server now
+/// when the write carried none).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProgressRecord {
     pub book_uuid: String,
@@ -125,20 +124,7 @@ pub struct ProgressRecord {
     pub epub_cfi: Option<String>,
     pub audio_position_seconds: Option<f64>,
     pub updated_at: i64,
-    /// The reader's clock for this position — the `client_updated_at` of
-    /// whichever write won, on the device that made it.
-    ///
-    /// [`upsert_progress`](../../omnibus_db/progress/fn.upsert_progress.html)
-    /// orders conflicts on this, not on `updated_at`, so it is the only field
-    /// a client can compare its own position against. Returning just
-    /// `updated_at` — an arrival timestamp on the server's clock — left
-    /// clients comparing a server clock to a device clock and reaching for a
-    /// sync offer on the difference between two boxes' NTP drift.
-    ///
-    /// `None` only for a row written before migration 0051; callers fall back
-    /// to `updated_at` there.
-    #[serde(default)]
-    pub client_updated_at: Option<i64>,
+    pub client_updated_at: i64,
 }
 
 /// "Pick up where you left off" entry returned by `GET /api/progress/recent` and `rpc_recent_progress`.
@@ -171,7 +157,7 @@ pub struct SessionReport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_id: Option<i64>,
     /// Handle minted by the device that recorded the session, making a
-    /// replay idempotent (migration 0050). A queued report is retried
+    /// replay idempotent (migration 0052). A queued report is retried
     /// whenever the reply was lost rather than the request, and without a
     /// handle each retry appended a second row. `None` for web clients,
     /// which post once and never retry.

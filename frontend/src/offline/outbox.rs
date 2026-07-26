@@ -2,7 +2,7 @@
 //! connectivity-class error (or is attempted while already offline) is
 //! queued here, applied optimistically to the replica cache, and replayed
 //! in enqueue order by the sync drain. Conflict stance is last-write-wins
-//! (docs/roadmap/2-1-progress-sync.md); offline-created rows carry
+//! offline-created rows carry
 //! negative client temp ids that remap to server ids on drain.
 
 use omnibus_shared::{
@@ -289,12 +289,10 @@ pub(crate) async fn queue_save_progress(update: &ProgressUpdate) -> Option<Progr
         epub_cfi: update.epub_cfi.clone(),
         audio_position_seconds: update.audio_position_seconds,
         updated_at: now,
-        // The clock this write will actually be ordered on when it replays,
-        // so the optimistic row can be compared against a server answer the
-        // same way a real one can. Falling back to `now` mirrors the server's
-        // own `COALESCE(?, strftime('%s','now'))` for an update that carries
-        // no clock of its own.
-        client_updated_at: Some(update.client_updated_at.unwrap_or(now)),
+        // Optimistic local record: mirrors the server's own COALESCE (issue
+        // #1362) — the update's own client event time when it sent one,
+        // else "now".
+        client_updated_at: update.client_updated_at.unwrap_or(now),
     };
     let queued = enqueue(Op::SaveProgress {
         update: update.clone(),

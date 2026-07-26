@@ -16,6 +16,7 @@ pub mod covers;
 pub mod deletion;
 pub mod discovery;
 pub mod ebook;
+pub mod epub_rewrite;
 pub mod helpers;
 pub mod highlights;
 pub mod hls;
@@ -26,6 +27,7 @@ pub mod journal_images;
 pub mod journals;
 pub mod kepub;
 pub mod kindle;
+pub mod kobo;
 pub mod library_layout;
 pub mod logs;
 pub mod merge;
@@ -33,6 +35,7 @@ pub mod metadata_lookup;
 pub mod metadata_overrides;
 pub mod missing_files;
 pub mod normalize;
+pub mod opf_export;
 pub mod palette;
 pub mod physical;
 pub mod pool;
@@ -57,7 +60,7 @@ pub mod worker;
 // instead of `omnibus_db::queries::list_books(...)`. Keeps callsites terse
 // and mirrors how `db.rs` looked before the extraction.
 pub use author_photos_data::*;
-pub use book_summary::fetch_summary;
+pub use book_summary::{fetch_summary, summary_source_plan};
 pub use books::{
     book_file_path, book_file_path_by_id, book_file_paths, collect_paths, count_books,
     count_books_for_paths, count_books_page, count_search_books, count_search_books_for_paths,
@@ -77,6 +80,7 @@ pub use deletion::{
     DeletionManifest,
 };
 pub use discovery::*;
+pub use epub_rewrite::{export_epub_dir, rewritten_epub_path, EpubRewriteError};
 pub use helpers::{build_fts_match, sanitize_fts_query};
 pub use kepub::{convert_book, kepub_path, kepubify_available, warn_if_unavailable, KepubError};
 pub use merge::{merge_books, undo_merge, MergeError, MergeOutcome};
@@ -86,6 +90,7 @@ pub use missing_files::{
     backfill_missing_files_flags, gc_books_missing_files, MissingFilesError,
     MISSING_FILES_RETENTION_DAYS,
 };
+pub use opf_export::{export_opf, OpfExport, OpfExportError};
 pub use palette::*;
 pub use physical::{
     add_physical_copy, add_wishlist_entry, create_fileless_book, delete_fileless_book,

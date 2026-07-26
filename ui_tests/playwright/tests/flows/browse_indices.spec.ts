@@ -1,5 +1,5 @@
-import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expect, test } from "../fixtures/test";
 import { gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
 
@@ -51,7 +51,8 @@ test("authors index filters by name", async ({ page }) => {
   await page.getByTestId("authors-filter").fill("Lovelace");
 
   // Poll until only matching cards remain.
-  await expect.poll(async () => page.getByTestId("author-card").count())
+  await expect
+    .poll(async () => page.getByTestId("author-card").count())
     .toBeLessThan(initialCount);
 
   const visible = await page.getByTestId("author-card").allTextContents();
@@ -60,7 +61,9 @@ test("authors index filters by name", async ({ page }) => {
   }
 });
 
-test("authors index letter strip jumps to the matching section", async ({ page }) => {
+test("authors index letter strip jumps to the matching section", async ({
+  page,
+}) => {
   await gotoReady(page, "/authors");
 
   // Wait for the index to render so the letter strip has populated.
@@ -127,7 +130,8 @@ test("series index filters by name", async ({ page }) => {
   const initialCount = await page.getByTestId("series-card").count();
 
   await page.getByTestId("series-filter").fill("Pioneers");
-  await expect.poll(async () => page.getByTestId("series-card").count())
+  await expect
+    .poll(async () => page.getByTestId("series-card").count())
     .toBeLessThanOrEqual(initialCount);
 
   const visible = await page.getByTestId("series-card").allTextContents();

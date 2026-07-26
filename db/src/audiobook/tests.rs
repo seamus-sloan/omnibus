@@ -1,7 +1,6 @@
 use std::fs;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::parse::AudiobookError;
 use super::*;
 
 fn make_test_dir(suffix: &str) -> std::path::PathBuf {
@@ -113,38 +112,21 @@ fn parse_groups_emits_one_book_per_m4b_even_when_stems_share_a_base() {
 }
 
 #[test]
-fn audiobook_error_io_variant_renders_useful_message() {
-    let io = std::io::Error::new(std::io::ErrorKind::NotFound, "missing.m4b");
-    let err: AudiobookError = io.into();
-    let s = err.to_string();
-    assert!(s.starts_with("io error"), "got {s:?}");
-}
-
-#[test]
-fn audiobook_error_unsupported_variant_renders_format_token() {
-    let err = AudiobookError::Unsupported("xyz".into());
-    let s = err.to_string();
-    assert!(s.contains("xyz"), "got {s:?}");
-}
-
-#[test]
-fn build_indexed_book_surfaces_tag_error_for_undecodable_audio() {
-    // `build_indexed_book` propagates the lofty decode/container failure via
-    // `?` as `AudiobookError::Tag` — the direct-propagation counterpart to
+fn build_indexed_book_surfaces_error_for_undecodable_audio() {
+    // `build_indexed_book` propagates the lofty decode/container failure as
+    // an `anyhow::Error` — the direct-propagation counterpart to
     // `parse_audiobook_targets`, which instead folds the same failure into an
     // `error` metadata row. Feeding a file with an audio extension but junk
-    // bytes drives `lofty::read_from_path` to error, which `#[from]` maps to
-    // `Tag`.
+    // bytes drives `lofty::read_from_path` to error.
     let dir = make_test_dir("tag_err");
     let f = dir.join("garbage.m4b");
     fs::write(&f, b"this is not a valid m4b container").unwrap();
     let err =
         build_indexed_book(&f, "garbage.m4b".into()).expect_err("undecodable audio must not parse");
     fs::remove_dir_all(&dir).unwrap();
-    assert!(matches!(err, AudiobookError::Tag(_)), "got {err:?}");
     assert!(
-        err.to_string().starts_with("tag decode failed"),
-        "got {err}"
+        err.to_string().contains("garbage.m4b"),
+        "expected path context in error, got {err}"
     );
 }
 
@@ -196,7 +178,10 @@ fn inspect_audiobook_files_errors_when_no_readable_tags() {
     fs::write(&f, b"not an mp3 at all").unwrap();
     let err = inspect_audiobook_files(&[f]).expect_err("junk must not parse");
     fs::remove_dir_all(&dir).unwrap();
-    assert!(matches!(err, AudiobookError::Unsupported(_)), "got {err:?}");
+    assert!(
+        err.to_string().contains("no readable audio tags"),
+        "got {err}"
+    );
 }
 
 #[test]

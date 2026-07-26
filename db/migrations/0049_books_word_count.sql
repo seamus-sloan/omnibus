@@ -1,0 +1,20 @@
+-- F3.4 — Reading stats: persist a per-book word-count estimate so the Pages
+-- tile sums a stored number instead of opening and parsing every finished
+-- book's EPUB on demand at stats-query time (the old `db::stats::pages`
+-- model, which parsed an unbounded set of files per cache-miss — issues
+-- #1099 / #1352).
+--
+--   word_count  estimated total words in the book's EPUB, from a spine-text
+--               walk (`db::ebook::estimate_word_count`). Computed once when a
+--               file is indexed (new / changed) and rewritten on re-parse.
+--               NULL means "not yet estimated" — a book with no EPUB file
+--               (audio-only), a parse failure, or a row indexed before this
+--               migration. The Pages tile treats NULL as "no data" (its
+--               em-dash state) rather than zero, so the honest `Option` the
+--               estimator returns survives to the UI.
+--
+-- Additive, nullable, forward-only (rule 06). No in-SQL backfill is possible
+-- (the value can only come from opening the EPUB); `Task::BackfillWordCounts`
+-- fills pre-existing rows off the async runtime, posted after each library
+-- scan the way `BackfillChapters` fills audiobook chapters.
+ALTER TABLE books ADD COLUMN word_count INTEGER;

@@ -14,7 +14,7 @@ use crate::test_support::{indexed, CoversTempDir};
 
 // ── search_palette ───────────────────────────────────────────────
 #[tokio::test]
-async fn palette_books_match_title() {
+async fn search_palette_books_match_title() {
     let _covers = CoversTempDir::new("palette_books");
     let pool = init_db("sqlite::memory:").await.unwrap();
     replace_books(
@@ -49,7 +49,7 @@ async fn palette_books_match_title() {
     assert!(results.books[0].formats.contains(&"EPUB".to_string()));
 }
 #[tokio::test]
-async fn palette_authors_match_substring() {
+async fn search_palette_authors_match_substring() {
     let _covers = CoversTempDir::new("palette_authors");
     let pool = init_db("sqlite::memory:").await.unwrap();
     replace_books(
@@ -80,7 +80,7 @@ async fn palette_authors_match_substring() {
     );
 }
 #[tokio::test]
-async fn palette_series_match() {
+async fn search_palette_series_match() {
     let _covers = CoversTempDir::new("palette_series");
     let pool = init_db("sqlite::memory:").await.unwrap();
     replace_books(
@@ -121,7 +121,7 @@ async fn palette_series_match() {
     );
 }
 #[tokio::test]
-async fn palette_tags_match() {
+async fn search_palette_tags_match() {
     let _covers = CoversTempDir::new("palette_tags");
     let pool = init_db("sqlite::memory:").await.unwrap();
     replace_books(
@@ -148,7 +148,7 @@ async fn palette_tags_match() {
 /// not the canonical scanned `b.title`, so what the user clicks matches
 /// what they searched for.
 #[tokio::test]
-async fn palette_book_hit_uses_overridden_title() {
+async fn search_palette_book_hit_uses_overridden_title() {
     let _covers = CoversTempDir::new("palette_override_title");
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
@@ -195,7 +195,7 @@ async fn palette_book_hit_uses_overridden_title() {
 /// comma-joined `author_display` so the palette subtitle matches the
 /// detail page.
 #[tokio::test]
-async fn palette_book_hit_uses_overridden_author_display() {
+async fn search_palette_book_hit_uses_overridden_author_display() {
     let _covers = CoversTempDir::new("palette_override_authors");
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
@@ -254,7 +254,7 @@ async fn palette_book_hit_uses_overridden_author_display() {
 /// scanned book had no cover. Mirrors `apply_overrides` so the palette
 /// row doesn't go cover-less for an override-only cover.
 #[tokio::test]
-async fn palette_book_hit_uses_overridden_cover() {
+async fn search_palette_book_hit_uses_overridden_cover() {
     let _covers = CoversTempDir::new("palette_override_cover");
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
@@ -297,7 +297,7 @@ async fn palette_book_hit_uses_overridden_cover() {
 // silently break palette tag:/author:/series: queries without any
 // palette test failing.
 #[tokio::test]
-async fn palette_book_matches_tag_facet() {
+async fn search_palette_book_matches_tag_facet() {
     let _covers = CoversTempDir::new("palette_tag_facet");
     let pool = init_db("sqlite::memory:").await.unwrap();
     replace_books(
@@ -337,7 +337,7 @@ async fn palette_book_matches_tag_facet() {
     );
 }
 #[tokio::test]
-async fn palette_book_matches_author_facet() {
+async fn search_palette_book_matches_author_facet() {
     let _covers = CoversTempDir::new("palette_author_facet");
     let pool = init_db("sqlite::memory:").await.unwrap();
     replace_books(
@@ -379,7 +379,7 @@ async fn palette_book_matches_author_facet() {
     );
 }
 #[tokio::test]
-async fn palette_book_matches_series_facet() {
+async fn search_palette_book_matches_series_facet() {
     let _covers = CoversTempDir::new("palette_series_facet");
     let pool = init_db("sqlite::memory:").await.unwrap();
     replace_books(
@@ -414,7 +414,7 @@ async fn palette_book_matches_series_facet() {
     );
 }
 #[tokio::test]
-async fn palette_empty_query_returns_empty() {
+async fn search_palette_empty_query_returns_empty() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let results = search_palette(&pool, "/lib", "   ").await.unwrap();
     assert!(results.books.is_empty());
@@ -424,7 +424,7 @@ async fn palette_empty_query_returns_empty() {
     assert_eq!(results.query, "");
 }
 #[tokio::test]
-async fn palette_no_results() {
+async fn search_palette_no_results() {
     let _covers = CoversTempDir::new("palette_no_results");
     let pool = init_db("sqlite::memory:").await.unwrap();
     replace_books(
@@ -444,7 +444,7 @@ async fn palette_no_results() {
     assert!(results.tags.is_empty());
 }
 #[tokio::test]
-async fn palette_scoped_to_library() {
+async fn search_palette_scoped_to_library() {
     let _covers = CoversTempDir::new("palette_scoped");
     let pool = init_db("sqlite::memory:").await.unwrap();
     replace_books(
@@ -484,7 +484,7 @@ async fn palette_scoped_to_library() {
     assert_eq!(results.authors[0].book_count, 1);
 }
 #[tokio::test]
-async fn palette_duration_populated() {
+async fn search_palette_duration_populated() {
     let _covers = CoversTempDir::new("palette_duration");
     let pool = init_db("sqlite::memory:").await.unwrap();
     replace_books(
@@ -508,7 +508,7 @@ async fn palette_duration_populated() {
 /// /lib-b for the same author/series/tag, and the rare "Sole" author
 /// only appears in /lib-b, so it must be absent from /lib-a results.
 #[tokio::test]
-async fn palette_taxonomy_counts_scoped_per_library() {
+async fn search_palette_taxonomy_counts_scoped_per_library() {
     let _covers = CoversTempDir::new("palette_taxonomy_scoped");
     let pool = init_db("sqlite::memory:").await.unwrap();
 
@@ -625,7 +625,7 @@ async fn palette_taxonomy_counts_scoped_per_library() {
     assert_eq!(tag_b.book_count, 2);
 }
 #[tokio::test]
-async fn palette_author_count_reflects_overrides() {
+async fn search_palette_author_count_reflects_overrides() {
     // F5.1: the palette author count must match the merged
     // (override-aware) view, not the raw `books_authors_link` count.
     // Repro of the "Sanderson, Brandon still says 4 books" report:
@@ -703,7 +703,7 @@ async fn palette_author_count_reflects_overrides() {
     );
 }
 #[tokio::test]
-async fn palette_tag_count_reflects_overrides() {
+async fn search_palette_tag_count_reflects_overrides() {
     // F5.1: same shape for tags. `overrides.subjects` replaces the
     // canonical tag list wholesale, so a book moved between tags
     // must shift both counts.
@@ -759,8 +759,8 @@ async fn palette_tag_count_reflects_overrides() {
     );
 }
 #[tokio::test]
-async fn palette_series_count_reflects_overrides() {
-    // F5.1: same shape as palette_author_count_reflects_overrides
+async fn search_palette_series_count_reflects_overrides() {
+    // F5.1: same shape as search_palette_author_count_reflects_overrides
     // but for the series tile. Books moved into a series via
     // `overrides.series` must add to the destination count; books
     // moved out drop from the source count.
@@ -838,7 +838,7 @@ async fn palette_series_count_reflects_overrides() {
     );
 }
 #[tokio::test]
-async fn palette_series_author_display_reflects_override() {
+async fn search_palette_series_author_display_reflects_override() {
     // F5.1: the "by X" line on a series tile must follow the first
     // book's effective creator, not the canonical one — otherwise
     // renaming the author through the metadata edit form leaves the
@@ -900,7 +900,7 @@ async fn palette_series_author_display_reflects_override() {
 /// loudly if any of the link tables fall back to a full SCAN, which
 /// would defeat the whole point of this optimization.
 #[tokio::test]
-async fn palette_taxonomy_query_plans_use_indexes() {
+async fn search_palette_taxonomy_query_plans_use_indexes() {
     let pool = init_db("sqlite::memory:").await.unwrap();
 
     async fn plan_text(pool: &SqlitePool, sql: &str) -> String {
@@ -1040,7 +1040,7 @@ async fn palette_taxonomy_query_plans_use_indexes() {
 /// but `book_total` is 7, while `author_total`/`tag_total` (under the cap)
 /// equal their vec lengths. `total_count()` sums the true totals.
 #[tokio::test]
-async fn palette_totals_report_uncapped_counts() {
+async fn search_palette_totals_report_uncapped_counts() {
     let _covers = CoversTempDir::new("palette_totals");
     let pool = init_db("sqlite::memory:").await.unwrap();
     let books: Vec<_> = (0..7)

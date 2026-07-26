@@ -51,7 +51,7 @@ pub(super) async fn get_highlights(
 /// Resolve a `{id}` path segment to a numeric highlight id.
 ///
 /// The segment is either the server's own row id or the uuid the creating
-/// device minted (migration 0049). Both are valid handles: an offline client
+/// device minted (migration 0051). Both are valid handles: an offline client
 /// queues an edit or a delete against its own uuid long before it has heard
 /// what row id the create was assigned, and replaying that op has to land on
 /// the same annotation. A uuid can't parse as an `i64`, so the two namespaces

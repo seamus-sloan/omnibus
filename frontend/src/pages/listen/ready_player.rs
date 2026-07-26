@@ -15,7 +15,7 @@ use super::chapter_nav::{chapter_index_for_elapsed, chapter_next_target, chapter
 use super::chapters_drawer::ChaptersDrawer;
 use super::overlays::{FailedOverlay, PreparingOverlay};
 use super::sleep::{end_of_chapter_seconds, sleep_toolbar_label, use_sleep, SleepChoice};
-use super::sleep_panel::SleepPanel;
+use super::sleep_panel::{SleepPanel, SleepPanelState};
 use super::speed_panel::SpeedPanel;
 use super::stage::{
     PlaybackPosition, PlayerCallbacks, PlayerContent, PlayerStage, ToolbarState, TransportState,
@@ -224,11 +224,6 @@ pub(super) fn PlayerStageBinding(
     let on_toggle = super::helpers::on_toggle_playback();
     let on_skip_back = super::helpers::on_skip_back_30();
     let on_skip_forward = super::helpers::on_skip_forward_30();
-    let on_seek = move |evt: Event<FormData>| {
-        if let Ok(secs) = evt.value().parse::<f64>() {
-            super::helpers::seek_to(secs);
-        }
-    };
     let on_volume = move |v: f64| super::helpers::apply_volume(&mut volume, v);
     let on_rate = move |_: MouseEvent| {
         let cur = *speed_panel_open.peek();
@@ -282,7 +277,6 @@ pub(super) fn PlayerStageBinding(
                 volume: volume(),
             },
             callbacks: PlayerCallbacks {
-                on_seek: EventHandler::new(on_seek),
                 on_toggle: EventHandler::new(on_toggle),
                 on_skip_back: EventHandler::new(on_skip_back),
                 on_skip_forward: EventHandler::new(on_skip_forward),
@@ -386,13 +380,15 @@ pub(super) fn PlayerOverlays(
         }
         if sleep_panel_open() {
             SleepPanel {
-                remaining: sleep_display.remaining,
-                choice: sleep_display.choice,
-                fade: sleep_display.fade,
-                has_chapters: sleep_display.has_chapters,
-                on_select: move |secs: i32| on_sleep_select.call(secs),
-                on_end_of_chapter: move |_| on_sleep_end_of_chapter.call(()),
-                on_toggle_fade: move |_| on_sleep_toggle_fade.call(()),
+                state: SleepPanelState {
+                    remaining: sleep_display.remaining,
+                    choice: sleep_display.choice,
+                    fade: sleep_display.fade,
+                    has_chapters: sleep_display.has_chapters,
+                    on_select: EventHandler::new(move |secs: i32| on_sleep_select.call(secs)),
+                    on_end_of_chapter: EventHandler::new(move |_| on_sleep_end_of_chapter.call(())),
+                    on_toggle_fade: EventHandler::new(move |_| on_sleep_toggle_fade.call(())),
+                },
                 on_close: move |_| sleep_panel_open.set(false),
             }
         }

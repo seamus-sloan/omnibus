@@ -27,7 +27,7 @@ Use for issues that **should** be fixed but won't block merge on their own. Code
 - Missing or weak tests for new behavior (see "Missing Tests" section below)
 - Bad architecture decisions (cross-crate leakage, putting server-only deps in `shared`, business logic in `rpc.rs` wrappers instead of `db`)
 - Error-handling violations (`unwrap()`/`expect()` outside tests, swallowing errors with `let _ =`, using `anyhow` inside library code that should expose typed `thiserror` enums)
-- Speculative scope — adding tables, fields, endpoints, or abstractions that aren't tied to a concrete roadmap initiative under [docs/roadmap/](../docs/roadmap/)
+- Speculative scope — adding tables, fields, endpoints, or abstractions that aren't tied to a concrete roadmap initiative
 - Selector violations in Playwright specs (XPath, brittle `locator()` chains when a role/label/testid would work — see [04-playwright.md](../.claude/rules/04-playwright.md))
 - Mutating Playwright requests not wrapped in `expectMutation`
 - New dependencies in `Cargo.toml` without a corresponding update to [CLAUDE.md](../CLAUDE.md) or [flake.nix](../flake.nix) when system-level
@@ -85,7 +85,7 @@ Per [03-unit-testing.md](../.claude/rules/03-unit-testing.md), every meaningful 
 - **Mutating Playwright actions** not wrapped in `expectMutation` — the test cannot prove the mutation succeeded otherwise.
 - **Auth, rate-limit, or CSRF surface changes** without a test exercising the failure path. ❌ CRITICAL.
 - **New SQL migration** without a test that runs against `sqlite::memory:` and exercises the new schema.
-- **New roadmap initiative acceptance criteria** shipping without matching tests. Reference the initiative file under [docs/roadmap/](../docs/roadmap/) when flagging.
+- **New roadmap initiative acceptance criteria** shipping without matching tests. Reference the relevant roadmap initiative when flagging.
 
 ---
 

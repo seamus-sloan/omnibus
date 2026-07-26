@@ -77,7 +77,7 @@ pub struct JournalEntry {
     #[serde(default)]
     pub status: JournalStatus,
     /// The device-minted identity this entry was created under, when the
-    /// creating client supplied one. `None` for rows predating migration 0049.
+    /// creating client supplied one. `None` for rows predating migration 0051.
     #[serde(default)]
     pub client_id: Option<String>,
     pub created_at: i64,

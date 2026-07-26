@@ -46,6 +46,20 @@ pub struct DownloadRow {
     pub updated_at: i64,
 }
 
+/// Failure opening or preparing the offline SQLite store. Wraps the raw
+/// `rusqlite::Error` so it never crosses this module's boundary directly
+/// (see `.claude/rules/02-error-handling.md`'s boundary rule).
+#[derive(Debug, thiserror::Error)]
+pub enum StoreError {
+    /// Any `rusqlite` failure opening the connection, setting pragmas, or
+    /// applying the schema.
+    #[error(transparent)]
+    Sqlite(#[from] rusqlite::Error),
+    /// The OS refused to spawn the dedicated worker thread.
+    #[error("could not spawn the offline store worker thread: {0}")]
+    WorkerSpawn(#[source] std::io::Error),
+}
+
 type Job = Box<dyn FnOnce(&Connection) + Send>;
 
 /// Handle to the store worker. Cheap to clone; the tokio unbounded sender is
@@ -106,7 +120,7 @@ impl Store {
     /// Open (or create) the database at `path` and spawn the worker thread.
     /// The connection and schema are prepared on the caller's thread so open
     /// failures surface immediately instead of as silent no-op sends.
-    pub fn open(path: PathBuf) -> Result<Store, rusqlite::Error> {
+    pub fn open(path: PathBuf) -> Result<Store, StoreError> {
         let conn = Connection::open(&path)?;
         // WAL keeps readers (none today, but cheap insurance) from blocking
         // the worker's writes; NORMAL sync is durable enough for a cache +
@@ -124,9 +138,7 @@ impl Store {
                     job(&conn);
                 }
             })
-            .map_err(|e| {
-                rusqlite::Error::InvalidPath(PathBuf::from(format!("worker spawn failed: {e}")))
-            })?;
+            .map_err(StoreError::WorkerSpawn)?;
         Ok(Store { tx })
     }
 

@@ -26,11 +26,13 @@ mod authors;
 mod bookmarks;
 mod covers;
 mod ebooks;
+mod export_opf;
 mod health;
 mod highlights;
 mod image_upload;
 mod journals;
 mod kindle;
+mod kobo;
 mod overrides;
 mod physical;
 mod progress;
@@ -46,6 +48,9 @@ mod suggestions;
 mod summary;
 mod tags;
 mod uploads;
+mod users;
+
+pub use kobo::kobo_router;
 
 /// Per-IP rate-limit budget for `/api/search/*` and the `/api/rpc/search-*`
 /// server functions. Each request runs four FTS5 queries plus joins, so the
@@ -260,6 +265,15 @@ fn content_routes() -> Router<AppState> {
         .route("/api/reindex", post(settings::post_reindex))
         .route("/api/scan-library", post(settings::post_scan_library))
         .route("/api/fts/rebuild", post(settings::post_rebuild_fts))
+        // Admin user management (F5.4) — all AdminUser-gated.
+        .route("/api/users", get(users::get_users).post(users::post_user))
+        .route("/api/users/{id}", delete(users::delete_user))
+        .route(
+            "/api/users/{id}/permissions",
+            patch(users::patch_permissions),
+        )
+        .route("/api/users/{id}/password", post(users::post_password))
+        .route("/api/users/{id}/unlock", post(users::post_unlock))
         .route("/api/library", get(ebooks::get_library))
         .route("/api/ebooks", get(ebooks::get_ebooks))
         .route("/api/ebooks/{uuid}", get(ebooks::get_ebook_by_uuid))
@@ -306,6 +320,10 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
         .route(
             "/api/ebooks/{uuid}/overrides",
             post(overrides::post_ebook_overrides).delete(overrides::delete_ebook_overrides),
+        )
+        .route(
+            "/api/ebooks/{uuid}/export-opf",
+            post(export_opf::post_export_opf),
         )
         // Cover-only revert. Carries no upload body (unlike the POST in
         // `upload_router`), so it stays outside the upload rate limiter —
@@ -491,10 +509,7 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             "/api/ebooks/{uuid}/summary/fetch",
             post(summary::post_ebook_summary_fetch),
         )
-        .route(
-            "/api/summary/hardcover-configured",
-            get(summary::get_hardcover_configured),
-        )
+        .route("/api/summary/sources", get(summary::get_summary_sources))
         // F4.3 Send-to-Kindle — mobile-facing REST. Web hits the analogous
         // `/api/rpc/kindle/send`, `/api/rpc/account/kindle-email`, and
         // `/api/rpc/smtp*` server fns.

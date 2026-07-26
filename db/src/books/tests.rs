@@ -473,6 +473,7 @@ async fn search_books_excludes_isbn_column_from_match() {
             cover: None,
             mtime_epoch: 0,
             size_bytes: 0,
+            word_count: None,
         }],
     )
     .await
@@ -754,6 +755,7 @@ async fn list_and_search_books_return_multi_valued_fields() {
             cover: None,
             mtime_epoch: 0,
             size_bytes: 0,
+            word_count: None,
         }],
     )
     .await
@@ -818,6 +820,7 @@ async fn get_book_and_list_books_surface_isbn_from_book_identifiers_after_column
             cover: None,
             mtime_epoch: 0,
             size_bytes: 0,
+            word_count: None,
         }],
     )
     .await
@@ -1114,6 +1117,7 @@ async fn get_book_returns_sanitized_html_description() {
             cover: None,
             mtime_epoch: 0,
             size_bytes: 0,
+            word_count: None,
         }],
     )
     .await
@@ -2243,6 +2247,7 @@ async fn seed_book_with_identifier(
             cover: None,
             mtime_epoch: 0,
             size_bytes: 0,
+            word_count: None,
         }],
     )
     .await

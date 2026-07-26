@@ -323,7 +323,10 @@ fn author_body(series_groups: SeriesGroups, standalone: Vec<EbookMetadata>) -> E
                     }
                     div { class: "disc-grid",
                         for book in books.into_iter() {
-                            {author_series_tile(book)}
+                            {
+                                let series_index = book.series_index.clone();
+                                author_book_tile(book, series_index)
+                            }
                         }
                     }
                 }
@@ -337,7 +340,7 @@ fn author_body(series_groups: SeriesGroups, standalone: Vec<EbookMetadata>) -> E
                     }
                     div { class: "disc-grid",
                         for book in standalone.into_iter() {
-                            {author_standalone_tile(book)}
+                            {author_book_tile(book, None)}
                         }
                     }
                 }
@@ -346,12 +349,12 @@ fn author_body(series_groups: SeriesGroups, standalone: Vec<EbookMetadata>) -> E
     }
 }
 
-/// One book tile within a series group — cover, plus a title caption
-/// prefixed with the series index when set. Small display fields are
-/// pulled out before `book` moves into `Cover`, which needs ownership.
-fn author_series_tile(book: EbookMetadata) -> Element {
+/// One book tile in the author's discovery grid — cover, plus a title
+/// caption. `series_index` prefixes the caption with `#N ·` for series-group
+/// tiles; standalone tiles pass `None`. Small display fields are pulled out
+/// before `book` moves into `Cover`, which needs ownership.
+fn author_book_tile(book: EbookMetadata, series_index: Option<String>) -> Element {
     let uuid = book.unique_identifier.clone().unwrap_or_default();
-    let series_index = book.series_index.clone();
     let title = book.title.clone().unwrap_or_else(|| book.filename.clone());
     let book_id = book.id;
     rsx! {
@@ -366,22 +369,6 @@ fn author_series_tile(book: EbookMetadata) -> Element {
                 }
                 "{title}"
             }
-        }
-    }
-}
-
-/// One book tile within the standalone / "Other works" section.
-fn author_standalone_tile(book: EbookMetadata) -> Element {
-    let uuid = book.unique_identifier.clone().unwrap_or_default();
-    let title = book.title.clone().unwrap_or_else(|| book.filename.clone());
-    let book_id = book.id;
-    rsx! {
-        Link {
-            key: "{book_id}",
-            to: Route::BookDetail { uuid },
-            class: "lib-tile",
-            Cover { book }
-            div { class: "lib-tile-title", "{title}" }
         }
     }
 }

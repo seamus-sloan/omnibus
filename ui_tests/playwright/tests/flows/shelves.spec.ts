@@ -1,8 +1,8 @@
-import { expect, test } from "../fixtures/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
+import { expect, test } from "../fixtures/test";
+import { expectMutation } from "../utils/api";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { expectNavVisible, gotoReady } from "../utils/nav";
-import { expectMutation } from "../utils/api";
 import { fixturesDir, seedLibrary } from "../utils/seed";
 
 // Shelves need a real library so the create modal's hand-picked picker and the
@@ -21,7 +21,9 @@ test("renders the shelves rail on the library page", async ({ page }) => {
   await expectNavVisible(page);
 });
 
-test("creates a hand-picked shelf and shows it in the rail", async ({ page }) => {
+test("creates a hand-picked shelf and shows it in the rail", async ({
+  page,
+}) => {
   await gotoReady(page, "/");
 
   await page.getByTestId("new-shelf").click();
@@ -105,7 +107,10 @@ test("surfaces a distinct error when the member-books refetch fails", async ({
   await expect(page.getByTestId("shelf-refetch-error")).toBeVisible();
 });
 
-test("switches shelves via the rail without a full reload", async ({ page, request }) => {
+test("switches shelves via the rail without a full reload", async ({
+  page,
+  request,
+}) => {
   // Two hand-picked shelves, each holding one distinct fixture book, so the
   // header and grid content can only match if the rail switch actually
   // re-fetched.
@@ -129,7 +134,10 @@ test("switches shelves via the rail without a full reload", async ({ page, reque
         },
       },
     });
-    expect(resp.status(), `POST /api/rpc/shelves/create failed for ${name}`).toBe(200);
+    expect(
+      resp.status(),
+      `POST /api/rpc/shelves/create failed for ${name}`,
+    ).toBe(200);
     const shelf = (await resp.json()) as { id: number };
     return shelf.id;
   };
@@ -144,7 +152,9 @@ test("switches shelves via the rail without a full reload", async ({ page, reque
   await page.getByTestId(`rail-shelf-${shelfBId}`).click();
 
   await expect(page.getByTestId("shelf-detail-header")).toContainText(nameB);
-  await expect(page.getByTestId("shelf-grid")).toContainText("Beta in the Series");
+  await expect(page.getByTestId("shelf-grid")).toContainText(
+    "Beta in the Series",
+  );
   await expect(page.getByTestId("shelf-grid")).not.toContainText("Alpha");
 
   // And back the other way, confirming both directions re-fetch.
@@ -152,7 +162,9 @@ test("switches shelves via the rail without a full reload", async ({ page, reque
 
   await expect(page.getByTestId("shelf-detail-header")).toContainText(nameA);
   await expect(page.getByTestId("shelf-grid")).toContainText("Alpha");
-  await expect(page.getByTestId("shelf-grid")).not.toContainText("Beta in the Series");
+  await expect(page.getByTestId("shelf-grid")).not.toContainText(
+    "Beta in the Series",
+  );
 });
 
 test("edits an existing smart shelf's rules and the member grid updates", async ({
@@ -182,7 +194,9 @@ test("edits an existing smart shelf's rules and the member grid updates", async 
 
   await gotoReady(page, `/shelves/${shelf.id}`);
   await expect(page.getByTestId("shelf-grid")).toContainText("Alpha");
-  await expect(page.getByTestId("shelf-grid")).not.toContainText("Beta in the Series");
+  await expect(page.getByTestId("shelf-grid")).not.toContainText(
+    "Beta in the Series",
+  );
 
   await page.getByTestId("shelf-actions").click();
   await page.getByTestId("shelf-edit-rules").click();
@@ -219,6 +233,8 @@ test("edits an existing smart shelf's rules and the member grid updates", async 
   );
 
   await expect(modal).not.toBeVisible();
-  await expect(page.getByTestId("shelf-grid")).toContainText("Beta in the Series");
+  await expect(page.getByTestId("shelf-grid")).toContainText(
+    "Beta in the Series",
+  );
   await expect(page.getByTestId("shelf-grid")).not.toContainText("Alpha");
 });
