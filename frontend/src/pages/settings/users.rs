@@ -122,9 +122,7 @@ pub fn UsersSection() -> Element {
                         on_close: move |_| modal.set(Modal::None),
                         on_deleted: move |_| {
                             modal.set(Modal::None);
-                            // A self-delete invalidates the session server-side, so
-                            // refetching the table would just 401 — send the admin
-                            // to login instead of reloading now-inaccessible data.
+                            // Self-delete invalidates the session; reloading would just 401.
                             if is_self {
                                 nav.replace(Route::Login {});
                             } else {
