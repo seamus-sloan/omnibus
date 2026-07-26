@@ -211,6 +211,13 @@ jobs:
     if: ${{ github.event.inputs.apps == 'both' || github.event.inputs.apps == 'swiftui' }}
     # omnibus-ios targets iOS 26.5, so it needs the Xcode 26 / iOS 26 SDK on macos-26.
     runs-on: macos-26
+    permissions:
+      contents: read
+      # Granted for the .ipa upload step. Belt-and-braces rather than load-bearing:
+      # upload-artifact@v4 authenticates with ACTIONS_RUNTIME_TOKEN, which is
+      # injected per-job and isn't governed by `permissions:`. The mobile job's
+      # own `actions: write` is load-bearing — cache-nix-action's `purge: true`.
+      actions: write
     env:
       BUILD_NUMBER: ${{ github.event.inputs.build_number || github.run_number }}
       MARKETING_VERSION: ${{ needs.version.outputs.marketing_version }}
