@@ -63,7 +63,9 @@ private struct HeroCard: View {
         Button {
             Haptics.tap()
             if isAudio {
-                Presentation.shared.openPlayer(book)
+                // Reopen the file the position was taken in, not the book's
+                // first one — two narrations don't share a timeline.
+                Presentation.shared.openPlayer(book, fileID: point.record.bookFileID)
             } else {
                 Presentation.shared.openReader(book)
             }
