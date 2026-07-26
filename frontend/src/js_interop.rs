@@ -1,11 +1,9 @@
 //! Shared JS-interop mechanics reused by the mobile/web JS-bridge modules
 //! (barcode scanner, mobile audio, mobile reader): encoding a value as a JS
 //! literal, and draining a persistent `dioxus::document::Eval` channel of
-//! typed JS→Rust events. Each call site still builds and installs its own
-//! bespoke shim script — the shapes differ too much per surface to share —
-//! but all three reuse these two mechanical pieces instead of re-deriving
-//! them independently.
+//! typed JS→Rust events.
 
+#[cfg(any(feature = "web", feature = "mobile"))]
 use dioxus::document::Eval;
 
 /// Encode `value` as a JS literal, falling back to the given raw JS
@@ -22,6 +20,7 @@ pub fn json_literal<T: serde::Serialize + ?Sized>(value: &T) -> String {
 
 /// Drain a persistent JS→Rust event channel until it closes (the surface was
 /// torn down or navigated away from), invoking `handle` for each typed event.
+#[cfg(any(feature = "web", feature = "mobile"))]
 pub async fn drain_events<T, F>(mut eval: Eval, mut handle: F)
 where
     T: serde::de::DeserializeOwned,
@@ -49,8 +48,19 @@ mod tests {
 
     #[test]
     fn json_literal_or_falls_back_when_encoding_fails() {
-        // A non-finite float is the one practical way `serde_json` refuses to
-        // encode a value (JSON has no NaN/Infinity literal).
-        assert_eq!(json_literal_or(&f64::NAN, "0"), "0");
+        // `serde_json` writes non-finite floats as `null` rather than erroring,
+        // so exercising the fallback needs a `Serialize` impl that actually
+        // returns `Err`.
+        struct AlwaysFails;
+        impl serde::Serialize for AlwaysFails {
+            fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                Err(serde::ser::Error::custom("boom"))
+            }
+        }
+
+        assert_eq!(json_literal_or(&AlwaysFails, "0"), "0");
     }
 }
