@@ -60,6 +60,24 @@ pub struct UpdateCopyNoteRequest {
     pub note: Option<String>,
 }
 
+impl UpdateCopyNoteRequest {
+    /// Maximum length (in chars) of a physical copy's free-text note. Mirrors
+    /// `omnibus_shared::highlight::UpdateHighlightNote::NOTE_MAX_LEN`.
+    pub const NOTE_MAX_LEN: usize = 4096;
+
+    /// Validate the note length. `None` clears the note and is always
+    /// permitted. Returns `Err` with a human-readable message when the cap is
+    /// exceeded. Handlers translate `Err(_)` into 400.
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(ref note) = self.note {
+            if note.chars().count() > Self::NOTE_MAX_LEN {
+                return Err(format!("note exceeds {} characters", Self::NOTE_MAX_LEN));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// A book on one user's physical wishlist. Unique per `(user_id, book_uuid)`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WishlistEntry {
@@ -71,26 +89,4 @@ pub struct WishlistEntry {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn wishlist_source_round_trips_through_the_db_string_for_every_variant() {
-        for variant in [
-            WishlistSource::Scan,
-            WishlistSource::Detail,
-            WishlistSource::Manual,
-        ] {
-            assert_eq!(
-                WishlistSource::from_db(variant.as_str()),
-                Some(variant),
-                "variant {variant:?} did not round-trip through as_str/from_db"
-            );
-        }
-    }
-
-    #[test]
-    fn wishlist_source_from_db_returns_none_for_unrecognized_token() {
-        assert_eq!(WishlistSource::from_db("bogus"), None);
-    }
-}
+mod tests;

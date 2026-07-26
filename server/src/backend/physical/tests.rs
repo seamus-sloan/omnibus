@@ -150,6 +150,28 @@ async fn api_patch_copy_note_rejects_a_user_without_edit_permission() {
 }
 
 #[tokio::test]
+async fn api_patch_copy_note_returns_400_for_an_oversized_note() {
+    let _covers = CoversDirGuard::new("phys_patch_400");
+    let (app, _state, pool) = fixture().await;
+    let (_uuid, copy_id) = seed_physical_only(&pool, "Paper Only").await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    let oversized = "x".repeat(omnibus_shared::physical::UpdateCopyNoteRequest::NOTE_MAX_LEN + 1);
+    let res = app
+        .oneshot(req(
+            "PATCH",
+            &format!("/api/physical/copies/{copy_id}"),
+            &token,
+            Some(serde_json::json!({ "note": oversized })),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn api_patch_copy_note_returns_404_for_unknown_copy() {
     let (app, _state, pool) = fixture().await;
     let admin = auth_test_support::create_admin(&pool, "admin").await;

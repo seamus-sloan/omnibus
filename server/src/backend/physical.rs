@@ -62,6 +62,9 @@ pub(super) async fn patch_copy_note(
     if let Some(denied) = require_edit(&user) {
         return denied;
     }
+    if let Err(msg) = req.validate() {
+        return (StatusCode::BAD_REQUEST, msg).into_response();
+    }
     match db::update_physical_copy_note(&state.pool, copy_id, req.note.as_deref()).await {
         Ok(copy) => Json(copy).into_response(),
         Err(e) => physical_error("update_physical_copy_note", e),
