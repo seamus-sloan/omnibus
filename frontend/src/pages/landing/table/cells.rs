@@ -36,11 +36,40 @@ pub(super) struct RowContext {
     pub save_authors: EventHandler<Vec<String>>,
 }
 
-/// Build the common per-cell save callback. Empty strings clear the
-/// override (None — the scanned value re-surfaces); non-empty strings
-/// persist as `Some(value)`. The server-side merge in `rpc_save_overrides`
-/// returns the canonical merged metadata which we install verbatim into
-/// the optimistic `book_state` signal.
+/// Build the single-field override payload for a grid quick-edit save.
+///
+/// `EditableCell` only invokes the save callback when the trimmed value
+/// differs from the cell's prior value (see its `onkeydown`/`onblur`
+/// guards), so by the time this runs the field has genuinely changed —
+/// including changing to empty (the user cleared it). That means the
+/// override must always carry `Some(trimmed)`, **never `None`**: `None`
+/// is what `MetadataOverrides::merge` (and `merge_metadata_overrides`'s
+/// read-merge-write) reads as "untouched, keep whatever override already
+/// exists", so a `None`-based "clear" is a silent no-op. `Some("")` is
+/// the established clear sentinel — the same one the full metadata-edit
+/// page's `build_overrides` already emits (see
+/// `frontend::pages::metadata_edit::build_overrides`) — and the merge +
+/// `apply_overrides` read path already understands it (#1085).
+pub(super) fn field_override(field: EditField, value: &str) -> MetadataOverrides {
+    let mut overrides = MetadataOverrides::default();
+    let value = Some(value.trim().to_string());
+    match field {
+        EditField::Title => overrides.title = value,
+        EditField::Series => overrides.series = value,
+        EditField::Publisher => overrides.publisher = value,
+        EditField::Published => overrides.published = value,
+        EditField::Language => overrides.language = value,
+        // Authors edits go through `build_save_authors` so they can set
+        // the `creators` override instead of a scalar.
+        EditField::Authors => {}
+    }
+    overrides
+}
+
+/// Build the common per-cell save callback. Delegates the payload shape to
+/// [`field_override`]; the server-side merge in `rpc_save_overrides` returns
+/// the canonical merged metadata which we install verbatim into the
+/// optimistic `book_state` signal.
 pub(super) fn build_save_field(
     uuid: String,
     server_url: String,
@@ -48,26 +77,13 @@ pub(super) fn build_save_field(
 ) -> impl FnMut((EditField, String)) + 'static {
     move |args: (EditField, String)| {
         let (field, value) = args;
+        if field == EditField::Authors {
+            return;
+        }
         let uuid = uuid.clone();
         let url = server_url.clone();
         spawn(async move {
-            let mut overrides = MetadataOverrides::default();
-            let trimmed = value.trim();
-            let value = if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            };
-            match field {
-                EditField::Title => overrides.title = value,
-                EditField::Series => overrides.series = value,
-                EditField::Publisher => overrides.publisher = value,
-                EditField::Published => overrides.published = value,
-                EditField::Language => overrides.language = value,
-                // Authors edits go through `build_save_authors` so they
-                // can set the `creators` override instead of a scalar.
-                EditField::Authors => return,
-            }
+            let overrides = field_override(field, &value);
             if overrides.validate().is_err() {
                 // F5.1 length caps rejected the payload. The display
                 // reverts on the next refetch; a toast / inline error
@@ -489,3 +505,6 @@ pub(super) fn AuthorsCell(props: AuthorsCellProps) -> Element {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

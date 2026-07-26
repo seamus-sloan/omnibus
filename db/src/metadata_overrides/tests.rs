@@ -105,6 +105,91 @@ async fn merge_metadata_overrides_creates_row_when_absent() {
     assert_eq!(loaded.title, Some("Fresh".into()));
     assert!(!has_cover, "a brand-new merged row has no cover override");
 }
+
+/// #1085 regression: a grid quick-edit "clear this field" save must land
+/// as a real clear, not a silent no-op. `merge_metadata_overrides` reads
+/// an incoming `None` as "untouched — keep whatever override already
+/// exists" (that's what lets an edit that only touches one field
+/// preserve the rest), so a caller that represents "the user cleared
+/// series/publisher" as `None` can never actually clear it — the prior
+/// override value survives forever. The correct clear payload is
+/// `Some("")` (the same sentinel `apply_overrides` already special-cases
+/// for `isbn13`, and what the full metadata-edit page's `build_overrides`
+/// already emits): `Option::or` always prefers a `Some`, even an empty
+/// one, so it overwrites the prior value and the book reads back
+/// cleared. This is what `frontend::pages::landing::table::cells::field_override`
+/// now sends for the grid's quick-edit cells (AC2/AC3).
+#[tokio::test]
+async fn merge_metadata_overrides_treats_none_as_untouched_but_empty_string_as_clear() {
+    let _covers = CoversTempDir::new("clear_field_1085");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+
+    replace_books(
+        &pool,
+        "/lib",
+        vec![indexed(
+            "clear.epub",
+            Some("Scanned Title"),
+            &["Author"],
+            &[],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+    let books = list_books(&pool, "/lib").await.unwrap();
+    let uuid = books[0].unique_identifier.clone().unwrap();
+    let id = books[0].id;
+
+    let initial = MetadataOverrides {
+        series: Some("Foundation".into()),
+        publisher: Some("Gnome Press".into()),
+        ..Default::default()
+    };
+    merge_metadata_overrides(&pool, &uuid, &initial, user_id)
+        .await
+        .unwrap();
+    let with_overrides = get_book(&pool, id).await.unwrap().unwrap();
+    assert_eq!(with_overrides.series.as_deref(), Some("Foundation"));
+    assert_eq!(with_overrides.publisher.as_deref(), Some("Gnome Press"));
+
+    // A `None`-based "clear" (the pre-fix grid payload) is a no-op: the
+    // prior override values survive the merge untouched.
+    let none_clear = MetadataOverrides::default();
+    merge_metadata_overrides(&pool, &uuid, &none_clear, user_id)
+        .await
+        .unwrap();
+    let after_none = get_book(&pool, id).await.unwrap().unwrap();
+    assert_eq!(
+        after_none.series.as_deref(),
+        Some("Foundation"),
+        "a None-based clear payload must not be able to clear series (#1085)"
+    );
+    assert_eq!(
+        after_none.publisher.as_deref(),
+        Some("Gnome Press"),
+        "a None-based clear payload must not be able to clear publisher (#1085)"
+    );
+
+    // The `Some("")` sentinel actually clears.
+    let real_clear = MetadataOverrides {
+        series: Some(String::new()),
+        publisher: Some(String::new()),
+        ..Default::default()
+    };
+    merge_metadata_overrides(&pool, &uuid, &real_clear, user_id)
+        .await
+        .unwrap();
+    let after_clear = get_book(&pool, id).await.unwrap().unwrap();
+    assert_eq!(after_clear.series.as_deref(), Some(""));
+    assert_eq!(after_clear.publisher.as_deref(), Some(""));
+}
+
 /// Two concurrent saves to the same book (e.g. the edit form open in two
 /// tabs, or a network retry firing twice) each touch a different field.
 /// Because the rpc/REST save paths route through `merge_metadata_overrides`
