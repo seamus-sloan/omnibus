@@ -1,6 +1,6 @@
 //! Tests for the export-with-overrides EPUB rewrite (F5.8 #1372).
 
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 
 use epub::doc::EpubDoc;
 use image::{DynamicImage, ImageFormat, RgbImage};
@@ -280,6 +280,46 @@ fn rewrite_blocking_bakes_metadata_without_cover_override() {
     super::rewrite_blocking(&src, &dst, &book).unwrap();
     let doc = EpubDoc::new(&dst).unwrap();
     assert_eq!(epub_title(&doc).as_deref(), Some("Text Only Edit"));
+}
+
+// --- rewrite_archive (zip-entry size bound, #1394) ---------------------
+
+#[test]
+fn rewrite_archive_errors_on_entry_that_decompresses_past_the_size_cap() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("bomb.epub");
+    let dst = tmp.path().join("out.epub");
+
+    // Zip-bomb-style fixture: `huge.bin` decompresses to one byte past the
+    // 200 MiB per-entry read cap, but — being all zeros — deflates to a few
+    // KB on disk, exactly the "small compressed, huge decompressed" shape a
+    // hostile EPUB upload could exploit. Streamed via `io::repeat` so
+    // *building* the fixture never materializes 200 MiB in memory either.
+    const OVER_CAP: u64 = 200 * 1024 * 1024 + 1;
+    let file = std::fs::File::create(&src).unwrap();
+    let mut writer = zip::ZipWriter::new(file);
+    writer
+        .start_file(
+            "huge.bin",
+            zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated),
+        )
+        .unwrap();
+    std::io::copy(&mut std::io::repeat(0).take(OVER_CAP), &mut writer).unwrap();
+    writer.finish().unwrap();
+
+    let err = super::archive::rewrite_archive(
+        &src,
+        &dst,
+        "nonexistent.opf",
+        |raw| Ok(raw.to_vec()),
+        None,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("exceeds") && err.to_string().contains("byte cap"),
+        "expected a size-cap error, got: {err}"
+    );
 }
 
 // --- rewritten_epub_path (DB-integrated) -------------------------------
