@@ -1,11 +1,16 @@
-//! Read-only book listing that feeds native Kobo wireless sync
+//! Book listing that feeds native Kobo wireless sync
 //! (`/kobo/v1/library/sync`). Scoped to the requesting user's shelves that are
-//! flagged `sync_to_kobo` — never the whole library.
+//! flagged `sync_to_kobo` — never the whole library. [`delta`] turns that set
+//! into the per-device add/change/remove diff the protocol expects.
 
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
 
 use crate::resolve_canonical_book_uuid;
+
+pub mod delta;
+
+pub use delta::{clear_snapshot, record_synced, sync_delta, SyncChange, SyncDelta};
 
 /// SELECT list shared by [`sync_books`] and [`book_for_sync`]. `b` is the
 /// `books` alias; the correlated subquery pulls the lowest-`position` author.
@@ -24,7 +29,7 @@ const SELECT_COLS: &str = "b.uuid,
 /// One book shaped for the Kobo sync endpoint: durable uuid, display title, a
 /// best-effort author line, and the last-modified epoch that drives the
 /// device's metadata-freshness check.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct KoboBookRow {
     pub uuid: String,
     pub title: String,

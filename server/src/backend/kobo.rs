@@ -100,55 +100,97 @@ async fn auth_refresh(auth: KoboAuthUser) -> Response {
     Json(dto::auth_envelope(&auth.token)).into_response()
 }
 
-/// `GET library/sync` — enumerate the caller's opted-in books as
-/// `NewEntitlement`s, streamed as a JSON array via [`Body::from_stream`].
-/// Deliberately imposes no item cap (unlike Calibre-Web's
-/// `SYNC_ITEM_LIMIT=100`). Scope comes from the user's `sync_to_kobo` shelves
-/// (#924); the per-device delta cursor is still #922.
+/// `GET library/sync` — the per-device delta, streamed as a JSON array via
+/// [`Body::from_stream`] with no item cap (unlike Calibre-Web's
+/// `SYNC_ITEM_LIMIT=100`). First sync emits the whole opted-in set as
+/// `NewEntitlement`s; later syncs emit only `ChangedProductMetadata` +
+/// `ChangedReadingState` for modified books and `ChangedEntitlement
+/// {IsRemoved:true}` for books that left the opted-in set (#922).
+///
+/// The device's snapshot advances in the stream's final poll — the same one
+/// that emits the closing `]`, so commit and completion are a single step the
+/// transport can't split. A connection dropped mid-body never reaches that
+/// poll, and the device replays the same delta on the next sync instead of
+/// silently losing books.
 async fn library_sync(
     auth: KoboAuthUser,
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    let books = match db::kobo::sync_books(state.pool(), auth.user_id).await {
-        Ok(b) => b,
-        Err(e) => return internal("kobo sync_books", e),
+    let delta = match db::kobo::sync_delta(state.pool(), auth.user_id, auth.device_id).await {
+        Ok(d) => d,
+        Err(e) => return internal("kobo sync_delta", e),
     };
     let base = origin_from_headers(&headers);
+    let pool = state.pool().clone();
+    let device_id = auth.device_id;
 
-    // Serialize each entitlement lazily as the device drains the body — no
-    // second buffer of the whole payload. (`sync_books` still materializes the
-    // row set; streaming rows straight from SQLx is a later optimization.)
+    // Serialize each item lazily as the device drains the body — no second
+    // buffer of the whole payload.
     let stream = stream::unfold(
-        (books, base, auth.token, SyncPhase::Open),
-        |(books, base, token, phase)| async move {
-            let chunk: Bytes = match phase {
-                SyncPhase::Open => {
-                    let next = if books.is_empty() {
-                        SyncPhase::Close
-                    } else {
-                        SyncPhase::Item(0)
-                    };
-                    return Some((ok(Bytes::from_static(b"[")), (books, base, token, next)));
-                }
-                SyncPhase::Item(i) => {
-                    let item = dto::new_entitlement(&base, &token, &books[i], 0);
-                    // These DTOs are owned Strings/primitives, so serialization
-                    // is infallible; default to empty on the impossible error.
-                    let json = serde_json::to_vec(&item).unwrap_or_default();
-                    let mut piece = if i > 0 { vec![b','] } else { Vec::new() };
-                    piece.extend_from_slice(&json);
-                    let next = if i + 1 < books.len() {
-                        SyncPhase::Item(i + 1)
-                    } else {
-                        SyncPhase::Close
-                    };
-                    return Some((ok(Bytes::from(piece)), (books, base, token, next)));
-                }
-                SyncPhase::Close => Bytes::from_static(b"]"),
-                SyncPhase::End => return None,
-            };
-            Some((ok(chunk), (books, base, token, SyncPhase::End)))
+        (delta.changes, base, auth.token, SyncPhase::Open),
+        move |(changes, base, token, phase)| {
+            let pool = pool.clone();
+            async move {
+                let chunk: Bytes = match phase {
+                    SyncPhase::Open => {
+                        let next = if changes.is_empty() {
+                            SyncPhase::Close
+                        } else {
+                            SyncPhase::Item {
+                                change: 0,
+                                emitted: 0,
+                            }
+                        };
+                        return Some((ok(Bytes::from_static(b"[")), (changes, base, token, next)));
+                    }
+                    SyncPhase::Item { change, emitted } => {
+                        let items = dto::sync_items(&base, &token, &changes[change]);
+                        let mut piece = Vec::new();
+                        for item in &items {
+                            // These DTOs are owned Strings/primitives, so this
+                            // never fails in practice — but if it ever does,
+                            // abort the body rather than emit malformed JSON:
+                            // the stream jumps to End, `record_synced` never
+                            // runs, and the device retries the same delta.
+                            let json = match serde_json::to_vec(item) {
+                                Ok(j) => j,
+                                Err(e) => {
+                                    return Some((
+                                        Err(std::io::Error::other(e)),
+                                        (changes, base, token, SyncPhase::End),
+                                    ));
+                                }
+                            };
+                            if emitted > 0 || !piece.is_empty() {
+                                piece.push(b',');
+                            }
+                            piece.extend_from_slice(&json);
+                        }
+                        let next = if change + 1 < changes.len() {
+                            SyncPhase::Item {
+                                change: change + 1,
+                                emitted: emitted + items.len(),
+                            }
+                        } else {
+                            SyncPhase::Close
+                        };
+                        return Some((ok(Bytes::from(piece)), (changes, base, token, next)));
+                    }
+                    SyncPhase::Close => {
+                        // Body is complete: commit the snapshot. A failure here
+                        // is deliberately non-fatal to the response (the bytes
+                        // are already on the wire) — the device just replays
+                        // the same delta next sync, which is safe.
+                        if let Err(e) = db::kobo::record_synced(&pool, device_id, &changes).await {
+                            tracing::warn!(device_id, error = %e, "kobo snapshot advance failed");
+                        }
+                        Bytes::from_static(b"]")
+                    }
+                    SyncPhase::End => return None,
+                };
+                Some((ok(chunk), (changes, base, token, SyncPhase::End)))
+            }
         },
     );
 
@@ -156,11 +198,11 @@ async fn library_sync(
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, "application/json"),
-            // Opaque per-device cursor; the device echoes it back but we never
-            // parse it (the real per-device snapshot cursor lands with #923).
+            // Opaque; the device echoes it back but the real cursor is the
+            // per-device snapshot (`kobo_device_books`), never this value.
             (
                 header::HeaderName::from_static("x-kobo-synctoken"),
-                "slice-a",
+                "omnibus",
             ),
         ],
         Body::from_stream(stream),
@@ -168,10 +210,11 @@ async fn library_sync(
         .into_response()
 }
 
-/// Streaming position for [`library_sync`]'s JSON-array body.
+/// Streaming position for [`library_sync`]'s JSON-array body. `emitted`
+/// counts items already written, since one change can fan out into two items.
 enum SyncPhase {
     Open,
-    Item(usize),
+    Item { change: usize, emitted: usize },
     Close,
     End,
 }

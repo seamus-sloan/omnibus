@@ -107,7 +107,7 @@ async fn library_sync_streams_every_book_with_no_cap() {
         .unwrap();
 
     assert_eq!(res.status(), StatusCode::OK);
-    assert_eq!(res.headers().get("x-kobo-synctoken").unwrap(), "slice-a");
+    assert_eq!(res.headers().get("x-kobo-synctoken").unwrap(), "omnibus");
     let json = body_json(res).await;
     // Deliberately never adopts Calibre-Web's SYNC_ITEM_LIMIT=100 cap.
     assert_eq!(json.as_array().unwrap().len(), 150);
@@ -354,10 +354,12 @@ async fn library_sync_never_returns_another_users_opted_in_books() {
 #[tokio::test]
 async fn library_sync_reflects_an_opt_in_toggled_off() {
     // AC2: toggling the flag changes what the *next* sync returns, with no
-    // intermediate publish step.
+    // intermediate publish step. Since the per-device delta (#922) the device
+    // is told to *archive* the book — a `ChangedEntitlement{IsRemoved:true}` —
+    // rather than just no longer seeing it.
     let (app, pool, token, uid) = fixture().await;
     let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
-    opt_in(&pool, uid, &[uuid]).await;
+    opt_in(&pool, uid, std::slice::from_ref(&uuid)).await;
 
     let first = app
         .clone()
@@ -386,10 +388,83 @@ async fn library_sync_reflects_an_opt_in_toggled_off() {
     .unwrap();
 
     let second = app
+        .clone()
+        .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
+        .await
+        .unwrap();
+    let items = body_json(second).await;
+    let arr = items.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    let removed = &arr[0]["ChangedEntitlement"]["BookEntitlement"];
+    assert_eq!(removed["Id"], uuid);
+    assert_eq!(removed["IsRemoved"], true);
+
+    // And once the removal is delivered, the third sync is a true no-op.
+    let third = app
+        .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
+        .await
+        .unwrap();
+    assert!(body_json(third).await.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn library_sync_returns_an_empty_delta_once_the_device_is_current() {
+    // The snapshot advances when the body drains, so an unchanged library
+    // yields an empty second sync instead of a full re-download.
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    opt_in(&pool, uid, std::slice::from_ref(&uuid)).await;
+
+    let first = app
+        .clone()
+        .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
+        .await
+        .unwrap();
+    assert_eq!(body_json(first).await.as_array().unwrap().len(), 1);
+
+    let second = app
         .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
         .await
         .unwrap();
     assert!(body_json(second).await.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn library_sync_emits_the_change_pair_when_a_book_is_modified() {
+    // A modified book re-syncs as ChangedProductMetadata + ChangedReadingState
+    // — never a duplicate NewEntitlement, which would double the shelf row on
+    // the device.
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    opt_in(&pool, uid, std::slice::from_ref(&uuid)).await;
+    let first = app
+        .clone()
+        .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
+        .await
+        .unwrap();
+    assert_eq!(body_json(first).await.as_array().unwrap().len(), 1);
+
+    sqlx::query("UPDATE books SET last_modified = 9999999999 WHERE uuid = ?")
+        .bind(&uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let second = app
+        .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
+        .await
+        .unwrap();
+    let items = body_json(second).await;
+    let arr = items.as_array().unwrap();
+    assert_eq!(arr.len(), 2);
+    assert_eq!(
+        arr[0]["ChangedProductMetadata"]["BookMetadata"]["EntitlementId"],
+        uuid
+    );
+    assert_eq!(
+        arr[1]["ChangedReadingState"]["ReadingState"]["EntitlementId"],
+        uuid
+    );
 }
 
 #[tokio::test]
