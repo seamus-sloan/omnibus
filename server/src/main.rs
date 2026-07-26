@@ -297,7 +297,7 @@ mod server {
                     tracing::info_span!(
                         "request",
                         method = %req.method(),
-                        path = %req.uri().path(),
+                        path = %redact_path(req.uri().path()),
                         version = ?req.version(),
                     )
                 })
@@ -305,5 +305,48 @@ mod server {
                     tower_http::trace::DefaultOnResponse::new().level(tracing::Level::INFO),
                 ),
         )
+    }
+
+    /// Redact the `<TOKEN>` segment of a `/kobo/<TOKEN>/…` path before it
+    /// reaches the trace span. Kobo devices carry a long-lived (90-day)
+    /// session token directly in the URL path (see
+    /// `backend::kobo::extractor::kobo_path_token`), so logging the raw path
+    /// would leak a durable credential to stderr and the on-disk JSON sink.
+    /// Every other path is returned unchanged, borrowed rather than
+    /// allocated — this runs on every request, and only the Kobo case needs
+    /// to build a new string.
+    fn redact_path(path: &str) -> std::borrow::Cow<'_, str> {
+        let mut segs = path.split('/');
+        match (segs.next(), segs.next(), segs.next()) {
+            (Some(""), Some("kobo"), Some(_token)) => {
+                let rest: String = segs.map(|s| format!("/{s}")).collect();
+                std::borrow::Cow::Owned(format!("/kobo/[REDACTED]{rest}"))
+            }
+            _ => std::borrow::Cow::Borrowed(path),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::redact_path;
+
+        #[test]
+        fn redact_path_replaces_the_token_segment_of_a_kobo_path() {
+            assert_eq!(
+                redact_path("/kobo/abc123/v1/library/sync"),
+                "/kobo/[REDACTED]/v1/library/sync"
+            );
+            assert_eq!(
+                redact_path("/kobo/abc123/v1/download/some-uuid"),
+                "/kobo/[REDACTED]/v1/download/some-uuid"
+            );
+        }
+
+        #[test]
+        fn redact_path_leaves_non_kobo_paths_unchanged() {
+            assert_eq!(redact_path("/api/ebooks"), "/api/ebooks");
+            assert_eq!(redact_path("/"), "/");
+            assert_eq!(redact_path("/kobo"), "/kobo");
+        }
     }
 }
