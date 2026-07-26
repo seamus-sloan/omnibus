@@ -3,7 +3,7 @@
 //! pattern) so background threads never touch Dioxus signals; UI
 //! components subscribe inside a `use_future`. The drain replays the
 //! outbox in enqueue order with last-write-wins semantics — the project's
-//! committed conflict stance (docs/roadmap/2-1-progress-sync.md) — and a
+//! committed conflict stance — and a
 //! stale guard on progress writes so a queued position can't clobber a
 //! newer one written by another device while this one was offline.
 

@@ -2,7 +2,7 @@
 
 Guidance for Claude Code when working in this repo. This file is an index — detailed rules and recipes live in [.claude/](.claude/).
 
-Omnibus is a self-hosted ebook/audiobook library (see [docs/roadmap/0-0-summary.md](docs/roadmap/0-0-summary.md)). Foundations and browse/discovery have shipped; reading/listening is in progress — the UI is a real library app (landing grid + table, EPUB reader, audiobook player, command-palette search, auth, author/series/tag discovery).
+Omnibus is a self-hosted ebook/audiobook library. Foundations and browse/discovery have shipped; reading/listening is in progress — the UI is a real library app (landing grid + table, EPUB reader, audiobook player, command-palette search, auth, author/series/tag discovery).
 
 ## Rules
 
@@ -105,4 +105,4 @@ just e2e-mobile                                             # port from dev-up e
 
 ## Project direction
 
-See [docs/roadmap/0-0-summary.md](docs/roadmap/0-0-summary.md) for the phased roadmap (foundations, browse/discovery, reading/listening, personalization, device sync, admin, mobile).
+See the [roadmap project board](https://github.com/users/seamus-sloan/projects/2/views/9) for the phased plan (foundations, browse/discovery, reading/listening, personalization, device sync, admin, mobile).

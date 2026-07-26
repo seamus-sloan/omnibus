@@ -1,6 +1,6 @@
 # Atrium — design system design doc
 
-**Initiative:** [F1.7 Atrium design system](../roadmap/1-7-atrium-design-system.md). **Phase:** 1 — Browse & discovery. **Status:** in progress.
+**Initiative:** F1.7 Atrium design system. **Phase:** 1 — Browse & discovery. **Status:** in progress.
 
 A cinematic-dark visual direction for Omnibus, sourced from a Claude Design handoff. The design system spans tokens, primitives, and a per-book cover-derived accent. This doc covers only the **foundation delivery** — tokens + primitives + Library reskin. Every other Atrium screen is tracked as its own roadmap initiative (see §9).
 
@@ -201,7 +201,7 @@ All changes in this delivery are reversible.
 
 ### Metrics / alerts / dashboards
 
-N/A — no metrics pipeline yet. Tracked under [F5.2 Observability](../roadmap/5-2-observability.md).
+N/A — no metrics pipeline yet. Tracked under F5.2 Observability.
 
 ---
 
@@ -252,21 +252,21 @@ N/A — no metrics pipeline yet. Tracked under [F5.2 Observability](../roadmap/5
 
 ### Not tested (and why)
 
-- Visual diff of every cover template — Playwright pixel-diffs are flaky on font subpixel rendering. Tracked under [F5.2](../roadmap/5-2-observability.md) for visual regression tooling.
+- Visual diff of every cover template — Playwright pixel-diffs are flaky on font subpixel rendering. Tracked under F5.2 for visual regression tooling.
 - Per-book contrast WCAG validation. We clamp lightness to a readable band; full validation would gate indexing on a slow check. Future: admin-surface contrast warning.
 
 ---
 
-## 9. Roadmap doc additions
+## 9. Roadmap initiatives
 
-| New file | Tracks | Status |
+| Initiative | Tracks | Status |
 |---|---|---|
-| [F1.7 Atrium design system](../roadmap/1-7-atrium-design-system.md) | This delivery — tokens, primitives, Library reskin | In progress |
-| [F1.8 Discovery pages](../roadmap/1-8-discovery-pages.md) | Author / Series / Tag-cloud pages | Planned |
-| [F3.4 Stats](../roadmap/3-4-stats.md) | Year-in-review reading stats | Planned (depends on F2.1) |
-| [F3.1 Shelves](../roadmap/3-1-shelves.md) | Smart + hand-picked shelves, private/public | Planned |
-| [F5.6 Admin health](../roadmap/5-6-admin-health.md) | Server health dashboard | Planned (splits from F5.4) |
-| [F5.7 Journal & quote cards](../roadmap/5-7-journal-quote-cards.md) | Markdown journal + quote card composer | Planned (extends F3.2) |
+| F1.7 Atrium design system | This delivery — tokens, primitives, Library reskin | In progress |
+| F1.8 Discovery pages | Author / Series / Tag-cloud pages | Planned |
+| F3.4 Stats | Year-in-review reading stats | Planned (depends on F2.1) |
+| F3.1 Shelves | Smart + hand-picked shelves, private/public | Planned |
+| F5.6 Admin health | Server health dashboard | Planned (splits from F5.4) |
+| F5.7 Journal & quote cards | Markdown journal + quote card composer | Planned (extends F3.2) |
 
 Existing initiatives that gain an Atrium "redesign" sub-task:
 
