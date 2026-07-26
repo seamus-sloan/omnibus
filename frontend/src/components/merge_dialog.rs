@@ -356,7 +356,7 @@ fn render_candidate(
     target_series: Option<String>,
     mut selected: Signal<Option<EbookMetadata>>,
 ) -> Element {
-    let title = book.title.clone().unwrap_or_else(|| book.filename.clone());
+    let title = book.display_title();
     // Primary author only — joining every creator surfaces calibre's
     // book-producer contributor ("calibre (x.y) [url]") as junk, and the
     // keeper rail above already shows just the lead author.
