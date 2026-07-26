@@ -10,6 +10,7 @@ use dioxus::prelude::*;
 use dioxus_router::{use_navigator, Link};
 use omnibus_shared::{EbookMetadata, ProgressFormat, ProgressUpdate};
 
+use super::helpers::effective_scrub_position;
 use crate::components::atrium::Cover;
 use crate::contexts::use_server_url;
 use crate::data;
@@ -317,13 +318,18 @@ fn render_player(p: PlayerProps) -> Element {
     // While dragging, every readout previews the drag position and the current
     // chapter is re-derived from it, so the bar/times track the thumb; at rest
     // `effective` is the true elapsed. The transport handlers below still act
-    // on the real `elapsed` / `chapter_index`, never the preview.
-    let effective = scrub().unwrap_or(elapsed);
-    let disp_index = if scrub().is_some() {
-        chapter_index_for_elapsed(&view.chapters, effective)
-    } else {
-        chapter_index
-    };
+    // on the real `elapsed` / `chapter_index`, never the preview. Shared with
+    // the web player via `effective_scrub_position` so the two derivations
+    // can't silently diverge.
+    let (effective, disp_index, eff_remaining) = effective_scrub_position(
+        &view.chapters,
+        elapsed,
+        duration,
+        chapter_index,
+        (duration - elapsed).max(0.0),
+        scrub(),
+        chapter_index_for_elapsed,
+    );
     let current = view.chapters.get(disp_index);
     let chapter_no = disp_index + 1;
     let chapter_count = view.chapters.len();
@@ -335,7 +341,7 @@ fn render_player(p: PlayerProps) -> Element {
         view::remaining_in_chapter(&view.chapters, disp_index, effective),
         rate,
     );
-    let remaining_book = remaining_at_rate((duration - effective).max(0.0), rate);
+    let remaining_book = remaining_at_rate(eff_remaining, rate);
     let scrub_max = if duration > 0.0 { duration } else { 1.0 };
 
     let accent_style = view

@@ -1,11 +1,9 @@
 //! Segmented chapter progress bar doubling as a draggable seek scrubber.
 //!
-//! Each chapter is a flex segment sized by `flex: {duration_seconds}`; the
-//! played portion fills proportionally with accent colour. A transparent
-//! full-width `<input type="range">` layered on top captures click / drag /
-//! keyboard seeking (the visible playhead is drawn separately). Dragging
-//! previews the target position on the bar and only seeks the audio on
-//! release, so a scrub across a multi-part book doesn't thrash `el.src`.
+//! Each chapter is a flex segment sized by `flex: {duration_seconds}`; a
+//! transparent `<input type="range">` layered on top captures click / drag /
+//! keyboard seeking. See [`helpers::effective_scrub_position`] for the
+//! drag-preview contract.
 
 #![cfg(not(feature = "mobile"))]
 
@@ -13,7 +11,7 @@ use dioxus::prelude::*;
 use omnibus_shared::ChapterInfo;
 
 use super::chapter_nav::chapter_index_for_elapsed;
-use super::helpers::format_hms;
+use super::helpers::{self, format_hms};
 
 /// Fill percentage for a chapter segment in the progress bar.
 /// `i` is the segment index, `current` is the active chapter index.
@@ -132,6 +130,105 @@ pub(super) struct ChapterMapProps {
     pub on_seek: EventHandler<f64>,
 }
 
+/// Scrub-state readouts derived for one render of [`ChapterMap`]: the
+/// previewed position, current chapter, remaining time, thumb offset, and
+/// whether a drag is in progress.
+struct ScrubState {
+    effective: f64,
+    eff_current: usize,
+    eff_remaining: f64,
+    thumb: f64,
+    is_scrubbing: bool,
+}
+
+/// Derive [`ScrubState`] from the raw `scrubbing` / `scrub_secs` signal pair
+/// via the shared [`helpers::effective_scrub_position`] (web's bool+f64 pair
+/// normalizes to that function's `Option<f64>` shape at this one call site).
+fn scrub_state(
+    chapters: &[ChapterInfo],
+    elapsed: f64,
+    duration: f64,
+    current_chapter_index: usize,
+    remaining: f64,
+    scrubbing: bool,
+    scrub_secs: f64,
+) -> ScrubState {
+    let scrub = scrubbing.then_some(scrub_secs);
+    let (effective, eff_current, eff_remaining) = helpers::effective_scrub_position(
+        chapters,
+        elapsed,
+        duration,
+        current_chapter_index,
+        remaining,
+        scrub,
+        chapter_index_for_elapsed,
+    );
+    let max = if duration > 0.0 { duration } else { 1.0 };
+    ScrubState {
+        effective,
+        eff_current,
+        eff_remaining,
+        thumb: thumb_pct(effective, max),
+        is_scrubbing: scrubbing,
+    }
+}
+
+/// Render the segmented chapter bar: one flex segment per chapter (or a
+/// single fallback segment when there are no chapter markers), each filled
+/// proportionally to how much of it has played. Pure visual — the range
+/// overlay in [`ChapterMap`] owns pointer interaction (`pointer-events: none`
+/// in CSS).
+fn segment_bar(
+    chapters: &[ChapterInfo],
+    eff_current: usize,
+    effective: f64,
+    duration: f64,
+) -> Element {
+    rsx! {
+        div { class: "lp-chapter-seg-row", "data-testid": "chapter-map",
+            if chapters.is_empty() {
+                div { class: "lp-chapter-seg", style: "flex: 1;",
+                    div {
+                        class: "lp-chapter-seg-fill",
+                        style: "width: {no_chapter_fill_pct(effective, duration):.1}%;",
+                    }
+                }
+            } else {
+                for (i, ch) in chapters.iter().enumerate() {
+                    {
+                        let flex_val = ch.duration_seconds.max(0.1);
+                        let fill = chapter_fill_pct(
+                            i,
+                            eff_current,
+                            effective,
+                            ch.start_seconds,
+                            ch.duration_seconds,
+                        );
+                        let class_name = if i == eff_current {
+                            "lp-chapter-seg current"
+                        } else {
+                            "lp-chapter-seg"
+                        };
+                        let title = ch.title.clone();
+                        rsx! {
+                            div {
+                                key: "{ch.ordinal}",
+                                class: "{class_name}",
+                                style: "flex: {flex_val};",
+                                title: "{title}",
+                                div {
+                                    class: "lp-chapter-seg-fill",
+                                    style: "width: {fill:.1}%;",
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// The chapter progress map / seek scrubber component.
 #[component]
 pub(super) fn ChapterMap(props: ChapterMapProps) -> Element {
@@ -145,31 +242,28 @@ pub(super) fn ChapterMap(props: ChapterMapProps) -> Element {
     } = props;
 
     // Local scrub state. While the user drags, the segments / thumb / time
-    // readouts preview `scrub_secs`; the audio element is only seeked on
-    // release so dragging across a multi-part book doesn't thrash `el.src`.
+    // readouts preview `scrub_secs` (see `scrub_state`); the audio element is
+    // only seeked on release so dragging across a multi-part book doesn't
+    // thrash `el.src`.
     let mut scrubbing = use_signal(|| false);
     let mut scrub_secs = use_signal(|| 0.0_f64);
 
+    let ScrubState {
+        effective,
+        eff_current,
+        eff_remaining,
+        thumb,
+        is_scrubbing,
+    } = scrub_state(
+        &chapters,
+        elapsed,
+        duration,
+        current_chapter_index,
+        remaining,
+        scrubbing(),
+        scrub_secs(),
+    );
     let max = if duration > 0.0 { duration } else { 1.0 };
-    let is_scrubbing = scrubbing();
-    let effective = if is_scrubbing {
-        scrub_secs().clamp(0.0, max)
-    } else {
-        elapsed
-    };
-    // Track the current chapter from the preview so segment fills follow the
-    // thumb mid-drag; fall back to the parent's index at rest.
-    let eff_current = if is_scrubbing {
-        chapter_index_for_elapsed(&chapters, effective)
-    } else {
-        current_chapter_index
-    };
-    let eff_remaining = if is_scrubbing {
-        (duration - effective).max(0.0)
-    } else {
-        remaining
-    };
-    let thumb = thumb_pct(effective, max);
 
     let on_input = move |evt: Event<FormData>| {
         if let Ok(v) = evt.value().parse::<f64>() {
@@ -193,49 +287,7 @@ pub(super) fn ChapterMap(props: ChapterMapProps) -> Element {
     rsx! {
         div { class: "lp-chapter-map",
             div { class: "{scrub_class}",
-                // Segmented bar — pure visual; the range overlay owns pointer
-                // interaction (`pointer-events: none` in CSS).
-                div { class: "lp-chapter-seg-row", "data-testid": "chapter-map",
-                    if chapters.is_empty() {
-                        div { class: "lp-chapter-seg", style: "flex: 1;",
-                            div {
-                                class: "lp-chapter-seg-fill",
-                                style: "width: {no_chapter_fill_pct(effective, duration):.1}%;",
-                            }
-                        }
-                    } else {
-                        for (i, ch) in chapters.iter().enumerate() {
-                            {
-                                let flex_val = ch.duration_seconds.max(0.1);
-                                let fill = chapter_fill_pct(
-                                    i,
-                                    eff_current,
-                                    effective,
-                                    ch.start_seconds,
-                                    ch.duration_seconds,
-                                );
-                                let class_name = if i == eff_current {
-                                    "lp-chapter-seg current"
-                                } else {
-                                    "lp-chapter-seg"
-                                };
-                                let title = ch.title.clone();
-                                rsx! {
-                                    div {
-                                        key: "{ch.ordinal}",
-                                        class: "{class_name}",
-                                        style: "flex: {flex_val};",
-                                        title: "{title}",
-                                        div {
-                                            class: "lp-chapter-seg-fill",
-                                            style: "width: {fill:.1}%;",
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                {segment_bar(&chapters, eff_current, effective, duration)}
 
                 // Visible playhead + drag-time bubble.
                 div { class: "lp-chapter-thumb", style: "left: {thumb:.3}%;" }
