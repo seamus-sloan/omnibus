@@ -19,13 +19,16 @@ use super::*;
 use crate::auth::test_support as auth_test_support;
 
 /// Kobo router wired to a fresh in-memory DB, plus a valid path token and the
-/// owning user's id (for read-state assertions).
+/// owning user's id (for read-state assertions). The token is a real per-device
+/// `kobo_devices` credential (#923), not a session token.
 async fn fixture() -> (Router, SqlitePool, String, i64) {
     let pool = db::init_db("sqlite::memory:").await.unwrap();
     let app = kobo_router(AppState::new(pool.clone()));
     let user = auth_test_support::create_user(&pool, "kobo-reader").await;
-    let token = auth_test_support::bearer_token(&pool, user.id).await;
-    (app, pool, token, user.id)
+    let device = db::kobo_devices::create_device(&pool, user.id, "Test Kobo")
+        .await
+        .unwrap();
+    (app, pool, device.token, user.id)
 }
 
 async fn body_json(res: Response) -> Value {
@@ -162,6 +165,62 @@ async fn put_state_persists_read_status_and_returns_success() {
         .unwrap()
         .unwrap();
     assert_eq!(rec.status, ReadStatus::Finished);
+}
+
+#[tokio::test]
+async fn a_revoked_token_is_rejected() {
+    let (app, pool, token, uid) = fixture().await;
+    // Revoke the only device this token belongs to.
+    let dev = db::kobo_devices::list_devices(&pool, uid).await.unwrap();
+    db::kobo_devices::revoke_device(&pool, uid, dev[0].id)
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn state_push_is_scoped_to_the_tokens_owner() {
+    // AC4: a device token authorizes only its owner's user-scoped state — a
+    // second user's token records read status under the second user, never the
+    // first.
+    let (app, pool, _owner_token, owner_id) = fixture().await;
+    let other = auth_test_support::create_user(&pool, "other-reader").await;
+    let other_token = db::kobo_devices::create_device(&pool, other.id, "Other Kobo")
+        .await
+        .unwrap()
+        .token;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+
+    let body = serde_json::json!({
+        "ReadingStates": [{ "StatusInfo": { "Status": "Finished" } }]
+    });
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/kobo/{other_token}/v1/library/{uuid}/state"))
+                .method("PUT")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Recorded under `other`, not the fixture's owner.
+    assert!(db::read_status::get_read_status(&pool, other.id, &uuid)
+        .await
+        .unwrap()
+        .is_some());
+    assert!(db::read_status::get_read_status(&pool, owner_id, &uuid)
+        .await
+        .unwrap()
+        .is_none());
 }
 
 #[tokio::test]

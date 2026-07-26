@@ -11,6 +11,10 @@ mod books;
 mod highlights;
 mod journals;
 mod kindle;
+// Per-user Kobo device tokens (#923) — web (server-fn) + SSR stubs; the Account
+// settings card is web-only, so there's no mobile transport.
+#[cfg(not(feature = "mobile"))]
+mod kobo;
 #[cfg(not(feature = "mobile"))]
 mod logs;
 mod physical;
@@ -40,6 +44,8 @@ pub use books::*;
 pub use highlights::*;
 pub use journals::*;
 pub use kindle::*;
+#[cfg(not(feature = "mobile"))]
+pub use kobo::*;
 #[cfg(not(feature = "mobile"))]
 pub use logs::*;
 pub use physical::*;

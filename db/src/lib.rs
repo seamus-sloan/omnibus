@@ -28,6 +28,7 @@ pub mod journals;
 pub mod kepub;
 pub mod kindle;
 pub mod kobo;
+pub mod kobo_devices;
 pub mod library_layout;
 pub mod logs;
 pub mod merge;

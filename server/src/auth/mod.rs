@@ -15,7 +15,7 @@ pub mod strategy;
 pub mod test_support;
 
 pub use csrf::origin_check;
-pub use extractor::{resolve_session_token, AdminUser, AuthUser, MediaAuthUser};
+pub use extractor::{AdminUser, AuthUser, MediaAuthUser};
 pub use gate::require_auth;
 pub use handlers::auth_router;
 
