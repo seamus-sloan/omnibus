@@ -231,7 +231,9 @@ async fn revoke_all_sessions_for_user_is_scoped_to_the_target_user() {
     let p = pool().await;
     let alice = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
     // Registration auto-disables after the first user; re-enable for bob.
-    crate::auth::set_registration_enabled(&p, true).await.unwrap();
+    crate::auth::set_registration_enabled(&p, true)
+        .await
+        .unwrap();
     let bob = create_user(&p, "bob", "bunker9-longer-pass").await.unwrap();
     let alices = create_session(&p, alice.id, None, SessionKind::Cookie, 3600)
         .await
