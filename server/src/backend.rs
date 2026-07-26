@@ -32,6 +32,7 @@ mod highlights;
 mod image_upload;
 mod journals;
 mod kindle;
+mod kobo;
 mod overrides;
 mod physical;
 mod progress;
@@ -48,6 +49,8 @@ mod summary;
 mod tags;
 mod uploads;
 mod users;
+
+pub use kobo::kobo_router;
 
 /// Per-IP rate-limit budget for `/api/search/*` and the `/api/rpc/search-*`
 /// server functions. Each request runs four FTS5 queries plus joins, so the

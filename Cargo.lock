@@ -4462,6 +4462,7 @@ dependencies = [
  "axum-prometheus",
  "dioxus",
  "epub",
+ "futures-util",
  "omnibus-db",
  "omnibus-frontend",
  "omnibus-shared",
