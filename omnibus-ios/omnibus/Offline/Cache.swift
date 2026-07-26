@@ -35,7 +35,13 @@ enum CacheKey {
     static func ratingsOthers(_ uuid: String) -> String { "ratings_others:\(uuid)" }
     static func readStatus(_ uuid: String) -> String { "read_status:\(uuid)" }
     static func stats(_ range: StatsRange) -> String { "stats:\(range.rawValue)" }
-    static func manifest(_ uuid: String) -> String { "manifest:\(uuid)" }
+    /// Scoped by file as well as book when a specific `book_files` row is
+    /// requested: each file lays out its own timeline, so a manifest cached
+    /// for one narration must never answer for another. The no-file key is
+    /// unchanged so manifests cached before selection existed stay valid.
+    static func manifest(_ uuid: String, fileID: Int64? = nil) -> String {
+        fileID.map { "manifest:\(uuid):\($0)" } ?? "manifest:\(uuid)"
+    }
     static func libraryPage(_ signature: String) -> String { "books_page:\(signature)" }
     static func playbackRate(_ uuid: String) -> String { "audio_rate:\(uuid)" }
     static func suggestions(_ uuid: String) -> String { "suggestions:\(uuid)" }
