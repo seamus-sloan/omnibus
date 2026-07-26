@@ -551,9 +551,18 @@ async fn norm_candidate_fast_path_uses_an_index_seek_not_a_table_scan() {
         .map(|(_, _, _, s)| s.as_str())
         .collect::<Vec<_>>()
         .join(" | ");
+    // Only forbid a table scan on `books`/`b` itself — whether SQLite scans or
+    // seeks the (typically tiny) `metadata_overrides` table for the `NOT
+    // EXISTS` probe is not the regression this test guards against. Match on
+    // a trailing word boundary so a differently-aliased scan elsewhere in the
+    // plan (e.g. `bal` for `books_authors_link`) can't false-positive here.
+    let scans_books = plan
+        .iter()
+        .any(|(_, _, _, s)| s == "SCAN b" || s.starts_with("SCAN b "));
+    assert!(!scans_books, "expected no table scan on books, got: {text}");
     assert!(
-        text.contains("SEARCH b") && text.contains("idx_books_norm") && !text.contains("SCAN"),
-        "expected an idx_books_norm index seek, got: {text}"
+        text.contains("SEARCH b") && text.contains("idx_books_norm"),
+        "expected an idx_books_norm index seek on books, got: {text}"
     );
 }
 
