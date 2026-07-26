@@ -47,6 +47,16 @@ pub(super) fn transform_opf(opf: &[u8], book: &EbookMetadata) -> anyhow::Result<
     // When `Some(d)`, we're inside a managed element's subtree opened at depth
     // `d`; swallow every event until its matching end at `d`.
     let mut skip_depth: Option<i32> = None;
+    // We inject `dc:`/`opf:`-prefixed markup, so those prefixes must be bound by
+    // the source OPF (they normally are, on `<package>` or `<metadata>`). Track
+    // the declarations we pass; if the injected prefixes aren't bound we bail
+    // rather than emit an unbound-prefix (invalid) OPF the caller would serve.
+    let mut dc_bound = false;
+    let mut opf_bound = false;
+    let needs_opf = book.creators.iter().any(|c| {
+        c.role.as_deref().is_some_and(|s| !s.is_empty())
+            || c.file_as.as_deref().is_some_and(|s| !s.is_empty())
+    });
     let mut buf = Vec::new();
 
     loop {
@@ -58,6 +68,12 @@ pub(super) fn transform_opf(opf: &[u8], book: &EbookMetadata) -> anyhow::Result<
 
             Event::Start(e) => {
                 depth += 1;
+                if declares(&e, b"xmlns:dc") {
+                    dc_bound = true;
+                }
+                if declares(&e, b"xmlns:opf") {
+                    opf_bound = true;
+                }
                 if skip_depth.is_some() {
                     // Inside a dropped subtree — swallow.
                 } else if metadata_depth.is_none() && is_metadata(e.name().as_ref()) {
@@ -89,8 +105,20 @@ pub(super) fn transform_opf(opf: &[u8], book: &EbookMetadata) -> anyhow::Result<
                     continue;
                 }
                 if metadata_depth == Some(depth) {
-                    // Closing `<metadata>` — inject the regenerated children
-                    // just before the end tag, then fall through to write it.
+                    // Closing `<metadata>` — inject the regenerated children just
+                    // before the end tag. Refuse when a prefix we'd emit isn't
+                    // bound, so the caller falls back to the untouched source EPUB
+                    // instead of shipping invalid XML.
+                    if !dc_bound {
+                        anyhow::bail!(
+                            "OPF does not bind xmlns:dc; refusing to inject dc:* metadata"
+                        );
+                    }
+                    if needs_opf && !opf_bound {
+                        anyhow::bail!(
+                            "OPF does not bind xmlns:opf; refusing to inject opf:* attributes"
+                        );
+                    }
                     writer
                         .get_mut()
                         .extend_from_slice(render_managed(book).as_bytes());
@@ -110,6 +138,11 @@ pub(super) fn transform_opf(opf: &[u8], book: &EbookMetadata) -> anyhow::Result<
     }
 
     Ok(writer.into_inner())
+}
+
+/// Whether `e` declares the given namespace attribute (e.g. `xmlns:dc`).
+fn declares(e: &quick_xml::events::BytesStart, attr: &[u8]) -> bool {
+    e.attributes().flatten().any(|a| a.key.as_ref() == attr)
 }
 
 /// True for the OPF `<metadata>` container by local name (prefix-agnostic:

@@ -91,18 +91,23 @@ async fn touch_book_last_modified(
     conn: &mut SqliteConnection,
     book_uuid: &str,
 ) -> Result<(), sqlx::Error> {
-    if let Some(book_id) = resolve_book_id_by_uuid_exec(&mut *conn, book_uuid)
-        .await
-        .map_err(|e| match e {
-            crate::books::BooksError::Db(inner) => inner,
-            other => sqlx::Error::Protocol(other.to_string()),
-        })?
-    {
-        sqlx::query("UPDATE books SET last_modified = strftime('%s','now') WHERE id = ?")
-            .bind(book_id)
-            .execute(&mut *conn)
-            .await?;
-    }
+    // Resolve uuid→id (merged-uuid aware, same UNION as
+    // `resolve_book_id_by_uuid_exec`) inline so the write stays on `sqlx::Error`
+    // — a bare id lookup can't produce the `BooksError::OverridesJson` variant,
+    // so routing through the typed resolver would only add a misleading map_err.
+    // A uuid with no live book row updates zero rows (a no-op).
+    sqlx::query(
+        "UPDATE books SET last_modified = strftime('%s','now')
+         WHERE id = (
+             SELECT id FROM books WHERE uuid = ?1
+             UNION ALL
+             SELECT book_id FROM merged_uuids WHERE uuid = ?1
+             LIMIT 1
+         )",
+    )
+    .bind(book_uuid)
+    .execute(&mut *conn)
+    .await?;
     Ok(())
 }
 

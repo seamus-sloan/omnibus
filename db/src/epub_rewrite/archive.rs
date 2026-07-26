@@ -30,9 +30,31 @@ pub(super) fn rewrite_archive(
     let out = File::create(dst).context("create rewritten epub")?;
     let mut writer = ZipWriter::new(out);
 
+    // EPUB OCF requires `mimetype` to be the archive's *first* entry, stored
+    // uncompressed. Emit it explicitly up front so the output is spec-correct
+    // even when the source stored it out of order (we can't rely on the source
+    // iteration order); the main loop then skips it.
+    if let Ok(mut mt) = archive.by_name("mimetype") {
+        let mut raw = Vec::with_capacity(mt.size() as usize);
+        mt.read_to_end(&mut raw).context("read mimetype entry")?;
+        drop(mt);
+        writer
+            .start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .context("start mimetype entry")?;
+        writer.write_all(&raw).context("write mimetype entry")?;
+    }
+
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).context("read zip entry")?;
         let name = entry.name().to_owned();
+
+        // Already emitted first, above.
+        if name == "mimetype" {
+            continue;
+        }
 
         if entry.is_dir() {
             writer
@@ -41,13 +63,8 @@ pub(super) fn rewrite_archive(
             continue;
         }
 
-        // The `mimetype` entry must be the first entry and stored uncompressed
-        // (EPUB OCF). Everything else deflates.
-        let options = if name == "mimetype" {
-            SimpleFileOptions::default().compression_method(CompressionMethod::Stored)
-        } else {
-            SimpleFileOptions::default().compression_method(CompressionMethod::Deflated)
-        };
+        // Every non-mimetype entry deflates.
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
 
         let bytes = if name == opf_path {
             let mut raw = Vec::with_capacity(entry.size() as usize);

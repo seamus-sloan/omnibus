@@ -168,6 +168,26 @@ fn transform_opf_drops_managed_fields_when_effective_value_is_absent() {
     );
 }
 
+#[test]
+fn transform_opf_errors_when_dc_namespace_is_unbound() {
+    // Metadata that never binds `xmlns:dc` — injecting `<dc:*>` would be invalid
+    // XML, so the rewrite must fail and let the caller serve the source EPUB.
+    let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata>
+    <identifier id="id">book-1</identifier>
+    <title>Original</title>
+  </metadata>
+  <manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml"/></manifest>
+  <spine><itemref idref="nav"/></spine>
+</package>"#;
+    let err = transform_opf(opf.as_bytes(), &overridden_book()).unwrap_err();
+    assert!(
+        err.to_string().contains("xmlns:dc"),
+        "expected an unbound-dc error, got: {err}"
+    );
+}
+
 // --- encode_cover_for --------------------------------------------------
 
 #[test]
