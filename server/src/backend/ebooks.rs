@@ -317,12 +317,14 @@ pub(super) async fn get_ebook_kepub(
         }
     }
 
-    // Fallback: the plain EPUB.
-    let path = match db::book_file_path(&state.pool, id, "EPUB").await {
+    // Fallback: the plain EPUB — still override-baked so a Kobo without
+    // kepubify support (or after a conversion failure) shows the user's edits.
+    let source = match db::book_file_path(&state.pool, id, "EPUB").await {
         Ok(Some(p)) => p,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(e) => return internal("book_file_path", e),
     };
+    let path = rewritten_or_source(&state, id, source).await;
     match tokio::fs::read(&path).await {
         Ok(bytes) => download_response(bytes, &format!("{canonical}.epub")),
         Err(e) => {
@@ -390,11 +392,36 @@ pub(super) async fn get_ebook_download(
     Query(query): Query<EbookFileQuery>,
     req: Request,
 ) -> Response {
-    let path = match resolve_epub_path(&state, &uuid, query.file_id).await {
+    let source = match resolve_epub_path(&state, &uuid, query.file_id).await {
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    // A saved download must carry the user's metadata/cover edits (F5.8 #1372),
+    // so serve the override-baked EPUB when the book has any; otherwise the
+    // source verbatim.
+    let path = match db::resolve_book_id_by_uuid(&state.pool, &uuid).await {
+        Ok(Some(id)) => rewritten_or_source(&state, id, source).await,
+        _ => source,
+    };
     super::serve_download(req, &path, "application/epub+zip").await
+}
+
+/// The override-baked export EPUB for `book_id` when the book has edits, else
+/// `source` unchanged. A rewrite failure logs and falls back to `source` — an
+/// export must always download *something*.
+async fn rewritten_or_source(
+    state: &AppState,
+    book_id: i64,
+    source: std::path::PathBuf,
+) -> std::path::PathBuf {
+    match db::rewritten_epub_path(&state.pool, book_id, &source).await {
+        Ok(Some(rewritten)) => rewritten,
+        Ok(None) => source,
+        Err(e) => {
+            tracing::warn!(book_id, error = %e, "epub override-rewrite failed; serving source");
+            source
+        }
+    }
 }
 
 pub(super) async fn get_library(_user: AuthUser, State(state): State<AppState>) -> Response {

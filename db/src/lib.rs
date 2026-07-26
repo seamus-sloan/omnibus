@@ -16,6 +16,7 @@ pub mod covers;
 pub mod deletion;
 pub mod discovery;
 pub mod ebook;
+pub mod epub_rewrite;
 pub mod helpers;
 pub mod highlights;
 pub mod hls;
@@ -78,6 +79,7 @@ pub use deletion::{
     DeletionManifest,
 };
 pub use discovery::*;
+pub use epub_rewrite::{export_epub_dir, rewritten_epub_path, EpubRewriteError};
 pub use helpers::{build_fts_match, sanitize_fts_query};
 pub use kepub::{convert_book, kepub_path, kepubify_available, warn_if_unavailable, KepubError};
 pub use merge::{merge_books, undo_merge, MergeError, MergeOutcome};

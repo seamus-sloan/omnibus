@@ -1171,3 +1171,75 @@ async fn upsert_overrides_persists_books_series_link_row_for_new_series() {
         "books_series_link should reflect the new override series after upsert commits"
     );
 }
+
+// -----------------------------------------------------------------
+// F5.8 export-with-overrides (#1372): override writes must invalidate the
+// cache clock so exports (thumb / KEPUB / rewritten EPUB) rebuild after an edit
+// -----------------------------------------------------------------
+#[tokio::test]
+async fn upsert_metadata_overrides_bumps_book_last_modified() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let uuid = crate::test_support::seed_synced_ebook(&pool, "b.epub", "T", "A").await;
+    // Force an old clock so the post-write bump is unambiguously observable.
+    sqlx::query("UPDATE books SET last_modified = 1 WHERE uuid = ?")
+        .bind(&uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let ov = MetadataOverrides {
+        title: Some("Baked".into()),
+        ..Default::default()
+    };
+    upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+        .await
+        .unwrap();
+
+    let last_modified: i64 = sqlx::query_scalar("SELECT last_modified FROM books WHERE uuid = ?")
+        .bind(&uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        last_modified > 1,
+        "override save must bump books.last_modified (cache clock), got {last_modified}"
+    );
+}
+
+#[tokio::test]
+async fn delete_metadata_overrides_bumps_book_last_modified() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let uuid = crate::test_support::seed_synced_ebook(&pool, "b.epub", "T", "A").await;
+    let ov = MetadataOverrides {
+        title: Some("Baked".into()),
+        ..Default::default()
+    };
+    upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE books SET last_modified = 1 WHERE uuid = ?")
+        .bind(&uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    delete_metadata_overrides(&pool, &uuid).await.unwrap();
+
+    let last_modified: i64 = sqlx::query_scalar("SELECT last_modified FROM books WHERE uuid = ?")
+        .bind(&uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        last_modified > 1,
+        "reverting overrides must bump last_modified so exports drop back to source, got {last_modified}"
+    );
+}
