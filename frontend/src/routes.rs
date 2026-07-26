@@ -372,15 +372,9 @@ pub fn Register() -> Element {
     rsx! { RegisterPage {} }
 }
 
-/// Where a "Continue reading/listening" affordance sends the reader: the
-/// player for an audio position, the reader for an epub one.
-///
-/// Audio carries the point's `book_file_id` through as `?file_id=`. A book
-/// can hold several audiobooks (two narrations, an abridged edition), and a
-/// bare `/listen/:uuid` resolves to the first audio file by ordinal — which
-/// reopened the wrong narration seeked to the right narration's timestamp.
-/// `resume_points` re-resolves the id server-side, so it always names a file
-/// that exists.
+/// Where a "Continue" affordance resumes: the player (carrying the point's
+/// `book_file_id` as `?file_id=`, since a bare `/listen/:uuid` opens the
+/// first audio file) or the reader.
 pub fn resume_route(point: &omnibus_shared::ResumePoint) -> Route {
     let uuid = point.record.book_uuid.clone();
     match point.record.format {
