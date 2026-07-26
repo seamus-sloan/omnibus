@@ -46,6 +46,11 @@ async function recentPoint(
         epub_cfi: format === "epub" ? "epubcfi(/6/2)" : null,
         audio_position_seconds: format === "audio" ? 90 : null,
         updated_at: 123,
+        // Server responses always populate this (issue #1362); the mock
+        // must match the real wire shape or the client's deserialization
+        // of the recent-progress response fails and the resume card never
+        // renders.
+        client_updated_at: 123,
       },
       book,
       total_duration_seconds: null,

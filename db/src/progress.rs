@@ -1,13 +1,8 @@
 //! Server-authoritative reading/listening position sync plus batched
 //! session reports. Position upserts are most-recent-wins on
-//! `(user_id, book_uuid, format)`, resolved by the client's own event time
-//! (`client_updated_at`, issue #1362) rather than server receipt time, so a
-//! late-arriving offline replay can't clobber a genuinely newer write.
-//! Session inserts go to the per-format `reading_sessions` /
-//! `listening_sessions` tables. All rows soft-reference the durable
-//! `books.uuid` (no FK, no cascade), resolved through the same
-//! merged-uuid-aware canonical resolver so a format-merged uuid stores the
-//! surviving book's identity.
+//! `(user_id, book_uuid, format)` by client event time, not server receipt
+//! time. Session inserts go to the per-format `reading_sessions` /
+//! `listening_sessions` tables; all rows soft-reference `books.uuid`.
 
 use omnibus_shared::{
     AudiobookPlaybackRateRecord, AudiobookPlaybackRateUpdate, ChapterInfo, ProgressFormat,
@@ -108,7 +103,8 @@ pub async fn upsert_progress(
              audio_position_seconds = excluded.audio_position_seconds,
              updated_at = strftime('%s','now'),
              client_updated_at = excluded.client_updated_at
-         WHERE excluded.client_updated_at >= reading_progress.client_updated_at",
+         WHERE excluded.client_updated_at >=
+             COALESCE(reading_progress.client_updated_at, reading_progress.updated_at)",
     )
     .bind(user_id)
     .bind(&book_uuid)
@@ -120,7 +116,8 @@ pub async fn upsert_progress(
     .await?;
 
     let row = sqlx::query(
-        "SELECT epub_cfi, audio_position_seconds, updated_at, client_updated_at
+        "SELECT epub_cfi, audio_position_seconds, updated_at,
+                COALESCE(client_updated_at, updated_at) AS client_updated_at
          FROM reading_progress
          WHERE user_id = ? AND book_uuid = ? AND format = ?",
     )
@@ -153,7 +150,8 @@ pub async fn get_progress(
     };
     let fmt = format_str(format);
     let Some(row) = sqlx::query(
-        "SELECT format, epub_cfi, audio_position_seconds, updated_at, client_updated_at
+        "SELECT format, epub_cfi, audio_position_seconds, updated_at,
+                COALESCE(client_updated_at, updated_at) AS client_updated_at
          FROM reading_progress
          WHERE user_id = ? AND book_uuid = ? AND format = ?",
     )
@@ -245,7 +243,8 @@ pub async fn recent_progress(
     limit: i64,
 ) -> Result<Vec<ProgressRecord>, ProgressError> {
     let rows = sqlx::query(
-        "SELECT book_uuid, format, epub_cfi, audio_position_seconds, updated_at, client_updated_at
+        "SELECT book_uuid, format, epub_cfi, audio_position_seconds, updated_at,
+                COALESCE(client_updated_at, updated_at) AS client_updated_at
          FROM reading_progress
          WHERE user_id = ?
          ORDER BY COALESCE(client_updated_at, updated_at) DESC, book_uuid

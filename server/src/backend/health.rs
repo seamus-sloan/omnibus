@@ -1,10 +1,8 @@
-//! `GET /api/_health` handler.
-//!
-//! Unauthenticated liveness + build-fingerprint endpoint used by
-//! `scripts/dev-server-up.sh` to identify a running omnibus instance and
-//! its worktree. Also the clock-offset probe clients hit to correct their
-//! own wall clock before stamping `ProgressUpdate::client_updated_at`
-//! (issue #1362). Whitelisted in `auth::gate::require_auth`.
+//! `GET /api/_health` handler: unauthenticated liveness + build-fingerprint
+//! endpoint used by `scripts/dev-server-up.sh` to identify a running
+//! omnibus instance and its worktree; also the clock-offset probe clients
+//! hit before stamping their own progress writes. Whitelisted in
+//! `auth::gate::require_auth`.
 
 use axum::{
     response::{IntoResponse, Response},

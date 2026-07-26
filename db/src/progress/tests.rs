@@ -1,10 +1,8 @@
-//! Unit tests for the `progress` module: `upsert_progress` roundtrip,
-//! most-recent-wins by client event time (issue #1362: older-write
-//! rejection, newer-write acceptance, future-timestamp clamping, and the
-//! missing-timestamp default), per-user/format isolation, `BookNotFound`,
-//! `get_progress` empty-state, `recent_progress` client-event-time
-//! ordering, `record_session` per-format dispatch and unknown-uuid skip,
-//! merged-uuid resolution, and `record_session_tx` rollback.
+//! Unit tests for the `progress` module: `upsert_progress` most-recent-wins
+//! by client event time (rejection/acceptance/clamping/NULL handling),
+//! per-user/format isolation, `get_progress`/`recent_progress` ordering and
+//! empty-state, `record_session` dispatch and merged-uuid resolution, and
+//! `record_session_tx` rollback.
 
 use omnibus_shared::EbookMetadata;
 
@@ -315,6 +313,87 @@ async fn recent_progress_orders_by_client_event_time_not_server_receipt_time() {
         "client event time must win over server receipt order"
     );
     assert_eq!(rows[1].book_uuid, stale_replay);
+}
+
+/// Insert a row directly with a NULL `client_updated_at` — the column has
+/// no `NOT NULL` constraint, and rows written by a path other than
+/// `upsert_progress` (or a pre-migration row not yet backfilled) can
+/// legitimately have one.
+async fn seed_null_client_updated_at(pool: &SqlitePool, user_id: i64, uuid: &str, updated_at: i64) {
+    sqlx::query(
+        "INSERT INTO reading_progress
+            (user_id, book_uuid, format, epub_cfi, updated_at, client_updated_at)
+         VALUES (?, ?, 'epub', 'epubcfi(null-client-ts)', ?, NULL)",
+    )
+    .bind(user_id)
+    .bind(uuid)
+    .bind(updated_at)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn get_progress_coalesces_a_null_client_updated_at_to_receipt_time() {
+    // A NULL client_updated_at must not make the SELECT error — it should
+    // read back as updated_at, matching pre-#1362 semantics.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    seed_null_client_updated_at(&pool, user, &uuid, 555).await;
+
+    let fetched = get_progress(&pool, user, &uuid, ProgressFormat::Epub)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched.updated_at, 555);
+    assert_eq!(fetched.client_updated_at, 555);
+}
+
+#[tokio::test]
+async fn recent_progress_coalesces_a_null_client_updated_at_to_receipt_time() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    seed_null_client_updated_at(&pool, user, &uuid, 777).await;
+
+    let rows = recent_progress(&pool, user, 10).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].client_updated_at, 777);
+}
+
+#[tokio::test]
+async fn upsert_overwrites_a_row_whose_stored_client_updated_at_is_null() {
+    // Issue #1362 correctness fix: `WHERE excluded.client_updated_at >=
+    // reading_progress.client_updated_at` evaluates to NULL (never true)
+    // when the stored side is NULL, which would wedge the row forever.
+    // Coalescing the stored side to `updated_at` in that comparison keeps a
+    // NULL row updatable, matching pre-migration receipt-time semantics.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    seed_null_client_updated_at(&pool, user, &uuid, 100).await;
+
+    let saved = upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Epub,
+            epub_cfi: Some("epubcfi(overwritten)".into()),
+            audio_position_seconds: None,
+            client_updated_at: Some(200),
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        saved.epub_cfi.as_deref(),
+        Some("epubcfi(overwritten)"),
+        "a NULL-stored row must still accept a newer write"
+    );
+    assert_eq!(saved.client_updated_at, 200);
 }
 
 #[tokio::test]
