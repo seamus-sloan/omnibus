@@ -66,18 +66,9 @@ fn use_row_state(
     let mut book_state: Signal<EbookMetadata> = use_signal(|| book.clone());
     let editing: Signal<Option<EditField>> = use_signal(|| None);
     use_effect(use_reactive!(|book| {
-        // `editing.peek()` deliberately does *not* subscribe this effect
-        // to the `editing` signal (only `use_reactive!`'s `book` dependency
-        // does). Reading it reactively (`editing()`) used to re-run this
-        // resync on every edit-close transition — including a chip-editor
-        // close that lands *after* an in-flight save already applied the
-        // fresh `book_state` (`build_save_authors`'s `book_state.set(merged)`
-        // in cells.rs) — clobbering the just-saved optimistic value back to
-        // this stale outer `book` prop until the next full library refetch
-        // (#1085 AC1: an author edit "requires a refresh" to show up).
-        // `.peek()` still reads the *current* value to gate the resync so an
-        // upstream `book` change mid-edit doesn't stomp an open draft; it
-        // just no longer treats "editing closed" as its own trigger.
+        // `.peek()` avoids subscribing this effect to `editing`, so a save
+        // that resolves after edit-close (e.g. the chip editor) can't have
+        // its fresh `book_state` clobbered by a spurious resync.
         if editing.peek().is_none() {
             // `book` here is `use_reactive!`'s per-run dependency snapshot
             // (already an owned clone produced by the macro), not the

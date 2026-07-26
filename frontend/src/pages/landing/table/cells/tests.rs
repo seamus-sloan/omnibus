@@ -1,4 +1,4 @@
-//! Tests for the grid quick-edit save payload construction (#1085).
+//! Tests for the grid quick-edit save payload construction.
 
 use super::*;
 

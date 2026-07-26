@@ -106,19 +106,22 @@ async fn merge_metadata_overrides_creates_row_when_absent() {
     assert!(!has_cover, "a brand-new merged row has no cover override");
 }
 
-/// #1085 regression: a grid quick-edit "clear this field" save must land
-/// as a real clear, not a silent no-op. `merge_metadata_overrides` reads
-/// an incoming `None` as "untouched — keep whatever override already
-/// exists" (that's what lets an edit that only touches one field
-/// preserve the rest), so a caller that represents "the user cleared
-/// series/publisher" as `None` can never actually clear it — the prior
-/// override value survives forever. The correct clear payload is
-/// `Some("")` (the same sentinel `apply_overrides` already special-cases
-/// for `isbn13`, and what the full metadata-edit page's `build_overrides`
-/// already emits): `Option::or` always prefers a `Some`, even an empty
-/// one, so it overwrites the prior value and the book reads back
-/// cleared. This is what `frontend::pages::landing::table::cells::field_override`
-/// now sends for the grid's quick-edit cells (AC2/AC3).
+/// A grid quick-edit "clear this field" save must land as a real clear,
+/// not a silent no-op. `merge_metadata_overrides` reads an incoming
+/// `None` as "untouched — keep whatever override already exists" (that's
+/// what lets an edit that only touches one field preserve the rest), so
+/// a caller that represents "the user cleared series/publisher" as
+/// `None` can never actually clear it — the prior override value
+/// survives forever. The correct clear payload is `Some("")`:
+/// `Option::or` always prefers a `Some`, even an empty one, so the merge
+/// overwrites the prior override value. Unlike `isbn13` — which
+/// `apply_overrides` special-cases to read back as `None` — series and
+/// publisher have no such special-casing, so the field reads back as a
+/// literal empty string (`Some("")`), not `None`; that's still what the
+/// UI (and the full metadata-edit page's `build_overrides`) treats as
+/// "cleared". This is what
+/// `frontend::pages::landing::table::cells::field_override` now sends
+/// for the grid's quick-edit cells.
 #[tokio::test]
 async fn merge_metadata_overrides_treats_none_as_untouched_but_empty_string_as_clear() {
     let _covers = CoversTempDir::new("clear_field_1085");
