@@ -49,13 +49,12 @@ impl NowPlaying<'_> {
     /// Serialize to the `{title, artist, album, artwork}` JS literal the
     /// surface script feeds to `MediaMetadata`.
     fn to_json_lit(&self) -> String {
-        serde_json::to_string(&serde_json::json!({
+        crate::js_interop::json_literal(&serde_json::json!({
             "title": self.title,
             "artist": self.author,
             "album": "Omnibus",
             "artwork": self.artwork_url,
         }))
-        .unwrap_or_else(|_| "null".into())
     }
 }
 
@@ -84,9 +83,9 @@ pub fn install_direct_surface(
             })
         })
         .collect();
-    let parts_json = serde_json::to_string(&tokened).unwrap_or_else(|_| "[]".into());
-    let resume_lit = serde_json::to_string(&resume_seconds).unwrap_or_else(|_| "0".into());
-    let rate_lit = serde_json::to_string(&rate).unwrap_or_else(|_| "1".into());
+    let parts_json = crate::js_interop::json_literal_or(&tokened, "[]");
+    let resume_lit = crate::js_interop::json_literal_or(&resume_seconds, "0");
+    let rate_lit = crate::js_interop::json_literal_or(&rate, "1");
     let meta_lit = now_playing.to_json_lit();
     dioxus::document::eval(&surface_js(&parts_json, &resume_lit, &rate_lit, &meta_lit))
 }
@@ -98,7 +97,7 @@ pub fn toggle() {
 
 /// Seek to an absolute (cross-part) second offset.
 pub fn seek(seconds: f64) {
-    let lit = serde_json::to_string(&seconds).unwrap_or_else(|_| "0".into());
+    let lit = crate::js_interop::json_literal_or(&seconds, "0");
     fire(&format!(
         "window.OmnibusMobileAudio && window.OmnibusMobileAudio.seek({lit});"
     ));
@@ -106,7 +105,7 @@ pub fn seek(seconds: f64) {
 
 /// Relative skip (+30 / -30), computed in absolute terms.
 pub fn skip(delta: f64) {
-    let lit = serde_json::to_string(&delta).unwrap_or_else(|_| "0".into());
+    let lit = crate::js_interop::json_literal_or(&delta, "0");
     fire(&format!(
         "window.OmnibusMobileAudio && window.OmnibusMobileAudio.skip({lit});"
     ));
@@ -139,7 +138,7 @@ pub fn teardown() {
 
 /// Set the playback rate.
 pub fn set_rate(rate: f64) {
-    let lit = serde_json::to_string(&rate).unwrap_or_else(|_| "1".into());
+    let lit = crate::js_interop::json_literal_or(&rate, "1");
     fire(&format!(
         "window.OmnibusMobileAudio && window.OmnibusMobileAudio.setRate({lit});"
     ));

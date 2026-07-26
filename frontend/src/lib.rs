@@ -14,6 +14,7 @@ pub mod contexts;
 pub mod data;
 pub mod format;
 pub mod index_prefs;
+pub mod js_interop;
 #[cfg(feature = "mobile")]
 pub(crate) mod native_share;
 #[cfg(feature = "mobile")]

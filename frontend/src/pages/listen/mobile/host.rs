@@ -333,11 +333,13 @@ async fn init_direct_and_drain(
     drain_audio_events(eval, ctx, uuid, server_url).await;
 }
 
-/// Drain the JS→Rust audio event channel until cancelled, updating the
-/// position / playing signals, throttling position persistence to ~5 s
-/// deltas, and firing the armed end-of-chapter sleep boundary.
+/// Drain the JS→Rust audio event channel until it closes (surface torn
+/// down), updating the position / playing signals, throttling position
+/// persistence to ~5 s deltas, and firing the armed end-of-chapter sleep
+/// boundary. The drain loop itself is [`crate::js_interop::drain_events`],
+/// shared with the barcode scanner and mobile reader interop.
 async fn drain_audio_events(
-    mut eval: dioxus::document::Eval,
+    eval: dioxus::document::Eval,
     ctx: MobilePlayback,
     uuid: String,
     server_url: String,
@@ -349,36 +351,33 @@ async fn drain_audio_events(
         ..
     } = ctx;
     let mut last_saved = 0.0_f64;
-    loop {
-        match eval.recv::<interop::AudioEvent>().await {
-            Ok(interop::AudioEvent::Time { seconds, paused }) => {
-                elapsed.set(seconds);
-                // WKWebView can resume after an interruption without re-firing `play`; reconcile the icon.
-                if playing_out_of_sync(*playing.peek(), paused) {
-                    playing.set(!paused);
-                }
-                let armed = *sleep.peek();
-                if let SleepState::EndOfChapter { at_seconds } = armed {
-                    if seconds >= at_seconds {
-                        interop::pause();
-                        sleep.set(SleepState::Off);
-                    }
-                }
-                if (seconds - last_saved).abs() >= 5.0 {
-                    last_saved = seconds;
-                    persist_position(&uuid, &server_url, seconds);
+    crate::js_interop::drain_events(eval, move |event: interop::AudioEvent| match event {
+        interop::AudioEvent::Time { seconds, paused } => {
+            elapsed.set(seconds);
+            // WKWebView can resume after an interruption without re-firing `play`; reconcile the icon.
+            if playing_out_of_sync(*playing.peek(), paused) {
+                playing.set(!paused);
+            }
+            let armed = *sleep.peek();
+            if let SleepState::EndOfChapter { at_seconds } = armed {
+                if seconds >= at_seconds {
+                    interop::pause();
+                    sleep.set(SleepState::Off);
                 }
             }
-            Ok(interop::AudioEvent::Play) => playing.set(true),
-            Ok(interop::AudioEvent::Pause { seconds }) => {
-                playing.set(false);
-                elapsed.set(seconds);
+            if (seconds - last_saved).abs() >= 5.0 {
+                last_saved = seconds;
                 persist_position(&uuid, &server_url, seconds);
             }
-            // Channel closed (surface torn down) — stop draining.
-            Err(_) => return,
         }
-    }
+        interop::AudioEvent::Play => playing.set(true),
+        interop::AudioEvent::Pause { seconds } => {
+            playing.set(false);
+            elapsed.set(seconds);
+            persist_position(&uuid, &server_url, seconds);
+        }
+    })
+    .await;
 }
 
 #[cfg(test)]
