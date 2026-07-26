@@ -36,5 +36,14 @@
 	<array>
 		<string>app.omnibus.sync</string>
 	</array>
+	<!-- Pre-declare the export-compliance exemption so App Store Connect skips
+	     the "Missing Compliance" gate that otherwise blocks every build from
+	     TestFlight distribution until it's answered by hand. The app adds no
+	     encryption of its own: transport is TLS via the OS, and the only
+	     CryptoKit use is SHA-256 over a cache key in RemoteImage, which is a
+	     hash rather than encryption. scripts/ios-package-ipa.sh declares the
+	     same for the WebView build. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>
