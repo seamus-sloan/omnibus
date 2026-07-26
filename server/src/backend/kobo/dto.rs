@@ -62,11 +62,34 @@ fn derive_opaque(token: &str, purpose: &str) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// One element of the `library/sync` array. Externally tagged, so it
-/// serializes as `{"NewEntitlement": { … }}` — the shape the device parses.
+/// One element of the `library/sync` array. Externally tagged, so each
+/// serializes as `{"<Shape>": { … }}` — the envelope names the device parses.
+///
+/// The three shapes map 1:1 onto `db::kobo::SyncChange`: an add is a
+/// `NewEntitlement`; a change is `ChangedProductMetadata` (the device
+/// re-fetches metadata + file) paired with a `ChangedReadingState`; a removal
+/// is a `ChangedEntitlement` whose `BookEntitlement.IsRemoved` is true, which
+/// archives the book on-device without touching annotations.
 #[derive(Debug, Serialize)]
 pub enum SyncItem {
     NewEntitlement(Entitlement),
+    ChangedEntitlement(Entitlement),
+    ChangedProductMetadata(ChangedProductMetadata),
+    ChangedReadingState(ChangedReadingState),
+}
+
+/// `ChangedProductMetadata` payload: just the refreshed metadata block.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ChangedProductMetadata {
+    pub book_metadata: BookMetadata,
+}
+
+/// `ChangedReadingState` payload: just the reading-state block.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ChangedReadingState {
+    pub reading_state: ReadingState,
 }
 
 /// A full entitlement: the ownership record, book metadata, and reading state.
@@ -179,6 +202,79 @@ pub fn new_entitlement(base: &str, token: &str, book: &KoboBookRow, size: u64) -
         book_metadata: book_metadata(base, token, book, size),
         reading_state: ReadingState {
             entitlement_id: uuid.clone(),
+            created: ts.clone(),
+            last_modified: ts,
+            status_info: StatusInfo {
+                status: "ReadyToRead".to_owned(),
+            },
+            current_bookmark: CurrentBookmark::default(),
+        },
+    })
+}
+
+/// The `SyncItem`s for one `db::kobo::SyncChange`. A change fans out into two
+/// items (metadata + reading state); an add or removal is one.
+pub fn sync_items(base: &str, token: &str, change: &omnibus_db::kobo::SyncChange) -> Vec<SyncItem> {
+    use omnibus_db::kobo::SyncChange;
+    match change {
+        SyncChange::New(book) => vec![new_entitlement(base, token, book, 0)],
+        SyncChange::Changed(book) => {
+            let ts = rfc3339(book.last_modified_epoch);
+            vec![
+                SyncItem::ChangedProductMetadata(ChangedProductMetadata {
+                    book_metadata: book_metadata(base, token, book, 0),
+                }),
+                SyncItem::ChangedReadingState(ChangedReadingState {
+                    reading_state: ReadingState {
+                        entitlement_id: book.uuid.clone(),
+                        created: ts.clone(),
+                        last_modified: ts,
+                        status_info: StatusInfo {
+                            status: "ReadyToRead".to_owned(),
+                        },
+                        current_bookmark: CurrentBookmark::default(),
+                    },
+                }),
+            ]
+        }
+        SyncChange::Removed { book_uuid } => vec![removed_entitlement(book_uuid)],
+    }
+}
+
+/// A `ChangedEntitlement` that archives `book_uuid` on the device
+/// (`IsRemoved: true`). Metadata is a minimal shell — the device only needs
+/// the ids to find what to drop.
+fn removed_entitlement(book_uuid: &str) -> SyncItem {
+    let uuid = book_uuid.to_owned();
+    let ts = rfc3339(0);
+    SyncItem::ChangedEntitlement(Entitlement {
+        book_entitlement: BookEntitlement {
+            id: uuid.clone(),
+            cross_revision_id: uuid.clone(),
+            revision_id: uuid.clone(),
+            created: ts.clone(),
+            last_modified: ts.clone(),
+            status: "Deleted",
+            accessibility: "Full",
+            is_removed: true,
+            is_hidden_from_archive: false,
+            is_locked: false,
+            origin_category: "Imported",
+        },
+        book_metadata: BookMetadata {
+            entitlement_id: uuid.clone(),
+            cross_revision_id: uuid.clone(),
+            revision_id: uuid.clone(),
+            title: String::new(),
+            description: String::new(),
+            language: "en".to_owned(),
+            cover_image_id: uuid.clone(),
+            slug: uuid.clone(),
+            download_urls: Vec::new(),
+            contributor_roles: Vec::new(),
+        },
+        reading_state: ReadingState {
+            entitlement_id: uuid,
             created: ts.clone(),
             last_modified: ts,
             status_info: StatusInfo {
