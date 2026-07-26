@@ -99,11 +99,19 @@ runs:
         UUID="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$PLIST")"
         NAME="$(/usr/libexec/PlistBuddy -c 'Print :Name' "$PLIST")"
 
-        # Install into the dir xcodebuild searches, keyed by UUID as Xcode expects.
-        INSTALL_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
-        mkdir -p "$INSTALL_DIR"
-        cp "$PROFILE" "$INSTALL_DIR/$UUID.mobileprovision"
+        # Install into every dir xcodebuild searches, keyed by UUID as Xcode
+        # expects. Xcode 16 moved the search path to ~/Library/Developer/Xcode/
+        # UserData and no longer reads the legacy ~/Library/MobileDevice one, so
+        # on the macos-26 image (Xcode 26) only the former resolves
+        # PROVISIONING_PROFILE_SPECIFIER; write both to stay version-agnostic.
+        for INSTALL_DIR in \
+          "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles" \
+          "$HOME/Library/MobileDevice/Provisioning Profiles"; do
+          mkdir -p "$INSTALL_DIR"
+          cp "$PROFILE" "$INSTALL_DIR/$UUID.mobileprovision"
+        done
 
+        echo "Installed profile '$NAME' ($UUID)"
         echo "path=$PROFILE" >> "$GITHUB_OUTPUT"
         echo "uuid=$UUID" >> "$GITHUB_OUTPUT"
         echo "name=$NAME" >> "$GITHUB_OUTPUT"
