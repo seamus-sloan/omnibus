@@ -196,7 +196,7 @@ async fn change_password_updates_hash_and_stamp_and_new_password_logs_in() {
         .await
         .unwrap();
 
-    change_password(&p, u.id, "hunter2-real-long", "brand-new-longpass")
+    change_password(&p, u.id, "hunter2-real-long", "brand-new-longpass", -1)
         .await
         .unwrap();
 
@@ -228,7 +228,7 @@ async fn change_password_rejects_wrong_current_and_leaves_hash_intact() {
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
 
-    let err = change_password(&p, u.id, "wrong-current-pass", "brand-new-longpass")
+    let err = change_password(&p, u.id, "wrong-current-pass", "brand-new-longpass", -1)
         .await
         .unwrap_err();
     assert!(matches!(err, AuthError::InvalidCredentials));
@@ -245,13 +245,13 @@ async fn change_password_rejects_invalid_new_password() {
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
 
     // Too short.
-    let err = change_password(&p, u.id, "hunter2-real-long", "short")
+    let err = change_password(&p, u.id, "hunter2-real-long", "short", -1)
         .await
         .unwrap_err();
     assert!(matches!(err, AuthError::Validation(_)));
 
     // Common-password reject-list.
-    let err = change_password(&p, u.id, "hunter2-real-long", "password123")
+    let err = change_password(&p, u.id, "hunter2-real-long", "password123", -1)
         .await
         .unwrap_err();
     assert!(matches!(err, AuthError::Validation(_)));
@@ -260,10 +260,47 @@ async fn change_password_rejects_invalid_new_password() {
 #[tokio::test]
 async fn change_password_rejects_unknown_user() {
     let p = pool().await;
-    let err = change_password(&p, 9999, "anything-here-long", "brand-new-longpass")
+    let err = change_password(&p, 9999, "anything-here-long", "brand-new-longpass", -1)
         .await
         .unwrap_err();
     assert!(matches!(err, AuthError::InvalidCredentials));
+}
+
+#[tokio::test]
+async fn change_password_keeps_callers_own_session_but_revokes_others() {
+    // #1402: a self-service password change must not immediately log the
+    // caller out of the session they used to make the change, but any other
+    // live session for the account (e.g. a stolen cookie) must die with it.
+    use crate::auth::{create_session, lookup_session, SessionKind};
+
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+
+    let callers_session = create_session(&p, u.id, None, SessionKind::Cookie, 3600)
+        .await
+        .unwrap();
+    let other_session = create_session(&p, u.id, None, SessionKind::Bearer, 3600)
+        .await
+        .unwrap();
+
+    change_password(
+        &p,
+        u.id,
+        "hunter2-real-long",
+        "brand-new-longpass",
+        callers_session.session.id,
+    )
+    .await
+    .unwrap();
+
+    lookup_session(&p, &callers_session.raw_token)
+        .await
+        .expect("the caller's own session must survive the password change");
+
+    let err = lookup_session(&p, &other_session.raw_token)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AuthError::SessionNotFound));
 }
 
 // ── Admin user management (F5.4) ─────────────────────────────────────
@@ -425,6 +462,39 @@ async fn admin_set_password_resets_and_new_password_logs_in() {
     crate::auth::verify_login(&p, "bob", "reset-by-admin-99")
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn admin_set_password_revokes_all_sessions_for_target_user() {
+    // #1402: an admin-initiated reset has no caller session on the target
+    // account to preserve — every existing session for that user must die.
+    use crate::auth::{create_session, lookup_session, SessionKind};
+
+    let p = pool().await;
+    create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let bob = admin_create_user(&p, "bob", "bunker9-longer-pass", READER)
+        .await
+        .unwrap();
+
+    let bobs_cookie = create_session(&p, bob.id, None, SessionKind::Cookie, 3600)
+        .await
+        .unwrap();
+    let bobs_bearer = create_session(&p, bob.id, None, SessionKind::Bearer, 3600)
+        .await
+        .unwrap();
+
+    admin_set_password(&p, bob.id, "reset-by-admin-99")
+        .await
+        .unwrap();
+
+    let err = lookup_session(&p, &bobs_cookie.raw_token)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AuthError::SessionNotFound));
+    let err = lookup_session(&p, &bobs_bearer.raw_token)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AuthError::SessionNotFound));
 }
 
 #[tokio::test]

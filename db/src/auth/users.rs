@@ -4,6 +4,7 @@ use omnibus_shared::{AdminUserRow, UserPermissions};
 use sqlx::{Row, SqliteConnection, SqlitePool};
 
 use super::password::{hash_password, validate_password, validate_username, verify_password};
+use super::session::{revoke_all_sessions_for_user, revoke_all_sessions_for_user_except};
 use super::{now_unix, row_to_user, AuthError, AuthResult, User};
 
 /// Atomically create a user. The first user created becomes admin; the
@@ -187,6 +188,10 @@ pub async fn get_kindle_email(pool: &SqlitePool, user_id: i64) -> AuthResult<Opt
 /// authorize the change, validates `new` against the password policy, then
 /// re-hashes with Argon2id and stamps `password_changed_at` — all in one
 /// transaction so an interrupted call never leaves a half-applied state.
+/// Also revokes every other active session for the user in the same
+/// transaction (#1402), except `except_session_id` — the caller's own
+/// session, which stays live so a self-service change doesn't immediately
+/// log the caller out.
 ///
 /// Errors with [`AuthError::InvalidCredentials`] when the current password is
 /// wrong (or the user id no longer exists) and [`AuthError::Validation`] when
@@ -197,6 +202,7 @@ pub async fn change_password(
     user_id: i64,
     current: &str,
     new: &str,
+    except_session_id: i64,
 ) -> AuthResult<()> {
     let mut tx = pool.begin().await?;
 
@@ -234,6 +240,11 @@ pub async fn change_password(
     if updated.rows_affected() == 0 {
         return Err(AuthError::InvalidCredentials);
     }
+
+    // Kick out anyone else holding a session for this account (e.g. an
+    // attacker with a stolen cookie) — but leave the caller's own session
+    // live, since they authenticated this very request with it.
+    revoke_all_sessions_for_user_except(&mut *tx, user_id, except_session_id).await?;
 
     tx.commit().await?;
     Ok(())
@@ -406,8 +417,11 @@ pub async fn update_user_permissions(
 }
 
 /// Admin-reset a user's password: validate + re-hash + stamp
-/// `password_changed_at`. No current-password check — this is the admin
-/// override path, distinct from the self-service [`change_password`].
+/// `password_changed_at`, then revoke every active session for the target
+/// user in the same transaction (#1402) — unlike the self-service
+/// [`change_password`], there is no caller session to exclude, since the
+/// admin isn't the affected account. No current-password check — this is
+/// the admin override path.
 /// [`AuthError::UserNotFound`] for an unknown id; [`AuthError::Validation`]
 /// when the new password fails policy.
 pub async fn admin_set_password(
@@ -417,17 +431,24 @@ pub async fn admin_set_password(
 ) -> AuthResult<()> {
     validate_password(new_password)?;
     let phc = hash_password(new_password)?;
+
+    let mut tx = pool.begin().await?;
+
     let updated = sqlx::query(
         "UPDATE users SET password_hash = ?, password_changed_at = strftime('%s','now')
          WHERE id = ?",
     )
     .bind(&phc)
     .bind(user_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     if updated.rows_affected() == 0 {
         return Err(AuthError::UserNotFound);
     }
+
+    revoke_all_sessions_for_user(&mut *tx, user_id).await?;
+
+    tx.commit().await?;
     Ok(())
 }
 
