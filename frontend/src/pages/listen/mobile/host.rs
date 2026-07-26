@@ -24,6 +24,15 @@ fn first_audio_file_id(files: &[omnibus_shared::BookFileInfo]) -> Option<i64> {
     crate::offline::downloads::default_audio_file_id(files)
 }
 
+/// What a load run is playing: the book, plus the `?file_id=` it was entered
+/// with. `None` means "whatever the server serves by default" — carried
+/// through to every position write so a book with several audiobooks resumes
+/// in the one being listened to.
+struct LoadTarget {
+    uuid: String,
+    file_id: Option<i64>,
+}
+
 /// Whether the host must (re)load for a newly-requested `(uuid, file_id)`.
 ///
 /// A different book always reloads. The *same* book reloads only on an
@@ -221,7 +230,10 @@ async fn load_and_drain(
             init_direct_and_drain(
                 ctx,
                 &book,
-                uuid,
+                LoadTarget {
+                    uuid,
+                    file_id: selected_file_id,
+                },
                 server_url,
                 parts,
                 total_duration_seconds,
@@ -293,7 +305,7 @@ async fn resolve_playback_rate(ctx: MobilePlayback, server_url: &str, uuid: &str
 async fn init_direct_and_drain(
     ctx: MobilePlayback,
     book: &omnibus_shared::EbookMetadata,
-    uuid: String,
+    target: LoadTarget,
     server_url: String,
     parts: Vec<omnibus_shared::ManifestPart>,
     total_duration_seconds: f64,
@@ -303,6 +315,7 @@ async fn init_direct_and_drain(
     let mut loading = ctx.loading;
     let mut duration = ctx.duration;
     let mut elapsed = ctx.elapsed;
+    let LoadTarget { uuid, file_id } = target;
 
     let resume = resolve_resume(&server_url, &uuid).await;
     let playback_rate = resolve_playback_rate(ctx, &server_url, &uuid).await;
@@ -330,7 +343,7 @@ async fn init_direct_and_drain(
         &now_playing,
     );
     view.set(Some(pv));
-    drain_audio_events(eval, ctx, uuid, server_url).await;
+    drain_audio_events(eval, ctx, LoadTarget { uuid, file_id }, server_url).await;
 }
 
 /// Drain the JS→Rust audio event channel until it closes (surface torn
@@ -341,7 +354,7 @@ async fn init_direct_and_drain(
 async fn drain_audio_events(
     eval: dioxus::document::Eval,
     ctx: MobilePlayback,
-    uuid: String,
+    target: LoadTarget,
     server_url: String,
 ) {
     let MobilePlayback {
@@ -350,6 +363,7 @@ async fn drain_audio_events(
         mut sleep,
         ..
     } = ctx;
+    let LoadTarget { uuid, file_id } = target;
     let mut last_saved = 0.0_f64;
     crate::js_interop::drain_events(eval, move |event: interop::AudioEvent| match event {
         interop::AudioEvent::Time { seconds, paused } => {
@@ -367,14 +381,14 @@ async fn drain_audio_events(
             }
             if (seconds - last_saved).abs() >= 5.0 {
                 last_saved = seconds;
-                persist_position(&uuid, &server_url, seconds);
+                persist_position(&uuid, file_id, &server_url, seconds);
             }
         }
         interop::AudioEvent::Play => playing.set(true),
         interop::AudioEvent::Pause { seconds } => {
             playing.set(false);
             elapsed.set(seconds);
-            persist_position(&uuid, &server_url, seconds);
+            persist_position(&uuid, file_id, &server_url, seconds);
         }
     })
     .await;

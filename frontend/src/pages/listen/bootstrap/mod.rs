@@ -158,6 +158,7 @@ fn boot_new_book(
     register_js_callbacks(
         cb_holder,
         uuid.to_string(),
+        file_id,
         playback.duration,
         playback.elapsed,
         playback.playing,
@@ -268,9 +269,14 @@ fn spawn_manifest_init(
 /// `__omnibusOnAudioTime`, `__omnibusOnAudioDuration`, `__omnibusOnAudioPlay`,
 /// `__omnibusOnAudioPause`, `__omnibusOnInitTimeout`. Registered before the
 /// JS bootstrap so a fast `loadedmetadata` always finds them.
+///
+/// `file_id` is the file this boot loaded; it rides along on every position
+/// POST. Re-registered on each boot, and a file switch always re-boots (see
+/// [`needs_reload`]), so the captured value can't outlive its file.
 fn register_js_callbacks(
     cb_holder: &JsCallbackHolder,
     uuid_cb: String,
+    file_id: Option<i64>,
     mut duration: Signal<f64>,
     mut elapsed: Signal<f64>,
     mut playing: Signal<bool>,
@@ -288,7 +294,7 @@ fn register_js_callbacks(
         }
         last_saved = secs;
         crate::audiobook_progress::save(&uuid_for_save, secs);
-        post_audio_progress(uuid_for_save.clone(), secs);
+        post_audio_progress(uuid_for_save.clone(), file_id, secs);
     });
     let on_duration = Closure::<dyn FnMut(f64)>::new(move |d: f64| {
         duration.set(d);
@@ -300,7 +306,7 @@ fn register_js_callbacks(
     let on_pause = Closure::<dyn FnMut(f64)>::new(move |secs: f64| {
         playing.set(false);
         crate::audiobook_progress::save(&uuid_for_pause, secs);
-        post_audio_progress(uuid_for_pause.clone(), secs);
+        post_audio_progress(uuid_for_pause.clone(), file_id, secs);
     });
     // Fired from the init-poll's `n >= 200` branch when
     // `window.OmnibusAudio` never appears (mount loop gave

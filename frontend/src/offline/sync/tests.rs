@@ -101,6 +101,7 @@ async fn mock_server() -> String {
         format: update.format,
         epub_cfi: update.epub_cfi,
         audio_position_seconds: update.audio_position_seconds,
+        book_file_id: None,
         updated_at: 4242,
         client_updated_at: update.client_updated_at.unwrap_or(4242),
     };
@@ -179,6 +180,7 @@ fn progress_op(uuid: &str) -> Op {
             format: ProgressFormat::Epub,
             epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
             audio_position_seconds: None,
+            book_file_id: None,
             client_updated_at: None,
         },
         captured_at: 100,

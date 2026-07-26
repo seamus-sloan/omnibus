@@ -284,14 +284,7 @@ fn um_now_reading_row(point: ResumePoint) -> Element {
         "Continue reading"
     };
     let uuid = point.record.book_uuid.clone();
-    let to = if is_audio {
-        Route::BookListen {
-            uuid: uuid.clone(),
-            file_id: None,
-        }
-    } else {
-        Route::BookRead { uuid: uuid.clone() }
-    };
+    let to = crate::routes::resume_route(&point);
     let detail = Route::BookDetail { uuid };
     let action_label = format!("{action} {title}");
 

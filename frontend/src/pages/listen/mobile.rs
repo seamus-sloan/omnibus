@@ -197,8 +197,11 @@ async fn resolve_resume(server_url: &str, uuid: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
-/// Persist the latest position both locally and to the server (fire-and-forget).
-fn persist_position(uuid: &str, server_url: &str, seconds: f64) {
+/// Persist the latest position both locally and to the server
+/// (fire-and-forget). `file_id` is the `?file_id=` the player was entered
+/// with, so a book carrying several audiobooks resumes in the one being
+/// listened to; `None` keeps the server's first-file default.
+fn persist_position(uuid: &str, file_id: Option<i64>, server_url: &str, seconds: f64) {
     crate::audiobook_progress::save(uuid, seconds);
     let uuid = uuid.to_string();
     let server_url = server_url.to_string();
@@ -208,6 +211,7 @@ fn persist_position(uuid: &str, server_url: &str, seconds: f64) {
             format: ProgressFormat::Audio,
             epub_cfi: None,
             audio_position_seconds: Some(seconds),
+            book_file_id: file_id,
             client_updated_at: Some(now_unix()),
         };
         let _ = data::save_progress(&server_url, update).await;
@@ -361,11 +365,12 @@ fn render_player(p: PlayerProps) -> Element {
     };
     let uuid_seek = uuid.clone();
     let su_seek = server_url.clone();
+    let file_sig = ctx.file_id;
     let on_seek_commit = move |evt: Event<FormData>| {
         let mut scrub = scrub;
         if let Ok(secs) = evt.value().parse::<f64>() {
             interop::seek(secs);
-            persist_position(&uuid_seek, &su_seek, secs);
+            persist_position(&uuid_seek, *file_sig.peek(), &su_seek, secs);
         }
         scrub.set(None);
     };
@@ -640,13 +645,14 @@ fn render_sheets(p: &SheetProps) -> Element {
         OpenSheet::Bookmarks => {
             let uuid = p.uuid.clone();
             let server_url = p.server_url.clone();
+            let file_sig = p.ctx.file_id;
             rsx! {
                 BookmarksSheet {
                     bookmarks: p.bookmarks,
                     chapters: p.chapters.as_ref().clone(),
                     on_seek: EventHandler::new(move |secs: f64| {
                         interop::seek(secs);
-                        persist_position(&uuid, &server_url, secs);
+                        persist_position(&uuid, *file_sig.peek(), &server_url, secs);
                         sheet.set(OpenSheet::None);
                     }),
                     on_close: close,

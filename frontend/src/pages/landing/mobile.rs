@@ -232,14 +232,7 @@ fn resume_card(point: &ResumePoint, server_url: &str) -> Element {
         .map(|c| c.name.clone())
         .unwrap_or_default();
     let is_audio = point.record.format == ProgressFormat::Audio;
-    let to = if is_audio {
-        Route::BookListen {
-            uuid: uuid.clone(),
-            file_id: None,
-        }
-    } else {
-        Route::BookRead { uuid: uuid.clone() }
-    };
+    let to = crate::routes::resume_route(point);
     let (meta, pct) = resume_meta(point);
     let (src, _srcset) = thumb_srcs(&book, &uuid, server_url);
 
