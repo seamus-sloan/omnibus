@@ -436,7 +436,10 @@ fn ShelfHeader(
         && viewer
             .as_ref()
             .is_some_and(|u| u.id == owner_id || u.is_admin);
-    let show_attribution = viewer.as_ref().is_some_and(|u| u.id != owner_id);
+    // Suppressed on a wishlist: its system name already opens with the owner's
+    // username, so the badge would just repeat it.
+    let show_attribution =
+        viewer.as_ref().is_some_and(|u| u.id != owner_id) && shelf.kind != ShelfKind::Wishlist;
 
     let id = shelf.id;
     let is_smart = shelf.kind == ShelfKind::Smart;

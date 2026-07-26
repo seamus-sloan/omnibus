@@ -106,7 +106,10 @@ fn render_shelf_row(s: &ShelfSummary, active: RailActive, viewer_id: Option<i64>
     };
     let accent = s.accent.clone().unwrap_or_else(|| "var(--accent)".into());
     // Attribute a shelf that isn't the viewer's (only once the viewer is known).
-    let not_mine = viewer_id.is_some_and(|vid| vid != s.owner_user_id);
+    // A wishlist's system name already opens with the owner's username, so the
+    // chip would just repeat it.
+    let not_mine =
+        viewer_id.is_some_and(|vid| vid != s.owner_user_id) && s.kind != ShelfKind::Wishlist;
 
     rsx! {
         Link {
