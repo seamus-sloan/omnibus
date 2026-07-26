@@ -16,7 +16,7 @@ mod opf;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::UNIX_EPOCH;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
 use sqlx::SqlitePool;
@@ -64,8 +64,93 @@ pub fn export_epub_dir() -> PathBuf {
 }
 
 /// Cache path for one book's rewritten EPUB: `<export dir>/<book_id>.epub`.
-fn export_epub_path(book_id: i64) -> PathBuf {
+///
+/// `pub(crate)` (rather than private) so sibling-module tests — e.g.
+/// `metadata_overrides`'s cache-invalidation tests — can seed/assert against
+/// the exact path without duplicating this naming scheme.
+pub(crate) fn export_epub_path(book_id: i64) -> PathBuf {
     export_epub_dir().join(format!("{book_id}.epub"))
+}
+
+/// Default eviction cap (5 GiB), mirroring `thumbs`/`hls`.
+const DEFAULT_CAP_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+
+/// Resolved eviction cap in bytes. Reads `OMNIBUS_EXPORT_EPUB_CAP_BYTES`;
+/// falls back to [`DEFAULT_CAP_BYTES`] when unset or unparseable.
+pub fn cap_bytes() -> u64 {
+    std::env::var("OMNIBUS_EXPORT_EPUB_CAP_BYTES")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_CAP_BYTES)
+}
+
+/// Delete the cached rewritten EPUB for `book_id`, if present.
+///
+/// Called once a book's override state fully clears — see
+/// [`crate::metadata_overrides::delete_metadata_overrides`] and
+/// [`crate::metadata_overrides::clear_cover_override`] — and when the book
+/// itself is deleted (`deletion::fs`), so the cache doesn't linger
+/// unreferenced (#1395). A missing file is a no-op; any other failure is
+/// logged and swallowed — the caller has already decided the cache shouldn't
+/// exist, and a stray file is a disk-space nuisance, not a correctness
+/// problem.
+pub fn invalidate_export_epub_cache(book_id: i64) {
+    if let Err(e) = std::fs::remove_file(export_epub_path(book_id)) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(book_id, error = %e, "export_epub: failed to remove stale cache file");
+        }
+    }
+}
+
+/// Walk `export_epub_dir()` and delete cached rewritten EPUBs, oldest-mtime
+/// first, until the total cache size is under `cap_bytes`.
+///
+/// Unlike [`crate::thumbs::evict_if_over_cap`] there is no cache-hit mtime
+/// touch, so eviction order is FIFO by last-rewrite time rather than true
+/// LRU — acceptable here since this cache is written only on an explicit
+/// export/download action, not on every page view.
+///
+/// Must be called inside `tokio::task::spawn_blocking`.
+pub fn evict_if_over_cap(cap_bytes: u64) -> Result<(), std::io::Error> {
+    let dir = export_epub_dir();
+    if !dir.exists() {
+        return Ok(());
+    }
+
+    let mut entries: Vec<(SystemTime, PathBuf, u64)> = Vec::new();
+    let mut total: u64 = 0;
+
+    for entry in std::fs::read_dir(&dir)?.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        // Skip in-flight temp files (`.{book_id}.{pid}.{seq}.tmp.epub`) — not
+        // yet promoted cache entries, and may still be actively written.
+        if name.starts_with('.') || !name.ends_with(".epub") {
+            continue;
+        }
+        let meta = entry.metadata()?;
+        let size = meta.len();
+        let mtime = meta.modified().unwrap_or(UNIX_EPOCH);
+        total += size;
+        entries.push((mtime, entry.path(), size));
+    }
+
+    if total <= cap_bytes {
+        return Ok(());
+    }
+
+    entries.sort_by_key(|(mtime, _, _)| *mtime);
+    for (_, path, size) in &entries {
+        if total <= cap_bytes {
+            break;
+        }
+        match std::fs::remove_file(path) {
+            Ok(()) => total = total.saturating_sub(*size),
+            Err(e) => tracing::warn!(error = %e, path = ?path, "export_epub: evict failed"),
+        }
+    }
+
+    Ok(())
 }
 
 /// Path to the EPUB that should be exported for `book_id`, given its `source`
@@ -89,6 +174,17 @@ pub async fn rewritten_epub_path(
     // (an admin who ranks embedded tags above overrides gets no rewrite — the
     // same deliberate gating `opf_export` documents). Nothing to bake → source.
     if !book.has_override && !book.has_cover_override {
+        // Belt-and-suspenders cleanup (#1395): the write paths that clear
+        // overrides (`delete_metadata_overrides`, `clear_cover_override`)
+        // already invalidate this cache eagerly, so this normally finds
+        // nothing. It still catches any cache file left behind from before
+        // that fix shipped, or any future path that clears overrides without
+        // going through those two functions.
+        if let Err(e) =
+            tokio::task::spawn_blocking(move || invalidate_export_epub_cache(book_id)).await
+        {
+            tracing::warn!(book_id, error = %e, "export_epub: cache-invalidate task join failed");
+        }
         return Ok(None);
     }
 
@@ -127,6 +223,16 @@ pub async fn rewritten_epub_path(
     tokio::fs::rename(&tmp, &out)
         .await
         .context("promote rewritten epub into cache")?;
+
+    // Best-effort, non-fatal: the freshly rewritten file above is already
+    // promoted, so a failed/skipped eviction only leaves the cache
+    // temporarily over its cap (mirrors `thumbs`/`hls`'s eviction hook).
+    let cap = cap_bytes();
+    match tokio::task::spawn_blocking(move || evict_if_over_cap(cap)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!(error = %e, "export_epub: eviction failed"),
+        Err(e) => tracing::warn!(error = %e, "export_epub: eviction task join failed"),
+    }
     Ok(Some(out))
 }
 

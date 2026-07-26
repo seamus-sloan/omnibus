@@ -49,6 +49,7 @@ fn cleanup_blocking(job: Cleanup) {
     remove_thumbnails(book.book_id);
     remove_dir(&crate::hls::hls_dir().join(book.book_id.to_string()));
     remove_file(&crate::kepub::kepub_path(book.book_id));
+    crate::epub_rewrite::invalidate_export_epub_cache(book.book_id);
     for name in &book.journal_images {
         crate::journal_images::delete_journal_image(name);
     }
