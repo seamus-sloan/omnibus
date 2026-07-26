@@ -177,7 +177,8 @@ pub async fn list_visible_shelves(
 pub async fn get_shelf(pool: &SqlitePool, id: i64) -> Result<Option<Shelf>, ShelfError> {
     let Some(r) = sqlx::query(
         "SELECT s.id, s.owner_user_id, u.username AS owner_username,
-                s.kind, s.name, s.description, s.visibility, s.accent, s.match_mode
+                s.kind, s.name, s.description, s.visibility, s.accent, s.match_mode,
+                s.sync_to_kobo
            FROM shelves s
            JOIN users u ON u.id = s.owner_user_id
           WHERE s.id = ?",
@@ -225,7 +226,57 @@ pub async fn get_shelf(pool: &SqlitePool, id: i64) -> Result<Option<Shelf>, Shel
         match_mode,
         rules,
         book_count,
+        sync_to_kobo: r.try_get::<i64, _>("sync_to_kobo")? != 0,
     }))
+}
+
+/// Every book uuid the owner's Kobo devices may sync: the union of membership
+/// across `user_id`'s shelves flagged `sync_to_kobo`.
+///
+/// Deliberately **uncapped** — the Kobo sync response streams and must not
+/// inherit a page limit (the whole point of #922's no-`SYNC_ITEM_LIMIT` rule),
+/// so this does not go through `shelf_page`/`MAX_BOOKS_RETURNED`. Scoped to
+/// shelves the user owns, so one user's opt-in can never expose books through
+/// another user's device token.
+///
+/// Returns uuids in no meaningful order; the caller orders the book rows.
+pub async fn kobo_synced_book_uuids(
+    pool: &SqlitePool,
+    user_id: i64,
+) -> Result<Vec<String>, ShelfError> {
+    let shelves = sqlx::query(
+        "SELECT id, kind, match_mode FROM shelves
+          WHERE owner_user_id = ? AND sync_to_kobo = 1",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut uuids: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for row in &shelves {
+        let id: i64 = row.try_get("id")?;
+        let kind = parse_kind(&row.try_get::<String, _>("kind")?)?;
+        let match_mode = row
+            .try_get::<Option<String>, _>("match_mode")?
+            .as_deref()
+            .and_then(MatchMode::from_str);
+        let found = match kind {
+            ShelfKind::Manual => manual_member_uuids(pool, id).await?,
+            ShelfKind::Wishlist => wishlist_member_uuids(pool, user_id).await?,
+            ShelfKind::Smart => {
+                let rules = load_rules(pool, id).await?;
+                smart_member_uuids(pool, user_id, match_mode.unwrap_or(MatchMode::Any), &rules)
+                    .await?
+            }
+        };
+        for uuid in found {
+            if seen.insert(uuid.clone()) {
+                uuids.push(uuid);
+            }
+        }
+    }
+    Ok(uuids)
 }
 
 /// One page of a shelf's books (v1: capped at [`MAX_BOOKS_RETURNED`], no
@@ -533,6 +584,70 @@ async fn fetch_manual(
         .fetch_all(pool)
         .await?;
     hydrate(pool, &rows).await
+}
+
+// --- uuid-only membership, for Kobo sync (#924) -----------------------------
+//
+// These mirror the `fetch_*` helpers above but select only `books.uuid` and
+// take no `LIMIT`: the Kobo sync response must not inherit a page cap, and the
+// caller wants identity, not hydrated metadata.
+
+/// Hand-picked membership as bare uuids. Fileless books are excluded: a Kobo
+/// entitlement the device can't then download is worse than an absent one.
+async fn manual_member_uuids(pool: &SqlitePool, shelf_id: i64) -> Result<Vec<String>, ShelfError> {
+    let rows = sqlx::query(&format!(
+        "SELECT sb.book_uuid FROM shelf_books sb
+           JOIN books b ON b.uuid = sb.book_uuid
+          WHERE sb.shelf_id = ? AND {FILE_EXISTS}
+          ORDER BY sb.position, sb.added_at"
+    ))
+    .bind(shelf_id)
+    .fetch_all(pool)
+    .await?;
+    rows.iter().map(|r| Ok(r.try_get("book_uuid")?)).collect()
+}
+
+/// Wishlist membership as bare uuids. Unreachable in practice — `update_shelf`
+/// rejects every edit to a system shelf, so the flag can't be set on one — but
+/// covered rather than left to panic if that ever loosens.
+async fn wishlist_member_uuids(
+    pool: &SqlitePool,
+    owner_id: i64,
+) -> Result<Vec<String>, ShelfError> {
+    let rows = sqlx::query(&format!(
+        "SELECT we.book_uuid FROM wishlist_entries we
+           JOIN books b ON b.uuid = we.book_uuid
+          WHERE we.user_id = ? AND {FILE_EXISTS}
+          ORDER BY we.added_at DESC, we.id DESC"
+    ))
+    .bind(owner_id)
+    .fetch_all(pool)
+    .await?;
+    rows.iter().map(|r| Ok(r.try_get("book_uuid")?)).collect()
+}
+
+/// Rule-derived membership as bare uuids. Keeps the same `FILE_EXISTS` filter
+/// the hydrated smart path uses, so a ghosted book doesn't sync.
+async fn smart_member_uuids(
+    pool: &SqlitePool,
+    owner_id: i64,
+    match_mode: MatchMode,
+    rules: &[ShelfRule],
+) -> Result<Vec<String>, ShelfError> {
+    let pred = membership_predicate(rules, match_mode, owner_id)?;
+    let sql = format!(
+        "SELECT b.uuid FROM books b WHERE {FILE_EXISTS} AND {}",
+        pred.sql
+    );
+    let mut q = sqlx::query(&sql);
+    for b in &pred.binds {
+        q = match b {
+            Bind::Text(s) => q.bind(s.clone()),
+            Bind::Int(i) => q.bind(*i),
+        };
+    }
+    let rows = q.fetch_all(pool).await?;
+    rows.iter().map(|r| Ok(r.try_get("uuid")?)).collect()
 }
 
 /// Decode rows into `EbookMetadata`, then merge overrides + backfill creator ids

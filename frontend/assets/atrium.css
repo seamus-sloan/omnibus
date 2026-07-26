@@ -4895,6 +4895,23 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .btn.ghost.danger { color: #f87171; }
 @media (hover: hover) { .btn.ghost.danger:hover { background: var(--bg-1); color: #fca5a5; } }
 
+/* Kobo annotation data-loss warning (#927). */
+.kobo-warning {
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid #f8717155;
+  border-left-width: 3px;
+  border-left-color: #f87171;
+  border-radius: 8px;
+  background: var(--bg-1);
+  font-size: 0.85rem;
+  color: var(--ink-1);
+}
+.kobo-warning p { margin: 0 0 0.5rem; }
+.kobo-warning p:last-child { margin-bottom: 0; }
+.kobo-warning-title { font-weight: 600; color: #f87171; }
+.kobo-warning code { font-family: var(--mono, ui-monospace, monospace); font-size: 0.8rem; }
+
 /* F5.1 per-library metadata-source precedence editor (#972). */
 .metadata-precedence-list {
   display: flex;
@@ -6596,6 +6613,8 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 .shelf-badge--vis { color: var(--accent); }
 .shelf-badge--owner { text-transform: none; letter-spacing: 0; color: var(--ink-3); }
+/* Kobo wireless-sync opt-in (#924). */
+.shelf-badge--kobo { color: #34d399; border-color: #34d39955; }
 .shelf-title-row { display: flex; align-items: center; gap: 12px; }
 .shelf-title { margin: 0; font-size: 26px; color: var(--ink-0); flex: 1 1 auto; }
 .shelf-actions { position: relative; }

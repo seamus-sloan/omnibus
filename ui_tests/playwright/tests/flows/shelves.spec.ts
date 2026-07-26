@@ -225,6 +225,7 @@ test("edits an existing smart shelf's rules and the member grid updates", async 
           visibility: null,
           match_mode: "any",
           rules: [{ field: "author", op: "is", value: "Grace Hopper" }],
+          sync_to_kobo: null,
         },
       },
       expectedStatus: 200,
