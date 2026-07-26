@@ -547,8 +547,9 @@ impl Store {
 }
 
 /// Log-and-continue for best-effort writes: the offline layer must never
-/// take the app down over a cache write.
-fn log_err(r: Result<usize, rusqlite::Error>) {
+/// take the app down over a cache write. `pub(super)` so sibling `offline`
+/// modules (e.g. `downloads`) share this instead of swallowing the error.
+pub(super) fn log_err(r: Result<usize, rusqlite::Error>) {
     if let Err(e) = r {
         tracing::warn!(error = %e, "offline store write failed");
     }

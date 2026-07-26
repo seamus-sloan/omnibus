@@ -372,23 +372,17 @@ pub(super) fn update_progress_bytes(
 ) {
     let downloaded = downloaded.max(0);
     let now = store::now_secs();
-    let found = registry()
-        .write()
-        .ok()
-        .map(
-            |mut guard| match guard.get_mut(&(uuid.to_string(), format)) {
-                Some(entry) => {
-                    entry.status = DownloadStatus::Downloading { downloaded, total };
-                    entry.updated_at = now;
-                    true
-                }
-                None => false,
-            },
-        )
-        .unwrap_or(false);
-    if !found {
+    let Ok(mut guard) = registry().write() else {
         return;
-    }
+    };
+    let Some(entry) = guard.get_mut(&(uuid.to_string(), format)) else {
+        return;
+    };
+    entry.status = DownloadStatus::Downloading { downloaded, total };
+    entry.updated_at = now;
+    // Release the lock before the DB write — persistence never needs to
+    // hold it.
+    drop(guard);
     persist_progress(uuid, format, downloaded, total, now);
     bump();
 }
@@ -404,11 +398,11 @@ fn persist_progress(
     let uuid = uuid.to_string();
     let format = format.as_str();
     store.run_detached(move |conn| {
-        let _ = conn.execute(
+        store::log_err(conn.execute(
             "UPDATE downloads SET downloaded_bytes = ?1, total_bytes = ?2, updated_at = ?3
              WHERE book_uuid = ?4 AND format = ?5",
             rusqlite::params![downloaded, total, updated_at, uuid, format],
-        );
+        ));
     });
 }
 
