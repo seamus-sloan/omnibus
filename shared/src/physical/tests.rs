@@ -1,5 +1,5 @@
 //! Serde/token round-trip tests plus `UpdateCopyNoteRequest::validate` length-cap
-//! coverage (issue #1338).
+//! coverage.
 
 use super::*;
 
