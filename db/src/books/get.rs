@@ -396,6 +396,32 @@ pub async fn book_file_path(
     }))
 }
 
+/// Resolve the library-relative directory of a book's file for the given
+/// format (e.g. "EPUB") — the on-disk path with the owning scan root's
+/// absolute prefix stripped. Used where a caller must not echo the server's
+/// absolute filesystem layout back to the client (e.g. the OPF export
+/// response) but still wants to show where the file lives *within* the
+/// library. Same lowest-`ordinal` tie-break as [`book_file_path`]. `Ok(None)`
+/// when absent.
+pub async fn book_file_relative_dir(
+    pool: &SqlitePool,
+    id: i64,
+    format: &str,
+) -> Result<Option<std::path::PathBuf>, super::BooksError> {
+    let row = sqlx::query_as::<_, (String,)>(
+        "SELECT COALESCE(bf.path, b.path) \
+         FROM books b \
+         JOIN book_files bf ON bf.book_id = b.id \
+         WHERE b.id = ? AND bf.format = ? COLLATE NOCASE \
+         ORDER BY bf.ordinal LIMIT 1",
+    )
+    .bind(id)
+    .bind(format)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(dir,)| std::path::PathBuf::from(dir)))
+}
+
 /// Resolve the on-disk path for a specific `book_files.id`, verifying
 /// it belongs to the given book. When `format` is `Some`, also
 /// validates the file's format matches (case-insensitive) — returns
