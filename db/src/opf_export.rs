@@ -4,6 +4,7 @@
 //! Audiobookshelf). One-shot and write-only: the DB stays the source of
 //! truth, and the scanner ignores sidecar `metadata.opf` on reindex.
 
+use std::fmt::Write as _;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
@@ -87,6 +88,26 @@ pub async fn export_opf(pool: &SqlitePool, book_id: i64) -> Result<OpfExport, Op
 /// place. A concurrent reader never sees a torn document (the final step is a
 /// single atomic rename).
 async fn write_sidecar(book_dir: &Path, xml: &str) -> Result<bool, std::io::Error> {
+    write_sidecar_inner(book_dir, xml, false).await
+}
+
+/// Test-only seam: identical to [`write_sidecar`] but forces the final
+/// promotion rename to fail, so a test can assert the `.bak` rollback
+/// actually restores the pre-existing sidecar. A real filesystem fault can't
+/// be injected between the two renames without racing, hence the flag.
+#[cfg(test)]
+async fn write_sidecar_forcing_promote_failure(
+    book_dir: &Path,
+    xml: &str,
+) -> Result<bool, std::io::Error> {
+    write_sidecar_inner(book_dir, xml, true).await
+}
+
+async fn write_sidecar_inner(
+    book_dir: &Path,
+    xml: &str,
+    force_promote_failure: bool,
+) -> Result<bool, std::io::Error> {
     let opf = book_dir.join("metadata.opf");
     let bak = book_dir.join("metadata.opf.bak");
     let tmp = book_dir.join(".metadata.opf.tmp");
@@ -102,7 +123,15 @@ async fn write_sidecar(book_dir: &Path, xml: &str) -> Result<bool, std::io::Erro
         }
     };
 
-    if let Err(e) = tokio::fs::rename(&tmp, &opf).await {
+    let promoted = if force_promote_failure {
+        Err(std::io::Error::other(
+            "forced promotion failure (test seam)",
+        ))
+    } else {
+        tokio::fs::rename(&tmp, &opf).await
+    };
+
+    if let Err(e) = promoted {
         // Promotion failed after the backup — restore the original so the
         // book isn't left without a sidecar.
         if backed_up {
@@ -171,71 +200,8 @@ pub fn render_opf(book: &EbookMetadata) -> String {
         "  <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:opf=\"http://www.idpf.org/2007/opf\">\n",
     );
 
-    // Package unique identifier (the durable books.uuid), anchored by
-    // `unique-identifier="uuid_id"` above. Always emitted so that attribute
-    // reference resolves — OPF 2.0 requires it. `unique_identifier` is always
-    // present via `get_book`; the filename fallback keeps a directly-built
-    // `EbookMetadata` (uuid `None`) valid rather than dangling the reference.
-    let package_id = book
-        .unique_identifier
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .unwrap_or(&book.filename);
-    out.push_str(&format!(
-        "    <dc:identifier opf:scheme=\"uuid\" id=\"uuid_id\">{}</dc:identifier>\n",
-        xml_escape(package_id)
-    ));
-
-    // Scanned identifiers (projection order is deterministic).
-    for ident in &book.identifiers {
-        match ident.scheme.as_deref() {
-            Some(scheme) => out.push_str(&format!(
-                "    <dc:identifier opf:scheme=\"{}\">{}</dc:identifier>\n",
-                xml_escape(scheme),
-                xml_escape(&ident.value)
-            )),
-            None => out.push_str(&format!(
-                "    <dc:identifier>{}</dc:identifier>\n",
-                xml_escape(&ident.value)
-            )),
-        }
-    }
-
-    // ISBN override that exists only in metadata_overrides (not already among
-    // the scanned identifiers). Raw string equality — a hyphenated scanned
-    // ISBN duplicating an unhyphenated override yields two lines (harmless).
-    if let Some(isbn) = book.isbn13.as_deref().filter(|s| !s.is_empty()) {
-        if !book.identifiers.iter().any(|i| i.value == isbn) {
-            out.push_str(&format!(
-                "    <dc:identifier opf:scheme=\"ISBN\">{}</dc:identifier>\n",
-                xml_escape(isbn)
-            ));
-        }
-    }
-
-    // dc:title is mandatory in OPF 2.0; fall back to the filename the way the
-    // UI does for untitled books.
-    let title = book
-        .title
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .unwrap_or(&book.filename);
-    out.push_str(&format!("    <dc:title>{}</dc:title>\n", xml_escape(title)));
-
-    for creator in &book.creators {
-        let mut attrs = String::new();
-        if let Some(role) = creator.role.as_deref().filter(|s| !s.is_empty()) {
-            attrs.push_str(&format!(" opf:role=\"{}\"", xml_escape(role)));
-        }
-        if let Some(file_as) = creator.file_as.as_deref().filter(|s| !s.is_empty()) {
-            attrs.push_str(&format!(" opf:file-as=\"{}\"", xml_escape(file_as)));
-        }
-        out.push_str(&format!(
-            "    <dc:creator{}>{}</dc:creator>\n",
-            attrs,
-            xml_escape(&creator.name)
-        ));
-    }
+    push_identifiers(&mut out, book);
+    push_title_and_creators(&mut out, book);
 
     // Description is ammonia-sanitized HTML; escape it once as a text node —
     // a consumer that unescapes gets the markup back (Calibre-identical).
@@ -244,45 +210,137 @@ pub fn render_opf(book: &EbookMetadata) -> String {
     push_dc(&mut out, "date", book.published.as_deref());
     push_dc(&mut out, "language", book.language.as_deref());
 
-    for subject in &book.subjects {
-        out.push_str(&format!(
-            "    <dc:subject>{}</dc:subject>\n",
-            xml_escape(subject)
-        ));
-    }
-
-    // Calibre EPUB2 series metas — the same keys the parser falls back to, so
-    // an export→rescan round-trips.
-    if let Some(series) = book.series.as_deref().filter(|s| !s.is_empty()) {
-        out.push_str(&format!(
-            "    <meta name=\"calibre:series\" content=\"{}\"/>\n",
-            xml_escape(series)
-        ));
-    }
-    if let Some(index) = book.series_index.as_deref().filter(|s| !s.is_empty()) {
-        out.push_str(&format!(
-            "    <meta name=\"calibre:series_index\" content=\"{}\"/>\n",
-            xml_escape(index)
-        ));
-    }
+    push_subjects(&mut out, book);
+    push_series_metas(&mut out, book);
 
     out.push_str("  </metadata>\n");
     out.push_str("</package>\n");
     out
 }
 
-/// Emit `<dc:{tag}>{value}</dc:{tag}>` when `value` is present and non-empty.
-fn push_dc(out: &mut String, tag: &str, value: Option<&str>) {
-    if let Some(v) = value.filter(|s| !s.is_empty()) {
-        out.push_str(&format!("    <dc:{tag}>{}</dc:{tag}>\n", xml_escape(v)));
+/// Emit the package's `dc:identifier` elements: the durable-uuid identifier
+/// anchored by `unique-identifier="uuid_id"`, every scanned identifier, and
+/// an ISBN override not already among them.
+fn push_identifiers(out: &mut String, book: &EbookMetadata) {
+    // Package unique identifier (the durable books.uuid). Always emitted so
+    // the `unique-identifier` attribute reference resolves — OPF 2.0
+    // requires it. `unique_identifier` is always present via `get_book`; the
+    // filename fallback keeps a directly-built `EbookMetadata` (uuid `None`)
+    // valid rather than dangling the reference.
+    let package_id = book
+        .unique_identifier
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&book.filename);
+    let _ = writeln!(
+        out,
+        "    <dc:identifier opf:scheme=\"uuid\" id=\"uuid_id\">{}</dc:identifier>",
+        xml_escape(package_id)
+    );
+
+    // Scanned identifiers (projection order is deterministic).
+    for ident in &book.identifiers {
+        match ident.scheme.as_deref() {
+            Some(scheme) => {
+                let _ = writeln!(
+                    out,
+                    "    <dc:identifier opf:scheme=\"{}\">{}</dc:identifier>",
+                    xml_escape(scheme),
+                    xml_escape(&ident.value)
+                );
+            }
+            None => {
+                let _ = writeln!(
+                    out,
+                    "    <dc:identifier>{}</dc:identifier>",
+                    xml_escape(&ident.value)
+                );
+            }
+        }
+    }
+
+    // ISBN override that exists only in metadata_overrides (not already among
+    // the scanned identifiers). Raw string equality — a hyphenated scanned
+    // ISBN duplicating an unhyphenated override yields two lines (harmless).
+    if let Some(isbn) = book.isbn13.as_deref().filter(|s| !s.is_empty()) {
+        if !book.identifiers.iter().any(|i| i.value == isbn) {
+            let _ = writeln!(
+                out,
+                "    <dc:identifier opf:scheme=\"ISBN\">{}</dc:identifier>",
+                xml_escape(isbn)
+            );
+        }
     }
 }
 
-/// Escape the five XML metacharacters. Used for both text nodes and attribute
-/// values — over-escaping `"`/`'` in a text node is still valid XML.
-fn xml_escape(s: &str) -> String {
+/// Emit `dc:title` (mandatory in OPF 2.0, falling back to the filename the
+/// way the UI does for untitled books) and one `dc:creator` per contributor.
+/// Contributors were merged into `creators` at parse time and the schema
+/// can't tell them apart, so every creator re-exports as `<dc:creator>`.
+fn push_title_and_creators(out: &mut String, book: &EbookMetadata) {
+    let title = book
+        .title
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(&book.filename);
+    let _ = writeln!(out, "    <dc:title>{}</dc:title>", xml_escape(title));
+
+    for creator in &book.creators {
+        let mut attrs = String::new();
+        if let Some(role) = creator.role.as_deref().filter(|s| !s.is_empty()) {
+            let _ = write!(attrs, " opf:role=\"{}\"", xml_escape(role));
+        }
+        if let Some(file_as) = creator.file_as.as_deref().filter(|s| !s.is_empty()) {
+            let _ = write!(attrs, " opf:file-as=\"{}\"", xml_escape(file_as));
+        }
+        let _ = writeln!(
+            out,
+            "    <dc:creator{}>{}</dc:creator>",
+            attrs,
+            xml_escape(&creator.name)
+        );
+    }
+}
+
+/// Emit one `dc:subject` per subject tag.
+fn push_subjects(out: &mut String, book: &EbookMetadata) {
+    for subject in &book.subjects {
+        let _ = writeln!(out, "    <dc:subject>{}</dc:subject>", xml_escape(subject));
+    }
+}
+
+/// Emit the Calibre EPUB2 series `<meta>` pair — the same keys the parser
+/// falls back to, so an export→rescan round-trips.
+fn push_series_metas(out: &mut String, book: &EbookMetadata) {
+    if let Some(series) = book.series.as_deref().filter(|s| !s.is_empty()) {
+        let _ = writeln!(
+            out,
+            "    <meta name=\"calibre:series\" content=\"{}\"/>",
+            xml_escape(series)
+        );
+    }
+    if let Some(index) = book.series_index.as_deref().filter(|s| !s.is_empty()) {
+        let _ = writeln!(
+            out,
+            "    <meta name=\"calibre:series_index\" content=\"{}\"/>",
+            xml_escape(index)
+        );
+    }
+}
+
+/// Emit `<dc:{tag}>{value}</dc:{tag}>` when `value` is present and non-empty.
+fn push_dc(out: &mut String, tag: &str, value: Option<&str>) {
+    if let Some(v) = value.filter(|s| !s.is_empty()) {
+        let _ = writeln!(out, "    <dc:{tag}>{}</dc:{tag}>", xml_escape(v));
+    }
+}
+
+/// Escape the five XML metacharacters and strip XML-illegal control
+/// characters. Used for both text nodes and attribute values —
+/// over-escaping `"`/`'` in a text node is still valid XML.
+pub(crate) fn xml_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
+    for c in s.chars().filter(|c| !is_xml_illegal_control_char(*c)) {
         match c {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
@@ -293,6 +351,12 @@ fn xml_escape(s: &str) -> String {
         }
     }
     out
+}
+
+/// True for control characters that are valid UTF-8 but illegal in XML 1.0
+/// text (everything below 0x20 except tab, LF, and CR).
+fn is_xml_illegal_control_char(c: char) -> bool {
+    matches!(c, '\u{0}'..='\u{8}' | '\u{B}'..='\u{C}' | '\u{E}'..='\u{1F}')
 }
 
 #[cfg(test)]

@@ -440,6 +440,20 @@ pub async fn get_book_files(
     pool: &SqlitePool,
     book_id: i64,
 ) -> Result<Vec<omnibus_shared::BookFileInfo>, super::BooksError> {
+    get_book_files_exec(pool, book_id).await
+}
+
+/// Executor-generic counterpart to [`get_book_files`], so a caller already
+/// holding an open transaction (e.g. book deletion's count-inside-the-tx fix)
+/// reads on the same connection its writes will run on. Pass `&pool` for a
+/// standalone read or `&mut *tx` from within a transaction.
+pub async fn get_book_files_exec<'e, E>(
+    executor: E,
+    book_id: i64,
+) -> Result<Vec<omnibus_shared::BookFileInfo>, super::BooksError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     let rows = sqlx::query_as::<
         _,
         (
@@ -456,7 +470,7 @@ pub async fn get_book_files(
          WHERE book_id = ? ORDER BY format, ordinal",
     )
     .bind(book_id)
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await?;
     Ok(rows
         .into_iter()

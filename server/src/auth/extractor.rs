@@ -112,19 +112,24 @@ async fn resolve_auth_user(
         .flatten();
     let authorization = header_auth.or(query_auth.as_deref());
     match auth_db::validate_session(&pool, authorization, cookie_header).await {
-        Ok((user, session)) => Ok(AuthUser {
-            id: user.id,
-            username: user.username,
-            is_admin: user.is_admin,
-            can_upload: user.can_upload,
-            can_edit: user.can_edit,
-            can_download: user.can_download,
-            kindle_email: user.kindle_email,
-            session_id: session.id,
-            session_kind: session.kind,
-        }),
+        Ok((user, session)) => Ok(build_auth_user(user, session)),
         Err(SessionAuthError::Unauthenticated) => Err(unauthorized()),
         Err(SessionAuthError::Internal(e)) => Err(internal(e)),
+    }
+}
+
+/// Assemble the extractor's `AuthUser` from a validated user + session pair.
+fn build_auth_user(user: auth_db::User, session: auth_db::Session) -> AuthUser {
+    AuthUser {
+        id: user.id,
+        username: user.username,
+        is_admin: user.is_admin,
+        can_upload: user.can_upload,
+        can_edit: user.can_edit,
+        can_download: user.can_download,
+        kindle_email: user.kindle_email,
+        session_id: session.id,
+        session_kind: session.kind,
     }
 }
 

@@ -102,6 +102,7 @@ pub(super) fn AnnotationsSheet(props: AnnotationsSheetProps) -> Element {
             #[cfg(any(feature = "web", feature = "mobile"))]
             spawn(async move {
                 let input = CreateBookmark {
+                    client_id: None,
                     book_uuid: uuid,
                     position: cfi,
                     title: if label.is_empty() { None } else { Some(label) },

@@ -1,12 +1,9 @@
-//! Unit tests for [`super::pages_read`] and its helpers, seeding real fixture
-//! EPUBs on disk so the word-count estimate exercises actual parsing.
-
-use std::path::Path;
+//! Unit tests for [`super::pages_read`] and [`super::words_to_pages`]. The
+//! word count is read straight from `books.word_count` (persisted at index
+//! time), so these seed that column directly — no EPUB parsing at query time.
 
 use super::*;
-use crate::ebook::test_support::{copy_fixture_into, fixture};
 use crate::init_db;
-use crate::test_support::make_test_dir;
 
 const T0: i64 = 1_700_000_000;
 
@@ -21,43 +18,25 @@ async fn seed_user(pool: &SqlitePool, name: &str) -> i64 {
     .unwrap()
 }
 
-/// Seed one book backed by a real fixture EPUB copied to `dir` — real bytes
-/// on disk are required since `pages_read` actually opens and parses the
-/// file. `dir` becomes the book's `scan_roots.path`, so `books.path` stays
-/// empty and the file sits at `dir/<fixture_name>`. Idempotent on the
-/// `scan_roots` row so two books can share the same `dir` (`path` is
-/// UNIQUE) — callers seeding multiple fixtures into one directory don't
-/// each need their own scan root.
-async fn seed_book_with_fixture(pool: &SqlitePool, dir: &Path, fixture_name: &str, uuid: &str) {
-    copy_fixture_into(fixture_name, dir);
-    sqlx::query(
-        "INSERT INTO scan_roots (path, display_name) VALUES (?, ?) ON CONFLICT(path) DO NOTHING",
+async fn seed_lib(pool: &SqlitePool) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO scan_roots (path, display_name) VALUES ('/lib', 'lib') RETURNING id",
     )
-    .bind(dir.to_str().unwrap())
-    .bind(dir.to_str().unwrap())
-    .execute(pool)
+    .fetch_one(pool)
     .await
-    .unwrap();
-    let lib_id: i64 = sqlx::query_scalar("SELECT id FROM scan_roots WHERE path = ?")
-        .bind(dir.to_str().unwrap())
-        .fetch_one(pool)
-        .await
-        .unwrap();
-    let book_id: i64 = sqlx::query_scalar(
-        "INSERT INTO books (uuid, library_id, path, title) VALUES (?, ?, '', ?) RETURNING id",
+    .unwrap()
+}
+
+/// Seed one `books` row with an explicit `word_count` (NULL when `None`).
+async fn seed_book(pool: &SqlitePool, lib_id: i64, uuid: &str, word_count: Option<i64>) {
+    sqlx::query(
+        "INSERT INTO books (uuid, library_id, path, title, word_count)
+         VALUES (?, ?, '', ?, ?)",
     )
     .bind(uuid)
     .bind(lib_id)
     .bind(uuid)
-    .fetch_one(pool)
-    .await
-    .unwrap();
-    let stem = fixture_name.trim_end_matches(".epub");
-    sqlx::query(
-        "INSERT INTO book_files (book_id, format, filename, size_bytes) VALUES (?, 'EPUB', ?, 0)",
-    )
-    .bind(book_id)
-    .bind(stem)
+    .bind(word_count)
     .execute(pool)
     .await
     .unwrap();
@@ -76,6 +55,19 @@ async fn finish_journal(pool: &SqlitePool, user: i64, uuid: &str, created_at: i6
     .unwrap();
 }
 
+async fn finish_read_status(pool: &SqlitePool, user: i64, uuid: &str, finished_at: i64) {
+    sqlx::query(
+        "INSERT INTO book_read_status (user_id, book_uuid, status, finished_at)
+         VALUES (?, ?, 'finished', ?)",
+    )
+    .bind(user)
+    .bind(uuid)
+    .bind(finished_at)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 // --- words_to_pages -----------------------------------------------------
 
 #[test]
@@ -87,136 +79,91 @@ fn words_to_pages_rounds_to_the_nearest_page() {
     assert_eq!(words_to_pages(550), 2);
 }
 
-// --- sum_word_counts ------------------------------------------------------
-
-#[test]
-fn sum_word_counts_adds_estimates_across_fixture_epubs() {
-    // alpha.epub / beta.epub are real generated fixtures (see
-    // `ebook::wordcount::tests` for the exact per-file word counts).
-    let paths = vec![fixture("alpha.epub"), fixture("beta.epub")];
-    assert_eq!(sum_word_counts(&paths), Some(14));
-}
-
-#[test]
-fn sum_word_counts_skips_unreadable_paths_and_keeps_the_rest() {
-    let paths = vec![
-        std::path::PathBuf::from("/does/not/exist.epub"),
-        fixture("alpha.epub"),
-    ];
-    assert_eq!(sum_word_counts(&paths), Some(4));
-}
-
-#[test]
-fn sum_word_counts_is_none_when_every_path_fails() {
-    let paths = vec![std::path::PathBuf::from("/does/not/exist.epub")];
-    assert_eq!(sum_word_counts(&paths), None);
-}
-
-// --- pages_read -----------------------------------------------------------
+// --- pages_read ---------------------------------------------------------
 
 #[tokio::test]
 async fn pages_read_is_none_when_nothing_finished_in_the_window() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    // A finished-count-eligible book exists but is never marked finished.
+    seed_book(&pool, lib, "uuid-a", Some(550)).await;
 
     assert_eq!(pages_read(&pool, user, 0).await.unwrap(), None);
 }
 
 #[tokio::test]
-async fn pages_read_sums_word_counts_across_finished_books() {
+async fn pages_read_sums_word_counts_of_finished_books_as_pages() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
-    let dir = make_test_dir("stats-pages-sum");
+    let lib = seed_lib(&pool).await;
+    seed_book(&pool, lib, "uuid-a", Some(275)).await; // 1 page
+    seed_book(&pool, lib, "uuid-b", Some(550)).await; // 2 pages
+    finish_journal(&pool, user, "uuid-a", T0).await;
+    finish_journal(&pool, user, "uuid-b", T0).await;
 
-    seed_book_with_fixture(&pool, &dir, "alpha.epub", "uuid-alpha").await;
-    seed_book_with_fixture(&pool, &dir, "beta.epub", "uuid-beta").await;
-    finish_journal(&pool, user, "uuid-alpha", T0).await;
-    finish_journal(&pool, user, "uuid-beta", T0).await;
+    // (275 + 550) / 275 = 3 pages.
+    assert_eq!(pages_read(&pool, user, 0).await.unwrap(), Some(3));
+}
 
-    // 4 + 10 = 14 words total (see `sum_word_counts_adds_estimates_across_fixture_epubs`),
-    // well under one `WORDS_PER_PAGE` — rounds to an honest zero, not
-    // `None`: the window *does* have data, the estimate is just small.
-    assert_eq!(pages_read(&pool, user, 0).await.unwrap(), Some(0));
+#[tokio::test]
+async fn pages_read_counts_a_book_finished_via_read_status() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    seed_book(&pool, lib, "uuid-a", Some(825)).await; // 3 pages
+                                                      // Finished via read-status only (no journal entry) — the tile uses the
+                                                      // same unified completion definition as the rest of the stats page.
+    finish_read_status(&pool, user, "uuid-a", T0).await;
 
-    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(pages_read(&pool, user, 0).await.unwrap(), Some(3));
+}
+
+#[tokio::test]
+async fn pages_read_counts_a_book_finished_both_ways_once() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    seed_book(&pool, lib, "uuid-a", Some(550)).await; // 2 pages
+    finish_journal(&pool, user, "uuid-a", T0).await;
+    finish_read_status(&pool, user, "uuid-a", T0).await;
+
+    // DISTINCT-book subquery collapses the two completion events to one row,
+    // so the word count is counted once (2 pages, not 4).
+    assert_eq!(pages_read(&pool, user, 0).await.unwrap(), Some(2));
+}
+
+#[tokio::test]
+async fn pages_read_is_none_when_finished_book_has_no_stored_word_count() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let lib = seed_lib(&pool).await;
+    // Finished, but word_count is NULL (audio-only / not-yet-backfilled).
+    seed_book(&pool, lib, "uuid-a", None).await;
+    finish_journal(&pool, user, "uuid-a", T0).await;
+
+    assert_eq!(pages_read(&pool, user, 0).await.unwrap(), None);
 }
 
 #[tokio::test]
 async fn pages_read_ignores_finishes_outside_the_window() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
-    let dir = make_test_dir("stats-pages-window");
-
-    seed_book_with_fixture(&pool, &dir, "alpha.epub", "uuid-alpha").await;
-    finish_journal(&pool, user, "uuid-alpha", T0).await;
+    let lib = seed_lib(&pool).await;
+    seed_book(&pool, lib, "uuid-a", Some(550)).await;
+    finish_journal(&pool, user, "uuid-a", T0).await;
 
     // A window starting after the finish must not see it.
     assert_eq!(pages_read(&pool, user, T0 + 1).await.unwrap(), None);
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
-async fn pages_read_skips_a_finished_book_with_no_epub_file() {
+async fn pages_read_ignores_a_ghosted_book_with_no_live_row() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
-    let lib_id: i64 = sqlx::query_scalar(
-        "INSERT INTO scan_roots (path, display_name) VALUES ('/nowhere', 'lib') RETURNING id",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO books (uuid, library_id, path, title) VALUES ('uuid-nofile', ?, '', 'No File')",
-    )
-    .bind(lib_id)
-    .execute(&pool)
-    .await
-    .unwrap();
-    finish_journal(&pool, user, "uuid-nofile", T0).await;
+    // Completion event references a uuid with no `books` row (ghosted): the
+    // inner join drops it, so there is no data.
+    finish_journal(&pool, user, "uuid-ghost", T0).await;
 
     assert_eq!(pages_read(&pool, user, 0).await.unwrap(), None);
-}
-
-// ---------- StatsError variants (#1099) ----------
-
-#[tokio::test]
-async fn pages_read_propagates_books_error_when_the_batched_lookup_fails() {
-    let pool = init_db("sqlite::memory:").await.unwrap();
-    let user = seed_user(&pool, "alice").await;
-    let dir = make_test_dir("stats-pages-books-error");
-
-    seed_book_with_fixture(&pool, &dir, "alpha.epub", "uuid-alpha").await;
-    finish_journal(&pool, user, "uuid-alpha", T0).await;
-
-    // Drop `book_files` (not `scan_roots`): `finished_book_ids` doesn't
-    // touch it, so it still succeeds, isolating the failure to the batched
-    // `book_file_paths` join. Dropping `scan_roots` cascades via
-    // `books.library_id ON DELETE CASCADE` and deletes the seeded book too.
-    sqlx::query("DROP TABLE book_files")
-        .execute(&pool)
-        .await
-        .unwrap();
-
-    let err = pages_read(&pool, user, 0).await.unwrap_err();
-    assert!(matches!(err, StatsError::Books(_)), "got {err:?}");
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[tokio::test]
-async fn spawn_blocking_panic_surfaces_as_pages_task_variant() {
-    // The `spawn_blocking` call in `pages_read` runs `sum_word_counts` off
-    // the async runtime; a panic there (corrupt zip state, an allocation
-    // failure) must propagate as `StatsError::PagesTask` via `?` rather than
-    // being swallowed. Forcing an actual EPUB-parse panic isn't practical
-    // deterministically, so this exercises the identical `spawn_blocking` +
-    // `?` shape `pages_read` uses, with a closure that panics on purpose.
-    async fn forced() -> Result<(), StatsError> {
-        tokio::task::spawn_blocking(|| panic!("intentional test panic")).await?;
-        Ok(())
-    }
-
-    let err = forced().await.unwrap_err();
-    assert!(matches!(err, StatsError::PagesTask(_)), "got {err:?}");
 }

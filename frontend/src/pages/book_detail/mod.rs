@@ -5,7 +5,7 @@
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
-use omnibus_shared::{display_title, EbookMetadata, MergeBooksResult, SuggestionsResponse};
+use omnibus_shared::{EbookMetadata, MergeBooksResult, SuggestionsResponse};
 
 use crate::components::{PageError, PageLoading, PageNotFound};
 use crate::{data, use_server_url, Route};
@@ -33,6 +33,8 @@ mod hero;
 mod mobile;
 #[cfg(feature = "mobile")]
 mod offline;
+#[cfg(not(feature = "mobile"))]
+mod physical;
 
 #[cfg(not(feature = "mobile"))]
 use body::{BdAuthorCluster, BdBodyMain, BdPageCtx, BdRailSection};
@@ -295,7 +297,7 @@ fn render_book_shell(
         delete_open,
         merge.refresh,
         b.unique_identifier.clone().unwrap_or_default(),
-        display_title(b.title.as_deref(), &b.filename),
+        b.display_title(),
     );
     #[cfg(feature = "mobile")]
     let delete_ui: Option<Element> = {
@@ -312,8 +314,11 @@ fn render_book_shell(
             delete: delete_button,
         },
         suggestions,
-        server_url,
-        is_admin_flag,
+        LoadedCtx {
+            server_url,
+            is_admin: is_admin_flag,
+            refresh: merge.refresh,
+        },
     );
     rsx! {
         {body}
@@ -540,7 +545,7 @@ struct LoadedBookView {
 
 /// Compute the per-section display fields from the loaded book.
 fn derive_loaded_view(b: &EbookMetadata) -> LoadedBookView {
-    let title = display_title(b.title.as_deref(), &b.filename);
+    let title = b.display_title();
     let primary_author = b
         .creators
         .first()
@@ -589,6 +594,15 @@ fn derive_loaded_view(b: &EbookMetadata) -> LoadedBookView {
     }
 }
 
+/// Server URL + admin flag + book-refetch signal threaded into
+/// [`render_loaded`]. Grouped so the call site stays under clippy's argument
+/// cap; `Copy`-free (`server_url` is a `String`), so it's passed by value once.
+struct LoadedCtx {
+    server_url: String,
+    is_admin: bool,
+    refresh: Signal<u32>,
+}
+
 /// Render the fully-loaded book detail view.
 fn render_loaded(
     b: EbookMetadata,
@@ -596,16 +610,22 @@ fn render_loaded(
     author_books: Vec<EbookMetadata>,
     rail: RailButtons,
     suggestions: Option<SuggestionsResponse>,
-    server_url: String,
-    is_admin: bool,
+    ctx: LoadedCtx,
 ) -> Element {
+    let LoadedCtx {
+        server_url,
+        is_admin,
+        refresh,
+    } = ctx;
     // Mobile re-flows the same loaded data into a single column; the web body
     // (hero + rail + suggestions + merge UI) isn't rendered there.
     #[cfg(feature = "mobile")]
     let out = {
         // The merge and delete affordances stay web-only; the discovery blocks
-        // (author cluster + suggestions) now render on mobile too.
+        // (author cluster + suggestions) now render on mobile too. The physical
+        // panel is web-only too (issue #1186 scope), so `refresh` is unused here.
         let _ = rail;
+        let _ = refresh;
         mobile::render_loaded_mobile(mobile::MobileBookView {
             b,
             author_books,
@@ -640,6 +660,10 @@ fn render_loaded(
         } = derive_loaded_view(&b);
 
         let uuid = b.unique_identifier.clone().unwrap_or_default();
+        // Extract the physical-panel inputs before `b` is moved into the rail.
+        let is_fileless = b.formats.is_empty();
+        let isbn13 = b.isbn13.clone();
+        let panel_author = primary_author.clone();
         rsx! {
             div { class: "bd-root", style: "{accent_style}",
                 BdHeroSection {
@@ -651,6 +675,14 @@ fn render_loaded(
                         has_ebook,
                         has_audio,
                     },
+                }
+                physical::BdPhysicalPanel {
+                    uuid: uuid.clone(),
+                    is_fileless,
+                    isbn: isbn13,
+                    title: title.clone(),
+                    author: panel_author,
+                    refresh,
                 }
                 section { class: "bd-body-grid",
                     BdBodyMain {

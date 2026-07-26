@@ -232,6 +232,20 @@ skip = [
     # 0.26 from sqlx-core; 1.0 from hyper-rustls (reqwest).
     # Collapses when sqlx bumps its rustls deps.
     { name = "webpki-roots", version = "0.26.11" },
+
+    # --- Dioxus git-pin lag (axum-extra / tower-http / reqwest) ---
+    # dioxus-fullstack 0.7.9's git-pinned Dioxus tag carries older copies of
+    # these three crates than our own server crate/workspace pin. See
+    # docs/dependency-audit.md for full source chains (issue #1100).
+    { name = "axum-extra", version = "0.10.3" },
+    # tower-http 0.6.11 also arrives via reqwest 0.12.28 AND reqwest 0.13.4
+    # (each vendors its own copy) — not purely a Dioxus-lag issue; persists
+    # until reqwest itself upgrades to tower-http 0.7.
+    { name = "tower-http", version = "0.6.11" },
+    # reqwest: two *major* versions (0.12 vs 0.13), the largest gap in this
+    # list. 0.12.28 is the dioxus-fullstack git-pin copy; 0.13.4 is the
+    # workspace-pinned version (Cargo.toml [workspace.dependencies]).
+    { name = "reqwest", version = "0.12.28" },
 ]
 
 # ---------------------------------------------------------------------------

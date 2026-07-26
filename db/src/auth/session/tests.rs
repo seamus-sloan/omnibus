@@ -203,6 +203,90 @@ async fn touch_update_does_not_bump_revoked_session() {
 }
 
 #[tokio::test]
+async fn revoke_all_sessions_for_user_revokes_every_active_session() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let a = create_session(&p, u.id, None, SessionKind::Cookie, 3600)
+        .await
+        .unwrap();
+    let b = create_session(&p, u.id, None, SessionKind::Bearer, 3600)
+        .await
+        .unwrap();
+
+    let revoked = revoke_all_sessions_for_user(&p, u.id).await.unwrap();
+    assert_eq!(revoked, 2);
+
+    assert!(matches!(
+        lookup_session(&p, &a.raw_token).await.unwrap_err(),
+        AuthError::SessionNotFound
+    ));
+    assert!(matches!(
+        lookup_session(&p, &b.raw_token).await.unwrap_err(),
+        AuthError::SessionNotFound
+    ));
+}
+
+#[tokio::test]
+async fn revoke_all_sessions_for_user_is_scoped_to_the_target_user() {
+    let p = pool().await;
+    let alice = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    // Registration auto-disables after the first user; re-enable for bob.
+    crate::auth::set_registration_enabled(&p, true)
+        .await
+        .unwrap();
+    let bob = create_user(&p, "bob", "bunker9-longer-pass").await.unwrap();
+    let alices = create_session(&p, alice.id, None, SessionKind::Cookie, 3600)
+        .await
+        .unwrap();
+    let bobs = create_session(&p, bob.id, None, SessionKind::Cookie, 3600)
+        .await
+        .unwrap();
+
+    let revoked = revoke_all_sessions_for_user(&p, alice.id).await.unwrap();
+    assert_eq!(revoked, 1);
+
+    assert!(matches!(
+        lookup_session(&p, &alices.raw_token).await.unwrap_err(),
+        AuthError::SessionNotFound
+    ));
+    lookup_session(&p, &bobs.raw_token)
+        .await
+        .expect("bob's session must be untouched by alice's revocation");
+}
+
+#[tokio::test]
+async fn revoke_all_sessions_for_user_except_preserves_only_the_named_session() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let keep = create_session(&p, u.id, None, SessionKind::Cookie, 3600)
+        .await
+        .unwrap();
+    let drop_a = create_session(&p, u.id, None, SessionKind::Bearer, 3600)
+        .await
+        .unwrap();
+    let drop_b = create_session(&p, u.id, None, SessionKind::Cookie, 3600)
+        .await
+        .unwrap();
+
+    let revoked = revoke_all_sessions_for_user_except(&p, u.id, keep.session.id)
+        .await
+        .unwrap();
+    assert_eq!(revoked, 2);
+
+    lookup_session(&p, &keep.raw_token)
+        .await
+        .expect("the excluded session must remain live");
+    assert!(matches!(
+        lookup_session(&p, &drop_a.raw_token).await.unwrap_err(),
+        AuthError::SessionNotFound
+    ));
+    assert!(matches!(
+        lookup_session(&p, &drop_b.raw_token).await.unwrap_err(),
+        AuthError::SessionNotFound
+    ));
+}
+
+#[tokio::test]
 async fn unknown_token_is_rejected() {
     let p = pool().await;
     let err = lookup_session(&p, "not-a-real-token").await.unwrap_err();

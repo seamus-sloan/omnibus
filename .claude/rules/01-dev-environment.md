@@ -13,10 +13,10 @@ The flake exposes five purpose-built shells so daily cargo work doesn't pay for 
 
 | Shell | Headline tools | When to use |
 |---|---|---|
-| `default` (slim) | rust core + sqlite + openssl + just + zellij + process-compose + stylelint | Daily `cargo test`/`clippy`/`fmt`, editor, rust-analyzer, `just lint-css` — this is what direnv auto-loads via `.envrc` |
+| `default` (slim) | rust core (+ `llvm-tools-preview`) + sqlite + openssl + just + zellij + process-compose + stylelint + cargo-llvm-cov | Daily `cargo test`/`clippy`/`fmt`, editor, rust-analyzer, `just lint-css`, `just coverage` — this is what direnv auto-loads via `.envrc` |
 | `web` | default + dioxus-cli + matched `wasm-bindgen` + node + pnpm | `dx serve --platform web`, `just dev-up`, `just lint-ts`, anything that bundles the WASM client or drives the Playwright npm project |
 | `e2e` | web + Playwright Chromium bundle | `pnpm exec playwright test`, the `playwright` pane in the multiplexer, CI's E2E job |
-| `mobile` | default + dioxus-cli (`dx`) + maestro + Android + iOS rust-std targets + JDK 21 + Xcode/Android SDK auto-detect (+ GTK 3 / WebKitGTK on Linux) | `dx serve --platform ios`/`android`, `cargo build -p omnibus-mobile`, `just e2e-mobile` (Maestro mobile E2E); CI's `cargo clippy (mobile)` host-target lint |
+| `mobile` | own package set (not `default`-based) — rust core (mobile targets) + sqlite + openssl + just + zellij + process-compose + sccache + dioxus-cli (`dx`) + maestro + Android + iOS rust-std targets + JDK 21 + Xcode/Android SDK auto-detect (+ GTK 3 / WebKitGTK on Linux) | `dx serve --platform ios`/`android`, `cargo build -p omnibus-mobile`, `just e2e-mobile` (Maestro mobile E2E); CI's `cargo clippy (mobile)` host-target lint |
 | `audit` | default + cargo-audit + cargo-deny | Local `cargo audit` / `cargo deny`, mirrors CI's security job |
 
 One-shot pattern for any non-default shell:
@@ -46,6 +46,12 @@ just fixtures    # one-time download; instant no-op thereafter
 ## CSS structural lint
 
 `stylelint` lives in the slim shell so `just lint` (which runs `just lint-css`) and the `css-lint.yml` CI job both guard `frontend/assets/**.css` against structural errors — chiefly an unclosed `}`, which under CSS nesting silently reparents every following rule as a descendant of the unclosed selector and breaks layouts the Rust/web build never exercises. The ruleset ([`.stylelintrc.json`](../../.stylelintrc.json)) is parse/structural-only, so it errors on broken CSS but never nags about pre-existing style. Run `just lint-css` to check just the CSS.
+
+## Code coverage
+
+`cargo-llvm-cov` (backed by the `llvm-tools-preview` toolchain component, both in the slim shell) drives LLVM source-based coverage over the same crate/feature matrix as `just test`, running the tests via **cargo-nextest** (also slim-shell). The whole workspace runs on nextest — `just test`, `just coverage`, and the CI `test` job — so local and CI exercise the same runner; there are no doctests (all nextest would skip). Run `just coverage` for an lcov + per-file summary, or `just coverage-html` for a browsable per-line report. In CI the `test` job in [`rust.yml`](../../.github/workflows/rust.yml) runs `cargo llvm-cov nextest` (one instrumented pass — coverage falls out of the same run that gates correctness) and each matrix variant uploads its lcov to Codecov, configured report-only via [`codecov.yml`](../../codecov.yml) (informational status, never a merge gate; a Codecov upload hiccup never fails the gated job). Two deliberate blind spots for *line* coverage: the wasm32 `web` frontend can't be instrumented, and the E2E suites aren't included — so read the absolute number as a floor, and lean on **patch coverage** (did this PR test its new logic?) rather than the project total.
+
+**Test Analytics** (flaky-test / failure-rate tracking) is separate from line coverage: every CI suite emits JUnit and uploads it via `codecov/codecov-action@v5` with `report_type: test_results` — Rust through nextest's `ci` profile ([`.config/nextest.toml`](../../.config/nextest.toml)), Playwright through its `junit` reporter ([`e2e.yml`](../../.github/workflows/e2e.yml)), and Maestro through `maestro-report.xml` ([`mobile-e2e.yml`](../../.github/workflows/mobile-e2e.yml)). These uploads are best-effort and never gate a merge. Both coverage and Test Analytics want a `CODECOV_TOKEN` repo secret to be reliable; tokenless OIDC upload works for the public repo but is rate-limited.
 
 ## Common environment
 
@@ -104,6 +110,9 @@ HLS audiobook transcode cache (read by `db::hls`):
 Kobo KEPUB conversion (read by `db::kepub`, for the "Send to Kobo" download):
 - `OMNIBUS_KEPUBIFY_PATH` — explicit kepubify path; otherwise kepubify must be on `$PATH`. Absent → download falls back to plain EPUB with a one-time startup warning. Bundled in the `.#web` shell and the release image.
 - `OMNIBUS_KEPUB_DIR` — directory for the KEPUB cache, used verbatim when set; otherwise defaults to `$OMNIBUS_DATA_DIR/kepub/`. Purely a regenerable cache (safe to delete, rebuilt on next download).
+
+Export-with-overrides EPUB cache (read by `db::epub_rewrite`, for the "Send to Kobo" + plain EPUB download when a book has overrides):
+- `OMNIBUS_EXPORT_EPUB_DIR` — directory for the override-baked EPUB cache, used verbatim when set; otherwise defaults to `$OMNIBUS_DATA_DIR/export-epub/`. Purely a regenerable cache (safe to delete, rebuilt on next export), invalidated on `books.last_modified` (bumped on every override save).
 
 - `OMNIBUS_VERSION` — the running release tag (e.g. `v0.8.9`), read once at boot and returned as the `version` field on `GET /api/_health`; the mobile "You" screen fetches it there to show the server's release alongside the app's own compile-time build version (F-1055, `server::backend::app_version`). Also read at **compile time** via `option_env!` by `omnibus_frontend::version::app_version` so the web user-menu version line and a mobile build's own "App version" line report the real tag instead of the crate's pinned `0.1.0`. Baked into the Docker image build-arg (`Dockerfile`, `.github/workflows/docker.yml`) and into the TestFlight build env (`.github/workflows/testflight.yml`, mirroring its already-resolved `MARKETING_VERSION`). Leave unset for local dev — the server reports `"dev"` and the frontend falls back to `CARGO_PKG_VERSION`.
 

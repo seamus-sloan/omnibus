@@ -4,6 +4,7 @@ use super::*;
 
 fn create(body: &str) -> CreateJournalEntry {
     CreateJournalEntry {
+        client_id: None,
         book_uuid: "book-1".into(),
         body_md: body.into(),
         progress: None,

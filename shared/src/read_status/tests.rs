@@ -58,6 +58,18 @@ fn set_read_status_validate_accepts_nonblank_uuid() {
 }
 
 #[test]
+fn set_read_status_validate_rejects_an_oversized_uuid() {
+    let req = SetReadStatus {
+        book_uuid: "u".repeat(crate::BOOK_UUID_MAX_LEN + 1),
+        status: ReadStatus::Reading,
+    };
+    let err = req
+        .validate()
+        .expect_err("oversized book_uuid must be rejected");
+    assert!(err.contains("bytes"), "got: {err}");
+}
+
+#[test]
 fn record_omits_null_finished_at_from_wire() {
     let json = serde_json::to_string(&ReadStatusRecord {
         book_uuid: "abc".into(),

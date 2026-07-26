@@ -44,15 +44,18 @@ test.describe("add-books sheet (phone viewport)", () => {
     await expect(rows.nth(2)).toContainText("Enter an ISBN");
   });
 
-  test("Scan routes to the check-in page and closes the sheet", async ({
+  test("Scan opens the check-in overlay and closes the sheet", async ({
     page,
   }) => {
     await gotoReady(page, "/");
     await page.getByTestId("tabbar-scan").click();
     await page.getByTestId("add-books-row").nth(0).click();
 
-    await expect(page).toHaveURL(/\/check-in$/);
+    // Check-in is now a centered overlay, not a route: the flow floats in
+    // place over the current page, no navigation.
+    await expect(page.getByTestId("check-in-overlay-scrim")).toBeVisible();
     await expect(page.getByTestId("check-in")).toBeVisible();
+    await expect(page).toHaveURL(/\/$/);
     await expect(page.getByTestId("add-books-sheet")).toHaveCount(0);
   });
 

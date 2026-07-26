@@ -20,7 +20,7 @@ pub use login::verify_login;
 pub use password::{hash_password, validate_password, validate_username, verify_password};
 pub use session::{
     create_session, lookup_session, prune_expired_sessions, revoke_all_sessions_for_user,
-    revoke_session, validate_session, SessionAuthError,
+    revoke_all_sessions_for_user_except, revoke_session, validate_session, SessionAuthError,
 };
 pub use session_key::{get_session_key, load_or_create_session_key, put_session_key};
 pub use token::{
@@ -28,8 +28,10 @@ pub use token::{
     SESSION_COOKIE_NAME_HOST_PREFIXED,
 };
 pub use users::{
-    create_user, get_kindle_email, get_user_by_id, get_user_by_username, promote_to_admin,
-    registration_enabled, set_kindle_email, set_registration_enabled,
+    admin_create_user, admin_set_password, change_password, create_user, delete_user,
+    get_kindle_email, get_user_by_id, get_user_by_username, list_users, promote_to_admin,
+    registration_enabled, set_kindle_email, set_registration_enabled, unlock_user,
+    update_user_permissions,
 };
 
 use sqlx::Row;
@@ -44,6 +46,10 @@ pub enum AuthError {
     Validation(String),
     #[error("username is already taken")]
     UsernameTaken,
+    #[error("user not found")]
+    UserNotFound,
+    #[error("cannot remove the last administrator")]
+    LastAdmin,
     #[error("session not found or expired")]
     SessionNotFound,
     #[error("account is temporarily locked")]

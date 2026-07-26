@@ -1,8 +1,8 @@
 //! On-demand external book-summary fetch backing the "Fetch Summary" button.
-//! The client drives the Hardcover→OpenLibrary cascade one source at a time
-//! (so it can show a per-source status), calling [`rpc_fetch_summary`] per
-//! source and [`rpc_hardcover_configured`] to decide whether to start with
-//! Hardcover.
+//! The client drives the cascade one source at a time (so it can show a
+//! per-source status), calling [`rpc_summary_sources`] once for the ordered
+//! plan (Hardcover → Google Books → Open Library, trimmed to the configured
+//! providers) and then [`rpc_fetch_summary`] per source in that order.
 
 use dioxus::fullstack::post;
 use dioxus::prelude::*;
@@ -29,13 +29,14 @@ pub async fn rpc_fetch_summary(uuid: String, source: SummarySource) -> Result<Op
     Ok(text)
 }
 
-/// Whether a server-wide Hardcover key is configured. Any authenticated user
-/// may read this non-sensitive flag; it drives the client's source cascade
-/// (Hardcover first when configured, else OpenLibrary).
-#[post("/api/rpc/ebook/summary/hardcover-configured", pool: PoolExt, _user: AuthUser)]
-pub async fn rpc_hardcover_configured() -> Result<bool> {
-    let status = db::hardcover_key_status(&pool.0)
+/// The ordered summary-source cascade for the current settings (Hardcover when
+/// keyed → Google Books always → Open Library only when no keys). Any
+/// authenticated user may read this non-sensitive plan; it drives which sources
+/// the client attempts, and in what order.
+#[post("/api/rpc/ebook/summary/sources", pool: PoolExt, _user: AuthUser)]
+pub async fn rpc_summary_sources() -> Result<Vec<SummarySource>> {
+    let sources = db::summary_source_plan(&pool.0)
         .await
-        .map_err(|e| internal_rpc_error("hardcover key status", e))?;
-    Ok(status.configured)
+        .map_err(|e| internal_rpc_error("summary source plan", e))?;
+    Ok(sources)
 }

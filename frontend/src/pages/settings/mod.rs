@@ -15,12 +15,18 @@ mod library;
 mod metadata_precedence;
 mod secret_key_field;
 mod smtp;
+// Web/server only: the admin Users surface calls the web-only `data::users`
+// REST wrappers (no mobile admin surface).
+#[cfg(not(feature = "mobile"))]
+mod users;
 
 use dioxus::prelude::*;
 
 use library::LibraryLocationSection;
 use secret_key_field::{SecretKeyField, SecretKeyKind};
 use smtp::SmtpConfigField;
+#[cfg(not(feature = "mobile"))]
+use users::UsersSection;
 
 /// The `/settings` page. Web/server render the sectioned sidebar; the native
 /// shell renders the flat mobile form (`section` is web-only navigation state).
@@ -73,6 +79,7 @@ enum SettingsSection {
     Library,
     Metadata,
     Email,
+    Users,
     Logs,
 }
 
@@ -85,6 +92,7 @@ impl SettingsSection {
             SettingsSection::Library => "library",
             SettingsSection::Metadata => "metadata",
             SettingsSection::Email => "email",
+            SettingsSection::Users => "users",
             SettingsSection::Logs => "logs",
         }
     }
@@ -103,6 +111,7 @@ fn parse_section(raw: Option<&str>, is_admin: bool) -> SettingsSection {
         Some("library") => SettingsSection::Library,
         Some("metadata") => SettingsSection::Metadata,
         Some("email") => SettingsSection::Email,
+        Some("users") => SettingsSection::Users,
         Some("logs") => SettingsSection::Logs,
         _ => SettingsSection::Account,
     };
@@ -126,6 +135,7 @@ fn section_content(active: SettingsSection) -> Element {
             SecretKeyField { kind: SecretKeyKind::GoogleBooks }
         },
         SettingsSection::Email => rsx! { SmtpConfigField {} },
+        SettingsSection::Users => rsx! { UsersSection {} },
         SettingsSection::Logs => rsx! { super::LogsPage {} },
     }
 }
@@ -158,6 +168,7 @@ fn SettingsSidebar(active: SettingsSection, is_admin: bool) -> Element {
                     SettingsNavItem { section: SettingsSection::Email, active, label: "Email delivery", icon: "✉" }
                 }
                 SettingsNavGroup { label: "Administration",
+                    SettingsNavItem { section: SettingsSection::Users, active, label: "Users", icon: "☰" }
                     SettingsNavItem { section: SettingsSection::Logs, active, label: "Logs", icon: "▣" }
                 }
             } else {

@@ -66,7 +66,10 @@ fn use_row_state(
     let mut book_state: Signal<EbookMetadata> = use_signal(|| book.clone());
     let editing: Signal<Option<EditField>> = use_signal(|| None);
     use_effect(use_reactive!(|book| {
-        if editing().is_none() {
+        // `.peek()` avoids subscribing this effect to `editing`, so a save
+        // that resolves after edit-close (e.g. the chip editor) can't have
+        // its fresh `book_state` clobbered by a spurious resync.
+        if editing.peek().is_none() {
             // `book` here is `use_reactive!`'s per-run dependency snapshot
             // (already an owned clone produced by the macro), not the
             // outer `book` parameter — safe to move straight into the

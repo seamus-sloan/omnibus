@@ -138,6 +138,23 @@ async fn next_temp_id_decrements_and_survives_reopen() {
 }
 
 #[tokio::test]
+async fn open_returns_sqlite_error_when_path_is_a_directory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let result = Store::open(dir.path().to_path_buf());
+    assert!(matches!(result, Err(StoreError::Sqlite(_))));
+}
+
+#[test]
+fn store_error_worker_spawn_variant_carries_the_source_message() {
+    let io_err = std::io::Error::other("boom");
+    let err = StoreError::WorkerSpawn(io_err);
+    assert_eq!(
+        err.to_string(),
+        "could not spawn the offline store worker thread: boom"
+    );
+}
+
+#[tokio::test]
 async fn meta_round_trips_values() {
     let (_dir, store) = open_temp();
     assert!(store.meta_get("last_sync_at").await.is_none());

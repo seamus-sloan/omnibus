@@ -35,6 +35,20 @@ pub async fn convert_book(pool: &SqlitePool, book_id: i64) -> Result<PathBuf, Ke
         .context("look up book's EPUB source path")?
         .ok_or(KepubError::SourceMissing(book_id))?;
 
+    // Bake DB metadata/cover overrides into a rewritten EPUB first, so the
+    // KEPUB the Kobo renders carries the user's edits (F5.8 #1372). No active
+    // override → `None`, and we kepubify the source verbatim. A rewrite failure
+    // is non-fatal: log and fall back to the source rather than blocking the
+    // download.
+    let input = match crate::rewritten_epub_path(pool, book_id, &src).await {
+        Ok(Some(rewritten)) => rewritten,
+        Ok(None) => src.clone(),
+        Err(e) => {
+            tracing::warn!(target: "omnibus::kepub", book_id, error = %e, "epub override-rewrite failed; kepubifying source");
+            src.clone()
+        }
+    };
+
     let dir = kepub_dir();
     tokio::fs::create_dir_all(&dir)
         .await
@@ -44,8 +58,8 @@ pub async fn convert_book(pool: &SqlitePool, book_id: i64) -> Result<PathBuf, Ke
     let tmp = dir.join(format!(".{book_id}.tmp.kepub.epub"));
     let _ = tokio::fs::remove_file(&tmp).await;
 
-    tracing::info!(target: "omnibus::kepub", book_id, ?src, "converting epub to kepub");
-    run_kepubify(&src, &tmp).await?;
+    tracing::info!(target: "omnibus::kepub", book_id, ?input, "converting epub to kepub");
+    run_kepubify(&input, &tmp).await?;
     tokio::fs::rename(&tmp, &out_path)
         .await
         .context("move converted kepub into cache")?;

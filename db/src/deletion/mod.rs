@@ -15,7 +15,10 @@ use sqlx::SqlitePool;
 use omnibus_shared::physical::PhysicalCopy;
 use omnibus_shared::BookFileInfo;
 
-use crate::books::{book_file_path_by_id, get_book_files, resolve_book_id_by_uuid};
+use crate::books::{
+    book_file_path_by_id, get_book_files, get_book_files_exec, resolve_book_id_by_uuid,
+};
+use crate::physical::list_physical_copies_by_canonical_uuid_exec;
 
 /// Errors from the deletion path.
 #[derive(Debug, thiserror::Error)]
@@ -110,6 +113,13 @@ pub async fn book_deletion_manifest(
 /// flight can re-insert a file it snapshotted before the unlink (as a fresh
 /// book with a new uuid); the next scan won't, so that's left to resolve
 /// itself rather than locking against the worker.
+///
+/// The item count that decides `total_delete` is read and acted on inside one
+/// `BEGIN IMMEDIATE` transaction (see [`selection_total_delete`]), so two
+/// concurrent calls on the same book with disjoint selections can't both
+/// observe the pre-delete count and both leave a zero-item `books` row
+/// behind: `BEGIN IMMEDIATE` takes the RESERVED write lock up front, so the
+/// second call blocks until the first commits, then counts fresh.
 pub async fn delete_book_items(
     pool: &SqlitePool,
     book_uuid: &str,
@@ -128,31 +138,26 @@ pub async fn delete_book_items(
     let file_ids = &dedup(file_ids);
     let copy_ids = &dedup(copy_ids);
 
-    let existing_files = get_book_files(pool, book_id).await?;
-    if let Some(unknown) = file_ids
-        .iter()
-        .find(|id| !existing_files.iter().any(|f| f.id == **id))
-    {
-        return Err(DeleteError::FileNotFound(*unknown));
-    }
-    let existing_copies = crate::physical::list_physical_copies(pool, &uuid).await?;
-    if let Some(unknown) = copy_ids
-        .iter()
-        .find(|id| !existing_copies.iter().any(|c| c.id == **id))
-    {
-        return Err(DeleteError::CopyNotFound(*unknown));
-    }
-
-    let item_count = existing_files.len() + existing_copies.len();
-    let selected = file_ids.len() + copy_ids.len();
+    // `BEGIN IMMEDIATE` takes the RESERVED write lock at open time, before
+    // the count below runs, matching `auth::users::create_user`'s guard
+    // against the same class of race. A plain `pool.begin()` issues a
+    // DEFERRED `BEGIN` that acquires the lock lazily on first write, which
+    // would leave the count read outside the lock and reopen the TOCTOU
+    // window this closes.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     // Selecting nothing on a book that still has items is a no-op; the same
-    // call on a book with no items at all is the "delete this record" case.
-    if selected == 0 && item_count > 0 {
+    // call on a book with no items at all is the "delete this record" case
+    // `total_delete` handles below.
+    let Some(total_delete) =
+        selection_total_delete(&mut tx, book_id, &uuid, file_ids, copy_ids).await?
+    else {
         return Ok(DeleteOutcome::default());
-    }
-    let total_delete = selected == item_count;
+    };
 
     // Resolve on-disk paths before the rows they're derived from disappear.
+    // Read on the pool rather than the tx: the rows aren't deleted until the
+    // writes below, so a separate connection still sees them, and a plain
+    // `SELECT` never contends with the tx's RESERVED write lock under WAL.
     let mut paths = Vec::with_capacity(file_ids.len());
     for id in file_ids {
         if let Some(path) = book_file_path_by_id(pool, book_id, *id, None).await? {
@@ -166,7 +171,6 @@ pub async fn delete_book_items(
         Vec::new()
     };
 
-    let mut tx = pool.begin().await?;
     purge::delete_file_rows(&mut tx, book_id, file_ids).await?;
     purge::delete_copy_rows(&mut tx, &uuid, copy_ids).await?;
     if total_delete {
@@ -193,6 +197,47 @@ pub async fn delete_book_items(
         deleted_copy_ids: copy_ids.to_vec(),
         book_deleted: total_delete,
     })
+}
+
+/// Validate `file_ids`/`copy_ids` against the book's *current* items and
+/// decide whether every item is being removed. Reads on `tx`'s own
+/// connection, so they run under the `BEGIN IMMEDIATE` RESERVED lock the
+/// caller opened — the fix for the TOCTOU where two concurrent deletes with
+/// disjoint selections could each read the pre-transaction item count and
+/// both conclude `total_delete = false`, leaving a zero-item `books` row
+/// neither call purges.
+///
+/// Returns `None` for the no-op case (nothing selected on a book that still
+/// has items); otherwise `Some(total_delete)`.
+async fn selection_total_delete(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    book_id: i64,
+    canonical_uuid: &str,
+    file_ids: &[i64],
+    copy_ids: &[i64],
+) -> Result<Option<bool>, DeleteError> {
+    let existing_files = get_book_files_exec(&mut **tx, book_id).await?;
+    if let Some(unknown) = file_ids
+        .iter()
+        .find(|id| !existing_files.iter().any(|f| f.id == **id))
+    {
+        return Err(DeleteError::FileNotFound(*unknown));
+    }
+    let existing_copies =
+        list_physical_copies_by_canonical_uuid_exec(&mut **tx, canonical_uuid).await?;
+    if let Some(unknown) = copy_ids
+        .iter()
+        .find(|id| !existing_copies.iter().any(|c| c.id == **id))
+    {
+        return Err(DeleteError::CopyNotFound(*unknown));
+    }
+
+    let item_count = existing_files.len() + existing_copies.len();
+    let selected = file_ids.len() + copy_ids.len();
+    if selected == 0 && item_count > 0 {
+        return Ok(None);
+    }
+    Ok(Some(selected == item_count))
 }
 
 /// Copy of `ids` with duplicates removed, order-independent (the caller only

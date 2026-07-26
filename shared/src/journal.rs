@@ -76,6 +76,10 @@ pub struct JournalEntry {
     pub progress: Option<u8>,
     #[serde(default)]
     pub status: JournalStatus,
+    /// The device-minted identity this entry was created under, when the
+    /// creating client supplied one. `None` for rows predating migration 0051.
+    #[serde(default)]
+    pub client_id: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -89,13 +93,33 @@ pub struct CreateJournalEntry {
     pub progress: Option<u8>,
     #[serde(default)]
     pub status: JournalStatus,
+    /// Identity minted on the device at composition time, so an offline client
+    /// can edit or delete this entry before the server has assigned it an id.
+    /// Creates are idempotent on it.
+    #[serde(default)]
+    pub client_id: Option<String>,
 }
 
 impl CreateJournalEntry {
+    /// Maximum length (in chars) of a client-minted entry id. Mirror of
+    /// [`crate::highlight::CreateHighlight::CLIENT_ID_MAX_LEN`].
+    pub const CLIENT_ID_MAX_LEN: usize = crate::highlight::CreateHighlight::CLIENT_ID_MAX_LEN;
+
     /// Reject an empty uuid, an empty/oversized body, or out-of-range progress.
     pub fn validate(&self) -> Result<(), String> {
         if self.book_uuid.trim().is_empty() {
             return Err("book_uuid is required".into());
+        }
+        if let Some(ref client_id) = self.client_id {
+            if client_id.trim().is_empty() {
+                return Err("client_id must not be blank".into());
+            }
+            if client_id.chars().count() > Self::CLIENT_ID_MAX_LEN {
+                return Err(format!(
+                    "client_id exceeds {} characters",
+                    Self::CLIENT_ID_MAX_LEN
+                ));
+            }
         }
         validate_body(&self.body_md, self.progress)
     }

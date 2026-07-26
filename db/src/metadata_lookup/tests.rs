@@ -228,6 +228,44 @@ async fn lookup_rejects_invalid_isbn_without_calling_a_provider() {
     ));
 }
 
+// ── invalid response bodies ──────────────────────────────────────
+
+#[tokio::test]
+async fn openlibrary_lookup_errors_when_response_body_is_invalid_json() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(OL_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+        .mount(&server)
+        .await;
+
+    let err = super::providers::openlibrary_lookup(&config_for(&server), ISBN13)
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("not valid json"),
+        "must report a json parse failure, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn googlebooks_lookup_errors_when_response_body_is_invalid_json() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(GB_PATH))
+        .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+        .mount(&server)
+        .await;
+
+    let err = super::providers::googlebooks_lookup(&config_for(&server), ISBN13)
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("not valid json"),
+        "must report a json parse failure, got: {err}"
+    );
+}
+
 // ── Google Books API key ─────────────────────────────────────────
 
 #[test]

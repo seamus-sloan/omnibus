@@ -109,9 +109,27 @@ pub fn Logs() -> Element {
     rsx! {}
 }
 
-/// Route target for `/account` — wraps [`AccountPage`] in the platform screen
-/// layout. Web renders the Send-to-Kindle destination form; the native shell
-/// renders the mobile "You" tab.
+/// Route target for `/account` on web/server — the Account content now lives
+/// inside Settings (the same [`AccountPage`], `embedded: true`, behind the
+/// sidebar), so this is a redirect that keeps old bookmarks and the bottom
+/// nav's "You" tab working, mirroring how `/logs` redirects into Settings
+/// above.
+#[cfg(not(feature = "mobile"))]
+#[component]
+pub fn Account() -> Element {
+    let nav = dioxus_router::use_navigator();
+    use_effect(move || {
+        nav.replace(Route::Settings { section: None });
+    });
+    rsx! {}
+}
+
+/// Route target for `/account` on mobile — wraps [`AccountPage`] in the
+/// platform screen layout to render the native "You" tab (identity,
+/// now-reading, account rows, theme, sign out). Mobile's Settings page has no
+/// Account section (it's a flat library/admin form), so mobile keeps its own
+/// route here rather than redirecting.
+#[cfg(feature = "mobile")]
 #[component]
 pub fn Account() -> Element {
     use_page_title(|| Some("Account".into()));

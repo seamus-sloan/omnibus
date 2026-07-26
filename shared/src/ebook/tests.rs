@@ -7,16 +7,38 @@ fn contributor(name: &str) -> Contributor {
     }
 }
 
-// --- display_title() ----------------------------------------------------
+// --- display_title() (free fn — label/filename pairs outside EbookMetadata, e.g. book_files) ---
 
 #[test]
-fn display_title_returns_title_when_set() {
+fn display_title_helper_returns_title_when_set() {
     assert_eq!(display_title(Some("A Title"), "file.epub"), "A Title");
 }
 
 #[test]
-fn display_title_falls_back_to_filename_when_title_is_none() {
+fn display_title_helper_falls_back_to_filename_when_title_is_none() {
     assert_eq!(display_title(None, "file.epub"), "file.epub");
+}
+
+// --- EbookMetadata::display_title() ------------------------------------
+
+#[test]
+fn display_title_returns_title_when_present() {
+    let m = EbookMetadata {
+        filename: "book.epub".into(),
+        title: Some("The Actual Title".into()),
+        ..Default::default()
+    };
+    assert_eq!(m.display_title(), "The Actual Title");
+}
+
+#[test]
+fn display_title_falls_back_to_filename_when_title_is_none() {
+    let m = EbookMetadata {
+        filename: "untitled.epub".into(),
+        title: None,
+        ..Default::default()
+    };
+    assert_eq!(m.display_title(), "untitled.epub");
 }
 
 // --- validate() --------------------------------------------------------

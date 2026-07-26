@@ -143,6 +143,7 @@ pub(crate) async fn seed_book_with_uuid(
             cover: None,
             mtime_epoch: 0,
             size_bytes: 0,
+            word_count: None,
         }],
     )
     .await

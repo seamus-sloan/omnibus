@@ -24,11 +24,11 @@ pub async fn fetch_summary(
         .map_err(note_server_fn_err)
 }
 
-/// Web/SSR: whether a server-wide Hardcover key is configured — drives whether
-/// the client's cascade starts at Hardcover or goes straight to OpenLibrary.
+/// Web/SSR: the ordered summary-source cascade for the current settings —
+/// drives which sources the client attempts, and in what order.
 #[cfg(not(feature = "mobile"))]
-pub async fn hardcover_configured(_server_url: &str) -> Result<bool, DataError> {
-    crate::rpc::rpc_hardcover_configured()
+pub async fn summary_sources(_server_url: &str) -> Result<Vec<SummarySource>, DataError> {
+    crate::rpc::rpc_summary_sources()
         .await
         .map_err(note_server_fn_err)
 }
@@ -53,15 +53,14 @@ pub async fn fetch_summary(
     Ok(response.json::<Option<String>>().await?)
 }
 
-/// Mobile: GET `/api/summary/hardcover-configured` — see the web
-/// `hardcover_configured` doc.
+/// Mobile: GET `/api/summary/sources` — see the web `summary_sources` doc.
 #[cfg(feature = "mobile")]
-pub async fn hardcover_configured(server_url: &str) -> Result<bool, DataError> {
-    let url = format!("{server_url}/api/summary/hardcover-configured");
+pub async fn summary_sources(server_url: &str) -> Result<Vec<SummarySource>, DataError> {
+    let url = format!("{server_url}/api/summary/sources");
     let response = with_bearer(http_client().get(&url)).send().await?;
     let status = note_status(response.status());
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    Ok(response.json::<bool>().await?)
+    Ok(response.json::<Vec<SummarySource>>().await?)
 }

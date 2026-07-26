@@ -4,7 +4,7 @@
 
 use dioxus::prelude::*;
 use dioxus_router::navigator;
-use omnibus_shared::{display_title, EbookMetadata};
+use omnibus_shared::EbookMetadata;
 
 use super::form_grid::{FormFields, FormSuggestions};
 use super::save_bar::{DirtyState, SaveStatus};
@@ -128,7 +128,7 @@ fn use_field_signals(book: &EbookMetadata) -> FormFields {
 /// title, primary author name + id, and the CSS custom-property style
 /// string for the page's accent color.
 fn header_strings(book: &EbookMetadata) -> (String, String, Option<i64>, String) {
-    let title = display_title(book.title.as_deref(), &book.filename);
+    let title = book.display_title();
     let (primary_author, primary_author_id) = book
         .creators
         .first()

@@ -133,6 +133,31 @@ fn render_opf_escapes_xml_special_characters_in_text_and_attributes() {
 }
 
 #[test]
+fn render_opf_strips_xml_illegal_control_chars_while_keeping_tab_lf_cr() {
+    let book = EbookMetadata {
+        filename: "x.epub".into(),
+        title: Some("Stray\u{1}Control".into()),
+        description: Some("Tab\tKept\nLF\rCR\u{c}Stripped".into()),
+        creators: vec![Contributor {
+            name: "Author\u{0}Name".into(),
+            role: None,
+            file_as: None,
+            id: None,
+        }],
+        unique_identifier: Some("uuid-1".into()),
+        ..Default::default()
+    };
+
+    let xml = render_opf(&book);
+    assert!(xml.contains("<dc:title>StrayControl</dc:title>"));
+    assert!(xml.contains("<dc:description>Tab\tKept\nLF\rCRStripped</dc:description>"));
+    assert!(xml.contains(">AuthorName</dc:creator>"));
+    // The document as a whole stays well-formed: no illegal control chars
+    // survive anywhere in the output.
+    assert!(!xml.chars().any(is_xml_illegal_control_char));
+}
+
+#[test]
 fn render_opf_skips_duplicate_isbn_identifier_when_already_scanned() {
     let book = EbookMetadata {
         filename: "x.epub".into(),
@@ -316,6 +341,69 @@ async fn export_opf_returns_no_epub_file_for_audiobook_only_book() {
 
     let err = export_opf(&pool, book_id).await.unwrap_err();
     assert!(matches!(err, OpfExportError::NoEpubFile(_)));
+}
+
+#[tokio::test]
+async fn export_opf_returns_books_error_when_book_files_table_is_missing() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib = tempfile::tempdir().unwrap();
+    let (book_id, _uuid) = seed_epub_book_at(&pool, lib.path()).await;
+    // get_book's final step (get_book_files) queries book_files; dropping it
+    // forces the crate::books::BooksError this exercises.
+    sqlx::query("DROP TABLE book_files")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let err = export_opf(&pool, book_id).await.unwrap_err();
+    assert!(matches!(err, OpfExportError::Books(_)));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn export_opf_returns_io_error_when_book_directory_is_not_writable() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib = tempfile::tempdir().unwrap();
+    let (book_id, _uuid) = seed_epub_book_at(&pool, lib.path()).await;
+    let dir = lib.path().join("sub");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    // Skip if the chmod didn't take (e.g. running as root in some CI
+    // containers), same guard as db/src/ebook/cover/tests.rs.
+    if std::fs::write(dir.join("write_probe"), b"x").is_ok() {
+        std::fs::remove_file(dir.join("write_probe")).ok();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+
+    let err = export_opf(&pool, book_id).await.unwrap_err();
+
+    // Restore perms so the tempdir can clean itself up.
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(matches!(err, OpfExportError::Io(_)));
+}
+
+#[tokio::test]
+async fn write_sidecar_restores_backup_when_promotion_rename_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("metadata.opf"), b"ORIGINAL SIDECAR").unwrap();
+
+    let err = write_sidecar_forcing_promote_failure(dir.path(), "<new/>")
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::Other);
+
+    // The pre-existing sidecar must be restored, not left missing, and no
+    // stray backup/temp file should remain.
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("metadata.opf")).unwrap(),
+        "ORIGINAL SIDECAR"
+    );
+    assert!(!dir.path().join("metadata.opf.bak").exists());
+    assert!(!dir.path().join(".metadata.opf.tmp").exists());
 }
 
 /// Encode a 1×1 red image in `format` for the cover-copy tests.

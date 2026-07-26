@@ -396,3 +396,30 @@ mod tests {
         assert_eq!(rated_ago(432_000, 172_800), "rated 3 days ago");
     }
 }
+
+// SSR render-smoke coverage of the widget body — separate module because these
+// need the `server` feature (`dioxus::ssr`), while the pure `rated_ago` tests
+// above run under any target.
+#[cfg(all(test, feature = "server"))]
+mod render_tests {
+    use super::*;
+    use crate::test_support::render;
+
+    #[test]
+    fn rating_widget_first_paint_is_unrated_with_five_interactive_stars() {
+        let html = render(rsx! {
+            BdRatingWidget { uuid: "book-uuid".to_string() }
+        });
+
+        assert!(html.contains("data-testid=\"rating-stars\""));
+        assert!(html.contains("bd-stars bd-stars-interactive"));
+        assert!(html.contains("aria-label=\"Your rating\""));
+        // The post-mount load doesn't run under SSR, so the card renders its
+        // unrated first paint — matching what the client hydrates against.
+        assert!(html.contains("data-testid=\"rating-meta\""));
+        assert!(html.contains("Not rated yet"));
+        // Half-star click targets carry accessible labels.
+        assert!(html.contains("aria-label=\"Rate 1 star\""));
+        assert!(html.contains("aria-label=\"Rate 0.5 stars\""));
+    }
+}

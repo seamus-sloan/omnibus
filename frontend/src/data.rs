@@ -11,8 +11,13 @@ mod books;
 mod highlights;
 mod journals;
 mod kindle;
+// Per-user Kobo device tokens (#923) — web (server-fn) + SSR stubs; the Account
+// settings card is web-only, so there's no mobile transport.
+#[cfg(not(feature = "mobile"))]
+mod kobo;
 #[cfg(not(feature = "mobile"))]
 mod logs;
+mod physical;
 mod progress;
 mod ratings;
 mod read_status;
@@ -24,6 +29,9 @@ mod suggestions;
 mod summary;
 mod tags;
 mod uploads;
+// Admin user management (F5.4) — web (gloo REST) + SSR stubs; no mobile surface.
+#[cfg(not(feature = "mobile"))]
+mod users;
 
 // auth exports exist under web, mobile, and server-only (the last only
 // re-exports the SSR `current_user` stub so pages can call `data::current_user`
@@ -37,7 +45,10 @@ pub use highlights::*;
 pub use journals::*;
 pub use kindle::*;
 #[cfg(not(feature = "mobile"))]
+pub use kobo::*;
+#[cfg(not(feature = "mobile"))]
 pub use logs::*;
+pub use physical::*;
 pub use progress::*;
 pub use ratings::*;
 pub use read_status::*;
@@ -49,6 +60,8 @@ pub use suggestions::*;
 pub use summary::*;
 pub use tags::*;
 pub use uploads::*;
+#[cfg(not(feature = "mobile"))]
+pub use users::*;
 
 /// Errors surfaced by the feature-gated data transport.
 ///
@@ -767,16 +780,18 @@ pub mod web_auth_state {
 /// skip the redirect ping — there's no client to redirect.
 #[cfg(not(feature = "mobile"))]
 pub(crate) fn note_server_fn_err(e: dioxus::CapturedError) -> DataError {
-    if let Some(sfn_err) = e.0.downcast_ref::<dioxus::fullstack::ServerFnError>() {
-        let code = match sfn_err {
-            dioxus::fullstack::ServerFnError::ServerError { code, .. } => *code,
-            _ => 0,
-        };
-        if code == 401 {
+    if let Some(dioxus::fullstack::ServerFnError::ServerError { code, message, .. }) =
+        e.0.downcast_ref::<dioxus::fullstack::ServerFnError>()
+    {
+        if *code == 401 {
             #[cfg(feature = "web")]
             web_auth_state::notify_unauthorized();
             return DataError::Unauthorized;
         }
+        // Surface the handler's own `ServerFnError::new(msg)` text rather than
+        // the `CapturedError` Display, which wraps it as "error running server
+        // function: <msg> (details: None)" — noise for an inline form error.
+        return DataError::Other(message.clone());
     }
     DataError::Other(e.to_string())
 }

@@ -7,10 +7,12 @@ target
 *.db-wal
 
 # Dev-server cover cache (F0.1 writes extracted covers to ./covers by default).
-# Also ignored under server/ — `cargo test -p omnibus` runs with CWD=server/,
-# so cover-writing integration tests materialize the cache there.
+# Also ignored under server/ and db/ — `cargo test -p omnibus` / `-p omnibus-db`
+# run with CWD=server/ or db/, so cover-writing tests (and init_db's cover-scheme
+# sentinel) materialize the cache there.
 /covers/
 server/covers/
+db/covers/
 # Dev-server thumbnail WebP cache (F1.2)
 /thumbs/
 server/thumbs/
@@ -42,6 +44,9 @@ ui_tests/**/blob-report/
 ui_tests/**/.playwright/
 # Top-level Playwright `test-results` written when invoked from the repo root.
 /test-results/
+# Playwright JUnit reports (`junit` reporter) — uploaded to Codecov Test
+# Analytics in CI, regenerated every run, never committed.
+ui_tests/playwright/results*.xml
 
 # F0.6 cover sidecars materialized next to fixture EPUBs by the indexer.
 # The .epub files themselves are committed (regenerated via tools/make_epub.ts);
@@ -83,3 +88,24 @@ test_data/.fixtures-version
 # Python bytecode (scripts/*.py)
 __pycache__/
 *.pyc
+
+# Coverage report emitted by `just coverage` (cargo-llvm-cov). Uploaded to
+# Codecov in CI; regenerated on every run, never committed.
+/lcov.info
+
+# Xcode / Swift (the native iOS app)
+# Per-user IDE state — window layout, selected scheme, breakpoints. Xcode
+# rewrites these on open and on every build, so tracking them leaves the tree
+# dirty after merely opening the project. `xcshareddata/` is the shared
+# counterpart and stays committed.
+**/xcuserdata/
+# Build output. Builds normally land in DerivedData outside the tree, but an
+# in-tree copy appears whenever xcodebuild runs without -derivedDataPath.
+DerivedData/
+*.xcarchive
+*.ipa
+*.dSYM
+*.dSYM.zip
+# Swift Package Manager local state (Package.resolved stays committed).
+.swiftpm/
+.build/

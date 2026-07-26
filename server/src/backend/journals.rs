@@ -54,17 +54,38 @@ pub(super) async fn get_journal_entries(
     }
 }
 
+/// Resolve a `{id}` path segment to a numeric entry id.
+///
+/// Accepts either the server's row id or the uuid the composing device minted
+/// (migration 0051), so an offline client can edit or delete an entry it wrote
+/// but has not yet synced. See `highlights::resolve_id` for the full rationale.
+async fn resolve_id(state: &AppState, user_id: i64, raw: &str) -> Result<i64, JournalError> {
+    if let Ok(id) = raw.parse::<i64>() {
+        return Ok(id);
+    }
+    db::journals::journal_id_for_client_id(&state.pool, user_id, raw)
+        .await?
+        .ok_or(JournalError::NotFound)
+}
+
 /// Edit a journal entry owned by the current user. 400 on an invalid body, 404
 /// when the id does not exist or belongs to another user.
 pub(super) async fn patch_journal(
     user: AuthUser,
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Path(id): Path<String>,
     Json(input): Json<UpdateJournalEntry>,
 ) -> Response {
     if let Err(msg) = input.validate() {
         return (axum::http::StatusCode::BAD_REQUEST, msg).into_response();
     }
+    let id = match resolve_id(&state, user.id, &id).await {
+        Ok(id) => id,
+        Err(JournalError::NotFound) => {
+            return (axum::http::StatusCode::NOT_FOUND, "journal entry not found").into_response()
+        }
+        Err(e) => return internal("update_journal_entry", e),
+    };
     match db::journals::update_journal_entry(&state.pool, user.id, id, &input).await {
         Ok(entry) => Json(entry).into_response(),
         Err(JournalError::NotFound) => {
@@ -150,8 +171,15 @@ pub(super) async fn get_journal_image(_user: MediaAuthUser, Path(name): Path<Str
 pub(super) async fn delete_journal(
     user: AuthUser,
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Path(id): Path<String>,
 ) -> Response {
+    let id = match resolve_id(&state, user.id, &id).await {
+        Ok(id) => id,
+        Err(JournalError::NotFound) => {
+            return (axum::http::StatusCode::NOT_FOUND, "journal entry not found").into_response()
+        }
+        Err(e) => return internal("delete_journal_entry", e),
+    };
     match db::journals::delete_journal_entry(&state.pool, user.id, id).await {
         Ok(()) => axum::http::StatusCode::NO_CONTENT.into_response(),
         Err(JournalError::NotFound) => {

@@ -105,6 +105,7 @@ async fn replace_books_round_trips_accent_color() {
         cover: None,
         mtime_epoch: 0,
         size_bytes: 0,
+        word_count: None,
     };
     let no_accent = IndexedBook {
         metadata: EbookMetadata {
@@ -120,6 +121,7 @@ async fn replace_books_round_trips_accent_color() {
         cover: None,
         mtime_epoch: 0,
         size_bytes: 0,
+        word_count: None,
     };
     replace_books(&pool, "/lib", vec![with_accent, no_accent])
         .await
@@ -170,6 +172,7 @@ async fn replace_books_drops_unsafe_accent_color() {
         cover: None,
         mtime_epoch: 0,
         size_bytes: 0,
+        word_count: None,
     };
     replace_books(&pool, "/lib", vec![unsafe_book])
         .await
@@ -252,6 +255,7 @@ async fn sync_preserves_book_id_for_changed() {
             cover: None,
             mtime_epoch: 999,
             size_bytes: 42,
+            word_count: None,
         }],
         ..Default::default()
     };
@@ -1393,6 +1397,7 @@ fn book_with_identifiers(filename: &str, idents: Vec<Identifier>) -> IndexedBook
         cover: None,
         mtime_epoch: 0,
         size_bytes: 0,
+        word_count: None,
     }
 }
 

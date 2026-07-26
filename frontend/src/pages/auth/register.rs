@@ -6,7 +6,9 @@ use dioxus_router::{use_navigator, Link};
 
 #[cfg(not(feature = "mobile"))]
 use crate::components::auth::AuthShell;
-use crate::components::auth::{Banner, BannerKind, Field, StrengthMeter, StrengthScore};
+use crate::components::auth::{
+    score_password, Banner, BannerKind, Field, PasswordRequirements, StrengthMeter,
+};
 use crate::{use_server_url, Route};
 
 #[cfg(feature = "mobile")]
@@ -287,27 +289,7 @@ fn PasswordSection(
             score: score,
             label: Some(score_label.to_string()),
         }
-        div { class: "auth-requirements",
-            div { class: "auth-requirements-title", "Password needs" }
-            PasswordRequirementRow { ok: rules[0], text: "At least 10 characters" }
-            PasswordRequirementRow { ok: rules[1], text: "Mixed case" }
-            PasswordRequirementRow { ok: rules[2], text: "One number or symbol" }
-        }
-    }
-}
-
-#[component]
-fn PasswordRequirementRow(ok: bool, text: String) -> Element {
-    let cls = if ok { "auth-req ok" } else { "auth-req" };
-    let status = if ok { "met" } else { "not met" };
-    rsx! {
-        div { class: "{cls}",
-            span { class: "auth-req-dot", aria_hidden: "true" }
-            span { "{text}" }
-            // Screen-reader-only status — the dot color alone isn't
-            // perceivable to assistive tech, so announce met/unmet.
-            span { class: "sr-only", ": {status}" }
-        }
+        PasswordRequirements { rules }
     }
 }
 
@@ -331,52 +313,6 @@ fn classify_register_error(raw: &str) -> RegisterError {
     } else {
         RegisterError::Other(raw.to_string())
     }
-}
-
-/// Presentational password scoring — server still enforces policy (10-char
-/// minimum). Returns the meter score (0..=4), a short label, and the three
-/// checklist booleans (length≥10, mixed case, number-or-symbol) so the
-/// page renders both the meter and the requirements list from one pass.
-fn score_password(pw: &str) -> (StrengthScore, &'static str, [bool; 3]) {
-    let len = pw.chars().count();
-    let has_lower = pw.chars().any(|c| c.is_ascii_lowercase());
-    let has_upper = pw.chars().any(|c| c.is_ascii_uppercase());
-    let mixed_case = has_lower && has_upper;
-    let has_number_or_symbol = pw
-        .chars()
-        .any(|c| c.is_ascii_digit() || !c.is_alphanumeric());
-    let len_ok = len >= 10;
-
-    let mut raw: u8 = 0;
-    if len >= 4 {
-        raw = raw.saturating_add(1);
-    }
-    if len >= 8 {
-        raw = raw.saturating_add(1);
-    }
-    if mixed_case {
-        raw = raw.saturating_add(1);
-    }
-    if has_number_or_symbol {
-        raw = raw.saturating_add(1);
-    }
-    if len_ok {
-        raw = raw.saturating_add(1);
-    }
-    let score = StrengthScore::new(raw.min(StrengthScore::MAX));
-    // "empty" only when nothing was typed; a non-empty score-0 input
-    // (1–3 chars, no special chars) is still weak, not empty.
-    let label = if pw.is_empty() {
-        "empty"
-    } else {
-        match score.value() {
-            0 | 1 => "weak",
-            2 => "fair",
-            3 => "good",
-            _ => "strong",
-        }
-    };
-    (score, label, [len_ok, mixed_case, has_number_or_symbol])
 }
 
 #[cfg(test)]

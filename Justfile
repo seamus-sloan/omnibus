@@ -51,9 +51,11 @@ dev-bounce:
 fixtures:
     scripts/fetch-fixtures.sh
 
-# Run the full unit/integration test matrix. `cargo test --workspace` is a
-# trap here — it silently skips the frontend rpc/page tests (they need
-# --features server) — so run each crate explicitly. The frontend runs twice
+# Run the full unit/integration test matrix via cargo-nextest (the same runner
+# CI uses, so local and CI results match; no doctests in the tree, which is all
+# nextest can't run). A bare `--workspace` is a trap here — it silently skips
+# the frontend rpc/page tests (they need --features server) — so run each crate
+# explicitly. The frontend runs twice
 # with different feature sets: `server` (rpc/page tests) and `mobile` (the
 # `data::token_store` / `app_dirs` persistence tests) — the `web`/`mobile`/
 # `server` impls are cfg-split, so each set exercises a different code path.
@@ -62,11 +64,44 @@ fixtures:
 # Self-wraps in the slim nix shell so it works from a bare checkout too.
 test: fixtures
     scripts/with-dev-env.sh default bash -ec '\
-        cargo test -p omnibus-db && \
-        cargo test -p omnibus && \
-        cargo test -p omnibus-frontend --features server && \
-        cargo test -p omnibus-frontend --features mobile && \
-        cargo test -p omnibus-shared'
+        cargo nextest run -p omnibus-db && \
+        cargo nextest run -p omnibus && \
+        cargo nextest run -p omnibus-frontend --features server && \
+        cargo nextest run -p omnibus-frontend --features mobile && \
+        cargo nextest run -p omnibus-shared'
+
+# Line/region coverage over the same crate matrix as `just test`, via
+# cargo-llvm-cov driving cargo-nextest (matches the CI `test` job). Each crate
+# runs under `--no-report` to accumulate profraw, then a single `report` merges every
+# feature-split run into one number — mirroring the `test` recipe so the
+# coverage build exercises the identical code paths. `clean` first drops stale
+# profiles from a previous run. Writes lcov.info (Codecov / CI) and prints the
+# per-file summary. The wasm32 `web` feature is intentionally absent —
+# llvm-cov can't instrument the wasm32 target, so coverage reflects the
+# server + mobile-feature Rust only. Self-wraps in the slim nix shell.
+coverage: fixtures
+    scripts/with-dev-env.sh default bash -ec '\
+        cargo llvm-cov clean --workspace && \
+        cargo llvm-cov nextest --no-report -p omnibus-db && \
+        cargo llvm-cov nextest --no-report -p omnibus && \
+        cargo llvm-cov nextest --no-report -p omnibus-frontend --features server && \
+        cargo llvm-cov nextest --no-report -p omnibus-frontend --features mobile && \
+        cargo llvm-cov nextest --no-report -p omnibus-shared && \
+        cargo llvm-cov report --lcov --output-path lcov.info && \
+        cargo llvm-cov report'
+
+# Same coverage run as `just coverage`, but emit a browsable HTML report
+# (under $CARGO_TARGET_DIR/llvm-cov/html) instead of lcov — for local
+# per-line drill-down. `--open` launches it in a browser.
+coverage-html: fixtures
+    scripts/with-dev-env.sh default bash -ec '\
+        cargo llvm-cov clean --workspace && \
+        cargo llvm-cov nextest --no-report -p omnibus-db && \
+        cargo llvm-cov nextest --no-report -p omnibus && \
+        cargo llvm-cov nextest --no-report -p omnibus-frontend --features server && \
+        cargo llvm-cov nextest --no-report -p omnibus-frontend --features mobile && \
+        cargo llvm-cov nextest --no-report -p omnibus-shared && \
+        cargo llvm-cov report --html --open'
 
 # Structural CSS lint — stylelint over frontend/assets, scoped to parse /
 # structural errors only (unclosed rules, misplaced @import), not style.

@@ -96,6 +96,28 @@ async fn api_export_opf_writes_sidecar_and_returns_path_and_backed_up() {
 }
 
 #[tokio::test]
+async fn api_export_opf_returns_500_on_db_failure() {
+    let (app, _state, pool) = fixture().await;
+    let lib = tempfile::tempdir().unwrap();
+    let (_id, uuid) = db::test_support::seed_epub_book_at(&pool, lib.path()).await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+    // get_book's final step queries book_files; dropping it forces the
+    // db::OpfExportError::Books catch-all path to 500, mirroring
+    // read_status's api_get_read_status_returns_500_on_db_failure.
+    sqlx::query("DROP TABLE book_files")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(post_export(&uuid, Some(&token)))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
 async fn api_export_opf_returns_409_when_book_has_no_epub() {
     let (app, _state, pool) = fixture().await;
     let admin = auth_test_support::create_admin(&pool, "admin").await;

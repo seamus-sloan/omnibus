@@ -1,8 +1,8 @@
-//! `GET /api/_health` handler.
-//!
-//! Unauthenticated liveness + build-fingerprint endpoint used by
-//! `scripts/dev-server-up.sh` to identify a running omnibus instance and
-//! its worktree. Whitelisted in `auth::gate::require_auth`.
+//! `GET /api/_health` handler: unauthenticated liveness + build-fingerprint
+//! endpoint used by `scripts/dev-server-up.sh` to identify a running
+//! omnibus instance and its worktree; also the clock-offset probe clients
+//! hit before stamping their own progress writes. Whitelisted in
+//! `auth::gate::require_auth`.
 
 use axum::{
     response::{IntoResponse, Response},
@@ -18,8 +18,10 @@ use super::{app_version, build_id, repo_root};
 /// `jj` workspace's server bound to the same port. The `version` field
 /// (from `OMNIBUS_VERSION`, `"dev"` when unset) lets the mobile "You"
 /// screen show the running server's release alongside its own app version.
-/// Whitelisted in `auth::gate::require_auth` so it remains reachable
-/// without a session.
+/// The `time` field (unix seconds) lets a client measure its own clock
+/// offset from the server, so it can stamp progress writes with a
+/// server-corrected event time (issue #1362). Whitelisted in
+/// `auth::gate::require_auth` so it remains reachable without a session.
 pub(super) async fn get_health() -> Response {
     Json(serde_json::json!({
         "app": "omnibus",
@@ -27,8 +29,19 @@ pub(super) async fn get_health() -> Response {
         "build_id": build_id().to_string(),
         "repo_root": repo_root(),
         "version": app_version(),
+        "time": now_unix_secs(),
     }))
     .into_response()
+}
+
+/// Current unix time in seconds. `unwrap_or(0)` rather than panicking on the
+/// (practically unreachable) pre-1970 clock case — mirrors `now_millis` in
+/// `backend.rs`.
+fn now_unix_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -77,5 +90,14 @@ mod tests {
         // dedicated fallback test in `backend/tests.rs` covers precisely.
         let version = json["version"].as_str().expect("version is a string");
         assert!(!version.is_empty(), "version should not be empty");
+
+        // `time` is the clock-offset probe (issue #1362) — assert it's a
+        // plausible unix-seconds value rather than pinning an exact number,
+        // since the test doesn't control wall-clock time.
+        let time = json["time"].as_i64().expect("time is an integer");
+        assert!(
+            time > 1_700_000_000,
+            "time should be a unix-seconds value, got {time}"
+        );
     }
 }

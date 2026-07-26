@@ -6,6 +6,7 @@
 
 use dioxus::prelude::*;
 
+use super::image_upload::use_file_upload;
 use crate::data;
 
 /// Wrapper that renders an "edit" pencil button positioned over its child.
@@ -227,8 +228,23 @@ fn FilePhotoSection(
     status: PhotoEditStatus,
     on_change: EventHandler<()>,
 ) -> Element {
-    let mut busy = status.busy;
-    let mut msg = status.status;
+    let busy = status.busy;
+    let msg = status.status;
+
+    let onchange = use_file_upload(
+        busy,
+        msg,
+        |filename| Some(format!("Uploading {filename}\u{2026}")),
+        move |filename, mime, bytes| {
+            let server_url = server_url.clone();
+            async move { data::upload_author_photo(&server_url, author_id, filename, mime, bytes).await }
+        },
+        move |()| {
+            let mut msg = msg;
+            msg.set(Some("Photo uploaded.".into()));
+            on_change.call(());
+        },
+    );
 
     rsx! {
         section { class: "author-photo-modal__section",
@@ -242,39 +258,7 @@ fn FilePhotoSection(
                 accept: "image/jpeg,image/png,image/webp,image/gif",
                 "data-testid": "author-photo-file-input",
                 disabled: busy(),
-                onchange: move |evt: Event<FormData>| {
-                    let server_url = server_url.clone();
-                    let Some(file) = evt.files().into_iter().next() else { return };
-                    let filename = file.name();
-                    let mime = file
-                        .content_type()
-                        .unwrap_or_else(|| "application/octet-stream".into());
-                    busy.set(true);
-                    msg.set(Some(format!("Uploading {filename}\u{2026}")));
-                    spawn(async move {
-                        match file.read_bytes().await {
-                            Ok(bytes) => {
-                                match data::upload_author_photo(
-                                    &server_url,
-                                    author_id,
-                                    filename,
-                                    mime,
-                                    bytes.to_vec(),
-                                )
-                                .await
-                                {
-                                    Ok(()) => {
-                                        msg.set(Some("Photo uploaded.".into()));
-                                        on_change.call(());
-                                    }
-                                    Err(e) => msg.set(Some(format!("Upload failed: {e}"))),
-                                }
-                            }
-                            Err(e) => msg.set(Some(format!("Read file failed: {e}"))),
-                        }
-                        busy.set(false);
-                    });
-                },
+                onchange,
             }
         }
     }

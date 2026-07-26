@@ -1210,3 +1210,73 @@ async fn create_shelf_rejects_wishlist_kind() {
         "forging a wishlist shelf is rejected"
     );
 }
+
+#[tokio::test]
+async fn manual_shelves_containing_names_every_hand_picked_shelf_holding_the_book() {
+    let (pool, _covers) = seed_discovery_fixture().await;
+    let owner = make_user(&pool, "owner", false).await;
+    let uuid = uuid_by_title(&pool, "Saga: Book One").await;
+
+    let holding = create_shelf(&pool, owner, &manual_req("Picks", vec![uuid.clone()]))
+        .await
+        .unwrap();
+    let empty = create_shelf(&pool, owner, &manual_req("Later", vec![]))
+        .await
+        .unwrap();
+
+    let ids = manual_shelves_containing(&pool, owner, false, &uuid)
+        .await
+        .unwrap();
+    assert_eq!(ids, vec![holding.id]);
+    assert!(!ids.contains(&empty.id));
+}
+
+#[tokio::test]
+async fn manual_shelves_containing_skips_smart_shelves() {
+    let (pool, _covers) = seed_discovery_fixture().await;
+    let owner = make_user(&pool, "owner", false).await;
+    let uuid = uuid_by_title(&pool, "Saga: Book One").await;
+
+    // A smart shelf can hold the book, but its membership is derived from a
+    // rule — there is nothing for a checklist to toggle.
+    create_shelf(
+        &pool,
+        owner,
+        &smart_req("Fiction", MatchMode::Any, vec![tag_rule("fiction")]),
+    )
+    .await
+    .unwrap();
+
+    let ids = manual_shelves_containing(&pool, owner, false, &uuid)
+        .await
+        .unwrap();
+    assert!(ids.is_empty());
+}
+
+#[tokio::test]
+async fn manual_shelves_containing_hides_another_users_private_shelf() {
+    let (pool, _covers) = seed_discovery_fixture().await;
+    let owner = make_user(&pool, "owner", false).await;
+    let stranger = make_user(&pool, "stranger", false).await;
+    let uuid = uuid_by_title(&pool, "Saga: Book One").await;
+
+    create_shelf(&pool, owner, &manual_req("Picks", vec![uuid.clone()]))
+        .await
+        .unwrap();
+
+    let ids = manual_shelves_containing(&pool, stranger, false, &uuid)
+        .await
+        .unwrap();
+    assert!(ids.is_empty());
+}
+
+#[tokio::test]
+async fn manual_shelves_containing_returns_nothing_for_an_unknown_uuid() {
+    let (pool, _covers) = seed_discovery_fixture().await;
+    let owner = make_user(&pool, "owner", false).await;
+
+    let ids = manual_shelves_containing(&pool, owner, false, "not-a-book")
+        .await
+        .unwrap();
+    assert!(ids.is_empty());
+}

@@ -6,7 +6,7 @@
 
 use dioxus::core::Task;
 use dioxus::prelude::*;
-use omnibus_shared::{display_title, EbookMetadata, MergeBooksResult};
+use omnibus_shared::{EbookMetadata, MergeBooksResult};
 
 use crate::components::atrium::Cover;
 use crate::{data, use_server_url};
@@ -45,7 +45,7 @@ pub fn MergeDialog(
 ) -> Element {
     let server_url = use_server_url();
     let target_uuid = target.unique_identifier.clone().unwrap_or_default();
-    let target_title = display_title(target.title.as_deref(), &target.filename);
+    let target_title = target.display_title();
 
     let signals = use_merge_dialog_signals();
     let busy = signals.busy;
@@ -353,7 +353,7 @@ fn render_candidate(
     target_series: Option<String>,
     mut selected: Signal<Option<EbookMetadata>>,
 ) -> Element {
-    let title = display_title(book.title.as_deref(), &book.filename);
+    let title = book.display_title();
     // Primary author only — joining every creator surfaces calibre's
     // book-producer contributor ("calibre (x.y) [url]") as junk, and the
     // keeper rail above already shows just the lead author.
@@ -422,7 +422,7 @@ fn render_confirm(
 ) -> Element {
     let mut on_confirm = on_confirm;
     let mut on_back = on_back;
-    let source_title = display_title(source.title.as_deref(), &source.filename);
+    let source_title = source.display_title();
     rsx! {
         div { class: "mg-confirm",
             p { class: "mg-confirm-copy",

@@ -82,6 +82,7 @@ async fn api_get_search_sets_total_count_header_with_indexed_library() {
                 cover: None,
                 mtime_epoch: 0,
                 size_bytes: 0,
+                word_count: None,
             },
             db::ebook::IndexedBook {
                 metadata: omnibus_shared::EbookMetadata {
@@ -92,6 +93,7 @@ async fn api_get_search_sets_total_count_header_with_indexed_library() {
                 cover: None,
                 mtime_epoch: 0,
                 size_bytes: 0,
+                word_count: None,
             },
         ],
     )

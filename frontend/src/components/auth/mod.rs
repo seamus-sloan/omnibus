@@ -11,4 +11,7 @@ mod strength;
 pub use banner::{Banner, BannerKind};
 pub use field::Field;
 pub use shell::AuthShell;
-pub use strength::{StrengthMeter, StrengthScore};
+pub use strength::{score_password, PasswordRequirements, StrengthMeter, StrengthScore};
+
+#[cfg(all(test, feature = "server"))]
+mod tests;

@@ -95,8 +95,9 @@ pub async fn get_me(server_url: &str) -> Result<UserSummary, DataError> {
         get_me_online(server_url),
     )
     .await?;
-    // Account switches wipe the previous user's replicated data.
-    crate::offline::note_user(&me.username).await;
+    // Account switches wipe the previous user's replicated data (and
+    // re-seed the "me" row this call just cached — see `note_user`).
+    crate::offline::note_user(&me).await;
     Ok(me)
 }
 

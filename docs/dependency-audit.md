@@ -1,6 +1,6 @@
 # Dependency Audit — Cargo.lock Duplicate Families
 
-Last updated: 2026-07-23 (issue #1268; previously issues #1147, #643).
+Last updated: 2026-07-25 (issue #1100; previously issues #1268, #1147, #643).
 
 Run `cargo tree -d` and inspect the output any time Dioxus or Axum are bumped.
 The `deny.toml` `[bans]` section has matching `skip` entries for all accepted
@@ -26,7 +26,7 @@ this list.
 | `reqwest` | 0.12.28, 0.13.4 | 0.12.28 via `dioxus-fullstack` 0.7.9 (the git-pinned Dioxus tag); 0.13.4 via `omnibus-db`, `omnibus-frontend`, `omnibus-mobile` — the workspace-pinned version per `Cargo.toml`'s `[workspace.dependencies] reqwest = { version = "0.13", ... }` | **blocked by upstream** | Two-*major*-version split, the largest gap in this table (the rest is minor-version churn). Exists because `dioxus-fullstack`'s git-pinned tag hasn't caught up to the `reqwest 0.13` the workspace standardized on. Should collapse on the next Dioxus bump, same caveat as the `tungstenite`/`const-serialize` rows. |
 | `digest` | 0.10.7 (×2) | Both consumers are `sha1` (axum/tungstenite) + `blake2`/`sha2` (argon2/sqlx) | N/A — same version | `cargo tree -d` shows two entry paths to the same version (different consumers). No actual duplicate in the lockfile. |
 | `rustc-hash` | 1.1.0, 2.1.2 | 1.1.0 via `sledgehammer_utils` (pulled in by `dioxus-interpreter-js`, which both `dioxus-web` and `dioxus-server` depend on); 2.1.2 as a direct dependency of `dioxus-core` | **blocked by upstream** | Verified with `cargo tree -i rustc-hash@1.1.0` / `@2.1.2` (not assumed): both versions are reachable from the default, non-mobile build via `dioxus-core`/`dioxus-server`/`dioxus-web`, which `omnibus` and `omnibus-frontend` depend on directly — i.e. **inside** the shipped web/WASM bundle, not confined to the `wry`/`tao` mobile native-shell subtree (despite that subtree's skip-tree comment in `deny.toml` also naming `rustc-hash` among its duplicates — the mobile subtree apparently resolves to one of these same two versions rather than introducing a third). Collapses when Dioxus unifies its internal `rustc-hash` pin. |
-| `bytes`, `futures-*`, `num-traits`, `tokio`, `manganis-core` | (shown ×2 each) | Multiple downstream consumers | N/A — same version | Same pattern as `digest`: one version, multiple reverse-dependency entry points in the `cargo tree -d` output. Not true duplicates. |
+| `bytes`, `futures-*`, `num-traits`, `tokio`, `manganis-core`, `log`, `fastrand`, `sqlx-sqlite` | (shown ×2 each) | Multiple downstream consumers | N/A — same version | Same pattern as `digest`: one version, multiple reverse-dependency entry points in the `cargo tree -d` output. Not true duplicates. |
 
 ## First-party skew resolved in this PR
 

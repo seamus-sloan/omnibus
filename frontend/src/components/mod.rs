@@ -67,6 +67,11 @@ pub use page_state::{PageError, PageLoading, PageNotFound};
 pub mod cover_tile;
 pub use cover_tile::{CoverTile, CoverTileKind};
 
+// Shared "pick books from the whole library" fetch/filter/grid, used by the
+// create-shelf hand-picked body and the shelf-detail "add books" modal.
+pub mod library_picker_grid;
+pub use library_picker_grid::{filter_library, use_library_fetch, LibraryPickerGrid};
+
 // F1.11 follow-up: hover-overlay "edit photo" affordance + modal with
 // three actions (paste URL, upload file, scan Open Library). Mounted by
 // the author detail hero only — the `/authors` index renders cached
@@ -74,6 +79,10 @@ pub use cover_tile::{CoverTile, CoverTileKind};
 // modal can be lifted to other surfaces (e.g. an admin bulk-edit view)
 // without duplicating the form.
 pub mod author_photo_edit;
+
+// Shared file-picker upload `onchange` builder used by `author_photo_edit`'s
+// file section and the journal composer's image-insert toolbar button.
+pub(crate) mod image_upload;
 
 // F5.10 admin "Merge with…" dialog, mounted by the book detail page.
 // Web-only: merge is an admin surface and mobile renders no admin

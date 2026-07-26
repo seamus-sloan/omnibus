@@ -11,6 +11,9 @@ use omnibus_db as db;
 // Only the server-side body names the source; the client half never sees it.
 #[cfg(feature = "server")]
 use omnibus_shared::physical::WishlistSource;
+// Only the server-side body constructs one to reuse its `validate()`.
+#[cfg(feature = "server")]
+use omnibus_shared::physical::UpdateCopyNoteRequest;
 
 #[cfg(feature = "server")]
 use super::{internal_rpc_error, AuthUser, PoolExt};
@@ -57,8 +60,12 @@ pub async fn rpc_update_physical_copy_note(
     note: Option<String>,
 ) -> Result<PhysicalCopy> {
     require_edit(&user)?;
+    let req = UpdateCopyNoteRequest { note };
+    if let Err(msg) = req.validate() {
+        return Err(ServerFnError::new(msg).into());
+    }
     Ok(
-        db::update_physical_copy_note(&pool.0, copy_id, note.as_deref())
+        db::update_physical_copy_note(&pool.0, copy_id, req.note.as_deref())
             .await
             .map_err(|e| map_physical_error("update physical copy note", e))?,
     )

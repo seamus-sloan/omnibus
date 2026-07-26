@@ -252,13 +252,44 @@ pub async fn revoke_session(pool: &SqlitePool, session_id: i64) -> AuthResult<()
 }
 
 /// Revoke all active sessions for a user; returns the number of rows updated.
-pub async fn revoke_all_sessions_for_user(pool: &SqlitePool, user_id: i64) -> AuthResult<u64> {
+/// Accepts any `sqlx::Executor` so callers can run it inside an existing
+/// transaction (e.g. alongside a password update, so a failure rolls back
+/// both together) or standalone via `&SqlitePool`.
+pub async fn revoke_all_sessions_for_user<'e, E>(executor: E, user_id: i64) -> AuthResult<u64>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
     let r =
         sqlx::query("UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL")
             .bind(now_unix())
             .bind(user_id)
-            .execute(pool)
+            .execute(executor)
             .await?;
+    Ok(r.rows_affected())
+}
+
+/// Revoke all of a user's active sessions except `except_session_id`. Used by
+/// the self-service password change so the caller's own session survives the
+/// revocation sweep (they'd otherwise be logged out by the change they just
+/// made). Accepts any `sqlx::Executor`, same rationale as
+/// [`revoke_all_sessions_for_user`].
+pub async fn revoke_all_sessions_for_user_except<'e, E>(
+    executor: E,
+    user_id: i64,
+    except_session_id: i64,
+) -> AuthResult<u64>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
+    let r = sqlx::query(
+        "UPDATE sessions SET revoked_at = ?
+         WHERE user_id = ? AND id != ? AND revoked_at IS NULL",
+    )
+    .bind(now_unix())
+    .bind(user_id)
+    .bind(except_session_id)
+    .execute(executor)
+    .await?;
     Ok(r.rows_affected())
 }
 

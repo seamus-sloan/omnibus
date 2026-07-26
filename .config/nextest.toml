@@ -1,0 +1,6 @@
+# cargo-nextest config. The `ci` profile emits a JUnit report that the CI
+# `test` job uploads to Codecov Test Analytics (flaky-test / failure-rate
+# tracking). Path is relative to `$CARGO_TARGET_DIR/nextest/ci/`, so with the
+# CI's `CARGO_TARGET_DIR=./target` it lands at `target/nextest/ci/junit.xml`.
+[profile.ci.junit]
+path = "junit.xml"

@@ -98,6 +98,11 @@ pub(super) fn SyncStatusRow() -> Element {
                     "{state.dropped_ops} changes couldn't sync and were discarded."
                 }
             }
+            if state.stuck_ops > 0 {
+                div { class: "m-account-sync-dropped", "data-testid": "account-sync-stuck",
+                    "{state.stuck_ops} changes failed repeatedly and were dropped after retrying."
+                }
+            }
             if let Some(at) = last_sync() {
                 div { class: "m-account-sync-when mono", "Last synced {relative_time(at)}" }
             }

@@ -11,7 +11,7 @@ mod screens;
 mod tests;
 
 use dioxus::prelude::*;
-use dioxus_router::{use_navigator, Link};
+use dioxus_router::{use_navigator, use_route, Link};
 use omnibus_shared::{
     isbn::normalize_isbn, AddPhysicalOnlyRequest, CheckInRequest, ExternalBookMeta, ResolveRequest,
     ScanBook, ScanOutcome, WishlistAddRequest, WishlistSource,
@@ -23,6 +23,120 @@ use scan::ScanScreen;
 use screens::{
     ChooseScreen, CloseMatchScreen, ConfirmScreen, ResolvingScreen, SuccessScreen, UnresolvedScreen,
 };
+
+/// Whether the check-in overlay is open. Provided at [`crate::App`] scope so
+/// every entry point (top nav, add-books sheet, account row) can raise it and
+/// the overlay — mounted once at the `ScreenLayout` root — can read it.
+///
+/// Starts closed, so SSR and the first WASM paint render no modal and agree
+/// (rule 07).
+#[derive(Copy, Clone, PartialEq)]
+pub struct CheckInOpen(pub Signal<bool>);
+
+/// Centered check-in overlay: the [`CheckInPage`] flow floating in a card over
+/// a blurred scrim of the current page.
+///
+/// Mounted once at the `ScreenLayout` root (like the search palette) so its
+/// `position: fixed` scrim covers the whole app and clicking outside closes it
+/// — placed inside `TopNav`, the topbar's `backdrop-filter` would become the
+/// containing block and shrink the scrim to the header strip. The `/check-in`
+/// route still renders the same flow full-page as a deep-link fallback.
+#[component]
+pub fn CheckInOverlay() -> Element {
+    let open = use_context::<CheckInOpen>().0;
+    rsx! {
+        if open() {
+            CheckInModal {}
+        }
+    }
+}
+
+/// The scrim + card wrapper, mounted only while the overlay is open so the
+/// flow's signals reset on every fresh open.
+#[component]
+fn CheckInModal() -> Element {
+    let mut open = use_context::<CheckInOpen>().0;
+    // The overlay lives in `ScreenLayout` and survives route changes, so a
+    // check-in that navigates away (an already-owned scan, or "View book" on
+    // the success screen) would otherwise strand the modal over the new page.
+    // Reading the route subscribes this component; dismiss on any change from
+    // the route we opened over. Comparing against the mount route (not a bare
+    // "close on every run") keeps the effect's mount pass from closing us
+    // immediately.
+    let route = use_route::<Route>();
+    let opened_over = use_hook(|| route.clone());
+    use_effect(use_reactive!(|route| {
+        if route != opened_over {
+            open.set(false);
+        }
+    }));
+
+    let mut close = move || open.set(false);
+    rsx! {
+        div {
+            class: "check-in-overlay-scrim",
+            "data-testid": "check-in-overlay-scrim",
+            onclick: move |_| close(),
+            div {
+                class: "check-in-overlay-panel",
+                "data-testid": "check-in-overlay-panel",
+                role: "dialog",
+                aria_modal: "true",
+                aria_label: "Check in a book",
+                tabindex: "-1",
+                // Move focus into the dialog on open so keyboard users land
+                // inside the modal and the panel's Escape handler fires without
+                // a prior click. Mirrors the search palette's input focus.
+                onmounted: move |evt: MountedEvent| focus_overlay_panel(&evt),
+                // Clicks inside the card must not reach the scrim's close.
+                onclick: move |e| e.stop_propagation(),
+                onkeydown: move |e| {
+                    if e.key() == Key::Escape {
+                        close();
+                    }
+                },
+                button {
+                    class: "check-in-overlay-close",
+                    r#type: "button",
+                    aria_label: "Close",
+                    "data-testid": "check-in-overlay-close",
+                    onclick: move |_| close(),
+                    "\u{00d7}"
+                }
+                CheckInPage {}
+            }
+        }
+    }
+}
+
+/// Focus the dialog panel after the browser paints it, so the modal opens with
+/// focus inside it and Escape works without a prior click. The
+/// `requestAnimationFrame` hop lets layout finish first — a synchronous
+/// `.focus()` inside `onmounted` lands before the element is laid out and
+/// no-ops. Mirrors `focus_palette_input` in the search palette.
+#[cfg(feature = "web")]
+fn focus_overlay_panel(evt: &MountedEvent) {
+    use dioxus::web::WebEventExt;
+    use wasm_bindgen::prelude::*;
+
+    let Some(element) = evt.try_as_web_event() else {
+        return;
+    };
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let cb = Closure::once_into_js(move || {
+        if let Some(html_el) = element.dyn_ref::<web_sys::HtmlElement>() {
+            let _ = html_el.focus();
+        }
+    });
+    let _ = window.request_animation_frame(cb.unchecked_ref());
+}
+
+/// No-op on SSR / native: the panel only needs programmatic focus on the web
+/// client, and mobile has no hardware Escape key.
+#[cfg(not(feature = "web"))]
+fn focus_overlay_panel(_evt: &MountedEvent) {}
 
 /// Where the flow currently sits. One variant per leaf of the design's
 /// decision tree, plus the three transient states (scan, entry, resolving).

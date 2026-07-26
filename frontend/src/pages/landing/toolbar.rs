@@ -108,3 +108,54 @@ pub(super) fn Toolbar(prefs: ViewPrefs, on_change: EventHandler<ViewPrefs>) -> E
         }
     }
 }
+
+// SSR render-smoke coverage — `render_element` supplies a runtime, but the
+// `on_change` EventHandler must be built inside a component body, so the tests
+// mount the toolbar through a tiny prop-only harness.
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::*;
+    use crate::test_support::render;
+
+    #[component]
+    fn ToolbarHarness(prefs: ViewPrefs) -> Element {
+        rsx! {
+            Toolbar { prefs, on_change: move |_| {} }
+        }
+    }
+
+    fn render_toolbar(prefs: ViewPrefs) -> String {
+        render(rsx! {
+            ToolbarHarness { prefs }
+        })
+    }
+
+    #[test]
+    fn toolbar_renders_the_view_toggle_with_table_pressed_by_default() {
+        let html = render_toolbar(ViewPrefs::default());
+
+        assert!(html.contains("data-testid=\"lib-toolbar\""));
+        assert!(html.contains("role=\"toolbar\""));
+        assert!(html.contains("data-testid=\"view-toggle-table\""));
+        assert!(html.contains("data-testid=\"view-toggle-grid\""));
+        assert!(html.contains("Table"));
+        assert!(html.contains("Grid"));
+        // Default view mode is Table, so its button is the pressed one and the
+        // grid-only sort controls stay out of the markup.
+        assert!(html.contains("aria-pressed=\"true\""));
+        assert!(!html.contains("data-testid=\"lib-sort-select\""));
+    }
+
+    #[test]
+    fn toolbar_reveals_the_sort_controls_in_grid_mode() {
+        let prefs = ViewPrefs {
+            view_mode: ViewMode::Grid,
+            ..ViewPrefs::default()
+        };
+        let html = render_toolbar(prefs);
+
+        assert!(html.contains("data-testid=\"lib-sort-select\""));
+        assert!(html.contains("data-testid=\"lib-sort-dir\""));
+        assert!(html.contains("Sort by"));
+    }
+}

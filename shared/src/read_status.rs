@@ -62,10 +62,18 @@ pub struct SetReadStatus {
 }
 
 impl SetReadStatus {
-    /// Reject an empty uuid. Handlers translate `Err(_)` into 400.
+    /// Reject an empty or oversized `book_uuid`, mirroring the same cap
+    /// applied to every other `book_uuid`-carrying request (e.g.
+    /// `CheckInRequest::validate`). Handlers translate `Err(_)` into 400.
     pub fn validate(&self) -> Result<(), String> {
         if self.book_uuid.trim().is_empty() {
             return Err("book_uuid is required".into());
+        }
+        if self.book_uuid.len() > crate::BOOK_UUID_MAX_LEN {
+            return Err(format!(
+                "book uuid must be ≤ {} bytes",
+                crate::BOOK_UUID_MAX_LEN
+            ));
         }
         Ok(())
     }

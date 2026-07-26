@@ -34,6 +34,7 @@ fn indexed_with_isbn(filename: &str, title: &str, author: &str, isbn: &str) -> I
         cover: None,
         mtime_epoch: 0,
         size_bytes: 0,
+        word_count: None,
     }
 }
 

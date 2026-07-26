@@ -1,8 +1,10 @@
-//! "Fetch Summary" button + inline status. Drives the Hardcover→OpenLibrary
-//! cascade from the client (so it can show a per-source "Searching…" message),
-//! then hands the resolved text to `on_fetched` — the caller decides whether to
-//! fill an editor field or save-and-refresh. SSR and first WASM paint render
-//! the same idle markup; the network work runs only in the click handler.
+//! "Fetch Summary" button + inline status. Fetches the server's ordered source
+//! plan (Hardcover → Google Books → Open Library, trimmed to the configured
+//! providers), then drives it from the client (so it can show a per-source
+//! "Searching…" message) and hands the resolved text to `on_fetched` — the
+//! caller decides whether to fill an editor field or save-and-refresh. SSR and
+//! first WASM paint render the same idle markup; the network work runs only in
+//! the click handler.
 
 use dioxus::prelude::*;
 use omnibus_shared::summary::SummarySource;
@@ -39,16 +41,16 @@ enum FetchState {
     Error(String),
 }
 
-/// A "Fetch Summary" button that pulls a book blurb from Hardcover (when a key
-/// is configured) or OpenLibrary as a fallback, showing a per-source spinner +
-/// status. On success it calls `on_fetched` with the text.
+/// A "Fetch Summary" button that pulls a book blurb from the configured source
+/// cascade (Hardcover → Google Books → Open Library), showing a per-source
+/// spinner + status. On success it calls `on_fetched` with the text.
 #[component]
 pub fn FetchSummaryButton(uuid: String, on_fetched: EventHandler<String>) -> Element {
     let server_url = use_server_url();
     let state = use_signal(|| FetchState::Idle);
     // Set synchronously at click, before the first `await`, so a rapid second
     // click can't spawn a concurrent cascade (the `state` flag only flips to
-    // `Searching` after `hardcover_configured` resolves, which is too late).
+    // `Searching` after the source plan resolves, which is too late).
     let mut busy = use_signal(|| false);
 
     let on_click = move |_| {
@@ -105,41 +107,56 @@ pub fn FetchSummaryButton(uuid: String, on_fetched: EventHandler<String>) -> Ele
     }
 }
 
-/// Run Hardcover→OpenLibrary in order, updating `state` with the per-source
+/// Walk the server's ordered source plan, updating `state` with the per-source
 /// "Searching…" message. Returns the found text, or `None` (leaving `state` on
-/// an error) when neither source had a summary.
+/// an error) when no source had a summary. A miss OR a transient error on one
+/// source falls through to the next — the goal is to surface *a* summary if one
+/// exists anywhere; only the final source's outcome decides the error shown.
 async fn run_cascade(url: &str, uuid: &str, mut state: Signal<FetchState>) -> Option<String> {
-    // Only start at Hardcover when a key is configured; with no key the first
-    // (and only) message is OpenLibrary's, per the spec.
-    let use_hardcover = data::hardcover_configured(url).await.unwrap_or(false);
-
-    if use_hardcover {
-        state.set(FetchState::Searching(SummarySource::Hardcover));
-        // A miss OR a transient error falls through to OpenLibrary below — the
-        // goal is to surface *a* summary if one exists anywhere.
-        if let Ok(Some(text)) = data::fetch_summary(url, uuid, SummarySource::Hardcover).await {
-            return Some(text);
-        }
-    }
-
-    state.set(FetchState::Searching(SummarySource::OpenLibrary));
-    match data::fetch_summary(url, uuid, SummarySource::OpenLibrary).await {
-        Ok(Some(text)) => Some(text),
-        Ok(None) => {
-            state.set(FetchState::Error("No summary found.".to_string()));
-            None
-        }
+    // A failed plan fetch is a transport/RPC error, not a summary miss — surface
+    // it distinctly rather than collapsing it into "No summary found."
+    let sources = match data::summary_sources(url).await {
+        Ok(sources) => sources,
         Err(e) => {
-            state.set(FetchState::Error(format!("Couldn't fetch a summary: {e}")));
-            None
+            state.set(FetchState::Error(format!(
+                "Couldn't fetch summary sources: {e}"
+            )));
+            return None;
+        }
+    };
+    // The server always includes at least Google Books, so an empty plan is
+    // unexpected — treat it as a config problem, not a summary miss.
+    if sources.is_empty() {
+        state.set(FetchState::Error(
+            "Couldn't fetch a summary: no sources are configured.".to_string(),
+        ));
+        return None;
+    }
+
+    // Only the final source's outcome decides the error shown; a miss or a
+    // transient error on an earlier source just falls through to the next.
+    let last = sources.len() - 1;
+    for (i, source) in sources.into_iter().enumerate() {
+        state.set(FetchState::Searching(source));
+        match data::fetch_summary(url, uuid, source).await {
+            Ok(Some(text)) => return Some(text),
+            Ok(None) if i == last => {
+                state.set(FetchState::Error("No summary found.".to_string()));
+            }
+            Err(e) if i == last => {
+                state.set(FetchState::Error(format!("Couldn't fetch a summary: {e}")));
+            }
+            _ => {}
         }
     }
+    None
 }
 
 /// The per-source "Searching…" status text.
 fn searching_label(source: SummarySource) -> &'static str {
     match source {
         SummarySource::Hardcover => "Searching for summary on Hardcover\u{2026}",
+        SummarySource::GoogleBooks => "Searching for summary on Google Books\u{2026}",
         SummarySource::OpenLibrary => "Searching for summary on OpenLibrary\u{2026}",
     }
 }
@@ -153,6 +170,10 @@ mod tests {
         assert_eq!(
             searching_label(SummarySource::Hardcover),
             "Searching for summary on Hardcover\u{2026}"
+        );
+        assert_eq!(
+            searching_label(SummarySource::GoogleBooks),
+            "Searching for summary on Google Books\u{2026}"
         );
         assert_eq!(
             searching_label(SummarySource::OpenLibrary),

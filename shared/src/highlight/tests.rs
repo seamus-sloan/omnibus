@@ -4,6 +4,7 @@ use super::*;
 
 fn ok_create(cfi: &str) -> CreateHighlight {
     CreateHighlight {
+        client_id: None,
         book_uuid: "uuid-1".into(),
         epub_cfi_range: cfi.into(),
         color: HighlightColor::Amber,

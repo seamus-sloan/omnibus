@@ -8,38 +8,30 @@ use dioxus::prelude::*;
 use dioxus_router::Link;
 use omnibus_shared::{IndexSort, SeriesSummary};
 
-use crate::components::{PageError, PageLoading};
-use crate::scroll_restore::use_scroll_restore;
+use super::index_shell::{index_page_early_return, use_index_page_shell, IndexPageState};
 use crate::{data, index_prefs, use_server_url, Route};
 
 /// Series index page — browse all series in the library.
 #[component]
 pub fn SeriesIndexPage() -> Element {
     let server_url = use_server_url();
-    let mut filter = use_signal(String::new);
-    let mut sort = use_signal(IndexSort::default);
-    let (series, loading, error) = use_series_data(server_url);
+    let shell = use_index_page_shell(
+        move || {
+            let url = server_url.clone();
+            async move { data::list_series(&url).await }
+        },
+        || index_prefs::load().series_sort,
+    );
+    let IndexPageState {
+        items: series,
+        loading,
+        error,
+        mut filter,
+        mut sort,
+    } = shell;
 
-    // Reconcile the sort axis from persisted prefs after mount (seeded to the
-    // default above for hydration parity — rule 07; the sort toolbar renders
-    // only post-fetch, so this can't flash).
-    use_effect(move || {
-        let stored = index_prefs::load().series_sort;
-        if stored != *sort.peek() {
-            sort.set(stored);
-        }
-    });
-
-    // Restore scroll once the (full) list has painted, so returning from a
-    // series detail lands back where the reader left off.
-    let ready = use_memo(move || !loading());
-    use_scroll_restore(ready);
-
-    if loading() {
-        return rsx! { PageLoading {} };
-    }
-    if let Some(msg) = error() {
-        return rsx! { PageError { message: msg, back_to: Route::Landing {} } };
+    if let Some(early) = index_page_early_return(loading, error) {
+        return early;
     }
 
     // Borrow the signal's contents instead of cloning — see authors_index
@@ -73,41 +65,6 @@ pub fn SeriesIndexPage() -> Element {
             {render_series_body(&filtered, all.is_empty())}
         }
     }
-}
-
-/// Hook: own the `list_series` fetch and surface (data, loading, error) signals.
-fn use_series_data(
-    server_url: String,
-) -> (
-    Signal<Vec<SeriesSummary>>,
-    Signal<bool>,
-    Signal<Option<String>>,
-) {
-    let mut series: Signal<Vec<SeriesSummary>> = use_signal(Vec::new);
-    let mut loading = use_signal(|| true);
-    let mut error: Signal<Option<String>> = use_signal(|| None);
-
-    let generation = crate::use_cache_generation();
-    use_effect(move || {
-        // Re-run on cache-revalidation bumps; the refetch is a cache hit.
-        let _ = generation();
-        let url = server_url.clone();
-        spawn(async move {
-            if series.peek().is_empty() {
-                loading.set(true);
-            }
-            match data::list_series(&url).await {
-                Ok(s) => {
-                    series.set(s);
-                    error.set(None);
-                }
-                Err(e) => error.set(Some(e.to_string())),
-            }
-            loading.set(false);
-        });
-    });
-
-    (series, loading, error)
 }
 
 /// Filter by `query` (name + primary author, case-insensitive), then sort by `sort`.

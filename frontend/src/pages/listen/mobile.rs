@@ -55,6 +55,9 @@ pub fn MobilePlayer(uuid: String, file_id: Option<i64>) -> Element {
     let server_url = use_server_url();
     let ctx = use_mobile_playback();
     let sheet = use_signal(|| OpenSheet::None);
+    // Drag-preview position: `Some` while the scrubber is being dragged, `None`
+    // at rest. The audio is only seeked on release (see `render_player`).
+    let scrub = use_signal(|| Option::<f64>::None);
     let bookmarks = use_mobile_bookmarks(uuid.clone(), server_url.clone());
     let nav = use_navigator();
 
@@ -154,6 +157,7 @@ pub fn MobilePlayer(uuid: String, file_id: Option<i64>) -> Element {
         sleep: (ctx.sleep)(),
         chapter_index: ch_idx,
         sheet,
+        scrub,
         bookmarks,
         ctx,
         on_nav_back: on_back,
@@ -172,6 +176,8 @@ struct PlayerProps {
     sleep: SleepState,
     chapter_index: usize,
     sheet: Signal<OpenSheet>,
+    /// Drag-preview position; `Some` only while the scrubber is being dragged.
+    scrub: Signal<Option<f64>>,
     bookmarks: MobileBookmarks,
     ctx: MobilePlayback,
     /// Top-bar back affordance (distinct from the `-30s` transport skip).
@@ -202,9 +208,22 @@ fn persist_position(uuid: &str, server_url: &str, seconds: f64) {
             format: ProgressFormat::Audio,
             epub_cfi: None,
             audio_position_seconds: Some(seconds),
+            client_updated_at: Some(now_unix()),
         };
         let _ = data::save_progress(&server_url, update).await;
     });
+}
+
+/// Current unix time in seconds from the device clock — stamped onto every
+/// `ProgressUpdate` so most-recent-wins resolves on client event time
+/// rather than server receipt time (issue #1362). This module only
+/// compiles under `feature = "mobile"` (native, not wasm32), so the
+/// platform clock is always `std::time::SystemTime`.
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// Marquee-ready title markup: `.m-player-title` is the fixed-width clipping
@@ -288,24 +307,35 @@ fn render_player(p: PlayerProps) -> Element {
         sleep,
         chapter_index,
         mut sheet,
+        scrub,
         bookmarks,
         ctx,
         on_nav_back,
     } = p;
 
     let server_url = use_server_url();
-    let current = view.chapters.get(chapter_index);
-    let chapter_no = chapter_index + 1;
+    // While dragging, every readout previews the drag position and the current
+    // chapter is re-derived from it, so the bar/times track the thumb; at rest
+    // `effective` is the true elapsed. The transport handlers below still act
+    // on the real `elapsed` / `chapter_index`, never the preview.
+    let effective = scrub().unwrap_or(elapsed);
+    let disp_index = if scrub().is_some() {
+        chapter_index_for_elapsed(&view.chapters, effective)
+    } else {
+        chapter_index
+    };
+    let current = view.chapters.get(disp_index);
+    let chapter_no = disp_index + 1;
     let chapter_count = view.chapters.len();
     let chapter_title = current.map(|c| c.title.clone()).unwrap_or_default();
     let chapter_start = current.map(|c| c.start_seconds).unwrap_or(0.0);
     let chapter_dur = current.map(|c| c.duration_seconds).unwrap_or(0.0);
-    let within = (elapsed - chapter_start).max(0.0);
+    let within = (effective - chapter_start).max(0.0);
     let chapter_left = remaining_at_rate(
-        view::remaining_in_chapter(&view.chapters, chapter_index, elapsed),
+        view::remaining_in_chapter(&view.chapters, disp_index, effective),
         rate,
     );
-    let remaining_book = remaining_at_rate((duration - elapsed).max(0.0), rate);
+    let remaining_book = remaining_at_rate((duration - effective).max(0.0), rate);
     let scrub_max = if duration > 0.0 { duration } else { 1.0 };
 
     let accent_style = view
@@ -319,20 +349,25 @@ fn render_player(p: PlayerProps) -> Element {
     let has_chapters = !view.chapters.is_empty();
     let toast = (bookmarks.toast)();
 
-    // Transport handlers — all route through the JS control surface.
-    // Seek live on every input, but only persist on release (`onchange`) so
-    // dragging the scrubber doesn't spam local writes + server POSTs.
+    // Transport handlers — all route through the JS control surface. Dragging
+    // the scrubber only previews (`oninput` stashes the target in `scrub`); the
+    // audio is seeked and the position persisted once on release (`onchange`),
+    // so a drag across a multi-part book doesn't thrash `el.src` or spam POSTs.
     let on_seek_input = move |evt: Event<FormData>| {
+        let mut scrub = scrub;
         if let Ok(secs) = evt.value().parse::<f64>() {
-            interop::seek(secs);
+            scrub.set(Some(secs));
         }
     };
     let uuid_seek = uuid.clone();
     let su_seek = server_url.clone();
     let on_seek_commit = move |evt: Event<FormData>| {
+        let mut scrub = scrub;
         if let Ok(secs) = evt.value().parse::<f64>() {
+            interop::seek(secs);
             persist_position(&uuid_seek, &su_seek, secs);
         }
+        scrub.set(None);
     };
     // Let audio events drive `ctx.playing`; an optimistic flip can desync the icon.
     let on_toggle = move |_| interop::toggle();
@@ -421,12 +456,12 @@ fn render_player(p: PlayerProps) -> Element {
                     min: "0",
                     max: "{scrub_max}",
                     step: "1",
-                    value: "{elapsed}",
+                    value: "{effective}",
                     oninput: on_seek_input,
                     onchange: on_seek_commit,
                 }
                 div { class: "m-player-times mono",
-                    span { "{format_hms(elapsed)}" }
+                    span { "{format_hms(effective)}" }
                     if has_chapters {
                         span { class: "m-player-chtime",
                             "{format_ms(within)} / {format_ms(chapter_dur)} \u{00b7} {format_ms(chapter_left)} left"

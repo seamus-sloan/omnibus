@@ -7,9 +7,8 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::Context;
-use serde::Deserialize;
-
 use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider};
+use serde::Deserialize;
 
 /// Per-request timeout for a provider call. A single lookup runs per scan, so
 /// this bounds how long the check-in flow waits on a slow provider.
@@ -31,6 +30,7 @@ pub struct MetadataLookupConfig {
     /// (HTTP 429) — in practice keyless lookups fail more often than they
     /// succeed. Never logged; see [`strip_url`].
     pub googlebooks_api_key: Option<String>,
+    /// Per-request timeout applied to each provider HTTP call.
     pub timeout: Duration,
 }
 

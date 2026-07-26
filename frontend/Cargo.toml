@@ -19,6 +19,10 @@ serde_json.workspace = true
 # the derive must be available in all builds (including the no-feature
 # default-members check). Version matches `omnibus-db`.
 thiserror.workspace = true
+# Foreign-failure-space errors for the mobile-only `offline` module (network,
+# filesystem) per `.claude/rules/02-error-handling.md`. Optional, enabled by
+# `mobile` — not needed by the web/server builds. Version matches `omnibus-db`.
+anyhow = { version = "1", optional = true }
 reqwest = { workspace = true, optional = true, features = ["multipart"] }
 gloo-net = { version = "0.7", default-features = false, features = ["http", "json"], optional = true }
 gloo-timers = { version = "0.4", features = ["futures"], optional = true }
@@ -121,6 +125,11 @@ tokio = { workspace = true, features = ["macros", "rt"] }
 
 [features]
 default = []
+# Exposes the SSR render-smoke harness (`test_support`) to dependents. Pulls in
+# `server`, since the harness uses `dioxus::ssr`, which only exists there. The
+# crate's own render tests reach the harness through `cfg(test)` and don't need
+# this feature; it's here so another crate could consume the helper (rule 03).
+test-support = ["server"]
 # Web client (WASM): uses dioxus-fullstack server-function client stubs.
 # tokio/sync (sync-only, WASM-safe) backs `data::web_auth_state` — a watch
 # channel that lets data-layer 401s notify the router to redirect to /login
@@ -155,6 +164,7 @@ mobile = [
     "tokio/fs",
     "tokio/io-util",
     "dep:tracing",
+    "dep:anyhow",
     "dep:jni",
     "dep:ndk-context",
     "dep:base64",

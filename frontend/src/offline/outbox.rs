@@ -2,7 +2,7 @@
 //! connectivity-class error (or is attempted while already offline) is
 //! queued here, applied optimistically to the replica cache, and replayed
 //! in enqueue order by the sync drain. Conflict stance is last-write-wins
-//! (docs/roadmap/2-1-progress-sync.md); offline-created rows carry
+//! offline-created rows carry
 //! negative client temp ids that remap to server ids on drain.
 
 use omnibus_shared::{
@@ -282,12 +282,17 @@ pub(crate) async fn remap_queued(temp_id: i64, real_id: i64) {
 
 /// Queue a reading/listening position write.
 pub(crate) async fn queue_save_progress(update: &ProgressUpdate) -> Option<ProgressRecord> {
+    let now = store::now_secs();
     let record = ProgressRecord {
         book_uuid: update.book_uuid.clone(),
         format: update.format,
         epub_cfi: update.epub_cfi.clone(),
         audio_position_seconds: update.audio_position_seconds,
-        updated_at: store::now_secs(),
+        updated_at: now,
+        // Optimistic local record: mirrors the server's own COALESCE (issue
+        // #1362) — the update's own client event time when it sent one,
+        // else "now".
+        client_updated_at: update.client_updated_at.unwrap_or(now),
     };
     let queued = enqueue(Op::SaveProgress {
         update: update.clone(),
@@ -376,6 +381,9 @@ pub(crate) async fn queue_create_highlight(input: &CreateHighlight) -> Option<Hi
         color: input.color,
         note: None,
         text: input.text.clone(),
+        // Web addresses this row by its temp id and rewrites it on apply;
+        // `client_id` is the mobile outbox's handle, not this one's.
+        client_id: None,
         created_at: store::now_secs(),
     };
     let queued = enqueue(Op::CreateHighlight {
@@ -447,6 +455,7 @@ pub(crate) async fn queue_create_bookmark(input: &CreateBookmark) -> Option<Book
         book_uuid: input.book_uuid.clone(),
         position: input.position.clone(),
         title: input.title.clone(),
+        client_id: None,
         created_at: store::now_secs(),
     };
     let queued = enqueue(Op::CreateBookmark {
@@ -594,6 +603,7 @@ pub(crate) async fn queue_create_journal(input: &CreateJournalEntry) -> Option<J
         body_html: fallback_html(&input.body_md),
         progress: input.progress,
         status: input.status,
+        client_id: None,
         created_at: now,
         updated_at: now,
     };

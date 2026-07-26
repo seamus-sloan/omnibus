@@ -48,14 +48,26 @@ pub struct ProgressUpdate {
     pub epub_cfi: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_position_seconds: Option<f64>,
+    /// Unix seconds when the client observed this position — used to
+    /// resolve most-recent-wins by **event** time rather than server
+    /// receipt time (issue #1362). `#[serde(default)]` so an older client
+    /// that never sends this field still parses; `upsert_progress` treats a
+    /// missing value as "use server now", preserving prior last-write-wins
+    /// behaviour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_updated_at: Option<i64>,
 }
 
 impl ProgressUpdate {
-    /// Reject empty UUIDs and missing format-specific positions. Mirrors
-    /// `MetadataOverrides::validate` — handlers translate `Err(_)` into 400.
+    /// Reject empty UUIDs, missing format-specific positions, and a
+    /// negative `client_updated_at`. Mirrors `MetadataOverrides::validate`
+    /// — handlers translate `Err(_)` into 400.
     pub fn validate(&self) -> Result<(), String> {
         if self.book_uuid.trim().is_empty() {
             return Err("book_uuid is required".into());
+        }
+        if self.client_updated_at.is_some_and(|ts| ts < 0) {
+            return Err("client_updated_at must be non-negative".into());
         }
         // Reject the non-discriminated field at the API boundary so a
         // cross-format payload (e.g. `{format:"epub", audio_position_seconds:…}`)
@@ -101,7 +113,10 @@ impl ProgressUpdate {
 /// Server-authoritative position returned by `POST /api/progress` and
 /// `GET /api/progress/{uuid}`. The non-discriminated field for the other
 /// format is always `None`. `updated_at` is unix seconds (SQLite
-/// `strftime('%s')`).
+/// `strftime('%s')`) — server receipt time. `client_updated_at` is the
+/// event time the most-recent-wins ordering actually resolves on (clamped
+/// to server now for a client with a fast clock; defaulted to server now
+/// when the write carried none).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProgressRecord {
     pub book_uuid: String,
@@ -109,6 +124,7 @@ pub struct ProgressRecord {
     pub epub_cfi: Option<String>,
     pub audio_position_seconds: Option<f64>,
     pub updated_at: i64,
+    pub client_updated_at: i64,
 }
 
 /// "Pick up where you left off" entry returned by `GET /api/progress/recent` and `rpc_recent_progress`.
@@ -140,13 +156,25 @@ pub struct SessionReport {
     pub progress_units: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_id: Option<i64>,
+    /// Handle minted by the device that recorded the session, making a
+    /// replay idempotent (migration 0052). A queued report is retried
+    /// whenever the reply was lost rather than the request, and without a
+    /// handle each retry appended a second row. `None` for web clients,
+    /// which post once and never retry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
 }
 
 impl SessionReport {
-    /// Reject empty UUIDs, inverted time ranges, and negative durations
-    /// before they reach the `reading_sessions` / `listening_sessions`
-    /// tables — these rows feed future stats / year-in-review, so a single
-    /// negative `progress_units` would skew aggregates indefinitely.
+    /// Maximum length (in chars) of a client-minted session id. Mirror of
+    /// [`CreateHighlight::CLIENT_ID_MAX_LEN`].
+    pub const CLIENT_ID_MAX_LEN: usize = CreateHighlight::CLIENT_ID_MAX_LEN;
+
+    /// Reject empty UUIDs, inverted time ranges, negative durations, and a
+    /// malformed `client_id` before they reach the `reading_sessions` /
+    /// `listening_sessions` tables — these rows feed future stats /
+    /// year-in-review, so a single negative `progress_units` would skew
+    /// aggregates indefinitely.
     pub fn validate(&self) -> Result<(), String> {
         if self.book_uuid.trim().is_empty() {
             return Err("book_uuid is required".into());
@@ -159,6 +187,20 @@ impl SessionReport {
         }
         if self.progress_units < 0 {
             return Err("progress_units must be non-negative".into());
+        }
+        // Same ceiling as the annotation handles: this one indexes a batched
+        // route, so an unbounded string would go straight into a unique
+        // index once per report in the batch.
+        if let Some(ref client_id) = self.client_id {
+            if client_id.trim().is_empty() {
+                return Err("client_id must not be blank".into());
+            }
+            if client_id.chars().count() > Self::CLIENT_ID_MAX_LEN {
+                return Err(format!(
+                    "client_id exceeds {} characters",
+                    Self::CLIENT_ID_MAX_LEN
+                ));
+            }
         }
         Ok(())
     }

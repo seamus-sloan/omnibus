@@ -144,3 +144,44 @@ fn PrecedenceList(library: &'static str, label: &'static str) -> Element {
         }
     }
 }
+
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::*;
+    use crate::test_support::render;
+
+    #[test]
+    fn precedence_field_renders_both_libraries_seeded_with_the_default_order() {
+        let html = render(rsx! {
+            MetadataPrecedenceField {}
+        });
+
+        assert!(html.contains("data-testid=\"metadata-precedence-card\""));
+        assert!(html.contains("Metadata Precedence"));
+        // Both per-library lists render, each seeded from
+        // `DEFAULT_METADATA_PRECEDENCE` before any load completes.
+        assert!(html.contains("data-testid=\"ebook-metadata-precedence\""));
+        assert!(html.contains("data-testid=\"audiobook-metadata-precedence\""));
+        assert!(html.contains("Ebook Library"));
+        assert!(html.contains("Audiobook Library"));
+        assert!(html.contains("Folder Structure"));
+        assert!(html.contains("Provider Match (Hardcover)"));
+        // First row's up control is present and its Save button is rendered.
+        assert!(html.contains("aria-label=\"Move Folder Structure up\""));
+        assert!(html.contains("Save Order"));
+    }
+
+    #[test]
+    fn precedence_field_labels_every_metadata_source() {
+        let html = render(rsx! {
+            MetadataPrecedenceField {}
+        });
+
+        for source in DEFAULT_METADATA_PRECEDENCE {
+            assert!(
+                html.contains(source_label(source)),
+                "missing label for {source:?}"
+            );
+        }
+    }
+}

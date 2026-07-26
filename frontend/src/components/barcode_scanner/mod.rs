@@ -181,18 +181,17 @@ fn install_scanner(
                 glue: SCANNER_GLUE_JS.to_string(),
                 wasm: ZXING_WASM.to_string(),
             };
-            let mut eval = interop::install_scanner_surface(VIDEO_ID, &scripts);
-            task.set(Some(spawn(async move {
-                while let Ok(event) = eval.recv::<interop::ScannerEvent>().await {
-                    match event {
-                        interop::ScannerEvent::Result { text } => on_detect.call(text),
-                        interop::ScannerEvent::Status { state } => {
-                            status.set(ScanStatus::from_glue(&state))
-                        }
-                        interop::ScannerEvent::Torch { flag } => torch_available.set(flag == "1"),
+            let eval = interop::install_scanner_surface(VIDEO_ID, &scripts);
+            task.set(Some(spawn(crate::js_interop::drain_events(
+                eval,
+                move |event: interop::ScannerEvent| match event {
+                    interop::ScannerEvent::Result { text } => on_detect.call(text),
+                    interop::ScannerEvent::Status { state } => {
+                        status.set(ScanStatus::from_glue(&state))
                     }
-                }
-            })));
+                    interop::ScannerEvent::Torch { flag } => torch_available.set(flag == "1"),
+                },
+            ))));
         });
 
         use_drop(move || {
