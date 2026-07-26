@@ -110,6 +110,10 @@ mod server_auth {
         /// Metadata edit permission. `true` for the first user (admin) and
         /// any user explicitly granted `can_edit`.
         pub can_edit: bool,
+        /// The live session this request authenticated with. Threaded into
+        /// `db::auth::change_password` so a self-service password change can
+        /// exclude the caller's own session from its revocation sweep (#1402).
+        pub session_id: i64,
     }
 
     /// Admin-only wrapper. Extracting this returns 403 for non-admin users
@@ -150,10 +154,11 @@ mod server_auth {
                 .get(header::COOKIE)
                 .and_then(|v| v.to_str().ok());
             match auth_db::validate_session(&pool, authorization, cookie_header).await {
-                Ok((user, _session)) => Ok(AuthUser {
+                Ok((user, session)) => Ok(AuthUser {
                     id: user.id,
                     is_admin: user.is_admin,
                     can_edit: user.can_edit,
+                    session_id: session.id,
                 }),
                 Err(SessionAuthError::Unauthenticated) => Err(unauthorized()),
                 Err(SessionAuthError::Internal(e)) => Err(internal(e)),

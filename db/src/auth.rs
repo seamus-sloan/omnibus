@@ -20,7 +20,7 @@ pub use login::verify_login;
 pub use password::{hash_password, validate_password, validate_username, verify_password};
 pub use session::{
     create_session, lookup_session, prune_expired_sessions, revoke_all_sessions_for_user,
-    revoke_session, validate_session, SessionAuthError,
+    revoke_all_sessions_for_user_except, revoke_session, validate_session, SessionAuthError,
 };
 pub use session_key::{get_session_key, load_or_create_session_key, put_session_key};
 pub use token::{
