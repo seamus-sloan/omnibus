@@ -38,6 +38,12 @@ const KEPUB_CONVERT_BUDGET: std::time::Duration = std::time::Duration::from_secs
 /// device treats the payload as malformed and never adopts the resources map.
 const KOBO_API_TOKEN: &str = "e30=";
 
+/// Changes per `library/sync` response. More remain → `x-kobo-sync: continue`,
+/// and the device immediately re-hits the route until the header is absent —
+/// so unlike Calibre-Web's `SYNC_ITEM_LIMIT`, this bounds the *response*, not
+/// the sync: every page still arrives, in one device-driven loop.
+const SYNC_PAGE_SIZE: usize = 100;
+
 /// Build the wireless Kobo router. `Extension(pool)` is layered here so the
 /// router is self-contained for integration tests; the live server adds the
 /// same one at the top (harmless overlap, mirroring `rest_router`).
@@ -110,6 +116,12 @@ async fn auth_refresh(auth: KoboAuthUser) -> Response {
 /// The device's snapshot advances in the stream's final step — after the
 /// closing `]` is written — so a connection dropped mid-body replays the same
 /// delta on the next sync instead of silently losing books.
+///
+/// Responses are paged at [`SYNC_PAGE_SIZE`] changes: only the first page is
+/// emitted (and committed), and `x-kobo-sync: continue` tells the device to
+/// re-hit the route for the rest. Pagination needs no extra cursor — a
+/// committed page is in the snapshot, so the next request's delta *is* the
+/// remainder.
 async fn library_sync(
     auth: KoboAuthUser,
     State(state): State<AppState>,
@@ -122,6 +134,11 @@ async fn library_sync(
     let base = origin_from_headers(&headers);
     let pool = state.pool().clone();
     let device_id = auth.device_id;
+
+    let mut changes = delta.changes;
+    let has_more = changes.len() > SYNC_PAGE_SIZE;
+    changes.truncate(SYNC_PAGE_SIZE);
+    let delta = db::kobo::SyncDelta { changes };
 
     // Serialize each item lazily as the device drains the body — no second
     // buffer of the whole payload.
@@ -181,7 +198,7 @@ async fn library_sync(
         },
     );
 
-    (
+    let mut res = (
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, "application/json"),
@@ -194,7 +211,14 @@ async fn library_sync(
         ],
         Body::from_stream(stream),
     )
-        .into_response()
+        .into_response();
+    if has_more {
+        res.headers_mut().insert(
+            header::HeaderName::from_static("x-kobo-sync"),
+            header::HeaderValue::from_static("continue"),
+        );
+    }
+    res
 }
 
 /// Streaming position for [`library_sync`]'s JSON-array body. `emitted`
