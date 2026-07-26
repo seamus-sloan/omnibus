@@ -23,6 +23,15 @@ use omnibus_shared::{
 /// `chapter_index_for_elapsed` under its own cfg gate (`chapter_nav` on web,
 /// `mobile::view` on mobile) — this is the one place the "preview while
 /// dragging, commit on release" math itself lives, so the two can't diverge.
+///
+/// Note the `target.clamp(0.0, max)` below is a deliberate, small behavior
+/// change on mobile: the pre-refactor mobile derivation used the raw drag
+/// value unclamped (`scrub().unwrap_or(elapsed)`), while web already
+/// clamped. A stale drag value that outlives a mid-drag `duration` change
+/// (or any other out-of-range input) now clamps into range on both
+/// platforms instead of only on web — intentionally aligning mobile with
+/// web's existing, safer edge-case behavior rather than preserving mobile's
+/// unguarded one.
 pub(super) fn effective_scrub_position(
     chapters: &[ChapterInfo],
     elapsed: f64,
@@ -303,12 +312,25 @@ mod tests {
     }
 
     #[test]
-    fn effective_scrub_position_clamps_drag_target_to_the_book_bounds() {
+    fn effective_scrub_position_clamps_a_drag_target_past_the_end() {
         let chs = vec![ch(1, "Intro", 0.0, 300.0)];
         let (effective, _, remaining) =
             effective_scrub_position(&chs, 0.0, 300.0, 0, 300.0, Some(999.0), idx_of);
         assert!((effective - 300.0).abs() < f64::EPSILON);
         assert!((remaining - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn effective_scrub_position_clamps_a_negative_drag_target_to_zero() {
+        // A stale/out-of-range scrub value (e.g. one that outlives a
+        // mid-drag `duration` change) clamps into range on both platforms —
+        // this is the mobile-alignment fix noted on `effective_scrub_position`.
+        let chs = vec![ch(1, "Intro", 0.0, 300.0)];
+        let (effective, idx, remaining) =
+            effective_scrub_position(&chs, 120.0, 300.0, 0, 180.0, Some(-50.0), idx_of);
+        assert!((effective - 0.0).abs() < f64::EPSILON);
+        assert_eq!(idx, 0);
+        assert!((remaining - 300.0).abs() < f64::EPSILON);
     }
 
     #[test]
