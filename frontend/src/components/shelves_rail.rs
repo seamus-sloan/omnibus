@@ -41,15 +41,9 @@ pub fn ShelvesRail(active: RailActive) -> Element {
         });
     };
 
-    let effect_url = url.clone();
-    use_effect(move || {
-        let url = effect_url.clone();
-        spawn(async move {
-            if let Ok(s) = data::list_shelves(&url).await {
-                shelves.set(s);
-            }
-        });
-    });
+    // Mount fetch reuses `refetch` rather than re-implementing its body —
+    // the two copies previously drifted independently (#1337).
+    use_effect(refetch.clone());
 
     let all_active = matches!(active, RailActive::All);
     let all_class = if all_active {

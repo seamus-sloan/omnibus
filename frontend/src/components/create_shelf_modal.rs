@@ -10,9 +10,9 @@ use omnibus_shared::{
     CreateShelfRequest, EbookMetadata, MatchMode, Shelf, ShelfKind, ShelfRule, Visibility,
 };
 
-use crate::components::cover_tile::toggle_picked;
+use crate::components::library_picker_grid::{filter_library, use_library_fetch};
 use crate::components::shelf_rule_builder::{RuleBuilder, RuleDraft};
-use crate::components::{CoverTile, CoverTileKind};
+use crate::components::LibraryPickerGrid;
 use crate::{data, use_server_url};
 
 /// Create-shelf modal. Emits the created shelf via `on_created`.
@@ -196,31 +196,14 @@ fn VisibilityToggle(visibility: Visibility, on_change: EventHandler<Visibility>)
 /// Hand-picked picker: a searchable, selectable cover grid over the library.
 #[component]
 fn PickerBody(picked: Signal<Vec<String>>, server_url: String) -> Element {
-    let mut library = use_signal(Vec::<EbookMetadata>::new);
+    let library = use_signal(Vec::<EbookMetadata>::new);
     let mut query = use_signal(String::new);
 
-    let effect_url = server_url.clone();
-    use_effect(move || {
-        let url = effect_url.clone();
-        spawn(async move {
-            if let Ok(lib) = data::get_ebooks(&url).await {
-                library.set(lib.books);
-            }
-        });
-    });
+    use_library_fetch(server_url.clone(), library);
 
-    let q = query.read().to_lowercase();
-    let books = library.read();
-    let filtered: Vec<&EbookMetadata> = books
-        .iter()
-        .filter(|b| {
-            q.is_empty()
-                || b.title
-                    .as_deref()
-                    .unwrap_or(&b.filename)
-                    .to_lowercase()
-                    .contains(&q)
-        })
+    let filtered: Vec<EbookMetadata> = filter_library(&library.read(), &query.read())
+        .into_iter()
+        .cloned()
         .collect();
     let picked_count = picked.read().len();
 
@@ -237,29 +220,7 @@ fn PickerBody(picked: Signal<Vec<String>>, server_url: String) -> Element {
                 }
                 span { class: "mono shelf-picker-count", "On this shelf \u{b7} {picked_count}" }
             }
-            div { class: "shelf-picker-grid",
-                for book in filtered.iter().map(|b| (*b).clone()) {
-                    {
-                        let uuid = book.unique_identifier.clone().unwrap_or_default();
-                        let selected = picked.read().contains(&uuid);
-                        let mut picked = picked;
-                        rsx! {
-                            div {
-                                key: "{book.id}",
-                                CoverTile {
-                                    book,
-                                    server_url: server_url.clone(),
-                                    sizes: "120px".to_string(),
-                                    kind: CoverTileKind::Selectable {
-                                        selected,
-                                        on_toggle: EventHandler::new(move |_| toggle_picked(&mut picked, &uuid)),
-                                    },
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            LibraryPickerGrid { books: filtered, server_url: server_url.clone(), picked }
         }
     }
 }

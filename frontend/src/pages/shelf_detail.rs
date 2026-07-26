@@ -17,8 +17,9 @@ use omnibus_shared::{ShelfKind, UpdateShelfRequest, Visibility};
 
 #[cfg(not(feature = "mobile"))]
 use crate::components::atrium::fallback_title;
-use crate::components::cover_tile::toggle_picked;
+use crate::components::library_picker_grid::{filter_library, use_library_fetch};
 use crate::components::EditShelfRulesModal;
+use crate::components::LibraryPickerGrid;
 use crate::components::{CoverTile, CoverTileKind};
 #[cfg(not(feature = "mobile"))]
 use crate::components::{RailActive, ShelvesRail};
@@ -655,7 +656,10 @@ fn AddBooksModal(shelf_id: i64, on_close: EventHandler<()>, on_added: EventHandl
     };
 
     let library_books = library.read();
-    let filtered = filter_library(&library_books, &query.read());
+    let filtered: Vec<EbookMetadata> = filter_library(&library_books, &query.read())
+        .into_iter()
+        .cloned()
+        .collect();
     let picked_count = picked.read().len();
 
     rsx! {
@@ -678,7 +682,7 @@ fn AddBooksModal(shelf_id: i64, on_close: EventHandler<()>, on_added: EventHandl
                         }
                         span { class: "mono shelf-picker-count", "Selected \u{b7} {picked_count}" }
                     }
-                    {add_books_picker_grid(&filtered, &server_url, picked)}
+                    LibraryPickerGrid { books: filtered, server_url: server_url.clone(), picked }
                 }
                 div { class: "shelf-modal-foot",
                     button {
@@ -692,69 +696,6 @@ fn AddBooksModal(shelf_id: i64, on_close: EventHandler<()>, on_added: EventHandl
                         disabled: saving(),
                         onclick: on_add,
                         if saving() { "Adding\u{2026}" } else { "Add \u{b7} {picked_count}" }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Fetches the full library once on mount, for the "Add books" search/pick UI.
-fn use_library_fetch(server_url: String, mut library: Signal<Vec<EbookMetadata>>) {
-    use_effect(move || {
-        let url = server_url.clone();
-        spawn(async move {
-            if let Ok(lib) = data::get_ebooks(&url).await {
-                library.set(lib.books);
-            }
-        });
-    });
-}
-
-/// Library books whose title (or filename fallback) contains `query`,
-/// case-insensitively; an empty query matches everything.
-fn filter_library<'a>(books: &'a [EbookMetadata], query: &str) -> Vec<&'a EbookMetadata> {
-    let q = query.to_lowercase();
-    books
-        .iter()
-        .filter(|b| {
-            q.is_empty()
-                || b.title
-                    .as_deref()
-                    .unwrap_or(&b.filename)
-                    .to_lowercase()
-                    .contains(&q)
-        })
-        .collect()
-}
-
-/// Selectable cover grid for the "Add books" modal; toggles membership in
-/// `picked` via `CoverTile`'s `Selectable` kind.
-fn add_books_picker_grid(
-    filtered: &[&EbookMetadata],
-    server_url: &str,
-    picked: Signal<Vec<String>>,
-) -> Element {
-    rsx! {
-        div { class: "shelf-picker-grid",
-            for book in filtered.iter().map(|b| (*b).clone()) {
-                {
-                    let uuid = book.unique_identifier.clone().unwrap_or_default();
-                    let selected = picked.read().contains(&uuid);
-                    let mut picked = picked;
-                    rsx! {
-                        div {
-                            key: "{book.id}",
-                            CoverTile {
-                                book,
-                                server_url: server_url.to_string(),
-                                sizes: "120px".to_string(),
-                                kind: CoverTileKind::Selectable {
-                                    selected,
-                                    on_toggle: EventHandler::new(move |_| toggle_picked(&mut picked, &uuid)),
-                                },
-                            }
-                        }
                     }
                 }
             }
