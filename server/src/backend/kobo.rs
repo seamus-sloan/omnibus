@@ -100,16 +100,17 @@ async fn auth_refresh(auth: KoboAuthUser) -> Response {
     Json(dto::auth_envelope(&auth.token)).into_response()
 }
 
-/// `GET library/sync` — enumerate every opted-in book as a `NewEntitlement`,
-/// streamed as a JSON array via [`Body::from_stream`]. Deliberately imposes no
-/// item cap (unlike Calibre-Web's `SYNC_ITEM_LIMIT=100`). Slice A returns the
-/// whole library on every call; the per-device delta cursor is #923.
+/// `GET library/sync` — enumerate the caller's opted-in books as
+/// `NewEntitlement`s, streamed as a JSON array via [`Body::from_stream`].
+/// Deliberately imposes no item cap (unlike Calibre-Web's
+/// `SYNC_ITEM_LIMIT=100`). Scope comes from the user's `sync_to_kobo` shelves
+/// (#924); the per-device delta cursor is still #922.
 async fn library_sync(
     auth: KoboAuthUser,
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    let books = match db::kobo::sync_books(state.pool()).await {
+    let books = match db::kobo::sync_books(state.pool(), auth.user_id).await {
         Ok(b) => b,
         Err(e) => return internal("kobo sync_books", e),
     };

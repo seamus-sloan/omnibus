@@ -61,6 +61,7 @@ fn coalesce_keys_group_upserts_and_keep_partial_patches_distinct() {
             visibility: None,
             match_mode: None,
             rules: None,
+            sync_to_kobo: None,
         },
     };
     assert_eq!(shelf_patch.coalesce_key(), None);
@@ -259,6 +260,7 @@ fn test_shelf(id: i64, name: &str, book_count: i64) -> omnibus_shared::Shelf {
         match_mode: None,
         rules: vec![],
         book_count,
+        sync_to_kobo: false,
     }
 }
 
@@ -422,6 +424,7 @@ async fn shelf_update_patches_the_cached_detail_and_list_entry() {
         visibility: Some(omnibus_shared::Visibility::Public),
         match_mode: None,
         rules: None,
+        sync_to_kobo: None,
     };
     let patched = queue_update_shelf(20, &req).await.expect("queued");
     assert_eq!(patched.name, "New");

@@ -124,6 +124,22 @@ pub fn KoboDevicesCard() -> Element {
                 "The token authorizes only your library."
             }
 
+            // Unconditional: the hazard applies the moment a URL is copied.
+            div { class: "kobo-warning", "data-testid": "kobo-data-loss-warning",
+                p { class: "kobo-warning-title", "First sync can erase your Kobo's highlights" }
+                p {
+                    "A Kobo clears its own highlights and notes when the server it syncs with "
+                    "does not answer Kobo's annotation channel. Omnibus does not answer that "
+                    "channel yet, and does not store what the device erases."
+                }
+                p {
+                    "Copy "
+                    code { ".kobo/KoboReader.sqlite" }
+                    " off the device over USB before you point it here. Wireless sync is "
+                    "incomplete \u{2014} treat it as experimental."
+                }
+            }
+
             if device_list.is_empty() {
                 p {
                     class: "settings-status",
@@ -253,5 +269,67 @@ mod tests {
             endpoint_url("http://localhost:3000/", "abc"),
             "http://localhost:3000/kobo/abc"
         );
+    }
+}
+
+// SSR render-smoke coverage. These need the `server` feature (`dioxus::ssr`).
+#[cfg(all(test, feature = "server"))]
+mod render_tests {
+    use super::*;
+    use crate::test_support::render_in_vdom;
+
+    fn card() -> Element {
+        rsx! {
+            KoboDevicesCard {}
+        }
+    }
+
+    /// `Callback::new` needs a live runtime, so the row is built inside the
+    /// throwaway `VirtualDom` rather than via a bare `render`.
+    fn device_row() -> Element {
+        rsx! {
+            KoboDeviceRow {
+                device: KoboDeviceView {
+                    id: 1,
+                    name: "Kobo Clara".to_string(),
+                    token: "tok123".to_string(),
+                    created_at: 0,
+                    last_seen_at: 0,
+                },
+                endpoint: "https://omni.example.com/kobo/tok123".to_string(),
+                disabled: false,
+                on_regenerate: Callback::new(|_| {}),
+                on_remove: Callback::new(|_| {}),
+            }
+        }
+    }
+
+    /// The warning sits at card level, above the list, so it is present on the
+    /// very first paint — before any device row (and therefore any endpoint
+    /// URL) can render. `KoboDeviceRow` is only ever mounted inside this card,
+    /// so covering the card covers every path that shows a URL (#927 AC1/AC4).
+    #[test]
+    fn kobo_card_renders_the_data_loss_warning_on_first_paint() {
+        let html = render_in_vdom(card);
+        assert!(html.contains("data-testid=\"kobo-data-loss-warning\""));
+        assert!(html.contains("First sync can erase your Kobo&#39;s highlights"));
+        assert!(html.contains("KoboReader.sqlite"));
+    }
+
+    /// The warning must not be gated on having registered a device — a user
+    /// reads it *before* adding their first Kobo, not after.
+    #[test]
+    fn kobo_card_warns_even_with_no_devices_registered() {
+        let html = render_in_vdom(card);
+        assert!(html.contains("data-testid=\"kobo-devices-empty\""));
+        assert!(html.contains("data-testid=\"kobo-data-loss-warning\""));
+    }
+
+    /// The row is what actually exposes the endpoint URL; assert it renders so
+    /// the card-level warning test above is anchored to a real URL surface.
+    #[test]
+    fn kobo_device_row_renders_the_endpoint_url() {
+        let html = render_in_vdom(device_row);
+        assert!(html.contains("https://omni.example.com/kobo/tok123"));
     }
 }

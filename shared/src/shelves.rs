@@ -250,6 +250,10 @@ pub struct Shelf {
     pub match_mode: Option<MatchMode>,
     pub rules: Vec<ShelfRule>,
     pub book_count: i64,
+    /// Whether this shelf's books are exposed to the owner's Kobo devices over
+    /// wireless sync. Off by default — sync is never whole-library (#924).
+    #[serde(default)]
+    pub sync_to_kobo: bool,
 }
 
 /// Create payload. For smart: `match_mode` + `rules` set, `book_uuids` empty.
@@ -322,6 +326,9 @@ pub struct UpdateShelfRequest {
     pub match_mode: Option<MatchMode>,
     #[serde(default)]
     pub rules: Option<Vec<ShelfRule>>,
+    /// Toggle the shelf's Kobo wireless-sync opt-in (#924).
+    #[serde(default)]
+    pub sync_to_kobo: Option<bool>,
 }
 
 impl UpdateShelfRequest {
