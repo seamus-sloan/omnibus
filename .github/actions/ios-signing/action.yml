@@ -1,0 +1,109 @@
+name: "iOS signing setup"
+description: >
+  Import an Apple Distribution certificate into a throwaway keychain and install
+  an App Store provisioning profile. Shared by the mobile (WebView) and swiftui
+  (native) TestFlight jobs so the security-sensitive keychain code lives in one
+  place. The keychain persists for the rest of the job; delete it in an
+  always() cleanup step using the `keychain-path` output.
+
+inputs:
+  cert-p12-base64:
+    description: "base64 of the Apple Distribution .p12 (exported WITH its private key)"
+    required: true
+  cert-password:
+    description: "password for the .p12"
+    required: true
+  profile-base64:
+    description: "base64 of the App Store .mobileprovision for the app being built"
+    required: true
+
+outputs:
+  signing-identity:
+    description: "SHA-1 hash of the codesigning identity (codesign matches the hash exactly)"
+    value: ${{ steps.cert.outputs.identity }}
+  keychain-path:
+    description: "Path to the throwaway keychain — delete it in an always() cleanup step"
+    value: ${{ steps.cert.outputs.keychain }}
+  profile-path:
+    description: "Path to the decoded .mobileprovision file (the dx path embeds this directly)"
+    value: ${{ steps.profile.outputs.path }}
+  profile-uuid:
+    description: "UUID of the provisioning profile"
+    value: ${{ steps.profile.outputs.uuid }}
+  profile-name:
+    description: "Name of the provisioning profile (for PROVISIONING_PROFILE_SPECIFIER / ExportOptions)"
+    value: ${{ steps.profile.outputs.name }}
+
+runs:
+  using: composite
+  steps:
+    # Import the distribution cert into a throwaway keychain so codesign can find
+    # the identity. `-D` is the BSD/macOS base64 decode flag (`--decode` is a GNU
+    # long-opt some macOS images lack); these steps run outside nix on the runner.
+    - name: Import signing certificate
+      id: cert
+      shell: bash
+      env:
+        CERT_P12_BASE64: ${{ inputs.cert-p12-base64 }}
+        CERT_PASSWORD: ${{ inputs.cert-password }}
+      run: |
+        set -euo pipefail
+        KEYCHAIN="$RUNNER_TEMP/omnibus-signing.keychain-db"
+        KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+        CERT_P12="$RUNNER_TEMP/dist.p12"
+        echo "$CERT_P12_BASE64" | base64 -D > "$CERT_P12"
+
+        security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+        security set-keychain-settings -lut 21600 "$KEYCHAIN"
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+        security import "$CERT_P12" -k "$KEYCHAIN" -P "$CERT_PASSWORD" \
+          -T /usr/bin/codesign -T /usr/bin/security
+        # Let codesign use the key without an interactive prompt.
+        security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+        # Prepend our keychain to the user search list so codesign/xcodebuild see it.
+        # Intentional word-splitting: each existing keychain path is a separate -s argument.
+        # shellcheck disable=SC2046
+        security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+        rm -f "$CERT_P12"
+
+        # Derive the identity's SHA-1 from the imported cert rather than trusting a
+        # hand-entered name — codesign matches the hash exactly. Fail loudly (dumping
+        # what's present) if the cert has no usable codesigning identity — the usual
+        # cause is a .p12 exported without its private key.
+        IDENTITY_HASH="$(security find-identity -v -p codesigning "$KEYCHAIN" \
+          | awk 'match($0, /[0-9A-F]{40}/) { print substr($0, RSTART, RLENGTH); exit }')"
+        if [ -z "$IDENTITY_HASH" ]; then
+          echo "::error::No codesigning identity in the imported keychain — the cert must be an Apple Distribution cert exported WITH its private key."
+          security find-identity -v -p codesigning "$KEYCHAIN" || true
+          exit 1
+        fi
+        echo "Using codesigning identity $IDENTITY_HASH"
+        echo "identity=$IDENTITY_HASH" >> "$GITHUB_OUTPUT"
+        echo "keychain=$KEYCHAIN" >> "$GITHUB_OUTPUT"
+
+    # Decode the profile and install it where xcodebuild looks. The dx path reads
+    # the file directly by `profile-path`; the native path resolves it by name/UUID.
+    - name: Install provisioning profile
+      id: profile
+      shell: bash
+      env:
+        PROFILE_BASE64: ${{ inputs.profile-base64 }}
+      run: |
+        set -euo pipefail
+        PROFILE="$RUNNER_TEMP/omnibus.mobileprovision"
+        echo "$PROFILE_BASE64" | base64 -D > "$PROFILE"
+
+        # Read UUID + Name out of the profile's decoded plist.
+        PLIST="$RUNNER_TEMP/profile.plist"
+        security cms -D -i "$PROFILE" > "$PLIST"
+        UUID="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$PLIST")"
+        NAME="$(/usr/libexec/PlistBuddy -c 'Print :Name' "$PLIST")"
+
+        # Install into the dir xcodebuild searches, keyed by UUID as Xcode expects.
+        INSTALL_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+        mkdir -p "$INSTALL_DIR"
+        cp "$PROFILE" "$INSTALL_DIR/$UUID.mobileprovision"
+
+        echo "path=$PROFILE" >> "$GITHUB_OUTPUT"
+        echo "uuid=$UUID" >> "$GITHUB_OUTPUT"
+        echo "name=$NAME" >> "$GITHUB_OUTPUT"
