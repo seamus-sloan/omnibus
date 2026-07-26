@@ -312,15 +312,17 @@ mod server {
     /// session token directly in the URL path (see
     /// `backend::kobo::extractor::kobo_path_token`), so logging the raw path
     /// would leak a durable credential to stderr and the on-disk JSON sink.
-    /// Every other path is returned unchanged.
-    fn redact_path(path: &str) -> String {
+    /// Every other path is returned unchanged, borrowed rather than
+    /// allocated — this runs on every request, and only the Kobo case needs
+    /// to build a new string.
+    fn redact_path(path: &str) -> std::borrow::Cow<'_, str> {
         let mut segs = path.split('/');
         match (segs.next(), segs.next(), segs.next()) {
             (Some(""), Some("kobo"), Some(_token)) => {
                 let rest: String = segs.map(|s| format!("/{s}")).collect();
-                format!("/kobo/[REDACTED]{rest}")
+                std::borrow::Cow::Owned(format!("/kobo/[REDACTED]{rest}"))
             }
-            _ => path.to_owned(),
+            _ => std::borrow::Cow::Borrowed(path),
         }
     }
 
