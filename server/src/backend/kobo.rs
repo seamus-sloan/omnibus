@@ -1,15 +1,16 @@
 //! Native Kobo wireless sync (`/kobo/<TOKEN>/v1/*`).
 //!
 //! Mounted outside the `/api/*` auth gate; each route authenticates via its
-//! path token ([`KoboAuthUser`]). Serves the library enumeration, per-book
-//! metadata, KEPUB download, the read-state PUT, tags, and cover images.
+//! path token ([`KoboAuthUser`]). Serves the initialization handshake, the
+//! library enumeration, per-book metadata, KEPUB download, the read-state PUT,
+//! tags, and cover images.
 
 use axum::{
     body::{Body, Bytes},
     extract::{Path, Request, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, put},
+    routing::{get, post, put},
     Extension, Json, Router,
 };
 use futures_util::stream;
@@ -21,8 +22,10 @@ use omnibus_shared::{ReadStatus, SetReadStatus};
 
 use super::{internal, serve_download, AppState};
 
+mod analytics;
 mod dto;
 mod extractor;
+mod store_resources;
 #[cfg(test)]
 mod tests;
 
@@ -32,12 +35,30 @@ use extractor::KoboAuthUser;
 /// falling back to plain EPUB. Mirrors the USB sideload path's budget.
 const KEPUB_CONVERT_BUDGET: std::time::Duration = std::time::Duration::from_secs(25);
 
+/// Required on the `v1/initialization` response — base64 `{}`. Without it the
+/// device treats the payload as malformed and never adopts the resources map.
+const KOBO_API_TOKEN: &str = "e30=";
+
+/// Changes per `library/sync` response; more remain → `x-kobo-sync: continue`, bounding the response but never the sync (unlike Calibre-Web's `SYNC_ITEM_LIMIT`).
+const SYNC_PAGE_SIZE: usize = 100;
+
 /// Build the wireless Kobo router. `Extension(pool)` is layered here so the
 /// router is self-contained for integration tests; the live server adds the
 /// same one at the top (harmless overlap, mirroring `rest_router`).
 pub fn kobo_router(state: AppState) -> Router {
     let pool = state.pool().clone();
     Router::new()
+        .route("/kobo/{token}/v1/initialization", get(initialization))
+        .route("/kobo/{token}/v1/auth/device", post(auth_device))
+        .route("/kobo/{token}/v1/auth/refresh", post(auth_refresh))
+        .route(
+            "/kobo/{token}/v1/analytics/event",
+            post(analytics::analytics_event),
+        )
+        .route(
+            "/kobo/{token}/v1/analytics/gettests",
+            get(analytics::analytics_gettests),
+        )
         .route("/kobo/{token}/v1/library/sync", get(library_sync))
         .route(
             "/kobo/{token}/v1/library/{uuid}/metadata",
@@ -54,77 +75,176 @@ pub fn kobo_router(state: AppState) -> Router {
         .layer(Extension(pool))
 }
 
-/// `GET library/sync` — enumerate every opted-in book as a `NewEntitlement`,
-/// streamed as a JSON array via [`Body::from_stream`]. Deliberately imposes no
-/// item cap (unlike Calibre-Web's `SYNC_ITEM_LIMIT=100`). Slice A returns the
-/// whole library on every call; the per-device delta cursor is #923.
+/// `GET v1/initialization` — the handshake that redirects a device at this
+/// server. Returns Kobo's own resources map with only the sync/download/cover/
+/// annotation entries repointed here, so store browse and search keep working
+/// against Kobo directly and this server never proxies that traffic.
+///
+/// `reading_services_host` is advertised even though the annotation channel
+/// isn't implemented yet: advertising-then-not-answering is the wipe mechanism
+/// the settings-card warning covers, and the channel can't be adopted at all
+/// until the host is published.
+async fn initialization(auth: KoboAuthUser, headers: HeaderMap) -> Response {
+    let base = origin_from_headers(&headers);
+    let resources = store_resources::resources_for(&base, &auth.token);
+    (
+        StatusCode::OK,
+        [(
+            header::HeaderName::from_static("x-kobo-apitoken"),
+            KOBO_API_TOKEN,
+        )],
+        Json(serde_json::json!({ "Resources": resources })),
+    )
+        .into_response()
+}
+
+/// `POST v1/auth/device` — the device's initial token exchange. The values are
+/// generated locally and never validated afterwards: the `/kobo/<TOKEN>/` path
+/// token is the real credential, so this is a well-formed envelope by design,
+/// not a stub standing in for verification.
+async fn auth_device(auth: KoboAuthUser) -> Response {
+    Json(dto::auth_envelope(&auth.token)).into_response()
+}
+
+/// `POST v1/auth/refresh` — same envelope as [`auth_device`]; the device
+/// refreshes on a schedule and expects the same shape back.
+async fn auth_refresh(auth: KoboAuthUser) -> Response {
+    Json(dto::auth_envelope(&auth.token)).into_response()
+}
+
+/// `GET library/sync` — the per-device delta, streamed as a JSON array via
+/// [`Body::from_stream`] with no item cap (unlike Calibre-Web's
+/// `SYNC_ITEM_LIMIT=100`). First sync emits the whole opted-in set as
+/// `NewEntitlement`s; later syncs emit only `ChangedProductMetadata` +
+/// `ChangedReadingState` for modified books and `ChangedEntitlement
+/// {IsRemoved:true}` for books that left the opted-in set (#922).
+///
+/// The device's snapshot advances in the stream's final poll — the same one
+/// that emits the closing `]`, so commit and completion are a single step the
+/// transport can't split. A connection dropped mid-body never reaches that
+/// poll, and the device replays the same delta on the next sync instead of
+/// silently losing books.
+///
+/// Responses are paged at [`SYNC_PAGE_SIZE`] changes: only the first page is
+/// emitted (and committed), and `x-kobo-sync: continue` tells the device to
+/// re-hit the route for the rest. Pagination needs no extra cursor — a
+/// committed page is in the snapshot, so the next request's delta *is* the
+/// remainder.
 async fn library_sync(
     auth: KoboAuthUser,
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    let books = match db::kobo::sync_books(state.pool()).await {
-        Ok(b) => b,
-        Err(e) => return internal("kobo sync_books", e),
+    let delta = match db::kobo::sync_delta(state.pool(), auth.user_id, auth.device_id).await {
+        Ok(d) => d,
+        Err(e) => return internal("kobo sync_delta", e),
     };
     let base = origin_from_headers(&headers);
+    let pool = state.pool().clone();
+    let device_id = auth.device_id;
 
-    // Serialize each entitlement lazily as the device drains the body — no
-    // second buffer of the whole payload. (`sync_books` still materializes the
-    // row set; streaming rows straight from SQLx is a later optimization.)
+    let mut changes = delta.changes;
+    let has_more = changes.len() > SYNC_PAGE_SIZE;
+    changes.truncate(SYNC_PAGE_SIZE);
+    let delta = db::kobo::SyncDelta { changes };
+
+    // Serialize each item lazily as the device drains the body — no second
+    // buffer of the whole payload.
     let stream = stream::unfold(
-        (books, base, auth.token, SyncPhase::Open),
-        |(books, base, token, phase)| async move {
-            let chunk: Bytes = match phase {
-                SyncPhase::Open => {
-                    let next = if books.is_empty() {
-                        SyncPhase::Close
-                    } else {
-                        SyncPhase::Item(0)
-                    };
-                    return Some((ok(Bytes::from_static(b"[")), (books, base, token, next)));
-                }
-                SyncPhase::Item(i) => {
-                    let item = dto::new_entitlement(&base, &token, &books[i], 0);
-                    // These DTOs are owned Strings/primitives, so serialization
-                    // is infallible; default to empty on the impossible error.
-                    let json = serde_json::to_vec(&item).unwrap_or_default();
-                    let mut piece = if i > 0 { vec![b','] } else { Vec::new() };
-                    piece.extend_from_slice(&json);
-                    let next = if i + 1 < books.len() {
-                        SyncPhase::Item(i + 1)
-                    } else {
-                        SyncPhase::Close
-                    };
-                    return Some((ok(Bytes::from(piece)), (books, base, token, next)));
-                }
-                SyncPhase::Close => Bytes::from_static(b"]"),
-                SyncPhase::End => return None,
-            };
-            Some((ok(chunk), (books, base, token, SyncPhase::End)))
+        (delta.changes, base, auth.token, SyncPhase::Open),
+        move |(changes, base, token, phase)| {
+            let pool = pool.clone();
+            async move {
+                let chunk: Bytes = match phase {
+                    SyncPhase::Open => {
+                        let next = if changes.is_empty() {
+                            SyncPhase::Close
+                        } else {
+                            SyncPhase::Item {
+                                change: 0,
+                                emitted: 0,
+                            }
+                        };
+                        return Some((ok(Bytes::from_static(b"[")), (changes, base, token, next)));
+                    }
+                    SyncPhase::Item { change, emitted } => {
+                        let items = dto::sync_items(&base, &token, &changes[change]);
+                        let mut piece = Vec::new();
+                        for item in &items {
+                            // These DTOs are owned Strings/primitives, so this
+                            // never fails in practice — but if it ever does,
+                            // abort the body rather than emit malformed JSON:
+                            // the stream jumps to End, `record_synced` never
+                            // runs, and the device retries the same delta.
+                            let json = match serde_json::to_vec(item) {
+                                Ok(j) => j,
+                                Err(e) => {
+                                    return Some((
+                                        Err(std::io::Error::other(e)),
+                                        (changes, base, token, SyncPhase::End),
+                                    ));
+                                }
+                            };
+                            if emitted > 0 || !piece.is_empty() {
+                                piece.push(b',');
+                            }
+                            piece.extend_from_slice(&json);
+                        }
+                        let next = if change + 1 < changes.len() {
+                            SyncPhase::Item {
+                                change: change + 1,
+                                emitted: emitted + items.len(),
+                            }
+                        } else {
+                            SyncPhase::Close
+                        };
+                        return Some((ok(Bytes::from(piece)), (changes, base, token, next)));
+                    }
+                    SyncPhase::Close => {
+                        // Body is complete: commit the snapshot. A failure here
+                        // is deliberately non-fatal to the response (the bytes
+                        // are already on the wire) — the device just replays
+                        // the same delta next sync, which is safe.
+                        if let Err(e) = db::kobo::record_synced(&pool, device_id, &changes).await {
+                            tracing::warn!(device_id, error = %e, "kobo snapshot advance failed");
+                        }
+                        Bytes::from_static(b"]")
+                    }
+                    SyncPhase::End => return None,
+                };
+                Some((ok(chunk), (changes, base, token, SyncPhase::End)))
+            }
         },
     );
 
-    (
+    let mut res = (
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, "application/json"),
-            // Opaque per-device cursor; the device echoes it back but we never
-            // parse it (the real per-device snapshot cursor lands with #923).
+            // Opaque; the device echoes it back but the real cursor is the
+            // per-device snapshot (`kobo_device_books`), never this value.
             (
                 header::HeaderName::from_static("x-kobo-synctoken"),
-                "slice-a",
+                "omnibus",
             ),
         ],
         Body::from_stream(stream),
     )
-        .into_response()
+        .into_response();
+    if has_more {
+        res.headers_mut().insert(
+            header::HeaderName::from_static("x-kobo-sync"),
+            header::HeaderValue::from_static("continue"),
+        );
+    }
+    res
 }
 
-/// Streaming position for [`library_sync`]'s JSON-array body.
+/// Streaming position for [`library_sync`]'s JSON-array body. `emitted`
+/// counts items already written, since one change can fan out into two items.
 enum SyncPhase {
     Open,
-    Item(usize),
+    Item { change: usize, emitted: usize },
     Close,
     End,
 }
@@ -132,6 +252,14 @@ enum SyncPhase {
 /// Wrap a chunk as the infallible `Result` item `Body::from_stream` expects.
 fn ok(bytes: Bytes) -> Result<Bytes, std::io::Error> {
     Ok(bytes)
+}
+
+/// Cap a path `{uuid}` at [`omnibus_shared::BOOK_UUID_MAX_LEN`] before any DB
+/// round trip, mirroring the request-input sweep the JSON-body routes already
+/// follow (`kindle::SendBody::validate`). `Some(response)` is the rejection.
+fn reject_oversized_uuid(uuid: &str) -> Option<Response> {
+    (uuid.len() > omnibus_shared::BOOK_UUID_MAX_LEN)
+        .then(|| StatusCode::BAD_REQUEST.into_response())
 }
 
 /// `GET library/<uuid>/metadata` — the single-book metadata array Kobo fetches
@@ -142,10 +270,13 @@ async fn library_metadata(
     Path((_token, uuid)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
+    if let Some(rejected) = reject_oversized_uuid(&uuid) {
+        return rejected;
+    }
     match db::kobo::book_for_sync(state.pool(), &uuid).await {
         Ok(Some(book)) => {
             let base = origin_from_headers(&headers);
-            Json(vec![dto::book_metadata(&base, &auth.token, &book, 0)]).into_response()
+            Json(vec![dto::book_metadata(&base, &auth.token, &book)]).into_response()
         }
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => internal("kobo book_for_sync", e),
@@ -161,6 +292,9 @@ async fn download(
     Path((_token, uuid)): Path<(String, String)>,
     req: Request,
 ) -> Response {
+    if let Some(rejected) = reject_oversized_uuid(&uuid) {
+        return rejected;
+    }
     let id = match db::resolve_book_id_by_uuid(state.pool(), &uuid).await {
         Ok(Some(id)) => id,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
@@ -188,6 +322,9 @@ async fn put_state(
     Path((_token, uuid)): Path<(String, String)>,
     Json(body): Json<dto::StateRequest>,
 ) -> Response {
+    if let Some(rejected) = reject_oversized_uuid(&uuid) {
+        return rejected;
+    }
     for entry in &body.reading_states {
         if let Some(info) = &entry.status_info {
             let update = SetReadStatus {
@@ -209,6 +346,11 @@ async fn put_state(
         if entry.current_bookmark.is_some() {
             tracing::debug!(%uuid, "kobo position received; KoboSpan→CFI deferred to #925");
         }
+        // Acknowledged, deliberately unwritten — cumulative totals would
+        // double-count against the LeaveContent sessions (see `dto::Statistics`).
+        if entry.statistics.is_some() {
+            tracing::debug!(%uuid, "kobo statistics received");
+        }
     }
     Json(dto::StateResponse::success(uuid)).into_response()
 }
@@ -220,7 +362,12 @@ async fn library_tags(_auth: KoboAuthUser) -> Response {
 }
 
 /// `GET books/<uuid>/thumbnail/.../image.jpg` — serve the book cover. The
-/// requested dimensions are advisory; slice A serves the stored cover as-is.
+/// requested dimensions are advisory; the stored cover is served as-is.
+///
+/// Carries a weak `ETag` derived from `(book id, last_modified)` and honors
+/// `If-None-Match` with a bodyless 304 — the device re-validates covers on
+/// every sync, so without this each sync re-downloads every cover it already
+/// holds.
 async fn image(
     _auth: KoboAuthUser,
     State(state): State<AppState>,
@@ -232,14 +379,41 @@ async fn image(
         u32,
         String,
     )>,
+    headers: HeaderMap,
 ) -> Response {
+    if let Some(rejected) = reject_oversized_uuid(&uuid) {
+        return rejected;
+    }
     let id = match db::resolve_book_id_by_uuid(state.pool(), &uuid).await {
         Ok(Some(id)) => id,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(e) => return internal("kobo image resolve", e),
     };
+    // Cheap freshness probe before the cover bytes are ever loaded: the cover
+    // changes only through paths that bump `books.last_modified` (override
+    // save, reindex), so the pair is an honest validator.
+    let last_modified: i64 = match sqlx::query_scalar(
+        "SELECT CAST(COALESCE(last_modified, 0) AS INTEGER) FROM books WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(state.pool())
+    .await
+    {
+        Ok(lm) => lm,
+        Err(e) => return internal("kobo image last_modified", e),
+    };
+    let etag = format!("W/\"{id}-{last_modified}\"");
+    if headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.split(',').any(|c| c.trim() == etag))
+    {
+        return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response();
+    }
     match db::get_cover(state.pool(), id).await {
-        Ok(Some((mime, bytes))) => ([(header::CONTENT_TYPE, mime)], bytes).into_response(),
+        Ok(Some((mime, bytes))) => {
+            ([(header::CONTENT_TYPE, mime), (header::ETAG, etag)], bytes).into_response()
+        }
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => internal("kobo get_cover", e),
     }

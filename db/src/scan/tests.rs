@@ -490,6 +490,83 @@ async fn resolve_not_in_library_when_two_books_share_the_norm() {
 }
 
 #[tokio::test]
+async fn resolve_not_in_library_when_a_no_override_and_an_overridden_book_share_the_norm() {
+    // The ambiguity guard must see across both arms of the two-step lookup
+    // (#1343): one candidate comes from the no-override fast path, the other
+    // only matches via its override, so the total count — not either arm in
+    // isolation — must still land on ambiguous.
+    let pool = pool().await;
+    seed_book(&pool, "u1", "Effective Java", "Joshua Bloch", None).await;
+    seed_book(
+        &pool,
+        "u2",
+        "Garbled OPF Title",
+        "Wrong Scanned Author",
+        None,
+    )
+    .await;
+    let user = seed_user(&pool, "editor").await;
+    override_title_author(
+        &pool,
+        "u2",
+        user,
+        Some("Effective Java"),
+        Some("Joshua Bloch"),
+    )
+    .await;
+    let server = MockServer::start().await;
+    mount_ol_hit(&server, "Effective Java", "Joshua Bloch").await;
+
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
+        .await
+        .unwrap();
+    assert!(matches!(outcome, ScanOutcome::NotInLibrary { .. }));
+}
+
+/// #1343: the no-override arm of `query_norm_candidate` compares
+/// `books.title_norm`/`books.author_norm` directly (no `metadata_overrides`
+/// join), so it must be servable by `idx_books_norm` — a `SEARCH`, not a
+/// `SCAN books` — for the common case where the exact-ISBN rung misses and no
+/// override exists. This is the literal WHERE clause of that arm; a
+/// regression that reintroduces a `COALESCE(...)` or join on this path would
+/// fail this assertion before it ever reached production.
+#[tokio::test]
+async fn norm_candidate_fast_path_uses_an_index_seek_not_a_table_scan() {
+    let pool = pool().await;
+    seed_book(&pool, "u1", "Effective Java", "Joshua Bloch", None).await;
+
+    let plan: Vec<(i64, i64, i64, String)> = sqlx::query_as(
+        "EXPLAIN QUERY PLAN
+         SELECT 1 FROM books b
+          WHERE b.title_norm = ?1 AND b.author_norm = ?2
+            AND NOT EXISTS (SELECT 1 FROM metadata_overrides mo WHERE mo.book_uuid = b.uuid)",
+    )
+    .bind("effective java")
+    .bind("joshua bloch")
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let text = plan
+        .iter()
+        .map(|(_, _, _, s)| s.as_str())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    // Only forbid a table scan on `books`/`b` itself — whether SQLite scans or
+    // seeks the (typically tiny) `metadata_overrides` table for the `NOT
+    // EXISTS` probe is not the regression this test guards against. Match on
+    // a trailing word boundary so a differently-aliased scan elsewhere in the
+    // plan (e.g. `bal` for `books_authors_link`) can't false-positive here.
+    let scans_books = plan
+        .iter()
+        .any(|(_, _, _, s)| s == "SCAN b" || s.starts_with("SCAN b "));
+    assert!(!scans_books, "expected no table scan on books, got: {text}");
+    assert!(
+        text.contains("SEARCH b") && text.contains("idx_books_norm"),
+        "expected an idx_books_norm index seek on books, got: {text}"
+    );
+}
+
+#[tokio::test]
 async fn backfill_override_norms_repairs_a_row_written_before_migration_0048() {
     // Simulate a pre-0048 override: overrides JSON present, norm columns NULL.
     // The boot backfill must populate them so the renamed book matches on

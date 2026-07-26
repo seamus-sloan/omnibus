@@ -108,6 +108,11 @@ struct BookDetailView: View {
     @State private var showJournalComposer = false
     @State private var showShelfPicker = false
     @State private var showBookmarks = false
+    @State private var showAudioFilePicker = false
+    /// The file chosen in the picker, opened from the sheet's `onDismiss` —
+    /// presenting the full-screen player while the sheet is still up would
+    /// be refused.
+    @State private var pickedAudioFile: BookFileInfo?
     @State private var showDeleteConfirm = false
     @State private var scrollY: CGFloat = 0
     @State private var aboutExpanded = false
@@ -172,6 +177,20 @@ struct BookDetailView: View {
                 BookmarksSheet(book: book, isAudio: book.hasAudiobook)
             }
         }
+        .sheet(isPresented: $showAudioFilePicker, onDismiss: openPickedAudioFile) {
+            if let book = model.book {
+                AudioFilePickerSheet(book: book) { file in
+                    pickedAudioFile = file
+                }
+            }
+        }
+    }
+
+    /// Open the player on the file the picker chose, once its sheet is gone.
+    private func openPickedAudioFile() {
+        guard let file = pickedAudioFile, let book = model.book else { return }
+        pickedAudioFile = nil
+        Presentation.shared.openPlayer(book, fileID: file.id)
     }
 
     private func content(_ book: Book) -> some View {
@@ -293,13 +312,25 @@ struct BookDetailView: View {
                 if book.hasAudiobook {
                     Button {
                         Haptics.tap()
-                        Presentation.shared.openPlayer(book)
+                        listen(book)
                     } label: {
                         Label("Listen", systemImage: "headphones")
                     }
                     .buttonStyle(FilledButtonStyle(prominent: !book.hasEbook))
                 }
             }
+        }
+    }
+
+    /// A book with one audiobook file opens straight into the player; one
+    /// with several asks which — they don't share a timeline, so "Listen"
+    /// alone can't say where to put the needle. The player resolves the
+    /// saved-position file on its own for the single-file case.
+    private func listen(_ book: Book) {
+        if book.audioFiles.count > 1 {
+            showAudioFilePicker = true
+        } else {
+            Presentation.shared.openPlayer(book)
         }
     }
 

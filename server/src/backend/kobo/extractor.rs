@@ -19,9 +19,7 @@ use sqlx::SqlitePool;
 /// path prefix).
 pub struct KoboAuthUser {
     pub user_id: i64,
-    /// The resolved device row id. Not yet read by a handler — it's the hook
-    /// the per-device delta cursor (#926) hangs off — so allow it to be unused.
-    #[allow(dead_code)]
+    /// The resolved device row id — keys the per-device sync snapshot (#922).
     pub device_id: i64,
     pub token: String,
 }

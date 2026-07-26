@@ -521,6 +521,9 @@ pub(crate) async fn queue_create_shelf(req: &CreateShelfRequest) -> Option<Shelf
         match_mode: req.match_mode,
         rules: req.rules.clone(),
         book_count: req.book_uuids.len() as i64,
+        // A locally-created shelf is never Kobo-synced until the user opts it
+        // in against the server (#924).
+        sync_to_kobo: false,
     };
     let queued = enqueue(Op::CreateShelf {
         temp_id: temp,

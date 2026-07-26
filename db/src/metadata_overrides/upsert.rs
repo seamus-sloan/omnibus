@@ -111,6 +111,23 @@ async fn touch_book_last_modified(
     Ok(())
 }
 
+/// Best-effort removal of a book's cached export-EPUB after its override
+/// state clears entirely. No-op when `book_id` is `None` (the uuid had no
+/// live book row to resolve). Runs on the blocking pool since
+/// `invalidate_export_epub_cache` is a sync `std::fs` call; a join failure
+/// is logged and swallowed — a stray cache file is a disk-space nuisance,
+/// not a correctness problem (#1395).
+async fn invalidate_export_epub_cache_for(book_id: Option<i64>) {
+    let Some(book_id) = book_id else { return };
+    if let Err(e) = tokio::task::spawn_blocking(move || {
+        crate::epub_rewrite::invalidate_export_epub_cache(book_id)
+    })
+    .await
+    {
+        tracing::warn!(book_id, error = %e, "export-epub cache invalidate task join failed");
+    }
+}
+
 /// Normalized effective (title, author) match keys for a set of overrides,
 /// mirroring how the sync writers derive `books.(title_norm, author_norm)` from
 /// scanned metadata: `normalize_title` of the override title, `normalize_author`
@@ -337,11 +354,17 @@ pub async fn delete_metadata_overrides(
         .await?;
     // Resolve inside the transaction so the id read agrees with the DELETE.
     // A uuid with no live book has no FTS row to restore.
-    if let Some(book_id) = resolve_book_id_by_uuid_exec(&mut *tx, book_uuid).await? {
-        upsert_fts(&mut tx, book_id).await?;
+    let book_id = resolve_book_id_by_uuid_exec(&mut *tx, book_uuid).await?;
+    if let Some(id) = book_id {
+        upsert_fts(&mut tx, id).await?;
     }
     touch_book_last_modified(&mut tx, book_uuid).await?;
     tx.commit().await?;
+
+    // The override state is now fully cleared, so any cached rewritten
+    // export EPUB has nothing left to bake — remove it rather than leaving
+    // it orphaned on disk (#1395).
+    invalidate_export_epub_cache_for(book_id).await;
     Ok(())
 }
 
@@ -377,13 +400,15 @@ pub async fn clear_cover_override(
     }
 
     let overrides: MetadataOverrides = serde_json::from_str(&json)?;
+    let mut cleared_book_id = None;
     if overrides == MetadataOverrides::default() {
         sqlx::query("DELETE FROM metadata_overrides WHERE book_uuid = ?")
             .bind(book_uuid)
             .execute(&mut *tx)
             .await?;
         // Resolve inside the transaction so the id read agrees with the DELETE.
-        if let Some(book_id) = resolve_book_id_by_uuid_exec(&mut *tx, book_uuid).await? {
+        cleared_book_id = resolve_book_id_by_uuid_exec(&mut *tx, book_uuid).await?;
+        if let Some(book_id) = cleared_book_id {
             upsert_fts(&mut tx, book_id).await?;
         }
     } else {
@@ -391,6 +416,13 @@ pub async fn clear_cover_override(
     }
     touch_book_last_modified(&mut tx, book_uuid).await?;
     tx.commit().await?;
+
+    // Only the "no override left at all" branch above stales the export-EPUB
+    // cache — see [`delete_metadata_overrides`]'s equivalent cleanup (#1395).
+    // A cover-only clear that leaves text overrides in place still needs a
+    // rewrite (just without the cover swap), which the staleness check in
+    // `rewritten_epub_path` already handles via the `last_modified` bump.
+    invalidate_export_epub_cache_for(cleared_book_id).await;
     Ok(())
 }
 

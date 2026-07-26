@@ -14,11 +14,82 @@ pub fn rfc3339(epoch: i64) -> String {
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned())
 }
 
-/// One element of the `library/sync` array. Externally tagged, so it
-/// serializes as `{"NewEntitlement": { … }}` — the shape the device parses.
+/// The `v1/auth/device` / `v1/auth/refresh` response envelope.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct AuthEnvelope {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub token_type: String,
+    pub tracking_id: String,
+    pub user_key: String,
+}
+
+/// Build the auth envelope for a device.
+///
+/// The values are **derived from the path token, not random**. Nothing ever
+/// validates them — the `/kobo/<TOKEN>/` path token is the real credential —
+/// and the device re-runs this handshake on a refresh schedule, so a stable
+/// answer is the honest one: it needs no storage and cannot drift between the
+/// initial exchange and a later refresh.
+pub fn auth_envelope(token: &str) -> AuthEnvelope {
+    AuthEnvelope {
+        access_token: derive_opaque(token, "access"),
+        refresh_token: derive_opaque(token, "refresh"),
+        token_type: "Bearer".to_owned(),
+        tracking_id: derive_opaque(token, "tracking"),
+        user_key: derive_opaque(token, "user"),
+    }
+}
+
+/// A stable opaque hex value for `(token, purpose)`. Not a secret and not
+/// treated as one — it exists to fill a field shape the device requires.
+///
+/// SHA-256 rather than `DefaultHasher`: the latter's output is explicitly not
+/// stable across Rust toolchain versions, so a compiler bump would silently
+/// rotate every device's envelope and defeat the stability this function
+/// exists to provide. `db::helpers::stable_uuid` documents the same trap after
+/// a `DefaultHasher` rotation once orphaned every cover file on disk.
+fn derive_opaque(token: &str, purpose: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    // NUL can't appear in either input, so it's an unambiguous separator — no
+    // other `(purpose, token)` split can produce the same pre-image.
+    hasher.update(purpose.as_bytes());
+    hasher.update([0u8]);
+    hasher.update(token.as_bytes());
+    let digest = hasher.finalize();
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// One element of the `library/sync` array. Externally tagged, so each
+/// serializes as `{"<Shape>": { … }}` — the envelope names the device parses.
+///
+/// The three shapes map 1:1 onto `db::kobo::SyncChange`: an add is a
+/// `NewEntitlement`; a change is `ChangedProductMetadata` (the device
+/// re-fetches metadata + file) paired with a `ChangedReadingState`; a removal
+/// is a `ChangedEntitlement` whose `BookEntitlement.IsRemoved` is true, which
+/// archives the book on-device without touching annotations.
 #[derive(Debug, Serialize)]
 pub enum SyncItem {
     NewEntitlement(Entitlement),
+    ChangedEntitlement(Entitlement),
+    ChangedProductMetadata(ChangedProductMetadata),
+    ChangedReadingState(ChangedReadingState),
+}
+
+/// `ChangedProductMetadata` payload: just the refreshed metadata block.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ChangedProductMetadata {
+    pub book_metadata: BookMetadata,
+}
+
+/// `ChangedReadingState` payload: just the reading-state block.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ChangedReadingState {
+    pub reading_state: ReadingState,
 }
 
 /// A full entitlement: the ownership record, book metadata, and reading state.
@@ -111,7 +182,7 @@ pub struct CurrentBookmark {
 /// Build a first-connect `NewEntitlement` for `book`. `base` is the absolute
 /// origin (e.g. `https://host`) and `token` the device path token, so the
 /// download URL points back at this server's Kobo route.
-pub fn new_entitlement(base: &str, token: &str, book: &KoboBookRow, size: u64) -> SyncItem {
+pub fn new_entitlement(base: &str, token: &str, book: &KoboBookRow) -> SyncItem {
     let ts = rfc3339(book.last_modified_epoch);
     let uuid = book.uuid.clone();
     SyncItem::NewEntitlement(Entitlement {
@@ -128,9 +199,82 @@ pub fn new_entitlement(base: &str, token: &str, book: &KoboBookRow, size: u64) -
             is_locked: false,
             origin_category: "Imported",
         },
-        book_metadata: book_metadata(base, token, book, size),
+        book_metadata: book_metadata(base, token, book),
         reading_state: ReadingState {
             entitlement_id: uuid.clone(),
+            created: ts.clone(),
+            last_modified: ts,
+            status_info: StatusInfo {
+                status: "ReadyToRead".to_owned(),
+            },
+            current_bookmark: CurrentBookmark::default(),
+        },
+    })
+}
+
+/// The `SyncItem`s for one `db::kobo::SyncChange`. A change fans out into two
+/// items (metadata + reading state); an add or removal is one.
+pub fn sync_items(base: &str, token: &str, change: &omnibus_db::kobo::SyncChange) -> Vec<SyncItem> {
+    use omnibus_db::kobo::SyncChange;
+    match change {
+        SyncChange::New(book) => vec![new_entitlement(base, token, book)],
+        SyncChange::Changed(book) => {
+            let ts = rfc3339(book.last_modified_epoch);
+            vec![
+                SyncItem::ChangedProductMetadata(ChangedProductMetadata {
+                    book_metadata: book_metadata(base, token, book),
+                }),
+                SyncItem::ChangedReadingState(ChangedReadingState {
+                    reading_state: ReadingState {
+                        entitlement_id: book.uuid.clone(),
+                        created: ts.clone(),
+                        last_modified: ts,
+                        status_info: StatusInfo {
+                            status: "ReadyToRead".to_owned(),
+                        },
+                        current_bookmark: CurrentBookmark::default(),
+                    },
+                }),
+            ]
+        }
+        SyncChange::Removed { book_uuid } => vec![removed_entitlement(book_uuid)],
+    }
+}
+
+/// A `ChangedEntitlement` that archives `book_uuid` on the device
+/// (`IsRemoved: true`). Metadata is a minimal shell — the device only needs
+/// the ids to find what to drop.
+fn removed_entitlement(book_uuid: &str) -> SyncItem {
+    let uuid = book_uuid.to_owned();
+    let ts = rfc3339(0);
+    SyncItem::ChangedEntitlement(Entitlement {
+        book_entitlement: BookEntitlement {
+            id: uuid.clone(),
+            cross_revision_id: uuid.clone(),
+            revision_id: uuid.clone(),
+            created: ts.clone(),
+            last_modified: ts.clone(),
+            status: "Deleted",
+            accessibility: "Full",
+            is_removed: true,
+            is_hidden_from_archive: false,
+            is_locked: false,
+            origin_category: "Imported",
+        },
+        book_metadata: BookMetadata {
+            entitlement_id: uuid.clone(),
+            cross_revision_id: uuid.clone(),
+            revision_id: uuid.clone(),
+            title: String::new(),
+            description: String::new(),
+            language: "en".to_owned(),
+            cover_image_id: uuid.clone(),
+            slug: uuid.clone(),
+            download_urls: Vec::new(),
+            contributor_roles: Vec::new(),
+        },
+        reading_state: ReadingState {
+            entitlement_id: uuid,
             created: ts.clone(),
             last_modified: ts,
             status_info: StatusInfo {
@@ -144,7 +288,7 @@ pub fn new_entitlement(base: &str, token: &str, book: &KoboBookRow, size: u64) -
 /// Build the `BookMetadata` for `book`, with a `DownloadUrl` pointing back at
 /// this server's Kobo download route. Shared by `library/sync` and the
 /// `library/<uuid>/metadata` endpoint so the two never drift.
-pub fn book_metadata(base: &str, token: &str, book: &KoboBookRow, size: u64) -> BookMetadata {
+pub fn book_metadata(base: &str, token: &str, book: &KoboBookRow) -> BookMetadata {
     let uuid = book.uuid.clone();
     BookMetadata {
         entitlement_id: uuid.clone(),
@@ -157,7 +301,9 @@ pub fn book_metadata(base: &str, token: &str, book: &KoboBookRow, size: u64) -> 
         slug: uuid.clone(),
         download_urls: vec![DownloadUrl {
             format: "KEPUB",
-            size,
+            // Best-effort: the source EPUB's size (the served KEPUB differs
+            // slightly). Only drives device-side progress UI.
+            size: book.epub_size_bytes.max(0) as u64,
             url: format!("{base}/kobo/{token}/v1/download/{uuid}"),
             platform: "Generic",
             drm_type: "None",
@@ -169,9 +315,23 @@ pub fn book_metadata(base: &str, token: &str, book: &KoboBookRow, size: u64) -> 
     }
 }
 
+/// Cumulative per-book stats on the `state` PUT. Parsed so the payload
+/// round-trips cleanly, but **deliberately not written anywhere**: these are
+/// running totals, while `reading_sessions` stores discrete sessions — the
+/// per-session truth already arrives via the `LeaveContent` analytics event,
+/// and deriving sessions from a cumulative counter would double-count.
+#[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "PascalCase")]
+pub struct Statistics {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spent_reading_minutes: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remaining_time_minutes: Option<i64>,
+}
+
 /// The `PUT library/<uuid>/state` request body. Kobo batches one or more
-/// reading states; slice A reads `StatusInfo`/`CurrentBookmark` and ignores
-/// `Statistics`.
+/// reading states; `StatusInfo` persists, `CurrentBookmark` waits on the
+/// KoboSpan decision (#925), `Statistics` is acknowledged (see its doc).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct StateRequest {
@@ -186,6 +346,8 @@ pub struct StateEntry {
     pub status_info: Option<StatusInfo>,
     #[serde(default)]
     pub current_bookmark: Option<CurrentBookmark>,
+    #[serde(default)]
+    pub statistics: Option<Statistics>,
 }
 
 /// The `state` PUT response. Kobo checks each sub-result is `Success`.

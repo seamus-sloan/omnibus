@@ -74,7 +74,8 @@ enum UserDataService {
             // unset here would make the optimistic row the one thing in the
             // replica that couldn't be compared against a server answer.
             updatedAt: update.clientUpdatedAt,
-            clientUpdatedAt: update.clientUpdatedAt
+            clientUpdatedAt: update.clientUpdatedAt,
+            bookFileID: update.bookFileID
         )
         await Cache.write(key, optimistic)
         await noteResumePoint(optimistic)

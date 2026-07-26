@@ -145,6 +145,7 @@ async fn mock_server() -> String {
                         match_mode: req.match_mode,
                         rules: req.rules,
                         book_count: 0,
+                        sync_to_kobo: false,
                     })
                 },
             ),

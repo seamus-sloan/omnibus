@@ -133,6 +133,20 @@ struct Book: Codable, Hashable, Sendable, Identifiable {
 
     static let ebookFormats: Set<String> = ["epub", "kepub", "pdf", "mobi", "azw3", "cbz", "cbr"]
     static let audioFormats: Set<String> = ["m4b", "m4a", "mp3", "aac", "flac", "ogg", "opus", "wav"]
+
+    /// The formats the server's manifest resolver admits for playback —
+    /// `resolve_audiobook_file` in `db/src/hls/query.rs` filters on exactly
+    /// these, so offering any other format as a selection would 404.
+    static let selectableAudioFormats: Set<String> = ["m4b", "m4a", "mp3"]
+
+    /// The audiobook files a listener can choose between, in the order the
+    /// server resolves them — its default (no `file_id`) is the first of
+    /// these by ordinal.
+    var audioFiles: [BookFileInfo] {
+        bookFiles
+            .filter { Self.selectableAudioFormats.contains($0.format.lowercased()) }
+            .sorted { $0.ordinal < $1.ordinal }
+    }
 }
 
 struct EbookLibrary: Codable, Sendable {
@@ -377,6 +391,10 @@ struct ProgressUpdate: Codable, Sendable {
     /// read further. The server keeps whichever position carries the later
     /// clock, so a replayed position can no longer overwrite a newer one.
     var clientUpdatedAt: Int64 = Int64(Date().timeIntervalSince1970)
+    /// The `book_files` row the position was taken in, when the client knows
+    /// it. `nil` encodes as an absent field, so a server that predates the
+    /// column sees the same payload it always has.
+    var bookFileID: Int64?
 
     enum CodingKeys: String, CodingKey {
         case format
@@ -384,6 +402,7 @@ struct ProgressUpdate: Codable, Sendable {
         case epubCFI = "epub_cfi"
         case audioPositionSeconds = "audio_position_seconds"
         case clientUpdatedAt = "client_updated_at"
+        case bookFileID = "book_file_id"
     }
 }
 
@@ -399,6 +418,9 @@ struct ProgressRecord: Codable, Sendable {
     /// `nil` only against a server too old to send it. Prefer
     /// [`orderingClock`] over reading either field directly.
     var clientUpdatedAt: Int64?
+    /// The `book_files` row the position was taken in. `nil` for positions
+    /// saved before the column existed, and against older servers.
+    var bookFileID: Int64?
 
     /// The clock two positions may be compared on.
     ///
@@ -419,6 +441,7 @@ struct ProgressRecord: Codable, Sendable {
         case audioPositionSeconds = "audio_position_seconds"
         case updatedAt = "updated_at"
         case clientUpdatedAt = "client_updated_at"
+        case bookFileID = "book_file_id"
     }
 }
 

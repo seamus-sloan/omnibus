@@ -19,6 +19,11 @@ final class AudioPlayer {
 
     private(set) var book: Book?
     private(set) var manifest: AudiobookManifest?
+    /// The `book_files` row playback was built against. Resolved on load —
+    /// an explicit pick, else the file the saved position was taken in, else
+    /// the server's default — and carried on every position write so a
+    /// resume reopens this file rather than the book's first one.
+    private(set) var fileID: Int64?
     private(set) var isPlaying = false
     private(set) var isLoading = false
     private(set) var duration: Double = 0
@@ -85,9 +90,13 @@ final class AudioPlayer {
 
     // MARK: - Loading
 
-    func load(book: Book, autoplay: Bool = true) async {
-        // Re-opening the book that's already loaded should not restart it.
-        if self.book?.uuid == book.uuid, player != nil {
+    func load(book: Book, fileID requestedFileID: Int64? = nil, autoplay: Bool = true) async {
+        // Re-opening the book that's already loaded should not restart it —
+        // unless a different file of it was explicitly asked for. A `nil`
+        // request means "whatever is right", and what's already playing is.
+        if self.book?.uuid == book.uuid, player != nil,
+           requestedFileID == nil || requestedFileID == fileID
+        {
             if autoplay, !isPlaying { play() }
             return
         }
@@ -119,8 +128,15 @@ final class AudioPlayer {
         position = 0
         duration = 0
 
+        // The saved position is read before the manifest because it also
+        // names the file to open: an explicit pick wins, else the file the
+        // position was taken in, else the server's default (first by
+        // ordinal). Resolved up front — the manifest is built per file.
+        let local = await UserDataService.localProgress(uuid: book.uuid, format: .audio)
+        fileID = requestedFileID ?? local?.bookFileID ?? book.audioFiles.first?.id
+
         do {
-            let manifest = try await LibraryService.audiobookManifest(uuid: book.uuid)
+            let manifest = try await loadManifest(for: book)
             self.manifest = manifest
             let item = try await makeItem(for: manifest, uuid: book.uuid)
 
@@ -149,12 +165,11 @@ final class AudioPlayer {
             // elsewhere was overwritten by a stale local one before the
             // listener had heard a word. Reading first is what makes the
             // handoff work in the direction it was always claimed to.
-            let local = await UserDataService.localProgress(uuid: book.uuid, format: .audio)
             let remote = Task { @MainActor in
                 await PositionSync.newerRemote(uuid: book.uuid, format: .audio, than: local)
             }
             let opening = await firstResult(of: remote, within: PositionSync.openDeadline) ?? local
-            if let saved = opening?.audioPositionSeconds, saved > 1 {
+            if let saved = opening?.audioPositionSeconds, saved > 1, matchesLoadedFile(opening) {
                 await seek(to: saved)
             }
             // Only now may the observer write. Before this the position is
@@ -185,6 +200,38 @@ final class AudioPlayer {
         isAdoptingRate = false
     }
 
+    /// The manifest for the resolved file, falling back to the server's
+    /// default when a remembered id has gone stale — `book_files` rows churn
+    /// on reindex, so a position saved before one can name a file the book
+    /// no longer has.
+    private func loadManifest(for book: Book) async throws -> AudiobookManifest {
+        do {
+            return try await LibraryService.audiobookManifest(uuid: book.uuid, fileID: fileID)
+        } catch let error as APIError {
+            guard case .http(status: 404, message: _) = error, fileID != nil else { throw error }
+            fileID = book.audioFiles.first?.id
+            return try await LibraryService.audiobookManifest(uuid: book.uuid)
+        }
+    }
+
+    /// Whether a stored position belongs to the file being played. A record
+    /// carrying no file id predates selection (or came from an older server)
+    /// and applies to whatever is loaded — the pre-selection behaviour.
+    private func matchesLoadedFile(_ record: ProgressRecord?) -> Bool {
+        guard let recorded = record?.bookFileID, let fileID else { return true }
+        return recorded == fileID
+    }
+
+    /// Whether the resolved file is the one the server picks with no
+    /// `file_id` at all — the first audio file by ordinal. Answered `true`
+    /// when the cached `Book` doesn't carry its files: refusing the local
+    /// copy on missing data would break offline playback of a downloaded
+    /// book, which is worse than opening a mis-remembered selection.
+    private var isDefaultFileSelected: Bool {
+        guard let fileID, let defaultID = book?.audioFiles.first?.id else { return true }
+        return fileID == defaultID
+    }
+
     /// Surface a position that landed after the open deadline, if it is still
     /// ahead of where this listener has got to.
     ///
@@ -197,6 +244,7 @@ final class AudioPlayer {
             guard let record = await remote.value,
                   let seconds = record.audioPositionSeconds,
                   book?.uuid == uuid,
+                  matchesLoadedFile(record),
                   seconds > position + 1
             else { return }
             withAnimation(Motion.settle) { syncOffer = seconds }
@@ -240,7 +288,10 @@ final class AudioPlayer {
     /// remote part streams directly; multiple parts are stitched into one
     /// composition so the timeline and seeking stay continuous.
     private func makeItem(for manifest: AudiobookManifest, uuid: String) async throws -> AVPlayerItem {
-        if let local = DownloadManager.shared.localURL(for: uuid, kind: .audio) {
+        // The downloaded copy is the server's default file (the download
+        // endpoint takes no file id), so it can only stand in for that
+        // selection — any other file of the book streams.
+        if isDefaultFileSelected, let local = DownloadManager.shared.localURL(for: uuid, kind: .audio) {
             return AVPlayerItem(asset: AVURLAsset(url: local))
         }
 
@@ -389,11 +440,13 @@ final class AudioPlayer {
         // until the network answers.
         let closing = book
         let finalPosition = position
+        let finalFileID = fileID
         let pending = takePendingReport()
 
         teardown()
         book = nil
         manifest = nil
+        fileID = nil
         position = 0
         duration = 0
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
@@ -404,7 +457,8 @@ final class AudioPlayer {
                 await UserDataService.saveProgress(
                     ProgressUpdate(
                         bookUUID: closing.uuid, format: .audio,
-                        epubCFI: nil, audioPositionSeconds: finalPosition
+                        epubCFI: nil, audioPositionSeconds: finalPosition,
+                        bookFileID: finalFileID
                     )
                 )
             }
@@ -482,7 +536,8 @@ final class AudioPlayer {
         lastPersist = Date()
         await UserDataService.saveProgress(
             ProgressUpdate(
-                bookUUID: book.uuid, format: .audio, epubCFI: nil, audioPositionSeconds: position
+                bookUUID: book.uuid, format: .audio, epubCFI: nil,
+                audioPositionSeconds: position, bookFileID: fileID
             ),
             push: force
         )
