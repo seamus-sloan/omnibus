@@ -6596,6 +6596,8 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 .shelf-badge--vis { color: var(--accent); }
 .shelf-badge--owner { text-transform: none; letter-spacing: 0; color: var(--ink-3); }
+/* Kobo wireless-sync opt-in (#924). */
+.shelf-badge--kobo { color: #34d399; border-color: #34d39955; }
 .shelf-title-row { display: flex; align-items: center; gap: 12px; }
 .shelf-title { margin: 0; font-size: 26px; color: var(--ink-0); flex: 1 1 auto; }
 .shelf-actions { position: relative; }

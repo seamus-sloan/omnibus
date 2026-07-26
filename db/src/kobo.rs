@@ -1,6 +1,6 @@
 //! Read-only book listing that feeds native Kobo wireless sync
-//! (`/kobo/v1/library/sync`). Enumerates the whole library; a per-shelf
-//! opt-in filter layers on top of this query later.
+//! (`/kobo/v1/library/sync`). Scoped to the requesting user's shelves that are
+//! flagged `sync_to_kobo` — never the whole library.
 
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
@@ -38,6 +38,19 @@ pub enum KoboError {
     Sqlx(#[from] sqlx::Error),
 }
 
+impl From<crate::shelves::ShelfError> for KoboError {
+    fn from(e: crate::shelves::ShelfError) -> Self {
+        match e {
+            crate::shelves::ShelfError::Sqlx(inner) => Self::Sqlx(inner),
+            // `kobo_synced_book_uuids` only reads rows and translates stored
+            // rules; the remaining variants are mutation/validation failures it
+            // cannot produce. Fold rather than widen `KoboError` with arms no
+            // caller can branch on.
+            other => Self::Sqlx(sqlx::Error::Protocol(other.to_string())),
+        }
+    }
+}
+
 impl From<crate::books::BooksError> for KoboError {
     fn from(e: crate::books::BooksError) -> Self {
         match e {
@@ -52,18 +65,39 @@ impl From<crate::books::BooksError> for KoboError {
     }
 }
 
-/// List every indexed book that carries a durable uuid, newest-modified first.
-/// The author is the lowest-`position` entry in `books_authors_link` (empty
-/// when a book has none — Kobo tolerates a blank author). No per-shelf filter
-/// yet — slice A syncs the whole library (see #924).
-pub async fn sync_books(pool: &SqlitePool) -> Result<Vec<KoboBookRow>, KoboError> {
+/// The books `user_id`'s Kobo devices may sync, newest-modified first: the
+/// union of membership across that user's shelves flagged `sync_to_kobo`.
+///
+/// Sync is **never whole-library** (#924) — a user with no opted-in shelf gets
+/// an empty set, which is the correct answer, not a degenerate one. The author
+/// is the lowest-`position` entry in `books_authors_link` (empty when a book
+/// has none — Kobo tolerates a blank author).
+///
+/// Scoped through shelf ownership, so a device token can only ever reach books
+/// its own user opted in.
+pub async fn sync_books(pool: &SqlitePool, user_id: i64) -> Result<Vec<KoboBookRow>, KoboError> {
+    let uuids = crate::shelves::kobo_synced_book_uuids(pool, user_id).await?;
+    if uuids.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Bind the uuid set rather than interpolating it: the values are
+    // server-derived, but a parameterized IN list keeps the query plan on the
+    // `books.uuid` UNIQUE index and never risks a quoting bug.
+    let placeholders = std::iter::repeat_n("?", uuids.len())
+        .collect::<Vec<_>>()
+        .join(",");
     let sql = format!(
         "SELECT {SELECT_COLS}
          FROM books b
          WHERE b.uuid IS NOT NULL AND b.uuid != ''
+           AND b.uuid IN ({placeholders})
          ORDER BY b.last_modified DESC, b.id DESC"
     );
-    let rows = sqlx::query(&sql).fetch_all(pool).await?;
+    let mut q = sqlx::query(&sql);
+    for uuid in &uuids {
+        q = q.bind(uuid);
+    }
+    let rows = q.fetch_all(pool).await?;
     Ok(rows.iter().map(row_to_book).collect())
 }
 
