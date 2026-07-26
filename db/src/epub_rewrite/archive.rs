@@ -18,13 +18,26 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 /// (a "zip bomb") — this bounds memory regardless of what the entry claims
 /// or how well it compresses. 200 MiB comfortably covers any real EPUB
 /// resource (fonts, images, video) while staying far below an OOM.
-const MAX_ENTRY_BYTES: u64 = 200 * 1024 * 1024;
+#[cfg(not(test))]
+pub(super) const MAX_ENTRY_BYTES: u64 = 200 * 1024 * 1024;
+/// Test builds use a much smaller cap so the zip-bomb regression test isn't
+/// streaming 200 MiB of I/O and compression on every run — the bounded-read
+/// behavior under test doesn't depend on the cap's exact value.
+#[cfg(test)]
+pub(super) const MAX_ENTRY_BYTES: u64 = 64 * 1024;
+
+/// Ceiling on the up-front `Vec` allocation for a zip entry, independent of
+/// [`MAX_ENTRY_BYTES`]. `ZipFile::size()` is attacker-controlled, so trusting
+/// it for `Vec::with_capacity` would let a crafted entry force a large
+/// allocation immediately — even though the read itself is capped — and
+/// concurrent rewrites would multiply that cost.
+const PREALLOC_HINT_BYTES: usize = 64 * 1024;
 
 /// Read `entry` fully into memory, capped at [`MAX_ENTRY_BYTES`] regardless
 /// of the entry's declared (attacker-controlled) size. Errors if the entry's
 /// actual decompressed content exceeds the cap.
 fn read_entry_bounded<R: Read>(entry: &mut ZipFile<'_, R>, name: &str) -> anyhow::Result<Vec<u8>> {
-    let hint = entry.size().min(MAX_ENTRY_BYTES) as usize;
+    let hint = (entry.size().min(MAX_ENTRY_BYTES) as usize).min(PREALLOC_HINT_BYTES);
     let mut raw = Vec::with_capacity(hint);
     // Take one byte past the cap so an entry that lands exactly on the
     // boundary reads clean, while anything larger is distinguishable from a
@@ -94,7 +107,7 @@ pub(super) fn rewrite_archive(
         let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
 
         let bytes = if name == opf_path {
-            let raw = read_entry_bounded(&mut entry, "OPF entry")?;
+            let raw = read_entry_bounded(&mut entry, &name)?;
             opf_transform(&raw)?
         } else if cover.as_ref().is_some_and(|(p, _)| *p == name) {
             // Safe: matched the guard above.

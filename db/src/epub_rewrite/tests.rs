@@ -291,11 +291,13 @@ fn rewrite_archive_errors_on_entry_that_decompresses_past_the_size_cap() {
     let dst = tmp.path().join("out.epub");
 
     // Zip-bomb-style fixture: `huge.bin` decompresses to one byte past the
-    // 200 MiB per-entry read cap, but — being all zeros — deflates to a few
-    // KB on disk, exactly the "small compressed, huge decompressed" shape a
-    // hostile EPUB upload could exploit. Streamed via `io::repeat` so
-    // *building* the fixture never materializes 200 MiB in memory either.
-    const OVER_CAP: u64 = 200 * 1024 * 1024 + 1;
+    // per-entry read cap (test builds use a much smaller `MAX_ENTRY_BYTES`
+    // than production so this regression stays fast), but — being all zeros
+    // — deflates to a few bytes on disk, exactly the "small compressed, huge
+    // decompressed" shape a hostile EPUB upload could exploit. Streamed via
+    // `io::repeat` so *building* the fixture never materializes the cap's
+    // worth of bytes in memory either.
+    const OVER_CAP: u64 = super::archive::MAX_ENTRY_BYTES + 1;
     let file = std::fs::File::create(&src).unwrap();
     let mut writer = zip::ZipWriter::new(file);
     writer
