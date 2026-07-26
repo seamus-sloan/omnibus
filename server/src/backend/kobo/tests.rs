@@ -87,10 +87,7 @@ async fn library_sync_rejects_an_invalid_token() {
 
 #[tokio::test]
 async fn library_sync_delivers_every_book_across_the_continue_loop() {
-    // 150 books > SYNC_PAGE_SIZE (100), so this exercises the real protocol
-    // loop: page + `x-kobo-sync: continue` → device re-hits → final page with
-    // no header. Unlike Calibre-Web's SYNC_ITEM_LIMIT, nothing is dropped —
-    // the page bounds the response, not the sync.
+    // 150 books > SYNC_PAGE_SIZE (100): exercises the real continue loop, unlike Calibre-Web's SYNC_ITEM_LIMIT nothing is dropped.
     let (app, pool, token, uid) = fixture().await;
     let mut uuids = Vec::new();
     for i in 0..150 {

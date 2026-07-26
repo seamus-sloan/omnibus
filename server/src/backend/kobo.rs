@@ -38,10 +38,7 @@ const KEPUB_CONVERT_BUDGET: std::time::Duration = std::time::Duration::from_secs
 /// device treats the payload as malformed and never adopts the resources map.
 const KOBO_API_TOKEN: &str = "e30=";
 
-/// Changes per `library/sync` response. More remain → `x-kobo-sync: continue`,
-/// and the device immediately re-hits the route until the header is absent —
-/// so unlike Calibre-Web's `SYNC_ITEM_LIMIT`, this bounds the *response*, not
-/// the sync: every page still arrives, in one device-driven loop.
+/// Changes per `library/sync` response; more remain → `x-kobo-sync: continue`, bounding the response but never the sync (unlike Calibre-Web's `SYNC_ITEM_LIMIT`).
 const SYNC_PAGE_SIZE: usize = 100;
 
 /// Build the wireless Kobo router. `Extension(pool)` is layered here so the
