@@ -1049,15 +1049,50 @@ async fn provision_wishlist_shelf_is_idempotent() {
 }
 
 #[tokio::test]
-async fn wishlist_shelf_is_public_and_named_wishlist() {
+async fn wishlist_shelf_is_public_and_named_after_its_owner() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = make_user(&pool, "reader", false).await;
     let id = wishlist_shelf_id(&pool, user).await;
 
     let shelf = get_shelf(&pool, id).await.unwrap().unwrap();
     assert_eq!(shelf.kind, ShelfKind::Wishlist);
-    assert_eq!(shelf.name, "Wishlist");
+    assert_eq!(shelf.name, "reader's Wishlist");
     assert_eq!(shelf.visibility, Visibility::Public);
+}
+
+/// Provisioning is inline in the insert transaction, so the name query must see
+/// the uncommitted `users` row.
+#[tokio::test]
+async fn create_user_provisions_a_wishlist_shelf_named_after_the_new_user() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = crate::auth::create_user(&pool, "newcomer", "correct-horse-battery")
+        .await
+        .unwrap();
+
+    let shelf = get_shelf(&pool, wishlist_shelf_id(&pool, user.id).await)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(shelf.name, "newcomer's Wishlist");
+}
+
+#[tokio::test]
+async fn provision_wishlist_shelves_names_each_backfilled_shelf_after_its_owner() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let alice = make_user(&pool, "alice", false).await;
+    let bob = make_user(&pool, "bob", false).await;
+
+    crate::shelves::provision_wishlist_shelves(&pool)
+        .await
+        .unwrap();
+
+    for (user, expected) in [(alice, "alice's Wishlist"), (bob, "bob's Wishlist")] {
+        let shelf = get_shelf(&pool, wishlist_shelf_id(&pool, user).await)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(shelf.name, expected);
+    }
 }
 
 #[tokio::test]

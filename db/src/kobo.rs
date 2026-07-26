@@ -34,6 +34,12 @@ pub struct KoboBookRow {
 
 #[derive(Debug, thiserror::Error)]
 pub enum KoboError {
+    /// Resolving the opted-in shelf membership failed for a non-DB reason —
+    /// in practice a stored `kind`/`visibility`/rule that no longer parses.
+    /// Kept distinct from [`Self::Sqlx`] so the real cause survives into the
+    /// log instead of being disguised as a protocol error.
+    #[error("shelf membership lookup failed: {0}")]
+    Shelf(String),
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
 }
@@ -42,11 +48,7 @@ impl From<crate::shelves::ShelfError> for KoboError {
     fn from(e: crate::shelves::ShelfError) -> Self {
         match e {
             crate::shelves::ShelfError::Sqlx(inner) => Self::Sqlx(inner),
-            // `kobo_synced_book_uuids` only reads rows and translates stored
-            // rules; the remaining variants are mutation/validation failures it
-            // cannot produce. Fold rather than widen `KoboError` with arms no
-            // caller can branch on.
-            other => Self::Sqlx(sqlx::Error::Protocol(other.to_string())),
+            other => Self::Shelf(other.to_string()),
         }
     }
 }
@@ -80,25 +82,37 @@ pub async fn sync_books(pool: &SqlitePool, user_id: i64) -> Result<Vec<KoboBookR
     if uuids.is_empty() {
         return Ok(Vec::new());
     }
-    // Bind the uuid set rather than interpolating it: the values are
+    // Bind the uuids rather than interpolating them: the values are
     // server-derived, but a parameterized IN list keeps the query plan on the
     // `books.uuid` UNIQUE index and never risks a quoting bug.
-    let placeholders = std::iter::repeat_n("?", uuids.len())
-        .collect::<Vec<_>>()
-        .join(",");
-    let sql = format!(
-        "SELECT {SELECT_COLS}
-         FROM books b
-         WHERE b.uuid IS NOT NULL AND b.uuid != ''
-           AND b.uuid IN ({placeholders})
-         ORDER BY b.last_modified DESC, b.id DESC"
-    );
-    let mut q = sqlx::query(&sql);
-    for uuid in &uuids {
-        q = q.bind(uuid);
+    //
+    // Chunked at 900 because a single `IN (...)` would otherwise blow SQLite's
+    // 999 bound-parameter ceiling — the exact failure the "no cap" goal exists
+    // to avoid, just relocated from the protocol to the driver. Mirrors
+    // `resolve_book_ids_bulk` in `books/get.rs` (chunked at 499 there because
+    // it binds each uuid twice).
+    let mut rows = Vec::with_capacity(uuids.len());
+    for chunk in uuids.chunks(900) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT {SELECT_COLS}
+             FROM books b
+             WHERE b.uuid IS NOT NULL AND b.uuid != ''
+               AND b.uuid IN ({placeholders})"
+        );
+        let mut q = sqlx::query(&sql);
+        for uuid in chunk {
+            q = q.bind(uuid);
+        }
+        rows.extend(q.fetch_all(pool).await?.iter().map(row_to_book));
     }
-    let rows = q.fetch_all(pool).await?;
-    Ok(rows.iter().map(row_to_book).collect())
+    // Ordering moves out of SQL because the result set is now assembled across
+    // chunks; sorting here keeps newest-modified-first over the whole set
+    // rather than within each chunk.
+    rows.sort_by_key(|r| std::cmp::Reverse(r.last_modified_epoch));
+    Ok(rows)
 }
 
 /// Fetch a single book for the Kobo `library/<uuid>/metadata` endpoint,
