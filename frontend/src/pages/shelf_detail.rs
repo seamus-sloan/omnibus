@@ -20,6 +20,7 @@ use crate::components::atrium::fallback_title;
 use crate::components::library_picker_grid::{filter_library, use_library_fetch};
 use crate::components::EditShelfRulesModal;
 use crate::components::LibraryPickerGrid;
+#[cfg(not(feature = "mobile"))]
 use crate::components::{CoverTile, CoverTileKind};
 #[cfg(not(feature = "mobile"))]
 use crate::components::{RailActive, ShelvesRail};
