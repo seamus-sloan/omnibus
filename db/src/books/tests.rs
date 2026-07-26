@@ -1780,6 +1780,47 @@ async fn book_file_path_returns_absolute_path_for_epub() {
 }
 
 #[tokio::test]
+async fn book_file_relative_dir_returns_library_relative_directory_for_epub() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES ('/lib', 'lib')")
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    let book_id = sqlx::query(
+        "INSERT INTO books (uuid, library_id, path, title) \
+         VALUES ('uuid-epub-rel', ?, 'sub/dir', 'Some Book')",
+    )
+    .bind(lib_id)
+    .execute(&pool)
+    .await
+    .unwrap()
+    .last_insert_rowid();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES (?, 'EPUB', 'some-book', 0)",
+    )
+    .bind(book_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let dir = book_file_relative_dir(&pool, book_id, "EPUB")
+        .await
+        .unwrap();
+    // Relative to the scan root only — never includes `/lib`, unlike
+    // `book_file_path`.
+    assert_eq!(dir, Some(std::path::PathBuf::from("sub/dir")));
+}
+
+#[tokio::test]
+async fn book_file_relative_dir_returns_none_for_missing_book() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let dir = book_file_relative_dir(&pool, 9999, "EPUB").await.unwrap();
+    assert!(dir.is_none());
+}
+
+#[tokio::test]
 async fn book_file_path_returns_none_for_missing_book() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let path = book_file_path(&pool, 9999, "EPUB").await.unwrap();

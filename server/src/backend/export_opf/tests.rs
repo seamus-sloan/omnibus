@@ -96,6 +96,34 @@ async fn api_export_opf_writes_sidecar_and_returns_path_and_backed_up() {
 }
 
 #[tokio::test]
+async fn api_export_opf_returns_library_relative_path_not_absolute_filesystem_path() {
+    let (app, _state, pool) = fixture().await;
+    let lib = tempfile::tempdir().unwrap();
+    let (_id, uuid) = db::test_support::seed_epub_book_at(&pool, lib.path()).await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    let res = app
+        .oneshot(post_export(&uuid, Some(&token)))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let result: OpfExportResult = serde_json::from_slice(&bytes).unwrap();
+    // The exact library-relative path — not the absolute path underneath
+    // `lib`, which would leak the server's filesystem layout to any
+    // can_edit-but-not-admin client.
+    assert_eq!(result.path, "sub/metadata.opf");
+    let absolute_lib_path = lib.path().to_string_lossy().to_string();
+    assert!(
+        !result.path.contains(&absolute_lib_path),
+        "response leaked the server's absolute filesystem path: {}",
+        result.path
+    );
+}
+
+#[tokio::test]
 async fn api_export_opf_returns_500_on_db_failure() {
     let (app, _state, pool) = fixture().await;
     let lib = tempfile::tempdir().unwrap();

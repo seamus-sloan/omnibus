@@ -202,6 +202,22 @@ async fn export_opf_writes_snapshot_of_scanned_metadata_when_no_overrides() {
 }
 
 #[tokio::test]
+async fn export_opf_returns_library_relative_path_not_absolute_directory() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib = tempfile::tempdir().unwrap();
+    let (book_id, _uuid) = seed_epub_book_at(&pool, lib.path()).await;
+
+    let result = export_opf(&pool, book_id).await.unwrap();
+    assert_eq!(
+        result.path,
+        std::path::Path::new("sub").join("metadata.opf")
+    );
+    assert!(!result.path.is_absolute());
+    let absolute_lib_path = lib.path().to_string_lossy().to_string();
+    assert!(!result.path.to_string_lossy().contains(&absolute_lib_path));
+}
+
+#[tokio::test]
 async fn export_opf_merges_overrides_into_written_snapshot() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user_id = seed_user(&pool).await;
