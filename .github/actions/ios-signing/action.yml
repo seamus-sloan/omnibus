@@ -16,6 +16,14 @@ inputs:
   profile-base64:
     description: "base64 of the App Store .mobileprovision for the app being built"
     required: true
+  expected-team:
+    description: >
+      Team ID the profile must belong to. Set it on any job that resolves the
+      profile by name (xcodebuild's PROVISIONING_PROFILE_SPECIFIER): a mismatch
+      there surfaces only as Xcode's opaque "No profile for team X matching Y
+      found", which names the team it wanted but never the one it got.
+    required: false
+    default: ""
 
 outputs:
   signing-identity:
@@ -33,6 +41,9 @@ outputs:
   profile-name:
     description: "Name of the provisioning profile (for PROVISIONING_PROFILE_SPECIFIER / ExportOptions)"
     value: ${{ steps.profile.outputs.name }}
+  profile-team:
+    description: "Team ID the provisioning profile belongs to"
+    value: ${{ steps.profile.outputs.team }}
 
 runs:
   using: composite
@@ -88,16 +99,23 @@ runs:
       shell: bash
       env:
         PROFILE_BASE64: ${{ inputs.profile-base64 }}
+        EXPECTED_TEAM: ${{ inputs.expected-team }}
       run: |
         set -euo pipefail
         PROFILE="$RUNNER_TEMP/omnibus.mobileprovision"
         echo "$PROFILE_BASE64" | base64 -D > "$PROFILE"
 
-        # Read UUID + Name out of the profile's decoded plist.
+        # Read UUID + Name + team out of the profile's decoded plist.
         PLIST="$RUNNER_TEMP/profile.plist"
         security cms -D -i "$PROFILE" > "$PLIST"
         UUID="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$PLIST")"
         NAME="$(/usr/libexec/PlistBuddy -c 'Print :Name' "$PLIST")"
+        TEAM="$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$PLIST")"
+
+        if [ -n "$EXPECTED_TEAM" ] && [ "$TEAM" != "$EXPECTED_TEAM" ]; then
+          echo "::error::Profile '$NAME' belongs to team $TEAM, but the build signs as $EXPECTED_TEAM. The cert, the profile, and DEVELOPMENT_TEAM must all name one team."
+          exit 1
+        fi
 
         # Install into every dir xcodebuild searches, keyed by UUID as Xcode
         # expects. Xcode 16 moved the search path to ~/Library/Developer/Xcode/
@@ -111,7 +129,8 @@ runs:
           cp "$PROFILE" "$INSTALL_DIR/$UUID.mobileprovision"
         done
 
-        echo "Installed profile '$NAME' ($UUID)"
+        echo "Installed profile '$NAME' ($UUID), team $TEAM"
         echo "path=$PROFILE" >> "$GITHUB_OUTPUT"
         echo "uuid=$UUID" >> "$GITHUB_OUTPUT"
         echo "name=$NAME" >> "$GITHUB_OUTPUT"
+        echo "team=$TEAM" >> "$GITHUB_OUTPUT"
