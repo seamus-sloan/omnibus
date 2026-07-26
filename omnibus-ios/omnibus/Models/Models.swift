@@ -393,7 +393,7 @@ struct ProgressUpdate: Codable, Sendable {
     var clientUpdatedAt: Int64 = Int64(Date().timeIntervalSince1970)
     /// The `book_files` row the position was taken in, when the client knows
     /// it. `nil` encodes as an absent field, so a server that predates the
-    /// column (migration 0056) sees the same payload it always has.
+    /// column sees the same payload it always has.
     var bookFileID: Int64?
 
     enum CodingKeys: String, CodingKey {

@@ -342,7 +342,7 @@ struct ProgressFileIdentityTests {
 
     @Test("an unknown file encodes as an absent field, not null")
     func unknownFileIsOmitted() throws {
-        // A server that predates migration 0056 must see the payload it always
+        // A server that predates the column must see the payload it always
         // has — the web client omits the field the same way.
         let update = ProgressUpdate(
             bookUUID: "book-1", format: .audio,
