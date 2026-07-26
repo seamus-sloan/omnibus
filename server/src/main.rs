@@ -223,6 +223,10 @@ mod server {
                 state.clone(),
                 search_limiter,
             ))
+            // Native Kobo wireless sync. Sits outside the `/api/*` auth gate
+            // (require_auth passes through non-`/api/` paths); each route
+            // authenticates via its path token internally.
+            .merge(backend::kobo_router(state.clone()))
             .merge(
                 auth::auth_router(state.clone()).layer(axum::middleware::from_fn_with_state(
                     (auth_limiter, auth_limiter_prefixes),
