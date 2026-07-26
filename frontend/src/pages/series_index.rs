@@ -43,7 +43,21 @@ pub fn SeriesIndexPage() -> Element {
 
     let filter_text = filter();
     let current_sort = sort();
-    let filtered = apply_filter_and_sort(&all, &filter_text, current_sort);
+    // Filter/sort is recomputed only when `series`, `filter`, or `sort`
+    // actually change, not on every unrelated re-render. The memo owns its
+    // output — `apply_filter_and_sort` borrows from the `series.read()`
+    // guard, which can't outlive this closure, so the result is cloned out
+    // before returning.
+    let filtered = use_memo(move || {
+        let all = series.read();
+        let q = filter();
+        let s = sort();
+        apply_filter_and_sort(&all, &q, s)
+            .into_iter()
+            .cloned()
+            .collect::<Vec<SeriesSummary>>()
+    });
+    let filtered = filtered();
 
     rsx! {
         div { class: "idx-page",
@@ -100,7 +114,7 @@ fn apply_filter_and_sort<'a>(
 }
 
 /// Body grid: empty-state copy when `filtered` is empty, otherwise the card grid.
-fn render_series_body(filtered: &[&SeriesSummary], library_empty: bool) -> Element {
+fn render_series_body(filtered: &[SeriesSummary], library_empty: bool) -> Element {
     rsx! {
         div { class: "idx-body",
             if filtered.is_empty() {

@@ -658,11 +658,19 @@ fn AddBooksModal(shelf_id: i64, on_close: EventHandler<()>, on_added: EventHandl
         });
     };
 
-    let library_books = library.read();
-    let filtered: Vec<EbookMetadata> = filter_library(&library_books, &query.read())
-        .into_iter()
-        .cloned()
-        .collect();
+    // Recomputed only when `library` or `query` actually change, not on
+    // every unrelated re-render (e.g. a keystroke in another field, or the
+    // `picked` selection changing). `filter_library` borrows from the
+    // `library.read()` guard, which can't outlive this closure, so the
+    // result is cloned out before returning.
+    let filtered = use_memo(move || {
+        let library_books = library.read();
+        filter_library(&library_books, &query.read())
+            .into_iter()
+            .cloned()
+            .collect::<Vec<EbookMetadata>>()
+    });
+    let filtered = filtered();
     let picked_count = picked.read().len();
 
     rsx! {
