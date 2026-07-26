@@ -182,7 +182,7 @@ pub struct CurrentBookmark {
 /// Build a first-connect `NewEntitlement` for `book`. `base` is the absolute
 /// origin (e.g. `https://host`) and `token` the device path token, so the
 /// download URL points back at this server's Kobo route.
-pub fn new_entitlement(base: &str, token: &str, book: &KoboBookRow, size: u64) -> SyncItem {
+pub fn new_entitlement(base: &str, token: &str, book: &KoboBookRow) -> SyncItem {
     let ts = rfc3339(book.last_modified_epoch);
     let uuid = book.uuid.clone();
     SyncItem::NewEntitlement(Entitlement {
@@ -199,7 +199,7 @@ pub fn new_entitlement(base: &str, token: &str, book: &KoboBookRow, size: u64) -
             is_locked: false,
             origin_category: "Imported",
         },
-        book_metadata: book_metadata(base, token, book, size),
+        book_metadata: book_metadata(base, token, book),
         reading_state: ReadingState {
             entitlement_id: uuid.clone(),
             created: ts.clone(),
@@ -217,12 +217,12 @@ pub fn new_entitlement(base: &str, token: &str, book: &KoboBookRow, size: u64) -
 pub fn sync_items(base: &str, token: &str, change: &omnibus_db::kobo::SyncChange) -> Vec<SyncItem> {
     use omnibus_db::kobo::SyncChange;
     match change {
-        SyncChange::New(book) => vec![new_entitlement(base, token, book, 0)],
+        SyncChange::New(book) => vec![new_entitlement(base, token, book)],
         SyncChange::Changed(book) => {
             let ts = rfc3339(book.last_modified_epoch);
             vec![
                 SyncItem::ChangedProductMetadata(ChangedProductMetadata {
-                    book_metadata: book_metadata(base, token, book, 0),
+                    book_metadata: book_metadata(base, token, book),
                 }),
                 SyncItem::ChangedReadingState(ChangedReadingState {
                     reading_state: ReadingState {
@@ -288,7 +288,7 @@ fn removed_entitlement(book_uuid: &str) -> SyncItem {
 /// Build the `BookMetadata` for `book`, with a `DownloadUrl` pointing back at
 /// this server's Kobo download route. Shared by `library/sync` and the
 /// `library/<uuid>/metadata` endpoint so the two never drift.
-pub fn book_metadata(base: &str, token: &str, book: &KoboBookRow, size: u64) -> BookMetadata {
+pub fn book_metadata(base: &str, token: &str, book: &KoboBookRow) -> BookMetadata {
     let uuid = book.uuid.clone();
     BookMetadata {
         entitlement_id: uuid.clone(),
@@ -301,7 +301,9 @@ pub fn book_metadata(base: &str, token: &str, book: &KoboBookRow, size: u64) -> 
         slug: uuid.clone(),
         download_urls: vec![DownloadUrl {
             format: "KEPUB",
-            size,
+            // Best-effort: the source EPUB's size (the served KEPUB differs
+            // slightly). Only drives device-side progress UI.
+            size: book.epub_size_bytes.max(0) as u64,
             url: format!("{base}/kobo/{token}/v1/download/{uuid}"),
             platform: "Generic",
             drm_type: "None",
@@ -313,9 +315,23 @@ pub fn book_metadata(base: &str, token: &str, book: &KoboBookRow, size: u64) -> 
     }
 }
 
+/// Cumulative per-book stats on the `state` PUT. Parsed so the payload
+/// round-trips cleanly, but **deliberately not written anywhere**: these are
+/// running totals, while `reading_sessions` stores discrete sessions — the
+/// per-session truth already arrives via the `LeaveContent` analytics event,
+/// and deriving sessions from a cumulative counter would double-count.
+#[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "PascalCase")]
+pub struct Statistics {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spent_reading_minutes: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remaining_time_minutes: Option<i64>,
+}
+
 /// The `PUT library/<uuid>/state` request body. Kobo batches one or more
-/// reading states; slice A reads `StatusInfo`/`CurrentBookmark` and ignores
-/// `Statistics`.
+/// reading states; `StatusInfo` persists, `CurrentBookmark` waits on the
+/// KoboSpan decision (#925), `Statistics` is acknowledged (see its doc).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct StateRequest {
@@ -330,6 +346,8 @@ pub struct StateEntry {
     pub status_info: Option<StatusInfo>,
     #[serde(default)]
     pub current_bookmark: Option<CurrentBookmark>,
+    #[serde(default)]
+    pub statistics: Option<Statistics>,
 }
 
 /// The `state` PUT response. Kobo checks each sub-result is `Success`.

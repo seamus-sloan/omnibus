@@ -22,6 +22,7 @@ use omnibus_shared::{ReadStatus, SetReadStatus};
 
 use super::{internal, serve_download, AppState};
 
+mod analytics;
 mod dto;
 mod extractor;
 mod store_resources;
@@ -50,6 +51,14 @@ pub fn kobo_router(state: AppState) -> Router {
         .route("/kobo/{token}/v1/initialization", get(initialization))
         .route("/kobo/{token}/v1/auth/device", post(auth_device))
         .route("/kobo/{token}/v1/auth/refresh", post(auth_refresh))
+        .route(
+            "/kobo/{token}/v1/analytics/event",
+            post(analytics::analytics_event),
+        )
+        .route(
+            "/kobo/{token}/v1/analytics/gettests",
+            get(analytics::analytics_gettests),
+        )
         .route("/kobo/{token}/v1/library/sync", get(library_sync))
         .route(
             "/kobo/{token}/v1/library/{uuid}/metadata",
@@ -245,6 +254,14 @@ fn ok(bytes: Bytes) -> Result<Bytes, std::io::Error> {
     Ok(bytes)
 }
 
+/// Cap a path `{uuid}` at [`omnibus_shared::BOOK_UUID_MAX_LEN`] before any DB
+/// round trip, mirroring the request-input sweep the JSON-body routes already
+/// follow (`kindle::SendBody::validate`). `Some(response)` is the rejection.
+fn reject_oversized_uuid(uuid: &str) -> Option<Response> {
+    (uuid.len() > omnibus_shared::BOOK_UUID_MAX_LEN)
+        .then(|| StatusCode::BAD_REQUEST.into_response())
+}
+
 /// `GET library/<uuid>/metadata` — the single-book metadata array Kobo fetches
 /// before downloading.
 async fn library_metadata(
@@ -253,10 +270,13 @@ async fn library_metadata(
     Path((_token, uuid)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
+    if let Some(rejected) = reject_oversized_uuid(&uuid) {
+        return rejected;
+    }
     match db::kobo::book_for_sync(state.pool(), &uuid).await {
         Ok(Some(book)) => {
             let base = origin_from_headers(&headers);
-            Json(vec![dto::book_metadata(&base, &auth.token, &book, 0)]).into_response()
+            Json(vec![dto::book_metadata(&base, &auth.token, &book)]).into_response()
         }
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => internal("kobo book_for_sync", e),
@@ -272,6 +292,9 @@ async fn download(
     Path((_token, uuid)): Path<(String, String)>,
     req: Request,
 ) -> Response {
+    if let Some(rejected) = reject_oversized_uuid(&uuid) {
+        return rejected;
+    }
     let id = match db::resolve_book_id_by_uuid(state.pool(), &uuid).await {
         Ok(Some(id)) => id,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
@@ -299,6 +322,9 @@ async fn put_state(
     Path((_token, uuid)): Path<(String, String)>,
     Json(body): Json<dto::StateRequest>,
 ) -> Response {
+    if let Some(rejected) = reject_oversized_uuid(&uuid) {
+        return rejected;
+    }
     for entry in &body.reading_states {
         if let Some(info) = &entry.status_info {
             let update = SetReadStatus {
@@ -320,6 +346,11 @@ async fn put_state(
         if entry.current_bookmark.is_some() {
             tracing::debug!(%uuid, "kobo position received; KoboSpan→CFI deferred to #925");
         }
+        // Acknowledged, deliberately unwritten — cumulative totals would
+        // double-count against the LeaveContent sessions (see `dto::Statistics`).
+        if entry.statistics.is_some() {
+            tracing::debug!(%uuid, "kobo statistics received");
+        }
     }
     Json(dto::StateResponse::success(uuid)).into_response()
 }
@@ -331,7 +362,12 @@ async fn library_tags(_auth: KoboAuthUser) -> Response {
 }
 
 /// `GET books/<uuid>/thumbnail/.../image.jpg` — serve the book cover. The
-/// requested dimensions are advisory; slice A serves the stored cover as-is.
+/// requested dimensions are advisory; the stored cover is served as-is.
+///
+/// Carries a weak `ETag` derived from `(book id, last_modified)` and honors
+/// `If-None-Match` with a bodyless 304 — the device re-validates covers on
+/// every sync, so without this each sync re-downloads every cover it already
+/// holds.
 async fn image(
     _auth: KoboAuthUser,
     State(state): State<AppState>,
@@ -343,14 +379,41 @@ async fn image(
         u32,
         String,
     )>,
+    headers: HeaderMap,
 ) -> Response {
+    if let Some(rejected) = reject_oversized_uuid(&uuid) {
+        return rejected;
+    }
     let id = match db::resolve_book_id_by_uuid(state.pool(), &uuid).await {
         Ok(Some(id)) => id,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(e) => return internal("kobo image resolve", e),
     };
+    // Cheap freshness probe before the cover bytes are ever loaded: the cover
+    // changes only through paths that bump `books.last_modified` (override
+    // save, reindex), so the pair is an honest validator.
+    let last_modified: i64 = match sqlx::query_scalar(
+        "SELECT CAST(COALESCE(last_modified, 0) AS INTEGER) FROM books WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(state.pool())
+    .await
+    {
+        Ok(lm) => lm,
+        Err(e) => return internal("kobo image last_modified", e),
+    };
+    let etag = format!("W/\"{id}-{last_modified}\"");
+    if headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.split(',').any(|c| c.trim() == etag))
+    {
+        return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response();
+    }
     match db::get_cover(state.pool(), id).await {
-        Ok(Some((mime, bytes))) => ([(header::CONTENT_TYPE, mime)], bytes).into_response(),
+        Ok(Some((mime, bytes))) => {
+            ([(header::CONTENT_TYPE, mime), (header::ETAG, etag)], bytes).into_response()
+        }
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => internal("kobo get_cover", e),
     }

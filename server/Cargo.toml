@@ -36,7 +36,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"], optio
 # Non-blocking rolling-file appender for the on-disk JSON log sink. Its
 # `WorkerGuard` must outlive the process so buffered records flush on shutdown.
 tracing-appender = { version = "0.2", optional = true }
-time = { version = "0.3", features = ["formatting"], optional = true }
+time = { version = "0.3", features = ["formatting", "parsing"], optional = true }
 futures-util = { version = "0.3", optional = true }
 # Fixed-digest derivation for the Kobo auth envelope. Deliberately not
 # `DefaultHasher`, whose output is not stable across toolchain versions —

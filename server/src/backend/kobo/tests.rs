@@ -498,6 +498,358 @@ async fn library_sync_emits_the_change_pair_when_a_book_is_modified() {
     );
 }
 
+/// POST a JSON body to a kobo route.
+fn post_json(uri: String, body: serde_json::Value) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .method("POST")
+        .header("host", "omni.test")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn analytics_leave_content_records_a_reading_session() {
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+
+    let body = serde_json::json!({
+        "Events": [{
+            "Id": "evt-1",
+            "EventType": "LeaveContent",
+            "Timestamp": "2026-07-26T12:00:00Z",
+            "Metrics": { "SecondsRead": 600 },
+            "Attributes": { "volumeid": uuid }
+        }]
+    });
+    let res = app
+        .oneshot(post_json(format!("/kobo/{token}/v1/analytics/event"), body))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["Result"], "Success");
+
+    let (seconds, client_id): (i64, String) =
+        sqlx::query_as("SELECT seconds_read, client_id FROM reading_sessions WHERE user_id = ?")
+            .bind(uid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(seconds, 600);
+    assert_eq!(client_id, "kobo:evt-1");
+}
+
+#[tokio::test]
+async fn analytics_leave_content_rejects_a_pre_epoch_device_clock() {
+    // A device clock stuck before 1970 combined with a large SecondsRead makes
+    // `started_at = ended_at - seconds` negative. SessionReport::validate()
+    // must catch this before the row reaches `reading_sessions` — a session
+    // that skipped validation would silently corrupt future stats aggregates.
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+
+    let body = serde_json::json!({
+        "Events": [{
+            "Id": "evt-bad-clock",
+            "EventType": "LeaveContent",
+            "Timestamp": "1970-01-01T00:00:05Z",
+            "Metrics": { "SecondsRead": 600 },
+            "Attributes": { "volumeid": uuid }
+        }]
+    });
+    let res = app
+        .oneshot(post_json(format!("/kobo/{token}/v1/analytics/event"), body))
+        .await
+        .unwrap();
+
+    // The batch contract still answers Success (per-event failures are
+    // logged and skipped, never surfaced as a 4xx that makes the device
+    // re-queue) — but no row must have been written.
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["Result"], "Success");
+
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM reading_sessions WHERE user_id = ?")
+        .bind(uid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0, "an invalid session must not be persisted");
+}
+
+#[tokio::test]
+async fn analytics_replayed_batch_does_not_double_count_a_session() {
+    // The event Id rides as the session client_id, so a device that never saw
+    // the ack and re-posts the batch collapses onto the existing row (0052).
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    let body = serde_json::json!({
+        "Events": [{
+            "Id": "evt-1",
+            "EventType": "LeaveContent",
+            "Timestamp": "2026-07-26T12:00:00Z",
+            "Metrics": { "SecondsRead": 600 },
+            "Attributes": { "volumeid": uuid }
+        }]
+    });
+
+    for _ in 0..2 {
+        let res = app
+            .clone()
+            .oneshot(post_json(
+                format!("/kobo/{token}/v1/analytics/event"),
+                body.clone(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM reading_sessions WHERE user_id = ?")
+        .bind(uid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 1);
+}
+
+#[tokio::test]
+async fn analytics_rate_book_sets_and_clears_the_rating() {
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+
+    let rate = serde_json::json!({
+        "Events": [{
+            "Id": "evt-2",
+            "EventType": "RateBook",
+            "Metrics": { "stars": 4 },
+            "Attributes": { "volumeid": uuid }
+        }]
+    });
+    app.clone()
+        .oneshot(post_json(format!("/kobo/{token}/v1/analytics/event"), rate))
+        .await
+        .unwrap();
+    let rec = db::ratings::get_rating(&pool, uid, &uuid).await.unwrap();
+    assert_eq!(rec.unwrap().stars, 4.0);
+
+    let clear = serde_json::json!({
+        "Events": [{
+            "Id": "evt-3",
+            "EventType": "RateBook",
+            "Metrics": { "stars": 0 },
+            "Attributes": { "volumeid": uuid }
+        }]
+    });
+    app.oneshot(post_json(
+        format!("/kobo/{token}/v1/analytics/event"),
+        clear,
+    ))
+    .await
+    .unwrap();
+    assert!(db::ratings::get_rating(&pool, uid, &uuid)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn analytics_unknown_event_types_are_acknowledged_and_dropped() {
+    // A 4xx here would make the device re-queue and hammer the route, so even
+    // a junk batch answers Success.
+    let (app, _pool, token, _uid) = fixture().await;
+    let body = serde_json::json!({
+        "Events": [
+            { "Id": "e1", "EventType": "OpenContent" },
+            { "Id": "e2", "EventType": "LeaveContent" },
+            { "Id": "e3", "EventType": "RateBook" }
+        ]
+    });
+
+    let res = app
+        .oneshot(post_json(format!("/kobo/{token}/v1/analytics/event"), body))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["Result"], "Success");
+}
+
+#[tokio::test]
+async fn analytics_gettests_answers_the_initialization_pointer() {
+    // The #926 resources map points `get_tests_request` at this route; a 404
+    // there would be the server advertising a URL it doesn't serve.
+    let (app, _pool, token, _uid) = fixture().await;
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/analytics/gettests")))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["Result"], "Success");
+}
+
+#[tokio::test]
+async fn analytics_rejects_an_invalid_token() {
+    let (app, _pool, _token, _uid) = fixture().await;
+    let res = app
+        .oneshot(post_json(
+            "/kobo/not-a-real-token/v1/analytics/event".to_owned(),
+            serde_json::json!({ "Events": [] }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn image_returns_304_when_the_if_none_match_etag_is_current() {
+    // The 304 path fires before the cover bytes are ever loaded, so a current
+    // validator answers bodyless even while the book has no stored cover.
+    let (app, pool, token, _uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    let (id, lm): (i64, i64) = sqlx::query_as(
+        "SELECT id, CAST(COALESCE(last_modified, 0) AS INTEGER) FROM books WHERE uuid = ?",
+    )
+    .bind(&uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let etag = format!("W/\"{id}-{lm}\"");
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/kobo/{token}/v1/books/{uuid}/thumbnail/400/600/100/false/image.jpg"
+                ))
+                .header("host", "omni.test")
+                .header("if-none-match", &etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(res.headers().get("etag").unwrap().to_str().unwrap(), etag);
+}
+
+#[tokio::test]
+async fn image_serves_the_body_when_the_etag_is_stale() {
+    // A stale validator falls through to the normal serve path — here a 404,
+    // since the fixture book has no stored cover. The point is that it did NOT
+    // answer 304 against a stale tag.
+    let (app, pool, token, _uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/kobo/{token}/v1/books/{uuid}/thumbnail/400/600/100/false/image.jpg"
+                ))
+                .header("host", "omni.test")
+                .header("if-none-match", "W/\"stale\"")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn library_sync_advertises_the_source_epub_size() {
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    sqlx::query(
+        "UPDATE book_files SET size_bytes = 123456
+          WHERE book_id = (SELECT id FROM books WHERE uuid = ?)",
+    )
+    .bind(&uuid)
+    .execute(&pool)
+    .await
+    .unwrap();
+    opt_in(&pool, uid, std::slice::from_ref(&uuid)).await;
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
+        .await
+        .unwrap();
+    let json = body_json(res).await;
+    let ent = &json.as_array().unwrap()[0]["NewEntitlement"];
+
+    assert_eq!(ent["BookMetadata"]["DownloadUrls"][0]["Size"], 123456);
+}
+
+#[tokio::test]
+async fn put_state_accepts_a_statistics_block() {
+    // Statistics is parsed but deliberately unwritten (cumulative totals would
+    // double-count against the LeaveContent sessions) — the contract here is
+    // that a payload carrying it still round-trips as Success.
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "solaris.epub", "Solaris", "Lem").await;
+    let body = serde_json::json!({
+        "ReadingStates": [{
+            "StatusInfo": { "Status": "Reading" },
+            "Statistics": { "SpentReadingMinutes": 42, "RemainingTimeMinutes": 90 }
+        }]
+    });
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/kobo/{token}/v1/library/{uuid}/state"))
+                .method("PUT")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["RequestResult"], "Success");
+    let rec = db::read_status::get_read_status(&pool, uid, &uuid)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rec.status, ReadStatus::Reading);
+}
+
+#[tokio::test]
+async fn uuid_routes_reject_an_oversized_path_uuid() {
+    let (app, _pool, token, _uid) = fixture().await;
+    let oversized = "a".repeat(omnibus_shared::BOOK_UUID_MAX_LEN + 1);
+
+    for uri in [
+        format!("/kobo/{token}/v1/library/{oversized}/metadata"),
+        format!("/kobo/{token}/v1/download/{oversized}"),
+        format!("/kobo/{token}/v1/books/{oversized}/thumbnail/400/600/100/false/image.jpg"),
+    ] {
+        let res = app.clone().oneshot(get(uri.clone())).await.unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "GET {uri}");
+    }
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/kobo/{token}/v1/library/{oversized}/state"))
+                .method("PUT")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "ReadingStates": [] }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
 #[tokio::test]
 async fn metadata_returns_the_book() {
     let (app, pool, token, _uid) = fixture().await;
