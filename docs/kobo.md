@@ -14,8 +14,8 @@ and you copy it over yourself. Both are described below.
 > **cannot delete or change anything already on your Kobo** — not your books,
 > not your highlights, not your notes. Omnibus only ever *adds* a book file; it
 > never touches the device's internal database. (That is *not* true of wireless
-> "sync", which is a different feature Omnibus does not yet offer — see the note
-> at the bottom.)
+> sync, a separate and still-incomplete feature — see
+> [About wireless sync](#about-wireless-sync-experimental).)
 
 ## Chrome / Edge — one-click write
 
@@ -63,11 +63,32 @@ just a bit slower. The official Docker image ships `kepubify`; if you build from
 source, install `kepubify` on the server's `PATH` (or set `OMNIBUS_KEPUBIFY_PATH`)
 to get KEPUB output. See [.env.example](../.env.example).
 
-## About wireless sync (not yet available)
+## About wireless sync (experimental)
 
-Some servers offer *wireless* Kobo sync, where the device talks to the server
-over Wi-Fi. Omnibus does **not** do this yet. It's worth knowing why the wired
-copy above is the safe choice in the meantime: pointing a Kobo's wireless sync at
-a server that doesn't fully implement Kobo's protocol can make the **device erase
-its own highlights and notes**. The manual USB copy has no such risk. If wireless
-sync is added later, Omnibus will warn you clearly before you enable it.
+*Wireless* Kobo sync — where the device talks to Omnibus over Wi-Fi instead of a
+USB cable — is **under construction**. **Account → Kobo wireless sync** will hand
+you an endpoint URL, but the protocol behind it is incomplete. Treat it as
+experimental and do not point a device you care about at it yet.
+
+> [!WARNING]
+> **The first wireless sync can erase your Kobo's highlights and notes.**
+> A Kobo clears its own annotations when the server it syncs with does not answer
+> Kobo's annotation channel. Omnibus does not answer that channel yet, and does
+> **not** store what the device erases — anything lost this way is gone.
+
+**Back up your annotations before the first wireless sync.** They live in a
+single file on the device:
+
+1. Connect the Kobo over USB and tap **Connect**. It appears as a USB drive.
+2. Copy `.kobo/KoboReader.sqlite` off the drive to somewhere safe. (`.kobo` is a
+   hidden folder — on macOS press <kbd>⌘</kbd><kbd>⇧</kbd><kbd>.</kbd> in Finder
+   to reveal it; on Windows enable **Hidden items** in Explorer's View tab.)
+3. Eject the Kobo safely.
+
+That file holds every highlight and note on the device. Keeping a copy means a
+wipe is recoverable. Importing one back into Omnibus is planned, not yet built
+([#933](https://github.com/seamus-sloan/omnibus/issues/933)) — for now the copy
+is a backup you keep, not something Omnibus can read.
+
+The wired **Send to Kobo** transfer described above carries none of this risk and
+stays the safe choice.
