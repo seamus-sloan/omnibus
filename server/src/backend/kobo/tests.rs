@@ -975,6 +975,87 @@ async fn download_returns_404_for_unknown_uuid() {
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }
 
+/// #1391: kepubify is absent in the test environment, so `download` takes its
+/// plain-EPUB fallback arm — which must still route through
+/// `rewritten_or_source` (mirrors `api_get_ebook_download_bakes_metadata_override_into_epub`
+/// in `ebooks/tests.rs`) rather than serving the raw on-disk file.
+#[tokio::test]
+async fn download_bakes_a_metadata_override_into_the_plain_epub_fallback() {
+    use std::io::Cursor;
+
+    let (app, pool, token, uid) = fixture().await;
+
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!("omnibus_kobo_dl_override_{pid}_{nanos}"));
+    let export = tmp.join("export");
+    std::fs::create_dir_all(&export).unwrap();
+    // Isolate the export cache so the rewrite doesn't land in ./data.
+    let _env =
+        db::test_support::EnvVarGuard::set_os("OMNIBUS_EXPORT_EPUB_DIR", Some(export.as_os_str()));
+
+    // Copy a real fixture EPUB so the rewrite has a valid container to parse.
+    let fixture_epub = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../test_data/epubs/generated/alpha.epub");
+    let stem = "alpha";
+    std::fs::copy(&fixture_epub, tmp.join(format!("{stem}.epub"))).unwrap();
+
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
+        .bind(tmp.to_str().unwrap())
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    let uuid = "55555555-5555-5555-5555-555555555555";
+    sqlx::query(
+        "INSERT INTO books (uuid, library_id, path, title, last_modified) \
+         VALUES (?, ?, ?, 'Alpha', 1)",
+    )
+    .bind(uuid)
+    .bind(lib_id)
+    .bind(tmp.to_str().unwrap())
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES ((SELECT id FROM books WHERE uuid = ?), 'EPUB', ?, 0)",
+    )
+    .bind(uuid)
+    .bind(stem)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let overrides = omnibus_shared::MetadataOverrides {
+        title: Some("Stormlight #1".into()),
+        ..Default::default()
+    };
+    db::upsert_metadata_overrides(&pool, uuid, &overrides, false, uid)
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/download/{uuid}")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+
+    let doc = epub::doc::EpubDoc::from_reader(Cursor::new(bytes.to_vec()))
+        .expect("downloaded bytes are a valid EPUB");
+    assert_eq!(
+        doc.mdata("title").map(|m| m.value.clone()),
+        Some("Stormlight #1".to_string()),
+        "kobo download fallback must carry the baked title override"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
 #[tokio::test]
 async fn library_tags_returns_an_empty_collection() {
     let (app, _pool, token, _uid) = fixture().await;
