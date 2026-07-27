@@ -8,7 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use omnibus_db::{self as db, highlights::HighlightError};
+use omnibus_db::{self as db, annotations::HighlightError};
 use omnibus_shared::{CreateHighlight, HighlightColor, UpdateHighlightNote};
 
 use super::{internal, AppState};
@@ -23,7 +23,7 @@ pub(super) async fn post_highlight(
     if let Err(msg) = input.validate() {
         return (axum::http::StatusCode::BAD_REQUEST, msg).into_response();
     }
-    match db::highlights::create_highlight(&state.pool, user.id, &input).await {
+    match db::annotations::create_highlight(&state.pool, user.id, &input).await {
         Ok(h) => Json(h).into_response(),
         Err(HighlightError::BookNotFound) => {
             (axum::http::StatusCode::NOT_FOUND, "book not found").into_response()
@@ -41,7 +41,7 @@ pub(super) async fn get_highlights(
     State(state): State<AppState>,
     Path(book_uuid): Path<String>,
 ) -> Response {
-    match db::highlights::list_highlights(&state.pool, user.id, &book_uuid).await {
+    match db::annotations::list_highlights(&state.pool, user.id, &book_uuid).await {
         Ok(list) => Json(list).into_response(),
         Err(HighlightError::Sqlx(e)) => internal("list_highlights", e),
         Err(e) => internal("list_highlights", e),
@@ -60,7 +60,7 @@ async fn resolve_id(state: &AppState, user_id: i64, raw: &str) -> Result<i64, Hi
     if let Ok(id) = raw.parse::<i64>() {
         return Ok(id);
     }
-    db::highlights::highlight_id_for_client_id(&state.pool, user_id, raw)
+    db::annotations::highlight_id_for_client_id(&state.pool, user_id, raw)
         .await?
         .ok_or(HighlightError::NotFound)
 }
@@ -84,7 +84,7 @@ pub(super) async fn patch_highlight_color(
         }
         Err(e) => return internal("update_highlight_color", e),
     };
-    match db::highlights::update_highlight_color(&state.pool, user.id, id, body.color).await {
+    match db::annotations::update_highlight_color(&state.pool, user.id, id, body.color).await {
         Ok(()) => axum::http::StatusCode::NO_CONTENT.into_response(),
         Err(HighlightError::NotFound) => {
             (axum::http::StatusCode::NOT_FOUND, "highlight not found").into_response()
@@ -111,7 +111,7 @@ pub(super) async fn patch_highlight_note(
         }
         Err(e) => return internal("update_highlight_note", e),
     };
-    match db::highlights::update_highlight_note(&state.pool, user.id, id, body.note.as_deref())
+    match db::annotations::update_highlight_note(&state.pool, user.id, id, body.note.as_deref())
         .await
     {
         Ok(()) => axum::http::StatusCode::NO_CONTENT.into_response(),
@@ -136,7 +136,7 @@ pub(super) async fn delete_highlight(
         }
         Err(e) => return internal("delete_highlight", e),
     };
-    match db::highlights::delete_highlight(&state.pool, user.id, id).await {
+    match db::annotations::delete_highlight(&state.pool, user.id, id).await {
         Ok(()) => axum::http::StatusCode::NO_CONTENT.into_response(),
         Err(HighlightError::NotFound) => {
             (axum::http::StatusCode::NOT_FOUND, "highlight not found").into_response()

@@ -52,7 +52,7 @@ pub async fn gc_books_missing_files(
             AND NOT EXISTS (SELECT 1 FROM bookmarks            WHERE book_uuid = b.uuid)
             AND NOT EXISTS (SELECT 1 FROM reading_sessions     WHERE book_uuid = b.uuid)
             AND NOT EXISTS (SELECT 1 FROM listening_sessions   WHERE book_uuid = b.uuid)
-            AND NOT EXISTS (SELECT 1 FROM highlights           WHERE book_uuid = b.uuid)
+            AND NOT EXISTS (SELECT 1 FROM annotations          WHERE book_uuid = b.uuid)
             AND NOT EXISTS (SELECT 1 FROM user_ratings         WHERE book_uuid = b.uuid)
             AND NOT EXISTS (SELECT 1 FROM book_read_status     WHERE book_uuid = b.uuid)
             AND NOT EXISTS (SELECT 1 FROM audiobook_playback_preferences
@@ -77,8 +77,9 @@ pub async fn gc_books_missing_files(
 }
 
 /// Hard-delete the `(id, uuid)` victims in one transaction: their
-/// `metadata_overrides`, `books`, and `books_fts` rows (chunked at 500 to
-/// stay under SQLite's 999-bind cap), then any taxonomy the purge orphaned.
+/// `metadata_overrides`, `kobo_annotations_sync`, `books`, and `books_fts`
+/// rows (chunked at 500 to stay under SQLite's 999-bind cap), then any
+/// taxonomy the purge orphaned.
 async fn delete_victim_rows(
     pool: &SqlitePool,
     victims: &[(i64, String)],
@@ -93,6 +94,18 @@ async fn delete_victim_rows(
         let del_overrides =
             format!("DELETE FROM metadata_overrides WHERE book_uuid IN ({placeholders})");
         let mut q = sqlx::query(&del_overrides);
+        for (_, uuid) in chunk {
+            q = q.bind(uuid);
+        }
+        q.execute(&mut *tx).await?;
+
+        // Per-device annotation watermarks (#1278) are bookkeeping, not user
+        // data, so they don't guard a victim — but an orphaned row would make
+        // Reading Services `checkforchanges` re-report the purged uuid
+        // forever (its GET can only 404, so it never acks).
+        let del_kobo_sync =
+            format!("DELETE FROM kobo_annotations_sync WHERE book_uuid IN ({placeholders})");
+        let mut q = sqlx::query(&del_kobo_sync);
         for (_, uuid) in chunk {
             q = q.bind(uuid);
         }

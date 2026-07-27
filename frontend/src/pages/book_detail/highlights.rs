@@ -94,14 +94,24 @@ fn BdHighlightCard(
     // to copy; disable the action rather than offer a silent no-op.
     let copy_src = highlight.text.clone();
     let note = highlight.note.clone();
-    let meta_line = match highlight_locator(&highlight.epub_cfi_range) {
+    // A Kobo-origin passage has no CFI: it still lists, but there is no
+    // position to derive a locator from and nowhere for "Open in reader" to
+    // jump.
+    let meta_line = match highlight
+        .epub_cfi_range
+        .as_deref()
+        .and_then(highlight_locator)
+    {
         Some(loc) => format!(
             "{loc} \u{00b7} saved {}",
             fmt_long_date(highlight.created_at)
         ),
         None => format!("saved {}", fmt_long_date(highlight.created_at)),
     };
-    let open_href = reader_deep_link(&highlight.book_uuid, &highlight.epub_cfi_range);
+    let open_href = highlight
+        .epub_cfi_range
+        .as_deref()
+        .map(|cfi| reader_deep_link(&highlight.book_uuid, cfi));
 
     let on_delete = move |_| {
         let mut highlights = highlights;
@@ -126,11 +136,13 @@ fn BdHighlightCard(
             div { class: "bd-hl-foot",
                 span { class: "mono bd-hl-meta", "data-testid": "highlight-meta", "{meta_line}" }
                 div { class: "bd-hl-actions",
-                    Link {
-                        to: "{open_href}",
-                        class: "btn ghost sm",
-                        "data-testid": "highlight-open",
-                        "Open in reader"
+                    if let Some(href) = open_href {
+                        Link {
+                            to: "{href}",
+                            class: "btn ghost sm",
+                            "data-testid": "highlight-open",
+                            "Open in reader"
+                        }
                     }
                     button {
                         class: "btn ghost sm",

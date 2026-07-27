@@ -380,7 +380,7 @@ pub(crate) async fn queue_create_highlight(input: &CreateHighlight) -> Option<Hi
     let highlight = Highlight {
         id: temp,
         book_uuid: input.book_uuid.clone(),
-        epub_cfi_range: input.epub_cfi_range.clone(),
+        epub_cfi_range: Some(input.epub_cfi_range.clone()),
         color: input.color,
         note: None,
         text: input.text.clone(),

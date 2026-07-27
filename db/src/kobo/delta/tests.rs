@@ -215,12 +215,11 @@ async fn record_synced_is_idempotent_for_a_repeated_change() {
     record_synced(&pool, device, &delta.changes).await.unwrap();
     record_synced(&pool, device, &delta.changes).await.unwrap();
 
-    let held: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM kobo_device_books WHERE device_id = ?")
-            .bind(device)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let held: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM kobo_books_sync WHERE device_id = ?")
+        .bind(device)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(held, 1);
 }
 
@@ -253,7 +252,7 @@ async fn deleting_a_device_cascades_its_snapshot() {
         .unwrap();
 
     let orphans: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM kobo_device_books WHERE device_id = ?")
+        sqlx::query_scalar("SELECT COUNT(*) FROM kobo_books_sync WHERE device_id = ?")
             .bind(device)
             .fetch_one(&pool)
             .await
@@ -289,7 +288,7 @@ async fn sync_delta_emits_a_state_change_when_read_status_moves_elsewhere() {
 
     // `synced_at` has 1-second granularity, so age the snapshot rather than
     // racing it — the assertion is about the comparison, not the clock.
-    sqlx::query("UPDATE kobo_device_books SET synced_at = 1 WHERE device_id = ?")
+    sqlx::query("UPDATE kobo_books_sync SET synced_at = 1 WHERE device_id = ?")
         .bind(device)
         .execute(&pool)
         .await
@@ -322,7 +321,7 @@ async fn recording_a_state_change_preserves_last_modified_seen() {
     synced_shelf(&pool, user, "Kobo", std::slice::from_ref(&uuid)).await;
     sync_once(&pool, user, device).await;
     let seen_before: i64 = sqlx::query_scalar(
-        "SELECT last_modified_seen FROM kobo_device_books WHERE device_id = ? AND book_uuid = ?",
+        "SELECT last_modified_seen FROM kobo_books_sync WHERE device_id = ? AND book_uuid = ?",
     )
     .bind(device)
     .bind(&uuid)
@@ -339,7 +338,7 @@ async fn recording_a_state_change_preserves_last_modified_seen() {
         .unwrap();
 
     let seen_after: i64 = sqlx::query_scalar(
-        "SELECT last_modified_seen FROM kobo_device_books WHERE device_id = ? AND book_uuid = ?",
+        "SELECT last_modified_seen FROM kobo_books_sync WHERE device_id = ? AND book_uuid = ?",
     )
     .bind(device)
     .bind(&uuid)
@@ -360,7 +359,7 @@ async fn sync_delta_prefers_a_metadata_change_over_a_state_change() {
     synced_shelf(&pool, user, "Kobo", std::slice::from_ref(&uuid)).await;
     sync_once(&pool, user, device).await;
 
-    sqlx::query("UPDATE kobo_device_books SET synced_at = 1 WHERE device_id = ?")
+    sqlx::query("UPDATE kobo_books_sync SET synced_at = 1 WHERE device_id = ?")
         .bind(device)
         .execute(&pool)
         .await

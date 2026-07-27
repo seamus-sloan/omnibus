@@ -68,6 +68,41 @@ fn create_highlight_validate_rejects_text_over_max_len() {
 }
 
 #[test]
+fn highlight_decodes_a_payload_with_null_or_missing_cfi_range() {
+    // Kobo-origin rows serve `epub_cfi_range: null`; older stored payloads
+    // may omit the key entirely. Both must decode to `None`.
+    let with_null: Highlight = serde_json::from_str(
+        r#"{"id":1,"book_uuid":"u","epub_cfi_range":null,"color":"amber","note":null,"created_at":5}"#,
+    )
+    .expect("null cfi must decode");
+    assert_eq!(with_null.epub_cfi_range, None);
+
+    let missing: Highlight = serde_json::from_str(
+        r#"{"id":1,"book_uuid":"u","color":"amber","note":null,"created_at":5}"#,
+    )
+    .expect("missing cfi must decode");
+    assert_eq!(missing.epub_cfi_range, None);
+}
+
+#[test]
+fn highlight_serializes_an_anchorless_row_with_an_explicit_null_cfi() {
+    let h = Highlight {
+        id: 7,
+        book_uuid: "u".into(),
+        epub_cfi_range: None,
+        color: HighlightColor::Rose,
+        note: None,
+        text: Some("quote".into()),
+        client_id: Some("kobo-uuid".into()),
+        created_at: 5,
+    };
+    let json = serde_json::to_value(&h).expect("serialize");
+    // The key stays present (honest null) so decoders see a stable shape.
+    assert!(json.get("epub_cfi_range").is_some());
+    assert!(json["epub_cfi_range"].is_null());
+}
+
+#[test]
 fn update_highlight_note_validate_accepts_none() {
     let u = UpdateHighlightNote { note: None };
     assert!(u.validate().is_ok());

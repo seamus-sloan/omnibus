@@ -316,11 +316,16 @@ final class ReaderController: NSObject {
             pendingHighlights = items
             return
         }
+        // Kobo-origin rows have no CFI and are never drawn; only anchored
+        // rows participate in the reconcile.
+        let anchored = items.filter { $0.epubCFIRange != nil }
         let previous = Dictionary(
-            drawnHighlights.map { ($0.epubCFIRange, $0) }, uniquingKeysWith: { _, latest in latest }
+            drawnHighlights.compactMap { h in h.epubCFIRange.map { ($0, h) } },
+            uniquingKeysWith: { _, latest in latest }
         )
         let next = Dictionary(
-            items.map { ($0.epubCFIRange, $0) }, uniquingKeysWith: { _, latest in latest }
+            anchored.compactMap { h in h.epubCFIRange.map { ($0, h) } },
+            uniquingKeysWith: { _, latest in latest }
         )
 
         for range in previous.keys where next[range] == nil {
@@ -336,7 +341,7 @@ final class ReaderController: NSObject {
             }
             addAnnotation(cfiRange: range, color: highlight.color, hasNote: hasNote)
         }
-        drawnHighlights = items
+        drawnHighlights = anchored
     }
 
     func clearSelection() {
@@ -414,13 +419,14 @@ final class ReaderController: NSObject {
                 isReady = true
                 failed = false
                 for highlight in pendingHighlights {
+                    guard let cfiRange = highlight.epubCFIRange else { continue }
                     addAnnotation(
-                        cfiRange: highlight.epubCFIRange,
+                        cfiRange: cfiRange,
                         color: highlight.color,
                         hasNote: highlight.note?.nilIfBlank != nil
                     )
                 }
-                drawnHighlights = pendingHighlights
+                drawnHighlights = pendingHighlights.filter { $0.epubCFIRange != nil }
                 pendingHighlights = []
             case "error":
                 failed = true

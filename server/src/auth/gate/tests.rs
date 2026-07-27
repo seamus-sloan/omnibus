@@ -11,6 +11,12 @@ async fn app() -> (Router, sqlx::SqlitePool) {
     let state = AppState::new(pool.clone());
     let router = Router::new()
         .route("/api/value", get(|| async { "ok" }))
+        .route(
+            "/api/v3/content/{id}/annotations",
+            get(|| async { "annotations ok" }),
+        )
+        .route("/api/v3/other", get(|| async { "other ok" }))
+        .route("/api/UserStorage/Metadata", get(|| async { "storage ok" }))
         .route("/api/thumbs/{uuid}/{size}", get(|| async { "thumb ok" }))
         .route(
             "/api/audiobooks/{uuid}/parts/{ordinal}",
@@ -102,6 +108,43 @@ async fn api_auth_passes_through_without_auth() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn kobo_reading_services_paths_pass_the_session_gate_untouched() {
+    // The Kobo device speaks at the bare origin with no session; these routes
+    // carry their own x-kobo-deviceid auth (#1278), so the gate stands aside.
+    let (app, _pool) = app().await;
+    for uri in [
+        "/api/v3/content/some-uuid/annotations",
+        "/api/UserStorage/Metadata",
+    ] {
+        let res = app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "{uri} must bypass the gate");
+    }
+}
+
+#[tokio::test]
+async fn api_v3_paths_outside_content_stay_gated() {
+    // The exemption is scoped to /api/v3/content/ — neither a sibling route
+    // nor a same-prefix name (/api/v3/contentious) rides along.
+    let (app, _pool) = app().await;
+    for uri in ["/api/v3/other", "/api/v3/contentious", "/api/v3/content"] {
+        let res = app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::UNAUTHORIZED,
+            "{uri} must stay gated"
+        );
+    }
 }
 
 #[tokio::test]

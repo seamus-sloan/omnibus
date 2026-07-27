@@ -50,7 +50,7 @@ mod tags;
 mod uploads;
 mod users;
 
-pub use kobo::kobo_router;
+pub use kobo::{kobo_router, reading_services_router};
 
 /// Per-IP rate-limit budget for `/api/search/*` and the `/api/rpc/search-*`
 /// server functions. Each request runs four FTS5 queries plus joins, so the

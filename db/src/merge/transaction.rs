@@ -458,13 +458,29 @@ async fn move_progress_and_history(
     .bind(&source_uuid)
     .execute(&mut **tx)
     .await?;
+    // Per-device annotation sync state keys on (device_id, book_uuid); where a
+    // device tracks BOTH uuids, keep the target's row (the retarget below
+    // would collide) — the watermark is regenerable, and a moved fingerprint
+    // just re-reports the merged book once.
+    sqlx::query(
+        "DELETE FROM kobo_annotations_sync
+          WHERE book_uuid = ?2 AND EXISTS (
+            SELECT 1 FROM kobo_annotations_sync t
+             WHERE t.book_uuid = ?1
+               AND t.device_id = kobo_annotations_sync.device_id)",
+    )
+    .bind(&target_uuid)
+    .bind(&source_uuid)
+    .execute(&mut **tx)
+    .await?;
     for table in [
         "reading_progress",
         "audiobook_playback_preferences",
         "bookmarks",
         "reading_sessions",
         "listening_sessions",
-        "highlights",
+        "annotations",
+        "kobo_annotations_sync",
     ] {
         let sql = format!("UPDATE {table} SET book_uuid = ?1 WHERE book_uuid = ?2");
         sqlx::query(&sql)

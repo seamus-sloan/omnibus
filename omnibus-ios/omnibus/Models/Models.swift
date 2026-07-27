@@ -626,7 +626,9 @@ enum HighlightColor: String, Codable, CaseIterable, Sendable {
 struct Highlight: Codable, Hashable, Sendable, Identifiable {
     var id: Int64
     var bookUUID: String
-    var epubCFIRange: String
+    /// `nil` for Kobo-origin annotations — anchored by an opaque KoboSpan on
+    /// the server, so they list here but cannot be painted in the reader.
+    var epubCFIRange: String?
     var color: HighlightColor
     var note: String?
     var text: String?
