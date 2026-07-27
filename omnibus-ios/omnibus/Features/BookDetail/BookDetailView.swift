@@ -153,7 +153,7 @@ struct BookDetailView: View {
         .toolbar { toolbar }
         .bookZoomDestination(uuid, in: bookZoom)
         .task { await model.load(uuid: uuid) }
-        .refreshable { await model.load(uuid: uuid) }
+        .refreshTask { await model.load(uuid: uuid) }
         .sheet(isPresented: $showJournalComposer) {
             if let book = model.book {
                 JournalComposer(book: book, editing: editingJournal) {

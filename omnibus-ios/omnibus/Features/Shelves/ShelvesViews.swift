@@ -63,7 +63,7 @@ struct ShelvesView: View {
                 Button { showCreate = true } label: { Image(systemName: "plus") }
             }
         }
-        .refreshable { await load(force: true) }
+        .refreshTask { await load(force: true) }
         .sheet(isPresented: $showCreate) {
             CreateShelfSheet { Task { await load(force: true) } }
         }
@@ -187,7 +187,7 @@ struct ShelfDetailView: View {
                 }
             }
         }
-        .refreshable { await load(force: true) }
+        .refreshTask { await load(force: true) }
         .task { await load() }
     }
 

@@ -29,7 +29,7 @@ struct StatsView: View {
             // root; a stock large title alongside it would state it twice.
             .toolbar(.hidden, for: .navigationBar)
             .topEdgeScrim()
-            .refreshable { await load(force: true) }
+            .refreshTask { await load(force: true) }
             .withDestinations()
         }
         .task { await load() }

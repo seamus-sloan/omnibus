@@ -189,7 +189,7 @@ struct LibraryView: View {
             .topEdgeScrim()
             // An explicit pull is the one place the whole-library mirror is
             // worth re-pulling on demand rather than on its own schedule.
-            .refreshable {
+            .refreshTask {
                 async let mirror: Void = LibraryIndex.shared.sync(force: true)
                 await model.reload()
                 await mirror

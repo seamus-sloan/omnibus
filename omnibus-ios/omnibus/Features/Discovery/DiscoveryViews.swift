@@ -97,7 +97,7 @@ struct AuthorsView: View {
         .background(ScreenBackground())
         .navigationTitle("Authors")
         .searchable(text: $query, prompt: "Filter authors")
-        .refreshable { await load(force: true) }
+        .refreshTask { await load(force: true) }
         .task { await load() }
     }
 
