@@ -95,10 +95,14 @@ test("persists the selected shelf across a reload", async ({
   );
   await expect(tile).toHaveAttribute("aria-pressed", "true");
 
-  await page.reload();
-  await page.waitForLoadState("networkidle");
+  // The persisted pick reconciles post-mount (rule 07) and refires the
+  // member fetch — await it so the assertions can't race the list swap.
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/shelves/page", expectedStatus: 200 },
+    async () => page.reload(),
+  );
 
-  // The persisted pick reconciles post-mount (rule 07), so poll for it.
   await expect(page.getByTestId(`gallery-shelf-${shelfId}`)).toHaveAttribute(
     "aria-pressed",
     "true",
