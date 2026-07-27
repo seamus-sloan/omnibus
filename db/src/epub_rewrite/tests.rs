@@ -549,8 +549,8 @@ async fn rewritten_epub_path_returns_failed_when_the_source_epub_is_missing() {
     // An override is active, so `rewritten_epub_path` attempts the rewrite —
     // but `source` doesn't exist on disk, so opening it as an epub fails and
     // the anyhow error collapses into `Failed` per the module's doc comment.
-    let src = std::path::Path::new("/nonexistent/does-not-exist.epub");
-    let err = super::rewritten_epub_path(&pool, id, src)
+    let src = export.path().join("does-not-exist.epub");
+    let err = super::rewritten_epub_path(&pool, id, &src)
         .await
         .unwrap_err();
     assert!(matches!(err, EpubRewriteError::Failed(_)));
