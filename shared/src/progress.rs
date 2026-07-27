@@ -96,14 +96,21 @@ impl ProgressUpdate {
         // constraint and surfacing as a 500.
         match self.format {
             ProgressFormat::Epub => {
-                let has_cfi = self
+                // A present-but-blank CFI is rejected outright rather than
+                // ignored: `upsert_progress` merges position fields with
+                // COALESCE, and `Some("   ")` is non-NULL to SQL — it would
+                // overwrite a real stored anchor with whitespace.
+                if self
                     .epub_cfi
                     .as_deref()
-                    .is_some_and(|s| !s.trim().is_empty());
+                    .is_some_and(|s| s.trim().is_empty())
+                {
+                    return Err("epub_cfi must not be blank".into());
+                }
                 // A CFI *or* a percent is enough. A Kobo has no CFI to give
                 // (its location is a `KoboSpan`, not a CFI), so requiring one
                 // would lock the device out of the progress store entirely.
-                if !has_cfi && self.progress_percent.is_none() {
+                if self.epub_cfi.is_none() && self.progress_percent.is_none() {
                     return Err("format=epub requires epub_cfi or progress_percent".into());
                 }
                 if let Some(cfi) = &self.epub_cfi {

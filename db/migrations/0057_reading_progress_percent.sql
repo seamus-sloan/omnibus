@@ -34,10 +34,15 @@ CREATE TABLE reading_progress_new (
     -- Deliberately opaque: it is echoed back to the same device for exact
     -- resume and is never parsed, rewritten, or shown to another surface.
     kobo_location            TEXT,
+    -- Both arms name every column they exclude, so a caller that bypasses the
+    -- API validators still can't persist a cross-format row.
     CHECK (
         (format = 'epub'  AND (epub_cfi IS NOT NULL OR progress_percent IS NOT NULL)
                           AND audio_position_seconds IS NULL)
-     OR (format = 'audio' AND audio_position_seconds IS NOT NULL AND epub_cfi IS NULL)
+     OR (format = 'audio' AND audio_position_seconds IS NOT NULL
+                          AND epub_cfi IS NULL
+                          AND progress_percent IS NULL
+                          AND kobo_location IS NULL)
     ),
     UNIQUE (user_id, book_uuid, format)
 );

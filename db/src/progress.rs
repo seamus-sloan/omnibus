@@ -120,10 +120,18 @@ pub async fn upsert_progress(
     .bind(user_id)
     .bind(&book_uuid)
     .bind(fmt)
-    .bind(update.epub_cfi.as_deref())
+    // Blank-to-NULL at the bind, not just at `validate` — the COALESCE merge
+    // below treats any non-NULL as a real value, so a whitespace CFI reaching
+    // an internal caller that skipped validation would clobber a good anchor.
+    .bind(update.epub_cfi.as_deref().filter(|s| !s.trim().is_empty()))
     .bind(update.audio_position_seconds)
     .bind(update.progress_percent)
-    .bind(update.kobo_location.as_deref())
+    .bind(
+        update
+            .kobo_location
+            .as_deref()
+            .filter(|s| !s.trim().is_empty()),
+    )
     .bind(update.client_updated_at)
     .execute(pool)
     .await?;

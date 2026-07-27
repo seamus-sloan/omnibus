@@ -151,6 +151,24 @@ fn progress_update_rejects_a_blank_cfi_with_no_percent() {
 }
 
 #[test]
+fn progress_update_rejects_a_blank_cfi_even_alongside_a_percent() {
+    // The dangerous case: a percent satisfies the "some position" rule, so a
+    // blank CFI would ride along — and `upsert_progress` merges with COALESCE,
+    // where `Some("   ")` is non-NULL and overwrites a real stored anchor.
+    let u = ProgressUpdate {
+        book_uuid: "x".into(),
+        format: ProgressFormat::Epub,
+        epub_cfi: Some("   ".into()),
+        audio_position_seconds: None,
+        progress_percent: Some(40),
+        kobo_location: None,
+        client_updated_at: None,
+    };
+    let err = u.validate().expect_err("blank cfi must be rejected");
+    assert!(err.contains("epub_cfi"), "got: {err}");
+}
+
+#[test]
 fn progress_update_rejects_out_of_range_percent() {
     for pct in [-1, 101] {
         let u = ProgressUpdate {

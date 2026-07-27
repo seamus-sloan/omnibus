@@ -406,7 +406,11 @@ async fn persist_bookmark(
 ) -> Result<(), db::progress::ProgressError> {
     // The device reports whole-book percent in `ProgressPercent`; the
     // content-source variant is per-chapter and not comparable across surfaces.
-    let percent = bookmark.progress_percent.map(|p| p.clamp(0, 100));
+    //
+    // An out-of-range value is *dropped*, not clamped: clamping would turn
+    // data we plainly don't understand into a confident-looking resume point
+    // (101 → "finished"), and a silently wrong position is worse than none.
+    let percent = bookmark.progress_percent.filter(|p| (0..=100).contains(p));
     let location = bookmark
         .location
         .as_ref()

@@ -1537,3 +1537,73 @@ async fn record_session_without_client_id_still_inserts_every_report() {
         .unwrap();
     assert_eq!(count, 2);
 }
+
+#[tokio::test]
+async fn upsert_does_not_let_a_blank_cfi_clobber_a_stored_one() {
+    // Defense in depth for the COALESCE merge: `validate` rejects a blank CFI
+    // at the API boundary, and the bind normalizes it to NULL so an internal
+    // caller that skipped validation still can't overwrite a good anchor with
+    // whitespace.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    let cfi = "epubcfi(/6/4!/4/2/1:0)";
+    upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Epub,
+            epub_cfi: Some(cfi.into()),
+            audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
+            client_updated_at: Some(100),
+        },
+    )
+    .await
+    .unwrap();
+
+    let after = upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Epub,
+            epub_cfi: Some("   ".into()),
+            audio_position_seconds: None,
+            progress_percent: Some(70),
+            kobo_location: None,
+            client_updated_at: Some(200),
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(after.epub_cfi.as_deref(), Some(cfi), "anchor must survive");
+    assert_eq!(after.progress_percent, Some(70));
+}
+
+#[tokio::test]
+async fn audio_rows_cannot_carry_the_epub_only_position_columns() {
+    // The row CHECK enforces the cross-format invariant independently of the
+    // API validators, so an internal caller can't persist a mixed row.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+
+    let err = sqlx::query(
+        "INSERT INTO reading_progress
+            (user_id, book_uuid, format, audio_position_seconds, progress_percent, updated_at)
+         VALUES (?, ?, 'audio', 12.0, 50, 1)",
+    )
+    .bind(user)
+    .bind(&uuid)
+    .execute(&pool)
+    .await
+    .expect_err("an audio row with a percent must violate the CHECK");
+    assert!(
+        err.to_string().to_lowercase().contains("constraint"),
+        "got: {err}"
+    );
+}
