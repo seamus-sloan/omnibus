@@ -305,24 +305,15 @@
       installContentLinkNav();
       installStageResizeWatch(elementId);
 
-      // These body backgrounds are mirrored by the per-theme `--rd-page`
-      // token in atrium.css (the reader-surface ground) — change both
-      // together or the chrome strips stop matching the page.
-      rendition.themes.register("light", {
-        body: { background: "#fcfbfa", color: foregroundColorForTheme("light") },
-      });
-      rendition.themes.register("dark", {
-        body: { background: "#201e1b", color: foregroundColorForTheme("dark") },
-      });
-      // Matches Apple Books' dark reading theme on macOS: a pure-black
-      // #000000 page with bright #ffffff text.
-      rendition.themes.register("black", {
-        body: { background: "#000000", color: foregroundColorForTheme("black") },
-      });
-      rendition.themes.register("sepia", {
-        body: { background: "#ede4d0", color: foregroundColorForTheme("sepia") },
-      });
-      rendition.themes.select(opts.theme || "dark");
+      // The page's colours are the reader's own — see `applyThemeColors` and
+      // the baseline stylesheet — rather than epub.js themes.
+      //
+      // `themes.select` was the wrong tool: it appends a per-theme <style> to
+      // each section head and never removes or reorders one, so the ground came
+      // from whichever theme was appended last, not from the selected one. Once
+      // all four had been visited every later switch left the page on the
+      // fourth one's ground while the ink and the host chrome followed the
+      // selection — Light ink on a black page.
       currentTheme = opts.theme || "dark";
       applyHostGround(currentTheme);
 
@@ -756,10 +747,34 @@
     }
   }
 
+  // Page grounds, keyed by theme token. Mirrored by the per-theme `--rd-page`
+  // token in atrium.css and by `Palette.readerPage` in the iOS design system —
+  // change all three together or the chrome strips stop matching the page.
+  // Black matches Apple Books' dark reading theme on macOS: a pure-black page
+  // under bright #ffffff text.
+  var PAGE_GROUNDS = {
+    light: "#fcfbfa",
+    dark: "#201e1b",
+    black: "#000000",
+    sepia: "#ede4d0",
+  };
+
+  function backgroundColorForTheme(name) {
+    return PAGE_GROUNDS[name] || PAGE_GROUNDS.dark;
+  }
+
   // Push the current theme's reader-owned colours into a section as CSS vars
   // the baseline stylesheet reads. Runs per section and on every theme swap.
+  //
+  // A variable rather than a stylesheet swap is the whole point: one rule reads
+  // it, so a theme change is a value changing in place and can never turn into
+  // a cascade race between the ground the reader left and the one it picked.
   function applyThemeColors(doc) {
     if (doc && doc.documentElement) {
+      doc.documentElement.style.setProperty(
+        "--omn-bg",
+        backgroundColorForTheme(currentTheme)
+      );
       doc.documentElement.style.setProperty(
         "--omn-fg",
         foregroundColorForTheme(currentTheme)
@@ -807,18 +822,22 @@
       // margins, justification — set elsewhere), while the publisher keeps
       // structure — weight, style, headings, alignment, indents, small-caps.
       //
-      // Appended last, and `!important` on colour so a publisher hue can't
-      // override the theme. Include `body` itself: descendants inheriting from
-      // a publisher-coloured, classed body otherwise stay black in Black/Dark
-      // themes. Only *real* links — `a` with an `href` — get the reader's
-      // accent. Scoping to `[href]` also spares body text that Gutenberg wraps
-      // in a self-closing *named* anchor (`<a id="chapN"/>`, no href), which
-      // the HTML parser leaves open across the chapter.
+      // Appended last, and `!important` on both ground and ink so a publisher
+      // hue can't override the theme. Include `body` itself: descendants
+      // inheriting from a publisher-coloured, classed body otherwise stay black
+      // in Black/Dark themes. Only *real* links — `a` with an `href` — get the
+      // reader's accent. Scoping to `[href]` also spares body text that
+      // Gutenberg wraps in a self-closing *named* anchor (`<a id="chapN"/>`, no
+      // href), which the HTML parser leaves open across the chapter.
+      //
+      // The ground is one rule over `html,body` only — never `body *`, which
+      // would paint every element its own opaque box.
       if (!doc.getElementById("__omnibus_baseline")) {
         var style = doc.createElement("style");
         style.id = "__omnibus_baseline";
         style.textContent =
           "html,body{-webkit-hyphens:auto;-ms-hyphens:auto;hyphens:auto;}" +
+          "html,body{background:var(--omn-bg,#201e1b)!important;}" +
           "body,body *{color:var(--omn-fg,#f5f3f0)!important;}" +
           "a:not([href]){cursor:auto;}" +
           "a[href]{color:var(--omn-link,#4a86d8)!important;text-decoration:none;}" +
@@ -1746,15 +1765,6 @@
     applyMarkStyles();
   }
 
-  // Page grounds, keyed by theme token. Mirrors the `themes.register` bodies
-  // above — change both together.
-  var HOST_GROUNDS = {
-    light: "#fcfbfa",
-    dark: "#201e1b",
-    black: "#000000",
-    sepia: "#ede4d0",
-  };
-
   // Paint the *host* document the same ground as the page.
   //
   // The stage is inset from the safe areas, so the bands above and below it are
@@ -1762,14 +1772,15 @@
   // dark behind a white page — which reads as a broken frame around the prose
   // now that the chrome floats over those bands instead of covering them.
   function applyHostGround(name) {
-    var ground = HOST_GROUNDS[name];
-    if (!ground || !document.documentElement) return;
-    document.documentElement.style.setProperty("--page", ground);
+    if (!document.documentElement) return;
+    document.documentElement.style.setProperty(
+      "--page",
+      backgroundColorForTheme(name)
+    );
   }
 
   function setTheme(name) {
     if (!rendition) return;
-    rendition.themes.select(name);
     currentTheme = name;
     applyHostGround(name);
     applyMarkStyles();
