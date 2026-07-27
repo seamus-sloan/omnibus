@@ -130,19 +130,21 @@ async fn kobo_reading_services_paths_pass_the_session_gate_untouched() {
 
 #[tokio::test]
 async fn api_v3_paths_outside_content_stay_gated() {
-    // The exemption is scoped to /api/v3/content — nothing else under /api/v3
-    // rides along.
+    // The exemption is scoped to /api/v3/content/ — neither a sibling route
+    // nor a same-prefix name (/api/v3/contentious) rides along.
     let (app, _pool) = app().await;
-    let res = app
-        .oneshot(
-            Request::builder()
-                .uri("/api/v3/other")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    for uri in ["/api/v3/other", "/api/v3/contentious", "/api/v3/content"] {
+        let res = app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            res.status(),
+            StatusCode::UNAUTHORIZED,
+            "{uri} must stay gated"
+        );
+    }
 }
 
 #[tokio::test]

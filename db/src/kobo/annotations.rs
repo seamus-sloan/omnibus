@@ -112,19 +112,16 @@ pub async fn changed_book_uuids(
         );
     }
 
-    let mut candidates: Vec<String> = sqlx::query_scalar(
+    let annotated: Vec<String> = sqlx::query_scalar(
         "SELECT DISTINCT book_uuid FROM annotations
          WHERE user_id = ? AND kobo_location IS NOT NULL AND client_id IS NOT NULL",
     )
     .bind(user_id)
     .fetch_all(pool)
     .await?;
-    for uuid in state.keys() {
-        if !candidates.contains(uuid) {
-            candidates.push(uuid.clone());
-        }
-    }
-    candidates.sort();
+    // BTreeSet union: dedup + deterministic report order in one shot.
+    let candidates: std::collections::BTreeSet<String> =
+        annotated.into_iter().chain(state.keys().cloned()).collect();
 
     let mut changed = Vec::new();
     for uuid in candidates {

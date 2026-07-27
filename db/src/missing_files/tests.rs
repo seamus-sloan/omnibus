@@ -743,3 +743,42 @@ async fn user_data_book_uuid_probes_use_the_book_uuid_first_index() {
         );
     }
 }
+
+#[tokio::test]
+async fn gc_deletes_the_purged_books_kobo_annotation_sync_state() {
+    // A per-device annotation watermark (#1278) is bookkeeping, not user
+    // data — it must not guard a victim, and it must not survive the purge:
+    // an orphaned row would make Reading Services `checkforchanges`
+    // re-report the dead uuid forever (its GET can only 404, never ack).
+    let _covers = CoversTempDir::new("gc_kobo_sync");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let uuid = seed_and_make_missing(&pool, "gone-kobo.epub").await;
+    backdate_missing_since(&pool, &uuid, 40).await;
+
+    let user_id = create_user(&pool, "kobo-reader", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let device = crate::kobo_devices::create_device(&pool, user_id, "Kobo")
+        .await
+        .unwrap();
+    crate::kobo::annotations::mark_adopted(&pool, device.id, &uuid)
+        .await
+        .unwrap();
+
+    let purged = gc_books_missing_files(&pool, MISSING_FILES_RETENTION_DAYS)
+        .await
+        .unwrap();
+    assert_eq!(purged, 1, "sync state alone must not guard a victim");
+
+    let sync_rows: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM kobo_annotations_sync WHERE book_uuid = ?")
+            .bind(&uuid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        sync_rows, 0,
+        "orphaned watermark rows must purge with the book"
+    );
+}
