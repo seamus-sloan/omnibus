@@ -464,7 +464,7 @@ async fn move_progress_and_history(
         "bookmarks",
         "reading_sessions",
         "listening_sessions",
-        "highlights",
+        "annotations",
     ] {
         let sql = format!("UPDATE {table} SET book_uuid = ?1 WHERE book_uuid = ?2");
         sqlx::query(&sql)

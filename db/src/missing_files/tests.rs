@@ -723,7 +723,7 @@ async fn user_data_book_uuid_probes_use_the_book_uuid_first_index() {
         ("bookmarks", "idx_bookmarks_book_uuid"),
         ("reading_sessions", "idx_reading_sessions_book_uuid"),
         ("listening_sessions", "idx_listening_sessions_book_uuid"),
-        ("highlights", "idx_highlights_book_uuid"),
+        ("annotations", "idx_annotations_book_uuid"),
     ];
     for (table, index) in cases {
         let sql = format!("EXPLAIN QUERY PLAN SELECT 1 FROM {table} WHERE book_uuid = ?");

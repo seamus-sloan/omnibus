@@ -235,7 +235,10 @@ async fn drain_reader_events(
             // Replay saved highlights into the freshly-mounted rendition.
             if matches!(st, ReaderStatus::Ready) && highlights.peek().is_empty() {
                 for h in &saved_highlights {
-                    reader_call_json2("addAnnotation", &h.epub_cfi_range, h.color.as_str());
+                    // Kobo-origin highlights carry no CFI — nothing to paint.
+                    if let Some(cfi) = &h.epub_cfi_range {
+                        reader_call_json2("addAnnotation", cfi, h.color.as_str());
+                    }
                 }
                 highlights.set(saved_highlights.clone());
             }

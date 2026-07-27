@@ -1,6 +1,7 @@
-//! Unit tests for the `highlights` CRUD module — create round-trip,
-//! BookNotFound / NotFound variants, list isolation, color + note
-//! updates, and delete behaviour.
+//! Unit tests for the `annotations` module — web-path CRUD (create
+//! round-trip, BookNotFound / NotFound variants, list isolation, color +
+//! note updates, delete) and the Kobo ingest/serve half (idempotent upsert
+//! on the device-minted id, delete by id, anchor-filtered serving).
 
 use omnibus_shared::EbookMetadata;
 
@@ -58,7 +59,10 @@ async fn create_highlight_round_trips_fields() {
     };
     let h = create_highlight(&pool, user, &input).await.unwrap();
     assert_eq!(h.book_uuid, uuid);
-    assert_eq!(h.epub_cfi_range, "epubcfi(/6/4!/4/2,/1:0,/1:100)");
+    assert_eq!(
+        h.epub_cfi_range.as_deref(),
+        Some("epubcfi(/6/4!/4/2,/1:0,/1:100)")
+    );
     assert_eq!(h.color, HighlightColor::Blue);
     assert_eq!(h.text.as_deref(), Some("the quoted passage"));
     assert!(h.note.is_none());
@@ -268,7 +272,7 @@ async fn seed_highlights_raw(pool: &SqlitePool, user_id: i64, book_uuid: &str, c
         WITH RECURSIVE n(i) AS (
             SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?
         )
-        INSERT INTO highlights (user_id, book_uuid, epub_cfi_range, color, created_at)
+        INSERT INTO annotations (user_id, book_uuid, epub_cfi_range, color, created_at)
         SELECT ?, ?, 'epubcfi(/' || i || ')', 'amber', i FROM n
         ",
     )
@@ -297,8 +301,8 @@ async fn list_highlights_caps_response_at_hard_limit() {
 }
 
 /// Guard against a covering-index regression. Without
-/// `idx_highlights_user_book_created` the planner falls back to
-/// `idx_highlights_user_book` and sorts the matched rows in memory —
+/// `idx_annotations_user_book_created` the planner falls back to
+/// `idx_annotations_user_book` and sorts the matched rows in memory —
 /// SQLite calls this out as `USE TEMP B-TREE FOR ORDER BY` in the plan.
 /// We assert the plan mentions the covering index by name and does not
 /// mention the temp b-tree — a structural check that survives
@@ -319,7 +323,7 @@ async fn list_highlights_query_plan_uses_covering_index() {
     let plan_rows = sqlx::query(
         "EXPLAIN QUERY PLAN
          SELECT h.id, h.book_uuid, h.epub_cfi_range, h.color, h.note, h.text, h.created_at
-           FROM highlights h
+           FROM annotations h
           WHERE h.user_id = ? AND h.book_uuid = ?
           ORDER BY h.created_at ASC
           LIMIT ?",
@@ -336,7 +340,7 @@ async fn list_highlights_query_plan_uses_covering_index() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        plan.contains("idx_highlights_user_book_created"),
+        plan.contains("idx_annotations_user_book_created"),
         "expected covering index in plan, got:\n{plan}",
     );
     assert!(
@@ -478,5 +482,220 @@ async fn highlight_id_for_client_id_propagates_db_error_when_pool_is_closed() {
     let err = highlight_id_for_client_id(&pool, 1, "handle")
         .await
         .unwrap_err();
+    assert!(matches!(err, HighlightError::Sqlx(_)));
+}
+
+// ---------------------------------------------------------------------------
+// Kobo ingest / serve (#1278)
+// ---------------------------------------------------------------------------
+
+fn kobo_upload(client_id: &str, color: HighlightColor, note: Option<&str>) -> IngestKoboAnnotation {
+    IngestKoboAnnotation {
+        client_id: client_id.into(),
+        color,
+        text: Some("device prose".into()),
+        note: note.map(Into::into),
+        kobo_location: r#"{"span":{"startPath":"span#kobo\\.1\\.2","startChar":3}}"#.into(),
+    }
+}
+
+#[tokio::test]
+async fn ingest_kobo_annotations_creates_anchorless_rows_the_web_list_still_returns() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+
+    ingest_kobo_annotations(
+        &pool,
+        user,
+        &uuid,
+        &[kobo_upload(
+            "kobo-1",
+            HighlightColor::Green,
+            Some("device note"),
+        )],
+        &[],
+    )
+    .await
+    .unwrap();
+
+    let listed = list_highlights(&pool, user, &uuid).await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].epub_cfi_range, None, "kobo rows carry no CFI");
+    assert_eq!(listed[0].color, HighlightColor::Green);
+    assert_eq!(listed[0].note.as_deref(), Some("device note"));
+    assert_eq!(listed[0].text.as_deref(), Some("device prose"));
+    assert_eq!(listed[0].client_id.as_deref(), Some("kobo-1"));
+
+    let served = served_kobo_annotations(&pool, user, &uuid).await.unwrap();
+    assert_eq!(served.len(), 1);
+    assert_eq!(served[0].client_id, "kobo-1");
+    assert!(served[0].kobo_location.contains("startPath"));
+}
+
+#[tokio::test]
+async fn ingest_kobo_annotations_replay_of_the_same_upload_creates_no_duplicates() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    let batch = [kobo_upload("kobo-1", HighlightColor::Amber, None)];
+
+    ingest_kobo_annotations(&pool, user, &uuid, &batch, &[])
+        .await
+        .unwrap();
+    ingest_kobo_annotations(&pool, user, &uuid, &batch, &[])
+        .await
+        .unwrap();
+
+    assert_eq!(list_highlights(&pool, user, &uuid).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn ingest_kobo_annotations_updates_color_note_and_text_for_an_existing_id() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+
+    ingest_kobo_annotations(
+        &pool,
+        user,
+        &uuid,
+        &[kobo_upload("kobo-1", HighlightColor::Amber, None)],
+        &[],
+    )
+    .await
+    .unwrap();
+
+    // A device-side edit re-uploads the same id with newer content; unlike
+    // the web path's replayed create, this carries intent and must win.
+    let mut edited = kobo_upload("kobo-1", HighlightColor::Violet, Some("second thoughts"));
+    edited.text = Some("re-selected prose".into());
+    ingest_kobo_annotations(&pool, user, &uuid, &[edited], &[])
+        .await
+        .unwrap();
+
+    let listed = list_highlights(&pool, user, &uuid).await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].color, HighlightColor::Violet);
+    assert_eq!(listed[0].note.as_deref(), Some("second thoughts"));
+    assert_eq!(listed[0].text.as_deref(), Some("re-selected prose"));
+}
+
+#[tokio::test]
+async fn ingest_kobo_annotations_deletes_rows_by_device_minted_id() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+
+    ingest_kobo_annotations(
+        &pool,
+        user,
+        &uuid,
+        &[
+            kobo_upload("kobo-1", HighlightColor::Amber, None),
+            kobo_upload("kobo-2", HighlightColor::Blue, None),
+        ],
+        &[],
+    )
+    .await
+    .unwrap();
+
+    ingest_kobo_annotations(&pool, user, &uuid, &[], &["kobo-1".to_string()])
+        .await
+        .unwrap();
+
+    let served = served_kobo_annotations(&pool, user, &uuid).await.unwrap();
+    assert_eq!(served.len(), 1);
+    assert_eq!(served[0].client_id, "kobo-2");
+}
+
+#[tokio::test]
+async fn ingest_kobo_annotations_returns_book_not_found_for_an_unknown_uuid() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+
+    let err = ingest_kobo_annotations(
+        &pool,
+        user,
+        "no-such-uuid",
+        &[kobo_upload("kobo-1", HighlightColor::Amber, None)],
+        &[],
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, HighlightError::BookNotFound));
+}
+
+#[tokio::test]
+async fn served_kobo_annotations_excludes_cfi_only_rows_and_other_users() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let alice = seed_user(&pool, "alice").await;
+    let bob = seed_user(&pool, "bob").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+
+    // Alice: one web highlight (CFI, no kobo anchor) and one device upload.
+    create_highlight(
+        &pool,
+        alice,
+        &CreateHighlight {
+            client_id: None,
+            book_uuid: uuid.clone(),
+            epub_cfi_range: "epubcfi(/6/4)".into(),
+            color: HighlightColor::Blue,
+            text: None,
+        },
+    )
+    .await
+    .unwrap();
+    ingest_kobo_annotations(
+        &pool,
+        alice,
+        &uuid,
+        &[kobo_upload("kobo-alice", HighlightColor::Amber, None)],
+        &[],
+    )
+    .await
+    .unwrap();
+    // Bob's device upload on the same book stays his.
+    ingest_kobo_annotations(
+        &pool,
+        bob,
+        &uuid,
+        &[kobo_upload("kobo-bob", HighlightColor::Rose, None)],
+        &[],
+    )
+    .await
+    .unwrap();
+
+    let served = served_kobo_annotations(&pool, alice, &uuid).await.unwrap();
+    assert_eq!(served.len(), 1, "web CFI rows and Bob's rows are excluded");
+    assert_eq!(served[0].client_id, "kobo-alice");
+}
+
+#[tokio::test]
+async fn served_kobo_annotations_returns_empty_for_an_unknown_book() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    assert!(served_kobo_annotations(&pool, user, "no-such-uuid")
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn ingest_kobo_annotations_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = ingest_kobo_annotations(&pool, 1, "uuid", &[], &[])
+        .await
+        .unwrap_err();
+    assert!(matches!(err, HighlightError::Sqlx(_)));
+}
+
+#[tokio::test]
+async fn served_kobo_annotations_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = served_kobo_annotations(&pool, 1, "uuid").await.unwrap_err();
     assert!(matches!(err, HighlightError::Sqlx(_)));
 }

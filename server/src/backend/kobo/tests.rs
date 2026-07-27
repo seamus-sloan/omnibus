@@ -1153,7 +1153,7 @@ async fn library_sync_re_announces_a_status_change_to_a_device_that_holds_the_bo
     assert_eq!(body_json(first).await.as_array().unwrap().len(), 1);
 
     // Age the snapshot past `synced_at`'s 1-second granularity.
-    sqlx::query("UPDATE kobo_device_books SET synced_at = 1")
+    sqlx::query("UPDATE kobo_books_sync SET synced_at = 1")
         .execute(&pool)
         .await
         .unwrap();

@@ -158,7 +158,7 @@ async fn delete_book_items_purges_the_book_and_its_user_data_when_every_item_goe
     assert_eq!(count_rows(&pool, "SELECT COUNT(*) FROM books").await, 0);
     assert_eq!(count_rows(&pool, "SELECT COUNT(*) FROM books_fts").await, 0);
     for table in [
-        "highlights",
+        "annotations",
         "bookmarks",
         "user_ratings",
         "journal_entries",
@@ -623,7 +623,7 @@ async fn seed_user_data(pool: &SqlitePool, user_id: i64, uuid: &str) -> i64 {
          VALUES (?1, ?2, 'epub', 'epubcfi(/2)', 1)",
         "INSERT INTO bookmarks (user_id, book_uuid, position, created_at)
          VALUES (?1, ?2, 'x', 1)",
-        "INSERT INTO highlights (user_id, book_uuid, epub_cfi_range, created_at)
+        "INSERT INTO annotations (user_id, book_uuid, epub_cfi_range, created_at)
          VALUES (?1, ?2, 'x', 1)",
         "INSERT INTO user_ratings (user_id, book_uuid, half_stars, updated_at)
          VALUES (?1, ?2, 8, 1)",

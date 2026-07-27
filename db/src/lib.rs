@@ -4,6 +4,7 @@
 //! (axum REST handlers) and `frontend/` (Dioxus server functions under
 //! `feature = "server"`).
 
+pub mod annotations;
 pub mod audiobook;
 pub mod auth;
 pub mod author_photos;
@@ -18,7 +19,6 @@ pub mod discovery;
 pub mod ebook;
 pub mod epub_rewrite;
 pub mod helpers;
-pub mod highlights;
 pub mod hls;
 mod http_client;
 pub mod identity;

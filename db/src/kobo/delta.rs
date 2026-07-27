@@ -1,5 +1,5 @@
 //! Per-device sync delta: diff the caller's opted-in books against what a
-//! device already holds (`kobo_device_books`) and classify each into an add,
+//! device already holds (`kobo_books_sync`) and classify each into an add,
 //! a change, or a removal.
 
 use sqlx::{Row, SqlitePool};
@@ -109,7 +109,7 @@ pub async fn record_synced(
         match change {
             SyncChange::New(book) | SyncChange::Changed(book) => {
                 sqlx::query(
-                    "INSERT INTO kobo_device_books
+                    "INSERT INTO kobo_books_sync
                         (device_id, book_uuid, last_modified_seen, synced_at)
                      VALUES (?, ?, ?, strftime('%s','now'))
                      ON CONFLICT(device_id, book_uuid) DO UPDATE SET
@@ -126,7 +126,7 @@ pub async fn record_synced(
             // overwriting it here would mark unsent metadata as delivered.
             SyncChange::StateChanged(book) => {
                 sqlx::query(
-                    "UPDATE kobo_device_books SET synced_at = strftime('%s','now')
+                    "UPDATE kobo_books_sync SET synced_at = strftime('%s','now')
                       WHERE device_id = ? AND book_uuid = ?",
                 )
                 .bind(device_id)
@@ -135,7 +135,7 @@ pub async fn record_synced(
                 .await?;
             }
             SyncChange::Removed { book_uuid } => {
-                sqlx::query("DELETE FROM kobo_device_books WHERE device_id = ? AND book_uuid = ?")
+                sqlx::query("DELETE FROM kobo_books_sync WHERE device_id = ? AND book_uuid = ?")
                     .bind(device_id)
                     .bind(book_uuid)
                     .execute(&mut *tx)
@@ -150,7 +150,7 @@ pub async fn record_synced(
 /// Forget everything a device is holding, so its next sync re-sends the whole
 /// opted-in set. Used when a device is re-registered or its token rotated.
 pub async fn clear_snapshot(pool: &SqlitePool, device_id: i64) -> Result<(), KoboError> {
-    sqlx::query("DELETE FROM kobo_device_books WHERE device_id = ?")
+    sqlx::query("DELETE FROM kobo_books_sync WHERE device_id = ?")
         .bind(device_id)
         .execute(pool)
         .await?;
@@ -172,7 +172,7 @@ async fn held_snapshot(
 ) -> Result<std::collections::BTreeMap<String, Held>, KoboError> {
     let rows = sqlx::query(
         "SELECT book_uuid, last_modified_seen, synced_at
-           FROM kobo_device_books WHERE device_id = ?",
+           FROM kobo_books_sync WHERE device_id = ?",
     )
     .bind(device_id)
     .fetch_all(pool)

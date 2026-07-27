@@ -10,6 +10,7 @@ use omnibus_shared::ReadStatus;
 
 use crate::resolve_canonical_book_uuid;
 
+pub mod annotations;
 pub mod delta;
 
 pub use delta::{clear_snapshot, record_synced, sync_delta, SyncChange, SyncDelta};

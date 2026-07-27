@@ -172,23 +172,58 @@ pub async fn resolve_device_by_token(
     }))
 }
 
-/// Persist the `x-kobo-deviceid` hardware id the first time we see it, so
-/// later token-less Reading Services calls (#927) can map back to this device.
-/// Write-once: an already-learned id is left untouched.
+/// Bind the `x-kobo-deviceid` hardware id to this device row, so token-less
+/// Reading Services calls (#1278) can map back to it. Steal-on-learn: the id
+/// is cleared from any other row first (0060 enforces uniqueness), so the
+/// hardware id always follows the device row whose *token* it most recently
+/// presented — a factory-reset or re-pointed Kobo re-binds correctly, and no
+/// other user's row can retain it.
 pub async fn learn_kobo_device_id(
     pool: &SqlitePool,
     device_id: i64,
     hardware_id: &str,
 ) -> Result<(), KoboDeviceError> {
+    let mut tx = pool.begin().await?;
+    // Clear before set, in that order, so the partial unique index never trips.
     sqlx::query(
-        "UPDATE kobo_devices SET kobo_device_id = ?
-         WHERE id = ? AND kobo_device_id IS NULL",
+        "UPDATE kobo_devices SET kobo_device_id = NULL WHERE kobo_device_id = ? AND id <> ?",
     )
     .bind(hardware_id)
     .bind(device_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    sqlx::query("UPDATE kobo_devices SET kobo_device_id = ? WHERE id = ?")
+        .bind(hardware_id)
+        .bind(device_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
     Ok(())
+}
+
+/// Resolve an `x-kobo-deviceid` hardware id to its owning device + user,
+/// touching `last_seen_at`. `Ok(None)` for an id no tokened call has taught us
+/// — the Reading Services extractor maps that to `401`. At most one row can
+/// match (unique index, 0060).
+pub async fn resolve_device_by_hardware_id(
+    pool: &SqlitePool,
+    hardware_id: &str,
+) -> Result<Option<ResolvedKoboDevice>, KoboDeviceError> {
+    let Some(row) = sqlx::query(
+        "UPDATE kobo_devices SET last_seen_at = strftime('%s', 'now')
+         WHERE kobo_device_id = ?
+         RETURNING id, user_id",
+    )
+    .bind(hardware_id)
+    .fetch_optional(pool)
+    .await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(ResolvedKoboDevice {
+        device_id: row.get("id"),
+        user_id: row.get("user_id"),
+    }))
 }
 
 /// Store the opaque per-device delta cursor (#926). Kept independent of the

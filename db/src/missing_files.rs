@@ -52,7 +52,7 @@ pub async fn gc_books_missing_files(
             AND NOT EXISTS (SELECT 1 FROM bookmarks            WHERE book_uuid = b.uuid)
             AND NOT EXISTS (SELECT 1 FROM reading_sessions     WHERE book_uuid = b.uuid)
             AND NOT EXISTS (SELECT 1 FROM listening_sessions   WHERE book_uuid = b.uuid)
-            AND NOT EXISTS (SELECT 1 FROM highlights           WHERE book_uuid = b.uuid)
+            AND NOT EXISTS (SELECT 1 FROM annotations          WHERE book_uuid = b.uuid)
             AND NOT EXISTS (SELECT 1 FROM user_ratings         WHERE book_uuid = b.uuid)
             AND NOT EXISTS (SELECT 1 FROM book_read_status     WHERE book_uuid = b.uuid)
             AND NOT EXISTS (SELECT 1 FROM audiobook_playback_preferences

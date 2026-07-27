@@ -701,13 +701,15 @@ struct ReaderView: View {
 
         switch action {
         case .highlight:
-            guard let created = await createHighlight(selection, color: .amber) else { return }
+            guard let created = await createHighlight(selection, color: .amber),
+                  let createdCFI = created.epubCFIRange
+            else { return }
             // Highlighting opens our own menu on the new mark, so the colour
             // is one tap away rather than fixed at whatever we defaulted to —
             // the same follow-through Apple Books gives the action.
             withAnimation(Motion.snap) {
                 controller.tappedAnnotation = AnnotationTapData(
-                    cfiRange: created.epubCFIRange, rect: rect
+                    cfiRange: createdCFI, rect: rect
                 )
             }
 
@@ -725,24 +727,30 @@ struct ReaderView: View {
 
     private func recolor(_ highlight: Highlight, to color: HighlightColor) async {
         controller.tappedAnnotation = nil
-        controller.removeAnnotation(cfiRange: highlight.epubCFIRange)
-        controller.addAnnotation(
-            cfiRange: highlight.epubCFIRange,
-            color: color,
-            hasNote: highlight.note?.nilIfBlank != nil
-        )
+        // Anchorless (Kobo-origin) rows are never painted; the row state and
+        // the persisted value still change.
+        if let cfiRange = highlight.epubCFIRange {
+            controller.removeAnnotation(cfiRange: cfiRange)
+            controller.addAnnotation(
+                cfiRange: cfiRange,
+                color: color,
+                hasNote: highlight.note?.nilIfBlank != nil
+            )
+        }
         update(highlight) { $0.color = color }
         await UserDataService.setHighlightColor(highlight, color: color)
     }
 
     private func saveNote(_ note: String?, on highlight: Highlight) async {
         // Re-add the mark so the note underline appears or clears to match.
-        controller.removeAnnotation(cfiRange: highlight.epubCFIRange)
-        controller.addAnnotation(
-            cfiRange: highlight.epubCFIRange,
-            color: highlight.color,
-            hasNote: note != nil
-        )
+        if let cfiRange = highlight.epubCFIRange {
+            controller.removeAnnotation(cfiRange: cfiRange)
+            controller.addAnnotation(
+                cfiRange: cfiRange,
+                color: highlight.color,
+                hasNote: note != nil
+            )
+        }
         update(highlight) { $0.note = note }
         Haptics.success()
         await UserDataService.setHighlightNote(highlight, note: note)
@@ -750,7 +758,9 @@ struct ReaderView: View {
 
     private func removeHighlight(_ highlight: Highlight) async {
         controller.tappedAnnotation = nil
-        controller.removeAnnotation(cfiRange: highlight.epubCFIRange)
+        if let cfiRange = highlight.epubCFIRange {
+            controller.removeAnnotation(cfiRange: cfiRange)
+        }
         highlights.removeAll { $0.id == highlight.id }
         Haptics.warning()
         await UserDataService.deleteHighlight(highlight)

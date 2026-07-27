@@ -227,6 +227,10 @@ mod server {
             // (require_auth passes through non-`/api/` paths); each route
             // authenticates via its path token internally.
             .merge(backend::kobo_router(state.clone()))
+            // Kobo Reading Services (annotations, #1278). Lives under /api/v3
+            // at the bare origin — require_auth exempts those paths; each
+            // route authenticates via the x-kobo-deviceid header internally.
+            .merge(backend::reading_services_router(state.clone()))
             .merge(
                 auth::auth_router(state.clone()).layer(axum::middleware::from_fn_with_state(
                     (auth_limiter, auth_limiter_prefixes),

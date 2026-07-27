@@ -13,7 +13,7 @@ works in production.
 
 1. **Name it `NNNN_short_description.sql`.** Take the next zero-padded
    number after the highest existing file (latest is
-   `0056_reading_progress_book_file.sql`). The number is the version
+   `0060_kobo_annotations_sync.sql`). The number is the version
    `_sqlx_migrations` records; renumbering or renaming an applied file
    breaks the applied-version bookkeeping.
 2. **Never edit an applied migration.** Once a file has run anywhere
