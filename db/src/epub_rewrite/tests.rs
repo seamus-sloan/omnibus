@@ -1,13 +1,14 @@
 //! Tests for the export-with-overrides EPUB rewrite (F5.8 #1372).
 
-use std::io::{Cursor, Read};
+use std::io::{Cursor, Read, Write};
 
 use epub::doc::EpubDoc;
 use image::{DynamicImage, ImageFormat, RgbImage};
-use omnibus_shared::{Contributor, EbookMetadata};
+use omnibus_shared::{Contributor, EbookMetadata, MetadataOverrides};
 
 use super::cover::encode_cover_for;
 use super::opf::transform_opf;
+use super::EpubRewriteError;
 use crate::ebook::test_support::{copy_fixture_into, fixture};
 use crate::test_support::{CoversTempDir, EnvVarGuard};
 
@@ -324,6 +325,62 @@ fn rewrite_archive_errors_on_entry_that_decompresses_past_the_size_cap() {
     );
 }
 
+#[test]
+fn rewrite_archive_returns_a_clean_err_for_a_file_that_is_not_a_zip_container() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("not-a-zip.epub");
+    let dst = tmp.path().join("out.epub");
+
+    // No zip signature at all — the shape a completely garbled/non-EPUB
+    // upload would take. Must surface as a plain `Err`, never a panic.
+    std::fs::write(&src, b"this file is not a zip archive, just plain text").unwrap();
+
+    let err =
+        super::archive::rewrite_archive(&src, &dst, "content.opf", |raw| Ok(raw.to_vec()), None)
+            .unwrap_err();
+    assert!(
+        err.to_string().contains("read source epub as zip"),
+        "expected a zip-parse error, got: {err}"
+    );
+}
+
+#[test]
+fn rewrite_archive_returns_a_clean_err_for_a_zip_truncated_mid_central_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let full = tmp.path().join("full.epub");
+    let src = tmp.path().join("truncated.epub");
+    let dst = tmp.path().join("out.epub");
+
+    // A well-formed small zip, then chopped in half — local file headers and
+    // data may still be intact, but the end-of-central-directory record (at
+    // the tail) is gone. Models a partially-downloaded or disk-corrupted
+    // EPUB rather than a file that was never a zip at all.
+    {
+        let file = std::fs::File::create(&full).unwrap();
+        let mut writer = zip::ZipWriter::new(file);
+        writer
+            .start_file(
+                "mimetype",
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored),
+            )
+            .unwrap();
+        writer.write_all(b"application/epub+zip").unwrap();
+        writer
+            .start_file("content.opf", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(SAMPLE_OPF.as_bytes()).unwrap();
+        writer.finish().unwrap();
+    }
+    let full_bytes = std::fs::read(&full).unwrap();
+    std::fs::write(&src, &full_bytes[..full_bytes.len() / 2]).unwrap();
+
+    let err =
+        super::archive::rewrite_archive(&src, &dst, "content.opf", |raw| Ok(raw.to_vec()), None)
+            .unwrap_err();
+    assert!(!err.to_string().is_empty(), "expected a descriptive error");
+}
+
 // --- rewritten_epub_path (DB-integrated) -------------------------------
 
 #[tokio::test]
@@ -425,6 +482,93 @@ async fn rewritten_epub_path_removes_a_leftover_cache_file_when_no_override_is_a
         !cache_path.exists(),
         "the orphaned cache file must be cleaned up rather than left on disk"
     );
+}
+
+// --- rewritten_epub_path error variants (#1396) ------------------------
+
+#[tokio::test]
+async fn rewritten_epub_path_returns_book_not_found_for_unknown_book_id() {
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    let src = fixture("alpha.epub");
+
+    let err = super::rewritten_epub_path(&pool, 9999, &src)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, EpubRewriteError::BookNotFound(9999)));
+}
+
+#[tokio::test]
+async fn rewritten_epub_path_returns_books_error_when_pool_is_closed() {
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    let uuid =
+        crate::test_support::seed_synced_ebook(&pool, "closed-pool.epub", "Closed Pool", "Author")
+            .await;
+    let id = crate::resolve_book_id_by_uuid(&pool, &uuid)
+        .await
+        .unwrap()
+        .unwrap();
+    pool.close().await;
+
+    let src = fixture("alpha.epub");
+    let err = super::rewritten_epub_path(&pool, id, &src)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, EpubRewriteError::Books(_)));
+}
+
+#[tokio::test]
+async fn rewritten_epub_path_returns_failed_when_the_source_epub_is_missing() {
+    let export = tempfile::tempdir().unwrap();
+    let _env = EnvVarGuard::set_os("OMNIBUS_EXPORT_EPUB_DIR", Some(export.path().as_os_str()));
+
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let uuid = crate::test_support::seed_synced_ebook(
+        &pool,
+        "missing-source.epub",
+        "Missing Source",
+        "Author",
+    )
+    .await;
+    let id = crate::resolve_book_id_by_uuid(&pool, &uuid)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let overrides = MetadataOverrides {
+        title: Some("New Title".into()),
+        ..Default::default()
+    };
+    crate::upsert_metadata_overrides(&pool, &uuid, &overrides, false, user_id)
+        .await
+        .unwrap();
+
+    // An override is active, so `rewritten_epub_path` attempts the rewrite —
+    // but `source` doesn't exist on disk, so opening it as an epub fails and
+    // the anyhow error collapses into `Failed` per the module's doc comment.
+    let src = export.path().join("does-not-exist.epub");
+    let err = super::rewritten_epub_path(&pool, id, &src)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, EpubRewriteError::Failed(_)));
+}
+
+/// `EpubRewriteError::Io` is declared for completeness (mirroring the
+/// sibling `opf_export::OpfExportError`) but every filesystem failure inside
+/// `rewritten_epub_path` is deliberately routed through `anyhow` context
+/// first — per the enum's own doc comment, "every foreign-system failure...
+/// collapses into `Failed`" — so `Io` is never constructed by that function
+/// today. This exercises the `#[from] std::io::Error` conversion directly
+/// so the variant still has a passing test and a regression catches it if a
+/// future caller starts constructing it.
+#[test]
+fn epub_rewrite_error_io_variant_wraps_a_source_io_error_via_from() {
+    let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "missing file");
+    let err: EpubRewriteError = io_err.into();
+    assert!(matches!(err, EpubRewriteError::Io(_)));
 }
 
 // --- cap_bytes / evict_if_over_cap / invalidate_export_epub_cache -----
