@@ -207,6 +207,22 @@ pub fn use_is_admin() -> ReadSignal<bool> {
     ReadSignal::new(use_signal(|| false))
 }
 
+/// Derive `can_upload` (admin implies it) from [`CurrentUser`] — mirrors [`use_is_admin`].
+#[cfg(feature = "web")]
+pub fn use_can_upload() -> ReadSignal<bool> {
+    let user_ctx = use_current_user().0;
+    ReadSignal::new(use_memo(
+        move || matches!(user_ctx(), Some(Some(ref u)) if u.is_admin || u.can_upload),
+    ))
+}
+
+/// Non-web fallback for [`use_can_upload`] — same reasoning as
+/// [`use_is_admin`]'s fallback.
+#[cfg(not(feature = "web"))]
+pub fn use_can_upload() -> ReadSignal<bool> {
+    ReadSignal::new(use_signal(|| false))
+}
+
 /// Derive the resolved current user from the app-wide [`CurrentUser`]
 /// context — a pure function of its value, so `use_memo` recomputes it
 /// inline with no extra render pass, flattening "not yet resolved" and
@@ -328,7 +344,9 @@ mod tests {
 
     use dioxus::prelude::*;
 
-    use super::{append_cache_bust, bump_cover_cache_bust, cover_bust_for, format_page_title};
+    use super::{
+        append_cache_bust, bump_cover_cache_bust, cover_bust_for, format_page_title, use_can_upload,
+    };
 
     #[test]
     fn format_page_title_prefixes_subtitle_and_omits_when_none() {
@@ -390,5 +408,22 @@ mod tests {
             rsx! {}
         }
         VirtualDom::new(AssertBustCounter).rebuild_in_place();
+    }
+
+    // The `web` arm (which derives the real value from `CurrentUser`) needs
+    // the wasm32 target and isn't compiled for this native run, so only the
+    // non-web fallback is exercisable here — same blind spot `use_is_admin`
+    // already has. It's still worth pinning: this is the value SSR and the
+    // first WASM paint both render before the boot effect resolves the real
+    // permission (rule 07), so a regression here would flash the upload UI.
+    #[test]
+    fn use_can_upload_defaults_to_false_on_the_non_web_fallback() {
+        #[component]
+        fn AssertCanUpload() -> Element {
+            let can_upload = use_can_upload();
+            assert!(!can_upload());
+            rsx! {}
+        }
+        VirtualDom::new(AssertCanUpload).rebuild_in_place();
     }
 }
