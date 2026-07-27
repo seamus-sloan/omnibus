@@ -113,16 +113,23 @@ fn creator_needs_opf_attrs(book: &EbookMetadata) -> bool {
     })
 }
 
-/// `Event::Start` handling: track depth and namespace bindings, then either
-/// swallow (inside a dropped subtree), open the tracked `<metadata>`, start
-/// dropping a managed element's subtree, or pass the element through.
+/// `Event::Start` handling: track depth and (while still outside
+/// `<metadata>`'s subtree) namespace bindings, then either swallow (inside a
+/// dropped subtree), open the tracked `<metadata>`, start dropping a managed
+/// element's subtree, or pass the element through.
 fn handle_start(
     e: BytesStart<'_>,
     writer: &mut Writer<Vec<u8>>,
     state: &mut RewriteState,
 ) -> anyhow::Result<()> {
     state.depth += 1;
-    track_namespace_bindings(&e, state);
+    // Only elements at or above `<metadata>` are still in scope at the
+    // injection point (just before `</metadata>`): once `metadata_depth` is
+    // set, we're inside its subtree, where an XML namespace declaration goes
+    // out of scope again as soon as the declaring element closes.
+    if state.metadata_depth.is_none() {
+        track_namespace_bindings(&e, state);
+    }
 
     if state.skip_depth.is_some() {
         // Inside a dropped subtree — swallow.
@@ -153,7 +160,11 @@ fn handle_empty(
 }
 
 /// Record whether `e` declares the `xmlns:dc`/`xmlns:opf` prefixes the
-/// rewrite is about to inject.
+/// rewrite is about to inject. Callers must only invoke this for `<metadata>`
+/// itself or one of its ancestors — a declaration on a descendant (e.g. a
+/// redundant `xmlns:dc` on a `<dc:title>` child) is out of scope again by the
+/// time we inject new markup just before `</metadata>`, so trusting it would
+/// let unbound `dc:`/`opf:` elements slip into invalid OPF.
 fn track_namespace_bindings(e: &BytesStart<'_>, state: &mut RewriteState) {
     if declares(e, b"xmlns:dc") {
         state.dc_bound = true;
