@@ -61,7 +61,7 @@ cache_is_stale() {
   local p
   while IFS= read -r p; do
     [ -e "$p" ] || return 0
-  done < <(grep -o '/nix/store/[^"'\'' :]*' "$cache_file" | sort -u)
+  done < <(grep -o '/nix/store/[^"'\'' :]*' "$cache_file")
   return 1
 }
 

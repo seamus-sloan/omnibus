@@ -25,7 +25,7 @@ eval "$func_src"
 
 # Two store paths that genuinely exist on this box, standing in for
 # survived-GC paths. A fabricated suffix stands in for a collected one.
-existing_paths=(/nix/store/*/)
+mapfile -t existing_paths < <(compgen -G '/nix/store/*/' | head -n 2)
 if [ "${#existing_paths[@]}" -lt 2 ]; then
   echo "SKIP: fewer than two /nix/store entries on this machine; cannot build fixtures" >&2
   exit 0
