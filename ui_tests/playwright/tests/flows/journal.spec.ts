@@ -18,6 +18,15 @@ test.beforeAll(async ({ request }) => {
 
 const TARGET = FIXTURE_BOOKS.find((b) => b.slug === "alpha")!;
 
+// Reserved for the insert-from-highlights test (see fixtures/epubs.ts): a
+// seeded highlight is per-(user, book) state on the shared, persistent dev
+// server, so seeding one on TARGET would break reader.spec.ts's empty
+// highlights-drawer assertion on the same book. `standalone-meadow`
+// (Claude Shannon) is read by no other spec.
+const HIGHLIGHT_BOOK = FIXTURE_BOOKS.find(
+  (b) => b.slug === "standalone-meadow",
+)!;
+
 type Page = import("@playwright/test").Page;
 
 // The Write surface is a live-formatting `contenteditable` (testid
@@ -153,7 +162,9 @@ test("inserts a saved highlight into the draft as a blockquote", async ({
   page,
   request,
 }) => {
-  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  // HIGHLIGHT_BOOK, not TARGET: the seeded highlight below outlives the test's
+  // page, so it must land on a book no other spec reads.
+  const uuid = await fetchBookUuidByTitle(request, HIGHLIGHT_BOOK.title);
 
   // Seed a highlight via the REST API (bearer-authed request fixture); a unique
   // passage keeps the assertion robust against the shared, persistent dev DB.
@@ -167,25 +178,34 @@ test("inserts a saved highlight into the draft as a blockquote", async ({
     },
   });
   expect(created.status(), "seed highlight").toBe(200);
+  const highlightId = (await created.json()).id as number;
 
-  await gotoReady(page, `/books/${uuid}`);
-  await page.getByTestId("journal-open-composer").click();
+  // `finally`, so a mid-test assertion failure still cleans up: the seeded row
+  // would otherwise outlive the run in the shared dev DB.
+  try {
+    await gotoReady(page, `/books/${uuid}`);
+    await page.getByTestId("journal-open-composer").click();
 
-  // Open the inserter, pick the seeded passage → it lands as a `> ` blockquote
-  // with attribution, and the popover closes.
-  await page.getByTestId("journal-insert-highlight").click();
-  await expect(page.getByTestId("journal-highlights-pop")).toBeVisible();
-  await page
-    .getByTestId("journal-highlight-item")
-    .filter({ hasText: quote })
-    .click();
+    // Open the inserter, pick the seeded passage → it lands as a `> `
+    // blockquote with attribution, and the popover closes.
+    await page.getByTestId("journal-insert-highlight").click();
+    await expect(page.getByTestId("journal-highlights-pop")).toBeVisible();
+    await page
+      .getByTestId("journal-highlight-item")
+      .filter({ hasText: quote })
+      .click();
 
-  await expect(editorMarkdown(page)).toHaveValue(
-    new RegExp(`> ${quote}[\\s\\S]*saved from highlights`),
-  );
-  await expect(page.getByTestId("journal-highlights-pop")).toHaveCount(0);
+    await expect(editorMarkdown(page)).toHaveValue(
+      new RegExp(`> ${quote}[\\s\\S]*saved from highlights`),
+    );
+    await expect(page.getByTestId("journal-highlights-pop")).toHaveCount(0);
 
-  await cancelComposerDiscardingDraft(page);
+    await cancelComposerDiscardingDraft(page);
+  } finally {
+    // 204 No Content, unlike the 200 on create.
+    const removed = await request.delete(`/api/highlights/${highlightId}`);
+    expect(removed.status(), "clean up seeded highlight").toBe(204);
+  }
 });
 
 // ---------------------------------------------------------------------------

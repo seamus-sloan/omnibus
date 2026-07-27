@@ -339,6 +339,10 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     language: "en",
     hasCover: false,
   },
+  // Reserved for the journal insert-from-highlights spec (`journal.spec.ts`):
+  // it seeds a highlight on this book, and highlights are per-(user, book)
+  // server state that survives the run, so any spec asserting an empty
+  // highlights state on it would race that seed. No other spec may read it.
   {
     slug: "standalone-meadow",
     filename: "standalone-meadow.epub",
