@@ -40,5 +40,9 @@ private struct LaunchView: View {
             ProgressView()
                 .tint(palette.ink3Color)
         }
+        // The mark is decorative and the spinner has no label of its own, so
+        // without this the launching phase announces as a bare busy indicator.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading Omnibus")
     }
 }
