@@ -10,6 +10,7 @@ use dioxus::prelude::*;
 use omnibus_shared::physical::PhysicalCopy;
 use omnibus_shared::{BookDeletionManifest, BookFileInfo, DeleteBookFilesResult};
 
+use crate::components::ConfirmModal;
 use crate::{data, format, use_server_url};
 
 /// Which pane the dialog is showing.
@@ -75,24 +76,15 @@ pub fn DeleteBookDialog(
     });
 
     rsx! {
-        div {
-            class: "author-photo-modal-backdrop",
-            role: "dialog",
-            aria_modal: "true",
-            aria_label: "Delete book files",
-            "data-testid": "delete-book-dialog",
-            // No dismissal mid-delete — closing would hide the outcome while
-            // the request keeps running (same rule as the merge dialog).
-            onclick: move |_| {
-                if !busy() {
-                    on_close.call(());
-                }
-            },
-            div {
-                class: "mg-modal del-modal",
-                onclick: move |evt| evt.stop_propagation(),
-                {render_pane(title, signals, do_delete, on_close)}
-            }
+        // No dismissal mid-delete — closing would hide the outcome while
+        // the request keeps running (same rule as the merge dialog).
+        ConfirmModal {
+            testid: "delete-book-dialog".to_string(),
+            aria_label: "Delete book files".to_string(),
+            dialog_class: "mg-modal del-modal".to_string(),
+            busy: busy(),
+            on_dismiss: move |_| on_close.call(()),
+            {render_pane(title, signals, do_delete, on_close)}
         }
     }
 }

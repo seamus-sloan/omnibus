@@ -9,6 +9,7 @@ use dioxus::prelude::*;
 use omnibus_shared::{EbookMetadata, MergeBooksResult};
 
 use crate::components::atrium::Cover;
+use crate::components::ConfirmModal;
 use crate::{data, use_server_url};
 
 /// Search-and-select signals shared across the dialog's search and
@@ -53,37 +54,29 @@ pub fn MergeDialog(
     let do_merge = build_do_merge(server_url.clone(), target_uuid.clone(), signals, on_merged);
 
     rsx! {
-        div {
-            class: "author-photo-modal-backdrop",
-            role: "dialog",
-            aria_modal: "true",
-            aria_label: "Merge with another book",
-            // No dismissal while a merge is executing — closing would
-            // hide the outcome (the request itself keeps running).
-            onclick: move |_| {
-                if !busy() {
-                    on_close.call(());
+        // No dismissal while a merge is executing — closing would
+        // hide the outcome (the request itself keeps running).
+        ConfirmModal {
+            testid: "merge-dialog".to_string(),
+            aria_label: "Merge with another book".to_string(),
+            dialog_class: "mg-modal".to_string(),
+            busy: busy(),
+            on_dismiss: move |_| on_close.call(()),
+            div { class: "mg-head",
+                div { class: "label mg-kicker", "Merge duplicate" }
+                h2 { class: "mg-title", "Merge with\u{2026}" }
+            }
+            {render_merge_body(target.clone(), target_title.clone(), signals, run_search, do_merge)}
+            div { class: "mg-foot",
+                span { class: "mono mg-foot-note",
+                    "Nothing is deleted \u{2014} every merge can be undone."
                 }
-            },
-            div {
-                class: "mg-modal",
-                onclick: move |evt| evt.stop_propagation(),
-                div { class: "mg-head",
-                    div { class: "label mg-kicker", "Merge duplicate" }
-                    h2 { class: "mg-title", "Merge with\u{2026}" }
-                }
-                {render_merge_body(target.clone(), target_title.clone(), signals, run_search, do_merge)}
-                div { class: "mg-foot",
-                    span { class: "mono mg-foot-note",
-                        "Nothing is deleted \u{2014} every merge can be undone."
-                    }
-                    button {
-                        class: "btn ghost sm",
-                        "data-testid": "merge-cancel",
-                        disabled: busy(),
-                        onclick: move |_| on_close.call(()),
-                        "Cancel"
-                    }
+                button {
+                    class: "btn ghost sm",
+                    "data-testid": "merge-cancel",
+                    disabled: busy(),
+                    onclick: move |_| on_close.call(()),
+                    "Cancel"
                 }
             }
         }

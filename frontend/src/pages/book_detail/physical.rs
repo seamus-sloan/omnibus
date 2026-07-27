@@ -10,6 +10,7 @@
 use dioxus::prelude::*;
 use omnibus_shared::physical::{PhysicalCopy, WishlistEntry, WishlistSource};
 
+use crate::components::{confirm_modal_body, ConfirmModal, ConfirmModalAction, ConfirmModalTone};
 use crate::{data, use_server_url};
 
 use super::BdSectionHead;
@@ -364,74 +365,81 @@ fn render_delete_modal(state: PhysPanelState, url: String, uuid: String) -> Elem
         return rsx! {};
     };
     let copy_id = target.copy_id;
+    let is_busy = busy();
     if target.last_fileless {
         let (uw, ww) = (url.clone(), uuid.clone());
+        let title = "Remove your last copy";
         rsx! {
-            div {
-                class: "author-photo-modal-backdrop",
-                role: "dialog",
-                aria_modal: "true",
-                "data-testid": "last-copy-modal",
-                onclick: move |_| if !busy() { delete_target.set(None); },
-                div { class: "mg-modal del-modal", onclick: move |e| e.stop_propagation(),
-                    h3 { class: "del-modal-title", "Remove your last copy" }
-                    p { class: "del-modal-body",
-                        "This is the only copy of a book with no files in your library. Remove it entirely, or keep tracking it on your wishlist?"
-                    }
-                    div { class: "del-modal-actions",
-                        button {
-                            class: "del-btn-ghost",
-                            "data-testid": "last-copy-cancel",
-                            disabled: busy(),
-                            onclick: move |_| delete_target.set(None),
-                            "Cancel"
-                        }
-                        button {
-                            class: "del-btn-ghost",
-                            "data-testid": "last-copy-wishlist",
-                            disabled: busy(),
-                            onclick: move |_| delete_last_and_wishlist(state, uw.clone(), ww.clone(), copy_id),
-                            "Move to wishlist"
-                        }
-                        button {
-                            class: "del-btn-danger",
-                            "data-testid": "last-copy-remove",
-                            disabled: busy(),
-                            onclick: move |_| delete_last_and_remove(state, url.clone(), uuid.clone(), copy_id),
-                            "Remove from library"
-                        }
-                    }
-                }
+            ConfirmModal {
+                testid: "last-copy-modal".to_string(),
+                aria_label: title.to_string(),
+                dialog_class: "mg-modal del-modal".to_string(),
+                busy: is_busy,
+                on_dismiss: move |_| delete_target.set(None),
+                {confirm_modal_body(
+                    title,
+                    "This is the only copy of a book with no files in your library. Remove it entirely, or keep tracking it on your wishlist?",
+                    vec![
+                        ConfirmModalAction {
+                            testid: "last-copy-cancel".to_string(),
+                            label: "Cancel".to_string(),
+                            tone: ConfirmModalTone::Ghost,
+                            disabled: is_busy,
+                            on_click: EventHandler::new(move |_| delete_target.set(None)),
+                        },
+                        ConfirmModalAction {
+                            testid: "last-copy-wishlist".to_string(),
+                            label: "Move to wishlist".to_string(),
+                            tone: ConfirmModalTone::Ghost,
+                            disabled: is_busy,
+                            on_click: EventHandler::new(move |_| {
+                                delete_last_and_wishlist(state, uw.clone(), ww.clone(), copy_id)
+                            }),
+                        },
+                        ConfirmModalAction {
+                            testid: "last-copy-remove".to_string(),
+                            label: "Remove from library".to_string(),
+                            tone: ConfirmModalTone::Danger,
+                            disabled: is_busy,
+                            on_click: EventHandler::new(move |_| {
+                                delete_last_and_remove(state, url.clone(), uuid.clone(), copy_id)
+                            }),
+                        },
+                    ],
+                )}
             }
         }
     } else {
+        let title = "Remove this copy?";
         rsx! {
-            div {
-                class: "author-photo-modal-backdrop",
-                role: "dialog",
-                aria_modal: "true",
-                "data-testid": "copy-delete-modal",
-                onclick: move |_| if !busy() { delete_target.set(None); },
-                div { class: "mg-modal del-modal", onclick: move |e| e.stop_propagation(),
-                    h3 { class: "del-modal-title", "Remove this copy?" }
-                    p { class: "del-modal-body", "This removes the physical copy from your collection." }
-                    div { class: "del-modal-actions",
-                        button {
-                            class: "del-btn-ghost",
-                            "data-testid": "copy-delete-cancel",
-                            disabled: busy(),
-                            onclick: move |_| delete_target.set(None),
-                            "Cancel"
-                        }
-                        button {
-                            class: "del-btn-danger",
-                            "data-testid": "copy-delete-confirm",
-                            disabled: busy(),
-                            onclick: move |_| delete_copy_only(state, url.clone(), copy_id),
-                            "I sold it"
-                        }
-                    }
-                }
+            ConfirmModal {
+                testid: "copy-delete-modal".to_string(),
+                aria_label: title.to_string(),
+                dialog_class: "mg-modal del-modal".to_string(),
+                busy: is_busy,
+                on_dismiss: move |_| delete_target.set(None),
+                {confirm_modal_body(
+                    title,
+                    "This removes the physical copy from your collection.",
+                    vec![
+                        ConfirmModalAction {
+                            testid: "copy-delete-cancel".to_string(),
+                            label: "Cancel".to_string(),
+                            tone: ConfirmModalTone::Ghost,
+                            disabled: is_busy,
+                            on_click: EventHandler::new(move |_| delete_target.set(None)),
+                        },
+                        ConfirmModalAction {
+                            testid: "copy-delete-confirm".to_string(),
+                            label: "I sold it".to_string(),
+                            tone: ConfirmModalTone::Danger,
+                            disabled: is_busy,
+                            on_click: EventHandler::new(move |_| {
+                                delete_copy_only(state, url.clone(), copy_id)
+                            }),
+                        },
+                    ],
+                )}
             }
         }
     }

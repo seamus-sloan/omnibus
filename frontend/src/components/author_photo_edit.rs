@@ -7,6 +7,7 @@
 use dioxus::prelude::*;
 
 use super::image_upload::use_file_upload;
+use crate::components::ConfirmModal;
 use crate::data;
 
 /// Wrapper that renders an "edit" pencil button positioned over its child.
@@ -93,65 +94,56 @@ fn AuthorPhotoEditModal(
     let edit_status = PhotoEditStatus { busy, status };
 
     rsx! {
-        div {
-            class: "author-photo-modal-backdrop",
-            role: "dialog",
-            aria_modal: "true",
-            aria_label: "Edit photo for {author_name}",
-            // The overlay is rendered as a child of the author card's
-            // `<Link>`, so any unstopped click would also navigate to the
-            // detail page. Stop propagation on every modal-level click.
-            onclick: move |evt| {
-                evt.stop_propagation();
-                on_close.call(());
-            },
-            div {
-                class: "author-photo-modal",
-                // Clicks inside the modal body don't close it (they don't
-                // reach the backdrop) and don't navigate (propagation
-                // stops here).
-                onclick: move |evt| evt.stop_propagation(),
+        // The overlay is rendered as a child of the author card's `<Link>`,
+        // so any unstopped click would also navigate to the detail page —
+        // `ConfirmModal` always stops propagation on the backdrop click, and
+        // `busy: false` means every click dismisses (there's no in-flight
+        // request the modal needs to protect against here).
+        ConfirmModal {
+            testid: "author-photo-edit-modal".to_string(),
+            aria_label: format!("Edit photo for {author_name}"),
+            dialog_class: "author-photo-modal".to_string(),
+            busy: false,
+            on_dismiss: move |_| on_close.call(()),
+            div { class: "author-photo-modal__head",
+                h2 { class: "author-photo-modal__title", "Edit photo" }
+            }
 
-                div { class: "author-photo-modal__head",
-                    h2 { class: "author-photo-modal__title", "Edit photo" }
-                }
+            UrlPhotoSection {
+                author_id,
+                server_url: server_url.clone(),
+                url_input,
+                status: edit_status,
+                on_change,
+            }
+            FilePhotoSection {
+                author_id,
+                server_url: server_url.clone(),
+                status: edit_status,
+                on_change,
+            }
+            ScanPhotoSection {
+                author_id,
+                server_url: server_url.clone(),
+                status: edit_status,
+                on_change,
+            }
 
-                UrlPhotoSection {
-                    author_id,
-                    server_url: server_url.clone(),
-                    url_input,
-                    status: edit_status,
-                    on_change,
+            if let Some(msg) = status() {
+                p {
+                    class: "author-photo-modal__status",
+                    role: "status",
+                    "data-testid": "author-photo-status",
+                    "{msg}"
                 }
-                FilePhotoSection {
-                    author_id,
-                    server_url: server_url.clone(),
-                    status: edit_status,
-                    on_change,
-                }
-                ScanPhotoSection {
-                    author_id,
-                    server_url: server_url.clone(),
-                    status: edit_status,
-                    on_change,
-                }
+            }
 
-                if let Some(msg) = status() {
-                    p {
-                        class: "author-photo-modal__status",
-                        role: "status",
-                        "data-testid": "author-photo-status",
-                        "{msg}"
-                    }
-                }
-
-                div { class: "author-photo-modal__actions",
-                    button {
-                        r#type: "button",
-                        class: "btn ghost",
-                        onclick: move |_| on_close.call(()),
-                        "Close"
-                    }
+            div { class: "author-photo-modal__actions",
+                button {
+                    r#type: "button",
+                    class: "btn ghost",
+                    onclick: move |_| on_close.call(()),
+                    "Close"
                 }
             }
         }
