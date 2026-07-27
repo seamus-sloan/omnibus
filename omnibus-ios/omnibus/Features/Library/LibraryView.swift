@@ -12,7 +12,6 @@ final class LibraryModel {
     var isLoading = false
     var isLoadingMore = false
     var error: String?
-    var total: Int64?
 
     var sort: SortKey = .newestAdded {
         didSet { if sort != oldValue { Task { await reload() } } }
@@ -69,7 +68,6 @@ final class LibraryModel {
                         guard self.loadToken == token else { return }
                         self.books = read.value.books
                         self.cursor = read.value.nextCursor
-                        self.total = read.value.total
                         self.reachedEnd = read.value.nextCursor == nil
                         self.error = nil
                         self.isLoading = false
@@ -217,7 +215,7 @@ struct LibraryView: View {
             // draw-in animation. Laziness is only worth anything for the grid,
             // which is a `LazyVGrid` and manages its own.
             VStack(alignment: .leading, spacing: 30) {
-                Masthead(title: "Library", count: countLabel) {
+                Masthead(title: "Library") {
                     HStack(spacing: Spacing.sm) {
                         OfflinePill()
                         filterMenu
@@ -276,14 +274,6 @@ struct LibraryView: View {
             Spacer(minLength: 0)
         }
         .screenPadding()
-    }
-
-    private var countLabel: String {
-        let shown = model.visibleBooks.count
-        if let total = model.total, model.category == .all, Int(total) != shown {
-            return "\(total)"
-        }
-        return "\(shown)"
     }
 
     /// One control for everything that shapes the grid. Sort and format used to

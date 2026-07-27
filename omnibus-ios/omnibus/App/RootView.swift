@@ -36,11 +36,13 @@ private struct LaunchView: View {
 
     var body: some View {
         VStack(spacing: Spacing.lg) {
-            Image(systemName: "books.vertical.fill")
-                .font(.system(size: 44, weight: .light))
-                .foregroundStyle(palette.accentColor)
+            OmnibusMark(height: 44)
             ProgressView()
                 .tint(palette.ink3Color)
         }
+        // The mark is decorative and the spinner has no label of its own, so
+        // without this the launching phase announces as a bare busy indicator.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading Omnibus")
     }
 }

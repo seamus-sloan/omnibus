@@ -9,35 +9,8 @@
 
 import SwiftUI
 
-/// Three books on a shelf, the last one leaning. Drawn rather than pulled from
-/// SF Symbols — the mark is the one piece of the app that shouldn't look like
-/// it shipped with the OS.
-struct OmnibusMark: View {
-    var height: CGFloat = 13
-
-    @Environment(\.palette) private var palette
-
-    var body: some View {
-        HStack(alignment: .bottom, spacing: 1.5) {
-            bar(0.74)
-            bar(1.0)
-            bar(0.58)
-                .rotationEffect(.degrees(10), anchor: .bottom)
-        }
-        .frame(height: height)
-        .accessibilityHidden(true)
-    }
-
-    private func bar(_ fraction: CGFloat) -> some View {
-        Capsule()
-            .fill(palette.accentColor)
-            .frame(width: 2.5, height: height * fraction)
-    }
-}
-
 struct Masthead<Trailing: View>: View {
     let title: String
-    var count: String?
     @ViewBuilder var trailing: () -> Trailing
 
     @Environment(\.palette) private var palette
@@ -58,23 +31,9 @@ struct Masthead<Trailing: View>: View {
                 trailing()
             }
 
-            HStack(alignment: .firstTextBaseline, spacing: 9) {
-                Text(title)
-                    .font(.display(38))
-                    .foregroundStyle(palette.ink0Color)
-
-                if let count {
-                    Text(count)
-                        .font(.monoUI(12, weight: .medium))
-                        .foregroundStyle(palette.ink3Color)
-                        // Counts change as pages load; rolling the digits is
-                        // cheaper to read than a hard swap.
-                        .contentTransition(.numericText())
-                        .animation(Motion.snap, value: count)
-                }
-
-                Spacer(minLength: 0)
-            }
+            Text(title)
+                .font(.display(38))
+                .foregroundStyle(palette.ink0Color)
 
             // The accent lead-in is the whole signature of the rule: a plain
             // hairline reads as a divider, this reads as a masthead.
@@ -96,8 +55,8 @@ struct Masthead<Trailing: View>: View {
 }
 
 extension Masthead where Trailing == EmptyView {
-    init(title: String, count: String? = nil) {
-        self.init(title: title, count: count, trailing: { EmptyView() })
+    init(title: String) {
+        self.init(title: title, trailing: { EmptyView() })
     }
 }
 
