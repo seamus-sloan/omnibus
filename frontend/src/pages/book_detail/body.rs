@@ -1,4 +1,4 @@
-//! Body grid of the book-detail page — two-column main (public journal feed + highlights stub + cover-fan rail) plus a sticky right rail (file details, [`FormatSwitcher`], series info, insights).
+//! Body grid of the book-detail page — two-column main (public journal feed + saved passages + cover-fan rail) plus a sticky right rail (file details, [`FormatSwitcher`], series info, insights).
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
@@ -12,6 +12,7 @@ use super::discovery::{
     cover_src, list_count_label, same_hand_author_label, same_hand_title, same_hand_year,
     suggestion_cover_book, SuggestionsSpinner,
 };
+use super::highlights::BdHighlightsSection;
 use super::journal::BdJournalSection;
 use super::{BdInsightCell, BdMetaRow, BdSectionHead};
 
@@ -30,7 +31,7 @@ pub(super) struct BdAuthorCluster {
     pub author_books: Vec<EbookMetadata>,
 }
 
-/// Main column: public journal feed, highlights stub, from-the-same-hand fan,
+/// Main column: public journal feed, saved passages, from-the-same-hand fan,
 /// and the "Readers also enjoyed" suggestions strip.
 #[component]
 pub(super) fn BdBodyMain(
@@ -42,13 +43,9 @@ pub(super) fn BdBodyMain(
 ) -> Element {
     rsx! {
         div { class: "bd-body-main",
-            BdJournalSection { uuid }
+            BdJournalSection { uuid: uuid.clone() }
             div { class: "divider" }
-            BdSectionHead { kicker: "0 highlights".to_string(), title: "Passages you saved".to_string() }
-            div { class: "bd-journal-empty card", aria_hidden: "true",
-                p { class: "mono", "No highlights saved yet." }
-                p { class: "bd-stub-hint", "Highlights land in F3.2." }
-            }
+            BdHighlightsSection { uuid }
             div { class: "divider" }
             BdSameHand { author }
             BdSuggestionsStrip {

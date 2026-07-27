@@ -1,3 +1,4 @@
+import type { APIRequestContext } from "@playwright/test";
 import {
   AUDIOBOOK_BOOK_COUNT,
   AUDIOBOOK_BOOKS,
@@ -58,6 +59,14 @@ const READ_STATUS_BOOK = FIXTURE_BOOKS.find(
   (b) => b.slug === "standalone-canyon",
 )!;
 
+// Reserved for the saved-passages tests: highlights are per-(user, book)
+// server state, so seeding one here must not disturb another spec's counts.
+// `standalone-garden` is read by no other flow, and the reader spec's own
+// highlight books (beta / gamma / pioneers-3) stay untouched.
+const PASSAGES_BOOK = FIXTURE_BOOKS.find(
+  (b) => b.slug === "standalone-garden",
+)!;
+
 // ---------------------------------------------------------------------------
 // Layout
 // ---------------------------------------------------------------------------
@@ -99,6 +108,16 @@ test("renders the book detail layout", async ({ page, request }) => {
   const crumb = page.getByRole("navigation", { name: "breadcrumb" });
   await expect(crumb).toBeVisible();
   await expect(crumb.getByRole("link", { name: "Home" })).toBeVisible();
+
+  // Body — "Passages you saved" section is always rendered. Only its
+  // presence is asserted here: `journal.spec.ts` seeds a highlight on this
+  // same book, so whether the list or the empty state fills it depends on
+  // run order. The empty and populated states are covered by the
+  // saved-passages action tests below, on a book reserved for them.
+  await expect(
+    page.getByRole("heading", { name: "Passages you saved" }),
+  ).toBeVisible();
+  await expect(page.getByTestId("highlights-section")).toBeVisible();
 
   // Body — "From the same hand" section heading is always rendered.
   await expect(
@@ -718,6 +737,171 @@ test("reverts the read status and reports an error when the save fails", async (
     { method: "POST", url: "/api/rpc/read-status/set", expectedStatus: 200 },
     async () => control.getByTestId("read-status-unread").click(),
   );
+});
+
+// ---------------------------------------------------------------------------
+// Action — saved passages (highlights)
+// ---------------------------------------------------------------------------
+
+/// Seed one highlight on PASSAGES_BOOK and return its uuid, id and quote. The
+/// quote is stamped so a re-run never collides with a leftover row on the
+/// shared, persistent dev DB. `note` needs a follow-up PATCH — `CreateHighlight`
+/// carries no note field, so passing one to the POST would be silently dropped.
+async function seedPassage(
+  request: APIRequestContext,
+  cfi: string,
+  note?: string,
+): Promise<{ uuid: string; id: number; quote: string }> {
+  const uuid = await fetchBookUuidByTitle(request, PASSAGES_BOOK.title);
+  const quote = `saved passage ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const created = await request.post("/api/highlights", {
+    data: {
+      book_uuid: uuid,
+      epub_cfi_range: cfi,
+      color: "violet",
+      text: quote,
+    },
+  });
+  expect(created.status(), "seed highlight").toBe(200);
+  const { id } = (await created.json()) as { id: number };
+  if (note !== undefined) {
+    const patched = await request.patch(`/api/highlights/${id}/note`, {
+      data: { note },
+    });
+    expect(patched.status(), "seed highlight note").toBe(204);
+  }
+  return { uuid, id, quote };
+}
+
+// Start from a known-empty book. These tests assert the empty state *returns*
+// after a delete, so residue from an interrupted earlier run would fail them
+// for the wrong reason.
+test.beforeAll(async ({ request }) => {
+  const uuid = await fetchBookUuidByTitle(request, PASSAGES_BOOK.title);
+  const list = await request.get(`/api/highlights/book/${uuid}`);
+  expect(list.status(), "list highlights").toBe(200);
+  for (const h of (await list.json()) as { id: number }[]) {
+    expect((await request.delete(`/api/highlights/${h.id}`)).status()).toBe(
+      204,
+    );
+  }
+});
+
+test("lists a saved passage with its locator, note and date, then deletes it", async ({
+  page,
+  request,
+}) => {
+  const { uuid, quote } = await seedPassage(
+    request,
+    "epubcfi(/6/14[chap03]!/4/2,/1:0,/1:40)",
+    "the line that stuck",
+  );
+
+  await gotoReady(page, `/books/${uuid}`);
+
+  // The empty state must give way to the list.
+  await expect(page.getByTestId("highlights-empty")).toHaveCount(0);
+  const card = page.getByTestId("highlight-card").filter({ hasText: quote });
+  await expect(card).toHaveCount(1);
+  await expect(card.getByTestId("highlight-note")).toHaveText(
+    "the line that stuck",
+  );
+  // The locator is derived from the CFI's spine step (/14 → section 7); the
+  // date comes from the server-assigned created_at.
+  await expect(card.getByTestId("highlight-meta")).toContainText("Section 7");
+  await expect(card.getByTestId("highlight-meta")).toContainText("saved ");
+
+  // Delete it — the RPC must fire and the card must leave the list.
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: /\/api\/rpc\/highlights\/delete(?:\?|$)/,
+      expectedStatus: 200,
+    },
+    async () => card.getByTestId("highlight-delete").click(),
+  );
+  await expect(page.getByText(quote)).toHaveCount(0);
+  await expect(page.getByTestId("highlights-empty")).toBeVisible();
+});
+
+test("keeps the passage listed when the delete request fails", async ({
+  page,
+  request,
+}) => {
+  const { uuid, quote } = await seedPassage(
+    request,
+    "epubcfi(/6/6!/4/2,/1:0,/1:20)",
+  );
+
+  await gotoReady(page, `/books/${uuid}`);
+  const card = page.getByTestId("highlight-card").filter({ hasText: quote });
+  await expect(card).toHaveCount(1);
+
+  await page.route("**/api/rpc/highlights/delete*", (route) =>
+    route.fulfill({
+      status: 500,
+      contentType: "text/plain",
+      body: "delete exploded",
+    }),
+  );
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: /\/api\/rpc\/highlights\/delete(?:\?|$)/,
+      expectedStatus: 500,
+    },
+    async () => card.getByTestId("highlight-delete").click(),
+  );
+
+  // The row is only dropped once the server confirms, so it survives.
+  await expect(card).toHaveCount(1);
+
+  // Clean up shared state: drop the override and delete for real.
+  await page.unroute("**/api/rpc/highlights/delete*");
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: /\/api\/rpc\/highlights\/delete(?:\?|$)/,
+      expectedStatus: 200,
+    },
+    async () => card.getByTestId("highlight-delete").click(),
+  );
+  await expect(page.getByText(quote)).toHaveCount(0);
+});
+
+test("opens the reader at the passage via a cfi deep link", async ({
+  page,
+  request,
+}) => {
+  const cfi = "epubcfi(/6/4!/4/2,/1:0,/1:30)";
+  const { uuid, id, quote } = await seedPassage(request, cfi);
+
+  await gotoReady(page, `/books/${uuid}`);
+  const card = page.getByTestId("highlight-card").filter({ hasText: quote });
+  const open = card.getByTestId("highlight-open");
+
+  // The link carries the percent-encoded CFI so the reader boots at the
+  // passage rather than resuming wherever this book was last left off.
+  // Assert the decoded contract, not the escaping style — the Rust encoder
+  // escapes `!()` too, which `encodeURIComponent` leaves alone.
+  const href = await open.getAttribute("href");
+  expect(href).not.toBeNull();
+  const linked = new URL(href as string, page.url());
+  expect(linked.pathname).toBe(`/read/${uuid}`);
+  expect(linked.searchParams.get("cfi")).toBe(cfi);
+
+  await open.click();
+  await expect(page).toHaveURL(
+    (url) =>
+      url.pathname === `/read/${uuid}` && url.searchParams.get("cfi") === cfi,
+  );
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
+
+  // Clean up the seeded highlight so re-runs start from the empty state.
+  expect((await request.delete(`/api/highlights/${id}`)).status()).toBe(204);
 });
 
 test("breadcrumb author segment links to the author page", async ({
