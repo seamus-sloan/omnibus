@@ -493,6 +493,7 @@ async fn api_get_recent_progress_returns_resume_points_newest_first() {
                 format: omnibus_shared::ProgressFormat::Epub,
                 epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
                 audio_position_seconds: None,
+                book_file_id: None,
                 client_updated_at: None,
             },
         )

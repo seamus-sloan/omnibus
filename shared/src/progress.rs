@@ -48,6 +48,12 @@ pub struct ProgressUpdate {
     pub epub_cfi: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_position_seconds: Option<f64>,
+    /// The `book_files` row the position was taken in, for books carrying
+    /// more than one file of the format (two narrations of one audiobook).
+    /// `None` from a client that doesn't track it — the server then resolves
+    /// the same default file the manifest would have served.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub book_file_id: Option<i64>,
     /// Unix seconds when the client observed this position — used to
     /// resolve most-recent-wins by **event** time rather than server
     /// receipt time (issue #1362). `#[serde(default)]` so an older client
@@ -68,6 +74,9 @@ impl ProgressUpdate {
         }
         if self.client_updated_at.is_some_and(|ts| ts < 0) {
             return Err("client_updated_at must be non-negative".into());
+        }
+        if self.book_file_id.is_some_and(|id| id <= 0) {
+            return Err("book_file_id must be positive".into());
         }
         // Reject the non-discriminated field at the API boundary so a
         // cross-format payload (e.g. `{format:"epub", audio_position_seconds:…}`)
@@ -123,6 +132,13 @@ pub struct ProgressRecord {
     pub format: ProgressFormat,
     pub epub_cfi: Option<String>,
     pub audio_position_seconds: Option<f64>,
+    /// The `book_files` row this position was taken in. On a [`ResumePoint`]
+    /// this is re-resolved against the book, so it always names a file that
+    /// currently exists (see `db::progress::resume_points`); read straight
+    /// from `GET /api/progress/{uuid}` it is whatever the last writer sent,
+    /// and may be `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub book_file_id: Option<i64>,
     pub updated_at: i64,
     pub client_updated_at: i64,
 }

@@ -7,6 +7,7 @@ fn progress_update_rejects_cross_format_audio_field_on_epub() {
         format: ProgressFormat::Epub,
         epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
         audio_position_seconds: Some(12.0),
+        book_file_id: None,
         client_updated_at: None,
     };
     let err = u
@@ -22,6 +23,7 @@ fn progress_update_rejects_cross_format_cfi_on_audio() {
         format: ProgressFormat::Audio,
         epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
         audio_position_seconds: Some(12.0),
+        book_file_id: None,
         client_updated_at: None,
     };
     let err = u
@@ -37,6 +39,7 @@ fn progress_update_rejects_overlong_epub_cfi() {
         format: ProgressFormat::Epub,
         epub_cfi: Some("a".repeat(EPUB_CFI_MAX_LEN + 1)),
         audio_position_seconds: None,
+        book_file_id: None,
         client_updated_at: None,
     };
     let err = u
@@ -54,6 +57,7 @@ fn progress_update_accepts_epub_cfi_at_cap() {
         format: ProgressFormat::Epub,
         epub_cfi: Some("é".repeat(EPUB_CFI_MAX_LEN)),
         audio_position_seconds: None,
+        book_file_id: None,
         client_updated_at: None,
     };
     assert!(u.validate().is_ok());
@@ -66,6 +70,7 @@ fn progress_update_rejects_negative_client_updated_at() {
         format: ProgressFormat::Epub,
         epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
         audio_position_seconds: None,
+        book_file_id: None,
         client_updated_at: Some(-1),
     };
     let err = u
@@ -81,9 +86,41 @@ fn progress_update_accepts_missing_client_updated_at() {
         format: ProgressFormat::Epub,
         epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
         audio_position_seconds: None,
+        book_file_id: None,
         client_updated_at: None,
     };
     assert!(u.validate().is_ok(), "older clients must still validate");
+}
+
+#[test]
+fn progress_update_rejects_non_positive_book_file_id() {
+    for id in [0, -3] {
+        let u = ProgressUpdate {
+            book_uuid: "x".into(),
+            format: ProgressFormat::Audio,
+            epub_cfi: None,
+            audio_position_seconds: Some(12.0),
+            book_file_id: Some(id),
+            client_updated_at: None,
+        };
+        let err = u
+            .validate()
+            .expect_err("book_file_id must name a real rowid");
+        assert!(err.contains("book_file_id"), "got: {err}");
+    }
+}
+
+#[test]
+fn progress_update_accepts_a_book_file_id() {
+    let u = ProgressUpdate {
+        book_uuid: "x".into(),
+        format: ProgressFormat::Audio,
+        epub_cfi: None,
+        audio_position_seconds: Some(12.0),
+        book_file_id: Some(917),
+        client_updated_at: None,
+    };
+    assert!(u.validate().is_ok());
 }
 
 #[test]
