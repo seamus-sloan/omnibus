@@ -34,7 +34,13 @@ const PROGRESS_ERR_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "great-gatsby")!;
 // Reserved for the `?cfi=` deep-link test — book detail's saved-passages list
 // opens the reader that way. Same isolation rationale as the two above (the
 // test drives and reads saved position) and the same multi-page requirement.
-const DEEP_LINK_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "middlemarch")!;
+// Deliberately one of the *smaller* public-domain fixtures: this test opens
+// the book twice, and epub.js regenerates whole-book locations on the first
+// cold open (later opens hit the localStorage cache). On a fresh CI shard a
+// large fixture blows the pagination poll before a single page turn lands.
+const DEEP_LINK_BOOK = FIXTURE_BOOKS.find(
+  (b) => b.slug === "romeo-and-juliet",
+)!;
 
 // The epub.js progress POST fires on the reader's relocate events; pin the
 // exact pathname so the sibling `/api/rpc/progress/get` reads never match.
@@ -407,6 +413,10 @@ test("a ?cfi= deep link opens the reader at that passage, not the resume point",
   page,
   request,
 }) => {
+  // Two sequential paginated opens (cold generate, then a cached reopen) plus
+  // eight debounced page turns don't fit the 60s file default — the config
+  // points such tests at their own budget.
+  test.setTimeout(120_000);
   const uuid = await fetchBookUuidByTitle(request, DEEP_LINK_BOOK.title);
 
   // Read a way in and capture both the CFI and the page it renders on. The
@@ -414,8 +424,11 @@ test("a ?cfi= deep link opens the reader at that passage, not the resume point",
   // here would store.
   await gotoReady(page, `/read/${uuid}`);
   await expect(page.getByTestId("reader-viewer")).toBeVisible();
+  // Cold-open headroom: this is the run that generates whole-book locations
+  // (the sibling restore test's 20s assumes a book already paginated earlier
+  // in the file; this book is opened for the first time here).
   await expect
-    .poll(async () => footerPageLabel(page), { timeout: 20_000 })
+    .poll(async () => footerPageLabel(page), { timeout: 45_000 })
     .toMatch(PAGE_LABEL);
   const opened = await footerPageLabel(page);
 

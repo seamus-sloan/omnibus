@@ -5,6 +5,7 @@
 //! so SSR and first-hydration paint stay identical (rule 07).
 
 use dioxus::prelude::*;
+use dioxus_router::Link;
 use omnibus_shared::Highlight;
 
 use crate::{data, use_server_url};
@@ -100,13 +101,7 @@ fn BdHighlightCard(
         ),
         None => format!("saved {}", fmt_long_date(highlight.created_at)),
     };
-    // The reader resumes at `?cfi=`, so the link lands on the passage rather
-    // than wherever this reader last left off.
-    let open_href = format!(
-        "/read/{}?cfi={}",
-        percent_encode(&highlight.book_uuid),
-        percent_encode(&highlight.epub_cfi_range)
-    );
+    let open_href = reader_deep_link(&highlight.book_uuid, &highlight.epub_cfi_range);
 
     let on_delete = move |_| {
         let mut highlights = highlights;
@@ -131,9 +126,9 @@ fn BdHighlightCard(
             div { class: "bd-hl-foot",
                 span { class: "mono bd-hl-meta", "data-testid": "highlight-meta", "{meta_line}" }
                 div { class: "bd-hl-actions",
-                    a {
+                    Link {
+                        to: "{open_href}",
                         class: "btn ghost sm",
-                        href: "{open_href}",
                         "data-testid": "highlight-open",
                         "Open in reader"
                     }
@@ -160,6 +155,17 @@ fn BdHighlightCard(
             }
         }
     }
+}
+
+/// Reader URL that opens `book_uuid` at `cfi`. The reader prefers a `?cfi=`
+/// deep link over saved progress, so the link lands on the passage rather than
+/// wherever this book was last left off.
+fn reader_deep_link(book_uuid: &str, cfi: &str) -> String {
+    format!(
+        "/read/{}?cfi={}",
+        percent_encode(book_uuid),
+        percent_encode(cfi)
+    )
 }
 
 /// Percent-encode a path/query segment. Hand-rolled rather than pulled from a

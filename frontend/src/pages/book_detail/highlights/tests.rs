@@ -74,12 +74,51 @@ fn percent_encode_escapes_multibyte_characters_per_utf8_byte() {
     assert_eq!(percent_encode("é"), "%C3%A9");
 }
 
+#[test]
+fn reader_deep_link_encodes_the_cfi_into_the_query() {
+    // The whole point of the link: the reader prefers `?cfi=` over saved
+    // progress, so every CFI delimiter has to survive the query string.
+    assert_eq!(
+        reader_deep_link("book-uuid", "epubcfi(/6/14[chap03]!/4/2,/1:0,/1:12)"),
+        "/read/book-uuid?cfi=epubcfi%28%2F6%2F14%5Bchap03%5D%21%2F4%2F2%2C%2F1%3A0%2C%2F1%3A12%29"
+    );
+}
+
 // SSR render-smoke coverage. These need the `server` feature (`dioxus::ssr`).
 #[cfg(feature = "server")]
 mod render_tests {
     use super::*;
     use crate::test_support::render_in_vdom;
+    use dioxus_router::{Routable, Router};
     use omnibus_shared::HighlightColor;
+
+    // The card's "Open in reader" is a `dioxus_router::Link`, which panics
+    // without a parent router. Each card variant therefore gets a one-route
+    // test router mounted at `/` (the default memory history's initial path)
+    // rather than being rendered into a bare VirtualDom.
+    #[derive(Clone, Debug, PartialEq, Routable)]
+    enum NoteCardRoute {
+        #[route("/")]
+        NoteCardHost {},
+    }
+
+    #[derive(Clone, Debug, PartialEq, Routable)]
+    enum PlainCardRoute {
+        #[route("/")]
+        PlainCardHost {},
+    }
+
+    fn render_note_card() -> Element {
+        rsx! {
+            Router::<NoteCardRoute> {}
+        }
+    }
+
+    fn render_plain_card() -> Element {
+        rsx! {
+            Router::<PlainCardRoute> {}
+        }
+    }
 
     fn section_first_paint() -> Element {
         rsx! {
@@ -111,7 +150,8 @@ mod render_tests {
         }
     }
 
-    fn card_with_note() -> Element {
+    #[component]
+    fn NoteCardHost() -> Element {
         rsx! {
             BdHighlightCard {
                 highlight: seeded_highlight(Some("Worth revisiting"), Some("The Beauty of the House")),
@@ -123,7 +163,7 @@ mod render_tests {
 
     #[test]
     fn card_renders_the_quote_note_locator_and_deep_link() {
-        let html = render_in_vdom(card_with_note);
+        let html = render_in_vdom(render_note_card);
         assert!(html.contains("The Beauty of the House"));
         assert!(html.contains("Worth revisiting"));
         assert!(html.contains("Section 7 \u{00b7} saved May 17, 2026"));
@@ -138,7 +178,8 @@ mod render_tests {
         assert!(html.contains("--hl-violet"));
     }
 
-    fn card_without_text() -> Element {
+    #[component]
+    fn PlainCardHost() -> Element {
         rsx! {
             BdHighlightCard {
                 highlight: seeded_highlight(None, None),
@@ -152,7 +193,7 @@ mod render_tests {
     fn card_disables_copy_for_a_highlight_saved_before_the_text_column() {
         // Pre-migration-0030 rows carry no prose, so Copy would be a silent
         // no-op; the control is disabled instead.
-        let html = render_in_vdom(card_without_text);
+        let html = render_in_vdom(render_plain_card);
         assert!(html.contains("(highlighted passage)"));
         assert!(!html.contains("data-testid=\"highlight-note\""));
         let copy_idx = html
