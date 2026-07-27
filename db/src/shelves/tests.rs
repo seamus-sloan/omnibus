@@ -1315,3 +1315,96 @@ async fn manual_shelves_containing_returns_nothing_for_an_unknown_uuid() {
         .unwrap();
     assert!(ids.is_empty());
 }
+
+// -----------------------------------------------------------------
+// Mosaic cover uuids on ShelfSummary (landing shelf gallery)
+// -----------------------------------------------------------------
+
+#[tokio::test]
+async fn list_visible_shelves_caps_manual_cover_uuids_at_four_cover_bearing_members() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let owner = make_user(&pool, "owner", false).await;
+    seed_minimal_books(&pool, 6).await;
+    // First member lacks a cover: the mosaic must skip it, then cap at four.
+    sqlx::query("UPDATE books SET has_cover = 1 WHERE uuid != 'uuid-1'")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let members: Vec<String> = (1..=6).map(|i| format!("uuid-{i}")).collect();
+    let shelf = create_shelf(&pool, owner, &manual_req("Six", members))
+        .await
+        .unwrap();
+
+    let shelves = list_visible_shelves(&pool, owner, false).await.unwrap();
+    let summary = shelves.iter().find(|s| s.id == shelf.id).unwrap();
+    assert_eq!(
+        summary.cover_uuids,
+        vec!["uuid-2", "uuid-3", "uuid-4", "uuid-5"],
+        "mosaic skips coverless members and caps at four, in shelf position order"
+    );
+}
+
+#[tokio::test]
+async fn list_visible_shelves_returns_smart_and_wishlist_cover_uuids() {
+    let (pool, _covers) = seed_discovery_fixture().await;
+    let owner = make_user(&pool, "owner", false).await;
+    // Every fixture book except Saga Two gets a cover; the smart mosaic must
+    // exclude the uncovered match.
+    sqlx::query("UPDATE books SET has_cover = 1 WHERE title != 'Saga: Book Two'")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let fiction = create_shelf(
+        &pool,
+        owner,
+        &smart_req("Fiction", MatchMode::Any, vec![tag_rule("fiction")]),
+    )
+    .await
+    .unwrap();
+
+    let saga1 = uuid_by_title(&pool, "Saga: Book One").await;
+    let standalone = uuid_by_title(&pool, "Standalone").await;
+    let wishlist = wishlist_shelf_id(&pool, owner).await;
+    add_wishlist_entry(&pool, owner, &saga1, WishlistSource::Detail)
+        .await
+        .unwrap();
+    add_wishlist_entry(&pool, owner, &standalone, WishlistSource::Detail)
+        .await
+        .unwrap();
+
+    let shelves = list_visible_shelves(&pool, owner, false).await.unwrap();
+    let covers_for = |id: i64| {
+        shelves
+            .iter()
+            .find(|s| s.id == id)
+            .unwrap()
+            .cover_uuids
+            .clone()
+    };
+
+    assert_eq!(
+        covers_for(fiction.id),
+        vec![saga1.clone()],
+        "only the cover-bearing fiction match feeds the smart mosaic"
+    );
+    assert_eq!(
+        covers_for(wishlist),
+        vec![standalone, saga1],
+        "wishlist mosaic is newest-entry first, matching fetch_wishlist order"
+    );
+}
+
+#[tokio::test]
+async fn list_visible_shelves_returns_empty_cover_uuids_for_empty_shelf() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let owner = make_user(&pool, "owner", false).await;
+    let shelf = create_shelf(&pool, owner, &manual_req("Empty", vec![]))
+        .await
+        .unwrap();
+
+    let shelves = list_visible_shelves(&pool, owner, false).await.unwrap();
+    let summary = shelves.iter().find(|s| s.id == shelf.id).unwrap();
+    assert!(summary.cover_uuids.is_empty());
+}

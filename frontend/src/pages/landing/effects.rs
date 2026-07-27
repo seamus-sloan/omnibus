@@ -3,12 +3,18 @@
 //! `use_effect` so the page body stays a small composition of named stages.
 
 use dioxus::prelude::*;
-use omnibus_shared::{EbookMetadata, TagWeight, ViewPrefs};
+use omnibus_shared::{
+    EbookMetadata, ResumePoint, ShelfSummary, SortDir, SortKey, TagWeight, ViewPrefs,
+};
 
 use crate::components::chip_editor::{collect_suggestions, SuggestionItem};
 use crate::data;
+use crate::shelf_selection::ShelfSelection;
 
 use super::PAGE_SIZE;
+
+/// How many resume points the continue-reading hero carousel shows.
+pub(super) const HERO_POINTS: i64 = 5;
 
 /// Stable per-page handle on the chip-editor suggestion pool signals (authors, tags).
 #[derive(Copy, Clone)]
@@ -235,6 +241,120 @@ pub(super) fn spawn_load_more_effect(
                 Err(e) => error.set(Some(e.to_string())),
             }
             loading_more.set(false);
+        });
+    });
+}
+
+/// Fetch the gallery's shelf list on mount and again whenever `tick` bumps
+/// (after a create). Failures leave the list empty — the gallery then renders
+/// the All Books tile alone, and `loaded` stays false so a persisted shelf
+/// selection isn't wrongly reset against a missing list.
+///
+/// The dangling-pick reset lives *here*, in the fetch completion with the
+/// authoritative list in hand, rather than in a reactive effect over
+/// `(loaded, selection)` — that shape intermittently misfired during
+/// hydration and silently rewrote a valid persisted pick back to All.
+pub(super) fn spawn_shelves_list_effect(
+    server_url: String,
+    tick: Signal<u32>,
+    mut shelves: Signal<Vec<ShelfSummary>>,
+    mut shelves_loaded: Signal<bool>,
+    mut selection: Signal<ShelfSelection>,
+) {
+    use_effect(move || {
+        let _ = tick();
+        let url = server_url.clone();
+        spawn(async move {
+            let Ok(list) = data::list_shelves(&url).await else {
+                return;
+            };
+            let current = *selection.peek();
+            if let ShelfSelection::Shelf(id) = current {
+                if !list.iter().any(|s| s.id == id) {
+                    crate::shelf_selection::save(ShelfSelection::All);
+                    selection.set(ShelfSelection::All);
+                }
+            }
+            shelves.set(list);
+            shelves_loaded.set(true);
+        });
+    });
+}
+
+/// Fetch the continue-reading resume points once on mount. Any error —
+/// including the logged-out 401 — leaves the list empty, which hides the hero.
+pub(super) fn spawn_hero_effect(server_url: String, mut hero_points: Signal<Vec<ResumePoint>>) {
+    use_effect(move || {
+        let url = server_url.clone();
+        spawn(async move {
+            if let Ok(points) = data::recent_progress(&url, HERO_POINTS).await {
+                hero_points.set(points);
+            }
+        });
+    });
+}
+
+/// Signals the shelf-overlay fetch drives (see [`spawn_shelf_books_effect`]).
+#[derive(Copy, Clone)]
+pub(super) struct ShelfFetchSignals {
+    /// `None` = no shelf selected / not loaded yet; `Some` = member list.
+    pub(super) shelf_books: Signal<Option<Vec<EbookMetadata>>>,
+    pub(super) shelf_loading: Signal<bool>,
+    pub(super) shelf_error: Signal<Option<String>>,
+    pub(super) shelf_epoch: Signal<u64>,
+}
+
+/// Fetch the selected shelf's members whenever the selection or sort axis
+/// changes. Layered over the browse pipeline rather than replacing it — the
+/// always-warm browse page keeps `lib_path`, the header subtitle, and the
+/// All Books mosaic working, and makes switching back to All instant.
+pub(super) fn spawn_shelf_books_effect(
+    server_url: String,
+    key: Memo<(ShelfSelection, SortKey, SortDir)>,
+    sigs: ShelfFetchSignals,
+) {
+    let ShelfFetchSignals {
+        mut shelf_books,
+        mut shelf_loading,
+        mut shelf_error,
+        mut shelf_epoch,
+    } = sigs;
+    use_effect(move || {
+        let (selection, sort_key, sort_dir) = key();
+        // Same stale-drop idiom as `fetch_epoch`: an in-flight member fetch
+        // superseded by a newer selection/sort change discards its result.
+        let epoch = {
+            shelf_epoch.with_mut(|e| *e += 1);
+            *shelf_epoch.peek()
+        };
+        let ShelfSelection::Shelf(id) = selection else {
+            shelf_books.set(None);
+            shelf_loading.set(false);
+            shelf_error.set(None);
+            return;
+        };
+        // Clear stale members before fetching: the sweep remount (keyed on the
+        // selection) happens at click time, so leaving the previous shelf's
+        // list in place would replay the cascade twice — once with stale data.
+        shelf_books.set(None);
+        shelf_loading.set(true);
+        let url = server_url.clone();
+        spawn(async move {
+            let result = data::shelf_page(&url, id, sort_key, sort_dir).await;
+            if *shelf_epoch.peek() != epoch {
+                return;
+            }
+            match result {
+                Ok(page) => {
+                    shelf_error.set(None);
+                    shelf_books.set(Some(page.books));
+                }
+                Err(e) => {
+                    shelf_error.set(Some(e.to_string()));
+                    shelf_books.set(Some(Vec::new()));
+                }
+            }
+            shelf_loading.set(false);
         });
     });
 }

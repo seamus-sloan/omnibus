@@ -20,6 +20,8 @@ pub(super) struct LandingHeaderView {
     pub path_missing: bool,
     pub page_error: Option<String>,
     pub lib_err: Option<String>,
+    /// The gallery pick this header titles: "All Books" or the shelf's name.
+    pub section_title: String,
 }
 
 /// Sticky `data-testid="lib-header"` header; also renders page-level + library-path errors.
@@ -35,6 +37,7 @@ pub(super) fn LandingHeader(
         path_missing,
         page_error,
         lib_err,
+        section_title,
     } = view;
     rsx! {
         header { class: "lib-header", "data-testid": "lib-header",
@@ -45,10 +48,12 @@ pub(super) fn LandingHeader(
                 }
             }
             div { class: "lib-header-row",
-                p { class: "lib-header-title",
-                    em { "{book_count}" }
-                    " "
-                    if book_count == 1 { "book" } else { "books" }
+                p { class: "lib-header-title", "data-testid": "lib-section-title",
+                    em { "{section_title}" }
+                    span { class: "lib-header-count",
+                        " · {book_count} "
+                        if book_count == 1 { "book" } else { "books" }
+                    }
                 }
                 Toolbar {
                     prefs: prefs,
@@ -99,6 +104,9 @@ pub(super) struct LandingContentProps {
     pub prefs: ViewPrefs,
     pub ctx: BookTableContext,
     pub handlers: LandingContentHandlers,
+    /// Remount key for the book area — a changed key mounts a fresh subtree,
+    /// which is what replays the sweep-in CSS cascade on a gallery pick.
+    pub sweep_key: String,
 }
 
 /// Sidebar + grid/table column with load-more sentinel; stateless, mutations route through parent handlers.
@@ -109,6 +117,7 @@ pub(super) fn LandingContent(props: LandingContentProps) -> Element {
         prefs,
         ctx,
         handlers,
+        sweep_key,
     } = props;
     let BooksView {
         is_loading,
@@ -143,7 +152,7 @@ pub(super) fn LandingContent(props: LandingContentProps) -> Element {
 
     rsx! {
         div { class: "lib-layout lib-layout--collapsed",
-            div { class: "lib-main",
+            div { key: "{sweep_key}", class: "lib-main lib-books",
                 if is_loading {
                     p { class: "library-empty", "Loading..." }
                 } else if !visible_is_empty || lib_err.is_some() || page_error.is_some() {

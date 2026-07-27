@@ -232,6 +232,11 @@ pub struct ShelfSummary {
     pub visibility: Visibility,
     pub accent: Option<String>,
     pub book_count: i64,
+    /// Up to four member book uuids (cover-bearing members first, shelf
+    /// default order) for gallery mosaic tiles. `default` keeps payloads from
+    /// older servers deserializable.
+    #[serde(default)]
+    pub cover_uuids: Vec<String>,
 }
 
 /// Full shelf detail: the summary fields plus description, rule, and match mode.

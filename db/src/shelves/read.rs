@@ -24,6 +24,15 @@ const FILE_EXISTS: &str = "EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id 
 /// Cover count in the create-modal live preview.
 const PREVIEW_SAMPLE: i64 = 12;
 
+/// A book that can actually render a thumbnail: an embedded cover or an
+/// uploaded override. Mosaic tiles filter on this so the gallery never
+/// composes a collage cell that 404s.
+const HAS_COVER: &str = "(b.has_cover = 1 OR EXISTS (SELECT 1 FROM metadata_overrides mo \
+     WHERE mo.book_uuid = b.uuid AND mo.has_cover_override = 1))";
+
+/// Mosaic size: how many member cover uuids `ShelfSummary.cover_uuids` carries.
+const MOSAIC_COVERS: i64 = 4;
+
 /// Hard cap on how many shelves `list_visible_shelves` returns for a single
 /// viewer. Matches `LIST_BOOKMARKS_LIMIT`/`LIST_HIGHLIGHTS_LIMIT` — a
 /// defensive ceiling so a user with a pathological shelf count can't produce
@@ -135,6 +144,8 @@ pub async fn list_visible_shelves(
     let mut rules_by_shelf = load_rules_batch(pool, &smart_ids).await?;
     let manual_counts = count_manual_batch(pool, &manual_ids).await?;
     let wishlist_counts = count_wishlist_batch(pool, &wishlist_owner_ids).await?;
+    let mut manual_covers = covers_manual_batch(pool, &manual_ids).await?;
+    let mut wishlist_covers = covers_wishlist_batch(pool, &wishlist_owner_ids).await?;
 
     // Each smart shelf's membership predicate is unique, so unlike the manual
     // counts above these can't fold into one `GROUP BY` — fan them out
@@ -147,6 +158,7 @@ pub async fn list_visible_shelves(
             smart_inputs.push((row.id, row.owner_user_id, mode, rules));
         }
     }
+    let mut smart_covers = covers_smart_fan_out(pool, &smart_inputs).await?;
     let smart_counts = count_smart_fan_out(pool, smart_inputs).await?;
 
     let mut out = Vec::with_capacity(parsed.len());
@@ -159,6 +171,16 @@ pub async fn list_visible_shelves(
                 .copied()
                 .unwrap_or(0),
         };
+        let cover_uuids = match row.kind {
+            ShelfKind::Smart => smart_covers.remove(&row.id).unwrap_or_default(),
+            ShelfKind::Manual => manual_covers.remove(&row.id).unwrap_or_default(),
+            // Two visible rows can share an owner's wishlist covers only if the
+            // same user somehow owned two wishlists; `remove` keeps the map
+            // drain simple and the first row wins.
+            ShelfKind::Wishlist => wishlist_covers
+                .remove(&row.owner_user_id)
+                .unwrap_or_default(),
+        };
         out.push(ShelfSummary {
             id: row.id,
             owner_user_id: row.owner_user_id,
@@ -168,6 +190,7 @@ pub async fn list_visible_shelves(
             visibility: row.visibility,
             accent: row.accent,
             book_count,
+            cover_uuids,
         });
     }
     Ok(out)
@@ -405,6 +428,125 @@ async fn count_manual_batch(
     let rows = q.fetch_all(pool).await?;
     for r in &rows {
         out.insert(r.try_get("shelf_id")?, r.try_get("cnt")?);
+    }
+    Ok(out)
+}
+
+/// First-[`MOSAIC_COVERS`] cover-bearing member uuids per manual shelf, in
+/// `shelf_books.position` order, one windowed query for the whole rail —
+/// the mosaic analogue of [`count_manual_batch`]. Shelves whose members all
+/// lack covers are absent; callers default to empty.
+async fn covers_manual_batch(
+    pool: &SqlitePool,
+    shelf_ids: &[i64],
+) -> Result<HashMap<i64, Vec<String>>, ShelfError> {
+    let mut out: HashMap<i64, Vec<String>> = HashMap::new();
+    if shelf_ids.is_empty() {
+        return Ok(out);
+    }
+    let placeholders = shelf_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT shelf_id, book_uuid FROM ( \
+           SELECT sb.shelf_id, sb.book_uuid, \
+                  ROW_NUMBER() OVER (PARTITION BY sb.shelf_id \
+                                     ORDER BY sb.position, sb.added_at) AS rn \
+             FROM shelf_books sb \
+             JOIN books b ON b.uuid = sb.book_uuid \
+            WHERE sb.shelf_id IN ({placeholders}) AND {HAS_COVER} \
+         ) WHERE rn <= {MOSAIC_COVERS} ORDER BY shelf_id, rn"
+    );
+    let mut q = sqlx::query(&sql);
+    for id in shelf_ids {
+        q = q.bind(id);
+    }
+    let rows = q.fetch_all(pool).await?;
+    for r in &rows {
+        out.entry(r.try_get("shelf_id")?)
+            .or_default()
+            .push(r.try_get("book_uuid")?);
+    }
+    Ok(out)
+}
+
+/// First-[`MOSAIC_COVERS`] cover-bearing wishlist uuids per owner, newest
+/// first (matching [`fetch_wishlist`]'s order), keyed by owner id like
+/// [`count_wishlist_batch`].
+async fn covers_wishlist_batch(
+    pool: &SqlitePool,
+    owner_ids: &[i64],
+) -> Result<HashMap<i64, Vec<String>>, ShelfError> {
+    let mut out: HashMap<i64, Vec<String>> = HashMap::new();
+    if owner_ids.is_empty() {
+        return Ok(out);
+    }
+    let placeholders = owner_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT uid, book_uuid FROM ( \
+           SELECT we.user_id AS uid, we.book_uuid, \
+                  ROW_NUMBER() OVER (PARTITION BY we.user_id \
+                                     ORDER BY we.added_at DESC, we.id DESC) AS rn \
+             FROM wishlist_entries we \
+             JOIN books b ON b.uuid = we.book_uuid \
+            WHERE we.user_id IN ({placeholders}) AND {HAS_COVER} \
+         ) WHERE rn <= {MOSAIC_COVERS} ORDER BY uid, rn"
+    );
+    let mut q = sqlx::query(&sql);
+    for id in owner_ids {
+        q = q.bind(id);
+    }
+    let rows = q.fetch_all(pool).await?;
+    for r in &rows {
+        out.entry(r.try_get("uid")?)
+            .or_default()
+            .push(r.try_get("book_uuid")?);
+    }
+    Ok(out)
+}
+
+/// First-[`MOSAIC_COVERS`] cover-bearing member uuids per smart shelf. Like
+/// [`count_smart_fan_out`], each shelf's predicate is unique so these fan out
+/// [`SMART_COUNT_CONCURRENCY`] at a time — but as uuid-only `LIMIT` queries,
+/// not hydrated pages. Title order mirrors the landing default sort.
+async fn covers_smart_fan_out(
+    pool: &SqlitePool,
+    inputs: &[(i64, i64, MatchMode, Vec<ShelfRule>)],
+) -> Result<HashMap<i64, Vec<String>>, ShelfError> {
+    async fn one(
+        pool: &SqlitePool,
+        owner_id: i64,
+        mode: MatchMode,
+        rules: &[ShelfRule],
+    ) -> Result<Vec<String>, ShelfError> {
+        let pred = membership_predicate(rules, mode, owner_id)?;
+        let sql = format!(
+            "SELECT b.uuid FROM books b \
+             WHERE {FILE_EXISTS} AND {HAS_COVER} AND {} \
+             ORDER BY {} LIMIT {MOSAIC_COVERS}",
+            pred.sql,
+            order_by_sql(SortKey::Title, SortDir::Asc),
+        );
+        let mut q = sqlx::query(&sql);
+        for b in &pred.binds {
+            q = match b {
+                Bind::Text(s) => q.bind(s.clone()),
+                Bind::Int(i) => q.bind(*i),
+            };
+        }
+        let rows = q.fetch_all(pool).await?;
+        rows.iter().map(|r| Ok(r.try_get("uuid")?)).collect()
+    }
+
+    let mut out = HashMap::with_capacity(inputs.len());
+    for chunk in inputs.chunks(SMART_COUNT_CONCURRENCY) {
+        let covers = try_join_all(
+            chunk
+                .iter()
+                .map(|(_, owner_id, mode, rules)| one(pool, *owner_id, *mode, rules)),
+        )
+        .await?;
+        for ((shelf_id, ..), uuids) in chunk.iter().zip(covers) {
+            out.insert(*shelf_id, uuids);
+        }
     }
     Ok(out)
 }

@@ -277,6 +277,7 @@ fn test_shelf_summary(id: i64, name: &str, book_count: i64) -> omnibus_shared::S
         visibility: omnibus_shared::Visibility::Private,
         accent: None,
         book_count,
+        cover_uuids: Vec::new(),
     }
 }
 

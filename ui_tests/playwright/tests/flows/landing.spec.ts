@@ -26,9 +26,11 @@ test("renders the landing page layout", async ({ page }) => {
   ).toBeVisible();
   await expect(page.getByTestId("ebook-table")).toBeVisible();
   await expect(page.getByTestId("lib-toolbar")).toBeVisible();
-  // F3.1: the shelves rail replaced the old filter sidebar. "All books" is the
-  // way back to the full library; shelf CRUD is covered by shelves.spec.ts.
-  await expect(page.getByTestId("rail-all-books")).toBeVisible();
+  // The shelf gallery replaced the left rail on the landing: an "All Books"
+  // tile (selected by default) plus a New-shelf tile. In-place selection is
+  // covered by shelf_gallery.spec.ts; shelf CRUD by shelves.spec.ts.
+  await expect(page.getByTestId("shelf-gallery")).toBeVisible();
+  await expect(page.getByTestId("gallery-all-books")).toBeVisible();
   await expect(page.getByTestId("new-shelf")).toBeVisible();
   await expectNavVisible(page);
 });
