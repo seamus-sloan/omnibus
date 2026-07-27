@@ -12,7 +12,10 @@ import SwiftUI
 /// tested without standing up a view.
 @MainActor
 func runUncancelled(_ action: @escaping @MainActor () async -> Void) async {
-    await Task { await action() }.value
+    // Isolation spelled out rather than left to `Task.init`'s inheritance: the
+    // actor it runs on is not what detaches it — cancellation is — and an
+    // unannotated closure invites a later reader to "fix" the wrong half.
+    await Task { @MainActor in await action() }.value
 }
 
 extension View {
