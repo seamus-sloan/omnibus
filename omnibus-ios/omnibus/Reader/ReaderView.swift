@@ -156,6 +156,15 @@ struct ReaderView: View {
         .onChange(of: controller.location?.cfi) { _, _ in
             Task { await persist(force: false) }
         }
+        // A handle drag ends when the finger lifts — unless the selection goes
+        // out from under it first, which a re-pagination does (the glue drops
+        // the selection on `relocated`, and a rotation or the audio dock
+        // appearing re-paginates). The handles leave the hierarchy mid-gesture,
+        // SwiftUI never delivers `onEnded`, and the flag would pin the passage
+        // menu shut for the rest of the session.
+        .onChange(of: controller.selection == nil) { _, gone in
+            if gone { adjustingSelection = false }
+        }
         .onChange(of: bridge.pendingCFI) { _, cfi in
             guard let cfi else { return }
             controller.display(cfi)

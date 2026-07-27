@@ -166,9 +166,12 @@ final class AnnotatingWebView: WKWebView {
         false
     }
 
+    /// `super` first, then remove — the responder chain's contract. Removing
+    /// ahead of it only takes out what is in the builder at that moment, and
+    /// `WKWebView`'s own implementation puts its edit menu in afterwards.
     override func buildMenu(with builder: any UIMenuBuilder) {
-        builder.remove(menu: .standardEdit)
         super.buildMenu(with: builder)
+        builder.remove(menu: .standardEdit)
     }
 }
 

@@ -137,6 +137,7 @@
     tocFlat = [];
     sel = null;
     currentSectionBase = null;
+    dropFlatCache();
     if (selEmitRaf) {
       cancelAnimationFrame(selEmitRaf);
       selEmitRaf = 0;
@@ -465,6 +466,10 @@
         emitRelocate(location);
       }, 400);
     });
+
+    // A new section means new text nodes, so every block flattened off the
+    // old ones is dead weight.
+    rendition.on("rendered", dropFlatCache);
 
     rendition.on("relocated", function (location) {
       // A selection belongs to the page it was made on: once the page turns,
@@ -887,6 +892,31 @@
     return { text: text, segs: segs };
   }
 
+  // Flattened blocks, keyed by the element they were built from.
+  //
+  // `extendSelectionTo` runs on every `touchmove`, and `blockRootOf` stops at
+  // the nearest block tag — which in a book whose chapter is one undivided
+  // <div> (plenty are) is the whole chapter. Rebuilt per event, that is the
+  // chapter's text concatenated sixty times a second.
+  //
+  // Safe to hold across a drag because the index is purely textual: node
+  // identity and offsets, no geometry. Re-pagination doesn't touch it; only a
+  // new section does, which is what `rendered` below invalidates on.
+  var flatCache = typeof Map === "function" ? new Map() : null;
+
+  function flattenCached(root, doc) {
+    if (!flatCache) return flatten(root, doc);
+    var hit = flatCache.get(root);
+    if (hit) return hit;
+    var flat = flatten(root, doc);
+    flatCache.set(root, flat);
+    return flat;
+  }
+
+  function dropFlatCache() {
+    if (flatCache) flatCache.clear();
+  }
+
   function flatIndexOf(flat, node, offset) {
     for (var i = 0; i < flat.segs.length; i++) {
       if (flat.segs[i].node === node) return flat.segs[i].at + offset;
@@ -915,7 +945,7 @@
   function tokenRangeAt(doc, node, offset) {
     var root = blockRootOf(node);
     if (!root) return null;
-    var flat = flatten(root, doc);
+    var flat = flattenCached(root, doc);
     var index = flatIndexOf(flat, node, offset);
     if (index < 0) return null;
 
