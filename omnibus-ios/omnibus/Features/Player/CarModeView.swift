@@ -16,6 +16,9 @@ struct CarModeView: View {
     @Environment(\.palette) private var palette
     @Environment(\.dismiss) private var dismiss
 
+    /// What the idle timer was set to before Car Mode took it over.
+    @State private var wasIdleTimerDisabled = false
+
     var body: some View {
         VStack(spacing: Spacing.lg) {
             header
@@ -29,8 +32,15 @@ struct CarModeView: View {
         .background(palette.bg0Color.ignoresSafeArea())
         // A driver isn't going to tap every 30 seconds to keep the screen up,
         // and a dark screen is the whole reason they'd look down at all.
-        .onAppear { UIApplication.shared.isIdleTimerDisabled = true }
-        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
+        //
+        // Restored to what it was rather than to `false`: the flag is
+        // process-wide, so hard-clearing it on exit would stamp on any other
+        // surface that had a reason to hold the screen awake.
+        .onAppear {
+            wasIdleTimerDisabled = UIApplication.shared.isIdleTimerDisabled
+            UIApplication.shared.isIdleTimerDisabled = true
+        }
+        .onDisappear { UIApplication.shared.isIdleTimerDisabled = wasIdleTimerDisabled }
     }
 
     private var header: some View {

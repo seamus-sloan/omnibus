@@ -78,6 +78,19 @@ final class AudioPlayer {
 
     private init() {
         configureRemoteCommands()
+        syncChapterCommands()
+    }
+
+    /// Point the lock screen's chapter-skip buttons at whether there are chapters
+    /// to skip. A book with no marks would otherwise offer two controls that
+    /// return without doing anything.
+    ///
+    /// Called from every place `timeline` is assigned — that pairing is the whole
+    /// invariant, since the commands are process-wide and outlive any one book.
+    private func syncChapterCommands() {
+        let center = MPRemoteCommandCenter.shared()
+        center.nextTrackCommand.isEnabled = hasChapters
+        center.previousTrackCommand.isEnabled = hasChapters
     }
 
     var isActive: Bool { book != nil }
@@ -171,11 +184,7 @@ final class AudioPlayer {
             // no length of its own measures to the next chapter's start, and the
             // last one has only the end of the book to measure to.
             timeline = ChapterTimeline(chapters: manifest.chapters, bookDuration: duration)
-            // A lock screen offering chapter skip on a book with no chapter marks
-            // gives two buttons that do nothing.
-            let center = MPRemoteCommandCenter.shared()
-            center.nextTrackCommand.isEnabled = hasChapters
-            center.previousTrackCommand.isEnabled = hasChapters
+            syncChapterCommands()
 
             adoptRate(await loadRate(uuid: book.uuid))
 
@@ -479,6 +488,12 @@ final class AudioPlayer {
         // manifest, and leaving this up means the chapter bar spends that window
         // offering to seek inside the book that was just closed.
         timeline = ChapterTimeline()
+        // Paired with the line above so the lock screen's chapter buttons can
+        // never outlive the chapter data they act on. `load` tears down and then
+        // *awaits* the next manifest, so leaving the previous book's enablement
+        // standing offered chapter skip across that whole window — and with an
+        // empty timeline both commands return without doing anything.
+        syncChapterCommands()
         // Closed again so the next book cannot be written to before its own
         // opening position has been settled — this is the one flag whose stale
         // value would be silently destructive rather than merely wrong.
@@ -682,14 +697,10 @@ final class AudioPlayer {
             Task { @MainActor in self?.skip(-15) }
             return .success
         }
-        // Both start disabled and `load` turns them on once it knows whether
-        // this book has chapter marks at all.
-        center.nextTrackCommand.isEnabled = false
         center.nextTrackCommand.addTarget { [weak self] _ in
             Task { @MainActor in self?.nextChapter() }
             return .success
         }
-        center.previousTrackCommand.isEnabled = false
         center.previousTrackCommand.addTarget { [weak self] _ in
             Task { @MainActor in self?.previousChapter() }
             return .success
