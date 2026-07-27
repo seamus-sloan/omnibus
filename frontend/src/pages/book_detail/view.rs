@@ -239,11 +239,13 @@ pub(super) fn render_loaded(
                     },
                 }
                 physical::BdPhysicalPanel {
-                    uuid: uuid.clone(),
-                    is_fileless,
-                    isbn: isbn13,
-                    title: title.clone(),
-                    author: panel_author,
+                    identity: physical::BdBookIdentity {
+                        uuid: uuid.clone(),
+                        is_fileless,
+                        isbn: isbn13,
+                        title: title.clone(),
+                        author: panel_author,
+                    },
                     refresh,
                 }
                 section { class: "bd-body-grid",
