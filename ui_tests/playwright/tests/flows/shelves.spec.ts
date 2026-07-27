@@ -12,16 +12,18 @@ test.beforeAll(async ({ request }) => {
   await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
 });
 
-test("renders the shelves rail on the library page", async ({ page }) => {
+test("renders the shelf gallery on the library page", async ({ page }) => {
   await gotoReady(page, "/");
 
-  // The rail replaces the old filter row: "All books" + a New-shelf button.
-  await expect(page.getByTestId("rail-all-books")).toBeVisible();
+  // The gallery replaces the old left rail: an "All Books" tile (selected by
+  // default) + a New-shelf button in the gallery head.
+  await expect(page.getByTestId("shelf-gallery")).toBeVisible();
+  await expect(page.getByTestId("gallery-all-books")).toBeVisible();
   await expect(page.getByTestId("new-shelf")).toBeVisible();
   await expectNavVisible(page);
 });
 
-test("creates a hand-picked shelf and shows it in the rail", async ({
+test("creates a hand-picked shelf and shows it in the gallery", async ({
   page,
 }) => {
   await gotoReady(page, "/");
@@ -43,7 +45,7 @@ test("creates a hand-picked shelf and shows it in the rail", async ({
     async () => modal.getByTestId("shelf-create-submit").click(),
   );
 
-  // The rail refetches and the new shelf appears.
+  // The gallery refetches and the new shelf appears as a tile.
   await expect(page.getByText(name)).toBeVisible();
 });
 

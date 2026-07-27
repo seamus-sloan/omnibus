@@ -11,15 +11,22 @@ use omnibus_shared::EbookMetadata;
 use super::sorting::{contributor_names, row_ident};
 use crate::Route;
 
+/// Entrance-cascade delay for tile `index`, mirroring the iOS settle cascade:
+/// 40 ms steps, modulo 8 so late pages animate like the first.
+pub(super) fn stagger_ms(index: usize) -> usize {
+    (index % 8) * 40
+}
+
 #[component]
 pub(super) fn BookGrid(books: Vec<EbookMetadata>, server_url: String) -> Element {
     rsx! {
         div { class: "lib-grid", "data-testid": "lib-grid", role: "list",
-            for book in books.into_iter() {
+            for (index, book) in books.into_iter().enumerate() {
                 GridTile {
                     key: "{row_ident(&book)}",
                     book: book,
                     server_url: server_url.clone(),
+                    index,
                 }
             }
         }
@@ -27,7 +34,7 @@ pub(super) fn BookGrid(books: Vec<EbookMetadata>, server_url: String) -> Element
 }
 
 #[component]
-fn GridTile(book: EbookMetadata, server_url: String) -> Element {
+fn GridTile(book: EbookMetadata, server_url: String, index: usize) -> Element {
     // Stable per-book uuid drives both detail-route URL and thumb URL
     // (see `Route::BookDetail`).
     let uuid = book.unique_identifier.clone().unwrap_or_default();
@@ -58,6 +65,7 @@ fn GridTile(book: EbookMetadata, server_url: String) -> Element {
             "data-testid": "{tile_testid}",
             role: "listitem",
             tabindex: "0",
+            style: "animation-delay: {stagger_ms(index)}ms",
             aria_label: "Open details for {display_title}",
             onclick: move |_| { nav.push(Route::BookDetail { uuid: uuid_click.clone() }); },
             onkeydown: move |evt: Event<KeyboardData>| {
@@ -89,5 +97,19 @@ fn GridTile(book: EbookMetadata, server_url: String) -> Element {
                 div { class: "lib-tile-author", "{authors}" }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stagger_ms;
+
+    #[test]
+    fn stagger_ms_steps_by_40_and_wraps_every_eight_tiles() {
+        assert_eq!(stagger_ms(0), 0);
+        assert_eq!(stagger_ms(3), 120);
+        assert_eq!(stagger_ms(7), 280);
+        assert_eq!(stagger_ms(8), 0);
+        assert_eq!(stagger_ms(19), 120);
     }
 }

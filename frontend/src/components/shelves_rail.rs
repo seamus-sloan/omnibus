@@ -146,7 +146,7 @@ fn render_shelf_row(s: &ShelfSummary, active: RailActive, viewer_id: Option<i64>
 }
 
 /// Stack-of-books glyph for the "All books" row.
-fn all_books_icon() -> Element {
+pub(crate) fn all_books_icon() -> Element {
     rsx! {
         svg {
             width: "14", height: "14", view_box: "0 0 24 24",
@@ -159,7 +159,7 @@ fn all_books_icon() -> Element {
 }
 
 /// Cog glyph marking a smart shelf.
-fn cog_icon() -> Element {
+pub(crate) fn cog_icon() -> Element {
     rsx! {
         svg {
             width: "13", height: "13", view_box: "0 0 24 24",
@@ -172,7 +172,7 @@ fn cog_icon() -> Element {
 }
 
 /// Heart glyph marking the built-in Wishlist shelf.
-fn heart_icon() -> Element {
+pub(crate) fn heart_icon() -> Element {
     rsx! {
         svg {
             width: "13", height: "13", view_box: "0 0 24 24",
