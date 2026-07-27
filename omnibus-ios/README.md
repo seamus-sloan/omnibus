@@ -338,6 +338,18 @@ had the old value and nothing published the update. Resume points are stricter
 still (network-first), because a stale empty list hides the Continue rail
 entirely.
 
+**Pull-to-refresh uses `refreshTask`, never `refreshable`.** SwiftUI cancels a
+`refreshable` action the moment the view it is attached to invalidates, and
+every refresh here publishes as it goes — the replica first, the server's answer
+when it lands. Publishing the replica redrew the view, which cancelled the
+action, which cancelled the request still in flight behind it: a pull re-rendered
+the same stale page, so a book added or removed on the server never showed up
+until the app was relaunched. Changing a filter did pick it up, because that
+reload runs in a task of its own — which is what made this look like a caching
+bug rather than a cancellation one. `View.refreshTask` runs the work
+unstructured and awaits it, detaching it from that cancellation while keeping
+the spinner up until the refresh has settled.
+
 **Offline is Swift-native.** The Rust layer pairs its download registry with a
 loopback HTTP server so the WebView can play a local file. `AVPlayer` and
 `WKWebView` both load `file://` directly, so that hop is gone. The rest is a
