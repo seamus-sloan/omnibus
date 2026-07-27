@@ -1,48 +1,98 @@
 //  AnnotationMenu.swift
-//  The highlight menu and note composer.
+//  The passage menu and the note composer.
 //
 //  One menu serves both directions: a fresh selection (no colour yet) and a
-//  tap on a highlight already on the page. Anchoring it to the passage rather
-//  than pinning it to the bottom of the screen is what makes it read as acting
-//  *on that sentence* — the Apple Books model — instead of as a global toolbar
-//  that happens to be showing.
+//  tap on a highlight already on the page. It replaces the system callout
+//  rather than joining it — WebKit's selection is off inside the section, so
+//  there is no second menu to compete with, and the verbs a reader wants on a
+//  passage (a colour, a note, a quote card) are ones no system menu offers.
+//  Look Up and Translate are carried over so nothing the callout gave up is
+//  actually lost.
 
 import SwiftUI
 
+/// What the menu can be asked to do with a passage.
+enum PassageAction: Hashable {
+    case note
+    case quote
+    case copy
+    case lookUp
+    case translate
+    case share
+    case remove
+}
+
 struct AnnotationMenu: View {
-    /// The highlight's current colour, or `nil` for a new selection.
+    /// The highlight's current colour, or `nil` for a plain selection.
     var current: HighlightColor?
     var hasNote = false
+    /// The reading theme, so the menu sits on the page rather than on the app.
+    var theme: String
     var onColor: (HighlightColor) -> Void
-    var onNote: () -> Void
-    var onCopy: () -> Void
-    var onShare: () -> Void
-    /// Only an existing highlight can be removed.
-    var onRemove: (() -> Void)?
+    var onAction: (PassageAction) -> Void
+    /// Only a passage that already carries a highlight can have it removed.
+    var canRemove: Bool
+    /// Which way the tail points, from the anchor that placed this.
+    var tail: PanelTail = .none
 
-    @Environment(\.palette) private var palette
+    /// Sized rather than measured: the anchor has to know the box before the
+    /// menu is laid out, and a measured size buys nothing but a frame of the
+    /// menu jumping into place.
+    static let width: CGFloat = 300
+    static let tailHeight: CGFloat = 8
+    private static let contentHeight: CGFloat = 112
+    /// What the anchor places, tail included.
+    static let height: CGFloat = contentHeight + tailHeight
+
+    private var actions: [(PassageAction, String, String)] {
+        var items: [(PassageAction, String, String)] = [
+            (.note, hasNote ? "Edit note" : "Note", "square.and.pencil"),
+            (.quote, "Quote", "quote.opening"),
+            (.copy, "Copy", "doc.on.doc"),
+            (.lookUp, "Look Up", "character.book.closed"),
+            (.translate, "Translate", "translate"),
+            (.share, "Share", "square.and.arrow.up"),
+        ]
+        if canRemove {
+            items.append((.remove, "Remove", "trash"))
+        }
+        return items
+    }
+
+    private var ink: Color { ReaderTheme.ink(theme) }
 
     var body: some View {
         VStack(spacing: 0) {
             colorRow
             Rectangle()
-                .fill(palette.line2.color)
+                .fill(ink.opacity(0.12))
                 .frame(height: 0.5)
             actionRow
         }
+        .frame(width: Self.width, height: Self.contentHeight)
+        // The tail is reserved out of the frame rather than drawn over the
+        // page, so the anchor's placement maths and the shape agree on where
+        // the menu ends.
+        .padding(tail.pointsDown ? .bottom : .top, Self.tailHeight)
         .background(
-            RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
-                .fill(.regularMaterial)
+            PanelShape(tail: tail, tailHeight: Self.tailHeight)
+                // The shadow rides the fill style rather than the view, so it
+                // follows the tail. A `.shadow` modifier on a material-filled
+                // shape falls back to the view's rectangular frame and lays a
+                // hard grey band across the page under the menu.
+                .fill(
+                    .regularMaterial.shadow(
+                        .drop(color: .black.opacity(0.24), radius: 14, y: 5)
+                    )
+                )
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
-                .strokeBorder(.white.opacity(0.10), lineWidth: 0.5)
-        )
-        .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
+        .environment(\.colorScheme, ReaderTheme.isLightPage(theme) ? .light : .dark)
     }
 
+    /// The colours, and — on a passage already marked — the ring that says
+    /// which one it is before you change it.
     private var colorRow: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 0) {
             ForEach(HighlightColor.allCases, id: \.self) { color in
                 Button {
                     Haptics.select()
@@ -54,44 +104,59 @@ struct AnnotationMenu: View {
                         .overlay(
                             Circle().strokeBorder(.white.opacity(0.28), lineWidth: 1)
                         )
-                        // The ring is how you can tell what a passage already
-                        // is before you change it.
                         .overlay {
                             if current == color {
                                 Circle()
-                                    .strokeBorder(palette.ink0Color, lineWidth: 2)
+                                    .strokeBorder(ink, lineWidth: 2)
                                     .padding(-4)
                             }
                         }
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(color.label)
                 .accessibilityAddTraits(current == color ? [.isSelected, .isButton] : .isButton)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 13)
+        .padding(.horizontal, 10)
     }
 
+    /// Scrolls rather than crowds: seven verbs at a readable size don't fit a
+    /// menu narrow enough to sit beside a passage, and shrinking them to fit
+    /// is how a native-looking bar starts looking like a web toolbar.
     private var actionRow: some View {
-        HStack(spacing: 0) {
-            action(hasNote ? "Edit note" : "Note", icon: "square.and.pencil", action: onNote)
-            action("Copy", icon: "doc.on.doc", action: onCopy)
-            action("Share", icon: "square.and.arrow.up", action: onShare)
-            if let onRemove {
-                action("Remove", icon: "trash", tint: palette.badColor, action: onRemove)
+        ScrollView(.horizontal) {
+            HStack(spacing: 0) {
+                ForEach(actions, id: \.0) { action, label, icon in
+                    button(action, label: label, icon: icon)
+                }
             }
+            .padding(.horizontal, 6)
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 8)
+        .scrollIndicators(.hidden)
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(height: 56)
+        // Fades the verbs off the edge instead of guillotining one mid-word,
+        // which is the difference between "there is more" and "this is broken".
+        .mask(
+            LinearGradient(
+                stops: [
+                    .init(color: .black, location: 0),
+                    .init(color: .black, location: 0.93),
+                    .init(color: .clear, location: 1),
+                ],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+        )
     }
 
-    private func action(
-        _ label: String, icon: String, tint: Color? = nil, action: @escaping () -> Void
-    ) -> some View {
+    private func button(_ action: PassageAction, label: String, icon: String) -> some View {
         Button {
             Haptics.tap()
-            action()
+            onAction(action)
         } label: {
             VStack(spacing: 4) {
                 Image(systemName: icon)
@@ -100,60 +165,57 @@ struct AnnotationMenu: View {
                     .font(.ui(10.5, weight: .medium))
                     .lineLimit(1)
             }
-            .foregroundStyle(tint ?? palette.ink0Color)
+            .foregroundStyle(action == .remove ? Color.red.opacity(0.9) : ink)
             .frame(minWidth: 62)
-            .padding(.vertical, 4)
+            .padding(.vertical, 6)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
 }
 
-/// Places the menu beside the passage it acts on.
-struct AnnotationAnchor<Content: View>: View {
-    let rect: SelectionData.SelectionRect?
-    @ViewBuilder var content: () -> Content
+// MARK: - Dictionary and translation
 
-    /// The menu is a fixed shape, so a measured size would buy nothing but a
-    /// frame of the menu jumping into place.
-    private let menuSize = CGSize(width: 286, height: 116)
-    private let gap: CGFloat = 12
-    private let edge: CGFloat = 10
-
-    var body: some View {
-        GeometryReader { geometry in
-            content()
-                .frame(width: menuSize.width)
-                .position(center(in: geometry.size))
-        }
-        .ignoresSafeArea(.keyboard)
+/// The system dictionary, which has no SwiftUI form.
+///
+/// Presented over the key window rather than as a sheet off the reader: the
+/// reader owns a full-screen presentation with its own colour scheme, and a
+/// `UIReferenceLibraryViewController` inside it inherits the page's theme and
+/// renders grey-on-grey.
+enum DictionaryLookup {
+    /// A selection carries its punctuation — that is what lets a drag reach
+    /// the end of a sentence — but the dictionary has no entry for `it,"`.
+    private static func headword(_ term: String) -> String {
+        term.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
     }
 
-    private func center(in size: CGSize) -> CGPoint {
-        guard let rect else {
-            // No geometry (a tap epub.js couldn't locate): fall back to the
-            // bottom bar position rather than dropping the menu entirely.
-            return CGPoint(x: size.width / 2, y: size.height - menuSize.height / 2 - 96)
-        }
+    @MainActor
+    static func present(_ term: String) {
+        let word = headword(term)
+        guard !word.isEmpty,
+              UIReferenceLibraryViewController.dictionaryHasDefinition(forTerm: word),
+              let scene = UIApplication.shared.connectedScenes
+                  .compactMap({ $0 as? UIWindowScene })
+                  .first(where: { $0.activationState == .foregroundActive }),
+              let root = scene.keyWindow?.rootViewController
+        else { return }
 
-        let halfWidth = menuSize.width / 2
-        let halfHeight = menuSize.height / 2
-        let x = min(
-            max(CGFloat(rect.x + rect.width / 2), halfWidth + edge),
-            size.width - halfWidth - edge
-        )
+        var presenter = root
+        while let presented = presenter.presentedViewController { presenter = presented }
+        presenter.present(UIReferenceLibraryViewController(term: word), animated: true)
+    }
 
-        // Above the passage when it fits, below it otherwise — the menu must
-        // never cover the text it is about.
-        let above = CGFloat(rect.y) - gap - halfHeight
-        let below = CGFloat(rect.y + (rect.height ?? 0)) + gap + halfHeight
-        let minY = halfHeight + 60
-        let maxY = size.height - halfHeight - 60
-        let y = above >= minY ? above : min(below, maxY)
-
-        return CGPoint(x: x, y: min(max(y, minY), maxY))
+    /// Whether the dictionary has anything to say, so the verb can be dropped
+    /// rather than doing nothing when tapped.
+    @MainActor
+    static func hasDefinition(for term: String) -> Bool {
+        let word = headword(term)
+        guard !word.isEmpty else { return false }
+        return UIReferenceLibraryViewController.dictionaryHasDefinition(forTerm: word)
     }
 }
+
+// MARK: - Note composer
 
 /// Writing or editing the note attached to a highlight.
 struct NoteComposer: View {

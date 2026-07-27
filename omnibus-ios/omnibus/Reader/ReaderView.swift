@@ -1,14 +1,22 @@
 //  ReaderView.swift
 //  Native chrome around the epub.js stage: tap zones for page turns, an
-//  auto-hiding top/bottom bar, the typography sheet, TOC, and the selection
-//  action bar that creates highlights.
+//  auto-hiding top/bottom bar, the sheets, and the passage menu that turns a
+//  selection into a highlight, a note, or a quote card.
 
 import SwiftUI
+import Translation
 
 /// A position worth being able to get back to after a scrub.
 struct ReturnPoint: Equatable {
     let cfi: String
     let page: Int
+}
+
+/// A passage on its way to the quote-card sheet. Identity is per request, so
+/// making a card of the same passage twice reopens the sheet.
+struct QuoteRequest: Identifiable {
+    let id = UUID()
+    let text: String
 }
 
 struct ReaderView: View {
@@ -44,6 +52,16 @@ struct ReaderView: View {
     @State private var justBookmarked = false
     /// The highlight whose note is being written, driving the composer sheet.
     @State private var noteTarget: Highlight?
+    /// The passage being turned into a card, driving the quote sheet.
+    @State private var quoteTarget: QuoteRequest?
+    /// Translation is a system presentation over the reader, not a sheet of
+    /// ours, so it needs its own live text rather than an optional target.
+    @State private var translateText = ""
+    @State private var showTranslate = false
+    /// True while a selection handle is under a finger. The menu comes down
+    /// for the duration — one that chases a drag can't be read, and Books
+    /// likewise brings it back only on release.
+    @State private var adjustingSelection = false
     @State private var startCFI: String?
     /// The record the reader actually opened on, so a later answer from the
     /// server can be judged newer or older than what this device knew.
@@ -116,51 +134,11 @@ struct ReaderView: View {
 
             chrome
 
-            // No menu of our own for a live selection: iOS raises its own
-            // callout for that, and `AnnotatingWebView` adds Highlight / Note /
-            // Remove to it. Two menus for one gesture is what made selecting
-            // text feel like a fight.
-            if let tap = controller.tappedAnnotation, let highlight = tappedHighlight(tap) {
-                // One tap anywhere closes it — including the gutters, which
-                // would otherwise turn the page out from under a menu that is
-                // about a passage on it. Dismissal is a SwiftUI concern while
-                // this is up; the glue never sees these touches.
-                Color.clear
-                    .contentShape(Rectangle())
-                    .ignoresSafeArea()
-                    .onTapGesture { closeAnnotationMenu() }
+            selectionLayer
 
-                AnnotationAnchor(rect: tap.rect) {
-                    AnnotationMenu(
-                        current: highlight.color,
-                        hasNote: highlight.note?.nilIfBlank != nil,
-                        onColor: { color in
-                            Task { await recolor(highlight, to: color) }
-                        },
-                        onNote: {
-                            noteTarget = highlight
-                            closeAnnotationMenu()
-                        },
-                        onCopy: {
-                            UIPasteboard.general.string = highlight.text ?? ""
-                            closeAnnotationMenu()
-                        },
-                        onShare: {
-                            ShareSheet.present(items: [highlight.text ?? ""])
-                            closeAnnotationMenu()
-                        },
-                        onRemove: {
-                            Task { await removeHighlight(highlight) }
-                        }
-                    )
-                }
-                // Keyed on the passage so moving to another highlight fades in
-                // at the new one rather than sliding the menu across the page.
-                .id(tap.cfiRange)
-                .transition(.opacity.combined(with: .scale(scale: 0.96)))
-            }
+            passageMenu
         }
-        .animation(Motion.snap, value: controller.tappedAnnotation?.cfiRange)
+        .animation(Motion.snap, value: passage?.id)
         .statusBarHidden(!chromeVisible)
         .persistentSystemOverlays(chromeVisible ? .automatic : .hidden)
         // The status bar sits on the page, so it has to read against the
@@ -178,12 +156,17 @@ struct ReaderView: View {
                 if !chromeVisible { showMenu = false }
             }
         }
-        .onChange(of: controller.menuActionToken) { _, _ in
-            guard let action = controller.menuAction else { return }
-            Task { await perform(action) }
-        }
         .onChange(of: controller.location?.cfi) { _, _ in
             Task { await persist(force: false) }
+        }
+        // A handle drag ends when the finger lifts — unless the selection goes
+        // out from under it first, which a re-pagination does (the glue drops
+        // the selection on `relocated`, and a rotation or the audio dock
+        // appearing re-paginates). The handles leave the hierarchy mid-gesture,
+        // SwiftUI never delivers `onEnded`, and the flag would pin the passage
+        // menu shut for the rest of the session.
+        .onChange(of: controller.selection == nil) { _, gone in
+            if gone { adjustingSelection = false }
         }
         .onChange(of: bridge.pendingCFI) { _, cfi in
             guard let cfi else { return }
@@ -218,6 +201,127 @@ struct ReaderView: View {
             }
             .preferredColorScheme(appScheme)
         }
+        .sheet(item: $quoteTarget) { request in
+            QuoteCardSheet(quote: request.text, book: book)
+                .preferredColorScheme(appScheme)
+        }
+        .translationPresentation(isPresented: $showTranslate, text: translateText)
+    }
+
+    // MARK: - Passage menu
+
+    /// A passage worth a menu: either a live selection, or a highlight already
+    /// on the page that was tapped. One menu serves both — the verbs are the
+    /// same, and only whether there is already a colour differs.
+    private enum Passage: Equatable {
+        case selection(SelectionData)
+        case highlight(Highlight, [PageRect])
+
+        var rects: [PageRect] {
+            switch self {
+            case .selection(let selection): selection.rects
+            case .highlight(_, let rects): rects
+            }
+        }
+
+        /// Identity for the menu, so moving to another passage fades in at the
+        /// new one rather than sliding the menu across the page.
+        var id: String {
+            switch self {
+            case .selection(let selection): "sel:\(selection.cfiRange ?? selection.text)"
+            // Row id, not the anchor: a Kobo-origin highlight has no CFI, and
+            // two of them would otherwise share one identity.
+            case .highlight(let highlight, _): "hl:\(highlight.id)"
+            }
+        }
+    }
+
+    private var passage: Passage? {
+        if let tap = controller.tappedAnnotation, let highlight = tappedHighlight(tap) {
+            return .highlight(highlight, tap.rects)
+        }
+        guard let selection = controller.selection,
+              !selection.dragging,
+              !adjustingSelection,
+              !selection.rects.isEmpty
+        else { return nil }
+        return .selection(selection)
+    }
+
+    /// The stored highlight a passage already carries, if any.
+    private func storedHighlight(_ passage: Passage) -> Highlight? {
+        switch passage {
+        case .highlight(let highlight, _):
+            return highlight
+        case .selection(let selection):
+            guard let existing = selection.existing else { return nil }
+            return highlights.first { $0.epubCFIRange == existing }
+        }
+    }
+
+    private func passageText(_ passage: Passage) -> String {
+        switch passage {
+        case .selection(let selection): selection.text
+        case .highlight(let highlight, _): highlight.text ?? ""
+        }
+    }
+
+    /// The tint and the grabbers. Drawn by the app rather than by WebKit —
+    /// see `ReaderSelectionLayer` for why.
+    @ViewBuilder
+    private var selectionLayer: some View {
+        if let selection = controller.selection, !selection.rects.isEmpty {
+            ReaderSelectionLayer(
+                selection: selection,
+                theme: controller.settings.theme,
+                onEdgeDragBegan: { edge in
+                    adjustingSelection = true
+                    controller.beginEdgeDrag(edge)
+                },
+                onEdgeDragChanged: { point in controller.dragEdge(to: point) },
+                onEdgeDragEnded: {
+                    adjustingSelection = false
+                    controller.endEdgeDrag()
+                }
+            )
+            .transition(.opacity)
+        }
+    }
+
+    @ViewBuilder
+    private var passageMenu: some View {
+        if let passage {
+            // A tapped highlight has no glue-side state to dismiss it, so the
+            // scrim is what closes it — including over the gutters, which
+            // would otherwise turn the page out from under a menu about a
+            // passage on it. A live selection needs no scrim: the glue clears
+            // it on the next tap, and a scrim would swallow handle drags.
+            if case .highlight = passage {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .ignoresSafeArea()
+                    .onTapGesture { dismissPassage() }
+            }
+
+            PassageAnchor(
+                rects: passage.rects,
+                width: AnnotationMenu.width,
+                height: AnnotationMenu.height
+            ) { tail in
+                let stored = storedHighlight(passage)
+                AnnotationMenu(
+                    current: stored?.color,
+                    hasNote: stored?.note?.nilIfBlank != nil,
+                    theme: controller.settings.theme,
+                    onColor: { color in Task { await apply(color, to: passage) } },
+                    onAction: { action in Task { await run(action, on: passage) } },
+                    canRemove: stored != nil,
+                    tail: tail
+                )
+            }
+            .id(passage.id)
+            .transition(.opacity.combined(with: .scale(scale: 0.94)))
+        }
     }
 
     /// The stored highlight a tapped mark belongs to.
@@ -225,8 +329,63 @@ struct ReaderView: View {
         highlights.first { $0.epubCFIRange == tap.cfiRange }
     }
 
-    private func closeAnnotationMenu() {
-        withAnimation(Motion.snap) { controller.tappedAnnotation = nil }
+    /// Put the menu away, whichever kind of passage raised it.
+    private func dismissPassage() {
+        withAnimation(Motion.snap) {
+            controller.tappedAnnotation = nil
+        }
+        if controller.selection != nil { controller.clearSelection() }
+    }
+
+    private func apply(_ color: HighlightColor, to passage: Passage) async {
+        if let stored = storedHighlight(passage) {
+            await recolor(stored, to: color)
+            if controller.selection != nil { controller.clearSelection() }
+            return
+        }
+        guard case .selection(let selection) = passage else { return }
+        await createHighlight(selection, color: color)
+    }
+
+    private func run(_ action: PassageAction, on passage: Passage) async {
+        let text = passageText(passage)
+
+        switch action {
+        case .note:
+            if let stored = storedHighlight(passage) {
+                dismissPassage()
+                noteTarget = stored
+            } else if case .selection(let selection) = passage {
+                await createHighlightThenNote(selection)
+            }
+
+        case .quote:
+            dismissPassage()
+            quoteTarget = QuoteRequest(text: text)
+
+        case .copy:
+            UIPasteboard.general.string = text
+            Haptics.success()
+            dismissPassage()
+
+        case .lookUp:
+            dismissPassage()
+            DictionaryLookup.present(text)
+
+        case .translate:
+            dismissPassage()
+            translateText = text
+            showTranslate = true
+
+        case .share:
+            dismissPassage()
+            ShareSheet.present(items: [text])
+
+        case .remove:
+            guard let stored = storedHighlight(passage) else { return }
+            if controller.selection != nil { controller.clearSelection() }
+            await removeHighlight(stored)
+        }
     }
 
     /// Declining is as final as accepting — re-offering the same position on
@@ -236,12 +395,7 @@ struct ReaderView: View {
     }
 
     private var readerPage: Color {
-        switch controller.settings.theme {
-        case "light": Palette.light.readerPage
-        case "sepia": Palette.sepia.readerPage
-        case "black": Palette.black.readerPage
-        default: Palette.atrium.readerPage
-        }
+        ReaderTheme.pageColor(controller.settings.theme)
     }
 
     /// The two labels above and below the page. See `ReaderIndicators` for what
@@ -275,10 +429,7 @@ struct ReaderView: View {
 
     /// The scheme the *page* is in, which is what the chrome sits on.
     private var pageScheme: ColorScheme {
-        switch controller.settings.theme {
-        case "light", "sepia": .light
-        default: .dark
-        }
+        ReaderTheme.isLightPage(controller.settings.theme) ? .light : .dark
     }
 
     /// The scheme the rest of the app is in.
@@ -434,10 +585,7 @@ struct ReaderView: View {
     /// The bars sit on the page ground, not the app ground, so their ink has
     /// to follow the reading theme rather than the app theme.
     private var barInk: Color {
-        switch controller.settings.theme {
-        case "light", "sepia": Palette.light.ink0Color
-        default: Palette.atrium.ink0Color
-        }
+        ReaderTheme.ink(controller.settings.theme)
     }
 
     // MARK: - Lifecycle
@@ -623,13 +771,16 @@ struct ReaderView: View {
     private func createHighlight(
         _ selection: SelectionData, color: HighlightColor
     ) async -> Highlight? {
-        controller.addAnnotation(cfiRange: selection.cfiRange, color: color)
+        // Absent only while a drag is in flight, which is exactly when no menu
+        // is up to have asked for this.
+        guard let cfiRange = selection.cfiRange else { return nil }
+        controller.addAnnotation(cfiRange: cfiRange, color: color)
         controller.clearSelection()
         Haptics.success()
         let created = await UserDataService.createHighlight(
             CreateHighlight(
                 bookUUID: book.uuid,
-                epubCFIRange: selection.cfiRange,
+                epubCFIRange: cfiRange,
                 color: color,
                 text: selection.text
             )
@@ -647,37 +798,6 @@ struct ReaderView: View {
     private func createHighlightThenNote(_ selection: SelectionData) async {
         guard let created = await createHighlight(selection, color: .amber) else { return }
         noteTarget = created
-    }
-
-    /// Run a verb invoked from the system edit menu against the live selection.
-    private func perform(_ action: SelectionMenuAction) async {
-        guard let selection = controller.selection else { return }
-        let rect = selection.rect
-
-        switch action {
-        case .highlight:
-            guard let created = await createHighlight(selection, color: .amber),
-                  let createdCFI = created.epubCFIRange
-            else { return }
-            // Highlighting opens our own menu on the new mark, so the colour
-            // is one tap away rather than fixed at whatever we defaulted to —
-            // the same follow-through Apple Books gives the action.
-            withAnimation(Motion.snap) {
-                controller.tappedAnnotation = AnnotationTapData(
-                    cfiRange: createdCFI, rect: rect
-                )
-            }
-
-        case .note:
-            await createHighlightThenNote(selection)
-
-        case .removeHighlight:
-            guard let cfi = selection.existing,
-                  let existing = highlights.first(where: { $0.epubCFIRange == cfi })
-            else { return }
-            controller.clearSelection()
-            await removeHighlight(existing)
-        }
     }
 
     private func recolor(_ highlight: Highlight, to color: HighlightColor) async {
@@ -724,230 +844,6 @@ struct ReaderView: View {
     private func update(_ highlight: Highlight, _ change: (inout Highlight) -> Void) {
         guard let index = highlights.firstIndex(where: { $0.id == highlight.id }) else { return }
         change(&highlights[index])
-    }
-}
-
-// MARK: - Settings sheet
-
-/// Reading typography.
-///
-/// Was a stock `Form` of system segmented controls — grey chrome from a
-/// different app, on the surface where the reader is most likely to be looking
-/// closely at how things are set. Themes are now shown in the page colours they
-/// actually produce, so picking one is looking rather than guessing.
-private struct ReaderSettingsSheet: View {
-    @Bindable var controller: ReaderController
-
-    @Environment(\.palette) private var palette
-    @Environment(\.dismiss) private var dismiss
-
-    private let themes: [(token: String, label: String)] = [
-        ("light", "Light"), ("sepia", "Sepia"), ("dark", "Dark"), ("black", "Black"),
-    ]
-    private let fonts: [(token: String, label: String)] = [
-        ("serif", "Serif"), ("sans-serif", "Sans"), ("monospace", "Mono"),
-    ]
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 26) {
-                    group("Page") {
-                        HStack(spacing: Spacing.md) {
-                            ForEach(themes, id: \.token) { theme in
-                                PageSwatch(
-                                    token: theme.token,
-                                    label: theme.label,
-                                    isOn: controller.settings.theme == theme.token
-                                ) {
-                                    guard controller.settings.theme != theme.token else { return }
-                                    Haptics.select()
-                                    withAnimation(Motion.settle) {
-                                        controller.settings.theme = theme.token
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    group("Type") {
-                        PillSelector(
-                            options: fonts.map(\.token),
-                            label: { token in
-                                fonts.first { $0.token == token }?.label ?? token
-                            },
-                            selection: $controller.settings.fontFamily
-                        )
-
-                        Plate {
-                            sizeRow
-                            lineHeightRow
-                        }
-                    }
-
-                    group("Layout") {
-                        PillSelector(
-                            options: ReaderMargins.allCases,
-                            label: \.label,
-                            selection: $controller.settings.margins
-                        )
-
-                        Plate {
-                            PlateRow(label: "Justify text", isFirst: true) {
-                                Toggle("", isOn: $controller.settings.justify)
-                                    .labelsHidden()
-                                    .tint(palette.accentColor)
-                            }
-                        }
-                    }
-                }
-                .screenPadding()
-                .padding(.top, Spacing.md)
-                .padding(.bottom, 32)
-            }
-            .scrollIndicators(.hidden)
-            .background(ScreenBackground())
-            .navigationTitle("Reading")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-        }
-        // Tall enough that every control is on screen at rest — a `.medium`
-        // detent cut the layout group off, so half the settings needed a drag
-        // to discover — while still leaving page enough of the page visible to
-        // watch a change land.
-        .presentationDetents([.height(600), .large])
-        .tint(palette.accentColor)
-    }
-
-    /// The size is set in the face it controls, so the control previews itself.
-    private var sizeRow: some View {
-        PlateRow(label: "Size", isFirst: true) {
-            HStack(spacing: Spacing.md) {
-                Text("Aa")
-                    .font(.system(size: CGFloat(controller.settings.fontSize), design: .serif))
-                    .foregroundStyle(palette.ink1Color)
-                    .frame(width: 46, alignment: .trailing)
-                    .animation(Motion.snap, value: controller.settings.fontSize)
-
-                stepButton("minus", enabled: controller.settings.fontSize > 12) {
-                    controller.settings.fontSize = max(12, controller.settings.fontSize - 1)
-                }
-                stepButton("plus", enabled: controller.settings.fontSize < 34) {
-                    controller.settings.fontSize = min(34, controller.settings.fontSize + 1)
-                }
-            }
-        }
-    }
-
-    private var lineHeightRow: some View {
-        VStack(spacing: 0) {
-            Hairline()
-
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    RowLabel("Line height")
-                    Spacer(minLength: 0)
-                    Text(String(format: "%.1f", controller.settings.lineHeight))
-                        .font(.monoUI(12))
-                        .foregroundStyle(palette.ink2Color)
-                        .contentTransition(.numericText())
-                }
-                Slider(value: $controller.settings.lineHeight, in: 1.2...2.2, step: 0.1)
-                    .tint(palette.accentColor)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-        }
-    }
-
-    private func stepButton(
-        _ icon: String, enabled: Bool, action: @escaping () -> Void
-    ) -> some View {
-        Button {
-            Haptics.tap()
-            action()
-        } label: {
-            Image(systemName: icon)
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(enabled ? palette.accentColor : palette.ink3Color)
-                .frame(width: 32, height: 32)
-                .background(Circle().fill(palette.bg2Color))
-                .overlay(Circle().strokeBorder(palette.line2.color, lineWidth: 0.5))
-        }
-        .buttonStyle(.plain)
-        .disabled(!enabled)
-    }
-
-    private func group<Content: View>(
-        _ title: String, @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            SectionLabel(title)
-            content()
-        }
-    }
-}
-
-/// One reading theme, shown as the page it produces.
-private struct PageSwatch: View {
-    let token: String
-    let label: String
-    let isOn: Bool
-    let action: () -> Void
-
-    @Environment(\.palette) private var palette
-
-    private var page: Color {
-        switch token {
-        case "light": Palette.light.readerPage
-        case "sepia": Palette.sepia.readerPage
-        case "black": Palette.black.readerPage
-        default: Palette.atrium.readerPage
-        }
-    }
-
-    private var ink: Color {
-        token == "light" || token == "sepia"
-            ? Palette.light.ink0Color
-            : Palette.atrium.ink0Color
-    }
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 7) {
-                RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                    .fill(page)
-                    .aspectRatio(0.82, contentMode: .fit)
-                    .overlay {
-                        VStack(alignment: .leading, spacing: 3.5) {
-                            ForEach([1.0, 0.86, 0.94, 0.6], id: \.self) { fraction in
-                                Capsule()
-                                    .fill(ink.opacity(0.6))
-                                    .frame(width: 30 * fraction, height: 2.5)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .center)
-                    }
-                    .overlay(
-                        RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                            .strokeBorder(
-                                isOn ? palette.accentColor : palette.lineColor,
-                                lineWidth: isOn ? 2 : 0.75
-                            )
-                    )
-
-                Text(label)
-                    .font(.ui(11, weight: isOn ? .semibold : .regular))
-                    .foregroundStyle(isOn ? palette.ink0Color : palette.ink3Color)
-            }
-        }
-        .buttonStyle(PressableStyle())
-        .accessibilityLabel(label)
-        .accessibilityAddTraits(isOn ? [.isSelected, .isButton] : .isButton)
     }
 }
 
