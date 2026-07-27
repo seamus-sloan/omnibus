@@ -36,9 +36,7 @@ private struct LaunchView: View {
 
     var body: some View {
         VStack(spacing: Spacing.lg) {
-            Image(systemName: "books.vertical.fill")
-                .font(.system(size: 44, weight: .light))
-                .foregroundStyle(palette.accentColor)
+            OmnibusMark(height: 44)
             ProgressView()
                 .tint(palette.ink3Color)
         }

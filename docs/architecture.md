@@ -247,7 +247,8 @@ App/                — AppState (server URL, auth, theme), RootView phase route
 Design/             — Theme (Atrium tokens), OKLCH↔sRGB conversion for
                       server-provided accents, Motion (shared curves), and
                       Components/ (BookCover, RemoteImage, Plate, SearchField,
-                      OmnibusTabBar, Masthead, FlowLayout, TopEdgeScrim)
+                      OmnibusTabBar, Masthead, BrandMark — the stoat, a copy of
+                      the web's omnibus-stoat.png — FlowLayout, TopEdgeScrim)
 Features/           — one directory per surface: Account, AddBooks, Auth,
                       BookDetail, CheckIn, Discovery, Library, Player, Search,
                       Settings, Shelves, Stats

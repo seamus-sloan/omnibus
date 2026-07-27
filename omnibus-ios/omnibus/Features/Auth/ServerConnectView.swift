@@ -69,9 +69,7 @@ struct ServerConnectView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
-            Image(systemName: "books.vertical.fill")
-                .font(.system(size: 34, weight: .light))
-                .foregroundStyle(palette.accentColor)
+            OmnibusMark(height: 36)
                 .padding(.bottom, Spacing.xs)
             Text("Connect to Omnibus")
                 .font(.display(34))
