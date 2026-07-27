@@ -31,7 +31,10 @@ struct ReaderView: View {
     @Environment(AppState.self) private var appState
 
     @State private var controller = ReaderController()
-    @State private var chromeVisible = true
+    /// The reading view opens bare, the way a book does — the buttons are one
+    /// centre tap away, and opening onto them puts chrome over the first page
+    /// of every book for someone who only wanted to read.
+    @State private var chromeVisible = false
     @State private var showSettings = false
     @State private var showContents = false
     @State private var contentsTab: ReaderContentsSheet.Tab = .contents
@@ -226,7 +229,9 @@ struct ReaderView: View {
         var id: String {
             switch self {
             case .selection(let selection): "sel:\(selection.cfiRange ?? selection.text)"
-            case .highlight(let highlight, _): "hl:\(highlight.epubCFIRange)"
+            // Row id, not the anchor: a Kobo-origin highlight has no CFI, and
+            // two of them would otherwise share one identity.
+            case .highlight(let highlight, _): "hl:\(highlight.id)"
             }
         }
     }
@@ -393,65 +398,17 @@ struct ReaderView: View {
         ReaderTheme.pageColor(controller.settings.theme)
     }
 
-    /// The two labels, which stay put whether the buttons are showing or not.
-    ///
-    /// They sit in the bands `#stage` reserves via `env(safe-area-inset-*)`, so
-    /// they never overlap prose, and they take no touches so the page keeps
-    /// every gesture. Only the buttons come and go on a centre tap — the
-    /// position is quiet enough to live there permanently.
+    /// The two labels above and below the page. See `ReaderIndicators` for what
+    /// each one says, which depends on whether the chrome is up.
     private var persistentIndicators: some View {
-        VStack(spacing: 0) {
-            indicator(chapterLabel)
-                .padding(.top, Spacing.xs)
-
-            Spacer(minLength: 0)
-
-            indicator(positionLabel)
-                .padding(.bottom, Spacing.xs)
-        }
-        .allowsHitTesting(false)
-    }
-
-    /// Given the button's own box rather than its own text height, so a label
-    /// sits centred on the line its buttons are on however the type resolves.
-    @ViewBuilder
-    private func indicator(_ label: String?) -> some View {
-        if let label {
-            Text(label)
-                .font(.ui(12.5))
-                .foregroundStyle(barInk.opacity(0.5))
-                .lineLimit(1)
-                .frame(height: ReaderMenu.buttonSize)
-                .padding(.horizontal, 72)
-        }
-    }
-
-    /// How much further to a natural place to stop — the question you have with
-    /// a book open, which a raw page number can't answer. Falls back to the
-    /// chapter's own position until epub.js's whole-book locations pass lands.
-    private var chapterLabel: String? {
-        guard let location = controller.location else { return nil }
-        let left = location.chapterPagesLeft
-        if left > 0 {
-            return left == 1
-                ? "1 page left in chapter"
-                : "\(left) pages left in chapter"
-        }
-        // `chapter` is 0 when the current href matched no TOC entry (common in
-        // front matter) — omit rather than showing a meaningless "Ch. 0".
-        guard location.chapter > 0, location.totalChapters > 0 else { return nil }
-        return "Chapter \(location.chapter) of \(location.totalChapters)"
-    }
-
-    /// Page numbers need epub.js's whole-book locations pass, which lands
-    /// seconds after the first paint; percent stands in until then rather than
-    /// a placeholder that jumps.
-    private var positionLabel: String? {
-        guard let location = controller.location else { return nil }
-        if location.hasPageNumbers {
-            return "\(location.page) of \(location.totalPages)"
-        }
-        return location.pct > 0 ? "\(location.pct)%" : nil
+        ReaderIndicatorLabels(
+            indicators: ReaderIndicators(
+                location: controller.location,
+                title: book.displayTitle,
+                chromeVisible: chromeVisible
+            ),
+            ink: barInk
+        )
     }
 
     @ViewBuilder
@@ -845,24 +802,30 @@ struct ReaderView: View {
 
     private func recolor(_ highlight: Highlight, to color: HighlightColor) async {
         controller.tappedAnnotation = nil
-        controller.removeAnnotation(cfiRange: highlight.epubCFIRange)
-        controller.addAnnotation(
-            cfiRange: highlight.epubCFIRange,
-            color: color,
-            hasNote: highlight.note?.nilIfBlank != nil
-        )
+        // Anchorless (Kobo-origin) rows are never painted; the row state and
+        // the persisted value still change.
+        if let cfiRange = highlight.epubCFIRange {
+            controller.removeAnnotation(cfiRange: cfiRange)
+            controller.addAnnotation(
+                cfiRange: cfiRange,
+                color: color,
+                hasNote: highlight.note?.nilIfBlank != nil
+            )
+        }
         update(highlight) { $0.color = color }
         await UserDataService.setHighlightColor(highlight, color: color)
     }
 
     private func saveNote(_ note: String?, on highlight: Highlight) async {
         // Re-add the mark so the note underline appears or clears to match.
-        controller.removeAnnotation(cfiRange: highlight.epubCFIRange)
-        controller.addAnnotation(
-            cfiRange: highlight.epubCFIRange,
-            color: highlight.color,
-            hasNote: note != nil
-        )
+        if let cfiRange = highlight.epubCFIRange {
+            controller.removeAnnotation(cfiRange: cfiRange)
+            controller.addAnnotation(
+                cfiRange: cfiRange,
+                color: highlight.color,
+                hasNote: note != nil
+            )
+        }
         update(highlight) { $0.note = note }
         Haptics.success()
         await UserDataService.setHighlightNote(highlight, note: note)
@@ -870,7 +833,9 @@ struct ReaderView: View {
 
     private func removeHighlight(_ highlight: Highlight) async {
         controller.tappedAnnotation = nil
-        controller.removeAnnotation(cfiRange: highlight.epubCFIRange)
+        if let cfiRange = highlight.epubCFIRange {
+            controller.removeAnnotation(cfiRange: cfiRange)
+        }
         highlights.removeAll { $0.id == highlight.id }
         Haptics.warning()
         await UserDataService.deleteHighlight(highlight)

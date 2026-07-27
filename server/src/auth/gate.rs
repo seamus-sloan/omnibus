@@ -59,6 +59,11 @@ pub async fn require_auth(State(state): State<AppState>, req: Request, next: Nex
         || path == "/api/auth"
         || path.starts_with("/api/auth/")
         || path == "/api/_health"
+        // Kobo Reading Services (#1278): the device calls these at the bare
+        // origin with no session and no path token; the routes authenticate
+        // themselves via the x-kobo-deviceid header (KoboHardwareUser).
+        || path.starts_with("/api/v3/content/")
+        || path == "/api/UserStorage/Metadata"
     {
         return next.run(req).await;
     }

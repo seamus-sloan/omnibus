@@ -276,7 +276,10 @@ async fn spawn_bootstrap_and_highlights(
 
     if let Ok(list) = data::list_highlights("", &uuid).await {
         for h in &list {
-            reader_call_json2("addAnnotation", &h.epub_cfi_range, h.color.as_str());
+            // Kobo-origin highlights carry no CFI — nothing to paint.
+            if let Some(cfi) = &h.epub_cfi_range {
+                reader_call_json2("addAnnotation", cfi, h.color.as_str());
+            }
         }
         highlights.set(list);
     }

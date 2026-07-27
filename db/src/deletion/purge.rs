@@ -18,7 +18,11 @@ const UUID_KEYED_TABLES: &[&str] = &[
     "bookmarks",
     "reading_sessions",
     "listening_sessions",
-    "highlights",
+    "annotations",
+    // Per-device annotation sync state (#1278): a stale row here would make
+    // `checkforchanges` re-report the purged uuid forever, since the GET that
+    // would ack it can only 404.
+    "kobo_annotations_sync",
     "user_ratings",
     "audiobook_playback_preferences",
     "journal_entries",

@@ -276,7 +276,10 @@ struct ReaderContentsSheet: View {
             List {
                 ForEach(sortedHighlights) { highlight in
                     Button {
-                        jump(to: highlight.epubCFIRange)
+                        // Anchorless (Kobo-origin) rows have nowhere to jump.
+                        if let cfiRange = highlight.epubCFIRange {
+                            jump(to: cfiRange)
+                        }
                     } label: {
                         highlightRow(highlight)
                     }

@@ -18,15 +18,15 @@ pub async fn rpc_create_highlight(input: CreateHighlight) -> Result<Highlight> {
     if let Err(msg) = input.validate() {
         return Err(ServerFnError::new(msg).into());
     }
-    match db::highlights::create_highlight(&pool.0, user.id, &input).await {
+    match db::annotations::create_highlight(&pool.0, user.id, &input).await {
         Ok(h) => Ok(h),
-        Err(db::highlights::HighlightError::BookNotFound) => {
+        Err(db::annotations::HighlightError::BookNotFound) => {
             Err(ServerFnError::new("book not found").into())
         }
-        Err(db::highlights::HighlightError::NotFound) => {
+        Err(db::annotations::HighlightError::NotFound) => {
             Err(ServerFnError::new("highlight not found").into())
         }
-        Err(db::highlights::HighlightError::Sqlx(e)) => {
+        Err(db::annotations::HighlightError::Sqlx(e)) => {
             Err(internal_rpc_error("create highlight", e).into())
         }
     }
@@ -37,9 +37,9 @@ pub async fn rpc_create_highlight(input: CreateHighlight) -> Result<Highlight> {
 /// the uuid is unknown or has no highlights yet.
 #[post("/api/rpc/highlights/list", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_list_highlights(book_uuid: String) -> Result<Vec<Highlight>> {
-    match db::highlights::list_highlights(&pool.0, user.id, &book_uuid).await {
+    match db::annotations::list_highlights(&pool.0, user.id, &book_uuid).await {
         Ok(list) => Ok(list),
-        Err(db::highlights::HighlightError::Sqlx(e)) => {
+        Err(db::annotations::HighlightError::Sqlx(e)) => {
             Err(internal_rpc_error("list highlights", e).into())
         }
         Err(e) => Err(internal_rpc_error("list highlights", e).into()),
@@ -52,12 +52,12 @@ pub async fn rpc_list_highlights(book_uuid: String) -> Result<Vec<Highlight>> {
 /// to avoid leaking ownership).
 #[post("/api/rpc/highlights/update-color", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_update_highlight_color(id: i64, color: HighlightColor) -> Result<()> {
-    match db::highlights::update_highlight_color(&pool.0, user.id, id, color).await {
+    match db::annotations::update_highlight_color(&pool.0, user.id, id, color).await {
         Ok(()) => Ok(()),
-        Err(db::highlights::HighlightError::NotFound) => {
+        Err(db::annotations::HighlightError::NotFound) => {
             Err(ServerFnError::new("highlight not found").into())
         }
-        Err(db::highlights::HighlightError::Sqlx(e)) => {
+        Err(db::annotations::HighlightError::Sqlx(e)) => {
             Err(internal_rpc_error("update highlight color", e).into())
         }
         Err(e) => Err(internal_rpc_error("update highlight color", e).into()),
@@ -73,12 +73,12 @@ pub async fn rpc_update_highlight_note(id: i64, body: UpdateHighlightNote) -> Re
     if let Err(msg) = body.validate() {
         return Err(ServerFnError::new(msg).into());
     }
-    match db::highlights::update_highlight_note(&pool.0, user.id, id, body.note.as_deref()).await {
+    match db::annotations::update_highlight_note(&pool.0, user.id, id, body.note.as_deref()).await {
         Ok(()) => Ok(()),
-        Err(db::highlights::HighlightError::NotFound) => {
+        Err(db::annotations::HighlightError::NotFound) => {
             Err(ServerFnError::new("highlight not found").into())
         }
-        Err(db::highlights::HighlightError::Sqlx(e)) => {
+        Err(db::annotations::HighlightError::Sqlx(e)) => {
             Err(internal_rpc_error("update highlight note", e).into())
         }
         Err(e) => Err(internal_rpc_error("update highlight note", e).into()),
@@ -90,12 +90,12 @@ pub async fn rpc_update_highlight_note(id: i64, body: UpdateHighlightNote) -> Re
 /// user (the two cases are deliberately indistinguishable).
 #[post("/api/rpc/highlights/delete", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_delete_highlight(id: i64) -> Result<()> {
-    match db::highlights::delete_highlight(&pool.0, user.id, id).await {
+    match db::annotations::delete_highlight(&pool.0, user.id, id).await {
         Ok(()) => Ok(()),
-        Err(db::highlights::HighlightError::NotFound) => {
+        Err(db::annotations::HighlightError::NotFound) => {
             Err(ServerFnError::new("highlight not found").into())
         }
-        Err(db::highlights::HighlightError::Sqlx(e)) => {
+        Err(db::annotations::HighlightError::Sqlx(e)) => {
             Err(internal_rpc_error("delete highlight", e).into())
         }
         Err(e) => Err(internal_rpc_error("delete highlight", e).into()),

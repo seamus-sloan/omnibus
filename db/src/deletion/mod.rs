@@ -83,7 +83,7 @@ pub async fn book_deletion_manifest(
 
     let mut impact = DeletionImpact::default();
     for (table, slot) in [
-        ("highlights", &mut impact.highlights),
+        ("annotations", &mut impact.highlights),
         ("journal_entries", &mut impact.journal_entries),
         ("bookmarks", &mut impact.bookmarks),
         ("reading_sessions", &mut impact.reading_sessions),
