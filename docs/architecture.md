@@ -254,8 +254,10 @@ Networking/         — APIClient, keychain-backed TokenStore
 Offline/            — Cache (read-through policies), OfflineStore (SQLite
                       replica), DownloadManager, SyncEngine (the mutation
                       outbox — see rule 08), Connectivity
-Reader/             — SwiftUI reader chrome + annotation menu, over Web/
-                      (vendored epub.js + JSZip + glue, hosted in a WKWebView)
+Reader/             — SwiftUI reader chrome, the host-drawn selection layer,
+                      the passage menu, the typography sheet and the quote-card
+                      composer, over Web/ (vendored epub.js + JSZip + glue,
+                      hosted in a WKWebView)
 Services/           — AuthService, LibraryService, UserDataService
 ```
 
@@ -267,16 +269,37 @@ generation compatibly. Assets and book bytes are served over a custom
 cookie. Everything around it — chrome, gestures, sheets, persistence — is
 native.
 
+**Selection is drawn by the app, not by WebKit.** The iOS glue disables
+WebKit's own touch selection inside each section (`user-select: none` in the
+per-section baseline stylesheet) and runs its own engine instead:
+`beginSelectionAt` / `extendSelectionTo` / `beginEdgeDrag` snap a range to word
+boundaries and report per-line rects in web-view coordinates, and
+`Reader/ReaderSelectionLayer.swift` draws the tint, the handles, and the
+`PassageAnchor` the menu hangs off. WebKit's selection is unusable here for two
+reasons: its handles and loupe are laid out against a section iframe as wide as
+the whole chapter, so in a paginated book they land in the wrong column, and its
+long-press recogniser fights the glue's drag-to-turn handler for the same touch.
+Highlights stay epub.js marks (they ride the page-turn transform, which a native
+overlay would not); their look is one host-document rule, `markStyleCss`, which
+switches blend mode with the reading theme.
+
 **The glue is forked.** `omnibus-ios/omnibus/Reader/Web/epub-reader-glue.js` is a
 copy of `frontend/assets/vendor/epub-reader-glue.js`, and the two have diverged:
-the iOS copy carries `sectionRanges` / `pagesLeftInSection`, and the web copy has
-since moved its pagination onto `location.start.displayed`. Changing one does not
-change the other — check both when touching reader behaviour.
+the iOS copy carries `sectionRanges` / `pagesLeftInSection` plus the whole
+selection engine above, and the web copy has since moved its pagination onto
+`location.start.displayed` and still uses WebKit's own selection. Changing one
+does not change the other — check both when touching reader behaviour.
 
 **Offline writes** follow [rule 08](../.claude/rules/08-offline-writes.md): the
 `OpKind` outbox in `Offline/SyncEngine.swift` carries per-user content state
 only, never configuration and never commands. `OutboxScope` in `Offline/Cache.swift`
-declares each kind's blast radius. `omnibusTests/OfflineSyncTests.swift` covers it;
-the rest of `omnibusTests` is still the Xcode template stub, and no CI job builds
-or tests this project (`mobile-e2e.yml` and `testflight.yml` both target
-`omnibus-mobile`).
+declares each kind's blast radius. `omnibusTests/OfflineSyncTests.swift` covers it,
+and `omnibusTests/ReaderSelectionTests.swift` pins the selection payload the glue
+posts plus the passage-menu placement rules. No CI job builds or tests this
+project (`mobile-e2e.yml` and `testflight.yml` both target `omnibus-mobile`), so
+run the suite locally:
+
+```bash
+xcodebuild test -project omnibus-ios/omnibus.xcodeproj -scheme omnibus \
+  -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:omnibusTests
+```

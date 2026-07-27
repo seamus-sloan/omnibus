@@ -104,75 +104,71 @@ struct RelocateData: Codable {
     var chapterName: String? { chapterTitle.nilIfBlank }
 }
 
-struct SelectionData: Codable {
-    var cfiRange: String
-    var text: String
-    var rect: SelectionRect?
-    /// A highlight this selection runs through, if any.
-    var existing: String?
+/// A box on the page, in web-view coordinates — the same space the reader's
+/// own overlay is laid out in, so a rect crosses the bridge ready to draw.
+struct PageRect: Codable, Equatable, Hashable {
+    var x: Double
+    var y: Double
+    var width: Double
+    var height: Double
 
-    struct SelectionRect: Codable {
-        var x: Double
-        var y: Double
-        var width: Double
-        var height: Double?
+    var cgRect: CGRect {
+        CGRect(x: x, y: y, width: width, height: height)
     }
 }
 
+/// Where one end of a selection sits: the caret box the host hangs a handle
+/// off. `x` is the outer edge — the left of the first line, the right of the
+/// last.
+struct SelectionCaret: Codable, Equatable, Hashable {
+    var x: Double
+    var y: Double
+    var height: Double
+}
+
+/// The live selection, as the glue reports it. One rect per visual line.
+struct SelectionData: Codable, Equatable {
+    /// Absent while a drag is in flight — deriving it costs a CFI walk the
+    /// glue skips until the range settles.
+    var cfiRange: String?
+    var text: String
+    var rects: [PageRect] = []
+    var start: SelectionCaret?
+    var end: SelectionCaret?
+    /// A highlight this selection runs through, if any.
+    var existing: String?
+    /// True while the finger is still moving, so the host can hold the menu
+    /// back until the range settles.
+    var dragging: Bool = false
+}
+
 /// A tap on a highlight already on the page.
-struct AnnotationTapData: Codable {
+struct AnnotationTapData: Codable, Equatable {
     var cfiRange: String
-    var rect: SelectionData.SelectionRect?
+    var rects: [PageRect] = []
 }
 
-/// What the reader was asked to do from the system's own selection menu.
-enum SelectionMenuAction: Equatable {
-    case highlight
-    case note
-    case removeHighlight
+/// Which end of a selection a handle drag is moving.
+enum SelectionEdge: String {
+    case start
+    case end
 }
 
-/// A `WKWebView` that contributes Omnibus's verbs to the system edit menu.
+/// A `WKWebView` with no edit menu of its own.
 ///
-/// Selecting text raises iOS's own callout (Copy, Look Up, Translate, Share),
-/// and our floating colour bar was a second, competing menu over the top of it
-/// — two answers to one gesture. Apple Books instead *joins* that menu, so
-/// Highlight and Note sit alongside Copy and the selection behaves like text
-/// everywhere else on the system. `buildMenu(with:)` is how a responder adds
-/// to it; `UIMenuController`, the old way, was deprecated in iOS 16.
+/// Selection is drawn by the app, not by WebKit — the glue disables WebKit's
+/// own (its handles and loupe are laid out against a section iframe as wide as
+/// the whole chapter, so they land in the wrong column). This is the belt to
+/// that braces: even if a stray selection were ever made, no system callout
+/// can appear over the reader's own menu.
 final class AnnotatingWebView: WKWebView {
-    /// Kept in sync with the glue's selection events so the menu only offers
-    /// these verbs when there is prose selected to apply them to.
-    var hasSelection = false
-    var selectionHasHighlight = false
-    var onMenuAction: ((SelectionMenuAction) -> Void)?
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        false
+    }
 
     override func buildMenu(with builder: any UIMenuBuilder) {
+        builder.remove(menu: .standardEdit)
         super.buildMenu(with: builder)
-        guard hasSelection else { return }
-
-        var actions: [UIAction] = [
-            UIAction(title: "Highlight", image: UIImage(systemName: "highlighter")) {
-                [weak self] _ in self?.onMenuAction?(.highlight)
-            },
-            UIAction(title: "Note", image: UIImage(systemName: "square.and.pencil")) {
-                [weak self] _ in self?.onMenuAction?(.note)
-            },
-        ]
-        if selectionHasHighlight {
-            actions.append(
-                UIAction(
-                    title: "Remove Highlight",
-                    image: UIImage(systemName: "trash"),
-                    attributes: .destructive
-                ) { [weak self] _ in self?.onMenuAction?(.removeHighlight) }
-            )
-        }
-
-        builder.insertChild(
-            UIMenu(title: "", options: .displayInline, children: actions),
-            atStartOfMenu: .standardEdit
-        )
     }
 }
 
@@ -201,45 +197,17 @@ final class ReaderController: NSObject {
     }
     private(set) var toc: [TocItem] = []
     private(set) var location: RelocateData?
-    private(set) var selection: SelectionData? {
-        didSet { syncSelectionMenuState() }
-    }
+    /// The live host-drawn selection. The glue owns the range; this is the
+    /// geometry the reader draws it from.
+    private(set) var selection: SelectionData?
     /// Set when a highlight already on the page is tapped; cleared by the host
     /// once it dismisses the menu.
     var tappedAnnotation: AnnotationTapData?
-    /// Bumped when the system edit menu invokes one of our verbs, so the view
-    /// can act on it with the selection that was live at the time.
-    private(set) var menuAction: SelectionMenuAction?
-    private(set) var menuActionToken = 0
-
-    fileprivate func noteMenuAction(_ action: SelectionMenuAction) {
-        menuAction = action
-        menuActionToken &+= 1
-    }
-
-    /// The menu is built by UIKit on demand, so the web view needs the current
-    /// selection state cached rather than asking for it mid-build.
-    private func syncSelectionMenuState() {
-        guard let annotating = webView as? AnnotatingWebView else { return }
-        annotating.hasSelection = selection != nil
-        annotating.selectionHasHighlight = selection?.existing != nil
-    }
 
     /// Incremented on every centre tap inside the page. The glue owns the tap
     /// zones and swipe-to-turn; a SwiftUI overlay on top of the web view would
     /// swallow the touches those depend on.
     private(set) var chromeToggleToken = 0
-
-    /// When a tap on a highlight last arrived.
-    ///
-    /// One tap on a mark reaches us twice — as an annotation tap from the
-    /// mark's own listener and as a page tap from the document's. Which lands
-    /// first depends on DOM listener order (target phase before bubble), so the
-    /// two are paired by arrival time rather than by sequence. Without this the
-    /// bars flip underneath the menu as it opens, and putting them back costs
-    /// the reader an extra tap after closing it.
-    private var lastAnnotationTapAt = Date.distantPast
-    private static let tapPairWindow: TimeInterval = 0.3
 
     var settings: ReaderSettings {
         didSet {
@@ -339,10 +307,30 @@ final class ReaderController: NSObject {
         drawnHighlights = items
     }
 
+    // MARK: - Selection
+
+    /// Pin the edge the reader is *not* dragging, so pulling one handle moves
+    /// only that end of the range.
+    func beginEdgeDrag(_ edge: SelectionEdge) {
+        run("OmnibusReader.beginEdgeDrag(\(edge.rawValue.jsQuoted))")
+    }
+
+    /// Extend the selection to a point in web-view coordinates. Called on
+    /// every handle-drag change; the glue coalesces to one layout read a frame.
+    func dragEdge(to point: CGPoint) {
+        run("OmnibusReader.extendSelectionTo(\(point.x), \(point.y))")
+    }
+
+    /// Settle a handle drag. This is the emit that carries the CFI and the
+    /// overlapping highlight, both of which the in-flight emits leave out.
+    func endEdgeDrag() {
+        run("OmnibusReader.endSelectionDrag()")
+    }
+
     func clearSelection() {
         selection = nil
-        // Has to go through the glue: the selection lives in the section
-        // iframe, which the host window's `getSelection` can't reach.
+        // The range lives in the glue, so dropping our copy isn't enough —
+        // left standing, the next tap on the page would only dismiss it.
         run("OmnibusReader.clearSelection()")
     }
 
@@ -444,7 +432,19 @@ final class ReaderController: NSObject {
             guard let payload, let data = payload.data(using: .utf8),
                   let decoded = try? JSONDecoder().decode(SelectionData.self, from: data)
             else { return }
+            // A live selection and a tapped highlight are mutually exclusive
+            // menus; the newer one wins.
+            tappedAnnotation = nil
+            let previous = selection
             selection = decoded
+            // The whole point of word snapping is that you can feel it: a tick
+            // per word crossed is what tells a finger it landed on a boundary
+            // without having to look at what is under it.
+            if previous == nil {
+                Haptics.tap()
+            } else if previous?.text != decoded.text {
+                Haptics.select()
+            }
 
         case "selectionCleared":
             selection = nil
@@ -453,17 +453,10 @@ final class ReaderController: NSObject {
             guard let payload, let data = payload.data(using: .utf8),
                   let decoded = try? JSONDecoder().decode(AnnotationTapData.self, from: data)
             else { return }
-            // A tap on a highlight and a live text selection are mutually
-            // exclusive menus; the newer one wins.
             selection = nil
-            lastAnnotationTapAt = Date()
             tappedAnnotation = decoded
 
         case "toggleChrome":
-            // The same tap that opened an annotation menu, arriving a second
-            // time as a page tap.
-            guard Date().timeIntervalSince(lastAnnotationTapAt) > Self.tapPairWindow
-            else { break }
             chromeToggleToken &+= 1
 
         case "shareText":
@@ -503,9 +496,6 @@ struct ReaderWebView: UIViewRepresentable {
         configuration.suppressesIncrementalRendering = false
 
         let webView = AnnotatingWebView(frame: .zero, configuration: configuration)
-        webView.onMenuAction = { [controller] action in
-            controller.noteMenuAction(action)
-        }
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.isScrollEnabled = false
