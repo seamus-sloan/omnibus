@@ -3,6 +3,10 @@
 //! files it into the canonical folder and redirects to the new book. Ebooks
 //! take one `.epub`; audiobooks one `.m4a`/`.m4b` or a set of `.mp3` parts. The
 //! rsx is target-agnostic — file interop runs only in the post-mount `spawn`.
+//!
+//! Gated on `can_upload`: the real boundary is the server's `require_upload`
+//! (`server/src/backend/uploads.rs`); this just keeps the form off a screen
+//! the submit would 403 on, mirroring `pages::logs`'s `use_is_admin` gate.
 
 use dioxus::prelude::*;
 use dioxus_router::use_navigator;
@@ -58,6 +62,10 @@ impl UploadState {
 /// Upload form: pick a file, confirm/correct the auto-extracted metadata, file it.
 #[component]
 pub fn AddBooksPage() -> Element {
+    // All hooks run unconditionally on every render — only the rsx output
+    // below branches on `can_upload` — so the hook call order stays stable
+    // once the boot effect resolves the real permission (rule 07).
+    let can_upload = crate::use_can_upload();
     let server_url = use_server_url();
     let nav = use_navigator();
 
@@ -79,6 +87,10 @@ pub fn AddBooksPage() -> Element {
     let on_file = make_on_file(server_url.clone(), state);
     let on_submit = make_on_submit(server_url, state, nav);
     let is_audiobook = (state.mode)() == UploadMode::Audiobook;
+
+    if !can_upload() {
+        return rsx! { AddBooksForbidden {} };
+    }
 
     rsx! {
         section { class: "card",
@@ -110,6 +122,22 @@ pub fn AddBooksPage() -> Element {
                     class: if (state.status_is_error)() { "settings-status error" } else { "settings-status success" },
                     "{msg}"
                 }
+            }
+        }
+    }
+}
+
+/// Not-authorized state shown in place of the form to a user without
+/// `can_upload`. Split out (no props, no hooks) so it's directly
+/// render-testable without `AddBooksPage`'s router dependency
+/// (`use_navigator` panics outside a `Router` ancestor).
+#[component]
+fn AddBooksForbidden() -> Element {
+    rsx! {
+        section { class: "card",
+            h1 { "Add books" }
+            p { class: "settings-status error", "data-testid": "add-books-forbidden",
+                "You don't have permission to add books to this library."
             }
         }
     }
@@ -520,5 +548,22 @@ fn ConfirmForm(state: UploadState, audiobook: bool, on_submit: EventHandler<Form
                 }
             }
         }
+    }
+}
+
+#[cfg(all(test, feature = "server"))]
+mod render_tests {
+    use super::*;
+
+    /// A user without `can_upload` sees the not-authorized state, not the
+    /// upload form — the markup `AddBooksPage` returns via `AddBooksForbidden`
+    /// when its `use_can_upload` gate is (the SSR/pre-hydration default) false.
+    #[test]
+    fn add_books_forbidden_renders_not_authorized_message_not_the_form() {
+        let html = dioxus::ssr::render_element(rsx! { AddBooksForbidden {} });
+        assert!(html.contains("data-testid=\"add-books-forbidden\""));
+        assert!(html.contains("have permission to add books"));
+        assert!(!html.contains("add-books-file-input"));
+        assert!(!html.contains("add-books-submit"));
     }
 }
