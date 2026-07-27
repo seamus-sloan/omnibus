@@ -210,7 +210,13 @@ struct LibraryView: View {
     /// row — moved to the tab that owns it, so the landing is mostly books.
     private var content: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 30) {
+            // Deliberately not a `LazyVStack`: it releases subviews that scroll
+            // out of the viewport, and rebuilding one restores it with fresh
+            // `@State`. The Continue carousel paid for that twice — it came back
+            // reset to the first card, and every progress bar on it replayed its
+            // draw-in animation. Laziness is only worth anything for the grid,
+            // which is a `LazyVGrid` and manages its own.
+            VStack(alignment: .leading, spacing: 30) {
                 Masthead(title: "Library", count: countLabel) {
                     HStack(spacing: Spacing.sm) {
                         OfflinePill()

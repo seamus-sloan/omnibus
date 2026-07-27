@@ -390,6 +390,65 @@ struct StarRating: View {
     }
 }
 
+// MARK: - Progress
+
+/// A slim capsule track. `ProgressView`'s linear style renders at a fixed
+/// height and can't be tinted per-item without fighting it.
+struct ProgressBar: View {
+    let fraction: Double
+    var tint: Color
+    var height: CGFloat = 3
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var filled = false
+
+    var body: some View {
+        GeometryReader { geometry in
+            let clamped = min(1, max(0, fraction))
+            let width = max(height, geometry.size.width * clamped)
+
+            ZStack(alignment: .leading) {
+                Capsule().fill(.white.opacity(0.14))
+
+                Capsule()
+                    // A flat bar states a number; the gradient and the lit cap
+                    // make it read as distance covered.
+                    .fill(
+                        LinearGradient(
+                            colors: [tint.opacity(0.75), tint],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .overlay(alignment: .trailing) {
+                        Capsule()
+                            .fill(.white.opacity(0.55))
+                            .frame(width: height)
+                            .blur(radius: 1)
+                    }
+                    .frame(width: filled ? width : height)
+                    .shadow(color: tint.opacity(0.5), radius: 4, y: 0)
+            }
+            .onAppear {
+                guard !filled else { return }
+                guard !reduceMotion else {
+                    filled = true
+                    return
+                }
+                // Draws itself in on arrival, so the card announces where you
+                // are rather than presenting a bar that was always there. Once
+                // only — a host that rebuilds this view replays it, which is
+                // why the Continue carousel is not inside a lazy stack.
+                withAnimation(Motion.page.delay(0.12)) { filled = true }
+            }
+        }
+        .frame(height: height)
+        .accessibilityElement()
+        .accessibilityLabel("Progress")
+        .accessibilityValue("\(Int(min(1, max(0, fraction)) * 100)) percent")
+    }
+}
+
 // MARK: - Layout helpers
 
 /// Background that fills the whole screen including under the nav bar.

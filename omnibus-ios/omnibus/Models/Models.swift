@@ -452,7 +452,22 @@ struct ResumePoint: Codable, Sendable, Identifiable {
     var chapterNumber: Int64?
     var chapterCount: Int64?
 
-    var id: String { record.bookUUID }
+    /// Scoped by format as well as book, mirroring `CacheKey.progress`.
+    ///
+    /// A dual-format book someone is both reading and listening to produces two
+    /// of these, and keying them on the uuid alone gave them one identity: the
+    /// `ForEach`es that render the Continue rail saw a duplicate id, shuffled
+    /// per-card state between the two, and left the carousel's page count
+    /// disagreeing with its dots.
+    var id: String { "\(record.bookUUID):\(record.format.rawValue)" }
+
+    var isAudio: Bool { record.format == .audio }
+
+    /// Whether this is the card `record` belongs to — the (book, format) pair
+    /// behind [`id`], single-sourced so no caller re-derives it as the uuid.
+    func matches(_ record: ProgressRecord) -> Bool {
+        self.record.bookUUID == record.bookUUID && self.record.format == record.format
+    }
 
     enum CodingKeys: String, CodingKey {
         case record, book
@@ -462,8 +477,12 @@ struct ResumePoint: Codable, Sendable, Identifiable {
     }
 
     /// Fraction complete for the progress bar, when the format supports one.
+    ///
+    /// Audio only — an EPUB position is a CFI, and there is no honest
+    /// percentage to derive from one. The format check is what keeps a reading
+    /// card from borrowing the listening card's bar.
     var fraction: Double? {
-        guard let total = totalDurationSeconds, total > 0,
+        guard isAudio, let total = totalDurationSeconds, total > 0,
               let position = record.audioPositionSeconds else { return nil }
         return min(1, max(0, position / total))
     }
