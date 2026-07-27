@@ -103,6 +103,7 @@ async fn mock_server() -> String {
         audio_position_seconds: update.audio_position_seconds,
         progress_percent: update.progress_percent,
         kobo_location: update.kobo_location,
+        book_file_id: None,
         updated_at: 4242,
         client_updated_at: update.client_updated_at.unwrap_or(4242),
     };
@@ -184,6 +185,7 @@ fn progress_op(uuid: &str) -> Op {
             audio_position_seconds: None,
             progress_percent: None,
             kobo_location: None,
+            book_file_id: None,
             client_updated_at: None,
         },
         captured_at: 100,

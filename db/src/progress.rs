@@ -76,13 +76,6 @@ fn parse_format(raw: &str) -> ProgressFormat {
 /// rejected (older) write still re-reads and returns the row that won, so
 /// the caller learns it is behind rather than seeing its own rejected
 /// payload echoed back.
-///
-/// The position fields **merge** rather than replace (`COALESCE(excluded, …)`)
-/// because different surfaces carry different halves of a position: a Kobo
-/// sends a percent and an opaque location but no CFI, the web reader sends a
-/// CFI and no percent. Plain assignment would make each write null out the
-/// other surface's anchor. The tradeoff is that no caller can *clear* a
-/// field by sending `None` — nothing needs to today.
 pub async fn upsert_progress(
     pool: &SqlitePool,
     user_id: i64,
@@ -99,8 +92,9 @@ pub async fn upsert_progress(
     sqlx::query(
         "INSERT INTO reading_progress
             (user_id, book_uuid, format, epub_cfi, audio_position_seconds,
-             progress_percent, kobo_location, updated_at, client_updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%s','now'),
+             progress_percent, kobo_location, book_file_id,
+             updated_at, client_updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'),
              MIN(
                  COALESCE(?, CAST(strftime('%s','now') AS INTEGER)),
                  CAST(strftime('%s','now') AS INTEGER)
@@ -112,6 +106,7 @@ pub async fn upsert_progress(
                  COALESCE(excluded.progress_percent, reading_progress.progress_percent),
              kobo_location =
                  COALESCE(excluded.kobo_location, reading_progress.kobo_location),
+             book_file_id = excluded.book_file_id,
              updated_at = strftime('%s','now'),
              client_updated_at = excluded.client_updated_at
          WHERE excluded.client_updated_at >=
@@ -121,7 +116,7 @@ pub async fn upsert_progress(
     .bind(&book_uuid)
     .bind(fmt)
     // Blank-to-NULL at the bind, not just at `validate` — the COALESCE merge
-    // below treats any non-NULL as a real value, so a whitespace CFI reaching
+    // above treats any non-NULL as a real value, so a whitespace CFI reaching
     // an internal caller that skipped validation would clobber a good anchor.
     .bind(update.epub_cfi.as_deref().filter(|s| !s.trim().is_empty()))
     .bind(update.audio_position_seconds)
@@ -132,13 +127,15 @@ pub async fn upsert_progress(
             .as_deref()
             .filter(|s| !s.trim().is_empty()),
     )
+    .bind(update.book_file_id)
     .bind(update.client_updated_at)
     .execute(pool)
     .await?;
 
     let row = sqlx::query(
         "SELECT epub_cfi, audio_position_seconds, progress_percent, kobo_location,
-                updated_at, COALESCE(client_updated_at, updated_at) AS client_updated_at
+                book_file_id, updated_at,
+                COALESCE(client_updated_at, updated_at) AS client_updated_at
          FROM reading_progress
          WHERE user_id = ? AND book_uuid = ? AND format = ?",
     )
@@ -154,6 +151,7 @@ pub async fn upsert_progress(
         audio_position_seconds: row.try_get::<Option<f64>, _>("audio_position_seconds")?,
         progress_percent: row.try_get::<Option<i64>, _>("progress_percent")?,
         kobo_location: row.try_get::<Option<String>, _>("kobo_location")?,
+        book_file_id: row.try_get::<Option<i64>, _>("book_file_id")?,
         updated_at: row.try_get::<i64, _>("updated_at")?,
         client_updated_at: row.try_get::<i64, _>("client_updated_at")?,
     })
@@ -174,7 +172,8 @@ pub async fn get_progress(
     let fmt = format_str(format);
     let Some(row) = sqlx::query(
         "SELECT format, epub_cfi, audio_position_seconds, progress_percent, kobo_location,
-                updated_at, COALESCE(client_updated_at, updated_at) AS client_updated_at
+                book_file_id, updated_at,
+                COALESCE(client_updated_at, updated_at) AS client_updated_at
          FROM reading_progress
          WHERE user_id = ? AND book_uuid = ? AND format = ?",
     )
@@ -193,6 +192,7 @@ pub async fn get_progress(
         audio_position_seconds: row.try_get::<Option<f64>, _>("audio_position_seconds")?,
         progress_percent: row.try_get::<Option<i64>, _>("progress_percent")?,
         kobo_location: row.try_get::<Option<String>, _>("kobo_location")?,
+        book_file_id: row.try_get::<Option<i64>, _>("book_file_id")?,
         updated_at: row.try_get::<i64, _>("updated_at")?,
         client_updated_at: row.try_get::<i64, _>("client_updated_at")?,
     }))
@@ -269,8 +269,8 @@ pub async fn recent_progress(
 ) -> Result<Vec<ProgressRecord>, ProgressError> {
     let rows = sqlx::query(
         "SELECT book_uuid, format, epub_cfi, audio_position_seconds,
-                progress_percent, kobo_location, updated_at,
-                COALESCE(client_updated_at, updated_at) AS client_updated_at
+                progress_percent, kobo_location, book_file_id,
+                updated_at, COALESCE(client_updated_at, updated_at) AS client_updated_at
          FROM reading_progress
          WHERE user_id = ?
          ORDER BY COALESCE(client_updated_at, updated_at) DESC, book_uuid
@@ -289,6 +289,7 @@ pub async fn recent_progress(
                 audio_position_seconds: row.try_get::<Option<f64>, _>("audio_position_seconds")?,
                 progress_percent: row.try_get::<Option<i64>, _>("progress_percent")?,
                 kobo_location: row.try_get::<Option<String>, _>("kobo_location")?,
+                book_file_id: row.try_get::<Option<i64>, _>("book_file_id")?,
                 updated_at: row.try_get::<i64, _>("updated_at")?,
                 client_updated_at: row.try_get::<i64, _>("client_updated_at")?,
             })
@@ -307,7 +308,7 @@ pub async fn resume_points(
 ) -> Result<Vec<ResumePoint>, ProgressError> {
     let records = recent_progress(pool, user_id, limit).await?;
     let mut points = Vec::with_capacity(records.len());
-    for record in records {
+    for mut record in records {
         let Some(book) = crate::get_book_by_uuid(pool, &record.book_uuid).await? else {
             continue;
         };
@@ -316,8 +317,25 @@ pub async fn resume_points(
             ProgressFormat::Epub => None,
         };
         let (total_duration_seconds, chapter_number, chapter_count) = match audio {
-            Some((dur, ch_no, ch_count)) => (Some(dur), ch_no, ch_count),
-            None => (None, None, None),
+            Some(totals) => {
+                // Overwrite rather than trust the stored id: it may name a
+                // `book_files` row the reindex has since replaced, and the
+                // Continue CTA links straight at `?file_id=` — a dead id
+                // would open the player on a manifest that 404s.
+                record.book_file_id = Some(totals.book_file_id);
+                (
+                    Some(totals.total_duration_seconds),
+                    totals.chapter_number,
+                    totals.chapter_count,
+                )
+            }
+            None => {
+                // Audio row whose book has no audio file left (and every
+                // epub row): drop the stored id rather than hand a CTA an
+                // id that resolves to nothing.
+                record.book_file_id = None;
+                (None, None, None)
+            }
         };
         points.push(ResumePoint {
             record,
@@ -330,25 +348,51 @@ pub async fn resume_points(
     Ok(points)
 }
 
-/// Whole-book duration and chapter position for an audio progress row.
-/// `None` when the book has no resolvable audio file (e.g. the file was
-/// removed after the position was saved).
+/// Which audio file a resume point plays, plus the duration and chapter
+/// position measured against **that** file.
+struct AudioTotals {
+    book_file_id: i64,
+    total_duration_seconds: f64,
+    chapter_number: Option<i64>,
+    chapter_count: Option<i64>,
+}
+
+/// Resolve the audio file for a progress row and measure duration + chapter
+/// position against it. `None` when the book has no resolvable audio file
+/// (e.g. every file was removed after the position was saved).
+///
+/// The row's stored `book_file_id` picks the file for a book carrying more
+/// than one audiobook, so the resume card reads out the narration the user
+/// was actually in. It is a soft reference (rule 06) — a stale id, or one
+/// belonging to another book, falls back to the first audio file by ordinal,
+/// which is what the whole feature did before the id was recorded.
 async fn audio_totals(
     pool: &SqlitePool,
     uuid: &str,
     record: &ProgressRecord,
-) -> Result<Option<(f64, Option<i64>, Option<i64>)>, ProgressError> {
-    let Some(resolved) = hls::resolve_audiobook(pool, uuid).await? else {
-        return Ok(None);
+) -> Result<Option<AudioTotals>, ProgressError> {
+    let stored = match record.book_file_id {
+        Some(id) => hls::resolve_audiobook_file(pool, uuid, Some(id)).await?,
+        None => None,
+    };
+    let resolved = match stored {
+        Some(resolved) => resolved,
+        None => match hls::resolve_audiobook(pool, uuid).await? {
+            Some(resolved) => resolved,
+            None => return Ok(None),
+        },
     };
     let parts = hls::get_parts(pool, resolved.book_file_id).await?;
     let total: f64 = parts.iter().map(|p| p.duration_seconds).sum();
     let mut chapters = hls::get_chapters(pool, resolved.book_file_id).await?;
     chapters.sort_by(|a, b| a.start_seconds.total_cmp(&b.start_seconds));
     let position = record.audio_position_seconds.unwrap_or(0.0);
-    let number = chapter_number_at(&chapters, position);
-    let count = (!chapters.is_empty()).then_some(chapters.len() as i64);
-    Ok(Some((total, number, count)))
+    Ok(Some(AudioTotals {
+        book_file_id: resolved.book_file_id,
+        total_duration_seconds: total,
+        chapter_number: chapter_number_at(&chapters, position),
+        chapter_count: (!chapters.is_empty()).then_some(chapters.len() as i64),
+    }))
 }
 
 /// 1-based chapter number at `elapsed` seconds, mirroring the player's

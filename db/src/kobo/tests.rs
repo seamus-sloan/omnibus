@@ -352,6 +352,7 @@ async fn reading_state_for_returns_status_and_position_per_book() {
             progress_percent: Some(64),
             kobo_location: Some("{\"Value\":\"kobo.4.2\"}".into()),
             client_updated_at: None,
+            book_file_id: None,
         },
     )
     .await

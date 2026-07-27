@@ -61,6 +61,12 @@ pub struct ProgressUpdate {
     /// `serde_json` runtime dependency.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kobo_location: Option<String>,
+    /// The `book_files` row the position was taken in, for books carrying
+    /// more than one file of the format (two narrations of one audiobook).
+    /// `None` from a client that doesn't track it — the server then resolves
+    /// the same default file the manifest would have served.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub book_file_id: Option<i64>,
     /// Unix seconds when the client observed this position — used to
     /// resolve most-recent-wins by **event** time rather than server
     /// receipt time (issue #1362). `#[serde(default)]` so an older client
@@ -89,6 +95,9 @@ impl ProgressUpdate {
             .is_some_and(|p| !(0..=100).contains(&p))
         {
             return Err("progress_percent must be between 0 and 100".into());
+        }
+        if self.book_file_id.is_some_and(|id| id <= 0) {
+            return Err("book_file_id must be positive".into());
         }
         // Reject the non-discriminated field at the API boundary so a
         // cross-format payload (e.g. `{format:"epub", audio_position_seconds:…}`)
@@ -166,6 +175,10 @@ pub struct ProgressRecord {
     /// Opaque Kobo `CurrentBookmark.Location` JSON; see [`ProgressUpdate::kobo_location`].
     #[serde(default)]
     pub kobo_location: Option<String>,
+    /// The `book_files` row the position was taken in; see
+    /// [`ProgressUpdate::book_file_id`].
+    #[serde(default)]
+    pub book_file_id: Option<i64>,
     pub updated_at: i64,
     pub client_updated_at: i64,
 }

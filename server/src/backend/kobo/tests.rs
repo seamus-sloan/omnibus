@@ -1101,6 +1101,7 @@ async fn library_sync_reports_real_read_status_and_position() {
             progress_percent: Some(88),
             kobo_location: Some(r#"{"Value":"kobo.12.4"}"#.into()),
             client_updated_at: None,
+            book_file_id: None,
         },
     )
     .await

@@ -732,11 +732,15 @@ fn AddBooksModal(shelf_id: i64, on_close: EventHandler<()>, on_added: EventHandl
         });
     };
 
-    let library_books = library.read();
-    let filtered: Vec<EbookMetadata> = filter_library(&library_books, &query.read())
-        .into_iter()
-        .cloned()
-        .collect();
+    // Memoized so filter only reruns when library/query change, not on every render.
+    let filtered = use_memo(move || {
+        let library_books = library.read();
+        filter_library(&library_books, &query.read())
+            .into_iter()
+            .cloned()
+            .collect::<Vec<EbookMetadata>>()
+    });
+    let filtered = filtered();
     let picked_count = picked.read().len();
 
     rsx! {

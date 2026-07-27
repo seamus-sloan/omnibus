@@ -1,0 +1,24 @@
+-- Renumbered 0056 -> 0057. This shipped as `0056_reading_progress_book_file`
+-- while `0056_kobo_device_snapshot` already held that number, and sqlx derives
+-- a migration's version from the `NNNN_` prefix — so every `init_db` aborted
+-- with `UNIQUE constraint failed: _sqlx_migrations.version` and no install
+-- could boot. Renaming is safe precisely because the collision meant this file
+-- never applied anywhere: no database has recorded a checksum for it.
+--
+-- A book can carry more than one audiobook file (two narrations, an abridged
+-- edition), but `reading_progress` keyed only `(user, book, format)`. The
+-- Continue surfaces therefore linked at `/listen/:uuid` with no `?file_id=`,
+-- which resolves to the *first* audio file by ordinal — so a position saved
+-- while listening to the second audiobook reopened the first one seeked to
+-- that timestamp, and the card's chapter / percent readout was computed
+-- against the wrong file's duration.
+--
+-- `book_file_id` records which file the position was taken in. Soft
+-- reference, no FK and no cascade (rule 06): `book_files` rows are dropped
+-- and re-inserted by the reindex diff, so this id is advisory — the read
+-- path (`db::progress::resume_points`) re-resolves it against the book and
+-- falls back to the first audio file when it no longer matches.
+--
+-- NULL for every pre-existing row, and for any write from a client that
+-- doesn't send one; both resolve to the same first-file behaviour as before.
+ALTER TABLE reading_progress ADD COLUMN book_file_id INTEGER;

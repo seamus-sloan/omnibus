@@ -75,6 +75,7 @@ async fn upsert_round_trips_epub_position() {
         audio_position_seconds: None,
         progress_percent: None,
         kobo_location: None,
+        book_file_id: None,
         client_updated_at: None,
     };
     let saved = upsert_progress(&pool, user, &upd).await.unwrap();
@@ -106,6 +107,7 @@ async fn upsert_round_trips_a_percent_only_epub_position() {
         progress_percent: Some(37),
         kobo_location: Some(loc.into()),
         client_updated_at: None,
+        book_file_id: None,
     };
 
     let saved = upsert_progress(&pool, user, &upd).await.unwrap();
@@ -140,6 +142,7 @@ async fn upsert_merges_a_kobo_percent_into_an_existing_web_cfi_row() {
             progress_percent: None,
             kobo_location: None,
             client_updated_at: Some(100),
+            book_file_id: None,
         },
     )
     .await
@@ -156,6 +159,7 @@ async fn upsert_merges_a_kobo_percent_into_an_existing_web_cfi_row() {
             progress_percent: Some(55),
             kobo_location: Some("{}".into()),
             client_updated_at: Some(200),
+            book_file_id: None,
         },
     )
     .await
@@ -186,6 +190,7 @@ async fn upsert_merges_a_web_cfi_into_an_existing_kobo_percent_row() {
             progress_percent: Some(20),
             kobo_location: Some("{}".into()),
             client_updated_at: Some(100),
+            book_file_id: None,
         },
     )
     .await
@@ -202,6 +207,7 @@ async fn upsert_merges_a_web_cfi_into_an_existing_kobo_percent_row() {
             progress_percent: None,
             kobo_location: None,
             client_updated_at: Some(200),
+            book_file_id: None,
         },
     )
     .await
@@ -224,6 +230,7 @@ async fn upsert_is_last_write_wins() {
         audio_position_seconds: None,
         progress_percent: None,
         kobo_location: None,
+        book_file_id: None,
         client_updated_at: None,
     };
     upsert_progress(&pool, user, &first).await.unwrap();
@@ -234,6 +241,7 @@ async fn upsert_is_last_write_wins() {
         audio_position_seconds: None,
         progress_percent: None,
         kobo_location: None,
+        book_file_id: None,
         client_updated_at: None,
     };
     let saved = upsert_progress(&pool, user, &second).await.unwrap();
@@ -264,6 +272,7 @@ async fn upsert_rejects_older_client_write_and_returns_the_stored_newer_record()
         audio_position_seconds: None,
         progress_percent: None,
         kobo_location: None,
+        book_file_id: None,
         client_updated_at: Some(2000),
     };
     upsert_progress(&pool, user, &newer).await.unwrap();
@@ -275,6 +284,7 @@ async fn upsert_rejects_older_client_write_and_returns_the_stored_newer_record()
         audio_position_seconds: None,
         progress_percent: None,
         kobo_location: None,
+        book_file_id: None,
         client_updated_at: Some(1000),
     };
     let result = upsert_progress(&pool, user, &stale_replay).await.unwrap();
@@ -310,6 +320,7 @@ async fn upsert_accepts_a_write_with_a_strictly_newer_client_timestamp() {
             audio_position_seconds: None,
             progress_percent: None,
             kobo_location: None,
+            book_file_id: None,
             client_updated_at: Some(1000),
         },
     )
@@ -326,6 +337,7 @@ async fn upsert_accepts_a_write_with_a_strictly_newer_client_timestamp() {
             audio_position_seconds: None,
             progress_percent: None,
             kobo_location: None,
+            book_file_id: None,
             client_updated_at: Some(2000),
         },
     )
@@ -354,6 +366,7 @@ async fn upsert_clamps_a_future_client_timestamp_to_server_now() {
             audio_position_seconds: None,
             progress_percent: None,
             kobo_location: None,
+            book_file_id: None,
             client_updated_at: Some(far_future),
         },
     )
@@ -391,6 +404,7 @@ async fn upsert_defaults_missing_client_timestamp_to_server_now() {
             audio_position_seconds: None,
             progress_percent: None,
             kobo_location: None,
+            book_file_id: None,
             client_updated_at: None,
         },
     )
@@ -426,6 +440,7 @@ async fn recent_progress_orders_by_client_event_time_not_server_receipt_time() {
             audio_position_seconds: None,
             progress_percent: None,
             kobo_location: None,
+            book_file_id: None,
             client_updated_at: Some(5000),
         },
     )
@@ -444,6 +459,7 @@ async fn recent_progress_orders_by_client_event_time_not_server_receipt_time() {
             audio_position_seconds: None,
             progress_percent: None,
             kobo_location: None,
+            book_file_id: None,
             client_updated_at: Some(1000),
         },
     )
@@ -528,6 +544,7 @@ async fn upsert_overwrites_a_row_whose_stored_client_updated_at_is_null() {
             audio_position_seconds: None,
             progress_percent: None,
             kobo_location: None,
+            book_file_id: None,
             client_updated_at: Some(200),
         },
     )
@@ -558,6 +575,7 @@ async fn isolates_per_user_book_format() {
             audio_position_seconds: None,
             progress_percent: None,
             kobo_location: None,
+            book_file_id: None,
             client_updated_at: None,
         },
     )
@@ -573,6 +591,7 @@ async fn isolates_per_user_book_format() {
             audio_position_seconds: Some(42.5),
             progress_percent: None,
             kobo_location: None,
+            book_file_id: None,
             client_updated_at: None,
         },
     )
@@ -610,6 +629,7 @@ async fn upsert_unknown_book_is_not_found() {
             audio_position_seconds: None,
             progress_percent: None,
             kobo_location: None,
+            book_file_id: None,
             client_updated_at: None,
         },
     )
@@ -988,6 +1008,7 @@ async fn progress_survives_hard_delete_of_book() {
             audio_position_seconds: None,
             progress_percent: None,
             kobo_location: None,
+            book_file_id: None,
             client_updated_at: None,
         },
     )
@@ -1092,6 +1113,7 @@ async fn recent_progress_returns_rows_newest_first_within_limit() {
                 audio_position_seconds: None,
                 progress_percent: None,
                 kobo_location: None,
+                book_file_id: None,
                 client_updated_at: None,
             },
         )
@@ -1143,6 +1165,7 @@ async fn resume_points_enrich_audio_rows_with_duration_and_chapter() {
             audio_position_seconds: Some(450.0),
             progress_percent: None,
             kobo_location: None,
+            book_file_id: None,
             client_updated_at: None,
         },
     )
@@ -1156,6 +1179,231 @@ async fn resume_points_enrich_audio_rows_with_duration_and_chapter() {
     assert_eq!(p.total_duration_seconds, Some(1200.0));
     assert_eq!(p.chapter_number, Some(2));
     assert_eq!(p.chapter_count, Some(3));
+}
+
+/// Attach a second audiobook file to `book_id` — a different narration of
+/// the same book: one 3000 s part and two chapters, so its totals can't be
+/// confused with the first file's (1200 s / three chapters).
+async fn seed_second_audiobook_file(pool: &SqlitePool, book_id: i64) -> i64 {
+    let file_id = sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, ordinal) \
+         VALUES (?, 'M4B', 'b', 1, 1)",
+    )
+    .bind(book_id)
+    .execute(pool)
+    .await
+    .unwrap()
+    .last_insert_rowid();
+    sqlx::query(
+        "INSERT INTO book_file_parts \
+            (book_file_id, ordinal, filename, size_bytes, mtime_epoch, duration_seconds) \
+         VALUES (?, 0, 'p', 1, 0, 3000.0)",
+    )
+    .bind(file_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    for (ordinal, start, dur) in [(1i64, 0.0f64, 1500.0f64), (2, 1500.0, 1500.0)] {
+        sqlx::query(
+            "INSERT INTO file_chapters \
+                (book_file_id, ordinal, title, start_seconds, duration_seconds) \
+             VALUES (?, ?, 'ch', ?, ?)",
+        )
+        .bind(file_id)
+        .bind(ordinal)
+        .bind(start)
+        .bind(dur)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    file_id
+}
+
+#[tokio::test]
+async fn upsert_round_trips_the_audio_file_the_position_was_taken_in() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    let book_id = seed_audiobook(&pool, uuid).await;
+    let second = seed_second_audiobook_file(&pool, book_id).await;
+
+    let saved = upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.into(),
+            format: ProgressFormat::Audio,
+            epub_cfi: None,
+            audio_position_seconds: Some(90.0),
+            book_file_id: Some(second),
+            client_updated_at: None,
+            progress_percent: None,
+            kobo_location: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(saved.book_file_id, Some(second));
+
+    let fetched = get_progress(&pool, user, uuid, ProgressFormat::Audio)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched.book_file_id, Some(second));
+}
+
+#[tokio::test]
+async fn resume_points_return_the_audio_file_the_position_was_taken_in() {
+    // The reported bug: with two audiobooks on one book, the Continue CTA
+    // opened the first file by ordinal at the *other* file's timestamp, and
+    // read out the first file's duration and chapter count.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    let book_id = seed_audiobook(&pool, uuid).await;
+    let second = seed_second_audiobook_file(&pool, book_id).await;
+    upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.into(),
+            format: ProgressFormat::Audio,
+            epub_cfi: None,
+            // 1600 s → chapter 2 of the second file; past the first file's
+            // whole 1200 s duration.
+            audio_position_seconds: Some(1600.0),
+            book_file_id: Some(second),
+            client_updated_at: None,
+            progress_percent: None,
+            kobo_location: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let points = resume_points(&pool, user, 5).await.unwrap();
+    assert_eq!(points[0].record.book_file_id, Some(second));
+    assert_eq!(points[0].total_duration_seconds, Some(3000.0));
+    assert_eq!(points[0].chapter_number, Some(2));
+    assert_eq!(points[0].chapter_count, Some(2));
+}
+
+#[tokio::test]
+async fn resume_points_fall_back_to_the_first_audio_file_for_an_unresolvable_file_id() {
+    // `book_files.id` is a soft reference: the reindex diff drops and
+    // re-inserts rows, so a stored id can name a file that no longer exists
+    // (or one on another book). Resuming must still open a real file.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    let book_id = seed_audiobook(&pool, uuid).await;
+    let second = seed_second_audiobook_file(&pool, book_id).await;
+    upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.into(),
+            format: ProgressFormat::Audio,
+            epub_cfi: None,
+            audio_position_seconds: Some(450.0),
+            book_file_id: Some(second),
+            client_updated_at: None,
+            progress_percent: None,
+            kobo_location: None,
+        },
+    )
+    .await
+    .unwrap();
+    sqlx::query("DELETE FROM book_files WHERE id = ?")
+        .bind(second)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let points = resume_points(&pool, user, 5).await.unwrap();
+    let first = crate::hls::resolve_audiobook(&pool, uuid)
+        .await
+        .unwrap()
+        .unwrap()
+        .book_file_id;
+    assert_eq!(
+        points[0].record.book_file_id,
+        Some(first),
+        "a dead file id must not reach the Continue CTA's ?file_id="
+    );
+    assert_eq!(points[0].total_duration_seconds, Some(1200.0));
+    assert_eq!(points[0].chapter_number, Some(2));
+    assert_eq!(points[0].chapter_count, Some(3));
+}
+
+#[tokio::test]
+async fn resume_points_name_the_default_audio_file_when_the_row_stored_none() {
+    // Pre-migration rows and clients that don't track the file still get a
+    // concrete id, so the CTA links at the file it will actually open.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    seed_audiobook(&pool, uuid).await;
+    upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.into(),
+            format: ProgressFormat::Audio,
+            epub_cfi: None,
+            audio_position_seconds: Some(450.0),
+            book_file_id: None,
+            client_updated_at: None,
+            progress_percent: None,
+            kobo_location: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let points = resume_points(&pool, user, 5).await.unwrap();
+    let expected = crate::hls::resolve_audiobook(&pool, uuid)
+        .await
+        .unwrap()
+        .unwrap()
+        .book_file_id;
+    assert_eq!(points[0].record.book_file_id, Some(expected));
+}
+
+#[tokio::test]
+async fn resume_points_drop_a_file_id_that_resolves_to_nothing() {
+    // Every audio file gone (ghosted book) — the CTA must fall back to a
+    // bare `/listen/:uuid` rather than carry an id nothing can open.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    let book_id = seed_audiobook(&pool, uuid).await;
+    upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.into(),
+            format: ProgressFormat::Audio,
+            epub_cfi: None,
+            audio_position_seconds: Some(450.0),
+            book_file_id: Some(1),
+            client_updated_at: None,
+            progress_percent: None,
+            kobo_location: None,
+        },
+    )
+    .await
+    .unwrap();
+    sqlx::query("DELETE FROM book_files WHERE book_id = ?")
+        .bind(book_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let points = resume_points(&pool, user, 5).await.unwrap();
+    assert_eq!(points[0].record.book_file_id, None);
+    assert_eq!(points[0].total_duration_seconds, None);
 }
 
 #[tokio::test]
@@ -1175,6 +1423,7 @@ async fn resume_points_skip_rows_whose_book_is_gone_and_leave_epub_totals_empty(
                 audio_position_seconds: None,
                 progress_percent: None,
                 kobo_location: None,
+                book_file_id: None,
                 client_updated_at: None,
             },
         )
@@ -1559,6 +1808,7 @@ async fn upsert_does_not_let_a_blank_cfi_clobber_a_stored_one() {
             progress_percent: None,
             kobo_location: None,
             client_updated_at: Some(100),
+            book_file_id: None,
         },
     )
     .await
@@ -1575,6 +1825,7 @@ async fn upsert_does_not_let_a_blank_cfi_clobber_a_stored_one() {
             progress_percent: Some(70),
             kobo_location: None,
             client_updated_at: Some(200),
+            book_file_id: None,
         },
     )
     .await

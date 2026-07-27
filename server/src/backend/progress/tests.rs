@@ -524,6 +524,7 @@ async fn api_get_recent_progress_returns_resume_points_newest_first() {
                 audio_position_seconds: None,
                 progress_percent: None,
                 kobo_location: None,
+                book_file_id: None,
                 client_updated_at: None,
             },
         )

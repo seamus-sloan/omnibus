@@ -426,6 +426,9 @@ async fn persist_bookmark(
         audio_position_seconds: None,
         progress_percent: percent,
         kobo_location: location,
+        // Epub-format position; `book_file_id` selects among multiple audio
+        // files and has no meaning here.
+        book_file_id: None,
         client_updated_at: Some(time::OffsetDateTime::now_utc().unix_timestamp()),
     };
     // A location with no percent can't satisfy the epub position rule, and

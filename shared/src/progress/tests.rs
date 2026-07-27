@@ -9,6 +9,7 @@ fn progress_update_rejects_cross_format_audio_field_on_epub() {
         audio_position_seconds: Some(12.0),
         progress_percent: None,
         kobo_location: None,
+        book_file_id: None,
         client_updated_at: None,
     };
     let err = u
@@ -26,6 +27,7 @@ fn progress_update_rejects_cross_format_cfi_on_audio() {
         audio_position_seconds: Some(12.0),
         progress_percent: None,
         kobo_location: None,
+        book_file_id: None,
         client_updated_at: None,
     };
     let err = u
@@ -43,6 +45,7 @@ fn progress_update_rejects_overlong_epub_cfi() {
         audio_position_seconds: None,
         progress_percent: None,
         kobo_location: None,
+        book_file_id: None,
         client_updated_at: None,
     };
     let err = u
@@ -62,6 +65,7 @@ fn progress_update_accepts_epub_cfi_at_cap() {
         audio_position_seconds: None,
         progress_percent: None,
         kobo_location: None,
+        book_file_id: None,
         client_updated_at: None,
     };
     assert!(u.validate().is_ok());
@@ -76,6 +80,7 @@ fn progress_update_rejects_negative_client_updated_at() {
         audio_position_seconds: None,
         progress_percent: None,
         kobo_location: None,
+        book_file_id: None,
         client_updated_at: Some(-1),
     };
     let err = u
@@ -93,6 +98,7 @@ fn progress_update_accepts_missing_client_updated_at() {
         audio_position_seconds: None,
         progress_percent: None,
         kobo_location: None,
+        book_file_id: None,
         client_updated_at: None,
     };
     assert!(u.validate().is_ok(), "older clients must still validate");
@@ -110,6 +116,7 @@ fn progress_update_accepts_percent_without_a_cfi_for_epub() {
         progress_percent: Some(42),
         kobo_location: Some(r#"{"Type":"KoboSpan","Value":"kobo.9.1"}"#.into()),
         client_updated_at: None,
+        book_file_id: None,
     };
     assert!(u.validate().is_ok(), "percent alone must satisfy epub");
 }
@@ -124,6 +131,7 @@ fn progress_update_rejects_epub_with_neither_cfi_nor_percent() {
         progress_percent: None,
         kobo_location: None,
         client_updated_at: None,
+        book_file_id: None,
     };
     let err = u
         .validate()
@@ -143,6 +151,7 @@ fn progress_update_rejects_a_blank_cfi_with_no_percent() {
         progress_percent: None,
         kobo_location: None,
         client_updated_at: None,
+        book_file_id: None,
     };
     assert!(
         u.validate().is_err(),
@@ -163,6 +172,7 @@ fn progress_update_rejects_a_blank_cfi_even_alongside_a_percent() {
         progress_percent: Some(40),
         kobo_location: None,
         client_updated_at: None,
+        book_file_id: None,
     };
     let err = u.validate().expect_err("blank cfi must be rejected");
     assert!(err.contains("epub_cfi"), "got: {err}");
@@ -179,6 +189,7 @@ fn progress_update_rejects_out_of_range_percent() {
             progress_percent: Some(pct),
             kobo_location: None,
             client_updated_at: None,
+            book_file_id: None,
         };
         let err = u.validate().expect_err("out-of-range percent must reject");
         assert!(err.contains("progress_percent"), "pct={pct} got: {err}");
@@ -196,6 +207,7 @@ fn progress_update_accepts_percent_at_both_bounds() {
             progress_percent: Some(pct),
             kobo_location: None,
             client_updated_at: None,
+            book_file_id: None,
         };
         assert!(u.validate().is_ok(), "pct={pct} must be accepted");
     }
@@ -212,6 +224,7 @@ fn progress_update_rejects_kobo_fields_on_audio() {
         progress_percent: None,
         kobo_location: None,
         client_updated_at: None,
+        book_file_id: None,
     };
     let with_pct = ProgressUpdate {
         progress_percent: Some(50),
@@ -244,6 +257,41 @@ fn progress_record_decodes_a_payload_predating_the_percent_fields() {
     let rec: ProgressRecord = serde_json::from_str(json).expect("legacy payload must decode");
     assert_eq!(rec.progress_percent, None);
     assert_eq!(rec.kobo_location, None);
+}
+
+#[test]
+fn progress_update_rejects_non_positive_book_file_id() {
+    for id in [0, -3] {
+        let u = ProgressUpdate {
+            book_uuid: "x".into(),
+            format: ProgressFormat::Audio,
+            epub_cfi: None,
+            audio_position_seconds: Some(12.0),
+            book_file_id: Some(id),
+            client_updated_at: None,
+            progress_percent: None,
+            kobo_location: None,
+        };
+        let err = u
+            .validate()
+            .expect_err("book_file_id must name a real rowid");
+        assert!(err.contains("book_file_id"), "got: {err}");
+    }
+}
+
+#[test]
+fn progress_update_accepts_a_book_file_id() {
+    let u = ProgressUpdate {
+        book_uuid: "x".into(),
+        format: ProgressFormat::Audio,
+        epub_cfi: None,
+        audio_position_seconds: Some(12.0),
+        book_file_id: Some(917),
+        client_updated_at: None,
+        progress_percent: None,
+        kobo_location: None,
+    };
+    assert!(u.validate().is_ok());
 }
 
 #[test]

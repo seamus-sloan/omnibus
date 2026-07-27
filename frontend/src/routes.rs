@@ -371,3 +371,76 @@ pub fn Register() -> Element {
     use_page_title(|| Some("Register".into()));
     rsx! { RegisterPage {} }
 }
+
+/// Where a "Continue" affordance resumes: the player (carrying the point's
+/// `book_file_id` as `?file_id=`, since a bare `/listen/:uuid` opens the
+/// first audio file) or the reader.
+pub fn resume_route(point: &omnibus_shared::ResumePoint) -> Route {
+    let uuid = point.record.book_uuid.clone();
+    match point.record.format {
+        omnibus_shared::ProgressFormat::Audio => Route::BookListen {
+            uuid,
+            file_id: point.record.book_file_id,
+        },
+        omnibus_shared::ProgressFormat::Epub => Route::BookRead { uuid },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use omnibus_shared::{ProgressFormat, ProgressRecord, ResumePoint};
+
+    use super::*;
+
+    fn point(format: ProgressFormat, book_file_id: Option<i64>) -> ResumePoint {
+        ResumePoint {
+            record: ProgressRecord {
+                book_uuid: "book-a".into(),
+                format,
+                epub_cfi: None,
+                audio_position_seconds: None,
+                book_file_id,
+                progress_percent: None,
+                kobo_location: None,
+                updated_at: 0,
+                client_updated_at: 0,
+            },
+            book: Default::default(),
+            total_duration_seconds: None,
+            chapter_number: None,
+            chapter_count: None,
+        }
+    }
+
+    #[test]
+    fn resume_route_carries_the_audio_file_the_position_was_taken_in() {
+        assert_eq!(
+            resume_route(&point(ProgressFormat::Audio, Some(917))),
+            Route::BookListen {
+                uuid: "book-a".into(),
+                file_id: Some(917),
+            }
+        );
+    }
+
+    #[test]
+    fn resume_route_leaves_the_file_open_when_the_point_names_none() {
+        assert_eq!(
+            resume_route(&point(ProgressFormat::Audio, None)),
+            Route::BookListen {
+                uuid: "book-a".into(),
+                file_id: None,
+            }
+        );
+    }
+
+    #[test]
+    fn resume_route_sends_an_epub_position_to_the_reader() {
+        assert_eq!(
+            resume_route(&point(ProgressFormat::Epub, None)),
+            Route::BookRead {
+                uuid: "book-a".into()
+            }
+        );
+    }
+}

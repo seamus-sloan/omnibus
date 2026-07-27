@@ -25,6 +25,7 @@ fn progress_update(uuid: &str) -> ProgressUpdate {
         audio_position_seconds: None,
         progress_percent: None,
         kobo_location: None,
+        book_file_id: None,
         client_updated_at: None,
     }
 }

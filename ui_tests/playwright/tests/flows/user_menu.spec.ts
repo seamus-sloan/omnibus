@@ -19,6 +19,7 @@ test.beforeAll(async ({ request }) => {
 async function recentPoint(
   request: import("@playwright/test").APIRequestContext,
   format: "epub" | "audio",
+  bookFileId: number | null = null,
 ) {
   const target = FIXTURE_BOOKS[1]!;
   const uuid = await fetchBookUuidByTitle(request, target.title);
@@ -45,6 +46,9 @@ async function recentPoint(
         format,
         epub_cfi: format === "epub" ? "epubcfi(/6/2)" : null,
         audio_position_seconds: format === "audio" ? 90 : null,
+        // Which of the book's files the position was taken in — the server
+        // re-resolves this on every resume point, so it is always a live id.
+        book_file_id: bookFileId,
         updated_at: 123,
         // Server responses always populate this (issue #1362); the mock
         // must match the real wire shape or the client's deserialization
@@ -175,6 +179,27 @@ for (const sample of [
     await expect(cover).toHaveAttribute("href", `/books/${latest.uuid}`);
   });
 }
+
+test("Continue listening resumes the audiobook file the position was taken in", async ({
+  page,
+  request,
+}) => {
+  // A book can carry more than one audiobook (two narrations, an abridged
+  // edition). A bare `/listen/:uuid` resolves to the first audio file by
+  // ordinal, so the CTA used to reopen the wrong narration seeked to the
+  // right narration's timestamp.
+  const latest = await recentPoint(request, "audio", 917);
+  await page.route("**/api/rpc/progress/recent", async (route) => {
+    await route.fulfill({ status: 200, json: [latest.point] });
+  });
+
+  await gotoReady(page, "/");
+  await page.getByTestId("user-menu-trigger").click();
+
+  await expect(
+    page.getByTestId("user-menu-now-reading-action"),
+  ).toHaveAttribute("href", `/listen/${latest.uuid}?file_id=917`);
+});
 
 test("shows an empty state when no book has progress", async ({ page }) => {
   await page.route("**/api/rpc/progress/recent", async (route) => {

@@ -26,6 +26,10 @@ CREATE TABLE reading_progress_new (
     audio_position_seconds   REAL,
     updated_at               INTEGER NOT NULL DEFAULT (strftime('%s','now')),
     client_updated_at        INTEGER,
+    -- Carried through from 0057_reading_progress_book_file: which audio file
+    -- the position was taken in. A rebuild that omitted it would silently drop
+    -- the column and every value in it.
+    book_file_id             INTEGER,
     -- Whole-book percent, 0..=100. Nullable: only surfaces that report one set
     -- it, and an existing CFI-only row keeps NULL until the next write.
     progress_percent         INTEGER CHECK (progress_percent IS NULL
@@ -48,9 +52,9 @@ CREATE TABLE reading_progress_new (
 );
 INSERT INTO reading_progress_new
     (id, user_id, book_uuid, format, epub_cfi, audio_position_seconds,
-     updated_at, client_updated_at)
+     updated_at, client_updated_at, book_file_id)
 SELECT id, user_id, book_uuid, format, epub_cfi, audio_position_seconds,
-       updated_at, client_updated_at
+       updated_at, client_updated_at, book_file_id
   FROM reading_progress;
 DROP TABLE reading_progress;
 ALTER TABLE reading_progress_new RENAME TO reading_progress;
