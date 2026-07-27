@@ -1,9 +1,9 @@
 //! Shelf detail page (`/shelves/:id`).
 //!
 //! Renders the shelf rail alongside a main column showing one shelf's header
-//! (kind + visibility badges, actions) and its member books. Smart shelves
-//! show their rule as chips and an auto-sorted grid; manual shelves show a
-//! position-ordered grid with an "Add books" affordance.
+//! (title + edit pencil, kind/visibility facets with rule chips, actions) and
+//! its member books. Smart shelves show an auto-sorted grid; manual shelves
+//! show a position-ordered grid with an "Add books" affordance.
 
 use dioxus::prelude::*;
 #[cfg(not(feature = "mobile"))]
@@ -18,7 +18,7 @@ use omnibus_shared::{ShelfKind, UpdateShelfRequest, Visibility};
 #[cfg(not(feature = "mobile"))]
 use crate::components::atrium::fallback_title;
 use crate::components::library_picker_grid::{filter_library, use_library_fetch};
-use crate::components::EditShelfRulesModal;
+use crate::components::EditShelfModal;
 use crate::components::LibraryPickerGrid;
 #[cfg(not(feature = "mobile"))]
 use crate::components::{CoverTile, CoverTileKind};
@@ -45,13 +45,10 @@ pub fn ShelfDetailPage(id: i64) -> Element {
     #[cfg(not(feature = "mobile"))]
     let show_add = use_signal(|| false);
     #[cfg(feature = "mobile")]
-    let mut edit_rules = use_signal(|| false);
+    let mut edit_shelf = use_signal(|| false);
     #[cfg(not(feature = "mobile"))]
-    let edit_rules = use_signal(|| false);
+    let edit_shelf = use_signal(|| false);
     // Bumped to force a refetch after a membership edit.
-    #[cfg(feature = "mobile")]
-    let mut reload = use_signal(|| 0u32);
-    #[cfg(not(feature = "mobile"))]
     let reload = use_signal(|| 0u32);
     // Set when the member-books refetch fails, so a transient network error
     // renders distinctly from a shelf that is genuinely empty (mirrors
@@ -99,8 +96,7 @@ pub fn ShelfDetailPage(id: i64) -> Element {
             errored: errored(),
             server_url: server_url.clone(),
             on_add: move |_| show_add.set(true),
-            on_edit_rules: move |_| edit_rules.set(true),
-            on_changed: move |_| reload.with_mut(|n| *n += 1),
+            on_edit: move |_| edit_shelf.set(true),
         }
     };
 
@@ -113,24 +109,24 @@ pub fn ShelfDetailPage(id: i64) -> Element {
         ShelfBodySignals {
             sort_key,
             show_add,
-            edit_rules,
+            edit_shelf,
             reload,
         },
     );
 
     rsx! {
         {body}
-        {shelf_detail_modals(id, current, show_add, edit_rules, reload)}
+        {shelf_detail_modals(id, current, show_add, edit_shelf, reload)}
     }
 }
 
-/// The "Add books" and "Edit rules" modals, shown when their respective
+/// The "Add books" and "Edit shelf" modals, shown when their respective
 /// signals flip true; both bump `reload` on success so the parent refetches.
 fn shelf_detail_modals(
     shelf_id: i64,
     current: Shelf,
     mut show_add: Signal<bool>,
-    mut edit_rules: Signal<bool>,
+    mut edit_shelf: Signal<bool>,
     mut reload: Signal<u32>,
 ) -> Element {
     rsx! {
@@ -145,12 +141,12 @@ fn shelf_detail_modals(
             }
         }
 
-        if edit_rules() {
-            EditShelfRulesModal {
+        if edit_shelf() {
+            EditShelfModal {
                 shelf: current.clone(),
-                on_close: move |_| edit_rules.set(false),
+                on_close: move |_| edit_shelf.set(false),
                 on_saved: move |_| {
-                    edit_rules.set(false);
+                    edit_shelf.set(false);
                     reload.with_mut(|n| *n += 1);
                 },
             }
@@ -278,12 +274,12 @@ fn render_page_state(id: i64, inner: Element) -> Element {
 struct ShelfBodySignals {
     sort_key: Signal<SortKey>,
     show_add: Signal<bool>,
-    edit_rules: Signal<bool>,
+    edit_shelf: Signal<bool>,
     reload: Signal<u32>,
 }
 
-/// Web presentation: rail + header (badges/actions), rule chips + sort row
-/// for smart shelves, and the `CoverTile` member grid.
+/// Web presentation: rail + header (title + facets/actions), sort row for
+/// smart shelves, and the `CoverTile` member grid.
 #[cfg(not(feature = "mobile"))]
 fn web_shelf_body(
     current: &Shelf,
@@ -295,7 +291,7 @@ fn web_shelf_body(
     let ShelfBodySignals {
         mut sort_key,
         mut show_add,
-        mut edit_rules,
+        mut edit_shelf,
         mut reload,
     } = signals;
     let id = current.id;
@@ -306,16 +302,11 @@ fn web_shelf_body(
             div { class: "shelf-main",
                 ShelfHeader {
                     shelf: current.clone(),
-                    on_edit_rules: move |_| edit_rules.set(true),
+                    on_edit: move |_| edit_shelf.set(true),
                     on_changed: move |_| reload.with_mut(|n| *n += 1),
                 }
 
                 if is_smart {
-                    div { class: "shelf-rule-summary",
-                        for (i, rule) in current.rules.iter().enumerate() {
-                            span { key: "{i}", class: "shelf-rule-chip", "{rule_text(rule)}" }
-                        }
-                    }
                     div { class: "shelf-sort-row",
                         span { class: "label", "Sort" }
                         select {
@@ -407,21 +398,15 @@ fn member_grid(
     }
 }
 
-/// Header: back link, badges, name, and the actions menu. `on_changed` fires
-/// after a successful rename / visibility change so the parent refetches and
-/// the header reflects the new value; `on_edit_rules` opens the smart-shelf
-/// rule editor.
+/// Header: back link, name + edit pencil, facet row (kind / visibility /
+/// rule chips), and the actions menu. `on_changed` fires after a successful
+/// Kobo-sync toggle so the parent refetches; `on_edit` opens the edit-shelf
+/// modal (name, visibility, and — for smart shelves — rules).
 #[cfg(not(feature = "mobile"))]
 #[component]
-fn ShelfHeader(
-    shelf: Shelf,
-    on_edit_rules: EventHandler<()>,
-    on_changed: EventHandler<()>,
-) -> Element {
+fn ShelfHeader(shelf: Shelf, on_edit: EventHandler<()>, on_changed: EventHandler<()>) -> Element {
     let nav = use_navigator();
     let server_url = use_server_url();
-    let renaming = use_signal(|| false);
-    let mut draft_name = use_signal(|| shelf.name.clone());
     let menu_open = use_signal(|| false);
 
     // Owner/admin gating; `None` until the boot effect resolves the viewer, so
@@ -443,24 +428,18 @@ fn ShelfHeader(
     let id = shelf.id;
     let is_smart = shelf.kind == ShelfKind::Smart;
     let kind_label = match shelf.kind {
-        ShelfKind::Smart => "Smart",
-        ShelfKind::Manual => "Hand-picked",
+        ShelfKind::Smart => "Smart shelf",
+        ShelfKind::Manual => "Hand-picked shelf",
         ShelfKind::Wishlist => "Wishlist",
     };
     let vis_label = match shelf.visibility {
         Visibility::Private => "Private",
         Visibility::Public => "Public",
     };
-    let next_vis = match shelf.visibility {
-        Visibility::Private => Visibility::Public,
-        Visibility::Public => Visibility::Private,
-    };
 
     let syncs_to_kobo = shelf.sync_to_kobo;
 
     let on_delete = build_on_delete(server_url.clone(), id, nav);
-    let on_toggle_vis =
-        build_on_toggle_vis(server_url.clone(), id, next_vis, menu_open, on_changed);
     let on_toggle_kobo = build_on_toggle_kobo(
         server_url.clone(),
         id,
@@ -468,15 +447,35 @@ fn ShelfHeader(
         menu_open,
         on_changed,
     );
-    let on_rename_save =
-        build_on_rename_save(server_url.clone(), id, renaming, draft_name, on_changed);
 
     rsx! {
         header { class: "shelf-detail-header", "data-testid": "shelf-detail-header",
             Link { to: Route::Landing {}, class: "shelf-back", "\u{2190} All books" }
-            div { class: "shelf-badges",
-                span { class: "shelf-badge", "{kind_label}" }
-                span { class: "shelf-badge shelf-badge--vis", "{vis_label}" }
+            div { class: "shelf-title-row",
+                h1 { class: "shelf-title", "{shelf.name}" }
+                if can_manage {
+                    button {
+                        r#type: "button",
+                        class: "shelf-edit-btn",
+                        "data-testid": "shelf-edit",
+                        "aria-label": "Edit shelf",
+                        onclick: move |_| on_edit.call(()),
+                        {pencil_glyph()}
+                    }
+                    {shelf_actions_menu(
+                        syncs_to_kobo,
+                        menu_open,
+                        ShelfMenuActions {
+                            toggle_kobo: on_toggle_kobo,
+                            delete: on_delete,
+                        },
+                    )}
+                }
+            }
+            div { class: "shelf-facets", "data-testid": "shelf-facets",
+                span { class: "shelf-facet shelf-facet--kind", "{kind_label}" }
+                span { class: "shelf-facet-dot", "\u{00b7}" }
+                span { class: "shelf-facet", "{vis_label}" }
                 if syncs_to_kobo {
                     span {
                         class: "shelf-badge shelf-badge--kobo",
@@ -491,40 +490,24 @@ fn ShelfHeader(
                         "by {shelf.owner_username}"
                     }
                 }
-            }
-            div { class: "shelf-title-row",
-                if renaming() {
-                    input {
-                        r#type: "text",
-                        class: "shelf-name-input",
-                        "data-testid": "shelf-rename-input",
-                        value: "{draft_name}",
-                        oninput: move |e| draft_name.set(e.value()),
-                    }
-                    button {
-                        r#type: "button", class: "btn shelf-btn-primary",
-                        "data-testid": "shelf-rename-save",
-                        onclick: move |_| on_rename_save.call(()),
-                        "Save"
-                    }
-                } else {
-                    h1 { class: "shelf-title", "{shelf.name}" }
-                    if can_manage {
-                        {shelf_actions_menu(
-                            is_smart,
-                            syncs_to_kobo,
-                            menu_open,
-                            renaming,
-                            ShelfMenuActions {
-                                edit_rules: on_edit_rules,
-                                toggle_vis: on_toggle_vis,
-                                toggle_kobo: on_toggle_kobo,
-                                delete: on_delete,
-                            },
-                        )}
+                if is_smart {
+                    for (i, rule) in shelf.rules.iter().enumerate() {
+                        span { key: "{i}", class: "shelf-rule-chip", "{rule_text(rule)}" }
                     }
                 }
             }
+        }
+    }
+}
+
+/// Pencil icon for the header's edit-shelf button.
+#[cfg(not(feature = "mobile"))]
+fn pencil_glyph() -> Element {
+    rsx! {
+        svg {
+            width: "15", height: "15", view_box: "0 0 24 24", fill: "none",
+            stroke: "currentColor", stroke_width: "2", stroke_linecap: "round", stroke_linejoin: "round",
+            path { d: "M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" }
         }
     }
 }
@@ -538,31 +521,6 @@ fn build_on_delete(server_url: String, id: i64, nav: dioxus_router::Navigator) -
         spawn(async move {
             if data::delete_shelf(&url, id).await.is_ok() {
                 nav.push(Route::Landing {});
-            }
-        });
-    })
-}
-
-/// Builds the visibility-toggle handler: closes the actions menu, flips
-/// visibility, and refetches on success.
-#[cfg(not(feature = "mobile"))]
-fn build_on_toggle_vis(
-    server_url: String,
-    id: i64,
-    next_vis: Visibility,
-    mut menu_open: Signal<bool>,
-    on_changed: EventHandler<()>,
-) -> EventHandler<()> {
-    EventHandler::new(move |()| {
-        let url = server_url.clone();
-        menu_open.set(false);
-        spawn(async move {
-            let req = UpdateShelfRequest {
-                visibility: Some(next_vis),
-                ..Default::default()
-            };
-            if data::update_shelf(&url, id, req).await.is_ok() {
-                on_changed.call(());
             }
         });
     })
@@ -594,57 +552,25 @@ fn build_on_toggle_kobo(
     })
 }
 
-/// Builds the rename-save handler: saves the draft name and refetches on
-/// success.
-#[cfg(not(feature = "mobile"))]
-fn build_on_rename_save(
-    server_url: String,
-    id: i64,
-    mut renaming: Signal<bool>,
-    draft_name: Signal<String>,
-    on_changed: EventHandler<()>,
-) -> EventHandler<()> {
-    EventHandler::new(move |()| {
-        let url = server_url.clone();
-        let name = draft_name();
-        renaming.set(false);
-        spawn(async move {
-            let req = UpdateShelfRequest {
-                name: Some(name),
-                ..Default::default()
-            };
-            if data::update_shelf(&url, id, req).await.is_ok() {
-                on_changed.call(());
-            }
-        });
-    })
-}
-
 /// The actions-menu handlers, bundled so [`shelf_actions_menu`] stays inside
 /// clippy's argument-count limit.
 #[cfg(not(feature = "mobile"))]
 struct ShelfMenuActions {
-    edit_rules: EventHandler<()>,
-    toggle_vis: EventHandler<()>,
     toggle_kobo: EventHandler<()>,
     delete: EventHandler<()>,
 }
 
-/// Owner-only actions trigger + dropdown: edit rules (smart shelves only),
-/// rename, toggle visibility, toggle Kobo sync, delete. Split out of
-/// [`ShelfHeader`] to keep it under the line cap, mirroring `member_grid`'s
-/// plain-fn split.
+/// Owner-only actions trigger + dropdown: toggle Kobo sync, delete. Name,
+/// visibility, and rules are edited via the title-row pencil's edit-shelf
+/// modal instead. Split out of [`ShelfHeader`] to keep it under the line cap,
+/// mirroring `member_grid`'s plain-fn split.
 #[cfg(not(feature = "mobile"))]
 fn shelf_actions_menu(
-    is_smart: bool,
     syncs_to_kobo: bool,
     mut menu_open: Signal<bool>,
-    mut renaming: Signal<bool>,
     actions: ShelfMenuActions,
 ) -> Element {
     let ShelfMenuActions {
-        edit_rules: on_edit_rules,
-        toggle_vis: on_toggle_vis,
         toggle_kobo: on_toggle_kobo,
         delete: on_delete,
     } = actions;
@@ -665,26 +591,6 @@ fn shelf_actions_menu(
             }
             if menu_open() {
                 div { class: "shelf-actions-menu",
-                    if is_smart {
-                        button {
-                            r#type: "button", class: "shelf-menu-item",
-                            "data-testid": "shelf-edit-rules",
-                            onclick: move |_| { menu_open.set(false); on_edit_rules.call(()); },
-                            "Edit rules"
-                        }
-                    }
-                    button {
-                        r#type: "button", class: "shelf-menu-item",
-                        "data-testid": "shelf-rename",
-                        onclick: move |_| { menu_open.set(false); renaming.set(true); },
-                        "Rename"
-                    }
-                    button {
-                        r#type: "button", class: "shelf-menu-item",
-                        "data-testid": "shelf-toggle-visibility",
-                        onclick: move |_| on_toggle_vis.call(()),
-                        "Change visibility"
-                    }
                     button {
                         r#type: "button", class: "shelf-menu-item",
                         "data-testid": "shelf-toggle-kobo",

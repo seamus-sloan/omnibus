@@ -141,11 +141,11 @@ pub mod offline_guard;
 pub use offline_guard::OfflineGuardModal;
 
 // The condition-row editor + live-preview pane shared by shelf creation and
-// the "Edit rules" surface.
+// the "Edit shelf" surface.
 pub mod shelf_rule_builder;
 
-pub mod edit_shelf_rules_modal;
-pub use edit_shelf_rules_modal::EditShelfRulesModal;
+pub mod edit_shelf_modal;
+pub use edit_shelf_modal::EditShelfModal;
 
 // "Fetch Summary" button — pulls a book blurb from Hardcover/OpenLibrary on
 // demand. Mounted by the metadata editor (always) and the web book-detail hero
