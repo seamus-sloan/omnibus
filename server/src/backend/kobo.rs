@@ -333,11 +333,15 @@ async fn download(
     let path = if kepub_ready(&state, id).await {
         db::kepub_path(id)
     } else {
-        match db::book_file_path(state.pool(), id, "EPUB").await {
+        // Still override-baked — same fallback `get_ebook_kepub` uses — so a
+        // Kobo device without kepubify support (or after a conversion
+        // failure) sees the user's edits rather than the raw scanned file.
+        let source = match db::book_file_path(state.pool(), id, "EPUB").await {
             Ok(Some(p)) => p,
             Ok(None) => return StatusCode::NOT_FOUND.into_response(),
             Err(e) => return internal("kobo book_file_path", e),
-        }
+        };
+        super::ebooks::rewritten_or_source(&state, id, source).await
     };
     serve_download(req, &path, "application/epub+zip").await
 }

@@ -408,8 +408,10 @@ pub(super) async fn get_ebook_download(
 
 /// The override-baked export EPUB for `book_id` when the book has edits, else
 /// `source` unchanged. A rewrite failure logs and falls back to `source` — an
-/// export must always download *something*.
-async fn rewritten_or_source(
+/// export must always download *something*. `pub(super)` so the Kobo plain-
+/// EPUB download fallback (`backend::kobo::download`) shares it rather than
+/// serving the raw on-disk file when overrides exist.
+pub(super) async fn rewritten_or_source(
     state: &AppState,
     book_id: i64,
     source: std::path::PathBuf,
