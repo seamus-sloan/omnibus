@@ -608,4 +608,29 @@ mod tests {
         // Nothing to go back to when there was no choose step.
         assert!(!html.contains("data-testid=\"delete-back\""));
     }
+
+    /// Mounts the real `DeleteBookDialog`, not just its inner panes — the
+    /// manifest fetch is a `use_effect`-spawned future that doesn't resolve
+    /// within one `render_in_vdom` rebuild, so this exercises the dialog's
+    /// `ConfirmModal` wiring in its "loading" first paint, same as a real
+    /// mount before the fetch lands.
+    fn dialog_harness() -> Element {
+        rsx! {
+            DeleteBookDialog {
+                uuid: "book-uuid".to_string(),
+                title: "Piranesi".to_string(),
+                on_deleted: move |_| {},
+                on_close: move |_| {},
+            }
+        }
+    }
+
+    #[test]
+    fn delete_book_dialog_renders_the_confirm_modal_shell_on_first_paint() {
+        let html = crate::test_support::render_in_vdom(dialog_harness);
+        assert!(html.contains("data-testid=\"delete-book-dialog\""));
+        assert!(html.contains("author-photo-modal-backdrop"));
+        assert!(html.contains("mg-modal del-modal"));
+        assert!(html.contains("Loading this book\u{2019}s files\u{2026}"));
+    }
 }

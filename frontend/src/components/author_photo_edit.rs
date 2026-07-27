@@ -299,3 +299,38 @@ fn ScanPhotoSection(
         }
     }
 }
+
+// Every test here renders SSR markup, so the whole module is `server`-gated —
+// under `web` its contents would be dead code and CI lints with `-D warnings`.
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::*;
+    use crate::test_support::render_in_vdom;
+
+    /// Mounts the real (private) `AuthorPhotoEditModal` — none of its three
+    /// photo-source sections fetch on mount, so a single rebuild renders the
+    /// full steady state, including the `ConfirmModal` wiring.
+    fn modal_harness() -> Element {
+        rsx! {
+            AuthorPhotoEditModal {
+                author_id: 1,
+                author_name: "Susanna Clarke".to_string(),
+                server_url: String::new(),
+                on_close: move |_| {},
+                on_change: move |_| {},
+            }
+        }
+    }
+
+    #[test]
+    fn author_photo_edit_modal_renders_the_confirm_modal_shell_and_all_three_sections() {
+        let html = render_in_vdom(modal_harness);
+        assert!(html.contains("data-testid=\"author-photo-edit-modal\""));
+        assert!(html.contains("author-photo-modal-backdrop"));
+        assert!(html.contains("author-photo-modal"));
+        assert!(html.contains("Edit photo for Susanna Clarke"));
+        assert!(html.contains("data-testid=\"author-photo-url-input\""));
+        assert!(html.contains("data-testid=\"author-photo-file-input\""));
+        assert!(html.contains("data-testid=\"author-photo-scan\""));
+    }
+}

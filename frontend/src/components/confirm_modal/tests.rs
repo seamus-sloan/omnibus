@@ -1,5 +1,9 @@
 //! SSR render-smoke coverage for the shared modal shell and its
-//! title/body/action-row body. Needs the `server` feature (`dioxus::ssr`).
+//! title/body/action-row body, plus direct coverage of the backdrop's
+//! busy-gate logic. Needs the `server` feature (`dioxus::ssr`).
+
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use super::*;
 use crate::test_support::render;
@@ -70,4 +74,27 @@ fn BusyHarness() -> Element {
 fn confirm_modal_body_disables_every_action_when_told_to() {
     let html = render(rsx! { BusyHarness {} });
     assert!(html.contains("disabled"));
+}
+
+/// Runs [`dismiss_unless_busy`] inside a live scope (needed for
+/// `EventHandler::new`) and records whether it fired.
+#[component]
+fn DismissHarness(busy: bool, fired: Rc<RefCell<bool>>) -> Element {
+    let handler = EventHandler::new(move |_| *fired.borrow_mut() = true);
+    dismiss_unless_busy(busy, handler);
+    rsx! {}
+}
+
+#[test]
+fn dismiss_unless_busy_calls_on_dismiss_when_not_busy() {
+    let fired = Rc::new(RefCell::new(false));
+    render(rsx! { DismissHarness { busy: false, fired: fired.clone() } });
+    assert!(*fired.borrow());
+}
+
+#[test]
+fn dismiss_unless_busy_is_a_noop_while_busy() {
+    let fired = Rc::new(RefCell::new(false));
+    render(rsx! { DismissHarness { busy: true, fired: fired.clone() } });
+    assert!(!*fired.borrow());
 }

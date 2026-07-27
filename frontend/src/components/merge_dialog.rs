@@ -443,3 +443,40 @@ fn render_confirm(
         }
     }
 }
+
+// Every test here renders SSR markup, so the whole module is `server`-gated —
+// under `web` its contents would be dead code and CI lints with `-D warnings`.
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::*;
+    use crate::contexts::CoverCacheBust;
+    use crate::test_support::render_in_vdom;
+
+    /// Mounts the real `MergeDialog` — `Cover` (in the target rail) reads
+    /// `CoverCacheBust` from context, so the harness provides it the same
+    /// way `App` does at the real mount point.
+    fn dialog_harness() -> Element {
+        use_context_provider(|| CoverCacheBust(Signal::new(std::collections::HashMap::new())));
+        rsx! {
+            MergeDialog {
+                target: EbookMetadata {
+                    title: Some("Piranesi".to_string()),
+                    unique_identifier: Some("target-uuid".to_string()),
+                    ..Default::default()
+                },
+                on_merged: move |_| {},
+                on_close: move |_| {},
+            }
+        }
+    }
+
+    #[test]
+    fn merge_dialog_renders_the_confirm_modal_shell_and_search_pane() {
+        let html = render_in_vdom(dialog_harness);
+        assert!(html.contains("data-testid=\"merge-dialog\""));
+        assert!(html.contains("author-photo-modal-backdrop"));
+        assert!(html.contains("mg-modal"));
+        assert!(html.contains("data-testid=\"merge-search\""));
+        assert!(html.contains("data-testid=\"merge-cancel\""));
+    }
+}

@@ -22,6 +22,16 @@ pub struct ConfirmModalAction {
     pub on_click: EventHandler<()>,
 }
 
+/// Forward to `on_dismiss` unless a mutation is in flight — the shared
+/// backdrop-dismiss gate every modal call site relies on. Split out from the
+/// backdrop's `onclick` so the branch is directly unit-testable without a
+/// simulated click.
+fn dismiss_unless_busy(busy: bool, on_dismiss: EventHandler<()>) {
+    if !busy {
+        on_dismiss.call(());
+    }
+}
+
 /// Modal backdrop + panel shell shared by every dialog in the app: a
 /// backdrop click dismisses (unless `busy`), a click inside the panel
 /// itself does not bubble to the backdrop. Callers supply their own body
@@ -44,9 +54,7 @@ pub fn ConfirmModal(
             "data-testid": "{testid}",
             onclick: move |evt| {
                 evt.stop_propagation();
-                if !busy {
-                    on_dismiss.call(());
-                }
+                dismiss_unless_busy(busy, on_dismiss);
             },
             div { class: "{dialog_class}", onclick: move |evt| evt.stop_propagation(), {children} }
         }
