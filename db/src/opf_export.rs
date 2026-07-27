@@ -196,9 +196,6 @@ fn encode_override_cover_jpeg(uuid: &str) -> Option<Vec<u8>> {
 /// Render `book` as an OPF 2.0 `<package>` document (metadata only, no
 /// manifest/spine — the Calibre sidecar convention). Pure and deterministic:
 /// fields emit in a fixed order so the output is byte-stable for tests.
-///
-/// Contributors were merged into `creators` at parse time and the schema
-/// can't tell them apart, so every creator re-exports as `<dc:creator>`.
 pub fn render_opf(book: &EbookMetadata) -> String {
     let mut out = String::new();
     out.push_str("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
@@ -210,20 +207,35 @@ pub fn render_opf(book: &EbookMetadata) -> String {
     );
 
     push_identifiers(&mut out, book);
-    push_title_and_creators(&mut out, book);
+    out.push_str(&render_effective_metadata(book));
 
-    // Description is ammonia-sanitized HTML; escape it once as a text node —
-    // a consumer that unescapes gets the markup back (Calibre-identical).
+    out.push_str("  </metadata>\n");
+    out.push_str("</package>\n");
+    out
+}
+
+/// Render the descriptive `<metadata>` children every OPF renderer emits from
+/// a book's effective metadata — title, creators, description, publisher,
+/// date, language, subjects, and the calibre series pair — as a single
+/// four-space-indented XML fragment, one element per line.
+///
+/// Defined once so [`render_opf`]'s whole-document build and
+/// `crate::epub_rewrite::opf`'s in-place event-rewrite consume the same
+/// field mapping and emission order; a future field addition only needs to
+/// change this function. Contributors were merged into `creators` at parse
+/// time and the schema can't tell them apart, so every creator re-exports as
+/// `<dc:creator>`. Description is ammonia-sanitized HTML; escaping it once
+/// as a text node means a consumer that unescapes gets the markup back
+/// (Calibre-identical).
+pub(crate) fn render_effective_metadata(book: &EbookMetadata) -> String {
+    let mut out = String::new();
+    push_title_and_creators(&mut out, book);
     push_dc(&mut out, "description", book.description.as_deref());
     push_dc(&mut out, "publisher", book.publisher.as_deref());
     push_dc(&mut out, "date", book.published.as_deref());
     push_dc(&mut out, "language", book.language.as_deref());
-
     push_subjects(&mut out, book);
     push_series_metas(&mut out, book);
-
-    out.push_str("  </metadata>\n");
-    out.push_str("</package>\n");
     out
 }
 

@@ -189,6 +189,30 @@ fn transform_opf_errors_when_dc_namespace_is_unbound() {
     );
 }
 
+#[test]
+fn transform_opf_errors_when_dc_namespace_is_only_declared_on_a_managed_descendant() {
+    // `<package>`/`<metadata>` never bind `xmlns:dc`, but the managed
+    // `<dc:title>` child redundantly re-declares it on itself. That
+    // declaration is out of scope again by the time we inject new `dc:*`
+    // markup just before `</metadata>`, so it must not satisfy the
+    // dc-bound check — the rewrite must still bail rather than emit markup
+    // that relies on an unbound prefix.
+    let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata>
+    <identifier id="id">book-1</identifier>
+    <dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">Original</dc:title>
+  </metadata>
+  <manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml"/></manifest>
+  <spine><itemref idref="nav"/></spine>
+</package>"#;
+    let err = transform_opf(opf.as_bytes(), &overridden_book()).unwrap_err();
+    assert!(
+        err.to_string().contains("xmlns:dc"),
+        "expected an unbound-dc error despite the redundant descendant declaration, got: {err}"
+    );
+}
+
 // --- encode_cover_for --------------------------------------------------
 
 #[test]
