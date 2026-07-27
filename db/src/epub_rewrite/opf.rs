@@ -7,13 +7,12 @@
 //! EPUB's identity and structure survive.
 
 use anyhow::Context;
-use quick_xml::events::Event;
+use omnibus_shared::EbookMetadata;
+use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::Reader;
 use quick_xml::writer::Writer;
 
-use omnibus_shared::EbookMetadata;
-
-use crate::opf_export::xml_escape;
+use crate::opf_export::render_effective_metadata;
 
 /// Descriptive `<dc:*>` local names we own: their originals are dropped and a
 /// fresh copy is emitted from the effective metadata. Everything not listed
@@ -33,6 +32,32 @@ const MANAGED_DC: &[&[u8]] = &[
     b"subject",
 ];
 
+/// Nesting state threaded through `transform_opf`'s per-event loop: current
+/// depth, which depth (if any) the source `<metadata>` element opened at,
+/// which depth (if any) a dropped managed subtree opened at, and whether the
+/// `dc:`/`opf:` prefixes we're about to inject are bound by the source.
+struct RewriteState {
+    depth: i32,
+    metadata_depth: Option<i32>,
+    // When `Some(d)`, we're inside a managed element's subtree opened at
+    // depth `d`; swallow every event until its matching end at `d`.
+    skip_depth: Option<i32>,
+    dc_bound: bool,
+    opf_bound: bool,
+}
+
+impl RewriteState {
+    fn new() -> Self {
+        Self {
+            depth: 0,
+            metadata_depth: None,
+            skip_depth: None,
+            dc_bound: false,
+            opf_bound: false,
+        }
+    }
+}
+
 /// Rewrite `opf` so its `<metadata>` reflects `book`'s effective values.
 ///
 /// Returns the transformed OPF bytes. The manifest, spine, guide, and all
@@ -41,22 +66,10 @@ const MANAGED_DC: &[&[u8]] = &[
 pub(super) fn transform_opf(opf: &[u8], book: &EbookMetadata) -> anyhow::Result<Vec<u8>> {
     let mut reader = Reader::from_reader(opf);
     let mut writer = Writer::new(Vec::with_capacity(opf.len() + 256));
-
-    let mut depth: i32 = 0;
-    let mut metadata_depth: Option<i32> = None;
-    // When `Some(d)`, we're inside a managed element's subtree opened at depth
-    // `d`; swallow every event until its matching end at `d`.
-    let mut skip_depth: Option<i32> = None;
+    let mut state = RewriteState::new();
     // We inject `dc:`/`opf:`-prefixed markup, so those prefixes must be bound by
-    // the source OPF (they normally are, on `<package>` or `<metadata>`). Track
-    // the declarations we pass; if the injected prefixes aren't bound we bail
-    // rather than emit an unbound-prefix (invalid) OPF the caller would serve.
-    let mut dc_bound = false;
-    let mut opf_bound = false;
-    let needs_opf = book.creators.iter().any(|c| {
-        c.role.as_deref().is_some_and(|s| !s.is_empty())
-            || c.file_as.as_deref().is_some_and(|s| !s.is_empty())
-    });
+    // the source OPF; `needs_opf` gates whether the `opf:` check applies.
+    let needs_opf = creator_needs_opf_attrs(book);
     let mut buf = Vec::new();
 
     loop {
@@ -65,71 +78,22 @@ pub(super) fn transform_opf(opf: &[u8], book: &EbookMetadata) -> anyhow::Result<
             .with_context(|| format!("parse OPF at byte {}", reader.buffer_position()))?;
         match event {
             Event::Eof => break,
-
-            Event::Start(e) => {
-                depth += 1;
-                if declares(&e, b"xmlns:dc") {
-                    dc_bound = true;
-                }
-                if declares(&e, b"xmlns:opf") {
-                    opf_bound = true;
-                }
-                if skip_depth.is_some() {
-                    // Inside a dropped subtree — swallow.
-                } else if metadata_depth.is_none() && is_metadata(e.name().as_ref()) {
-                    metadata_depth = Some(depth);
-                    writer.write_event(Event::Start(e.borrow()))?;
-                } else if metadata_depth == Some(depth - 1) && is_managed(&e) {
-                    skip_depth = Some(depth);
-                } else {
-                    writer.write_event(Event::Start(e.borrow()))?;
-                }
-            }
-
-            Event::Empty(e) => {
-                // Self-closing element — no depth change. Managed empties (e.g.
-                // `<meta name="calibre:series" .../>`, `<dc:date/>`) are dropped;
-                // everything else (notably `<meta name="cover" .../>`) is kept.
-                let managed = metadata_depth == Some(depth) && is_managed(&e);
-                if skip_depth.is_none() && !managed {
-                    writer.write_event(Event::Empty(e.borrow()))?;
-                }
-            }
-
+            Event::Start(e) => handle_start(e, &mut writer, &mut state)?,
+            Event::Empty(e) => handle_empty(e, &mut writer, &state)?,
             Event::End(e) => {
-                if let Some(d) = skip_depth {
-                    if depth == d {
-                        skip_depth = None;
+                if let Some(d) = state.skip_depth {
+                    if state.depth == d {
+                        state.skip_depth = None;
                     }
-                    depth -= 1;
+                    state.depth -= 1;
                     continue;
                 }
-                if metadata_depth == Some(depth) {
-                    // Closing `<metadata>` — inject the regenerated children just
-                    // before the end tag. Refuse when a prefix we'd emit isn't
-                    // bound, so the caller falls back to the untouched source EPUB
-                    // instead of shipping invalid XML.
-                    if !dc_bound {
-                        anyhow::bail!(
-                            "OPF does not bind xmlns:dc; refusing to inject dc:* metadata"
-                        );
-                    }
-                    if needs_opf && !opf_bound {
-                        anyhow::bail!(
-                            "OPF does not bind xmlns:opf; refusing to inject opf:* attributes"
-                        );
-                    }
-                    writer
-                        .get_mut()
-                        .extend_from_slice(render_managed(book).as_bytes());
-                    metadata_depth = None;
-                }
+                inject_managed_metadata_before_close(&mut writer, &mut state, book, needs_opf)?;
                 writer.write_event(Event::End(e.borrow()))?;
-                depth -= 1;
+                state.depth -= 1;
             }
-
             other => {
-                if skip_depth.is_none() {
+                if state.skip_depth.is_none() {
                     writer.write_event(other.borrow())?;
                 }
             }
@@ -140,8 +104,95 @@ pub(super) fn transform_opf(opf: &[u8], book: &EbookMetadata) -> anyhow::Result<
     Ok(writer.into_inner())
 }
 
+/// Whether any creator carries a role or file-as that would render as an
+/// `opf:role`/`opf:file-as` attribute, requiring the `xmlns:opf` prefix.
+fn creator_needs_opf_attrs(book: &EbookMetadata) -> bool {
+    book.creators.iter().any(|c| {
+        c.role.as_deref().is_some_and(|s| !s.is_empty())
+            || c.file_as.as_deref().is_some_and(|s| !s.is_empty())
+    })
+}
+
+/// `Event::Start` handling: track depth and namespace bindings, then either
+/// swallow (inside a dropped subtree), open the tracked `<metadata>`, start
+/// dropping a managed element's subtree, or pass the element through.
+fn handle_start(
+    e: BytesStart<'_>,
+    writer: &mut Writer<Vec<u8>>,
+    state: &mut RewriteState,
+) -> anyhow::Result<()> {
+    state.depth += 1;
+    track_namespace_bindings(&e, state);
+
+    if state.skip_depth.is_some() {
+        // Inside a dropped subtree — swallow.
+    } else if state.metadata_depth.is_none() && is_metadata(e.name().as_ref()) {
+        state.metadata_depth = Some(state.depth);
+        writer.write_event(Event::Start(e.borrow()))?;
+    } else if state.metadata_depth == Some(state.depth - 1) && is_managed(&e) {
+        state.skip_depth = Some(state.depth);
+    } else {
+        writer.write_event(Event::Start(e.borrow()))?;
+    }
+    Ok(())
+}
+
+/// `Event::Empty` handling: self-closing elements don't change depth. Managed
+/// empties (e.g. `<meta name="calibre:series" .../>`, `<dc:date/>`) are
+/// dropped; everything else (notably `<meta name="cover" .../>`) is kept.
+fn handle_empty(
+    e: BytesStart<'_>,
+    writer: &mut Writer<Vec<u8>>,
+    state: &RewriteState,
+) -> anyhow::Result<()> {
+    let managed = state.metadata_depth == Some(state.depth) && is_managed(&e);
+    if state.skip_depth.is_none() && !managed {
+        writer.write_event(Event::Empty(e.borrow()))?;
+    }
+    Ok(())
+}
+
+/// Record whether `e` declares the `xmlns:dc`/`xmlns:opf` prefixes the
+/// rewrite is about to inject.
+fn track_namespace_bindings(e: &BytesStart<'_>, state: &mut RewriteState) {
+    if declares(e, b"xmlns:dc") {
+        state.dc_bound = true;
+    }
+    if declares(e, b"xmlns:opf") {
+        state.opf_bound = true;
+    }
+}
+
+/// When the upcoming `Event::End` closes the tracked `<metadata>` element,
+/// inject the regenerated managed children just before it. No-op otherwise.
+///
+/// Refuses (bails) when a prefix the injected markup would use isn't bound
+/// by the source, so the caller falls back to the untouched source EPUB
+/// instead of shipping invalid XML.
+fn inject_managed_metadata_before_close(
+    writer: &mut Writer<Vec<u8>>,
+    state: &mut RewriteState,
+    book: &EbookMetadata,
+    needs_opf: bool,
+) -> anyhow::Result<()> {
+    if state.metadata_depth != Some(state.depth) {
+        return Ok(());
+    }
+    if !state.dc_bound {
+        anyhow::bail!("OPF does not bind xmlns:dc; refusing to inject dc:* metadata");
+    }
+    if needs_opf && !state.opf_bound {
+        anyhow::bail!("OPF does not bind xmlns:opf; refusing to inject opf:* attributes");
+    }
+    writer
+        .get_mut()
+        .extend_from_slice(render_effective_metadata(book).as_bytes());
+    state.metadata_depth = None;
+    Ok(())
+}
+
 /// Whether `e` declares the given namespace attribute (e.g. `xmlns:dc`).
-fn declares(e: &quick_xml::events::BytesStart, attr: &[u8]) -> bool {
+fn declares(e: &BytesStart, attr: &[u8]) -> bool {
     e.attributes().flatten().any(|a| a.key.as_ref() == attr)
 }
 
@@ -154,7 +205,7 @@ fn is_metadata(qname: &[u8]) -> bool {
 /// Whether an element is one we regenerate: a managed `<dc:*>` element, or a
 /// `<meta name="calibre:series"|"calibre:series_index">` (both the paired and
 /// self-closing spellings reach here).
-fn is_managed(e: &quick_xml::events::BytesStart) -> bool {
+fn is_managed(e: &BytesStart) -> bool {
     let name = e.name();
     let local = local_name(name.as_ref());
     if local == b"meta" {
@@ -168,7 +219,7 @@ fn is_managed(e: &quick_xml::events::BytesStart) -> bool {
 }
 
 /// The `name` attribute of a `<meta>` element, if present.
-fn meta_name(e: &quick_xml::events::BytesStart) -> Option<Vec<u8>> {
+fn meta_name(e: &BytesStart) -> Option<Vec<u8>> {
     e.attributes()
         .flatten()
         .find(|a| a.key.as_ref() == b"name")
@@ -180,69 +231,5 @@ fn local_name(qname: &[u8]) -> &[u8] {
     match qname.iter().position(|&b| b == b':') {
         Some(i) => &qname[i + 1..],
         None => qname,
-    }
-}
-
-/// Render the managed `<metadata>` children from effective values, using the
-/// conventional `dc:`/`opf:` prefixes (declared by every OPF we rewrite).
-/// Indented four spaces to sit inside `<metadata>`.
-fn render_managed(book: &EbookMetadata) -> String {
-    let mut out = String::new();
-
-    // dc:title is mandatory in OPF 2.0 — fall back to the filename like the UI.
-    let title = book
-        .title
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .unwrap_or(&book.filename);
-    out.push_str(&format!("    <dc:title>{}</dc:title>\n", xml_escape(title)));
-
-    for creator in &book.creators {
-        let mut attrs = String::new();
-        if let Some(role) = creator.role.as_deref().filter(|s| !s.is_empty()) {
-            attrs.push_str(&format!(" opf:role=\"{}\"", xml_escape(role)));
-        }
-        if let Some(file_as) = creator.file_as.as_deref().filter(|s| !s.is_empty()) {
-            attrs.push_str(&format!(" opf:file-as=\"{}\"", xml_escape(file_as)));
-        }
-        out.push_str(&format!(
-            "    <dc:creator{}>{}</dc:creator>\n",
-            attrs,
-            xml_escape(&creator.name)
-        ));
-    }
-
-    push_dc(&mut out, "description", book.description.as_deref());
-    push_dc(&mut out, "publisher", book.publisher.as_deref());
-    push_dc(&mut out, "date", book.published.as_deref());
-    push_dc(&mut out, "language", book.language.as_deref());
-
-    for subject in &book.subjects {
-        out.push_str(&format!(
-            "    <dc:subject>{}</dc:subject>\n",
-            xml_escape(subject)
-        ));
-    }
-
-    if let Some(series) = book.series.as_deref().filter(|s| !s.is_empty()) {
-        out.push_str(&format!(
-            "    <meta name=\"calibre:series\" content=\"{}\"/>\n",
-            xml_escape(series)
-        ));
-    }
-    if let Some(index) = book.series_index.as_deref().filter(|s| !s.is_empty()) {
-        out.push_str(&format!(
-            "    <meta name=\"calibre:series_index\" content=\"{}\"/>\n",
-            xml_escape(index)
-        ));
-    }
-
-    out
-}
-
-/// Emit `<dc:{tag}>{value}</dc:{tag}>` when `value` is present and non-empty.
-fn push_dc(out: &mut String, tag: &str, value: Option<&str>) {
-    if let Some(v) = value.filter(|s| !s.is_empty()) {
-        out.push_str(&format!("    <dc:{tag}>{}</dc:{tag}>\n", xml_escape(v)));
     }
 }

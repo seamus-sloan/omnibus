@@ -19,9 +19,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
-use sqlx::SqlitePool;
-
 use omnibus_shared::EbookMetadata;
+use sqlx::SqlitePool;
 
 use archive::rewrite_archive;
 use cover::encode_cover_for;
