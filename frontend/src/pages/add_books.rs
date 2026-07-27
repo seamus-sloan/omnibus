@@ -1,12 +1,8 @@
-//! Add-books page (`/add-books`) — upload an EPUB or audiobook into the library.
-//! Users pick a file; the server parses it for an editable confirm step, then
-//! files it into the canonical folder and redirects to the new book. Ebooks
-//! take one `.epub`; audiobooks one `.m4a`/`.m4b` or a set of `.mp3` parts. The
-//! rsx is target-agnostic — file interop runs only in the post-mount `spawn`.
-//!
-//! Gated on `can_upload`: the real boundary is the server's `require_upload`
-//! (`server/src/backend/uploads.rs`); this just keeps the form off a screen
-//! the submit would 403 on, mirroring `pages::logs`'s `use_is_admin` gate.
+//! Add-books page (`/add-books`) — upload an EPUB or audiobook into the
+//! library, gated on `can_upload` (server's `require_upload` remains the real
+//! boundary). Users pick a file; the server parses it for an editable confirm
+//! step, then files it into the canonical folder and redirects to the new
+//! book. rsx is target-agnostic — file interop runs only in `spawn`.
 
 use dioxus::prelude::*;
 use dioxus_router::use_navigator;

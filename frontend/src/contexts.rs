@@ -207,12 +207,7 @@ pub fn use_is_admin() -> ReadSignal<bool> {
     ReadSignal::new(use_signal(|| false))
 }
 
-/// Derive `can_upload` from the app-wide [`CurrentUser`] context, same
-/// shape as [`use_is_admin`]: an admin implicitly may upload even with the
-/// flag unset (mirrors `require_upload` in
-/// `server/src/backend/uploads.rs`, the real enforcement boundary this
-/// only pre-empts in the UI). Web-only: see [`use_is_admin`] for why the
-/// other targets take the fallback below.
+/// Derive `can_upload` (admin implies it) from [`CurrentUser`] — mirrors [`use_is_admin`].
 #[cfg(feature = "web")]
 pub fn use_can_upload() -> ReadSignal<bool> {
     let user_ctx = use_current_user().0;

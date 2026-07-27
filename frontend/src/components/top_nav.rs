@@ -85,12 +85,7 @@ pub fn TopNav() -> Element {
     }
 }
 
-/// The "Add books" nav entry, gated on `can_upload` — the server's
-/// `require_upload` (`server/src/backend/uploads.rs`) is the real boundary;
-/// this only keeps the entry point off a screen a non-uploader would 403 on.
-/// Split out from [`TopNav`] so both render states are unit-testable without
-/// a router/context (mirrors `SettingsSidebar`'s bool-prop shape in
-/// `pages::settings`).
+/// The "Add books" nav entry, shown only when `can_upload` is true.
 #[component]
 fn AddBooksButton(can_upload: bool, on_click: EventHandler<MouseEvent>) -> Element {
     if !can_upload {
