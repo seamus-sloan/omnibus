@@ -80,6 +80,12 @@ pub use library_picker_grid::{filter_library, use_library_fetch, LibraryPickerGr
 // without duplicating the form.
 pub mod author_photo_edit;
 
+// Shared backdrop/panel modal shell (dismiss-on-click, click-through-safe)
+// used by the merge, delete, author-photo, and physical-copy dialogs, plus
+// a title/body/action-row body for the common single-confirm case.
+pub mod confirm_modal;
+pub use confirm_modal::{confirm_modal_body, ConfirmModal, ConfirmModalAction, ConfirmModalTone};
+
 // Shared file-picker upload `onchange` builder used by `author_photo_edit`'s
 // file section and the journal composer's image-insert toolbar button.
 pub(crate) mod image_upload;
