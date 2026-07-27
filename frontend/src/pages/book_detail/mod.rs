@@ -11,6 +11,7 @@ use omnibus_shared::{EbookMetadata, MergeBooksResult, SuggestionsResponse};
 use crate::components::{PageError, PageLoading, PageNotFound};
 use crate::{data, use_server_url, Route};
 
+mod dates;
 mod delete;
 mod discovery;
 mod file_picker;
@@ -31,6 +32,8 @@ mod body;
 mod export_menu;
 #[cfg(not(feature = "mobile"))]
 mod hero;
+#[cfg(not(feature = "mobile"))]
+mod highlights;
 #[cfg(feature = "mobile")]
 mod mobile;
 #[cfg(feature = "mobile")]

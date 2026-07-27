@@ -1095,6 +1095,32 @@ html, body { overscroll-behavior: none; }
   text-align: center;
 }
 
+/* Saved passages — the book's highlights, outside the reader. The left rule
+   carries the highlight's palette color (set inline from `--hl-*`), matching
+   the reader's highlights drawer. */
+.bd-hl-list { display: grid; gap: 14px; margin-top: 16px; }
+.bd-hl-card {
+  padding: 16px 20px;
+  border-left: 3px solid var(--accent);
+}
+.bd-hl-quote {
+  margin: 0;
+  font-family: var(--serif); font-style: italic;
+  font-size: 18px; line-height: 1.4; color: var(--ink-0);
+}
+.bd-hl-note {
+  margin: 8px 0 0;
+  font-size: 13px; line-height: 1.5; color: var(--ink-2);
+}
+.bd-hl-foot {
+  margin-top: 10px;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 14px; flex-wrap: wrap;
+}
+.bd-hl-meta { font-size: 11px; color: var(--ink-3); }
+.bd-hl-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+@media (hover: hover) { .bd-hl-delete:hover { color: var(--bad); } }
+
 /* F3.2 — public reading journal */
 .bd-journal-blurb {
   font-size: 11px;
@@ -5781,8 +5807,10 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .rd-swatch[data-color="rose"]   { background: rgba(244,63,94,.7); }
 .rd-swatch[data-color="violet"] { background: rgba(139,92,246,.7); }
 
-/* Palette tokens reused by drawer rows + filter chips. */
-.rd-surface {
+/* Highlight palette tokens. On `:root`, not `.rd-surface`: the reader's
+   drawer rows and filter chips were the first consumers, but the book-detail
+   saved-passages cards read them too and sit outside the reader surface. */
+:root {
   --hl-amber: rgb(245,158,11); --hl-green: rgb(34,197,94);
   --hl-blue: rgb(59,130,246); --hl-rose: rgb(244,63,94);
   --hl-violet: rgb(139,92,246);

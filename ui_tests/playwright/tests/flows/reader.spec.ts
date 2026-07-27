@@ -31,6 +31,10 @@ const RECOLOR_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "pioneers-3")!;
 // one-paragraph EPUBs render as a single page with no page turns.
 const PROGRESS_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "frankenstein")!;
 const PROGRESS_ERR_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "great-gatsby")!;
+// Reserved for the `?cfi=` deep-link test — book detail's saved-passages list
+// opens the reader that way. Same isolation rationale as the two above (the
+// test drives and reads saved position) and the same multi-page requirement.
+const DEEP_LINK_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "middlemarch")!;
 
 // The epub.js progress POST fires on the reader's relocate events; pin the
 // exact pathname so the sibling `/api/rpc/progress/get` reads never match.
@@ -397,6 +401,54 @@ test("restores the exact reading position when the reader is reopened", async ({
   await expect
     .poll(async () => footerPageLabel(page), { timeout: 20_000 })
     .toBe(leftAt);
+});
+
+test("a ?cfi= deep link opens the reader at that passage, not the resume point", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, DEEP_LINK_BOOK.title);
+
+  // Read a way in and capture both the CFI and the page it renders on. The
+  // CFI comes off the progress save, so it's exactly what a highlight taken
+  // here would store.
+  await gotoReady(page, `/read/${uuid}`);
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
+  await expect
+    .poll(async () => footerPageLabel(page), { timeout: 20_000 })
+    .toMatch(PAGE_LABEL);
+  const opened = await footerPageLabel(page);
+
+  let passageCfi = "";
+  for (let turn = 0; turn < 8; turn++) {
+    const saved = await expectMutation(page, PROGRESS_POST, async () =>
+      page.getByTestId("reader-next").click(),
+    );
+    passageCfi = saved.request.postDataJSON().update.epub_cfi as string;
+  }
+  const passagePage = await footerPageLabel(page);
+  expect(passagePage, "the turns should move the page label").not.toBe(opened);
+
+  // Now rewind the saved position to the front of the book, so "resume" and
+  // "the passage" are unmistakably different destinations.
+  await gotoReady(page, `/books/${uuid}`);
+  const reset = await request.post("/api/rpc/progress", {
+    data: {
+      update: {
+        book_uuid: uuid,
+        format: "epub",
+        epub_cfi: "epubcfi(/6/2!/4/2/1:0)",
+      },
+    },
+  });
+  expect(reset.status(), "rewind saved progress").toBe(200);
+
+  // Opening with ?cfi= must land on the passage's page, not the rewound one.
+  await gotoReady(page, `/read/${uuid}?cfi=${encodeURIComponent(passageCfi)}`);
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
+  await expect
+    .poll(async () => footerPageLabel(page), { timeout: 20_000 })
+    .toBe(passagePage);
 });
 
 test("keeps reading when the progress save POST fails", async ({

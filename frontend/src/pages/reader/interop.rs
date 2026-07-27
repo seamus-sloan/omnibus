@@ -60,6 +60,7 @@ pub(crate) fn install_reader_web_interop(uuid: String, prefs: ReaderPrefs, sigs:
         status.set(ReaderStatus::Loading);
 
         let local_saved = crate::reader_progress::load(&uuid);
+        let deep_link_cfi = parse_cfi_from_url();
         let size = *prefs.font_size.read();
         let theme_name = theme.read().as_attr();
         let file_url = match parse_file_id_from_url() {
@@ -91,6 +92,7 @@ pub(crate) fn install_reader_web_interop(uuid: String, prefs: ReaderPrefs, sigs:
         spawn(spawn_bootstrap_and_highlights(
             uuid.clone(),
             local_saved,
+            deep_link_cfi,
             bootstrap,
             highlights,
         ));
@@ -221,13 +223,20 @@ struct BootstrapLiterals {
     justify_val: bool,
 }
 
-/// Resolve the starting CFI (server progress, else local save), run the
-/// epub.js bootstrap IIFE, then seed the annotation layer from the saved
-/// highlights and publish them into the `highlights` signal.
+/// Resolve the starting CFI (a `?cfi=` deep link, else server progress, else
+/// the local save), run the epub.js bootstrap IIFE, then seed the annotation
+/// layer from the saved highlights and publish them into the `highlights`
+/// signal.
+///
+/// `deep_link_cfi` wins outright: the reader was opened *at* a passage (from
+/// the book-detail saved-passages list), so resuming where this book was last
+/// left off would ignore the whole point of the link. The relocate handler
+/// then persists the new position as usual.
 #[cfg(feature = "web")]
 async fn spawn_bootstrap_and_highlights(
     uuid: String,
     local_saved: Option<String>,
+    deep_link_cfi: Option<String>,
     lits: BootstrapLiterals,
     mut highlights: Signal<Vec<Highlight>>,
 ) {
@@ -236,12 +245,19 @@ async fn spawn_bootstrap_and_highlights(
     use crate::data;
     use crate::js_interop::json_literal;
 
-    let server_cfi = crate::data::get_progress("", &uuid, omnibus_shared::ProgressFormat::Epub)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|r| r.epub_cfi);
-    let chosen = server_cfi.or(local_saved);
+    // Only pay for the progress round trip when nothing already decided.
+    let chosen = match deep_link_cfi {
+        Some(cfi) => Some(cfi),
+        None => {
+            let server_cfi =
+                crate::data::get_progress("", &uuid, omnibus_shared::ProgressFormat::Epub)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|r| r.epub_cfi);
+            server_cfi.or(local_saved)
+        }
+    };
     let cfi_arg = json_literal(&chosen);
     let locations_key_lit = json_literal(&uuid);
     let js = reader_bootstrap_js(&BootstrapArgs {
@@ -273,4 +289,15 @@ fn parse_file_id_from_url() -> Option<i64> {
     let search = web_sys::window()?.location().search().ok()?;
     let params = web_sys::UrlSearchParams::new_with_str(&search).ok()?;
     params.get("file_id")?.parse().ok()
+}
+
+/// Extract a `?cfi=` deep link from the current URL — the book-detail
+/// saved-passages list opens the reader at a specific highlight this way.
+/// Blank values are treated as absent so `?cfi=` alone falls back to resume.
+#[cfg(feature = "web")]
+fn parse_cfi_from_url() -> Option<String> {
+    let search = web_sys::window()?.location().search().ok()?;
+    let params = web_sys::UrlSearchParams::new_with_str(&search).ok()?;
+    let cfi = params.get("cfi")?;
+    (!cfi.trim().is_empty()).then_some(cfi)
 }

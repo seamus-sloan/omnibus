@@ -6,6 +6,7 @@ use dioxus::prelude::*;
 use omnibus_shared::{JournalEntry, JournalStatus, UpdateJournalEntry, UserSummary};
 
 use crate::data;
+use crate::pages::book_detail::dates::fmt_long_date;
 use crate::pages::book_detail::journal_editor::*;
 
 const JOURNAL_COLLAPSE_CHAR_THRESHOLD: usize = 900;
@@ -367,46 +368,6 @@ fn BdJournalEntryEditForm(
     }
 }
 
-/// Format a unix-seconds timestamp as e.g. "May 17, 2026". Dependency-free and
-/// deterministic (no wall clock), so it's safe in both SSR and WASM renders.
-fn fmt_long_date(unix_secs: i64) -> String {
-    const MONTHS: [&str; 12] = [
-        "January",
-        "February",
-        "March",
-        "April",
-        "May",
-        "June",
-        "July",
-        "August",
-        "September",
-        "October",
-        "November",
-        "December",
-    ];
-    let (y, m, d) = civil_from_days(unix_secs.div_euclid(86_400));
-    let name = MONTHS
-        .get((m as usize).saturating_sub(1))
-        .copied()
-        .unwrap_or("");
-    format!("{name} {d}, {y}")
-}
-
-/// Convert days since the unix epoch to a `(year, month, day)` civil date
-/// (Howard Hinnant's `civil_from_days`).
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    (if m <= 2 { y + 1 } else { y }, m, d)
-}
-
 fn should_show_more_button(markdown: &str) -> bool {
     if markdown
         .trim()
@@ -427,15 +388,7 @@ fn should_show_more_button(markdown: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{fmt_long_date, should_show_more_button};
-
-    #[test]
-    fn formats_known_epoch_dates() {
-        // 2026-05-17 12:00:00 UTC = 1_779_019_200
-        assert_eq!(fmt_long_date(1_779_019_200), "May 17, 2026");
-        // The unix epoch itself.
-        assert_eq!(fmt_long_date(0), "January 1, 1970");
-    }
+    use super::should_show_more_button;
 
     #[test]
     fn shows_more_for_long_markdown() {
