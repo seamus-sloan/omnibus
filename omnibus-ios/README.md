@@ -257,6 +257,71 @@ stitched into one `AVMutableComposition` so the timeline and seeking stay
 continuous. `MPNowPlayingInfoCenter` + `MPRemoteCommandCenter` give lock-screen,
 Control Center, AirPlay, and CarPlay transport.
 
+**The chapter is the unit of the player, Audible-style.** The layout follows
+Audible's, top to bottom: artwork, then the chapter name left-aligned behind a
+`☰` and tappable straight into the chapter list, then the scrubber, then a
+five-slot transport (chapter back · skip back · play · skip forward · chapter
+forward), then Speed · Car Mode · Sleep · Bookmark.
+
+The scrubber spans the *current chapter*, not the book: on a twelve-hour
+audiobook a whole-book bar puts every chapter boundary within a couple of points
+of its neighbours, so the one gesture the control exists for can't be aimed. The
+three readouts under it are chapter elapsed, **book** remaining, chapter
+remaining — all at once, which is what pays for the chapter-scoped bar without
+needing a mode. The mini bar's hairline stays whole-book for the same reason.
+
+It's a hand-rolled `PlayerScrubber`, not a `Slider`: `Slider` draws a fixed 27pt
+pill thumb and its own inset chrome, and no amount of tinting gets it to the slim
+track every player of this shape uses. The parent owns the drag position so the
+thumb and the readouts can't disagree; a plain tap on the track seeks there too.
+
+The play disc is intrinsically sized rather than taking an equal fifth of the
+transport, so the four steppers split what's left and it can't be squeezed —
+which is what went wrong when chapter-skip first moved into this row.
+
+`ChapterTimeline` owns every bit of the arithmetic — which chapter a position is
+in, how long it runs, where its span starts — as a value type with no AVPlayer
+behind it, because the scrubber, the "Ch N of M" readout, the countdown and the
+prev/next enablement all read the same three functions, so an off-by-one surfaces
+in four places and in none of them obviously. Two cases it exists to pin: a
+chapter that ships `duration_seconds` as 0 (common in real files) measures to the
+next chapter's start, or to the end of the book if it's the last; and a position
+*before* the first chapter's mark resolves to that chapter rather than to `nil`,
+since containers routinely start chapter one a second or two in and "no chapter"
+is not a place you can be listening. A book with no marks at all degrades to a
+whole-book span, and the chapter row and lock-screen chapter commands drop out.
+
+**The artwork gets a share of the screen, not the remainder.** Sizing the cover
+as whatever the transport left over made it resize between books — a title that
+wrapped to two lines cost it 30pt — and on a short phone it drove the layout's
+spacers to zero, wedging the cover against the scrubber. It now takes a fraction
+of the band between the two safe-area insets. The fraction tapers on a short
+screen (0.66 under a 380pt band, 0.76 above): the transport's height is fixed, so
+on a 4.7" phone it claims a far larger share of the screen than on a 6.3" one, and
+holding the tall-screen fraction there re-creates the squeeze.
+
+> **An aspect-fill image in a layout container grows it.** `RemoteImage` renders
+> `.resizable().scaledToFill()`, and a `.fill` aspect ratio *reports* a size
+> larger than the box it fills — that is what filling means. Sat directly in the
+> player's backdrop `ZStack` with no frame and no `.clipped()`, it grew the stack
+> past the screen, and `safeAreaInset` then measured the chrome against those
+> bounds: the top bar landed under the status bar and the utility row's labels
+> fell off the bottom. Nothing errors and nothing logs.
+>
+> It only reproduces on a book with **real cover art** — a generated plate is
+> gradients and `Color`s, all infinitely flexible, so they accept the proposal
+> instead of overriding it. Every generated audiobook fixture is coverless, which
+> is how this shipped: put a cover on one (`POST /api/ebooks/{uuid}/cover`)
+> before trusting a player screenshot. Hold decorative art in a
+> `Color.clear.overlay { … }.clipped()` — an overlay can't grow its parent, which
+> is the same reason `BookCover` puts its art in one.
+
+**Car Mode is a face, not a mode.** It drives the same `AudioPlayer` and adds no
+playback behaviour — five targets none smaller than a thumb, and nothing that
+needs aiming (scrubber, chapter list, speed, bookmarks) reachable from it. It
+holds `isIdleTimerDisabled` while open, since a driver won't tap every 30 seconds
+to keep the screen up and a dark screen is the only reason they'd look down.
+
 **Cached reads have a freshness bound.** `Cache.readThrough` serves the replica
 within `freshnessWindow` (45s) and goes to the network past it, falling back to
 the replica either way when offline. Without the bound, anything changed
@@ -289,4 +354,6 @@ carries a TODO to harden it; this does that.
   read status alone does not populate it. The server also caches stats for 60s,
   so a fresh entry takes up to a minute to appear.
 - Author photo editing, book merging, and the admin log viewer are not ported.
-- No test target yet.
+- Test coverage is limited to the pure logic worth pinning — the offline layer
+  (`omnibusTests/OfflineSyncTests.swift`) and the player's chapter arithmetic
+  (`omnibusTests/ChapterTimelineTests.swift`). No screen-level coverage.
