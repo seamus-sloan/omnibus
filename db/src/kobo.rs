@@ -6,6 +6,8 @@
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
 
+use omnibus_shared::ReadStatus;
+
 use crate::resolve_canonical_book_uuid;
 
 pub mod delta;
@@ -158,6 +160,94 @@ fn row_to_book(row: &sqlx::sqlite::SqliteRow) -> KoboBookRow {
         last_modified_epoch: row.get("last_modified_epoch"),
         epub_size_bytes: row.get("epub_size_bytes"),
     }
+}
+
+/// One book's per-user reading state, as the Kobo protocol wants it: a read
+/// status, plus the position halves a device can act on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KoboBookState {
+    pub status: ReadStatus,
+    pub percent: Option<i64>,
+    /// Opaque `CurrentBookmark.Location` JSON, echoed back verbatim.
+    pub kobo_location: Option<String>,
+    /// Newest of the read-status and progress timestamps — the value the
+    /// per-device delta compares against its snapshot to decide whether a
+    /// device's state is stale.
+    pub state_updated_at: i64,
+}
+
+/// Per-user reading state for `uuids`, keyed by book uuid.
+///
+/// Books with neither a read-status nor a progress row are simply absent —
+/// the caller treats a miss as "unread, no position", which is what a fresh
+/// book is. Chunked at 900 for the same SQLite bound-parameter ceiling
+/// [`sync_books`] works around (each uuid binds twice here, so the chunk is
+/// halved to 450).
+pub async fn reading_state_for(
+    pool: &SqlitePool,
+    user_id: i64,
+    uuids: &[String],
+) -> Result<std::collections::HashMap<String, KoboBookState>, KoboError> {
+    let mut out = std::collections::HashMap::with_capacity(uuids.len());
+    if uuids.is_empty() {
+        return Ok(out);
+    }
+    for chunk in uuids.chunks(450) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        // FULL OUTER JOIN isn't available in older SQLite, and a book can have
+        // either row independently, so union the two key sets and left-join
+        // both sides onto it.
+        let sql = format!(
+            "WITH keys(book_uuid) AS (
+                 SELECT book_uuid FROM book_read_status
+                  WHERE user_id = ? AND book_uuid IN ({placeholders})
+                 UNION
+                 SELECT book_uuid FROM reading_progress
+                  WHERE user_id = ? AND format = 'epub' AND book_uuid IN ({placeholders})
+             )
+             SELECT k.book_uuid,
+                    rs.status AS status,
+                    rp.progress_percent AS progress_percent,
+                    rp.kobo_location AS kobo_location,
+                    MAX(
+                        COALESCE(rs.updated_at, 0),
+                        COALESCE(rp.client_updated_at, rp.updated_at, 0)
+                    ) AS state_updated_at
+               FROM keys k
+               LEFT JOIN book_read_status rs
+                      ON rs.book_uuid = k.book_uuid AND rs.user_id = ?
+               LEFT JOIN reading_progress rp
+                      ON rp.book_uuid = k.book_uuid AND rp.user_id = ? AND rp.format = 'epub'"
+        );
+        let mut q = sqlx::query(&sql).bind(user_id);
+        for uuid in chunk {
+            q = q.bind(uuid);
+        }
+        q = q.bind(user_id);
+        for uuid in chunk {
+            q = q.bind(uuid);
+        }
+        q = q.bind(user_id).bind(user_id);
+        for row in q.fetch_all(pool).await? {
+            let uuid: String = row.try_get("book_uuid")?;
+            let status = row
+                .try_get::<Option<String>, _>("status")?
+                .map(|s| ReadStatus::from_db(&s))
+                .unwrap_or_default();
+            out.insert(
+                uuid,
+                KoboBookState {
+                    status,
+                    percent: row.try_get::<Option<i64>, _>("progress_percent")?,
+                    kobo_location: row.try_get::<Option<String>, _>("kobo_location")?,
+                    state_updated_at: row.try_get::<i64, _>("state_updated_at")?,
+                },
+            );
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

@@ -400,6 +400,8 @@ mod tests {
                 epub_cfi: None,
                 audio_position_seconds: None,
                 book_file_id,
+                progress_percent: None,
+                kobo_location: None,
                 updated_at: 0,
                 client_updated_at: 0,
             },

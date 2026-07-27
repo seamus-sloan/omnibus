@@ -33,7 +33,7 @@ async fn api_post_progress_requires_auth() {
 }
 
 #[tokio::test]
-async fn api_post_progress_rejects_missing_cfi() {
+async fn api_post_progress_rejects_an_epub_body_with_no_position() {
     let (app, _state, pool) = fixture().await;
     let user = auth_test_support::create_user(&pool, "alice").await;
     let token = auth_test_support::bearer_token(&pool, user.id).await;
@@ -53,7 +53,36 @@ async fn api_post_progress_rejects_missing_cfi() {
         )
         .await
         .unwrap();
+    // Since #925 an epub position may be a CFI *or* a percent — this body
+    // carries neither, which is still a 400.
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn api_post_progress_accepts_an_epub_percent_without_a_cfi() {
+    // The Kobo shape reaching the shared REST route: a percent is a position.
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let uuid = omnibus_db::test_support::seed_synced_ebook(&pool, "dune.epub", "Dune", "H").await;
+    let body = serde_json::json!({
+        "book_uuid": uuid,
+        "format": "epub",
+        "progress_percent": 61,
+    });
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/progress")
+                .method("POST")
+                .header("content-type", "application/json")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -493,6 +522,8 @@ async fn api_get_recent_progress_returns_resume_points_newest_first() {
                 format: omnibus_shared::ProgressFormat::Epub,
                 epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
                 audio_position_seconds: None,
+                progress_percent: None,
+                kobo_location: None,
                 book_file_id: None,
                 client_updated_at: None,
             },

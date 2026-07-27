@@ -212,6 +212,8 @@ fn persist_position(uuid: &str, file_id: Option<i64>, server_url: &str, seconds:
             format: ProgressFormat::Audio,
             epub_cfi: None,
             audio_position_seconds: Some(seconds),
+            progress_percent: None,
+            kobo_location: None,
             book_file_id: file_id,
             client_updated_at: Some(now_unix()),
         };

@@ -18,7 +18,7 @@ use omnibus_db::{
     self as db,
     worker::{Task, TaskOutcome},
 };
-use omnibus_shared::{ReadStatus, SetReadStatus};
+use omnibus_shared::{ProgressFormat, ProgressUpdate, ReadStatus, SetReadStatus};
 
 use super::{internal, serve_download, AppState};
 
@@ -146,13 +146,29 @@ async fn library_sync(
     let mut changes = delta.changes;
     let has_more = changes.len() > SYNC_PAGE_SIZE;
     changes.truncate(SYNC_PAGE_SIZE);
+
+    // Load the per-user reading state for this page only — the emit needs real
+    // status/position per book, and a removal has no state to report.
+    let page_uuids: Vec<String> = changes
+        .iter()
+        .filter_map(|c| match c {
+            db::kobo::SyncChange::New(b)
+            | db::kobo::SyncChange::Changed(b)
+            | db::kobo::SyncChange::StateChanged(b) => Some(b.uuid.clone()),
+            db::kobo::SyncChange::Removed { .. } => None,
+        })
+        .collect();
+    let states = match db::kobo::reading_state_for(state.pool(), auth.user_id, &page_uuids).await {
+        Ok(s) => s,
+        Err(e) => return internal("kobo reading_state_for", e),
+    };
     let delta = db::kobo::SyncDelta { changes };
 
     // Serialize each item lazily as the device drains the body — no second
     // buffer of the whole payload.
     let stream = stream::unfold(
-        (delta.changes, base, auth.token, SyncPhase::Open),
-        move |(changes, base, token, phase)| {
+        (delta.changes, base, auth.token, states, SyncPhase::Open),
+        move |(changes, base, token, states, phase)| {
             let pool = pool.clone();
             async move {
                 let chunk: Bytes = match phase {
@@ -165,10 +181,20 @@ async fn library_sync(
                                 emitted: 0,
                             }
                         };
-                        return Some((ok(Bytes::from_static(b"[")), (changes, base, token, next)));
+                        return Some((
+                            ok(Bytes::from_static(b"[")),
+                            (changes, base, token, states, next),
+                        ));
                     }
                     SyncPhase::Item { change, emitted } => {
-                        let items = dto::sync_items(&base, &token, &changes[change]);
+                        let uuid = match &changes[change] {
+                            db::kobo::SyncChange::New(b)
+                            | db::kobo::SyncChange::Changed(b)
+                            | db::kobo::SyncChange::StateChanged(b) => Some(b.uuid.as_str()),
+                            db::kobo::SyncChange::Removed { .. } => None,
+                        };
+                        let book_state = uuid.and_then(|u| states.get(u));
+                        let items = dto::sync_items(&base, &token, &changes[change], book_state);
                         let mut piece = Vec::new();
                         for item in &items {
                             // These DTOs are owned Strings/primitives, so this
@@ -181,7 +207,7 @@ async fn library_sync(
                                 Err(e) => {
                                     return Some((
                                         Err(std::io::Error::other(e)),
-                                        (changes, base, token, SyncPhase::End),
+                                        (changes, base, token, states, SyncPhase::End),
                                     ));
                                 }
                             };
@@ -198,7 +224,10 @@ async fn library_sync(
                         } else {
                             SyncPhase::Close
                         };
-                        return Some((ok(Bytes::from(piece)), (changes, base, token, next)));
+                        return Some((
+                            ok(Bytes::from(piece)),
+                            (changes, base, token, states, next),
+                        ));
                     }
                     SyncPhase::Close => {
                         // Body is complete: commit the snapshot. A failure here
@@ -212,7 +241,7 @@ async fn library_sync(
                     }
                     SyncPhase::End => return None,
                 };
-                Some((ok(chunk), (changes, base, token, SyncPhase::End)))
+                Some((ok(chunk), (changes, base, token, states, SyncPhase::End)))
             }
         },
     );
@@ -343,8 +372,16 @@ async fn put_state(
                 }
             }
         }
-        if entry.current_bookmark.is_some() {
-            tracing::debug!(%uuid, "kobo position received; KoboSpan→CFI deferred to #925");
+        if let Some(bookmark) = &entry.current_bookmark {
+            match persist_bookmark(&state, auth.user_id, &uuid, bookmark).await {
+                Ok(()) => {}
+                Err(db::progress::ProgressError::BookNotFound) => {
+                    tracing::warn!(%uuid, "kobo position PUT for unknown book");
+                }
+                Err(db::progress::ProgressError::Sqlx(e)) => {
+                    return internal("kobo upsert_progress", e);
+                }
+            }
         }
         // Acknowledged, deliberately unwritten — cumulative totals would
         // double-count against the LeaveContent sessions (see `dto::Statistics`).
@@ -353,6 +390,55 @@ async fn put_state(
         }
     }
     Json(dto::StateResponse::success(uuid)).into_response()
+}
+
+/// Persist a device's `CurrentBookmark` as an epub position (#925).
+///
+/// The Kobo location is a `KoboSpan`, not a CFI, so it rides in its own opaque
+/// column and never touches `epub_cfi`; the percent is the half that means the
+/// same thing on every surface. A bookmark carrying neither is a no-op rather
+/// than a validation error — the device sends the field either way.
+async fn persist_bookmark(
+    state: &AppState,
+    user_id: i64,
+    uuid: &str,
+    bookmark: &dto::CurrentBookmark,
+) -> Result<(), db::progress::ProgressError> {
+    // The device reports whole-book percent in `ProgressPercent`; the
+    // content-source variant is per-chapter and not comparable across surfaces.
+    //
+    // An out-of-range value is *dropped*, not clamped: clamping would turn
+    // data we plainly don't understand into a confident-looking resume point
+    // (101 → "finished"), and a silently wrong position is worse than none.
+    let percent = bookmark.progress_percent.filter(|p| (0..=100).contains(p));
+    let location = bookmark
+        .location
+        .as_ref()
+        .map(|l| serde_json::to_string(l).unwrap_or_default())
+        .filter(|s| !s.is_empty());
+    if percent.is_none() && location.is_none() {
+        return Ok(());
+    }
+    let update = ProgressUpdate {
+        book_uuid: uuid.to_owned(),
+        format: ProgressFormat::Epub,
+        epub_cfi: None,
+        audio_position_seconds: None,
+        progress_percent: percent,
+        kobo_location: location,
+        // Epub-format position; `book_file_id` selects among multiple audio
+        // files and has no meaning here.
+        book_file_id: None,
+        client_updated_at: Some(time::OffsetDateTime::now_utc().unix_timestamp()),
+    };
+    // A location with no percent can't satisfy the epub position rule, and
+    // there is nothing to store for the web reader in that case either.
+    if update.validate().is_err() {
+        tracing::debug!(%uuid, "kobo bookmark carried no usable position");
+        return Ok(());
+    }
+    db::progress::upsert_progress(state.pool(), user_id, &update).await?;
+    Ok(())
 }
 
 /// `GET library/tags` — device-side collections. Slice A returns an empty set;

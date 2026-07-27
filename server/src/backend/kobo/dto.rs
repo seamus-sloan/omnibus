@@ -2,7 +2,8 @@
 //! the device sends and expects. Models the entitlement envelope emitted by
 //! `library/sync` plus the request/response for the `state` PUT.
 
-use omnibus_db::kobo::KoboBookRow;
+use omnibus_db::kobo::{KoboBookRow, KoboBookState};
+use omnibus_shared::ReadStatus;
 use serde::{Deserialize, Serialize};
 
 /// Format an epoch-seconds instant as the RFC 3339 string Kobo expects.
@@ -182,7 +183,12 @@ pub struct CurrentBookmark {
 /// Build a first-connect `NewEntitlement` for `book`. `base` is the absolute
 /// origin (e.g. `https://host`) and `token` the device path token, so the
 /// download URL points back at this server's Kobo route.
-pub fn new_entitlement(base: &str, token: &str, book: &KoboBookRow) -> SyncItem {
+pub fn new_entitlement(
+    base: &str,
+    token: &str,
+    book: &KoboBookRow,
+    state: Option<&KoboBookState>,
+) -> SyncItem {
     let ts = rfc3339(book.last_modified_epoch);
     let uuid = book.uuid.clone();
     SyncItem::NewEntitlement(Entitlement {
@@ -200,24 +206,56 @@ pub fn new_entitlement(base: &str, token: &str, book: &KoboBookRow) -> SyncItem 
             origin_category: "Imported",
         },
         book_metadata: book_metadata(base, token, book),
-        reading_state: ReadingState {
-            entitlement_id: uuid.clone(),
-            created: ts.clone(),
-            last_modified: ts,
-            status_info: StatusInfo {
-                status: "ReadyToRead".to_owned(),
-            },
-            current_bookmark: CurrentBookmark::default(),
-        },
+        reading_state: reading_state(&uuid, &ts, state),
     })
+}
+
+/// The device-facing reading state for one book: real status and position when
+/// the user has any, an untouched book's defaults otherwise.
+fn reading_state(uuid: &str, ts: &str, state: Option<&KoboBookState>) -> ReadingState {
+    ReadingState {
+        entitlement_id: uuid.to_owned(),
+        created: ts.to_owned(),
+        last_modified: ts.to_owned(),
+        status_info: StatusInfo {
+            status: kobo_status(state).to_owned(),
+        },
+        current_bookmark: state
+            .map(|s| CurrentBookmark {
+                progress_percent: s.percent,
+                content_source_progress_percent: None,
+                // Round-tripped verbatim; a value we did not store parses back
+                // to nothing rather than being invented.
+                location: s
+                    .kobo_location
+                    .as_deref()
+                    .and_then(|raw| serde_json::from_str(raw).ok()),
+            })
+            .unwrap_or_default(),
+    }
+}
+
+/// Map the internal read status onto the device's vocabulary. `Unread` is
+/// `ReadyToRead` on the wire — Kobo has no "unread" token.
+fn kobo_status(state: Option<&KoboBookState>) -> &'static str {
+    match state.map(|s| s.status) {
+        Some(ReadStatus::Finished) => "Finished",
+        Some(ReadStatus::Reading) => "Reading",
+        Some(ReadStatus::Unread) | None => "ReadyToRead",
+    }
 }
 
 /// The `SyncItem`s for one `db::kobo::SyncChange`. A change fans out into two
 /// items (metadata + reading state); an add or removal is one.
-pub fn sync_items(base: &str, token: &str, change: &omnibus_db::kobo::SyncChange) -> Vec<SyncItem> {
+pub fn sync_items(
+    base: &str,
+    token: &str,
+    change: &omnibus_db::kobo::SyncChange,
+    state: Option<&KoboBookState>,
+) -> Vec<SyncItem> {
     use omnibus_db::kobo::SyncChange;
     match change {
-        SyncChange::New(book) => vec![new_entitlement(base, token, book)],
+        SyncChange::New(book) => vec![new_entitlement(base, token, book, state)],
         SyncChange::Changed(book) => {
             let ts = rfc3339(book.last_modified_epoch);
             vec![
@@ -225,17 +263,16 @@ pub fn sync_items(base: &str, token: &str, change: &omnibus_db::kobo::SyncChange
                     book_metadata: book_metadata(base, token, book),
                 }),
                 SyncItem::ChangedReadingState(ChangedReadingState {
-                    reading_state: ReadingState {
-                        entitlement_id: book.uuid.clone(),
-                        created: ts.clone(),
-                        last_modified: ts,
-                        status_info: StatusInfo {
-                            status: "ReadyToRead".to_owned(),
-                        },
-                        current_bookmark: CurrentBookmark::default(),
-                    },
+                    reading_state: reading_state(&book.uuid, &ts, state),
                 }),
             ]
+        }
+        // Metadata is already current on the device; only the state moved.
+        SyncChange::StateChanged(book) => {
+            let ts = rfc3339(book.last_modified_epoch);
+            vec![SyncItem::ChangedReadingState(ChangedReadingState {
+                reading_state: reading_state(&book.uuid, &ts, state),
+            })]
         }
         SyncChange::Removed { book_uuid } => vec![removed_entitlement(book_uuid)],
     }

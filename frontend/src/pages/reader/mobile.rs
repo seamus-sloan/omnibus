@@ -287,6 +287,8 @@ fn persist_progress(uuid: &str, server_url: &str, cfi: String) {
             format: ProgressFormat::Epub,
             epub_cfi: Some(cfi),
             audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
             book_file_id: None,
             client_updated_at: Some(now_unix()),
         };

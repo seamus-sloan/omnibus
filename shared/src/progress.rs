@@ -48,6 +48,19 @@ pub struct ProgressUpdate {
     pub epub_cfi: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_position_seconds: Option<f64>,
+    /// Whole-book percent, 0..=100. The cross-surface half of a position:
+    /// unlike a CFI or a `KoboSpan` it means the same thing everywhere. A
+    /// Kobo reports one and no CFI, so for `Epub` this satisfies the
+    /// "some position" requirement on its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_percent: Option<i64>,
+    /// A Kobo's `CurrentBookmark.Location` object, serialized to a JSON
+    /// string and passed through verbatim. Opaque by design — it is echoed
+    /// back to the same device for exact resume and is never parsed here or
+    /// shown to another surface, so a string keeps `shared` free of a
+    /// `serde_json` runtime dependency.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kobo_location: Option<String>,
     /// The `book_files` row the position was taken in, for books carrying
     /// more than one file of the format (two narrations of one audiobook).
     /// `None` from a client that doesn't track it — the server then resolves
@@ -75,6 +88,14 @@ impl ProgressUpdate {
         if self.client_updated_at.is_some_and(|ts| ts < 0) {
             return Err("client_updated_at must be non-negative".into());
         }
+        // Checked before the format split so an out-of-range percent is a 400
+        // rather than falling through to the row CHECK as a 500.
+        if self
+            .progress_percent
+            .is_some_and(|p| !(0..=100).contains(&p))
+        {
+            return Err("progress_percent must be between 0 and 100".into());
+        }
         if self.book_file_id.is_some_and(|id| id <= 0) {
             return Err("book_file_id must be positive".into());
         }
@@ -84,13 +105,22 @@ impl ProgressUpdate {
         // constraint and surfacing as a 500.
         match self.format {
             ProgressFormat::Epub => {
+                // A present-but-blank CFI is rejected outright rather than
+                // ignored: `upsert_progress` merges position fields with
+                // COALESCE, and `Some("   ")` is non-NULL to SQL — it would
+                // overwrite a real stored anchor with whitespace.
                 if self
                     .epub_cfi
                     .as_deref()
-                    .map(|s| s.trim().is_empty())
-                    .unwrap_or(true)
+                    .is_some_and(|s| s.trim().is_empty())
                 {
-                    return Err("epub_cfi is required for format=epub".into());
+                    return Err("epub_cfi must not be blank".into());
+                }
+                // A CFI *or* a percent is enough. A Kobo has no CFI to give
+                // (its location is a `KoboSpan`, not a CFI), so requiring one
+                // would lock the device out of the progress store entirely.
+                if self.epub_cfi.is_none() && self.progress_percent.is_none() {
+                    return Err("format=epub requires epub_cfi or progress_percent".into());
                 }
                 if let Some(cfi) = &self.epub_cfi {
                     if cfi.chars().count() > EPUB_CFI_MAX_LEN {
@@ -113,6 +143,12 @@ impl ProgressUpdate {
                 if self.epub_cfi.is_some() {
                     return Err("epub_cfi must not be set for format=audio".into());
                 }
+                if self.progress_percent.is_some() {
+                    return Err("progress_percent must not be set for format=audio".into());
+                }
+                if self.kobo_location.is_some() {
+                    return Err("kobo_location must not be set for format=audio".into());
+                }
             }
         }
         Ok(())
@@ -132,12 +168,16 @@ pub struct ProgressRecord {
     pub format: ProgressFormat,
     pub epub_cfi: Option<String>,
     pub audio_position_seconds: Option<f64>,
-    /// The `book_files` row this position was taken in. On a [`ResumePoint`]
-    /// this is re-resolved against the book, so it always names a file that
-    /// currently exists (see `db::progress::resume_points`); read straight
-    /// from `GET /api/progress/{uuid}` it is whatever the last writer sent,
-    /// and may be `None`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Whole-book percent, 0..=100. `#[serde(default)]` — unlike its siblings
+    /// here — so a payload from a server predating this field still decodes.
+    #[serde(default)]
+    pub progress_percent: Option<i64>,
+    /// Opaque Kobo `CurrentBookmark.Location` JSON; see [`ProgressUpdate::kobo_location`].
+    #[serde(default)]
+    pub kobo_location: Option<String>,
+    /// The `book_files` row the position was taken in; see
+    /// [`ProgressUpdate::book_file_id`].
+    #[serde(default)]
     pub book_file_id: Option<i64>,
     pub updated_at: i64,
     pub client_updated_at: i64,

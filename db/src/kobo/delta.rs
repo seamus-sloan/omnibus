@@ -13,6 +13,9 @@ pub enum SyncChange {
     New(KoboBookRow),
     /// The device holds it, but `books.last_modified` has moved since.
     Changed(KoboBookRow),
+    /// The book and its metadata are unchanged, but the user's reading state
+    /// (status / position) has moved since this device last synced.
+    StateChanged(KoboBookRow),
     /// The device holds it and it is no longer opted in — archive it there.
     Removed { book_uuid: String },
 }
@@ -49,13 +52,26 @@ pub async fn sync_delta(
 ) -> Result<SyncDelta, KoboError> {
     let wanted = sync_books(pool, user_id).await?;
     let held = held_snapshot(pool, device_id).await?;
+    let wanted_uuid_list: Vec<String> = wanted.iter().map(|b| b.uuid.clone()).collect();
+    let states = super::reading_state_for(pool, user_id, &wanted_uuid_list).await?;
 
     let mut changes = Vec::new();
     for book in &wanted {
         match held.get(&book.uuid) {
             None => changes.push(SyncChange::New(book.clone())),
-            Some(&seen) if book.last_modified_epoch > seen => {
+            Some(h) if book.last_modified_epoch > h.last_modified_seen => {
                 changes.push(SyncChange::Changed(book.clone()));
+            }
+            // Metadata is current, but the user's status/position may have
+            // moved on another surface since this device last synced. Without
+            // this arm a book marked Finished on the web is never re-announced
+            // to a device that already holds it.
+            Some(h)
+                if states
+                    .get(&book.uuid)
+                    .is_some_and(|s| s.state_updated_at > h.synced_at) =>
+            {
+                changes.push(SyncChange::StateChanged(book.clone()));
             }
             Some(_) => {}
         }
@@ -106,6 +122,18 @@ pub async fn record_synced(
                 .execute(&mut *tx)
                 .await?;
             }
+            // State-only: bump the watermark, never `last_modified_seen` —
+            // overwriting it here would mark unsent metadata as delivered.
+            SyncChange::StateChanged(book) => {
+                sqlx::query(
+                    "UPDATE kobo_device_books SET synced_at = strftime('%s','now')
+                      WHERE device_id = ? AND book_uuid = ?",
+                )
+                .bind(device_id)
+                .bind(&book.uuid)
+                .execute(&mut *tx)
+                .await?;
+            }
             SyncChange::Removed { book_uuid } => {
                 sqlx::query("DELETE FROM kobo_device_books WHERE device_id = ? AND book_uuid = ?")
                     .bind(device_id)
@@ -129,13 +157,22 @@ pub async fn clear_snapshot(pool: &SqlitePool, device_id: i64) -> Result<(), Kob
     Ok(())
 }
 
-/// `book_uuid -> last_modified_seen` for everything the device holds.
+/// What a device already holds for one book.
+struct Held {
+    last_modified_seen: i64,
+    /// When this row was last sent — the watermark a state change is newer
+    /// than, since reading state carries no `last_modified` of its own.
+    synced_at: i64,
+}
+
+/// `book_uuid -> Held` for everything the device holds.
 async fn held_snapshot(
     pool: &SqlitePool,
     device_id: i64,
-) -> Result<std::collections::BTreeMap<String, i64>, KoboError> {
+) -> Result<std::collections::BTreeMap<String, Held>, KoboError> {
     let rows = sqlx::query(
-        "SELECT book_uuid, last_modified_seen FROM kobo_device_books WHERE device_id = ?",
+        "SELECT book_uuid, last_modified_seen, synced_at
+           FROM kobo_device_books WHERE device_id = ?",
     )
     .bind(device_id)
     .fetch_all(pool)
@@ -144,7 +181,10 @@ async fn held_snapshot(
     for row in &rows {
         map.insert(
             row.try_get("book_uuid")?,
-            row.try_get("last_modified_seen")?,
+            Held {
+                last_modified_seen: row.try_get("last_modified_seen")?,
+                synced_at: row.try_get("synced_at")?,
+            },
         );
     }
     Ok(map)
