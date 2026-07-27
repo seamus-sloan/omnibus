@@ -102,11 +102,32 @@ enum UserDataService {
     /// the rail move without the network, the same way the shelf lists already
     /// did.
     static func noteResumePoint(_ record: ProgressRecord) async {
-        var points: [ResumePoint] = await Cache.cachedOnly(CacheKey.recentProgress) ?? []
-        let existing = points.firstIndex { $0.record.bookUUID == record.bookUUID }
+        let points: [ResumePoint] = await Cache.cachedOnly(CacheKey.recentProgress) ?? []
+        // Only a card the rail has never held needs the book resolved.
+        let book = points.contains { $0.matches(record) }
+            ? nil
+            : await bookForResume(record.bookUUID)
+        guard let spliced = splice(record, book: book, into: points) else { return }
+        await Cache.write(CacheKey.recentProgress, spliced)
+    }
 
+    /// Put `record`'s card at the front of `points`, replacing the existing one
+    /// for the same **(book, format)** pair.
+    ///
+    /// Matching on the pair rather than the book is the whole point: a
+    /// dual-format book has a reading card and a listening card, and on the uuid
+    /// alone a saved listening position rewrote the reading one in place — same
+    /// book, wrong verb, and the reading position it had been holding was gone.
+    ///
+    /// `book` is consulted only when no such card exists yet. `nil` for a book
+    /// that isn't already on the rail returns `nil`: better to leave the rail
+    /// alone than to add a card with no metadata to draw.
+    static func splice(
+        _ record: ProgressRecord, book: Book?, into points: [ResumePoint]
+    ) -> [ResumePoint]? {
+        var points = points
         var point: ResumePoint
-        if let existing {
+        if let existing = points.firstIndex(where: { $0.matches(record) }) {
             // Keep the audio duration and chapter readout the server computed —
             // this device can't derive them, and dropping them would blank the
             // card's progress bar on every save.
@@ -114,14 +135,14 @@ enum UserDataService {
             point.record = record
             points.remove(at: existing)
         } else {
-            guard let book = await bookForResume(record.bookUUID) else { return }
+            guard let book else { return nil }
             point = ResumePoint(
                 record: record, book: book, totalDurationSeconds: nil,
                 chapterNumber: nil, chapterCount: nil
             )
         }
         points.insert(point, at: 0)
-        await Cache.write(CacheKey.recentProgress, Array(points.prefix(resumeLimit)))
+        return Array(points.prefix(resumeLimit))
     }
 
     /// The book behind a resume card. The mirror holds every book in the
