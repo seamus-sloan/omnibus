@@ -344,7 +344,9 @@ mod tests {
 
     use dioxus::prelude::*;
 
-    use super::{append_cache_bust, bump_cover_cache_bust, cover_bust_for, format_page_title};
+    use super::{
+        append_cache_bust, bump_cover_cache_bust, cover_bust_for, format_page_title, use_can_upload,
+    };
 
     #[test]
     fn format_page_title_prefixes_subtitle_and_omits_when_none() {
@@ -406,5 +408,22 @@ mod tests {
             rsx! {}
         }
         VirtualDom::new(AssertBustCounter).rebuild_in_place();
+    }
+
+    // The `web` arm (which derives the real value from `CurrentUser`) needs
+    // the wasm32 target and isn't compiled for this native run, so only the
+    // non-web fallback is exercisable here — same blind spot `use_is_admin`
+    // already has. It's still worth pinning: this is the value SSR and the
+    // first WASM paint both render before the boot effect resolves the real
+    // permission (rule 07), so a regression here would flash the upload UI.
+    #[test]
+    fn use_can_upload_defaults_to_false_on_the_non_web_fallback() {
+        #[component]
+        fn AssertCanUpload() -> Element {
+            let can_upload = use_can_upload();
+            assert!(!can_upload());
+            rsx! {}
+        }
+        VirtualDom::new(AssertCanUpload).rebuild_in_place();
     }
 }
