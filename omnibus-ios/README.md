@@ -151,12 +151,19 @@ touch those depend on — page turns still worked because the overlay called
 `next()` itself, which masked the fact that swipe was dead. The host now layers
 nothing interactive over the page.
 
-**Reading chrome follows Apple Books.** The reading view carries almost
-nothing: a `✕` top-right, one menu button bottom-right, and two centred labels
-— "N pages left in chapter" above, "361 of 661" below. The labels never leave;
-only the two buttons come and go on a centre tap, because the position is quiet
-enough to live there permanently. "Pages left in chapter" is the question you
-actually have with a book open, which a raw page number can't answer.
+**Reading chrome follows Apple Books.** A book opens bare — no buttons at all,
+just the page between two centred labels. A centre tap brings up a `✕`
+top-right and one menu button bottom-right; another puts them away.
+
+The labels never leave, but they answer a different question in each state,
+because the two states are different activities (`ReaderIndicators`). Reading,
+they name where you are and nothing else: the **book's title** above, the bare
+**page number** below. With the chrome up you are navigating rather than
+reading, so they widen into "**N pages left in chapter**" and "**361 of 661**"
+— "pages left in chapter" being the question you actually have mid-book, which
+a raw page number can't answer. Both fall back while epub.js's whole-book
+locations pass is still running: the top line to "Chapter N of M", the bottom
+to a percentage, since a page number of 0 would be both wrong and jumpy.
 
 Everything else is behind the one menu, as rows: **Contents · N%**, **Bookmarks
 & Highlights** (with a count), **Themes & Settings**, then a strip of round
