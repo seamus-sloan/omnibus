@@ -172,7 +172,8 @@ async fn apply_title_author_overrides(
     if overrides.is_empty() {
         return Ok(());
     }
-    let precedence = crate::settings::metadata_precedence_by_uuid(pool, &uuids).await?;
+    let overridden_uuids: Vec<String> = overrides.keys().cloned().collect();
+    let precedence = crate::settings::metadata_precedence_by_uuid(pool, &overridden_uuids).await?;
     for row in rows.iter_mut() {
         let Some((ov, has_cover_override)) = overrides.get(&row.uuid) else {
             continue;
