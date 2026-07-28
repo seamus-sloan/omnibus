@@ -1,5 +1,4 @@
 //! Web-only physical-collection + wishlist panel for the book-detail page.
-//!
 //! Renders checked-in copies (edit-note / delete), the wishlist tracking card,
 //! and the add-to-wishlist affordance. Self-loads post-mount for SSR/WASM
 //! hydration parity; bumps the page `refresh` signal after mutations that
