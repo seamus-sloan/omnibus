@@ -141,6 +141,77 @@ test("returns to All Books and restores the full library", async ({
     .toBeGreaterThanOrEqual(FIXTURE_BOOKS.length);
 });
 
+test("edits the selected shelf from the landing header pencil", async ({
+  page,
+  request,
+}) => {
+  // A smart shelf so the facet row has a rule chip to assert. The author
+  // rule only reads fixture books — nothing here mutates a shared fixture.
+  const name = `E2E Gallery Edit ${Date.now()}`;
+  const createResp = await request.post("/api/rpc/shelves/create", {
+    data: {
+      req: {
+        kind: "smart",
+        name,
+        description: null,
+        visibility: "private",
+        match_mode: "any",
+        rules: [{ field: "author", op: "is", value: "Ada Lovelace" }],
+        book_uuids: [],
+      },
+    },
+  });
+  expect(createResp.status(), "POST /api/rpc/shelves/create failed").toBe(200);
+  const shelf = (await createResp.json()) as { id: number };
+
+  await gotoReady(page, "/");
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/shelves/page", expectedStatus: 200 },
+    async () => page.getByTestId(`gallery-shelf-${shelf.id}`).click(),
+  );
+
+  // Facet row under the section title states the kind, visibility, and the
+  // rule query once the full-shelf fetch lands.
+  const facets = page.getByTestId("shelf-facets");
+  await expect(facets).toContainText("Smart shelf");
+  await expect(facets).toContainText("Private");
+  await expect(facets).toContainText("Author is Ada Lovelace");
+
+  await page.getByTestId("shelf-edit").click();
+  const modal = page.getByTestId("edit-shelf-modal");
+  await expect(modal.getByTestId("edit-shelf-name")).toHaveValue(name);
+
+  const renamed = `${name} v2`;
+  await modal.getByTestId("edit-shelf-name").fill(renamed);
+  await modal.getByTestId("shelf-vis-public").click();
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/shelves/update",
+      expectedBody: {
+        id: shelf.id,
+        req: {
+          name: renamed,
+          description: null,
+          visibility: "public",
+          match_mode: "any",
+          rules: [{ field: "author", op: "is", value: "Ada Lovelace" }],
+          sync_to_kobo: null,
+        },
+      },
+      expectedStatus: 200,
+    },
+    async () => modal.getByTestId("edit-shelf-save").click(),
+  );
+
+  await expect(modal).not.toBeVisible();
+  await expect(page.getByTestId("lib-section-title")).toContainText(renamed);
+  await expect(facets).toContainText("Public");
+});
+
 test("shows the continue-reading hero once a book has progress", async ({
   page,
   request,

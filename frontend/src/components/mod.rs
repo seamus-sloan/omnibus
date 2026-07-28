@@ -147,11 +147,16 @@ pub mod offline_guard;
 pub use offline_guard::OfflineGuardModal;
 
 // The condition-row editor + live-preview pane shared by shelf creation and
-// the "Edit rules" surface.
+// the "Edit shelf" surface.
 pub mod shelf_rule_builder;
 
-pub mod edit_shelf_rules_modal;
-pub use edit_shelf_rules_modal::EditShelfRulesModal;
+pub mod edit_shelf_modal;
+pub use edit_shelf_modal::EditShelfModal;
+
+// Facet row (kind / visibility / rule chips) shown under shelf titles on the
+// landing header and the shelf detail header.
+pub mod shelf_facets;
+pub use shelf_facets::ShelfFacets;
 
 // "Fetch Summary" button — pulls a book blurb from Hardcover/OpenLibrary on
 // demand. Mounted by the metadata editor (always) and the web book-detail hero

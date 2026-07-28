@@ -2,15 +2,16 @@
 //! header + grid, matching the imported design. Mirrors `landing::mobile`: a
 //! persistent "Omnibus" + search header, a title block with an eyebrow + facet
 //! row (kind / visibility / rule chips), the shared Shelves entry card, a
-//! three-column cover grid, and a ⋯ actions menu (rename / change visibility /
-//! delete, + Add books on manual). Reuses the parent module's `rule_text` and
+//! three-column cover grid, and a ⋯ actions menu (edit shelf / delete, + Add
+//! books on manual). Reuses `shelf_facets::rule_text` and
 //! `landing::mobile_cover_cell`; the parent resolves the shelf before rendering
 //! this, so it takes a loaded [`Shelf`].
 
 use dioxus::prelude::*;
 use dioxus_router::{use_navigator, Link};
-use omnibus_shared::{EbookMetadata, Shelf, ShelfKind, UpdateShelfRequest, Visibility};
+use omnibus_shared::{EbookMetadata, Shelf, ShelfKind, Visibility};
 
+use crate::components::shelf_facets::rule_text;
 use crate::pages::landing::mobile_cover_cell;
 use crate::{data, use_server_url, Route};
 
@@ -29,10 +30,8 @@ pub(super) struct MobileShelfDetailProps {
     pub server_url: String,
     /// Opens the shared add-books modal (manual shelves).
     pub on_add: EventHandler<()>,
-    /// Opens the shared rule-editor modal (smart shelves).
-    pub on_edit_rules: EventHandler<()>,
-    /// Fired after a rename / visibility change so the parent refetches.
-    pub on_changed: EventHandler<()>,
+    /// Opens the shared edit-shelf modal (name / visibility / rules).
+    pub on_edit: EventHandler<()>,
 }
 
 /// Mobile shelf-detail surface. Fed the loaded shelf + member books from
@@ -45,8 +44,7 @@ pub(super) fn MobileShelfDetail(props: MobileShelfDetailProps) -> Element {
         errored,
         server_url,
         on_add,
-        on_edit_rules,
-        on_changed,
+        on_edit,
     } = props;
 
     let is_smart = shelf.kind == ShelfKind::Smart;
@@ -89,7 +87,12 @@ pub(super) fn MobileShelfDetail(props: MobileShelfDetailProps) -> Element {
                         "data-testid": "mobile-search-entry",
                         {search_glyph()}
                     }
-                    MobileShelfActions { shelf: shelf.clone(), on_add, on_edit_rules, on_changed }
+                    // System shelves (Wishlist) are locked server-side — don't
+                    // offer edit/delete the server would reject (mirrors web's
+                    // `can_manage` gate).
+                    if !shelf.kind.is_system() {
+                        MobileShelfActions { shelf: shelf.clone(), on_add, on_edit }
+                    }
                 }
             }
 
@@ -107,7 +110,7 @@ pub(super) fn MobileShelfDetail(props: MobileShelfDetailProps) -> Element {
                     span { class: "m-shelf-facet-vis", "{vis_label}" }
                     if is_smart {
                         for (i, rule) in shelf.rules.iter().enumerate() {
-                            span { key: "{i}", class: "m-shelf-facet-chip", "{super::rule_text(rule)}" }
+                            span { key: "{i}", class: "m-shelf-facet-chip", "{rule_text(rule)}" }
                         }
                     }
                 }
@@ -156,30 +159,22 @@ pub(super) fn MobileShelfDetail(props: MobileShelfDetailProps) -> Element {
     }
 }
 
-/// The header actions button + dropdown menu (rename, change visibility,
-/// delete, and — for smart shelves — edit rules, or — for manual shelves —
-/// add books). Owns its own menu / rename state so [`MobileShelfDetail`]
-/// stays a pure presentation shell.
+/// The header actions button + dropdown menu (edit shelf, delete, and — for
+/// manual shelves — add books). Name / visibility / rule edits all live in
+/// the shared edit-shelf modal opened via `on_edit`. Owns its own menu state
+/// so [`MobileShelfDetail`] stays a pure presentation shell.
 #[component]
 fn MobileShelfActions(
     shelf: Shelf,
     on_add: EventHandler<()>,
-    on_edit_rules: EventHandler<()>,
-    on_changed: EventHandler<()>,
+    on_edit: EventHandler<()>,
 ) -> Element {
     let nav = use_navigator();
     let server_url = use_server_url();
     let mut menu_open = use_signal(|| false);
-    let mut renaming = use_signal(|| false);
-    let mut draft_name = use_signal(|| shelf.name.clone());
 
     let id = shelf.id;
     let is_manual = shelf.kind == ShelfKind::Manual;
-    let is_smart = shelf.kind == ShelfKind::Smart;
-    let next_vis = match shelf.visibility {
-        Visibility::Private => Visibility::Public,
-        Visibility::Public => Visibility::Private,
-    };
 
     let del_url = server_url.clone();
     let on_delete = move |_| {
@@ -191,113 +186,46 @@ fn MobileShelfActions(
         });
     };
 
-    let vis_url = server_url.clone();
-    let on_toggle_vis = move |_| {
-        let url = vis_url.clone();
-        menu_open.set(false);
-        spawn(async move {
-            let req = UpdateShelfRequest {
-                visibility: Some(next_vis),
-                ..Default::default()
-            };
-            if data::update_shelf(&url, id, req).await.is_ok() {
-                on_changed.call(());
-            }
-        });
-    };
-
-    let rename_url = server_url.clone();
-    let on_rename_save = move |_| {
-        let url = rename_url.clone();
-        let name = draft_name();
-        renaming.set(false);
-        spawn(async move {
-            let req = UpdateShelfRequest {
-                name: Some(name),
-                ..Default::default()
-            };
-            if data::update_shelf(&url, id, req).await.is_ok() {
-                on_changed.call(());
-            }
-        });
-    };
-
     rsx! {
         div { class: "m-shelf-menu-wrap",
-            if renaming() {
-                input {
-                    r#type: "text",
-                    class: "shelf-name-input",
-                    "data-testid": "shelf-rename-input",
-                    value: "{draft_name}",
-                    oninput: move |e| draft_name.set(e.value()),
-                }
-                button {
-                    r#type: "button",
-                    class: "btn shelf-btn-primary",
-                    "data-testid": "shelf-rename-save",
-                    onclick: on_rename_save,
-                    "Save"
-                }
-            } else {
-                button {
-                    r#type: "button",
-                    class: "m-icon-btn",
-                    "data-testid": "shelf-actions",
-                    "aria-label": "Shelf actions",
-                    onclick: move |_| menu_open.toggle(),
-                    "\u{22EF}"
-                }
-                if menu_open() {
-                    div { class: "shelf-actions-menu",
-                        if is_manual {
-                            button {
-                                r#type: "button",
-                                class: "shelf-menu-item",
-                                "data-testid": "shelf-add-books-menu",
-                                onclick: move |_| {
-                                    menu_open.set(false);
-                                    on_add.call(());
-                                },
-                                "Add books"
-                            }
-                        }
-                        if is_smart {
-                            button {
-                                r#type: "button",
-                                class: "shelf-menu-item",
-                                "data-testid": "shelf-edit-rules",
-                                onclick: move |_| {
-                                    menu_open.set(false);
-                                    on_edit_rules.call(());
-                                },
-                                "Edit rules"
-                            }
-                        }
+            button {
+                r#type: "button",
+                class: "m-icon-btn",
+                "data-testid": "shelf-actions",
+                "aria-label": "Shelf actions",
+                onclick: move |_| menu_open.toggle(),
+                "\u{22EF}"
+            }
+            if menu_open() {
+                div { class: "shelf-actions-menu",
+                    if is_manual {
                         button {
                             r#type: "button",
                             class: "shelf-menu-item",
-                            "data-testid": "shelf-rename",
+                            "data-testid": "shelf-add-books-menu",
                             onclick: move |_| {
                                 menu_open.set(false);
-                                renaming.set(true);
+                                on_add.call(());
                             },
-                            "Rename"
+                            "Add books"
                         }
-                        button {
-                            r#type: "button",
-                            class: "shelf-menu-item",
-                            "data-testid": "shelf-toggle-visibility",
-                            onclick: on_toggle_vis,
-                            "Change visibility"
-                        }
-                        button {
-                            r#type: "button",
-                            class: "shelf-menu-item shelf-menu-item--danger",
-                            "data-testid": "shelf-delete",
-                            onclick: on_delete,
-                            "Delete"
-                        }
+                    }
+                    button {
+                        r#type: "button",
+                        class: "shelf-menu-item",
+                        "data-testid": "shelf-edit",
+                        onclick: move |_| {
+                            menu_open.set(false);
+                            on_edit.call(());
+                        },
+                        "Edit shelf"
+                    }
+                    button {
+                        r#type: "button",
+                        class: "shelf-menu-item shelf-menu-item--danger",
+                        "data-testid": "shelf-delete",
+                        onclick: on_delete,
+                        "Delete"
                     }
                 }
             }

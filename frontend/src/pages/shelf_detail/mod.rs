@@ -1,15 +1,15 @@
 //! Shelf detail page (`/shelves/:id`).
 //!
 //! Renders the shelf rail alongside a main column showing one shelf's header
-//! (kind + visibility badges, actions) and its member books. Smart shelves
-//! show their rule as chips and an auto-sorted grid; manual shelves show a
-//! position-ordered grid with an "Add books" affordance.
+//! (title + edit pencil, kind/visibility facets with rule chips, actions) and
+//! its member books. Smart shelves show an auto-sorted grid; manual shelves
+//! show a position-ordered grid with an "Add books" affordance.
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
-use omnibus_shared::{EbookMetadata, RuleField, RuleOp, Shelf, ShelfRule, SortDir, SortKey};
+use omnibus_shared::{EbookMetadata, Shelf, SortDir, SortKey};
 
-use crate::components::EditShelfRulesModal;
+use crate::components::EditShelfModal;
 #[cfg(not(feature = "mobile"))]
 use crate::components::{RailActive, ShelvesRail};
 use crate::{data, use_server_url, Route};
@@ -42,13 +42,10 @@ pub fn ShelfDetailPage(id: i64) -> Element {
     #[cfg(not(feature = "mobile"))]
     let show_add = use_signal(|| false);
     #[cfg(feature = "mobile")]
-    let mut edit_rules = use_signal(|| false);
+    let mut edit_shelf = use_signal(|| false);
     #[cfg(not(feature = "mobile"))]
-    let edit_rules = use_signal(|| false);
+    let edit_shelf = use_signal(|| false);
     // Bumped to force a refetch after a membership edit.
-    #[cfg(feature = "mobile")]
-    let mut reload = use_signal(|| 0u32);
-    #[cfg(not(feature = "mobile"))]
     let reload = use_signal(|| 0u32);
     // Set when the member-books refetch fails, so a transient network error
     // renders distinctly from a shelf that is genuinely empty (mirrors
@@ -96,8 +93,7 @@ pub fn ShelfDetailPage(id: i64) -> Element {
             errored: errored(),
             server_url: server_url.clone(),
             on_add: move |_| show_add.set(true),
-            on_edit_rules: move |_| edit_rules.set(true),
-            on_changed: move |_| reload.with_mut(|n| *n += 1),
+            on_edit: move |_| edit_shelf.set(true),
         }
     };
 
@@ -110,24 +106,24 @@ pub fn ShelfDetailPage(id: i64) -> Element {
         ShelfBodySignals {
             sort_key,
             show_add,
-            edit_rules,
+            edit_shelf,
             reload,
         },
     );
 
     rsx! {
         {body}
-        {shelf_detail_modals(id, current, show_add, edit_rules, reload)}
+        {shelf_detail_modals(id, current, show_add, edit_shelf, reload)}
     }
 }
 
-/// The "Add books" and "Edit rules" modals, shown when their respective
+/// The "Add books" and "Edit shelf" modals, shown when their respective
 /// signals flip true; both bump `reload` on success so the parent refetches.
 fn shelf_detail_modals(
     shelf_id: i64,
     current: Shelf,
     mut show_add: Signal<bool>,
-    mut edit_rules: Signal<bool>,
+    mut edit_shelf: Signal<bool>,
     mut reload: Signal<u32>,
 ) -> Element {
     rsx! {
@@ -142,12 +138,12 @@ fn shelf_detail_modals(
             }
         }
 
-        if edit_rules() {
-            EditShelfRulesModal {
+        if edit_shelf() {
+            EditShelfModal {
                 shelf: current.clone(),
-                on_close: move |_| edit_rules.set(false),
+                on_close: move |_| edit_shelf.set(false),
                 on_saved: move |_| {
-                    edit_rules.set(false);
+                    edit_shelf.set(false);
                     reload.with_mut(|n| *n += 1);
                 },
             }
@@ -276,60 +272,9 @@ fn default_dir_for(key: SortKey) -> SortDir {
     }
 }
 
-/// Human-readable summary of one smart rule, e.g. "Tag is Fantasy".
-fn rule_text(rule: &ShelfRule) -> String {
-    format!(
-        "{} {} {}",
-        field_label(rule.field),
-        op_label(rule.op),
-        rule.value
-    )
-}
-
-/// Display label for a rule field.
-fn field_label(field: RuleField) -> &'static str {
-    match field {
-        RuleField::Tag => "Tag",
-        RuleField::Author => "Author",
-        RuleField::Series => "Series",
-        RuleField::Rating => "Rating",
-        RuleField::Status => "Reading status",
-        RuleField::Format => "Format",
-        RuleField::Year => "Year",
-        RuleField::DateAdded => "Date added",
-        RuleField::DateUpdated => "Date updated",
-    }
-}
-
-/// Display label for a rule operator.
-fn op_label(op: RuleOp) -> &'static str {
-    match op {
-        RuleOp::Is => "is",
-        RuleOp::IsNot => "is not",
-        RuleOp::Contains => "contains",
-        RuleOp::StartsWith => "starts with",
-        RuleOp::Gte => "is at least",
-        RuleOp::Includes => "includes",
-        RuleOp::InLast => "in the last",
-        RuleOp::Between => "between",
-        RuleOp::Before => "before",
-        RuleOp::After => "after",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn rule_text_reads_field_op_value() {
-        let rule = ShelfRule {
-            field: RuleField::Tag,
-            op: RuleOp::Is,
-            value: "Fantasy".into(),
-        };
-        assert_eq!(rule_text(&rule), "Tag is Fantasy");
-    }
 
     #[test]
     fn default_dir_for_dates_is_desc() {

@@ -5281,6 +5281,8 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   font-style: italic;
   font-feature-settings: 'lnum';
 }
+.lib-header-title-wrap { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.lib-header .shelf-facets { margin-top: 8px; }
 .lib-header-hint { color: var(--ink-2); font-size: 13px; }
 
 .lib-toolbar {
@@ -6632,20 +6634,34 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .shelf-detail-header { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
 .shelf-back { font-size: 12px; color: var(--ink-2); text-decoration: none; }
 @media (hover: hover) { .shelf-back:hover { color: var(--ink-0); } }
-.shelf-badges { display: flex; gap: 6px; }
 .shelf-badge {
   font-family: var(--mono); font-size: 10px; font-weight: 600;
   letter-spacing: .04em; text-transform: uppercase;
   color: var(--ink-2); background: var(--bg-2);
   border: 1px solid var(--line-2); border-radius: 6px; padding: 2px 7px;
 }
-.shelf-badge--vis { color: var(--accent); }
 .shelf-badge--owner { text-transform: none; letter-spacing: 0; color: var(--ink-3); }
 /* Kobo wireless-sync opt-in (#924). */
 .shelf-badge--kobo { color: #34d399; border-color: #34d39955; }
-.shelf-title-row { display: flex; align-items: center; gap: 12px; }
-.shelf-title { margin: 0; font-size: 26px; color: var(--ink-0); flex: 1 1 auto; }
-.shelf-actions { position: relative; }
+.shelf-title-row { display: flex; align-items: center; gap: 10px; }
+/* min-width:0 lets long titles ellipsize instead of pushing the controls off-row. */
+.shelf-title {
+  margin: 0; font-size: 26px; color: var(--ink-0);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.shelf-edit-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--ink-2); background: transparent;
+  border: none; border-radius: 8px;
+  width: 28px; height: 28px; cursor: pointer; margin-right: auto; flex-shrink: 0;
+}
+@media (hover: hover) { .shelf-edit-btn:hover { color: var(--ink-0); background: var(--bg-2); } }
+/* Facet row under the title: kind / visibility, then smart-rule chips. */
+.shelf-facets { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; }
+.shelf-facet { font-size: 12px; color: var(--ink-2); }
+.shelf-facet--kind { color: var(--accent); }
+.shelf-facet-dot { color: var(--ink-3); }
+.shelf-actions { position: relative; flex-shrink: 0; }
 .shelf-actions-btn {
   font: inherit; font-size: 18px; line-height: 1;
   color: var(--ink-1); background: var(--bg-2);

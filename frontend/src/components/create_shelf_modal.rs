@@ -168,9 +168,10 @@ pub fn CreateShelfModal(on_close: EventHandler<()>, on_created: EventHandler<She
     }
 }
 
-/// Private/Public segmented control shared by the modal header.
+/// Private/Public segmented control shared by the create- and edit-shelf
+/// modal headers.
 #[component]
-fn VisibilityToggle(visibility: Visibility, on_change: EventHandler<Visibility>) -> Element {
+pub fn VisibilityToggle(visibility: Visibility, on_change: EventHandler<Visibility>) -> Element {
     rsx! {
         div { class: "shelf-vis-toggle",
             button {

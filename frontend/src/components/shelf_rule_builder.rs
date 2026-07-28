@@ -1,6 +1,6 @@
 //! Smart-shelf rule builder — the condition-row editor + live-preview pane
 //! shared by shelf creation ([`crate::components::CreateShelfModal`]) and
-//! editing ([`crate::components::EditShelfRulesModal`]). [`RuleDraft`] is the
+//! editing ([`crate::components::EditShelfModal`]). [`RuleDraft`] is the
 //! per-row editable state; [`RuleBuilder`] is the mounted editor + preview.
 
 use dioxus::prelude::*;
@@ -129,7 +129,7 @@ impl RuleDraft {
 }
 
 /// Match-mode row + condition-row editor + live-preview pane. Shared between
-/// the create modal and [`crate::components::EditShelfRulesModal`] — both own
+/// the create modal and [`crate::components::EditShelfModal`] — both own
 /// the `rules`/`match_mode` state and hand this component a signal to edit.
 #[component]
 pub fn RuleBuilder(

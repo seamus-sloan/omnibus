@@ -1,12 +1,11 @@
 //! Web presentation for the shelf detail page: rail + header, the smart-shelf
-//! rule chips / sort row, and the member-books grid with its "Add books"
-//! tile. Mobile renders its own surface in `super::mobile` instead.
+//! sort row, and the member-books grid with its "Add books" tile. Mobile
+//! renders its own surface in `super::mobile` instead.
 
 use dioxus::prelude::*;
 use omnibus_shared::{EbookMetadata, Shelf, ShelfKind, SortKey};
 
 use super::header::ShelfHeader;
-use super::rule_text;
 use crate::components::atrium::fallback_title;
 use crate::components::{CoverTile, CoverTileKind, RailActive, ShelvesRail};
 
@@ -17,12 +16,12 @@ use crate::components::{CoverTile, CoverTileKind, RailActive, ShelvesRail};
 pub(super) struct ShelfBodySignals {
     pub sort_key: Signal<SortKey>,
     pub show_add: Signal<bool>,
-    pub edit_rules: Signal<bool>,
+    pub edit_shelf: Signal<bool>,
     pub reload: Signal<u32>,
 }
 
-/// Web presentation: rail + header (badges/actions), rule chips + sort row
-/// for smart shelves, and the `CoverTile` member grid.
+/// Web presentation: rail + header (title + facets/actions), sort row for
+/// smart shelves, and the `CoverTile` member grid.
 pub(super) fn web_shelf_body(
     current: &Shelf,
     books: &[EbookMetadata],
@@ -33,7 +32,7 @@ pub(super) fn web_shelf_body(
     let ShelfBodySignals {
         mut sort_key,
         mut show_add,
-        mut edit_rules,
+        mut edit_shelf,
         mut reload,
     } = signals;
     let id = current.id;
@@ -44,16 +43,11 @@ pub(super) fn web_shelf_body(
             div { class: "shelf-main",
                 ShelfHeader {
                     shelf: current.clone(),
-                    on_edit_rules: move |_| edit_rules.set(true),
+                    on_edit: move |_| edit_shelf.set(true),
                     on_changed: move |_| reload.with_mut(|n| *n += 1),
                 }
 
                 if is_smart {
-                    div { class: "shelf-rule-summary",
-                        for (i, rule) in current.rules.iter().enumerate() {
-                            span { key: "{i}", class: "shelf-rule-chip", "{rule_text(rule)}" }
-                        }
-                    }
                     div { class: "shelf-sort-row",
                         span { class: "label", "Sort" }
                         select {

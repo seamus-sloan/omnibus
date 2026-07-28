@@ -200,10 +200,14 @@ test("edits an existing smart shelf's rules and the member grid updates", async 
     "Beta in the Series",
   );
 
-  await page.getByTestId("shelf-actions").click();
-  await page.getByTestId("shelf-edit-rules").click();
+  // The facet row under the title states the kind and the rule query.
+  const facets = page.getByTestId("shelf-facets");
+  await expect(facets).toContainText("Smart shelf");
+  await expect(facets).toContainText("Author is Ada Lovelace");
 
-  const modal = page.getByTestId("edit-shelf-rules-modal");
+  await page.getByTestId("shelf-edit").click();
+
+  const modal = page.getByTestId("edit-shelf-modal");
   await expect(modal).toBeVisible();
 
   // Prefilled from the shelf's current rule.
@@ -222,9 +226,9 @@ test("edits an existing smart shelf's rules and the member grid updates", async 
       expectedBody: {
         id: shelf.id,
         req: {
-          name: null,
+          name,
           description: null,
-          visibility: null,
+          visibility: "private",
           match_mode: "any",
           rules: [{ field: "author", op: "is", value: "Grace Hopper" }],
           sync_to_kobo: null,
@@ -232,12 +236,114 @@ test("edits an existing smart shelf's rules and the member grid updates", async 
       },
       expectedStatus: 200,
     },
-    async () => modal.getByTestId("edit-rules-save").click(),
+    async () => modal.getByTestId("edit-shelf-save").click(),
   );
 
   await expect(modal).not.toBeVisible();
+  await expect(facets).toContainText("Author is Grace Hopper");
   await expect(page.getByTestId("shelf-grid")).toContainText(
     "Beta in the Series",
   );
   await expect(page.getByTestId("shelf-grid")).not.toContainText("Alpha");
+});
+
+test("edits a shelf's name and visibility from the pencil modal", async ({
+  page,
+  request,
+}) => {
+  const name = `E2E Edit Fields ${Date.now()}`;
+  const createResp = await request.post("/api/rpc/shelves/create", {
+    data: {
+      req: {
+        kind: "manual",
+        name,
+        description: null,
+        visibility: "private",
+        match_mode: null,
+        rules: [],
+        book_uuids: [],
+      },
+    },
+  });
+  expect(createResp.status(), "POST /api/rpc/shelves/create failed").toBe(200);
+  const shelf = (await createResp.json()) as { id: number };
+
+  await gotoReady(page, `/shelves/${shelf.id}`);
+  const facets = page.getByTestId("shelf-facets");
+  await expect(facets).toContainText("Hand-picked shelf");
+  await expect(facets).toContainText("Private");
+
+  await page.getByTestId("shelf-edit").click();
+  const modal = page.getByTestId("edit-shelf-modal");
+  await expect(modal.getByTestId("edit-shelf-name")).toHaveValue(name);
+
+  const renamed = `${name} (renamed)`;
+  await modal.getByTestId("edit-shelf-name").fill(renamed);
+  await modal.getByTestId("shelf-vis-public").click();
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/shelves/update",
+      expectedBody: {
+        id: shelf.id,
+        req: {
+          name: renamed,
+          description: null,
+          visibility: "public",
+          match_mode: null,
+          rules: null,
+          sync_to_kobo: null,
+        },
+      },
+      expectedStatus: 200,
+    },
+    async () => modal.getByTestId("edit-shelf-save").click(),
+  );
+
+  await expect(modal).not.toBeVisible();
+  await expect(page.getByTestId("shelf-detail-header")).toContainText(renamed);
+  await expect(facets).toContainText("Public");
+});
+
+test("surfaces an error when the shelf edit save fails", async ({
+  page,
+  request,
+}) => {
+  const name = `E2E Edit Fail ${Date.now()}`;
+  const createResp = await request.post("/api/rpc/shelves/create", {
+    data: {
+      req: {
+        kind: "manual",
+        name,
+        description: null,
+        visibility: "private",
+        match_mode: null,
+        rules: [],
+        book_uuids: [],
+      },
+    },
+  });
+  expect(createResp.status(), "POST /api/rpc/shelves/create failed").toBe(200);
+  const shelf = (await createResp.json()) as { id: number };
+
+  await gotoReady(page, `/shelves/${shelf.id}`);
+  await page.route("**/api/rpc/shelves/update", (route) =>
+    route.fulfill({ status: 500, body: "boom" }),
+  );
+
+  await page.getByTestId("shelf-edit").click();
+  const modal = page.getByTestId("edit-shelf-modal");
+  await modal.getByTestId("edit-shelf-name").fill(`${name} v2`);
+
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/shelves/update", expectedStatus: 500 },
+    async () => modal.getByTestId("edit-shelf-save").click(),
+  );
+
+  await expect(modal.getByTestId("edit-shelf-error")).toBeVisible();
+  // The header keeps the saved name — the failed edit must not leak in.
+  await expect(page.getByTestId("shelf-detail-header")).toContainText(name);
 });

@@ -4,7 +4,7 @@
 
 use dioxus::prelude::*;
 use omnibus_shared::{
-    EbookMetadata, ResumePoint, ShelfSummary, SortDir, SortKey, TagWeight, ViewPrefs,
+    EbookMetadata, ResumePoint, Shelf, ShelfSummary, SortDir, SortKey, TagWeight, ViewPrefs,
 };
 
 use crate::components::chip_editor::{collect_suggestions, SuggestionItem};
@@ -281,6 +281,31 @@ pub(super) fn spawn_shelves_list_effect(
     });
 }
 
+/// Fetch the full selected shelf (rules, visibility, ownership) whenever the
+/// gallery pick changes or the shelves list refetches — the landing facet row
+/// and edit-shelf modal need more than the gallery's [`ShelfSummary`].
+pub(super) fn spawn_selected_shelf_effect(
+    server_url: String,
+    key: Memo<(ShelfSelection, u32)>,
+    mut selected_shelf: Signal<Option<Shelf>>,
+) {
+    use_effect(move || {
+        let (selection, _tick) = key();
+        let ShelfSelection::Shelf(id) = selection else {
+            selected_shelf.set(None);
+            return;
+        };
+        let url = server_url.clone();
+        spawn(async move {
+            let fetched = data::get_shelf(&url, id).await.ok();
+            // Drop a stale result if the pick moved on mid-flight.
+            if key.peek().0 == ShelfSelection::Shelf(id) {
+                selected_shelf.set(fetched);
+            }
+        });
+    });
+}
+
 /// Fetch the continue-reading resume points once on mount. Any error —
 /// including the logged-out 401 — leaves the list empty, which hides the hero.
 pub(super) fn spawn_hero_effect(server_url: String, mut hero_points: Signal<Vec<ResumePoint>>) {
@@ -305,12 +330,14 @@ pub(super) struct ShelfFetchSignals {
 }
 
 /// Fetch the selected shelf's members whenever the selection or sort axis
-/// changes. Layered over the browse pipeline rather than replacing it — the
-/// always-warm browse page keeps `lib_path`, the header subtitle, and the
-/// All Books mosaic working, and makes switching back to All instant.
+/// changes, or the shelves list refetches (the `u32` tick — an edit-shelf
+/// save can change smart membership). Layered over the browse pipeline
+/// rather than replacing it — the always-warm browse page keeps `lib_path`,
+/// the header subtitle, and the All Books mosaic working, and makes
+/// switching back to All instant.
 pub(super) fn spawn_shelf_books_effect(
     server_url: String,
-    key: Memo<(ShelfSelection, SortKey, SortDir)>,
+    key: Memo<(ShelfSelection, SortKey, SortDir, u32)>,
     sigs: ShelfFetchSignals,
 ) {
     let ShelfFetchSignals {
@@ -320,7 +347,7 @@ pub(super) fn spawn_shelf_books_effect(
         mut shelf_epoch,
     } = sigs;
     use_effect(move || {
-        let (selection, sort_key, sort_dir) = key();
+        let (selection, sort_key, sort_dir, _tick) = key();
         // Same stale-drop idiom as `fetch_epoch`: an in-flight member fetch
         // superseded by a newer selection/sort change discards its result.
         let epoch = {

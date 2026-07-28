@@ -3,9 +3,11 @@
 //! sort + filters persist per library path via [`crate::view_prefs`].
 
 use dioxus::prelude::*;
-use omnibus_shared::{EbookMetadata, ResumePoint, ShelfSummary, ViewFilters, ViewPrefs};
+use omnibus_shared::{EbookMetadata, ResumePoint, Shelf, ShelfSummary, ViewFilters, ViewPrefs};
 
 use crate::components::chip_editor::SuggestionItem;
+#[cfg(not(feature = "mobile"))]
+use crate::components::EditShelfModal;
 use crate::shelf_selection::{self, ShelfSelection};
 use crate::{use_search_query, use_server_url, view_prefs};
 
@@ -46,9 +48,9 @@ pub(crate) use mobile::cover_cell as mobile_cover_cell;
 #[cfg(feature = "web")]
 use effects::spawn_load_more_observer;
 use effects::{
-    spawn_hero_effect, spawn_load_more_effect, spawn_page_fetch_effect, spawn_shelf_books_effect,
-    spawn_shelves_list_effect, spawn_suggestion_pools_effect, FetchSignals, ShelfFetchSignals,
-    SuggestionPools,
+    spawn_hero_effect, spawn_load_more_effect, spawn_page_fetch_effect,
+    spawn_selected_shelf_effect, spawn_shelf_books_effect, spawn_shelves_list_effect,
+    spawn_suggestion_pools_effect, FetchSignals, ShelfFetchSignals, SuggestionPools,
 };
 use filtering::apply_filters;
 #[cfg(not(feature = "mobile"))]
@@ -99,6 +101,11 @@ struct LandingSignals {
     shelf_books: Signal<Option<Vec<EbookMetadata>>>,
     shelf_loading: Signal<bool>,
     shelf_error: Signal<Option<String>>,
+    /// Full detail for the selected shelf (`None` on All Books / while it
+    /// loads) — feeds the header facet row and the edit-shelf modal.
+    selected_shelf: Signal<Option<Shelf>>,
+    /// True while the edit-shelf modal is open.
+    edit_shelf: Signal<bool>,
     /// Continue-reading hero feed. Starts empty (hero hidden) for SSR parity.
     hero_points: Signal<Vec<ResumePoint>>,
 }
@@ -144,6 +151,8 @@ fn setup_landing_signals(server_url: &str, query: Signal<String>) -> LandingSign
     let shelf_loading = use_signal(|| false);
     let shelf_error = use_signal(|| None::<String>);
     let shelf_epoch = use_signal(|| 0u64);
+    let selected_shelf = use_signal(|| None::<Shelf>);
+    let edit_shelf = use_signal(|| false);
     let hero_points = use_signal(Vec::<ResumePoint>::new);
     let fetch_sigs = FetchSignals {
         books,
@@ -169,6 +178,7 @@ fn setup_landing_signals(server_url: &str, query: Signal<String>) -> LandingSign
         shelves_loaded,
         shelves_tick,
         shelf_sigs,
+        selected_shelf,
         hero_points,
     };
     wire_landing_effects(
@@ -200,6 +210,8 @@ fn setup_landing_signals(server_url: &str, query: Signal<String>) -> LandingSign
         shelf_books,
         shelf_loading,
         shelf_error,
+        selected_shelf,
+        edit_shelf,
         hero_points,
     }
 }
@@ -213,6 +225,7 @@ struct ShelfWiring {
     shelves_loaded: Signal<bool>,
     shelves_tick: Signal<u32>,
     shelf_sigs: ShelfFetchSignals,
+    selected_shelf: Signal<Option<Shelf>>,
     hero_points: Signal<Vec<ResumePoint>>,
 }
 
@@ -270,6 +283,7 @@ fn wire_landing_effects(
         shelves_loaded,
         shelves_tick,
         shelf_sigs,
+        selected_shelf,
         hero_points,
     } = shelf_wiring;
     spawn_shelves_list_effect(
@@ -281,12 +295,18 @@ fn wire_landing_effects(
     );
     spawn_hero_effect(server_url.to_string(), hero_points);
 
+    // Full detail for the gallery pick; re-runs after an edit-shelf save
+    // because the save bumps `shelves_tick`.
+    let selected_key = use_memo(move || (selection(), shelves_tick()));
+    spawn_selected_shelf_effect(server_url.to_string(), selected_key, selected_shelf);
+
     // Refetch the selected shelf's members when the gallery pick or the sort
-    // axis changes. Mirrors `fetch_key` deliberately: view-mode toggles and
-    // filters stay client-side and must not refetch.
+    // axis changes, or after an edit-shelf save (`shelves_tick` bump — a rules
+    // edit changes membership). Mirrors `fetch_key` deliberately: view-mode
+    // toggles and filters stay client-side and must not refetch.
     let shelf_key = use_memo(move || {
         let p = prefs();
-        (selection(), p.sort_key, p.sort_dir)
+        (selection(), p.sort_key, p.sort_dir, shelves_tick())
     });
     spawn_shelf_books_effect(server_url.to_string(), shelf_key, shelf_sigs);
 
@@ -616,6 +636,9 @@ fn web_landing_body(
         on_shelf_created,
     } = handlers;
     let hero_points = (sigs.hero_points)();
+    let selected_shelf = (sigs.selected_shelf)();
+    let mut edit_shelf = sigs.edit_shelf;
+    let mut shelves_tick = sigs.shelves_tick;
     // All Books mosaic: first four cover-bearing books of the (always-warm)
     // browse page. Before it lands, the tile falls back to its accent plate.
     let all_cover_uuids: Vec<String> = sigs
@@ -653,9 +676,11 @@ fn web_landing_body(
                     page_error: view.page_error.clone(),
                     lib_err: view.lib_err.clone(),
                     section_title: view.section_title,
+                    selected_shelf: selected_shelf.clone(),
                 },
                 prefs: prefs(),
                 on_prefs_change: on_prefs_change_header,
+                on_edit_shelf: move |_| edit_shelf.set(true),
             }
 
             LandingContent {
@@ -683,6 +708,21 @@ fn web_landing_body(
                         on_clear_filters,
                     },
                     sweep_key: view.sweep_key,
+                }
+            }
+
+            if edit_shelf() {
+                if let Some(shelf) = selected_shelf {
+                    EditShelfModal {
+                        shelf,
+                        on_close: move |_| edit_shelf.set(false),
+                        on_saved: move |_| {
+                            edit_shelf.set(false);
+                            // Refetches the gallery list, the section title,
+                            // and (via `selected_key`) the full shelf.
+                            shelves_tick.with_mut(|n| *n += 1);
+                        },
+                    }
                 }
             }
         }
