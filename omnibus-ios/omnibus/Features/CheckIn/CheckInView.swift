@@ -129,6 +129,17 @@ struct CheckInView: View {
                         .foregroundStyle(palette.ink2Color)
                     checkInButton(uuid: book.uuid, isbn: book.isbn, label: "Add another copy")
 
+                case let .onWishlist(book):
+                    resultCard(
+                        title: book.title, authors: book.authors, uuid: book.uuid,
+                        badge: "On your wishlist", tint: palette.accentColor
+                    )
+                    Text("Checking a copy in clears this book from your wishlist.")
+                        .font(.ui(14))
+                        .foregroundStyle(palette.ink2Color)
+                    noteField
+                    checkInButton(uuid: book.uuid, isbn: book.isbn, label: "Check in this copy")
+
                 case let .inLibraryUnowned(book):
                     resultCard(
                         title: book.title, authors: book.authors, uuid: book.uuid,
@@ -198,12 +209,22 @@ struct CheckInView: View {
                         .foregroundStyle(palette.okColor)
                 }
 
+                // Without this the outcome screen's writes failed in silence —
+                // only the scanner section rendered `error`, so a rejected
+                // check-in / add / wishlist looked like a dead button.
+                if let error {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.ui(13))
+                        .foregroundStyle(palette.badColor)
+                }
+
                 Button("Scan another") {
                     withAnimation {
                         outcome = nil
                         manualISBN = ""
                         note = ""
                         didComplete = false
+                        error = nil
                     }
                 }
                 .font(.ui(14))
@@ -287,7 +308,16 @@ struct CheckInView: View {
         }
     }
 
+    /// Drop the previous write's result before starting another. Neither banner
+    /// names the action it came from, so a leftover "Saved" beside a fresh error
+    /// reads as if the write that just failed had succeeded.
+    private func beginWrite() {
+        error = nil
+        withAnimation { didComplete = false }
+    }
+
     private func checkIn(uuid: String, isbn: String?) async {
+        beginWrite()
         do {
             let _: Empty = try await APIClient.shared.post(
                 "/api/scan/check-in",
@@ -302,6 +332,7 @@ struct CheckInView: View {
     }
 
     private func addPhysicalOnly(_ meta: ExternalBookMeta) async {
+        beginWrite()
         do {
             let _: Empty = try await APIClient.shared.post(
                 "/api/scan/physical-only",
@@ -315,13 +346,18 @@ struct CheckInView: View {
     }
 
     private func addWishlist(_ meta: ExternalBookMeta) async {
+        beginWrite()
         do {
             let _: Empty = try await APIClient.shared.post(
                 "/api/scan/wishlist",
-                body: WishlistAddRequest(meta: meta, note: note.nilIfBlank)
+                body: WishlistAddRequest(bookUUID: nil, meta: meta, source: .scan)
             )
             Haptics.success()
             withAnimation { didComplete = true }
+            // The wishlist is a real shelf whose membership derives from these
+            // entries, so its count and preview covers are now stale.
+            await OfflineStore.shared.cacheDelete(CacheKey.shelves)
+            await OfflineStore.shared.cacheDelete(CacheKey.shelfPreviews)
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }

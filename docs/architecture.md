@@ -293,6 +293,15 @@ selection engine above, and the web copy has since moved its pagination onto
 `location.start.displayed` and still uses WebKit's own selection. Changing one
 does not change the other — check both when touching reader behaviour.
 
+**The models are hand-mirrored, so they drift silently.** `Models/` restates the
+`shared/` wire DTOs in Swift with no generator and no compiler tying the two
+together, so a field added or renamed on the Rust side surfaces as a runtime 422
+(or a `#[serde(other)]`-style fallback swallowing a variant), never a build
+error. `omnibusTests/ScanCodecTests.swift` is the pattern for pinning one of
+these contracts — assert the encoded keys a handler requires, and that every
+enum variant the server can answer with maps to its own case rather than the
+catch-all. Worth adding wherever a mismatch would fail quietly.
+
 **Offline writes** follow [rule 08](../.claude/rules/08-offline-writes.md): the
 `OpKind` outbox in `Offline/SyncEngine.swift` carries per-user content state
 only, never configuration and never commands. `OutboxScope` in `Offline/Cache.swift`
