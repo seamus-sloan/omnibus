@@ -731,7 +731,7 @@ html, body { overscroll-behavior: none; }
 }
 .bd-fmt-badge--physical { color: var(--accent); border-color: var(--accent); }
 
-/* Physical collection + wishlist panel (F Physical Check-In, issue #1186) */
+/* Physical collection + wishlist panel */
 .bd-physical-panel {
   max-width: var(--content-w, 1120px);
   margin: 0 auto; padding: 0 24px;
