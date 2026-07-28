@@ -117,7 +117,7 @@ mod render_tests {
             delete_target: use_signal(|| None),
             refresh: use_signal(|| 0u32),
         };
-        render_physical_section(state, "".to_string(), "u".to_string(), false, true)
+        render_physical_section(state, "".to_string(), false, true)
     }
 
     #[test]
