@@ -239,9 +239,7 @@ async fn mock_server() -> String {
             "/api/account/kindle-email",
             post(
                 |axum::Json(body): axum::Json<serde_json::Value>| async move {
-                    // Two of the earlier tests assert the 5xx / retry-budget
-                    // path against this exact address — keep that behavior
-                    // and give every other address a normal success reply.
+                    // Preserve the 5xx/retry-budget behavior earlier tests assert for this address.
                     if body.get("email").and_then(|v| v.as_str()) == Some("reader@example.com") {
                         axum::http::StatusCode::INTERNAL_SERVER_ERROR
                     } else {

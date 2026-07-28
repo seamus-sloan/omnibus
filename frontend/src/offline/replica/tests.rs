@@ -1,4 +1,7 @@
 //! Pure replica pagination / sorting / search tests.
+// The state-lock guard is deliberately held across awaits: it serializes
+// whole async test bodies against process-global state, and each test owns
+// its own thread + runtime, so there is no interleaving to deadlock on.
 #![allow(clippy::await_holding_lock)]
 
 use omnibus_shared::Contributor;

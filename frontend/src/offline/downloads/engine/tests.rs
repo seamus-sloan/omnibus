@@ -1,6 +1,6 @@
 //! Unit tests for `friendly()`'s `DataError` → `DownloadError` mapping —
 //! guards against a raw-error leak into `DownloadStatus::Error` — plus
-//! `download_file`'s byte-range resume/streaming state machine (#1307 AC5).
+//! `download_file`'s byte-range resume/streaming state machine.
 
 use axum::response::IntoResponse;
 
