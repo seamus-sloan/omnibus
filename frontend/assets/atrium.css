@@ -116,7 +116,12 @@
      lands the contrast ratio near 3.5:1 — still reads as muted, but legible
      for the small UI text these rails carry. */
   --ink-3: oklch(0.50 0.010 70);
-  --accent-ink: oklch(0.99 0 0);
+  /* Light does not darken `--accent`, so it keeps the 0.78 L amber from
+     `:root`. A near-white ink on that ground is ~2:1 — every accent-filled
+     control (the hero resume pill, primary buttons, active toggles) was
+     unreadable. Sepia can afford white ink because it drops the accent to
+     0.58 L; light has to take the dark ink instead. */
+  --accent-ink: oklch(0.16 0.02 65);
   --cover-fallback-bg:  oklch(0.86 0.004 70);
   --cover-fallback-ink: oklch(0.28 0.006 70);
   --rd-page: #fcfbfa;
@@ -2862,7 +2867,9 @@ a.idx-letter-on:focus-visible {
   font-family: var(--mono);
   font-size: 10px;
 }
-.um-nr-play {
+/* Scoped like `.ch-hero .ch-cta` — a bare class loses `color` to
+   `.atrium a { color: inherit }` and the glyph washes out on the amber disc. */
+.um-now-reading .um-nr-play {
   align-self: center; flex: 0 0 34px; width: 34px; height: 34px;
   border-radius: 999px; display: grid; place-items: center;
   background: var(--accent); color: var(--accent-ink); text-decoration: none;
@@ -6867,8 +6874,14 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .ch-bar + .ch-foot { margin-top: 6px; }
 .ch-hero .ch-body:not(:has(.ch-bar)) .ch-foot { margin-top: auto; }
 .ch-meta { font-size: 11.5px; color: var(--ink-2); }
-.ch-cta {
+/* Scoped under `.ch-hero` to outrank `.atrium a { color: inherit }`, which a
+   bare `.ch-cta` loses to — that left the pill at `--ink-0`, i.e. near-white
+   on the amber ground in the default dark theme. */
+.ch-hero .ch-cta {
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 7px 13px;
   border-radius: 999px;
   background: var(--accent);
@@ -6878,6 +6891,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   text-decoration: none;
   transition: filter 0.15s;
 }
+.ch-cta svg { display: block; flex-shrink: 0; }
 @media (hover: hover) { .ch-cta:hover { filter: brightness(1.08); } }
 .ch-dots { display: flex; justify-content: center; gap: 6px; }
 .ch-dot {

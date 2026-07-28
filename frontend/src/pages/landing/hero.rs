@@ -9,6 +9,7 @@ use dioxus_router::Link;
 use omnibus_shared::{ProgressFormat, ResumePoint};
 
 use super::resume_meta::resume_meta;
+use crate::components::glyphs::{book_glyph, play_glyph};
 use crate::Route;
 
 /// Watch the hero cards and report the index of the mostly-visible one, so
@@ -191,7 +192,12 @@ fn HeroCard(point: ResumePoint, server_url: String) -> Element {
                         class: "ch-cta",
                         "data-testid": "hero-resume-{uuid}",
                         aria_label: "{eyebrow}: {title}",
-                        "{cta_label}"
+                        if is_audio {
+                            {play_glyph(11)}
+                        } else {
+                            {book_glyph(11)}
+                        }
+                        span { "{cta_label}" }
                     }
                 }
             }
