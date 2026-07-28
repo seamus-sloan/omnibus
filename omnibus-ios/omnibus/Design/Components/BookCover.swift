@@ -173,7 +173,7 @@ struct GeneratedCoverPlate: View {
                         .frame(width: unit * 22, height: max(1, unit * 0.7))
 
                     Text(identity.title)
-                        .font(.system(size: unit * 11, weight: .semibold, design: .serif))
+                        .font(.display(unit * 11, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.94))
                         .lineLimit(4)
                         .minimumScaleFactor(0.7)
