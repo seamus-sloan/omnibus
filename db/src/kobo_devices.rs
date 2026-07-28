@@ -13,6 +13,12 @@ use crate::auth::generate_token;
 const COLS: &str =
     "id, user_id, token, name, kobo_device_id, sync_cursor, created_at, last_seen_at";
 
+/// Hard cap on how many devices `list_devices` returns for a single user.
+/// Matches `LIST_SHELVES_LIMIT`/`LIST_BOOKMARKS_LIMIT` — a real reader
+/// registers only a handful of Koboes, but the cap keeps the response bounded
+/// regardless.
+pub const LIST_DEVICES_LIMIT: i64 = 100;
+
 /// One registered Kobo: its owning user, the re-displayable path token, a
 /// user-visible label, the learned `x-kobo-deviceid` (once seen), the opaque
 /// per-device delta cursor, and timestamps.
@@ -77,9 +83,11 @@ pub async fn list_devices(
     let rows = sqlx::query(&format!(
         "SELECT {COLS} FROM kobo_devices
          WHERE user_id = ?
-         ORDER BY created_at ASC, id ASC"
+         ORDER BY created_at ASC, id ASC
+         LIMIT ?"
     ))
     .bind(user_id)
+    .bind(LIST_DEVICES_LIMIT)
     .fetch_all(pool)
     .await?;
     Ok(rows.iter().map(row_to_device).collect())
