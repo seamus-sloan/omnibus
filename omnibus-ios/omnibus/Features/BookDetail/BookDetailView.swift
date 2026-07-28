@@ -526,9 +526,15 @@ struct BookDetailView: View {
                         Text("Update available")
                             .font(.ui(14, weight: .medium))
                     }
-                    .foregroundStyle(palette.warnColor)
+                    .foregroundStyle(
+                        Connectivity.shared.isOnline ? palette.warnColor : palette.ink3Color
+                    )
                 }
                 .buttonStyle(.plain)
+                // Disabled rather than failed after the fact: replacing a copy
+                // needs the server, and the reader should see that before
+                // tapping.
+                .disabled(!Connectivity.shared.isOnline)
             }
 
         case .complete:

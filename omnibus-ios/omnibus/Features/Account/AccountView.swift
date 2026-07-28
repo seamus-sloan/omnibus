@@ -572,6 +572,7 @@ struct DownloadsView: View {
                                             systemImage: "arrow.triangle.2.circlepath"
                                         )
                                     }
+                                    .disabled(!Connectivity.shared.isOnline)
                                 }
                                 Button(role: .destructive) {
                                     Task { await downloads.remove(record.bookUUID, kind: record.kind) }

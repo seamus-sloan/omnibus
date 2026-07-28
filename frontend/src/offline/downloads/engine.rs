@@ -45,16 +45,43 @@ enum DownloadError {
     Interrupted,
 }
 
+/// Subdirectory a replacement downloads into before it is swapped over the
+/// copy it supersedes. Lives under the book's own dir so it is cleaned up with
+/// it, and is never served: the loopback `/dl/{uuid}/{file}` route only ever
+/// resolves plain file names.
+const REPLACE_DIR: &str = ".replacing";
+
 /// Run one download to completion (or error). The registry entry was
 /// already put in `Downloading` by `downloads::start`.
-pub(super) async fn run(server_url: String, uuid: String, format: DlFormat, file_id: Option<i64>) {
-    if let Err(err) = run_inner(&server_url, &uuid, format, file_id).await {
+///
+/// `replacing` carries the completed entry a re-download supersedes, if any.
+/// Its presence stages the transfer and, on failure, restores it.
+pub(super) async fn run(
+    server_url: String,
+    uuid: String,
+    format: DlFormat,
+    file_id: Option<i64>,
+    replacing: Option<DownloadEntry>,
+) {
+    if let Err(err) = run_inner(&server_url, &uuid, format, file_id, replacing.is_some()).await {
         // `err`'s `Display` is always a safe, pre-authored message (see
         // `DownloadError` and the `.context(...)` calls below); the full
         // chain — which can include raw io/reqwest text — is logged here
         // for diagnosis and never forwarded to the UI.
         tracing::warn!(error = ?err, book_uuid = %uuid, "offline download failed");
-        super::set_error(&uuid, format, err.to_string());
+        match replacing {
+            // A failed replacement never touched the copy on disk, so the
+            // honest end state is the one the reader still has. An error row
+            // would hide a book they can still open — and the staleness chip
+            // stays put, which is both the truth and the retry affordance.
+            Some(prior) => {
+                if let Some(dir) = media::downloads_root().map(|r| r.join(&uuid)) {
+                    let _ = tokio::fs::remove_dir_all(dir.join(REPLACE_DIR)).await;
+                }
+                super::upsert(prior);
+            }
+            None => super::set_error(&uuid, format, err.to_string()),
+        }
     }
 }
 
@@ -63,6 +90,7 @@ async fn run_inner(
     uuid: &str,
     format: DlFormat,
     file_id: Option<i64>,
+    replacing: bool,
 ) -> anyhow::Result<()> {
     // The raw `_online` variant: starting a download while offline must
     // fail loudly, never silently plan from a stale cached book.
@@ -101,26 +129,57 @@ async fn run_inner(
         return Err(DownloadError::NothingToDownload.into());
     }
 
-    let dir = media::downloads_root()
+    let live_dir = media::downloads_root()
         .map(|r| r.join(uuid))
         .ok_or(DownloadError::StorageUnavailable)?;
+    // A replacement is staged beside the copy it supersedes, never written
+    // over it in place: the reader keeps a book they can open until the new
+    // one is complete, and a transfer that fails — including the offline
+    // fast-fail — costs them nothing.
+    let dir = if replacing {
+        let staging = live_dir.join(REPLACE_DIR);
+        // Anything left by an abandoned attempt is of unknown provenance.
+        let _ = tokio::fs::remove_dir_all(&staging).await;
+        staging
+    } else {
+        live_dir.clone()
+    };
     tokio::fs::create_dir_all(&dir)
         .await
         .context("Offline storage unavailable")?;
 
+    let mut validator = super::source_validator(&book, format, file_id);
+    let previous_entry = super::get_entry(uuid, format);
+
+    // Prior work is only reusable if it came from the source this attempt is
+    // downloading. A multi-part audiobook interrupted before a replacement
+    // would otherwise keep its finished tracks from the old file, fetch the
+    // rest from the new one, and report the mixture as current — the splice
+    // `If-Range` prevents inside one file, happening across several.
+    //
+    // Unprovable counts as unusable: an entry from before validators were
+    // recorded costs one restart, which is cheaper than a silently mixed book.
+    let same_source = matches!(
+        (&previous_entry.as_ref().and_then(|e| e.validator.as_deref()), &validator.as_deref()),
+        (Some(before), Some(now)) if before == now
+    );
+    let prior: Vec<PlannedFile> = match previous_entry {
+        Some(entry) if same_source => entry.files,
+        _ => Vec::new(),
+    };
+
     // Merge prior completion state (resume of a partly-finished download).
     // Stat asynchronously — this future shares the loopback runtime with the
     // media server, so blocking std::fs calls here would stall playback.
-    let prior = super::get_entry(uuid, format)
-        .map(|e| e.files)
-        .unwrap_or_default();
     let mut files: Vec<PlannedFile> = Vec::with_capacity(plan.len());
     for mut f in plan {
         let previous = prior.iter().find(|p| p.rel == f.rel);
         // Carry the recorded validator across the replan, for finished files
         // and half-finished ones alike: a fresh plan knows the URL but not
         // what the bytes already on disk were served under, and dropping it
-        // would leave the resume with no precondition to send.
+        // would leave the resume with no precondition to send. Discarding the
+        // prior plan above therefore also disarms every resume below, since
+        // `download_file` refuses to resume a partial it cannot vouch for.
         f.etag = previous.and_then(|p| p.etag.clone());
         if previous.is_some_and(|p| p.done) {
             if let Ok(meta) = tokio::fs::metadata(dir.join(&f.rel)).await {
@@ -132,8 +191,6 @@ async fn run_inner(
         }
         files.push(f);
     }
-
-    let validator = super::source_validator(&book, format, file_id);
     let mut downloaded: i64 = files.iter().filter_map(|f| f.bytes).sum();
     publish(
         uuid,
@@ -152,34 +209,27 @@ async fn run_inner(
         }
         let mut unflushed: i64 = 0;
         let planned = files[idx].clone();
-        let mut served_under: Option<String> = None;
-        let written = download_file(
-            server_url,
-            &dir,
-            &planned,
-            &mut |etag| {
-                // Straight to the registry rather than through `files`: this
-                // has to survive the process dying mid-stream, which is
-                // exactly the case where the local vector never gets written
-                // back.
-                super::set_file_etag(uuid, format, &planned.rel, etag.clone());
-                served_under = etag;
-            },
-            &mut |delta| {
-                downloaded += delta;
-                unflushed += delta;
-                if unflushed >= PROGRESS_FLUSH_BYTES {
-                    unflushed = 0;
-                    // Re-publish with the pre-loop file list; per-file `done`
-                    // flags land on file completion below.
-                    publish_progress(uuid, format, downloaded, total_estimate);
-                }
-            },
-        )
+        let fetched = download_file(server_url, uuid, format, &dir, &planned, &mut |delta| {
+            downloaded += delta;
+            unflushed += delta;
+            if unflushed >= PROGRESS_FLUSH_BYTES {
+                unflushed = 0;
+                // Re-publish with the pre-loop file list; per-file `done`
+                // flags land on file completion below.
+                publish_progress(uuid, format, downloaded, total_estimate);
+            }
+        })
         .await?;
         files[idx].done = true;
-        files[idx].bytes = Some(written);
-        files[idx].etag = served_under;
+        files[idx].bytes = Some(fetched.bytes);
+        files[idx].etag = fetched.etag;
+        // The server's own answer about what it served, which beats the
+        // metadata read from before the transfer: a source replaced in between
+        // would otherwise have this copy recorded under a validator that never
+        // described it.
+        if fetched.source.is_some() {
+            validator = fetched.source;
+        }
         downloaded = files.iter().filter_map(|f| f.bytes).sum();
         publish(
             uuid,
@@ -191,6 +241,10 @@ async fn run_inner(
             total_estimate,
             validator.as_deref(),
         );
+    }
+
+    if replacing {
+        swap_into_place(&dir, &live_dir, &files).await?;
     }
 
     warm_related(server_url, uuid, &book, format).await;
@@ -209,19 +263,60 @@ async fn run_inner(
     Ok(())
 }
 
+/// The server header naming the `book_files` row a download drew from. Kept in
+/// lockstep with `backend::validator::SOURCE_VALIDATOR`.
+const SOURCE_VALIDATOR_HEADER: &str = "x-omnibus-source-validator";
+
+/// What one completed transfer knows about itself.
+struct Fetched {
+    bytes: i64,
+    /// `ETag` of the artifact streamed — the `If-Range` precondition for a
+    /// later resume of this same file.
+    etag: Option<String>,
+    /// Validator of the source row the server resolved, which is what a later
+    /// metadata refresh is compared against. Distinct from `etag` wherever the
+    /// bytes served are not the source file itself: one part of a multi-part
+    /// audiobook, or an override-baked export.
+    source: Option<String>,
+}
+
+/// Move a finished replacement over the copy it supersedes, then drop the
+/// staging dir.
+///
+/// Runs only once every file has landed, so the swap is the first moment the
+/// reader's copy changes at all. Each rename is atomic within the book's own
+/// directory; a failure part-way leaves a mixed set that the next attempt
+/// re-downloads whole, since the entry is restored to its pre-replacement
+/// validator and no longer matches the source.
+async fn swap_into_place(
+    staged: &std::path::Path,
+    live: &std::path::Path,
+    files: &[PlannedFile],
+) -> anyhow::Result<()> {
+    for file in files {
+        tokio::fs::rename(staged.join(&file.rel), live.join(&file.rel))
+            .await
+            .context("Could not replace the copy on this device")?;
+    }
+    let _ = tokio::fs::remove_dir_all(staged).await;
+    Ok(())
+}
+
 /// Stream one file to `{rel}.part`, resuming from any existing bytes via a
 /// Range request, then rename to `rel`. Returns the final byte count.
 ///
-/// `on_etag` fires as soon as the response headers land, before a single byte
-/// is written, so a transfer that dies mid-stream still leaves the validator
-/// its `.part` file was built from — the precondition the next resume sends.
+/// Returns the final byte count and the validator the server served those
+/// bytes under, which is also written to the registry — awaited, before a
+/// single byte is on disk — so a transfer that dies mid-stream still leaves a
+/// `.part` the next attempt can vouch for.
 async fn download_file(
     server_url: &str,
+    uuid: &str,
+    format: DlFormat,
     dir: &std::path::Path,
     file: &PlannedFile,
-    on_etag: &mut (dyn FnMut(Option<String>) + Send),
     on_delta: &mut (dyn FnMut(i64) + Send),
-) -> anyhow::Result<i64> {
+) -> anyhow::Result<Fetched> {
     use tokio::io::AsyncWriteExt;
 
     let part_path = dir.join(format!("{}.part", file.rel));
@@ -235,18 +330,19 @@ async fn download_file(
     // Streaming client: no whole-request timeout, so a large book can't be
     // killed mid-transfer by the default client's 30s cap.
     let mut req = data::with_bearer(data::streaming_client().get(&url));
-    if resumed > 0 {
-        req = req.header(reqwest::header::RANGE, format!("bytes={resumed}-"));
-        // Without this the server cannot tell that the file was replaced
-        // since the interrupted attempt, and the 206 it returns would be
-        // counted from the *new* bytes — appending a new tail to the old head
-        // already in `.part` and leaving a corrupt book that nothing reports.
-        // A server that no longer recognises the tag answers with the whole
-        // file instead, which the 200 branch below restarts cleanly from.
-        if let Some(etag) = file.etag.as_deref() {
-            if let Ok(value) = reqwest::header::HeaderValue::from_str(etag) {
-                req = req.header(reqwest::header::IF_RANGE, value);
-            }
+    // A `Range` only ever goes out under a precondition. Without one the
+    // server cannot tell the file was replaced since the interrupted attempt,
+    // and the 206 it returns would be counted from the *new* bytes — appending
+    // a new tail to the old head already in `.part` and leaving a corrupt book
+    // that nothing reports. So a partial whose validator was never recorded —
+    // a `.part` from before this was tracked, or one whose process died before
+    // the write landed — is not resumed at all: asking for the whole file
+    // routes it through the restart branch below, which truncates it.
+    if let (true, Some(etag)) = (resumed > 0, file.etag.as_deref()) {
+        if let Ok(value) = reqwest::header::HeaderValue::from_str(etag) {
+            req = req
+                .header(reqwest::header::RANGE, format!("bytes={resumed}-"))
+                .header(reqwest::header::IF_RANGE, value);
         }
     }
     let mut resp = req.send().await.map_err(|e| {
@@ -263,12 +359,15 @@ async fn download_file(
         return Err(DownloadError::ServerError.into());
     }
 
-    on_etag(
+    let header = |name: &str| {
         resp.headers()
-            .get(reqwest::header::ETAG)
+            .get(name)
             .and_then(|v| v.to_str().ok())
-            .map(str::to_string),
-    );
+            .map(str::to_string)
+    };
+    let etag = header(reqwest::header::ETAG.as_str());
+    let source = header(SOURCE_VALIDATOR_HEADER);
+    super::set_file_etag(uuid, format, &file.rel, etag.clone()).await;
 
     // 206 → append after the existing bytes; 200 → the server ignored the
     // Range (or refused it because the file changed), start over.
@@ -325,7 +424,11 @@ async fn download_file(
     tokio::fs::rename(&part_path, &final_path)
         .await
         .context("Could not finalize the download")?;
-    Ok(written)
+    Ok(Fetched {
+        bytes: written,
+        etag,
+        source,
+    })
 }
 
 /// Warm every cache a downloaded book needs offline: artwork (lock screen,

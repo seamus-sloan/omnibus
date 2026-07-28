@@ -1,9 +1,7 @@
-//! `ETag` stamping and the conditional-request preconditions that depend on
-//! it, for the routes that serve a file off disk.
-//!
-//! `ServeFile` handles `Range` but knows nothing about entity tags, so the
-//! handlers evaluate `If-None-Match` and `If-Range` here before delegating to
-//! it and stamp the validator on the way back out.
+//! `ETag` stamping and the conditional requests that depend on it, for the
+//! routes that serve a file off disk. `ServeFile` handles `Range` but knows
+//! nothing about entity tags, so `If-None-Match` and `If-Range` are evaluated
+//! here before delegating to it.
 
 use std::path::Path;
 
@@ -32,6 +30,29 @@ pub(super) const MEDIA_VARY: &str = "Cookie, Authorization";
 /// let a client keep serving a file that was replaced in place under the same
 /// uuid-keyed URL, never even asking — the failure this module exists to fix.
 pub(super) const REVALIDATE: &str = "private, no-cache";
+
+/// Names the `book_files` row a download drew from, so a client records the
+/// validator describing the bytes it actually received.
+///
+/// The `ETag` cannot serve for this on three of the four download routes: it
+/// describes the artifact streamed, which is one part of a multi-part
+/// audiobook, or an override-baked export rather than its source. A client
+/// comparing either against the book's metadata would see a difference that
+/// never goes away.
+pub(super) const SOURCE_VALIDATOR: &str = "x-omnibus-source-validator";
+
+/// Attach [`SOURCE_VALIDATOR`] to a response that carries file bytes.
+pub(super) fn with_source_validator(mut resp: Response, source: Option<&str>) -> Response {
+    if !matches!(resp.status(), StatusCode::OK | StatusCode::PARTIAL_CONTENT) {
+        return resp;
+    }
+    if let Some(value) = source.and_then(|v| HeaderValue::from_str(v).ok()) {
+        if let Ok(name) = axum::http::HeaderName::from_bytes(SOURCE_VALIDATOR.as_bytes()) {
+            resp.headers_mut().insert(name, value);
+        }
+    }
+    resp
+}
 
 /// Stat `path` and derive its `ETag`, or `None` when it cannot be stat'd.
 ///

@@ -236,6 +236,13 @@ pub(super) async fn get_audiobook_part(
 
     let abs_path = std::path::Path::new(&resolved.library_path).join(&part.filename);
     let mime = audiobook::mime_for_filename(&part.filename);
+    // The row's own validator, not this part's: the `book_files` row
+    // aggregates every part, and that aggregate is what the book's metadata
+    // reports for a client to compare a stored copy against.
+    let source_validator = omnibus_db::book_file_validator(&state.pool, resolved.book_file_id)
+        .await
+        .ok()
+        .flatten();
     let (mut parts_resp, body) = super::validator::serve_file(req, &abs_path)
         .await
         .into_parts();
@@ -249,7 +256,10 @@ pub(super) async fn get_audiobook_part(
                 .insert(axum::http::header::CONTENT_TYPE, value);
         }
     }
-    Response::from_parts(parts_resp, body)
+    super::validator::with_source_validator(
+        Response::from_parts(parts_resp, body),
+        source_validator.as_deref(),
+    )
 }
 
 /// Query parameters for `GET /api/audiobooks/{uuid}/download`.
@@ -287,7 +297,14 @@ pub(super) async fn get_audiobook_download(
     };
     let abs_path = std::path::Path::new(&resolved.library_path).join(&part.filename);
     let mime = audiobook::mime_for_filename(&part.filename);
-    super::serve_download(req, &abs_path, mime).await
+    // The `book_files` row's aggregate validator, not this part's own — see
+    // the note in `get_audiobook_part`.
+    let source_validator = omnibus_db::book_file_validator(&state.pool, resolved.book_file_id)
+        .await
+        .ok()
+        .flatten();
+    let resp = super::serve_download(req, &abs_path, mime).await;
+    super::validator::with_source_validator(resp, source_validator.as_deref())
 }
 
 /// Returns `{"ready": bool, "progress": f32}` for the AUDIO64 profile.

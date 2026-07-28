@@ -18,6 +18,10 @@ final class DownloadManager: NSObject {
     /// this identifier when it relaunches the app to deliver completions.
     static let sessionID = "app.omnibus.downloads"
 
+    /// The server header naming the `book_files` row a download drew from.
+    /// Kept in lockstep with `backend::validator::SOURCE_VALIDATOR`.
+    static let sourceValidatorHeader = "X-Omnibus-Source-Validator"
+
     /// Registry mirror, keyed by `DownloadRecord.id` (`uuid:kind`), for
     /// synchronous view reads.
     private(set) var records: [String: DownloadRecord] = [:]
@@ -25,6 +29,15 @@ final class DownloadManager: NSObject {
     /// Held by the app delegate while iOS is waiting to be told the app has
     /// finished handling a background session's completions.
     var backgroundCompletion: (() -> Void)?
+
+    /// Completed records a re-download is superseding, keyed by record id.
+    ///
+    /// A replacement must not cost the reader the book they already have, so
+    /// the old file is left in place — `didFinishDownloadingTo` only swaps it
+    /// once the transfer has actually succeeded — and any failure before that
+    /// puts this record back rather than leaving a `.failed` row over a file
+    /// that is still perfectly readable.
+    private var superseding: [String: DownloadRecord] = [:]
 
     private var session: URLSession!
 
@@ -129,9 +142,28 @@ final class DownloadManager: NSObject {
     }
 
     /// Replace a superseded copy with the file the server holds now.
+    ///
+    /// Deliberately not `remove` then `start`. Removing first destroys the
+    /// reader's only offline copy before anything is known about whether a
+    /// replacement is obtainable, so a dropped connection, an expired session,
+    /// a full disk, or a 500 would leave them with nothing. The download
+    /// already lands in a temp file and is moved into place only on a 2xx, so
+    /// leaving the old file alone makes the swap the first moment their copy
+    /// changes at all.
     func redownload(_ book: Book, kind: DownloadKind) async {
-        await remove(book.uuid, kind: kind)
+        let key = DownloadRecord.key(book.uuid, kind)
+        guard let prior = records[key], prior.state == .complete else { return }
+        superseding[key] = prior
         await start(book: book, kind: kind)
+    }
+
+    /// Put back the copy a failed replacement was superseding, if any.
+    /// `true` when it did, meaning the caller must not write a failure row.
+    private func restoreSuperseded(key: String) async -> Bool {
+        guard let prior = superseding.removeValue(forKey: key) else { return false }
+        records[key] = prior
+        await OfflineStore.shared.upsertDownload(prior)
+        return true
     }
 
     /// Which formats of this book can be taken offline. A dual-format book
@@ -167,8 +199,13 @@ final class DownloadManager: NSObject {
             request.setValue(value, forHTTPHeaderField: key)
         }
 
+        // A replacement keeps the superseded file's name on the record: the
+        // bytes are still on disk and still the reader's, right up until the
+        // swap, and blanking it here would strand them behind a `nil`.
+        let superseded = superseding[DownloadRecord.key(uuid, kind)]
         let record = DownloadRecord(
-            bookUUID: uuid, kind: kind, format: format, state: .running, localPath: nil,
+            bookUUID: uuid, kind: kind, format: format, state: .running,
+            localPath: superseded?.localPath,
             totalBytes: 0, receivedBytes: 0, updatedAt: Int64(Date().timeIntervalSince1970),
             error: nil,
             // Snapshotted from the book being downloaded, so a later refresh
@@ -277,7 +314,14 @@ extension DownloadManager: URLSessionDownloadDelegate {
         didFinishDownloadingTo location: URL
     ) {
         guard let key = downloadTask.taskDescription else { return }
-        let status = (downloadTask.response as? HTTPURLResponse)?.statusCode ?? 0
+        let http = downloadTask.response as? HTTPURLResponse
+        let status = http?.statusCode ?? 0
+        // What the server says it served, which beats the metadata read from
+        // before the transfer: a source replaced in between would otherwise
+        // leave this copy recorded under a validator that never described it.
+        // The `ETag` is not a substitute — on the audiobook route it names one
+        // part, while the book's metadata reports the whole row.
+        let servedUnder = http?.value(forHTTPHeaderField: Self.sourceValidatorHeader)
         // The temp file is deleted the moment this method returns, so the move
         // has to happen synchronously here, not in the Task below.
         let staged = OfflineStore.downloadsDirectory
@@ -292,6 +336,7 @@ extension DownloadManager: URLSessionDownloadDelegate {
 
             guard (200..<300).contains(status), moved else {
                 try? FileManager.default.removeItem(at: staged)
+                guard await self.restoreSuperseded(key: key) == false else { return }
                 await self.update(key: key) { record in
                     record.state = .failed
                     record.error = "Download failed (\(status))"
@@ -307,6 +352,7 @@ extension DownloadManager: URLSessionDownloadDelegate {
                 try FileManager.default.moveItem(at: staged, to: destination)
             } catch {
                 try? FileManager.default.removeItem(at: staged)
+                guard await self.restoreSuperseded(key: key) == false else { return }
                 await self.update(key: key) { record in
                     record.state = .failed
                     record.error = error.localizedDescription
@@ -316,6 +362,7 @@ extension DownloadManager: URLSessionDownloadDelegate {
 
             let size = (try? FileManager.default
                 .attributesOfItem(atPath: destination.path)[.size] as? Int64) ?? 0
+            self.superseding[key] = nil
             await self.update(key: key) { record in
                 record.state = .complete
                 record.localPath = name
@@ -323,6 +370,7 @@ extension DownloadManager: URLSessionDownloadDelegate {
                     record.receivedBytes = size
                     if record.totalBytes == 0 { record.totalBytes = size }
                 }
+                if let servedUnder { record.validator = servedUnder }
                 record.error = nil
             }
         }
@@ -338,7 +386,11 @@ extension DownloadManager: URLSessionDownloadDelegate {
             guard await self.adopt(key: key) else { return }
             // A cancel tears the record down on its own; reporting it as a
             // failure would resurrect the row the cancel just removed.
-            guard (error as? URLError)?.code != .cancelled else { return }
+            guard (error as? URLError)?.code != .cancelled else {
+                self.superseding[key] = nil
+                return
+            }
+            guard await self.restoreSuperseded(key: key) == false else { return }
             await self.update(key: key) { record in
                 record.state = .failed
                 record.error = error.localizedDescription

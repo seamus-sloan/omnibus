@@ -113,21 +113,16 @@ fn DlRow(
         let uuid = uuid.clone();
         move |_| downloads::remove(&uuid, format)
     };
-    // Remove first: `start` refuses to run against a Complete entry, and the
-    // bytes on disk are the superseded ones either way.
+    // `replace`, never remove-then-start: the copy on disk stays readable
+    // until the new one is complete.
     let redownload = {
-        let (uuid, title, server_url) = (uuid.clone(), title.clone(), server_url.clone());
-        move |_| {
-            downloads::remove(&uuid, format);
-            downloads::start(
-                server_url.clone(),
-                uuid.clone(),
-                format,
-                None,
-                title.clone(),
-            );
-        }
+        let (uuid, server_url) = (uuid.clone(), server_url.clone());
+        move |_| downloads::replace(server_url.clone(), uuid.clone(), format)
     };
+    // Disabled rather than failed-after-the-fact, per the offline-writes
+    // corollary: a replacement needs the server, and the reader should be able
+    // to see that before tapping.
+    let offline = crate::offline::sync::is_offline();
 
     let testid = format!("offline-row-{}", format.as_str());
     rsx! {
@@ -175,6 +170,8 @@ fn DlRow(
                         r#type: "button",
                         class: "btn sm",
                         "data-testid": "offline-redownload-{format.as_str()}",
+                        disabled: offline,
+                        title: if offline { "Connect to replace this copy" } else { "" },
                         onclick: redownload,
                         "Re-download"
                     }

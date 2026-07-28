@@ -129,11 +129,12 @@ async fn download_file_streams_a_fresh_file_from_a_full_response() {
     let file = planned_file("book.epub", "/file");
     let mut deltas = Vec::new();
 
-    let written = download_file(&base, dir.path(), &file, &mut |_| {}, &mut |d| {
+    let written = download_file(&base, "u", DlFormat::Epub, dir.path(), &file, &mut |d| {
         deltas.push(d)
     })
     .await
-    .expect("fresh download must succeed");
+    .expect("fresh download must succeed")
+    .bytes;
 
     assert_eq!(written, 5000);
     assert_eq!(deltas.iter().sum::<i64>(), 5000);
@@ -183,11 +184,12 @@ async fn download_file_resumes_a_partial_download_via_a_range_request() {
     let file = planned_file("book.epub", "/file");
     let mut deltas = Vec::new();
 
-    let written = download_file(&base, dir.path(), &file, &mut |_| {}, &mut |d| {
+    let written = download_file(&base, "u", DlFormat::Epub, dir.path(), &file, &mut |d| {
         deltas.push(d)
     })
     .await
-    .expect("resumed download must succeed");
+    .expect("resumed download must succeed")
+    .bytes;
 
     assert_eq!(written, 5000, "final size must be the full file");
     // Resumed bytes are the caller's concern (already counted in a prior
@@ -219,11 +221,12 @@ async fn download_file_restarts_from_scratch_when_the_server_ignores_the_range_r
     let file = planned_file("book.epub", "/file");
     let mut deltas = Vec::new();
 
-    let written = download_file(&base, dir.path(), &file, &mut |_| {}, &mut |d| {
+    let written = download_file(&base, "u", DlFormat::Epub, dir.path(), &file, &mut |d| {
         deltas.push(d)
     })
     .await
-    .expect("restart-from-scratch download must succeed");
+    .expect("restart-from-scratch download must succeed")
+    .bytes;
 
     assert_eq!(written, 500);
     // The stale 200 bytes on disk are discarded; the negative delta says so.
@@ -273,7 +276,7 @@ async fn download_file_errors_and_leaves_no_final_file_when_the_response_is_trun
     let dir = tempfile::tempdir().expect("tempdir");
     let file = planned_file("book.epub", "/file");
 
-    let result = download_file(&base, dir.path(), &file, &mut |_| {}, &mut |_| {}).await;
+    let result = download_file(&base, "u", DlFormat::Epub, dir.path(), &file, &mut |_| {}).await;
 
     assert!(
         result.is_err(),
@@ -339,19 +342,11 @@ async fn download_file_records_the_validator_its_bytes_were_served_under() {
     let base = spawn_router(app).await;
     let dir = tempfile::tempdir().expect("tempdir");
     let file = planned_file("book.epub", "/file");
-    let mut observed = None;
+    let fetched = download_file(&base, "u", DlFormat::Epub, dir.path(), &file, &mut |_| {})
+        .await
+        .expect("fresh download must succeed");
 
-    download_file(
-        &base,
-        dir.path(),
-        &file,
-        &mut |etag| observed = etag,
-        &mut |_| {},
-    )
-    .await
-    .expect("fresh download must succeed");
-
-    assert_eq!(observed.as_deref(), Some("\"abc-1f4\""));
+    assert_eq!(fetched.etag.as_deref(), Some("\"abc-1f4\""));
 }
 
 #[tokio::test]
@@ -367,11 +362,12 @@ async fn download_file_sends_if_range_so_a_resume_is_conditional() {
     file.etag = Some("\"abc-1388\"".into());
     let mut deltas = Vec::new();
 
-    let written = download_file(&base, dir.path(), &file, &mut |_| {}, &mut |d| {
+    let written = download_file(&base, "u", DlFormat::Epub, dir.path(), &file, &mut |d| {
         deltas.push(d)
     })
     .await
-    .expect("resumed download must succeed");
+    .expect("resumed download must succeed")
+    .bytes;
 
     assert_eq!(
         seen.lock().expect("lock").as_deref(),
@@ -406,17 +402,13 @@ async fn download_file_discards_its_partial_copy_when_the_file_changed_under_it(
     let mut file = planned_file("book.epub", "/file");
     file.etag = Some("\"abc-1388\"".into());
     let mut deltas = Vec::new();
-    let mut observed = None;
 
-    let written = download_file(
-        &base,
-        dir.path(),
-        &file,
-        &mut |etag| observed = etag,
-        &mut |d| deltas.push(d),
-    )
+    let fetched = download_file(&base, "u", DlFormat::Epub, dir.path(), &file, &mut |d| {
+        deltas.push(d)
+    })
     .await
     .expect("download must restart cleanly rather than splice");
+    let written = fetched.bytes;
 
     assert_eq!(seen.lock().expect("lock").as_deref(), Some("\"abc-1388\""));
     assert_eq!(deltas[0], -2000, "the stale partial bytes must be dropped");
@@ -427,8 +419,107 @@ async fn download_file_discards_its_partial_copy_when_the_file_changed_under_it(
         "the stored file must be the new one, whole — never a spliced mix"
     );
     assert_eq!(
-        observed.as_deref(),
+        fetched.etag.as_deref(),
         Some("\"def-bb8\""),
         "the recorded validator must move to the bytes now on disk"
     );
+}
+
+// ── the resume refuses what it cannot vouch for ────────────────────────
+
+#[tokio::test]
+async fn download_file_does_not_resume_a_partial_it_has_no_validator_for() {
+    // A `.part` written before validators were recorded, or one whose process
+    // died before the validator reached disk. Sending a bare `Range` here
+    // would let the server answer 206 from whatever the file is now, appending
+    // a new tail to a head of unknown provenance — the splice, unguarded.
+    let full = fixture_content(5000);
+    let ranges = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let recorder = ranges.clone();
+    let app = axum::Router::new().route(
+        "/file",
+        axum::routing::get(move |headers: axum::http::HeaderMap| {
+            let full = full.clone();
+            let recorder = recorder.clone();
+            async move {
+                let range = headers
+                    .get(axum::http::header::RANGE)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default()
+                    .to_string();
+                if let Ok(mut guard) = recorder.lock() {
+                    guard.push(range.clone());
+                }
+                // A Range-honouring server, exactly like ours.
+                if let Some(start) = range
+                    .strip_prefix("bytes=")
+                    .and_then(|r| r.trim_end_matches('-').parse::<usize>().ok())
+                {
+                    return (
+                        axum::http::StatusCode::PARTIAL_CONTENT,
+                        full[start..].to_vec(),
+                    )
+                        .into_response();
+                }
+                (axum::http::StatusCode::OK, full).into_response()
+            }
+        }),
+    );
+    let base = spawn_router(app).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    tokio::fs::write(dir.path().join("book.epub.part"), fixture_content(2000))
+        .await
+        .expect("seed partial file");
+    // The distinguishing detail: no recorded validator.
+    let file = planned_file("book.epub", "/file");
+    assert_eq!(file.etag, None, "precondition: nothing to condition on");
+    let mut deltas = Vec::new();
+
+    let fetched = download_file(&base, "u", DlFormat::Epub, dir.path(), &file, &mut |d| {
+        deltas.push(d)
+    })
+    .await
+    .expect("download must restart rather than resume blind");
+
+    assert_eq!(
+        ranges.lock().expect("lock").as_slice(),
+        &[String::new()],
+        "no Range may go out without a precondition to qualify it"
+    );
+    assert_eq!(deltas[0], -2000, "the unvouched-for bytes must be dropped");
+    assert_eq!(fetched.bytes, 5000);
+    assert_eq!(
+        tokio::fs::read(dir.path().join("book.epub")).await.unwrap(),
+        fixture_content(5000)
+    );
+}
+
+#[tokio::test]
+async fn download_file_reports_the_source_validator_the_server_named() {
+    // The `ETag` describes the bytes streamed; this header describes the row
+    // they came from. On the audiobook and export routes those differ, and it
+    // is the latter a staleness check compares against.
+    let app = axum::Router::new().route(
+        "/file",
+        axum::routing::get(|| async {
+            let mut resp = (axum::http::StatusCode::OK, fixture_content(64)).into_response();
+            resp.headers_mut()
+                .insert(axum::http::header::ETAG, "\"part-1\"".parse().unwrap());
+            resp.headers_mut().insert(
+                "x-omnibus-source-validator",
+                "\"whole-row-9\"".parse().unwrap(),
+            );
+            resp
+        }),
+    );
+    let base = spawn_router(app).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = planned_file("book.epub", "/file");
+
+    let fetched = download_file(&base, "u", DlFormat::Epub, dir.path(), &file, &mut |_| {})
+        .await
+        .expect("download must succeed");
+
+    assert_eq!(fetched.etag.as_deref(), Some("\"part-1\""));
+    assert_eq!(fetched.source.as_deref(), Some("\"whole-row-9\""));
 }

@@ -1,10 +1,8 @@
 //! The content validator (HTTP `ETag`) for a file served off disk.
 //!
-//! One recipe, shared by the db layer — which reports a file's current
-//! validator alongside its metadata — and the server handlers, which stamp
-//! the same string on the response. A client compares the two to decide
-//! whether the copy it downloaded is still the copy the server holds, so the
-//! two sides producing byte-identical strings is the whole contract.
+//! One recipe, shared by the db layer that reports it and the server handlers
+//! that stamp it, because a client compares the two — so the whole contract is
+//! that both sides produce byte-identical strings.
 
 /// The `ETag` for a file with this filesystem stat, quotes included.
 ///

@@ -297,7 +297,9 @@ async fn read_ebook_file(
             if let Some(value) = etag.as_deref().and_then(|e| HeaderValue::from_str(e).ok()) {
                 resp.headers_mut().insert(header::ETAG, value);
             }
-            resp
+            // This route serves the source file itself, so its own validator
+            // is the source validator — no second stat needed.
+            validator::with_source_validator(resp, etag.as_deref())
         }
         Err(e) => {
             tracing::warn!(?path, error = %e, "epub file read failed");
@@ -427,11 +429,17 @@ pub(super) async fn get_ebook_download(
     // A saved download must carry the user's metadata/cover edits (F5.8 #1372),
     // so serve the override-baked EPUB when the book has any; otherwise the
     // source verbatim.
+    // Taken from the *source* file, not the artifact served: with overrides in
+    // play the export is a different file with its own stat, and a client
+    // comparing that against the book's metadata would see a difference that
+    // never resolves.
+    let source_validator = validator::file_etag(&source).await;
     let path = match db::resolve_book_id_by_uuid(&state.pool, &uuid).await {
         Ok(Some(id)) => rewritten_or_source(&state, id, source).await,
         _ => source,
     };
-    super::serve_download(req, &path, "application/epub+zip").await
+    let resp = super::serve_download(req, &path, "application/epub+zip").await;
+    validator::with_source_validator(resp, source_validator.as_deref())
 }
 
 /// The override-baked export EPUB for `book_id` when the book has edits, else

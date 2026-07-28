@@ -480,6 +480,27 @@ pub async fn book_file_path_by_id(
     }))
 }
 
+/// The content validator of a single `book_files` row.
+///
+/// What a download response reports as the source it drew from, so a client
+/// records the validator describing the bytes it actually received rather than
+/// one read from metadata before the transfer began. Same value
+/// [`get_book_files`] reports for the row, from the same columns.
+pub async fn book_file_validator(
+    pool: &SqlitePool,
+    book_file_id: i64,
+) -> Result<Option<String>, super::BooksError> {
+    let row = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT mtime_epoch, size_bytes FROM book_files WHERE id = ?",
+    )
+    .bind(book_file_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.and_then(|(mtime_epoch, size_bytes)| {
+        omnibus_shared::content_validator(mtime_epoch, size_bytes)
+    }))
+}
+
 /// Fetch all `book_files` rows for a book, ordered by format then ordinal.
 pub async fn get_book_files(
     pool: &SqlitePool,

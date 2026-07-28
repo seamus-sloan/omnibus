@@ -304,3 +304,51 @@ async fn enforce_if_range_leaves_a_range_alone_when_no_precondition_was_sent() {
         Some("bytes=5-"),
     );
 }
+
+#[tokio::test]
+async fn with_source_validator_names_the_row_a_file_response_drew_from() {
+    let scratch = Scratch::new("source_header");
+    let path = scratch.write("book.epub", b"0123456789");
+    let res = serve_file(get().body(Body::empty()).unwrap(), &path).await;
+
+    let stamped = with_source_validator(res, Some("\"whole-row-9\""));
+
+    // Deliberately not the `ETag`: on the audiobook and export routes the
+    // bytes served are one part or a rewritten copy, while this names the row
+    // a staleness check compares against.
+    assert_eq!(
+        stamped
+            .headers()
+            .get(SOURCE_VALIDATOR)
+            .and_then(|v| v.to_str().ok()),
+        Some("\"whole-row-9\""),
+    );
+    assert_ne!(
+        stamped
+            .headers()
+            .get(header::ETAG)
+            .and_then(|v| v.to_str().ok()),
+        Some("\"whole-row-9\""),
+    );
+}
+
+#[tokio::test]
+async fn with_source_validator_leaves_a_bodyless_response_alone() {
+    // A 304 carries no bytes, so there is no source for it to name.
+    let scratch = Scratch::new("source_header_304");
+    let path = scratch.write("book.epub", b"0123456789");
+    let etag = file_etag(&path).await.expect("real file has a validator");
+    let res = serve_file(
+        get()
+            .header(header::IF_NONE_MATCH, &etag)
+            .body(Body::empty())
+            .unwrap(),
+        &path,
+    )
+    .await;
+
+    let stamped = with_source_validator(res, Some("\"whole-row-9\""));
+
+    assert_eq!(stamped.status(), StatusCode::NOT_MODIFIED);
+    assert!(stamped.headers().get(SOURCE_VALIDATOR).is_none());
+}

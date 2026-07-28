@@ -353,9 +353,57 @@ pub fn start(
         return;
     }
     upsert(entry);
-    let spawned = media::spawn_on_runtime(engine::run(server_url, uuid.clone(), format, file_id));
+    let spawned =
+        media::spawn_on_runtime(engine::run(server_url, uuid.clone(), format, file_id, None));
     if !spawned {
         set_error(&uuid, format, "Offline storage unavailable".into());
+    }
+}
+
+/// Replace a completed download with the file the server holds now.
+///
+/// Deliberately not `remove` + [`start`]. That pair deletes the reader's only
+/// offline copy *before* knowing a replacement is obtainable, so a transient
+/// failure — or simply being offline, which `start` fast-fails — leaves them
+/// with nothing; on the web side it also raced its own cleanup, since `remove`
+/// defers the row and file deletion onto the runtime that `start` is already
+/// writing into. Here the copy on disk is untouched until the new one is
+/// complete (see `engine::run`'s `replacing` path), and a failure restores the
+/// entry exactly as it was.
+///
+/// No-op unless the format is currently `Complete` — there is nothing to
+/// replace otherwise, and [`start`] already covers every other state.
+pub fn replace(server_url: String, uuid: String, format: DlFormat) {
+    let Some(prior) = get_entry(&uuid, format) else {
+        return;
+    };
+    if !matches!(prior.status, DownloadStatus::Complete { .. }) {
+        return;
+    }
+    // The control is disabled offline, so this is the belt to that braces: a
+    // replacement that can't start must not disturb what the reader has.
+    if sync::is_offline() {
+        return;
+    }
+    let mut entry = prior.clone();
+    entry.status = DownloadStatus::Downloading {
+        downloaded: 0,
+        total: None,
+    };
+    entry.updated_at = store::now_secs();
+    upsert(entry);
+
+    // The prior `file_id`, not `None`: a book with several files must be
+    // replaced with a new copy of the one that was actually taken offline.
+    let spawned = media::spawn_on_runtime(engine::run(
+        server_url,
+        uuid.clone(),
+        format,
+        prior.file_id,
+        Some(prior.clone()),
+    ));
+    if !spawned {
+        upsert(prior);
     }
 }
 
@@ -500,14 +548,19 @@ fn persist_progress(
     });
 }
 
-/// Record the validator one file's bytes are being served under.
+/// Record the validator one file's bytes are being served under, and wait for
+/// it to reach disk.
 ///
 /// Written the moment the response headers land, before any of the body is on
 /// disk, because the case it exists for is the process dying mid-transfer: on
 /// the next attempt the `.part` file is all that survived, and this is what
-/// says which server-side bytes it was cut from. No-op when the entry or file
-/// isn't registered (a header callback racing a `remove`).
-pub(super) fn set_file_etag(uuid: &str, format: DlFormat, rel: &str, etag: Option<String>) {
+/// says which server-side bytes it was cut from.
+///
+/// Awaited, not fire-and-forget, for the same reason. A detached write races
+/// the body it describes, and a `.part` that outlives the process with no
+/// validator beside it is one the next attempt has to throw away. No-op when
+/// the entry or file isn't registered (headers racing a `remove`).
+pub(super) async fn set_file_etag(uuid: &str, format: DlFormat, rel: &str, etag: Option<String>) {
     let entry = {
         let Ok(mut guard) = registry().write() else {
             return;
@@ -525,9 +578,11 @@ pub(super) fn set_file_etag(uuid: &str, format: DlFormat, rel: &str, etag: Optio
         entry.updated_at = store::now_secs();
         entry.clone()
     };
-    // Full `persist` rather than a targeted UPDATE: the validator lives in the
-    // JSON `files` blob, so there is no column to write on its own.
-    persist(&entry);
+    // Full row rather than a targeted UPDATE: the validator lives in the JSON
+    // `files` blob, so there is no column to write on its own.
+    if let Some(store) = store::store() {
+        store.downloads_upsert(row_from_entry(&entry)).await;
+    }
 }
 
 pub(super) fn set_error(uuid: &str, format: DlFormat, message: String) {

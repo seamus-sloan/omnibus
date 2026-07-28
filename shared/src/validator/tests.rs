@@ -1,3 +1,6 @@
+//! Unit tests for the content-validator recipe: its format, its field
+//! order, and the never-observed sentinel.
+
 use super::*;
 
 #[test]
