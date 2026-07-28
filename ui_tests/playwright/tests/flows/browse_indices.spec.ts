@@ -21,9 +21,9 @@ test("renders the authors index layout", async ({ page }) => {
   // Hero — "By author."
   await expect(page.getByRole("heading", { level: 1 })).toContainText("author");
 
-  // Breadcrumb has "Library" link.
-  const breadcrumb = page.locator("nav.breadcrumb");
-  await expect(breadcrumb.getByRole("link", { name: "Library" })).toBeVisible();
+  // No breadcrumb — /authors is a top-level route, so the shared nav is the
+  // only wayfinding it needs.
+  await expect(page.locator("nav.breadcrumb")).toHaveCount(0);
 
   // Toolbar — filter input and at least one sort button.
   await expect(page.getByTestId("authors-filter")).toBeVisible();
@@ -112,8 +112,7 @@ test("renders the series index layout", async ({ page }) => {
 
   await expect(page.getByRole("heading", { level: 1 })).toContainText("series");
 
-  const breadcrumb = page.locator("nav.breadcrumb");
-  await expect(breadcrumb.getByRole("link", { name: "Library" })).toBeVisible();
+  await expect(page.locator("nav.breadcrumb")).toHaveCount(0);
 
   await expect(page.getByTestId("series-filter")).toBeVisible();
   await expect(page.getByTestId("series-sort-name")).toBeVisible();
