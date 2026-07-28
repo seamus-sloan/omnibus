@@ -97,7 +97,7 @@ fn ExportCard(uuid: String, saving: Signal<bool>) -> Element {
         spawn(async move {
             let result = data::export_opf(&server_url, &uuid)
                 .await
-                .map_err(|e| format!("Export failed: {e}"));
+                .map_err(|e| export_error_message(&e));
             status.set(Some(result));
             exporting.set(false);
         });
@@ -140,5 +140,42 @@ fn ExportCard(uuid: String, saving: Signal<bool>) -> Element {
                 None => rsx! {},
             }
         }
+    }
+}
+
+/// Build the status-line message for a failed export, splicing in the
+/// server's actual diagnostic text (via [`data::server_error_message`])
+/// instead of `DataError`'s status-only `Display` — a 409/403 should read
+/// as its real reason, not "server returned {status}".
+fn export_error_message(err: &data::DataError) -> String {
+    format!("Export failed: {}", data::server_error_message(err))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn export_error_message_surfaces_the_servers_diagnostic_body() {
+        let err = data::DataError::Http {
+            status: 409,
+            body: "book has no EPUB file to export next to".into(),
+        };
+        assert_eq!(
+            export_error_message(&err),
+            "Export failed: 409: book has no EPUB file to export next to"
+        );
+    }
+
+    #[test]
+    fn export_error_message_falls_back_to_display_when_the_body_is_empty() {
+        let err = data::DataError::Http {
+            status: 500,
+            body: String::new(),
+        };
+        assert_eq!(
+            export_error_message(&err),
+            "Export failed: server returned 500"
+        );
     }
 }

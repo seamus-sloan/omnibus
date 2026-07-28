@@ -97,19 +97,15 @@ async fn submit_register(
 }
 
 /// Flatten a [`crate::data::DataError`] into the user-facing string the auth
-/// pages surface. For an HTTP failure we splice the server's diagnostic body
-/// back in — `DataError`'s own `Display` deliberately omits it, but the
-/// register-error classifier keys on "username"/"password" substrings, so the
-/// mobile path must keep the body to route field errors correctly (mirrors
-/// the pre-#96 `"{status}: {body}"` string).
+/// pages surface. Delegates to [`crate::data::server_error_message`], which
+/// splices the server's diagnostic body back into an HTTP failure —
+/// `DataError`'s own `Display` deliberately omits it, but the register-error
+/// classifier keys on "username"/"password" substrings, so the mobile path
+/// must keep the body to route field errors correctly (mirrors the pre-#96
+/// `"{status}: {body}"` string).
 #[cfg(feature = "mobile")]
 fn data_error_message(err: crate::data::DataError) -> String {
-    match err {
-        crate::data::DataError::Http { status, body } if !body.is_empty() => {
-            format!("{status}: {body}")
-        }
-        other => other.to_string(),
-    }
+    crate::data::server_error_message(&err)
 }
 
 /// Best-effort device name for the bearer-login `device_name` field. The

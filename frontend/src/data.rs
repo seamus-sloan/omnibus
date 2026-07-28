@@ -123,6 +123,19 @@ impl DataError {
     }
 }
 
+/// Flatten a [`DataError`] into the user-facing diagnostic text a caller
+/// should display. For an HTTP failure this splices the server's response
+/// body back in — `DataError`'s own `Display` deliberately omits it (see the
+/// `Http` variant's doc comment) — so a 409/403 renders its actual reason
+/// instead of a bare status code. Every other variant falls back to its own
+/// `Display`.
+pub fn server_error_message(err: &DataError) -> String {
+    match err {
+        DataError::Http { status, body } if !body.is_empty() => format!("{status}: {body}"),
+        other => other.to_string(),
+    }
+}
+
 /// Dioxus context wrapper holding the backend base URL for mobile clients.
 ///
 /// Reactive: the pre-login Connect screen rewrites this signal, and every
@@ -823,6 +836,33 @@ mod tests {
         let err = DataError::Other("missing value field".into());
         assert!(!err.is_unauthorized());
         assert_eq!(err.to_string(), "missing value field");
+    }
+
+    #[test]
+    fn server_error_message_splices_the_body_back_in_for_http_errors() {
+        let err = DataError::Http {
+            status: 409,
+            body: "book has no EPUB file to export next to".into(),
+        };
+        assert_eq!(
+            server_error_message(&err),
+            "409: book has no EPUB file to export next to"
+        );
+    }
+
+    #[test]
+    fn server_error_message_falls_back_to_display_for_an_empty_body() {
+        let err = DataError::Http {
+            status: 500,
+            body: String::new(),
+        };
+        assert_eq!(server_error_message(&err), "server returned 500");
+    }
+
+    #[test]
+    fn server_error_message_falls_back_to_display_for_non_http_variants() {
+        let err = DataError::Other("book not found".into());
+        assert_eq!(server_error_message(&err), "book not found");
     }
 
     // `Decode` only exists on the web/mobile builds that link `serde_json`
