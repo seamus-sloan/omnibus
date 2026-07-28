@@ -110,7 +110,11 @@ struct Palette: Sendable {
         ink3: OKLCH(0.50, 0.010, 70),
         accent: OKLCH(0.78, 0.13, 65),
         accentSoft: OKLCH(0.30, 0.07, 65),
-        accentInk: OKLCH(0.99, 0, 0),
+        // Light keeps the dark palette's 0.78 L amber accent, so it takes the
+        // dark ink with it — a near-white ink on that ground is ~2:1, which is
+        // what made the Continue-reading capsule unreadable. Sepia can use a
+        // white ink only because it drops the accent to 0.58 L.
+        accentInk: OKLCH(0.16, 0.02, 65),
         coverFallbackBg: OKLCH(0.86, 0.004, 70),
         coverFallbackInk: OKLCH(0.28, 0.006, 70),
         ok: OKLCH(0.78, 0.13, 150),

@@ -8,6 +8,7 @@ use dioxus_router::{use_navigator, Link};
 use omnibus_shared::{ProgressFormat, ResumePoint, UserSummary};
 
 use crate::components::atrium::{persist_theme, Cover, Theme};
+use crate::components::glyphs::{book_glyph, play_glyph};
 use crate::{use_current_user, Route};
 
 /// Derive 1–2 character avatar initials from a username. Empty input falls
@@ -315,35 +316,11 @@ fn um_now_reading_row(point: ResumePoint) -> Element {
                 "data-testid": "user-menu-now-reading-action",
                 "aria-label": "{action_label}",
                 if is_audio {
-                    {play_glyph()}
+                    {play_glyph(14)}
                 } else {
-                    {book_glyph()}
+                    {book_glyph(14)}
                 }
             }
-        }
-    }
-}
-
-/// Solid play triangle for the "continue listening" affordance.
-#[cfg(any(feature = "web", feature = "server"))]
-fn play_glyph() -> Element {
-    rsx! {
-        svg {
-            width: "14", height: "14", view_box: "0 0 15 15", fill: "currentColor",
-            path { d: "M4 2.5v10l8-5z" }
-        }
-    }
-}
-
-/// Open-book outline for the "continue reading" affordance.
-#[cfg(any(feature = "web", feature = "server"))]
-fn book_glyph() -> Element {
-    rsx! {
-        svg {
-            width: "14", height: "14", view_box: "0 0 24 24", fill: "none",
-            stroke: "currentColor", stroke_width: "2", stroke_linecap: "round", stroke_linejoin: "round",
-            path { d: "M4 19.5A2.5 2.5 0 0 1 6.5 17H20" }
-            path { d: "M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" }
         }
     }
 }
