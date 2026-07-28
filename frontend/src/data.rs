@@ -123,12 +123,14 @@ impl DataError {
     }
 }
 
-/// Flatten a [`DataError`] into the user-facing diagnostic text a caller
-/// should display. For an HTTP failure this splices the server's response
-/// body back in — `DataError`'s own `Display` deliberately omits it (see the
-/// `Http` variant's doc comment) — so a 409/403 renders its actual reason
-/// instead of a bare status code. Every other variant falls back to its own
-/// `Display`.
+/// Flatten a [`DataError`] into diagnostic text for a UI surface that
+/// already treats the server body as user-facing. For an HTTP failure this
+/// splices the server's response body back in — `DataError`'s own `Display`
+/// deliberately omits it (see the `Http` variant's doc comment) — so a
+/// 409/403 renders its actual reason instead of a bare status code. Every
+/// other variant falls back to its own `Display`. Not a default for every
+/// caller: some contexts (e.g. offline downloads) deliberately avoid echoing
+/// raw server bodies to the user.
 pub fn server_error_message(err: &DataError) -> String {
     match err {
         DataError::Http { status, body } if !body.is_empty() => format!("{status}: {body}"),
