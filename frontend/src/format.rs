@@ -46,6 +46,7 @@ mod tests {
             label: label.map(str::to_string),
             size_bytes: 0,
             path: None,
+            validator: None,
         }
     }
 

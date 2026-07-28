@@ -13,18 +13,9 @@ use axum::{
 };
 use omnibus_db::{self as db};
 
+use super::validator::{if_none_match_hits, not_modified, MEDIA_VARY, REVALIDATE};
 use super::{internal, AppState};
 use crate::auth::MediaAuthUser;
-
-/// `Vary` value shared by every response these handlers return (200s *and*
-/// the 304s in [`not_modified`]). [`MediaAuthUser`] accepts either a
-/// session cookie or an `Authorization: Bearer` header, so a
-/// shared/intermediate cache keying only on `Cookie` could hand one
-/// bearer-authenticated user's cached response — including a 304 validator
-/// match — back to a different bearer-authenticated user who shares the
-/// same (or no) cookie state. Defined once so the 200 and 304 paths can
-/// never drift apart.
-const MEDIA_VARY: &str = "Cookie, Authorization";
 
 pub(super) async fn get_cover(
     _user: MediaAuthUser,
@@ -51,7 +42,7 @@ pub(super) async fn get_cover(
             let etag = content_etag(&bytes);
             if if_none_match_hits(&headers, &etag) {
                 tracing::debug!(uuid, book_id = id, "cover: not modified (304)");
-                return not_modified(&etag);
+                return not_modified(&etag, REVALIDATE, MEDIA_VARY);
             }
             tracing::debug!(
                 uuid,
@@ -75,7 +66,7 @@ pub(super) async fn get_cover(
                     // user's covers to an unauthenticated (or differently
                     // bearer-authenticated) request on the same URL now
                     // that the endpoint is gated.
-                    (header::CACHE_CONTROL, "private, no-cache"),
+                    (header::CACHE_CONTROL, REVALIDATE),
                     (header::ETAG, etag.as_str()),
                     (header::VARY, MEDIA_VARY),
                     // Prevent browsers from MIME-sniffing a cover into an
@@ -108,33 +99,6 @@ fn content_etag(bytes: &[u8]) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     bytes.hash(&mut hasher);
     format!("\"{:016x}\"", hasher.finish())
-}
-
-/// Whether the request's `If-None-Match` already carries the current
-/// `etag` — i.e. the client's cached copy is still current and a 304 can
-/// stand in for the full body.
-fn if_none_match_hits(headers: &HeaderMap, etag: &str) -> bool {
-    headers
-        .get(header::IF_NONE_MATCH)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v == etag)
-}
-
-/// Build a `304 Not Modified` response carrying the same `Cache-Control` /
-/// `Vary` a 200 from these handlers would, so a hit doesn't reset the
-/// client's notion of freshness or open the cross-user cache gap
-/// [`MEDIA_VARY`] documents.
-fn not_modified(etag: &str) -> Response {
-    (
-        axum::http::StatusCode::NOT_MODIFIED,
-        [
-            (header::CACHE_CONTROL, "private, no-cache"),
-            (header::ETAG, etag),
-            (header::VARY, MEDIA_VARY),
-        ],
-        (),
-    )
-        .into_response()
 }
 
 pub(super) async fn get_thumb(
@@ -208,7 +172,7 @@ pub(super) async fn get_thumb(
             let etag = content_etag(&bytes);
             if if_none_match_hits(&headers, &etag) {
                 tracing::debug!(uuid, book_id = id, ?size, "thumb: not modified (304)");
-                return not_modified(&etag);
+                return not_modified(&etag, REVALIDATE, MEDIA_VARY);
             }
             tracing::debug!(
                 uuid,
@@ -226,7 +190,7 @@ pub(super) async fn get_thumb(
             return (
                 [
                     (header::CONTENT_TYPE, "image/webp"),
-                    (header::CACHE_CONTROL, "private, no-cache"),
+                    (header::CACHE_CONTROL, REVALIDATE),
                     (header::ETAG, etag.as_str()),
                     (header::VARY, MEDIA_VARY),
                     (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),

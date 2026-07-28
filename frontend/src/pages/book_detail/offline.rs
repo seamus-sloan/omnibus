@@ -17,6 +17,8 @@ pub(super) fn BdOfflineSection(
     title: String,
     has_ebook: bool,
     has_audio: bool,
+    stale_ebook: bool,
+    stale_audio: bool,
 ) -> Element {
     // Re-render on every registry transition (progress %, completion,
     // removal) — the registry generation rides a watch channel per the
@@ -62,6 +64,7 @@ pub(super) fn BdOfflineSection(
                         format_label: "Ebook",
                         format: DlFormat::Epub,
                         status: downloads::status(&uuid, DlFormat::Epub),
+                        stale: stale_ebook,
                     }
                 }
                 if has_audio {
@@ -71,6 +74,7 @@ pub(super) fn BdOfflineSection(
                         format_label: "Audiobook",
                         format: DlFormat::Audio,
                         status: downloads::status(&uuid, DlFormat::Audio),
+                        stale: stale_audio,
                     }
                 }
             }
@@ -89,6 +93,7 @@ fn DlRow(
     format_label: &'static str,
     format: DlFormat,
     status: DownloadStatus,
+    stale: bool,
 ) -> Element {
     let server_url = use_server_url();
 
@@ -107,6 +112,21 @@ fn DlRow(
     let remove = {
         let uuid = uuid.clone();
         move |_| downloads::remove(&uuid, format)
+    };
+    // Remove first: `start` refuses to run against a Complete entry, and the
+    // bytes on disk are the superseded ones either way.
+    let redownload = {
+        let (uuid, title, server_url) = (uuid.clone(), title.clone(), server_url.clone());
+        move |_| {
+            downloads::remove(&uuid, format);
+            downloads::start(
+                server_url.clone(),
+                uuid.clone(),
+                format,
+                None,
+                title.clone(),
+            );
+        }
     };
 
     let testid = format!("offline-row-{}", format.as_str());
@@ -127,6 +147,11 @@ fn DlRow(
                     DownloadStatus::Error { message } => rsx! {
                         div { class: "m-dl-row-sub m-dl-row-error", "{message}" }
                     },
+                    DownloadStatus::Complete { bytes } if stale => rsx! {
+                        div { class: "m-dl-row-sub m-dl-row-stale",
+                            "Update available \u{00b7} {downloads::format_bytes(*bytes)} on this device"
+                        }
+                    },
                     DownloadStatus::Complete { bytes } => rsx! {
                         div { class: "m-dl-row-sub m-dl-row-ok",
                             {downloaded_check()}
@@ -144,6 +169,15 @@ fn DlRow(
                 },
                 DownloadStatus::Error { .. } => rsx! {
                     button { r#type: "button", class: "btn sm", onclick: start, "Retry" }
+                },
+                DownloadStatus::Complete { .. } if stale => rsx! {
+                    button {
+                        r#type: "button",
+                        class: "btn sm",
+                        "data-testid": "offline-redownload-{format.as_str()}",
+                        onclick: redownload,
+                        "Re-download"
+                    }
                 },
                 DownloadStatus::Complete { .. } => rsx! {
                     button {

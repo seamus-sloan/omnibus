@@ -122,6 +122,24 @@ pub struct EbookMetadata {
     /// oversized-file gate on the email button — see `kindle_email_oversize`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub epub_size_bytes: Option<i64>,
+
+    /// [`BookFileInfo::validator`] of the EPUB an unqualified download
+    /// resolves to — the lowest-ordinal one, matching `book_file_path`.
+    ///
+    /// Hoisted out of [`Self::book_files`] for the same reason
+    /// [`Self::epub_size_bytes`] is: that list is only populated for
+    /// multi-file books, so a client comparing a downloaded copy against it
+    /// would have nothing to compare for the ordinary single-file book. The
+    /// server doing the resolving is also what keeps the two ends from
+    /// disagreeing about *which* file an unqualified download meant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epub_validator: Option<String>,
+
+    /// [`BookFileInfo::validator`] of the audiobook file an unqualified
+    /// download resolves to — the lowest-ordinal `M4B`/`M4A`/`MP3`, matching
+    /// `resolve_audiobook_file`. See [`Self::epub_validator`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_validator: Option<String>,
 }
 
 impl EbookMetadata {
@@ -151,4 +169,24 @@ pub struct BookFileInfo {
     /// predating the `scan_key` backfill.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// Validator for this file's current content, over the row's stat.
+    ///
+    /// A client that took the file offline snapshots this at download time
+    /// and compares it on its next metadata refresh: a difference means the
+    /// copy on the device is no longer the copy the server holds. For an EPUB
+    /// the stat is that one file's, so this doubles as the `ETag` that
+    /// `GET /api/ebooks/{uuid}/file` returns; for an audiobook the row
+    /// aggregates its parts (total size, newest mtime), so it tracks the
+    /// group changing rather than naming any single part's bytes.
+    ///
+    /// Not a substitute for the response `ETag` when resuming a transfer —
+    /// `If-Range` has to carry the validator of the artifact actually being
+    /// streamed, which for a multi-part audiobook is one part and for
+    /// `GET /api/ebooks/{uuid}/download` is the override-baked export rather
+    /// than the source file.
+    ///
+    /// `None` for a row whose stat has never been observed — see
+    /// [`crate::validator::content_validator`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validator: Option<String>,
 }

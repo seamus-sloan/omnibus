@@ -14,6 +14,9 @@ actor ImageCache {
 
     private let memory = NSCache<NSString, UIImage>()
     private let directory: URL
+    /// Keys already revalidated against the server this launch — see
+    /// `refreshIfSuperseded`.
+    private var revalidated: Set<String> = []
 
     init() {
         memory.countLimit = 300
@@ -44,19 +47,70 @@ actor ImageCache {
         return image
     }
 
-    func store(_ image: UIImage, data: Data, for key: String) {
+    func store(_ image: UIImage, data: Data, for key: String, etag: String? = nil) {
         memory.setObject(image, forKey: key as NSString, cost: data.count)
         try? data.write(to: diskURL(for: key), options: .atomic)
+        let sidecar = etagURL(for: key)
+        if let etag {
+            try? Data(etag.utf8).write(to: sidecar, options: .atomic)
+        } else {
+            // A server too old to send one must not leave a stale tag behind
+            // that a later revalidation would quote back at it.
+            try? FileManager.default.removeItem(at: sidecar)
+        }
+    }
+
+    /// The validator the copy on disk was stored under.
+    private func etagURL(for key: String) -> URL {
+        diskURL(for: key).appendingPathExtension("etag")
+    }
+
+    private func etag(for key: String) -> String? {
+        guard let data = try? Data(contentsOf: etagURL(for: key)),
+              let etag = String(data: data, encoding: .utf8),
+              !etag.isEmpty
+        else { return nil }
+        return etag
+    }
+
+    /// Ask the server whether the cached copy of `key` is still the one it
+    /// holds, at most once per key per launch.
+    ///
+    /// Returns the replacement when it is not, and `nil` when it is current,
+    /// when the check was already made, or when the server could not be
+    /// reached — all of which mean the copy on disk stands. The once-per-launch
+    /// bound is what keeps this affordable: a shelf draws the same cover on
+    /// every scroll pass, and a request behind each of those would put dozens
+    /// of round trips behind a flick. A cover changed on another device still
+    /// arrives — on the next launch, or the first time that image is drawn.
+    ///
+    /// An entry cached before validators were recorded has nothing to ask
+    /// with, so it refetches once and is conditional from then on.
+    func refreshIfSuperseded(_ key: String) async -> UIImage? {
+        guard !revalidated.contains(key), await Connectivity.shared.isOnline else { return nil }
+        let outcome: (data: Data, etag: String?)?
+        do {
+            outcome = try await APIClient.shared.conditionalData(for: key, ifNoneMatch: etag(for: key))
+        } catch {
+            // Only a definitive answer counts as checked; an unreachable
+            // server should be asked again once the connection is back.
+            return nil
+        }
+        revalidated.insert(key)
+        guard let outcome, let decoded = UIImage(data: outcome.data) else { return nil }
+        store(decoded, data: outcome.data, for: key, etag: outcome.etag)
+        return decoded
     }
 
     /// Pull a cover into the cache without a view asking for it. Used when a
     /// book is downloaded, so its art is already on disk when the network goes.
     func prefetch(_ key: String) async {
         guard image(for: key) == nil else { return }
-        guard let data = try? await APIClient.shared.data(for: key),
-              let decoded = UIImage(data: data)
+        guard let outcome = try? await APIClient.shared.conditionalData(for: key, ifNoneMatch: nil),
+              let decoded = UIImage(data: outcome.data)
         else { return }
-        store(decoded, data: data, for: key)
+        revalidated.insert(key)
+        store(decoded, data: outcome.data, for: key, etag: outcome.etag)
     }
 
     func clearDisk() {
@@ -121,6 +175,13 @@ struct RemoteImage<Placeholder: View>: View {
         }
         if let cached = await ImageCache.shared.image(for: path) {
             image = cached
+            // Drawn first, checked second: the reader sees their cover
+            // immediately, and a cover replaced from another device swaps in
+            // behind it rather than holding the plate blank on a round trip.
+            if let refreshed = await ImageCache.shared.refreshIfSuperseded(path) {
+                guard path == self.path else { return }
+                withAnimation(Motion.page) { image = refreshed }
+            }
             return
         }
         // Draw another size of the same cover straight away if we have one, so
@@ -135,10 +196,10 @@ struct RemoteImage<Placeholder: View>: View {
         isLoading = true
         defer { isLoading = false }
 
-        guard let data = try? await APIClient.shared.data(for: path),
-              let decoded = UIImage(data: data)
+        guard let outcome = try? await APIClient.shared.conditionalData(for: path, ifNoneMatch: nil),
+              let decoded = UIImage(data: outcome.data)
         else { return }
-        await ImageCache.shared.store(decoded, data: data, for: path)
+        await ImageCache.shared.store(decoded, data: outcome.data, for: path, etag: outcome.etag)
         // Guard against a recycled cell resolving onto the wrong row.
         guard path == self.path else { return }
         withAnimation(Motion.page) { image = decoded }

@@ -49,6 +49,7 @@ mod summary;
 mod tags;
 mod uploads;
 mod users;
+mod validator;
 
 pub use kobo::{kobo_router, reading_services_router};
 
@@ -92,20 +93,18 @@ fn internal<E: std::fmt::Display>(context: &'static str, e: E) -> Response {
 /// `Content-Disposition: attachment` with the on-disk basename as the
 /// suggested filename. `content_type` overrides the guessed MIME. The
 /// disposition/content-type headers are only attached to a real file
-/// response (200/206); a 404 from `ServeFile` passes through untouched.
+/// response (200/206); a 404 from `ServeFile`, or the 304 a client that
+/// already holds these bytes gets back, passes through untouched.
+///
+/// Goes through [`validator::serve_file`] rather than `ServeFile` directly,
+/// so every download carries an `ETag` and an interrupted one can be resumed
+/// without risking a splice across a file that changed in between.
 async fn serve_download(
     req: axum::extract::Request,
     path: &std::path::Path,
     content_type: &str,
 ) -> Response {
-    use tower::ServiceExt;
-
-    let serve = tower_http::services::ServeFile::new(path);
-    let res = match serve.oneshot(req).await {
-        Ok(r) => r,
-        Err(e) => return internal("serve download", e),
-    };
-    let (mut parts, body) = res.into_parts();
+    let (mut parts, body) = validator::serve_file(req, path).await.into_parts();
     let ok = matches!(
         parts.status,
         axum::http::StatusCode::OK | axum::http::StatusCode::PARTIAL_CONTENT
@@ -125,7 +124,7 @@ async fn serve_download(
                 .insert(axum::http::header::CONTENT_DISPOSITION, v);
         }
     }
-    Response::from_parts(parts, axum::body::Body::new(body))
+    Response::from_parts(parts, body)
 }
 
 /// Build a `Content-Disposition: attachment` value for `filename`.

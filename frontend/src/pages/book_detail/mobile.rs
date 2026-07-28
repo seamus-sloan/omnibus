@@ -14,6 +14,7 @@ use omnibus_shared::{
 
 use crate::components::atrium::Cover;
 use crate::components::FetchSummaryButton;
+use crate::offline::downloads::{self, DlFormat};
 use crate::{data, Route};
 
 use super::discovery::{
@@ -267,6 +268,11 @@ pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
                 title: title.clone(),
                 has_ebook,
                 has_audio,
+                // Computed here, where the freshly-read book is in hand: `b`
+                // is the network-first read when online, so a file replaced
+                // on the server shows up on this pass.
+                stale_ebook: downloads::is_stale(&uuid, DlFormat::Epub, &b),
+                stale_audio: downloads::is_stale(&uuid, DlFormat::Audio, &b),
             }
 
             // Files

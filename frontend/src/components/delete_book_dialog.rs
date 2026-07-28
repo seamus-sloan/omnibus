@@ -519,6 +519,7 @@ mod tests {
             label: Some(label.to_string()),
             size_bytes: 1_200_000,
             path: Some(path.to_string()),
+            validator: None,
         }
     }
 

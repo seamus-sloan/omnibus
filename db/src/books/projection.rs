@@ -260,6 +260,10 @@ pub(crate) fn row_to_ebook(r: &sqlx::sqlite::SqliteRow) -> Result<EbookMetadata,
         // Populated by `get_book` from the resolved EPUB; list/projection rows
         // don't carry it (no per-book export menu in list contexts).
         epub_size_bytes: None,
+        // Both resolved in `get_book`, which is the only read that
+        // knows the book's `book_files` rows.
+        epub_validator: None,
+        audio_validator: None,
     })
 }
 

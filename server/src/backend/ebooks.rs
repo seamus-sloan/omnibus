@@ -9,7 +9,7 @@
 
 use axum::{
     extract::{Path, Query, Request, State},
-    http::{header, HeaderValue, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -20,7 +20,7 @@ use omnibus_db::{
 use omnibus_shared::{EbookLibrary, SortDir, SortKey, ViewFilters};
 use serde::Deserialize;
 
-use super::{internal, with_pagination_headers, AppState};
+use super::{internal, validator, with_pagination_headers, AppState};
 use crate::auth::{AuthUser, MediaAuthUser};
 
 /// Default keyset page size for the paginated `GET /api/ebooks` form (F5b
@@ -238,8 +238,9 @@ pub(super) async fn get_ebook_file(
     State(state): State<AppState>,
     Path(uuid): Path<String>,
     Query(query): Query<EbookFileQuery>,
+    headers: HeaderMap,
 ) -> Response {
-    let mut resp = read_ebook_file(&state, &uuid, query.file_id).await;
+    let mut resp = read_ebook_file(&state, &uuid, query.file_id, &headers).await;
     // epub.js reads this stream over a cross-origin XHR from inside the mobile
     // WebView (unlike the CORS-exempt `<img>`/`<audio>` media the app uses
     // elsewhere), so the ACAO must ride *every* response — including the 404 /
@@ -255,22 +256,49 @@ pub(super) async fn get_ebook_file(
 /// Resolve the on-disk EPUB and stream its bytes (200), or the resolution /
 /// read failure as a 404 / 500. CORS is layered on by the caller so it covers
 /// every arm uniformly.
-async fn read_ebook_file(state: &AppState, uuid: &str, file_id: Option<i64>) -> Response {
+///
+/// Carries the file's content validator, and answers a request that already
+/// names it with a bodyless 304. That matters twice over here: a re-uploaded
+/// or repaired EPUB replaces these bytes under the same uuid-keyed URL, and
+/// this handler reads the whole book into memory to serve it — so a hit skips
+/// the read as well as the transfer.
+async fn read_ebook_file(
+    state: &AppState,
+    uuid: &str,
+    file_id: Option<i64>,
+    headers: &HeaderMap,
+) -> Response {
     let path = match resolve_epub_path(state, uuid, file_id).await {
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    let etag = validator::file_etag(&path).await;
+    if let Some(etag) = etag.as_deref() {
+        if validator::if_none_match_hits(headers, etag) {
+            return validator::not_modified(etag, validator::REVALIDATE, validator::MEDIA_VARY);
+        }
+    }
     match tokio::fs::read(&path).await {
-        Ok(bytes) => (
-            [
-                (header::CONTENT_TYPE, "application/epub+zip"),
-                (header::CACHE_CONTROL, "private, max-age=86400"),
-                (header::VARY, "Cookie"),
-                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-            ],
-            bytes,
-        )
-            .into_response(),
+        Ok(bytes) => {
+            let mut resp = (
+                [
+                    (header::CONTENT_TYPE, "application/epub+zip"),
+                    // Was `max-age=86400`, which let a reader keep serving a
+                    // replaced book for a day without ever asking. `no-cache`
+                    // plus the `ETag` below makes that a conditional request
+                    // whose answer is a 304 whenever nothing changed.
+                    (header::CACHE_CONTROL, validator::REVALIDATE),
+                    (header::VARY, validator::MEDIA_VARY),
+                    (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+                ],
+                bytes,
+            )
+                .into_response();
+            if let Some(value) = etag.as_deref().and_then(|e| HeaderValue::from_str(e).ok()) {
+                resp.headers_mut().insert(header::ETAG, value);
+            }
+            resp
+        }
         Err(e) => {
             tracing::warn!(?path, error = %e, "epub file read failed");
             axum::http::StatusCode::NOT_FOUND.into_response()

@@ -82,6 +82,13 @@ struct DownloadRecord: Sendable, Identifiable {
     var receivedBytes: Int64
     var updatedAt: Int64
     var error: String?
+    /// `BookFileInfo.validator` as it read when this download was taken.
+    ///
+    /// Compared against the same field on a later refresh to tell the reader
+    /// their copy has been superseded. `nil` for downloads taken before the
+    /// server reported one, which read as current rather than nagging about a
+    /// staleness nobody can confirm.
+    var validator: String?
 
     var fraction: Double {
         guard totalBytes > 0 else { return state == .complete ? 1 : 0 }
@@ -170,6 +177,12 @@ actor OfflineStore {
             )
             """)
         if !hasColumn("downloads", "kind") { rebuildDownloadsWithKind() }
+        // The validator the copy on disk was taken under. Added rather than
+        // rebuilt: nothing about the existing rows changes, and a download in
+        // flight during the upgrade must not lose its place.
+        if !hasColumn("downloads", "validator") {
+            exec("ALTER TABLE downloads ADD COLUMN validator TEXT")
+        }
         // Coalescing key for the outbox: a second position write for the same
         // book should replace the first, not queue behind it.
         exec("CREATE INDEX IF NOT EXISTS ops_kind_idx ON ops(kind)")
@@ -768,12 +781,13 @@ actor OfflineStore {
         let sql = """
             INSERT INTO downloads
               (book_uuid, kind, format, state, local_path, total_bytes, received_bytes,
-               updated_at, error)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               updated_at, error, validator)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(book_uuid, kind) DO UPDATE SET
               format = excluded.format, state = excluded.state, local_path = excluded.local_path,
               total_bytes = excluded.total_bytes, received_bytes = excluded.received_bytes,
-              updated_at = excluded.updated_at, error = excluded.error
+              updated_at = excluded.updated_at, error = excluded.error,
+              validator = excluded.validator
             """
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         bind(stmt, 1, record.bookUUID)
@@ -785,11 +799,17 @@ actor OfflineStore {
         sqlite3_bind_int64(stmt, 7, record.receivedBytes)
         sqlite3_bind_int64(stmt, 8, Int64(Date().timeIntervalSince1970))
         if let error = record.error { bind(stmt, 9, error) } else { sqlite3_bind_null(stmt, 9) }
+        if let validator = record.validator {
+            bind(stmt, 10, validator)
+        } else {
+            sqlite3_bind_null(stmt, 10)
+        }
         sqlite3_step(stmt)
     }
 
     private static let downloadColumns = """
-        book_uuid, kind, format, state, local_path, total_bytes, received_bytes, updated_at, error
+        book_uuid, kind, format, state, local_path, total_bytes, received_bytes, updated_at,
+        error, validator
         """
 
     func download(for uuid: String, kind: DownloadKind) -> DownloadRecord? {
@@ -924,7 +944,8 @@ actor OfflineStore {
             totalBytes: sqlite3_column_int64(stmt, 5),
             receivedBytes: sqlite3_column_int64(stmt, 6),
             updatedAt: sqlite3_column_int64(stmt, 7),
-            error: text(stmt, 8)
+            error: text(stmt, 8),
+            validator: text(stmt, 9)
         )
     }
 

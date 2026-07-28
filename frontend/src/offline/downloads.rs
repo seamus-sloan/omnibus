@@ -53,6 +53,18 @@ pub struct PlannedFile {
     /// Final on-disk size once fetched.
     pub bytes: Option<i64>,
     pub done: bool,
+    /// The `ETag` the server served these bytes under, recorded before the
+    /// first byte lands so an interrupted transfer can name what its `.part`
+    /// file came from. Sent back as `If-Range` on resume: without it the
+    /// server has no way to tell that the file changed in between, and the
+    /// resumed 206 would splice a new tail onto an old head.
+    ///
+    /// Distinct from the book's metadata validator — this names the artifact
+    /// actually streamed, which for an ebook download is the override-baked
+    /// export rather than the source file. `None` for rows written before
+    /// downloads recorded it.
+    #[serde(default)]
+    pub etag: Option<String>,
 }
 
 /// UI-facing status of one (uuid, format) download.
@@ -75,6 +87,15 @@ pub struct DownloadEntry {
     pub status: DownloadStatus,
     pub files: Vec<PlannedFile>,
     pub updated_at: i64,
+    /// `BookFileInfo.validator` as it read when this download was taken.
+    ///
+    /// Compared against the same field on a network-first metadata refresh to
+    /// tell the reader their offline copy has been superseded — a repaired or
+    /// re-uploaded file changes the server's side of this while the bytes on
+    /// the device stay whatever they were. `None` for downloads taken before
+    /// the server reported a validator, which read as current rather than
+    /// nagging about a staleness nobody can confirm.
+    pub validator: Option<String>,
 }
 
 fn registry() -> &'static RwLock<HashMap<(String, DlFormat), DownloadEntry>> {
@@ -107,7 +128,7 @@ pub fn init() {
         .run_blocking(|conn| {
             let mut stmt = match conn.prepare(
                 "SELECT book_uuid, format, title, file_id, status, total_bytes,
-                        downloaded_bytes, files, error, updated_at
+                        downloaded_bytes, files, error, updated_at, validator
                  FROM downloads",
             ) {
                 Ok(s) => s,
@@ -125,6 +146,7 @@ pub fn init() {
                     files: row.get(7)?,
                     error: row.get(8)?,
                     updated_at: row.get(9)?,
+                    validator: row.get(10)?,
                 })
             });
             match rows {
@@ -165,6 +187,75 @@ pub fn status(uuid: &str, format: DlFormat) -> DownloadStatus {
 /// `true` when the format is fully downloaded and locally playable.
 pub fn is_complete(uuid: &str, format: DlFormat) -> bool {
     matches!(status(uuid, format), DownloadStatus::Complete { .. })
+}
+
+/// `true` when the completed download on this device is no longer the file
+/// the server holds — the book was repaired, re-uploaded, or replaced on disk
+/// since it was taken offline.
+///
+/// `book` is whatever the caller most recently read; on a network-first read
+/// that is the server's current answer, and offline it is the last one seen,
+/// which reports no change rather than a staleness nobody can confirm.
+/// Answers `false` for an in-flight or failed download, and for either side
+/// missing a validator — the honest reading of "nothing to compare" is "not
+/// known to be stale", since the alternative nags at every reader whose
+/// library predates the stat backfill.
+pub fn is_stale(uuid: &str, format: DlFormat, book: &omnibus_shared::EbookMetadata) -> bool {
+    let Some(entry) = get_entry(uuid, format) else {
+        return false;
+    };
+    if !matches!(entry.status, DownloadStatus::Complete { .. }) {
+        return false;
+    }
+    let Some(taken_under) = entry.validator.as_deref() else {
+        return false;
+    };
+    source_validator(book, format, entry.file_id).is_some_and(|now| now != taken_under)
+}
+
+/// [`is_stale`] judged against the last book metadata this device saw.
+///
+/// For callers with no book in hand — the account Downloads list renders
+/// straight off the registry. The cache row is written by every book read,
+/// so this reflects the most recent online answer and, offline, the last one
+/// before that.
+pub async fn is_stale_cached(uuid: &str, format: DlFormat) -> bool {
+    match super::cache::get_json::<omnibus_shared::EbookMetadata>(&super::cache::keys::ebook(uuid))
+        .await
+    {
+        Some(book) => is_stale(uuid, format, &book),
+        None => false,
+    }
+}
+
+/// The validator of the file a download of this (format, file_id) draws from.
+///
+/// One definition for both sides of the staleness comparison — the snapshot
+/// the engine takes and the refresh [`is_stale`] checks it against. Two
+/// copies that disagreed by one tie-break would report every multi-file book
+/// as permanently out of date.
+///
+/// An explicit `file_id` names its own row. Without one, the answer is the
+/// server's own — `epub_validator` / `audio_validator` are resolved by the
+/// same queries that serve the unqualified download URL, so the two ends
+/// cannot disagree about which file it meant, and they are present even for
+/// the single-file books whose `book_files` list is never sent.
+pub(super) fn source_validator(
+    book: &omnibus_shared::EbookMetadata,
+    format: DlFormat,
+    file_id: Option<i64>,
+) -> Option<String> {
+    match file_id {
+        Some(id) => book
+            .book_files
+            .iter()
+            .find(|f| f.id == id)
+            .and_then(|f| f.validator.clone()),
+        None => match format {
+            DlFormat::Epub => book.epub_validator.clone(),
+            DlFormat::Audio => book.audio_validator.clone(),
+        },
+    }
 }
 
 /// Book uuids with at least one complete download (landing-grid badges).
@@ -248,6 +339,9 @@ pub fn start(
         },
         files: prior_files,
         updated_at: store::now_secs(),
+        // Unknown until the engine has the book's metadata in hand; a
+        // download in flight is by definition not stale.
+        validator: None,
     };
     // Known-offline fast-fail: surface the error row instantly instead of
     // letting the engine burn a doomed connect attempt.
@@ -406,6 +500,36 @@ fn persist_progress(
     });
 }
 
+/// Record the validator one file's bytes are being served under.
+///
+/// Written the moment the response headers land, before any of the body is on
+/// disk, because the case it exists for is the process dying mid-transfer: on
+/// the next attempt the `.part` file is all that survived, and this is what
+/// says which server-side bytes it was cut from. No-op when the entry or file
+/// isn't registered (a header callback racing a `remove`).
+pub(super) fn set_file_etag(uuid: &str, format: DlFormat, rel: &str, etag: Option<String>) {
+    let entry = {
+        let Ok(mut guard) = registry().write() else {
+            return;
+        };
+        let Some(entry) = guard.get_mut(&(uuid.to_string(), format)) else {
+            return;
+        };
+        let Some(file) = entry.files.iter_mut().find(|f| f.rel == rel) else {
+            return;
+        };
+        if file.etag == etag {
+            return;
+        }
+        file.etag = etag;
+        entry.updated_at = store::now_secs();
+        entry.clone()
+    };
+    // Full `persist` rather than a targeted UPDATE: the validator lives in the
+    // JSON `files` blob, so there is no column to write on its own.
+    persist(&entry);
+}
+
 pub(super) fn set_error(uuid: &str, format: DlFormat, message: String) {
     let Some(mut entry) = get_entry(uuid, format) else {
         return;
@@ -423,11 +547,12 @@ fn persist(entry: &DownloadEntry) {
     store.run_detached(move |conn| {
         let _ = conn.execute(
             "INSERT INTO downloads
-               (book_uuid, format, title, file_id, status, total_bytes, downloaded_bytes, files, error, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+               (book_uuid, format, title, file_id, status, total_bytes, downloaded_bytes, files, error, updated_at, validator)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(book_uuid, format) DO UPDATE SET
                title = ?3, file_id = ?4, status = ?5, total_bytes = ?6,
-               downloaded_bytes = ?7, files = ?8, error = ?9, updated_at = ?10",
+               downloaded_bytes = ?7, files = ?8, error = ?9, updated_at = ?10,
+               validator = ?11",
             rusqlite::params![
                 row.book_uuid,
                 row.format,
@@ -439,6 +564,7 @@ fn persist(entry: &DownloadEntry) {
                 row.files,
                 row.error,
                 row.updated_at,
+                row.validator,
             ],
         );
     });
@@ -464,6 +590,7 @@ fn row_from_entry(entry: &DownloadEntry) -> DownloadRow {
         files: serde_json::to_string(&entry.files).unwrap_or_else(|_| "[]".into()),
         error,
         updated_at: entry.updated_at,
+        validator: entry.validator.clone(),
     }
 }
 
@@ -490,6 +617,7 @@ fn entry_from_row(row: DownloadRow) -> Option<DownloadEntry> {
         status,
         files,
         updated_at: row.updated_at,
+        validator: row.validator,
     })
 }
 

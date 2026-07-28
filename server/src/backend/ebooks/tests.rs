@@ -436,6 +436,89 @@ async fn api_get_ebook_file_returns_200_with_epub_bytes() {
     std::fs::remove_dir_all(&tmp).ok();
 }
 
+/// A re-uploaded or repaired EPUB replaces these bytes under the same
+/// uuid-keyed URL, so the reader has to be able to tell that its copy went
+/// stale. The `ETag` is what tells it, and a client that already holds the
+/// current bytes gets a bodyless 304 rather than the whole book again.
+#[tokio::test]
+async fn api_get_ebook_file_carries_a_validator_and_answers_a_matching_if_none_match_with_304() {
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!("omnibus_ebook_file_etag_test_{pid}_{nanos}"));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let stem = "alpha";
+    std::fs::write(tmp.join(format!("{stem}.epub")), b"PK\x03\x04 fake-epub").unwrap();
+
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
+        .bind(tmp.to_str().unwrap())
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    let uuid = "55555555-5555-5555-5555-555555555555";
+    let book_id =
+        sqlx::query("INSERT INTO books (uuid, library_id, path, title) VALUES (?, ?, ?, 'Alpha')")
+            .bind(uuid)
+            .bind(lib_id)
+            .bind(tmp.to_str().unwrap())
+            .execute(&pool)
+            .await
+            .unwrap()
+            .last_insert_rowid();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES (?, 'EPUB', ?, 0)",
+    )
+    .bind(book_id)
+    .bind(stem)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    let res = app
+        .clone()
+        .oneshot(get_with_bearer(&format!("/api/ebooks/{uuid}/file"), &token))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::OK);
+    let etag = res
+        .headers()
+        .get(axum::http::header::ETAG)
+        .and_then(|v| v.to_str().ok())
+        .expect("a served file carries its validator")
+        .to_string();
+    // `max-age` alone would let the reader keep serving a replaced book
+    // without ever asking; the point of the validator is the asking.
+    assert_eq!(
+        res.headers()
+            .get(axum::http::header::CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok()),
+        Some("private, no-cache"),
+    );
+
+    let res = app
+        .oneshot(get_with_bearer_and_if_none_match(
+            &format!("/api/ebooks/{uuid}/file"),
+            &token,
+            &etag,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::NOT_MODIFIED);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    assert!(bytes.is_empty(), "a 304 must not carry the book again");
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
 /// The `/file` stream is gated by `MediaAuthUser`, so a `?token=` query param
 /// authenticates it with neither a cookie nor a bearer header — the path
 /// epub.js takes from inside the mobile WebView. Mirrors the bearer 200 test

@@ -9,6 +9,12 @@ use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 
 use crate::metadata_overrides::{apply_overrides, get_metadata_overrides};
 
+/// The `book_files.format` values an unqualified audiobook download resolves
+/// over. Kept in lockstep with `resolve_audiobook_file`'s `IN (…)` list — a
+/// format admitted here but not there would name a file the server refuses to
+/// serve.
+const DOWNLOADABLE_AUDIO_FORMATS: [&str; 3] = ["M4B", "M4A", "MP3"];
+
 use super::projection::{
     backfill_creator_ids, merge_overrides_into_books, row_to_ebook, BOOK_COLUMNS,
 };
@@ -62,11 +68,25 @@ pub async fn get_book(
     // Size of the EPUB the hero send would deliver (file_id None resolves the
     // lowest-ordinal EPUB, same as `book_file_path`), so the export menu can
     // gate the email button on Kindle's size cap.
-    book.epub_size_bytes = files
+    let lowest_epub = files
         .iter()
         .filter(|f| f.format.eq_ignore_ascii_case("EPUB"))
+        .min_by_key(|f| f.ordinal);
+    book.epub_size_bytes = lowest_epub.map(|f| f.size_bytes);
+    // The validators a client compares a downloaded copy against. Resolved
+    // here rather than client-side because `book_files` below is only attached
+    // for multi-file books, and because the pick has to be the server's own —
+    // the same rows `book_file_path` and `resolve_audiobook_file` serve.
+    book.epub_validator = lowest_epub.and_then(|f| f.validator.clone());
+    book.audio_validator = files
+        .iter()
+        .filter(|f| {
+            DOWNLOADABLE_AUDIO_FORMATS
+                .iter()
+                .any(|a| f.format.eq_ignore_ascii_case(a))
+        })
         .min_by_key(|f| f.ordinal)
-        .map(|f| f.size_bytes);
+        .and_then(|f| f.validator.clone());
     let has_multipart = files.iter().any(|f| {
         files
             .iter()
@@ -489,27 +509,31 @@ where
             Option<String>,
             i64,
             Option<String>,
+            i64,
         ),
     >(
-        "SELECT id, format, filename, ordinal, label, size_bytes, scan_key FROM book_files \
-         WHERE book_id = ? ORDER BY format, ordinal",
+        "SELECT id, format, filename, ordinal, label, size_bytes, scan_key, mtime_epoch \
+         FROM book_files WHERE book_id = ? ORDER BY format, ordinal",
     )
     .bind(book_id)
     .fetch_all(executor)
     .await?;
     Ok(rows
         .into_iter()
-        .map(|(id, format, filename, ordinal, label, size_bytes, path)| {
-            omnibus_shared::BookFileInfo {
-                id,
-                format,
-                filename,
-                ordinal,
-                label,
-                size_bytes,
-                path,
-            }
-        })
+        .map(
+            |(id, format, filename, ordinal, label, size_bytes, path, mtime_epoch)| {
+                omnibus_shared::BookFileInfo {
+                    id,
+                    format,
+                    filename,
+                    ordinal,
+                    label,
+                    size_bytes,
+                    path,
+                    validator: omnibus_shared::content_validator(mtime_epoch, size_bytes),
+                }
+            },
+        )
         .collect())
 }
 

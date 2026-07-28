@@ -13,6 +13,7 @@ fn bf(id: i64, format: &str, ordinal: i64, size_bytes: i64) -> BookFileInfo {
         label: None,
         size_bytes,
         path: None,
+        validator: None,
     }
 }
 
@@ -127,8 +128,10 @@ fn entry_row_round_trip_preserves_status_and_files() {
             ordinal: Some(0),
             bytes: Some(123),
             done: true,
+            etag: None,
         }],
         updated_at: 42,
+        validator: None,
     };
     let row = row_from_entry(&entry);
     assert_eq!(row.status, "complete");
@@ -162,6 +165,7 @@ fn registry_status_and_downloaded_uuids_reflect_upserts() {
         status: DownloadStatus::Complete { bytes: 10 },
         files: vec![],
         updated_at: 1,
+        validator: None,
     });
     assert!(is_complete(uuid, DlFormat::Epub));
     assert!(!is_complete(uuid, DlFormat::Audio));
@@ -177,6 +181,7 @@ fn update_progress_bytes_mutates_status_in_place_and_preserves_files() {
         ordinal: Some(0),
         bytes: None,
         done: false,
+        etag: None,
     }];
     upsert(DownloadEntry {
         book_uuid: uuid.into(),
@@ -189,6 +194,7 @@ fn update_progress_bytes_mutates_status_in_place_and_preserves_files() {
         },
         files: files.clone(),
         updated_at: 1,
+        validator: None,
     });
 
     update_progress_bytes(uuid, DlFormat::Audio, 42, Some(100));
@@ -228,6 +234,7 @@ fn update_progress_bytes_clamps_negative_downloaded_to_zero() {
         },
         files: vec![],
         updated_at: 1,
+        validator: None,
     });
 
     update_progress_bytes(uuid, DlFormat::Epub, -3, None);
@@ -308,4 +315,147 @@ fn format_bytes_scales_units() {
     assert_eq!(format_bytes(5 * 1024 * 1024), "5.0 MB");
     assert_eq!(format_bytes(3 * 1024 * 1024 * 1024), "3.0 GB");
     assert_eq!(format_bytes(-5), "0 B");
+}
+
+// ── is_stale: has the copy on this device been superseded? ─────────────
+
+/// A `BookFileInfo` carrying a validator, for the explicit-`file_id` case.
+fn bf_with_validator(id: i64, format: &str, ordinal: i64, validator: Option<&str>) -> BookFileInfo {
+    BookFileInfo {
+        validator: validator.map(str::to_string),
+        ..bf(id, format, ordinal, 0)
+    }
+}
+
+/// A book whose *unqualified* download validators are what the server
+/// resolved, which is what a download taken without a `file_id` compares to.
+fn book_with_validators(epub: Option<&str>, audio: Option<&str>) -> EbookMetadata {
+    EbookMetadata {
+        epub_validator: epub.map(str::to_string),
+        audio_validator: audio.map(str::to_string),
+        ..Default::default()
+    }
+}
+
+/// Register a completed download of `uuid` taken under `taken_under`.
+fn seed_complete(uuid: &str, format: DlFormat, file_id: Option<i64>, taken_under: Option<&str>) {
+    upsert(DownloadEntry {
+        book_uuid: uuid.into(),
+        format,
+        title: "T".into(),
+        file_id,
+        status: DownloadStatus::Complete { bytes: 10 },
+        files: Vec::new(),
+        updated_at: 0,
+        validator: taken_under.map(str::to_string),
+    });
+}
+
+#[test]
+fn is_stale_is_true_when_the_server_file_moved_since_the_download() {
+    let uuid = "stale-moved";
+    seed_complete(uuid, DlFormat::Epub, None, Some("\"a-1\""));
+    let book = book_with_validators(Some("\"b-2\""), None);
+
+    assert!(is_stale(uuid, DlFormat::Epub, &book));
+}
+
+#[test]
+fn is_stale_is_false_when_the_validator_still_matches() {
+    let uuid = "stale-same";
+    seed_complete(uuid, DlFormat::Epub, None, Some("\"a-1\""));
+    let book = book_with_validators(Some("\"a-1\""), None);
+
+    assert!(!is_stale(uuid, DlFormat::Epub, &book));
+}
+
+#[test]
+fn is_stale_is_false_when_either_side_has_no_validator() {
+    // A library predating the stat backfill reports nothing to compare. The
+    // reader gets no chip rather than a permanent one they cannot clear.
+    let unknown_locally = "stale-no-snapshot";
+    seed_complete(unknown_locally, DlFormat::Epub, None, None);
+    let book = book_with_validators(Some("\"b-2\""), None);
+    assert!(!is_stale(unknown_locally, DlFormat::Epub, &book));
+
+    let unknown_remotely = "stale-no-server-side";
+    seed_complete(unknown_remotely, DlFormat::Epub, None, Some("\"a-1\""));
+    let bare = book_with_validators(None, None);
+    assert!(!is_stale(unknown_remotely, DlFormat::Epub, &bare));
+}
+
+#[test]
+fn is_stale_is_false_for_a_download_that_is_not_complete() {
+    let uuid = "stale-in-flight";
+    upsert(DownloadEntry {
+        book_uuid: uuid.into(),
+        format: DlFormat::Epub,
+        title: "T".into(),
+        file_id: None,
+        status: DownloadStatus::Downloading {
+            downloaded: 1,
+            total: Some(10),
+        },
+        files: Vec::new(),
+        updated_at: 0,
+        validator: Some("\"a-1\"".into()),
+    });
+    let book = book_with_validators(Some("\"b-2\""), None);
+
+    assert!(!is_stale(uuid, DlFormat::Epub, &book));
+}
+
+#[test]
+fn is_stale_is_false_for_a_book_that_was_never_downloaded() {
+    let book = book_with_validators(Some("\"b-2\""), None);
+    assert!(!is_stale("stale-never-downloaded", DlFormat::Epub, &book));
+}
+
+#[test]
+fn is_stale_compares_the_file_the_download_actually_took() {
+    // Two EPUBs on one book. A download of the second must not be judged
+    // against the first, which is what an ordinal-blind comparison would do.
+    let uuid = "stale-multi-file";
+    seed_complete(uuid, DlFormat::Epub, Some(2), Some("\"second-1\""));
+    let mut book = book_with_files(vec![
+        bf_with_validator(1, "EPUB", 0, Some("\"first-changed\"")),
+        bf_with_validator(2, "EPUB", 1, Some("\"second-1\"")),
+    ]);
+    // The unqualified validator names the *first* file, which did change —
+    // a download that named file 2 must not be judged against it.
+    book.epub_validator = Some("\"first-changed\"".into());
+
+    assert!(
+        !is_stale(uuid, DlFormat::Epub, &book),
+        "a change to the sibling file must not flag this download"
+    );
+}
+
+#[test]
+fn is_stale_uses_the_servers_own_pick_when_the_download_named_no_file() {
+    // An unqualified download is judged against `epub_validator` — the server
+    // resolving its own URL — never against a client-side scan of
+    // `book_files`, which isn't even sent for a single-file book.
+    let uuid = "stale-unqualified";
+    seed_complete(uuid, DlFormat::Epub, None, Some("\"lowest-1\""));
+    let mut book = book_with_validators(Some("\"lowest-2\""), None);
+    book.book_files = vec![bf_with_validator(2, "EPUB", 1, Some("\"higher-9\""))];
+
+    assert!(is_stale(uuid, DlFormat::Epub, &book));
+}
+
+#[test]
+fn is_stale_reads_the_audio_validator_for_an_audiobook_download() {
+    // A dual-format book carries both; reading the wrong one would flag every
+    // audiobook whose ebook happened to change, and vice versa.
+    let uuid = "stale-dual-format";
+    seed_complete(uuid, DlFormat::Audio, None, Some("\"audio-1\""));
+    let book = book_with_validators(Some("\"epub-changed\""), Some("\"audio-1\""));
+
+    assert!(!is_stale(uuid, DlFormat::Audio, &book));
+    assert!(is_stale(
+        uuid,
+        DlFormat::Audio,
+        &book_with_validators(None, Some("\"audio-2\""))
+    ));
 }

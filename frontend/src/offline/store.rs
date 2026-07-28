@@ -44,6 +44,10 @@ pub struct DownloadRow {
     pub files: String,
     pub error: Option<String>,
     pub updated_at: i64,
+    /// `BookFileInfo.validator` as it read when this download was taken —
+    /// what a later metadata refresh is compared against to tell the reader
+    /// their offline copy has been superseded.
+    pub validator: Option<String>,
 }
 
 /// Failure opening or preparing the offline SQLite store. Wraps the raw
@@ -471,11 +475,12 @@ impl Store {
         self.run(move |conn| {
             log_err(conn.execute(
                 "INSERT INTO downloads
-                   (book_uuid, format, title, file_id, status, total_bytes, downloaded_bytes, files, error, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                   (book_uuid, format, title, file_id, status, total_bytes, downloaded_bytes, files, error, updated_at, validator)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                  ON CONFLICT(book_uuid, format) DO UPDATE SET
                    title = ?3, file_id = ?4, status = ?5, total_bytes = ?6,
-                   downloaded_bytes = ?7, files = ?8, error = ?9, updated_at = ?10",
+                   downloaded_bytes = ?7, files = ?8, error = ?9, updated_at = ?10,
+                   validator = ?11",
                 params![
                     row.book_uuid,
                     row.format,
@@ -487,6 +492,7 @@ impl Store {
                     row.files,
                     row.error,
                     row.updated_at,
+                    row.validator,
                 ],
             ));
         })
@@ -498,7 +504,7 @@ impl Store {
         self.run(|conn| {
             let mut stmt = match conn.prepare(
                 "SELECT book_uuid, format, title, file_id, status, total_bytes,
-                        downloaded_bytes, files, error, updated_at
+                        downloaded_bytes, files, error, updated_at, validator
                  FROM downloads ORDER BY updated_at DESC",
             ) {
                 Ok(s) => s,
@@ -519,6 +525,7 @@ impl Store {
                     files: row.get(7)?,
                     error: row.get(8)?,
                     updated_at: row.get(9)?,
+                    validator: row.get(10)?,
                 })
             });
             match rows {
@@ -555,11 +562,28 @@ pub(super) fn log_err(r: Result<usize, rusqlite::Error>) {
     }
 }
 
+/// Bring the offline schema up to date, one forward-only step per version.
+///
+/// Each step is guarded on its own `user_version` so a store created at any
+/// prior version converges on the same schema as a fresh one — the same
+/// forward-only shape the server's migrations use.
 fn apply_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if version >= 1 {
-        return Ok(());
+    if version < 1 {
+        apply_v1(conn)?;
     }
+    if version < 2 {
+        // The validator a download's bytes were taken under, so a later
+        // metadata refresh can tell the reader their copy was superseded.
+        conn.execute_batch(
+            "ALTER TABLE downloads ADD COLUMN validator TEXT;
+             PRAGMA user_version = 2;",
+        )?;
+    }
+    Ok(())
+}
+
+fn apply_v1(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS cache (
              key        TEXT PRIMARY KEY,

@@ -26,12 +26,35 @@ pub(super) fn DownloadsSection() -> Element {
             }
         }
     });
+    // Which rows have been superseded on the server. Recomputed on mount and
+    // on every registry transition, against the metadata each book was last
+    // read under — no request, so the list behaves the same offline.
+    let mut stale = use_signal(std::collections::HashSet::<(String, DlFormat)>::new);
+    use_future(move || async move {
+        let mut rx = downloads::subscribe();
+        loop {
+            let mut found = std::collections::HashSet::new();
+            for entry in downloads::list() {
+                if downloads::is_stale_cached(&entry.book_uuid, entry.format).await {
+                    found.insert((entry.book_uuid.clone(), entry.format));
+                }
+            }
+            if *stale.peek() != found {
+                stale.set(found);
+            }
+            if rx.changed().await.is_err() {
+                break;
+            }
+        }
+    });
+
     let _generation = generation();
     let entries = downloads::list();
     if entries.is_empty() {
         return rsx! {};
     }
     let total = downloads::total_complete_bytes();
+    let stale = stale();
 
     rsx! {
         div { class: "m-account-downloads", "data-testid": "account-downloads",
@@ -41,7 +64,11 @@ pub(super) fn DownloadsSection() -> Element {
             }
             div { class: "m-account-rows",
                 for entry in entries {
-                    DownloadRow { key: "{entry.book_uuid}:{entry.format.as_str()}", entry: entry.clone() }
+                    DownloadRow {
+                        key: "{entry.book_uuid}:{entry.format.as_str()}",
+                        stale: stale.contains(&(entry.book_uuid.clone(), entry.format)),
+                        entry: entry.clone(),
+                    }
                 }
             }
         }
@@ -124,12 +151,18 @@ fn relative_time(at: i64) -> String {
 /// One downloaded (or in-flight) book row: title + format/size subline,
 /// with Remove for finished rows.
 #[component]
-fn DownloadRow(entry: DownloadEntry) -> Element {
+fn DownloadRow(entry: DownloadEntry, stale: bool) -> Element {
     let format_label = match entry.format {
         DlFormat::Epub => "Ebook",
         DlFormat::Audio => "Audiobook",
     };
     let subline = match &entry.status {
+        DownloadStatus::Complete { bytes } if stale => {
+            format!(
+                "{format_label} \u{00b7} {} \u{00b7} update available",
+                downloads::format_bytes(*bytes)
+            )
+        }
         DownloadStatus::Complete { bytes } => {
             format!(
                 "{format_label} \u{00b7} {}",
@@ -161,7 +194,10 @@ fn DownloadRow(entry: DownloadEntry) -> Element {
                 to: Route::BookDetail { uuid: entry.book_uuid.clone() },
                 class: "m-account-dl-link",
                 div { class: "m-account-dl-title", "{title}" }
-                div { class: "m-account-dl-sub", "{subline}" }
+                div {
+                    class: if stale { "m-account-dl-sub m-dl-row-stale" } else { "m-account-dl-sub" },
+                    "{subline}"
+                }
             }
             if removable {
                 button {

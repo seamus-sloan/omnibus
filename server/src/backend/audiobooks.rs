@@ -236,18 +236,20 @@ pub(super) async fn get_audiobook_part(
 
     let abs_path = std::path::Path::new(&resolved.library_path).join(&part.filename);
     let mime = audiobook::mime_for_filename(&part.filename);
-    let serve = ServeFile::new(&abs_path);
-    let res = match serve.oneshot(req).await {
-        Ok(r) => r,
-        Err(e) => return internal("serve audiobook part", e),
-    };
-    let (mut parts_resp, body) = res.into_parts();
-    if let Ok(value) = mime.parse() {
-        parts_resp
-            .headers
-            .insert(axum::http::header::CONTENT_TYPE, value);
+    let (mut parts_resp, body) = super::validator::serve_file(req, &abs_path)
+        .await
+        .into_parts();
+    if matches!(
+        parts_resp.status,
+        axum::http::StatusCode::OK | axum::http::StatusCode::PARTIAL_CONTENT
+    ) {
+        if let Ok(value) = mime.parse() {
+            parts_resp
+                .headers
+                .insert(axum::http::header::CONTENT_TYPE, value);
+        }
     }
-    Response::from_parts(parts_resp, Body::new(body))
+    Response::from_parts(parts_resp, body)
 }
 
 /// Query parameters for `GET /api/audiobooks/{uuid}/download`.

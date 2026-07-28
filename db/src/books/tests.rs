@@ -11,8 +11,8 @@ use crate::metadata_overrides::upsert_metadata_overrides;
 use crate::pool::init_db;
 use crate::sync::replace_books;
 use crate::test_support::{
-    author_id_by_name, indexed, seed_discovery_fixture, seed_minimal_books, series_id_by_name,
-    CoversTempDir,
+    author_id_by_name, indexed, indexed_with_stat, seed_discovery_fixture, seed_minimal_books,
+    series_id_by_name, CoversTempDir,
 };
 
 // ---------- Server-side cap (issue #81) ----------
@@ -2506,4 +2506,129 @@ async fn physical_only_book_is_visible_but_wishlist_only_is_hidden() {
         facets.authors.iter().any(|f| f.value == "Print Author"),
         "physical-only book's author must appear in facets"
     );
+}
+
+// ---------- Content validators (offline staleness detection) ----------
+
+/// The validator a client would compare against, for the book titled `title`.
+async fn validator_of(pool: &sqlx::SqlitePool, title: &str) -> Option<String> {
+    let book_id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE title = ?")
+        .bind(title)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let files = get_book_files(pool, book_id).await.unwrap();
+    assert_eq!(files.len(), 1, "fixture books have exactly one file");
+    files[0].validator.clone()
+}
+
+#[tokio::test]
+async fn get_book_files_reports_a_validator_derived_from_the_stored_stat() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    replace_books(
+        &pool,
+        "/lib",
+        vec![indexed_with_stat(
+            "a.epub",
+            Some("Alpha"),
+            0x05f5_e100,
+            0xabc,
+        )],
+    )
+    .await
+    .unwrap();
+
+    // Byte-identical to what the server stamps as `ETag` for the same stat —
+    // the comparison a downloaded copy is checked against.
+    assert_eq!(
+        validator_of(&pool, "Alpha").await.as_deref(),
+        Some("\"5f5e100-abc\"")
+    );
+}
+
+#[tokio::test]
+async fn get_book_files_reports_no_validator_when_the_stat_was_never_observed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    replace_books(
+        &pool,
+        "/lib",
+        vec![indexed_with_stat("a.epub", Some("Alpha"), 0, 0)],
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(validator_of(&pool, "Alpha").await, None);
+}
+
+#[tokio::test]
+async fn reindex_moves_the_validator_of_a_replaced_file_and_leaves_the_others_alone() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    replace_books(
+        &pool,
+        "/lib",
+        vec![
+            indexed_with_stat("a.epub", Some("Alpha"), 1_000, 500),
+            indexed_with_stat("b.epub", Some("Beta"), 2_000, 600),
+        ],
+    )
+    .await
+    .unwrap();
+    let alpha_before = validator_of(&pool, "Alpha").await;
+    let beta_before = validator_of(&pool, "Beta").await;
+    assert!(alpha_before.is_some() && beta_before.is_some());
+
+    // `a.epub` replaced in place — same path, new stat, so the diff classifies
+    // it Changed. `b.epub` is untouched and classifies Unchanged.
+    replace_books(
+        &pool,
+        "/lib",
+        vec![
+            indexed_with_stat("a.epub", Some("Alpha"), 1_500, 700),
+            indexed_with_stat("b.epub", Some("Beta"), 2_000, 600),
+        ],
+    )
+    .await
+    .unwrap();
+
+    assert_ne!(
+        validator_of(&pool, "Alpha").await,
+        alpha_before,
+        "a replaced file must not keep the validator its old bytes were served under"
+    );
+    assert_eq!(
+        validator_of(&pool, "Beta").await,
+        beta_before,
+        "an untouched file must not look stale to a device holding it"
+    );
+}
+
+#[tokio::test]
+async fn get_book_hoists_the_validator_of_the_file_an_unqualified_download_resolves_to() {
+    // `book_files` is only attached for multi-file books, so a single-file
+    // book — the ordinary case — would otherwise carry no validator at all and
+    // every download of it would look current forever.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    replace_books(
+        &pool,
+        "/lib",
+        vec![indexed_with_stat("a.epub", Some("Alpha"), 1_000, 500)],
+    )
+    .await
+    .unwrap();
+    let book_id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE title = 'Alpha'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let book = get_book(&pool, book_id).await.unwrap().unwrap();
+    assert!(
+        book.book_files.is_empty(),
+        "precondition: a single-file book sends no file list"
+    );
+    assert_eq!(
+        book.epub_validator.as_deref(),
+        validator_of(&pool, "Alpha").await.as_deref(),
+        "the hoisted validator must be the one the file row reports"
+    );
+    assert_eq!(book.audio_validator, None, "this book has no audio file");
 }

@@ -186,6 +186,40 @@ actor APIClient {
         }
     }
 
+    /// Raw bytes plus the validator they were served under, or `nil` when the
+    /// server confirms `ifNoneMatch` still names the current bytes.
+    ///
+    /// The revalidation half of the image cache: a cover replaced from
+    /// another device changes the bytes behind an unchanged URL, and a 304
+    /// here is the cheap answer that the copy on disk is still that file.
+    func conditionalData(
+        for path: String,
+        ifNoneMatch: String?
+    ) async throws -> (data: Data, etag: String?)? {
+        guard let url = absoluteURL(path) else { throw APIError.notConfigured }
+        try failFastWhenUnreachable()
+        var request = URLRequest(url: url)
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        if let ifNoneMatch { request.setValue(ifNoneMatch, forHTTPHeaderField: "If-None-Match") }
+        // URLSession's own cache would answer some of these itself, out of a
+        // store this cache has no view of; the disk copy here is the cache.
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        do {
+            let (data, response) = try await session.data(for: request)
+            noteOutcome(reachable: true)
+            let http = response as? HTTPURLResponse
+            if http?.statusCode == 304 { return nil }
+            try validate(response, data: data)
+            return (data, http?.value(forHTTPHeaderField: "ETag"))
+        } catch let error as APIError {
+            throw error
+        } catch {
+            try rethrowIfCancelled(error)
+            noteOutcome(reachable: false)
+            throw APIError.transport(error.localizedDescription)
+        }
+    }
+
     /// Multipart upload used by the cover, photo, and book-upload endpoints.
     func upload<T: Decodable>(
         _ path: String,

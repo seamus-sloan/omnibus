@@ -29,6 +29,7 @@ pub mod stats;
 pub mod suggestion;
 pub mod summary;
 pub mod upload;
+pub mod validator;
 pub mod view_prefs;
 pub mod worker;
 
@@ -92,6 +93,7 @@ pub use stats::*;
 pub use suggestion::*;
 pub use summary::*;
 pub use upload::*;
+pub use validator::*;
 pub use view_prefs::*;
 pub use worker::*;
 

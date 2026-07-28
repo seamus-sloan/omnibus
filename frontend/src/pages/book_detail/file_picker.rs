@@ -230,6 +230,7 @@ mod tests {
             label: None,
             size_bytes: 0,
             path: None,
+            validator: None,
         }
     }
 

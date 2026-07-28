@@ -110,6 +110,30 @@ final class DownloadManager: NSObject {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
+    /// Whether the completed download of `kind` is no longer the file the
+    /// server holds — the book was repaired, re-uploaded, or replaced on disk
+    /// since it was taken offline.
+    ///
+    /// `book` is whatever the caller last read; reads are network-first while
+    /// online, so a replaced file surfaces on that pass. Answers `false` for a
+    /// download still running, and for either side missing a validator — the
+    /// honest reading of "nothing to compare" is "not known to be stale",
+    /// since the alternative nags at every reader whose library predates the
+    /// server recording one.
+    func isStale(_ book: Book, kind: DownloadKind) -> Bool {
+        guard let record = record(for: book.uuid, kind: kind), record.state == .complete,
+              let takenUnder = record.validator,
+              let current = book.sourceValidator(for: kind)
+        else { return false }
+        return current != takenUnder
+    }
+
+    /// Replace a superseded copy with the file the server holds now.
+    func redownload(_ book: Book, kind: DownloadKind) async {
+        await remove(book.uuid, kind: kind)
+        await start(book: book, kind: kind)
+    }
+
     /// Which formats of this book can be taken offline. A dual-format book
     /// offers both — they are two files and a reader may want either.
     nonisolated static func kinds(for book: Book) -> [DownloadKind] {
@@ -146,7 +170,10 @@ final class DownloadManager: NSObject {
         let record = DownloadRecord(
             bookUUID: uuid, kind: kind, format: format, state: .running, localPath: nil,
             totalBytes: 0, receivedBytes: 0, updatedAt: Int64(Date().timeIntervalSince1970),
-            error: nil
+            error: nil,
+            // Snapshotted from the book being downloaded, so a later refresh
+            // can tell this copy from the one the server holds.
+            validator: book.sourceValidator(for: kind)
         )
         records[record.id] = record
         await OfflineStore.shared.upsertDownload(record)

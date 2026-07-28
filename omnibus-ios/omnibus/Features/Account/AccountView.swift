@@ -562,6 +562,17 @@ struct DownloadsView: View {
                             }
                             .buttonStyle(PressableStyle())
                             .contextMenu {
+                                if let book = books[record.bookUUID],
+                                   downloads.isStale(book, kind: record.kind) {
+                                    Button {
+                                        Task { await downloads.redownload(book, kind: record.kind) }
+                                    } label: {
+                                        Label(
+                                            "Re-download",
+                                            systemImage: "arrow.triangle.2.circlepath"
+                                        )
+                                    }
+                                }
                                 Button(role: .destructive) {
                                     Task { await downloads.remove(record.bookUUID, kind: record.kind) }
                                 } label: {
@@ -605,6 +616,9 @@ struct DownloadsView: View {
 
     private func row(_ record: DownloadRecord, isFirst: Bool) -> some View {
         let book = books[record.bookUUID]
+        // Judged against the book this screen already loaded for its title —
+        // no extra request, and the same answer offline as on.
+        let stale = book.map { downloads.isStale($0, kind: record.kind) } ?? false
 
         return VStack(spacing: 0) {
             if !isFirst { Hairline() }
@@ -631,11 +645,9 @@ struct DownloadsView: View {
 
                     HStack(spacing: 6) {
                         Badge(text: record.format)
-                        Text(statusLabel(record))
+                        Text(statusLabel(record, stale: stale))
                             .font(.ui(11.5))
-                            .foregroundStyle(
-                                record.state == .failed ? palette.badColor : palette.ink3Color
-                            )
+                            .foregroundStyle(statusTint(record, stale: stale))
                     }
 
                     if record.state == .running {
@@ -655,12 +667,20 @@ struct DownloadsView: View {
         }
     }
 
-    private func statusLabel(_ record: DownloadRecord) -> String {
+    private func statusLabel(_ record: DownloadRecord, stale: Bool) -> String {
         switch record.state {
+        case .complete where stale: "\(Format.bytes(record.totalBytes)) · update available"
         case .complete: Format.bytes(record.totalBytes)
         case .running: "\(Int(record.fraction * 100))%"
         case .queued: "Queued"
         case .failed: record.error ?? "Failed"
         }
+    }
+
+    /// A superseded copy still opens, so it reads as a warning rather than the
+    /// failure red a broken download gets.
+    private func statusTint(_ record: DownloadRecord, stale: Bool) -> Color {
+        if record.state == .failed { return palette.badColor }
+        return stale ? palette.warnColor : palette.ink3Color
     }
 }

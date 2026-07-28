@@ -99,6 +99,7 @@ fn planned_file(rel: &str, url_path: &str) -> PlannedFile {
         ordinal: None,
         bytes: None,
         done: false,
+        etag: None,
     }
 }
 
@@ -128,9 +129,11 @@ async fn download_file_streams_a_fresh_file_from_a_full_response() {
     let file = planned_file("book.epub", "/file");
     let mut deltas = Vec::new();
 
-    let written = download_file(&base, dir.path(), &file, &mut |d| deltas.push(d))
-        .await
-        .expect("fresh download must succeed");
+    let written = download_file(&base, dir.path(), &file, &mut |_| {}, &mut |d| {
+        deltas.push(d)
+    })
+    .await
+    .expect("fresh download must succeed");
 
     assert_eq!(written, 5000);
     assert_eq!(deltas.iter().sum::<i64>(), 5000);
@@ -180,9 +183,11 @@ async fn download_file_resumes_a_partial_download_via_a_range_request() {
     let file = planned_file("book.epub", "/file");
     let mut deltas = Vec::new();
 
-    let written = download_file(&base, dir.path(), &file, &mut |d| deltas.push(d))
-        .await
-        .expect("resumed download must succeed");
+    let written = download_file(&base, dir.path(), &file, &mut |_| {}, &mut |d| {
+        deltas.push(d)
+    })
+    .await
+    .expect("resumed download must succeed");
 
     assert_eq!(written, 5000, "final size must be the full file");
     // Resumed bytes are the caller's concern (already counted in a prior
@@ -214,9 +219,11 @@ async fn download_file_restarts_from_scratch_when_the_server_ignores_the_range_r
     let file = planned_file("book.epub", "/file");
     let mut deltas = Vec::new();
 
-    let written = download_file(&base, dir.path(), &file, &mut |d| deltas.push(d))
-        .await
-        .expect("restart-from-scratch download must succeed");
+    let written = download_file(&base, dir.path(), &file, &mut |_| {}, &mut |d| {
+        deltas.push(d)
+    })
+    .await
+    .expect("restart-from-scratch download must succeed");
 
     assert_eq!(written, 500);
     // The stale 200 bytes on disk are discarded; the negative delta says so.
@@ -266,7 +273,7 @@ async fn download_file_errors_and_leaves_no_final_file_when_the_response_is_trun
     let dir = tempfile::tempdir().expect("tempdir");
     let file = planned_file("book.epub", "/file");
 
-    let result = download_file(&base, dir.path(), &file, &mut |_| {}).await;
+    let result = download_file(&base, dir.path(), &file, &mut |_| {}, &mut |_| {}).await;
 
     assert!(
         result.is_err(),
@@ -277,5 +284,151 @@ async fn download_file_errors_and_leaves_no_final_file_when_the_response_is_trun
             .await
             .is_err(),
         "a truncated transfer must never be renamed into a completed file"
+    );
+}
+
+// ── download_file: If-Range, so a resume can never splice ──────────────
+
+/// A server that answers a resume the way omnibus does: honour the range only
+/// while the client's `If-Range` still names the bytes on disk, and otherwise
+/// send the whole (new) file. Records what it was asked with.
+fn conditional_range_router(
+    content: Vec<u8>,
+    etag: &'static str,
+    seen: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+) -> axum::Router {
+    axum::Router::new().route(
+        "/file",
+        axum::routing::get(move |headers: axum::http::HeaderMap| {
+            let content = content.clone();
+            let seen = seen.clone();
+            async move {
+                let header = |name: axum::http::HeaderName| {
+                    headers
+                        .get(name)
+                        .and_then(|v| v.to_str().ok())
+                        .map(str::to_string)
+                };
+                let if_range = header(axum::http::header::IF_RANGE);
+                if let Ok(mut guard) = seen.lock() {
+                    *guard = if_range.clone();
+                }
+                let range = header(axum::http::header::RANGE);
+                let honour_range = range.is_some() && if_range.as_deref() == Some(etag);
+                let mut resp = match (honour_range, range.as_deref()) {
+                    (true, Some("bytes=2000-")) => (
+                        axum::http::StatusCode::PARTIAL_CONTENT,
+                        content[2000..].to_vec(),
+                    )
+                        .into_response(),
+                    _ => (axum::http::StatusCode::OK, content).into_response(),
+                };
+                if let Ok(value) = axum::http::HeaderValue::from_str(etag) {
+                    resp.headers_mut().insert(axum::http::header::ETAG, value);
+                }
+                resp
+            }
+        }),
+    )
+}
+
+#[tokio::test]
+async fn download_file_records_the_validator_its_bytes_were_served_under() {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let app = conditional_range_router(fixture_content(500), "\"abc-1f4\"", seen);
+    let base = spawn_router(app).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = planned_file("book.epub", "/file");
+    let mut observed = None;
+
+    download_file(
+        &base,
+        dir.path(),
+        &file,
+        &mut |etag| observed = etag,
+        &mut |_| {},
+    )
+    .await
+    .expect("fresh download must succeed");
+
+    assert_eq!(observed.as_deref(), Some("\"abc-1f4\""));
+}
+
+#[tokio::test]
+async fn download_file_sends_if_range_so_a_resume_is_conditional() {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let app = conditional_range_router(fixture_content(5000), "\"abc-1388\"", seen.clone());
+    let base = spawn_router(app).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    tokio::fs::write(dir.path().join("book.epub.part"), fixture_content(2000))
+        .await
+        .expect("seed partial file");
+    let mut file = planned_file("book.epub", "/file");
+    file.etag = Some("\"abc-1388\"".into());
+    let mut deltas = Vec::new();
+
+    let written = download_file(&base, dir.path(), &file, &mut |_| {}, &mut |d| {
+        deltas.push(d)
+    })
+    .await
+    .expect("resumed download must succeed");
+
+    assert_eq!(
+        seen.lock().expect("lock").as_deref(),
+        Some("\"abc-1388\""),
+        "a resume must state which bytes its partial copy came from"
+    );
+    assert_eq!(written, 5000);
+    assert_eq!(deltas.iter().sum::<i64>(), 3000, "only the tail is fetched");
+    assert_eq!(
+        tokio::fs::read(dir.path().join("book.epub")).await.unwrap(),
+        fixture_content(5000)
+    );
+}
+
+#[tokio::test]
+async fn download_file_discards_its_partial_copy_when_the_file_changed_under_it() {
+    // The corruption this whole mechanism exists to prevent: 2000 bytes of the
+    // old file are already on disk when the book is replaced on the server. A
+    // resume without the precondition would append the new file's tail to the
+    // old head and rename the result into place as a finished book.
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let replacement = fixture_content(3000)
+        .into_iter()
+        .map(|b| b ^ 0xff)
+        .collect::<Vec<u8>>();
+    let app = conditional_range_router(replacement.clone(), "\"def-bb8\"", seen.clone());
+    let base = spawn_router(app).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    tokio::fs::write(dir.path().join("book.epub.part"), fixture_content(2000))
+        .await
+        .expect("seed partial file");
+    let mut file = planned_file("book.epub", "/file");
+    file.etag = Some("\"abc-1388\"".into());
+    let mut deltas = Vec::new();
+    let mut observed = None;
+
+    let written = download_file(
+        &base,
+        dir.path(),
+        &file,
+        &mut |etag| observed = etag,
+        &mut |d| deltas.push(d),
+    )
+    .await
+    .expect("download must restart cleanly rather than splice");
+
+    assert_eq!(seen.lock().expect("lock").as_deref(), Some("\"abc-1388\""));
+    assert_eq!(deltas[0], -2000, "the stale partial bytes must be dropped");
+    assert_eq!(written, 3000);
+    assert_eq!(
+        tokio::fs::read(dir.path().join("book.epub")).await.unwrap(),
+        replacement,
+        "the stored file must be the new one, whole — never a spliced mix"
+    );
+    assert_eq!(
+        observed.as_deref(),
+        Some("\"def-bb8\""),
+        "the recorded validator must move to the bytes now on disk"
     );
 }

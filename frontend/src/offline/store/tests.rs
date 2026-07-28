@@ -20,6 +20,7 @@ fn download_row(uuid: &str, format: &str) -> DownloadRow {
         files: "[]".to_string(),
         error: None,
         updated_at: now_secs(),
+        validator: None,
     }
 }
 

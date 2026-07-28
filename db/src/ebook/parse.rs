@@ -121,6 +121,10 @@ fn extract_metadata(path: &Path, filename: String, opts: &ScanOptions) -> Indexe
             has_cover_override: false,
             book_files: Vec::new(),
             epub_size_bytes: None,
+            // Both resolved in `get_book`, which is the only read that
+            // knows the book's `book_files` rows.
+            epub_validator: None,
+            audio_validator: None,
         },
         cover,
         // Stat values get overwritten by `parse_ebook_targets` before the

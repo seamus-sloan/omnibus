@@ -509,6 +509,28 @@ struct BookDetailView: View {
         let record = downloads.record(for: book.uuid, kind: kind)
 
         switch record?.state {
+        case .complete where downloads.isStale(book, kind: kind):
+            // The copy still opens; it just isn't the file the server holds
+            // any more, so the offer is to replace it rather than remove it.
+            HStack(spacing: Spacing.sm) {
+                Text(Format.bytes(record?.totalBytes ?? 0))
+                    .font(.monoUI(11))
+                    .foregroundStyle(palette.ink3Color)
+                Button {
+                    Haptics.tap()
+                    Task { await downloads.redownload(book, kind: kind) }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("Update available")
+                            .font(.ui(14, weight: .medium))
+                    }
+                    .foregroundStyle(palette.warnColor)
+                }
+                .buttonStyle(.plain)
+            }
+
         case .complete:
             HStack(spacing: Spacing.sm) {
                 Text(Format.bytes(record?.totalBytes ?? 0))

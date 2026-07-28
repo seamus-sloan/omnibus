@@ -54,9 +54,14 @@ struct BookFileInfo: Codable, Hashable, Sendable, Identifiable {
     var label: String?
     var sizeBytes: Int64 = 0
     var path: String?
+    /// Validator for this file's current content. Snapshotted when the file is
+    /// taken offline and compared on a later refresh, which is how a download
+    /// learns the server no longer holds the bytes it copied. `nil` from a
+    /// server that does not report one.
+    var validator: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, format, filename, ordinal, label, path
+        case id, format, filename, ordinal, label, path, validator
         case sizeBytes = "size_bytes"
     }
 }
@@ -88,6 +93,11 @@ struct Book: Codable, Hashable, Sendable, Identifiable {
     var hasCoverOverride: Bool = false
     var bookFiles: [BookFileInfo] = []
     var epubSizeBytes: Int64?
+    /// Validator of the EPUB an unqualified download resolves to — see
+    /// `sourceValidator(for:)`.
+    var epubValidator: String?
+    /// Validator of the audiobook file an unqualified download resolves to.
+    var audioValidator: String?
 
     enum CodingKeys: String, CodingKey {
         case id, filename, title, description, publisher, published, modified
@@ -103,6 +113,8 @@ struct Book: Codable, Hashable, Sendable, Identifiable {
         case hasCoverOverride = "has_cover_override"
         case bookFiles = "book_files"
         case epubSizeBytes = "epub_size_bytes"
+        case epubValidator = "epub_validator"
+        case audioValidator = "audio_validator"
     }
 
     /// Stable identity used for every `/books/:uuid` and `/api/covers/:uuid`
@@ -146,6 +158,20 @@ struct Book: Codable, Hashable, Sendable, Identifiable {
         bookFiles
             .filter { Self.selectableAudioFormats.contains($0.format.lowercased()) }
             .sorted { $0.ordinal < $1.ordinal }
+    }
+
+    /// The validator of the file a download of `kind` draws from.
+    ///
+    /// The server resolves this, not the client: `epub_validator` and
+    /// `audio_validator` come from the same queries that serve the unqualified
+    /// download URL, so the two ends cannot disagree about which file it
+    /// meant — and they arrive even for the single-file books whose
+    /// `book_files` list is never sent.
+    func sourceValidator(for kind: DownloadKind) -> String? {
+        switch kind {
+        case .ebook: epubValidator
+        case .audio: audioValidator
+        }
     }
 }
 

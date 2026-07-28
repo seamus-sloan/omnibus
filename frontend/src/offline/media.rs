@@ -274,7 +274,12 @@ async fn img_handler(State(st): State<Arc<MediaState>>, Query(q): Query<ImgQuery
     let bust = q.v.unwrap_or(0) > 0;
     if !bust {
         if let Some((bytes, ct)) = cached_image(&st.img_dir, &path) {
-            return img_response(bytes, &ct);
+            // A cover replaced from another device changes these bytes under
+            // an unchanged URL, so a cache hit is not on its own an answer.
+            return match refresh_if_superseded(&st.img_dir, &path).await {
+                Some((fresh, fresh_ct)) => img_response(fresh, &fresh_ct),
+                None => img_response(bytes, &ct),
+            };
         }
     }
     match fetch_and_cache(&st.img_dir, &path).await {
@@ -380,36 +385,131 @@ fn cached_image(img_dir: &Path, path: &str) -> Option<(Vec<u8>, String)> {
     Some((bytes, ct))
 }
 
+/// Outcome of a conditional fetch through the image proxy.
+enum ImageFetch {
+    /// New bytes, already written to the cache.
+    Fresh(Vec<u8>, String),
+    /// The server confirmed the cached copy is still current.
+    Unchanged,
+    /// Offline, unauthorized, still generating, or a transport error — every
+    /// one of which means "keep serving whatever is on disk".
+    Failed,
+}
+
 /// Fetch `path` from the upstream server with the bearer token and cache the
-/// bytes + content type on disk. `None` when offline / unauthorized / error.
-/// Strictly 200-only: `/api/thumbs/*` answers 202 while a thumbnail is still
-/// being generated, and caching that placeholder would wedge the thumb
-/// offline forever.
-async fn fetch_and_cache(img_dir: &Path, path: &str) -> Option<(Vec<u8>, String)> {
-    let base = upstream_url()?;
+/// bytes, content type, and validator on disk.
+///
+/// Strictly 200-only for caching: `/api/thumbs/*` answers 202 while a
+/// thumbnail is still being generated, and storing that placeholder would
+/// wedge the thumb offline forever. Passing `if_none_match` turns this into a
+/// revalidation, where a 304 is the cheap answer that nothing changed.
+async fn fetch_image(img_dir: &Path, path: &str, if_none_match: Option<&str>) -> ImageFetch {
+    let Some(base) = upstream_url() else {
+        return ImageFetch::Failed;
+    };
     let url = format!("{base}{path}");
-    let resp = crate::data::with_bearer(crate::data::http_client().get(&url))
-        .send()
-        .await
-        .ok()?;
-    if resp.status() != reqwest::StatusCode::OK {
-        return None;
+    let mut req = crate::data::with_bearer(crate::data::http_client().get(&url));
+    if let Some(etag) = if_none_match {
+        if let Ok(value) = reqwest::header::HeaderValue::from_str(etag) {
+            req = req.header(reqwest::header::IF_NONE_MATCH, value);
+        }
     }
-    let ct = resp
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("image/jpeg")
-        .to_string();
-    let bytes = resp.bytes().await.ok()?.to_vec();
+    let Ok(resp) = req.send().await else {
+        return ImageFetch::Failed;
+    };
+    if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
+        return ImageFetch::Unchanged;
+    }
+    if resp.status() != reqwest::StatusCode::OK {
+        return ImageFetch::Failed;
+    }
+    let header_str = |name: reqwest::header::HeaderName| {
+        resp.headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    };
+    let ct = header_str(header::CONTENT_TYPE).unwrap_or_else(|| "image/jpeg".into());
+    let etag = header_str(reqwest::header::ETAG);
+    let Ok(body) = resp.bytes().await else {
+        return ImageFetch::Failed;
+    };
+    let bytes = body.to_vec();
     let name = cache_file_name(path);
     // Best-effort cache write; serving the fetched bytes matters more.
     let tmp = img_dir.join(format!("{name}.tmp"));
     if std::fs::write(&tmp, &bytes).is_ok() {
         let _ = std::fs::rename(&tmp, img_dir.join(&name));
         let _ = std::fs::write(img_dir.join(format!("{name}.ct")), &ct);
+        match &etag {
+            Some(etag) => {
+                let _ = std::fs::write(img_dir.join(format!("{name}.etag")), etag);
+            }
+            // A server too old to send one must not leave a stale tag behind
+            // that later revalidations would quote back at it.
+            None => {
+                let _ = std::fs::remove_file(img_dir.join(format!("{name}.etag")));
+            }
+        }
     }
-    Some((bytes, ct))
+    ImageFetch::Fresh(bytes, ct)
+}
+
+/// Fetch and cache `path` unconditionally.
+async fn fetch_and_cache(img_dir: &Path, path: &str) -> Option<(Vec<u8>, String)> {
+    match fetch_image(img_dir, path, None).await {
+        ImageFetch::Fresh(bytes, ct) => Some((bytes, ct)),
+        ImageFetch::Unchanged | ImageFetch::Failed => None,
+    }
+}
+
+/// Paths already revalidated against the server this process run.
+///
+/// The bound that makes revalidation affordable: covers are requested once
+/// per grid cell per scroll, and a conditional request on every one of those
+/// would put dozens of round-trips behind a flick. Checking each distinct
+/// image once per run still picks up a cover changed on another device — the
+/// next launch, or the next time that image is first drawn — without making
+/// scrolling pay for it.
+fn revalidated() -> &'static RwLock<std::collections::HashSet<String>> {
+    static SEEN: OnceLock<RwLock<std::collections::HashSet<String>>> = OnceLock::new();
+    SEEN.get_or_init(|| RwLock::new(std::collections::HashSet::new()))
+}
+
+/// The validator the cached copy of `path` was stored under.
+fn cached_etag(img_dir: &Path, path: &str) -> Option<String> {
+    let name = cache_file_name(path);
+    let etag = std::fs::read_to_string(img_dir.join(format!("{name}.etag"))).ok()?;
+    (!etag.trim().is_empty()).then_some(etag)
+}
+
+/// Ask the server whether the cached copy of `path` is still the one it
+/// holds, at most once per path per process run.
+///
+/// `Some` when it was not and new bytes are now cached; `None` when it was
+/// current, when the check was skipped, or when the server could not be
+/// reached — all of which mean "serve what is on disk". An entry cached
+/// before validators were recorded has nothing to ask with, so it refetches
+/// once and is conditional from then on.
+async fn refresh_if_superseded(img_dir: &Path, path: &str) -> Option<(Vec<u8>, String)> {
+    if super::sync::is_offline() {
+        return None;
+    }
+    if revalidated().read().is_ok_and(|seen| seen.contains(path)) {
+        return None;
+    }
+    let outcome = fetch_image(img_dir, path, cached_etag(img_dir, path).as_deref()).await;
+    // Only a definitive answer counts as checked; a failed reach should be
+    // retried once the connection is back, not written off for the run.
+    if !matches!(outcome, ImageFetch::Failed) {
+        if let Ok(mut seen) = revalidated().write() {
+            seen.insert(path.to_string());
+        }
+    }
+    match outcome {
+        ImageFetch::Fresh(bytes, ct) => Some((bytes, ct)),
+        ImageFetch::Unchanged | ImageFetch::Failed => None,
+    }
 }
 
 /// Oldest-first prune of the image cache down to `cap` bytes.

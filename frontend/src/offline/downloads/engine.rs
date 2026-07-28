@@ -116,7 +116,13 @@ async fn run_inner(
         .unwrap_or_default();
     let mut files: Vec<PlannedFile> = Vec::with_capacity(plan.len());
     for mut f in plan {
-        if prior.iter().any(|p| p.rel == f.rel && p.done) {
+        let previous = prior.iter().find(|p| p.rel == f.rel);
+        // Carry the recorded validator across the replan, for finished files
+        // and half-finished ones alike: a fresh plan knows the URL but not
+        // what the bytes already on disk were served under, and dropping it
+        // would leave the resume with no precondition to send.
+        f.etag = previous.and_then(|p| p.etag.clone());
+        if previous.is_some_and(|p| p.done) {
             if let Ok(meta) = tokio::fs::metadata(dir.join(&f.rel)).await {
                 if meta.is_file() {
                     f.done = true;
@@ -127,6 +133,7 @@ async fn run_inner(
         files.push(f);
     }
 
+    let validator = super::source_validator(&book, format, file_id);
     let mut downloaded: i64 = files.iter().filter_map(|f| f.bytes).sum();
     publish(
         uuid,
@@ -136,6 +143,7 @@ async fn run_inner(
         &files,
         downloaded,
         total_estimate,
+        validator.as_deref(),
     );
 
     for idx in 0..files.len() {
@@ -143,19 +151,35 @@ async fn run_inner(
             continue;
         }
         let mut unflushed: i64 = 0;
-        let written = download_file(server_url, &dir, &files[idx], &mut |delta| {
-            downloaded += delta;
-            unflushed += delta;
-            if unflushed >= PROGRESS_FLUSH_BYTES {
-                unflushed = 0;
-                // Re-publish with the pre-loop file list; per-file `done`
-                // flags land on file completion below.
-                publish_progress(uuid, format, downloaded, total_estimate);
-            }
-        })
+        let planned = files[idx].clone();
+        let mut served_under: Option<String> = None;
+        let written = download_file(
+            server_url,
+            &dir,
+            &planned,
+            &mut |etag| {
+                // Straight to the registry rather than through `files`: this
+                // has to survive the process dying mid-stream, which is
+                // exactly the case where the local vector never gets written
+                // back.
+                super::set_file_etag(uuid, format, &planned.rel, etag.clone());
+                served_under = etag;
+            },
+            &mut |delta| {
+                downloaded += delta;
+                unflushed += delta;
+                if unflushed >= PROGRESS_FLUSH_BYTES {
+                    unflushed = 0;
+                    // Re-publish with the pre-loop file list; per-file `done`
+                    // flags land on file completion below.
+                    publish_progress(uuid, format, downloaded, total_estimate);
+                }
+            },
+        )
         .await?;
         files[idx].done = true;
         files[idx].bytes = Some(written);
+        files[idx].etag = served_under;
         downloaded = files.iter().filter_map(|f| f.bytes).sum();
         publish(
             uuid,
@@ -165,6 +189,7 @@ async fn run_inner(
             &files,
             downloaded,
             total_estimate,
+            validator.as_deref(),
         );
     }
 
@@ -179,16 +204,22 @@ async fn run_inner(
         status: DownloadStatus::Complete { bytes },
         files,
         updated_at: crate::offline::store::now_secs(),
+        validator,
     });
     Ok(())
 }
 
 /// Stream one file to `{rel}.part`, resuming from any existing bytes via a
 /// Range request, then rename to `rel`. Returns the final byte count.
+///
+/// `on_etag` fires as soon as the response headers land, before a single byte
+/// is written, so a transfer that dies mid-stream still leaves the validator
+/// its `.part` file was built from — the precondition the next resume sends.
 async fn download_file(
     server_url: &str,
     dir: &std::path::Path,
     file: &PlannedFile,
+    on_etag: &mut (dyn FnMut(Option<String>) + Send),
     on_delta: &mut (dyn FnMut(i64) + Send),
 ) -> anyhow::Result<i64> {
     use tokio::io::AsyncWriteExt;
@@ -206,6 +237,17 @@ async fn download_file(
     let mut req = data::with_bearer(data::streaming_client().get(&url));
     if resumed > 0 {
         req = req.header(reqwest::header::RANGE, format!("bytes={resumed}-"));
+        // Without this the server cannot tell that the file was replaced
+        // since the interrupted attempt, and the 206 it returns would be
+        // counted from the *new* bytes — appending a new tail to the old head
+        // already in `.part` and leaving a corrupt book that nothing reports.
+        // A server that no longer recognises the tag answers with the whole
+        // file instead, which the 200 branch below restarts cleanly from.
+        if let Some(etag) = file.etag.as_deref() {
+            if let Ok(value) = reqwest::header::HeaderValue::from_str(etag) {
+                req = req.header(reqwest::header::IF_RANGE, value);
+            }
+        }
     }
     let mut resp = req.send().await.map_err(|e| {
         tracing::warn!(error = %e, url = %file.url_path, "offline download: request failed");
@@ -221,8 +263,15 @@ async fn download_file(
         return Err(DownloadError::ServerError.into());
     }
 
+    on_etag(
+        resp.headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string),
+    );
+
     // 206 → append after the existing bytes; 200 → the server ignored the
-    // Range (or none was sent), start over.
+    // Range (or refused it because the file changed), start over.
     let appending = status == reqwest::StatusCode::PARTIAL_CONTENT && resumed > 0;
     let expected_total = resp
         .content_length()
@@ -312,6 +361,9 @@ pub(super) fn plan_epub(uuid: &str, file_id: Option<i64>) -> Vec<PlannedFile> {
         ordinal: None,
         bytes: None,
         done: false,
+        // Filled in from the prior entry by the replan merge in `run_inner`,
+        // then from the response headers once the transfer starts.
+        etag: None,
     }]
 }
 
@@ -326,6 +378,7 @@ pub(super) fn plan_audio_parts(parts: &[ManifestPart]) -> Vec<PlannedFile> {
             ordinal: Some(p.ordinal),
             bytes: None,
             done: false,
+            etag: None,
         })
         .collect()
 }
@@ -366,6 +419,7 @@ pub(super) fn audio_size_estimate(book: &EbookMetadata) -> Option<i64> {
     (sum > 0).then_some(sum)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn publish(
     uuid: &str,
     format: DlFormat,
@@ -374,6 +428,7 @@ fn publish(
     files: &[PlannedFile],
     downloaded: i64,
     total: Option<i64>,
+    validator: Option<&str>,
 ) {
     super::upsert(DownloadEntry {
         book_uuid: uuid.to_string(),
@@ -386,6 +441,7 @@ fn publish(
         },
         files: files.to_vec(),
         updated_at: crate::offline::store::now_secs(),
+        validator: validator.map(str::to_string),
     });
 }
 
