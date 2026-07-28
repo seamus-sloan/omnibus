@@ -43,9 +43,11 @@ resolve_or_insert_simple!(resolve_or_insert_publisher, "publishers", "name");
 resolve_or_insert_simple!(resolve_or_insert_language, "languages", "code");
 
 /// Delete taxonomy rows (`authors`, `series`, `tags`, `publishers`,
-/// `languages`) no longer referenced by any book. Run after a book row is
-/// deleted — the missing-files GC purge and the merge source delete — so an
-/// author or series left with zero books doesn't linger. `author_photos`
+/// `languages`) no longer referenced by any book. Run wherever the last link
+/// to a taxonomy row can disappear — the missing-files GC purge, the merge
+/// source delete, and the indexer's Changed bucket, which wipes a book's link
+/// rows before re-inserting them from the re-parsed file — so an author or
+/// series left with zero books doesn't linger. `author_photos`
 /// cascades on the author delete; the link tables have no taxonomy-side
 /// cascade, so a row is only deletable once its last link is gone, which is
 /// exactly the set this targets. Table/column names are compile-time literals,
