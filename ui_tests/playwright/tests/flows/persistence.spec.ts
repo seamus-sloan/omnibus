@@ -138,4 +138,33 @@ test("library scroll position is restored after opening a book", async ({
   await expect
     .poll(async () => page.evaluate(() => window.scrollY), { timeout: 5000 })
     .toBeGreaterThan(savedY * 0.6);
+
+  // A restore freezes position recording for the length of the navigation —
+  // otherwise the browser's own clamped restoration overwrites the saved
+  // offset mid-transition. Recording has to come back afterwards, so move
+  // somewhere new with a real wheel gesture (which is also what cancels a
+  // restore still converging) and leave via the sticky nav, which — unlike
+  // clicking an off-screen tile — doesn't move the page on its way out.
+  await page.mouse.move(500, 200);
+  await page.mouse.wheel(0, -Math.round(savedY * 0.75));
+  await expect
+    .poll(async () => page.evaluate(() => window.scrollY), { timeout: 5000 })
+    .toBeLessThan(savedY * 0.5);
+  const movedY = await page.evaluate(() => window.scrollY);
+
+  await page
+    .getByRole("navigation", { name: "Primary" })
+    .getByRole("link", { name: "Authors" })
+    .click();
+  await expect(page).toHaveURL(/\/authors$/);
+
+  await page.goBack();
+  await expect(page.getByTestId(/^ebook-tile-/).first()).toBeVisible();
+
+  // The new offset is what comes back. A recorder left frozen by the first
+  // restore would still hold the bottom of the grid and land us down there.
+  await expect
+    .poll(async () => page.evaluate(() => window.scrollY), { timeout: 5000 })
+    .toBeGreaterThan(movedY * 0.6);
+  expect(await page.evaluate(() => window.scrollY)).toBeLessThan(movedY * 1.4);
 });

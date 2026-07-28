@@ -16,28 +16,44 @@ use dioxus::prelude::*;
 /// single `scrollTo` would land short. The loop keeps nudging toward the
 /// captured target until it's reached, the user scrolls (cancelling), the
 /// document stops growing, or a time budget elapses.
+///
+/// Recording is frozen for the duration of a route transition: the `scroll`
+/// events a transition fires are the browser clamping us against a
+/// mid-navigation document (and re-applying its own history restoration), not
+/// the reader moving, so recording them under the incoming path would
+/// overwrite the very offset this restore is about to read.
 #[cfg(any(feature = "web", feature = "mobile"))]
 const RESTORE_JS: &str = r#"
 (function () {
   if (!window.__omnibusScroll) {
     const positions = {};
     let raf = 0;
-    const record = () => { raf = 0; positions[location.pathname] = window.scrollY; };
+    // Path whose scroll offsets we trust. Null while a history navigation is
+    // in flight; `restore` re-arms it once the incoming page has settled.
+    let recordPath = location.pathname;
+    const record = () => {
+      raf = 0;
+      if (recordPath === null || location.pathname !== recordPath) return;
+      positions[recordPath] = window.scrollY;
+    };
     window.addEventListener("scroll", () => {
       if (!raf) raf = requestAnimationFrame(record);
     }, { passive: true });
+    window.addEventListener("popstate", () => { recordPath = null; });
     window.__omnibusScroll = {
       positions,
       restore(path) {
         const key = path || location.pathname;
         const target = positions[key];
-        if (target == null || target <= 0) return;
+        const rearm = () => { recordPath = key; };
+        if (target == null || target <= 0) { rearm(); return; }
         let cancelled = false;
         const cancel = () => { cancelled = true; teardown(); };
         const teardown = () => {
           window.removeEventListener("wheel", cancel);
           window.removeEventListener("touchstart", cancel);
           window.removeEventListener("keydown", cancel);
+          rearm();
         };
         // A real scroll intent from the user wins over restoration.
         window.addEventListener("wheel", cancel, { passive: true });
