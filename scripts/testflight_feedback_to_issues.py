@@ -2,23 +2,23 @@
 """Turn TestFlight screenshot feedback into GitHub issues.
 
 Polls the App Store Connect API `betaFeedbackScreenshotSubmissions` endpoint for
-the mobile app, and opens one GitHub issue per new tester submission — tester
-comment, device/OS environment, and the screenshot rendered inline. Idempotent:
-each issue embeds a hidden `asc-feedback-id` marker and the script skips a
-submission whose marker already appears in an existing issue.
+each TestFlight app, and opens one GitHub issue per new tester submission —
+tester comment, device/OS environment, and the screenshot rendered inline.
+Idempotent: each issue embeds a hidden `asc-feedback-id` marker and the script
+skips a submission whose marker already appears in an existing issue.
 
 Reuses the App Store Connect API key already configured for the build-upload
-workflow (`ASC_API_KEY_BASE64` / `ASC_KEY_ID` / `ASC_ISSUER_ID`). Screenshots are
-committed to a dedicated `testflight-feedback` branch so they render inline and
-persist past App Store Connect's short-lived signed URLs.
+workflow (`ASC_API_KEY_BASE64` / `ASC_KEY_ID` / `ASC_ISSUER_ID`). Both iOS
+clients live under one App Store Connect team, so that one key reads both.
+Screenshots are committed to a dedicated `testflight-feedback` branch so they
+render inline and persist past App Store Connect's short-lived signed URLs.
 
 Env:
   ASC_ISSUER_ID, ASC_KEY_ID              App Store Connect API key identity.
   ASC_API_KEY_BASE64 | ASC_PRIVATE_KEY   The .p8 private key (base64, or raw PEM).
   GITHUB_TOKEN                           Repo token (issues:write + contents:write).
   GITHUB_REPOSITORY                      "owner/repo" (set automatically in Actions).
-  BUNDLE_ID                              App bundle id (default com.omnibus.mobile).
-  ASC_APP_ID                             Optional: skip bundle-id lookup.
+  BUNDLE_IDS                             Comma-separated bundle ids (default: both iOS clients).
   ASSET_BRANCH                           Branch for screenshot assets (default testflight-feedback).
   MAX_PAGES                              Submission pages to scan per run (default 5).
   DRY_RUN=1                              Print instead of creating issues/assets.
@@ -35,7 +35,10 @@ import requests
 ASC_BASE = "https://api.appstoreconnect.apple.com"
 GH_BASE = "https://api.github.com"
 DRY_RUN = os.environ.get("DRY_RUN") == "1"
-BUNDLE_ID = os.environ.get("BUNDLE_ID", "com.omnibus.mobile")
+# Bundle id -> the name shown in the issue title and Environment block.
+APP_NAMES = {"com.omnibus.mobile": "Dioxus", "com.omnibus.swiftui": "SwiftUI"}
+BUNDLE_IDS = [b.strip() for b in
+              os.environ.get("BUNDLE_IDS", ",".join(APP_NAMES)).split(",") if b.strip()]
 ASSET_BRANCH = os.environ.get("ASSET_BRANCH", "testflight-feedback")
 MAX_PAGES = int(os.environ.get("MAX_PAGES", "5"))
 LABELS = ["testflight", "mobile", "bug"]
@@ -78,13 +81,19 @@ def asc_get(url, token, params=None):
     return r.json()
 
 
-def resolve_app_id(token):
-    if os.environ.get("ASC_APP_ID"):
-        return os.environ["ASC_APP_ID"]
-    data = asc_get("/v1/apps", token, {"filter[bundleId]": BUNDLE_ID, "limit": 1})["data"]
+def resolve_app(token, bundle_id):
+    """Resolve a bundle id to its App Store Connect app record, or None if absent.
+
+    A missing record warns rather than dies: an app that hasn't been created on
+    the Apple side yet must not stop the other app's feedback from being filed.
+    """
+    data = asc_get("/v1/apps", token, {"filter[bundleId]": bundle_id, "limit": 1})["data"]
     if not data:
-        die(f"no App Store Connect app for bundle id {BUNDLE_ID}")
-    return data[0]["id"]
+        print(f"warn: no App Store Connect app for bundle id {bundle_id}; skipping",
+              file=sys.stderr)
+        return None
+    return {"id": data[0]["id"], "bundle_id": bundle_id,
+            "name": APP_NAMES.get(bundle_id, bundle_id)}
 
 
 def fetch_submissions(token, app_id):
@@ -196,7 +205,7 @@ def tester_name(sub, included):
     return name or a.get("email")
 
 
-def render(sub, included, app_id, image_urls):
+def render(sub, included, app, image_urls):
     a = sub.get("attributes", {})
     sub_id = sub["id"]
     comment = (a.get("comment") or "").strip()
@@ -207,9 +216,10 @@ def render(sub, included, app_id, image_urls):
 
     first = comment.splitlines()[0] if comment else "Screenshot feedback"
     summary = (first[:70] + "…") if len(first) > 70 else first
-    title = f"[TestFlight] {device} · build {ver} — {summary}"
+    title = f"[TestFlight · {app['name']}] {device} · build {ver} — {summary}"
 
     env = [
+        f"- **App:** {app['name']} (`{app['bundle_id']}`)",
         f"- **Device:** {device}",
         f"- **OS:** {a.get('osVersion', '?')} ({a.get('devicePlatform') or a.get('appPlatform', '?')})",
         f"- **App version:** {ver}",
@@ -225,7 +235,7 @@ def render(sub, included, app_id, image_urls):
 
     shots = "\n\n".join(f"![screenshot {i + 1}]({u})" for i, u in enumerate(image_urls)) \
         or "_(screenshot could not be retrieved)_"
-    asc_link = f"https://appstoreconnect.apple.com/apps/{app_id}/testflight/ios/feedback"
+    asc_link = f"https://appstoreconnect.apple.com/apps/{app['id']}/testflight/ios/feedback"
 
     body = (
         f"## Description\n{comment or '_(no comment provided by tester)_'}\n\n"
@@ -244,46 +254,56 @@ def screenshot_urls(sub):
             yield u
 
 
+def collect_images(gh_token, sub_id, sub):
+    """Mirror a submission's screenshots onto the asset branch; return their URLs."""
+    urls = []
+    for n, url in enumerate(screenshot_urls(sub)):
+        if DRY_RUN:
+            urls.append(url)  # temporary ASC URL — fine for preview, no upload
+            continue
+        img = requests.get(url, timeout=60)
+        if img.status_code != 200:
+            print(f"  warn: screenshot {n} for {sub_id} -> {img.status_code}", file=sys.stderr)
+            continue
+        raw = upload_asset(gh_token, f"assets/{sub_id}-{n}.png", img.content,
+                           f"testflight feedback asset {sub_id}-{n}")
+        if raw:
+            urls.append(raw)
+    return urls
+
+
 def main():
     for req in ("ASC_ISSUER_ID", "ASC_KEY_ID", "GITHUB_TOKEN"):
         if not os.environ.get(req):
             die(f"missing env {req}")
     gh_token = os.environ["GITHUB_TOKEN"]
     asc_token = asc_jwt()
-    app_id = resolve_app_id(asc_token)
-    print(f"app id {app_id} (bundle {BUNDLE_ID}); repo {repo()}; dry_run={DRY_RUN}")
+    apps = [a for a in (resolve_app(asc_token, b) for b in BUNDLE_IDS) if a]
+    if not apps:
+        die(f"no App Store Connect app matched any of {', '.join(BUNDLE_IDS)}")
+    listed = ", ".join(f"{a['name']} {a['id']} ({a['bundle_id']})" for a in apps)
+    print(f"apps: {listed}; repo {repo()}; dry_run={DRY_RUN}")
 
     if not DRY_RUN:
         ensure_asset_branch(gh_token)
 
     created = skipped = 0
-    for sub, included in fetch_submissions(asc_token, app_id):
-        sub_id = sub["id"]
-        if already_filed(gh_token, sub_id):
-            skipped += 1
-            continue
+    for app in apps:
+        for sub, included in fetch_submissions(asc_token, app["id"]):
+            sub_id = sub["id"]
+            # Submission ids are unique across apps, so one marker search covers both.
+            if already_filed(gh_token, sub_id):
+                skipped += 1
+                continue
 
-        image_urls = []
-        for n, url in enumerate(screenshot_urls(sub)):
+            title, body = render(sub, included, app,
+                                 collect_images(gh_token, sub_id, sub))
             if DRY_RUN:
-                image_urls.append(url)  # temporary ASC URL — fine for preview, no upload
-                continue
-            img = requests.get(url, timeout=60)
-            if img.status_code != 200:
-                print(f"  warn: screenshot {n} for {sub_id} -> {img.status_code}", file=sys.stderr)
-                continue
-            raw = upload_asset(gh_token, f"assets/{sub_id}-{n}.png", img.content,
-                               f"testflight feedback asset {sub_id}-{n}")
-            if raw:
-                image_urls.append(raw)
-
-        title, body = render(sub, included, app_id, image_urls)
-        if DRY_RUN:
-            print(f"\n[dry] would create: {title}\n{body}")
-        else:
-            num = create_issue(gh_token, title, body)
-            print(f"created #{num}: {title}")
-        created += 1
+                print(f"\n[dry] would create: {title}\n{body}")
+            else:
+                num = create_issue(gh_token, title, body)
+                print(f"created #{num}: {title}")
+            created += 1
 
     print(f"done: created={created} skipped(existing)={skipped}")
 
