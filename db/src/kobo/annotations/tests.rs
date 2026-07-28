@@ -3,7 +3,7 @@
 //! unadopted-empty guard), and fingerprint behavior.
 
 use super::*;
-use crate::annotations::{ingest_kobo_annotations, IngestKoboAnnotation};
+use crate::annotations::{ingest_kobo_annotations, served_kobo_annotations, IngestKoboAnnotation};
 use crate::init_db;
 use crate::test_support::seed_synced_ebook;
 use omnibus_shared::HighlightColor;
@@ -201,6 +201,65 @@ async fn changed_book_uuids_reports_a_book_after_a_web_side_delete() {
     assert_eq!(
         changed_book_uuids(&pool, user, device).await.unwrap(),
         vec![uuid]
+    );
+}
+
+#[tokio::test]
+async fn changed_book_uuids_computes_the_correct_set_across_multiple_candidate_books() {
+    // Exercises the batched fetch (`served_kobo_annotations_batch`) with more
+    // than one candidate in flight: an acked-and-quiet book, a never-acked
+    // book, and a book whose ack went stale after a web-side recolor.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "kobo-reader").await;
+    let device = crate::kobo_devices::create_device(&pool, user, "Kobo")
+        .await
+        .unwrap()
+        .id;
+    let quiet = seed_synced_ebook(&pool, "quiet.epub", "Quiet", "A").await;
+    let never_acked = seed_synced_ebook(&pool, "never.epub", "Never Acked", "B").await;
+    let stale = seed_synced_ebook(&pool, "stale.epub", "Stale", "C").await;
+
+    for (uuid, client_id) in [
+        (&quiet, "kobo-quiet"),
+        (&never_acked, "kobo-never"),
+        (&stale, "kobo-stale"),
+    ] {
+        ingest_kobo_annotations(
+            &pool,
+            user,
+            uuid,
+            &[upload(client_id, HighlightColor::Amber, None)],
+            &[],
+        )
+        .await
+        .unwrap();
+        mark_adopted(&pool, device, uuid).await.unwrap();
+    }
+
+    let quiet_served = served_kobo_annotations(&pool, user, &quiet).await.unwrap();
+    ack_served(&pool, device, &quiet, &fingerprint(&quiet_served))
+        .await
+        .unwrap();
+
+    let stale_served = served_kobo_annotations(&pool, user, &stale).await.unwrap();
+    ack_served(&pool, device, &stale, &fingerprint(&stale_served))
+        .await
+        .unwrap();
+    let stale_id = crate::annotations::highlight_id_for_client_id(&pool, user, "kobo-stale")
+        .await
+        .unwrap()
+        .expect("ingested row resolves by client_id");
+    crate::annotations::update_highlight_color(&pool, user, stale_id, HighlightColor::Violet)
+        .await
+        .unwrap();
+
+    let mut changed = changed_book_uuids(&pool, user, device).await.unwrap();
+    changed.sort();
+    let mut expected = vec![never_acked, stale];
+    expected.sort();
+    assert_eq!(
+        changed, expected,
+        "quiet stays out; never-acked and stale-ack both report"
     );
 }
 

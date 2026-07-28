@@ -683,6 +683,84 @@ async fn served_kobo_annotations_returns_empty_for_an_unknown_book() {
 }
 
 #[tokio::test]
+async fn served_kobo_annotations_batch_groups_rows_by_book_and_omits_empty_and_unknown_uuids() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let alice = seed_user(&pool, "alice").await;
+    let (_, book_a) = seed(&pool, "/lib", "Book A").await;
+    let (_, book_b) = seed(&pool, "/lib", "Book B").await;
+    let (_, book_c) = seed(&pool, "/lib", "Book C").await;
+
+    ingest_kobo_annotations(
+        &pool,
+        alice,
+        &book_a,
+        &[
+            kobo_upload("kobo-a1", HighlightColor::Amber, None),
+            kobo_upload("kobo-a2", HighlightColor::Blue, None),
+        ],
+        &[],
+    )
+    .await
+    .unwrap();
+    ingest_kobo_annotations(
+        &pool,
+        alice,
+        &book_b,
+        &[kobo_upload("kobo-b1", HighlightColor::Rose, None)],
+        &[],
+    )
+    .await
+    .unwrap();
+    // Book C has no Kobo-anchored annotations at all.
+
+    let batch = served_kobo_annotations_batch(
+        &pool,
+        alice,
+        &[
+            book_a.clone(),
+            book_b.clone(),
+            book_c,
+            "no-such-uuid".into(),
+        ],
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(batch.len(), 2, "only books with servable rows are present");
+    let a = batch.get(&book_a).unwrap();
+    assert_eq!(a.len(), 2);
+    let b = batch.get(&book_b).unwrap();
+    assert_eq!(b.len(), 1);
+    assert_eq!(b[0].client_id, "kobo-b1");
+
+    // Matches the per-uuid form for the same candidates.
+    let a_single = served_kobo_annotations(&pool, alice, &book_a)
+        .await
+        .unwrap();
+    assert_eq!(a.len(), a_single.len());
+}
+
+#[tokio::test]
+async fn served_kobo_annotations_batch_returns_empty_map_for_no_candidates() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    assert!(served_kobo_annotations_batch(&pool, user, &[])
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn served_kobo_annotations_batch_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = served_kobo_annotations_batch(&pool, 1, &["uuid".to_string()])
+        .await
+        .unwrap_err();
+    assert!(matches!(err, HighlightError::Sqlx(_)));
+}
+
+#[tokio::test]
 async fn ingest_kobo_annotations_propagates_db_error_when_pool_is_closed() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     pool.close().await;

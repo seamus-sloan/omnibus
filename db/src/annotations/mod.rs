@@ -284,6 +284,60 @@ pub async fn served_kobo_annotations(
         .collect()
 }
 
+/// Batched counterpart to [`served_kobo_annotations`]: fetch the
+/// Kobo-placeable annotations for every uuid in `book_uuids` in a single
+/// query, grouped by `book_uuid`, instead of one round trip per uuid.
+/// Mirrors [`crate::kobo::reading_state_for`]'s `IN (...)` shape. Chunked at
+/// 900 to stay under SQLite's 999 bind-parameter cap (one bind per uuid plus
+/// `user_id`). A uuid with nothing servable is absent from the map rather
+/// than present with an empty vec. Unlike the single-uuid form, this does not
+/// canonicalize `book_uuids` first — callers (today, `changed_book_uuids`)
+/// must pass already-canonical uuids, and does not apply
+/// [`LIST_HIGHLIGHTS_LIMIT`] per book — the cap only guards a single-book
+/// serve response, not this fingerprint-comparison use.
+pub async fn served_kobo_annotations_batch(
+    pool: &SqlitePool,
+    user_id: i64,
+    book_uuids: &[String],
+) -> Result<std::collections::HashMap<String, Vec<ServedKoboAnnotation>>, HighlightError> {
+    let mut out: std::collections::HashMap<String, Vec<ServedKoboAnnotation>> =
+        std::collections::HashMap::with_capacity(book_uuids.len());
+    if book_uuids.is_empty() {
+        return Ok(out);
+    }
+    for chunk in book_uuids.chunks(900) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT book_uuid, client_id, color, text, note, kobo_location, updated_at
+               FROM annotations
+              WHERE user_id = ? AND book_uuid IN ({placeholders})
+                AND kobo_location IS NOT NULL AND client_id IS NOT NULL
+              ORDER BY created_at ASC"
+        );
+        let mut q = sqlx::query(&sql).bind(user_id);
+        for uuid in chunk {
+            q = q.bind(uuid);
+        }
+        for row in q.fetch_all(pool).await? {
+            let color_str: String = row.try_get("color")?;
+            let book_uuid: String = row.try_get("book_uuid")?;
+            out.entry(book_uuid)
+                .or_default()
+                .push(ServedKoboAnnotation {
+                    client_id: row.try_get("client_id")?,
+                    color: HighlightColor::parse(&color_str).unwrap_or(HighlightColor::Amber),
+                    text: row.try_get("text")?,
+                    note: row.try_get("note")?,
+                    kobo_location: row.try_get("kobo_location")?,
+                    updated_at: row.try_get("updated_at")?,
+                });
+        }
+    }
+    Ok(out)
+}
+
 /// Apply one device PATCH: upsert `updates` (keyed on the device-minted id in
 /// `client_id` — a re-upload updates color/note/text/anchor in place, so
 /// replays are idempotent) and delete `deleted_client_ids`, in one
