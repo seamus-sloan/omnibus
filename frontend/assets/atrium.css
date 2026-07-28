@@ -6642,12 +6642,16 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 /* Kobo wireless-sync opt-in (#924). */
 .shelf-badge--kobo { color: #34d399; border-color: #34d39955; }
 .shelf-title-row { display: flex; align-items: center; gap: 10px; }
-.shelf-title { margin: 0; font-size: 26px; color: var(--ink-0); }
+/* min-width:0 lets long titles ellipsize instead of pushing the controls off-row. */
+.shelf-title {
+  margin: 0; font-size: 26px; color: var(--ink-0);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .shelf-edit-btn {
   display: inline-flex; align-items: center; justify-content: center;
   color: var(--ink-2); background: transparent;
   border: none; border-radius: 8px;
-  width: 28px; height: 28px; cursor: pointer; margin-right: auto;
+  width: 28px; height: 28px; cursor: pointer; margin-right: auto; flex-shrink: 0;
 }
 @media (hover: hover) { .shelf-edit-btn:hover { color: var(--ink-0); background: var(--bg-2); } }
 /* Facet row under the title: kind / visibility, then smart-rule chips. */
@@ -6655,7 +6659,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .shelf-facet { font-size: 12px; color: var(--ink-2); }
 .shelf-facet--kind { color: var(--accent); }
 .shelf-facet-dot { color: var(--ink-3); }
-.shelf-actions { position: relative; }
+.shelf-actions { position: relative; flex-shrink: 0; }
 .shelf-actions-btn {
   font: inherit; font-size: 18px; line-height: 1;
   color: var(--ink-1); background: var(--bg-2);

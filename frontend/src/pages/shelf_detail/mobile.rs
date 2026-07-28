@@ -86,7 +86,12 @@ pub(super) fn MobileShelfDetail(props: MobileShelfDetailProps) -> Element {
                         "data-testid": "mobile-search-entry",
                         {search_glyph()}
                     }
-                    MobileShelfActions { shelf: shelf.clone(), on_add, on_edit }
+                    // System shelves (Wishlist) are locked server-side — don't
+                    // offer edit/delete the server would reject (mirrors web's
+                    // `can_manage` gate).
+                    if !shelf.kind.is_system() {
+                        MobileShelfActions { shelf: shelf.clone(), on_add, on_edit }
+                    }
                 }
             }
 
