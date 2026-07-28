@@ -142,7 +142,7 @@ struct SeriesHeaderView {
     sort: IndexSort,
 }
 
-/// Header: breadcrumb, hero heading + subtitle, filter input, sort toggles.
+/// Header: hero heading + subtitle, filter input, sort toggles.
 #[component]
 fn SeriesIndexHeader(
     view: SeriesHeaderView,
@@ -157,13 +157,6 @@ fn SeriesIndexHeader(
     } = view;
     rsx! {
         div { class: "idx-header",
-            nav {
-                class: "breadcrumb",
-                aria_label: "breadcrumb",
-                Link { to: Route::Landing {}, "Library" }
-                span { class: "breadcrumb-sep", " › " }
-                span { "Series" }
-            }
             div { class: "idx-head-row",
                 div {
                     span { class: "label", "Library lens" }

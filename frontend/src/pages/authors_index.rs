@@ -226,7 +226,7 @@ fn authors_index_body<'a>(
     }
 }
 
-/// Header: breadcrumb, hero, filter/sort toolbar, optional A–Z letter strip.
+/// Header: hero, filter/sort toolbar, optional A–Z letter strip.
 #[component]
 fn AuthorsIndexHeader(
     counts: AuthorIndexCounts,
@@ -249,13 +249,6 @@ fn AuthorsIndexHeader(
     } = filter_state;
     rsx! {
         div { class: "idx-header",
-            nav {
-                class: "breadcrumb",
-                aria_label: "breadcrumb",
-                Link { to: Route::Landing {}, "Library" }
-                span { class: "breadcrumb-sep", " › " }
-                span { "Authors" }
-            }
             div { class: "idx-head-row",
                 div {
                     span { class: "label", "Library lens" }
