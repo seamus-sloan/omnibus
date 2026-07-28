@@ -84,7 +84,8 @@ pub struct SyncPlan {
 /// 5. Backfill: UPDATE `book_files.(mtime_epoch, size_bytes)` only — no
 ///    OPF re-parse, no link writes, no FTS write. See the Backfill rule
 ///    in the [`crate::indexer`] module doc.
-/// 6. Stamp `scan_roots.last_indexed`.
+/// 6. Delete taxonomy rows left with zero books by step 3's link wipe.
+/// 7. Stamp `scan_roots.last_indexed`.
 ///
 /// Post-commit (best-effort, logged on failure — covers are a
 /// rebuildable cache):
@@ -149,6 +150,13 @@ pub async fn sync_books_with_progress(
     })
     .await?;
     super::backfill::backfill_stat_chunks(&mut tx, library_id, &plan.backfill).await?;
+    // Changed is the only bucket that drops link rows (`wipe_per_book_link_rows`
+    // before the re-insert), so it's the only one that can leave an author or
+    // series with zero books. Skip the sweep otherwise — it scans five taxonomy
+    // tables and most rescans have no Changed books at all.
+    if !plan.changed_books.is_empty() {
+        crate::taxonomy::delete_orphan_taxonomy(&mut tx).await?;
+    }
     stamp_last_indexed(&mut tx, library_id).await?;
 
     tx.commit().await?;
