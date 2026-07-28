@@ -38,7 +38,7 @@ DRY_RUN = os.environ.get("DRY_RUN") == "1"
 # Bundle id -> the name shown in the issue title and Environment block.
 APP_NAMES = {"com.omnibus.mobile": "Dioxus", "com.omnibus.swiftui": "SwiftUI"}
 BUNDLE_IDS = [b.strip() for b in
-              os.environ.get("BUNDLE_IDS", ",".join(APP_NAMES)).split(",") if b.strip()]
+              os.environ.get("BUNDLE_IDS", ",".join(APP_NAMES.keys())).split(",") if b.strip()]
 ASSET_BRANCH = os.environ.get("ASSET_BRANCH", "testflight-feedback")
 MAX_PAGES = int(os.environ.get("MAX_PAGES", "5"))
 LABELS = ["testflight", "mobile", "bug"]
@@ -261,7 +261,11 @@ def collect_images(gh_token, sub_id, sub):
         if DRY_RUN:
             urls.append(url)  # temporary ASC URL — fine for preview, no upload
             continue
-        img = requests.get(url, timeout=60)
+        try:
+            img = requests.get(url, timeout=60)
+        except requests.RequestException as e:  # a flaky fetch must not sink the run
+            print(f"  warn: screenshot {n} for {sub_id} -> {e}", file=sys.stderr)
+            continue
         if img.status_code != 200:
             print(f"  warn: screenshot {n} for {sub_id} -> {img.status_code}", file=sys.stderr)
             continue
