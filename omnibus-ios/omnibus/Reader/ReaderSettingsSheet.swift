@@ -102,7 +102,7 @@ struct ReaderSettingsSheet: View {
         PlateRow(label: "Size", isFirst: true) {
             HStack(spacing: Spacing.md) {
                 Text("Aa")
-                    .font(.system(size: CGFloat(controller.settings.fontSize), design: .serif))
+                    .font(.display(CGFloat(controller.settings.fontSize)))
                     .foregroundStyle(palette.ink1Color)
                     .frame(width: 46, alignment: .trailing)
                     .animation(Motion.snap, value: controller.settings.fontSize)

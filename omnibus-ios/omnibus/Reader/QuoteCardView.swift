@@ -130,7 +130,7 @@ struct QuoteCard: View {
                 Spacer(minLength: 0)
 
                 Text(text)
-                    .font(.system(size: quoteSize, weight: .regular, design: .serif))
+                    .font(.display(quoteSize))
                     .foregroundStyle(style.ink)
                     .lineSpacing(quoteSize * 0.34)
                     .multilineTextAlignment(.leading)
@@ -142,7 +142,7 @@ struct QuoteCard: View {
                     // of stranding itself at the top edge.
                     .background(alignment: .topLeading) {
                         Text("\u{201C}")
-                            .font(.system(size: width * 0.30, design: .serif))
+                            .font(.display(width * 0.30))
                             .foregroundStyle(style.ink.opacity(0.13))
                             .fixedSize()
                             .offset(x: -width * 0.035, y: -width * 0.135)
@@ -163,8 +163,7 @@ struct QuoteCard: View {
                         .padding(.bottom, width * 0.012)
                 }
                 Text(title)
-                    .font(.system(size: width * 0.033, design: .serif))
-                    .italic()
+                    .font(.displayItalic(width * 0.033))
                     .foregroundStyle(style.ink.opacity(0.62))
                     .lineLimit(2)
             }

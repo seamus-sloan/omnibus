@@ -21,8 +21,7 @@ struct Masthead<Trailing: View>: View {
                 OmnibusMark()
 
                 Text("Omnibus")
-                    .font(.system(size: 14, weight: .regular, design: .serif))
-                    .italic()
+                    .font(.displayItalic(14))
                     .tracking(0.2)
                     .foregroundStyle(palette.ink2Color)
 
@@ -81,7 +80,7 @@ struct FadingBarTitle: ToolbarContent {
     var body: some ToolbarContent {
         ToolbarItem(placement: .principal) {
             Text(title)
-                .font(.system(size: 16, weight: .medium, design: .serif))
+                .font(.display(16, weight: .medium))
                 .foregroundStyle(palette.ink0Color)
                 .lineLimit(1)
                 .opacity(opacity)
