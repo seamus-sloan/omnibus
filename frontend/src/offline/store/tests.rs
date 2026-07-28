@@ -181,6 +181,77 @@ async fn downloads_upsert_is_keyed_per_uuid_and_format() {
 }
 
 #[tokio::test]
+async fn kv_delete_removes_only_the_named_key() {
+    let (_dir, store) = open_temp();
+    store.kv_put("a", "1".to_string());
+    store.kv_put("b", "2".to_string());
+    store.kv_delete("a");
+    assert!(store.kv_get("a").await.is_none());
+    assert_eq!(store.kv_get("b").await.expect("row").payload, "2");
+}
+
+#[tokio::test]
+async fn kv_prefix_returns_only_matching_key_payload_pairs() {
+    let (_dir, store) = open_temp();
+    store.kv_put("progress:u1:epub", "1".to_string());
+    store.kv_put("progress:u2:epub", "2".to_string());
+    store.kv_put("shelves", "3".to_string());
+    let mut rows = store.kv_prefix("progress:").await;
+    rows.sort();
+    assert_eq!(
+        rows,
+        vec![
+            ("progress:u1:epub".to_string(), "1".to_string()),
+            ("progress:u2:epub".to_string(), "2".to_string()),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn kv_prefix_blocking_returns_only_matching_key_payload_pairs() {
+    let (_dir, store) = open_temp();
+    store.kv_put("rating:u1", "4.5".to_string());
+    store.kv_put("rating:u2", "3.0".to_string());
+    store.kv_put("shelves", "x".to_string());
+    // The put calls above go through the async worker channel; force them to
+    // land before the blocking read races the same queue.
+    let _ = store.kv_get("shelves").await;
+    let mut rows = store.kv_prefix_blocking("rating:");
+    rows.sort();
+    assert_eq!(
+        rows,
+        vec![
+            ("rating:u1".to_string(), "4.5".to_string()),
+            ("rating:u2".to_string(), "3.0".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn run_blocking_returns_the_closures_value_from_the_worker_thread() {
+    let (_dir, store) = open_temp();
+    let result = store.run_blocking(|_conn| 42i64);
+    assert_eq!(result, Some(42));
+}
+
+#[tokio::test]
+async fn ops_bump_attempts_increments_only_the_named_op() {
+    let (_dir, store) = open_temp();
+    store.ops_append("A", "1".to_string(), None);
+    store.ops_append("B", "2".to_string(), None);
+    let ops = store.ops_list().await;
+    let a_id = ops.iter().find(|o| o.kind == "A").expect("op A").id;
+    store.ops_bump_attempts(a_id);
+    // Force the detached write to land before reading it back.
+    let _ = store.ops_count().await;
+    let ops = store.ops_list().await;
+    let a = ops.iter().find(|o| o.id == a_id).expect("op A");
+    let b = ops.iter().find(|o| o.kind == "B").expect("op B");
+    assert_eq!(a.attempts, 1);
+    assert_eq!(b.attempts, 0);
+}
+
+#[tokio::test]
 async fn downloads_delete_removes_only_the_named_format() {
     let (_dir, store) = open_temp();
     store.downloads_upsert(download_row("u1", "epub")).await;
