@@ -13,10 +13,7 @@ use crate::auth::generate_token;
 const COLS: &str =
     "id, user_id, token, name, kobo_device_id, sync_cursor, created_at, last_seen_at";
 
-/// Hard cap on how many devices `list_devices` returns for a single user.
-/// Matches `LIST_SHELVES_LIMIT`/`LIST_BOOKMARKS_LIMIT` — a real reader
-/// registers only a handful of Koboes, but the cap keeps the response bounded
-/// regardless.
+/// Hard cap on devices `list_devices` returns for one user (matches `LIST_SHELVES_LIMIT`/`LIST_BOOKMARKS_LIMIT`).
 pub const LIST_DEVICES_LIMIT: i64 = 100;
 
 /// One registered Kobo: its owning user, the re-displayable path token, a
