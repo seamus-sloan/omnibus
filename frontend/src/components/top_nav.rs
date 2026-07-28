@@ -30,6 +30,7 @@ pub fn TopNav() -> Element {
     let is_authors = matches!(route, Route::AuthorsIndex {} | Route::AuthorDetail { .. });
     let is_series = matches!(route, Route::SeriesIndex {} | Route::SeriesDetail { .. });
     let is_stats = matches!(route, Route::Stats {});
+    let can_upload = crate::use_can_upload();
 
     rsx! {
         nav { class: "atrium-topbar", aria_label: "Primary",
@@ -72,17 +73,74 @@ pub fn TopNav() -> Element {
                     onclick: move |_| check_in_open.set(true),
                     "Check in"
                 }
-                button {
-                    class: "btn primary sm",
-                    r#type: "button",
-                    "data-testid": "add-books-button",
-                    onclick: move |_| {
+                AddBooksButton {
+                    can_upload: can_upload(),
+                    on_click: move |_| {
                         nav.push(Route::AddBooks {});
                     },
-                    "Add books"
                 }
                 UserMenu {}
             }
         }
+    }
+}
+
+/// The "Add books" nav entry, shown only when `can_upload` is true.
+#[component]
+fn AddBooksButton(can_upload: bool, on_click: EventHandler<MouseEvent>) -> Element {
+    if !can_upload {
+        return rsx! {};
+    }
+    rsx! {
+        button {
+            class: "btn primary sm",
+            r#type: "button",
+            "data-testid": "add-books-button",
+            onclick: move |e| on_click.call(e),
+            "Add books"
+        }
+    }
+}
+
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::*;
+
+    // `AddBooksButton` takes an `EventHandler` prop, and building one via
+    // `Callback::new` asserts a Dioxus runtime is active — true inside a
+    // component body mid-render, but not in a bare `rsx! { .. }` built
+    // directly in a `#[test]` fn. So each harness constructs the button from
+    // inside its own component body and the test drives it through a real
+    // `VirtualDom`, mirroring `contexts::tests::AssertBustCounter`.
+    #[component]
+    fn AllowedHarness() -> Element {
+        rsx! {
+            AddBooksButton { can_upload: true, on_click: move |_| {} }
+        }
+    }
+
+    #[component]
+    fn ForbiddenHarness() -> Element {
+        rsx! {
+            AddBooksButton { can_upload: false, on_click: move |_| {} }
+        }
+    }
+
+    #[test]
+    fn add_books_button_omits_markup_when_can_upload_is_false() {
+        let mut dom = VirtualDom::new(ForbiddenHarness);
+        dom.rebuild_in_place();
+        let html = dioxus::ssr::render(&dom);
+        assert!(!html.contains("add-books-button"));
+        assert!(!html.contains("Add books"));
+    }
+
+    #[test]
+    fn add_books_button_renders_when_can_upload_is_true() {
+        let mut dom = VirtualDom::new(AllowedHarness);
+        dom.rebuild_in_place();
+        let html = dioxus::ssr::render(&dom);
+        assert!(html.contains("data-testid=\"add-books-button\""));
+        assert!(html.contains("Add books"));
     }
 }

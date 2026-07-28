@@ -74,11 +74,13 @@ mod render_tests {
     fn panel_first_paint() -> Element {
         rsx! {
             BdPhysicalPanel {
-                uuid: "book-uuid".to_string(),
-                is_fileless: false,
-                isbn: None,
-                title: "Dracula".to_string(),
-                author: "Bram Stoker".to_string(),
+                identity: BdBookIdentity {
+                    uuid: "book-uuid".to_string(),
+                    is_fileless: false,
+                    isbn: None,
+                    title: "Dracula".to_string(),
+                    author: "Bram Stoker".to_string(),
+                },
                 refresh: use_signal(|| 0u32),
             }
         }

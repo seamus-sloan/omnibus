@@ -1,9 +1,13 @@
-use omnibus_shared::{CreateShelfRequest, MatchMode, RuleField, RuleOp, ShelfKind, ShelfRule};
+use omnibus_shared::{
+    Contributor, CreateShelfRequest, MatchMode, MetadataOverrides, RuleField, RuleOp, ShelfKind,
+    ShelfRule,
+};
 
 use super::*;
 use crate::init_db;
 use crate::shelves::{create_shelf, update_shelf};
 use crate::test_support::seed_synced_ebook;
+use crate::upsert_metadata_overrides;
 
 async fn make_user(pool: &SqlitePool, username: &str) -> i64 {
     sqlx::query_scalar::<_, i64>(
@@ -279,6 +283,36 @@ async fn sync_books_deduplicates_a_book_on_two_opted_in_shelves() {
 }
 
 #[tokio::test]
+async fn sync_books_reflects_a_saved_title_and_author_override() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = make_user(&pool, "reader").await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Frank Herbert").await;
+    synced_manual_shelf(&pool, user, "Kobo", std::slice::from_ref(&uuid)).await;
+    upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &MetadataOverrides {
+            title: Some("Dune (Corrected)".into()),
+            creators: Some(vec![Contributor {
+                name: "F. Herbert".into(),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        },
+        false,
+        user,
+    )
+    .await
+    .unwrap();
+
+    let rows = sync_books(&pool, user).await.unwrap();
+
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].title, "Dune (Corrected)");
+    assert_eq!(rows[0].author, "F. Herbert");
+}
+
+#[tokio::test]
 async fn sync_books_propagates_db_error_when_pool_is_closed() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = make_user(&pool, "reader").await;
@@ -299,6 +333,32 @@ async fn book_for_sync_returns_the_row_for_a_known_uuid() {
 
     assert_eq!(row.uuid, uuid);
     assert_eq!(row.title, "Dune");
+    assert_eq!(row.author, "Frank Herbert");
+}
+
+#[tokio::test]
+async fn book_for_sync_reflects_a_saved_title_override_with_no_creators_override() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = make_user(&pool, "reader").await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Frank Herbert").await;
+    upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &MetadataOverrides {
+            title: Some("Dune (Corrected)".into()),
+            ..Default::default()
+        },
+        false,
+        user,
+    )
+    .await
+    .unwrap();
+
+    let row = book_for_sync(&pool, &uuid).await.unwrap().unwrap();
+
+    assert_eq!(row.title, "Dune (Corrected)");
+    // Author has no override in this test — the scanned value must survive
+    // the merge unchanged rather than being blanked.
     assert_eq!(row.author, "Frank Herbert");
 }
 

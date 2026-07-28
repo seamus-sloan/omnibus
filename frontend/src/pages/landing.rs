@@ -3,25 +3,31 @@
 //! sort + filters persist per library path via [`crate::view_prefs`].
 
 use dioxus::prelude::*;
-use omnibus_shared::{EbookMetadata, ViewFilters, ViewPrefs};
+use omnibus_shared::{EbookMetadata, ResumePoint, Shelf, ShelfSummary, ViewFilters, ViewPrefs};
 
 use crate::components::chip_editor::SuggestionItem;
 #[cfg(not(feature = "mobile"))]
-use crate::components::{RailActive, ShelvesRail};
+use crate::components::EditShelfModal;
+use crate::shelf_selection::{self, ShelfSelection};
 use crate::{use_search_query, use_server_url, view_prefs};
 
 mod effects;
 mod filtering;
+mod resume_meta;
 mod sorting;
 
-// Web-only presentation cluster (rail + toolbar + table/grid). The mobile
-// build renders `mobile::MobileLanding` instead and never pulls these in.
+// Web-only presentation cluster (hero + gallery + toolbar + table/grid). The
+// mobile build renders `mobile::MobileLanding` instead and never pulls these in.
 #[cfg(not(feature = "mobile"))]
 mod filters;
 #[cfg(not(feature = "mobile"))]
 mod grid;
 #[cfg(not(feature = "mobile"))]
+mod hero;
+#[cfg(not(feature = "mobile"))]
 mod sections;
+#[cfg(not(feature = "mobile"))]
+mod shelf_gallery;
 #[cfg(not(feature = "mobile"))]
 mod table;
 #[cfg(not(feature = "mobile"))]
@@ -42,15 +48,20 @@ pub(crate) use mobile::cover_cell as mobile_cover_cell;
 #[cfg(feature = "web")]
 use effects::spawn_load_more_observer;
 use effects::{
-    spawn_load_more_effect, spawn_page_fetch_effect, spawn_suggestion_pools_effect, FetchSignals,
-    SuggestionPools,
+    spawn_hero_effect, spawn_load_more_effect, spawn_page_fetch_effect,
+    spawn_selected_shelf_effect, spawn_shelf_books_effect, spawn_shelves_list_effect,
+    spawn_suggestion_pools_effect, FetchSignals, ShelfFetchSignals, SuggestionPools,
 };
 use filtering::apply_filters;
+#[cfg(not(feature = "mobile"))]
+use hero::ContinueHero;
 #[cfg(not(feature = "mobile"))]
 use sections::{
     BooksView, LandingContent, LandingContentHandlers, LandingContentProps, LandingHeader,
     LandingHeaderView,
 };
+#[cfg(not(feature = "mobile"))]
+use shelf_gallery::ShelfGallery;
 use sorting::sort_books;
 #[cfg(not(feature = "mobile"))]
 use table::BookTableContext;
@@ -80,6 +91,23 @@ struct LandingSignals {
     want_more: Signal<u32>,
     is_admin: ReadSignal<bool>,
     pools: SuggestionPools,
+    /// Which lens the book list shows: All Books or one shelf (gallery pick).
+    selection: Signal<ShelfSelection>,
+    /// Gallery feed. Starts empty so the first WASM paint matches SSR.
+    shelves: Signal<Vec<ShelfSummary>>,
+    /// Bumped after a shelf create so the gallery refetches its list.
+    shelves_tick: Signal<u32>,
+    /// Selected shelf's member list (`None` = All Books / not yet loaded).
+    shelf_books: Signal<Option<Vec<EbookMetadata>>>,
+    shelf_loading: Signal<bool>,
+    shelf_error: Signal<Option<String>>,
+    /// Full detail for the selected shelf (`None` on All Books / while it
+    /// loads) — feeds the header facet row and the edit-shelf modal.
+    selected_shelf: Signal<Option<Shelf>>,
+    /// True while the edit-shelf modal is open.
+    edit_shelf: Signal<bool>,
+    /// Continue-reading hero feed. Starts empty (hero hidden) for SSR parity.
+    hero_points: Signal<Vec<ResumePoint>>,
 }
 
 /// Construct every signal the landing page owns and arm the effects that
@@ -112,6 +140,20 @@ fn setup_landing_signals(server_url: &str, query: Signal<String>) -> LandingSign
         authors: use_signal(Vec::<SuggestionItem>::new),
         tags: use_signal(Vec::<SuggestionItem>::new),
     };
+    // Shelf-gallery lens. `selection` seeds to All on every target (SSR
+    // parity, rule 07); the persisted choice reconciles post-mount in
+    // `wire_landing_effects`.
+    let selection = use_signal(ShelfSelection::default);
+    let shelves = use_signal(Vec::<ShelfSummary>::new);
+    let shelves_loaded = use_signal(|| false);
+    let shelves_tick = use_signal(|| 0u32);
+    let shelf_books = use_signal(|| None::<Vec<EbookMetadata>>);
+    let shelf_loading = use_signal(|| false);
+    let shelf_error = use_signal(|| None::<String>);
+    let shelf_epoch = use_signal(|| 0u64);
+    let selected_shelf = use_signal(|| None::<Shelf>);
+    let edit_shelf = use_signal(|| false);
+    let hero_points = use_signal(Vec::<ResumePoint>::new);
     let fetch_sigs = FetchSignals {
         books,
         next_cursor,
@@ -124,8 +166,30 @@ fn setup_landing_signals(server_url: &str, query: Signal<String>) -> LandingSign
         fetch_epoch,
         generation: crate::use_cache_generation(),
     };
+    let shelf_sigs = ShelfFetchSignals {
+        shelf_books,
+        shelf_loading,
+        shelf_error,
+        shelf_epoch,
+    };
+    let shelf_wiring = ShelfWiring {
+        selection,
+        shelves,
+        shelves_loaded,
+        shelves_tick,
+        shelf_sigs,
+        selected_shelf,
+        hero_points,
+    };
     wire_landing_effects(
-        server_url, query, prefs, want_more, is_admin, pools, fetch_sigs,
+        server_url,
+        query,
+        prefs,
+        want_more,
+        is_admin,
+        pools,
+        fetch_sigs,
+        shelf_wiring,
     );
     LandingSignals {
         books,
@@ -140,13 +204,36 @@ fn setup_landing_signals(server_url: &str, query: Signal<String>) -> LandingSign
         want_more,
         is_admin,
         pools,
+        selection,
+        shelves,
+        shelves_tick,
+        shelf_books,
+        shelf_loading,
+        shelf_error,
+        selected_shelf,
+        edit_shelf,
+        hero_points,
     }
+}
+
+/// Signal bundle for the shelf-gallery + hero effects armed by
+/// [`wire_landing_effects`], so its signature stays readable.
+#[derive(Copy, Clone)]
+struct ShelfWiring {
+    selection: Signal<ShelfSelection>,
+    shelves: Signal<Vec<ShelfSummary>>,
+    shelves_loaded: Signal<bool>,
+    shelves_tick: Signal<u32>,
+    shelf_sigs: ShelfFetchSignals,
+    selected_shelf: Signal<Option<Shelf>>,
+    hero_points: Signal<Vec<ResumePoint>>,
 }
 
 /// Arm every reactive side-effect the landing page needs: admin-gated
 /// suggestion-pool refetch, page-1 fetch on sort/filter/query change, the
 /// load-more append + web scroll observer, and prefs hydration once the
 /// library path resolves.
+#[allow(clippy::too_many_arguments)] // one bundle per pipeline; splitting further hides the wiring
 fn wire_landing_effects(
     server_url: &str,
     query: Signal<String>,
@@ -155,6 +242,7 @@ fn wire_landing_effects(
     is_admin: ReadSignal<bool>,
     pools: SuggestionPools,
     fetch_sigs: FetchSignals,
+    shelf_wiring: ShelfWiring,
 ) {
     spawn_suggestion_pools_effect(server_url.to_string(), is_admin, pools);
 
@@ -188,6 +276,95 @@ fn wire_landing_effects(
             }
         }
     });
+
+    let ShelfWiring {
+        mut selection,
+        shelves,
+        shelves_loaded,
+        shelves_tick,
+        shelf_sigs,
+        selected_shelf,
+        hero_points,
+    } = shelf_wiring;
+    spawn_shelves_list_effect(
+        server_url.to_string(),
+        shelves_tick,
+        shelves,
+        shelves_loaded,
+        selection,
+    );
+    spawn_hero_effect(server_url.to_string(), hero_points);
+
+    // Full detail for the gallery pick; re-runs after an edit-shelf save
+    // because the save bumps `shelves_tick`.
+    let selected_key = use_memo(move || (selection(), shelves_tick()));
+    spawn_selected_shelf_effect(server_url.to_string(), selected_key, selected_shelf);
+
+    // Refetch the selected shelf's members when the gallery pick or the sort
+    // axis changes, or after an edit-shelf save (`shelves_tick` bump — a rules
+    // edit changes membership). Mirrors `fetch_key` deliberately: view-mode
+    // toggles and filters stay client-side and must not refetch.
+    let shelf_key = use_memo(move || {
+        let p = prefs();
+        (selection(), p.sort_key, p.sort_dir, shelves_tick())
+    });
+    spawn_shelf_books_effect(server_url.to_string(), shelf_key, shelf_sigs);
+
+    // Reconcile the persisted gallery pick once after mount (no reactive
+    // reads, so this runs exactly once). SSR's client_store is inert, so SSR
+    // and the first WASM paint both render All Books — rule 07. A stored pick
+    // whose shelf no longer exists snaps back to All: validated against the
+    // shelves list here when it already arrived, and inside
+    // `spawn_shelves_list_effect`'s completion when it hasn't — both are
+    // plain sequential checks, never a reactive effect that could glitch on
+    // partially-applied writes.
+    use_effect(move || {
+        let stored = shelf_selection::load();
+        if stored == *selection.peek() {
+            return;
+        }
+        if let ShelfSelection::Shelf(id) = stored {
+            if *shelves_loaded.peek() && !shelves.peek().iter().any(|s| s.id == id) {
+                shelf_selection::save(ShelfSelection::All);
+                return;
+            }
+        }
+        selection.set(stored);
+    });
+}
+
+/// Which list feeds the grid/table. Search always wins (the palette overlays
+/// everything); a gallery pick overlays browse; browse is the default.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum VisibleSource {
+    Search,
+    Shelf,
+    Browse,
+}
+
+/// Resolve the precedence search > shelf > browse for this render.
+fn visible_source(is_search: bool, selection: ShelfSelection) -> VisibleSource {
+    if is_search {
+        VisibleSource::Search
+    } else if matches!(selection, ShelfSelection::Shelf(_)) {
+        VisibleSource::Shelf
+    } else {
+        VisibleSource::Browse
+    }
+}
+
+/// Section-header title for the current gallery pick. Falls back to a neutral
+/// "Shelf" while the shelves list is still loading after a reload directly
+/// into a persisted selection.
+fn section_title(selection: ShelfSelection, shelves: &[ShelfSummary]) -> String {
+    match selection {
+        ShelfSelection::All => "All Books".to_string(),
+        ShelfSelection::Shelf(id) => shelves
+            .iter()
+            .find(|s| s.id == id)
+            .map(|s| s.name.clone())
+            .unwrap_or_else(|| "Shelf".to_string()),
+    }
 }
 
 /// Per-render snapshot of the data the markup sub-components consume.
@@ -206,6 +383,13 @@ struct LandingViewState {
     books_empty: bool,
     has_more: bool,
     is_loading_more: bool,
+    section_title: String,
+    /// Remount key for the book area: changing it replays the sweep-in
+    /// cascade (a fresh subtree restarts its CSS animations).
+    sweep_key: String,
+    /// True while the palette query is non-empty — hero + gallery hide, and
+    /// the search result set renders exactly as before the redesign.
+    is_search: bool,
 }
 
 /// Snapshot every signal the markup needs in one place. Reads are cheap, but
@@ -213,32 +397,55 @@ struct LandingViewState {
 /// across the three child components.
 fn derive_view_state(sigs: &LandingSignals, query: Signal<String>) -> LandingViewState {
     // Browse is already server-ordered + server-filtered; render `books`
-    // verbatim. Search sorts + filters the capped result set client-side.
+    // verbatim. Search sorts + filters the capped result set client-side. A
+    // shelf pick renders its (server-sorted) member list, client-filtered
+    // with the same helper the search path uses.
     let books_sig = sigs.books;
     let prefs_sig = sigs.prefs;
+    let selection_sig = sigs.selection;
+    let shelf_books_sig = sigs.shelf_books;
     let visible = use_memo(move || {
         let is_search = !query().trim().is_empty();
-        if is_search {
-            let bs = books_sig.read();
-            let p = prefs_sig.read();
-            sort_books(apply_filters(&bs, &p.filters), p.sort_key, p.sort_dir)
-        } else {
+        match visible_source(is_search, selection_sig()) {
+            VisibleSource::Search => {
+                let bs = books_sig.read();
+                let p = prefs_sig.read();
+                sort_books(apply_filters(&bs, &p.filters), p.sort_key, p.sort_dir)
+            }
+            VisibleSource::Shelf => {
+                let members = shelf_books_sig.read().clone().unwrap_or_default();
+                let p = prefs_sig.read();
+                apply_filters(&members, &p.filters)
+            }
             // Browse renders the server-ordered list verbatim; the memo stores
             // a `Vec` by value, so a clone is unavoidable on this branch.
-            books_sig()
+            VisibleSource::Browse => books_sig(),
         }
     });
 
     let is_search = !query().trim().is_empty();
+    let selection = (sigs.selection)();
+    let source = visible_source(is_search, selection);
+    let shelves = sigs.shelves.read();
     let path_value = (sigs.lib_path)();
-    // Header count: the full library total on browse; the (capped) result
-    // count on search.
-    let book_count = if is_search {
-        sigs.books.read().len()
-    } else {
-        (sigs.total)()
+    // Header count: the full library total on browse; the shelf's member
+    // count on a gallery pick; the (capped) result count on search.
+    let book_count = match source {
+        VisibleSource::Search => sigs.books.read().len(),
+        VisibleSource::Shelf => {
+            let member_len = sigs.shelf_books.read().as_ref().map(Vec::len).unwrap_or(0);
+            match selection {
+                ShelfSelection::Shelf(id) => shelves
+                    .iter()
+                    .find(|s| s.id == id)
+                    .map(|s| usize::try_from(s.book_count).unwrap_or(member_len))
+                    .unwrap_or(member_len),
+                ShelfSelection::All => member_len,
+            }
+        }
+        VisibleSource::Browse => (sigs.total)()
             .map(|t| usize::try_from(t).unwrap_or(0))
-            .unwrap_or_else(|| sigs.books.read().len())
+            .unwrap_or_else(|| sigs.books.read().len()),
     };
     let visible_books = visible();
     let visible_is_empty = visible_books.is_empty();
@@ -246,19 +453,36 @@ fn derive_view_state(sigs: &LandingSignals, query: Signal<String>) -> LandingVie
         .as_ref()
         .map(|p| short_path(p))
         .unwrap_or_default();
+    let is_loading = match source {
+        VisibleSource::Shelf => (sigs.shelf_loading)(),
+        _ => (sigs.loading)(),
+    };
+    let page_error = (sigs.error)().or_else(|| match source {
+        VisibleSource::Shelf => (sigs.shelf_error)(),
+        _ => None,
+    });
 
     LandingViewState {
-        is_loading: (sigs.loading)(),
-        page_error: (sigs.error)(),
+        is_loading,
+        page_error,
         lib_err: (sigs.lib_error)(),
         path_subtitle,
-        path_missing: path_value.is_none(),
+        // A shelf pick isn't the surface for the library-path hint.
+        path_missing: path_value.is_none() && source != VisibleSource::Shelf,
         book_count,
         visible_books,
         visible_is_empty,
-        books_empty: sigs.books.read().is_empty(),
-        has_more: (sigs.next_cursor)().is_some(),
+        books_empty: match source {
+            VisibleSource::Shelf => visible_is_empty,
+            _ => sigs.books.read().is_empty(),
+        },
+        // Keyset pagination exists only on the browse path; shelf pages are
+        // capped whole lists and search is a capped set.
+        has_more: source == VisibleSource::Browse && (sigs.next_cursor)().is_some(),
         is_loading_more: (sigs.loading_more)(),
+        section_title: section_title(selection, &shelves),
+        sweep_key: format!("{selection:?}·{is_search}"),
+        is_search,
     }
 }
 
@@ -271,6 +495,10 @@ struct LandingHandlers {
     on_prefs_change_content: EventHandler<ViewPrefs>,
     on_load_more: EventHandler<()>,
     on_clear_filters: EventHandler<()>,
+    /// Gallery pick: move the glow, persist the choice, swap the book list.
+    on_select_shelf: EventHandler<ShelfSelection>,
+    /// After a create in the gallery's modal: refetch the shelves list.
+    on_shelf_created: EventHandler<()>,
 }
 
 /// Build the UI-event handlers from the landing signals. `save` is `Copy`
@@ -306,6 +534,17 @@ fn build_handlers(sigs: &LandingSignals) -> LandingHandlers {
                 next.filters = ViewFilters::default();
                 save(next);
             }
+        }),
+        on_select_shelf: EventHandler::new({
+            let mut selection = sigs.selection;
+            move |sel: ShelfSelection| {
+                shelf_selection::save(sel);
+                selection.set(sel);
+            }
+        }),
+        on_shelf_created: EventHandler::new({
+            let mut tick = sigs.shelves_tick;
+            move |_: ()| tick.with_mut(|n| *n += 1)
         }),
     }
 }
@@ -376,8 +615,10 @@ fn mobile_landing_body(
     }
 }
 
-/// Web presentation branch of [`LandingPage`]: shelves rail + header +
-/// grid/table content, wired to the admin table context and suggestion pools.
+/// Web presentation branch of [`LandingPage`]: continue-reading hero + shelf
+/// gallery + section header + grid/table content, wired to the admin table
+/// context and suggestion pools. The gallery filters in place — the old
+/// shelves rail (still used on `/shelves/:id`) no longer mounts here.
 #[cfg(not(feature = "mobile"))]
 fn web_landing_body(
     sigs: &LandingSignals,
@@ -391,46 +632,95 @@ fn web_landing_body(
         on_prefs_change_content,
         on_load_more,
         on_clear_filters,
+        on_select_shelf,
+        on_shelf_created,
     } = handlers;
+    let hero_points = (sigs.hero_points)();
+    let selected_shelf = (sigs.selected_shelf)();
+    let mut edit_shelf = sigs.edit_shelf;
+    let mut shelves_tick = sigs.shelves_tick;
+    // All Books mosaic: first four cover-bearing books of the (always-warm)
+    // browse page. Before it lands, the tile falls back to its accent plate.
+    let all_cover_uuids: Vec<String> = sigs
+        .books
+        .read()
+        .iter()
+        .filter(|b| b.cover_url.is_some())
+        .filter_map(|b| b.unique_identifier.clone())
+        .take(4)
+        .collect();
     rsx! {
-        div { class: "shelf-layout",
-            ShelvesRail { active: RailActive::All }
-            div { class: "shelf-main",
-                LandingHeader {
-                    view: LandingHeaderView {
-                        path_subtitle: view.path_subtitle,
-                        book_count: view.book_count,
-                        path_missing: view.path_missing,
-                        page_error: view.page_error.clone(),
-                        lib_err: view.lib_err.clone(),
+        div { class: "landing-col",
+            if !view.is_search && !hero_points.is_empty() {
+                ContinueHero {
+                    points: hero_points,
+                    server_url: server_url.clone(),
+                }
+            }
+            if !view.is_search {
+                ShelfGallery {
+                    shelves: (sigs.shelves)(),
+                    selection: (sigs.selection)(),
+                    all_count: (sigs.total)(),
+                    all_cover_uuids,
+                    server_url: server_url.clone(),
+                    on_select: on_select_shelf,
+                    on_created: on_shelf_created,
+                }
+            }
+            LandingHeader {
+                view: LandingHeaderView {
+                    path_subtitle: view.path_subtitle,
+                    book_count: view.book_count,
+                    path_missing: view.path_missing,
+                    page_error: view.page_error.clone(),
+                    lib_err: view.lib_err.clone(),
+                    section_title: view.section_title,
+                    selected_shelf: selected_shelf.clone(),
+                },
+                prefs: prefs(),
+                on_prefs_change: on_prefs_change_header,
+                on_edit_shelf: move |_| edit_shelf.set(true),
+            }
+
+            LandingContent {
+                ..LandingContentProps {
+                    books: BooksView {
+                        is_loading: view.is_loading,
+                        visible_books: view.visible_books,
+                        visible_is_empty: view.visible_is_empty,
+                        books_empty: view.books_empty,
+                        lib_err: view.lib_err,
+                        page_error: view.page_error,
+                        has_more: view.has_more,
+                        is_loading_more: view.is_loading_more,
                     },
                     prefs: prefs(),
-                    on_prefs_change: on_prefs_change_header,
+                    ctx: BookTableContext {
+                        server_url,
+                        is_admin: (sigs.is_admin)(),
+                        author_suggestions: sigs.pools.authors.into(),
+                        tag_suggestions: sigs.pools.tags.into(),
+                    },
+                    handlers: LandingContentHandlers {
+                        on_prefs_change: on_prefs_change_content,
+                        on_load_more,
+                        on_clear_filters,
+                    },
+                    sweep_key: view.sweep_key,
                 }
+            }
 
-                LandingContent {
-                    ..LandingContentProps {
-                        books: BooksView {
-                            is_loading: view.is_loading,
-                            visible_books: view.visible_books,
-                            visible_is_empty: view.visible_is_empty,
-                            books_empty: view.books_empty,
-                            lib_err: view.lib_err,
-                            page_error: view.page_error,
-                            has_more: view.has_more,
-                            is_loading_more: view.is_loading_more,
-                        },
-                        prefs: prefs(),
-                        ctx: BookTableContext {
-                            server_url,
-                            is_admin: (sigs.is_admin)(),
-                            author_suggestions: sigs.pools.authors.into(),
-                            tag_suggestions: sigs.pools.tags.into(),
-                        },
-                        handlers: LandingContentHandlers {
-                            on_prefs_change: on_prefs_change_content,
-                            on_load_more,
-                            on_clear_filters,
+            if edit_shelf() {
+                if let Some(shelf) = selected_shelf {
+                    EditShelfModal {
+                        shelf,
+                        on_close: move |_| edit_shelf.set(false),
+                        on_saved: move |_| {
+                            edit_shelf.set(false);
+                            // Refetches the gallery list, the section title,
+                            // and (via `selected_key`) the full shelf.
+                            shelves_tick.with_mut(|n| *n += 1);
                         },
                     }
                 }
@@ -457,5 +747,44 @@ mod tests {
         assert_eq!(short_path("/Users/ek/books"), "books");
         assert_eq!(short_path("/Users/ek/books/"), "books");
         assert_eq!(short_path("relative"), "relative");
+    }
+
+    #[test]
+    fn visible_source_prefers_search_then_shelf_then_browse() {
+        assert_eq!(
+            visible_source(true, ShelfSelection::Shelf(1)),
+            VisibleSource::Search
+        );
+        assert_eq!(
+            visible_source(false, ShelfSelection::Shelf(1)),
+            VisibleSource::Shelf
+        );
+        assert_eq!(
+            visible_source(false, ShelfSelection::All),
+            VisibleSource::Browse
+        );
+    }
+
+    #[test]
+    fn section_title_names_the_pick_and_falls_back_while_shelves_load() {
+        let shelf = ShelfSummary {
+            id: 3,
+            owner_user_id: 1,
+            owner_username: "elena".into(),
+            kind: omnibus_shared::ShelfKind::Manual,
+            name: "Space Operas".into(),
+            visibility: omnibus_shared::Visibility::Private,
+            accent: None,
+            book_count: 2,
+            cover_uuids: Vec::new(),
+        };
+        assert_eq!(section_title(ShelfSelection::All, &[]), "All Books");
+        assert_eq!(
+            section_title(ShelfSelection::Shelf(3), std::slice::from_ref(&shelf)),
+            "Space Operas"
+        );
+        // Reloading straight into a persisted pick renders before the list
+        // arrives — the header must not panic or claim All Books.
+        assert_eq!(section_title(ShelfSelection::Shelf(9), &[shelf]), "Shelf");
     }
 }

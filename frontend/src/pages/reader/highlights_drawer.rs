@@ -52,14 +52,18 @@ fn spawn_recolor(
     server_url: String,
     mut highlights: Signal<Vec<Highlight>>,
     id: i64,
-    cfi: String,
+    cfi: Option<String>,
     next: HighlightColor,
     prev: HighlightColor,
 ) {
     if next == prev {
         return;
     }
-    reannotate(&cfi, next);
+    // A Kobo-origin highlight has no CFI, so there is nothing painted in the
+    // viewer to repaint — the row color and the persisted value still change.
+    if let Some(cfi) = &cfi {
+        reannotate(cfi, next);
+    }
     // Bind the index first so the read guard drops before `write()` — a live
     // `read()` temporary across `write()` is a runtime borrow panic.
     let idx = highlights.read().iter().position(|h| h.id == id);
@@ -78,7 +82,9 @@ fn spawn_recolor(
                 .iter()
                 .any(|h| h.id == id && h.color == next);
             if still_ours {
-                reannotate(&cfi, prev);
+                if let Some(cfi) = &cfi {
+                    reannotate(cfi, prev);
+                }
                 let idx = highlights.read().iter().position(|h| h.id == id);
                 if let Some(i) = idx {
                     highlights.write()[i].color = prev;
@@ -195,9 +201,13 @@ pub(super) fn HighlightRow(
             let server_url = server_url.clone();
             spawn(async move {
                 if crate::data::delete_highlight(&server_url, id).await.is_ok() {
-                    #[cfg(any(feature = "web", feature = "mobile"))]
-                    super::reader_call_json("removeAnnotation", &cfi);
-                    let _ = &cfi;
+                    // Anchorless (Kobo-origin) rows have no painted swatch to
+                    // remove from the rendition.
+                    if let Some(cfi) = &cfi {
+                        #[cfg(any(feature = "web", feature = "mobile"))]
+                        super::reader_call_json("removeAnnotation", cfi);
+                        let _ = cfi;
+                    }
                     highlights.write().retain(|h| h.id != id);
                 }
             });
@@ -215,7 +225,13 @@ pub(super) fn HighlightRow(
             button {
                 class: "rd-hl-quote",
                 r#type: "button",
-                onclick: move |_| navigate_to(&nav_cfi),
+                // Anchorless rows have nowhere to jump; the quote still shows.
+                disabled: nav_cfi.is_none(),
+                onclick: move |_| {
+                    if let Some(cfi) = &nav_cfi {
+                        navigate_to(cfi);
+                    }
+                },
                 "\u{201c}{quote}\u{201d}"
             }
             if let Some(n) = note {

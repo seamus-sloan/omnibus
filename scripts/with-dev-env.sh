@@ -52,12 +52,17 @@ key="$( (cat "$repo_root/flake.nix" "$repo_root/flake.lock"; echo "$shell") | sh
 cache_file="$cache_dir/$shell-$key.env.bash"
 
 # Self-heal: a `nix store gc` can collect a store path the cached env
-# references, leaving a poisoned cache. Spot-check the first /nix/store path.
+# references, leaving a poisoned cache. Check every unique /nix/store path —
+# a partial GC can collect a later path while an earlier one survives, so a
+# spot-check of just the first path would report "still valid" and a command
+# would run with a silently incomplete PATH.
 cache_is_stale() {
   [ ! -f "$cache_file" ] && return 0
   local p
-  p="$(grep -o '/nix/store/[^\"'\'' :]*' "$cache_file" | head -1 || true)"
-  [ -n "$p" ] && [ ! -e "$p" ]
+  while IFS= read -r p; do
+    [ -e "$p" ] || return 0
+  done < <(grep -o '/nix/store/[^"'\'' :]*' "$cache_file")
+  return 1
 }
 
 if cache_is_stale; then

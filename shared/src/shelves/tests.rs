@@ -273,3 +273,16 @@ fn create_validate_rejects_blank_and_overlong_names() {
     };
     assert!(long.validate().is_err());
 }
+
+#[test]
+fn shelf_summary_without_cover_uuids_deserializes_to_empty_vec() {
+    // Wire-compat pin: payloads from servers predating the mosaic field (and
+    // the offline replica's cached JSON) must keep deserializing.
+    let json = r#"{
+        "id": 7, "owner_user_id": 1, "owner_username": "elena",
+        "kind": "manual", "name": "Picks", "visibility": "private",
+        "accent": null, "book_count": 3
+    }"#;
+    let summary: ShelfSummary = serde_json::from_str(json).unwrap();
+    assert!(summary.cover_uuids.is_empty());
+}

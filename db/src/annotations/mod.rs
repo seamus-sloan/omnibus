@@ -1,5 +1,8 @@
-//! Highlight annotation CRUD — create, list, update, and delete
-//! user highlights anchored to EPUB CFI ranges within a book.
+//! Annotation CRUD over the unified `annotations` table: web/iOS highlights
+//! and notes (CFI-anchored) plus Kobo device annotations (KoboSpan-anchored,
+//! held opaquely in `kobo_location`). The web wire surface keeps its
+//! highlight naming; the Kobo Reading Services channel uses the
+//! `*_kobo_annotations` functions.
 
 use omnibus_shared::{CreateHighlight, Highlight, HighlightColor};
 use sqlx::{Row, SqlitePool};
@@ -51,7 +54,7 @@ pub async fn create_highlight(
     // client_id is the user's gesture, and a replay carries no newer intent.
     // Colour and note changes arrive as their own ops.
     let id = sqlx::query_scalar::<_, i64>(
-        "INSERT INTO highlights (user_id, book_uuid, epub_cfi_range, color, text, client_id)
+        "INSERT INTO annotations (user_id, book_uuid, epub_cfi_range, color, text, client_id)
          VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(user_id, client_id) WHERE client_id IS NOT NULL DO NOTHING
          RETURNING id",
@@ -81,7 +84,7 @@ pub async fn highlight_id_for_client_id(
     client_id: &str,
 ) -> Result<Option<i64>, HighlightError> {
     Ok(sqlx::query_scalar::<_, i64>(
-        "SELECT id FROM highlights WHERE user_id = ? AND client_id = ?",
+        "SELECT id FROM annotations WHERE user_id = ? AND client_id = ?",
     )
     .bind(user_id)
     .bind(client_id)
@@ -101,7 +104,7 @@ pub async fn list_highlights(
     let rows = sqlx::query(
         "SELECT h.id, h.book_uuid, h.epub_cfi_range, h.color, h.note, h.text,
                 h.client_id, h.created_at
-         FROM highlights h
+         FROM annotations h
          WHERE h.user_id = ? AND h.book_uuid = ?
          ORDER BY h.created_at ASC
          LIMIT ?",
@@ -122,12 +125,15 @@ pub async fn update_highlight_color(
     highlight_id: i64,
     color: HighlightColor,
 ) -> Result<(), HighlightError> {
-    let result = sqlx::query("UPDATE highlights SET color = ? WHERE id = ? AND user_id = ?")
-        .bind(color.as_str())
-        .bind(highlight_id)
-        .bind(user_id)
-        .execute(pool)
-        .await?;
+    let result = sqlx::query(
+        "UPDATE annotations SET color = ?, updated_at = strftime('%s','now')
+         WHERE id = ? AND user_id = ?",
+    )
+    .bind(color.as_str())
+    .bind(highlight_id)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
     if result.rows_affected() == 0 {
         return Err(HighlightError::NotFound);
     }
@@ -141,12 +147,15 @@ pub async fn update_highlight_note(
     highlight_id: i64,
     note: Option<&str>,
 ) -> Result<(), HighlightError> {
-    let result = sqlx::query("UPDATE highlights SET note = ? WHERE id = ? AND user_id = ?")
-        .bind(note)
-        .bind(highlight_id)
-        .bind(user_id)
-        .execute(pool)
-        .await?;
+    let result = sqlx::query(
+        "UPDATE annotations SET note = ?, updated_at = strftime('%s','now')
+         WHERE id = ? AND user_id = ?",
+    )
+    .bind(note)
+    .bind(highlight_id)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
     if result.rows_affected() == 0 {
         return Err(HighlightError::NotFound);
     }
@@ -159,7 +168,7 @@ pub async fn delete_highlight(
     user_id: i64,
     highlight_id: i64,
 ) -> Result<(), HighlightError> {
-    let result = sqlx::query("DELETE FROM highlights WHERE id = ? AND user_id = ?")
+    let result = sqlx::query("DELETE FROM annotations WHERE id = ? AND user_id = ?")
         .bind(highlight_id)
         .bind(user_id)
         .execute(pool)
@@ -178,7 +187,7 @@ async fn get_highlight_by_id(
     let row = sqlx::query(
         "SELECT h.id, h.book_uuid, h.epub_cfi_range, h.color, h.note, h.text,
                 h.client_id, h.created_at
-         FROM highlights h
+         FROM annotations h
          WHERE h.id = ? AND h.user_id = ?",
     )
     .bind(highlight_id)
@@ -198,7 +207,7 @@ async fn get_highlight_by_client_id(
     let row = sqlx::query(
         "SELECT h.id, h.book_uuid, h.epub_cfi_range, h.color, h.note, h.text,
                 h.client_id, h.created_at
-         FROM highlights h
+         FROM annotations h
          WHERE h.client_id = ? AND h.user_id = ?",
     )
     .bind(client_id)
@@ -208,6 +217,121 @@ async fn get_highlight_by_client_id(
     .ok_or(HighlightError::NotFound)?;
 
     row_to_highlight(&row)
+}
+
+/// A Kobo-placeable annotation as the Reading Services channel serves it:
+/// the device-minted id rides in `client_id`, the anchor is the verbatim
+/// `kobo_location` JSON.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServedKoboAnnotation {
+    pub client_id: String,
+    pub color: HighlightColor,
+    pub text: Option<String>,
+    pub note: Option<String>,
+    pub kobo_location: String,
+    pub updated_at: i64,
+}
+
+/// One device-uploaded annotation to persist. Fields are pre-validated and
+/// capped by the server's tolerant PATCH parser.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IngestKoboAnnotation {
+    pub client_id: String,
+    pub color: HighlightColor,
+    pub text: Option<String>,
+    pub note: Option<String>,
+    pub kobo_location: String,
+}
+
+/// List the Kobo-placeable annotations for a user + book — rows that carry a
+/// `kobo_location` anchor (today that means device-origin rows; a future
+/// CFI→KoboSpan converter widens the set with no query change). Unknown book
+/// resolves to an empty list, mirroring [`list_highlights`].
+pub async fn served_kobo_annotations(
+    pool: &SqlitePool,
+    user_id: i64,
+    book_uuid: &str,
+) -> Result<Vec<ServedKoboAnnotation>, HighlightError> {
+    let Some(canonical) = resolve_canonical_book_uuid(pool, book_uuid).await? else {
+        return Ok(vec![]);
+    };
+    let rows = sqlx::query(
+        "SELECT client_id, color, text, note, kobo_location, updated_at
+         FROM annotations
+         WHERE user_id = ? AND book_uuid = ?
+           AND kobo_location IS NOT NULL AND client_id IS NOT NULL
+         ORDER BY created_at ASC
+         LIMIT ?",
+    )
+    .bind(user_id)
+    .bind(&canonical)
+    .bind(LIST_HIGHLIGHTS_LIMIT)
+    .fetch_all(pool)
+    .await?;
+
+    rows.iter()
+        .map(|row| {
+            let color_str: String = row.try_get("color")?;
+            Ok(ServedKoboAnnotation {
+                client_id: row.try_get("client_id")?,
+                color: HighlightColor::parse(&color_str).unwrap_or(HighlightColor::Amber),
+                text: row.try_get("text")?,
+                note: row.try_get("note")?,
+                kobo_location: row.try_get("kobo_location")?,
+                updated_at: row.try_get("updated_at")?,
+            })
+        })
+        .collect()
+}
+
+/// Apply one device PATCH: upsert `updates` (keyed on the device-minted id in
+/// `client_id` — a re-upload updates color/note/text/anchor in place, so
+/// replays are idempotent) and delete `deleted_client_ids`, in one
+/// transaction. Unlike the web path's create, a replayed upload *does* carry
+/// newer intent — the device batches edits into the same PATCH shape.
+pub async fn ingest_kobo_annotations(
+    pool: &SqlitePool,
+    user_id: i64,
+    book_uuid: &str,
+    updates: &[IngestKoboAnnotation],
+    deleted_client_ids: &[String],
+) -> Result<(), HighlightError> {
+    let canonical = resolve_canonical_book_uuid(pool, book_uuid)
+        .await?
+        .ok_or(HighlightError::BookNotFound)?;
+
+    let mut tx = pool.begin().await.map_err(HighlightError::Sqlx)?;
+    for a in updates {
+        sqlx::query(
+            "INSERT INTO annotations
+                 (user_id, book_uuid, epub_cfi_range, kobo_location, color, note, text, client_id)
+             VALUES (?, ?, NULL, ?, ?, ?, ?, ?)
+             ON CONFLICT(user_id, client_id) WHERE client_id IS NOT NULL DO UPDATE SET
+                 kobo_location = excluded.kobo_location,
+                 color = excluded.color,
+                 note = excluded.note,
+                 text = excluded.text,
+                 updated_at = strftime('%s','now')",
+        )
+        .bind(user_id)
+        .bind(&canonical)
+        .bind(&a.kobo_location)
+        .bind(a.color.as_str())
+        .bind(a.note.as_deref())
+        .bind(a.text.as_deref())
+        .bind(&a.client_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    for client_id in deleted_client_ids {
+        sqlx::query("DELETE FROM annotations WHERE user_id = ? AND client_id = ?")
+            .bind(user_id)
+            .bind(client_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await.map_err(HighlightError::Sqlx)?;
+    Ok(())
 }
 
 fn row_to_highlight(row: &sqlx::sqlite::SqliteRow) -> Result<Highlight, HighlightError> {

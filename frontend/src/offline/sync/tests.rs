@@ -342,6 +342,7 @@ async fn drain_remaps_temp_shelf_ids_across_later_ops() {
             visibility: omnibus_shared::Visibility::Private,
             accent: None,
             book_count: 0,
+            cover_uuids: Vec::new(),
         }],
     );
     enqueue_raw(&Op::CreateShelf {

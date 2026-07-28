@@ -277,6 +277,7 @@ fn test_shelf_summary(id: i64, name: &str, book_count: i64) -> omnibus_shared::S
         visibility: omnibus_shared::Visibility::Private,
         accent: None,
         book_count,
+        cover_uuids: Vec::new(),
     }
 }
 
@@ -384,7 +385,7 @@ async fn highlight_remapped_replaces_the_temp_record_with_the_server_copy() {
     let temp = omnibus_shared::Highlight {
         id: -13,
         book_uuid: "outbox-book-9".into(),
-        epub_cfi_range: "epubcfi(/6/4!/4/2,/1:0,/1:5)".into(),
+        epub_cfi_range: Some("epubcfi(/6/4!/4/2,/1:0,/1:5)".into()),
         color: HighlightColor::Blue,
         note: None,
         text: None,

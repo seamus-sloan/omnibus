@@ -36,6 +36,7 @@
  *   display(target)                 navigate to a TOC href or CFI (also the
  *                                   target of in-book content-link taps —
  *                                   see installContentLinkNav())
+ *   clearSelection()                drop the live selection
  *   copyText(text)                  clipboard write
  *   shareText(text)                 navigator.share, clipboard fallback
  *   exportQuoteCard(json)           canvas PNG → <a download>
@@ -44,16 +45,20 @@
  *   copyQuoteCardImage(json)        canvas PNG → clipboard, download fallback
  *   destroy()
  *
+ * Selection API (host-drawn selection; see the engine below):
+ *   beginSelectionAt(x, y)          long-press: select the token at a point
+ *   extendSelectionTo(x, y)         drag from the anchor token
+ *   beginEdgeDrag(edge)             pin the opposite edge for a handle drag
+ *   endSelectionDrag()              settle and re-emit with `existing`
+ *   clearSelection()
+ *
  * Selection callbacks:
- *   - `__omnibusOnSelection(json)` — invoked when the user selects text,
- *     with { cfiRange, text, rect: { x, y, width } } where rect is in
- *     viewport coordinates. epub.js re-fires this as the selection is
- *     adjusted (e.g. native handle drags), so the payload tracks the
- *     live range.
- *   - `__omnibusOnSelectionCleared(_)` — invoked (debounced) when the
- *     selection collapses to nothing, so the host can dismiss its
- *     selection UI without needing a scrim that would swallow the
- *     native handle drags.
+ *   - `__omnibusOnSelection(json)` — the live range, as
+ *     { cfiRange, text, rects: [{x,y,width,height}], start, end, existing,
+ *       dragging } in HOST-WINDOW coordinates. One rect per visual line;
+ *     `start`/`end` are the caret boxes the host hangs its handles off.
+ *   - `__omnibusOnSelectionCleared(_)` — the range collapsed (tap-away,
+ *     page turn), so the host can drop its selection UI.
  * Table-of-contents callback:
  *   - `__omnibusOnToc(json)` — invoked once the book is ready (and on
  *     requestToc()), with a flat [{ label, href, level }] array.
@@ -76,6 +81,10 @@
   var restoreSettled = true;
   var tocFlat = [];
   var currentTheme = "dark";
+  // Reading typography, tracked because the highlight geometry depends on it
+  // — the leading between lines is what a mark has to grow to cover.
+  var currentFontSize = 19;
+  var currentLineHeight = 1.6;
   // Whether the section iframe runs scripts. Only then can we await the
   // iframe's `fonts.ready`, which is what makes the settle short enough to
   // hide behind a fade rather than a long blank.
@@ -86,6 +95,12 @@
   // otherwise leave the last line of prose clipped behind stale pagination.
   var stageResizeObserver = null;
   var stageResizeTimer = null;
+  // Live host-drawn selection, or null. See the selection engine below.
+  var sel = null;
+  var selEmitRaf = 0;
+  // Spine item the reader is in, as the part of a CFI before its "!". Used to
+  // skip annotations that can't be on this page without resolving them.
+  var currentSectionBase = null;
 
   function emitStatus(state) {
     if (typeof window.__omnibusOnStatus === "function") {
@@ -120,6 +135,13 @@
     locationsReady = false;
     sectionRanges = null;
     tocFlat = [];
+    sel = null;
+    currentSectionBase = null;
+    dropFlatCache();
+    if (selEmitRaf) {
+      cancelAnimationFrame(selEmitRaf);
+      selEmitRaf = 0;
+    }
     if (rendition) {
       try {
         rendition.destroy();
@@ -279,40 +301,35 @@
       });
 
       installGestureNav();
-      installSelectionClearWatch();
       installContentEnhancements();
       installContentLinkNav();
       installStageResizeWatch(elementId);
 
-      // These body backgrounds are mirrored by the per-theme `--rd-page`
-      // token in atrium.css (the reader-surface ground) — change both
-      // together or the chrome strips stop matching the page.
-      rendition.themes.register("light", {
-        body: { background: "#fcfbfa", color: foregroundColorForTheme("light") },
-      });
-      rendition.themes.register("dark", {
-        body: { background: "#201e1b", color: foregroundColorForTheme("dark") },
-      });
-      // Matches Apple Books' dark reading theme on macOS: a pure-black
-      // #000000 page with bright #ffffff text.
-      rendition.themes.register("black", {
-        body: { background: "#000000", color: foregroundColorForTheme("black") },
-      });
-      rendition.themes.register("sepia", {
-        body: { background: "#ede4d0", color: foregroundColorForTheme("sepia") },
-      });
-      rendition.themes.select(opts.theme || "dark");
+      // The page's colours are the reader's own — see `applyThemeColors` and
+      // the baseline stylesheet — rather than epub.js themes.
+      //
+      // `themes.select` was the wrong tool: it appends a per-theme <style> to
+      // each section head and never removes or reorders one, so the ground came
+      // from whichever theme was appended last, not from the selected one. Once
+      // all four had been visited every later switch left the page on the
+      // fourth one's ground while the ink and the host chrome followed the
+      // selection — Light ink on a black page.
       currentTheme = opts.theme || "dark";
       applyHostGround(currentTheme);
 
       if (opts.fontSize) {
         rendition.themes.fontSize(opts.fontSize + "px");
+        currentFontSize = opts.fontSize;
       }
       if (opts.fontFamily) setFont(opts.fontFamily);
-      if (opts.lineHeight) setLineHeight(opts.lineHeight);
+      if (opts.lineHeight) currentLineHeight = Number(opts.lineHeight) || currentLineHeight;
+      if (opts.lineHeight) rendition.themes.override("line-height", opts.lineHeight);
       if (opts.maxWidth) setMargins(opts.maxWidth);
       if (opts.justify !== undefined) setJustify(opts.justify);
       if (opts.spread) rendition.spread(opts.spread);
+      // Last, so the mark geometry is derived from the typography the book
+      // actually opened with rather than from the defaults.
+      applyMarkStyles();
     } catch (e) {
       emitStatus("error");
       return;
@@ -441,33 +458,20 @@
       }, 400);
     });
 
-    rendition.on("selected", function (cfiRange, contents) {
-      if (typeof window.__omnibusOnSelection !== "function") return;
-      if (!contents || !contents.window) return;
-      var sel = contents.window.getSelection();
-      if (!sel || sel.isCollapsed || !sel.toString().trim()) return;
-      var range = sel.getRangeAt(0);
-      var iframeRect = { x: 0, y: 0 };
+    // A new section means new text nodes, so every block flattened off the
+    // old ones is dead weight.
+    rendition.on("rendered", dropFlatCache);
+
+    rendition.on("relocated", function (location) {
+      // A selection belongs to the page it was made on: once the page turns,
+      // its geometry is stale and the passage is no longer in front of the
+      // reader. Books drops it at the same moment.
+      clearSelection();
       try {
-        var frame = contents.content.ownerDocument.defaultView.frameElement;
-        if (frame) {
-          var fr = frame.getBoundingClientRect();
-          iframeRect = { x: fr.left, y: fr.top };
-        }
-      } catch (e) { /* cross-origin safety */ }
-      var r = range.getBoundingClientRect();
-      var rect = {
-        x: r.left + iframeRect.x,
-        y: r.top + iframeRect.y,
-        width: r.width,
-        height: r.height,
-      };
-      window.__omnibusOnSelection(JSON.stringify({
-        cfiRange: cfiRange,
-        text: sel.toString(),
-        rect: rect,
-        existing: overlappingAnnotation(range),
-      }));
+        currentSectionBase = String(location.start.cfi).split("!")[0];
+      } catch (e) {
+        currentSectionBase = null;
+      }
     });
 
     // Arrow keys page the book when the content iframe has focus. Key events
@@ -659,39 +663,6 @@
     return true;
   }
 
-  // Emit `__omnibusOnSelectionCleared` (debounced) when the iframe selection
-  // collapses. epub.js only reports selections that exist ("selected"); the
-  // host needs the opposite edge — tap-away, iOS "done", a completed Copy —
-  // to dismiss its popover, now that no scrim overlays the prose (a scrim
-  // would swallow the native selection-handle drags, turning a range adjust
-  // into a page-spanning selection).
-  function installSelectionClearWatch() {
-    if (!rendition || !rendition.hooks || !rendition.hooks.content) return;
-    rendition.hooks.content.register(function (contents) {
-      var doc = contents.document;
-      var win = contents.window || window;
-      var clearTimer = null;
-      doc.addEventListener("selectionchange", function () {
-        if (clearTimer) clearTimeout(clearTimer);
-        // Debounce past the transient collapse WebKit emits mid-drag when a
-        // handle crosses a line boundary — only a settled empty selection
-        // should dismiss.
-        clearTimer = setTimeout(function () {
-          clearTimer = null;
-          var s = win.getSelection && win.getSelection();
-          if (s && !s.isCollapsed && String(s).trim()) return;
-          if (typeof window.__omnibusOnSelectionCleared === "function") {
-            try {
-              window.__omnibusOnSelectionCleared("");
-            } catch (e) {
-              /* ignore handler errors */
-            }
-          }
-        }, 300);
-      });
-    });
-  }
-
   // Google Fonts stylesheet for the app's reading typefaces. The parent
   // document loads these via atrium.css, but webfonts don't cascade into the
   // section iframe — so `themes.font("'Instrument Serif'…")` renders as the
@@ -776,10 +747,34 @@
     }
   }
 
+  // Page grounds, keyed by theme token. Mirrored by the per-theme `--rd-page`
+  // token in atrium.css and by `Palette.readerPage` in the iOS design system —
+  // change all three together or the chrome strips stop matching the page.
+  // Black matches Apple Books' dark reading theme on macOS: a pure-black page
+  // under bright #ffffff text.
+  var PAGE_GROUNDS = {
+    light: "#fcfbfa",
+    dark: "#201e1b",
+    black: "#000000",
+    sepia: "#ede4d0",
+  };
+
+  function backgroundColorForTheme(name) {
+    return PAGE_GROUNDS[name] || PAGE_GROUNDS.dark;
+  }
+
   // Push the current theme's reader-owned colours into a section as CSS vars
   // the baseline stylesheet reads. Runs per section and on every theme swap.
+  //
+  // A variable rather than a stylesheet swap is the whole point: one rule reads
+  // it, so a theme change is a value changing in place and can never turn into
+  // a cascade race between the ground the reader left and the one it picked.
   function applyThemeColors(doc) {
     if (doc && doc.documentElement) {
+      doc.documentElement.style.setProperty(
+        "--omn-bg",
+        backgroundColorForTheme(currentTheme)
+      );
       doc.documentElement.style.setProperty(
         "--omn-fg",
         foregroundColorForTheme(currentTheme)
@@ -827,24 +822,444 @@
       // margins, justification — set elsewhere), while the publisher keeps
       // structure — weight, style, headings, alignment, indents, small-caps.
       //
-      // Appended last, and `!important` on colour so a publisher hue can't
-      // override the theme. Include `body` itself: descendants inheriting from
-      // a publisher-coloured, classed body otherwise stay black in Black/Dark
-      // themes. Only *real* links — `a` with an `href` — get the reader's
-      // accent. Scoping to `[href]` also spares body text that Gutenberg wraps
-      // in a self-closing *named* anchor (`<a id="chapN"/>`, no href), which
-      // the HTML parser leaves open across the chapter.
+      // Appended last, and `!important` on both ground and ink so a publisher
+      // hue can't override the theme. Include `body` itself: descendants
+      // inheriting from a publisher-coloured, classed body otherwise stay black
+      // in Black/Dark themes. Only *real* links — `a` with an `href` — get the
+      // reader's accent. Scoping to `[href]` also spares body text that
+      // Gutenberg wraps in a self-closing *named* anchor (`<a id="chapN"/>`, no
+      // href), which the HTML parser leaves open across the chapter.
+      //
+      // The ground is one rule over `html,body` only — never `body *`, which
+      // would paint every element its own opaque box.
       if (!doc.getElementById("__omnibus_baseline")) {
         var style = doc.createElement("style");
         style.id = "__omnibus_baseline";
         style.textContent =
           "html,body{-webkit-hyphens:auto;-ms-hyphens:auto;hyphens:auto;}" +
+          "html,body{background:var(--omn-bg,#201e1b)!important;}" +
           "body,body *{color:var(--omn-fg,#f5f3f0)!important;}" +
           "a:not([href]){cursor:auto;}" +
-          "a[href]{color:var(--omn-link,#4a86d8)!important;text-decoration:none;}";
+          "a[href]{color:var(--omn-link,#4a86d8)!important;text-decoration:none;}" +
+          // WebKit's own touch selection is what made selecting a sentence
+          // feel like a fight: its long-press recogniser and the drag-to-turn
+          // handler claim the same touch, and its handles and loupe are laid
+          // out against the iframe's full multi-column width, so they land in
+          // the wrong column. Turned off here, it never engages — the glue's
+          // selection engine owns the range and the host draws it.
+          "html,body,body *{-webkit-user-select:none!important;" +
+          "user-select:none!important;-webkit-touch-callout:none!important;}";
         doc.head.appendChild(style);
       }
     });
+  }
+
+  // ── Host-drawn text selection ──────────────────────────────────────
+  // The glue owns the *range*; the host owns every pixel of it. WebKit's
+  // selection is disabled in the section (see the baseline stylesheet), so
+  // this engine reads geometry out of the DOM and the host draws the tint,
+  // the handles, and the menu as real UIKit layers — which is what makes
+  // selecting a sentence feel like the rest of the phone rather than like a
+  // web page inside it.
+  //
+  // Everything crossing the bridge is in HOST-WINDOW coordinates: the host
+  // has no notion of the section iframe, which in paginated flow is as wide
+  // as the whole chapter and slides under the viewport as pages turn.
+
+  // A selection boundary lands between tokens, and a token is a run of
+  // non-space characters — punctuation included.
+  //
+  // Letters-and-digits was the obvious granule and the wrong one: a boundary
+  // could then never land on a full stop, a comma or a quotation mark, so the
+  // end of a sentence was literally unreachable and a lone dash could not be
+  // selected at all.
+  function isSpace(ch) {
+    return ch === "" || /\s/.test(ch);
+  }
+
+  // Where a token may not run past. Anything else — a <span>, an <em>, a
+  // footnote link — is inline markup that a token can legitimately cross.
+  var BLOCK_TAGS = {
+    P: 1, DIV: 1, LI: 1, BLOCKQUOTE: 1, SECTION: 1, ARTICLE: 1, ASIDE: 1,
+    TD: 1, TH: 1, DD: 1, DT: 1, FIGCAPTION: 1, PRE: 1, BODY: 1,
+    H1: 1, H2: 1, H3: 1, H4: 1, H5: 1, H6: 1,
+  };
+
+  function blockRootOf(node) {
+    var el = node && node.nodeType === 1 ? node : node && node.parentNode;
+    while (el && el.nodeType === 1) {
+      if (BLOCK_TAGS[el.nodeName]) return el;
+      el = el.parentNode;
+    }
+    return null;
+  }
+
+  // A block's text as one string, plus the map back to (text node, offset).
+  // Token boundaries are then plain string arithmetic, and a word broken
+  // across inline markup — `<em>hel</em>lo`, or a mid-word footnote anchor —
+  // is still one token rather than two.
+  function flatten(root, doc) {
+    var walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, null, false);
+    var segs = [];
+    var text = "";
+    var node;
+    while ((node = walker.nextNode())) {
+      if (!node.data || !node.data.length) continue;
+      segs.push({ node: node, at: text.length, len: node.data.length });
+      text += node.data;
+    }
+    return { text: text, segs: segs };
+  }
+
+  // Flattened blocks, keyed by the element they were built from.
+  //
+  // `extendSelectionTo` runs on every `touchmove`, and `blockRootOf` stops at
+  // the nearest block tag — which in a book whose chapter is one undivided
+  // <div> (plenty are) is the whole chapter. Rebuilt per event, that is the
+  // chapter's text concatenated sixty times a second.
+  //
+  // Safe to hold across a drag because the index is purely textual: node
+  // identity and offsets, no geometry. Re-pagination doesn't touch it; only a
+  // new section does, which is what `rendered` below invalidates on.
+  var flatCache = typeof Map === "function" ? new Map() : null;
+
+  function flattenCached(root, doc) {
+    if (!flatCache) return flatten(root, doc);
+    var hit = flatCache.get(root);
+    if (hit) return hit;
+    var flat = flatten(root, doc);
+    flatCache.set(root, flat);
+    return flat;
+  }
+
+  function dropFlatCache() {
+    if (flatCache) flatCache.clear();
+  }
+
+  function flatIndexOf(flat, node, offset) {
+    for (var i = 0; i < flat.segs.length; i++) {
+      if (flat.segs[i].node === node) return flat.segs[i].at + offset;
+    }
+    return -1;
+  }
+
+  function flatPointAt(flat, index) {
+    for (var i = 0; i < flat.segs.length; i++) {
+      var seg = flat.segs[i];
+      if (index <= seg.at + seg.len) {
+        return { node: seg.node, offset: Math.max(0, index - seg.at) };
+      }
+    }
+    var last = flat.segs[flat.segs.length - 1];
+    return last ? { node: last.node, offset: last.len } : null;
+  }
+
+  // The whole token under a caret, as a Range.
+  //
+  // Snapping to tokens is what makes a drag feel deliberate: the selection
+  // never stops mid-word, so it always reads as a phrase, and the reader can
+  // aim at a word rather than at a character. Apple Books and Kindle both
+  // select at this granularity for exactly that reason — and both carry the
+  // punctuation, which is what lets a drag reach the end of a sentence.
+  function tokenRangeAt(doc, node, offset) {
+    var root = blockRootOf(node);
+    if (!root) return null;
+    var flat = flattenCached(root, doc);
+    var index = flatIndexOf(flat, node, offset);
+    if (index < 0) return null;
+
+    var text = flat.text;
+    var start = index;
+    var end = index;
+    if (isSpace(text.charAt(end))) {
+      // The caret landed in the gap between tokens. Take the one behind it
+      // when there is one — that is the one the finger was nearest — else
+      // scan forward to the next.
+      if (start > 0 && !isSpace(text.charAt(start - 1))) {
+        end = start;
+      } else {
+        while (end < text.length && isSpace(text.charAt(end))) end++;
+        start = end;
+      }
+    }
+    while (start > 0 && !isSpace(text.charAt(start - 1))) start--;
+    while (end < text.length && !isSpace(text.charAt(end))) end++;
+    if (start === end) return null;
+
+    var from = flatPointAt(flat, start);
+    var to = flatPointAt(flat, end);
+    if (!from || !to) return null;
+    try {
+      var range = doc.createRange();
+      range.setStart(from.node, from.offset);
+      range.setEnd(to.node, to.offset);
+      return range;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // The offset from host-window coordinates into a section's own viewport.
+  function frameOffset(win) {
+    try {
+      var frame = win && win.frameElement;
+      if (frame) {
+        var r = frame.getBoundingClientRect();
+        return { x: r.left, y: r.top };
+      }
+    } catch (e) {
+      /* cross-origin safety */
+    }
+    return { x: 0, y: 0 };
+  }
+
+  function renderedContents() {
+    var list = (rendition && rendition.getContents && rendition.getContents()) || [];
+    if (!Array.isArray(list)) list = list && list.document ? [list] : [];
+    return list;
+  }
+
+  function contentsForDocument(doc) {
+    var list = renderedContents();
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].document === doc) return list[i];
+    }
+    return list[0] || null;
+  }
+
+  // The text position under a point given in host-window coordinates.
+  function caretAtHostPoint(x, y) {
+    var list = renderedContents();
+    for (var i = 0; i < list.length; i++) {
+      var doc = list[i].document;
+      var win = list[i].window;
+      if (!doc || !win || !doc.caretRangeFromPoint) continue;
+      var off = frameOffset(win);
+      var caret = doc.caretRangeFromPoint(x - off.x, y - off.y);
+      // Only a caret inside real text is something to snap a word to; a hit
+      // on an image or on block padding resolves to an element node.
+      if (caret && caret.startContainer && caret.startContainer.nodeType === 3) {
+        return {
+          doc: doc,
+          win: win,
+          node: caret.startContainer,
+          offset: caret.startOffset,
+        };
+      }
+    }
+    return null;
+  }
+
+  // The range spanning two ranges, whichever order they were made in.
+  function spanning(doc, a, b) {
+    var aFirst = a.compareBoundaryPoints(Range.START_TO_START, b) <= 0;
+    var first = aFirst ? a : b;
+    var last = aFirst ? b : a;
+    var range = doc.createRange();
+    range.setStart(first.startContainer, first.startOffset);
+    range.setEnd(last.endContainer, last.endOffset);
+    return range;
+  }
+
+  // One rounded bar per visual line, in host-window coordinates.
+  //
+  // `getClientRects` fragments a line at every inline element boundary, so a
+  // sentence crossing an <em> comes back as three abutting boxes — drawn as
+  // given, they show seams and doubled corners where they meet.
+  function lineRects(range, win) {
+    var off = frameOffset(win);
+    var raw = (range.getClientRects && range.getClientRects()) || [];
+    var rows = [];
+    for (var i = 0; i < raw.length; i++) {
+      var r = raw[i];
+      if (!r || r.width <= 0 || r.height <= 0) continue;
+      var row = null;
+      for (var k = 0; k < rows.length; k++) {
+        // Same line iff the boxes share most of their height. Superscripts
+        // and inline images sit on the line without matching its box.
+        var overlap = Math.min(rows[k].bottom, r.bottom) - Math.max(rows[k].top, r.top);
+        var shorter = Math.min(rows[k].bottom - rows[k].top, r.height);
+        if (overlap > shorter * 0.5) {
+          row = rows[k];
+          break;
+        }
+      }
+      if (row) {
+        row.left = Math.min(row.left, r.left);
+        row.right = Math.max(row.right, r.right);
+        row.top = Math.min(row.top, r.top);
+        row.bottom = Math.max(row.bottom, r.bottom);
+      } else {
+        rows.push({ left: r.left, right: r.right, top: r.top, bottom: r.bottom });
+      }
+    }
+
+    // Reading order, so the host's handles hang off the true ends.
+    rows.sort(function (a, b) {
+      return a.top - b.top || a.left - b.left;
+    });
+
+    // `getClientRects` measures the *font* box, not the line box, so on
+    // generously leaded prose the bars come back with a stripe of page
+    // between them. Grow each row by the gap its neighbours leave, which
+    // makes a multi-line selection one continuous block the way the system's
+    // own is — without needing to know the line height.
+    var gap = Infinity;
+    for (var g = 1; g < rows.length; g++) {
+      var between = rows[g].top - rows[g - 1].bottom;
+      if (between > 0 && between < gap) gap = between;
+    }
+    if (gap !== Infinity && gap > 0) {
+      var grow = gap / 2;
+      for (var e = 0; e < rows.length; e++) {
+        rows[e].top -= grow;
+        rows[e].bottom += grow;
+      }
+    }
+
+    // Only what is on the page in front of the reader: a selection near a
+    // column edge also has rects in the next column, which is off-screen but
+    // still inside the (chapter-wide) iframe.
+    var container = pageContainer();
+    var box = container ? container.getBoundingClientRect() : null;
+    var out = [];
+    for (var j = 0; j < rows.length; j++) {
+      var x = rows[j].left + off.x;
+      var width = rows[j].right - rows[j].left;
+      if (box && (x + width / 2 < box.left - 1 || x + width / 2 > box.right + 1)) continue;
+      out.push({
+        x: x,
+        y: rows[j].top + off.y,
+        width: width,
+        height: rows[j].bottom - rows[j].top,
+      });
+    }
+    return out;
+  }
+
+  function hasSelection() {
+    return !!(sel && sel.range && !sel.range.collapsed);
+  }
+
+  // `dragging` mutes the two expensive parts — the CFI and the
+  // overlapping-highlight scan — while the finger is still moving; the host
+  // only needs geometry and text until the drag settles.
+  function emitSelection(dragging) {
+    if (!sel || typeof window.__omnibusOnSelection !== "function") return;
+    var rects = lineRects(sel.range, sel.win);
+    if (!rects.length) return;
+    var first = rects[0];
+    var last = rects[rects.length - 1];
+    var cfi = sel.cfiRange;
+    var existing = sel.existing || null;
+    if (!dragging) {
+      try {
+        cfi = sel.contents ? sel.contents.cfiFromRange(sel.range) : null;
+      } catch (e) {
+        cfi = null;
+      }
+      existing = overlappingAnnotation(sel.range);
+      sel.cfiRange = cfi;
+      sel.existing = existing;
+    }
+    try {
+      window.__omnibusOnSelection(JSON.stringify({
+        cfiRange: cfi,
+        // Collapsed: a range's text carries the source file's own line
+        // breaks and indentation, which are invisible on the page but come
+        // out as ragged breaks anywhere the passage is re-set — a note, a
+        // quote card, a paste.
+        text: sel.range.toString().replace(/\s+/g, " ").trim(),
+        rects: rects,
+        start: { x: first.x, y: first.y, height: first.height },
+        end: { x: last.x + last.width, y: last.y, height: last.height },
+        existing: existing,
+        dragging: !!dragging,
+      }));
+    } catch (e) {
+      /* ignore handler errors */
+    }
+  }
+
+  // At most one emit per frame while a finger is moving: `touchmove` outruns
+  // the display, and each emit costs a layout read plus a bridge hop.
+  function scheduleSelectionEmit() {
+    if (selEmitRaf) return;
+    selEmitRaf = requestAnimationFrame(function () {
+      selEmitRaf = 0;
+      emitSelection(true);
+    });
+  }
+
+  function beginSelectionAt(x, y) {
+    var caret = caretAtHostPoint(x, y);
+    if (!caret) return false;
+    var token = tokenRangeAt(caret.doc, caret.node, caret.offset);
+    if (!token) return false;
+    sel = {
+      doc: caret.doc,
+      win: caret.win,
+      contents: contentsForDocument(caret.doc),
+      anchor: token.cloneRange(),
+      range: token,
+      cfiRange: null,
+      existing: null,
+    };
+    // Reported as a drag: the finger is still down, and the host holds its
+    // menu back until the range settles rather than opening one under it.
+    emitSelection(true);
+    return hasSelection();
+  }
+
+  function extendSelectionTo(x, y) {
+    if (!sel) return;
+    var caret = caretAtHostPoint(x, y);
+    // A point outside the section (the margins, the next column) leaves the
+    // range where it was rather than collapsing it out from under the finger.
+    if (!caret || caret.doc !== sel.doc) return;
+    var token = tokenRangeAt(caret.doc, caret.node, caret.offset);
+    if (!token) return;
+    sel.range = spanning(sel.doc, sel.anchor, token);
+    scheduleSelectionEmit();
+  }
+
+  // Pin the edge the host is *not* dragging, so the drag reads as moving one
+  // end of the range. Pulling one end past the other then flips them, the way
+  // a text field does, because the pinned edge is a fixed point to span from.
+  function beginEdgeDrag(edge) {
+    if (!sel) return;
+    var anchor = sel.doc.createRange();
+    if (edge === "start") {
+      anchor.setStart(sel.range.endContainer, sel.range.endOffset);
+    } else {
+      anchor.setStart(sel.range.startContainer, sel.range.startOffset);
+    }
+    anchor.collapse(true);
+    sel.anchor = anchor;
+  }
+
+  function endSelectionDrag() {
+    if (selEmitRaf) {
+      cancelAnimationFrame(selEmitRaf);
+      selEmitRaf = 0;
+    }
+    emitSelection(false);
+  }
+
+  function clearSelection() {
+    if (selEmitRaf) {
+      cancelAnimationFrame(selEmitRaf);
+      selEmitRaf = 0;
+    }
+    if (!sel) return;
+    sel = null;
+    if (typeof window.__omnibusOnSelectionCleared === "function") {
+      try {
+        window.__omnibusOnSelectionCleared("");
+      } catch (e) {
+        /* ignore handler errors */
+      }
+    }
   }
 
   // ── Books-style page-turn (touch) ──────────────────────────────────
@@ -1004,50 +1419,45 @@
     installGestureHandlers(document, true);
   }
 
-  // The content window whose text selection gates page-turn gestures: the
-  // host install can't close over a specific section's window, so resolve
-  // the currently rendered one at event time.
-  function currentContentsWindow() {
-    var list = (rendition && rendition.getContents && rendition.getContents()) || [];
-    if (!Array.isArray(list)) list = list && list.document ? [list] : [];
-    return (list[0] && list[0].window) || null;
-  }
-
-  // Drop the live text selection.
-  //
-  // The selection belongs to the *section iframe*, so clearing only the host
-  // window leaves it on screen: the passage stays visibly selected after it has
-  // been highlighted, and the glue's own touchend then spends the next tap
-  // dismissing it (`hadSel`) instead of acting — which is what made closing the
-  // highlight menu feel like it took two taps.
-  function clearSelection() {
-    var windows = [currentContentsWindow(), window];
-    for (var i = 0; i < windows.length; i++) {
-      try {
-        var w = windows[i];
-        if (w && w.getSelection) w.getSelection().removeAllRanges();
-      } catch (e) {
-        /* a section torn down mid-clear has nothing to clear */
-      }
-    }
-  }
-
   function installGestureHandlers(doc, isHost) {
     if (!doc || doc.__omnibusGestures) return;
     doc.__omnibusGestures = true;
-    var sx = 0, sy = 0, st = 0, hadSel = false;
+    var sx = 0, sy = 0, st = 0;
     var dragAxis = null, dragBase = 0, dragVx = 0;
     var dragPx = 0, dragIntentPx = 0, dragPending = null, dragRaf = 0;
     var velocitySamples = [];
+    // Long-press-to-select: armed on touchdown, disarmed by movement.
+    var pressTimer = null, pressAt = null;
+    // This touch is drawing a selection, so it is not a page gesture.
+    var selecting = false;
+    // This touch lands while a selection is up, so its job is to dismiss it.
+    var dismissing = false;
 
-    // The selection that gates page turns lives in the section iframe's
-    // window regardless of which document caught the touch.
-    function selWin() {
-      return isHost ? currentContentsWindow() : (doc.defaultView || window);
+    // A touch point in host-window coordinates. `clientX/Y` inside a section
+    // is relative to an iframe that is as wide as the chapter and slides
+    // under the viewport, so it has to be rebased before it crosses over.
+    function hostPoint(t) {
+      if (isHost) return { x: t.clientX, y: t.clientY };
+      var off = { x: 0, y: 0 };
+      try {
+        var frame = (doc.defaultView || {}).frameElement;
+        if (frame) {
+          var r = frame.getBoundingClientRect();
+          off = { x: r.left, y: r.top };
+        }
+      } catch (err) {
+        /* cross-origin safety */
+      }
+      return { x: t.clientX + off.x, y: t.clientY + off.y };
     }
-    function selText(w) {
-      return w && w.getSelection ? String(w.getSelection()) : "";
+
+    function cancelPress() {
+      if (pressTimer) {
+        clearTimeout(pressTimer);
+        pressTimer = null;
+      }
     }
+
     function nowMs() {
       return window.performance && performance.now ? performance.now() : Date.now();
     }
@@ -1107,12 +1517,30 @@
     var skipTap = false;
 
     doc.addEventListener("touchstart", function (e) {
+      cancelPress();
+      selecting = false;
+      dismissing = false;
       // A section turn is still laying out (or its View Transition is
       // holding the screen): a gesture started now would capture a stale
       // scroll base and fight the hand-off. Ignore the touch entirely.
       if (sectionTurnInFlight) {
         dragAxis = "none";
         skipTap = true;
+        return;
+      }
+      // A live selection owns the screen. Its handles and menu are host
+      // views that take their own touches, so anything reaching the page is
+      // a tap-away — never a page turn under a menu about a passage on it.
+      if (hasSelection()) {
+        dragAxis = "none";
+        skipTap = false;
+        dismissing = true;
+        if (e.touches && e.touches.length === 1) {
+          var dt = e.touches[0];
+          sx = stableX(dt);
+          sy = dt.clientY;
+          st = nowMs();
+        }
         return;
       }
       // Host install: gestures over the reading surface (stage incl.
@@ -1136,17 +1564,46 @@
       dragIntentPx = 0;
       dragVx = 0;
       velocitySamples = [];
-      // Snapshot whether a selection was live when the touch began: the
-      // tap that dismisses a selection clears it before touchend fires.
-      hadSel = selText(selWin()).length > 0;
       // A new touch catches a settling page at its destination.
       finishTurnAnim();
       var c = pageContainer();
       dragBase = c ? c.scrollLeft : 0;
+
+      // Arm the long press. Near UIKit's own 0.5s: short enough that holding
+      // a word feels answered, long enough that a swipe which starts with a
+      // moment's settle isn't mistaken for one. Movement past the slop in
+      // `touchmove` disarms it, the way `allowableMovement` does.
+      pressAt = hostPoint(t);
+      pressTimer = setTimeout(function () {
+        pressTimer = null;
+        if (dragAxis !== null || !beginSelectionAt(pressAt.x, pressAt.y)) return;
+        selecting = true;
+        // The finger is now drawing a selection, so this touch can no longer
+        // become a page drag or a tap.
+        dragAxis = "none";
+        skipTap = true;
+      }, 420);
     }, { passive: true });
 
     doc.addEventListener("touchmove", function (e) {
-      if (rtl || hadSel || dragAxis === "none") return;
+      if (selecting) {
+        // Keep the page still under a selection being drawn, and extend to
+        // the word the finger is over.
+        e.preventDefault();
+        if (e.touches.length === 1) {
+          var sp = hostPoint(e.touches[0]);
+          extendSelectionTo(sp.x, sp.y);
+        }
+        return;
+      }
+      if (pressTimer && e.touches.length === 1) {
+        // Movement past the press slop means this is a swipe, not a hold.
+        var pt = e.touches[0];
+        if (Math.abs(stableX(pt) - sx) > 10 || Math.abs(pt.clientY - sy) > 10) {
+          cancelPress();
+        }
+      }
+      if (rtl || dismissing || dragAxis === "none") return;
       if (e.touches.length !== 1) { springBack(); return; }
       var t = e.touches[0];
       var x = stableX(t);
@@ -1157,6 +1614,7 @@
         // finger drift.
         if (Math.abs(dx) < 8) return;
         dragAxis = "x";
+        cancelPress();
         sx = x;
         sy = t.clientY;
         dx = 0;
@@ -1164,7 +1622,6 @@
         var ac = pageContainer();
         if (ac) armViews(ac, true);
       }
-      if (selText(selWin()).length > 0) { springBack(); return; }
       e.preventDefault();
 
       var now = nowMs();
@@ -1189,23 +1646,45 @@
     }, { passive: false });
 
     doc.addEventListener("touchcancel", function () {
+      cancelPress();
+      if (selecting) {
+        selecting = false;
+        endSelectionDrag();
+        return;
+      }
       springBack();
     }, { passive: true });
 
     doc.addEventListener("touchend", function (e) {
+      cancelPress();
       var axis = dragAxis;
+      // Settle the range the finger drew: this is the emit that carries the
+      // CFI and the overlapping highlight, which the drag emits leave out.
+      if (selecting) {
+        selecting = false;
+        dragAxis = null;
+        skipTap = false;
+        endSelectionDrag();
+        return;
+      }
       stopDragRaf(axis === "x");
       dragAxis = null;
-      if (skipTap) { skipTap = false; return; }
-      // Never hijack a gesture that made — or just dismissed — a text
-      // selection; that's the highlight/note flow, not a page turn.
-      if (hadSel || selText(selWin()).length > 0) {
-        if (axis === "x") {
-          var cs = pageContainer();
-          if (cs) animateOffsetTo(cs, dragBase, dragPx, 0, 180);
+      if (dismissing) {
+        dismissing = false;
+        // A tap anywhere on the page puts the selection away — and does
+        // nothing else. Turning the page or toggling the chrome on the same
+        // tap would be two answers to one gesture.
+        if (e.changedTouches && e.changedTouches.length) {
+          var dt = e.changedTouches[0];
+          if (Math.abs(stableX(dt) - sx) < 10 &&
+              Math.abs(dt.clientY - sy) < 10 &&
+              nowMs() - st < 700) {
+            clearSelection();
+          }
         }
         return;
       }
+      if (skipTap) { skipTap = false; return; }
       if (!e.changedTouches || !e.changedTouches.length) return;
       var t = e.changedTouches[0];
       var endX = stableX(t);
@@ -1249,18 +1728,19 @@
         return;
       }
 
-      // Otherwise a stationary tap in the outer 20% gutters turns the page.
+      // Otherwise a stationary tap. A highlight under it wins — the passage
+      // is the more specific target — then the outer 20% gutters turn the
+      // page, and anything else toggles the chrome.
       if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && dt < 500) {
-        var tapX = t.clientX;
-        if (!isHost) {
-          try {
-            var fe = (doc.defaultView || {}).frameElement;
-            if (fe) tapX += fe.getBoundingClientRect().left;
-          } catch (err) { /* cross-origin safety */ }
+        var tap = hostPoint(t);
+        var hit = annotationAtHostPoint(tap.x, tap.y);
+        if (hit) {
+          emitAnnotationTap(hit);
+          return;
         }
         var w = window.innerWidth || 360;
-        if (tapX > w * 0.8) turnAnimated(1);
-        else if (tapX < w * 0.2) turnAnimated(-1);
+        if (tap.x > w * 0.8) turnAnimated(1);
+        else if (tap.x < w * 0.2) turnAnimated(-1);
         // A centre tap toggles the reader chrome for distraction-free reading.
         else emitToggleChrome();
       }
@@ -1272,9 +1752,6 @@
   // could clobber it, and it splits state across two owners), we signal through
   // the same `__omnibusOn*` bridge the rest of the glue uses and let the host
   // flip a `chrome_hidden` signal — the single source of truth on both targets.
-  // A tap on a highlight also reaches the document as a page tap. Which of the
-  // two the host hears first depends on DOM listener order, so the pair is
-  // matched on the host side (`ReaderController`) rather than here.
   function emitToggleChrome() {
     if (typeof window.__omnibusOnToggleChrome === "function") {
       window.__omnibusOnToggleChrome("");
@@ -1284,16 +1761,9 @@
   function setFontSize(px) {
     if (!rendition) return;
     rendition.themes.fontSize(px + "px");
+    currentFontSize = px;
+    applyMarkStyles();
   }
-
-  // Page grounds, keyed by theme token. Mirrors the `themes.register` bodies
-  // above — change both together.
-  var HOST_GROUNDS = {
-    light: "#fcfbfa",
-    dark: "#201e1b",
-    black: "#000000",
-    sepia: "#ede4d0",
-  };
 
   // Paint the *host* document the same ground as the page.
   //
@@ -1302,16 +1772,18 @@
   // dark behind a white page — which reads as a broken frame around the prose
   // now that the chrome floats over those bands instead of covering them.
   function applyHostGround(name) {
-    var ground = HOST_GROUNDS[name];
-    if (!ground || !document.documentElement) return;
-    document.documentElement.style.setProperty("--page", ground);
+    if (!document.documentElement) return;
+    document.documentElement.style.setProperty(
+      "--page",
+      backgroundColorForTheme(name)
+    );
   }
 
   function setTheme(name) {
     if (!rendition) return;
-    rendition.themes.select(name);
     currentTheme = name;
     applyHostGround(name);
+    applyMarkStyles();
     // Re-tint reader-owned colours in every rendered section for the new ground.
     try {
       rendition.getContents().forEach(function (c) {
@@ -1330,6 +1802,8 @@
   function setLineHeight(value) {
     if (!rendition) return;
     rendition.themes.override("line-height", value);
+    currentLineHeight = Number(value) || currentLineHeight;
+    applyMarkStyles();
   }
 
   function setMargins(maxWidth) {
@@ -1354,9 +1828,85 @@
     }
   }
 
-  // Solid fills — transparency is applied once via the `fill-opacity`
-  // attribute below. Baking alpha into the color too would multiply with
-  // fill-opacity (0.3 x 0.3) and render the highlight nearly invisible.
+  // How a mark is drawn, as one host-document rule.
+  //
+  // epub.js hands its `styles` to the mark's `<g>` as presentation
+  // attributes. `fill` inherits down to the `<rect>`s it draws, but geometry
+  // properties like `rx` don't — and the blend has to follow the reading
+  // theme, which an attribute set once at insert time can't. A stylesheet
+  // does both, and a CSS rule outranks a presentation attribute, so this is
+  // the last word on either.
+  //
+  // The blend is the whole trick: `multiply` on a light page keeps black
+  // type black under the colour, and `screen` on a dark one keeps white type
+  // white. Use either on the wrong ground and the passage goes muddy.
+  function markStyleCss(theme) {
+    var light = theme === "light" || theme === "sepia";
+    return (
+      "#stage svg g[ref^='hl-']{" +
+      "mix-blend-mode:" + (light ? "multiply" : "screen") + ";" +
+      // Opacity on the *group*, not the fill: the rects below are grown
+      // until they touch, and group opacity composites the whole set once,
+      // so the overlaps don't darken into seams the way per-shape alpha
+      // would.
+      // The blend leaves the type alone at any strength — `screen` maps white
+      // to white and `multiply` maps black to black — so this trades against
+      // nothing but how loud the mark is.
+      "opacity:" + (light ? "0.42" : "0.62") + ";}" +
+      // Square. Rounded ends made a marked paragraph read as a stack of
+      // separate pills rather than as one continuous run of marked text.
+      "#stage svg g[ref^='hl-'] rect{" +
+      // Every paint inside the group is fully opaque, and the group's own
+      // `opacity` above does all the fading — that is the only way the mark
+      // comes out one flat colour. epub.js merges its own defaults into the
+      // style object (`Object.assign({fill:"yellow","fill-opacity":"0.3"},
+      // styles)`), so without this the fill runs at 0.3 against whatever else
+      // is painted at 1 and the mark bands into three tones: a bright rim, a
+      // washed middle, and a dark seam where consecutive lines overlap.
+      "fill-opacity:1;" +
+      // Grown about its own centre, and only vertically — see `markScaleY`.
+      "transform-box:fill-box;transform-origin:center;" +
+      "transform:scaleY(" + markScaleY() + ");}" +
+      // The note cue is a rule under the passage, so it neither blends nor
+      // fades — it has to stay legible over its own highlight.
+      "#stage svg g[ref='omn-note']{mix-blend-mode:normal;}" +
+      // epub.js draws an underline as a `<line>` *plus* a bounding `<rect>`
+      // with `fill:none`. That rect inherits the group's stroke, so the cue
+      // came out as a box around the passage rather than a rule under it.
+      "#stage svg g[ref='omn-note'] rect{stroke:none;}"
+    );
+  }
+
+  // How much to grow a mark so consecutive lines meet, as a vertical scale.
+  //
+  // `getClientRects` measures the font box while the lines are set on the
+  // line box, and the difference is the leading — which is exactly what
+  // shows through as a stripe between the lines of a highlighted paragraph.
+  // The 1.15 is roughly the share of the line box the glyphs occupy, so the
+  // ratio is the leading the current line-height adds back.
+  //
+  // Scaling is what keeps the growth vertical. Growing the rect with a
+  // stroke, as this used to, also pushed the mark half a stroke past the
+  // first letter — so a highlight looked like it began on the space before
+  // the word rather than on the word.
+  function markScaleY() {
+    var scale = currentLineHeight / 1.15;
+    return Math.round(Math.min(1.9, Math.max(1, scale)) * 1000) / 1000;
+  }
+
+  function applyMarkStyles() {
+    var style = document.getElementById("__omnibus_marks");
+    if (!style) {
+      style = document.createElement("style");
+      style.id = "__omnibus_marks";
+      document.head.appendChild(style);
+    }
+    style.textContent = markStyleCss(currentTheme);
+  }
+
+  // Solid fills — transparency is applied once via `fill-opacity` above.
+  // Baking alpha into the colour too would multiply with it (0.3 x 0.3) and
+  // render the highlight nearly invisible.
   var HIGHLIGHT_COLORS = {
     amber:  "rgb(245, 158, 11)",
     green:  "rgb(34, 197, 94)",
@@ -1398,46 +1948,88 @@
     return null;
   }
 
-  // Report a tap on an existing highlight so the host can offer the same
-  // menu Apple Books does — recolour, note, remove. epub.js renders marks
-  // into a pane in the HOST document (not the section iframe), so these
-  // coordinates need no iframe offset, unlike the selection rect above.
-  function emitAnnotationTap(cfiRange, e) {
-    if (typeof window.__omnibusOnAnnotationTap !== "function") return;
-    var rect = null;
+  function windowOfRange(range) {
     try {
-      var target = e && (e.currentTarget || e.target);
-      var r = target && target.getBoundingClientRect && target.getBoundingClientRect();
-      if (r && r.width) {
-        rect = { x: r.left, y: r.top, width: r.width, height: r.height };
-      } else if (e && typeof e.clientX === "number") {
-        rect = { x: e.clientX, y: e.clientY, width: 0, height: 0 };
-      }
-    } catch (err) {
-      /* best effort — the host falls back to a centred menu */
+      var doc = range.startContainer.ownerDocument;
+      return (doc && doc.defaultView) || null;
+    } catch (e) {
+      return null;
     }
-    window.__omnibusOnAnnotationTap(
-      JSON.stringify({ cfiRange: cfiRange, rect: rect })
-    );
+  }
+
+  // The highlight under a point, in host-window coordinates, with the same
+  // per-line geometry a selection reports so the host anchors one menu the
+  // same way for both.
+  //
+  // Hit-tested here rather than bound to the mark's own DOM listener: that
+  // listener fires on `touchstart`, so a swipe that merely *began* on a
+  // highlighted word opened a menu about it, and the tap also reached the
+  // document as a page tap — two events for one touch, which the host could
+  // only ever pair up by arrival time.
+  function annotationAtHostPoint(x, y) {
+    if (!rendition || !rendition.annotations) return null;
+    var store = rendition.annotations._annotations;
+    if (!store) return null;
+    var keys = Object.keys(store);
+    for (var i = 0; i < keys.length; i++) {
+      var entry = store[keys[i]];
+      if (!entry || entry.type !== "highlight") continue;
+      // A string compare against the current spine item before the expensive
+      // part: `getRange` parses a CFI and walks the DOM, and a well-marked
+      // book has hundreds of these — paying that for every one on every tap
+      // is what would put a stutter on turning the page.
+      if (currentSectionBase &&
+          String(entry.cfiRange).split("!")[0] !== currentSectionBase) {
+        continue;
+      }
+      var range = null;
+      try {
+        range = rendition.getRange(entry.cfiRange);
+      } catch (e) {
+        continue;
+      }
+      var win = range && windowOfRange(range);
+      if (!win) continue;
+      var rects = lineRects(range, win);
+      for (var k = 0; k < rects.length; k++) {
+        var r = rects[k];
+        // A little slop: a finger aiming at a line of type lands low, and
+        // the mark is only as tall as the line box.
+        if (x >= r.x - 4 && x <= r.x + r.width + 4 &&
+            y >= r.y - 6 && y <= r.y + r.height + 6) {
+          return { cfiRange: entry.cfiRange, rects: rects };
+        }
+      }
+    }
+    return null;
+  }
+
+  function emitAnnotationTap(hit) {
+    if (typeof window.__omnibusOnAnnotationTap !== "function" || !hit) return;
+    try {
+      window.__omnibusOnAnnotationTap(JSON.stringify(hit));
+    } catch (e) {
+      /* ignore handler errors */
+    }
   }
 
   function addAnnotation(cfiRange, color, hasNote) {
     if (!rendition) return;
     var fill = HIGHLIGHT_COLORS[color] || HIGHLIGHT_COLORS.amber;
-    var onTap = function (e) {
-      emitAnnotationTap(cfiRange, e);
-    };
+    // No DOM listener on the mark — taps are hit-tested at touchend against
+    // `annotationAtHostPoint`, which keeps one touch to one outcome.
+    var onTap = function () {};
+    // `fill` inherits from the <g> down to the rects marks-pane draws; the
+    // stylesheet above does the rest.
     rendition.annotations.add(
-      "highlight", cfiRange, {}, onTap,
-      "hl-" + color,
-      { fill: fill, "fill-opacity": "0.3", "mix-blend-mode": "multiply" }
+      "highlight", cfiRange, {}, onTap, "hl-" + color, { fill: fill }
     );
     // A note is otherwise invisible on the page: without a cue, the only way
     // to find your own annotation is to remember where you left it.
     if (hasNote) {
       rendition.annotations.add(
         "underline", cfiRange, {}, onTap,
-        "hl-note",
+        "omn-note",
         { stroke: fill, "stroke-opacity": "0.95", "stroke-width": "2" }
       );
     }
@@ -1985,6 +2577,10 @@
     requestToc: requestToc,
     display: display,
     seek: seek,
+    beginSelectionAt: beginSelectionAt,
+    extendSelectionTo: extendSelectionTo,
+    beginEdgeDrag: beginEdgeDrag,
+    endSelectionDrag: endSelectionDrag,
     clearSelection: clearSelection,
     copyText: copyText,
     shareText: shareText,

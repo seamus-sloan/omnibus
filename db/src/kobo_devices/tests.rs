@@ -1,6 +1,6 @@
 //! Unit tests for `kobo_devices`: create/list/get, token regenerate (rotates
 //! the token, preserves cursor + learned device id), revoke, token resolution
-//! (valid / invalid / cross-user), device-id learn-once, and the NotFound
+//! (valid / invalid / cross-user), device-id steal-on-learn + hardware-id resolution, and the NotFound
 //! variant on regenerate/revoke of an unowned id.
 
 use super::*;
@@ -172,7 +172,7 @@ async fn list_devices_is_scoped_to_the_owner() {
 }
 
 #[tokio::test]
-async fn learn_kobo_device_id_persists_once_and_does_not_overwrite() {
+async fn learn_kobo_device_id_rebinds_a_new_id_to_the_same_row() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "reader").await;
     let dev = create_device(&pool, user, "Kobo").await.unwrap();
@@ -184,13 +184,92 @@ async fn learn_kobo_device_id_persists_once_and_does_not_overwrite() {
         .unwrap();
     assert_eq!(after.kobo_device_id.as_deref(), Some("hw-abc"));
 
-    // Write-once: a second (different) id must not overwrite the learned one.
+    // A factory-reset device reports a fresh hardware id on its next tokened
+    // call; the row follows the token, so the id re-binds in place.
     learn_kobo_device_id(&pool, dev.id, "hw-xyz").await.unwrap();
     let again = get_device_for_user(&pool, user, dev.id)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(again.kobo_device_id.as_deref(), Some("hw-abc"));
+    assert_eq!(again.kobo_device_id.as_deref(), Some("hw-xyz"));
+}
+
+#[tokio::test]
+async fn learn_kobo_device_id_steals_the_id_from_another_users_row() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let alice = seed_user(&pool, "alice").await;
+    let bob = seed_user(&pool, "bob").await;
+    let alices = create_device(&pool, alice, "Kobo").await.unwrap();
+    let bobs = create_device(&pool, bob, "Kobo").await.unwrap();
+
+    // The physical device synced under Alice's token first, then was handed
+    // to Bob who registered his own. Presenting Bob's token moves the
+    // hardware id — Alice's row must not retain it (unique index, 0060).
+    learn_kobo_device_id(&pool, alices.id, "hw-shared")
+        .await
+        .unwrap();
+    learn_kobo_device_id(&pool, bobs.id, "hw-shared")
+        .await
+        .unwrap();
+
+    let alices_after = get_device_for_user(&pool, alice, alices.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(alices_after.kobo_device_id, None);
+    let resolved = resolve_device_by_hardware_id(&pool, "hw-shared")
+        .await
+        .unwrap()
+        .expect("bob's row must resolve");
+    assert_eq!(resolved.device_id, bobs.id);
+    assert_eq!(resolved.user_id, bob);
+}
+
+#[tokio::test]
+async fn resolve_device_by_hardware_id_returns_the_owning_device_and_touches_last_seen() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "reader").await;
+    let dev = create_device(&pool, user, "Kobo").await.unwrap();
+    learn_kobo_device_id(&pool, dev.id, "hw-abc").await.unwrap();
+
+    sqlx::query("UPDATE kobo_devices SET last_seen_at = 1 WHERE id = ?")
+        .bind(dev.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let resolved = resolve_device_by_hardware_id(&pool, "hw-abc")
+        .await
+        .unwrap()
+        .expect("learned id must resolve");
+    assert_eq!(resolved.device_id, dev.id);
+    assert_eq!(resolved.user_id, user);
+
+    let after = get_device_for_user(&pool, user, dev.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(after.last_seen_at > 1, "resolve must touch last_seen_at");
+}
+
+#[tokio::test]
+async fn resolve_device_by_hardware_id_returns_none_for_an_unknown_id() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "reader").await;
+    create_device(&pool, user, "Kobo").await.unwrap();
+
+    assert!(resolve_device_by_hardware_id(&pool, "hw-never-learned")
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn resolve_device_by_hardware_id_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = resolve_device_by_hardware_id(&pool, "hw-abc").await;
+    assert!(matches!(err, Err(KoboDeviceError::Sqlx(_))));
 }
 
 #[tokio::test]

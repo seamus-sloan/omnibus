@@ -25,11 +25,13 @@ use super::{internal, serve_download, AppState};
 mod analytics;
 mod dto;
 mod extractor;
+mod reading_services;
 mod store_resources;
 #[cfg(test)]
 mod tests;
 
 use extractor::KoboAuthUser;
+pub use reading_services::reading_services_router;
 
 /// Wall-clock budget for an inline KEPUB conversion on a Kobo download before
 /// falling back to plain EPUB. Mirrors the USB sideload path's budget.
@@ -80,10 +82,9 @@ pub fn kobo_router(state: AppState) -> Router {
 /// annotation entries repointed here, so store browse and search keep working
 /// against Kobo directly and this server never proxies that traffic.
 ///
-/// `reading_services_host` is advertised even though the annotation channel
-/// isn't implemented yet: advertising-then-not-answering is the wipe mechanism
-/// the settings-card warning covers, and the channel can't be adopted at all
-/// until the host is published.
+/// `reading_services_host` points the device's annotation channel here too —
+/// answered by [`reading_services::reading_services_router`] at the bare
+/// origin (#1278), since the device calls it without the path token.
 async fn initialization(auth: KoboAuthUser, headers: HeaderMap) -> Response {
     let base = origin_from_headers(&headers);
     let resources = store_resources::resources_for(&base, &auth.token);
@@ -251,7 +252,7 @@ async fn library_sync(
         [
             (header::CONTENT_TYPE, "application/json"),
             // Opaque; the device echoes it back but the real cursor is the
-            // per-device snapshot (`kobo_device_books`), never this value.
+            // per-device snapshot (`kobo_books_sync`), never this value.
             (
                 header::HeaderName::from_static("x-kobo-synctoken"),
                 "omnibus",
@@ -332,11 +333,15 @@ async fn download(
     let path = if kepub_ready(&state, id).await {
         db::kepub_path(id)
     } else {
-        match db::book_file_path(state.pool(), id, "EPUB").await {
+        // Still override-baked — same fallback `get_ebook_kepub` uses — so a
+        // Kobo device without kepubify support (or after a conversion
+        // failure) sees the user's edits rather than the raw scanned file.
+        let source = match db::book_file_path(state.pool(), id, "EPUB").await {
             Ok(Some(p)) => p,
             Ok(None) => return StatusCode::NOT_FOUND.into_response(),
             Err(e) => return internal("kobo book_file_path", e),
-        }
+        };
+        super::ebooks::rewritten_or_source(&state, id, source).await
     };
     serve_download(req, &path, "application/epub+zip").await
 }

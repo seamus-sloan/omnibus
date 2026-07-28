@@ -199,7 +199,7 @@ async fn merge_books_moves_all_taxonomy_and_user_data_to_target() {
         sqlx::query("INSERT INTO listening_sessions (user_id, book_uuid, started_at, ended_at, seconds_listened) VALUES (?, ?, 1, 2, 1)")
             .bind(user).bind(uuid).execute(&pool).await.unwrap();
         sqlx::query(
-            "INSERT INTO highlights (user_id, book_uuid, epub_cfi_range) VALUES (?, ?, 'r')",
+            "INSERT INTO annotations (user_id, book_uuid, epub_cfi_range) VALUES (?, ?, 'r')",
         )
         .bind(user)
         .bind(uuid)
@@ -242,7 +242,7 @@ async fn merge_books_moves_all_taxonomy_and_user_data_to_target() {
             .unwrap();
     assert_eq!(prog, vec![(target.clone(), 200.0)]);
     // Bookmarks / sessions / highlights: both books' rows now on the target.
-    for tbl in ["bookmarks", "listening_sessions", "highlights"] {
+    for tbl in ["bookmarks", "listening_sessions", "annotations"] {
         let on_target: i64 =
             sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {tbl} WHERE book_uuid = ?"))
                 .bind(&target)
@@ -764,7 +764,7 @@ async fn merge_moves_highlights_to_target() {
     let target = seed_ebook(&pool, "A/Dracula.epub", "Dracula", "Bram Stoker").await;
     let source = seed_audiobook(&pool, "B/Drakula.m4b", "Drakula", "Bram Stoker").await;
 
-    crate::highlights::create_highlight(
+    crate::annotations::create_highlight(
         &pool,
         user,
         &omnibus_shared::CreateHighlight {
@@ -782,12 +782,73 @@ async fn merge_moves_highlights_to_target() {
         .await
         .unwrap();
 
-    let on_target = crate::highlights::list_highlights(&pool, user, &target)
+    let on_target = crate::annotations::list_highlights(&pool, user, &target)
         .await
         .unwrap();
     assert_eq!(
         on_target.len(),
         1,
         "the source book's highlight must re-parent to the target on merge"
+    );
+}
+
+#[tokio::test]
+async fn merge_retargets_kobo_annotation_sync_state_preferring_the_targets_row() {
+    // #1278: the per-device annotation watermark follows the merge. Where a
+    // device tracks both uuids the target's row wins (PK collision); a
+    // device that only tracked the source keeps its adoption under the
+    // target's uuid.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool).await;
+    let target = seed_ebook(&pool, "A/Dracula.epub", "Dracula", "Bram Stoker").await;
+    let source = seed_audiobook(&pool, "B/Drakula.m4b", "Drakula", "Bram Stoker").await;
+
+    let both = crate::kobo_devices::create_device(&pool, user, "Tracks both")
+        .await
+        .unwrap();
+    let source_only = crate::kobo_devices::create_device(&pool, user, "Tracks source")
+        .await
+        .unwrap();
+    crate::kobo::annotations::ack_served(&pool, both.id, &target, "fp-target")
+        .await
+        .unwrap();
+    crate::kobo::annotations::ack_served(&pool, both.id, &source, "fp-source")
+        .await
+        .unwrap();
+    crate::kobo::annotations::mark_adopted(&pool, source_only.id, &source)
+        .await
+        .unwrap();
+
+    merge_books(&pool, &source, &target, Some(user))
+        .await
+        .unwrap();
+
+    let stale: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM kobo_annotations_sync WHERE book_uuid = ?")
+            .bind(&source)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        stale, 0,
+        "no watermark may keep pointing at the source uuid"
+    );
+
+    let kept_ack: String = sqlx::query_scalar(
+        "SELECT acked_fingerprint FROM kobo_annotations_sync
+          WHERE device_id = ? AND book_uuid = ?",
+    )
+    .bind(both.id)
+    .bind(&target)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(kept_ack, "fp-target", "the target's row wins the collision");
+
+    assert!(
+        crate::kobo::annotations::is_adopted(&pool, source_only.id, &target)
+            .await
+            .unwrap(),
+        "a source-only device's adoption must follow the merge"
     );
 }

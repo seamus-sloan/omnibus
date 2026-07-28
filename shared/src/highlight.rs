@@ -1,7 +1,7 @@
 //! Highlight annotation wire types shared between web and mobile clients.
 //!
 //! The five highlight colors match the CHECK constraint on
-//! `highlights.color` in migration 0017.
+//! `annotations.color` (migration 0059, formerly `highlights` in 0017).
 
 use serde::{Deserialize, Serialize};
 
@@ -52,7 +52,11 @@ impl std::fmt::Display for HighlightColor {
 pub struct Highlight {
     pub id: i64,
     pub book_uuid: String,
-    pub epub_cfi_range: String,
+    /// `None` for Kobo-origin annotations — those are anchored by an opaque
+    /// KoboSpan location the server never exposes, so they list in the UI
+    /// but cannot be placed or jumped to in the web reader.
+    #[serde(default)]
+    pub epub_cfi_range: Option<String>,
     pub color: HighlightColor,
     pub note: Option<String>,
     /// The highlighted prose. `None` for highlights created before the text

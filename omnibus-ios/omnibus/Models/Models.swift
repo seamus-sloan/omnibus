@@ -626,7 +626,9 @@ enum HighlightColor: String, Codable, CaseIterable, Sendable {
 struct Highlight: Codable, Hashable, Sendable, Identifiable {
     var id: Int64
     var bookUUID: String
-    var epubCFIRange: String
+    /// `nil` for Kobo-origin annotations — anchored by an opaque KoboSpan on
+    /// the server, so they list here but cannot be painted in the reader.
+    var epubCFIRange: String?
     var color: HighlightColor
     var note: String?
     var text: String?
@@ -1221,6 +1223,7 @@ struct ExternalBookMeta: Codable, Hashable, Sendable {
 /// `#[serde(tag = "kind", rename_all = "snake_case")]` on the Rust side.
 enum ScanOutcome: Decodable, Sendable {
     case alreadyOwned(book: ScanBook)
+    case onWishlist(book: ScanBook)
     case inLibraryUnowned(book: ScanBook)
     case closeMatch(book: ScanBook, scanned: ExternalBookMeta)
     case notInLibrary(online: ExternalBookMeta)
@@ -1235,6 +1238,8 @@ enum ScanOutcome: Decodable, Sendable {
         switch try c.decode(String.self, forKey: .kind) {
         case "already_owned":
             self = .alreadyOwned(book: try c.decode(ScanBook.self, forKey: .book))
+        case "on_wishlist":
+            self = .onWishlist(book: try c.decode(ScanBook.self, forKey: .book))
         case "in_library_unowned":
             self = .inLibraryUnowned(book: try c.decode(ScanBook.self, forKey: .book))
         case "close_match":
@@ -1266,9 +1271,24 @@ struct AddPhysicalOnlyRequest: Codable, Sendable {
     var note: String?
 }
 
+/// `#[serde(rename_all = "lowercase")]` on the Rust side.
+enum WishlistSource: String, Codable, Sendable {
+    case scan, detail, manual
+}
+
+/// Names its target with either an existing `book_uuid` or resolved `meta`;
+/// `book_uuid` wins when both are set. `source` is required — the server has no
+/// default for it, so omitting it fails the body deserialization outright. A
+/// wishlist entry carries no note (a physical copy's check-in does).
 struct WishlistAddRequest: Codable, Sendable {
-    var meta: ExternalBookMeta
-    var note: String?
+    var bookUUID: String?
+    var meta: ExternalBookMeta?
+    var source: WishlistSource
+
+    enum CodingKeys: String, CodingKey {
+        case meta, source
+        case bookUUID = "book_uuid"
+    }
 }
 
 // MARK: - Small helpers

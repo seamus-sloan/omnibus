@@ -321,6 +321,9 @@ fn summary_of(shelf: &Shelf) -> ShelfSummary {
         visibility: shelf.visibility,
         accent: shelf.accent.clone(),
         book_count: shelf.book_count,
+        // The optimistic replica has no thumbnail knowledge; an empty mosaic
+        // is the honest offline rendering until the next real fetch.
+        cover_uuids: Vec::new(),
     }
 }
 

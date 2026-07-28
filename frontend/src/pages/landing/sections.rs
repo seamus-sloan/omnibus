@@ -4,13 +4,15 @@
 //! `prefs` signal and the data pipeline.
 
 use dioxus::prelude::*;
-use omnibus_shared::{EbookMetadata, SortKey, ViewMode, ViewPrefs};
+use omnibus_shared::{EbookMetadata, Shelf, SortKey, ViewMode, ViewPrefs};
 
 use super::filters::EmptyFiltered;
 use super::grid::BookGrid;
 use super::sorting::{default_dir_for, toggle_dir};
 use super::table::{BookTable, BookTableContext};
 use super::toolbar::Toolbar;
+use crate::components::shelf_facets::pencil_glyph;
+use crate::components::ShelfFacets;
 
 /// Header banner fields sourced from the page's derived view state.
 #[derive(Clone, PartialEq)]
@@ -20,14 +22,23 @@ pub(super) struct LandingHeaderView {
     pub path_missing: bool,
     pub page_error: Option<String>,
     pub lib_err: Option<String>,
+    /// The gallery pick this header titles: "All Books" or the shelf's name.
+    pub section_title: String,
+    /// Full detail for the gallery pick (`None` on All Books / while it
+    /// loads) — drives the edit pencil and the facet row.
+    pub selected_shelf: Option<Shelf>,
 }
 
-/// Sticky `data-testid="lib-header"` header; also renders page-level + library-path errors.
+/// Sticky `data-testid="lib-header"` header; also renders page-level +
+/// library-path errors. When the gallery pick is a shelf, the title grows an
+/// edit pencil (owner/admin, non-system) and a facet row (kind / visibility /
+/// rule chips) beneath it.
 #[component]
 pub(super) fn LandingHeader(
     view: LandingHeaderView,
     prefs: ViewPrefs,
     on_prefs_change: EventHandler<ViewPrefs>,
+    on_edit_shelf: EventHandler<()>,
 ) -> Element {
     let LandingHeaderView {
         path_subtitle,
@@ -35,7 +46,19 @@ pub(super) fn LandingHeader(
         path_missing,
         page_error,
         lib_err,
+        section_title,
+        selected_shelf,
     } = view;
+    // Owner/admin gating, mirroring `shelf_detail`'s header: `None` viewer
+    // until the boot effect resolves, so the pencil stays hidden on SSR +
+    // first paint (hydration parity, rule 07); system shelves stay locked.
+    let viewer = crate::use_current_user_summary()();
+    let can_edit = selected_shelf.as_ref().is_some_and(|s| {
+        !s.kind.is_system()
+            && viewer
+                .as_ref()
+                .is_some_and(|u| u.id == s.owner_user_id || u.is_admin)
+    });
     rsx! {
         header { class: "lib-header", "data-testid": "lib-header",
             div { class: "lib-header-kicker",
@@ -45,15 +68,32 @@ pub(super) fn LandingHeader(
                 }
             }
             div { class: "lib-header-row",
-                p { class: "lib-header-title",
-                    em { "{book_count}" }
-                    " "
-                    if book_count == 1 { "book" } else { "books" }
+                div { class: "lib-header-title-wrap",
+                    p { class: "lib-header-title", "data-testid": "lib-section-title",
+                        em { "{section_title}" }
+                        span { class: "lib-header-count",
+                            " · {book_count} "
+                            if book_count == 1 { "book" } else { "books" }
+                        }
+                    }
+                    if can_edit {
+                        button {
+                            r#type: "button",
+                            class: "shelf-edit-btn",
+                            "data-testid": "shelf-edit",
+                            "aria-label": "Edit shelf",
+                            onclick: move |_| on_edit_shelf.call(()),
+                            {pencil_glyph()}
+                        }
+                    }
                 }
                 Toolbar {
                     prefs: prefs,
                     on_change: move |next: ViewPrefs| on_prefs_change.call(next),
                 }
+            }
+            if let Some(shelf) = selected_shelf.as_ref() {
+                ShelfFacets { shelf: shelf.clone() }
             }
             if path_missing {
                 p { class: "lib-header-hint",
@@ -99,6 +139,9 @@ pub(super) struct LandingContentProps {
     pub prefs: ViewPrefs,
     pub ctx: BookTableContext,
     pub handlers: LandingContentHandlers,
+    /// Remount key for the book area — a changed key mounts a fresh subtree,
+    /// which is what replays the sweep-in CSS cascade on a gallery pick.
+    pub sweep_key: String,
 }
 
 /// Sidebar + grid/table column with load-more sentinel; stateless, mutations route through parent handlers.
@@ -109,6 +152,7 @@ pub(super) fn LandingContent(props: LandingContentProps) -> Element {
         prefs,
         ctx,
         handlers,
+        sweep_key,
     } = props;
     let BooksView {
         is_loading,
@@ -143,7 +187,7 @@ pub(super) fn LandingContent(props: LandingContentProps) -> Element {
 
     rsx! {
         div { class: "lib-layout lib-layout--collapsed",
-            div { class: "lib-main",
+            div { key: "{sweep_key}", class: "lib-main lib-books",
                 if is_loading {
                     p { class: "library-empty", "Loading..." }
                 } else if !visible_is_empty || lib_err.is_some() || page_error.is_some() {

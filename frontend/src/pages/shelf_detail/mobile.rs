@@ -3,7 +3,7 @@
 //! persistent "Omnibus" + search header, a title block with an eyebrow + facet
 //! row (kind / visibility / rule chips), the shared Shelves entry card, a
 //! three-column cover grid, and a ⋯ actions menu (edit shelf / delete, + Add
-//! books on manual). Reuses the parent module's `rule_text` and
+//! books on manual). Reuses `shelf_facets::rule_text` and
 //! `landing::mobile_cover_cell`; the parent resolves the shelf before rendering
 //! this, so it takes a loaded [`Shelf`].
 
@@ -11,6 +11,7 @@ use dioxus::prelude::*;
 use dioxus_router::{use_navigator, Link};
 use omnibus_shared::{EbookMetadata, Shelf, ShelfKind, Visibility};
 
+use crate::components::shelf_facets::rule_text;
 use crate::pages::landing::mobile_cover_cell;
 use crate::{data, use_server_url, Route};
 
@@ -109,7 +110,7 @@ pub(super) fn MobileShelfDetail(props: MobileShelfDetailProps) -> Element {
                     span { class: "m-shelf-facet-vis", "{vis_label}" }
                     if is_smart {
                         for (i, rule) in shelf.rules.iter().enumerate() {
-                            span { key: "{i}", class: "m-shelf-facet-chip", "{super::rule_text(rule)}" }
+                            span { key: "{i}", class: "m-shelf-facet-chip", "{rule_text(rule)}" }
                         }
                     }
                 }

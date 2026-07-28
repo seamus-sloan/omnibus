@@ -141,7 +141,7 @@ mod render_tests {
         Highlight {
             id: 7,
             book_uuid: "book-uuid".to_string(),
-            epub_cfi_range: "epubcfi(/6/14[chap03]!/4/2,/1:0,/1:12)".to_string(),
+            epub_cfi_range: Some("epubcfi(/6/14[chap03]!/4/2,/1:0,/1:12)".to_string()),
             color: HighlightColor::Violet,
             note: note.map(str::to_string),
             text: text.map(str::to_string),
@@ -176,6 +176,42 @@ mod render_tests {
             "expected a cfi deep link, got: {html}"
         );
         assert!(html.contains("--hl-violet"));
+    }
+
+    #[derive(Clone, Debug, PartialEq, Routable)]
+    enum AnchorlessCardRoute {
+        #[route("/")]
+        AnchorlessCardHost {},
+    }
+
+    fn render_anchorless_card() -> Element {
+        rsx! {
+            Router::<AnchorlessCardRoute> {}
+        }
+    }
+
+    #[component]
+    fn AnchorlessCardHost() -> Element {
+        let mut kobo_row = seeded_highlight(None, Some("Synced from the Kobo"));
+        kobo_row.epub_cfi_range = None;
+        rsx! {
+            BdHighlightCard {
+                highlight: kobo_row,
+                highlights: use_signal(Vec::new),
+                server_url: String::new(),
+            }
+        }
+    }
+
+    #[test]
+    fn unanchored_highlight_renders_without_an_open_in_reader_link() {
+        // A Kobo-origin row has no CFI: it lists with its quote and saved
+        // date, but there is no locator to derive and nowhere to deep-link.
+        let html = render_in_vdom(render_anchorless_card);
+        assert!(html.contains("Synced from the Kobo"));
+        assert!(html.contains("saved May 17, 2026"));
+        assert!(!html.contains("Section "));
+        assert!(!html.contains("data-testid=\"highlight-open\""));
     }
 
     #[component]

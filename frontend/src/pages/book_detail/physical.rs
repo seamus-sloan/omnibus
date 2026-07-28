@@ -10,6 +10,7 @@
 use dioxus::prelude::*;
 use omnibus_shared::physical::{PhysicalCopy, WishlistEntry, WishlistSource};
 
+use crate::components::{confirm_modal_body, ConfirmModal, ConfirmModalAction, ConfirmModalTone};
 use crate::{data, use_server_url};
 
 use super::BdSectionHead;
@@ -38,26 +39,38 @@ struct PhysPanelState {
     refresh: Signal<u32>,
 }
 
-/// Physical-collection + wishlist panel. `is_fileless` is `b.formats.is_empty()`
-/// (no ebook/audiobook files); `isbn`/`title`/`author` feed the "Find a copy"
-/// search. `refresh` is the page's book-refetch signal.
+/// Book-identity fields the panel needs, bundled to keep `BdPhysicalPanel`
+/// under the 5-prop guideline (mirrors `body::BdPageCtx`). `is_fileless` is
+/// `b.formats.is_empty()` (no ebook/audiobook files); `isbn`/`title`/`author`
+/// feed the "Find a copy" search.
+#[derive(Clone, PartialEq, Props)]
+pub(super) struct BdBookIdentity {
+    pub uuid: String,
+    pub is_fileless: bool,
+    pub isbn: Option<String>,
+    pub title: String,
+    pub author: String,
+}
+
+/// Physical-collection + wishlist panel. `refresh` is the page's book-refetch
+/// signal.
 #[component]
-pub(super) fn BdPhysicalPanel(
-    uuid: String,
-    is_fileless: bool,
-    isbn: Option<String>,
-    title: String,
-    author: String,
-    refresh: Signal<u32>,
-) -> Element {
+pub(super) fn BdPhysicalPanel(identity: BdBookIdentity, refresh: Signal<u32>) -> Element {
+    let BdBookIdentity {
+        uuid,
+        is_fileless,
+        isbn,
+        title,
+        author,
+    } = identity;
     let server_url = use_server_url();
     let user = crate::use_current_user_summary();
     let can_edit = user().map(|u| u.is_admin || u.can_edit).unwrap_or(false);
 
-    let mut copies = use_signal(Vec::<PhysicalCopy>::new);
-    let mut wishlist = use_signal(|| None::<WishlistEntry>);
-    let mut loaded = use_signal(|| false);
-    let mut err = use_signal(|| None::<String>);
+    let copies = use_signal(Vec::<PhysicalCopy>::new);
+    let wishlist = use_signal(|| None::<WishlistEntry>);
+    let loaded = use_signal(|| false);
+    let err = use_signal(|| None::<String>);
     let state = PhysPanelState {
         copies,
         wishlist,
@@ -69,33 +82,14 @@ pub(super) fn BdPhysicalPanel(
         refresh,
     };
 
-    let load_url = server_url.clone();
-    use_effect(use_reactive!(|uuid| {
-        // Reset on (re)navigation so a previous book's copies/wishlist don't
-        // flash under the new book before its load resolves.
-        copies.set(Vec::new());
-        wishlist.set(None);
-        err.set(None);
-        loaded.set(false);
-        if uuid.is_empty() {
-            return;
-        }
-        let load_url = load_url.clone();
-        let uuid = uuid.clone();
-        spawn(async move {
-            // Surface a read failure rather than silently degrading to the
-            // empty "add to wishlist" state (which would mask a 500/transient).
-            match data::list_physical_copies(&load_url, &uuid).await {
-                Ok(c) => copies.set(c),
-                Err(e) => err.set(Some(e.to_string())),
-            }
-            match data::get_wishlist_entry(&load_url, &uuid).await {
-                Ok(w) => wishlist.set(w),
-                Err(e) => err.set(Some(e.to_string())),
-            }
-            loaded.set(true);
-        });
-    }));
+    use_physical_load_effect(
+        uuid.clone(),
+        server_url.clone(),
+        copies,
+        wishlist,
+        err,
+        loaded,
+    );
 
     // First paint (SSR + first WASM) renders nothing; the post-mount load fills
     // it in. No hooks past this point, so the early return keeps hook order
@@ -127,6 +121,43 @@ pub(super) fn BdPhysicalPanel(
             {render_delete_modal(state, server_url, uuid)}
         }
     }
+}
+
+/// Install the uuid-reactive load effect: fetch this book's physical copies
+/// and wishlist entry post-mount, resetting state first so a previous book's
+/// copies/wishlist don't flash under the new book before its load resolves.
+fn use_physical_load_effect(
+    uuid: String,
+    load_url: String,
+    mut copies: Signal<Vec<PhysicalCopy>>,
+    mut wishlist: Signal<Option<WishlistEntry>>,
+    mut err: Signal<Option<String>>,
+    mut loaded: Signal<bool>,
+) {
+    use_effect(use_reactive!(|uuid| {
+        copies.set(Vec::new());
+        wishlist.set(None);
+        err.set(None);
+        loaded.set(false);
+        if uuid.is_empty() {
+            return;
+        }
+        let load_url = load_url.clone();
+        let uuid = uuid.clone();
+        spawn(async move {
+            // Surface a read failure rather than silently degrading to the
+            // empty "add to wishlist" state (which would mask a 500/transient).
+            match data::list_physical_copies(&load_url, &uuid).await {
+                Ok(c) => copies.set(c),
+                Err(e) => err.set(Some(e.to_string())),
+            }
+            match data::get_wishlist_entry(&load_url, &uuid).await {
+                Ok(w) => wishlist.set(w),
+                Err(e) => err.set(Some(e.to_string())),
+            }
+            loaded.set(true);
+        });
+    }));
 }
 
 /// The checked-in-copies section: pill + one card per copy.
@@ -173,7 +204,10 @@ fn render_copy_card(
     let note_val = copy.note.clone().unwrap_or_default();
     let note_is_empty = note_val.trim().is_empty();
     rsx! {
-        div { class: "card bd-phys-copy", "data-testid": "physical-copy-card",
+        div {
+            key: "{copy.id}",
+            class: "card bd-phys-copy",
+            "data-testid": "physical-copy-card",
             div { class: "bd-phys-copy-head",
                 span { class: "bd-phys-copy-date", "{checked_in}" }
                 if let Some(isbn) = copy.isbn.clone() {
@@ -331,74 +365,81 @@ fn render_delete_modal(state: PhysPanelState, url: String, uuid: String) -> Elem
         return rsx! {};
     };
     let copy_id = target.copy_id;
+    let is_busy = busy();
     if target.last_fileless {
         let (uw, ww) = (url.clone(), uuid.clone());
+        let title = "Remove your last copy";
         rsx! {
-            div {
-                class: "author-photo-modal-backdrop",
-                role: "dialog",
-                aria_modal: "true",
-                "data-testid": "last-copy-modal",
-                onclick: move |_| if !busy() { delete_target.set(None); },
-                div { class: "mg-modal del-modal", onclick: move |e| e.stop_propagation(),
-                    h3 { class: "del-modal-title", "Remove your last copy" }
-                    p { class: "del-modal-body",
-                        "This is the only copy of a book with no files in your library. Remove it entirely, or keep tracking it on your wishlist?"
-                    }
-                    div { class: "del-modal-actions",
-                        button {
-                            class: "del-btn-ghost",
-                            "data-testid": "last-copy-cancel",
-                            disabled: busy(),
-                            onclick: move |_| delete_target.set(None),
-                            "Cancel"
-                        }
-                        button {
-                            class: "del-btn-ghost",
-                            "data-testid": "last-copy-wishlist",
-                            disabled: busy(),
-                            onclick: move |_| delete_last_and_wishlist(state, uw.clone(), ww.clone(), copy_id),
-                            "Move to wishlist"
-                        }
-                        button {
-                            class: "del-btn-danger",
-                            "data-testid": "last-copy-remove",
-                            disabled: busy(),
-                            onclick: move |_| delete_last_and_remove(state, url.clone(), uuid.clone(), copy_id),
-                            "Remove from library"
-                        }
-                    }
-                }
+            ConfirmModal {
+                testid: "last-copy-modal".to_string(),
+                aria_label: title.to_string(),
+                dialog_class: "mg-modal del-modal".to_string(),
+                busy: is_busy,
+                on_dismiss: move |_| delete_target.set(None),
+                {confirm_modal_body(
+                    title,
+                    "This is the only copy of a book with no files in your library. Remove it entirely, or keep tracking it on your wishlist?",
+                    vec![
+                        ConfirmModalAction {
+                            testid: "last-copy-cancel".to_string(),
+                            label: "Cancel".to_string(),
+                            tone: ConfirmModalTone::Ghost,
+                            disabled: is_busy,
+                            on_click: EventHandler::new(move |_| delete_target.set(None)),
+                        },
+                        ConfirmModalAction {
+                            testid: "last-copy-wishlist".to_string(),
+                            label: "Move to wishlist".to_string(),
+                            tone: ConfirmModalTone::Ghost,
+                            disabled: is_busy,
+                            on_click: EventHandler::new(move |_| {
+                                delete_last_and_wishlist(state, uw.clone(), ww.clone(), copy_id)
+                            }),
+                        },
+                        ConfirmModalAction {
+                            testid: "last-copy-remove".to_string(),
+                            label: "Remove from library".to_string(),
+                            tone: ConfirmModalTone::Danger,
+                            disabled: is_busy,
+                            on_click: EventHandler::new(move |_| {
+                                delete_last_and_remove(state, url.clone(), uuid.clone(), copy_id)
+                            }),
+                        },
+                    ],
+                )}
             }
         }
     } else {
+        let title = "Remove this copy?";
         rsx! {
-            div {
-                class: "author-photo-modal-backdrop",
-                role: "dialog",
-                aria_modal: "true",
-                "data-testid": "copy-delete-modal",
-                onclick: move |_| if !busy() { delete_target.set(None); },
-                div { class: "mg-modal del-modal", onclick: move |e| e.stop_propagation(),
-                    h3 { class: "del-modal-title", "Remove this copy?" }
-                    p { class: "del-modal-body", "This removes the physical copy from your collection." }
-                    div { class: "del-modal-actions",
-                        button {
-                            class: "del-btn-ghost",
-                            "data-testid": "copy-delete-cancel",
-                            disabled: busy(),
-                            onclick: move |_| delete_target.set(None),
-                            "Cancel"
-                        }
-                        button {
-                            class: "del-btn-danger",
-                            "data-testid": "copy-delete-confirm",
-                            disabled: busy(),
-                            onclick: move |_| delete_copy_only(state, url.clone(), copy_id),
-                            "I sold it"
-                        }
-                    }
-                }
+            ConfirmModal {
+                testid: "copy-delete-modal".to_string(),
+                aria_label: title.to_string(),
+                dialog_class: "mg-modal del-modal".to_string(),
+                busy: is_busy,
+                on_dismiss: move |_| delete_target.set(None),
+                {confirm_modal_body(
+                    title,
+                    "This removes the physical copy from your collection.",
+                    vec![
+                        ConfirmModalAction {
+                            testid: "copy-delete-cancel".to_string(),
+                            label: "Cancel".to_string(),
+                            tone: ConfirmModalTone::Ghost,
+                            disabled: is_busy,
+                            on_click: EventHandler::new(move |_| delete_target.set(None)),
+                        },
+                        ConfirmModalAction {
+                            testid: "copy-delete-confirm".to_string(),
+                            label: "I sold it".to_string(),
+                            tone: ConfirmModalTone::Danger,
+                            disabled: is_busy,
+                            on_click: EventHandler::new(move |_| {
+                                delete_copy_only(state, url.clone(), copy_id)
+                            }),
+                        },
+                    ],
+                )}
             }
         }
     }

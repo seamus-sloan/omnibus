@@ -80,6 +80,12 @@ pub use library_picker_grid::{filter_library, use_library_fetch, LibraryPickerGr
 // without duplicating the form.
 pub mod author_photo_edit;
 
+// Shared backdrop/panel modal shell (dismiss-on-click, click-through-safe)
+// used by the merge, delete, author-photo, and physical-copy dialogs, plus
+// a title/body/action-row body for the common single-confirm case.
+pub mod confirm_modal;
+pub use confirm_modal::{confirm_modal_body, ConfirmModal, ConfirmModalAction, ConfirmModalTone};
+
 // Shared file-picker upload `onchange` builder used by `author_photo_edit`'s
 // file section and the journal composer's image-insert toolbar button.
 pub(crate) mod image_upload;
@@ -146,6 +152,11 @@ pub mod shelf_rule_builder;
 
 pub mod edit_shelf_modal;
 pub use edit_shelf_modal::EditShelfModal;
+
+// Facet row (kind / visibility / rule chips) shown under shelf titles on the
+// landing header and the shelf detail header.
+pub mod shelf_facets;
+pub use shelf_facets::ShelfFacets;
 
 // "Fetch Summary" button — pulls a book blurb from Hardcover/OpenLibrary on
 // demand. Mounted by the metadata editor (always) and the web book-detail hero

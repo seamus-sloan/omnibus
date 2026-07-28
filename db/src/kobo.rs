@@ -10,6 +10,7 @@ use omnibus_shared::ReadStatus;
 
 use crate::resolve_canonical_book_uuid;
 
+pub mod annotations;
 pub mod delta;
 
 pub use delta::{clear_snapshot, record_synced, sync_delta, SyncChange, SyncDelta};
@@ -131,6 +132,7 @@ pub async fn sync_books(pool: &SqlitePool, user_id: i64) -> Result<Vec<KoboBookR
     // chunks; sorting here keeps newest-modified-first over the whole set
     // rather than within each chunk.
     rows.sort_by_key(|r| std::cmp::Reverse(r.last_modified_epoch));
+    apply_title_author_overrides(pool, &mut rows).await?;
     Ok(rows)
 }
 
@@ -149,7 +151,70 @@ pub async fn book_for_sync(
         .bind(&canonical)
         .fetch_optional(pool)
         .await?;
-    Ok(row.as_ref().map(row_to_book))
+    let Some(mut book) = row.as_ref().map(row_to_book) else {
+        return Ok(None);
+    };
+    apply_title_author_overrides(pool, std::slice::from_mut(&mut book)).await?;
+    Ok(Some(book))
+}
+
+/// Overlay each row's title/author with its saved `metadata_overrides` (the
+/// same [`crate::metadata_overrides::apply_overrides`] merge `db::get_book`
+/// runs for every other book-detail surface), gated by the owning scan
+/// root's configured source precedence (#972). A no-op for rows whose uuid
+/// has no override row.
+async fn apply_title_author_overrides(
+    pool: &SqlitePool,
+    rows: &mut [KoboBookRow],
+) -> Result<(), KoboError> {
+    let uuids: Vec<String> = rows.iter().map(|r| r.uuid.clone()).collect();
+    let overrides = crate::metadata_overrides::load_overrides_bulk(pool, &uuids).await?;
+    if overrides.is_empty() {
+        return Ok(());
+    }
+    let overridden_uuids: Vec<String> = overrides.keys().cloned().collect();
+    let precedence = crate::settings::metadata_precedence_by_uuid(pool, &overridden_uuids).await?;
+    for row in rows.iter_mut() {
+        let Some((ov, has_cover_override)) = overrides.get(&row.uuid) else {
+            continue;
+        };
+        let prec = precedence
+            .get(&row.uuid)
+            .cloned()
+            .unwrap_or_else(|| omnibus_shared::DEFAULT_METADATA_PRECEDENCE.to_vec());
+        // A throwaway `EbookMetadata` seeded with this row's current
+        // title/author lets `apply_overrides` do the real merge (title
+        // replace, precedence gate, creators-list replace) instead of
+        // re-deriving those rules here.
+        let mut book = omnibus_shared::EbookMetadata {
+            title: Some(row.title.clone()),
+            creators: if row.author.is_empty() {
+                Vec::new()
+            } else {
+                vec![omnibus_shared::Contributor {
+                    name: row.author.clone(),
+                    ..Default::default()
+                }]
+            },
+            ..Default::default()
+        };
+        crate::metadata_overrides::apply_overrides(
+            &mut book,
+            &row.uuid,
+            ov,
+            *has_cover_override,
+            &prec,
+        );
+        if let Some(title) = book.title {
+            row.title = title;
+        }
+        row.author = book
+            .creators
+            .first()
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
+    }
+    Ok(())
 }
 
 fn row_to_book(row: &sqlx::sqlite::SqliteRow) -> KoboBookRow {

@@ -168,7 +168,10 @@ async fn api_highlight_crud_round_trip() {
     let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
     let created: Highlight = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(created.color, omnibus_shared::HighlightColor::Blue);
-    assert_eq!(created.epub_cfi_range, "epubcfi(/6/4!/4/2,/1:0,/1:100)");
+    assert_eq!(
+        created.epub_cfi_range.as_deref(),
+        Some("epubcfi(/6/4!/4/2,/1:0,/1:100)")
+    );
 
     // List
     let res = app

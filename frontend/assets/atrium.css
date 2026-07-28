@@ -5281,6 +5281,8 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   font-style: italic;
   font-feature-settings: 'lnum';
 }
+.lib-header-title-wrap { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.lib-header .shelf-facets { margin-top: 8px; }
 .lib-header-hint { color: var(--ink-2); font-size: 13px; }
 
 .lib-toolbar {
@@ -6767,6 +6769,312 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   cursor: pointer;
 }
 .file-drop-input:disabled { cursor: not-allowed; }
+
+/* ── Landing redesign · continue hero + shelf gallery ──────────────── */
+/* Web landing top-of-page: full-width continue-reading carousel (`.ch-*`,
+   mirroring the iOS ContinueHero) and the horizontal shelf gallery (`.sg-*`,
+   mirroring ShelfCard/ShelfMosaic) whose selected tile carries the accent
+   glow. The book area below sweeps in via `lib-sweep-in` on remount. */
+
+/* The app shell (`.app-shell > main`) already pads horizontally; this only
+   spaces the hero off the top bar and stacks the sections. */
+.landing-col {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding-top: 22px;
+}
+
+/* Continue-reading hero */
+.ch-hero { display: flex; flex-direction: column; gap: 10px; }
+.ch-track {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+}
+.ch-track::-webkit-scrollbar { display: none; }
+.ch-card {
+  position: relative;
+  flex: 0 0 100%;
+  scroll-snap-align: start;
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  min-height: 176px;
+  padding: 16px;
+  border-radius: var(--r-lg);
+  border: 0.5px solid color-mix(in oklch, white 12%, transparent);
+  background:
+    radial-gradient(320px 320px at 40px 40%,
+      color-mix(in oklch, var(--accent) 26%, transparent), transparent 70%),
+    linear-gradient(135deg,
+      color-mix(in oklch, var(--accent) 16%, var(--bg-2)),
+      color-mix(in oklch, var(--accent) 8%, var(--bg-1)));
+  box-shadow: 0 8px 18px color-mix(in oklch, black 35%, transparent);
+  overflow: hidden;
+}
+.ch-cover {
+  flex: 0 0 96px;
+  width: 96px;
+  filter: drop-shadow(0 6px 12px color-mix(in oklch, black 50%, transparent));
+}
+.ch-cover .cover-wrap { width: 96px; }
+.ch-body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  flex: 1;
+  align-self: stretch;
+}
+.ch-eyebrow {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: color-mix(in oklch, var(--accent) 85%, var(--ink-1));
+}
+.ch-title-link { text-decoration: none; color: inherit; min-width: 0; }
+.ch-title {
+  font-family: var(--serif);
+  font-size: 21px;
+  font-weight: 400;
+  line-height: 1.15;
+  margin: 0;
+  color: var(--ink-0);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+@media (hover: hover) { .ch-title-link:hover .ch-title { color: var(--accent); } }
+.ch-author {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ch-bar {
+  display: block;
+  height: 3px;
+  margin-top: auto;
+  border-radius: 999px;
+  background: color-mix(in oklch, white 14%, transparent);
+  overflow: hidden;
+}
+.ch-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg,
+    color-mix(in oklch, var(--accent) 75%, transparent), var(--accent));
+  box-shadow: 0 0 4px color-mix(in oklch, var(--accent) 50%, transparent);
+}
+.ch-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+}
+.ch-bar + .ch-foot { margin-top: 6px; }
+.ch-hero .ch-body:not(:has(.ch-bar)) .ch-foot { margin-top: auto; }
+.ch-meta { font-size: 11.5px; color: var(--ink-2); }
+.ch-cta {
+  flex-shrink: 0;
+  padding: 7px 13px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: filter 0.15s;
+}
+@media (hover: hover) { .ch-cta:hover { filter: brightness(1.08); } }
+.ch-dots { display: flex; justify-content: center; gap: 6px; }
+.ch-dot {
+  width: 5px;
+  height: 5px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--ink-3) 40%, transparent);
+  cursor: pointer;
+  transition: width 0.2s, background 0.2s;
+}
+.ch-dot--active { width: 16px; background: var(--ink-1); }
+
+/* Shelf gallery */
+.sg-gallery { display: flex; flex-direction: column; gap: 12px; }
+.sg-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.sg-track {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  padding: 6px 4px 14px;
+  scrollbar-width: none;
+}
+.sg-track::-webkit-scrollbar { display: none; }
+.sg-card {
+  flex: 0 0 108px;
+  width: 108px;
+  scroll-snap-align: start;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--r-sm);
+}
+.sg-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.sg-mosaic-wrap { position: relative; display: block; width: 100%; }
+.sg-mosaic {
+  display: grid;
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  gap: 1px;
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  background: var(--bg-0);
+  box-shadow:
+    inset 0 0 0 0.5px color-mix(in oklch, white 10%, transparent),
+    0 5px 10px color-mix(in oklch, black 45%, transparent);
+  margin-bottom: 5px;
+  transition: box-shadow 0.25s;
+}
+.sg-mosaic--1 { grid-template: 1fr / 1fr; }
+.sg-mosaic--2 { grid-template: 1fr / 1fr 1fr; }
+/* Three covers: lead cover full height beside two stacked (iOS ShelfMosaic). */
+.sg-mosaic--3 { grid-template: 1fr 1fr / 1fr 1fr; }
+.sg-mosaic--3 .sg-cell:first-child { grid-row: 1 / 3; }
+.sg-mosaic--4 { grid-template: 1fr 1fr / 1fr 1fr; }
+.sg-cell {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.sg-mosaic--empty { grid-template: 1fr / 1fr; }
+.sg-plate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: color-mix(in oklch, white 45%, transparent);
+}
+.sg-plate svg { width: 26px; height: 26px; opacity: 0.9; }
+.sg-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: color-mix(in oklch, black 50%, transparent);
+  backdrop-filter: blur(6px);
+  color: white;
+}
+.sg-badge svg { width: 10px; height: 10px; }
+.sg-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-1);
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color 0.2s;
+}
+.sg-meta {
+  font-size: 11px;
+  color: var(--ink-3);
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (hover: hover) {
+  .sg-card:hover .sg-mosaic {
+    box-shadow:
+      inset 0 0 0 0.5px color-mix(in oklch, white 16%, transparent),
+      0 8px 16px color-mix(in oklch, black 50%, transparent);
+  }
+  .sg-card:hover .sg-name { color: var(--ink-0); }
+}
+/* The selection glow — web-specific; recipe from .m-player-glow /
+   .um-now-reading accent tints. */
+.sg-card--active .sg-mosaic {
+  box-shadow:
+    0 0 0 2px color-mix(in oklch, var(--accent) 75%, transparent),
+    0 0 18px color-mix(in oklch, var(--accent) 40%, transparent),
+    0 5px 10px color-mix(in oklch, black 45%, transparent);
+}
+.sg-card--active .sg-name { color: var(--ink-0); }
+.sg-new {
+  flex: 0 0 108px;
+  width: 108px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-radius: var(--r-sm);
+}
+.sg-new:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.sg-new-plate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  border: 1px dashed var(--line);
+  border-radius: var(--r-sm);
+  color: var(--ink-3);
+  font-size: 20px;
+  font-weight: 300;
+  transition: border-color 0.15s, color 0.15s;
+}
+@media (hover: hover) {
+  .sg-new:hover .sg-new-plate { border-color: var(--ink-3); color: var(--ink-1); }
+}
+
+/* Book-area sweep: plays on (re)mount of the keyed `.lib-books` subtree —
+   a gallery pick remounts it, so the incoming set cascades like iOS. */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes lib-sweep-in {
+    from { opacity: 0; transform: translateY(12px) scale(0.985); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  .lib-books .lib-tile {
+    animation: lib-sweep-in 400ms cubic-bezier(0.2, 0.6, 0.3, 1) both;
+  }
+  .lib-books .ebook-table {
+    animation: lib-sweep-in 320ms cubic-bezier(0.2, 0.6, 0.3, 1) both;
+  }
+}
 
 /* ── Account screen (mobile "You" tab) ─────────────────────────────── */
 /* Mobile-only surface rendered by pages::account::AccountPage. Content
