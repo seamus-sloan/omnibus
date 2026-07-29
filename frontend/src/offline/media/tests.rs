@@ -1,6 +1,12 @@
 //! Loopback media server tests — real HTTP round-trips against a
 //! port-0 instance, plus the pure helper functions.
 
+// The state-lock guard is deliberately held across awaits: it serializes
+// whole async test bodies against process-global state, and each test owns
+// its own thread + runtime, so there is no interleaving to deadlock on.
+// Mirrors `offline::sync::tests`.
+#![allow(clippy::await_holding_lock)]
+
 use super::*;
 
 /// Boot the router on a random port with a temp downloads/img dir; returns
@@ -400,6 +406,41 @@ async fn img_does_not_revalidate_an_entry_with_no_stored_validator() {
         .expect("get");
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
     assert_eq!(hits.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn img_does_not_revalidate_while_the_client_is_offline() {
+    // The fourth documented skip condition on `revalidate_in_background`:
+    // spawning a check-back the device has no way to complete would just
+    // burn a task on every offline render of a stale-enough cover.
+    let _guard = crate::offline::sync::test_state_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    crate::offline::sync::note_offline();
+
+    let (base, token, dir) = boot(&[]).await;
+    let img_dir = dir.path().join("imgcache");
+    seed_cache_entry(&img_dir, "/api/covers/u1", b"cached-cover", Some("\"v1\""));
+    let (hits, _seen) = spawn_upstream(axum::http::StatusCode::OK, b"new", "\"v2\"").await;
+
+    let encoded = urlencode("/api/covers/u1");
+    let resp = reqwest::get(format!("{base}/img?path={encoded}&token={token}"))
+        .await
+        .expect("get");
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.bytes().await.expect("body").as_ref(),
+        b"cached-cover",
+        "the cached copy still serves instantly while offline"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        0,
+        "offline must not fire a background revalidation"
+    );
+
+    crate::offline::sync::note_online();
 }
 
 #[tokio::test]

@@ -486,3 +486,45 @@ fn thumb_srcs(
         (None, None)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file(format: &str, ordinal: i64) -> BookFileInfo {
+        BookFileInfo {
+            id: ordinal,
+            format: format.to_string(),
+            filename: format!("part-{ordinal}.{}", format.to_lowercase()),
+            ordinal,
+            label: None,
+            size_bytes: 0,
+            path: None,
+            etag: None,
+        }
+    }
+
+    #[test]
+    fn has_multi_file_format_is_false_for_an_empty_file_list() {
+        assert!(!has_multi_file_format(&[]));
+    }
+
+    #[test]
+    fn has_multi_file_format_is_false_when_every_format_has_one_file() {
+        assert!(!has_multi_file_format(&[file("EPUB", 0), file("M4B", 1)]));
+    }
+
+    #[test]
+    fn has_multi_file_format_is_true_when_a_format_has_two_files() {
+        assert!(has_multi_file_format(&[file("M4B", 0), file("M4B", 1)]));
+    }
+
+    #[test]
+    fn has_multi_file_format_is_true_when_only_one_of_several_formats_has_duplicates() {
+        assert!(has_multi_file_format(&[
+            file("EPUB", 0),
+            file("M4B", 1),
+            file("M4B", 2),
+        ]));
+    }
+}
