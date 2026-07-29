@@ -24,6 +24,7 @@ mod audiobooks;
 mod author_photos;
 mod authors;
 mod bookmarks;
+mod conditional;
 mod covers;
 mod ebooks;
 mod export_opf;
@@ -87,45 +88,72 @@ fn internal<E: std::fmt::Display>(context: &'static str, e: E) -> Response {
         .into_response()
 }
 
-/// Serve a file from disk as a browser download, streaming via `ServeFile`
-/// (so large audiobook files aren't buffered into memory) and forcing
-/// `Content-Disposition: attachment` with the on-disk basename as the
-/// suggested filename. `content_type` overrides the guessed MIME. The
-/// disposition/content-type headers are only attached to a real file
-/// response (200/206); a 404 from `ServeFile` passes through untouched.
+/// Serve a file from disk as a browser download: streamed (so large
+/// audiobook files aren't buffered into memory), Range-capable, conditional,
+/// and forced to `Content-Disposition: attachment` with the on-disk basename
+/// as the suggested filename. `content_type` overrides the guessed MIME.
 async fn serve_download(
     req: axum::extract::Request,
     path: &std::path::Path,
     content_type: &str,
 ) -> Response {
-    use tower::ServiceExt;
+    let filename = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("download");
+    serve_file(
+        req,
+        path,
+        content_type,
+        Some(content_disposition_attachment(filename)),
+    )
+    .await
+}
 
-    let serve = tower_http::services::ServeFile::new(path);
-    let res = match serve.oneshot(req).await {
-        Ok(r) => r,
-        Err(e) => return internal("serve download", e),
+/// The shared body of every endpoint that streams bytes off disk.
+///
+/// Opens the file **once** and hands that same handle to both the validator
+/// and the stream — see `conditional`'s module doc for why splitting those
+/// two is what reopens the splice this whole mechanism exists to close.
+/// Every precondition is settled before a byte is read; a missing file is
+/// the only condition reported as 404, so a legitimate 416 reaches the
+/// client intact with the `Content-Range` it needs to restart.
+async fn serve_file(
+    req: axum::extract::Request,
+    path: &std::path::Path,
+    content_type: &str,
+    disposition: Option<String>,
+) -> Response {
+    let open = match conditional::open(path).await {
+        Ok(open) => open,
+        Err(e) => {
+            tracing::warn!(?path, error = %e, "media file open failed");
+            return axum::http::StatusCode::NOT_FOUND.into_response();
+        }
     };
-    let (mut parts, body) = res.into_parts();
-    let ok = matches!(
-        parts.status,
-        axum::http::StatusCode::OK | axum::http::StatusCode::PARTIAL_CONTENT
-    );
-    if ok {
-        if let Ok(v) = axum::http::HeaderValue::from_str(content_type) {
-            parts.headers.insert(axum::http::header::CONTENT_TYPE, v);
+    let range = match conditional::evaluate(req.headers(), &open.validator, open.len) {
+        conditional::Precondition::NotModified(etag) => {
+            return conditional::not_modified(
+                &etag,
+                conditional::MEDIA_CACHE_CONTROL,
+                conditional::MEDIA_VARY,
+            )
         }
-        let filename = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("download");
-        if let Ok(v) = axum::http::HeaderValue::from_str(&content_disposition_attachment(filename))
-        {
-            parts
-                .headers
-                .insert(axum::http::header::CONTENT_DISPOSITION, v);
+        conditional::Precondition::Failed => {
+            return axum::http::StatusCode::PRECONDITION_FAILED.into_response()
         }
-    }
-    Response::from_parts(parts, axum::body::Body::new(body))
+        conditional::Precondition::Proceed { range } => range,
+    };
+    conditional::serve(
+        open,
+        range,
+        conditional::FileResponse {
+            content_type,
+            cache_control: conditional::MEDIA_CACHE_CONTROL,
+            disposition,
+        },
+    )
+    .await
 }
 
 /// Build a `Content-Disposition: attachment` value for `filename`.

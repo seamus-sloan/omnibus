@@ -1,9 +1,13 @@
-//! Pure single-range `Range` header parser for the loopback media server.
-//! `<audio>` and epub.js only ever send a single `bytes=` range, so
-//! multi-range requests are deliberately ignored (a server MAY ignore a
-//! Range header — the client just gets a 200 with the full body).
+//! Pure single-range `Range` header parser.
+//!
+//! Shared by the server's byte-serving endpoints and the mobile loopback
+//! media proxy, so a range means the same thing on both sides of a
+//! downloaded book. `<audio>`, epub.js and the download engine only ever
+//! send a single `bytes=` range, so multi-range requests are deliberately
+//! ignored (a server MAY ignore a Range header — the client just gets a 200
+//! with the full body).
 
-/// How the loopback server should answer a request against a `len`-byte file.
+/// How a server should answer a request against a `len`-byte file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RangeOutcome {
     /// No (usable) range — respond 200 with the full body.
