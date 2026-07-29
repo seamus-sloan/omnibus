@@ -27,7 +27,7 @@ nix develop .#audit  --command cargo deny check advisories sources bans
 nix develop .#mobile                  # interactive shell with Android NDK + iOS targets
 ```
 
-`.envrc` resolves `use flake` to `default`, so the editor stays on the slim shell at all times. `just serve` works from default because zellij + process-compose live there; each multiplexer pane internally wraps its command in the right `.#shell` (server → `.#web`, mobile → `.#mobile`, playwright → `.#e2e`), so only the panes you actually start realize their extras. `just dev-up` and `just dev-bounce` self-wrap in `.#web`, so they work straight from default too.
+`.envrc` resolves `use flake` to `default`, so the editor stays on the slim shell at all times. `just serve` works from default because zellij + process-compose live there; each multiplexer pane internally wraps its command in the right `.#shell` (server → `.#web`, android/ios-hybrid → `.#mobile`, playwright → `.#e2e`), so only the panes you actually start realize their extras — except the native `ios` pane, which runs `just ios-sim` on system xcodebuild + simctl and needs no nix shell at all. `just dev-up` and `just dev-bounce` self-wrap in `.#web`, so they work straight from default too.
 
 ## Cached dev-env for hot recipes
 
