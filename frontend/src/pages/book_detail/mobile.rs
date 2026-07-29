@@ -527,4 +527,9 @@ mod tests {
             file("M4B", 2),
         ]));
     }
+
+    #[test]
+    fn has_multi_file_format_matches_formats_that_differ_only_by_ascii_case() {
+        assert!(has_multi_file_format(&[file("M4B", 0), file("m4b", 1)]));
+    }
 }
