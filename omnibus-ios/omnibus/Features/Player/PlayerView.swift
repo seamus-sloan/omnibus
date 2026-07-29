@@ -541,7 +541,7 @@ struct MiniPlayerBar: View {
     /// Overrides what tapping the bar body does. The default expands into the
     /// app-global full-screen player; the reader passes its own handler so the
     /// book underneath stays open.
-    var onExpand: (() -> Void)?
+    var onExpand: (() -> Void)? = nil
 
     var body: some View {
         if let book = player.book {

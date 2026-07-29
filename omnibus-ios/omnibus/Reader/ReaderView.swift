@@ -192,6 +192,11 @@ struct ReaderView: View {
             controller.display(cfi)
             bridge.pendingCFI = nil
         }
+        // If playback closes while the player sheet is up, the sheet's
+        // content would be empty — take it down with the book.
+        .onChange(of: audio.isActive) { _, active in
+            if !active { showPlayer = false }
+        }
         .onDisappear {
             Task { await finish() }
         }
