@@ -23,6 +23,11 @@ unset LD CC CXX
 if [ -n "${OMNIBUS_IOS_SIM_UDID:-}" ]; then
   udid="$OMNIBUS_IOS_SIM_UDID"
 else
+  # Preflight like ios-test.sh: fail actionably instead of mid-pipeline.
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "ios-sim.sh: jq is required to auto-pick a simulator (brew install jq), or set OMNIBUS_IOS_SIM_UDID" >&2
+    exit 1
+  fi
   # Newest installed iOS runtime that has an iPhone device. Duplicated from
   # scripts/ios-test.sh (which CI owns) rather than shared — keep in sync.
   # xcodebuild's destination matcher silently omits simulators whose runtime
