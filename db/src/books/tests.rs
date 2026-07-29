@@ -56,6 +56,47 @@ async fn get_book_formats_machine_timestamps_as_fixed_width_iso() {
 }
 
 #[tokio::test]
+async fn last_modified_for_returns_the_stored_epoch() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    sqlx::query("INSERT INTO scan_roots (id, path, display_name) VALUES (1, '/lib', 'Lib')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, scan_key, library_id, path, title, last_modified) \
+         VALUES ('bk', 'b', 1, '/lib/bk', 'Book', 1700000000) \
+         RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let last_modified = last_modified_for(&pool, id).await.unwrap();
+    assert_eq!(last_modified, 1700000000);
+}
+
+#[tokio::test]
+async fn last_modified_for_defaults_to_zero_when_column_is_null() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE uuid = 'uuid-1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let last_modified = last_modified_for(&pool, id).await.unwrap();
+    assert_eq!(last_modified, 0);
+}
+
+#[tokio::test]
+async fn last_modified_for_returns_db_error_for_unknown_id() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    let err = last_modified_for(&pool, 999).await.unwrap_err();
+    assert!(matches!(err, BooksError::Db(_)));
+}
+
+#[tokio::test]
 async fn get_book_reports_epub_size_from_lowest_ordinal_epub() {
     // `epub_size_bytes` drives the export menu's Kindle size gate. It must
     // mirror what the hero send delivers — the lowest-ordinal EPUB — and ignore
