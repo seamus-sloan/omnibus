@@ -24,6 +24,9 @@ struct ServerConnectView: View {
                         .foregroundStyle(palette.ink2Color)
 
                     TextField("192.168.1.10:3000", text: $address)
+                        // Stable handle for omnibusUITests — placeholder text
+                        // and layout can change; this shouldn't.
+                        .accessibilityIdentifier("server-address")
                         .textFieldStyle(OmnibusFieldStyle())
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
