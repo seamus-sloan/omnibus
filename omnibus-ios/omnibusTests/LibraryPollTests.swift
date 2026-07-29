@@ -7,31 +7,31 @@ import Testing
 @testable import omnibus
 
 struct LibraryPollTests {
-    @Test func should_poll_when_online_idle_and_on_first_page() {
+    @Test func pollsWhenOnlineIdleAndOnFirstPage() {
         #expect(LibraryModel.shouldPoll(
             isOnline: true, isLoading: false, isLoadingMore: false, hasPaginated: false
         ))
     }
 
-    @Test func should_not_poll_while_offline() {
+    @Test func skipsWhileOffline() {
         #expect(!LibraryModel.shouldPoll(
             isOnline: false, isLoading: false, isLoadingMore: false, hasPaginated: false
         ))
     }
 
-    @Test func should_not_poll_while_a_reload_is_in_flight() {
+    @Test func skipsWhileAReloadIsInFlight() {
         #expect(!LibraryModel.shouldPoll(
             isOnline: true, isLoading: true, isLoadingMore: false, hasPaginated: false
         ))
     }
 
-    @Test func should_not_poll_while_a_page_fetch_is_in_flight() {
+    @Test func skipsWhileAPageFetchIsInFlight() {
         #expect(!LibraryModel.shouldPoll(
             isOnline: true, isLoading: false, isLoadingMore: true, hasPaginated: false
         ))
     }
 
-    @Test func should_not_poll_once_the_user_has_paginated() {
+    @Test func skipsOnceTheUserHasPaginated() {
         #expect(!LibraryModel.shouldPoll(
             isOnline: true, isLoading: false, isLoadingMore: false, hasPaginated: true
         ))

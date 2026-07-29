@@ -106,9 +106,15 @@ final class LibraryModel {
     }
 
     /// Resume points only. Re-running the whole `reload` would refetch the
-    /// grid and the shelves to update one card.
-    func refreshResume() async {
-        for await points in UserDataService.recentProgress().values() { resume = points }
+    /// grid and the shelves to update one card. `freshOnly` skips the replica
+    /// yield so a background poll doesn't republish an unchanged rail.
+    func refreshResume(freshOnly: Bool = false) async {
+        do {
+            for try await read in UserDataService.recentProgress() {
+                guard read.isFresh || !freshOnly else { continue }
+                resume = read.value
+            }
+        } catch {}
     }
 
     /// One background poll tick: pick up server-side changes (a finished
@@ -125,7 +131,7 @@ final class LibraryModel {
         ) else { return }
 
         async let mirror: Void = LibraryIndex.shared.sync()
-        await refreshResume()
+        await refreshResume(freshOnly: true)
         await revalidateFirstPage()
         await mirror
     }
@@ -253,8 +259,9 @@ struct LibraryView: View {
         // Background poll, mirroring the web client's sync tick. Tied to the
         // view's lifetime, so it pauses whenever the library isn't on screen.
         .task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: LibraryModel.pollInterval)
+            // `Task.sleep` throws on cancellation — bail out then, rather
+            // than letting a cancelled loop run one last refresh.
+            while (try? await Task.sleep(for: LibraryModel.pollInterval)) != nil {
                 await model.backgroundRefresh()
             }
         }
