@@ -47,6 +47,14 @@ sha2 = { version = "0.10", optional = true }
 # native startup helpers in main.rs that previously lived inside an inline
 # closure (where `?` upgraded any error via type inference).
 anyhow = { version = "1.0", optional = true }
+# IMF-fixdate parsing/formatting for the conditional-request layer's
+# `If-Modified-Since` / `If-Unmodified-Since` / date-form `If-Range`, and the
+# `Last-Modified` it publishes. Already in the tree via tower-http/hyper, so
+# depending on it directly unifies rather than adding a build.
+httpdate = { version = "1.0", optional = true }
+# Wraps the open file handle a media response streams from, so a
+# multi-hundred-MB audiobook is never buffered into memory.
+tokio-util = { version = "0.7", features = ["io"], optional = true }
 # Staging temp files for the upload-inspect parse path in
 # `backend::uploads` (RAII cleanup on drop). Also a dev-dependency below for
 # the integration tests; listed here so the server lib can use it directly.
@@ -89,6 +97,8 @@ server = [
     "dep:axum-extra",
     "dep:axum-prometheus",
     "dep:tower-http",
+    "dep:httpdate",
+    "dep:tokio-util",
     "dep:tower",
     "dep:serde",
     "dep:serde_json",

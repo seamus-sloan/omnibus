@@ -21,9 +21,7 @@ use base64::Engine;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::ReaderStream;
 
-use self::range::RangeOutcome;
-
-pub mod range;
+use omnibus_shared::http_range::{self as range, RangeOutcome};
 
 /// Where the running loopback server can be reached this boot.
 pub struct LoopbackInfo {

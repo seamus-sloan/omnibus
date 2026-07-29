@@ -8,6 +8,7 @@
 mod export;
 mod metadata;
 mod overrides;
+mod validator;
 
 #[cfg(test)]
 mod tests;
@@ -15,6 +16,7 @@ mod tests;
 pub use export::OpfExportResult;
 pub use metadata::{BookFileInfo, Contributor, EbookMetadata, Identifier};
 pub use overrides::MetadataOverrides;
+pub use validator::file_etag;
 
 /// Resolves a display title: the given title if set, otherwise the filename.
 pub fn display_title(title: Option<&str>, filename: &str) -> String {

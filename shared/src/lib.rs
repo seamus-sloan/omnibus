@@ -11,6 +11,7 @@ pub mod deletion;
 pub mod discovery;
 pub mod ebook;
 pub mod highlight;
+pub mod http_range;
 pub mod image_format;
 pub mod isbn;
 pub mod journal;
