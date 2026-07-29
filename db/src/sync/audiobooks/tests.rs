@@ -1,10 +1,8 @@
 //! Direct unit tests for the `sync/audiobooks` write-path helpers. Mirrors
-//! `sync/books/tests.rs`'s shape: each bucket helper and the shared row
-//! writers are exercised in isolation against an in-memory DB — the
-//! integration-style `sync_audiobooks` tests in `sync/tests.rs` only cover
-//! the composed happy path end-to-end, not the per-helper contracts (the
-//! multi-part attach path, the fileless re-attach, the stat-only backfill)
-//! asserted here.
+//! `sync/books/tests.rs`'s shape: each bucket helper and shared row writer
+//! is exercised against an in-memory DB — the integration-style
+//! `sync_audiobooks` tests in `sync/tests.rs` cover only the composed happy
+//! path, not these per-helper contracts (attach, re-attach, backfill).
 
 use sqlx::SqlitePool;
 
@@ -807,10 +805,9 @@ async fn attach_audiobook_file_writes_rows_and_ledger_and_adopts_cover() {
 
 /// Re-attaching a part of an already-attached multi-part file (a stat
 /// change) preserves its prior `ordinal` slot rather than jumping to the
-/// end of the picker order — the scenario is a book with 3 attached M4B
-/// parts (ordinals 0, 1, 2); re-attaching the middle one must not let the
-/// `COALESCE(MAX(ordinal)+1, ...)` insert recompute it against only the
-/// surviving siblings (which would yield 3, not 1).
+/// end of the picker order: with 3 attached M4B parts (ordinals 0,1,2),
+/// re-attaching the middle one must not let `COALESCE(MAX(ordinal)+1, ...)`
+/// recompute against only the surviving siblings (which would yield 3, not 1).
 #[tokio::test]
 async fn attach_audiobook_file_preserves_prior_ordinal_on_reattach() {
     let _covers = CoversTempDir::new("ab_attach_file_ordinal");
