@@ -149,7 +149,11 @@ fn StatTile(
             r#type: "button",
             "aria-label": "Expand {label} details",
             onclick: move |_| onexpand.call(()),
-            div { class: "st-tile-value",
+            // Keyed on the rendered value so a period switch remounts just
+            // this node when the new summary lands — replaying the content
+            // swap animation while the tile itself stays put (iOS
+            // numericText analogue). An unchanged value doesn't animate.
+            div { key: "{value}", class: "st-tile-value",
                 {value}
                 if let Some(u) = unit {
                     span { class: "st-tile-unit", {u} }

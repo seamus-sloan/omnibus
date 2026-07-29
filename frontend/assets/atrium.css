@@ -7931,9 +7931,9 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .st-range-check { color: var(--accent); }
 
 /* ── Entrance cascade (iOS CascadeIn: fade + 12px lift + settle) ──── */
-/* The period section remounts on every range switch, so these replay
-   then too — the stagger is short and capped, the point is that the
-   page *fills*, not that the user waits for it. */
+/* Page-load only: the cards stay mounted across period switches, so the
+   cascade never replays mid-session — the stagger is short and capped,
+   the point is that the page *fills*, not that the user waits for it. */
 .st-tiles .st-tile,
 .st-compose > *,
 .st-alltime > * {
@@ -7949,12 +7949,31 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .st-compose > *:nth-child(2) { animation-delay: 0.2s; }
 .st-alltime > *:nth-child(2) { animation-delay: 0.06s; }
 
+/* ── Content swap (iOS contentTransition(.numericText()) analogue) ── */
+/* These nodes are keyed on their rendered data, so a period switch
+   remounts just the contents when the new summary lands — the cards
+   around them never move. */
+.st-tile-value,
+.st-donut-body,
+.st-format-pct {
+  animation: st-content-in 0.34s var(--st-ease-settle) both;
+}
+@keyframes st-content-in {
+  from { opacity: 0; transform: translateY(6px); }
+}
+/* The split bar grows/shrinks in place rather than remounting. */
+.st-format-fill { transition: width 0.44s var(--st-ease-settle); }
+
 @media (prefers-reduced-motion: reduce) {
   .st-period-menu,
   .st-tiles .st-tile,
   .st-compose > *,
-  .st-alltime > * { animation: none; }
+  .st-alltime > *,
+  .st-tile-value,
+  .st-donut-body,
+  .st-format-pct { animation: none; }
   .st-period-chevron { transition: none; }
+  .st-format-fill { transition: none; }
 }
 
 /* ── Sections ─────────────────────────────────────────────────────── */

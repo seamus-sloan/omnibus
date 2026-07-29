@@ -113,6 +113,15 @@ test("renders the stats page layout", async ({ page }) => {
     page.getByRole("heading", { name: "Your reading month" }),
   ).toBeVisible();
 
+  // ESC dismisses it too (the menu takes focus on mount), also without
+  // changing the period.
+  const reopened = await openPeriodMenu(page);
+  await reopened.press("Escape");
+  await expect(reopened).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: "Your reading month" }),
+  ).toBeVisible();
+
   // Period-scoped section above, explicitly divided all-time section below.
   await expect(page.getByTestId("stats-period-section")).toBeVisible();
   await expect(page.getByText("Not tied to the period above.")).toBeVisible();

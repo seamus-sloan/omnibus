@@ -68,13 +68,11 @@ pub fn StatsPage() -> Element {
             if empty {
                 StatsEmpty {}
             } else {
-                // Keyed on the range so a period switch remounts the section
-                // and replays the cascade-in entrance (the web analogue of the
-                // iOS screen's settle-on-change motion).
-                section {
-                    key: "{range().label()}",
-                    class: "st-period",
-                    "data-testid": "stats-period-section",
+                // Deliberately not keyed on the range: a period switch keeps
+                // the cards mounted (the entrance cascade plays on page load
+                // only) and each card's *contents* transition when the new
+                // summary lands — the web analogue of iOS numericText.
+                section { class: "st-period", "data-testid": "stats-period-section",
                     PeriodSummary { period, expanded }
                 }
                 div { class: "st-divider",
@@ -196,6 +194,7 @@ fn StatsHeader(range: Signal<StatsRange>, menu_open: Signal<bool>) -> Element {
                         "data-testid": "stats-range-trigger",
                         "aria-haspopup": "dialog",
                         "aria-expanded": "{menu_open()}",
+                        "aria-describedby": "st-period-hint",
                         onclick: move |_| {
                             let next = !menu_open();
                             menu_open.set(next);
@@ -213,6 +212,13 @@ fn StatsHeader(range: Signal<StatsRange>, menu_open: Signal<bool>) -> Element {
                     }
                 }
             }
+            // aria-describedby target, outside the h1 so the hint text never
+            // joins the heading's accessible name ("Your reading month", not
+            // "Your reading Change period month"). An aria-label on the
+            // trigger would replace the period word as the button's name and
+            // distort the heading the same way — a description adds the
+            // action without touching either name.
+            span { id: "st-period-hint", class: "sr-only", "Change period" }
             p { class: "st-sub", "Reading & listening, tracked over time." }
         }
     }
