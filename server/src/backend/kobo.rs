@@ -10,7 +10,7 @@ use axum::{
     extract::{Path, Request, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post, put},
+    routing::{any, get, post, put},
     Extension, Json, Router,
 };
 use futures_util::stream;
@@ -57,9 +57,10 @@ pub fn kobo_router(state: AppState) -> Router {
             "/kobo/{token}/v1/analytics/event",
             post(analytics::analytics_event),
         )
+        // Real firmware POSTs gettests despite it being a fetch; serve both.
         .route(
             "/kobo/{token}/v1/analytics/gettests",
-            get(analytics::analytics_gettests),
+            get(analytics::analytics_gettests).post(analytics::analytics_gettests),
         )
         .route("/kobo/{token}/v1/library/sync", get(library_sync))
         .route(
@@ -73,8 +74,27 @@ pub fn kobo_router(state: AppState) -> Router {
             "/kobo/{token}/v1/books/{uuid}/thumbnail/{w}/{h}/{quality}/{greyscale}/image.jpg",
             get(image),
         )
+        // Registered routes win over the wildcard; only unhandled paths land here.
+        .route("/kobo/{token}/{*rest}", any(store_stub))
         .with_state(state)
         .layer(Extension(pool))
+}
+
+/// Benign `200 {}` for store paths the firmware derives from `api_endpoint`
+/// itself (`v1/user/profile`, `v1/deals`, …), bypassing the initialization
+/// resources map that points them at Kobo. A 404 on any of them makes the
+/// device abort the whole sync before `library/sync`; Calibre-Web answers the
+/// same paths with an empty object. The log line doubles as capture data for
+/// the #928 golden fixture.
+async fn store_stub(auth: KoboAuthUser, Path((_token, rest)): Path<(String, String)>) -> Response {
+    // `?rest` (Debug) escapes control chars the router percent-decodes into
+    // the path; device_id makes multi-device captures attributable.
+    tracing::info!(
+        device_id = auth.device_id,
+        path = ?rest,
+        "kobo store path answered with empty stub"
+    );
+    Json(serde_json::json!({})).into_response()
 }
 
 /// `GET v1/initialization` — the handshake that redirects a device at this

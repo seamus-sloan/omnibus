@@ -66,34 +66,37 @@ to get KEPUB output. See [.env.example](../.env.example).
 ## About wireless sync (experimental)
 
 *Wireless* Kobo sync — where the device talks to Omnibus over Wi-Fi instead of a
-USB cable — is **under construction**. **Account → Kobo wireless sync** will hand
-you an endpoint URL, but the protocol behind it is incomplete. Treat it as
-experimental and do not point a device you care about at it yet.
+USB cable — is functional but **experimental**: it has not yet passed
+verification against real devices.
 
 > [!WARNING]
-> **The first wireless sync can erase your Kobo's highlights and notes.**
-> A Kobo clears its own annotations when the server it syncs with does not answer
-> Kobo's annotation channel. Omnibus does not answer that channel yet, and does
-> **not** store what the device erases — anything lost this way is gone.
+> **First sync can erase your Kobo's highlights**
+>
+> An improper sync can potentially wipe data on the Kobo like your annotations,
+> notes, bookmarks, reading progress, and books.
+>
+> It is highly recommended to back up your device before attempting a sync with
+> one of these tools:
+>
+> - [seamus-sloan/kobo-backup](https://github.com/seamus-sloan/kobo-backup#kobo-backup)
+> - [karlicoss/kobuddy](https://github.com/karlicoss/kobuddy#usage)
+>
+> At minimum, copy `.kobo/KoboReader.sqlite` off the device over USB.
 
-**Back up your annotations before the first wireless sync.** They live in a
-single file on the device:
+### Setting up wireless sync
 
-1. Connect the Kobo over USB and tap **Connect**. It appears as a USB drive.
-2. Copy `.kobo/KoboReader.sqlite` off the drive to somewhere safe. (`.kobo` is a
-   hidden folder — on macOS press <kbd>⌘</kbd><kbd>⇧</kbd><kbd>.</kbd> in Finder
-   to reveal it; on Windows enable **Hidden items** in Explorer's View tab.)
-3. Eject the Kobo safely.
+From **Account → Kobo wireless sync**:
 
-That file holds every highlight and note on the device. Keeping a copy means a
-wipe is recoverable.
+1. Give your Kobo a name and click **Add a Kobo**
+2. Copy the device's wireless sync endpoint URL. (`/kobo/<token>`)
+3. Connect the Kobo over USB,
+4. Edit `.kobo/Kobo/Kobo eReader.conf` and set `api_endpoint=` under
+   `[OneStoreServices]` to `<your_omnibus_server_url>/kobo/<token>`.
+5. Eject safely. Your next sync on the device talks to Omnibus.
 
-**If your Omnibus version offers a Kobo annotation import, run it before the
-first wireless sync** — that pulls the device's highlights and notes into your
-library, so a wipe costs you nothing. That import is still in development
-([#933](https://github.com/seamus-sloan/omnibus/issues/933)); until it ships,
-the file copy above is the backup, and it is one you keep yourself rather than
-something Omnibus can read back.
+(`.kobo` is a hidden folder — on macOS press
+<kbd>⌘</kbd><kbd>⇧</kbd><kbd>.</kbd> in Finder to reveal it; on Windows enable
+**Hidden items** in Explorer's View tab.)
 
-The wired **Send to Kobo** transfer described above carries none of this risk and
-stays the safe choice.
+Only shelves you've opted in are synced — mark a shelf **Sync to Kobo** in its
+settings to include it.

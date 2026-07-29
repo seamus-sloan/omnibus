@@ -82,8 +82,9 @@ pub async fn analytics_event(
     Json(serde_json::json!({ "Result": "Success" })).into_response()
 }
 
-/// `GET v1/analytics/gettests` — the A/B-test flag fetch the initialization
-/// map points here. No tests to run; an empty result is a valid answer.
+/// `GET`/`POST v1/analytics/gettests` — the A/B-test flag fetch the
+/// initialization map points here (real firmware POSTs it). No tests to run;
+/// an empty result is a valid answer.
 pub async fn analytics_gettests(_auth: KoboAuthUser) -> Response {
     Json(serde_json::json!({ "Result": "Success", "TestKey": "", "Tests": {} })).into_response()
 }
