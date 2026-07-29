@@ -62,6 +62,7 @@ pub(super) fn BdOfflineSection(
                         format_label: "Ebook",
                         format: DlFormat::Epub,
                         status: downloads::status(&uuid, DlFormat::Epub),
+                        stale: downloads::is_marked_stale(&uuid, DlFormat::Epub),
                     }
                 }
                 if has_audio {
@@ -71,6 +72,7 @@ pub(super) fn BdOfflineSection(
                         format_label: "Audiobook",
                         format: DlFormat::Audio,
                         status: downloads::status(&uuid, DlFormat::Audio),
+                        stale: downloads::is_marked_stale(&uuid, DlFormat::Audio),
                     }
                 }
             }
@@ -79,9 +81,9 @@ pub(super) fn BdOfflineSection(
 }
 
 /// One per-format row: status line on the left, the state's action on the
-/// right. `status` arrives as a prop (not read from the registry here) so
-/// the row re-renders on every registry transition — see the memoization
-/// note in [`BdOfflineSection`].
+/// right. `status` and `stale` arrive as props (not read from the registry
+/// here) so the row re-renders on every registry transition — see the
+/// memoization note in [`BdOfflineSection`].
 #[component]
 fn DlRow(
     uuid: String,
@@ -89,6 +91,7 @@ fn DlRow(
     format_label: &'static str,
     format: DlFormat,
     status: DownloadStatus,
+    stale: bool,
 ) -> Element {
     let server_url = use_server_url();
 
@@ -107,6 +110,21 @@ fn DlRow(
     let remove = {
         let uuid = uuid.clone();
         move |_| downloads::remove(&uuid, format)
+    };
+    // One serialized operation, not remove-then-start: the latter races
+    // `remove`'s async deletion against the engine writing the replacement,
+    // and discards a readable book before knowing the new one arrives.
+    let redownload = {
+        let (uuid, title, server_url) = (uuid.clone(), title.clone(), server_url.clone());
+        move |_| {
+            downloads::redownload(
+                server_url.clone(),
+                uuid.clone(),
+                format,
+                None,
+                title.clone(),
+            );
+        }
     };
 
     let testid = format!("offline-row-{}", format.as_str());
@@ -127,6 +145,13 @@ fn DlRow(
                     DownloadStatus::Error { message } => rsx! {
                         div { class: "m-dl-row-sub m-dl-row-error", "{message}" }
                     },
+                    DownloadStatus::Complete { bytes } if stale => rsx! {
+                        div {
+                            class: "m-dl-row-sub m-dl-row-stale",
+                            "data-testid": "offline-stale-{format.as_str()}",
+                            "Update available \u{00b7} {downloads::format_bytes(*bytes)} on device"
+                        }
+                    },
                     DownloadStatus::Complete { bytes } => rsx! {
                         div { class: "m-dl-row-sub m-dl-row-ok",
                             {downloaded_check()}
@@ -144,6 +169,15 @@ fn DlRow(
                 },
                 DownloadStatus::Error { .. } => rsx! {
                     button { r#type: "button", class: "btn sm", onclick: start, "Retry" }
+                },
+                DownloadStatus::Complete { .. } if stale => rsx! {
+                    button {
+                        r#type: "button",
+                        class: "btn sm",
+                        "data-testid": "offline-redownload-{format.as_str()}",
+                        onclick: redownload,
+                        "Re-download"
+                    }
                 },
                 DownloadStatus::Complete { .. } => rsx! {
                     button {
