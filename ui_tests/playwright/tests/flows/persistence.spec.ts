@@ -1,3 +1,4 @@
+import type { Page } from "@playwright/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expect, test } from "../fixtures/test";
 import { gotoReady } from "../utils/nav";
@@ -73,6 +74,28 @@ test("series sort choice persists across a reload", async ({ page }) => {
 // Scroll restoration — back-navigation lands where you left off
 // ---------------------------------------------------------------------------
 
+/**
+ * Read `window.scrollY` once it has held still across two polls. A restore
+ * nudges the offset across animation frames as further pages stream in, so a
+ * bare read can catch it mid-converge and hand back a value that has already
+ * moved on by the time it's used.
+ */
+async function settledScrollY(page: Page): Promise<number> {
+  let previous = Number.NaN;
+  await expect
+    .poll(
+      async () => {
+        const y = await page.evaluate(() => window.scrollY);
+        const stable = y === previous;
+        previous = y;
+        return stable;
+      },
+      { timeout: 5000 },
+    )
+    .toBe(true);
+  return previous;
+}
+
 test("authors index scroll position is restored after visiting a detail", async ({
   page,
 }) => {
@@ -138,4 +161,43 @@ test("library scroll position is restored after opening a book", async ({
   await expect
     .poll(async () => page.evaluate(() => window.scrollY), { timeout: 5000 })
     .toBeGreaterThan(savedY * 0.6);
+
+  // A restore freezes position recording for the length of the navigation —
+  // otherwise the browser's own clamped restoration overwrites the saved
+  // offset mid-transition. Recording has to come back afterwards, so move
+  // somewhere new with a real wheel gesture (which is also what cancels a
+  // restore still converging) and leave via the sticky nav, which — unlike
+  // clicking an off-screen tile — doesn't move the page on its way out.
+  //
+  // Size that gesture off where the restore landed, never off `savedY`: the
+  // restore only has to get within 40% of it, so a `savedY`-sized delta can
+  // overshoot and clamp `scrollY` to 0 — and `restore` bails on a zero
+  // target, leaving nothing for the back-navigation below to come back to.
+  // The throwaway 1px nudge cancels the converge loop first, so that
+  // reference offset can't still be climbing when it's read.
+  await page.mouse.move(500, 200);
+  await page.mouse.wheel(0, -1);
+  const restoredY = await settledScrollY(page);
+  expect(restoredY).toBeGreaterThan(0);
+
+  await page.mouse.wheel(0, -Math.round(restoredY / 2));
+  const movedY = await settledScrollY(page);
+  expect(movedY).toBeGreaterThan(0);
+  expect(movedY).toBeLessThan(restoredY);
+
+  await page
+    .getByRole("navigation", { name: "Primary" })
+    .getByRole("link", { name: "Authors" })
+    .click();
+  await expect(page).toHaveURL(/\/authors$/);
+
+  await page.goBack();
+  await expect(page.getByTestId(/^ebook-tile-/).first()).toBeVisible();
+
+  // The new offset is what comes back. A recorder left frozen by the first
+  // restore would still hold the bottom of the grid and land us down there.
+  await expect
+    .poll(async () => page.evaluate(() => window.scrollY), { timeout: 5000 })
+    .toBeGreaterThan(movedY * 0.6);
+  expect(await settledScrollY(page)).toBeLessThan(movedY * 1.4);
 });
