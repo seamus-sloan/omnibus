@@ -1,7 +1,7 @@
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
-import { fetchBookIdByTitle } from "../utils/ebooks";
+import { fetchBookIdByTitle, switchToTableView } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
 
@@ -29,6 +29,7 @@ test("renders editable cell affordances on the landing table for admins", async 
   page,
 }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   const titleCell = page
     .getByTestId(`ebook-row-${TARGET.slug}`)
@@ -45,6 +46,7 @@ test("edits a title inline and saves the override via rpc_save_overrides", async
   request,
 }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   const row = page.getByTestId(`ebook-row-${TARGET.slug}`);
   const titleCell = row.getByTestId("ebook-cell-title");
@@ -87,6 +89,7 @@ test("inline edit save error keeps the row showing the prior value", async ({
   page,
 }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   const row = page.getByTestId(`ebook-row-${TARGET.slug}`);
   const titleCell = row.getByTestId("ebook-cell-title");
@@ -130,6 +133,7 @@ test("clicking the Authors cell renders the chip editor inline", async ({
   page,
 }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   const row = page.getByTestId(`ebook-row-${TARGET.slug}`);
   const authorsCell = row.getByTestId("ebook-cell-author");
@@ -163,6 +167,7 @@ test("clicking away from an open Authors cell editor closes it", async ({
   page,
 }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   const row = page.getByTestId(`ebook-row-${TARGET.slug}`);
   const authorsCell = row.getByTestId("ebook-cell-author");
@@ -184,6 +189,7 @@ test("Tab from the chip input reaches a chip's Remove button without closing the
   page,
 }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   const row = page.getByTestId(`ebook-row-${TARGET.slug}`);
   const authorsCell = row.getByTestId("ebook-cell-author");
@@ -212,6 +218,7 @@ test("selecting an author suggestion keeps the editor open; a later click away c
   request,
 }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   const row = page.getByTestId(`ebook-row-${TARGET.slug}`);
   const authorsCell = row.getByTestId("ebook-cell-author");

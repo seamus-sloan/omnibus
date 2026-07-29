@@ -9,7 +9,11 @@ import {
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
-import { fetchBookUuidByTitle, getRow } from "../utils/ebooks";
+import {
+  fetchBookUuidByTitle,
+  getRow,
+  switchToTableView,
+} from "../utils/ebooks";
 import { withLock } from "../utils/lock";
 import { gotoReady } from "../utils/nav";
 import {
@@ -230,6 +234,7 @@ test("navigates from a landing row to the detail page and back", async ({
   page,
 }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   // Click the row's cover cell to follow the SPA navigation. We target the
   // cover specifically because the seeded admin sees inline-editable cells
@@ -248,7 +253,8 @@ test("navigates from a landing row to the detail page and back", async ({
   await expect(backLink).toBeVisible();
 
   // The back link must return us to the landing route, not just visually
-  // re-render — assert URL plus that the table comes back.
+  // re-render — assert URL plus that the table view (persisted above) comes
+  // back.
   await backLink.click();
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByTestId("ebook-table")).toBeVisible();
@@ -358,12 +364,12 @@ test("renders the detail contents for the selected book", async ({
     page.getByRole("heading", { name: "Suggested for you" }),
   ).toBeVisible();
 
-  // Back link still navigates to landing
+  // Back link still navigates to landing (default Grid view)
   const backLink = page.getByRole("link", { name: "Back to library" });
   await expect(backLink).toBeVisible();
   await backLink.click();
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByTestId("ebook-table")).toBeVisible();
+  await expect(page.getByTestId("lib-grid")).toBeVisible();
 });
 
 // Action — Send to Kobo (F4.1 KEPUB direct write / download fallback)
