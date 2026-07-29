@@ -472,6 +472,17 @@ async fn reading_state_for_is_scoped_to_the_requesting_user() {
 }
 
 #[tokio::test]
+async fn reading_state_for_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+
+    assert!(matches!(
+        reading_state_for(&pool, 1, &["any-uuid".to_string()]).await,
+        Err(KoboError::Sqlx(_))
+    ));
+}
+
+#[tokio::test]
 async fn reading_state_for_returns_empty_for_no_uuids() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = make_user(&pool, "reader").await;

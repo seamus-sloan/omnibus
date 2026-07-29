@@ -36,6 +36,14 @@ async fn create_device_mints_a_token_and_lists_it() {
 }
 
 #[tokio::test]
+async fn create_device_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = create_device(&pool, 1, "Kobo").await;
+    assert!(matches!(err, Err(KoboDeviceError::Sqlx(_))));
+}
+
+#[tokio::test]
 async fn create_device_mints_unique_tokens_per_device() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "reader").await;
@@ -44,6 +52,22 @@ async fn create_device_mints_unique_tokens_per_device() {
     let b = create_device(&pool, user, "Kobo Two").await.unwrap();
     assert_ne!(a.token, b.token);
     assert_eq!(list_devices(&pool, user).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn list_devices_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = list_devices(&pool, 1).await;
+    assert!(matches!(err, Err(KoboDeviceError::Sqlx(_))));
+}
+
+#[tokio::test]
+async fn get_device_for_user_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = get_device_for_user(&pool, 1, 1).await;
+    assert!(matches!(err, Err(KoboDeviceError::Sqlx(_))));
 }
 
 #[tokio::test]
@@ -73,6 +97,14 @@ async fn resolve_device_by_token_returns_none_for_unknown_token() {
 }
 
 #[tokio::test]
+async fn regenerate_token_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = regenerate_token(&pool, 1, 1).await;
+    assert!(matches!(err, Err(KoboDeviceError::Sqlx(_))));
+}
+
+#[tokio::test]
 async fn regenerate_token_rotates_the_token_and_invalidates_the_old() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "reader").await;
@@ -92,6 +124,14 @@ async fn regenerate_token_rotates_the_token_and_invalidates_the_old() {
         .await
         .unwrap()
         .is_some());
+}
+
+#[tokio::test]
+async fn resolve_device_by_token_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = resolve_device_by_token(&pool, "some-token").await;
+    assert!(matches!(err, Err(KoboDeviceError::Sqlx(_))));
 }
 
 #[tokio::test]
@@ -121,6 +161,14 @@ async fn regenerate_token_rejects_a_device_owned_by_another_user() {
         .await
         .unwrap()
         .is_some());
+}
+
+#[tokio::test]
+async fn revoke_device_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = revoke_device(&pool, 1, 1).await;
+    assert!(matches!(err, Err(KoboDeviceError::Sqlx(_))));
 }
 
 #[tokio::test]
@@ -169,6 +217,22 @@ async fn list_devices_is_scoped_to_the_owner() {
         .await
         .unwrap()
         .is_none());
+}
+
+#[tokio::test]
+async fn learn_kobo_device_id_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = learn_kobo_device_id(&pool, 1, "hw-abc").await;
+    assert!(matches!(err, Err(KoboDeviceError::Sqlx(_))));
+}
+
+#[tokio::test]
+async fn set_sync_cursor_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = set_sync_cursor(&pool, 1, "cursor-1").await;
+    assert!(matches!(err, Err(KoboDeviceError::Sqlx(_))));
 }
 
 #[tokio::test]
