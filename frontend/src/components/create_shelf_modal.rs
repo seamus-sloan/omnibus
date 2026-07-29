@@ -37,32 +37,14 @@ pub fn CreateShelfModal(on_close: EventHandler<()>, on_created: EventHandler<She
         if saving() {
             return;
         }
-        let req = match kind() {
-            ShelfKind::Smart => {
-                let wire: Vec<ShelfRule> =
-                    rules.read().iter().filter_map(RuleDraft::to_rule).collect();
-                CreateShelfRequest {
-                    kind: ShelfKind::Smart,
-                    name: name(),
-                    description: None,
-                    visibility: visibility(),
-                    match_mode: Some(match_mode()),
-                    rules: wire,
-                    book_uuids: Vec::new(),
-                }
-            }
-            // The modal's toggle only offers Smart/Manual — Wishlist is a
-            // system shelf, never user-created — so it falls in with Manual.
-            ShelfKind::Manual | ShelfKind::Wishlist => CreateShelfRequest {
-                kind: ShelfKind::Manual,
-                name: name(),
-                description: None,
-                visibility: visibility(),
-                match_mode: None,
-                rules: Vec::new(),
-                book_uuids: picked.read().clone(),
-            },
-        };
+        let req = build_create_request(
+            kind(),
+            name(),
+            visibility(),
+            match_mode(),
+            &rules.read(),
+            &picked.read(),
+        );
         let url = submit_url.clone();
         let on_created = on_created;
         saving.set(true);
@@ -77,11 +59,7 @@ pub fn CreateShelfModal(on_close: EventHandler<()>, on_created: EventHandler<She
     };
 
     let picked_count = picked.read().len();
-    let create_label = match kind() {
-        ShelfKind::Smart => "Create".to_string(),
-        // Wishlist can't be reached by the toggle; grouped with Manual.
-        ShelfKind::Manual | ShelfKind::Wishlist => format!("Create \u{b7} {picked_count}"),
-    };
+    let create_label = create_label(kind(), picked_count);
 
     rsx! {
         div {
@@ -168,6 +146,53 @@ pub fn CreateShelfModal(on_close: EventHandler<()>, on_created: EventHandler<She
     }
 }
 
+/// Build the create-shelf request for the current form state. Smart shelves
+/// carry the encoded rule set and no book list; Manual — and Wishlist, which
+/// the kind toggle can never reach since it's system-provisioned — carry the
+/// picked book list and no rules.
+fn build_create_request(
+    kind: ShelfKind,
+    name: String,
+    visibility: Visibility,
+    match_mode: MatchMode,
+    rules: &[RuleDraft],
+    picked: &[String],
+) -> CreateShelfRequest {
+    match kind {
+        ShelfKind::Smart => {
+            let wire: Vec<ShelfRule> = rules.iter().filter_map(RuleDraft::to_rule).collect();
+            CreateShelfRequest {
+                kind: ShelfKind::Smart,
+                name,
+                description: None,
+                visibility,
+                match_mode: Some(match_mode),
+                rules: wire,
+                book_uuids: Vec::new(),
+            }
+        }
+        ShelfKind::Manual | ShelfKind::Wishlist => CreateShelfRequest {
+            kind: ShelfKind::Manual,
+            name,
+            description: None,
+            visibility,
+            match_mode: None,
+            rules: Vec::new(),
+            book_uuids: picked.to_vec(),
+        },
+    }
+}
+
+/// Submit-button label: plain for a smart shelf, a running picked-count for a
+/// hand-picked one.
+fn create_label(kind: ShelfKind, picked_count: usize) -> String {
+    match kind {
+        ShelfKind::Smart => "Create".to_string(),
+        // Wishlist can't be reached by the toggle; grouped with Manual.
+        ShelfKind::Manual | ShelfKind::Wishlist => format!("Create \u{b7} {picked_count}"),
+    }
+}
+
 /// Private/Public segmented control shared by the create- and edit-shelf
 /// modal headers.
 #[component]
@@ -223,5 +248,95 @@ fn PickerBody(picked: Signal<Vec<String>>, server_url: String) -> Element {
             }
             LibraryPickerGrid { books: filtered, server_url: server_url.clone(), picked }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use omnibus_shared::{RuleField, RuleOp};
+
+    use super::*;
+
+    /// A single complete Tag-is-Fantasy draft, the minimal input
+    /// `build_create_request`'s Smart branch needs to emit a rule.
+    fn complete_draft() -> RuleDraft {
+        RuleDraft {
+            field: RuleField::Tag,
+            op: RuleOp::Is,
+            value: "Fantasy".into(),
+            value2: String::new(),
+            unit: "d".into(),
+        }
+    }
+
+    #[test]
+    fn build_create_request_encodes_smart_kind_with_rules_and_no_book_uuids() {
+        let req = build_create_request(
+            ShelfKind::Smart,
+            "Cosy Reads".into(),
+            Visibility::Private,
+            MatchMode::All,
+            &[complete_draft()],
+            &["some-uuid".to_string()],
+        );
+        assert_eq!(req.kind, ShelfKind::Smart);
+        assert_eq!(req.match_mode, Some(MatchMode::All));
+        assert_eq!(
+            req.rules,
+            vec![ShelfRule {
+                field: RuleField::Tag,
+                op: RuleOp::Is,
+                value: "Fantasy".into(),
+            }]
+        );
+        // Smart shelves never carry a picked book list, even if one is passed in.
+        assert!(req.book_uuids.is_empty());
+    }
+
+    #[test]
+    fn build_create_request_encodes_manual_kind_with_picked_books_and_no_rules() {
+        let picked = vec!["uuid-1".to_string(), "uuid-2".to_string()];
+        let req = build_create_request(
+            ShelfKind::Manual,
+            "Hand-picked".into(),
+            Visibility::Public,
+            MatchMode::All,
+            &[complete_draft()],
+            &picked,
+        );
+        assert_eq!(req.kind, ShelfKind::Manual);
+        assert_eq!(req.match_mode, None);
+        assert!(req.rules.is_empty());
+        assert_eq!(req.book_uuids, picked);
+    }
+
+    #[test]
+    fn build_create_request_folds_wishlist_kind_into_manual() {
+        // The kind toggle only offers Smart/Manual, but the request builder is
+        // also defensive against a Wishlist value reaching it.
+        let req = build_create_request(
+            ShelfKind::Wishlist,
+            "Wishlist".into(),
+            Visibility::Private,
+            MatchMode::All,
+            &[],
+            &[],
+        );
+        assert_eq!(req.kind, ShelfKind::Manual);
+    }
+
+    #[test]
+    fn create_label_is_plain_for_smart_shelves() {
+        assert_eq!(create_label(ShelfKind::Smart, 4), "Create");
+    }
+
+    #[test]
+    fn create_label_shows_picked_count_for_manual_shelves() {
+        assert_eq!(create_label(ShelfKind::Manual, 3), "Create \u{b7} 3");
+    }
+
+    #[test]
+    fn create_label_shows_picked_count_for_wishlist_kind_too() {
+        assert_eq!(create_label(ShelfKind::Wishlist, 0), "Create \u{b7} 0");
     }
 }

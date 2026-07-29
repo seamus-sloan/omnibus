@@ -1,8 +1,9 @@
-//! SSR render-smoke coverage for the edit-shelf modal: the Kobo sync opt-in
-//! toggle renders for owner-editable shelves (prefilled from the shelf), and
-//! never for system shelves. Needs the `server` feature (`dioxus::ssr`).
+//! Coverage for the edit-shelf modal: SSR render-smoke of the Kobo sync
+//! opt-in toggle (prefilled from the shelf, never shown for system shelves),
+//! plus `build_update_request`'s save-validation branches. Needs the
+//! `server` feature (`dioxus::ssr`).
 
-use omnibus_shared::Visibility;
+use omnibus_shared::{RuleField, RuleOp, ShelfRule, Visibility};
 
 use super::*;
 use crate::test_support::render;
@@ -68,4 +69,90 @@ fn edit_shelf_modal_hides_the_kobo_toggle_for_system_shelves() {
     let html = render(rsx! { Harness { kind: ShelfKind::Wishlist, sync_to_kobo: false } });
     assert!(!html.contains("Sync to Kobo"));
     assert!(!html.contains("edit-shelf-kobo-on"));
+}
+
+/// A single complete Tag-is-Fantasy draft — the minimal input a smart shelf
+/// needs to encode a non-empty rule set.
+fn complete_draft() -> RuleDraft {
+    RuleDraft {
+        field: RuleField::Tag,
+        op: RuleOp::Is,
+        value: "Fantasy".into(),
+        value2: String::new(),
+        unit: "d".into(),
+    }
+}
+
+#[test]
+fn build_update_request_rejects_an_empty_name_before_any_other_check() {
+    let err = build_update_request(
+        "   ",
+        Visibility::Private,
+        true,
+        false,
+        true,
+        MatchMode::All,
+        &[complete_draft()],
+    )
+    .unwrap_err();
+    assert_eq!(err, "Name is required.");
+}
+
+#[test]
+fn build_update_request_rejects_a_smart_shelf_with_no_complete_rules() {
+    // An incomplete draft (empty value) encodes to no wire rule at all.
+    let incomplete = RuleDraft::default();
+    let err = build_update_request(
+        "Cosy Reads",
+        Visibility::Private,
+        true,
+        false,
+        true,
+        MatchMode::All,
+        &[incomplete],
+    )
+    .unwrap_err();
+    assert_eq!(err, "Add at least one condition.");
+}
+
+#[test]
+fn build_update_request_accepts_a_manual_shelf_with_no_rules() {
+    // Manual shelves skip the rule-set check entirely (`is_smart == false`).
+    let req = build_update_request(
+        "Cosy Reads",
+        Visibility::Public,
+        true,
+        true,
+        false,
+        MatchMode::All,
+        &[],
+    )
+    .expect("manual shelves don't need any rules");
+    assert_eq!(req.name, Some("Cosy Reads".to_string()));
+    assert_eq!(req.visibility, Some(Visibility::Public));
+    assert_eq!(req.sync_to_kobo, Some(true));
+    assert_eq!(req.rules, None);
+}
+
+#[test]
+fn build_update_request_accepts_a_smart_shelf_with_a_complete_rule() {
+    let req = build_update_request(
+        "Cosy Reads",
+        Visibility::Private,
+        true,
+        false,
+        true,
+        MatchMode::Any,
+        &[complete_draft()],
+    )
+    .expect("a complete draft encodes a rule");
+    assert_eq!(req.match_mode, Some(MatchMode::Any));
+    assert_eq!(
+        req.rules,
+        Some(vec![ShelfRule {
+            field: RuleField::Tag,
+            op: RuleOp::Is,
+            value: "Fantasy".into(),
+        }])
+    );
 }

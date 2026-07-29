@@ -5,7 +5,7 @@
 //! pencil, the web `ShelfHeader` pencil, and the mobile shelf-detail menu.
 
 use dioxus::prelude::*;
-use omnibus_shared::{MatchMode, Shelf, ShelfKind, ShelfRule, UpdateShelfRequest};
+use omnibus_shared::{MatchMode, Shelf, ShelfKind, ShelfRule, UpdateShelfRequest, Visibility};
 
 use crate::components::create_shelf_modal::VisibilityToggle;
 use crate::components::shelf_rule_builder::{RuleBuilder, RuleDraft};
@@ -56,28 +56,22 @@ pub fn EditShelfModal(
         if saving() {
             return;
         }
-        let trimmed = name().trim().to_string();
-        if trimmed.is_empty() {
-            error.set(Some("Name is required.".into()));
-            return;
-        }
-        let mut req = UpdateShelfRequest {
-            name: Some(trimmed),
-            visibility: Some(visibility()),
-            ..Default::default()
-        };
-        if show_kobo {
-            req.sync_to_kobo = Some(sync_to_kobo());
-        }
-        if is_smart {
-            let wire: Vec<ShelfRule> = rules.read().iter().filter_map(RuleDraft::to_rule).collect();
-            if wire.is_empty() {
-                error.set(Some("Add at least one condition.".into()));
+        let req = build_update_request(
+            &name(),
+            visibility(),
+            show_kobo,
+            sync_to_kobo(),
+            is_smart,
+            match_mode(),
+            &rules.read(),
+        );
+        let req = match req {
+            Ok(req) => req,
+            Err(msg) => {
+                error.set(Some(msg));
                 return;
             }
-            req.match_mode = Some(match_mode());
-            req.rules = Some(wire);
-        }
+        };
         let url = submit_url.clone();
         let on_saved = on_saved;
         saving.set(true);
@@ -176,4 +170,40 @@ pub fn EditShelfModal(
             }
         }
     }
+}
+
+/// Validate the current form state and build the save request, or return the
+/// message the modal renders inline. Two branches reject before any network
+/// call: an empty (post-trim) name, and — for a smart shelf only — an empty
+/// encoded rule set.
+fn build_update_request(
+    name: &str,
+    visibility: Visibility,
+    show_kobo: bool,
+    sync_to_kobo: bool,
+    is_smart: bool,
+    match_mode: MatchMode,
+    rules: &[RuleDraft],
+) -> Result<UpdateShelfRequest, String> {
+    let trimmed = name.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("Name is required.".into());
+    }
+    let mut req = UpdateShelfRequest {
+        name: Some(trimmed),
+        visibility: Some(visibility),
+        ..Default::default()
+    };
+    if show_kobo {
+        req.sync_to_kobo = Some(sync_to_kobo);
+    }
+    if is_smart {
+        let wire: Vec<ShelfRule> = rules.iter().filter_map(RuleDraft::to_rule).collect();
+        if wire.is_empty() {
+            return Err("Add at least one condition.".into());
+        }
+        req.match_mode = Some(match_mode);
+        req.rules = Some(wire);
+    }
+    Ok(req)
 }
