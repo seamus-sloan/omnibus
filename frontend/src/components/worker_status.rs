@@ -9,6 +9,7 @@
 use dioxus::prelude::*;
 use omnibus_shared::{GhostFilesWarning, ProgressState, TaskKind, TaskProgress, WorkerStatus};
 
+use crate::platform_sleep::async_sleep_ms;
 use crate::{data, use_server_url};
 
 /// Polling cadence in milliseconds. Always 1 s while the component is
@@ -289,24 +290,6 @@ fn ghost_warning_message(warning: &GhostFilesWarning) -> String {
         "{removed} of {total} books lost their files in this scan — \
          check that your library path is mounted."
     )
-}
-
-// ── Platform-gated 1 Hz poll sleeper ─────────────────────────────
-//
-// Web compiles with `gloo_timers` (already a dep under the `web` feature).
-// The server build runs SSR — server functions execute on the server side
-// of the component graph but `use_future` only runs on the client during
-// hydration, so the server-only branch isn't actually exercised. Keep a
-// `tokio::time::sleep` fallback so non-`web` server compilation succeeds.
-
-#[cfg(feature = "web")]
-async fn async_sleep_ms(ms: u32) {
-    gloo_timers::future::TimeoutFuture::new(ms).await;
-}
-
-#[cfg(all(not(feature = "web"), feature = "server"))]
-async fn async_sleep_ms(ms: u32) {
-    tokio::time::sleep(std::time::Duration::from_millis(ms as u64)).await;
 }
 
 #[cfg(test)]

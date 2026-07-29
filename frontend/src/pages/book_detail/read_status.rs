@@ -7,6 +7,7 @@
 use dioxus::prelude::*;
 use omnibus_shared::{ReadStatus, ReadStatusRecord, SetReadStatus};
 
+use crate::time::now_unix;
 use crate::{data, use_server_url};
 
 /// The three selectable states, in display order, with their labels + testids.
@@ -174,23 +175,6 @@ fn ago(now: i64, then: i64) -> String {
     } else {
         let d = secs / 86_400;
         format!("{d} day{} ago", plural(d))
-    }
-}
-
-/// Current unix time in seconds. Only ever called client-side (the relative
-/// timestamp renders after the post-mount load; the optimistic write runs on
-/// click), so SSR never invokes the JS clock.
-fn now_unix() -> i64 {
-    #[cfg(feature = "web")]
-    {
-        (js_sys::Date::now() / 1000.0) as i64
-    }
-    #[cfg(not(feature = "web"))]
-    {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0)
     }
 }
 

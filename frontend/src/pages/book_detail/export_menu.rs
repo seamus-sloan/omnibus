@@ -7,6 +7,7 @@ use dioxus::prelude::*;
 use omnibus_shared::{kindle_email_oversize, KINDLE_WEB_UPLOAD_URL};
 
 use crate::components::{SendToKindleButton, SendToKoboButton};
+use crate::focus_after_paint::focus_after_paint;
 
 /// The "Export" trigger + dropdown panel. Renders the download links for
 /// whichever formats the book has, the interactive Send-to-Kindle button,
@@ -79,7 +80,7 @@ fn BdExportPanel(
             "data-testid": "hero-export-panel",
             tabindex: "-1",
             onkeydown: on_keydown,
-            onmounted: move |evt: MountedEvent| focus_export_panel(&evt),
+            onmounted: move |evt: MountedEvent| focus_after_paint(&evt),
 
             if has_ebook {
                 // Plain anchor (not a router Link) so the browser performs a
@@ -172,30 +173,3 @@ fn KindleOversizeItem(open: Signal<bool>) -> Element {
         }
     }
 }
-
-/// Focus the panel after paint so its `onkeydown` receives ESC — same
-/// requestAnimationFrame timing as the user-menu panel. Web-only; SSR
-/// never paints the panel, so the gate lives at the fn definition to keep
-/// the `onmounted` handler body identical across targets (rule 07).
-#[cfg(feature = "web")]
-fn focus_export_panel(evt: &MountedEvent) {
-    use dioxus::web::WebEventExt;
-    use wasm_bindgen::prelude::*;
-
-    let Some(element) = evt.try_as_web_event() else {
-        return;
-    };
-    let Some(window) = web_sys::window() else {
-        return;
-    };
-    let cb = Closure::once_into_js(move || {
-        if let Some(html_el) = element.dyn_ref::<web_sys::HtmlElement>() {
-            let _ = html_el.focus();
-        }
-    });
-    let _ = window.request_animation_frame(cb.unchecked_ref());
-}
-
-/// Non-web stub (SSR): nothing to focus before hydration.
-#[cfg(not(feature = "web"))]
-fn focus_export_panel(_evt: &MountedEvent) {}

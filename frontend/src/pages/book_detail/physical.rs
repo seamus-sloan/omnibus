@@ -8,6 +8,7 @@ use dioxus::prelude::*;
 use omnibus_shared::physical::{PhysicalCopy, WishlistEntry, WishlistSource};
 
 use crate::components::{confirm_modal_body, ConfirmModal, ConfirmModalAction, ConfirmModalTone};
+use crate::time::now_unix;
 use crate::{data, use_server_url};
 
 use super::BdSectionHead;
@@ -652,23 +653,6 @@ fn encode_query(s: &str) -> String {
         }
     }
     out
-}
-
-/// Current unix seconds. Only ever called client-side (labels render after the
-/// post-mount load), so SSR never invokes the JS clock. Mirrors
-/// `rating::now_unix`.
-fn now_unix() -> i64 {
-    #[cfg(feature = "web")]
-    {
-        (js_sys::Date::now() / 1000.0) as i64
-    }
-    #[cfg(not(feature = "web"))]
-    {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0)
-    }
 }
 
 #[cfg(test)]

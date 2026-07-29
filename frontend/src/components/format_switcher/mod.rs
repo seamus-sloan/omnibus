@@ -241,23 +241,6 @@ fn read_book_action(_uuid: &str) -> Element {
     }
 }
 
-// ── Platform-gated poll sleeper ──────────────────────────────────
-//
-// Mirrors `worker_status`'s helper: web uses `gloo_timers`; the SSR/server
-// build (where the click handler never actually runs — it only needs to
-// compile) falls back to `tokio::time::sleep`. Shared by the Kobo + Kindle
-// send buttons in the sibling submodules.
-
-#[cfg(all(not(feature = "mobile"), feature = "web"))]
-pub(super) async fn async_sleep_ms(ms: u32) {
-    gloo_timers::future::TimeoutFuture::new(ms).await;
-}
-
-#[cfg(all(not(feature = "mobile"), not(feature = "web"), feature = "server"))]
-pub(super) async fn async_sleep_ms(ms: u32) {
-    tokio::time::sleep(std::time::Duration::from_millis(ms as u64)).await;
-}
-
 /// "Listen" CTA for the book-level row.
 #[cfg(not(feature = "mobile"))]
 fn listen_book_action(uuid: &str) -> Element {

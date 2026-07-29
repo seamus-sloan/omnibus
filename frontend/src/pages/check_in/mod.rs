@@ -17,6 +17,7 @@ use omnibus_shared::{
     ScanBook, ScanOutcome, WishlistAddRequest, WishlistSource,
 };
 
+use crate::focus_after_paint::focus_after_paint;
 use crate::{data, use_server_url, Route};
 use entry::EntryScreen;
 use scan::ScanScreen;
@@ -87,7 +88,7 @@ fn CheckInModal() -> Element {
                 // Move focus into the dialog on open so keyboard users land
                 // inside the modal and the panel's Escape handler fires without
                 // a prior click. Mirrors the search palette's input focus.
-                onmounted: move |evt: MountedEvent| focus_overlay_panel(&evt),
+                onmounted: move |evt: MountedEvent| focus_after_paint(&evt),
                 // Clicks inside the card must not reach the scrim's close.
                 onclick: move |e| e.stop_propagation(),
                 onkeydown: move |e| {
@@ -108,35 +109,6 @@ fn CheckInModal() -> Element {
         }
     }
 }
-
-/// Focus the dialog panel after the browser paints it, so the modal opens with
-/// focus inside it and Escape works without a prior click. The
-/// `requestAnimationFrame` hop lets layout finish first — a synchronous
-/// `.focus()` inside `onmounted` lands before the element is laid out and
-/// no-ops. Mirrors `focus_palette_input` in the search palette.
-#[cfg(feature = "web")]
-fn focus_overlay_panel(evt: &MountedEvent) {
-    use dioxus::web::WebEventExt;
-    use wasm_bindgen::prelude::*;
-
-    let Some(element) = evt.try_as_web_event() else {
-        return;
-    };
-    let Some(window) = web_sys::window() else {
-        return;
-    };
-    let cb = Closure::once_into_js(move || {
-        if let Some(html_el) = element.dyn_ref::<web_sys::HtmlElement>() {
-            let _ = html_el.focus();
-        }
-    });
-    let _ = window.request_animation_frame(cb.unchecked_ref());
-}
-
-/// No-op on SSR / native: the panel only needs programmatic focus on the web
-/// client, and mobile has no hardware Escape key.
-#[cfg(not(feature = "web"))]
-fn focus_overlay_panel(_evt: &MountedEvent) {}
 
 /// Where the flow currently sits. One variant per leaf of the design's
 /// decision tree, plus the three transient states (scan, entry, resolving).
