@@ -231,7 +231,8 @@ test("edits an existing smart shelf's rules and the member grid updates", async 
           visibility: "private",
           match_mode: "any",
           rules: [{ field: "author", op: "is", value: "Grace Hopper" }],
-          sync_to_kobo: null,
+          // The modal always states the toggle's value for non-system shelves.
+          sync_to_kobo: false,
         },
       },
       expectedStatus: 200,
@@ -247,7 +248,7 @@ test("edits an existing smart shelf's rules and the member grid updates", async 
   await expect(page.getByTestId("shelf-grid")).not.toContainText("Alpha");
 });
 
-test("edits a shelf's name and visibility from the pencil modal", async ({
+test("edits a shelf's name, visibility, and Kobo sync from the pencil modal", async ({
   page,
   request,
 }) => {
@@ -277,9 +278,16 @@ test("edits a shelf's name and visibility from the pencil modal", async ({
   const modal = page.getByTestId("edit-shelf-modal");
   await expect(modal.getByTestId("edit-shelf-name")).toHaveValue(name);
 
+  // The Kobo opt-in prefills from the shelf (off for a fresh shelf).
+  await expect(modal.getByTestId("edit-shelf-kobo-off")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+
   const renamed = `${name} (renamed)`;
   await modal.getByTestId("edit-shelf-name").fill(renamed);
   await modal.getByTestId("shelf-vis-public").click();
+  await modal.getByTestId("edit-shelf-kobo-on").click();
 
   await expectMutation(
     page,
@@ -294,7 +302,7 @@ test("edits a shelf's name and visibility from the pencil modal", async ({
           visibility: "public",
           match_mode: null,
           rules: null,
-          sync_to_kobo: null,
+          sync_to_kobo: true,
         },
       },
       expectedStatus: 200,
@@ -305,6 +313,8 @@ test("edits a shelf's name and visibility from the pencil modal", async ({
   await expect(modal).not.toBeVisible();
   await expect(page.getByTestId("shelf-detail-header")).toContainText(renamed);
   await expect(facets).toContainText("Public");
+  // The saved opt-in surfaces as the header's Kobo badge after the refetch.
+  await expect(page.getByTestId("shelf-kobo-badge")).toBeVisible();
 });
 
 test("surfaces an error when the shelf edit save fails", async ({

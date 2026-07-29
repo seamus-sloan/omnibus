@@ -199,7 +199,7 @@ test("edits the selected shelf from the landing header pencil", async ({
           visibility: "public",
           match_mode: "any",
           rules: [{ field: "author", op: "is", value: "Ada Lovelace" }],
-          sync_to_kobo: null,
+          sync_to_kobo: false,
         },
       },
       expectedStatus: 200,

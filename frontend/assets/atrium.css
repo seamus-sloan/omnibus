@@ -6546,7 +6546,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   border-radius: 10px; padding: 8px 11px;
 }
 .shelf-name-input:focus { outline: none; border-color: var(--accent); }
-.shelf-kind-toggle, .shelf-vis-toggle {
+.shelf-kind-toggle, .shelf-vis-toggle, .shelf-kobo-toggle {
   display: inline-flex; gap: 2px; padding: 2px;
   background: var(--bg-2); border: 1px solid var(--line-2); border-radius: 10px;
 }
@@ -6560,6 +6560,8 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .shelf-toggle-btn[aria-pressed="true"] { background: var(--bg-0); color: var(--ink-0); }
 
 .shelf-modal-body { overflow: auto; flex: 1 1 auto; min-height: 0; }
+.shelf-modal-kobo { display: flex; align-items: center; gap: 10px; }
+.shelf-kobo-label { font-size: 13px; color: var(--ink-1); }
 .shelf-modal-foot {
   display: flex; justify-content: flex-end; gap: 8px;
   border-top: 1px solid var(--line-2); padding-top: 12px;

@@ -1,9 +1,8 @@
-//! "Edit shelf" modal — the full field set from shelf creation (name,
-//! visibility, and the smart-shelf rule builder) in one dialog. Reuses
-//! [`crate::components::shelf_rule_builder::RuleBuilder`] so create and edit
-//! never duplicate the condition-row markup. Platform-agnostic like
-//! [`crate::components::CreateShelfModal`]; mounted by both the web
-//! `ShelfHeader` pencil action and the mobile shelf-detail actions menu.
+//! "Edit shelf" modal — name, visibility, the Kobo sync opt-in, and the
+//! smart-shelf rule builder in one dialog. Reuses
+//! [`crate::components::shelf_rule_builder::RuleBuilder`] like
+//! [`crate::components::CreateShelfModal`]; mounted by the landing-page
+//! pencil, the web `ShelfHeader` pencil, and the mobile shelf-detail menu.
 
 use dioxus::prelude::*;
 use omnibus_shared::{MatchMode, Shelf, ShelfKind, ShelfRule, UpdateShelfRequest};
@@ -12,10 +11,15 @@ use crate::components::create_shelf_modal::VisibilityToggle;
 use crate::components::shelf_rule_builder::{RuleBuilder, RuleDraft};
 use crate::{data, use_server_url};
 
-/// Prefills from the shelf's current name / visibility / rules and saves the
-/// whole set via [`data::update_shelf`] in one request. Kind is shown but not
-/// editable — [`UpdateShelfRequest`] has no `kind` field. Emits the updated
-/// shelf via `on_saved` so the caller can bump its reload signal and refetch.
+// SSR render tests — `server`-gated so `web` builds don't carry dead code.
+#[cfg(all(test, feature = "server"))]
+mod tests;
+
+/// Prefills from the shelf's current name / visibility / Kobo opt-in / rules
+/// and saves the whole set via [`data::update_shelf`] in one request. Kind is
+/// shown but not editable — [`UpdateShelfRequest`] has no `kind` field. Emits
+/// the updated shelf via `on_saved` so the caller can bump its reload signal
+/// and refetch.
 #[component]
 pub fn EditShelfModal(
     shelf: Shelf,
@@ -30,8 +34,11 @@ pub fn EditShelfModal(
         ShelfKind::Manual => "Hand-picked shelf",
         ShelfKind::Wishlist => "Wishlist",
     };
+    // System shelves reject the Kobo opt-in (`ShelfError::SystemShelf`) — never offer it.
+    let show_kobo = !shelf.kind.is_system();
     let mut name = use_signal(|| shelf.name.clone());
     let mut visibility = use_signal(|| shelf.visibility);
+    let mut sync_to_kobo = use_signal(|| shelf.sync_to_kobo);
     let mut match_mode = use_signal(|| shelf.match_mode.unwrap_or(MatchMode::All));
     let rules = use_signal(|| {
         let drafts: Vec<RuleDraft> = shelf.rules.iter().map(RuleDraft::from_rule).collect();
@@ -59,6 +66,9 @@ pub fn EditShelfModal(
             visibility: Some(visibility()),
             ..Default::default()
         };
+        if show_kobo {
+            req.sync_to_kobo = Some(sync_to_kobo());
+        }
         if is_smart {
             let wire: Vec<ShelfRule> = rules.read().iter().filter_map(RuleDraft::to_rule).collect();
             if wire.is_empty() {
@@ -110,6 +120,30 @@ pub fn EditShelfModal(
                             rules,
                             on_match_mode: move |m| match_mode.set(m),
                             server_url: server_url.clone(),
+                        }
+                    }
+                }
+
+                if show_kobo {
+                    div { class: "shelf-modal-kobo",
+                        span { class: "shelf-kobo-label", "Sync to Kobo" }
+                        div { class: "shelf-kobo-toggle",
+                            button {
+                                r#type: "button",
+                                class: "shelf-toggle-btn",
+                                "aria-pressed": if !sync_to_kobo() { "true" } else { "false" },
+                                "data-testid": "edit-shelf-kobo-off",
+                                onclick: move |_| sync_to_kobo.set(false),
+                                "Off"
+                            }
+                            button {
+                                r#type: "button",
+                                class: "shelf-toggle-btn",
+                                "aria-pressed": if sync_to_kobo() { "true" } else { "false" },
+                                "data-testid": "edit-shelf-kobo-on",
+                                onclick: move |_| sync_to_kobo.set(true),
+                                "On"
+                            }
                         }
                     }
                 }
