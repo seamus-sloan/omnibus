@@ -12,6 +12,8 @@ use omnibus_db::auth::{self as auth_db, SessionAuthError, SessionKind};
 use omnibus_shared::UserSummary;
 use sqlx::SqlitePool;
 
+use crate::http_errors::internal;
+
 /// Authenticated user resolved from either a session cookie or a bearer
 /// token. Extractor returns `401 Unauthorized` on anything that isn't a
 /// live session.
@@ -63,11 +65,6 @@ fn unauthorized() -> Response {
     (StatusCode::UNAUTHORIZED, "unauthorized").into_response()
 }
 
-fn internal<E: std::fmt::Display>(e: E) -> Response {
-    tracing::error!(error = %e, "internal auth extractor error");
-    (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
-}
-
 /// Pull the session token out of a `?token=<value>` query parameter.
 /// Session tokens are URL-safe base64 (no padding), so no percent-decoding
 /// is needed. Used by [`MediaAuthUser`] and the `require_auth` gate for the
@@ -90,7 +87,7 @@ async fn resolve_auth_user(
         .extensions
         .get::<SqlitePool>()
         .cloned()
-        .ok_or_else(|| internal("missing SqlitePool extension"))?;
+        .ok_or_else(|| internal("auth extractor", "missing SqlitePool extension"))?;
     // The cookie/bearer → live-session contract (token precedence,
     // SHA-256 hashing, absolute + idle expiry, revocation) lives in
     // `auth_db::validate_session` so this extractor and the Dioxus
@@ -114,7 +111,7 @@ async fn resolve_auth_user(
     match auth_db::validate_session(&pool, authorization, cookie_header).await {
         Ok((user, session)) => Ok(build_auth_user(user, session)),
         Err(SessionAuthError::Unauthenticated) => Err(unauthorized()),
-        Err(SessionAuthError::Internal(e)) => Err(internal(e)),
+        Err(SessionAuthError::Internal(e)) => Err(internal("auth extractor", e)),
     }
 }
 

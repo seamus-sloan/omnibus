@@ -19,6 +19,7 @@ use omnibus_shared::{LoginRequest, LoginResponse, RegisterRequest, UserSummary};
 use super::extractor::{extract_token, AuthUser};
 use super::{session_cookie_name, BEARER_TTL_SECS, COOKIE_TTL_SECS};
 use crate::backend::AppState;
+use crate::http_errors::internal;
 
 /// Build the `/api/auth/{register,login,logout,me}` router.
 pub fn auth_router(state: AppState) -> Router {
@@ -46,11 +47,6 @@ fn user_summary(u: &auth_db::User) -> UserSummary {
         can_download: u.can_download,
         kindle_email: u.kindle_email.clone(),
     }
-}
-
-fn internal<E: std::fmt::Display>(e: E) -> Response {
-    tracing::error!(error = %e, "internal auth error");
-    (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
 }
 
 fn auth_error_to_response(e: AuthError) -> Response {
@@ -95,8 +91,8 @@ fn auth_error_to_response(e: AuthError) -> Response {
             (StatusCode::FORBIDDEN, "registration disabled").into_response()
         }
         AuthError::SessionNotFound => (StatusCode::UNAUTHORIZED, "unauthorized").into_response(),
-        AuthError::Internal(e) => internal(e),
-        AuthError::Crypto(e) => internal(e),
+        AuthError::Internal(e) => internal("auth error", e),
+        AuthError::Crypto(e) => internal("auth crypto error", e),
     }
 }
 
@@ -278,11 +274,11 @@ async fn logout_handler(
         match auth_db::lookup_session(state.pool(), &token).await {
             Ok((_user, session)) => {
                 if let Err(e) = auth_db::revoke_session(state.pool(), session.id).await {
-                    return internal(e);
+                    return internal("revoke session", e);
                 }
             }
             Err(AuthError::SessionNotFound) => {}
-            Err(e) => return internal(e),
+            Err(e) => return internal("lookup session", e),
         }
     }
     let jar = jar.add(cleared_cookie());

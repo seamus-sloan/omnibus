@@ -971,6 +971,29 @@ async fn put_state_persists_read_status_and_returns_success() {
 }
 
 #[tokio::test]
+async fn put_state_rejects_a_batch_exceeding_max_reading_states() {
+    let (app, _pool, token, _uid) = fixture().await;
+    let entries: Vec<Value> = (0..=dto::StateRequest::MAX_READING_STATES)
+        .map(|_| serde_json::json!({}))
+        .collect();
+    let body = serde_json::json!({ "ReadingStates": entries });
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/kobo/{token}/v1/library/does-not-matter/state"))
+                .method("PUT")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn a_revoked_token_is_rejected() {
     let (app, pool, token, uid) = fixture().await;
     // Revoke the only device this token belongs to.

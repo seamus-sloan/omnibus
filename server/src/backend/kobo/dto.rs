@@ -376,6 +376,11 @@ pub struct StateRequest {
     pub reading_states: Vec<StateEntry>,
 }
 
+impl StateRequest {
+    /// Maximum number of `reading_states` entries accepted per `state` PUT.
+    pub const MAX_READING_STATES: usize = 128;
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct StateEntry {
