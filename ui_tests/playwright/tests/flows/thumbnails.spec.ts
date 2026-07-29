@@ -11,7 +11,7 @@ test.beforeAll(async ({ request }) => {
   await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
 });
 
-test("renders book grid with srcset cover images", async ({ page }) => {
+test("renders table cover images with a srcset", async ({ page }) => {
   await gotoReady(page, "/");
   await switchToTableView(page);
 
@@ -45,7 +45,7 @@ test("thumb endpoint serves an image", async ({ page, request }) => {
   await gotoReady(page, "/");
   await switchToTableView(page);
 
-  // Extract a real book ID from the srcset of the first cover <img> in the grid.
+  // Extract a real book UUID from the srcset of the first table row's cover <img>.
   const coverImg = page
     .getByTestId(/^ebook-row-/)
     .filter({ has: page.getByRole("img", { name: /^Cover of/ }) })
