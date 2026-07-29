@@ -56,6 +56,162 @@ fn ink_for(hex: &str) -> &'static str {
     }
 }
 
+/// Drawer head: kicker + title + close button.
+fn render_quote_header(on_close: EventHandler<()>) -> Element {
+    rsx! {
+        div { class: "rd-drawer-head",
+            div {
+                div { class: "rd-quote-kicker", "From your highlight" }
+                h4 { class: "rd-drawer-title", "Make a quote card" }
+            }
+            button {
+                class: "rd-x",
+                r#type: "button",
+                "aria-label": "Close",
+                onclick: move |_| on_close.call(()),
+                "\u{00d7}"
+            }
+        }
+    }
+}
+
+/// The live quote-card preview, styled with the current background/ink/ratio.
+fn render_quote_preview(
+    preview_style: &str,
+    quote_text: &str,
+    author: &str,
+    subtitle: &str,
+) -> Element {
+    rsx! {
+        div { class: "rd-quote-card", style: "{preview_style}",
+            div { class: "rd-quote-card-head", "OMNIBUS \u{00b7} QUOTE" }
+            div { class: "rd-quote-card-body", "\u{201c}{quote_text}\u{201d}" }
+            div { class: "rd-quote-card-foot",
+                div { class: "rd-quote-card-author", "{author}" }
+                div { class: "rd-quote-card-sub", "{subtitle}" }
+            }
+        }
+    }
+}
+
+/// Background swatches (book accent + fixed presets + custom color picker).
+fn render_background_swatches(
+    accent: &str,
+    bg: Signal<String>,
+    ink: Signal<String>,
+    custom: Signal<String>,
+) -> Element {
+    let mut bg = bg;
+    let mut ink = ink;
+    let mut custom = custom;
+    rsx! {
+        div { class: "rd-quote-label", "Background" }
+        div { class: "rd-quote-swatches",
+            button {
+                class: "rd-quote-swatch",
+                r#type: "button",
+                style: "background:{accent};",
+                "aria-label": "Book accent",
+                onclick: {
+                    let accent = accent.to_string();
+                    move |_| {
+                        bg.set(accent.clone());
+                        ink.set("#f5f0e8".into());
+                    }
+                },
+            }
+            for p in PRESETS.iter() {
+                button {
+                    key: "{p.bg}",
+                    class: "rd-quote-swatch",
+                    r#type: "button",
+                    style: "background:{p.bg};",
+                    "aria-label": "Background {p.bg}",
+                    onclick: move |_| {
+                        bg.set(p.bg.to_string());
+                        ink.set(p.ink.to_string());
+                    },
+                }
+            }
+            label { class: "rd-quote-custom",
+                input {
+                    r#type: "color",
+                    "aria-label": "Custom background color",
+                    value: "{custom}",
+                    oninput: move |e| {
+                        let hex = e.value();
+                        custom.set(hex.clone());
+                        ink.set(ink_for(&hex).to_string());
+                        bg.set(hex);
+                    },
+                }
+            }
+        }
+    }
+}
+
+/// Aspect-ratio chip row.
+fn render_ratio_controls(ratio: Signal<String>, cur_ratio: &str) -> Element {
+    let mut ratio = ratio;
+    rsx! {
+        div { class: "rd-quote-label", "Aspect" }
+        div { class: "rd-quote-ratios",
+            for r in RATIOS {
+                button {
+                    key: "{r}",
+                    class: if cur_ratio == r { "rd-chip on" } else { "rd-chip" },
+                    r#type: "button",
+                    onclick: move |_| ratio.set(r.to_string()),
+                    "{r}"
+                }
+            }
+        }
+    }
+}
+
+/// Export actions: download (desktop), copy/share (phone), composer (disabled).
+fn render_quote_actions(
+    download: impl FnMut(Event<MouseData>) + 'static,
+    copy_image: impl FnMut(Event<MouseData>) + 'static,
+    share: impl FnMut(Event<MouseData>) + 'static,
+) -> Element {
+    rsx! {
+        div { class: "rd-quote-actions",
+            button {
+                class: "btn primary rd-desktop-only",
+                r#type: "button",
+                "data-testid": "quote-download",
+                onclick: download,
+                "Download PNG"
+            }
+            button {
+                class: "btn rd-phone-only",
+                r#type: "button",
+                "data-testid": "quote-copy-image",
+                onclick: copy_image,
+                "Copy image"
+            }
+            // Phone primary action: the OS share sheet takes the
+            // rendered PNG (glue falls back to a download where
+            // Web Share can't carry files).
+            button {
+                class: "btn primary rd-phone-only",
+                r#type: "button",
+                "data-testid": "quote-share",
+                onclick: share,
+                "Share"
+            }
+            button {
+                class: "btn rd-desktop-only",
+                r#type: "button",
+                disabled: true,
+                title: "Journal & quote cards ship in a later phase",
+                "Open in composer \u{2192}"
+            }
+        }
+    }
+}
+
 #[component]
 pub(super) fn QuotePanel(
     quote_text: String,
@@ -64,10 +220,10 @@ pub(super) fn QuotePanel(
     accent: String,
     on_close: EventHandler<()>,
 ) -> Element {
-    let mut bg = use_signal(|| accent.clone());
-    let mut ink = use_signal(|| "#f5f0e8".to_string());
-    let mut ratio = use_signal(|| "1:1".to_string());
-    let mut custom = use_signal(|| "#6b4f8a".to_string());
+    let bg = use_signal(|| accent.clone());
+    let ink = use_signal(|| "#f5f0e8".to_string());
+    let ratio = use_signal(|| "1:1".to_string());
+    let custom = use_signal(|| "#6b4f8a".to_string());
 
     let cur_bg = bg();
     let cur_ink = ink();
@@ -130,119 +286,13 @@ pub(super) fn QuotePanel(
         div { class: "rd-scrim", onclick: move |_| on_close.call(()) }
         div { class: "rd-drawer rd-quote-drawer", "data-testid": "reader-quote-drawer",
             div { class: "rd-grabber" }
-            div { class: "rd-drawer-head",
-                div {
-                    div { class: "rd-quote-kicker", "From your highlight" }
-                    h4 { class: "rd-drawer-title", "Make a quote card" }
-                }
-                button {
-                    class: "rd-x",
-                    r#type: "button",
-                    "aria-label": "Close",
-                    onclick: move |_| on_close.call(()),
-                    "\u{00d7}"
-                }
-            }
+            {render_quote_header(on_close)}
             div { class: "rd-drawer-body",
-                div { class: "rd-quote-card", style: "{preview_style}",
-                    div { class: "rd-quote-card-head", "OMNIBUS \u{00b7} QUOTE" }
-                    div { class: "rd-quote-card-body", "\u{201c}{quote_text}\u{201d}" }
-                    div { class: "rd-quote-card-foot",
-                        div { class: "rd-quote-card-author", "{author}" }
-                        div { class: "rd-quote-card-sub", "{subtitle}" }
-                    }
-                }
-
+                {render_quote_preview(&preview_style, &quote_text, &author, &subtitle)}
                 div { class: "rd-quote-controls",
-                    div { class: "rd-quote-label", "Background" }
-                    div { class: "rd-quote-swatches",
-                        button {
-                            class: "rd-quote-swatch",
-                            r#type: "button",
-                            style: "background:{accent};",
-                            "aria-label": "Book accent",
-                            onclick: {
-                                let accent = accent.clone();
-                                move |_| {
-                                    bg.set(accent.clone());
-                                    ink.set("#f5f0e8".into());
-                                }
-                            },
-                        }
-                        for p in PRESETS.iter() {
-                            button {
-                                key: "{p.bg}",
-                                class: "rd-quote-swatch",
-                                r#type: "button",
-                                style: "background:{p.bg};",
-                                "aria-label": "Background {p.bg}",
-                                onclick: move |_| {
-                                    bg.set(p.bg.to_string());
-                                    ink.set(p.ink.to_string());
-                                },
-                            }
-                        }
-                        label { class: "rd-quote-custom",
-                            input {
-                                r#type: "color",
-                                "aria-label": "Custom background color",
-                                value: "{custom}",
-                                oninput: move |e| {
-                                    let hex = e.value();
-                                    custom.set(hex.clone());
-                                    ink.set(ink_for(&hex).to_string());
-                                    bg.set(hex);
-                                },
-                            }
-                        }
-                    }
-
-                    div { class: "rd-quote-label", "Aspect" }
-                    div { class: "rd-quote-ratios",
-                        for r in RATIOS {
-                            button {
-                                key: "{r}",
-                                class: if cur_ratio == r { "rd-chip on" } else { "rd-chip" },
-                                r#type: "button",
-                                onclick: move |_| ratio.set(r.to_string()),
-                                "{r}"
-                            }
-                        }
-                    }
-
-                    div { class: "rd-quote-actions",
-                        button {
-                            class: "btn primary rd-desktop-only",
-                            r#type: "button",
-                            "data-testid": "quote-download",
-                            onclick: download,
-                            "Download PNG"
-                        }
-                        button {
-                            class: "btn rd-phone-only",
-                            r#type: "button",
-                            "data-testid": "quote-copy-image",
-                            onclick: copy_image,
-                            "Copy image"
-                        }
-                        // Phone primary action: the OS share sheet takes the
-                        // rendered PNG (glue falls back to a download where
-                        // Web Share can't carry files).
-                        button {
-                            class: "btn primary rd-phone-only",
-                            r#type: "button",
-                            "data-testid": "quote-share",
-                            onclick: share,
-                            "Share"
-                        }
-                        button {
-                            class: "btn rd-desktop-only",
-                            r#type: "button",
-                            disabled: true,
-                            title: "Journal & quote cards ship in a later phase",
-                            "Open in composer \u{2192}"
-                        }
-                    }
+                    {render_background_swatches(&accent, bg, ink, custom)}
+                    {render_ratio_controls(ratio, &cur_ratio)}
+                    {render_quote_actions(download, copy_image, share)}
                 }
             }
         }

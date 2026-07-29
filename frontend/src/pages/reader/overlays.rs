@@ -126,6 +126,227 @@ pub(super) struct OverlayMeta {
     pub contents_progress: String,
 }
 
+/// Contents (table-of-contents) drawer, shown while `show_toc` is set.
+fn render_toc_overlay(
+    show_toc: Signal<bool>,
+    toc: Signal<Vec<super::toc_drawer::TocEntry>>,
+    chapter_title: String,
+    contents_progress: String,
+) -> Element {
+    if !show_toc() {
+        return rsx! {};
+    }
+    rsx! {
+        TocDrawer {
+            entries: toc.read().clone(),
+            current_title: chapter_title.clone(),
+            progress_label: contents_progress.clone(),
+            on_navigate: move |href: String| {
+                #[cfg(any(feature = "web", feature = "mobile"))]
+                super::reader_call_json("display", &href);
+                let _ = &href;
+                let mut show_toc = show_toc;
+                show_toc.set(false);
+            },
+            on_close: move |_| {
+                let mut show_toc = show_toc;
+                show_toc.set(false);
+            },
+        }
+    }
+}
+
+/// Highlights drawer, shown while `show_highlights` is set.
+fn render_highlights_overlay(
+    show_highlights: Signal<bool>,
+    highlights: Signal<Vec<Highlight>>,
+    quote_target: Signal<Option<Highlight>>,
+    note_target: Signal<Option<Highlight>>,
+) -> Element {
+    if !show_highlights() {
+        return rsx! {};
+    }
+    rsx! {
+        HighlightsDrawer {
+            highlights,
+            on_quote: move |h: Highlight| {
+                let mut quote_target = quote_target;
+                let mut show_highlights = show_highlights;
+                quote_target.set(Some(h));
+                show_highlights.set(false);
+            },
+            on_edit_note: move |h: Highlight| {
+                let mut note_target = note_target;
+                let mut show_highlights = show_highlights;
+                note_target.set(Some(h));
+                show_highlights.set(false);
+            },
+            on_close: move |_| {
+                let mut show_highlights = show_highlights;
+                show_highlights.set(false);
+            },
+        }
+    }
+}
+
+/// Full-text search drawer, shown while `show_search` is set.
+fn render_search_overlay(
+    show_search: Signal<bool>,
+    search_results: Signal<Vec<super::search_panel::SearchResult>>,
+) -> Element {
+    if !show_search() {
+        return rsx! {};
+    }
+    rsx! {
+        SearchPanel {
+            results: search_results,
+            on_query: move |q: String| {
+                #[cfg(any(feature = "web", feature = "mobile"))]
+                super::reader_call_json("search", &q);
+                let _ = &q;
+            },
+            on_navigate: move |cfi: String| {
+                #[cfg(any(feature = "web", feature = "mobile"))]
+                super::reader_call_json("display", &cfi);
+                let _ = &cfi;
+                let mut show_search = show_search;
+                show_search.set(false);
+            },
+            on_close: move |_| {
+                let mut show_search = show_search;
+                show_search.set(false);
+            },
+        }
+    }
+}
+
+/// Bookmarks drawer (desktop), shown while `show_bookmarks` is set.
+fn render_bookmarks_overlay(
+    show_bookmarks: Signal<bool>,
+    uuid: String,
+    current_cfi: String,
+    chapter_title: String,
+) -> Element {
+    if !show_bookmarks() {
+        return rsx! {};
+    }
+    rsx! {
+        ReaderBookmarksDrawer {
+            uuid: uuid.clone(),
+            current_cfi: current_cfi.clone(),
+            current_label: chapter_title.clone(),
+            on_navigate: move |cfi: String| {
+                #[cfg(any(feature = "web", feature = "mobile"))]
+                super::reader_call_json("display", &cfi);
+                let _ = &cfi;
+                let mut show_bookmarks = show_bookmarks;
+                show_bookmarks.set(false);
+            },
+            on_close: move |_| {
+                let mut show_bookmarks = show_bookmarks;
+                show_bookmarks.set(false);
+            },
+        }
+    }
+}
+
+/// Combined phone annotations sheet, shown while `show_annotations` is set.
+#[allow(clippy::too_many_arguments)]
+fn render_annotations_overlay(
+    show_annotations: Signal<bool>,
+    uuid: String,
+    current_cfi: String,
+    chapter_title: String,
+    highlights: Signal<Vec<Highlight>>,
+    quote_target: Signal<Option<Highlight>>,
+    note_target: Signal<Option<Highlight>>,
+) -> Element {
+    if !show_annotations() {
+        return rsx! {};
+    }
+    rsx! {
+        AnnotationsSheet {
+            uuid: uuid.clone(),
+            current_cfi: current_cfi.clone(),
+            current_label: chapter_title.clone(),
+            highlights,
+            on_quote: move |h: Highlight| {
+                let mut quote_target = quote_target;
+                let mut show_annotations = show_annotations;
+                quote_target.set(Some(h));
+                show_annotations.set(false);
+            },
+            on_edit_note: move |h: Highlight| {
+                let mut note_target = note_target;
+                let mut show_annotations = show_annotations;
+                note_target.set(Some(h));
+                show_annotations.set(false);
+            },
+            on_navigate: move |cfi: String| {
+                #[cfg(any(feature = "web", feature = "mobile"))]
+                super::reader_call_json("display", &cfi);
+                let _ = &cfi;
+                let mut show_annotations = show_annotations;
+                show_annotations.set(false);
+            },
+            on_close: move |_| {
+                let mut show_annotations = show_annotations;
+                show_annotations.set(false);
+            },
+        }
+    }
+}
+
+/// Quote-card panel, shown while a highlight is targeted for a quote card.
+fn render_quote_target_overlay(
+    quote_target: Signal<Option<Highlight>>,
+    book_author: String,
+    book_title: String,
+    book_accent: String,
+) -> Element {
+    let Some(h) = quote_target.read().clone() else {
+        return rsx! {};
+    };
+    rsx! {
+        QuotePanel {
+            quote_text: h.text.clone().unwrap_or_default(),
+            author: book_author.clone(),
+            subtitle: book_title.clone(),
+            accent: book_accent.clone(),
+            on_close: move |_| {
+                let mut quote_target = quote_target;
+                quote_target.set(None);
+            },
+        }
+    }
+}
+
+/// Note composer, shown while a highlight is targeted for note editing.
+fn render_note_target_overlay(
+    note_target: Signal<Option<Highlight>>,
+    highlights: Signal<Vec<Highlight>>,
+) -> Element {
+    let Some(h) = note_target.read().clone() else {
+        return rsx! {};
+    };
+    rsx! {
+        NoteComposer {
+            highlight: h,
+            on_saved: move |(id, note): (i64, Option<String>)| {
+                let mut highlights = highlights;
+                let idx = highlights.read().iter().position(|x| x.id == id);
+                if let Some(i) = idx {
+                    highlights.write()[i].note = note;
+                }
+            },
+            on_close: move |_| {
+                let mut note_target = note_target;
+                note_target.set(None);
+            },
+        }
+    }
+}
+
 /// The toggleable reader overlays: contents, highlights, search, bookmarks
 /// drawers plus the quote panel and note composer. Each renders only when its
 /// backing signal is set.
@@ -155,148 +376,22 @@ pub(super) fn ReaderOverlays(meta: OverlayMeta, panels: ReaderPanelSignals) -> E
     } = panels;
 
     rsx! {
-        if show_toc() {
-            TocDrawer {
-                entries: toc.read().clone(),
-                current_title: chapter_title.clone(),
-                progress_label: contents_progress.clone(),
-                on_navigate: move |href: String| {
-                    #[cfg(any(feature = "web", feature = "mobile"))]
-                    super::reader_call_json("display", &href);
-                    let _ = &href;
-                    let mut show_toc = show_toc;
-                    show_toc.set(false);
-                },
-                on_close: move |_| {
-                    let mut show_toc = show_toc;
-                    show_toc.set(false);
-                },
-            }
-        }
-
-        if show_highlights() {
-            HighlightsDrawer {
+        {render_toc_overlay(show_toc, toc, chapter_title.clone(), contents_progress)}
+        {render_highlights_overlay(show_highlights, highlights, quote_target, note_target)}
+        {render_search_overlay(show_search, search_results)}
+        {render_bookmarks_overlay(show_bookmarks, uuid.clone(), current_cfi.clone(), chapter_title.clone())}
+        {
+            render_annotations_overlay(
+                show_annotations,
+                uuid,
+                current_cfi,
+                chapter_title,
                 highlights,
-                on_quote: move |h: Highlight| {
-                    let mut quote_target = quote_target;
-                    let mut show_highlights = show_highlights;
-                    quote_target.set(Some(h));
-                    show_highlights.set(false);
-                },
-                on_edit_note: move |h: Highlight| {
-                    let mut note_target = note_target;
-                    let mut show_highlights = show_highlights;
-                    note_target.set(Some(h));
-                    show_highlights.set(false);
-                },
-                on_close: move |_| {
-                    let mut show_highlights = show_highlights;
-                    show_highlights.set(false);
-                },
-            }
+                quote_target,
+                note_target,
+            )
         }
-
-        if show_search() {
-            SearchPanel {
-                results: search_results,
-                on_query: move |q: String| {
-                    #[cfg(any(feature = "web", feature = "mobile"))]
-                    super::reader_call_json("search", &q);
-                    let _ = &q;
-                },
-                on_navigate: move |cfi: String| {
-                    #[cfg(any(feature = "web", feature = "mobile"))]
-                    super::reader_call_json("display", &cfi);
-                    let _ = &cfi;
-                    let mut show_search = show_search;
-                    show_search.set(false);
-                },
-                on_close: move |_| {
-                    let mut show_search = show_search;
-                    show_search.set(false);
-                },
-            }
-        }
-
-        if show_bookmarks() {
-            ReaderBookmarksDrawer {
-                uuid: uuid.clone(),
-                current_cfi: current_cfi.clone(),
-                current_label: chapter_title.clone(),
-                on_navigate: move |cfi: String| {
-                    #[cfg(any(feature = "web", feature = "mobile"))]
-                    super::reader_call_json("display", &cfi);
-                    let _ = &cfi;
-                    let mut show_bookmarks = show_bookmarks;
-                    show_bookmarks.set(false);
-                },
-                on_close: move |_| {
-                    let mut show_bookmarks = show_bookmarks;
-                    show_bookmarks.set(false);
-                },
-            }
-        }
-
-        if show_annotations() {
-            AnnotationsSheet {
-                uuid: uuid.clone(),
-                current_cfi: current_cfi.clone(),
-                current_label: chapter_title.clone(),
-                highlights,
-                on_quote: move |h: Highlight| {
-                    let mut quote_target = quote_target;
-                    let mut show_annotations = show_annotations;
-                    quote_target.set(Some(h));
-                    show_annotations.set(false);
-                },
-                on_edit_note: move |h: Highlight| {
-                    let mut note_target = note_target;
-                    let mut show_annotations = show_annotations;
-                    note_target.set(Some(h));
-                    show_annotations.set(false);
-                },
-                on_navigate: move |cfi: String| {
-                    #[cfg(any(feature = "web", feature = "mobile"))]
-                    super::reader_call_json("display", &cfi);
-                    let _ = &cfi;
-                    let mut show_annotations = show_annotations;
-                    show_annotations.set(false);
-                },
-                on_close: move |_| {
-                    let mut show_annotations = show_annotations;
-                    show_annotations.set(false);
-                },
-            }
-        }
-
-        if let Some(h) = quote_target.read().clone() {
-            QuotePanel {
-                quote_text: h.text.clone().unwrap_or_default(),
-                author: book_author.clone(),
-                subtitle: book_title.clone(),
-                accent: book_accent.clone(),
-                on_close: move |_| {
-                    let mut quote_target = quote_target;
-                    quote_target.set(None);
-                },
-            }
-        }
-
-        if let Some(h) = note_target.read().clone() {
-            NoteComposer {
-                highlight: h,
-                on_saved: move |(id, note): (i64, Option<String>)| {
-                    let mut highlights = highlights;
-                    let idx = highlights.read().iter().position(|x| x.id == id);
-                    if let Some(i) = idx {
-                        highlights.write()[i].note = note;
-                    }
-                },
-                on_close: move |_| {
-                    let mut note_target = note_target;
-                    note_target.set(None);
-                },
-            }
-        }
+        {render_quote_target_overlay(quote_target, book_author, book_title, book_accent)}
+        {render_note_target_overlay(note_target, highlights)}
     }
 }
