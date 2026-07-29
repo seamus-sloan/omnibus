@@ -691,6 +691,67 @@ async fn analytics_gettests_answers_the_initialization_pointer() {
 }
 
 #[tokio::test]
+async fn analytics_gettests_answers_the_post_a_real_device_sends() {
+    // Real firmware POSTs gettests even though it's a fetch; a 405 here aborts
+    // the device's whole sync before `library/sync` is ever attempted.
+    let (app, _pool, token, _uid) = fixture().await;
+    let res = app
+        .oneshot(post_json(
+            format!("/kobo/{token}/v1/analytics/gettests"),
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["Result"], "Success");
+}
+
+#[tokio::test]
+async fn store_stub_answers_firmware_hardcoded_paths_with_an_empty_object() {
+    // The device derives these from `api_endpoint` directly, bypassing the
+    // resources map; each must get a benign 200 or the sync aborts.
+    let (app, _pool, token, _uid) = fixture().await;
+    for path in [
+        "v1/user/profile",
+        "v1/user/loyalty/benefits",
+        "v1/products/books/subscriptions",
+        "v1/deals",
+    ] {
+        let res = app
+            .clone()
+            .oneshot(get(format!("/kobo/{token}/{path}")))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "{path}");
+        assert_eq!(body_json(res).await, serde_json::json!({}), "{path}");
+    }
+}
+
+#[tokio::test]
+async fn store_stub_rejects_an_invalid_token() {
+    let (app, _pool, _token, _uid) = fixture().await;
+    let res = app
+        .oneshot(get("/kobo/not-a-real-token/v1/user/profile".to_owned()))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn store_stub_does_not_shadow_registered_routes() {
+    // The wildcard must lose to every registered route: initialization keeps
+    // its real payload rather than the stub's empty object.
+    let (app, _pool, token, _uid) = fixture().await;
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/initialization")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(body_json(res).await.get("Resources").is_some());
+}
+
+#[tokio::test]
 async fn analytics_rejects_an_invalid_token() {
     let (app, _pool, _token, _uid) = fixture().await;
     let res = app

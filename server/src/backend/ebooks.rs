@@ -238,8 +238,9 @@ pub(super) async fn get_ebook_file(
     State(state): State<AppState>,
     Path(uuid): Path<String>,
     Query(query): Query<EbookFileQuery>,
+    req: Request,
 ) -> Response {
-    let mut resp = read_ebook_file(&state, &uuid, query.file_id).await;
+    let mut resp = read_ebook_file(&state, &uuid, query.file_id, req).await;
     // epub.js reads this stream over a cross-origin XHR from inside the mobile
     // WebView (unlike the CORS-exempt `<img>`/`<audio>` media the app uses
     // elsewhere), so the ACAO must ride *every* response — including the 404 /
@@ -252,30 +253,26 @@ pub(super) async fn get_ebook_file(
     resp
 }
 
-/// Resolve the on-disk EPUB and stream its bytes (200), or the resolution /
-/// read failure as a 404 / 500. CORS is layered on by the caller so it covers
+/// Resolve the on-disk EPUB and stream its bytes, or report the resolution
+/// failure as a 404 / 500. CORS is layered on by the caller so it covers
 /// every arm uniformly.
-async fn read_ebook_file(state: &AppState, uuid: &str, file_id: Option<i64>) -> Response {
+///
+/// Goes through the shared `serve_file` path rather than buffering the whole
+/// book, which is what gives the endpoint `Range` support — without which
+/// the `If-Range` guarantee would have nothing to guard. No
+/// `Content-Disposition`: this one is read inline by the reader, while
+/// `/download` is the save-to-disk sibling.
+async fn read_ebook_file(
+    state: &AppState,
+    uuid: &str,
+    file_id: Option<i64>,
+    req: Request,
+) -> Response {
     let path = match resolve_epub_path(state, uuid, file_id).await {
         Ok(p) => p,
         Err(resp) => return resp,
     };
-    match tokio::fs::read(&path).await {
-        Ok(bytes) => (
-            [
-                (header::CONTENT_TYPE, "application/epub+zip"),
-                (header::CACHE_CONTROL, "private, max-age=86400"),
-                (header::VARY, "Cookie"),
-                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-            ],
-            bytes,
-        )
-            .into_response(),
-        Err(e) => {
-            tracing::warn!(?path, error = %e, "epub file read failed");
-            axum::http::StatusCode::NOT_FOUND.into_response()
-        }
-    }
+    super::serve_file(req, &path, "application/epub+zip", None).await
 }
 
 /// Wall-clock budget for an inline KEPUB conversion before we give up and
@@ -403,6 +400,10 @@ pub(super) async fn get_ebook_download(
         Ok(Some(id)) => rewritten_or_source(&state, id, source).await,
         _ => source,
     };
+    // The validator is taken from whichever file is actually sent. For an
+    // override-having book that is the export-cache copy, whose own stat
+    // moves when `books.last_modified` invalidates it — so it tracks the
+    // bytes on the wire rather than the source they came from.
     super::serve_download(req, &path, "application/epub+zip").await
 }
 

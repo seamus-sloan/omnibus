@@ -13,18 +13,20 @@ use axum::{
 };
 use omnibus_db::{self as db};
 
+use super::conditional::MEDIA_VARY;
 use super::{internal, AppState};
 use crate::auth::MediaAuthUser;
 
-/// `Vary` value shared by every response these handlers return (200s *and*
-/// the 304s in [`not_modified`]). [`MediaAuthUser`] accepts either a
-/// session cookie or an `Authorization: Bearer` header, so a
-/// shared/intermediate cache keying only on `Cookie` could hand one
-/// bearer-authenticated user's cached response — including a 304 validator
-/// match — back to a different bearer-authenticated user who shares the
-/// same (or no) cookie state. Defined once so the 200 and 304 paths can
-/// never drift apart.
-const MEDIA_VARY: &str = "Cookie, Authorization";
+/// `Cache-Control` these handlers serve. A book editor cover replace (#1086)
+/// writes new bytes under the *same* uuid-keyed URL, so a stale
+/// `max-age`-only cache would keep serving the old image for up to a day on
+/// the next reload/revisit — the browser never even asks. `no-cache` forces
+/// a conditional GET on every load; the `ETag` makes that revalidation a
+/// cheap 304 whenever the image hasn't actually changed. `private` +
+/// [`MEDIA_VARY`] keep a shared proxy from serving one user's covers to an
+/// unauthenticated (or differently bearer-authenticated) request on the same
+/// URL now that the endpoint is gated.
+const MEDIA_CACHE_CONTROL: &str = "private, no-cache";
 
 pub(super) async fn get_cover(
     _user: MediaAuthUser,
@@ -63,19 +65,7 @@ pub(super) async fn get_cover(
             (
                 [
                     (header::CONTENT_TYPE, mime.as_str()),
-                    // A book editor cover replace (#1086) writes new bytes
-                    // under the *same* uuid-keyed URL, so a stale
-                    // `max-age`-only cache would keep serving the old image
-                    // for up to a day on the next reload/revisit — the
-                    // browser never even asks. `no-cache` forces a
-                    // conditional GET on every load; the `ETag` below makes
-                    // that revalidation a cheap 304 whenever the cover
-                    // hasn't actually changed. `private` + `Vary` (see
-                    // [`MEDIA_VARY`]) keep a shared proxy from serving one
-                    // user's covers to an unauthenticated (or differently
-                    // bearer-authenticated) request on the same URL now
-                    // that the endpoint is gated.
-                    (header::CACHE_CONTROL, "private, no-cache"),
+                    (header::CACHE_CONTROL, MEDIA_CACHE_CONTROL),
                     (header::ETAG, etag.as_str()),
                     (header::VARY, MEDIA_VARY),
                     // Prevent browsers from MIME-sniffing a cover into an
@@ -117,24 +107,13 @@ fn if_none_match_hits(headers: &HeaderMap, etag: &str) -> bool {
     headers
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v == etag)
+        .is_some_and(|v| super::conditional::if_none_match_hits(v, etag))
 }
 
 /// Build a `304 Not Modified` response carrying the same `Cache-Control` /
-/// `Vary` a 200 from these handlers would, so a hit doesn't reset the
-/// client's notion of freshness or open the cross-user cache gap
-/// [`MEDIA_VARY`] documents.
+/// `Vary` a 200 from these handlers would.
 fn not_modified(etag: &str) -> Response {
-    (
-        axum::http::StatusCode::NOT_MODIFIED,
-        [
-            (header::CACHE_CONTROL, "private, no-cache"),
-            (header::ETAG, etag),
-            (header::VARY, MEDIA_VARY),
-        ],
-        (),
-    )
-        .into_response()
+    super::conditional::not_modified(etag, MEDIA_CACHE_CONTROL, MEDIA_VARY)
 }
 
 pub(super) async fn get_thumb(
@@ -226,7 +205,7 @@ pub(super) async fn get_thumb(
             return (
                 [
                     (header::CONTENT_TYPE, "image/webp"),
-                    (header::CACHE_CONTROL, "private, no-cache"),
+                    (header::CACHE_CONTROL, MEDIA_CACHE_CONTROL),
                     (header::ETAG, etag.as_str()),
                     (header::VARY, MEDIA_VARY),
                     (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),

@@ -4928,6 +4928,16 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .btn.ghost.danger { color: #f87171; }
 @media (hover: hover) { .btn.ghost.danger:hover { background: var(--bg-1); color: #fca5a5; } }
 
+/* Kobo wireless-sync setup steps (#1499). */
+.kobo-setup-steps {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.kobo-setup-steps code { font-family: var(--mono, ui-monospace, monospace); font-size: 0.8rem; }
+
 /* Kobo annotation data-loss warning (#927). */
 .kobo-warning {
   margin-top: 1rem;
@@ -4941,6 +4951,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   color: var(--ink-1);
 }
 .kobo-warning p { margin: 0 0 0.5rem; }
+.kobo-warning ul { margin: 0 0 0.5rem; padding-left: 1.25rem; }
 .kobo-warning p:last-child { margin-bottom: 0; }
 .kobo-warning-title { font-weight: 600; color: #f87171; }
 .kobo-warning code { font-family: var(--mono, ui-monospace, monospace); font-size: 0.8rem; }
