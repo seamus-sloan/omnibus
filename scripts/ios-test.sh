@@ -22,6 +22,13 @@ case "$suite" in
     ;;
 esac
 
+# Fail with an actionable message rather than a confusing mid-pipeline
+# "command not found" from the simulator picker below.
+if ! command -v jq >/dev/null 2>&1; then
+  echo "ios-test.sh: jq is required (brew install jq, or any nix dev shell)" >&2
+  exit 1
+fi
+
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 results_dir="${OMNIBUS_IOS_RESULTS_DIR:-$repo_root/.claude/runtime/ios-tests}"
 mkdir -p "$results_dir"

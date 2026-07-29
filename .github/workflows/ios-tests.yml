@@ -59,6 +59,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Both come preinstalled on GitHub's macOS images today, but an image
+      # refresh dropping one would otherwise fail this required check before
+      # any test ran — install-if-missing keeps the job deterministic.
+      - name: Ensure jq + xcbeautify
+        run: |
+          set -euo pipefail
+          command -v jq >/dev/null 2>&1 || brew install jq
+          command -v xcbeautify >/dev/null 2>&1 || brew install xcbeautify
+
       # ios-test.sh picks the newest installed iPhone simulator runtime, so
       # the workflow never hardcodes a device name the image may not ship.
       # Results land inside the workspace because the upload conditions below
