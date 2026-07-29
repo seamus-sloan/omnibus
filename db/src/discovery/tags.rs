@@ -56,8 +56,12 @@ pub async fn get_tag_cloud(pool: &SqlitePool) -> Result<Vec<TagWeight>, Discover
     // override drops the book from arm (1) and yields no rows from
     // `json_each` in arm (2). UNION (not ALL) in arm (2) dedupes duplicate
     // subject strings within one override array so a book tagged
-    // `["fiction","fiction"]` still counts once. Override match stays
-    // BINARY (`je.value = t.name`, no COLLATE) to match the prior behavior.
+    // `["fiction","fiction"]` still counts once. Override names are folded
+    // with `lower()` on both sides of the match so a case-variant override
+    // ("fiction" typed against a canonical "Fiction" row) counts toward —
+    // and keeps visible — the NOCASE-unique `tags` row it already
+    // deduplicated into at materialize time; the same fold also collapses
+    // case-variant duplicates within one override array through the UNION.
     // A canonically-linked tag whose every book got overridden away stays
     // visible with `cnt = 0` (first EXISTS arm), matching the prior
     // semantics; an override-only tag surfaces through the second arm.
@@ -75,7 +79,7 @@ pub async fn get_tag_cloud(pool: &SqlitePool) -> Result<Vec<TagWeight>, Discover
              -- dedupes duplicate subject strings within one override array
              -- so a book with `["fiction","fiction"]` still counts once,
              -- matching the prior `EXISTS` semantics.
-             SELECT NULL AS tag_id, je.value AS tag_name, b.id AS book_id
+             SELECT NULL AS tag_id, lower(je.value) AS tag_name, b.id AS book_id
                FROM books b
                JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
                JOIN json_each(mo.overrides, '$.subjects') je
@@ -84,12 +88,12 @@ pub async fn get_tag_cloud(pool: &SqlitePool) -> Result<Vec<TagWeight>, Discover
            SELECT t.name, COUNT(e.book_id) AS cnt
            FROM tags t
            LEFT JOIN effective e
-             ON e.tag_id = t.id OR e.tag_name = t.name
+             ON e.tag_id = t.id OR e.tag_name = lower(t.name)
            WHERE EXISTS (
              SELECT 1 FROM books_tags_link btl WHERE btl.tag = t.id
            )
            OR EXISTS (
-             SELECT 1 FROM effective e2 WHERE e2.tag_name = t.name
+             SELECT 1 FROM effective e2 WHERE e2.tag_name = lower(t.name)
            )
            GROUP BY t.id, t.name
            ORDER BY cnt DESC, t.name ASC
