@@ -487,7 +487,7 @@ fn AuthorDeleteModal(
     rsx! {
         ConfirmModal {
             testid: "author-delete-modal".to_string(),
-            aria_label: "Delete {author_name}".to_string(),
+            aria_label: format!("Delete {author_name}"),
             dialog_class: "author-delete-modal".to_string(),
             busy,
             on_dismiss: move |_| show_confirm.set(false),
