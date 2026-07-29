@@ -558,7 +558,7 @@ fn ChipInput(props: ChipInputProps) -> Element {
             // with. Deferred to the next frame: calling `.focus()`
             // synchronously inside `onmounted` lands before layout
             // finishes and no-ops (same pattern as
-            // `search_palette::focus_after_paint`).
+            // `crate::focus_after_paint::focus_after_paint`).
             onmounted: move |evt: Event<MountedData>| {
                 if autofocus {
                     focus_after_paint(&evt);

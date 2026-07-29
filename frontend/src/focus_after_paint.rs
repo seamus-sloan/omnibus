@@ -1,9 +1,6 @@
 //! Shared "focus this panel after paint" helper, used by every dismissible
 //! overlay/menu whose `onmounted` handler needs the mounted element to hold
 //! focus (so `onkeydown` picks up ESC without a prior click).
-//!
-//! Replaces a prior `document::eval` + raw JS `requestAnimationFrame` +
-//! `querySelector` workaround with a fully typed `web_sys` path.
 
 use dioxus::prelude::*;
 
