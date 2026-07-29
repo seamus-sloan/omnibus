@@ -86,10 +86,14 @@ pub(super) fn GenreDonut(summary: StatsSummary) -> Element {
     }
     let percents = percentages(&folded.iter().map(|(_, c)| *c).collect::<Vec<_>>());
     let gradient = donut_gradient(&percents);
+    // Content-derived key: when a period switch lands a different mix, the
+    // body remounts and replays the content-swap animation while the card
+    // stays put. Same data → same key → no motion.
+    let content_key = format!("{books_active}|{gradient}|{folded:?}");
     rsx! {
         div { class: "card st-donut-card", "data-testid": "stats-genre-donut",
             div { class: "label", "What you read" }
-            div { class: "st-donut-body",
+            div { key: "{content_key}", class: "st-donut-body",
                 div { class: "st-donut", style: "background: {gradient};", role: "img",
                     aria_label: "Genre share by book count",
                     div { class: "st-donut-hole",
@@ -137,7 +141,10 @@ pub(super) fn FormatSplit(summary: StatsSummary) -> Element {
                 div { class: "st-format-row",
                     div { class: "st-format-row-head",
                         span { class: "st-format-name", {label} }
-                        span { class: "st-format-pct mono", "{pct}%" }
+                        // Keyed so a changed share fades the number in; the
+                        // bar below animates its width via CSS transition
+                        // instead (the row itself never remounts).
+                        span { key: "{pct}", class: "st-format-pct mono", "{pct}%" }
                     }
                     div { class: "st-format-track",
                         div { class: "st-format-fill", style: "width: {pct}%; background: {var};" }

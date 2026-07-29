@@ -1,7 +1,7 @@
-//! Reading-stats page (`/stats`). Period-scoped modules up top driven by a
-//! Week / Month / Year / Lifetime switcher, then an explicitly separated
-//! All-time section that never re-queries on switcher change. Mirrors the
-//! converged Stats design (`screens/stats-converged.jsx`).
+//! Reading-stats page (`/stats`). Period-scoped modules up top driven by the
+//! Week / Month / Year / Lifetime dropdown embedded in the page title, then an
+//! explicitly separated All-time section that never re-queries on period
+//! change. Mirrors the converged Stats design (`screens/stats-converged.jsx`).
 
 use dioxus::prelude::*;
 use omnibus_shared::{StatsRange, StatsSummary, STATS_TTL_SECS};
@@ -43,7 +43,9 @@ pub fn StatsPage() -> Element {
     let all_time: Signal<Option<StatsSummary>> = use_signal(|| None);
     let loading = use_signal(|| true);
     let error: Signal<Option<String>> = use_signal(|| None);
-    let sheet_open = use_signal(|| false);
+    // Seeded closed on every target (rule 07): the title dropdown only ever
+    // opens from a client click.
+    let menu_open = use_signal(|| false);
     // Which tile's drill-in is open, if any — seeded closed on every target
     // (rule 07): the sheet/modal only ever opens from a client click.
     let expanded: Signal<Option<Metric>> = use_signal(|| None);
@@ -62,10 +64,14 @@ pub fn StatsPage() -> Element {
 
     rsx! {
         div { class: "st-page",
-            StatsHeader { range, sheet_open }
+            StatsHeader { range, menu_open }
             if empty {
                 StatsEmpty {}
             } else {
+                // Deliberately not keyed on the range: a period switch keeps
+                // the cards mounted (the entrance cascade plays on page load
+                // only) and each card's *contents* transition when the new
+                // summary lands — the web analogue of iOS numericText.
                 section { class: "st-period", "data-testid": "stats-period-section",
                     PeriodSummary { period, expanded }
                 }
@@ -76,9 +82,6 @@ pub fn StatsPage() -> Element {
                 section { class: "st-alltime", "data-testid": "stats-alltime-section",
                     AllTimeSummary { all_time }
                 }
-            }
-            if sheet_open() {
-                RangeSheet { range, sheet_open }
             }
             if let (Some(metric), Some(summary)) = (expanded(), period.read().clone()) {
                 DrillIn { metric, summary, range: range(), expanded }
@@ -174,75 +177,122 @@ fn use_all_time_fetch_effect(
     });
 }
 
-/// Editorial header: title with the italic period word, subtitle, and the
-/// period switcher (desktop segmented control + mobile sheet trigger — CSS
-/// picks one per form factor, never `cfg`-gated rsx).
+/// Editorial header: the title's italic period word doubles as the period
+/// switcher — a trigger that drops the Week / Month / Year / Lifetime menu
+/// straight out of the headline, one control across every form factor.
 #[component]
-fn StatsHeader(range: Signal<StatsRange>, sheet_open: Signal<bool>) -> Element {
+fn StatsHeader(range: Signal<StatsRange>, menu_open: Signal<bool>) -> Element {
     let current = range();
     rsx! {
         header { class: "st-head",
             h1 { class: "st-title",
                 "Your reading "
-                span { class: "st-period-word", {period_word(current)} }
-            }
-            p { class: "st-sub", "Reading & listening, tracked over time." }
-            div { class: "st-seg", role: "group", "aria-label": "Period",
-                for r in StatsRange::ALL {
+                span { class: "st-period-picker",
                     button {
-                        class: if r == current { "st-seg-btn on" } else { "st-seg-btn" },
+                        class: "st-period-trigger",
                         r#type: "button",
-                        "aria-pressed": if r == current { "true" } else { "false" },
-                        onclick: move |_| range.set(r),
-                        {r.label()}
+                        "data-testid": "stats-range-trigger",
+                        "aria-haspopup": "dialog",
+                        "aria-expanded": "{menu_open()}",
+                        "aria-describedby": "st-period-hint",
+                        onclick: move |_| {
+                            let next = !menu_open();
+                            menu_open.set(next);
+                        },
+                        span { class: "st-period-word", {period_word(current)} }
+                        span { class: "st-period-chevron", aria_hidden: "true", "\u{25BE}" }
+                    }
+                    if menu_open() {
+                        div {
+                            class: "st-period-scrim",
+                            "data-testid": "stats-range-scrim",
+                            onclick: move |_| menu_open.set(false),
+                        }
+                        RangeMenu { range, menu_open }
                     }
                 }
             }
-            button {
-                class: "st-range-trigger",
-                r#type: "button",
-                "data-testid": "stats-range-trigger",
-                onclick: move |_| sheet_open.set(true),
-                {current.label()}
-                span { class: "st-range-chevron", aria_hidden: "true", "\u{25BE}" }
+            // aria-describedby target, outside the h1 so the hint text never
+            // joins the heading's accessible name ("Your reading month", not
+            // "Your reading Change period month"). An aria-label on the
+            // trigger would replace the period word as the button's name and
+            // distort the heading the same way — a description adds the
+            // action without touching either name.
+            span { id: "st-period-hint", class: "sr-only", "Change period" }
+            p { class: "st-sub", "Reading & listening, tracked over time." }
+        }
+    }
+}
+
+/// The open period dropdown, anchored under the title's period word.
+///
+/// `role="dialog"` (not `role="menu"`) to match the user-menu / export
+/// dropdowns: a scrim-dismissed popover with plain buttons, not an ARIA menu
+/// with roving-tabindex navigation.
+#[component]
+fn RangeMenu(range: Signal<StatsRange>, menu_open: Signal<bool>) -> Element {
+    let current = range();
+    let mut menu_open = menu_open;
+    let on_keydown = move |evt: Event<KeyboardData>| {
+        if evt.key() == Key::Escape {
+            evt.prevent_default();
+            menu_open.set(false);
+        }
+    };
+    rsx! {
+        div {
+            class: "st-period-menu",
+            role: "dialog",
+            "aria-label": "Period",
+            "data-testid": "stats-range-menu",
+            tabindex: "-1",
+            onkeydown: on_keydown,
+            onmounted: move |evt: MountedEvent| focus_range_menu(&evt),
+            for r in StatsRange::ALL {
+                button {
+                    class: if r == current { "st-range-row on" } else { "st-range-row" },
+                    r#type: "button",
+                    "aria-pressed": if r == current { "true" } else { "false" },
+                    onclick: move |_| {
+                        range.set(r);
+                        menu_open.set(false);
+                    },
+                    span { class: "st-range-row-label", {r.label()} }
+                    if r == current {
+                        span { class: "st-range-check", aria_hidden: "true", "\u{2713}" }
+                    }
+                }
             }
         }
     }
 }
 
-/// Mobile bottom sheet listing the four period options.
-#[component]
-fn RangeSheet(range: Signal<StatsRange>, sheet_open: Signal<bool>) -> Element {
-    let current = range();
-    rsx! {
-        div {
-            class: "m-sheet-scrim",
-            "data-testid": "stats-range-sheet",
-            onclick: move |_| sheet_open.set(false),
-            div { class: "m-sheet", onclick: move |e| e.stop_propagation(),
-                div { class: "m-sheet-grabber" }
-                div { class: "m-sheet-head",
-                    h4 { "Period" }
-                }
-                div { class: "m-sheet-body",
-                    div { class: "st-range-rows",
-                        for r in StatsRange::ALL {
-                            button {
-                                class: if r == current { "st-range-row on" } else { "st-range-row" },
-                                r#type: "button",
-                                onclick: move |_| {
-                                    range.set(r);
-                                    sheet_open.set(false);
-                                },
-                                {r.label()}
-                            }
-                        }
-                    }
-                }
-            }
+/// Focus the menu after paint so its `onkeydown` receives ESC — same
+/// requestAnimationFrame timing as the user-menu and export panels. Web-only;
+/// SSR never paints the menu, so the gate lives at the fn definition to keep
+/// the `onmounted` handler body identical across targets (rule 07).
+#[cfg(feature = "web")]
+fn focus_range_menu(evt: &MountedEvent) {
+    use dioxus::web::WebEventExt;
+    use wasm_bindgen::prelude::*;
+
+    let Some(element) = evt.try_as_web_event() else {
+        return;
+    };
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let cb = Closure::once_into_js(move || {
+        if let Some(html_el) = element.dyn_ref::<web_sys::HtmlElement>() {
+            let _ = html_el.focus();
         }
-    }
+    });
+    let _ = window.request_animation_frame(cb.unchecked_ref());
 }
+
+/// Non-web stub (SSR): nothing to focus before hydration.
+#[cfg(not(feature = "web"))]
+fn focus_range_menu(_evt: &MountedEvent) {}
 
 /// The period-scoped module stack: headline tiles, then the composition row
 /// (genre donut + format split). A placeholder card until the first fetch

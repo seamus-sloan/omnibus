@@ -1,6 +1,6 @@
 // Reading-stats page (/stats): layout, the Week / Month / Year / Lifetime
-// period switcher, the all-time section's immunity to switcher changes, and
-// the zero-activity empty state.
+// dropdown embedded in the page title, the all-time section's immunity to
+// period changes, and the zero-activity empty state.
 //
 // Sessions are seeded once in beforeAll — before the first /stats visit — so
 // the server-side 60s stats cache never captures an empty summary for the
@@ -8,6 +8,7 @@
 // indexed book, so the library is seeded first and sessions ride a real
 // fixture uuid.
 
+import type { Page } from "@playwright/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
@@ -22,6 +23,14 @@ test.describe.configure({ mode: "serial" });
 
 /** Late-2023 anchor: inside Lifetime, outside the week/month/year windows. */
 const OLD_SESSION_AT = 1_700_000_000;
+
+/** Open the in-title period dropdown and return its dialog locator. */
+async function openPeriodMenu(page: Page) {
+  await page.getByTestId("stats-range-trigger").click();
+  const menu = page.getByRole("dialog", { name: "Period" });
+  await expect(menu).toBeVisible();
+  return menu;
+}
 
 test.beforeAll(async ({ request }) => {
   await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
@@ -86,15 +95,32 @@ test("renders the stats page layout", async ({ page }) => {
     page.getByRole("heading", { name: "Your reading month" }),
   ).toBeVisible();
 
-  // The switcher offers all four periods with Month pre-selected.
-  const seg = page.getByRole("group", { name: "Period" });
+  // The title's period word opens the dropdown, which offers all four
+  // periods with Month pre-selected.
+  const menu = await openPeriodMenu(page);
   for (const label of ["Week", "Month", "Year", "Lifetime"]) {
-    await expect(seg.getByRole("button", { name: label })).toBeVisible();
+    await expect(menu.getByRole("button", { name: label })).toBeVisible();
   }
-  await expect(seg.getByRole("button", { name: "Month" })).toHaveAttribute(
+  await expect(menu.getByRole("button", { name: "Month" })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
+
+  // The scrim dismisses it without changing the period.
+  await page.getByTestId("stats-range-scrim").click();
+  await expect(menu).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: "Your reading month" }),
+  ).toBeVisible();
+
+  // ESC dismisses it too (the menu takes focus on mount), also without
+  // changing the period.
+  const reopened = await openPeriodMenu(page);
+  await reopened.press("Escape");
+  await expect(reopened).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: "Your reading month" }),
+  ).toBeVisible();
 
   // Period-scoped section above, explicitly divided all-time section below.
   await expect(page.getByTestId("stats-period-section")).toBeVisible();
@@ -144,12 +170,10 @@ test("a tile's grip opens its drill-in and the close button dismisses it", async
   await page.getByTestId("stats-drill-close").click();
   await expect(drillIn).toHaveCount(0);
 
-  // The period switcher underneath is untouched by opening/closing (AC4).
+  // The selected period is untouched by opening/closing (AC4).
   await expect(
-    page
-      .getByRole("group", { name: "Period" })
-      .getByRole("button", { name: "Month" }),
-  ).toHaveAttribute("aria-pressed", "true");
+    page.getByRole("heading", { name: "Your reading month" }),
+  ).toBeVisible();
 });
 
 test("the Finished drill-in lists the books completed in the window", async ({
@@ -171,7 +195,7 @@ test("switching the period re-queries and updates the period section", async ({
   page,
 }) => {
   await gotoReady(page, "/stats");
-  const seg = page.getByRole("group", { name: "Period" });
+  const menu = await openPeriodMenu(page);
 
   await expectMutation(
     page,
@@ -181,20 +205,25 @@ test("switching the period re-queries and updates the period section", async ({
       expectedBody: { range: "week" },
       expectedStatus: 200,
     },
-    async () => seg.getByRole("button", { name: "Week" }).click(),
+    async () => menu.getByRole("button", { name: "Week" }).click(),
   );
 
-  await expect(seg.getByRole("button", { name: "Week" })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
-  await expect(seg.getByRole("button", { name: "Month" })).toHaveAttribute(
-    "aria-pressed",
-    "false",
-  );
+  // Picking a period closes the menu and rewrites the title.
+  await expect(menu).toHaveCount(0);
   await expect(
     page.getByRole("heading", { name: "Your reading week" }),
   ).toBeVisible();
+
+  // Reopening shows the new selection.
+  const reopened = await openPeriodMenu(page);
+  await expect(reopened.getByRole("button", { name: "Week" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(reopened.getByRole("button", { name: "Month" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
 });
 
 test("the heatmap and genre donut render from seeded activity", async ({
@@ -246,7 +275,7 @@ test("the all-time section does not change with the switcher", async ({
   await expect(allTime).toBeVisible();
   const before = await allTime.textContent();
 
-  const seg = page.getByRole("group", { name: "Period" });
+  const menu = await openPeriodMenu(page);
   await expectMutation(
     page,
     {
@@ -255,7 +284,7 @@ test("the all-time section does not change with the switcher", async ({
       expectedBody: { range: "year" },
       expectedStatus: 200,
     },
-    async () => seg.getByRole("button", { name: "Year" }).click(),
+    async () => menu.getByRole("button", { name: "Year" }).click(),
   );
 
   await expect(

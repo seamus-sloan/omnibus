@@ -7847,9 +7847,12 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
    Stats page (/stats)
 
    Period-scoped modules driven by the Week / Month / Year / Lifetime
-   switcher, then an "All-time" section that never re-queries. Desktop
-   shows the segmented control; the phone breakpoint swaps it for a
-   trigger that opens the shared `.m-sheet-*` bottom sheet.
+   dropdown embedded in the page title (the italic period word is the
+   trigger), then an "All-time" section that never re-queries.
+
+   Motion mirrors the iOS app's vocabulary (omnibus-ios Motion.swift):
+   `settle` for entrances (cascade-in with a capped stagger), `lift` for
+   the dropdown popover, all disabled under prefers-reduced-motion.
    ═══════════════════════════════════════════════════════════════════ */
 
 .st-page {
@@ -7859,70 +7862,133 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   display: flex;
   flex-direction: column;
   gap: 22px;
+  /* iOS Motion.settle (spring 0.44/0.82) and Motion.lift (0.28/0.74),
+     approximated as eased curves with a whisper of overshoot. */
+  --st-ease-settle: cubic-bezier(0.22, 1, 0.36, 1);
+  --st-ease-lift: cubic-bezier(0.2, 0.9, 0.35, 1.08);
 }
 
 /* ── Editorial header ─────────────────────────────────────────────── */
 .st-head { display: flex; flex-direction: column; gap: 8px; }
 .st-title { margin: 0; }
+.st-sub { margin: 0; color: var(--ink-2); }
+
+/* ── In-title period dropdown ─────────────────────────────────────── */
+.st-period-picker { position: relative; display: inline-block; }
+/* The trigger inherits the h1's serif so the period word reads as part
+   of the headline, not as a control bolted next to it. */
+.st-period-trigger {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.28em;
+}
 .st-period-word {
   font-style: italic;
   border-bottom: 2px solid var(--accent);
   padding-bottom: 2px;
 }
-.st-sub { margin: 0; color: var(--ink-2); }
-
-/* ── Period switcher: desktop segmented control ───────────────────── */
-.st-seg {
-  display: flex;
-  gap: 4px;
-  align-self: flex-start;
-  margin-top: 6px;
-  background: var(--bg-1);
-  border: 1px solid var(--line-2);
-  border-radius: 10px;
-  padding: 4px;
+.st-period-chevron {
+  font-size: 0.38em;
+  color: var(--accent);
+  align-self: center;
+  transition: transform 0.28s var(--st-ease-lift);
 }
-.st-seg-btn {
-  border: 0;
-  border-radius: 7px;
-  padding: 5px 14px;
-  background: transparent;
-  color: var(--ink-2);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
+.st-period-trigger[aria-expanded="true"] .st-period-chevron {
+  transform: rotate(180deg);
 }
-.st-seg-btn.on { background: var(--bg-3); color: var(--ink-0); }
-
-/* ── Period switcher: mobile sheet trigger (hidden on desktop) ────── */
-.st-range-trigger {
-  display: none;
-  align-self: flex-start;
-  align-items: center;
-  gap: 7px;
-  margin-top: 6px;
-  border: 1px solid var(--line-2);
-  border-radius: 999px;
-  padding: 6px 14px;
-  background: var(--bg-1);
-  color: var(--ink-0);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
+.st-period-scrim {
+  position: fixed; inset: 0; z-index: 60;
+  background: transparent; cursor: default;
 }
-.st-range-chevron { color: var(--accent); }
-.st-range-rows { display: flex; flex-direction: column; gap: 4px; }
+.st-period-menu {
+  position: absolute; top: calc(100% + 10px); left: 0;
+  min-width: 210px; z-index: 61;
+  background: var(--bg-1); border: 1px solid var(--line-2);
+  border-radius: 12px; padding: 6px;
+  display: flex; flex-direction: column; gap: 2px;
+  /* Reset the h1 context the menu inherits from its place in the title. */
+  font-family: var(--sans); font-size: 14px;
+  font-style: normal; font-weight: 400; letter-spacing: normal;
+  box-shadow:
+    0 18px 40px color-mix(in oklch, black 55%, transparent),
+    0 2px 0 color-mix(in oklch, black 25%, transparent);
+  transform-origin: top left;
+  animation: st-menu-in 0.28s var(--st-ease-lift) both;
+}
+@keyframes st-menu-in {
+  from { opacity: 0; transform: translateY(-6px) scale(0.96); }
+}
 .st-range-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
   border: 0;
   border-radius: 8px;
-  padding: 12px 14px;
+  padding: 10px 12px;
   background: transparent;
   color: var(--ink-1);
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
+@media (hover: hover) {
+  .st-range-row:hover { background: var(--bg-2); color: var(--ink-0); }
+}
 .st-range-row.on { background: var(--bg-2); color: var(--ink-0); }
+.st-range-check { color: var(--accent); }
+
+/* ── Entrance cascade (iOS CascadeIn: fade + 12px lift + settle) ──── */
+/* Page-load only: the cards stay mounted across period switches, so the
+   cascade never replays mid-session — the stagger is short and capped,
+   the point is that the page *fills*, not that the user waits for it. */
+.st-tiles .st-tile,
+.st-compose > *,
+.st-alltime > * {
+  animation: st-cascade-in 0.44s var(--st-ease-settle) both;
+}
+@keyframes st-cascade-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.985); }
+}
+.st-tiles .st-tile:nth-child(2) { animation-delay: 0.04s; }
+.st-tiles .st-tile:nth-child(3) { animation-delay: 0.08s; }
+.st-tiles .st-tile:nth-child(4) { animation-delay: 0.12s; }
+.st-compose > *:nth-child(1) { animation-delay: 0.16s; }
+.st-compose > *:nth-child(2) { animation-delay: 0.2s; }
+.st-alltime > *:nth-child(2) { animation-delay: 0.06s; }
+
+/* ── Content swap (iOS contentTransition(.numericText()) analogue) ── */
+/* These nodes are keyed on their rendered data, so a period switch
+   remounts just the contents when the new summary lands — the cards
+   around them never move. */
+.st-tile-value,
+.st-donut-body,
+.st-format-pct {
+  animation: st-content-in 0.34s var(--st-ease-settle) both;
+}
+@keyframes st-content-in {
+  from { opacity: 0; transform: translateY(6px); }
+}
+/* The split bar grows/shrinks in place rather than remounting. */
+.st-format-fill { transition: width 0.44s var(--st-ease-settle); }
+
+@media (prefers-reduced-motion: reduce) {
+  .st-period-menu,
+  .st-tiles .st-tile,
+  .st-compose > *,
+  .st-alltime > *,
+  .st-tile-value,
+  .st-donut-body,
+  .st-format-pct { animation: none; }
+  .st-period-chevron { transition: none; }
+  .st-format-fill { transition: none; }
+}
 
 /* ── Sections ─────────────────────────────────────────────────────── */
 .st-period, .st-alltime { display: flex; flex-direction: column; gap: 16px; }
@@ -8202,8 +8268,6 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 
 @media (max-width: 720px) {
   .st-page { padding-top: 8px; }
-  .st-seg { display: none; }
-  .st-range-trigger { display: inline-flex; }
 
   /* Tiles collapse to a 2×2 grid; the hero pair (Finished, Avg rating)
      stays larger, per the converged design. */
