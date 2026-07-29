@@ -134,8 +134,8 @@ fn setup_landing_signals(server_url: &str, query: Signal<String>) -> LandingSign
     // — otherwise it would splice an old result stream onto the new list.
     let fetch_epoch = use_signal(|| 0u64);
     let is_admin = crate::use_is_admin();
-    // Suggestion pools for the inline Authors chip editor and the
-    // (future-reserved) Tags pool, each carrying the dropdown book-count.
+    // Suggestion pools for the inline Authors and Tags chip editors, each
+    // carrying the dropdown book-count.
     let pools = SuggestionPools {
         authors: use_signal(Vec::<SuggestionItem>::new),
         tags: use_signal(Vec::<SuggestionItem>::new),

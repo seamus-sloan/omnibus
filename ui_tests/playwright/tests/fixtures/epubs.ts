@@ -20,8 +20,21 @@ export interface ExpectedBook {
   /** Series name; combined with `seriesIndex` as `${name} #${idx}` if both set. */
   series?: string;
   seriesIndex?: string;
-  /** Verbatim text rendered in the publisher cell. */
+  /**
+   * The EPUB's `dc:publisher` metadata. No longer a table column (the
+   * Tags column replaced Publisher); still shown on the book detail page.
+   */
   publisher?: string;
+  /**
+   * Rendered comma-separated in the tags cell, sorted case-insensitively
+   * (the DB projection orders subjects by tag name). Undefined skips the
+   * cell assertion entirely — used by the public-domain fixtures (long
+   * real-world subject lists, covered by `db/tests/public_domain_epubs.rs`)
+   * and by `standalone-ocean` (its tags are mutated by the inline-edit
+   * spec). The generator emits no `dc:subject`, so the other generated
+   * fixtures pin `[]`.
+   */
+  tags?: string[];
   /** Verbatim text rendered in the published cell. */
   published?: string;
   /** Verbatim text rendered in the language cell (BCP-47). */
@@ -38,6 +51,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     authors: ["Ada Lovelace"],
     publisher: "Omnibus Test Press",
     published: "1843-10-01",
+    tags: [],
     language: "en",
     hasCover: true,
   },
@@ -50,6 +64,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     seriesIndex: "1",
     publisher: "Omnibus Test Press",
     published: "1969-07-20",
+    tags: [],
     language: "en",
     hasCover: true,
   },
@@ -62,6 +77,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     seriesIndex: "2",
     publisher: "Editorial Omnibus",
     published: "1942-08-11",
+    tags: [],
     language: "es",
     hasCover: false,
   },
@@ -76,6 +92,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     seriesIndex: "3",
     publisher: "Omnibus Test Press",
     published: "1947-06-12",
+    tags: [],
     language: "en",
     hasCover: true,
   },
@@ -88,6 +105,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     seriesIndex: "4",
     publisher: "Omnibus Test Press",
     published: "1972-11-02",
+    tags: [],
     language: "en",
     hasCover: true,
   },
@@ -100,6 +118,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     seriesIndex: "5",
     publisher: "Omnibus Test Press",
     published: "1985-03-15",
+    tags: [],
     language: "en",
     hasCover: true,
   },
@@ -114,6 +133,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     seriesIndex: "1",
     publisher: "Verlag Algorithmus",
     published: "1976-04-01",
+    tags: [],
     language: "de",
     hasCover: true,
   },
@@ -126,6 +146,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     seriesIndex: "2",
     publisher: "Verlag Algorithmus",
     published: "1977-08-12",
+    tags: [],
     language: "de",
     hasCover: true,
   },
@@ -138,6 +159,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     seriesIndex: "3",
     publisher: "Verlag Algorithmus",
     published: "1978-09-10",
+    tags: [],
     language: "en",
     hasCover: false,
   },
@@ -150,6 +172,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     seriesIndex: "4",
     publisher: "Verlag Algorithmus",
     published: "1979-12-01",
+    tags: [],
     language: "en",
     hasCover: true,
   },
@@ -164,6 +187,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     seriesIndex: "1",
     publisher: "Maison Polyglotte",
     published: "1830-05-29",
+    tags: [],
     language: "fr",
     hasCover: true,
   },
@@ -176,6 +200,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     seriesIndex: "2",
     publisher: "Maison Polyglotte",
     published: "1944-06-01",
+    tags: [],
     language: "es",
     hasCover: true,
   },
@@ -188,6 +213,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     seriesIndex: "3",
     publisher: "Maison Polyglotte",
     published: "1914-04-20",
+    tags: [],
     language: "ja",
     hasCover: true,
   },
@@ -202,6 +228,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     seriesIndex: "1",
     publisher: "MIT Press Mirror",
     published: "1977-01-01",
+    tags: [],
     language: "en",
     hasCover: true,
   },
@@ -214,6 +241,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     seriesIndex: "2",
     publisher: "MIT Press Mirror",
     published: "1986-10-15",
+    tags: [],
     language: "en",
     hasCover: true,
   },
@@ -226,6 +254,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     seriesIndex: "3",
     publisher: "MIT Press Mirror",
     published: "2006-08-31",
+    tags: [],
     language: "en",
     hasCover: false,
   },
@@ -240,6 +269,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     seriesIndex: "1",
     publisher: "Klein Mathematik",
     published: "1918-07-23",
+    tags: [],
     language: "de",
     hasCover: true,
   },
@@ -252,6 +282,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     seriesIndex: "2",
     publisher: "Klein Mathematik",
     published: "1815-01-08",
+    tags: [],
     language: "fr",
     hasCover: true,
   },
@@ -264,6 +295,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     seriesIndex: "3",
     publisher: "Klein Mathematik",
     published: "1888-12-24",
+    tags: [],
     language: "en",
     hasCover: false,
   },
@@ -276,6 +308,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     authors: ["Haskell Curry"],
     publisher: "Lambda Books",
     published: "1934-09-12",
+    tags: [],
     language: "en",
     hasCover: true,
   },
@@ -286,6 +319,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     authors: ["Alonzo Church"],
     publisher: "Lambda Books",
     published: "1936-04-19",
+    tags: [],
     language: "en",
     hasCover: true,
   },
@@ -296,6 +330,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     authors: ["Maria Zambrano"],
     publisher: "Editorial Omnibus",
     published: "1957-03-03",
+    tags: [],
     language: "es",
     hasCover: false,
   },
@@ -306,6 +341,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     authors: ["David Hilbert"],
     publisher: "Klein Mathematik",
     published: "1900-08-08",
+    tags: [],
     language: "de",
     hasCover: true,
   },
@@ -316,10 +352,14 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     authors: ["Henri Poincare"],
     publisher: "Maison Polyglotte",
     published: "1899-11-17",
+    tags: [],
     language: "fr",
     hasCover: true,
   },
   {
+    // Reserved for landing_inline_edit.spec.ts's Tags-cell tests: they hold
+    // a `subjects` override on this book mid-test, so `tags` stays
+    // undefined (unasserted) and no other spec may touch its overrides.
     slug: "standalone-ocean",
     filename: "standalone-ocean.epub",
     title: "Ocean of Bytes",
@@ -336,6 +376,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     authors: ["Vint Cerf", "Bob Kahn"],
     publisher: "Omnibus Test Press",
     published: "1974-05-10",
+    tags: [],
     language: "en",
     hasCover: false,
   },
@@ -350,6 +391,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     authors: ["Claude Shannon"],
     publisher: "Omnibus Test Press",
     published: "1948-07-30",
+    tags: [],
     language: "en",
     hasCover: true,
   },
@@ -360,6 +402,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     authors: ["Annie Easley"],
     publisher: "Lambda Books",
     published: "1955-04-23",
+    tags: [],
     language: "en",
     hasCover: true,
   },
@@ -377,6 +420,7 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     authors: ["Alan Turing"],
     publisher: "Omnibus Test Press",
     published: "1950-10-01",
+    tags: [],
     language: "en",
     hasCover: true,
   },

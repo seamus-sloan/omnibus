@@ -10,9 +10,9 @@ use omnibus_shared::EbookMetadata;
 
 use super::super::sorting::{contributor_names, row_ident};
 use super::cells::{
-    build_save_authors, build_save_field, AuthorsCell, CellEditCtx, EbookRowCoverCell,
-    EbookRowFormatsCell, RowContext, RowScalarCell, RowScalarCellDisplay, RowSeriesCell,
-    RowTitleCell,
+    build_save_authors, build_save_field, build_save_tags, CellEditCtx, ChipCell, ChipCellDisplay,
+    EbookRowCoverCell, EbookRowFormatsCell, RowContext, RowScalarCell, RowScalarCellDisplay,
+    RowSeriesCell, RowTitleCell,
 };
 use super::{BookTableContext, EditField};
 use crate::Route;
@@ -24,13 +24,19 @@ pub(super) fn EbookRow(book: EbookMetadata, ctx: BookTableContext) -> Element {
         server_url,
         is_admin,
         author_suggestions,
-        tag_suggestions: _tag_suggestions,
+        tag_suggestions,
     } = ctx;
 
     let uuid = book.unique_identifier.clone().unwrap_or_default();
-    let (book_state, editing, authors_draft) = use_row_state(book);
+    let RowState {
+        book_state,
+        editing,
+        authors_draft,
+        tags_draft,
+    } = use_row_state(book);
     let save_field = build_save_field(uuid.clone(), server_url.clone(), book_state);
     let save_authors = build_save_authors(uuid.clone(), server_url.clone(), book_state);
+    let save_tags = build_save_tags(uuid.clone(), server_url.clone(), book_state);
     let cover_bust =
         crate::contexts::cover_bust_for(crate::contexts::use_cover_cache_bust().0, &uuid);
     let display = derive_row_display(&book_state.read(), &server_url, &uuid, cover_bust);
@@ -39,9 +45,12 @@ pub(super) fn EbookRow(book: EbookMetadata, ctx: BookTableContext) -> Element {
         is_admin,
         editing,
         authors_draft,
+        tags_draft,
         author_suggestions,
+        tag_suggestions,
         save_field: EventHandler::new(save_field),
         save_authors: EventHandler::new(save_authors),
+        save_tags: EventHandler::new(save_tags),
     };
 
     rsx! {
@@ -50,19 +59,22 @@ pub(super) fn EbookRow(book: EbookMetadata, ctx: BookTableContext) -> Element {
 }
 
 /// Per-row reactive state — optimistic book copy, current editing cell, and
-/// the authors chip-editor draft. The optimistic copy lets a successful
+/// the authors/tags chip-editor drafts. The optimistic copy lets a successful
 /// inline save update the row immediately without a full library refetch;
 /// the `book` prop is resynced into it on upstream changes only when no
 /// cell is mid-edit (so a save round-trip doesn't clobber an open input).
-/// `authors_draft` mirrors `book_state.creators` so the chip editor sees
-/// canonical names after a save without dropping in-progress chip edits.
-fn use_row_state(
-    book: EbookMetadata,
-) -> (
-    Signal<EbookMetadata>,
-    Signal<Option<EditField>>,
-    Signal<Vec<String>>,
-) {
+/// `authors_draft` / `tags_draft` mirror `book_state.creators` / `.subjects`
+/// so each chip editor sees canonical values after a save without dropping
+/// in-progress chip edits.
+struct RowState {
+    book_state: Signal<EbookMetadata>,
+    editing: Signal<Option<EditField>>,
+    authors_draft: Signal<Vec<String>>,
+    tags_draft: Signal<Vec<String>>,
+}
+
+/// Seed and wire [`RowState`] for one row — see its doc for the semantics.
+fn use_row_state(book: EbookMetadata) -> RowState {
     let mut book_state: Signal<EbookMetadata> = use_signal(|| book.clone());
     let editing: Signal<Option<EditField>> = use_signal(|| None);
     use_effect(use_reactive!(|book| {
@@ -97,7 +109,21 @@ fn use_row_state(
         }
     });
 
-    (book_state, editing, authors_draft)
+    let initial_tags = book_state.read().subjects.clone();
+    let mut tags_draft: Signal<Vec<String>> = use_signal(|| initial_tags);
+    use_effect(move || {
+        let canonical = book_state.read().subjects.clone();
+        if *tags_draft.peek() != canonical {
+            tags_draft.set(canonical);
+        }
+    });
+
+    RowState {
+        book_state,
+        editing,
+        authors_draft,
+        tags_draft,
+    }
 }
 
 /// Pre-derived, ready-to-render display strings for a single row. Kept in
@@ -116,7 +142,7 @@ struct RowDisplay {
     authors_text: String,
     updated: String,
     added: String,
-    publisher: String,
+    tags_text: String,
     published: String,
     language: String,
 }
@@ -160,7 +186,7 @@ fn derive_row_display(
         authors_text: contributor_names(&book.creators),
         updated: book.modified.as_deref().unwrap_or("").to_string(),
         added: book.added_at.as_deref().unwrap_or("").to_string(),
-        publisher: book.publisher.clone().unwrap_or_default(),
+        tags_text: book.subjects.join(", "),
         published: book.published.clone().unwrap_or_default(),
         language: book.language.clone().unwrap_or_default(),
         book: book.clone(),
@@ -234,9 +260,12 @@ fn EbookRowCells(display: RowDisplay, ctx: RowContext) -> Element {
         is_admin,
         editing,
         authors_draft,
+        tags_draft,
         author_suggestions,
+        tag_suggestions,
         save_field,
         save_authors,
+        save_tags,
     } = ctx;
     // Cloned per scalar cell so each wrapper owns its own copy of the shared
     // admin/editing/save context.
@@ -257,7 +286,7 @@ fn EbookRowCells(display: RowDisplay, ctx: RowContext) -> Element {
         authors_text,
         updated,
         added,
-        publisher,
+        tags_text,
         published,
         language,
     } = display;
@@ -266,24 +295,22 @@ fn EbookRowCells(display: RowDisplay, ctx: RowContext) -> Element {
     rsx! {
         EbookRowCoverCell { thumb_src, thumb_srcset, has_cover, alt_title: cover_alt }
         RowTitleCell { title, error: book.error, ctx: cell_ctx.clone() }
-        AuthorsCell {
+        ChipCell {
+            display: ChipCellDisplay::authors(authors_text),
             is_admin,
             editing,
-            authors_draft,
-            authors_text,
+            draft: authors_draft,
             suggestions: author_suggestions,
             on_change: move |names: Vec<String>| save_authors.call(names),
         }
         RowSeriesCell { series_line, series_text, ctx: cell_ctx.clone() }
-        RowScalarCell {
-            display: RowScalarCellDisplay {
-                col_class: "ebook-col-publisher".to_string(),
-                cell_testid: "ebook-cell-publisher".to_string(),
-                value: publisher,
-                placeholder: "Publisher".to_string(),
-            },
-            field: EditField::Publisher,
-            ctx: cell_ctx.clone(),
+        ChipCell {
+            display: ChipCellDisplay::tags(tags_text),
+            is_admin,
+            editing,
+            draft: tags_draft,
+            suggestions: tag_suggestions,
+            on_change: move |tags: Vec<String>| save_tags.call(tags),
         }
         RowScalarCell {
             display: RowScalarCellDisplay {

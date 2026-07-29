@@ -5218,6 +5218,10 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   min-width: 80px;
 }
 .ebook-col-author { vertical-align: middle; }
+.ebook-col-tags {
+  vertical-align: middle;
+  min-width: 120px;
+}
 .ebook-edit-row td.ebook-edit-cell {
   background: var(--bg-1);
   padding: 10px 12px;
@@ -5248,7 +5252,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   .ebook-table .ebook-col-published { display: none; }
 }
 @media (max-width: 720px) {
-  .ebook-table .ebook-col-publisher { display: none; }
+  .ebook-table .ebook-col-tags { display: none; }
 }
 @media (max-width: 560px) {
   .ebook-table .ebook-col-series { display: none; }
