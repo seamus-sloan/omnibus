@@ -731,8 +731,8 @@ fn last_stale_check() -> &'static std::sync::atomic::AtomicI64 {
     &AT
 }
 
-/// Refresh the "Update available" flags for every completed download in
-/// **one** request.
+/// Refresh the "Update available" flags for every completed download, in as
+/// few requests as the server's per-request cap allows.
 ///
 /// Driven by the online background tick, so the Downloads list learns about
 /// a replaced file without the reader opening each book. Two properties are
@@ -759,13 +759,36 @@ pub(super) async fn refresh_stale_flags(server_url: &str) {
         last_stale_check().store(now, Ordering::Relaxed);
         return;
     }
-    let Ok(answers) = crate::data::download_validators(server_url, &queries).await else {
-        // Leave the timestamp alone so the next tick retries rather than
-        // waiting out a TTL on a request that never landed.
-        return;
-    };
-    last_stale_check().store(now, Ordering::Relaxed);
-    apply_validators(&answers);
+    if sweep_validators(server_url, &queries).await {
+        last_stale_check().store(now, Ordering::Relaxed);
+    }
+    // A chunk that failed leaves the timestamp alone so the next tick
+    // retries the whole sweep, rather than waiting out a TTL on a sweep
+    // that never finished.
+}
+
+/// Ask about every completed download in chunks of at most
+/// `MAX_VALIDATOR_QUERY` — the server rejects a single request over that
+/// size with `422` (`post_download_validators`), and a device can easily
+/// hold more downloads than that cap.
+///
+/// Each chunk's answers are applied as soon as they arrive rather than
+/// buffered for one final apply, so a later chunk failing still leaves the
+/// earlier chunks' flags updated. Returns whether every chunk succeeded;
+/// [`refresh_stale_flags`] only advances the TTL timestamp on a full `true`,
+/// so a partial sweep is retried in full on the next tick rather than being
+/// recorded as done.
+async fn sweep_validators(
+    server_url: &str,
+    queries: &[omnibus_shared::DownloadValidatorQuery],
+) -> bool {
+    for chunk in queries.chunks(omnibus_shared::MAX_VALIDATOR_QUERY) {
+        let Ok(answers) = crate::data::download_validators(server_url, chunk).await else {
+            return false;
+        };
+        apply_validators(&answers);
+    }
+    true
 }
 
 /// One query per completed download, naming the file it actually came from.
