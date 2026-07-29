@@ -118,25 +118,51 @@ pub fn KoboDevicesCard() -> Element {
         section { class: "card", "data-testid": "kobo-devices-card",
             h2 { "Kobo wireless sync" }
             p { class: "subtitle",
-                "Register a Kobo, then set its "
-                b { "wireless sync endpoint" }
-                " (Settings \u{2192} Beta Features on the device) to the URL below. "
-                "The token authorizes only your library."
+                "There is no on-device setting for this \u{2014} the endpoint is set "
+                "by editing a config file on the Kobo over USB:"
+            }
+            ol { class: "subtitle kobo-setup-steps", "data-testid": "kobo-setup-steps",
+                li {
+                    "Name your Kobo below and click "
+                    b { "Add a Kobo" }
+                    ". Omnibus mints it a private sync URL \u{2014} the token inside "
+                    "authorizes only your library."
+                }
+                li { "Copy the device's " b { "wireless sync endpoint" } " URL." }
+                li {
+                    "Connect the Kobo over USB, open the hidden "
+                    code { ".kobo/Kobo/Kobo eReader.conf" }
+                    " file, and set "
+                    code { "api_endpoint=" }
+                    " under "
+                    code { "[OneStoreServices]" }
+                    " to that URL."
+                }
+                li { "Eject safely. The next sync on the device talks to Omnibus." }
             }
 
             // Unconditional: the hazard applies the moment a URL is copied.
             div { class: "kobo-warning", "data-testid": "kobo-data-loss-warning",
                 p { class: "kobo-warning-title", "First sync can erase your Kobo's highlights" }
                 p {
-                    "A Kobo clears its own highlights and notes when the server it syncs with "
-                    "does not answer Kobo's annotation channel. Omnibus does not answer that "
-                    "channel yet, and does not store what the device erases."
+                    "A Kobo clears its own highlights and notes when the server it syncs "
+                    "with mishandles Kobo's annotation channel. Omnibus answers that "
+                    "channel, but it has not yet been verified against real devices \u{2014} "
+                    "treat wireless sync as experimental and assume the first sync can "
+                    "still wipe them."
                 }
                 p {
-                    "Copy "
+                    "Back up the device fully before you point it here \u{2014} "
+                    a { href: "https://github.com/seamus-sloan/kobo-backup", target: "_blank",
+                        "kobo-backup"
+                    }
+                    " snapshots and restores the whole device, and "
+                    a { href: "https://github.com/karlicoss/kobuddy", target: "_blank",
+                        "kobuddy"
+                    }
+                    " exports highlights and reading history. At minimum, copy "
                     code { ".kobo/KoboReader.sqlite" }
-                    " off the device over USB before you point it here. Wireless sync is "
-                    "incomplete \u{2014} treat it as experimental."
+                    " off the device over USB."
                 }
             }
 
@@ -314,6 +340,18 @@ mod render_tests {
         assert!(html.contains("data-testid=\"kobo-data-loss-warning\""));
         assert!(html.contains("First sync can erase your Kobo&#39;s highlights"));
         assert!(html.contains("KoboReader.sqlite"));
+    }
+
+    /// The setup steps must name the real procedure — the USB edit of
+    /// `Kobo eReader.conf` — and never a nonexistent on-device setting
+    /// (the pre-#1499 copy pointed at "Settings → Beta Features").
+    #[test]
+    fn kobo_card_walks_through_the_conf_file_setup() {
+        let html = render_in_vdom(card);
+        assert!(html.contains("data-testid=\"kobo-setup-steps\""));
+        assert!(html.contains("Kobo eReader.conf"));
+        assert!(html.contains("api_endpoint="));
+        assert!(!html.contains("Beta Features"));
     }
 
     /// The warning must not be gated on having registered a device — a user
