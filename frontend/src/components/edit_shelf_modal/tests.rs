@@ -36,19 +36,31 @@ fn Harness(kind: ShelfKind, sync_to_kobo: bool) -> Element {
     }
 }
 
+/// The opening tag holding `data-testid="<testid>"` — attribute-order-proof
+/// so assertions survive renderer reordering.
+fn tag_with_testid<'a>(html: &'a str, testid: &str) -> &'a str {
+    let needle = format!("data-testid=\"{testid}\"");
+    let pos = html
+        .find(&needle)
+        .unwrap_or_else(|| panic!("no element with testid {testid} in: {html}"));
+    let start = html[..pos].rfind('<').expect("testid outside a tag");
+    let end = pos + html[pos..].find('>').expect("unterminated tag");
+    &html[start..=end]
+}
+
 #[test]
 fn edit_shelf_modal_renders_the_kobo_toggle_off_when_the_shelf_does_not_sync() {
     let html = render(rsx! { Harness { kind: ShelfKind::Manual, sync_to_kobo: false } });
     assert!(html.contains("Sync to Kobo"));
-    assert!(html.contains("aria-pressed=\"true\" data-testid=\"edit-shelf-kobo-off\""));
-    assert!(html.contains("aria-pressed=\"false\" data-testid=\"edit-shelf-kobo-on\""));
+    assert!(tag_with_testid(&html, "edit-shelf-kobo-off").contains("aria-pressed=\"true\""));
+    assert!(tag_with_testid(&html, "edit-shelf-kobo-on").contains("aria-pressed=\"false\""));
 }
 
 #[test]
 fn edit_shelf_modal_prefills_the_kobo_toggle_on_from_the_shelf() {
     let html = render(rsx! { Harness { kind: ShelfKind::Smart, sync_to_kobo: true } });
-    assert!(html.contains("aria-pressed=\"true\" data-testid=\"edit-shelf-kobo-on\""));
-    assert!(html.contains("aria-pressed=\"false\" data-testid=\"edit-shelf-kobo-off\""));
+    assert!(tag_with_testid(&html, "edit-shelf-kobo-on").contains("aria-pressed=\"true\""));
+    assert!(tag_with_testid(&html, "edit-shelf-kobo-off").contains("aria-pressed=\"false\""));
 }
 
 #[test]

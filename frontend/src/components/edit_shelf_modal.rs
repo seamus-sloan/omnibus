@@ -1,8 +1,7 @@
-//! "Edit shelf" modal — the full field set from shelf creation (name,
-//! visibility, the Kobo sync opt-in, and the smart-shelf rule builder) in one
-//! dialog. Reuses [`crate::components::shelf_rule_builder::RuleBuilder`] so
-//! create and edit never duplicate the condition-row markup. Platform-agnostic
-//! like [`crate::components::CreateShelfModal`]; mounted by the landing-page
+//! "Edit shelf" modal — name, visibility, the Kobo sync opt-in, and the
+//! smart-shelf rule builder in one dialog. Reuses
+//! [`crate::components::shelf_rule_builder::RuleBuilder`] like
+//! [`crate::components::CreateShelfModal`]; mounted by the landing-page
 //! pencil, the web `ShelfHeader` pencil, and the mobile shelf-detail menu.
 
 use dioxus::prelude::*;
@@ -12,8 +11,7 @@ use crate::components::create_shelf_modal::VisibilityToggle;
 use crate::components::shelf_rule_builder::{RuleBuilder, RuleDraft};
 use crate::{data, use_server_url};
 
-// Every test here renders SSR markup, so the module is `server`-gated —
-// under `web` its contents would be dead code and CI lints with `-D warnings`.
+// SSR render tests — `server`-gated so `web` builds don't carry dead code.
 #[cfg(all(test, feature = "server"))]
 mod tests;
 
@@ -36,9 +34,7 @@ pub fn EditShelfModal(
         ShelfKind::Manual => "Hand-picked shelf",
         ShelfKind::Wishlist => "Wishlist",
     };
-    // A system shelf (Wishlist) rejects the Kobo opt-in server-side
-    // (`ShelfError::SystemShelf`) — hide the toggle so the UI never offers it,
-    // mirroring the shelf-detail ⋯-menu gating.
+    // System shelves reject the Kobo opt-in (`ShelfError::SystemShelf`) — never offer it.
     let show_kobo = !shelf.kind.is_system();
     let mut name = use_signal(|| shelf.name.clone());
     let mut visibility = use_signal(|| shelf.visibility);
