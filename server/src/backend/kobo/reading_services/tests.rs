@@ -586,6 +586,57 @@ async fn user_storage_metadata_returns_the_empty_stub() {
     );
 }
 
+#[tokio::test]
+async fn get_annotations_returns_500_when_pool_is_closed() {
+    let (app, pool, _user, _device) = fixture().await;
+    pool.close().await;
+
+    let res = app
+        .oneshot(request(
+            "GET",
+            &annotations_uri("any-book-uuid"),
+            Some(HW_ID),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn patch_annotations_returns_500_when_pool_is_closed() {
+    let (app, pool, _user, _device) = fixture().await;
+    pool.close().await;
+
+    let res = app
+        .oneshot(request(
+            "PATCH",
+            &annotations_uri("any-book-uuid"),
+            Some(HW_ID),
+            Some(&upload_body("kobo-ann-1", "yellow", None)),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn check_for_changes_returns_500_when_pool_is_closed() {
+    let (app, pool, _user, _device) = fixture().await;
+    pool.close().await;
+
+    let res = app
+        .oneshot(request(
+            "POST",
+            "/api/v3/content/checkforchanges",
+            Some(HW_ID),
+            Some(&json!([])),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
 mod dto_tests {
     use super::super::dto::*;
     use omnibus_shared::HighlightColor;

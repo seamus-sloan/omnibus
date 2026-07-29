@@ -265,6 +265,19 @@ async fn merge_books_rejects_same_book() {
 }
 
 #[tokio::test]
+async fn merge_books_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let target = seed_ebook(&pool, "A/Dracula.epub", "Dracula", "Bram Stoker").await;
+    let source = seed_audiobook(&pool, "B/Drakula.m4b", "Drakula", "Bram Stoker").await;
+    pool.close().await;
+
+    let err = merge_books(&pool, &source, &target, None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, MergeError::Db(_)));
+}
+
+#[tokio::test]
 async fn merge_books_rejects_unknown_uuid() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let uuid = seed_ebook(&pool, "Stoker/Dracula.epub", "Dracula", "Bram Stoker").await;
