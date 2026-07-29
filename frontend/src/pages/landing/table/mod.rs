@@ -1,7 +1,8 @@
 //! Power-user table view for the landing page.
 //!
-//! Dense `<table>` with inline-editable title / series / authors for admins,
-//! used by [`super::LandingPage`] when the view-mode toggle is set to table.
+//! Dense `<table>` with inline-editable title / series / authors / tags for
+//! admins, used by [`super::LandingPage`] when the view-mode toggle is set to
+//! table.
 //! Row plumbing in [`row`]; per-cell rendering in [`cells`].
 
 mod cells;
@@ -22,13 +23,13 @@ use crate::components::chip_editor::SuggestionItem;
 /// `Series` edits the series *name* only — the series index ("#N") stays
 /// in the full metadata edit page on `/books/:uuid/edit` to avoid adding a
 /// separate Series Index column to the power-user table. Title + Series +
-/// Authors covers the stated cleanup pain (stripping series-prefix cruft
-/// from titles, renaming author/series variants).
+/// Authors + Tags covers the stated cleanup pain (stripping series-prefix
+/// cruft from titles, renaming author/series variants, curating tags).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum EditField {
     Title,
     Series,
-    Publisher,
+    Tags,
     Published,
     Language,
     Authors,
@@ -81,7 +82,7 @@ pub(super) fn BookTable(
                             prefs: prefs.clone(),
                             on_sort: on_sort,
                         }
-                        th { class: "ebook-col-publisher", "Publisher" }
+                        th { class: "ebook-col-tags", "Tags" }
                         th { class: "ebook-col-published", "Published" }
                         th { class: "ebook-col-formats", "Formats" }
                         SortableHeader {

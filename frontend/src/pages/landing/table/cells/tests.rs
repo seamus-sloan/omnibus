@@ -15,10 +15,10 @@ fn field_override_sends_empty_string_sentinel_when_series_is_cleared() {
 }
 
 #[test]
-fn field_override_sends_empty_string_sentinel_when_publisher_is_cleared() {
+fn field_override_sends_empty_string_sentinel_when_language_is_cleared() {
     // Same contract as the series case, covering AC3.
-    let ov = field_override(EditField::Publisher, "  ");
-    assert_eq!(ov.publisher, Some(String::new()));
+    let ov = field_override(EditField::Language, "  ");
+    assert_eq!(ov.language, Some(String::new()));
 }
 
 #[test]
@@ -45,5 +45,13 @@ fn field_override_is_noop_for_authors_field() {
     // `field_override` itself must also stay a no-op if ever called
     // directly with it.
     let ov = field_override(EditField::Authors, "Someone");
+    assert_eq!(ov, MetadataOverrides::default());
+}
+
+#[test]
+fn field_override_is_noop_for_tags_field() {
+    // Same contract as the authors case: tags edits go through
+    // `build_save_tags`/`subjects`, never the scalar path.
+    let ov = field_override(EditField::Tags, "fiction");
     assert_eq!(ov, MetadataOverrides::default());
 }
