@@ -15,8 +15,9 @@ coverage:
       default:
         informational: true
 
-# One flag, `unit`, carried by the upload step. Leaves room for an `e2e` flag
-# later without reshaping the project number.
+# `unit` carries the Rust suite's upload; `ios` carries the omnibus-ios
+# unit suite (ios-tests.yml). Leaves room for an `e2e` flag later without
+# reshaping the project number.
 flags:
   unit:
     paths:
@@ -24,6 +25,9 @@ flags:
       - server/
       - shared/
       - frontend/
+  ios:
+    paths:
+      - omnibus-ios/
 
 # PR comment: show the overall + per-flag diff, and don't nag when there's
 # nothing to say.
