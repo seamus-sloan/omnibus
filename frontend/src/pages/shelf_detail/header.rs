@@ -24,7 +24,7 @@ pub(super) fn ShelfHeader(
 ) -> Element {
     let nav = use_navigator();
     let server_url = use_server_url();
-    let menu_open = use_signal(|| false);
+    let mut menu_open = use_signal(|| false);
     let mut show_delete_confirm = use_signal(|| false);
     let deleting = use_signal(|| false);
 
@@ -48,7 +48,10 @@ pub(super) fn ShelfHeader(
     let shelf_name = shelf.name.clone();
     let syncs_to_kobo = shelf.sync_to_kobo;
 
-    let on_delete = EventHandler::new(move |()| show_delete_confirm.set(true));
+    let on_delete = EventHandler::new(move |()| {
+        menu_open.set(false);
+        show_delete_confirm.set(true);
+    });
     let on_toggle_kobo = build_on_toggle_kobo(
         server_url.clone(),
         id,

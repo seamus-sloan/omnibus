@@ -462,9 +462,21 @@ test("surfaces the delete request in flight and keeps the shelf on failure", asy
   const shelf = (await createResp.json()) as { id: number };
 
   await gotoReady(page, `/shelves/${shelf.id}`);
-  await page.route("**/api/rpc/shelves/delete", (route) =>
-    route.fulfill({ status: 500, body: "boom" }),
-  );
+  // Only intercept the delete for *this* shelf, and hold it open briefly so
+  // the busy state below is actually observed in flight rather than racing
+  // straight to the resolved response.
+  await page.route("**/api/rpc/shelves/delete", async (route) => {
+    if (route.request().postDataJSON()?.id !== shelf.id) {
+      await route.continue();
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: "boom",
+    });
+  });
 
   try {
     await page.getByTestId("shelf-actions").click();
@@ -473,11 +485,24 @@ test("surfaces the delete request in flight and keeps the shelf on failure", asy
     const modal = page.getByTestId("shelf-delete-modal");
     const confirmBtn = modal.getByTestId("shelf-delete-confirm");
 
-    await expectMutation(
+    const mutation = expectMutation(
       page,
-      { method: "POST", url: "/api/rpc/shelves/delete", expectedStatus: 500 },
+      {
+        method: "POST",
+        url: "/api/rpc/shelves/delete",
+        expectedBody: { id: shelf.id },
+        expectedStatus: 500,
+      },
       async () => confirmBtn.click(),
     );
+
+    // While the delayed response is in flight, the confirm button is busy —
+    // disabled and relabeled — and the cancel button is disabled too.
+    await expect(confirmBtn).toBeDisabled();
+    await expect(confirmBtn).toHaveText("Deleting…");
+    await expect(modal.getByTestId("shelf-delete-cancel")).toBeDisabled();
+
+    await mutation;
 
     // The failed delete leaves the shelf, and the modal, in place.
     await expect(modal).toBeVisible();
