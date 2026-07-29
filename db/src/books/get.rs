@@ -177,6 +177,19 @@ where
     .await?)
 }
 
+/// Return `books.last_modified` (unix seconds), defaulting to `0` when the
+/// column is NULL. Used by the Kobo cover-image handler to derive a weak
+/// `ETag` from `(book id, last_modified)`; callers are expected to have
+/// already confirmed `id` exists (e.g. via [`resolve_book_id_by_uuid`]).
+pub async fn book_last_modified_for(pool: &SqlitePool, id: i64) -> Result<i64, super::BooksError> {
+    Ok(sqlx::query_scalar(
+        "SELECT CAST(COALESCE(last_modified, 0) AS INTEGER) FROM books WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await?)
+}
+
 /// Bulk counterpart to [`resolve_book_id_by_uuid`]: map each input uuid to
 /// its current `books.id`, replicating the `merged_uuids` fallback so a
 /// merged/attached uuid still resolves to the surviving book. UUIDs that

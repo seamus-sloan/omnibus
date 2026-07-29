@@ -503,13 +503,7 @@ async fn image(
     // Cheap freshness probe before the cover bytes are ever loaded: the cover
     // changes only through paths that bump `books.last_modified` (override
     // save, reindex), so the pair is an honest validator.
-    let last_modified: i64 = match sqlx::query_scalar(
-        "SELECT CAST(COALESCE(last_modified, 0) AS INTEGER) FROM books WHERE id = ?",
-    )
-    .bind(id)
-    .fetch_one(state.pool())
-    .await
-    {
+    let last_modified = match db::book_last_modified_for(state.pool(), id).await {
         Ok(lm) => lm,
         Err(e) => return internal("kobo image last_modified", e),
     };

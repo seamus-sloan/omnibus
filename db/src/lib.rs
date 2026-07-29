@@ -63,16 +63,17 @@ pub mod worker;
 pub use author_photos_data::*;
 pub use book_summary::{fetch_summary, summary_source_plan};
 pub use books::{
-    book_file_path, book_file_path_by_id, book_file_paths, collect_paths, count_books,
-    count_books_for_paths, count_books_page, count_search_books, count_search_books_for_paths,
-    download_validators, get_book, get_book_by_uuid, get_book_files, get_book_uuid_by_scan_key,
-    library_facets, library_from_db, library_from_db_combined, library_from_db_with_total,
-    library_from_db_with_total_combined, list_books, list_books_for_paths, list_books_page,
-    list_indexed_rows, list_indexed_rows_for_formats, list_merged_rows_for_formats,
-    resolve_book_id_by_uuid, resolve_book_id_by_uuid_exec, resolve_canonical_book_uuid,
-    resolve_canonical_book_uuid_exec, resolve_canonical_book_uuids_bulk_exec, search_books,
-    search_books_for_paths, search_books_for_paths_with_total, search_books_with_total, BookPage,
-    BooksError, CursorError, IndexedRow, PageCursor, MAX_BOOKS_RETURNED,
+    book_file_path, book_file_path_by_id, book_file_paths, book_last_modified_for, collect_paths,
+    count_books, count_books_for_paths, count_books_page, count_search_books,
+    count_search_books_for_paths, download_validators, get_book, get_book_by_uuid, get_book_files,
+    get_book_uuid_by_scan_key, library_facets, library_from_db, library_from_db_combined,
+    library_from_db_with_total, library_from_db_with_total_combined, list_books,
+    list_books_for_paths, list_books_page, list_indexed_rows, list_indexed_rows_for_formats,
+    list_merged_rows_for_formats, resolve_book_id_by_uuid, resolve_book_id_by_uuid_exec,
+    resolve_canonical_book_uuid, resolve_canonical_book_uuid_exec,
+    resolve_canonical_book_uuids_bulk_exec, search_books, search_books_for_paths,
+    search_books_for_paths_with_total, search_books_with_total, BookPage, BooksError, CursorError,
+    IndexedRow, PageCursor, MAX_BOOKS_RETURNED,
 };
 pub use browse::*;
 pub use covers::{covers_dir, get_cover, get_last_modified_epoch, CoversError};
