@@ -442,3 +442,33 @@ pub(super) async fn get_library(_user: AuthUser, State(state): State<AppState>) 
 
 #[cfg(test)]
 mod tests;
+
+/// Current validators for a batch of downloaded files.
+///
+/// A device holding N downloads needs to know whether any of their library
+/// files moved. Asking per book meant N full metadata fetches on a timer —
+/// a request-per-download polling loop that is a real data and battery cost
+/// on a phone and a real load cost on the server. This answers all of them
+/// in one small request, and carries no metadata: just the validator per
+/// (book, format, file) the caller names.
+///
+/// A file the caller asks about that is gone, or whose row the scanner has
+/// not stat'd, comes back with no `etag` — which every client reads as
+/// "can't tell", never as "unchanged".
+pub(super) async fn post_download_validators(
+    _user: AuthUser,
+    State(state): State<AppState>,
+    Json(request): Json<omnibus_shared::DownloadValidatorRequest>,
+) -> Response {
+    if request.files.len() > omnibus_shared::MAX_VALIDATOR_QUERY {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "too many files in one validator request",
+        )
+            .into_response();
+    }
+    match db::download_validators(&state.pool, &request.files).await {
+        Ok(files) => Json(omnibus_shared::DownloadValidatorResponse { files }).into_response(),
+        Err(error) => internal("download validators", error),
+    }
+}

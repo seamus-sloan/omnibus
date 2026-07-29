@@ -67,16 +67,17 @@ pub async fn get_book(
         .filter(|f| f.format.eq_ignore_ascii_case("EPUB"))
         .min_by_key(|f| f.ordinal)
         .map(|f| f.size_bytes);
-    let has_multipart = files.iter().any(|f| {
-        files
-            .iter()
-            .filter(|o| o.format.eq_ignore_ascii_case(&f.format))
-            .count()
-            > 1
-    });
-    if has_multipart {
-        book.book_files = files;
-    }
+    // Always published, including for the single-file-per-format case this
+    // used to omit. Each row carries the file's content validator, which is
+    // what an offline client compares against its download snapshot — and a
+    // typical library is *entirely* single-file books, so withholding the
+    // rows there withheld the validator from exactly the common case.
+    //
+    // Whether to *render* per-file detail or a compact format badge stays a
+    // presentation question, decided by the surfaces that show it (see
+    // `files_list` in `frontend/src/pages/book_detail/mobile.rs` and the
+    // per-format count in `format_switcher`).
+    book.book_files = files;
 
     Ok(Some(book))
 }
@@ -489,27 +490,34 @@ where
             Option<String>,
             i64,
             Option<String>,
+            i64,
         ),
     >(
-        "SELECT id, format, filename, ordinal, label, size_bytes, scan_key FROM book_files \
-         WHERE book_id = ? ORDER BY format, ordinal",
+        "SELECT id, format, filename, ordinal, label, size_bytes, scan_key, mtime_epoch \
+         FROM book_files WHERE book_id = ? ORDER BY format, ordinal",
     )
     .bind(book_id)
     .fetch_all(executor)
     .await?;
     Ok(rows
         .into_iter()
-        .map(|(id, format, filename, ordinal, label, size_bytes, path)| {
-            omnibus_shared::BookFileInfo {
-                id,
-                format,
-                filename,
-                ordinal,
-                label,
-                size_bytes,
-                path,
-            }
-        })
+        .map(
+            |(id, format, filename, ordinal, label, size_bytes, path, mtime_epoch)| {
+                omnibus_shared::BookFileInfo {
+                    id,
+                    format,
+                    filename,
+                    ordinal,
+                    label,
+                    size_bytes,
+                    path,
+                    // Same `(mtime_epoch, size_bytes)` pair the reindex diff
+                    // keys on, so a file the indexer classified Changed is
+                    // exactly a file whose validator moved.
+                    etag: omnibus_shared::file_etag(size_bytes, mtime_epoch),
+                }
+            },
+        )
         .collect())
 }
 
@@ -537,4 +545,106 @@ pub async fn get_book_uuid_by_scan_key(
     .bind(scan_key)
     .fetch_optional(pool)
     .await?)
+}
+
+/// Answer a batch of "what is this file's validator now?" questions in two
+/// queries, whatever the batch size.
+///
+/// The row picked per query mirrors what the download endpoints resolve: an
+/// explicit `file_id` when given, else the lowest-ordinal row of a format
+/// the download serves (`db::book_file_path`'s `ORDER BY bf.ordinal LIMIT
+/// 1`, and `default_audio_file_id` on the client). Answering about a
+/// different row than the one a download came from would report a book
+/// stale that isn't.
+///
+/// `None` for an entry whose book, format, or chosen file is gone, or whose
+/// row the scanner has not stat'd — every one of which a client reads as
+/// "can't tell", never as "unchanged".
+pub async fn download_validators(
+    pool: &SqlitePool,
+    queries: &[omnibus_shared::DownloadValidatorQuery],
+) -> Result<Vec<omnibus_shared::DownloadValidator>, super::BooksError> {
+    use std::collections::HashMap;
+
+    // uuid → books.id, merged-uuid aware so an attached format still
+    // resolves (migration 0016).
+    let mut ids: HashMap<&str, i64> = HashMap::new();
+    for query in queries {
+        if ids.contains_key(query.book_uuid.as_str()) {
+            continue;
+        }
+        if let Some(id) = crate::resolve_book_id_by_uuid(pool, &query.book_uuid).await? {
+            ids.insert(query.book_uuid.as_str(), id);
+        }
+    }
+
+    // One pass over every candidate row, chunked under SQLite's 999-param cap.
+    let distinct: Vec<i64> = {
+        let mut v: Vec<i64> = ids.values().copied().collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    let mut rows_by_book: HashMap<i64, Vec<ValidatorRow>> = HashMap::new();
+    for chunk in distinct.chunks(900) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let sql = format!(
+            "SELECT book_id, id, format, ordinal, size_bytes, mtime_epoch \
+             FROM book_files WHERE book_id IN ({placeholders})"
+        );
+        let mut q = sqlx::query_as::<_, (i64, i64, String, i64, i64, i64)>(&sql);
+        for id in chunk {
+            q = q.bind(id);
+        }
+        for (book_id, id, format, ordinal, size_bytes, mtime_epoch) in q.fetch_all(pool).await? {
+            rows_by_book.entry(book_id).or_default().push(ValidatorRow {
+                id,
+                format,
+                ordinal,
+                size_bytes,
+                mtime_epoch,
+            });
+        }
+    }
+
+    Ok(queries
+        .iter()
+        .map(|query| {
+            let etag = ids
+                .get(query.book_uuid.as_str())
+                .and_then(|book_id| rows_by_book.get(book_id))
+                .and_then(|rows| pick_validator_row(rows, query))
+                .and_then(|row| omnibus_shared::file_etag(row.size_bytes, row.mtime_epoch));
+            omnibus_shared::DownloadValidator {
+                book_uuid: query.book_uuid.clone(),
+                format: query.format,
+                file_id: query.file_id,
+                etag,
+            }
+        })
+        .collect())
+}
+
+/// The `book_files` columns a validator answer is built from.
+struct ValidatorRow {
+    id: i64,
+    format: String,
+    ordinal: i64,
+    size_bytes: i64,
+    mtime_epoch: i64,
+}
+
+/// The `book_files` row a query is about: the explicit `file_id` when given,
+/// else the lowest-ordinal row of a format this download serves.
+fn pick_validator_row<'a>(
+    rows: &'a [ValidatorRow],
+    query: &omnibus_shared::DownloadValidatorQuery,
+) -> Option<&'a ValidatorRow> {
+    if let Some(file_id) = query.file_id {
+        return rows.iter().find(|row| row.id == file_id);
+    }
+    let formats = query.format.file_formats();
+    rows.iter()
+        .filter(|row| formats.iter().any(|f| f.eq_ignore_ascii_case(&row.format)))
+        .min_by_key(|row| row.ordinal)
 }

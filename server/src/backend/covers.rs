@@ -13,20 +13,9 @@ use axum::{
 };
 use omnibus_db::{self as db};
 
-use super::conditional::MEDIA_VARY;
+use super::conditional::{MEDIA_CACHE_CONTROL, MEDIA_VARY};
 use super::{internal, AppState};
 use crate::auth::MediaAuthUser;
-
-/// `Cache-Control` these handlers serve. A book editor cover replace (#1086)
-/// writes new bytes under the *same* uuid-keyed URL, so a stale
-/// `max-age`-only cache would keep serving the old image for up to a day on
-/// the next reload/revisit — the browser never even asks. `no-cache` forces
-/// a conditional GET on every load; the `ETag` makes that revalidation a
-/// cheap 304 whenever the image hasn't actually changed. `private` +
-/// [`MEDIA_VARY`] keep a shared proxy from serving one user's covers to an
-/// unauthenticated (or differently bearer-authenticated) request on the same
-/// URL now that the endpoint is gated.
-const MEDIA_CACHE_CONTROL: &str = "private, no-cache";
 
 pub(super) async fn get_cover(
     _user: MediaAuthUser,

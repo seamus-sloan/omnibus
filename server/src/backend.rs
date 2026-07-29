@@ -303,6 +303,10 @@ fn content_routes() -> Router<AppState> {
         .route("/api/users/{id}/password", post(users::post_password))
         .route("/api/users/{id}/unlock", post(users::post_unlock))
         .route("/api/library", get(ebooks::get_library))
+        .route(
+            "/api/downloads/validators",
+            post(ebooks::post_download_validators),
+        )
         .route("/api/ebooks", get(ebooks::get_ebooks))
         .route("/api/ebooks/{uuid}", get(ebooks::get_ebook_by_uuid))
         .route("/api/ebooks/{uuid}/file", get(ebooks::get_ebook_file))

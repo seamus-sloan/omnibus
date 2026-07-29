@@ -433,6 +433,7 @@ mod tests {
             label: None,
             size_bytes: 0,
             path: None,
+            etag: None,
         }
     }
 

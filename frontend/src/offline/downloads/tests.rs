@@ -13,6 +13,7 @@ fn bf(id: i64, format: &str, ordinal: i64, size_bytes: i64) -> BookFileInfo {
         label: None,
         size_bytes,
         path: None,
+        etag: None,
     }
 }
 

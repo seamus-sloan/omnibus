@@ -420,10 +420,29 @@ fn suggestion_tile(s: BookSuggestion, server_url: &str) -> Element {
     }
 }
 
-/// File rows: per-file detail when the book carries `book_files`, otherwise
-/// one row per format.
+/// Whether any format on this book has more than one file — the case where
+/// naming the individual files tells the reader something a format badge
+/// doesn't (five M4B parts, two EPUB editions).
+fn has_multi_file_format(files: &[omnibus_shared::BookFileInfo]) -> bool {
+    files.iter().any(|f| {
+        files
+            .iter()
+            .filter(|other| other.format.eq_ignore_ascii_case(&f.format))
+            .count()
+            > 1
+    })
+}
+
+/// File rows: per-file detail when some format has more than one file,
+/// otherwise one badge per format.
+///
+/// The count is checked here rather than inferred from `book_files` being
+/// non-empty. The API publishes those rows for every book — they carry each
+/// file's content validator — so emptiness no longer means "single file",
+/// and reading it that way would show filename-and-path detail for every
+/// ordinary one-file book.
 fn files_list(b: &EbookMetadata) -> Element {
-    if !b.book_files.is_empty() {
+    if has_multi_file_format(&b.book_files) {
         rsx! {
             div { class: "m-bd-files",
                 for f in b.book_files.iter() {
