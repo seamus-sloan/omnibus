@@ -61,6 +61,17 @@ struct CheckInView: View {
                     RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
                         .strokeBorder(palette.lineColor, lineWidth: 1)
                 )
+                // VisionKit's guidance text ("Find nearby barcodes") isn't
+                // customizable, so guidance is disabled and drawn here instead.
+                .overlay(alignment: .top) {
+                    Text("Move barcode into view")
+                        .font(.ui(13, weight: .medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, Spacing.md)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(.black.opacity(0.55)))
+                        .padding(.top, Spacing.md)
+                }
                 .screenPadding()
                 .padding(.top, Spacing.lg)
 
@@ -377,6 +388,7 @@ struct BarcodeScannerView: UIViewControllerRepresentable {
             qualityLevel: .balanced,
             recognizesMultipleItems: false,
             isHighFrameRateTrackingEnabled: false,
+            isGuidanceEnabled: false,
             isHighlightingEnabled: true
         )
         controller.delegate = context.coordinator
