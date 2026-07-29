@@ -38,9 +38,15 @@ final class LibraryModel {
     /// so this is the loaded page as-is.
     var visibleBooks: [Book] { books }
 
+    /// Background poll cadence, mirroring the web client's 60 s sync tick.
+    static let pollInterval: Duration = .seconds(60)
+
     private var cursor: String?
     private var reachedEnd = false
     private var loadToken = UUID()
+    /// Once the user has paged past the first screen, a background refresh
+    /// would truncate the grid back to page one — so it stands down.
+    private var hasPaginated = false
 
     func loadIfNeeded() async {
         guard books.isEmpty, !isLoading else { return }
@@ -54,6 +60,7 @@ final class LibraryModel {
         error = nil
         cursor = nil
         reachedEnd = false
+        hasPaginated = false
 
         let sort = sort
         let direction = direction
@@ -104,6 +111,52 @@ final class LibraryModel {
         for await points in UserDataService.recentProgress().values() { resume = points }
     }
 
+    /// One background poll tick: pick up server-side changes (a finished
+    /// import, progress from another device) without requiring a pull.
+    /// Mirrors the web client's sync tick — the mirror sync self-throttles to
+    /// one full pass per five minutes, and the first-page revalidation only
+    /// repaints when the server's answer actually differs.
+    func backgroundRefresh() async {
+        guard Self.shouldPoll(
+            isOnline: Connectivity.shared.isOnline,
+            isLoading: isLoading,
+            isLoadingMore: isLoadingMore,
+            hasPaginated: hasPaginated
+        ) else { return }
+
+        async let mirror: Void = LibraryIndex.shared.sync()
+        await refreshResume()
+        await revalidateFirstPage()
+        await mirror
+    }
+
+    /// Pure poll gate, split out so the guard is testable without a server:
+    /// offline ticks are wasted requests, loading ticks would race the user,
+    /// and a paginated grid must not be truncated back to page one.
+    nonisolated static func shouldPoll(
+        isOnline: Bool, isLoading: Bool, isLoadingMore: Bool, hasPaginated: Bool
+    ) -> Bool {
+        isOnline && !isLoading && !isLoadingMore && !hasPaginated
+    }
+
+    /// Re-reads the first page through the replica cache. `Cache.live` yields
+    /// a fresh value only when the payload changed, so a quiet library never
+    /// re-renders; a failed poll is invisible and the next tick retries.
+    private func revalidateFirstPage() async {
+        let token = loadToken
+        do {
+            for try await read in LibraryService.page(
+                sort: sort, direction: direction, filter: category.filter, cursor: nil
+            ) {
+                guard loadToken == token, !hasPaginated else { return }
+                guard read.isFresh else { continue }
+                books = read.value.books
+                cursor = read.value.nextCursor
+                reachedEnd = read.value.nextCursor == nil
+            }
+        } catch {}
+    }
+
     func loadMoreIfNeeded(currentItem: Book) async {
         guard !reachedEnd, !isLoadingMore, !isLoading, let cursor else { return }
         // Prefetch a page ahead of the end so the grid never shows a gap.
@@ -120,6 +173,7 @@ final class LibraryModel {
             ) {
                 let page = read.value
                 let existing = Set(books.map(\.id))
+                hasPaginated = true
                 books.append(contentsOf: page.books.filter { !existing.contains($0.id) })
                 self.cursor = page.nextCursor
                 reachedEnd = page.nextCursor == nil || page.books.isEmpty
@@ -196,6 +250,14 @@ struct LibraryView: View {
         }
         .environment(\.bookZoomNamespace, bookZoom)
         .task { await model.loadIfNeeded() }
+        // Background poll, mirroring the web client's sync tick. Tied to the
+        // view's lifetime, so it pauses whenever the library isn't on screen.
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: LibraryModel.pollInterval)
+                await model.backgroundRefresh()
+            }
+        }
         // The reader and player are full-screen covers over the tab view, so
         // closing one neither re-runs `task` nor re-appears this view.
         .onChange(of: presentation.progressToken) { _, _ in
