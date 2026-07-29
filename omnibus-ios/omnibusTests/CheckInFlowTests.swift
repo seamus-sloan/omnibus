@@ -21,11 +21,23 @@ private func externalMeta(cover: String? = "https://covers.example/x.jpg") -> Ex
 
 struct CheckInFlowTests {
     @Test func checkedInSuccessIsCelebratoryWithViewBook() {
-        let success = CheckInFlow.checkedInSuccess(book: scanBook())
+        let success = CheckInFlow.checkedInSuccess(
+            book: scanBook(), ref: BookRef(bookUUID: "b-1")
+        )
         #expect(success.tone == .celebration)
         #expect(success.headline == "In your physical collection")
         #expect(success.bookUUID == "b-1")
         #expect(success.cover == .library(uuid: "b-1"))
+    }
+
+    @Test func checkedInSuccessPrefersTheCanonicalUUIDFromTheServer() {
+        // A merged book's check-in answers with the primary's uuid — the
+        // success screen must link and render through it.
+        let success = CheckInFlow.checkedInSuccess(
+            book: scanBook(uuid: "b-merged"), ref: BookRef(bookUUID: "b-primary")
+        )
+        #expect(success.bookUUID == "b-primary")
+        #expect(success.cover == .library(uuid: "b-primary"))
     }
 
     @Test func addedSuccessUsesReturnedUUIDAndExternalCover() {

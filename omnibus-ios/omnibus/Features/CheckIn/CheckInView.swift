@@ -278,6 +278,9 @@ struct CheckInView: View {
                 .foregroundStyle(palette.accentColor)
                 .frame(maxWidth: .infinity)
                 .padding(.top, Spacing.sm)
+                // Restarting mid-write would race the pending POST's stage
+                // swap — a stale success screen for the previous book.
+                .disabled(isWriting)
             }
             .screenPadding()
             .padding(.vertical, Spacing.lg)
@@ -423,17 +426,22 @@ struct CheckInView: View {
         guard beginWrite() else { return }
         defer { isWriting = false }
         do {
-            let _: BookRef = try await APIClient.shared.post(
+            let ref: BookRef = try await APIClient.shared.post(
                 "/api/scan/check-in",
                 body: CheckInRequest(bookUUID: book.uuid, isbn: isbn, note: note.nilIfBlank)
             )
             Haptics.success()
+            // The server answers with the canonical uuid (a merged book
+            // resolves to its primary); bust both keys when they differ.
             await OfflineStore.shared.cacheDelete(CacheKey.book(book.uuid))
+            if ref.bookUUID != book.uuid {
+                await OfflineStore.shared.cacheDelete(CacheKey.book(ref.bookUUID))
+            }
             // Check-in fulfills every user's wishlist for the book, so shelf
             // counts and preview covers are stale too.
             await OfflineStore.shared.cacheDelete(CacheKey.shelves)
             await OfflineStore.shared.cacheDelete(CacheKey.shelfPreviews)
-            withAnimation(Motion.settle) { stage = .success(CheckInFlow.checkedInSuccess(book: book)) }
+            withAnimation(Motion.settle) { stage = .success(CheckInFlow.checkedInSuccess(book: book, ref: ref)) }
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }

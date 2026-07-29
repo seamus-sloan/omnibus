@@ -65,8 +65,13 @@ actor ImageCache {
     /// third party (Google Books, Open Library).
     func externalImage(for url: String) async -> UIImage? {
         if let cached = image(for: url) { return cached }
+        // Provider metadata is untrusted input: only fetch http(s), and only
+        // cache bodies a 2xx actually vouched for.
         guard let remote = URL(string: url),
-              let (data, _) = try? await URLSession.shared.data(from: remote),
+              remote.scheme == "https" || remote.scheme == "http",
+              let (data, response) = try? await URLSession.shared.data(from: remote),
+              let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode),
               let decoded = UIImage(data: data)
         else { return nil }
         store(decoded, data: data, for: url)

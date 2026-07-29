@@ -42,14 +42,16 @@ struct CheckInSuccess: Equatable {
 /// Pure builders and gates, separated from the view so they're testable
 /// without a server (same pattern as `LibraryModel.shouldPoll`).
 enum CheckInFlow {
-    /// Checked in a physical copy of a library book.
-    static func checkedInSuccess(book: ScanBook) -> CheckInSuccess {
+    /// Checked in a physical copy of a library book. The server answers with
+    /// the *canonical* uuid (merged books resolve to their primary), so the
+    /// success screen links and renders through `ref`, not the scanned book.
+    static func checkedInSuccess(book: ScanBook, ref: BookRef) -> CheckInSuccess {
         CheckInSuccess(
             tone: .celebration,
             headline: "In your physical collection",
             title: book.title,
-            bookUUID: book.uuid,
-            cover: .library(uuid: book.uuid)
+            bookUUID: ref.bookUUID,
+            cover: .library(uuid: ref.bookUUID)
         )
     }
 
