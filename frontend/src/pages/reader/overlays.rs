@@ -139,8 +139,8 @@ fn render_toc_overlay(
     rsx! {
         TocDrawer {
             entries: toc.read().clone(),
-            current_title: chapter_title.clone(),
-            progress_label: contents_progress.clone(),
+            current_title: chapter_title,
+            progress_label: contents_progress,
             on_navigate: move |href: String| {
                 #[cfg(any(feature = "web", feature = "mobile"))]
                 super::reader_call_json("display", &href);
@@ -232,9 +232,9 @@ fn render_bookmarks_overlay(
     }
     rsx! {
         ReaderBookmarksDrawer {
-            uuid: uuid.clone(),
-            current_cfi: current_cfi.clone(),
-            current_label: chapter_title.clone(),
+            uuid,
+            current_cfi,
+            current_label: chapter_title,
             on_navigate: move |cfi: String| {
                 #[cfg(any(feature = "web", feature = "mobile"))]
                 super::reader_call_json("display", &cfi);
@@ -266,9 +266,9 @@ fn render_annotations_overlay(
     }
     rsx! {
         AnnotationsSheet {
-            uuid: uuid.clone(),
-            current_cfi: current_cfi.clone(),
-            current_label: chapter_title.clone(),
+            uuid,
+            current_cfi,
+            current_label: chapter_title,
             highlights,
             on_quote: move |h: Highlight| {
                 let mut quote_target = quote_target;
@@ -310,9 +310,9 @@ fn render_quote_target_overlay(
     rsx! {
         QuotePanel {
             quote_text: h.text.clone().unwrap_or_default(),
-            author: book_author.clone(),
-            subtitle: book_title.clone(),
-            accent: book_accent.clone(),
+            author: book_author,
+            subtitle: book_title,
+            accent: book_accent,
             on_close: move |_| {
                 let mut quote_target = quote_target;
                 quote_target.set(None);

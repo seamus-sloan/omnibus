@@ -15,7 +15,7 @@ fn endpoint_url(server_url: &str, token: &str) -> String {
     format!("{}/kobo/{token}", server_url.trim_end_matches('/'))
 }
 
-/// The three-step "how to connect" list at the top of the card.
+/// The numbered "how to connect" list at the top of the card.
 fn render_kobo_setup_steps() -> Element {
     rsx! {
         ol { class: "subtitle kobo-setup-steps", "data-testid": "kobo-setup-steps",
@@ -104,11 +104,11 @@ fn render_kobo_device_list(
     }
     rsx! {
         ul { class: "kobo-device-list", "data-testid": "kobo-device-list",
-            for dev in device_list.iter().cloned() {
+            for dev in device_list.iter() {
                 KoboDeviceRow {
                     key: "{dev.id}",
-                    device: dev.clone(),
                     endpoint: endpoint_url(server_url, &dev.token),
+                    device: dev.clone(),
                     disabled: in_flight,
                     on_regenerate,
                     on_remove,
