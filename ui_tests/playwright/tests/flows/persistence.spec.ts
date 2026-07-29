@@ -137,9 +137,8 @@ test("library scroll position is restored after opening a book", async ({
   await gotoReady(page, "/");
 
   // Grid tiles navigate on click with no editable cells (unlike admin table
-  // rows, where clicking the title cell enters edit mode). Grid view persists
-  // via view_prefs, so it survives the back-navigation too.
-  await page.getByTestId("view-toggle-grid").click();
+  // rows, where clicking the title cell enters edit mode). Grid is the
+  // default view mode, so the tiles are already on screen.
   await expect(page.getByTestId(/^ebook-tile-/).first()).toBeVisible();
 
   const savedY = await page.evaluate(() => {

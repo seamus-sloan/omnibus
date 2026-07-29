@@ -13,8 +13,8 @@ mod tests;
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ViewMode {
-    #[default]
     Table,
+    #[default]
     Grid,
 }
 

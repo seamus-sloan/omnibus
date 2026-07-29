@@ -71,6 +71,15 @@ export function getRow(page: Page, slug: string): Locator {
   return page.getByTestId(`ebook-row-${slug}`);
 }
 
+/**
+ * Switch the landing library to the table view. Grid is the default view
+ * mode, so any spec that asserts against table rows/cells must opt in first.
+ */
+export async function switchToTableView(page: Page): Promise<void> {
+  await page.getByTestId("view-toggle-table").click();
+  await expect(page.getByTestId("ebook-table")).toBeVisible();
+}
+
 /** Expected text for the series cell, mirroring the Rust formatter:
  *  `${name} #${idx}` when both are present, just `${name}` when no index,
  *  empty string otherwise. */
