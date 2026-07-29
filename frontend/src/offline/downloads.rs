@@ -14,6 +14,7 @@ use super::store::{self, DownloadRow};
 use super::sync;
 
 mod engine;
+mod verify;
 
 /// Downloadable format of a book — one registry row per (uuid, format), so
 /// dual-format books hold two independent downloads.
@@ -42,6 +43,12 @@ impl DlFormat {
 }
 
 /// One planned (or fetched) file of a download.
+///
+/// The two validators answer different questions and are deliberately not
+/// one field. Both are `#[serde(default)]` because this struct is stored as
+/// JSON in `downloads.files`, so rows written before they existed still
+/// load — as a download with no validators, which reads as "can't tell",
+/// never as "stale".
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PlannedFile {
     /// File name inside `downloads/{uuid}/` (also the `/dl` URL segment).
@@ -53,6 +60,18 @@ pub struct PlannedFile {
     /// Final on-disk size once fetched.
     pub bytes: Option<i64>,
     pub done: bool,
+    /// `ETag` the server sent for *this URL* when the file was fetched.
+    /// Replayed as `If-Range` on a resume so the server can tell us the
+    /// bytes moved and hand back the whole new body instead of a 206 that
+    /// would splice onto the wrong head.
+    #[serde(default)]
+    pub http_etag: Option<String>,
+    /// `BookFileInfo.etag` — the wire validator of the `book_files` row
+    /// this file came from — as it read at download time. Compared against
+    /// a later metadata refresh to surface "Update available". Every part
+    /// of one audiobook carries the same value, since they share a row.
+    #[serde(default)]
+    pub source_etag: Option<String>,
 }
 
 /// UI-facing status of one (uuid, format) download.
@@ -406,6 +425,36 @@ fn persist_progress(
     });
 }
 
+/// Persist the response validator for one file of a download, immediately.
+///
+/// Called by the engine the moment a response's headers arrive, *before*
+/// any of its body is read. That timing is the whole point: the process can
+/// be killed or the task cancelled at any point during a transfer, and the
+/// `.part` it leaves behind is only safely resumable if the tag naming the
+/// file those bytes came from already reached disk. Anything that waits for
+/// the transfer to return — success or failure — misses exactly the
+/// interruptions a mobile client actually suffers.
+pub(super) fn record_file_etag(uuid: &str, format: DlFormat, rel: &str, etag: Option<String>) {
+    let Ok(mut guard) = registry().write() else {
+        return;
+    };
+    let Some(entry) = guard.get_mut(&(uuid.to_string(), format)) else {
+        return;
+    };
+    let Some(file) = entry.files.iter_mut().find(|f| f.rel == rel) else {
+        return;
+    };
+    if file.http_etag == etag {
+        return;
+    }
+    file.http_etag = etag;
+    let snapshot = entry.clone();
+    // Release before the DB write — persistence never needs the lock.
+    drop(guard);
+    persist(&snapshot);
+    bump();
+}
+
 pub(super) fn set_error(uuid: &str, format: DlFormat, message: String) {
     let Some(mut entry) = get_entry(uuid, format) else {
         return;
@@ -497,6 +546,12 @@ fn entry_from_row(row: DownloadRow) -> Option<DownloadEntry> {
 /// Mirrors the HLS resolver's accepted formats; shared with the mobile
 /// listen host so download and playback pick the same file.
 pub fn default_audio_file_id(files: &[omnibus_shared::BookFileInfo]) -> Option<i64> {
+    default_audio_file(files).map(|f| f.id)
+}
+
+fn default_audio_file(
+    files: &[omnibus_shared::BookFileInfo],
+) -> Option<&omnibus_shared::BookFileInfo> {
     files
         .iter()
         .filter(|f| {
@@ -505,7 +560,54 @@ pub fn default_audio_file_id(files: &[omnibus_shared::BookFileInfo]) -> Option<i
                 || f.format.eq_ignore_ascii_case("MP3")
         })
         .min_by_key(|f| f.ordinal)
-        .map(|f| f.id)
+}
+
+/// The `book_files` row a download of `format` targets: the explicitly
+/// chosen `file_id`, else the same default the server would resolve —
+/// lowest ordinal of the format, matching `db::book_file_path`'s
+/// `ORDER BY bf.ordinal LIMIT 1` and [`default_audio_file_id`].
+pub(super) fn target_file(
+    book: &omnibus_shared::EbookMetadata,
+    format: DlFormat,
+    file_id: Option<i64>,
+) -> Option<&omnibus_shared::BookFileInfo> {
+    if let Some(id) = file_id {
+        return book.book_files.iter().find(|f| f.id == id);
+    }
+    match format {
+        DlFormat::Epub => book
+            .book_files
+            .iter()
+            .filter(|f| f.format.eq_ignore_ascii_case("EPUB"))
+            .min_by_key(|f| f.ordinal),
+        DlFormat::Audio => default_audio_file(&book.book_files),
+    }
+}
+
+/// Whether the stored copy of `(uuid, format)` predates the file currently
+/// in the library — the "Update available" condition.
+///
+/// Deliberately conservative: a missing validator on either side (an old
+/// registry row, a `book_files` row the scanner has not stat'd) reports
+/// `false`. Not knowing is not the same as knowing it is stale, and
+/// prompting a reader to re-download a book on a guess is worse than
+/// staying quiet.
+pub fn is_stale(uuid: &str, format: DlFormat, book: &omnibus_shared::EbookMetadata) -> bool {
+    let Some(entry) = get_entry(uuid, format) else {
+        return false;
+    };
+    if !matches!(entry.status, DownloadStatus::Complete { .. }) {
+        return false;
+    }
+    let Some(current) = target_file(book, format, entry.file_id).and_then(|f| f.etag.as_deref())
+    else {
+        return false;
+    };
+    entry
+        .files
+        .iter()
+        .filter_map(|f| f.source_etag.as_deref())
+        .any(|snapshot| snapshot != current)
 }
 
 /// Human-readable size for the download UI (binary units, one decimal).

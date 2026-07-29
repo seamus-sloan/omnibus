@@ -128,6 +128,8 @@ fn entry_row_round_trip_preserves_status_and_files() {
             ordinal: Some(0),
             bytes: Some(123),
             done: true,
+            http_etag: Some("\"resp-1\"".into()),
+            source_etag: Some("\"wire-1\"".into()),
         }],
         updated_at: 42,
     };
@@ -178,6 +180,8 @@ fn update_progress_bytes_mutates_status_in_place_and_preserves_files() {
         ordinal: Some(0),
         bytes: None,
         done: false,
+        http_etag: None,
+        source_etag: None,
     }];
     upsert(DownloadEntry {
         book_uuid: uuid.into(),
@@ -309,4 +313,155 @@ fn format_bytes_scales_units() {
     assert_eq!(format_bytes(5 * 1024 * 1024), "5.0 MB");
     assert_eq!(format_bytes(3 * 1024 * 1024 * 1024), "3.0 GB");
     assert_eq!(format_bytes(-5), "0 B");
+}
+
+// ── Staleness detection (#1231 AC3) ────────────────────────────────────
+
+fn bf_with_etag(id: i64, format: &str, ordinal: i64, etag: Option<&str>) -> BookFileInfo {
+    BookFileInfo {
+        etag: etag.map(str::to_string),
+        ..bf(id, format, ordinal, 1_000)
+    }
+}
+
+/// Register a completed download of `uuid` whose snapshot is `source_etag`.
+fn seed_complete_download(uuid: &str, format: DlFormat, source_etag: Option<&str>) {
+    upsert(DownloadEntry {
+        book_uuid: uuid.into(),
+        format,
+        title: "T".into(),
+        file_id: None,
+        status: DownloadStatus::Complete { bytes: 10 },
+        files: vec![PlannedFile {
+            rel: "book.epub".into(),
+            url_path: "/x".into(),
+            ordinal: None,
+            bytes: Some(10),
+            done: true,
+            http_etag: None,
+            source_etag: source_etag.map(str::to_string),
+        }],
+        updated_at: 1,
+    });
+}
+
+#[test]
+fn is_stale_is_true_when_the_library_file_moved_under_the_download() {
+    let uuid = "u-stale-moved";
+    seed_complete_download(uuid, DlFormat::Epub, Some("\"old\""));
+    let book = book_with_files(vec![bf_with_etag(1, "EPUB", 0, Some("\"new\""))]);
+    assert!(is_stale(uuid, DlFormat::Epub, &book));
+}
+
+#[test]
+fn is_stale_is_false_when_the_validator_is_unchanged() {
+    let uuid = "u-stale-same";
+    seed_complete_download(uuid, DlFormat::Epub, Some("\"same\""));
+    let book = book_with_files(vec![bf_with_etag(1, "EPUB", 0, Some("\"same\""))]);
+    assert!(!is_stale(uuid, DlFormat::Epub, &book));
+}
+
+#[test]
+fn is_stale_is_false_when_either_side_has_no_validator() {
+    // Not knowing is not the same as knowing it is stale. A registry row
+    // written before validators existed, or a `book_files` row the scanner
+    // has not stat'd, must not prompt a re-download on a guess.
+    let no_snapshot = "u-stale-no-snapshot";
+    seed_complete_download(no_snapshot, DlFormat::Epub, None);
+    let book = book_with_files(vec![bf_with_etag(1, "EPUB", 0, Some("\"new\""))]);
+    assert!(!is_stale(no_snapshot, DlFormat::Epub, &book));
+
+    let no_current = "u-stale-no-current";
+    seed_complete_download(no_current, DlFormat::Epub, Some("\"old\""));
+    let unstatted = book_with_files(vec![bf_with_etag(1, "EPUB", 0, None)]);
+    assert!(!is_stale(no_current, DlFormat::Epub, &unstatted));
+}
+
+#[test]
+fn is_stale_is_false_for_a_download_that_never_completed() {
+    let uuid = "u-stale-incomplete";
+    upsert(DownloadEntry {
+        book_uuid: uuid.into(),
+        format: DlFormat::Epub,
+        title: "T".into(),
+        file_id: None,
+        status: DownloadStatus::Error {
+            message: "boom".into(),
+        },
+        files: vec![PlannedFile {
+            rel: "book.epub".into(),
+            url_path: "/x".into(),
+            ordinal: None,
+            bytes: None,
+            done: false,
+            http_etag: None,
+            source_etag: Some("\"old\"".into()),
+        }],
+        updated_at: 1,
+    });
+    let book = book_with_files(vec![bf_with_etag(1, "EPUB", 0, Some("\"new\""))]);
+    assert!(!is_stale(uuid, DlFormat::Epub, &book));
+}
+
+#[test]
+fn is_stale_is_false_for_a_book_that_was_never_downloaded() {
+    let book = book_with_files(vec![bf_with_etag(1, "EPUB", 0, Some("\"new\""))]);
+    assert!(!is_stale("u-stale-absent", DlFormat::Epub, &book));
+}
+
+#[test]
+fn target_file_mirrors_the_servers_own_row_selection() {
+    let book = book_with_files(vec![
+        bf_with_etag(10, "EPUB", 1, Some("\"epub-1\"")),
+        bf_with_etag(11, "EPUB", 0, Some("\"epub-0\"")),
+        bf_with_etag(20, "M4B", 1, Some("\"m4b-1\"")),
+        bf_with_etag(21, "M4B", 0, Some("\"m4b-0\"")),
+    ]);
+    // No explicit file: lowest ordinal of the format, matching
+    // `db::book_file_path`'s `ORDER BY bf.ordinal LIMIT 1`.
+    assert_eq!(
+        target_file(&book, DlFormat::Epub, None).map(|f| f.id),
+        Some(11)
+    );
+    assert_eq!(
+        target_file(&book, DlFormat::Audio, None).map(|f| f.id),
+        Some(21)
+    );
+    // An explicit file_id wins, and is looked up across every format.
+    assert_eq!(
+        target_file(&book, DlFormat::Epub, Some(10)).map(|f| f.id),
+        Some(10)
+    );
+    assert_eq!(target_file(&book, DlFormat::Epub, Some(999)), None);
+}
+
+#[test]
+fn is_stale_follows_an_explicitly_chosen_file_id() {
+    let uuid = "u-stale-file-id";
+    upsert(DownloadEntry {
+        book_uuid: uuid.into(),
+        format: DlFormat::Epub,
+        title: "T".into(),
+        file_id: Some(10),
+        status: DownloadStatus::Complete { bytes: 10 },
+        files: vec![PlannedFile {
+            rel: "book.epub".into(),
+            url_path: "/x?file_id=10".into(),
+            ordinal: None,
+            bytes: Some(10),
+            done: true,
+            http_etag: None,
+            source_etag: Some("\"epub-1\"".into()),
+        }],
+        updated_at: 1,
+    });
+    // Row 11 changed; row 10 — the one this download came from — did not.
+    let book = book_with_files(vec![
+        bf_with_etag(10, "EPUB", 1, Some("\"epub-1\"")),
+        bf_with_etag(11, "EPUB", 0, Some("\"epub-0-changed\"")),
+    ]);
+    assert!(
+        !is_stale(uuid, DlFormat::Epub, &book),
+        "a sibling file changing must not mark this download stale"
+    );
 }

@@ -11,6 +11,7 @@ use anyhow::Context;
 use crate::data;
 use crate::offline::{cache, media};
 
+use super::verify::{self, Verdict};
 use super::{DlFormat, DownloadEntry, DownloadStatus, PlannedFile};
 
 /// Flush registry progress every this many streamed bytes.
@@ -43,6 +44,8 @@ enum DownloadError {
     Unauthorized,
     #[error("Download was interrupted — tap to resume")]
     Interrupted,
+    #[error("The download arrived damaged — tap to try again")]
+    Damaged,
 }
 
 /// Run one download to completion (or error). The registry entry was
@@ -76,6 +79,11 @@ async fn run_inner(
         .clone()
         .filter(|t| !t.trim().is_empty())
         .unwrap_or_else(|| book.filename.clone());
+
+    // Snapshot the wire validator of the `book_files` row this download
+    // targets. A later metadata refresh compares against it to learn the
+    // library file was replaced — see `downloads::is_stale`.
+    let source_etag = super::target_file(&book, format, file_id).and_then(|f| f.etag.clone());
 
     let (plan, total_estimate) = match format {
         DlFormat::Epub => (plan_epub(uuid, file_id), epub_size_estimate(&book)),
@@ -116,11 +124,27 @@ async fn run_inner(
         .unwrap_or_default();
     let mut files: Vec<PlannedFile> = Vec::with_capacity(plan.len());
     for mut f in plan {
-        if prior.iter().any(|p| p.rel == f.rel && p.done) {
-            if let Ok(meta) = tokio::fs::metadata(dir.join(&f.rel)).await {
-                if meta.is_file() {
-                    f.done = true;
-                    f.bytes = Some(meta.len() as i64);
+        f.source_etag = source_etag.clone();
+        if let Some(previous) = prior.iter().find(|p| p.rel == f.rel) {
+            if !reusable(previous.source_etag.as_deref(), source_etag.as_deref()) {
+                // These bytes cannot be shown to belong to the file this
+                // attempt is planning against. Keeping them would assemble
+                // one audiobook out of two — part 0 from the old recording,
+                // the rest from the new — and stamp every part with the
+                // current validator, so nothing downstream would ever
+                // report it. Start this file over instead.
+                discard_partial(&dir, &f.rel).await;
+            } else {
+                // Carry the prior attempt's response validator forward so
+                // the resume below can offer it as `If-Range`.
+                f.http_etag = previous.http_etag.clone();
+                if previous.done {
+                    if let Ok(meta) = tokio::fs::metadata(dir.join(&f.rel)).await {
+                        if meta.is_file() {
+                            f.done = true;
+                            f.bytes = Some(meta.len() as i64);
+                        }
+                    }
                 }
             }
         }
@@ -143,19 +167,40 @@ async fn run_inner(
             continue;
         }
         let mut unflushed: i64 = 0;
-        let written = download_file(server_url, &dir, &files[idx], &mut |delta| {
-            downloaded += delta;
-            unflushed += delta;
-            if unflushed >= PROGRESS_FLUSH_BYTES {
-                unflushed = 0;
-                // Re-publish with the pre-loop file list; per-file `done`
-                // flags land on file completion below.
-                publish_progress(uuid, format, downloaded, total_estimate);
-            }
-        })
-        .await?;
+        let mut observed_etag: Option<String> = None;
+        // Cloned so the header callback can write to the registry while the
+        // planned file is still borrowed by the call.
+        let planned = files[idx].clone();
+        let result = download_file(
+            server_url,
+            &dir,
+            &planned,
+            &mut |etag: Option<String>| {
+                observed_etag.clone_from(&etag);
+                // Straight to disk, before a body byte is read. Waiting for
+                // the transfer to return — even on its error path — misses
+                // the interruptions that actually happen on a phone: the
+                // process being killed, or the runtime dropping the task.
+                // Both leave the `.part` behind, and a `.part` without its
+                // tag resumes with a bare `Range`.
+                super::record_file_etag(uuid, format, &planned.rel, etag);
+            },
+            &mut |delta| {
+                downloaded += delta;
+                unflushed += delta;
+                if unflushed >= PROGRESS_FLUSH_BYTES {
+                    unflushed = 0;
+                    // Re-publish with the pre-loop file list; per-file `done`
+                    // flags land on file completion below.
+                    publish_progress(uuid, format, downloaded, total_estimate);
+                }
+            },
+        )
+        .await;
+        files[idx].http_etag = observed_etag;
+        let fetched = result?;
         files[idx].done = true;
-        files[idx].bytes = Some(written);
+        files[idx].bytes = Some(fetched.bytes);
         downloaded = files.iter().filter_map(|f| f.bytes).sum();
         publish(
             uuid,
@@ -183,14 +228,80 @@ async fn run_inner(
     Ok(())
 }
 
+/// Whether bytes already on disk can be shown to have come from the file
+/// the current plan names.
+#[derive(Debug, PartialEq, Eq)]
+enum Provenance {
+    /// Same file, proven — reuse the bytes.
+    Proven,
+    /// A different file, proven — the bytes are from another edition.
+    Superseded,
+    /// Unprovable: one side or the other published no validator.
+    Unknown,
+}
+
+fn provenance(previous: Option<&str>, current: Option<&str>) -> Provenance {
+    match (previous, current) {
+        (Some(a), Some(b)) if a == b => Provenance::Proven,
+        (Some(_), Some(_)) => Provenance::Superseded,
+        _ => Provenance::Unknown,
+    }
+}
+
+/// Whether a part already on disk may be carried into this attempt.
+///
+/// `Unknown` is reusable only while the *current* file has no validator
+/// either — nothing has been learned, so refusing to resume would just
+/// break downloads against a row the scanner has never stat'd. Once the
+/// current file does have one, an unprovable part is not kept: it would be
+/// silently restamped with that validator, which turns "I have no idea
+/// where these bytes came from" into "these bytes are current" and lets a
+/// pre-validator part sit in the same audiobook as freshly-fetched ones
+/// with nothing downstream ever reporting it. Re-fetching costs a
+/// download; the alternative costs a book that is quietly wrong.
+fn reusable(previous: Option<&str>, current: Option<&str>) -> bool {
+    match provenance(previous, current) {
+        Provenance::Proven => true,
+        Provenance::Superseded => false,
+        Provenance::Unknown => current.is_none(),
+    }
+}
+
+/// Drop the partial bytes for `rel` so the retry starts clean instead of
+/// resuming onto bytes from another edition.
+///
+/// The **finished** file is deliberately left alone. It is about to be
+/// overwritten by the rename at the end of a successful fetch — which is
+/// atomic — and until then it is the only copy the reader has. Deleting it
+/// up front buys nothing and turns any later failure into a book that used
+/// to work and now doesn't.
+async fn discard_partial(dir: &std::path::Path, rel: &str) {
+    let _ = tokio::fs::remove_file(dir.join(format!("{rel}.part"))).await;
+}
+
+/// What one fetched file yielded: its size on disk.
+struct Fetched {
+    bytes: i64,
+}
+
 /// Stream one file to `{rel}.part`, resuming from any existing bytes via a
-/// Range request, then rename to `rel`. Returns the final byte count.
+/// Range request, then rename to `rel`.
+///
+/// `on_etag` fires **as soon as the response headers arrive**, before a
+/// single body byte is read, so the caller can put the validator on disk
+/// while the transfer is still running. That timing is the point: the
+/// process can die at any moment during a large download, and the `.part`
+/// left behind is only safely resumable if the tag naming the file those
+/// bytes came from was already persisted. Reporting it with the result —
+/// even on the error path — misses every interruption that isn't a clean
+/// error return.
 async fn download_file(
     server_url: &str,
     dir: &std::path::Path,
     file: &PlannedFile,
+    on_etag: &mut (dyn FnMut(Option<String>) + Send),
     on_delta: &mut (dyn FnMut(i64) + Send),
-) -> anyhow::Result<i64> {
+) -> anyhow::Result<Fetched> {
     use tokio::io::AsyncWriteExt;
 
     let part_path = dir.join(format!("{}.part", file.rel));
@@ -206,6 +317,15 @@ async fn download_file(
     let mut req = data::with_bearer(data::streaming_client().get(&url));
     if resumed > 0 {
         req = req.header(reqwest::header::RANGE, format!("bytes={resumed}-"));
+        // Ask the server to honour the Range only if the file is still the
+        // one these bytes came from. Without this a replaced file answers
+        // 206 and we splice its tail onto the old head — a corrupt book
+        // that looks, by every byte count, like a successful download.
+        if let Some(etag) = file.http_etag.as_deref() {
+            if let Ok(value) = reqwest::header::HeaderValue::from_str(etag) {
+                req = req.header(reqwest::header::IF_RANGE, value);
+            }
+        }
     }
     let mut resp = req.send().await.map_err(|e| {
         tracing::warn!(error = %e, url = %file.url_path, "offline download: request failed");
@@ -221,9 +341,15 @@ async fn download_file(
         return Err(DownloadError::ServerError.into());
     }
 
-    // 206 → append after the existing bytes; 200 → the server ignored the
-    // Range (or none was sent), start over.
+    // 206 → append after the existing bytes; 200 → the server refused the
+    // Range because the file moved (or none was sent), start over.
     let appending = status == reqwest::StatusCode::PARTIAL_CONTENT && resumed > 0;
+    on_etag(
+        resp.headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string),
+    );
     let expected_total = resp
         .content_length()
         .map(|cl| if appending { resumed + cl } else { cl });
@@ -276,7 +402,20 @@ async fn download_file(
     tokio::fs::rename(&part_path, &final_path)
         .await
         .context("Could not finalize the download")?;
-    Ok(written)
+
+    // A byte count proves the transfer ran to length; it does not prove the
+    // bytes cohere. Check the container closes before this file is offered
+    // to a reader — the one guard that also covers a replacement no
+    // stat-derived validator can see (rule 09's known residual).
+    if verify::verify(&final_path).await == Verdict::Damaged {
+        tracing::warn!(rel = %file.rel, url = %file.url_path, "offline download: assembled file failed container verification");
+        // Remove it rather than leave a corrupt book on disk that a retry
+        // would try to resume from.
+        let _ = tokio::fs::remove_file(&final_path).await;
+        return Err(DownloadError::Damaged.into());
+    }
+
+    Ok(Fetched { bytes: written })
 }
 
 /// Warm every cache a downloaded book needs offline: artwork (lock screen,
@@ -312,6 +451,8 @@ pub(super) fn plan_epub(uuid: &str, file_id: Option<i64>) -> Vec<PlannedFile> {
         ordinal: None,
         bytes: None,
         done: false,
+        http_etag: None,
+        source_etag: None,
     }]
 }
 
@@ -326,6 +467,8 @@ pub(super) fn plan_audio_parts(parts: &[ManifestPart]) -> Vec<PlannedFile> {
             ordinal: Some(p.ordinal),
             bytes: None,
             done: false,
+            http_etag: None,
+            source_etag: None,
         })
         .collect()
 }

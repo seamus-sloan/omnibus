@@ -78,6 +78,13 @@ tokio-util = { version = "0.7", default-features = false, features = ["io"], opt
 # version already resolved in Cargo.lock (avoids adding a third duplicate).
 getrandom = { version = "0.2", optional = true }
 
+# Real ZIP validation for a downloaded EPUB: reading each member to EOF is
+# what checks the CRC-32 the central directory recorded for it, which is the
+# only thing that catches a same-length splice preserving the archive's
+# structure. Mobile-only (the offline layer never compiles for web), and
+# already in the tree via `epub`, so it unifies rather than adding a build.
+zip = { version = "3", default-features = false, features = ["deflate"], optional = true }
+
 [target.'cfg(target_os = "ios")'.dependencies]
 # UIKit bindings for `native_share` — WKWebView has no usable Web Share API,
 # so the reader's Share actions present a real UIActivityViewController.
@@ -159,6 +166,7 @@ web = [
 # drives the timer, so no extra runtime/macro features are needed.
 mobile = [
     "dep:reqwest",
+    "dep:zip",
     "dep:tokio",
     "tokio/sync",
     "tokio/time",
