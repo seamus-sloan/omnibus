@@ -117,10 +117,6 @@ pub fn KoboDevicesCard() -> Element {
     rsx! {
         section { class: "card", "data-testid": "kobo-devices-card",
             h2 { "Kobo wireless sync" }
-            p { class: "subtitle",
-                "There is no on-device setting for this \u{2014} the endpoint is set "
-                "by editing a config file on the Kobo over USB:"
-            }
             ol { class: "subtitle kobo-setup-steps", "data-testid": "kobo-setup-steps",
                 li {
                     "Give your Kobo a name and click "

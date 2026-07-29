@@ -66,65 +66,37 @@ to get KEPUB output. See [.env.example](../.env.example).
 ## About wireless sync (experimental)
 
 *Wireless* Kobo sync — where the device talks to Omnibus over Wi-Fi instead of a
-USB cable — is functional but **experimental**: the protocol implementation is
-complete, but it has not yet passed verification against real devices. Back up
-first (below), then expect rough edges.
+USB cable — is functional but **experimental**: it has not yet passed
+verification against real devices.
 
 > [!WARNING]
-> **The first wireless sync can erase your Kobo's highlights and notes.**
-> A Kobo clears its own annotations when the server it syncs with mishandles
-> Kobo's annotation channel. Omnibus answers that channel, but until real-device
-> verification passes, assume a first sync can still wipe on-device annotations —
-> and Omnibus does **not** store what the device erases.
-
-**Back up your device before the first wireless sync.** Two tools cover this
-properly:
-
-- [**kobo-backup**](https://github.com/seamus-sloan/kobo-backup) — snapshots the
-  entire device over USB into a verified zip (books, annotations, reading
-  progress, settings, databases) and can restore the Kobo to exactly that point
-  in time. The most complete option: a wipe becomes a non-event.
-- [**kobuddy**](https://github.com/karlicoss/kobuddy) — exports your highlights,
-  annotations, and reading history from the device database into plain data you
-  keep.
-
-At minimum, copy the device database off by hand:
-
-1. Connect the Kobo over USB and tap **Connect**. It appears as a USB drive.
-2. Copy `.kobo/KoboReader.sqlite` off the drive to somewhere safe. (`.kobo` is a
-   hidden folder — on macOS press <kbd>⌘</kbd><kbd>⇧</kbd><kbd>.</kbd> in Finder
-   to reveal it; on Windows enable **Hidden items** in Explorer's View tab.)
-3. Eject the Kobo safely.
-
-That file holds every highlight and note on the device. Keeping a copy means a
-wipe is recoverable.
+> **First sync can erase your Kobo's highlights**
+>
+> An improper sync can potentially wipe data on the Kobo like your annotations,
+> notes, bookmarks, reading progress, and books.
+>
+> It is highly recommended to back up your device before attempting a sync with
+> one of these tools:
+>
+> - [seamus-sloan/kobo-backup](https://github.com/seamus-sloan/kobo-backup#kobo-backup)
+> - [karlicoss/kobuddy](https://github.com/karlicoss/kobuddy#usage)
+>
+> At minimum, copy `.kobo/KoboReader.sqlite` off the device over USB.
 
 ### Setting up wireless sync
 
-There is **no on-device setting** for a custom sync server — the endpoint is set
-by editing a config file on the Kobo over USB:
+From **Account → Kobo wireless sync**:
 
-1. In Omnibus, open **Account → Kobo wireless sync**, name your device, and
-   click **Add a Kobo**. Omnibus mints it a private sync URL
-   (`https://<your-server>/kobo/<token>`); the token authorizes only your
-   library, and **Regenerate** revokes it.
-2. Copy the device's **wireless sync endpoint** URL from the card.
-3. Connect the Kobo over USB and tap **Connect**. Open the hidden
-   `.kobo/Kobo/Kobo eReader.conf` file in a text editor.
-4. In the `[OneStoreServices]` section, set `api_endpoint=` to the copied URL:
+1. Give your Kobo a name and click **Add a Kobo**
+2. Copy the device's wireless sync endpoint URL. (`/kobo/<token>`)
+3. Connect the Kobo over USB,
+4. Edit `.kobo/Kobo/Kobo eReader.conf` and set `api_endpoint=` under
+   `[OneStoreServices]` to `<your_omnibus_server_url>/kobo/<token>`.
+5. Eject safely. Your next sync on the device talks to Omnibus.
 
-   ```ini
-   [OneStoreServices]
-   api_endpoint=https://your-server.example.com/kobo/<token>
-   ```
-
-5. Save, eject the Kobo safely, and unplug. The next sync on the device
-   (**Sync** from the home screen) talks to Omnibus: books from shelves marked
-   **Sync to Kobo** appear on the device, and reading position, read status,
-   and highlights round-trip back.
+(`.kobo` is a hidden folder — on macOS press
+<kbd>⌘</kbd><kbd>⇧</kbd><kbd>.</kbd> in Finder to reveal it; on Windows enable
+**Hidden items** in Explorer's View tab.)
 
 Only shelves you've opted in are synced — mark a shelf **Sync to Kobo** in its
 settings to include it.
-
-The wired **Send to Kobo** transfer described above carries none of this risk and
-stays the safe choice for simply putting books on the device.
