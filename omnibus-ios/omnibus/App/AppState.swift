@@ -29,6 +29,13 @@ final class AppState {
     private static let themeKey = "omnibus.theme"
 
     init() {
+        // Hermetic hook for omnibusUITests: the suite launches with this
+        // argument so a simulator that already holds a server + session still
+        // boots to the connect phase. Must run before the loads below.
+        if ProcessInfo.processInfo.arguments.contains("--uitest-reset") {
+            ServerURLStore.clear()
+            TokenStore.clear()
+        }
         serverURL = ServerURLStore.load()
         theme = UserDefaults.standard.string(forKey: Self.themeKey)
             .flatMap(ThemeName.init(rawValue:)) ?? .atrium
