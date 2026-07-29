@@ -23,9 +23,9 @@ pub(crate) async fn connect_refused_error() -> DataError {
 pub(crate) async fn decode_error() -> DataError {
     use axum::routing::get;
     let app = axum::Router::new().route("/j", get(|| async { "not-json" }));
-    let port = spawn_router(app).await;
+    let base_url = spawn_router(app).await;
     let err = crate::data::http_client()
-        .get(format!("{port}/j"))
+        .get(format!("{base_url}/j"))
         .send()
         .await
         .expect("send")
