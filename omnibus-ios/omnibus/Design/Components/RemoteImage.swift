@@ -59,6 +59,20 @@ actor ImageCache {
         store(decoded, data: data, for: key)
     }
 
+    /// Fetch a provider-hosted image (an absolute URL outside the Omnibus
+    /// server). Same cache tiers, but the request must not carry the bearer
+    /// token or wait on the Omnibus server's reachability — the host is a
+    /// third party (Google Books, Open Library).
+    func externalImage(for url: String) async -> UIImage? {
+        if let cached = image(for: url) { return cached }
+        guard let remote = URL(string: url),
+              let (data, _) = try? await URLSession.shared.data(from: remote),
+              let decoded = UIImage(data: data)
+        else { return nil }
+        store(decoded, data: data, for: url)
+        return decoded
+    }
+
     func clearDisk() {
         try? FileManager.default.removeItem(at: directory)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -71,6 +85,35 @@ actor ImageCache {
         ) else { return 0 }
         return contents.reduce(0) { total, url in
             total + Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+    }
+}
+
+/// Loads a provider-hosted image from an absolute URL, showing `placeholder`
+/// until it lands. A separate type from `RemoteImage` so no call site can
+/// accidentally send the Omnibus bearer token to a third-party host.
+struct ExternalImage<Placeholder: View>: View {
+    let url: String?
+    @ViewBuilder var placeholder: () -> Placeholder
+
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .transition(.opacity)
+            } else {
+                placeholder()
+            }
+        }
+        .task(id: url) {
+            guard let url, !url.isEmpty else { return }
+            guard let fetched = await ImageCache.shared.externalImage(for: url) else { return }
+            guard url == self.url else { return }
+            withAnimation(Motion.page) { image = fetched }
         }
     }
 }

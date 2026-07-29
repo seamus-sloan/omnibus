@@ -1221,7 +1221,7 @@ struct ExternalBookMeta: Codable, Hashable, Sendable {
 }
 
 /// `#[serde(tag = "kind", rename_all = "snake_case")]` on the Rust side.
-enum ScanOutcome: Decodable, Sendable {
+enum ScanOutcome: Decodable, Equatable, Sendable {
     case alreadyOwned(book: ScanBook)
     case onWishlist(book: ScanBook)
     case inLibraryUnowned(book: ScanBook)
@@ -1287,6 +1287,15 @@ struct WishlistAddRequest: Codable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case meta, source
+        case bookUUID = "book_uuid"
+    }
+}
+
+/// `Json(BookRef { book_uuid })` — returned by all three scan writes.
+struct BookRef: Codable, Sendable {
+    var bookUUID: String
+
+    enum CodingKeys: String, CodingKey {
         case bookUUID = "book_uuid"
     }
 }
