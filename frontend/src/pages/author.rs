@@ -10,6 +10,8 @@ use omnibus_shared::{AuthorDetail, EbookMetadata};
 
 use crate::components::atrium::Cover;
 use crate::components::author_photo_edit::AuthorPhotoEditOverlay;
+#[cfg(not(feature = "mobile"))]
+use crate::components::{confirm_modal_body, ConfirmModal, ConfirmModalAction, ConfirmModalTone};
 use crate::components::{PageError, PageLoading, PageNotFound};
 use crate::{data, use_server_url, Route};
 
@@ -437,7 +439,9 @@ struct AuthorDeleteState {
 /// navigates back to `/authors`. The blocklist insert is what makes the
 /// delete durable across reindexes — without it the next `Task::Scan`
 /// would silently recreate the row from the OPF metadata. Web-only;
-/// mobile admins fall back to the per-book metadata edit page.
+/// mobile admins fall back to the per-book metadata edit page. Built on
+/// the shared `ConfirmModal` shell (see `components::confirm_modal`)
+/// rather than hand-rolling its own backdrop/busy-gate markup.
 #[cfg(not(feature = "mobile"))]
 #[component]
 fn AuthorDeleteModal(
@@ -448,80 +452,68 @@ fn AuthorDeleteModal(
     state: AuthorDeleteState,
 ) -> Element {
     let AuthorDeleteState {
-        show_confirm,
-        deleting,
-        delete_error,
+        mut show_confirm,
+        mut deleting,
+        mut delete_error,
     } = state;
-    let mut show_confirm = show_confirm;
-    let mut deleting = deleting;
-    let mut delete_error = delete_error;
     let nav = use_navigator();
     let busy = deleting();
     let book_count_label = if book_count == 1 { "book" } else { "books" };
+    let title = format!("Delete \"{author_name}\"?");
+    let body = format!(
+        "This will un-link the author from {book_count} {book_count_label} \
+         and prevent the name from being re-added on future library scans. \
+         The books themselves are not deleted."
+    );
 
-    rsx! {
-        div {
-            class: "author-delete-modal-backdrop",
-            role: "dialog",
-            aria_modal: "true",
-            aria_label: "Delete {author_name}",
-            "data-testid": "author-delete-modal",
-            onclick: move |_| {
-                if !busy {
+    let confirm_delete = move |_| {
+        let server_url = server_url.clone();
+        spawn(async move {
+            deleting.set(true);
+            delete_error.set(None);
+            match data::delete_author(&server_url, author_id).await {
+                Ok(_) => {
                     show_confirm.set(false);
+                    nav.push(Route::AuthorsIndex {});
                 }
-            },
-            div {
-                class: "author-delete-modal",
-                onclick: move |evt| evt.stop_propagation(),
-                h2 { class: "author-delete-modal__title", "Delete \"{author_name}\"?" }
-                p { class: "author-delete-modal__body",
-                    "This will un-link the author from {book_count} {book_count_label} "
-                    "and prevent the name from being re-added on future library scans. "
-                    "The books themselves are not deleted."
-                }
-                if let Some(msg) = delete_error() {
-                    p { role: "alert", class: "error author-delete-modal__error", "⚠ {msg}" }
-                }
-                div { class: "author-delete-modal__actions",
-                    button {
-                        class: "btn",
-                        "data-testid": "author-delete-cancel",
-                        disabled: busy,
-                        onclick: move |_| {
-                            show_confirm.set(false);
-                        },
-                        "Cancel"
-                    }
-                    button {
-                        class: "btn primary author-delete-confirm",
-                        "data-testid": "author-delete-confirm",
-                        disabled: busy,
-                        onclick: {
-                            let server_url = server_url.clone();
-                            move |_| {
-                                let server_url = server_url.clone();
-                                let nav = nav;
-                                spawn(async move {
-                                    deleting.set(true);
-                                    delete_error.set(None);
-                                    match data::delete_author(&server_url, author_id).await {
-                                        Ok(_) => {
-                                            show_confirm.set(false);
-                                            nav.push(Route::AuthorsIndex {});
-                                        }
-                                        Err(e) => {
-                                            delete_error.set(Some(e.to_string()));
-                                        }
-                                    }
-                                    deleting.set(false);
-                                });
-                            }
-                        },
-                        if busy { "Deleting\u{2026}" } else { "Delete" }
-                    }
+                Err(e) => {
+                    delete_error.set(Some(e.to_string()));
                 }
             }
+            deleting.set(false);
+        });
+    };
+
+    rsx! {
+        ConfirmModal {
+            testid: "author-delete-modal".to_string(),
+            aria_label: "Delete {author_name}".to_string(),
+            dialog_class: "author-delete-modal".to_string(),
+            busy,
+            on_dismiss: move |_| show_confirm.set(false),
+            if let Some(msg) = delete_error() {
+                p { role: "alert", class: "error author-delete-modal__error", "⚠ {msg}" }
+            }
+            {confirm_modal_body(
+                &title,
+                &body,
+                vec![
+                    ConfirmModalAction {
+                        testid: "author-delete-cancel".to_string(),
+                        label: "Cancel".to_string(),
+                        tone: ConfirmModalTone::Ghost,
+                        disabled: busy,
+                        on_click: EventHandler::new(move |_| show_confirm.set(false)),
+                    },
+                    ConfirmModalAction {
+                        testid: "author-delete-confirm".to_string(),
+                        label: if busy { "Deleting\u{2026}".to_string() } else { "Delete".to_string() },
+                        tone: ConfirmModalTone::Danger,
+                        disabled: busy,
+                        on_click: EventHandler::new(confirm_delete),
+                    },
+                ],
+            )}
         }
     }
 }
