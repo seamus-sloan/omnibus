@@ -19,6 +19,15 @@ final class ConnectSmokeTests: XCTestCase {
         return app
     }
 
+    /// SwiftUI applies `.disabled` state asynchronously to the accessibility
+    /// tree, so a bare `isEnabled` read right after typing can race it.
+    private func waitUntilEnabled(_ element: XCUIElement, timeout: TimeInterval = 5) {
+        let exp = expectation(
+            for: NSPredicate(format: "isEnabled == true"), evaluatedWith: element
+        )
+        wait(for: [exp], timeout: timeout)
+    }
+
     func testFreshLaunchLandsOnServerConnect() throws {
         let app = launchToConnect()
 
@@ -36,25 +45,25 @@ final class ConnectSmokeTests: XCTestCase {
         let app = launchToConnect()
         XCTAssertTrue(app.staticTexts["Connect to Omnibus"].waitForExistence(timeout: 15))
 
-        // The connect screen has exactly one text field.
-        let field = app.textFields.firstMatch
+        let field = app.textFields["server-address"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap()
         field.typeText("192.0.2.1:3000")
 
-        XCTAssertTrue(app.buttons["Connect"].isEnabled)
+        waitUntilEnabled(app.buttons["Connect"])
     }
 
     func testInvalidAddressShowsValidationError() throws {
         let app = launchToConnect()
         XCTAssertTrue(app.staticTexts["Connect to Omnibus"].waitForExistence(timeout: 15))
 
-        let field = app.textFields.firstMatch
+        let field = app.textFields["server-address"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
         field.tap()
         // "///" normalizes to a URL with no host, which ServerURLStore.normalize
         // rejects before any network probe.
         field.typeText("///")
+        waitUntilEnabled(app.buttons["Connect"])
         app.buttons["Connect"].tap()
 
         XCTAssertTrue(

@@ -31,11 +31,17 @@ final class AppState {
     init() {
         // Hermetic hook for omnibusUITests: the suite launches with this
         // argument so a simulator that already holds a server + session still
-        // boots to the connect phase. Must run before the loads below.
+        // boots to the connect phase. Must run before the loads below. DEBUG-
+        // only so a stray argument in a Release scheme can never wipe state
+        // (an XCTest-presence check wouldn't help here — XCUITest drives the
+        // app from a separate runner process, so XCTest is never loaded in
+        // the app itself).
+        #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("--uitest-reset") {
             ServerURLStore.clear()
             TokenStore.clear()
         }
+        #endif
         serverURL = ServerURLStore.load()
         theme = UserDefaults.standard.string(forKey: Self.themeKey)
             .flatMap(ThemeName.init(rawValue:)) ?? .atrium
