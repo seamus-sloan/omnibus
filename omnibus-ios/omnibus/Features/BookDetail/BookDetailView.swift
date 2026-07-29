@@ -509,6 +509,24 @@ struct BookDetailView: View {
         let record = downloads.record(for: book.uuid, kind: kind)
 
         switch record?.state {
+        case .complete where downloads.isStale(book.uuid, kind: kind, against: book):
+            // The library file moved under this copy. `warn`, not `bad`: what
+            // is on the device still opens and still reads, it is just no
+            // longer the newest one.
+            HStack(spacing: Spacing.sm) {
+                Text("Update available")
+                    .font(.ui(11.5))
+                    .foregroundStyle(palette.warnColor)
+                Button("Re-download") {
+                    Haptics.tap()
+                    // One operation that keeps the current file readable
+                    // until the replacement is down — see `redownload`.
+                    Task { await downloads.redownload(book: book, kind: kind) }
+                }
+                .font(.ui(13, weight: .medium))
+                .foregroundStyle(palette.accentColor)
+            }
+
         case .complete:
             HStack(spacing: Spacing.sm) {
                 Text(Format.bytes(record?.totalBytes ?? 0))

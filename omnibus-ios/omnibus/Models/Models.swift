@@ -54,9 +54,14 @@ struct BookFileInfo: Codable, Hashable, Sendable, Identifiable {
     var label: String?
     var sizeBytes: Int64 = 0
     var path: String?
+    /// Content validator for this file, derived server-side from the same
+    /// filesystem stat the reindex diff keys on. A download snapshots it and
+    /// compares against a later metadata refresh to learn its copy is stale.
+    /// `nil` for rows the scanner has not stat'd yet.
+    var etag: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, format, filename, ordinal, label, path
+        case id, format, filename, ordinal, label, path, etag
         case sizeBytes = "size_bytes"
     }
 }
@@ -138,6 +143,16 @@ struct Book: Codable, Hashable, Sendable, Identifiable {
     /// `resolve_audiobook_file` in `db/src/hls/query.rs` filters on exactly
     /// these, so offering any other format as a selection would 404.
     static let selectableAudioFormats: Set<String> = ["m4b", "m4a", "mp3"]
+
+    /// The ebook formats a download actually pulls.
+    ///
+    /// `/api/ebooks/{uuid}/file` resolves `book_file_path(id, "EPUB")` — EPUB
+    /// and nothing else — so this is deliberately narrower than
+    /// ``ebookFormats``, which is the set the library *contains*. Snapshotting
+    /// a validator against the broader set means a mixed PDF/EPUB book records
+    /// the PDF's tag while downloading the EPUB, and then reports staleness
+    /// about the wrong file in both directions.
+    static let downloadableEbookFormats: Set<String> = ["epub"]
 
     /// The audiobook files a listener can choose between, in the order the
     /// server resolves them — its default (no `file_id`) is the first of
