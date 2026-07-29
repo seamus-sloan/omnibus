@@ -580,16 +580,15 @@ pub async fn download_validators(
     use std::collections::HashMap;
 
     // uuid → books.id, merged-uuid aware so an attached format still
-    // resolves (migration 0016).
-    let mut ids: HashMap<&str, i64> = HashMap::new();
-    for query in queries {
-        if ids.contains_key(query.book_uuid.as_str()) {
-            continue;
-        }
-        if let Some(id) = crate::resolve_book_id_by_uuid(pool, &query.book_uuid).await? {
-            ids.insert(query.book_uuid.as_str(), id);
-        }
-    }
+    // resolves (migration 0016). Resolved in one bulk pass over the distinct
+    // uuid set rather than looping the single-uuid lookup (#1512).
+    let distinct_uuids: Vec<String> = {
+        let mut v: Vec<String> = queries.iter().map(|q| q.book_uuid.clone()).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    let ids: HashMap<String, i64> = resolve_book_ids_bulk(pool, &distinct_uuids).await?;
 
     // One pass over every candidate row, chunked under SQLite's 999-param cap.
     let distinct: Vec<i64> = {
