@@ -110,7 +110,11 @@ struct Palette: Sendable {
         ink3: OKLCH(0.50, 0.010, 70),
         accent: OKLCH(0.78, 0.13, 65),
         accentSoft: OKLCH(0.30, 0.07, 65),
-        accentInk: OKLCH(0.99, 0, 0),
+        // Light keeps the dark palette's 0.78 L amber accent, so it takes the
+        // dark ink with it — a near-white ink on that ground is ~2:1, which is
+        // what made the Continue-reading capsule unreadable. Sepia can use a
+        // white ink only because it drops the accent to 0.58 L.
+        accentInk: OKLCH(0.16, 0.02, 65),
         coverFallbackBg: OKLCH(0.86, 0.004, 70),
         coverFallbackInk: OKLCH(0.28, 0.006, 70),
         ok: OKLCH(0.78, 0.13, 150),
@@ -206,10 +210,33 @@ enum Spacing {
 // MARK: - Type scale
 
 extension Font {
-    /// Instrument Serif is the web display face; iOS ships New York, which is
-    /// the same editorial register and avoids bundling a webfont.
+    /// PostScript names of the vendored faces — what `Font.custom` matches on,
+    /// and what `Info.plist`'s `UIAppFonts` must keep resolvable.
+    enum DisplayFace {
+        static let regular = "InstrumentSerif-Regular"
+        static let italic = "InstrumentSerif-Italic"
+    }
+
+    /// Instrument Serif, the display face shared with the web client.
+    ///
+    /// `fixedSize:` rather than `size:` is deliberate: `Font.custom(_:size:)`
+    /// opts into Dynamic Type scaling, which `.system(size:)` never did, so the
+    /// plain initialiser would silently start resizing all ~40 call sites.
+    /// Supporting Dynamic Type is worth doing — but as its own change, with the
+    /// layouts checked.
+    ///
+    /// The family ships a single weight, matching the `ital@0;1`-only axis the
+    /// web requests (`atrium.css` pins `--serif` to 400). A non-regular `weight`
+    /// therefore gets a synthetic embolden from CoreText, not a real cut.
     static func display(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        .system(size: size, weight: weight, design: .serif)
+        .custom(DisplayFace.regular, fixedSize: size).weight(weight)
+    }
+
+    /// The true italic cut. `display(_:).italic()` would skew the upright face
+    /// instead, and Instrument Serif's italic is a separate drawing — far more
+    /// than a slant — so the synthetic version reads as a different typeface.
+    static func displayItalic(_ size: CGFloat) -> Font {
+        .custom(DisplayFace.italic, fixedSize: size)
     }
 
     static func ui(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {

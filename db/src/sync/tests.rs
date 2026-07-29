@@ -1890,3 +1890,59 @@ async fn sync_audiobooks_writes_one_chapter_when_single_chapter_provided() {
     // Single chapter with end_ms == 0 → duration falls back to total_duration - start = 120 s.
     assert_eq!(rows[0].3, 120.0);
 }
+
+/// Re-scanning a book whose OPF no longer names its old series leaves that
+/// series with zero members, and `sync_books` must delete the now-childless
+/// row rather than leave a 0-book series in browse.
+#[tokio::test]
+async fn sync_books_deletes_a_series_left_with_zero_books_by_a_changed_scan() {
+    let _covers = CoversTempDir::new("sync_orphan_series");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    replace_books(
+        &pool,
+        "/lib",
+        vec![indexed(
+            "a.epub",
+            Some("A"),
+            &["Author A"],
+            &[],
+            Some(("Old Saga", "1")),
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+
+    let plan = SyncPlan {
+        changed_books: vec![indexed(
+            "a.epub",
+            Some("A"),
+            &["Author B"],
+            &[],
+            Some(("New Saga", "1")),
+            None,
+        )],
+        ..Default::default()
+    };
+    sync_books(&pool, "/lib", plan).await.unwrap();
+
+    let series: Vec<String> = sqlx::query_scalar("SELECT name FROM series ORDER BY name")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        series,
+        vec!["New Saga".to_string()],
+        "orphan series deleted"
+    );
+
+    let authors: Vec<String> = sqlx::query_scalar("SELECT name FROM authors ORDER BY name")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        authors,
+        vec!["Author B".to_string()],
+        "orphan author deleted"
+    );
+}

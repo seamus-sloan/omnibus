@@ -46,7 +46,8 @@ pub struct AudiobookSyncPlan {
 ///    link + FTS, then re-insert them.
 /// 4. Insert New.
 /// 5. Backfill `book_files.(mtime_epoch, size_bytes)` only.
-/// 6. Stamp `scan_roots.last_indexed`.
+/// 6. Delete taxonomy rows left with zero books by step 3's link wipe.
+/// 7. Stamp `scan_roots.last_indexed`.
 ///
 /// Post-commit: write / delete cover files (best-effort, same as sync_books).
 ///
@@ -99,6 +100,11 @@ pub async fn sync_audiobooks_with_progress(
         })
         .await?;
     backfill_audiobook_stats(&mut tx, library_id, &plan.backfill).await?;
+    // Only Changed wipes link rows before re-inserting, so it's the only bucket
+    // that can leave an author or series with zero books. See `sync_books`.
+    if !plan.changed_books.is_empty() {
+        crate::taxonomy::delete_orphan_taxonomy(&mut tx).await?;
+    }
     stamp_audiobooks_last_indexed(&mut tx, library_id).await?;
 
     tx.commit().await?;

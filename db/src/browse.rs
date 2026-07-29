@@ -62,6 +62,11 @@ fn visible(book: &str, root: &str) -> String {
 /// ascending and capped at [`INDEX_LIMIT`]. An empty `library_paths` is not an
 /// empty result: physical-only books still browse (see [`placeholders`]).
 ///
+/// `book_count > 0` is an invariant of the result: membership is the
+/// `effective` (override-aware) set, so an author whose last book was
+/// reassigned through the edit form drops out rather than rendering a
+/// 0-book card off a canonical link the file still carries.
+///
 /// Currently returns results across all users (single-tenant). When F4.x
 /// per-user ACL lands, add a `user_id: i64` parameter and scope the query
 /// to books accessible to that user.
@@ -78,7 +83,8 @@ pub async fn list_authors(
     // A single `GROUP BY author_id` over it replaces the old per-author
     // correlated `COUNT(*)` subquery, so the books table is scanned once
     // rather than once per author. UNION (not ALL) collapses a duplicate
-    // author name inside one override array, matching the old `EXISTS`.
+    // author name inside one override array. The inner `JOIN counts` is also
+    // what enforces the `book_count > 0` invariant.
     let sql = format!(
         r"
         WITH lib_paths(p) AS (VALUES {ph}),
@@ -110,7 +116,7 @@ pub async fn list_authors(
              GROUP BY author_id
         )
         SELECT a.id, a.name, a.sort,
-               COALESCE(c.book_count, 0) AS book_count,
+               c.book_count AS book_count,
                (SELECT b2.accent_color
                   FROM books_authors_link bal2
                   JOIN books b2 ON b2.id = bal2.book
@@ -127,14 +133,7 @@ pub async fn list_authors(
                     AND ap.bytes IS NOT NULL
                ) AS has_photo
         FROM authors a
-        LEFT JOIN counts c ON c.author_id = a.id
-        WHERE EXISTS (
-            SELECT 1 FROM books_authors_link bal
-              JOIN books b ON b.id = bal.book
-              JOIN scan_roots l ON l.id = b.library_id
-             WHERE bal.author = a.id
-               AND {vis}
-          )
+        JOIN counts c ON c.author_id = a.id
         ORDER BY COALESCE(a.sort, a.name) COLLATE NOCASE ASC
         LIMIT ?
         "
@@ -164,6 +163,10 @@ pub async fn list_authors(
 /// ascending and capped at [`INDEX_LIMIT`]. An empty `library_paths` is not an
 /// empty result: physical-only books still browse (see [`placeholders`]).
 ///
+/// `book_count > 0` is an invariant of the result, same as [`list_authors`]:
+/// a series emptied by an edit-form reassignment drops out instead of
+/// rendering a 0-book card.
+///
 /// Currently returns results across all users (single-tenant). When F4.x
 /// per-user ACL lands, add a `user_id: i64` parameter and scope the query
 /// to books accessible to that user.
@@ -186,7 +189,8 @@ pub async fn list_series(
 /// primary author) each see the same `lib_paths` without repeated inline
 /// VALUES lists. `book_count` comes from a single `GROUP BY` over the
 /// `effective` membership set rather than a per-series correlated subquery,
-/// so the books table is scanned once instead of once per series.
+/// so the books table is scanned once instead of once per series. Joining
+/// `counts` inner (not left) is what drops emptied series from the index.
 fn series_index_sql(n: usize) -> String {
     let ph = placeholders(n);
     let vis = visible("b", "l");
@@ -222,7 +226,7 @@ fn series_index_sql(n: usize) -> String {
              GROUP BY series_id
         )
         SELECT s.id, s.name, s.sort,
-               COALESCE(c.book_count, 0) AS book_count,
+               c.book_count AS book_count,
                (SELECT
                   CASE
                     WHEN mo2.book_uuid IS NOT NULL
@@ -251,14 +255,7 @@ fn series_index_sql(n: usize) -> String {
                  ORDER BY b3.series_index NULLS LAST, b3.sort, b3.id
                  LIMIT 1) AS accent
         FROM series s
-        LEFT JOIN counts c ON c.series_id = s.id
-        WHERE EXISTS (
-            SELECT 1 FROM books_series_link bsl
-              JOIN books b ON b.id = bsl.book
-              JOIN scan_roots l ON l.id = b.library_id
-             WHERE bsl.series = s.id
-               AND {vis}
-          )
+        JOIN counts c ON c.series_id = s.id
         ORDER BY COALESCE(s.sort, s.name) COLLATE NOCASE ASC
         LIMIT ?
         "

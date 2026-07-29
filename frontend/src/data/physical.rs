@@ -1,9 +1,7 @@
-//! Physical-collection + wishlist transport for the book-detail page: a book's
-//! library-wide copies (list / edit-note / delete), the caller's wishlist entry
-//! (get / add / remove), and fileless-book removal. Mobile calls the
-//! `/api/physical/*` REST routes via `reqwest`; web/SSR proxy the RPC server
-//! functions in `crate::rpc`. Each function's public signature is shared across
-//! platforms; the `#[cfg]` gates carry the split.
+//! Physical-collection + wishlist transport for the book-detail page: copies
+//! (list / edit-note / delete), wishlist entry (get / add / remove), and
+//! fileless-book removal. Mobile calls `/api/physical/*` REST routes; web/SSR
+//! proxy the RPC server functions in `crate::rpc` behind a shared signature.
 
 use omnibus_shared::physical::{PhysicalCopy, WishlistEntry};
 

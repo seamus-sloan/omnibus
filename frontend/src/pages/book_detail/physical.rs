@@ -1,11 +1,8 @@
 //! Web-only physical-collection + wishlist panel for the book-detail page.
-//!
-//! Renders the "In your physical collection" pill with one card per checked-in
-//! copy (edit-note / delete), the wishlist tracking card (Remove / Find a copy),
-//! and the "Add to physical wishlist" affordance for any book without a copy.
-//! Self-loads its data post-mount so SSR and the first WASM paint match
-//! (rule 07); the page `refresh` signal is bumped after mutations that change
-//! the book's physical/visibility state so the hero re-fetches.
+//! Renders checked-in copies (edit-note / delete), the wishlist tracking card,
+//! and the add-to-wishlist affordance. Self-loads post-mount for SSR/WASM
+//! hydration parity; bumps the page `refresh` signal after mutations that
+//! change the book's physical/visibility state.
 
 use dioxus::prelude::*;
 use omnibus_shared::physical::{PhysicalCopy, WishlistEntry, WishlistSource};
@@ -99,13 +96,7 @@ pub(super) fn BdPhysicalPanel(identity: BdBookIdentity, refresh: Signal<u32>) ->
     }
 
     let content = if !copies().is_empty() {
-        render_physical_section(
-            state,
-            server_url.clone(),
-            uuid.clone(),
-            is_fileless,
-            can_edit,
-        )
+        render_physical_section(state, server_url.clone(), is_fileless, can_edit)
     } else if wishlist().is_some() {
         render_wishlist_section(state, server_url.clone(), uuid.clone(), isbn, title, author)
     } else {
@@ -164,7 +155,6 @@ fn use_physical_load_effect(
 fn render_physical_section(
     state: PhysPanelState,
     url: String,
-    uuid: String,
     is_fileless: bool,
     can_edit: bool,
 ) -> Element {
@@ -178,7 +168,7 @@ fn render_physical_section(
         }
         div { class: "bd-phys-copies",
             for copy in copies() {
-                {render_copy_card(state, url.clone(), uuid.clone(), copy, is_fileless, can_edit)}
+                {render_copy_card(state, url.clone(), copy, is_fileless, can_edit)}
             }
         }
     }
@@ -189,7 +179,6 @@ fn render_physical_section(
 fn render_copy_card(
     state: PhysPanelState,
     url: String,
-    _uuid: String,
     copy: PhysicalCopy,
     is_fileless: bool,
     can_edit: bool,
@@ -500,18 +489,22 @@ fn delete_copy_only(state: PhysPanelState, url: String, copy_id: i64) {
     });
 }
 
-/// Last-copy "Remove from library": delete the copy, then the now-fileless
-/// book. The copy is dropped from local state — and the modal closed — the
-/// instant its delete succeeds, so a failed follow-up book-delete can't leave a
-/// phantom card the user would retry into a 404. Bumps `refresh` only on full
-/// success (book gone → the page re-renders not-found).
-fn delete_last_and_remove(state: PhysPanelState, url: String, uuid: String, copy_id: i64) {
+/// Shared shape of the two last-copy actions: delete the copy, drop it from
+/// local state, close the modal, then run `follow_up` for the effect specific
+/// to "remove from library" vs "move to wishlist". The copy leaves local state
+/// the instant its own delete succeeds — before `follow_up` runs — so a failed
+/// follow-up can't resurrect a phantom card or leave a stale one; it can only
+/// drop the panel into a state the user can retry from.
+fn delete_last_copy_then<F, Fut>(state: PhysPanelState, url: String, copy_id: i64, follow_up: F)
+where
+    F: FnOnce() -> Fut + 'static,
+    Fut: std::future::Future<Output = ()> + 'static,
+{
     let PhysPanelState {
         mut copies,
         mut busy,
         mut err,
         mut delete_target,
-        mut refresh,
         ..
     } = state;
     busy.set(true);
@@ -522,46 +515,44 @@ fn delete_last_and_remove(state: PhysPanelState, url: String, uuid: String, copy
             busy.set(false);
             return;
         }
-        // Copy is gone server-side — reflect that locally before the book
-        // delete, whose failure must not resurrect the card.
         copies.with_mut(|l| l.retain(|c| c.id != copy_id));
         delete_target.set(None);
-        match data::delete_fileless_book(&url, &uuid).await {
-            Ok(()) => refresh.with_mut(|r| *r += 1),
-            Err(e) => err.set(Some(e.to_string())),
-        }
+        follow_up().await;
         busy.set(false);
     });
 }
 
-/// Last-copy "Move to wishlist": delete the copy, then wishlist the book. Same
-/// contract as [`delete_last_and_remove`] — the copy leaves local state as soon
-/// as its delete succeeds, so a failed wishlist-add drops the panel into its
-/// "add to wishlist" state (a clean retry) rather than showing a stale card.
-fn delete_last_and_wishlist(state: PhysPanelState, url: String, uuid: String, copy_id: i64) {
+/// Last-copy "Remove from library": delete the copy, then the now-fileless
+/// book. Bumps `refresh` only on full success (book gone → the page re-renders
+/// not-found).
+fn delete_last_and_remove(state: PhysPanelState, url: String, uuid: String, copy_id: i64) {
     let PhysPanelState {
-        mut copies,
-        mut wishlist,
-        mut busy,
+        mut refresh,
         mut err,
-        mut delete_target,
         ..
     } = state;
-    busy.set(true);
-    err.set(None);
-    spawn(async move {
-        if let Err(e) = data::delete_physical_copy(&url, copy_id).await {
-            err.set(Some(e.to_string()));
-            busy.set(false);
-            return;
+    let book_url = url.clone();
+    delete_last_copy_then(state, url, copy_id, move || async move {
+        match data::delete_fileless_book(&book_url, &uuid).await {
+            Ok(()) => refresh.with_mut(|r| *r += 1),
+            Err(e) => err.set(Some(e.to_string())),
         }
-        copies.with_mut(|l| l.retain(|c| c.id != copy_id));
-        delete_target.set(None);
-        match data::add_wishlist_entry(&url, &uuid).await {
+    });
+}
+
+/// Last-copy "Move to wishlist": delete the copy, then wishlist the book.
+fn delete_last_and_wishlist(state: PhysPanelState, url: String, uuid: String, copy_id: i64) {
+    let PhysPanelState {
+        mut wishlist,
+        mut err,
+        ..
+    } = state;
+    let entry_url = url.clone();
+    delete_last_copy_then(state, url, copy_id, move || async move {
+        match data::add_wishlist_entry(&entry_url, &uuid).await {
             Ok(entry) => wishlist.set(Some(entry)),
             Err(e) => err.set(Some(e.to_string())),
         }
-        busy.set(false);
     });
 }
 
@@ -638,8 +629,8 @@ fn source_label(source: WishlistSource) -> &'static str {
     }
 }
 
-/// "Find a copy" target URL. A default web search until the per-user source
-/// setting lands (#1188): the ISBN when present, else title + author.
+/// "Find a copy" target URL: a web search on the ISBN when present, else on
+/// title + author.
 fn find_a_copy_url(isbn: Option<&str>, title: &str, author: &str) -> String {
     let query = match isbn {
         Some(i) if !i.trim().is_empty() => i.trim().to_string(),

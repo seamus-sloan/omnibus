@@ -116,6 +116,11 @@ pub mod search_palette;
 #[cfg(not(feature = "mobile"))]
 pub mod worker_status;
 
+// Play / open-book marks shared by the two web "continue reading" surfaces:
+// the user-menu resume row and the landing hero CTA.
+#[cfg(not(feature = "mobile"))]
+pub mod glyphs;
+
 #[cfg(not(feature = "mobile"))]
 mod user_menu;
 

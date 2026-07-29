@@ -663,3 +663,80 @@ async fn list_authors_returns_empty_with_no_scan_roots_and_no_physical_books() {
     // `(NULL)` matches no path, so a wishlist-only book stays hidden.
     assert!(list_authors(&pool, &[]).await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn list_series_omits_a_series_left_with_zero_books_by_an_override() {
+    // Pioneers has exactly one canonical member. Move it into Saga via
+    // the edit form: the canonical `books_series_link` row stays (the file
+    // still says Pioneers), but Pioneers now has zero effective books and
+    // must drop out of the index rather than render a 0-book card.
+    let (pool, _guard) = seed_discovery_fixture().await;
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let books = list_books(&pool, "/lib").await.unwrap();
+    let pioneers_book = books
+        .iter()
+        .find(|b| b.series.as_deref() == Some("Pioneers"))
+        .expect("Pioneers member present");
+    let uuid = pioneers_book.unique_identifier.clone().unwrap();
+
+    let ov = MetadataOverrides {
+        series: Some("Saga".into()),
+        ..Default::default()
+    };
+    upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+        .await
+        .unwrap();
+
+    let series = list_series(&pool, &["/lib"]).await.unwrap();
+    let names: Vec<_> = series.iter().map(|s| s.name.clone()).collect();
+    assert_eq!(names, vec!["Saga".to_string()], "emptied series dropped");
+    assert!(
+        series.iter().all(|s| s.book_count > 0),
+        "the index must never surface a 0-book series"
+    );
+}
+
+#[tokio::test]
+async fn list_authors_omits_an_author_left_with_zero_books_by_an_override() {
+    // Niklaus Wirth has exactly one canonical book. Reassign it to Grace
+    // Hopper via the edit form — Niklaus keeps his canonical link but has
+    // zero effective books, so he must drop out of the index.
+    let (pool, _guard) = seed_discovery_fixture().await;
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let books = list_books(&pool, "/lib").await.unwrap();
+    let wirth_book = books
+        .iter()
+        .find(|b| b.creators.iter().any(|c| c.name == "Niklaus Wirth"))
+        .expect("Wirth book present");
+    let uuid = wirth_book.unique_identifier.clone().unwrap();
+
+    let ov = MetadataOverrides {
+        creators: Some(vec![Contributor {
+            name: "Grace Hopper".into(),
+            role: Some("aut".into()),
+            file_as: None,
+            id: None,
+        }]),
+        ..Default::default()
+    };
+    upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+        .await
+        .unwrap();
+
+    let authors = list_authors(&pool, &["/lib"]).await.unwrap();
+    let names: Vec<_> = authors.iter().map(|a| a.name.clone()).collect();
+    assert!(
+        !names.contains(&"Niklaus Wirth".to_string()),
+        "emptied author dropped, got {names:?}"
+    );
+    assert!(
+        authors.iter().all(|a| a.book_count > 0),
+        "the index must never surface a 0-book author"
+    );
+}

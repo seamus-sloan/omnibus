@@ -379,7 +379,7 @@ struct BookDetailView: View {
         guard isProse(text) else { return body }
 
         var initial = AttributedString(String(text.prefix(1)))
-        initial.font = .system(size: 44, weight: .regular, design: .serif)
+        initial.font = .display(44)
         initial.foregroundColor = palette.accentColor
         return initial + body
     }
@@ -738,7 +738,7 @@ struct BookDetailView: View {
     private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .principal) {
             Text(model.book?.displayTitle ?? "")
-                .font(.system(size: 16, weight: .medium, design: .serif))
+                .font(.display(16, weight: .medium))
                 .foregroundStyle(palette.ink0Color)
                 .lineLimit(1)
                 .opacity(barTitleOpacity)

@@ -272,6 +272,38 @@ async fn resolve_device_by_hardware_id_propagates_db_error_when_pool_is_closed()
     assert!(matches!(err, Err(KoboDeviceError::Sqlx(_))));
 }
 
+/// Seed `count` devices directly via SQL (bypassing `create_device`'s token
+/// generation, which is unnecessarily expensive at this volume).
+async fn seed_devices_raw(pool: &SqlitePool, user_id: i64, count: i64) {
+    sqlx::query(
+        "WITH RECURSIVE n(i) AS (
+            SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?
+        )
+        INSERT INTO kobo_devices (user_id, token, name, created_at)
+        SELECT ?, 'tok-' || i, 'Kobo ' || i, i FROM n",
+    )
+    .bind(count)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn list_devices_caps_response_at_hard_limit() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "reader").await;
+    let over_cap = LIST_DEVICES_LIMIT + 50;
+    seed_devices_raw(&pool, user, over_cap).await;
+
+    let listed = list_devices(&pool, user).await.unwrap();
+    assert_eq!(
+        listed.len() as i64,
+        LIST_DEVICES_LIMIT,
+        "list_devices must not return more than LIST_DEVICES_LIMIT rows",
+    );
+}
+
 #[tokio::test]
 async fn deleting_the_user_cascades_the_device() {
     let pool = init_db("sqlite::memory:").await.unwrap();
