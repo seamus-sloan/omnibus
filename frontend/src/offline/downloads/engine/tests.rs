@@ -550,6 +550,7 @@ fn record_file_etag_updates_the_registry_entry_in_place() {
         },
         files: vec![planned_file("book.epub", "/file")],
         updated_at: 1,
+        stale: false,
     });
 
     crate::offline::downloads::record_file_etag(

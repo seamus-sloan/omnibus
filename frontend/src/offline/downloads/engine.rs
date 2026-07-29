@@ -61,6 +61,29 @@ pub(super) async fn run(server_url: String, uuid: String, format: DlFormat, file
     }
 }
 
+/// Run a replacement download, restoring `previous` if it fails.
+///
+/// The files `previous` describes are still on disk throughout: the engine
+/// writes `.part` siblings and renames over them only on success. So a
+/// failure here is not a loss — it is the book the reader already had,
+/// still complete and still flagged, with the chip inviting another try.
+pub(super) async fn run_replacing(
+    server_url: String,
+    uuid: String,
+    format: DlFormat,
+    file_id: Option<i64>,
+    previous: DownloadEntry,
+) {
+    if let Err(err) = run_inner(&server_url, &uuid, format, file_id).await {
+        tracing::warn!(
+            error = ?err,
+            book_uuid = %uuid,
+            "offline re-download failed; keeping the copy already on the device"
+        );
+        super::restore(previous);
+    }
+}
+
 async fn run_inner(
     server_url: &str,
     uuid: &str,
@@ -224,6 +247,7 @@ async fn run_inner(
         status: DownloadStatus::Complete { bytes },
         files,
         updated_at: crate::offline::store::now_secs(),
+        stale: false,
     });
     Ok(())
 }
@@ -529,6 +553,7 @@ fn publish(
         },
         files: files.to_vec(),
         updated_at: crate::offline::store::now_secs(),
+        stale: false,
     });
 }
 

@@ -344,10 +344,17 @@ pub async fn search_palette(server_url: &str, q: &str) -> Result<PaletteResults,
 pub async fn get_ebook(server_url: &str, uuid: &str) -> Result<Option<EbookMetadata>, DataError> {
     let url = server_url.to_string();
     let uuid = uuid.to_string();
-    crate::offline::cache::read_through(crate::offline::cache::keys::ebook(&uuid), async move {
-        get_ebook_online(&url, &uuid).await
-    })
-    .await
+    let book = crate::offline::cache::read_through(
+        crate::offline::cache::keys::ebook(&uuid),
+        async move { get_ebook_online(&url, &uuid).await },
+    )
+    .await?;
+    // This is the only read that carries per-file content validators, so
+    // it's where a downloaded copy learns the library file moved under it.
+    if let Some(book) = book.as_ref() {
+        crate::offline::downloads::note_book(book);
+    }
+    Ok(book)
 }
 
 #[cfg(feature = "mobile")]
@@ -890,3 +897,32 @@ pub async fn delete_ebook_cover(
 
 #[cfg(all(test, feature = "mobile"))]
 mod tests;
+
+/// `POST /api/downloads/validators` — current validators for a batch of
+/// downloaded files, in one request carrying no metadata.
+///
+/// Deliberately not cached: the answer's whole purpose is to be newer than
+/// what this device holds, and it is small enough that a cache row would
+/// cost more than the request.
+#[cfg(feature = "mobile")]
+pub async fn download_validators(
+    server_url: &str,
+    files: &[omnibus_shared::DownloadValidatorQuery],
+) -> Result<Vec<omnibus_shared::DownloadValidator>, DataError> {
+    let url = format!("{server_url}/api/downloads/validators");
+    let body = omnibus_shared::DownloadValidatorRequest {
+        files: files.to_vec(),
+    };
+    let response = with_bearer(http_client().post(&url))
+        .json(&body)
+        .send()
+        .await?;
+    let status = note_status(response.status());
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    Ok(response
+        .json::<omnibus_shared::DownloadValidatorResponse>()
+        .await?
+        .files)
+}

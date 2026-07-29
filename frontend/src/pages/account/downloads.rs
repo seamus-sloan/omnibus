@@ -121,28 +121,40 @@ fn relative_time(at: i64) -> String {
     }
 }
 
-/// One downloaded (or in-flight) book row: title + format/size subline,
-/// with Remove for finished rows.
-#[component]
-fn DownloadRow(entry: DownloadEntry) -> Element {
-    let format_label = match entry.format {
-        DlFormat::Epub => "Ebook",
-        DlFormat::Audio => "Audiobook",
-    };
-    let subline = match &entry.status {
-        DownloadStatus::Complete { bytes } => {
-            format!(
-                "{format_label} \u{00b7} {}",
-                downloads::format_bytes(*bytes)
-            )
-        }
+/// The row's secondary line: what this format is, and what state it's in.
+fn subline(format_label: &str, status: &DownloadStatus, stale: bool) -> String {
+    match status {
+        DownloadStatus::Complete { bytes } if stale => format!(
+            "{format_label} \u{00b7} Update available \u{00b7} {}",
+            downloads::format_bytes(*bytes)
+        ),
+        DownloadStatus::Complete { bytes } => format!(
+            "{format_label} \u{00b7} {}",
+            downloads::format_bytes(*bytes)
+        ),
         DownloadStatus::Downloading { downloaded, .. } => format!(
             "{format_label} \u{00b7} downloading \u{2026} {}",
             downloads::format_bytes(*downloaded)
         ),
         DownloadStatus::Error { message } => format!("{format_label} \u{00b7} {message}"),
         DownloadStatus::NotDownloaded => format_label.to_string(),
+    }
+}
+
+/// One downloaded (or in-flight) book row: title + format/size subline,
+/// with Remove for finished rows — or Re-download when the library file has
+/// moved under this copy.
+#[component]
+fn DownloadRow(entry: DownloadEntry) -> Element {
+    let format_label = match entry.format {
+        DlFormat::Epub => "Ebook",
+        DlFormat::Audio => "Audiobook",
     };
+    // A completed row whose library file has since moved reads as an
+    // update, not a size — the number is still true but it is no longer
+    // the interesting fact about this row.
+    let stale = entry.stale && matches!(entry.status, DownloadStatus::Complete { .. });
+    let subline = subline(format_label, &entry.status, stale);
     let title = if entry.title.is_empty() {
         "Untitled".to_string()
     } else {
@@ -153,7 +165,29 @@ fn DownloadRow(entry: DownloadEntry) -> Element {
         DownloadStatus::Complete { .. } | DownloadStatus::Error { .. }
     );
     let (uuid, format) = (entry.book_uuid.clone(), entry.format);
-    let on_remove = move |_| downloads::remove(&uuid, format);
+    let on_remove = {
+        let uuid = uuid.clone();
+        move |_| downloads::remove(&uuid, format)
+    };
+    // Same single operation as the book-detail row — see `redownload` for
+    // why this is not `remove` followed by `start`.
+    let on_redownload = {
+        let (uuid, title, server_url) = (uuid, title.clone(), crate::use_server_url());
+        move |_| {
+            downloads::redownload(
+                server_url.clone(),
+                uuid.clone(),
+                format,
+                entry.file_id,
+                title.clone(),
+            );
+        }
+    };
+    let sub_class = if stale {
+        "m-account-dl-sub m-dl-row-stale"
+    } else {
+        "m-account-dl-sub"
+    };
 
     rsx! {
         div { class: "m-account-row m-account-dl-row", "data-testid": "account-download-row",
@@ -161,9 +195,18 @@ fn DownloadRow(entry: DownloadEntry) -> Element {
                 to: Route::BookDetail { uuid: entry.book_uuid.clone() },
                 class: "m-account-dl-link",
                 div { class: "m-account-dl-title", "{title}" }
-                div { class: "m-account-dl-sub", "{subline}" }
+                div { class: "{sub_class}", "{subline}" }
             }
-            if removable {
+            if stale {
+                button {
+                    r#type: "button",
+                    class: "btn sm",
+                    "data-testid": "account-download-redownload",
+                    "aria-label": "Re-download {title} to update this device's copy",
+                    onclick: on_redownload,
+                    "Re-download"
+                }
+            } else if removable {
                 button {
                     r#type: "button",
                     class: "btn sm ghost m-dl-remove",
@@ -173,5 +216,41 @@ fn DownloadRow(entry: DownloadEntry) -> Element {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subline_leads_with_the_update_when_the_library_file_moved() {
+        let status = DownloadStatus::Complete { bytes: 2048 };
+        assert_eq!(
+            subline("Ebook", &status, true),
+            "Ebook \u{00b7} Update available \u{00b7} 2.0 KB"
+        );
+        assert_eq!(subline("Ebook", &status, false), "Ebook \u{00b7} 2.0 KB");
+    }
+
+    #[test]
+    fn subline_ignores_staleness_for_a_row_that_is_not_complete() {
+        // Nothing finished downloading, so there is no local copy for a
+        // newer file to be newer *than*.
+        let downloading = DownloadStatus::Downloading {
+            downloaded: 1024,
+            total: Some(4096),
+        };
+        assert_eq!(
+            subline("Audiobook", &downloading, true),
+            "Audiobook \u{00b7} downloading \u{2026} 1.0 KB"
+        );
+        let failed = DownloadStatus::Error {
+            message: "Connection lost".into(),
+        };
+        assert_eq!(
+            subline("Audiobook", &failed, true),
+            "Audiobook \u{00b7} Connection lost"
+        );
     }
 }

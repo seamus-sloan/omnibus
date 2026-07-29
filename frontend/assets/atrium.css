@@ -7291,6 +7291,10 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 .m-dl-row-ok { color: var(--ok); }
 .m-dl-row-error { color: var(--bad); }
+/* The library file moved under a completed download. `--warn`, not
+   `--bad`: the copy on the device still opens and still reads — it is just
+   no longer the newest one, which is an invitation rather than a failure. */
+.m-dl-row-stale { color: var(--warn); }
 .m-dl-check { flex: 0 0 auto; }
 .m-dl-row-busy { color: var(--ink-3); }
 /* In-flight progress bar — same track as `.pbar`, accent fill driven by an

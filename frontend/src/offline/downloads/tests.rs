@@ -132,6 +132,7 @@ fn entry_row_round_trip_preserves_status_and_files() {
             source_etag: Some("\"wire-1\"".into()),
         }],
         updated_at: 42,
+        stale: false,
     };
     let row = row_from_entry(&entry);
     assert_eq!(row.status, "complete");
@@ -165,6 +166,7 @@ fn registry_status_and_downloaded_uuids_reflect_upserts() {
         status: DownloadStatus::Complete { bytes: 10 },
         files: vec![],
         updated_at: 1,
+        stale: false,
     });
     assert!(is_complete(uuid, DlFormat::Epub));
     assert!(!is_complete(uuid, DlFormat::Audio));
@@ -194,6 +196,7 @@ fn update_progress_bytes_mutates_status_in_place_and_preserves_files() {
         },
         files: files.clone(),
         updated_at: 1,
+        stale: false,
     });
 
     update_progress_bytes(uuid, DlFormat::Audio, 42, Some(100));
@@ -233,6 +236,7 @@ fn update_progress_bytes_clamps_negative_downloaded_to_zero() {
         },
         files: vec![],
         updated_at: 1,
+        stale: false,
     });
 
     update_progress_bytes(uuid, DlFormat::Epub, -3, None);
@@ -342,6 +346,7 @@ fn seed_complete_download(uuid: &str, format: DlFormat, source_etag: Option<&str
             source_etag: source_etag.map(str::to_string),
         }],
         updated_at: 1,
+        stale: false,
     });
 }
 
@@ -398,6 +403,7 @@ fn is_stale_is_false_for_a_download_that_never_completed() {
             source_etag: Some("\"old\"".into()),
         }],
         updated_at: 1,
+        stale: false,
     });
     let book = book_with_files(vec![bf_with_etag(1, "EPUB", 0, Some("\"new\""))]);
     assert!(!is_stale(uuid, DlFormat::Epub, &book));
@@ -454,6 +460,7 @@ fn is_stale_follows_an_explicitly_chosen_file_id() {
             source_etag: Some("\"epub-1\"".into()),
         }],
         updated_at: 1,
+        stale: false,
     });
     // Row 11 changed; row 10 — the one this download came from — did not.
     let book = book_with_files(vec![
@@ -463,5 +470,221 @@ fn is_stale_follows_an_explicitly_chosen_file_id() {
     assert!(
         !is_stale(uuid, DlFormat::Epub, &book),
         "a sibling file changing must not mark this download stale"
+    );
+}
+
+#[test]
+fn note_book_marks_and_clears_the_update_available_flag() {
+    let uuid = "u-note-book";
+    seed_complete_download(uuid, DlFormat::Epub, Some("\"old\""));
+    assert!(!is_marked_stale(uuid, DlFormat::Epub));
+
+    let mut moved = book_with_files(vec![bf_with_etag(1, "EPUB", 0, Some("\"new\""))]);
+    moved.unique_identifier = Some(uuid.into());
+    note_book(&moved);
+    assert!(is_marked_stale(uuid, DlFormat::Epub));
+
+    // The reader re-downloaded elsewhere and the snapshot now matches
+    // again: the chip must go away rather than stick until a restart.
+    let mut caught_up = book_with_files(vec![bf_with_etag(1, "EPUB", 0, Some("\"old\""))]);
+    caught_up.unique_identifier = Some(uuid.into());
+    note_book(&caught_up);
+    assert!(!is_marked_stale(uuid, DlFormat::Epub));
+}
+
+#[test]
+fn note_book_leaves_the_flag_alone_when_metadata_carries_no_file_rows() {
+    // The landing/replica projection has no `book_files`, so it can neither
+    // confirm nor deny staleness — it must not clear a flag the per-book
+    // read established.
+    let uuid = "u-note-book-no-files";
+    seed_complete_download(uuid, DlFormat::Epub, Some("\"old\""));
+    let mut moved = book_with_files(vec![bf_with_etag(1, "EPUB", 0, Some("\"new\""))]);
+    moved.unique_identifier = Some(uuid.into());
+    note_book(&moved);
+    assert!(is_marked_stale(uuid, DlFormat::Epub));
+
+    let mut projection_only = book_with_files(vec![]);
+    projection_only.unique_identifier = Some(uuid.into());
+    note_book(&projection_only);
+    assert!(
+        is_marked_stale(uuid, DlFormat::Epub),
+        "a projection without file rows must not silently clear the chip"
+    );
+}
+
+#[test]
+fn note_book_is_a_noop_for_a_book_with_no_uuid() {
+    let mut anonymous = book_with_files(vec![bf_with_etag(1, "EPUB", 0, Some("\"new\""))]);
+    anonymous.unique_identifier = None;
+    note_book(&anonymous);
+}
+
+// ── Re-download is non-destructive (#1231) ─────────────────────────────
+
+#[test]
+fn redownload_keeps_the_files_and_the_prior_selection() {
+    // The chip's action must not be remove-then-start: `remove` deletes
+    // asynchronously, so pairing them races the deletion against the engine
+    // writing the replacement — and discards a readable book before knowing
+    // the new one arrives.
+    let uuid = "u-redownload";
+    upsert(DownloadEntry {
+        book_uuid: uuid.into(),
+        format: DlFormat::Epub,
+        title: "Old title".into(),
+        file_id: Some(42),
+        status: DownloadStatus::Complete { bytes: 10 },
+        files: vec![PlannedFile {
+            rel: "book.epub".into(),
+            url_path: "/x?file_id=42".into(),
+            ordinal: None,
+            bytes: Some(10),
+            done: true,
+            http_etag: Some("\"resp\"".into()),
+            source_etag: Some("\"old\"".into()),
+        }],
+        updated_at: 1,
+        stale: true,
+    });
+
+    // No runtime in tests, so the engine never spawns; what matters is the
+    // registry state the spawn would have run against.
+    redownload(
+        "http://localhost".into(),
+        uuid.into(),
+        DlFormat::Epub,
+        None,
+        "New title".into(),
+    );
+
+    let entry = get_entry(uuid, DlFormat::Epub).expect("entry");
+    assert_eq!(
+        entry.file_id,
+        Some(42),
+        "a caller that doesn't track the selection must inherit it, not retarget the book"
+    );
+    assert_eq!(
+        entry.files.len(),
+        1,
+        "the planned files survive so their bytes stay on disk as the fallback"
+    );
+    assert!(
+        !entry.files[0].done,
+        "every file is refetched rather than carried forward"
+    );
+    assert_eq!(
+        entry.files[0].http_etag.as_deref(),
+        Some("\"resp\""),
+        "the response validator is kept so a resume can still offer If-Range"
+    );
+}
+
+#[test]
+fn restore_puts_back_the_copy_a_failed_replacement_was_standing_in_for() {
+    let uuid = "u-redownload-restore";
+    let previous = DownloadEntry {
+        book_uuid: uuid.into(),
+        format: DlFormat::Epub,
+        title: "T".into(),
+        file_id: None,
+        status: DownloadStatus::Complete { bytes: 10 },
+        files: vec![PlannedFile {
+            rel: "book.epub".into(),
+            url_path: "/x".into(),
+            ordinal: None,
+            bytes: Some(10),
+            done: true,
+            http_etag: None,
+            source_etag: Some("\"old\"".into()),
+        }],
+        updated_at: 1,
+        stale: true,
+    };
+    upsert(previous.clone());
+    redownload(
+        "http://localhost".into(),
+        uuid.into(),
+        DlFormat::Epub,
+        None,
+        "T".into(),
+    );
+    assert!(!is_complete(uuid, DlFormat::Epub), "mid-replacement");
+
+    restore(previous);
+
+    // The book the reader already had, still complete and still flagged —
+    // the chip invites another try rather than the book vanishing.
+    assert!(is_complete(uuid, DlFormat::Epub));
+    assert!(is_marked_stale(uuid, DlFormat::Epub));
+}
+
+#[test]
+fn apply_validators_marks_and_clears_from_a_batch_answer() {
+    let uuid = "u-batch-validators";
+    seed_complete_download(uuid, DlFormat::Epub, Some("\"old\""));
+
+    let answer = |etag: Option<&str>| omnibus_shared::DownloadValidator {
+        book_uuid: uuid.into(),
+        format: omnibus_shared::DownloadFormat::Epub,
+        file_id: None,
+        etag: etag.map(str::to_string),
+    };
+
+    apply_validators(&[answer(Some("\"new\""))]);
+    assert!(is_marked_stale(uuid, DlFormat::Epub));
+
+    apply_validators(&[answer(Some("\"old\""))]);
+    assert!(!is_marked_stale(uuid, DlFormat::Epub));
+}
+
+#[test]
+fn apply_validators_leaves_the_flag_alone_when_the_server_cannot_answer() {
+    // A book, format or file the server no longer has comes back with no
+    // etag. That is "can't tell", and must not clear a chip a real
+    // comparison set.
+    let uuid = "u-batch-unanswerable";
+    seed_complete_download(uuid, DlFormat::Epub, Some("\"old\""));
+    apply_validators(&[omnibus_shared::DownloadValidator {
+        book_uuid: uuid.into(),
+        format: omnibus_shared::DownloadFormat::Epub,
+        file_id: None,
+        etag: Some("\"new\"".into()),
+    }]);
+    assert!(is_marked_stale(uuid, DlFormat::Epub));
+
+    apply_validators(&[omnibus_shared::DownloadValidator {
+        book_uuid: uuid.into(),
+        format: omnibus_shared::DownloadFormat::Epub,
+        file_id: None,
+        etag: None,
+    }]);
+    assert!(is_marked_stale(uuid, DlFormat::Epub));
+}
+
+#[test]
+fn completed_validator_queries_names_the_file_each_download_came_from() {
+    let uuid = "u-queries";
+    upsert(DownloadEntry {
+        book_uuid: uuid.into(),
+        format: DlFormat::Audio,
+        title: "T".into(),
+        file_id: Some(9),
+        status: DownloadStatus::Complete { bytes: 10 },
+        files: vec![],
+        updated_at: 1,
+        stale: false,
+    });
+
+    let queries = completed_validator_queries();
+    let mine = queries
+        .iter()
+        .find(|q| q.book_uuid == uuid)
+        .expect("the completed download is asked about");
+    assert_eq!(mine.format, omnibus_shared::DownloadFormat::Audio);
+    assert_eq!(
+        mine.file_id,
+        Some(9),
+        "asking about the default row would report a two-edition book stale when it isn't"
     );
 }
