@@ -199,15 +199,44 @@ jobs:
           restore-keys: |
             playwright-node-modules-${{ runner.os }}-
 
-      # Re-use the bundle produced by the `bundle` job. The key is the same
-      # one that job computed, so this is a guaranteed hit when `bundle`
-      # succeeded.
+      # Re-use the bundle produced by the `bundle` job — a hit on the run that
+      # built it. NOT guaranteed forever: GHA evicts cache entries (LRU once
+      # the repo passes its 10 GB budget), so re-running a failed shard hours
+      # later can find the entry gone. `fail-on-cache-miss` used to turn that
+      # into a red shard before a single test ran, making "Re-run failed jobs"
+      # useless on any flake. Fall back to building the bundle here instead.
       - name: Restore dx bundle cache
-        uses: actions/cache@v4
+        id: bundle-cache
+        uses: actions/cache/restore@v4
         with:
           path: target/dx/omnibus/release/web
           key: ${{ needs.bundle.outputs.cache-key }}
-          fail-on-cache-miss: true
+
+      # Restore-only (`save-if: false`): the fallback wants a warm cargo cache,
+      # but this job must not save one — and its post-step cleanup would race
+      # the explicit bundle save below.
+      - name: Cache cargo registry and target
+        if: steps.bundle-cache.outputs.cache-hit != 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          shared-key: omnibus
+          save-if: false
+
+      - name: Rebuild web bundle (cache entry evicted)
+        if: steps.bundle-cache.outputs.cache-hit != 'true'
+        run: nix develop .#e2e --command bash -c 'set -euo pipefail; dx bundle --platform web --package omnibus --fullstack --release'
+
+      # Re-seed the evicted entry so the sibling shard (and any later re-run)
+      # hits it. Both shards can race to save the same key; the loser's
+      # "already exists" must not fail the shard.
+      - name: Save dx bundle cache
+        if: steps.bundle-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: target/dx/omnibus/release/web
+          key: ${{ needs.bundle.outputs.cache-key }}
 
       - name: Install Playwright npm deps
         run: nix develop .#e2e --command bash -c 'set -euo pipefail; cd ui_tests/playwright && pnpm install --frozen-lockfile'

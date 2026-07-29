@@ -683,6 +683,129 @@ async fn served_kobo_annotations_returns_empty_for_an_unknown_book() {
 }
 
 #[tokio::test]
+async fn served_kobo_annotations_batch_caps_each_book_at_list_highlights_limit_like_the_single_uuid_form(
+) {
+    // Regression: an earlier version of the batched query had no per-book
+    // cap, so a book past LIST_HIGHLIGHTS_LIMIT rows produced a fingerprint
+    // that could never match the one `served_kobo_annotations` acked via the
+    // GET path — `checkforchanges` would report that book changed forever.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Big Book").await;
+
+    let total = LIST_HIGHLIGHTS_LIMIT + 5;
+    for i in 0..total {
+        sqlx::query(
+            "INSERT INTO annotations
+                 (user_id, book_uuid, kobo_location, color, client_id, created_at)
+             VALUES (?, ?, ?, 'amber', ?, ?)",
+        )
+        .bind(user)
+        .bind(&uuid)
+        .bind(format!(r#"{{"span":{{"i":{i}}}}}"#))
+        .bind(format!("kobo-{i:05}"))
+        .bind(i) // explicit, strictly increasing created_at — avoids same-second ties
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    let single = served_kobo_annotations(&pool, user, &uuid).await.unwrap();
+    assert_eq!(single.len(), LIST_HIGHLIGHTS_LIMIT as usize);
+
+    let batch = served_kobo_annotations_batch(&pool, user, std::slice::from_ref(&uuid))
+        .await
+        .unwrap();
+    let batched = batch.get(&uuid).cloned().unwrap_or_default();
+    assert_eq!(batched.len(), LIST_HIGHLIGHTS_LIMIT as usize);
+
+    assert_eq!(
+        crate::kobo::annotations::fingerprint(&single),
+        crate::kobo::annotations::fingerprint(&batched),
+        "the batched fetch must cap to the same LIST_HIGHLIGHTS_LIMIT window as the \
+         single-uuid form, or a device's GET-acked fingerprint can never match again"
+    );
+}
+
+#[tokio::test]
+async fn served_kobo_annotations_batch_groups_rows_by_book_and_omits_empty_and_unknown_uuids() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let alice = seed_user(&pool, "alice").await;
+    let (_, book_a) = seed(&pool, "/lib", "Book A").await;
+    let (_, book_b) = seed(&pool, "/lib", "Book B").await;
+    let (_, book_c) = seed(&pool, "/lib", "Book C").await;
+
+    ingest_kobo_annotations(
+        &pool,
+        alice,
+        &book_a,
+        &[
+            kobo_upload("kobo-a1", HighlightColor::Amber, None),
+            kobo_upload("kobo-a2", HighlightColor::Blue, None),
+        ],
+        &[],
+    )
+    .await
+    .unwrap();
+    ingest_kobo_annotations(
+        &pool,
+        alice,
+        &book_b,
+        &[kobo_upload("kobo-b1", HighlightColor::Rose, None)],
+        &[],
+    )
+    .await
+    .unwrap();
+    // Book C has no Kobo-anchored annotations at all.
+
+    let batch = served_kobo_annotations_batch(
+        &pool,
+        alice,
+        &[
+            book_a.clone(),
+            book_b.clone(),
+            book_c,
+            "no-such-uuid".into(),
+        ],
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(batch.len(), 2, "only books with servable rows are present");
+    let a = batch.get(&book_a).unwrap();
+    assert_eq!(a.len(), 2);
+    let b = batch.get(&book_b).unwrap();
+    assert_eq!(b.len(), 1);
+    assert_eq!(b[0].client_id, "kobo-b1");
+
+    // Matches the per-uuid form for the same candidates.
+    let a_single = served_kobo_annotations(&pool, alice, &book_a)
+        .await
+        .unwrap();
+    assert_eq!(a.len(), a_single.len());
+}
+
+#[tokio::test]
+async fn served_kobo_annotations_batch_returns_empty_map_for_no_candidates() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    assert!(served_kobo_annotations_batch(&pool, user, &[])
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn served_kobo_annotations_batch_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = served_kobo_annotations_batch(&pool, 1, &["uuid".to_string()])
+        .await
+        .unwrap_err();
+    assert!(matches!(err, HighlightError::Sqlx(_)));
+}
+
+#[tokio::test]
 async fn ingest_kobo_annotations_propagates_db_error_when_pool_is_closed() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     pool.close().await;

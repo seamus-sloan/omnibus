@@ -6,7 +6,7 @@
 use sha2::{Digest, Sha256};
 use sqlx::{Row, SqlitePool};
 
-use crate::annotations::{served_kobo_annotations, HighlightError, ServedKoboAnnotation};
+use crate::annotations::{served_kobo_annotations_batch, HighlightError, ServedKoboAnnotation};
 
 #[derive(Debug, thiserror::Error)]
 pub enum KoboAnnotationSyncError {
@@ -122,17 +122,26 @@ pub async fn changed_book_uuids(
     // BTreeSet union: dedup + deterministic report order in one shot.
     let candidates: std::collections::BTreeSet<String> =
         annotated.into_iter().chain(state.keys().cloned()).collect();
+    let candidate_list: Vec<String> = candidates.iter().cloned().collect();
+
+    // Single batched fetch instead of one query per candidate — this backs
+    // the device's polling heartbeat, so it must not scale with the tracked-
+    // book count. Mirrors `sync_delta`'s use of `reading_state_for` (delta.rs).
+    let served_by_uuid = served_kobo_annotations_batch(pool, user_id, &candidate_list).await?;
 
     let mut changed = Vec::new();
     for uuid in candidates {
-        let served = served_kobo_annotations(pool, user_id, &uuid).await?;
+        let served: &[ServedKoboAnnotation] = served_by_uuid
+            .get(&uuid)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         let (adopted, acked) = state.get(&uuid).cloned().unwrap_or((false, None));
         // Unadopted pairs are servable only once something exists to serve —
         // the same rule the GET handler applies before answering 200.
         if !adopted && served.is_empty() {
             continue;
         }
-        let current = fingerprint(&served);
+        let current = fingerprint(served);
         if acked.as_deref() != Some(current.as_str()) {
             changed.push(uuid);
         }
