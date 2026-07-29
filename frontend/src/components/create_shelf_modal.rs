@@ -15,6 +15,9 @@ use crate::components::shelf_rule_builder::{RuleBuilder, RuleDraft};
 use crate::components::LibraryPickerGrid;
 use crate::{data, use_server_url};
 
+#[cfg(test)]
+mod tests;
+
 /// Create-shelf modal. Emits the created shelf via `on_created`.
 #[component]
 pub fn CreateShelfModal(on_close: EventHandler<()>, on_created: EventHandler<Shelf>) -> Element {
@@ -37,32 +40,14 @@ pub fn CreateShelfModal(on_close: EventHandler<()>, on_created: EventHandler<She
         if saving() {
             return;
         }
-        let req = match kind() {
-            ShelfKind::Smart => {
-                let wire: Vec<ShelfRule> =
-                    rules.read().iter().filter_map(RuleDraft::to_rule).collect();
-                CreateShelfRequest {
-                    kind: ShelfKind::Smart,
-                    name: name(),
-                    description: None,
-                    visibility: visibility(),
-                    match_mode: Some(match_mode()),
-                    rules: wire,
-                    book_uuids: Vec::new(),
-                }
-            }
-            // The modal's toggle only offers Smart/Manual — Wishlist is a
-            // system shelf, never user-created — so it falls in with Manual.
-            ShelfKind::Manual | ShelfKind::Wishlist => CreateShelfRequest {
-                kind: ShelfKind::Manual,
-                name: name(),
-                description: None,
-                visibility: visibility(),
-                match_mode: None,
-                rules: Vec::new(),
-                book_uuids: picked.read().clone(),
-            },
-        };
+        let req = build_create_request(
+            kind(),
+            name(),
+            visibility(),
+            match_mode(),
+            &rules.read(),
+            &picked.read(),
+        );
         let url = submit_url.clone();
         let on_created = on_created;
         saving.set(true);
@@ -77,11 +62,7 @@ pub fn CreateShelfModal(on_close: EventHandler<()>, on_created: EventHandler<She
     };
 
     let picked_count = picked.read().len();
-    let create_label = match kind() {
-        ShelfKind::Smart => "Create".to_string(),
-        // Wishlist can't be reached by the toggle; grouped with Manual.
-        ShelfKind::Manual | ShelfKind::Wishlist => format!("Create \u{b7} {picked_count}"),
-    };
+    let create_label = create_label(kind(), picked_count);
 
     rsx! {
         div {
@@ -165,6 +146,53 @@ pub fn CreateShelfModal(on_close: EventHandler<()>, on_created: EventHandler<She
                 }
             }
         }
+    }
+}
+
+/// Build the create-shelf request for the current form state. Smart shelves
+/// carry the encoded rule set and no book list; Manual — and Wishlist, which
+/// the kind toggle can never reach since it's system-provisioned — carry the
+/// picked book list and no rules.
+fn build_create_request(
+    kind: ShelfKind,
+    name: String,
+    visibility: Visibility,
+    match_mode: MatchMode,
+    rules: &[RuleDraft],
+    picked: &[String],
+) -> CreateShelfRequest {
+    match kind {
+        ShelfKind::Smart => {
+            let wire: Vec<ShelfRule> = rules.iter().filter_map(RuleDraft::to_rule).collect();
+            CreateShelfRequest {
+                kind: ShelfKind::Smart,
+                name,
+                description: None,
+                visibility,
+                match_mode: Some(match_mode),
+                rules: wire,
+                book_uuids: Vec::new(),
+            }
+        }
+        ShelfKind::Manual | ShelfKind::Wishlist => CreateShelfRequest {
+            kind: ShelfKind::Manual,
+            name,
+            description: None,
+            visibility,
+            match_mode: None,
+            rules: Vec::new(),
+            book_uuids: picked.to_vec(),
+        },
+    }
+}
+
+/// Submit-button label: plain for a smart shelf, a running picked-count for a
+/// hand-picked one.
+fn create_label(kind: ShelfKind, picked_count: usize) -> String {
+    match kind {
+        ShelfKind::Smart => "Create".to_string(),
+        // Wishlist can't be reached by the toggle; grouped with Manual.
+        ShelfKind::Manual | ShelfKind::Wishlist => format!("Create \u{b7} {picked_count}"),
     }
 }
 
