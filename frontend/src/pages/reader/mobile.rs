@@ -12,6 +12,7 @@ use dioxus::prelude::*;
 use omnibus_shared::{Highlight, ProgressFormat, ProgressUpdate};
 
 use crate::data;
+use crate::time::now_unix;
 
 use super::prefs::ReaderPrefs;
 use super::search_panel::SearchResult;
@@ -297,16 +298,4 @@ fn persist_progress(uuid: &str, server_url: &str, cfi: String) {
         };
         let _ = data::save_progress(&server_url, update).await;
     });
-}
-
-/// Current unix time in seconds from the device clock — stamped onto every
-/// `ProgressUpdate` so most-recent-wins resolves on client event time
-/// rather than server receipt time (issue #1362). This module only
-/// compiles under `feature = "mobile"` (native, not wasm32), so the
-/// platform clock is always `std::time::SystemTime`.
-fn now_unix() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }

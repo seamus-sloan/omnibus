@@ -10,6 +10,7 @@ use omnibus_shared::{EbookMetadata, MergeBooksResult};
 
 use crate::components::atrium::Cover;
 use crate::components::ConfirmModal;
+use crate::platform_sleep::async_sleep_ms;
 use crate::{data, use_server_url};
 
 /// Search-and-select signals shared across the dialog's search and
@@ -290,18 +291,6 @@ fn render_search_pane(
             }
         }
     }
-}
-
-// Debounce sleep, platform-gated like search_palette/overlay.rs: the
-// dialog compiles for web (WASM) and server (SSR) targets.
-#[cfg(feature = "web")]
-async fn async_sleep_ms(ms: u32) {
-    gloo_timers::future::TimeoutFuture::new(ms).await;
-}
-
-#[cfg(all(not(feature = "web"), feature = "server"))]
-async fn async_sleep_ms(ms: u32) {
-    tokio::time::sleep(std::time::Duration::from_millis(ms as u64)).await;
 }
 
 /// Pinned "this is the keeper" context shown above the search field: the

@@ -8,6 +8,7 @@
 use dioxus::prelude::*;
 
 use super::suggestion_dropdown::{compute_suggestions, DropdownSelectionState, SuggestionDropdown};
+use crate::focus_after_paint::focus_after_paint;
 
 /// Per-instance handle to the editor's own root DOM node, captured on mount
 /// so a later blur can check whether focus is still somewhere inside this
@@ -557,10 +558,10 @@ fn ChipInput(props: ChipInputProps) -> Element {
             // with. Deferred to the next frame: calling `.focus()`
             // synchronously inside `onmounted` lands before layout
             // finishes and no-ops (same pattern as
-            // `search_palette::focus_palette_input`).
+            // `search_palette::focus_after_paint`).
             onmounted: move |evt: Event<MountedData>| {
                 if autofocus {
-                    focus_chip_input(evt);
+                    focus_after_paint(&evt);
                 }
             },
             onfocus: move |_| on_focus.call(()),
@@ -570,32 +571,6 @@ fn ChipInput(props: ChipInputProps) -> Element {
         }
     }
 }
-
-#[cfg(feature = "web")]
-fn focus_chip_input(evt: Event<MountedData>) {
-    use dioxus::web::WebEventExt;
-    use wasm_bindgen::prelude::*;
-
-    let Some(element) = evt.try_as_web_event() else {
-        return;
-    };
-    let Some(window) = web_sys::window() else {
-        return;
-    };
-    let cb = Closure::once_into_js(move || {
-        if let Some(html_el) = element.dyn_ref::<web_sys::HtmlElement>() {
-            let _ = html_el.focus();
-        }
-    });
-    let _ = window.request_animation_frame(cb.unchecked_ref());
-}
-
-/// Non-web stub: SSR never paints an interactive input and mobile's touch
-/// keyboard doesn't need the same rAF-deferred focus nudge. Defined so the
-/// `onmounted` handler can call `focus_chip_input` unconditionally (rule
-/// 07: hydration parity — keep cfg gates out of rsx bodies).
-#[cfg(not(feature = "web"))]
-fn focus_chip_input(_evt: Event<MountedData>) {}
 
 /// Rendered chip row — one chip per value with an avatar (optional) and
 /// remove button. Fires `on_remove` with the new full list after each removal.

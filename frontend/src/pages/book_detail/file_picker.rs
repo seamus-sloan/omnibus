@@ -8,6 +8,8 @@ use dioxus::prelude::*;
 use dioxus_router::Link;
 use omnibus_shared::BookFileInfo;
 
+use crate::focus_after_paint::focus_after_paint;
+
 /// Which action the picker's rows perform — drives the route prefix, the
 /// dialog's accessible label, and the stable testids.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -154,7 +156,7 @@ fn BdFilePickerPanel(
             "data-testid": "{testid}-panel",
             tabindex: "-1",
             onkeydown: on_keydown,
-            onmounted: move |evt: MountedEvent| focus_file_picker_panel(&evt),
+            onmounted: move |evt: MountedEvent| focus_after_paint(&evt),
 
             div {
                 class: "label bd-file-picker-heading",
@@ -187,35 +189,6 @@ fn BdFilePickerPanel(
         }
     }
 }
-
-/// Focus the panel after paint so its `onkeydown` receives ESC — same
-/// requestAnimationFrame timing as `export_menu::focus_export_panel` and
-/// `user_menu::focus_user_menu_panel`.
-#[cfg(feature = "web")]
-fn focus_file_picker_panel(evt: &MountedEvent) {
-    use dioxus::web::WebEventExt;
-    use wasm_bindgen::prelude::*;
-
-    let Some(element) = evt.try_as_web_event() else {
-        return;
-    };
-    let Some(window) = web_sys::window() else {
-        return;
-    };
-    let cb = Closure::once_into_js(move || {
-        if let Some(html_el) = element.dyn_ref::<web_sys::HtmlElement>() {
-            let _ = html_el.focus();
-        }
-    });
-    let _ = window.request_animation_frame(cb.unchecked_ref());
-}
-
-/// Non-web stub: SSR never paints the panel, and the mobile native shell has
-/// no `web_sys` to focus through, so there is nothing to focus. Defined so
-/// the `onmounted` handler can call `focus_file_picker_panel` unconditionally
-/// (rule 07: hydration parity — keep cfg gates out of rsx bodies).
-#[cfg(not(feature = "web"))]
-fn focus_file_picker_panel(_evt: &MountedEvent) {}
 
 #[cfg(test)]
 mod tests {

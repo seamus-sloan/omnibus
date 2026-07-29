@@ -1,7 +1,7 @@
 //! The floating palette panel itself: dark scrim, centered panel with
 //! autofocused input, meta line, grouped result list, and a footer with
-//! keyboard hints. Owns the debounced FTS5 search task (cancel-on-keystroke)
-//! plus the platform-gated async-sleep + input-focus glue it needs.
+//! keyboard hints. Owns the debounced FTS5 search task (cancel-on-keystroke),
+//! using the shared `platform_sleep`/`focus_after_paint` interop helpers.
 
 use dioxus::core::Task;
 use dioxus::prelude::*;
@@ -12,6 +12,8 @@ use super::keyboard::{make_keydown_handler, KeyboardContext};
 use super::model::{build_flat_items, plural};
 use super::results::SpResultsList;
 use super::PaletteOpen;
+use crate::focus_after_paint::focus_after_paint;
+use crate::platform_sleep::async_sleep_ms;
 use crate::{data, use_server_url};
 
 /// Floating overlay: dark scrim + centered panel with input, results, footer.
@@ -200,7 +202,7 @@ fn SpInputRow(query: Signal<String>, is_loading: bool, on_input: EventHandler<St
                 // appears (this is the timing reason prior
                 // attempts with `set_focus(true)`/`spawn` failed).
                 onmounted: move |evt: MountedEvent| {
-                    focus_palette_input(&evt);
+                    focus_after_paint(&evt);
                 },
                 value: "{query}",
                 oninput: move |evt| on_input.call(evt.value()),
@@ -229,56 +231,4 @@ fn SpFooter() -> Element {
             }
         }
     }
-}
-
-// ── Async sleep (platform-gated) ─────────────────────────────────
-
-/// Platform-gated async sleep. Web uses `gloo_timers`, server uses `tokio`.
-#[cfg(feature = "web")]
-async fn async_sleep_ms(ms: u32) {
-    gloo_timers::future::TimeoutFuture::new(ms).await;
-}
-
-#[cfg(all(not(feature = "web"), feature = "server"))]
-async fn async_sleep_ms(ms: u32) {
-    tokio::time::sleep(std::time::Duration::from_millis(ms as u64)).await;
-}
-
-// ── Autofocus on overlay mount (platform-gated) ──────────────────
-
-/// Focus the palette input after the browser has painted it.
-///
-/// Replaces a prior `document::eval` + raw JS `requestAnimationFrame` +
-/// `querySelector` workaround with a fully typed `web_sys` path.
-///
-/// The `requestAnimationFrame` indirection is still required. Calling
-/// `.focus()` synchronously inside `onmounted` (or from a `spawn`ed
-/// future) lands before the element is laid out, so the caret never
-/// appears. Scheduling the focus for the next frame matches what the
-/// old eval block did and lets the browser finish layout first.
-#[cfg(feature = "web")]
-fn focus_palette_input(evt: &MountedEvent) {
-    use dioxus::web::WebEventExt;
-    use wasm_bindgen::prelude::*;
-
-    let Some(element) = evt.try_as_web_event() else {
-        return;
-    };
-    let Some(window) = web_sys::window() else {
-        return;
-    };
-    // `Closure::once_into_js` hands the callback to JS and frees the Rust
-    // closure (and the captured `element`) after the browser fires it once,
-    // so repeatedly opening/closing the palette doesn't accumulate leaks.
-    let cb = Closure::once_into_js(move || {
-        if let Some(html_el) = element.dyn_ref::<web_sys::HtmlElement>() {
-            let _ = html_el.focus();
-        }
-    });
-    let _ = window.request_animation_frame(cb.unchecked_ref());
-}
-
-#[cfg(not(feature = "web"))]
-fn focus_palette_input(_evt: &MountedEvent) {
-    // No-op on SSR / native: the overlay only opens via web interaction.
 }
