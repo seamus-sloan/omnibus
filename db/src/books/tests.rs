@@ -56,7 +56,7 @@ async fn get_book_formats_machine_timestamps_as_fixed_width_iso() {
 }
 
 #[tokio::test]
-async fn last_modified_for_returns_the_stored_epoch() {
+async fn book_last_modified_for_returns_the_stored_epoch() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     sqlx::query("INSERT INTO scan_roots (id, path, display_name) VALUES (1, '/lib', 'Lib')")
         .execute(&pool)
@@ -71,12 +71,12 @@ async fn last_modified_for_returns_the_stored_epoch() {
     .await
     .unwrap();
 
-    let last_modified = last_modified_for(&pool, id).await.unwrap();
+    let last_modified = book_last_modified_for(&pool, id).await.unwrap();
     assert_eq!(last_modified, 1700000000);
 }
 
 #[tokio::test]
-async fn last_modified_for_defaults_to_zero_when_column_is_null() {
+async fn book_last_modified_for_defaults_to_zero_when_column_is_null() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_minimal_books(&pool, 1).await;
     let id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE uuid = 'uuid-1'")
@@ -84,15 +84,15 @@ async fn last_modified_for_defaults_to_zero_when_column_is_null() {
         .await
         .unwrap();
 
-    let last_modified = last_modified_for(&pool, id).await.unwrap();
+    let last_modified = book_last_modified_for(&pool, id).await.unwrap();
     assert_eq!(last_modified, 0);
 }
 
 #[tokio::test]
-async fn last_modified_for_returns_db_error_for_unknown_id() {
+async fn book_last_modified_for_returns_db_error_for_unknown_id() {
     let pool = init_db("sqlite::memory:").await.unwrap();
 
-    let err = last_modified_for(&pool, 999).await.unwrap_err();
+    let err = book_last_modified_for(&pool, 999).await.unwrap_err();
     assert!(matches!(err, BooksError::Db(_)));
 }
 

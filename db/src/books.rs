@@ -17,8 +17,8 @@ mod tests;
 pub use facets::library_facets;
 pub use get::{
     book_file_path, book_file_path_by_id, book_file_paths, book_file_relative_dir,
-    download_validators, get_book, get_book_by_uuid, get_book_files, get_book_files_exec,
-    get_book_uuid_by_scan_key, last_modified_for, resolve_book_id_by_uuid,
+    book_last_modified_for, download_validators, get_book, get_book_by_uuid, get_book_files,
+    get_book_files_exec, get_book_uuid_by_scan_key, resolve_book_id_by_uuid,
     resolve_book_id_by_uuid_exec, resolve_canonical_book_uuid, resolve_canonical_book_uuid_exec,
     resolve_canonical_book_uuids_bulk_exec,
 };
