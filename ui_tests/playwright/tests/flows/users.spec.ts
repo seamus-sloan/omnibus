@@ -97,6 +97,60 @@ test("creates a user then deletes it", async ({ page }) => {
   await expect(tempRow(page)).toHaveCount(0);
 });
 
+test("a backdrop click during an in-flight delete does not dismiss the modal or lose the result", async ({
+  page,
+}) => {
+  // #1484 — DeleteUserModal used to sit on a hand-rolled `ModalShell` whose
+  // backdrop had no busy gate at all, so a stray click while the delete was
+  // in flight closed the modal before the admin saw the outcome. It now
+  // shares `ConfirmModal`, which refuses to dismiss while `busy`.
+  await gotoReady(page, USERS);
+
+  const tempName = `e2e_backdrop_${Date.now()}`;
+  await page.getByTestId("users-new").click();
+  await page.getByTestId("new-user-username").fill(tempName);
+  await page.getByTestId("new-user-password").fill(TEMP_PASSWORD);
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/users", expectedStatus: 201 },
+    async () => page.getByTestId("new-user-submit").click(),
+  );
+  const row = table(page).locator("tr", { hasText: tempName });
+  await expect(row).toBeVisible();
+
+  await row.getByRole("button", { name: "Delete" }).click();
+  const modal = page.getByTestId("users-delete-modal");
+  await expect(modal).toBeVisible();
+
+  // Delay the DELETE response so the modal is provably still busy when the
+  // backdrop click lands mid-request.
+  await page.route("**/api/users/*", async (route) => {
+    if (route.request().method() !== "DELETE") return route.continue();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    return route.continue();
+  });
+
+  try {
+    await expectMutation(
+      page,
+      { method: "DELETE", url: "/api/users/", expectedStatus: 204 },
+      async () => {
+        await page.getByTestId("delete-user-confirm").click();
+        // Click the backdrop well away from the centered panel while the
+        // delete is still in flight (the route above delays the response) —
+        // the modal must stay open and the request must still complete.
+        await modal.click({ position: { x: 5, y: 5 } });
+        await expect(modal).toBeVisible();
+      },
+    );
+  } finally {
+    await page.unroute("**/api/users/*");
+  }
+
+  await expect(modal).toHaveCount(0);
+  await expect(row).toHaveCount(0);
+});
+
 test("surfaces a 409 when creating a duplicate username", async ({ page }) => {
   await gotoReady(page, USERS);
   await page.getByTestId("users-new").click();
