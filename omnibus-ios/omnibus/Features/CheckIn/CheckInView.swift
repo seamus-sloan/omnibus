@@ -16,21 +16,36 @@ struct CheckInView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var manualISBN = ""
-    @State private var outcome: ScanOutcome?
+    @State private var stage: CheckInStage = .scan
     @State private var isResolving = false
+    @State private var isWriting = false
     @State private var error: String?
     @State private var scannerAvailable = DataScannerViewController.isSupported
         && DataScannerViewController.isAvailable
     @State private var note = ""
-    @State private var didComplete = false
+    /// Book detail presented full-screen over the sheet, so dismissing it
+    /// lands back on the scanner rather than losing the check-in loop.
+    @State private var detailTarget: DetailTarget?
+
+    private struct DetailTarget: Identifiable {
+        let uuid: String
+        var id: String { uuid }
+    }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                if outcome == nil {
+                switch stage {
+                case .scan:
                     scannerSection
-                } else {
-                    outcomeSection
+                case let .outcome(outcome):
+                    outcomeSection(outcome)
+                case let .success(success):
+                    CheckInSuccessView(
+                        success: success,
+                        onScanAnother: { restart() },
+                        onViewBook: { detailTarget = DetailTarget(uuid: $0) }
+                    )
                 }
             }
             .background(ScreenBackground())
@@ -40,6 +55,23 @@ struct CheckInView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
+            }
+        }
+        // Full-screen detail rather than a push inside the sheet; closing it
+        // returns to the check-in flow, so the scan loop is never lost.
+        .fullScreenCover(item: $detailTarget) { target in
+            NavigationStack {
+                BookDetailView(uuid: target.uuid)
+                    .withDestinations()
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button {
+                                detailTarget = nil
+                            } label: {
+                                Image(systemName: "chevron.left")
+                            }
+                        }
+                    }
             }
         }
     }
@@ -126,54 +158,66 @@ struct CheckInView: View {
     // MARK: - Outcome
 
     @ViewBuilder
-    private var outcomeSection: some View {
+    private func outcomeSection(_ outcome: ScanOutcome) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Spacing.lg) {
                 switch outcome {
                 case let .alreadyOwned(book):
                     resultCard(
-                        title: book.title, authors: book.authors, uuid: book.uuid,
+                        title: book.title, authors: book.authors,
+                        cover: .library(uuid: book.uuid),
                         badge: "Already on your shelf", tint: palette.okColor
                     )
                     Text("You've already checked in a physical copy of this book.")
                         .font(.ui(14))
                         .foregroundStyle(palette.ink2Color)
-                    checkInButton(uuid: book.uuid, isbn: book.isbn, label: "Add another copy")
+                    detailsLink(uuid: book.uuid, style: .filled)
 
                 case let .onWishlist(book):
                     resultCard(
-                        title: book.title, authors: book.authors, uuid: book.uuid,
+                        title: book.title, authors: book.authors,
+                        cover: .library(uuid: book.uuid),
                         badge: "On your wishlist", tint: palette.accentColor
                     )
                     Text("Checking a copy in clears this book from your wishlist.")
                         .font(.ui(14))
                         .foregroundStyle(palette.ink2Color)
-                    noteField
-                    checkInButton(uuid: book.uuid, isbn: book.isbn, label: "Check in this copy")
+                    checkInButton(book: book, isbn: book.isbn, label: "Check in this copy")
+                    detailsLink(uuid: book.uuid, style: .quiet)
 
                 case let .inLibraryUnowned(book):
                     resultCard(
-                        title: book.title, authors: book.authors, uuid: book.uuid,
+                        title: book.title, authors: book.authors,
+                        cover: .library(uuid: book.uuid),
                         badge: "In your library", tint: palette.accentColor
                     )
                     noteField
-                    checkInButton(uuid: book.uuid, isbn: book.isbn, label: "Check in this copy")
+                    checkInButton(book: book, isbn: book.isbn, label: "Check in this copy")
 
                 case let .closeMatch(book, scanned):
                     resultCard(
-                        title: book.title, authors: book.authors, uuid: book.uuid,
+                        title: book.title, authors: book.authors,
+                        cover: .library(uuid: book.uuid),
                         badge: "Possible match", tint: palette.warnColor
                     )
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("You scanned")
-                            .font(.ui(12, weight: .medium))
-                            .foregroundStyle(palette.ink3Color)
-                        Text(scanned.title)
-                            .font(.ui(14, weight: .medium))
-                            .foregroundStyle(palette.ink0Color)
-                        Text(scanned.authorDisplay)
-                            .font(.ui(12.5))
-                            .foregroundStyle(palette.ink2Color)
+                    HStack(alignment: .top, spacing: Spacing.md) {
+                        if let cover = scanned.coverURL, CheckInFlow.isExternalURL(cover) {
+                            ExternalImage(url: cover) { Color.clear }
+                                .aspectRatio(2.0 / 3.0, contentMode: .fit)
+                                .frame(width: 40)
+                                .clipShape(RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("You scanned")
+                                .font(.ui(12, weight: .medium))
+                                .foregroundStyle(palette.ink3Color)
+                            Text(scanned.title)
+                                .font(.ui(14, weight: .medium))
+                                .foregroundStyle(palette.ink0Color)
+                            Text(scanned.authorDisplay)
+                                .font(.ui(12.5))
+                                .foregroundStyle(palette.ink2Color)
+                        }
                     }
                     .padding(Spacing.md)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -181,43 +225,41 @@ struct CheckInView: View {
                         RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
                             .fill(palette.bg1Color)
                     )
-                    noteField
-                    checkInButton(uuid: book.uuid, isbn: scanned.isbn13, label: "Yes, same book — check in")
+                    checkInButton(book: book, isbn: scanned.isbn13, label: "Yes, same book — check in")
                     Button("No, add as a new physical book") {
                         Task { await addPhysicalOnly(scanned) }
                     }
                     .buttonStyle(QuietButtonStyle())
                     .frame(maxWidth: .infinity)
+                    .disabled(isWriting)
+                    .opacity(isWriting ? 0.55 : 1)
 
                 case let .notInLibrary(online):
                     resultCard(
-                        title: online.title, authors: online.authors, uuid: nil,
-                        badge: "Not in your library", tint: palette.ink2Color,
-                        remoteCover: online.coverURL
+                        title: online.title, authors: online.authors,
+                        cover: externalCover(online),
+                        badge: "Not in your library", tint: palette.ink2Color
                     )
-                    noteField
                     Button("Add as physical book") {
                         Task { await addPhysicalOnly(online) }
                     }
                     .buttonStyle(FilledButtonStyle())
+                    .disabled(isWriting)
+                    .opacity(isWriting ? 0.55 : 1)
                     Button("Add to wishlist") {
                         Task { await addWishlist(online) }
                     }
                     .buttonStyle(QuietButtonStyle())
                     .frame(maxWidth: .infinity)
+                    .disabled(isWriting)
+                    .opacity(isWriting ? 0.55 : 1)
 
-                case .unresolved, .none:
+                case .unresolved:
                     EmptyStateView(
                         icon: "questionmark.circle",
                         title: "Couldn't identify that book",
                         message: "Neither your library nor the online providers recognised that ISBN."
                     )
-                }
-
-                if didComplete {
-                    Label("Saved", systemImage: "checkmark.circle.fill")
-                        .font(.ui(14, weight: .medium))
-                        .foregroundStyle(palette.okColor)
                 }
 
                 // Without this the outcome screen's writes failed in silence —
@@ -230,18 +272,15 @@ struct CheckInView: View {
                 }
 
                 Button("Scan another") {
-                    withAnimation {
-                        outcome = nil
-                        manualISBN = ""
-                        note = ""
-                        didComplete = false
-                        error = nil
-                    }
+                    restart()
                 }
                 .font(.ui(14))
                 .foregroundStyle(palette.accentColor)
                 .frame(maxWidth: .infinity)
                 .padding(.top, Spacing.sm)
+                // Restarting mid-write would race the pending POST's stage
+                // swap — a stale success screen for the previous book.
+                .disabled(isWriting)
             }
             .screenPadding()
             .padding(.vertical, Spacing.lg)
@@ -249,28 +288,66 @@ struct CheckInView: View {
     }
 
     private var noteField: some View {
-        TextField("Note (optional)", text: $note, axis: .vertical)
+        TextField("Edition note (optional)", text: $note, axis: .vertical)
             .textFieldStyle(OmnibusFieldStyle())
             .lineLimit(1...3)
     }
 
+    private enum DetailsLinkStyle { case filled, quiet }
+
+    @ViewBuilder
+    private func detailsLink(uuid: String, style: DetailsLinkStyle) -> some View {
+        switch style {
+        case .filled:
+            Button("Go to Book Details") {
+                detailTarget = DetailTarget(uuid: uuid)
+            }
+            .buttonStyle(FilledButtonStyle())
+            .disabled(isWriting)
+        case .quiet:
+            Button {
+                detailTarget = DetailTarget(uuid: uuid)
+            } label: {
+                Text("Go to Book Details").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(QuietButtonStyle())
+            .disabled(isWriting)
+        }
+    }
+
+    private func coverPlate(title: String) -> some View {
+        RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+            .fill(palette.coverFallbackBg.color)
+            .aspectRatio(2.0 / 3.0, contentMode: .fit)
+            .overlay {
+                Text(title.prefix(1).uppercased())
+                    .font(.display(28))
+                    .foregroundStyle(palette.coverFallbackInk.color.opacity(0.5))
+            }
+    }
+
+    private func externalCover(_ meta: ExternalBookMeta) -> CheckInSuccess.Cover {
+        if let url = meta.coverURL, CheckInFlow.isExternalURL(url) {
+            return .external(url: url)
+        }
+        return .plate
+    }
+
     private func resultCard(
-        title: String, authors: [String], uuid: String?,
-        badge: String, tint: Color, remoteCover: String? = nil
+        title: String, authors: [String], cover: CheckInSuccess.Cover,
+        badge: String, tint: Color
     ) -> some View {
         HStack(alignment: .top, spacing: Spacing.md) {
             Group {
-                if let uuid {
+                switch cover {
+                case let .library(uuid):
                     BookCover(identity: CoverIdentity(uuid: uuid, title: title, hasCover: true), size: .md)
-                } else {
-                    RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                        .fill(palette.coverFallbackBg.color)
+                case let .external(url):
+                    ExternalImage(url: url) { coverPlate(title: title) }
                         .aspectRatio(2.0 / 3.0, contentMode: .fit)
-                        .overlay {
-                            Text(title.prefix(1).uppercased())
-                                .font(.display(28))
-                                .foregroundStyle(palette.coverFallbackInk.color.opacity(0.5))
-                        }
+                        .clipShape(RoundedRectangle(cornerRadius: Radius.md, style: .continuous))
+                case .plate:
+                    coverPlate(title: title)
                 }
             }
             .frame(width: 76)
@@ -291,11 +368,18 @@ struct CheckInView: View {
         }
     }
 
-    private func checkInButton(uuid: String, isbn: String?, label: String) -> some View {
-        Button(label) {
-            Task { await checkIn(uuid: uuid, isbn: isbn) }
+    private func checkInButton(book: ScanBook, isbn: String?, label: String) -> some View {
+        Button {
+            Task { await checkIn(book: book, isbn: isbn) }
+        } label: {
+            if isWriting {
+                ProgressView().controlSize(.small)
+            } else {
+                Text(label)
+            }
         }
         .buttonStyle(FilledButtonStyle())
+        .disabled(isWriting)
     }
 
     // MARK: - Actions
@@ -313,62 +397,85 @@ struct CheckInView: View {
             let result: ScanOutcome = try await APIClient.shared.post(
                 "/api/scan/resolve", body: ScanResolveRequest(isbn: isbn)
             )
-            withAnimation { outcome = result }
+            withAnimation(Motion.settle) { stage = .outcome(result) }
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
     }
 
-    /// Drop the previous write's result before starting another. Neither banner
-    /// names the action it came from, so a leftover "Saved" beside a fresh error
-    /// reads as if the write that just failed had succeeded.
-    private func beginWrite() {
-        error = nil
-        withAnimation { didComplete = false }
+    /// Back to the scanner for the next book.
+    private func restart() {
+        withAnimation(Motion.settle) {
+            stage = .scan
+            manualISBN = ""
+            note = ""
+            error = nil
+        }
     }
 
-    private func checkIn(uuid: String, isbn: String?) async {
-        beginWrite()
+    /// One write at a time — the second tap of a double-tap lands while the
+    /// first POST is still in flight, and must not fire another.
+    private func beginWrite() -> Bool {
+        guard !isWriting else { return false }
+        isWriting = true
+        error = nil
+        return true
+    }
+
+    private func checkIn(book: ScanBook, isbn: String?) async {
+        guard beginWrite() else { return }
+        defer { isWriting = false }
         do {
-            let _: Empty = try await APIClient.shared.post(
+            let ref: BookRef = try await APIClient.shared.post(
                 "/api/scan/check-in",
-                body: CheckInRequest(bookUUID: uuid, isbn: isbn, note: note.nilIfBlank)
+                body: CheckInRequest(bookUUID: book.uuid, isbn: isbn, note: note.nilIfBlank)
             )
             Haptics.success()
-            withAnimation { didComplete = true }
-            await OfflineStore.shared.cacheDelete(CacheKey.book(uuid))
+            // The server answers with the canonical uuid (a merged book
+            // resolves to its primary); bust both keys when they differ.
+            await OfflineStore.shared.cacheDelete(CacheKey.book(book.uuid))
+            if ref.bookUUID != book.uuid {
+                await OfflineStore.shared.cacheDelete(CacheKey.book(ref.bookUUID))
+            }
+            // Check-in fulfills every user's wishlist for the book, so shelf
+            // counts and preview covers are stale too.
+            await OfflineStore.shared.cacheDelete(CacheKey.shelves)
+            await OfflineStore.shared.cacheDelete(CacheKey.shelfPreviews)
+            withAnimation(Motion.settle) { stage = .success(CheckInFlow.checkedInSuccess(book: book, ref: ref)) }
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
     }
 
     private func addPhysicalOnly(_ meta: ExternalBookMeta) async {
-        beginWrite()
+        guard beginWrite() else { return }
+        defer { isWriting = false }
         do {
-            let _: Empty = try await APIClient.shared.post(
+            let ref: BookRef = try await APIClient.shared.post(
                 "/api/scan/physical-only",
                 body: AddPhysicalOnlyRequest(meta: meta, note: note.nilIfBlank)
             )
             Haptics.success()
-            withAnimation { didComplete = true }
+            withAnimation(Motion.settle) { stage = .success(CheckInFlow.addedSuccess(meta: meta, ref: ref)) }
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
     }
 
     private func addWishlist(_ meta: ExternalBookMeta) async {
-        beginWrite()
+        guard beginWrite() else { return }
+        defer { isWriting = false }
         do {
-            let _: Empty = try await APIClient.shared.post(
+            let ref: BookRef = try await APIClient.shared.post(
                 "/api/scan/wishlist",
                 body: WishlistAddRequest(bookUUID: nil, meta: meta, source: .scan)
             )
             Haptics.success()
-            withAnimation { didComplete = true }
             // The wishlist is a real shelf whose membership derives from these
             // entries, so its count and preview covers are now stale.
             await OfflineStore.shared.cacheDelete(CacheKey.shelves)
             await OfflineStore.shared.cacheDelete(CacheKey.shelfPreviews)
+            withAnimation(Motion.settle) { stage = .success(CheckInFlow.wishlistedSuccess(meta: meta, ref: ref)) }
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
