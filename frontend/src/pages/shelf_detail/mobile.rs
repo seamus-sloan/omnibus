@@ -12,6 +12,7 @@ use dioxus_router::{use_navigator, Link};
 use omnibus_shared::{EbookMetadata, Shelf, ShelfKind, Visibility};
 
 use crate::components::shelf_facets::rule_text;
+use crate::components::{confirm_modal_body, ConfirmModal, ConfirmModalAction, ConfirmModalTone};
 use crate::pages::landing::mobile_cover_cell;
 use crate::{data, use_server_url, Route};
 
@@ -172,19 +173,12 @@ fn MobileShelfActions(
     let nav = use_navigator();
     let server_url = use_server_url();
     let mut menu_open = use_signal(|| false);
+    let mut show_delete_confirm = use_signal(|| false);
+    let deleting = use_signal(|| false);
 
     let id = shelf.id;
+    let shelf_name = shelf.name.clone();
     let is_manual = shelf.kind == ShelfKind::Manual;
-
-    let del_url = server_url.clone();
-    let on_delete = move |_| {
-        let url = del_url.clone();
-        spawn(async move {
-            if data::delete_shelf(&url, id).await.is_ok() {
-                nav.push(Route::Landing {});
-            }
-        });
-    };
 
     rsx! {
         div { class: "m-shelf-menu-wrap",
@@ -224,11 +218,84 @@ fn MobileShelfActions(
                         r#type: "button",
                         class: "shelf-menu-item shelf-menu-item--danger",
                         "data-testid": "shelf-delete",
-                        onclick: on_delete,
+                        onclick: move |_| {
+                            menu_open.set(false);
+                            show_delete_confirm.set(true);
+                        },
                         "Delete"
                     }
                 }
             }
+        }
+        if show_delete_confirm() {
+            {render_delete_shelf_modal(
+                server_url,
+                id,
+                shelf_name,
+                nav,
+                show_delete_confirm,
+                deleting,
+            )}
+        }
+    }
+}
+
+/// The delete-shelf confirm modal: names the shelf, disables the confirm
+/// button while the request is in flight, and can't be dismissed mid-delete.
+/// On success, navigates back to the library. Mirrors the web header's
+/// version of the same modal (`shelf_detail::header::render_delete_shelf_modal`).
+fn render_delete_shelf_modal(
+    server_url: String,
+    id: i64,
+    shelf_name: String,
+    nav: dioxus_router::Navigator,
+    mut show_delete_confirm: Signal<bool>,
+    mut deleting: Signal<bool>,
+) -> Element {
+    let is_busy = deleting();
+    let do_delete = move |_| {
+        if deleting() {
+            return;
+        }
+        deleting.set(true);
+        let url = server_url.clone();
+        spawn(async move {
+            if data::delete_shelf(&url, id).await.is_ok() {
+                nav.push(Route::Landing {});
+            } else {
+                deleting.set(false);
+            }
+        });
+    };
+    rsx! {
+        ConfirmModal {
+            testid: "shelf-delete-modal".to_string(),
+            aria_label: "Delete shelf?".to_string(),
+            dialog_class: "mg-modal del-modal".to_string(),
+            busy: is_busy,
+            on_dismiss: move |_| show_delete_confirm.set(false),
+            {confirm_modal_body(
+                "Delete shelf?",
+                &format!(
+                    "Deleting \u{201c}{shelf_name}\u{201d} removes it and its rules. This can\u{2019}t be undone."
+                ),
+                vec![
+                    ConfirmModalAction {
+                        testid: "shelf-delete-cancel".to_string(),
+                        label: "Cancel".to_string(),
+                        tone: ConfirmModalTone::Ghost,
+                        disabled: is_busy,
+                        on_click: EventHandler::new(move |_| show_delete_confirm.set(false)),
+                    },
+                    ConfirmModalAction {
+                        testid: "shelf-delete-confirm".to_string(),
+                        label: if is_busy { "Deleting\u{2026}".to_string() } else { "Delete".to_string() },
+                        tone: ConfirmModalTone::Danger,
+                        disabled: is_busy,
+                        on_click: EventHandler::new(do_delete),
+                    },
+                ],
+            )}
         }
     }
 }
