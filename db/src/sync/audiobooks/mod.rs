@@ -17,6 +17,9 @@ mod new;
 mod removed;
 mod shared;
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) use shared::insert_chapters;
 
 use backfill::{backfill_audiobook_stats, stamp_audiobooks_last_indexed};
