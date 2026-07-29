@@ -4944,6 +4944,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   color: var(--ink-1);
 }
 .kobo-warning p { margin: 0 0 0.5rem; }
+.kobo-warning ul { margin: 0 0 0.5rem; padding-left: 1.25rem; }
 .kobo-warning p:last-child { margin-bottom: 0; }
 .kobo-warning-title { font-weight: 600; color: #f87171; }
 .kobo-warning code { font-family: var(--mono, ui-monospace, monospace); font-size: 0.8rem; }

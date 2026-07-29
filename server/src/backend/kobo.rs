@@ -86,8 +86,14 @@ pub fn kobo_router(state: AppState) -> Router {
 /// device abort the whole sync before `library/sync`; Calibre-Web answers the
 /// same paths with an empty object. The log line doubles as capture data for
 /// the #928 golden fixture.
-async fn store_stub(_auth: KoboAuthUser, Path((_token, rest)): Path<(String, String)>) -> Response {
-    tracing::info!(path = %rest, "kobo store path answered with empty stub");
+async fn store_stub(auth: KoboAuthUser, Path((_token, rest)): Path<(String, String)>) -> Response {
+    // `?rest` (Debug) escapes control chars the router percent-decodes into
+    // the path; device_id makes multi-device captures attributable.
+    tracing::info!(
+        device_id = auth.device_id,
+        path = ?rest,
+        "kobo store path answered with empty stub"
+    );
     Json(serde_json::json!({})).into_response()
 }
 

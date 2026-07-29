@@ -123,44 +123,60 @@ pub fn KoboDevicesCard() -> Element {
             }
             ol { class: "subtitle kobo-setup-steps", "data-testid": "kobo-setup-steps",
                 li {
-                    "Name your Kobo below and click "
+                    "Give your Kobo a name and click "
                     b { "Add a Kobo" }
-                    ". Omnibus mints it a private sync URL \u{2014} the token inside "
-                    "authorizes only your library."
                 }
-                li { "Copy the device's " b { "wireless sync endpoint" } " URL." }
                 li {
-                    "Connect the Kobo over USB, open the hidden "
+                    "Copy the device's wireless sync endpoint URL. ("
+                    code { "/kobo/<token>" }
+                    ")"
+                }
+                li { "Connect the Kobo over USB," }
+                li {
+                    "Edit "
                     code { ".kobo/Kobo/Kobo eReader.conf" }
-                    " file, and set "
+                    " and set "
                     code { "api_endpoint=" }
                     " under "
                     code { "[OneStoreServices]" }
-                    " to that URL."
+                    " to "
+                    code { "<your_omnibus_server_url>/kobo/<token>" }
+                    "."
                 }
-                li { "Eject safely. The next sync on the device talks to Omnibus." }
+                li { "Eject safely. Your next sync on the device talks to Omnibus." }
             }
 
             // Unconditional: the hazard applies the moment a URL is copied.
             div { class: "kobo-warning", "data-testid": "kobo-data-loss-warning",
                 p { class: "kobo-warning-title", "First sync can erase your Kobo's highlights" }
                 p {
-                    "A Kobo clears its own highlights and notes when the server it syncs "
-                    "with mishandles Kobo's annotation channel. Omnibus answers that "
-                    "channel, but it has not yet been verified against real devices \u{2014} "
-                    "treat wireless sync as experimental and assume the first sync can "
-                    "still wipe them."
+                    "An improper sync can potentially wipe data on the Kobo like your "
+                    "annotations, notes, bookmarks, reading progress, and books."
                 }
                 p {
-                    "Back up the device fully before you point it here \u{2014} "
-                    a { href: "https://github.com/seamus-sloan/kobo-backup", target: "_blank",
-                        "kobo-backup"
+                    "It is highly recommended to back up your device before attempting "
+                    "a sync with one of these tools:"
+                }
+                ul { class: "kobo-warning-tools",
+                    li {
+                        a {
+                            href: "https://github.com/seamus-sloan/kobo-backup#kobo-backup",
+                            target: "_blank",
+                            rel: "noopener noreferrer",
+                            "seamus-sloan/kobo-backup"
+                        }
                     }
-                    " snapshots and restores the whole device, and "
-                    a { href: "https://github.com/karlicoss/kobuddy", target: "_blank",
-                        "kobuddy"
+                    li {
+                        a {
+                            href: "https://github.com/karlicoss/kobuddy#usage",
+                            target: "_blank",
+                            rel: "noopener noreferrer",
+                            "karlicoss/kobuddy"
+                        }
                     }
-                    " exports highlights and reading history. At minimum, copy "
+                }
+                p {
+                    "At minimum, copy "
                     code { ".kobo/KoboReader.sqlite" }
                     " off the device over USB."
                 }
