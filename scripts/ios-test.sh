@@ -22,6 +22,12 @@ case "$suite" in
     ;;
 esac
 
+# The nix dev shells export LD/CC/CXX for cargo builds; xcodebuild adopts
+# $LD as its link driver and raw `ld` rejects the clang-style -Xlinker args,
+# so a direnv-loaded shell would fail every link. Neutralize them here —
+# xcodebuild picks its own toolchain.
+unset LD CC CXX
+
 # Fail with an actionable message rather than a confusing mid-pipeline
 # "command not found" from the simulator picker below.
 if ! command -v jq >/dev/null 2>&1; then
