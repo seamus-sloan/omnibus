@@ -57,6 +57,117 @@ pub(super) struct AnnotationsSheetProps {
     pub on_close: EventHandler<()>,
 }
 
+/// Drawer head: title + count, "+ Bookmark", and close button.
+fn render_annotations_header(
+    counts: String,
+    can_add: bool,
+    on_add: impl FnMut(Event<MouseData>) + 'static,
+    on_close: EventHandler<()>,
+) -> Element {
+    rsx! {
+        div { class: "rd-drawer-head",
+            h4 { class: "rd-drawer-title",
+                "Annotations "
+                span { class: "rd-drawer-count", "{counts}" }
+            }
+            div { class: "rd-drawer-head-actions",
+                button {
+                    class: "btn sm",
+                    r#type: "button",
+                    "data-testid": "reader-annotations-add",
+                    disabled: !can_add,
+                    onclick: on_add,
+                    "+ Bookmark"
+                }
+                button {
+                    class: "rd-x",
+                    r#type: "button",
+                    "aria-label": "Close",
+                    onclick: move |_| on_close.call(()),
+                    "\u{00d7}"
+                }
+            }
+        }
+    }
+}
+
+/// Kind/color filter chip row: All, Bookmarks, then one chip per highlight color.
+fn render_annotations_filter_row(active: AnnFilter, filter: Signal<AnnFilter>) -> Element {
+    let mut filter = filter;
+    rsx! {
+        div { class: "rd-filter-row",
+            button {
+                class: if active == AnnFilter::All { "rd-chip on" } else { "rd-chip" },
+                r#type: "button",
+                onclick: move |_| filter.set(AnnFilter::All),
+                "All"
+            }
+            button {
+                class: if active == AnnFilter::Bookmarks { "rd-chip on" } else { "rd-chip" },
+                r#type: "button",
+                "data-testid": "annotations-filter-bookmarks",
+                onclick: move |_| filter.set(AnnFilter::Bookmarks),
+                "Bookmarks"
+            }
+            span { class: "rd-filter-div" }
+            for (color, name) in PALETTE {
+                button {
+                    key: "{name}",
+                    class: if active == AnnFilter::Color(color) { "rd-chip on" } else { "rd-chip" },
+                    r#type: "button",
+                    "aria-label": "Filter {name}",
+                    onclick: move |_| filter.set(AnnFilter::Color(color)),
+                    span { class: "rd-chip-dot", "data-color": "{name}" }
+                }
+            }
+        }
+    }
+}
+
+/// Drawer body: empty state, or the filtered bookmark + highlight rows.
+#[allow(clippy::too_many_arguments)]
+fn render_annotations_body(
+    empty: bool,
+    show_bookmarks: bool,
+    marks: Vec<Bookmark>,
+    shown_highlights: Vec<Highlight>,
+    bookmarks: Signal<Vec<Bookmark>>,
+    highlights: Signal<Vec<Highlight>>,
+    on_navigate: EventHandler<String>,
+    on_quote: EventHandler<Highlight>,
+    on_edit_note: EventHandler<Highlight>,
+) -> Element {
+    rsx! {
+        div { class: "rd-drawer-body",
+            if empty {
+                div { class: "rd-drawer-empty",
+                    "Nothing here yet. Highlight a passage or tap + Bookmark to save your place."
+                }
+            } else {
+                if show_bookmarks {
+                    for mark in marks.iter() {
+                        AnnotationBookmarkRow {
+                            key: "bm-{mark.id}",
+                            bookmark: mark.clone(),
+                            on_navigate,
+                            list: bookmarks,
+                        }
+                    }
+                }
+                for h in shown_highlights.iter() {
+                    HighlightRow {
+                        key: "{h.id}",
+                        highlight: h.clone(),
+                        highlights,
+                        on_quote,
+                        on_edit_note,
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// The combined annotations bottom sheet.
 #[component]
 pub(super) fn AnnotationsSheet(props: AnnotationsSheetProps) -> Element {
@@ -70,7 +181,7 @@ pub(super) fn AnnotationsSheet(props: AnnotationsSheetProps) -> Element {
         on_navigate,
         on_close,
     } = props;
-    let mut filter = use_signal(|| AnnFilter::All);
+    let filter = use_signal(|| AnnFilter::All);
     let bookmarks = use_signal(Vec::<Bookmark>::new);
     let server_url = crate::contexts::use_server_url();
 
@@ -137,81 +248,20 @@ pub(super) fn AnnotationsSheet(props: AnnotationsSheetProps) -> Element {
         div { class: "rd-scrim", onclick: move |_| on_close.call(()) }
         div { class: "rd-drawer", "data-testid": "reader-annotations-drawer",
             div { class: "rd-grabber" }
-            div { class: "rd-drawer-head",
-                h4 { class: "rd-drawer-title",
-                    "Annotations "
-                    span { class: "rd-drawer-count", "{counts}" }
-                }
-                div { class: "rd-drawer-head-actions",
-                    button {
-                        class: "btn sm",
-                        r#type: "button",
-                        "data-testid": "reader-annotations-add",
-                        disabled: !can_add,
-                        onclick: add,
-                        "+ Bookmark"
-                    }
-                    button {
-                        class: "rd-x",
-                        r#type: "button",
-                        "aria-label": "Close",
-                        onclick: move |_| on_close.call(()),
-                        "\u{00d7}"
-                    }
-                }
-            }
-            div { class: "rd-filter-row",
-                button {
-                    class: if active == AnnFilter::All { "rd-chip on" } else { "rd-chip" },
-                    r#type: "button",
-                    onclick: move |_| filter.set(AnnFilter::All),
-                    "All"
-                }
-                button {
-                    class: if active == AnnFilter::Bookmarks { "rd-chip on" } else { "rd-chip" },
-                    r#type: "button",
-                    "data-testid": "annotations-filter-bookmarks",
-                    onclick: move |_| filter.set(AnnFilter::Bookmarks),
-                    "Bookmarks"
-                }
-                span { class: "rd-filter-div" }
-                for (color, name) in PALETTE {
-                    button {
-                        key: "{name}",
-                        class: if active == AnnFilter::Color(color) { "rd-chip on" } else { "rd-chip" },
-                        r#type: "button",
-                        "aria-label": "Filter {name}",
-                        onclick: move |_| filter.set(AnnFilter::Color(color)),
-                        span { class: "rd-chip-dot", "data-color": "{name}" }
-                    }
-                }
-            }
-            div { class: "rd-drawer-body",
-                if empty {
-                    div { class: "rd-drawer-empty",
-                        "Nothing here yet. Highlight a passage or tap + Bookmark to save your place."
-                    }
-                } else {
-                    if show_bookmarks {
-                        for mark in marks.iter() {
-                            AnnotationBookmarkRow {
-                                key: "bm-{mark.id}",
-                                bookmark: mark.clone(),
-                                on_navigate,
-                                list: bookmarks,
-                            }
-                        }
-                    }
-                    for h in shown_highlights.iter() {
-                        HighlightRow {
-                            key: "{h.id}",
-                            highlight: h.clone(),
-                            highlights,
-                            on_quote,
-                            on_edit_note,
-                        }
-                    }
-                }
+            {render_annotations_header(counts, can_add, add, on_close)}
+            {render_annotations_filter_row(active, filter)}
+            {
+                render_annotations_body(
+                    empty,
+                    show_bookmarks,
+                    marks,
+                    shown_highlights,
+                    bookmarks,
+                    highlights,
+                    on_navigate,
+                    on_quote,
+                    on_edit_note,
+                )
             }
         }
     }

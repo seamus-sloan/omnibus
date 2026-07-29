@@ -63,6 +63,134 @@ pub(super) struct MobileLandingProps {
     pub server_url: String,
 }
 
+/// "Pick up where you left off" — the most recent progress row, fetched per
+/// mount and re-read when a background cache revalidation lands.
+fn use_resume_point(server_url: String) -> Signal<Option<ResumePoint>> {
+    let mut resume = use_signal(|| None::<ResumePoint>);
+    let generation = crate::use_cache_generation();
+    use_effect(move || {
+        let _ = generation();
+        let url = server_url.clone();
+        spawn(async move {
+            if let Ok(points) = crate::data::recent_progress(&url, 1).await {
+                resume.set(points.into_iter().next());
+            }
+        });
+    });
+    resume
+}
+
+/// Settled reveal: hold the screen invisible until the first page fetch lands
+/// (the offline cache answers within tens of ms) AND the above-the-fold cover
+/// images have decoded, so the enter transition plays once over finished
+/// content — no cold "Loading" skeleton fading in, no covers popping over
+/// placeholder tiles mid-flight. Every wait is bounded: the decode eval times
+/// out internally, and the floor reveals unconditionally so a slow first load
+/// falls back to the ordinary Loading state updating in place.
+fn use_settled_reveal(is_loading: bool, books_empty: bool) -> bool {
+    let mut reveal_floor = use_signal(|| false);
+    use_future(move || async move {
+        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+        reveal_floor.set(true);
+    });
+    let mut covers_ready = use_signal(|| false);
+    let mut decode_eval = use_hook(|| dioxus::document::eval(COVERS_DECODE_JS));
+    use_future(move || async move {
+        if decode_eval.recv::<i32>().await.is_ok() {
+            covers_ready.set(true);
+        }
+    });
+    (!is_loading && (covers_ready() || books_empty)) || reveal_floor()
+}
+
+/// Slim header: brand word + search entry. Account/settings lives on the
+/// bottom-nav "You" tab.
+fn render_mobile_header() -> Element {
+    rsx! {
+        header { class: "m-lib-head",
+            div { class: "omn-brand-word m-lib-brand", "Omnibus" }
+            div { class: "m-lib-head-actions",
+                Link {
+                    to: Route::MobileSearch {},
+                    class: "m-icon-btn",
+                    "aria-label": "Search",
+                    "data-testid": "mobile-search-entry",
+                    {search_glyph()}
+                }
+            }
+        }
+    }
+}
+
+/// "All Books" title + the sort/filter pill that opens [`MobileSortFilterSheet`].
+fn render_mobile_title_row(
+    book_count: usize,
+    pill_label: &str,
+    pill_arrow: &str,
+    filter_count: usize,
+    sheet_open: Signal<bool>,
+) -> Element {
+    let mut sheet_open = sheet_open;
+    rsx! {
+        div { class: "m-lib-title",
+            div { class: "m-lib-title-text",
+                span { class: "label", "{book_count} books" }
+                h2 { class: "m-head-title",
+                    "All "
+                    span { class: "m-em", "Books" }
+                }
+            }
+            button {
+                r#type: "button",
+                class: "m-sort-pill",
+                "aria-label": "Sort & filter",
+                "data-testid": "mobile-sort-pill",
+                onclick: move |_| sheet_open.set(true),
+                {filter_glyph()}
+                span { class: "m-sort-pill-label", "{pill_label}" }
+                span { class: "m-sort-pill-arrow", "{pill_arrow}" }
+                if filter_count > 0 {
+                    span { class: "m-sort-pill-badge mono", "{filter_count}" }
+                }
+            }
+        }
+    }
+}
+
+/// The cover grid (or the loading line before the first page lands) plus the
+/// "Load more" pager.
+fn render_mobile_grid(
+    is_loading: bool,
+    is_loading_more: bool,
+    has_more: bool,
+    books: Vec<EbookMetadata>,
+    server_url: String,
+    on_load_more: EventHandler<()>,
+) -> Element {
+    if is_loading && books.is_empty() {
+        return rsx! {
+            p { class: "subtitle m-lib-loading", "Loading\u{2026}" }
+        };
+    }
+    rsx! {
+        div { class: "m-cover-grid", "data-testid": "mobile-lib-grid", role: "list",
+            for book in books.into_iter() {
+                {cover_cell(book, &server_url)}
+            }
+        }
+        if has_more {
+            button {
+                r#type: "button",
+                class: "btn m-load-more",
+                "data-testid": "mobile-load-more",
+                disabled: is_loading_more,
+                onclick: move |_| on_load_more.call(()),
+                if is_loading_more { "Loading\u{2026}" } else { "Load more" }
+            }
+        }
+    }
+}
+
 /// Mobile landing surface. Fed the already-derived view state from
 /// [`super::LandingPage`] so the data path stays shared across targets.
 #[component]
@@ -80,47 +208,14 @@ pub(super) fn MobileLanding(props: MobileLandingProps) -> Element {
     } = props;
 
     let mut sheet_open = use_signal(|| false);
-
-    // "Pick up where you left off" — the most recent progress row, fetched
-    // per mount and re-read when a background cache revalidation lands.
-    let mut resume = use_signal(|| None::<ResumePoint>);
-    let resume_url = server_url.clone();
-    let generation = crate::use_cache_generation();
-    use_effect(move || {
-        let _ = generation();
-        let url = resume_url.clone();
-        spawn(async move {
-            if let Ok(points) = crate::data::recent_progress(&url, 1).await {
-                resume.set(points.into_iter().next());
-            }
-        });
-    });
+    let resume = use_resume_point(server_url.clone());
 
     let pill_label = sort_pill_label(prefs.sort_key);
     let pill_arrow = dir_arrow(prefs.sort_dir);
     let filter_count = prefs.filters.formats.len();
 
-    // Settled reveal: hold the screen invisible until the first page fetch
-    // lands (the offline cache answers within tens of ms) AND the
-    // above-the-fold cover images have decoded, so the enter transition
-    // plays once over finished content — no cold "Loading" skeleton fading
-    // in, no covers popping over placeholder tiles mid-flight. Every wait
-    // is bounded: the decode eval times out internally, and the floor
-    // reveals unconditionally so a slow first load falls back to the
-    // ordinary Loading state updating in place.
-    let mut reveal_floor = use_signal(|| false);
-    use_future(move || async move {
-        tokio::time::sleep(std::time::Duration::from_millis(800)).await;
-        reveal_floor.set(true);
-    });
-    let mut covers_ready = use_signal(|| false);
-    let mut decode_eval = use_hook(|| dioxus::document::eval(COVERS_DECODE_JS));
-    use_future(move || async move {
-        if decode_eval.recv::<i32>().await.is_ok() {
-            covers_ready.set(true);
-        }
-    });
-    let settled = (!is_loading && (covers_ready() || books.is_empty())) || reveal_floor();
+    let books_empty = books.is_empty();
+    let settled = use_settled_reveal(is_loading, books_empty);
     let root_class = if settled {
         "m-lib m-lib-ready"
     } else {
@@ -134,43 +229,8 @@ pub(super) fn MobileLanding(props: MobileLandingProps) -> Element {
             div { class: "m-ptr", "aria-hidden": "true",
                 span { class: "m-ptr-arrow", "↓" }
             }
-            header { class: "m-lib-head",
-                div { class: "omn-brand-word m-lib-brand", "Omnibus" }
-                div { class: "m-lib-head-actions",
-                    // Search entry — opens the mobile-native search screen.
-                    // Account/settings lives on the bottom-nav "You" tab.
-                    Link {
-                        to: Route::MobileSearch {},
-                        class: "m-icon-btn",
-                        "aria-label": "Search",
-                        "data-testid": "mobile-search-entry",
-                        {search_glyph()}
-                    }
-                }
-            }
-
-            div { class: "m-lib-title",
-                div { class: "m-lib-title-text",
-                    span { class: "label", "{book_count} books" }
-                    h2 { class: "m-head-title",
-                        "All "
-                        span { class: "m-em", "Books" }
-                    }
-                }
-                button {
-                    r#type: "button",
-                    class: "m-sort-pill",
-                    "aria-label": "Sort & filter",
-                    "data-testid": "mobile-sort-pill",
-                    onclick: move |_| sheet_open.set(true),
-                    {filter_glyph()}
-                    span { class: "m-sort-pill-label", "{pill_label}" }
-                    span { class: "m-sort-pill-arrow", "{pill_arrow}" }
-                    if filter_count > 0 {
-                        span { class: "m-sort-pill-badge mono", "{filter_count}" }
-                    }
-                }
-            }
+            {render_mobile_header()}
+            {render_mobile_title_row(book_count, pill_label, pill_arrow, filter_count, sheet_open)}
 
             if let Some(point) = resume() {
                 {resume_card(&point, &server_url)}
@@ -188,25 +248,7 @@ pub(super) fn MobileLanding(props: MobileLandingProps) -> Element {
                 span { class: "m-shelves-entry-chevron", {chevron()} }
             }
 
-            if is_loading && books.is_empty() {
-                p { class: "subtitle m-lib-loading", "Loading\u{2026}" }
-            } else {
-                div { class: "m-cover-grid", "data-testid": "mobile-lib-grid", role: "list",
-                    for book in books.into_iter() {
-                        {cover_cell(book, &server_url)}
-                    }
-                }
-                if has_more {
-                    button {
-                        r#type: "button",
-                        class: "btn m-load-more",
-                        "data-testid": "mobile-load-more",
-                        disabled: is_loading_more,
-                        onclick: move |_| on_load_more.call(()),
-                        if is_loading_more { "Loading\u{2026}" } else { "Load more" }
-                    }
-                }
-            }
+            {render_mobile_grid(is_loading, is_loading_more, has_more, books, server_url.clone(), on_load_more)}
 
             if sheet_open() {
                 MobileSortFilterSheet {
