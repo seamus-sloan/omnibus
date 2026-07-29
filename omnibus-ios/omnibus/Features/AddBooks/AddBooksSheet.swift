@@ -28,8 +28,8 @@ struct AddBooksSheet: View {
 
                     actionCard(
                         icon: "barcode.viewfinder",
-                        title: "Check in a physical book",
-                        subtitle: "Scan the barcode to log a copy you own on paper."
+                        title: "Scan a barcode",
+                        subtitle: "Check in a physical copy you own on paper."
                     ) { showCheckIn = true }
 
                     if !uploads.isEmpty {
