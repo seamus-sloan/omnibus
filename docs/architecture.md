@@ -260,8 +260,12 @@ Features/           — one directory per surface: Account, AddBooks, Auth,
 Models/             — Codable mirrors of the `shared/` wire DTOs
 Networking/         — APIClient, keychain-backed TokenStore
 Offline/            — Cache (read-through policies), OfflineStore (SQLite
-                      replica), DownloadManager, SyncEngine (the mutation
-                      outbox — see rule 08), Connectivity
+                      replica; `downloads.source_etag` snapshots the file's
+                      content validator per rule 09), DownloadManager (which
+                      compares that snapshot against a later metadata refresh
+                      to drive "Update available" — three-valued, so "can't
+                      tell" never reads as "not stale"), SyncEngine (the
+                      mutation outbox — see rule 08), Connectivity
 Reader/             — SwiftUI reader chrome, the host-drawn selection layer,
                       the passage menu, the typography sheet and the quote-card
                       composer, over Web/ (vendored epub.js + JSZip + glue,

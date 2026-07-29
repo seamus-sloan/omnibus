@@ -168,15 +168,46 @@ actor APIClient {
 
     /// Raw bytes for a server path — covers, EPUB files, audio parts.
     func data(for path: String) async throws -> Data {
+        let answer = try await conditionalData(for: path, ifNoneMatch: nil)
+        guard let data = answer.data else {
+            // Nothing was conditioned on, so a bodyless success is the
+            // server misbehaving. Handing back empty `Data` would push those
+            // zero bytes into an EPUB load or an image decode as though they
+            // were the book.
+            throw APIError.http(status: 304, message: "unexpected 304 for an unconditional request")
+        }
+        return data
+    }
+
+    /// A fetched image plus the validator the server published for it, or —
+    /// when the caller offered an `If-None-Match` the server matched — the
+    /// bodyless answer that its cached copy is still current.
+    struct ConditionalData {
+        /// `nil` means 304: keep what you have.
+        var data: Data?
+        var etag: String?
+        var isNotModified: Bool { data == nil }
+    }
+
+    /// `GET path`, optionally conditional. A 304 comes back as a
+    /// `ConditionalData` with no body rather than an error, because "your
+    /// copy is current" is a success for every caller of this.
+    func conditionalData(for path: String, ifNoneMatch: String?) async throws -> ConditionalData {
         guard let url = absoluteURL(path) else { throw APIError.notConfigured }
         try failFastWhenUnreachable()
         var request = URLRequest(url: url)
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        if let ifNoneMatch { request.setValue(ifNoneMatch, forHTTPHeaderField: "If-None-Match") }
         do {
             let (data, response) = try await session.data(for: request)
             noteOutcome(reachable: true)
+            let http = response as? HTTPURLResponse
+            let etag = http?.value(forHTTPHeaderField: "ETag")
+            if http?.statusCode == 304 {
+                return ConditionalData(data: nil, etag: etag ?? ifNoneMatch)
+            }
             try validate(response, data: data)
-            return data
+            return ConditionalData(data: data, etag: etag)
         } catch let error as APIError {
             throw error
         } catch {

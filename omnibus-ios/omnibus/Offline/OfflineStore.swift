@@ -82,6 +82,11 @@ struct DownloadRecord: Sendable, Identifiable {
     var receivedBytes: Int64
     var updatedAt: Int64
     var error: String?
+    /// `BookFileInfo.etag` for the file this download came from, as it read
+    /// when the download started. Compared against a later metadata refresh
+    /// to drive "Update available"; `nil` for records written before
+    /// validators existed, which reads as "can't tell", never as "stale".
+    var sourceEtag: String?
 
     var fraction: Double {
         guard totalBytes > 0 else { return state == .complete ? 1 : 0 }
@@ -170,6 +175,11 @@ actor OfflineStore {
             )
             """)
         if !hasColumn("downloads", "kind") { rebuildDownloadsWithKind() }
+        // Additive, so a record written before content validators existed
+        // simply carries a null and reads as "can't tell".
+        if !hasColumn("downloads", "source_etag") {
+            exec("ALTER TABLE downloads ADD COLUMN source_etag TEXT")
+        }
         // Coalescing key for the outbox: a second position write for the same
         // book should replace the first, not queue behind it.
         exec("CREATE INDEX IF NOT EXISTS ops_kind_idx ON ops(kind)")
@@ -768,12 +778,13 @@ actor OfflineStore {
         let sql = """
             INSERT INTO downloads
               (book_uuid, kind, format, state, local_path, total_bytes, received_bytes,
-               updated_at, error)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               updated_at, error, source_etag)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(book_uuid, kind) DO UPDATE SET
               format = excluded.format, state = excluded.state, local_path = excluded.local_path,
               total_bytes = excluded.total_bytes, received_bytes = excluded.received_bytes,
-              updated_at = excluded.updated_at, error = excluded.error
+              updated_at = excluded.updated_at, error = excluded.error,
+              source_etag = excluded.source_etag
             """
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         bind(stmt, 1, record.bookUUID)
@@ -785,11 +796,13 @@ actor OfflineStore {
         sqlite3_bind_int64(stmt, 7, record.receivedBytes)
         sqlite3_bind_int64(stmt, 8, Int64(Date().timeIntervalSince1970))
         if let error = record.error { bind(stmt, 9, error) } else { sqlite3_bind_null(stmt, 9) }
+        if let etag = record.sourceEtag { bind(stmt, 10, etag) } else { sqlite3_bind_null(stmt, 10) }
         sqlite3_step(stmt)
     }
 
     private static let downloadColumns = """
-        book_uuid, kind, format, state, local_path, total_bytes, received_bytes, updated_at, error
+        book_uuid, kind, format, state, local_path, total_bytes, received_bytes, updated_at,
+        error, source_etag
         """
 
     func download(for uuid: String, kind: DownloadKind) -> DownloadRecord? {
@@ -924,7 +937,8 @@ actor OfflineStore {
             totalBytes: sqlite3_column_int64(stmt, 5),
             receivedBytes: sqlite3_column_int64(stmt, 6),
             updatedAt: sqlite3_column_int64(stmt, 7),
-            error: text(stmt, 8)
+            error: text(stmt, 8),
+            sourceEtag: text(stmt, 9)
         )
     }
 

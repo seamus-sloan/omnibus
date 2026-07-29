@@ -600,6 +600,32 @@ struct DownloadsView: View {
                     books[record.bookUUID] = book
                 }
             }
+            await refreshStaleness()
+        }
+    }
+
+    /// Re-read each completed download's detail metadata so the rows can say
+    /// whether the library file has moved under them.
+    ///
+    /// It has to be the *detail* read: the library listing projection carries
+    /// no per-file rows, so a replaced file is invisible in the mirror this
+    /// screen otherwise reads from. Bounded by the number of downloads, which
+    /// is small by nature, and skipped entirely offline — where the answer
+    /// could not be acted on anyway.
+    private func refreshStaleness() async {
+        guard Connectivity.shared.isOnline else { return }
+        for record in records where record.state == .complete {
+            do {
+                // Only the fresh (server-confirmed) read can settle this —
+                // the replica's provisional answer is what we already have.
+                for try await read in LibraryService.book(uuid: record.bookUUID)
+                where read.isFresh {
+                    books[record.bookUUID] = read.value
+                }
+            } catch {
+                // A row that can't refresh keeps showing what it had.
+                continue
+            }
         }
     }
 
@@ -631,11 +657,9 @@ struct DownloadsView: View {
 
                     HStack(spacing: 6) {
                         Badge(text: record.format)
-                        Text(statusLabel(record))
+                        Text(statusLabel(record, isStale: isStale(record)))
                             .font(.ui(11.5))
-                            .foregroundStyle(
-                                record.state == .failed ? palette.badColor : palette.ink3Color
-                            )
+                            .foregroundStyle(statusTint(record, isStale: isStale(record)))
                     }
 
                     if record.state == .running {
@@ -655,12 +679,31 @@ struct DownloadsView: View {
         }
     }
 
-    private func statusLabel(_ record: DownloadRecord) -> String {
+    /// Whether this row's library file has moved under the downloaded copy.
+    /// `false` until a refresh has produced detail metadata to compare
+    /// against — the listing projection carries no per-file validators.
+    private func isStale(_ record: DownloadRecord) -> Bool {
+        guard let book = books[record.bookUUID] else { return false }
+        return downloads.isStale(record.bookUUID, kind: record.kind, against: book)
+    }
+
+    private func statusLabel(_ record: DownloadRecord, isStale: Bool) -> String {
         switch record.state {
-        case .complete: Format.bytes(record.totalBytes)
+        case .complete:
+            isStale
+                ? "Update available · \(Format.bytes(record.totalBytes))"
+                : Format.bytes(record.totalBytes)
         case .running: "\(Int(record.fraction * 100))%"
         case .queued: "Queued"
         case .failed: record.error ?? "Failed"
         }
+    }
+
+    /// `warn`, not `bad`, for a superseded copy: the file on the device still
+    /// opens and still reads — it is just no longer the newest one, which is
+    /// an invitation rather than a failure.
+    private func statusTint(_ record: DownloadRecord, isStale: Bool) -> Color {
+        if record.state == .failed { return palette.badColor }
+        return isStale ? palette.warnColor : palette.ink3Color
     }
 }

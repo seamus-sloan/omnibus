@@ -90,6 +90,35 @@ hard way:
   neither side has a validator: nothing has been learned, so refusing to
   resume would only break downloads for a row the scanner has never stat'd.
 
+## Clients: snapshot, then compare
+
+Both offline clients snapshot `BookFileInfo.etag` when a download starts and
+compare it against a later metadata refresh — `PlannedFile.source_etag` in
+`frontend/src/offline/downloads.rs`, `DownloadRecord.sourceEtag` in
+`omnibus-ios/omnibus/Offline/OfflineStore.swift`. Two rules hold on both sides:
+
+- **The comparison is three-valued.** A missing validator on either side means
+  *can't tell*, which is not the same as *not stale*. A renderer may collapse
+  it to "not stale"; anything that **stores** the answer must not, or a read
+  that couldn't tell will clear a flag a real comparison had set. Only the
+  per-book detail read carries `book_files` — the library listing projection
+  has none — so this case is routine, not theoretical.
+- **The compared file is the one the server would serve**: lowest ordinal of
+  a format the endpoint actually *serves*, matching `db::book_file_path`'s
+  `ORDER BY bf.ordinal LIMIT 1`. Two ways to get this wrong, and both have
+  happened: comparing against the wrong row of a two-edition book, and
+  matching on the formats a library can *contain* rather than the narrow set
+  a download pulls — `/api/ebooks/{uuid}/file` serves EPUB alone, the
+  audiobook routes M4B/M4A/MP3 alone. A mixed PDF/EPUB book that snapshots
+  the PDF reports staleness about a file the device doesn't hold and misses
+  every change to the one it does.
+
+Cached cover bytes carry their own `ETag` sibling and revalidate with
+`If-None-Match` *after* the cached image has been served, never before —
+skipped while offline, inside a fresh window, without a stored validator, or
+while a check of the same key is in flight. Without all four, a grid scroll
+becomes one conditional request per visible cover.
+
 ## Strong, not weak
 
 Both validators are emitted as **strong** entity-tags (no `W/` prefix), which
