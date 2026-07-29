@@ -29,6 +29,7 @@ struct ReaderView: View {
     @Environment(\.palette) private var palette
     @Environment(\.dismiss) private var dismiss
     @Environment(AppState.self) private var appState
+    @Environment(AudioPlayer.self) private var audio
 
     @State private var controller = ReaderController()
     /// The reading view opens bare, the way a book does — the buttons are one
@@ -77,6 +78,9 @@ struct ReaderView: View {
     /// hours read.
     @State private var sessionStart: Date?
     @State private var lastSave = Date.distantPast
+    /// The full player, raised over the page from the audio dock — a sheet
+    /// rather than the app-global cover, so the book stays open underneath.
+    @State private var showPlayer = false
 
     /// How long a single stretch of reading may run before it is reported as
     /// its own session rather than held until the book closes.
@@ -90,7 +94,10 @@ struct ReaderView: View {
 
             if didConfigure {
                 ReaderWebView(controller: controller, bookUUID: book.uuid)
-                    .ignoresSafeArea()
+                    // Full-bleed alone; with the audio dock up, respecting the
+                    // bottom inset ends the stage above the bar, and the
+                    // glue's ResizeObserver re-paginates to the shorter page.
+                    .ignoresSafeArea(edges: audio.isActive ? [.top, .horizontal] : .all)
                     .opacity(controller.isReady ? 1 : 0)
                     // Fade the first paint in rather than letting a
                     // half-laid-out page flash — the reader is the one surface
@@ -139,6 +146,18 @@ struct ReaderView: View {
             passageMenu
         }
         .animation(Motion.snap, value: passage?.id)
+        // The audio dock: the tab shell's mini bar, kept on screen while
+        // reading so a running audiobook stays controllable — the immersive
+        // read the web reader ships as its docked bar (#1133).
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                if audio.isActive {
+                    MiniPlayerBar(onExpand: { showPlayer = true })
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(Motion.glide, value: audio.isActive)
+        }
         .statusBarHidden(!chromeVisible)
         .persistentSystemOverlays(chromeVisible ? .automatic : .hidden)
         // The status bar sits on the page, so it has to read against the
@@ -204,6 +223,12 @@ struct ReaderView: View {
         .sheet(item: $quoteTarget) { request in
             QuoteCardSheet(quote: request.text, book: book)
                 .preferredColorScheme(appScheme)
+        }
+        .sheet(isPresented: $showPlayer) {
+            if let audioBook = audio.book {
+                PlayerView(book: audioBook, fileID: audio.fileID)
+                    .preferredColorScheme(appScheme)
+            }
         }
         .translationPresentation(isPresented: $showTranslate, text: translateText)
     }

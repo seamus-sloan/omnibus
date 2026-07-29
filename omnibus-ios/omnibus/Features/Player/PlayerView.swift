@@ -538,6 +538,11 @@ struct MiniPlayerBar: View {
     @Environment(AudioPlayer.self) private var player
     @Environment(\.palette) private var palette
 
+    /// Overrides what tapping the bar body does. The default expands into the
+    /// app-global full-screen player; the reader passes its own handler so the
+    /// book underneath stays open.
+    var onExpand: (() -> Void)?
+
     var body: some View {
         if let book = player.book {
             VStack(spacing: 0) {
@@ -553,7 +558,11 @@ struct MiniPlayerBar: View {
 
                 Button {
                     // The file already playing, so expanding cannot reload it.
-                    Presentation.shared.openPlayer(book, fileID: player.fileID)
+                    if let onExpand {
+                        onExpand()
+                    } else {
+                        Presentation.shared.openPlayer(book, fileID: player.fileID)
+                    }
                 } label: {
                     HStack(spacing: 11) {
                         BookCover(identity: CoverIdentity(book), size: .sm, cornerRadius: 4)
