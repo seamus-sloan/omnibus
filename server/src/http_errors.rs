@@ -7,11 +7,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-/// Generic 500 response that never leaks internal error details to the wire.
-/// The full error is logged server-side via `tracing::error!` under
-/// `context` so it remains available in structured logs; the client sees
-/// only the boilerplate body.
-pub fn internal<E: std::fmt::Display>(context: &'static str, e: E) -> Response {
+/// Generic 500 response that logs `e` under `context` but never leaks it to the wire.
+pub(crate) fn internal<E: std::fmt::Display>(context: &'static str, e: E) -> Response {
     tracing::error!(error = %e, context = context, "internal server error");
     (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
 }
