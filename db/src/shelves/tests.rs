@@ -88,6 +88,75 @@ async fn create_smart_shelf_membership_matches_tag_rule() {
 }
 
 #[tokio::test]
+async fn smart_shelf_tag_rule_matches_override_added_subjects() {
+    let (pool, _covers) = seed_discovery_fixture().await;
+    let owner = make_user(&pool, "owner", false).await;
+
+    // "Other Story" is scanned as "nonfiction"; the user retags it through a
+    // subjects override, so the tag exists only in the override JSON — never
+    // in `books_tags_link` (see `materialize_tag_rows`).
+    let uuid = uuid_by_title(&pool, "Other Story").await;
+    let overrides = omnibus_shared::MetadataOverrides {
+        subjects: Some(vec!["Seamus".into()]),
+        ..Default::default()
+    };
+    crate::upsert_metadata_overrides(&pool, &uuid, &overrides, false, owner)
+        .await
+        .unwrap();
+
+    // `starts with` and case-insensitive `is` both reach the override arm.
+    let prefix = ShelfRule {
+        field: RuleField::Tag,
+        op: RuleOp::StartsWith,
+        value: "Sea".into(),
+    };
+    let shelf = create_shelf(
+        &pool,
+        owner,
+        &smart_req("Seamus Books", MatchMode::Any, vec![prefix]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(shelf.book_count, 1);
+
+    let shelf = create_shelf(
+        &pool,
+        owner,
+        &smart_req("Seamus Eq", MatchMode::Any, vec![tag_rule("seamus")]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(shelf.book_count, 1);
+}
+
+#[tokio::test]
+async fn smart_shelf_tag_rule_skips_scanned_tags_replaced_by_override() {
+    let (pool, _covers) = seed_discovery_fixture().await;
+    let owner = make_user(&pool, "owner", false).await;
+
+    // Both Saga books are scanned "fiction". A subjects override replaces
+    // Book Two's tag list wholesale, so only Book One may still match — the
+    // canonical link row must not shine through the override.
+    let uuid = uuid_by_title(&pool, "Saga: Book Two").await;
+    let overrides = omnibus_shared::MetadataOverrides {
+        subjects: Some(vec!["romance".into()]),
+        ..Default::default()
+    };
+    crate::upsert_metadata_overrides(&pool, &uuid, &overrides, false, owner)
+        .await
+        .unwrap();
+
+    let shelf = create_shelf(
+        &pool,
+        owner,
+        &smart_req("Fiction", MatchMode::Any, vec![tag_rule("fiction")]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(shelf.book_count, 1);
+}
+
+#[tokio::test]
 async fn smart_shelf_date_added_rules_match_epoch_column() {
     // `books.timestamp` is INTEGER unix-seconds (migration 0038); the date-rule
     // SQL must compare it as an epoch (`date(col,'unixepoch')`, numeric
