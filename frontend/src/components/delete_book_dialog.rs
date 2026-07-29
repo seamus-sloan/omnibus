@@ -2,7 +2,8 @@
 //! lists every deletable *item* (each `book_files` row and physical copy) with
 //! a checkbox; step 2 confirms, with copy branching on partial vs total. Its
 //! manifest is fetched on mount rather than read off the page's
-//! `EbookMetadata`, which only carries `book_files` for multi-file formats.
+//! `EbookMetadata`'s own `book_files`, so the dialog stays correct whatever
+//! that projection happens to carry.
 
 use std::collections::BTreeSet;
 
@@ -519,6 +520,7 @@ mod tests {
             label: Some(label.to_string()),
             size_bytes: 1_200_000,
             path: Some(path.to_string()),
+            etag: None,
         }
     }
 

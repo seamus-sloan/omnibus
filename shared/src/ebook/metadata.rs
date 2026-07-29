@@ -111,9 +111,16 @@ pub struct EbookMetadata {
     #[serde(default)]
     pub has_cover_override: bool,
 
-    /// Per-file detail for books with multiple files of the same format
-    /// (e.g. five merged M4B parts, or two EPUB editions). Empty for
-    /// single-file-per-format books — the `formats` vec is sufficient.
+    /// Every `book_files` row on this book, one per file on disk.
+    ///
+    /// Populated for every book, including ordinary single-file ones: each
+    /// row carries that file's content validator (`BookFileInfo::etag`),
+    /// which is what an offline client compares against the snapshot it
+    /// took at download time. A surface that wants to distinguish "five
+    /// merged M4B parts" from "one EPUB" counts the rows per format rather
+    /// than reading emptiness as a proxy for it.
+    ///
+    /// Empty only on the list projection, which does not join this table.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub book_files: Vec<BookFileInfo>,
 
@@ -151,4 +158,13 @@ pub struct BookFileInfo {
     /// predating the `scan_key` backfill.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// Content validator for this file (see
+    /// [`crate::file_etag`]). An offline client snapshots it at download
+    /// time and compares it against a later metadata refresh to learn its
+    /// copy is stale — no extra request, since the refresh already happens.
+    ///
+    /// `None` for rows the scanner has not stat'd yet, so the one-time
+    /// backfill of those columns never reads as a content change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub etag: Option<String>,
 }

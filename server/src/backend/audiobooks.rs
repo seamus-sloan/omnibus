@@ -236,18 +236,12 @@ pub(super) async fn get_audiobook_part(
 
     let abs_path = std::path::Path::new(&resolved.library_path).join(&part.filename);
     let mime = audiobook::mime_for_filename(&part.filename);
-    let serve = ServeFile::new(&abs_path);
-    let res = match serve.oneshot(req).await {
-        Ok(r) => r,
-        Err(e) => return internal("serve audiobook part", e),
-    };
-    let (mut parts_resp, body) = res.into_parts();
-    if let Ok(value) = mime.parse() {
-        parts_resp
-            .headers
-            .insert(axum::http::header::CONTENT_TYPE, value);
-    }
-    Response::from_parts(parts_resp, Body::new(body))
+    // Served inline (no `Content-Disposition`) — this URL is wired straight
+    // into an `<audio src>`. The validator comes from this part's own file,
+    // not the `book_files` row: that row carries the group's `max(mtime)`
+    // and summed size across every part, which is the wrong granularity for
+    // a per-part URL.
+    super::serve_file(req, &abs_path, mime, None).await
 }
 
 /// Query parameters for `GET /api/audiobooks/{uuid}/download`.

@@ -65,8 +65,8 @@ pub use book_summary::{fetch_summary, summary_source_plan};
 pub use books::{
     book_file_path, book_file_path_by_id, book_file_paths, collect_paths, count_books,
     count_books_for_paths, count_books_page, count_search_books, count_search_books_for_paths,
-    get_book, get_book_by_uuid, get_book_files, get_book_uuid_by_scan_key, library_facets,
-    library_from_db, library_from_db_combined, library_from_db_with_total,
+    download_validators, get_book, get_book_by_uuid, get_book_files, get_book_uuid_by_scan_key,
+    library_facets, library_from_db, library_from_db_combined, library_from_db_with_total,
     library_from_db_with_total_combined, list_books, list_books_for_paths, list_books_page,
     list_indexed_rows, list_indexed_rows_for_formats, list_merged_rows_for_formats,
     resolve_book_id_by_uuid, resolve_book_id_by_uuid_exec, resolve_canonical_book_uuid,

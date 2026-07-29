@@ -1555,3 +1555,116 @@ async fn api_get_ebook_file_fails_a_non_matching_if_match_with_412() {
 
     std::fs::remove_dir_all(&tmp).ok();
 }
+
+// --- POST /api/downloads/validators ---
+
+fn post_json_with_bearer(
+    uri: &str,
+    token: &str,
+    body: &str,
+) -> axum::http::Request<axum::body::Body> {
+    axum::http::Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(axum::http::header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn api_post_download_validators_returns_401_when_anonymous() {
+    let (app, _, _) = fixture().await;
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/api/downloads/validators")
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(r#"{"files":[]}"#))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn api_post_download_validators_answers_a_whole_device_in_one_request() {
+    // The point of the endpoint: N downloads used to mean N full metadata
+    // fetches on a timer. This is one request carrying no metadata at all.
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    sqlx::query("INSERT INTO scan_roots (id, path, display_name) VALUES (1, '/lib', 'Lib')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    for (uuid, mtime) in [("bk-1", 255), ("bk-2", 511)] {
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO books (uuid, scan_key, library_id, path, title) \
+             VALUES (?, ?, 1, '/lib/b', 'B') RETURNING id",
+        )
+        .bind(uuid)
+        .bind(uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch) \
+             VALUES (?, 'EPUB', 'b', 4096, ?)",
+        )
+        .bind(id)
+        .bind(mtime)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    let body = r#"{"files":[
+        {"book_uuid":"bk-1","format":"epub"},
+        {"book_uuid":"bk-2","format":"epub"},
+        {"book_uuid":"gone","format":"audio"}
+    ]}"#;
+    let res = app
+        .oneshot(post_json_with_bearer(
+            "/api/downloads/validators",
+            &token,
+            body,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let answer: omnibus_shared::DownloadValidatorResponse = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(answer.files.len(), 3);
+    assert_eq!(answer.files[0].etag.as_deref(), Some("\"ff-1000\""));
+    assert_eq!(answer.files[1].etag.as_deref(), Some("\"1ff-1000\""));
+    assert_eq!(
+        answer.files[2].etag, None,
+        "an unanswerable file reads as can't-tell, not as unchanged"
+    );
+}
+
+#[tokio::test]
+async fn api_post_download_validators_rejects_an_oversized_batch() {
+    // A device asks about what it has on disk; the cap only stops a
+    // malformed or hostile body turning one request into unbounded work.
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let app = crate::backend::rest_router(AppState::new(pool));
+
+    let files: Vec<String> = (0..omnibus_shared::MAX_VALIDATOR_QUERY + 1)
+        .map(|i| format!(r#"{{"book_uuid":"bk-{i}","format":"epub"}}"#))
+        .collect();
+    let body = format!(r#"{{"files":[{}]}}"#, files.join(","));
+
+    let res = app
+        .oneshot(post_json_with_bearer(
+            "/api/downloads/validators",
+            &token,
+            &body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}

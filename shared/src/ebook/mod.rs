@@ -16,7 +16,10 @@ mod tests;
 pub use export::OpfExportResult;
 pub use metadata::{BookFileInfo, Contributor, EbookMetadata, Identifier};
 pub use overrides::MetadataOverrides;
-pub use validator::file_etag;
+pub use validator::{
+    file_etag, DownloadFormat, DownloadValidator, DownloadValidatorQuery, DownloadValidatorRequest,
+    DownloadValidatorResponse, MAX_VALIDATOR_QUERY,
+};
 
 /// Resolves a display title: the given title if set, otherwise the filename.
 pub fn display_title(title: Option<&str>, filename: &str) -> String {
