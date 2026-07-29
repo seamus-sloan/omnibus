@@ -23,15 +23,9 @@ pub(crate) async fn connect_refused_error() -> DataError {
 pub(crate) async fn decode_error() -> DataError {
     use axum::routing::get;
     let app = axum::Router::new().route("/j", get(|| async { "not-json" }));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
-    let port = listener.local_addr().expect("addr").port();
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, app).await;
-    });
+    let base_url = spawn_router(app).await;
     let err = crate::data::http_client()
-        .get(format!("http://127.0.0.1:{port}/j"))
+        .get(format!("{base_url}/j"))
         .send()
         .await
         .expect("send")
@@ -39,6 +33,20 @@ pub(crate) async fn decode_error() -> DataError {
         .await
         .expect_err("decode must fail");
     DataError::from(err)
+}
+
+/// Serve `app` on a loopback port and return its base URL. Shared by every
+/// test in the `offline` tree that needs a real socket to drive a `reqwest`
+/// call against — download resume, decode errors, batched validator sweeps.
+pub(crate) async fn spawn_router(app: axum::Router) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    format!("http://127.0.0.1:{port}")
 }
 
 /// A structurally valid ZIP holding one stored (uncompressed) entry with a

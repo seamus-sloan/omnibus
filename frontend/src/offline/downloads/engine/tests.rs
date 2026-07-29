@@ -6,7 +6,7 @@ use axum::response::IntoResponse;
 
 use super::*;
 use crate::data::DataError;
-use crate::offline::test_support::{connect_refused_error, decode_error};
+use crate::offline::test_support::{connect_refused_error, decode_error, spawn_router};
 
 #[test]
 fn friendly_maps_offline_to_the_offline_message() {
@@ -123,17 +123,6 @@ async fn download_file_ignoring_etag(
     on_delta: &mut (dyn FnMut(i64) + Send),
 ) -> anyhow::Result<Fetched> {
     download_file(base, dir, file, &mut |_| {}, on_delta).await
-}
-
-async fn spawn_router(app: axum::Router) -> String {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
-    let port = listener.local_addr().expect("addr").port();
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, app).await;
-    });
-    format!("http://127.0.0.1:{port}")
 }
 
 #[tokio::test]
