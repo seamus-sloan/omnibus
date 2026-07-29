@@ -1,10 +1,12 @@
-# Launch the dev multiplexer with Zellij. Server tab auto-starts; android/ios/playwright
-# tabs are preloaded with their commands suspended — press Enter in the pane to start them.
+# Launch the dev multiplexer with Zellij. Server tab auto-starts; the
+# android/ios/ios-hybrid/playwright/maestro tabs are preloaded with their
+# commands suspended — press Enter in the pane to start them.
 serve:
     zellij --layout .zellij/layout.kdl
 
 # Launch the dev multiplexer with process-compose. Server process auto-starts;
-# android/ios/playwright are disabled by default — select one in the TUI and press F7 to start.
+# android/ios/ios-hybrid/playwright/maestro are disabled by default — select
+# one in the TUI and press F7 to start.
 serve-pc:
     process-compose up
 
@@ -171,3 +173,36 @@ ios-icon app="":
 # and installs. Pass a device name to disambiguate. See scripts/install-ios.sh.
 install-ios device="":
     nix develop .#mobile --command scripts/install-ios.sh "{{device}}"
+
+# --- Native SwiftUI app (omnibus-ios/, scheme `omnibus`). xcodebuild + simctl
+# are system Xcode, so none of these wrap in a nix shell — the opposite: the
+# `env -u LD -u CC -u CXX` prefixes strip the nix dev shell's toolchain exports
+# (direnv loads them into every interactive shell), because xcodebuild adopts
+# $LD as the linker driver and raw ld can't parse the clang-style args it then
+# receives. Derived data lives under ~/.cache/omnibus-ios-derived/<worktree> —
+# outside the repo, same philosophy as CARGO_TARGET_DIR.
+
+# Compile check against a generic simulator destination — no booted device
+# needed. Shares derived data with `ios-sim`, so a later sim run reuses it.
+ios-build:
+    env -u LD -u CC -u CXX xcodebuild build \
+        -project omnibus-ios/omnibus.xcodeproj -scheme omnibus \
+        -configuration Debug \
+        -destination 'generic/platform=iOS Simulator' \
+        -derivedDataPath "${OMNIBUS_IOS_DERIVED_DIR:-$HOME/.cache/omnibus-ios-derived/$(basename "$PWD")}"
+
+# Unit tests (omnibusTests) via scripts/ios-test.sh — the exact invocation CI
+# runs (.github/workflows/ios-tests.yml), so local and CI agree. Results land
+# as .claude/runtime/ios-tests/<suite>.xcresult.
+ios-test:
+    env -u LD -u CC -u CXX scripts/ios-test.sh unit
+
+# UI tests (omnibusUITests), same script/invocation as CI.
+ios-test-ui:
+    env -u LD -u CC -u CXX scripts/ios-test.sh ui
+
+# Boot the newest iPhone simulator, build, install, and launch the native app.
+# Prints this workspace's dev-server URL (from `just dev-up`'s env.sh) as a
+# hint for the Connect screen. See scripts/ios-sim.sh.
+ios-sim:
+    scripts/ios-sim.sh

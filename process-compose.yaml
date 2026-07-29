@@ -13,6 +13,14 @@ processes:
     disabled: true
 
   ios:
+    # Native SwiftUI app (omnibus-ios/): boot the newest iPhone simulator,
+    # build, install, launch. System xcodebuild — no nix shell.
+    command: just ios-sim
+    disabled: true
+
+  ios-hybrid:
+    # Hybrid WebView shell (mobile/ crate) on iOS — what the maestro process
+    # drives. The native `ios` process above is the iOS surface going forward.
     command: nix develop .#mobile --command dx serve --platform ios --package omnibus-mobile
     disabled: true
 
@@ -22,8 +30,9 @@ processes:
     disabled: true
 
   maestro:
-    # Mobile E2E suite, one run per F7. Prereqs: the ios process's app
-    # installed on a booted simulator, and the server process running —
+    # Mobile E2E suite, one run per F7. Prereqs: the ios-hybrid process's app
+    # (Maestro drives the hybrid WebView shell, not the native app) installed
+    # on a booted simulator, and the server process running —
     # OMNIBUS_PORT pins the flows at its fixed :3000 (the e2e-mobile recipe
     # would otherwise read a stale dev-up env.sh).
     command: just e2e-mobile

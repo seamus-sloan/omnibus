@@ -26,6 +26,16 @@ layout {
         }
     }
     tab name="ios" {
+        // Native SwiftUI app (omnibus-ios/): boot the newest iPhone simulator,
+        // build, install, launch. System xcodebuild — no nix shell; `just`
+        // comes from the direnv slim shell this session inherits.
+        pane command="just" start_suspended=true {
+            args "ios-sim"
+        }
+    }
+    tab name="ios-hybrid" {
+        // Hybrid WebView shell (mobile/ crate) on iOS — what the maestro tab
+        // drives. The native app above is the iOS surface going forward.
         pane command="nix" start_suspended=true {
             args "develop" ".#mobile" "--command" "dx" "serve" "--platform" "ios" "--package" "omnibus-mobile"
         }
@@ -36,7 +46,8 @@ layout {
         }
     }
     tab name="maestro" {
-        // Mobile E2E suite, one run per Enter. Prereqs: the ios tab's app
+        // Mobile E2E suite, one run per Enter. Prereqs: the ios-hybrid tab's
+        // app (Maestro drives the hybrid WebView shell, not the native app)
         // installed on a booted simulator, and the server tab running —
         // OMNIBUS_PORT=3000 pins the flows at that tab's fixed port (the
         // e2e-mobile recipe would otherwise read a stale dev-up env.sh).
