@@ -312,6 +312,14 @@ fn reject_oversized_uuid(uuid: &str) -> Option<Response> {
         .then(|| StatusCode::BAD_REQUEST.into_response())
 }
 
+/// Cap a `state` PUT body at [`dto::StateRequest::MAX_READING_STATES`] entries
+/// before any DB work, mirroring [`reject_oversized_uuid`]. `Some(response)`
+/// is the rejection.
+fn reject_oversized_state_request(body: &dto::StateRequest) -> Option<Response> {
+    (body.reading_states.len() > dto::StateRequest::MAX_READING_STATES)
+        .then(|| StatusCode::BAD_REQUEST.into_response())
+}
+
 /// `GET library/<uuid>/metadata` — the single-book metadata array Kobo fetches
 /// before downloading.
 async fn library_metadata(
@@ -377,6 +385,9 @@ async fn put_state(
     Json(body): Json<dto::StateRequest>,
 ) -> Response {
     if let Some(rejected) = reject_oversized_uuid(&uuid) {
+        return rejected;
+    }
+    if let Some(rejected) = reject_oversized_state_request(&body) {
         return rejected;
     }
     for entry in &body.reading_states {

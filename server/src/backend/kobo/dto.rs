@@ -376,6 +376,14 @@ pub struct StateRequest {
     pub reading_states: Vec<StateEntry>,
 }
 
+impl StateRequest {
+    /// Maximum number of `reading_states` entries accepted per `state` PUT.
+    /// The router's `DefaultBodyLimit` already bounds total payload bytes;
+    /// this bounds per-request handler work (a DB round trip per entry)
+    /// independent of how small an individual entry is.
+    pub const MAX_READING_STATES: usize = 128;
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct StateEntry {
