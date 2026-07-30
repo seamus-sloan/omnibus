@@ -39,7 +39,13 @@ pub fn SeriesIndexPage() -> Element {
     // on every keystroke would be wasted work).
     let all = series.read();
     let total_series = all.len();
-    let total_books: usize = all.iter().map(|s| s.book_count).sum();
+    let library_empty = all.is_empty();
+    drop(all);
+
+    // Memoized separately from the filter/sort pipeline below: this total is
+    // unaffected by the filter text or sort key, so tying it to that memo
+    // would recompute it on every keystroke for no reason.
+    let total_books = use_memo(move || series.read().iter().map(|s| s.book_count).sum::<usize>());
 
     let filter_text = filter();
     let current_sort = sort();
@@ -60,7 +66,7 @@ pub fn SeriesIndexPage() -> Element {
             SeriesIndexHeader {
                 view: SeriesHeaderView {
                     total_series,
-                    total_books,
+                    total_books: total_books(),
                     filter: filter_text,
                     sort: current_sort,
                 },
@@ -72,7 +78,7 @@ pub fn SeriesIndexPage() -> Element {
                     index_prefs::save(&prefs);
                 },
             }
-            {render_series_body(&filtered, all.is_empty())}
+            {render_series_body(&filtered, library_empty)}
         }
     }
 }

@@ -17,6 +17,15 @@ struct AuthorIndexCounts {
     total_books: usize,
 }
 
+/// Owned output of the filter/sort/group-by-letter pipeline, memoized as a
+/// single unit (mirrors `landing.rs`'s `visible = use_memo(...)`) so none of
+/// the three steps reruns on a render the filter/sort/source didn't touch.
+#[derive(Clone, PartialEq)]
+struct AuthorGroups {
+    filtered: Vec<AuthorSummary>,
+    letters: Vec<(char, Vec<AuthorSummary>)>,
+}
+
 /// Filter + sort + alphabet-strip state for the header. The strip's
 /// visibility, glyphs, and footnote totals all change together as the
 /// filtered set changes, so they ride the same struct.
@@ -63,25 +72,31 @@ pub fn AuthorsIndexPage() -> Element {
     // `&Vec<AuthorSummary>` and the rsx! tree only needs borrowed views.
     let all = authors.read();
     let total_authors = all.len();
-    let total_books: usize = all.iter().map(|a| a.book_count).sum();
+    let any_in_library = !all.is_empty();
+    drop(all);
 
-    // Memoized so filter/sort only reruns when authors/filter/sort change, not on every render.
-    let filtered = use_memo(move || {
+    // Memoized separately from the filter/sort/group-by pipeline below: this
+    // total is unaffected by the filter text or sort key, so tying it to
+    // that memo would recompute it on every keystroke for no reason.
+    let total_books = use_memo(move || authors.read().iter().map(|a| a.book_count).sum::<usize>());
+
+    // Group by first letter of sort key (last name when available, else
+    // name); only meaningful when sorting by name. Folded into the same
+    // memo as filter/sort so none of the three steps reruns on a render
+    // that didn't touch authors/filter/sort (mirrors `landing.rs`'s
+    // `visible = use_memo(...)`).
+    let show_letters = matches!(sort(), IndexSort::Name);
+    let groups = use_memo(move || {
         let all = authors.read();
         let q = filter.read().to_lowercase();
         let mut filtered = filter_authors(&all, &q);
-        sort_authors(&mut filtered, sort());
-        filtered
-            .into_iter()
-            .cloned()
-            .collect::<Vec<AuthorSummary>>()
+        let sort_value = sort();
+        sort_authors(&mut filtered, sort_value);
+        let filtered: Vec<AuthorSummary> = filtered.into_iter().cloned().collect();
+        let letters = group_by_letter(&filtered, matches!(sort_value, IndexSort::Name));
+        AuthorGroups { filtered, letters }
     });
-    let filtered = filtered();
-
-    // Group by first letter of sort key (last name when available, else name).
-    // Only meaningful when sorting by name.
-    let show_letters = matches!(sort(), IndexSort::Name);
-    let letters = group_by_letter(&filtered, show_letters);
+    let AuthorGroups { filtered, letters } = groups();
 
     // Alphabet strip: A–Z followed by a single '#' bucket for any
     // authors whose surname-equivalent doesn't start with an ASCII
@@ -92,11 +107,9 @@ pub fn AuthorsIndexPage() -> Element {
     let present_letters: std::collections::HashSet<char> =
         letters.iter().map(|(l, _)| *l).collect();
 
-    let any_in_library = !all.is_empty();
-
     let counts = AuthorIndexCounts {
         total_authors,
-        total_books,
+        total_books: total_books(),
     };
     let filter_state = AuthorIndexFilter {
         filter: filter(),
@@ -161,18 +174,20 @@ fn sort_authors(filtered: &mut [&AuthorSummary], sort: IndexSort) {
     }
 }
 
-/// Buckets `filtered` by first letter of `sort_key`; empty when `show_letters` is false.
+/// Buckets `filtered` by first letter of `sort_key`; empty when `show_letters`
+/// is false. Owned (not borrowed) so the result can live inside the
+/// `use_memo` pipeline in `AuthorsIndexPage` alongside `filtered`.
 fn group_by_letter(
     filtered: &[AuthorSummary],
     show_letters: bool,
-) -> Vec<(char, Vec<&AuthorSummary>)> {
-    let mut letters: Vec<(char, Vec<&AuthorSummary>)> = Vec::new();
+) -> Vec<(char, Vec<AuthorSummary>)> {
+    let mut letters: Vec<(char, Vec<AuthorSummary>)> = Vec::new();
     if show_letters {
         for a in filtered {
             let l = first_letter(a);
             match letters.last_mut() {
-                Some((existing, group)) if *existing == l => group.push(a),
-                _ => letters.push((l, vec![a])),
+                Some((existing, group)) if *existing == l => group.push(a.clone()),
+                _ => letters.push((l, vec![a.clone()])),
             }
         }
     }
@@ -183,7 +198,7 @@ fn group_by_letter(
 /// and `letters` directly instead of cloning them again for a child prop).
 fn authors_index_body<'a>(
     filtered: &'a [AuthorSummary],
-    letters: &[(char, Vec<&'a AuthorSummary>)],
+    letters: &'a [(char, Vec<AuthorSummary>)],
     show_letters: bool,
     any_in_library: bool,
     server_url: &str,
