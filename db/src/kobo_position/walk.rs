@@ -291,6 +291,47 @@ impl FileIndex {
         })
     }
 
+    /// Kepub walk: the normalized boundary offset for a DOM character
+    /// offset (UTF-16) into span `kobo.N.M`'s text node. Unlike
+    /// [`FileIndex::span_start`] this does not land on a visible character —
+    /// the caller decides which side of the boundary to resolve toward
+    /// (forward for a range start, backward for its exclusive end).
+    pub(super) fn span_boundary(&self, n: u32, m: u32, offset_utf16: u32) -> Option<u64> {
+        let mark = self.spans.iter().find(|s| s.n == n && s.m == m)?;
+        if offset_utf16 == 0 {
+            return Some(mark.norm_start);
+        }
+        // The span's text node is the cluster its first visible character
+        // lands in (elements always open a fresh cluster, so text after the
+        // span's start tag never coalesces with text before it).
+        let cluster = self.clusters.iter().find(|c| {
+            c.norm_len > 0
+                && mark.norm_start >= c.norm_start
+                && mark.norm_start < c.norm_start + c.norm_len
+        })?;
+        Some(replay_norm(cluster, offset_utf16))
+    }
+
+    /// Anchor at the first visible character at/after `t` — the landed
+    /// position plus its proving snippet.
+    pub(super) fn anchor_at(&self, t: u64) -> Option<Anchor> {
+        let landed = self.land(t)?;
+        Some(Anchor {
+            norm_offset: landed,
+            snippet: self.snippet_at(landed),
+        })
+    }
+
+    /// Anchor at the last visible character strictly before boundary `t` —
+    /// the kepub-side counterpart of [`FileIndex::tail_end_at`]'s anchor.
+    pub(super) fn back_anchor_before(&self, t: u64) -> Option<Anchor> {
+        let landed = self.back_land(t.checked_sub(1)?)?;
+        Some(Anchor {
+            norm_offset: landed,
+            snippet: self.snippet_at(landed),
+        })
+    }
+
     /// Kepub walk: which span covers normalized offset `t`? Past the last
     /// span resolves to the last span (end-of-chapter resume).
     pub(super) fn span_at(&self, t: u64) -> Option<(u32, u32)> {
@@ -348,6 +389,43 @@ impl FileIndex {
         })
     }
 
+    /// Source walk: the CFI tail addressing the *exclusive end* boundary
+    /// after the last visible character strictly before normalized offset
+    /// `t` — the DOM-Range end for a highlight whose normalized extent stops
+    /// at `t`. Returns the tail plus an anchor at that last character so the
+    /// two walks can prove alignment the same way starts do.
+    pub(super) fn tail_end_at(&self, t: u64) -> Option<(CfiTail, Anchor)> {
+        let last = self.back_land(t.checked_sub(1)?)?;
+        let cluster = self
+            .clusters
+            .iter()
+            .find(|c| c.norm_len > 0 && last >= c.norm_start && last < c.norm_start + c.norm_len)?;
+        let offset_utf16 = replay_offset_after(cluster, last)?;
+        Some((
+            CfiTail {
+                element_steps: cluster.element_steps.clone(),
+                text_index: cluster.text_index,
+                offset_utf16,
+            },
+            Anchor {
+                norm_offset: last,
+                snippet: self.snippet_at(last),
+            },
+        ))
+    }
+
+    /// Last visible (non-space) normalized offset at/before `t`. `None` when
+    /// nothing visible precedes it.
+    fn back_land(&self, t: u64) -> Option<u64> {
+        self.norm
+            .chars()
+            .take(t as usize + 1)
+            .enumerate()
+            .filter(|(_, c)| *c != ' ')
+            .last()
+            .map(|(i, _)| i as u64)
+    }
+
     /// First visible (non-space) normalized offset at/after `t`. An offset
     /// at/past the end of text resolves to the last character (so an
     /// end-of-file position still lands somewhere); `None` only for a
@@ -395,6 +473,32 @@ fn replay_offset(cluster: &Cluster, norm_target: u64) -> Option<u32> {
             in_run = false;
         }
         utf16 += c.len_utf16() as u32;
+    }
+    None
+}
+
+/// Like [`replay_offset`] but returns the raw UTF-16 offset *after* the
+/// character at `norm_target` — the exclusive DOM-Range end that includes it.
+fn replay_offset_after(cluster: &Cluster, norm_target: u64) -> Option<u32> {
+    let mut norm_pos = cluster.norm_start;
+    let mut utf16: u32 = 0;
+    let mut in_run = cluster.entered_in_run;
+    for c in cluster.raw.chars() {
+        let emits = if c.is_whitespace() {
+            let emits = !in_run;
+            in_run = true;
+            emits
+        } else {
+            in_run = false;
+            true
+        };
+        utf16 += c.len_utf16() as u32;
+        if emits {
+            if norm_pos == norm_target {
+                return Some(utf16);
+            }
+            norm_pos += 1;
+        }
     }
     None
 }

@@ -49,6 +49,36 @@ pub fn parse_cfi(raw: &str) -> Option<Cfi> {
     })
 }
 
+/// Format a range CFI (`epubcfi(parent,start,end)`) for two tails in the
+/// same spine document — the shape epub.js's `annotations.highlight()`
+/// resolves. The parent component carries the common element-step prefix,
+/// mirroring what epub.js's own `cfiFromRange` emits.
+pub fn format_range_cfi(spine_index: usize, start: &CfiTail, end: &CfiTail) -> String {
+    let common = start
+        .element_steps
+        .iter()
+        .zip(&end.element_steps)
+        .take_while(|(a, b)| a == b)
+        .count();
+    let rel = |tail: &CfiTail| {
+        let mut path = String::new();
+        for step in &tail.element_steps[common..] {
+            path.push_str(&format!("/{step}"));
+        }
+        format!("{path}/{}:{}", tail.text_index, tail.offset_utf16)
+    };
+    let mut parent = String::new();
+    for step in &start.element_steps[..common] {
+        parent.push_str(&format!("/{step}"));
+    }
+    format!(
+        "epubcfi(/6/{}!{parent},{},{})",
+        2 * (spine_index + 1),
+        rel(start),
+        rel(end)
+    )
+}
+
 /// Format a point CFI for the given spine index and tail.
 pub fn format_cfi(spine_index: usize, tail: &CfiTail) -> String {
     let mut path = String::new();

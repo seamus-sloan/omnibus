@@ -239,13 +239,14 @@ async fn patch_annotations(
     if let Some(reject) = reject_oversized_uuid(uuid) {
         return reject;
     }
-    let parsed = dto::parse_patch(&body);
+    let mut parsed = dto::parse_patch(&body);
     if parsed.skipped > 0 {
         tracing::warn!(
             skipped = parsed.skipped,
             "reading-services PATCH skipped unparseable entries"
         );
     }
+    derive_annotation_cfis(&state, uuid, &mut parsed.updates).await;
 
     match db::annotations::ingest_kobo_annotations(
         state.pool(),
@@ -283,6 +284,59 @@ async fn patch_annotations(
         }
     }
     StatusCode::NO_CONTENT.into_response()
+}
+
+/// Best-effort KoboSpan-range→CFI derivation for a PATCH's upserts, so the
+/// row lands renderable by the web/iOS readers. Mirrors the posture of
+/// `derive_cfi_for_location` (state PUTs): the cached KEPUB is used even
+/// when stale — the snippet check inside `annotation_cfis` catches a truly
+/// replaced source — and any miss leaves `epub_cfi_range` as `None`, which
+/// the boot-time backfill retries later.
+async fn derive_annotation_cfis(
+    state: &AppState,
+    uuid: &str,
+    updates: &mut [db::annotations::IngestKoboAnnotation],
+) {
+    let ranges: Vec<Option<db::kobo_position::KoboSpanRange>> = updates
+        .iter()
+        .map(|u| db::kobo_position::parse_annotation_location(&u.kobo_location))
+        .collect();
+    let parseable: Vec<db::kobo_position::KoboSpanRange> =
+        ranges.iter().flatten().cloned().collect();
+    if parseable.is_empty() {
+        return;
+    }
+    let Ok(Some(book_id)) = db::resolve_book_id_by_uuid(state.pool(), uuid).await else {
+        return;
+    };
+    let kepub = db::kepub_path(book_id);
+    if !tokio::fs::try_exists(&kepub).await.unwrap_or(false) {
+        return;
+    }
+    let Ok(Some(source)) = db::book_file_path(state.pool(), book_id, "EPUB").await else {
+        return;
+    };
+    let derived = tokio::task::spawn_blocking(move || {
+        db::kobo_position::annotation_cfis(&kepub, &source, &parseable)
+    })
+    .await;
+    let cfis = match derived {
+        Ok(Ok(cfis)) => cfis,
+        Ok(Err(e)) => {
+            tracing::warn!(%uuid, error = %e, "kobo annotation cfi derivation failed");
+            return;
+        }
+        Err(e) => {
+            tracing::warn!(%uuid, error = %e, "kobo annotation cfi task panicked");
+            return;
+        }
+    };
+    let mut cfis = cfis.into_iter();
+    for (update, range) in updates.iter_mut().zip(&ranges) {
+        if range.is_some() {
+            update.epub_cfi_range = cfis.next().flatten();
+        }
+    }
 }
 
 /// `POST .../content/checkforchanges` — the entitlement ids whose annotation

@@ -52,6 +52,7 @@ mod server {
         kick_recovery_scans(&pool, &worker).await;
         spawn_session_pruner(pool.clone());
         spawn_periodic_scan(pool.clone(), worker.clone());
+        spawn_annotation_cfi_backfill(pool.clone());
 
         let router = build_router(state, pool, worker);
         Ok(apply_security_headers(router))
@@ -157,6 +158,28 @@ mod server {
                     Err(e) => {
                         tracing::warn!(error = %e, "session prune failed");
                     }
+                }
+            }
+        });
+    }
+
+    /// Spawn the one-shot boot repair for Kobo-synced annotations that have
+    /// no derived CFI yet (kepub cache absent at ingest time, or rows from
+    /// before derivation existed). Cheap once caught up: the candidate query
+    /// returns nothing and the task exits.
+    fn spawn_annotation_cfi_backfill(pool: SqlitePool) {
+        tokio::spawn(async move {
+            match omnibus_db::annotations::backfill_kobo_annotation_cfis(&pool).await {
+                Ok(stats) if stats.derived > 0 || stats.unresolved > 0 => {
+                    tracing::info!(
+                        derived = stats.derived,
+                        unresolved = stats.unresolved,
+                        "kobo annotation CFI backfill finished"
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(error = %e, "kobo annotation CFI backfill failed");
                 }
             }
         });

@@ -337,6 +337,88 @@ async fn patch_for_an_unknown_book_answers_204_without_ingesting() {
 }
 
 #[tokio::test]
+async fn patch_stores_a_derived_range_cfi_when_kepub_and_source_are_on_disk() {
+    use db::test_support::{build_test_epub, build_test_kepub, make_test_dir, EnvVarGuard};
+
+    let (app, pool, user, _device) = fixture().await;
+
+    // A real on-disk library with one chapter, plus its kepubify-shaped twin
+    // in the kepub cache dir — the two walks annotation_cfis aligns.
+    let source_xhtml = r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head>
+<body><p>First sentence here. Second sentence follows.</p></body></html>"#;
+    let kepub_xhtml = r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head>
+<body><p><span class="koboSpan" id="kobo.1.1">First sentence here. </span><span class="koboSpan" id="kobo.1.2">Second sentence follows.</span></p></body></html>"#;
+    let dir = make_test_dir("rs_patch_cfi");
+    std::fs::write(
+        dir.join("book.epub"),
+        build_test_epub(&[("c1.xhtml", source_xhtml)]),
+    )
+    .unwrap();
+    db::replace_books(
+        &pool,
+        dir.to_str().unwrap(),
+        vec![db::ebook::IndexedBook {
+            metadata: omnibus_shared::EbookMetadata {
+                filename: "book.epub".into(),
+                title: Some("Book".into()),
+                ..Default::default()
+            },
+            cover: None,
+            mtime_epoch: 0,
+            size_bytes: 0,
+            word_count: None,
+        }],
+    )
+    .await
+    .unwrap();
+    let books = db::list_books(&pool, dir.to_str().unwrap()).await.unwrap();
+    let book = books.first().unwrap();
+    let uuid = book.unique_identifier.clone().unwrap();
+    let kepub_dir = dir.join("kepub");
+    std::fs::create_dir_all(&kepub_dir).unwrap();
+    std::fs::write(
+        kepub_dir.join(format!("{}.kepub.epub", book.id)),
+        build_test_kepub(&[("c1.xhtml", kepub_xhtml)]),
+    )
+    .unwrap();
+    let _guard = EnvVarGuard::set("OMNIBUS_KEPUB_DIR", Some(kepub_dir.to_str().unwrap()));
+
+    let body = json!({ "updatedAnnotations": [{
+        "id": "kobo-derived-1",
+        "type": "highlight",
+        "highlightColor": "yellow",
+        "highlightedText": "Second sentence follows.",
+        "location": { "span": {
+            "chapterFilename": "c1.xhtml",
+            "startPath": "span#kobo\\.1\\.2",
+            "startChar": 0,
+            "endPath": "span#kobo\\.1\\.2",
+            "endChar": 24
+        }}
+    }]});
+    let res = app
+        .oneshot(request(
+            "PATCH",
+            &annotations_uri(&uuid),
+            Some(HW_ID),
+            Some(&body),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    let listed = db::annotations::list_highlights(&pool, user, &uuid)
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        listed[0].epub_cfi_range.as_deref(),
+        Some("epubcfi(/6/2!/4/2,/1:21,/1:45)"),
+        "web/iOS readers need the derived range CFI to paint the highlight"
+    );
+}
+
+#[tokio::test]
 async fn checkforchanges_reports_an_ingested_book_and_goes_quiet_after_the_get_drains() {
     let (app, pool, _user, _device) = fixture().await;
     let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
