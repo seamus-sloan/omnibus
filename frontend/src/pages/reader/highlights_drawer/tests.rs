@@ -3,6 +3,7 @@
 //! to, but recolor and delete must still be offered. Needs the `server`
 //! feature (`dioxus::ssr`).
 
+#[cfg(feature = "server")]
 use super::*;
 
 #[cfg(feature = "server")]
