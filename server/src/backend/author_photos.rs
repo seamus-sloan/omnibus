@@ -14,23 +14,10 @@ use axum::{
 use omnibus_db::{self as db, worker::Task};
 use omnibus_shared::detect_image_format;
 use serde::Deserialize;
-use sqlx::SqlitePool;
 
 use super::image_upload::extract_validated_image;
 use super::{internal, AppState};
 use crate::auth::{AdminUser, MediaAuthUser};
-
-/// Returns `true` when an `authors` row with `id` exists. Extracted because
-/// the three admin-mutation handlers below all need an "author exists?"
-/// preflight before doing any side-effecting work; a future change (e.g.
-/// a soft-delete column) then has exactly one query to touch.
-async fn author_exists(pool: &SqlitePool, id: i64) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM authors WHERE id = ?)")
-        .bind(id)
-        .fetch_one(pool)
-        .await
-        .map(|v| v != 0)
-}
 
 /// Serve a cached author profile photo. Returns 404 when no photo is cached
 /// (including `'letter'` negative-cache markers) — the frontend keeps the
@@ -79,7 +66,7 @@ pub(super) async fn put_author_photo(
 ) -> Response {
     // Confirm the author exists before reading multipart so a malformed
     // upload to a missing id fails fast with 404 (not 400).
-    let exists = match author_exists(&state.pool, id).await {
+    let exists = match db::author_exists(&state.pool, id).await {
         Ok(v) => v,
         Err(e) => return internal("author exists check", e),
     };
@@ -136,7 +123,7 @@ pub(super) async fn post_author_photo_scan(
 ) -> Response {
     // Verify the author exists first so a typo on the id gets a 404 instead
     // of a successful no-op scan.
-    let exists = match author_exists(&state.pool, id).await {
+    let exists = match db::author_exists(&state.pool, id).await {
         Ok(v) => v,
         Err(e) => return internal("author exists check", e),
     };
@@ -194,7 +181,7 @@ pub(super) async fn put_author_photo_url(
     Path(id): Path<i64>,
     Json(body): Json<AuthorPhotoUrlBody>,
 ) -> Response {
-    let exists = match author_exists(&state.pool, id).await {
+    let exists = match db::author_exists(&state.pool, id).await {
         Ok(v) => v,
         Err(e) => return internal("author exists check", e),
     };

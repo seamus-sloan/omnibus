@@ -55,6 +55,21 @@ impl AuthorPhotoSource {
     }
 }
 
+/// Returns `true` when an `authors` row with `id` exists. Used as a
+/// preflight by the admin author-photo mutation handlers (upload, URL fetch,
+/// scan) so a typo'd id fails fast with 404 rather than doing side-effecting
+/// work first; a future change (e.g. a soft-delete column) then has exactly
+/// one query to touch.
+pub async fn author_exists(pool: &SqlitePool, id: i64) -> Result<bool, AuthorPhotosDataError> {
+    Ok(
+        sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM authors WHERE id = ?)")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .map(|v| v != 0)?,
+    )
+}
+
 /// Fetch a cached profile photo for the given author. Returns `None` when no
 /// row exists or the row is a `'letter'` negative-cache marker — both cases
 /// should produce a 404 from the GET handler so the frontend keeps rendering
