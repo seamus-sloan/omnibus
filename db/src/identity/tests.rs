@@ -1,3 +1,7 @@
+//! Tests for book-identity scan-key handling: `reconstruct_scan_key`'s
+//! extension rules per format, and the idempotent, error-propagating
+//! `backfill_scan_keys` boot pass for rows with a `NULL` scan key.
+
 use super::*;
 use crate::pool::init_db;
 

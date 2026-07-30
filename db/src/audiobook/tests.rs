@@ -1,3 +1,7 @@
+//! Tests for audiobook scanning and parsing: directory stat walks, m4b/mp3
+//! grouping into books, tag-derived title/metadata extraction (including
+//! error rows for unreadable or undecodable files), and duration formatting.
+
 use std::fs;
 use std::sync::atomic::{AtomicUsize, Ordering};
 

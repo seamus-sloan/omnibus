@@ -1,3 +1,7 @@
+//! Tests for shelf wire types: rule field/op token round-tripping, smart
+//! and manual shelf create/update validation, and length/count caps on
+//! rules, descriptions, names, and book uuid lists.
+
 use super::*;
 
 #[test]

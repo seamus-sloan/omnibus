@@ -1,3 +1,7 @@
+//! Tests for `resources_for`: the Kobo store-resources map repoints only
+//! the overridden keys at this server (with the path token attached) and
+//! leaves the rest of the map, including non-string entries, untouched.
+
 use super::*;
 
 const BASE: &str = "https://omni.test";

@@ -1,5 +1,5 @@
 //! Copy a source EPUB zip to a new archive, swapping only the OPF and cover
-//! entries (F5.8 #1372). Every other entry — text, styles, fonts, nav — is
+//! entries. Every other entry — text, styles, fonts, nav — is
 //! copied through unchanged, and the `mimetype` entry is re-emitted first and
 //! uncompressed per the EPUB OCF spec so the result stays a valid container.
 

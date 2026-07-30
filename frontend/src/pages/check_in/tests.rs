@@ -1,3 +1,7 @@
+//! Tests for the check-in flow's pure helpers: ISBN cleaning and check-digit
+//! rejection, keypad entry, wizard stage selection per lookup outcome, and
+//! the byline/notes formatting used by the confirm screens.
+
 use super::entry::apply_key;
 use super::screens::byline;
 use super::*;

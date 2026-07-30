@@ -1,6 +1,6 @@
 //! Bake a book's effective metadata + cover override *into* a copy of its
-//! EPUB (F5.8 #1372), so exports (Send-to-Kobo KEPUB, plain download) carry the
-//! user's edits instead of shipping the untouched source file. This writes
+//! EPUB, so exports (Send-to-Kobo KEPUB, plain download) carry the user's
+//! edits instead of shipping the untouched source file. This writes
 //! inside the `.epub` container, which is the only metadata a Kobo / kepubify
 //! actually reads.
 //!

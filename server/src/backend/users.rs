@@ -1,4 +1,4 @@
-//! Admin user-management REST handlers (F5.4). Every route is `AdminUser`-gated
+//! Admin user-management REST handlers. Every route is `AdminUser`-gated
 //! (403 for non-admins): list, create, update permissions, reset password,
 //! unlock, and delete — with the last-admin guardrails enforced by the db
 //! layer surfaced as `409 Conflict`.

@@ -486,7 +486,7 @@ pub(crate) async fn load_overrides_bulk(
 
 /// Apply a `MetadataOverrides` to an `EbookMetadata`, mutating it in place,
 /// gated by whether `precedence` (the owning scan root's configured
-/// metadata-source order, F5.1 #972) ranks `OmnibusOverrides` above
+/// metadata-source order) ranks `OmnibusOverrides` above
 /// `EmbeddedTags` — the two sources with a real data provider today (see
 /// [`overrides_outrank_embedded`]). Scalar fields are replaced when `Some`;
 /// m2m fields (`creators`, `subjects`) replace entirely when present.

@@ -1,3 +1,7 @@
+//! Tests for `EbookMetadata` and `MetadataOverrides`: title/description
+//! display fallbacks, override validation (length caps measured in chars,
+//! ISBN-13 shape, subject/creator/tag limits), and override-merge layering.
+
 use super::*;
 
 fn contributor(name: &str) -> Contributor {

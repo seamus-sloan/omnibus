@@ -1,3 +1,6 @@
+//! Tests for ISBN normalization: ISBN-10 to ISBN-13 conversion, check-digit
+//! validation, and rejection of malformed or non-ASCII-digit input.
+
 use super::*;
 
 const ISBN13: &str = "9780134685991";

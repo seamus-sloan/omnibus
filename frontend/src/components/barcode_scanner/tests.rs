@@ -1,3 +1,7 @@
+//! Tests for `ScanStatus`: mapping the JS camera-glue status strings to the
+//! enum (with an error default for unrecognized values), and which states
+//! are terminal (the camera is out for good).
+
 use super::*;
 
 #[test]

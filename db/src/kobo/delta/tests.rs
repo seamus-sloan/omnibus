@@ -1,3 +1,8 @@
+//! Tests for `sync_delta`: per-device entitlement change tracking — new,
+//! changed, and removed books since the last snapshot, ordering (removals
+//! after adds/changes), idempotent recording, snapshot clearing, and
+//! cascading cleanup when a device is deleted.
+
 use omnibus_shared::{CreateShelfRequest, ShelfKind};
 
 use super::*;

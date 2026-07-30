@@ -1,3 +1,7 @@
+//! Tests for the mobile audiobook player's pure helpers: time formatting,
+//! locating the chapter at an elapsed position, remaining-time math at a
+//! playback rate, and prev/next chapter and part seek targets.
+
 use super::*;
 
 fn ch(ordinal: i64, title: &str, start: f64, dur: f64) -> ChapterInfo {

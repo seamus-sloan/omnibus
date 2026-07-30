@@ -1,3 +1,8 @@
+//! Tests for title/author normalization: casefolding, punctuation
+//! collapsing, diacritic folding, last/first-name swapping, idempotence
+//! and panic-safety over varied Unicode input, and the `_norm` column
+//! boot backfill's error propagation.
+
 use super::*;
 use crate::pool::init_db;
 

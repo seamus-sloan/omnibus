@@ -1,3 +1,7 @@
+//! Tests for session lifecycle: create/lookup round-tripping, expiry and
+//! idle-timeout enforcement, revocation (single, all, all-except-current),
+//! last-used touch throttling, and cookie/bearer token resolution.
+
 use super::*;
 use crate::auth::test_support::pool;
 use crate::auth::token::SESSION_COOKIE_NAME;

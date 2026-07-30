@@ -1,3 +1,7 @@
+//! Tests for `ProgressUpdate` and `SessionReport` validation: cross-format
+//! field rejection, CFI/percent length and range caps, `client_updated_at`
+//! and `book_file_id` handling, and backward-compatible payload decoding.
+
 use super::*;
 
 #[test]

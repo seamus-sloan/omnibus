@@ -1,3 +1,8 @@
+//! Tests for cross-format book attachment: matching a new audiobook/ebook
+//! to an existing book of the other format by normalized title + author
+//! (including last/first name order), and the ambiguity/ownership guards
+//! that skip a match rather than clobbering an existing attachment.
+
 use crate::books::list_merged_rows_for_formats;
 use crate::indexer::diff_library;
 use crate::pool::init_db;

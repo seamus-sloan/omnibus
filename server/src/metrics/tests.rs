@@ -1,3 +1,6 @@
+//! Tests for the Prometheus metrics endpoint: request-labeled histograms
+//! render with grouped id-path labels rather than raw per-resource paths.
+
 use super::*;
 use axum::{
     body::{to_bytes, Body},
