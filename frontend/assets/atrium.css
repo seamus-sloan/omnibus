@@ -1126,6 +1126,13 @@ html, body { overscroll-behavior: none; }
 .bd-hl-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 @media (hover: hover) { .bd-hl-delete:hover { color: var(--bad); } }
 
+/* Quote-card modal — the shared reader editor (rd-quote-*) hosted in the
+   app modal shell instead of the reader drawer. Sized to the drawer's 432px
+   so the preview/controls layout carries over unchanged. Compound selector:
+   `.mg-modal`'s own width is declared later in this file and would win a
+   same-specificity tie. */
+.mg-modal.bd-quote-modal { width: min(432px, 100%); }
+
 /* F3.2 — public reading journal */
 .bd-journal-blurb {
   font-size: 11px;

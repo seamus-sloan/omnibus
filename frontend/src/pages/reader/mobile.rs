@@ -148,6 +148,7 @@ async fn mount_and_drain(
         jszip: super::JSZIP_JS.to_string(),
         epub: super::EPUBJS_JS.to_string(),
         glue: super::READER_GLUE_JS.to_string(),
+        quote_card: crate::components::quote_card::QUOTE_CARD_JS.to_string(),
     };
     let eval = interop::install_reader_surface(
         &file_url,

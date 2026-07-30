@@ -123,9 +123,20 @@ mod render_tests {
         }
     }
 
+    fn quote_meta() -> BdQuoteMeta {
+        BdQuoteMeta {
+            title: "Piranesi".to_string(),
+            author: "Susanna Clarke".to_string(),
+            accent: None,
+        }
+    }
+
     fn section_first_paint() -> Element {
         rsx! {
-            BdHighlightsSection { uuid: "book-uuid".to_string() }
+            BdHighlightsSection {
+                uuid: "book-uuid".to_string(),
+                quote_meta: quote_meta(),
+            }
         }
     }
 
@@ -138,6 +149,8 @@ mod render_tests {
         assert!(html.contains("data-testid=\"highlights-empty\""));
         assert!(html.contains("Quotes \u{00b7} none saved"));
         assert!(!html.contains("data-testid=\"highlights-list\""));
+        // No passage is targeted on first paint, so no modal either (rule 07).
+        assert!(!html.contains("data-testid=\"quote-card-modal\""));
     }
 
     fn seeded_highlight(note: Option<&str>, text: Option<&str>) -> Highlight {
@@ -160,6 +173,7 @@ mod render_tests {
                 highlight: seeded_highlight(Some("Worth revisiting"), Some("The Beauty of the House")),
                 highlights: use_signal(|| vec![seeded_highlight(None, None)]),
                 server_url: String::new(),
+                quote_target: use_signal(|| None),
             }
         }
     }
@@ -170,6 +184,8 @@ mod render_tests {
         assert!(html.contains("The Beauty of the House"));
         assert!(html.contains("Worth revisiting"));
         assert!(html.contains("Section 7 \u{00b7} saved May 17, 2026"));
+        // A text-carrying row offers the quote-card action.
+        assert!(html.contains("data-testid=\"highlight-quote\""));
         // The reader link carries the percent-encoded CFI so the passage,
         // not the resume point, is where the reader opens.
         assert!(
@@ -202,6 +218,7 @@ mod render_tests {
                 highlight: kobo_row,
                 highlights: use_signal(Vec::new),
                 server_url: String::new(),
+                quote_target: use_signal(|| None),
             }
         }
     }
@@ -224,25 +241,55 @@ mod render_tests {
                 highlight: seeded_highlight(None, None),
                 highlights: use_signal(Vec::new),
                 server_url: String::new(),
+                quote_target: use_signal(|| None),
             }
         }
     }
 
+    /// Assert the button tagged `testid` carries the `disabled` attribute.
+    fn assert_button_disabled(html: &str, testid: &str) {
+        let needle = format!("data-testid=\"{testid}\"");
+        let idx = html.find(&needle).expect("button rendered");
+        let button_end = html[idx..].find('>').expect("button tag closes") + idx;
+        assert!(
+            html[idx..button_end].contains("disabled"),
+            "{testid} should be disabled: {}",
+            &html[idx..button_end]
+        );
+    }
+
     #[test]
-    fn card_disables_copy_for_a_highlight_saved_before_the_text_column() {
+    fn card_disables_copy_and_quote_for_a_highlight_saved_before_the_text_column() {
         // Pre-migration-0030 rows carry no prose, so Copy would be a silent
-        // no-op; the control is disabled instead.
+        // no-op and a quote card would be blank; both controls are disabled.
         let html = render_in_vdom(render_plain_card);
         assert!(html.contains("(highlighted passage)"));
         assert!(!html.contains("data-testid=\"highlight-note\""));
-        let copy_idx = html
-            .find("data-testid=\"highlight-copy\"")
-            .expect("copy button rendered");
-        let button_end = html[copy_idx..].find('>').expect("button tag closes") + copy_idx;
-        assert!(
-            html[copy_idx..button_end].contains("disabled"),
-            "copy button should be disabled: {}",
-            &html[copy_idx..button_end]
-        );
+        assert_button_disabled(&html, "highlight-copy");
+        assert_button_disabled(&html, "highlight-quote");
+    }
+
+    fn targeted_quote_modal() -> Element {
+        let target = use_signal(|| Some(seeded_highlight(None, Some("The Beauty of the House"))));
+        render_quote_modal(
+            target,
+            BdQuoteMeta {
+                title: "Piranesi".to_string(),
+                author: "Susanna Clarke".to_string(),
+                accent: None,
+            },
+        )
+    }
+
+    #[test]
+    fn quote_modal_renders_the_editor_with_the_passage_and_book_identity() {
+        let html = render_in_vdom(targeted_quote_modal);
+        assert!(html.contains("data-testid=\"quote-card-modal\""));
+        assert!(html.contains("Make a quote card"));
+        assert!(html.contains("The Beauty of the House"));
+        assert!(html.contains("Susanna Clarke"));
+        assert!(html.contains("Piranesi"));
+        // With no book accent the editor falls back to the reader's default.
+        assert!(html.contains("#3a3027"));
     }
 }
