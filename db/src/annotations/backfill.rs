@@ -1,9 +1,8 @@
-//! One-shot repair pass for Kobo-synced annotations that predate CFI
-//! derivation: rows holding only a `kobo_location` anchor get their
-//! `epub_cfi_range` derived so the web/iOS readers can render them. Spawned
-//! in the background at server boot; a row that stays underivable (no kepub
-//! cache, diverged text) is retried on the next boot, which is cheap — the
-//! candidate query returns nothing once everything derivable is done.
+//! One-shot boot-time repair pass: Kobo-synced annotations holding only a
+//! `kobo_location` anchor get their `epub_cfi_range` derived so the web/iOS
+//! readers can render them. Underivable rows (no kepub cache, diverged
+//! text) retry on the next boot, which is cheap — the candidate query
+//! returns nothing once everything derivable is done.
 
 use std::collections::HashMap;
 
@@ -90,16 +89,25 @@ async fn backfill_book(
 
     let mut derived = 0;
     let mut cfis = cfis.into_iter();
-    for ((id, _), range) in rows.iter().zip(&ranges) {
+    for ((id, snapshot_location), range) in rows.iter().zip(&ranges) {
         let Some(cfi) = range.as_ref().and_then(|_| cfis.next().flatten()) else {
             continue;
         };
-        sqlx::query("UPDATE annotations SET epub_cfi_range = ? WHERE id = ?")
-            .bind(&cfi)
-            .bind(id)
-            .execute(pool)
-            .await?;
-        derived += 1;
+        // Guarded against a concurrent device PATCH: if the anchor moved (or
+        // ingest already derived a CFI) since the snapshot, this derivation
+        // is for the old anchor and must not land.
+        let result = sqlx::query(
+            "UPDATE annotations SET epub_cfi_range = ?
+             WHERE id = ? AND epub_cfi_range IS NULL AND kobo_location = ?",
+        )
+        .bind(&cfi)
+        .bind(id)
+        .bind(snapshot_location)
+        .execute(pool)
+        .await?;
+        if result.rows_affected() > 0 {
+            derived += 1;
+        }
     }
     Ok(derived)
 }

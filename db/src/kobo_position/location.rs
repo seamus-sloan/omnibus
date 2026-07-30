@@ -1,10 +1,8 @@
 //! Parse and format the two Kobo location payloads: the
 //! `CurrentBookmark.Location` object (`{"Source", "Type": "KoboSpan",
 //! "Value": "kobo.N.M"}`) a device reports as its position, and the
-//! annotation `location.span` object (`chapterFilename` plus
-//! `startPath`/`startChar`/`endPath`/`endChar`) it anchors highlights with.
-//! Only KoboSpan-shaped anchors are convertible; anything else parses to
-//! `None` and stays opaque.
+//! annotation `location.span` range it anchors highlights with. Only
+//! KoboSpan-shaped anchors are convertible; anything else parses to `None`.
 
 /// A parsed KoboSpan bookmark: the spine document (`Source`, an OPF-relative
 /// href) plus kepubify's paragraph/segment counters from `Value`.
