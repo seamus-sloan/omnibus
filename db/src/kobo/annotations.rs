@@ -1,5 +1,5 @@
 //! Per-(device, book) annotation sync state for the Kobo Reading Services
-//! channel (`kobo_annotations_sync`, #1278): first-PATCH adoption, the
+//! channel (`kobo_annotations_sync`): first-PATCH adoption, the
 //! acked-fingerprint watermark behind `checkforchanges`, and the content
 //! fingerprint itself. Annotation rows live device-agnostic in `annotations`.
 

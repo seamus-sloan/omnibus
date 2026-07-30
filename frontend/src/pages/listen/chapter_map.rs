@@ -131,13 +131,15 @@ pub(super) struct ChapterMapProps {
 }
 
 /// Scrub-state readouts derived for one render of [`ChapterMap`]: the
-/// previewed position, current chapter, remaining time, thumb offset, and
-/// whether a drag is in progress.
+/// previewed position, current chapter, remaining time, thumb offset, the
+/// scrub range's max (duration, or 1.0 to keep the range control non-empty
+/// when duration is unknown), and whether a drag is in progress.
 struct ScrubState {
     effective: f64,
     eff_current: usize,
     eff_remaining: f64,
     thumb: f64,
+    max: f64,
     is_scrubbing: bool,
 }
 
@@ -169,6 +171,7 @@ fn scrub_state(
         eff_current,
         eff_remaining,
         thumb: thumb_pct(effective, max),
+        max,
         is_scrubbing: scrubbing,
     }
 }
@@ -253,6 +256,7 @@ pub(super) fn ChapterMap(props: ChapterMapProps) -> Element {
         eff_current,
         eff_remaining,
         thumb,
+        max,
         is_scrubbing,
     } = scrub_state(
         &chapters,
@@ -263,7 +267,6 @@ pub(super) fn ChapterMap(props: ChapterMapProps) -> Element {
         scrubbing(),
         scrub_secs(),
     );
-    let max = if duration > 0.0 { duration } else { 1.0 };
 
     let on_input = move |evt: Event<FormData>| {
         if let Ok(v) = evt.value().parse::<f64>() {

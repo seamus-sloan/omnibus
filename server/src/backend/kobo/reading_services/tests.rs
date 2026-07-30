@@ -190,6 +190,22 @@ async fn get_annotations_answers_not_modified_for_an_unadopted_pair() {
 }
 
 #[tokio::test]
+async fn patch_annotations_rejects_an_oversized_content_id_with_400() {
+    let (app, _pool, _user, _device) = fixture().await;
+    let oversized = "u".repeat(omnibus_shared::BOOK_UUID_MAX_LEN + 1);
+    let res = app
+        .oneshot(request(
+            "PATCH",
+            &annotations_uri(&oversized),
+            Some(HW_ID),
+            Some(&upload_body("kobo-ann-1", "yellow", None)),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn patch_then_get_round_trips_a_device_highlight_with_a_weak_etag() {
     let (app, pool, _user, _device) = fixture().await;
     let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
