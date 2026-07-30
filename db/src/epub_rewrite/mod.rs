@@ -1,8 +1,8 @@
 //! Bake a book's effective metadata + cover override *into* a copy of its
 //! EPUB (F5.8 #1372), so exports (Send-to-Kobo KEPUB, plain download) carry the
-//! user's edits instead of shipping the untouched source file. Unlike the OPF
-//! sidecar export (`opf_export`), this writes inside the `.epub` container,
-//! which is the only metadata a Kobo / kepubify actually reads.
+//! user's edits instead of shipping the untouched source file. This writes
+//! inside the `.epub` container, which is the only metadata a Kobo / kepubify
+//! actually reads.
 //!
 //! One-shot and cache-backed: the rewritten EPUB is cached at
 //! `<export dir>/<book_id>.epub`, invalidated on `books.last_modified` (bumped
@@ -170,8 +170,8 @@ pub async fn rewritten_epub_path(
         .ok_or(EpubRewriteError::BookNotFound(book_id))?;
 
     // Effective state already reflects the library's metadata-source precedence
-    // (an admin who ranks embedded tags above overrides gets no rewrite — the
-    // same deliberate gating `opf_export` documents). Nothing to bake → source.
+    // (an admin who ranks embedded tags above overrides gets no rewrite).
+    // Nothing to bake → source.
     if !book.has_override && !book.has_cover_override {
         // Belt-and-suspenders cleanup (#1395): the write paths that clear
         // overrides (`delete_metadata_overrides`, `clear_cover_override`)
