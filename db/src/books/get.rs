@@ -413,8 +413,8 @@ pub async fn book_file_path(
 /// Resolve the scan-root-relative directory of a book's file for the given
 /// format (e.g. "EPUB"), as stored verbatim in `book_files.path` /
 /// `books.path`. Used where a caller must not echo the server's absolute
-/// filesystem layout back to the client (e.g. the OPF export response) but
-/// still wants to show where the file lives *within* the library. Same
+/// filesystem layout back to the client but still wants to show where the
+/// file lives *within* the library. Same
 /// lowest-`ordinal` tie-break as [`book_file_path`]. `Ok(None)` when absent.
 pub async fn book_file_relative_dir(
     pool: &SqlitePool,
