@@ -16,8 +16,11 @@ mod walk;
 
 use std::path::Path;
 
-pub use cfi::{format_cfi, parse_cfi, Cfi, CfiTail};
-pub use location::{location_json, parse_location, parse_span_id, span_id, KoboLoc};
+pub use cfi::{format_cfi, format_range_cfi, parse_cfi, Cfi, CfiTail};
+pub use location::{
+    location_json, parse_annotation_location, parse_location, parse_span_id, span_id, KoboLoc,
+    KoboSpanRange, SpanPoint,
+};
 
 /// Web→Kobo derivation result. The span needs the kepub cache; the percent
 /// needs only the source EPUB, so a cache miss degrades to a truthful
@@ -66,6 +69,82 @@ pub fn span_to_cfi(
         return Ok(None);
     }
     Ok(Some(format_cfi(s_idx, &tail)))
+}
+
+/// Kobo→Web: derive epub.js-compatible *range* CFIs for a batch of
+/// annotation anchors from one book, opening each container (and indexing
+/// each content document) once. Per-anchor failures — unknown source,
+/// missing span, snippet mismatch, an inverted range — yield `None` in that
+/// slot rather than failing the batch; `Err` is reserved for not being able
+/// to open either container at all.
+pub fn annotation_cfis(
+    kepub: &Path,
+    source_epub: &Path,
+    ranges: &[KoboSpanRange],
+) -> anyhow::Result<Vec<Option<String>>> {
+    if ranges.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut kdoc = book::open_doc(kepub)?;
+    let mut sdoc = book::open_doc(source_epub)?;
+    let mut k_cache: std::collections::HashMap<usize, walk::FileIndex> = Default::default();
+    let mut s_cache: std::collections::HashMap<usize, walk::FileIndex> = Default::default();
+    Ok(ranges
+        .iter()
+        .map(|r| annotation_cfi(&mut kdoc, &mut sdoc, &mut k_cache, &mut s_cache, r))
+        .collect())
+}
+
+/// One anchor of [`annotation_cfis`]: kepub walk for both endpoints, source
+/// walk with the mandatory snippet-equality proof at each, then the range
+/// CFI. Any miss is a `None`.
+fn annotation_cfi(
+    kdoc: &mut book::Doc,
+    sdoc: &mut book::Doc,
+    k_cache: &mut std::collections::HashMap<usize, walk::FileIndex>,
+    s_cache: &mut std::collections::HashMap<usize, walk::FileIndex>,
+    range: &KoboSpanRange,
+) -> Option<String> {
+    let k_idx = book::spine_index_for_source(kdoc, &range.source)?;
+    let k_index = cached_index(kdoc, k_cache, k_idx)?;
+    // Start: land forward on the first highlighted character. End: the
+    // exclusive boundary after the last one (`span_boundary` + `tail_end_at`
+    // resolve backward), so a highlight ending at a span's edge never bleeds
+    // into the following paragraph.
+    let start_boundary =
+        k_index.span_boundary(range.start.n, range.start.m, range.start.char_utf16)?;
+    let end_boundary = k_index.span_boundary(range.end.n, range.end.m, range.end.char_utf16)?;
+    let k_start = k_index.anchor_at(start_boundary)?;
+    let k_end_check = k_index.back_anchor_before(end_boundary)?;
+    if k_end_check.norm_offset < k_start.norm_offset {
+        return None;
+    }
+
+    let s_idx = book::spine_index_for_source(sdoc, &range.source)?;
+    let s_index = cached_index(sdoc, s_cache, s_idx)?;
+    let (start_tail, s_start) = s_index.tail_at(k_start.norm_offset)?;
+    if s_start.norm_offset != k_start.norm_offset || s_start.snippet != k_start.snippet {
+        return None;
+    }
+    let (end_tail, s_end) = s_index.tail_end_at(end_boundary)?;
+    if s_end.norm_offset != k_end_check.norm_offset || s_end.snippet != k_end_check.snippet {
+        return None;
+    }
+    Some(format_range_cfi(s_idx, &start_tail, &end_tail))
+}
+
+/// Read + index spine entry `idx`, memoized per batch so a book with many
+/// annotations in one chapter parses that chapter once.
+fn cached_index<'c>(
+    doc: &mut book::Doc,
+    cache: &'c mut std::collections::HashMap<usize, walk::FileIndex>,
+    idx: usize,
+) -> Option<&'c walk::FileIndex> {
+    if let std::collections::hash_map::Entry::Vacant(slot) = cache.entry(idx) {
+        let bytes = book::read_spine_entry(doc, idx).ok()?;
+        slot.insert(walk::index_file(&bytes).ok()?);
+    }
+    cache.get(&idx)
 }
 
 /// Web→Kobo: derive a KoboSpan location and whole-book percent for a

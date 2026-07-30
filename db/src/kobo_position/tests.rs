@@ -85,6 +85,62 @@ fn location_json_round_trips_through_parse_location() {
     assert_eq!(parse_location(&json), Some(loc("text/ch1.xhtml", 4, 2)));
 }
 
+fn span_range(source: &str, start: (u32, u32, u32), end: (u32, u32, u32)) -> KoboSpanRange {
+    KoboSpanRange {
+        source: source.to_string(),
+        start: SpanPoint {
+            n: start.0,
+            m: start.1,
+            char_utf16: start.2,
+        },
+        end: SpanPoint {
+            n: end.0,
+            m: end.1,
+            char_utf16: end.2,
+        },
+    }
+}
+
+#[test]
+fn parse_annotation_location_extracts_range_with_escaped_span_paths() {
+    let parsed = parse_annotation_location(
+        r#"{"span":{"chapterFilename":"OEBPS/ch1.xhtml","startPath":"span#kobo\\.1\\.2","startChar":3,"endPath":"span#kobo\\.1\\.4","endChar":9}}"#,
+    );
+    assert_eq!(
+        parsed,
+        Some(span_range("OEBPS/ch1.xhtml", (1, 2, 3), (1, 4, 9)))
+    );
+}
+
+#[test]
+fn parse_annotation_location_defaults_missing_char_offsets_to_zero() {
+    let parsed = parse_annotation_location(
+        r#"{"span":{"chapterFilename":"c1.xhtml","startPath":"span#kobo\\.2\\.1","endPath":"span#kobo\\.2\\.2"}}"#,
+    );
+    assert_eq!(parsed, Some(span_range("c1.xhtml", (2, 1, 0), (2, 2, 0))));
+}
+
+#[test]
+fn parse_annotation_location_rejects_missing_or_malformed_anchors() {
+    // No span object at all.
+    assert_eq!(parse_annotation_location(r#"{"value":"kobo.1.1"}"#), None);
+    // Missing chapter filename.
+    assert_eq!(
+        parse_annotation_location(
+            r#"{"span":{"startPath":"span#kobo\\.1\\.1","endPath":"span#kobo\\.1\\.2"}}"#
+        ),
+        None
+    );
+    // Endpoint path that isn't a KoboSpan id.
+    assert_eq!(
+        parse_annotation_location(
+            r#"{"span":{"chapterFilename":"c1.xhtml","startPath":"p.para1","endPath":"span#kobo\\.1\\.2"}}"#
+        ),
+        None
+    );
+    assert_eq!(parse_annotation_location("not json"), None);
+}
+
 // --- cfi.rs ------------------------------------------------------------
 
 #[test]
@@ -134,6 +190,37 @@ fn parse_cfi_defaults_missing_offset_and_element_anchors() {
     assert_eq!(element_anchor.tail.element_steps, vec![4, 6]);
     assert_eq!(element_anchor.tail.text_index, 1);
     assert_eq!(element_anchor.tail.offset_utf16, 0);
+}
+
+#[test]
+fn format_range_cfi_factors_the_common_element_prefix_into_the_parent() {
+    let start = CfiTail {
+        element_steps: vec![4, 6],
+        text_index: 1,
+        offset_utf16: 0,
+    };
+    let end = CfiTail {
+        element_steps: vec![4, 6, 2],
+        text_index: 1,
+        offset_utf16: 8,
+    };
+    assert_eq!(
+        format_range_cfi(0, &start, &end),
+        "epubcfi(/6/2!/4/6,/1:0,/2/1:8)"
+    );
+}
+
+#[test]
+fn format_range_cfi_handles_same_text_node_endpoints() {
+    let tail = |off| CfiTail {
+        element_steps: vec![4, 4],
+        text_index: 1,
+        offset_utf16: off,
+    };
+    assert_eq!(
+        format_range_cfi(0, &tail(21), &tail(45)),
+        "epubcfi(/6/2!/4/4,/1:21,/1:45)"
+    );
 }
 
 // --- span_to_cfi -------------------------------------------------------
@@ -233,6 +320,98 @@ fn span_to_cfi_returns_none_when_kepub_text_diverges_from_source() {
         span_to_cfi(&kepub, &source, &loc("c1.xhtml", 2, 1)).expect("derive"),
         None
     );
+}
+
+// --- annotation_cfis ---------------------------------------------------
+
+#[test]
+fn annotation_cfis_maps_a_whole_span_highlight_to_a_same_node_range() {
+    let (source, kepub) = fixture_pair("ann1", SOURCE_C1, KEPUB_C1);
+    // All of kobo.2.2 ("Second sentence follows.", 24 units).
+    let cfis = annotation_cfis(
+        &kepub,
+        &source,
+        &[span_range("c1.xhtml", (2, 2, 0), (2, 2, 24))],
+    )
+    .expect("derive");
+    assert_eq!(cfis, vec![Some("epubcfi(/6/2!/4/4,/1:21,/1:45)".into())]);
+}
+
+#[test]
+fn annotation_cfis_spans_element_boundaries_without_bleeding_past_the_end() {
+    let (source, kepub) = fixture_pair("ann2", SOURCE_C1, KEPUB_C1);
+    // From the start of kobo.3.1 through all of kobo.3.2 ("emphasis"): the
+    // end tail must stop at the em's own text node, not run on into the
+    // following " inside it." node.
+    let cfis = annotation_cfis(
+        &kepub,
+        &source,
+        &[span_range("c1.xhtml", (3, 1, 0), (3, 2, 8))],
+    )
+    .expect("derive");
+    assert_eq!(cfis, vec![Some("epubcfi(/6/2!/4/6,/1:0,/2/1:8)".into())]);
+}
+
+#[test]
+fn annotation_cfis_derives_a_batch_reusing_the_indexed_chapter() {
+    let (source, kepub) = fixture_pair("ann3", SOURCE_C1, KEPUB_C1);
+    let cfis = annotation_cfis(
+        &kepub,
+        &source,
+        &[
+            // " inside it." minus its leading space: chars 1..=10 of kobo.3.3.
+            span_range("c1.xhtml", (3, 3, 1), (3, 3, 11)),
+            // Unknown span: this slot degrades alone.
+            span_range("c1.xhtml", (9, 9, 0), (9, 9, 4)),
+        ],
+    )
+    .expect("derive");
+    assert_eq!(
+        cfis,
+        vec![Some("epubcfi(/6/2!/4/6,/3:1,/3:11)".into()), None]
+    );
+}
+
+#[test]
+fn annotation_cfis_returns_none_for_inverted_or_empty_ranges() {
+    let (source, kepub) = fixture_pair("ann4", SOURCE_C1, KEPUB_C1);
+    let cfis = annotation_cfis(
+        &kepub,
+        &source,
+        &[
+            // End strictly before start.
+            span_range("c1.xhtml", (2, 2, 0), (2, 1, 0)),
+            // Zero-length: start and end at the same boundary.
+            span_range("c1.xhtml", (2, 2, 0), (2, 2, 0)),
+        ],
+    )
+    .expect("derive");
+    assert_eq!(cfis, vec![None, None]);
+}
+
+#[test]
+fn annotation_cfis_refuses_when_kepub_text_diverges_from_source() {
+    let kepub = KEPUB_C1.replace("Second sentence follows.", "Entirely different text!");
+    let (source, kepub) = fixture_pair("ann5", SOURCE_C1, &kepub);
+    let cfis = annotation_cfis(
+        &kepub,
+        &source,
+        &[span_range("c1.xhtml", (2, 2, 0), (2, 2, 24))],
+    )
+    .expect("derive");
+    assert_eq!(cfis, vec![None]);
+}
+
+#[test]
+fn annotation_cfis_errors_when_a_container_cannot_be_opened() {
+    let (source, _kepub) = fixture_pair("ann6", SOURCE_C1, KEPUB_C1);
+    let missing = source.with_file_name("nope.kepub.epub");
+    assert!(annotation_cfis(
+        &missing,
+        &source,
+        &[span_range("c1.xhtml", (2, 2, 0), (2, 2, 24))]
+    )
+    .is_err());
 }
 
 // --- cfi_to_span -------------------------------------------------------

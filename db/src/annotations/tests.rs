@@ -496,6 +496,7 @@ fn kobo_upload(client_id: &str, color: HighlightColor, note: Option<&str>) -> In
         text: Some("device prose".into()),
         note: note.map(Into::into),
         kobo_location: r#"{"span":{"startPath":"span#kobo\\.1\\.2","startChar":3}}"#.into(),
+        epub_cfi_range: None,
     }
 }
 
@@ -521,7 +522,10 @@ async fn ingest_kobo_annotations_creates_anchorless_rows_the_web_list_still_retu
 
     let listed = list_highlights(&pool, user, &uuid).await.unwrap();
     assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0].epub_cfi_range, None, "kobo rows carry no CFI");
+    assert_eq!(
+        listed[0].epub_cfi_range, None,
+        "no CFI unless the server derived one"
+    );
     assert_eq!(listed[0].color, HighlightColor::Green);
     assert_eq!(listed[0].note.as_deref(), Some("device note"));
     assert_eq!(listed[0].text.as_deref(), Some("device prose"));
@@ -579,6 +583,77 @@ async fn ingest_kobo_annotations_updates_color_note_and_text_for_an_existing_id(
     assert_eq!(listed[0].color, HighlightColor::Violet);
     assert_eq!(listed[0].note.as_deref(), Some("second thoughts"));
     assert_eq!(listed[0].text.as_deref(), Some("re-selected prose"));
+}
+
+#[tokio::test]
+async fn ingest_kobo_annotations_stores_a_derived_cfi_alongside_the_kobo_anchor() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    let mut upload = kobo_upload("kobo-1", HighlightColor::Amber, None);
+    upload.epub_cfi_range = Some("epubcfi(/6/2!/4/4,/1:0,/1:20)".into());
+
+    ingest_kobo_annotations(&pool, user, &uuid, &[upload], &[])
+        .await
+        .unwrap();
+
+    let listed = list_highlights(&pool, user, &uuid).await.unwrap();
+    assert_eq!(
+        listed[0].epub_cfi_range.as_deref(),
+        Some("epubcfi(/6/2!/4/4,/1:0,/1:20)")
+    );
+    // Still Kobo-placeable: the kobo_location anchor rides along.
+    let served = served_kobo_annotations(&pool, user, &uuid).await.unwrap();
+    assert_eq!(served.len(), 1);
+}
+
+#[tokio::test]
+async fn ingest_kobo_annotations_keeps_an_existing_cfi_when_the_anchor_is_unchanged() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    let mut first = kobo_upload("kobo-1", HighlightColor::Amber, None);
+    first.epub_cfi_range = Some("epubcfi(/6/2!/4/4,/1:0,/1:20)".into());
+    ingest_kobo_annotations(&pool, user, &uuid, &[first], &[])
+        .await
+        .unwrap();
+
+    // A color edit re-uploads the same anchor; derivation may fail (no
+    // kepub cache right now) but the stored CFI is still truthful.
+    let replay = kobo_upload("kobo-1", HighlightColor::Blue, None);
+    ingest_kobo_annotations(&pool, user, &uuid, &[replay], &[])
+        .await
+        .unwrap();
+
+    let listed = list_highlights(&pool, user, &uuid).await.unwrap();
+    assert_eq!(listed[0].color, HighlightColor::Blue);
+    assert_eq!(
+        listed[0].epub_cfi_range.as_deref(),
+        Some("epubcfi(/6/2!/4/4,/1:0,/1:20)")
+    );
+}
+
+#[tokio::test]
+async fn ingest_kobo_annotations_drops_a_stale_cfi_when_the_anchor_moves_underivably() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    let mut first = kobo_upload("kobo-1", HighlightColor::Amber, None);
+    first.epub_cfi_range = Some("epubcfi(/6/2!/4/4,/1:0,/1:20)".into());
+    ingest_kobo_annotations(&pool, user, &uuid, &[first], &[])
+        .await
+        .unwrap();
+
+    // The device moved the highlight and this time nothing could be
+    // derived: keeping the old CFI would render the wrong passage.
+    let mut moved = kobo_upload("kobo-1", HighlightColor::Amber, None);
+    moved.kobo_location = r#"{"span":{"startPath":"span#kobo\\.9\\.9","startChar":0}}"#.into();
+    ingest_kobo_annotations(&pool, user, &uuid, &[moved], &[])
+        .await
+        .unwrap();
+
+    let listed = list_highlights(&pool, user, &uuid).await.unwrap();
+    assert_eq!(listed[0].epub_cfi_range, None);
 }
 
 #[tokio::test]

@@ -9,6 +9,10 @@ use sqlx::{Row, SqlitePool};
 
 use crate::resolve_canonical_book_uuid;
 
+mod backfill;
+
+pub use backfill::{backfill_kobo_annotation_cfis, BackfillStats};
+
 /// Hard cap on how many highlights `list_highlights` returns for a single
 /// `(user, book)` pair. Practical usage stays well under this; the cap
 /// exists so a pathological or automated annotation pipeline can't
@@ -233,7 +237,9 @@ pub struct ServedKoboAnnotation {
 }
 
 /// One device-uploaded annotation to persist. Fields are pre-validated and
-/// capped by the server's tolerant PATCH parser.
+/// capped by the server's tolerant PATCH parser; `epub_cfi_range` is the
+/// server-derived web anchor (`kobo_position::annotation_cfis`), `None`
+/// whenever derivation wasn't possible.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IngestKoboAnnotation {
     pub client_id: String,
@@ -241,6 +247,7 @@ pub struct IngestKoboAnnotation {
     pub text: Option<String>,
     pub note: Option<String>,
     pub kobo_location: String,
+    pub epub_cfi_range: Option<String>,
 }
 
 /// List the Kobo-placeable annotations for a user + book — rows that carry a
@@ -367,11 +374,20 @@ pub async fn ingest_kobo_annotations(
 
     let mut tx = pool.begin().await.map_err(HighlightError::Sqlx)?;
     for a in updates {
+        // The CFI conflict rule keeps the stored web anchor truthful: a
+        // moved kobo_location takes the fresh derivation even when it's
+        // NULL (a stale CFI is a wrong location), while an unmoved anchor
+        // keeps an existing CFI over a derivation that merely failed.
         sqlx::query(
             "INSERT INTO annotations
                  (user_id, book_uuid, epub_cfi_range, kobo_location, color, note, text, client_id)
-             VALUES (?, ?, NULL, ?, ?, ?, ?, ?)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(user_id, client_id) WHERE client_id IS NOT NULL DO UPDATE SET
+                 epub_cfi_range = CASE
+                     WHEN annotations.kobo_location IS NOT excluded.kobo_location
+                         THEN excluded.epub_cfi_range
+                     ELSE COALESCE(excluded.epub_cfi_range, annotations.epub_cfi_range)
+                 END,
                  kobo_location = excluded.kobo_location,
                  color = excluded.color,
                  note = excluded.note,
@@ -380,6 +396,7 @@ pub async fn ingest_kobo_annotations(
         )
         .bind(user_id)
         .bind(&canonical)
+        .bind(a.epub_cfi_range.as_deref())
         .bind(&a.kobo_location)
         .bind(a.color.as_str())
         .bind(a.note.as_deref())
