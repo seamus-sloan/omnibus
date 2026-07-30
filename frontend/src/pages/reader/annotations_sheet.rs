@@ -124,19 +124,31 @@ fn render_annotations_filter_row(active: AnnFilter, filter: Signal<AnnFilter>) -
     }
 }
 
-/// Drawer body: empty state, or the filtered bookmark + highlight rows.
-#[allow(clippy::too_many_arguments)]
-fn render_annotations_body(
-    empty: bool,
-    show_bookmarks: bool,
-    marks: Vec<Bookmark>,
-    shown_highlights: Vec<Highlight>,
+/// The bookmark/highlight lists plus the callbacks forwarded to each row.
+/// Grouped so [`render_annotations_body`] stays under the arg cap.
+struct AnnotationsBodyCtx {
     bookmarks: Signal<Vec<Bookmark>>,
     highlights: Signal<Vec<Highlight>>,
     on_navigate: EventHandler<String>,
     on_quote: EventHandler<Highlight>,
     on_edit_note: EventHandler<Highlight>,
+}
+
+/// Drawer body: empty state, or the filtered bookmark + highlight rows.
+fn render_annotations_body(
+    empty: bool,
+    show_bookmarks: bool,
+    marks: Vec<Bookmark>,
+    shown_highlights: Vec<Highlight>,
+    ctx: AnnotationsBodyCtx,
 ) -> Element {
+    let AnnotationsBodyCtx {
+        bookmarks,
+        highlights,
+        on_navigate,
+        on_quote,
+        on_edit_note,
+    } = ctx;
     rsx! {
         div { class: "rd-drawer-body",
             if empty {
@@ -256,11 +268,13 @@ pub(super) fn AnnotationsSheet(props: AnnotationsSheetProps) -> Element {
                     show_bookmarks,
                     marks,
                     shown_highlights,
-                    bookmarks,
-                    highlights,
-                    on_navigate,
-                    on_quote,
-                    on_edit_note,
+                    AnnotationsBodyCtx {
+                        bookmarks,
+                        highlights,
+                        on_navigate,
+                        on_quote,
+                        on_edit_note,
+                    },
                 )
             }
         }

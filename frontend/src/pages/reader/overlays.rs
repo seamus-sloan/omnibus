@@ -250,20 +250,34 @@ fn render_bookmarks_overlay(
     }
 }
 
-/// Combined phone annotations sheet, shown while `show_annotations` is set.
-#[allow(clippy::too_many_arguments)]
-fn render_annotations_overlay(
-    show_annotations: Signal<bool>,
+/// Book identity/position plus the shared annotation state the combined
+/// phone annotations sheet renders and mutates. Grouped so
+/// [`render_annotations_overlay`] stays under the arg cap.
+struct AnnotationsOverlayCtx {
     uuid: String,
     current_cfi: String,
     chapter_title: String,
     highlights: Signal<Vec<Highlight>>,
     quote_target: Signal<Option<Highlight>>,
     note_target: Signal<Option<Highlight>>,
+}
+
+/// Combined phone annotations sheet, shown while `show_annotations` is set.
+fn render_annotations_overlay(
+    show_annotations: Signal<bool>,
+    ctx: AnnotationsOverlayCtx,
 ) -> Element {
     if !show_annotations() {
         return rsx! {};
     }
+    let AnnotationsOverlayCtx {
+        uuid,
+        current_cfi,
+        chapter_title,
+        highlights,
+        quote_target,
+        note_target,
+    } = ctx;
     rsx! {
         AnnotationsSheet {
             uuid,
@@ -383,12 +397,14 @@ pub(super) fn ReaderOverlays(meta: OverlayMeta, panels: ReaderPanelSignals) -> E
         {
             render_annotations_overlay(
                 show_annotations,
-                uuid,
-                current_cfi,
-                chapter_title,
-                highlights,
-                quote_target,
-                note_target,
+                AnnotationsOverlayCtx {
+                    uuid,
+                    current_cfi,
+                    chapter_title,
+                    highlights,
+                    quote_target,
+                    note_target,
+                },
             )
         }
         {render_quote_target_overlay(quote_target, book_author, book_title, book_accent)}
