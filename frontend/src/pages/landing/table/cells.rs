@@ -325,9 +325,9 @@ pub(super) fn EbookRowFormatsCell(formats: Vec<String>, has_physical: bool) -> E
     }
 }
 
-/// Grouped display fields (column class, testid, value, placeholder) for an
-/// [`EditableCell`]. Mirrors [`RowScalarCellDisplay`] so both cell types
-/// stay under the prop cap.
+/// Grouped display fields (column class, testid, display/edit value,
+/// placeholder) for an [`EditableCell`]. Mirrors [`RowScalarCellDisplay`] so
+/// both cell types stay under the prop cap.
 #[derive(Clone, PartialEq, Default)]
 pub(super) struct EditableCellDisplay {
     pub col_class: String,
@@ -519,12 +519,9 @@ impl ChipCellDisplay {
     }
 }
 
-/// Props for the [`ChipCell`] component. Already groups its static config
-/// into [`ChipCellDisplay`]; the remaining 6 fields are each a distinct
-/// piece of live state (admin gate, editing signal, draft, suggestions,
-/// change handler) with no further natural grouping, so this sits at the
-/// same accepted-at-6 precedent as `RowScalarCell` (#853) rather than
-/// forcing an arbitrary split.
+/// Props for the [`ChipCell`] component. `display` already groups the static
+/// config; the other 5 fields are each distinct live state with no further
+/// natural grouping — accepted at 6 total, same precedent as `RowScalarCell`.
 #[derive(Props, Clone, PartialEq)]
 pub(super) struct ChipCellProps {
     /// Field/column/testid/options config for this cell.

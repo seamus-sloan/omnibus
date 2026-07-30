@@ -40,8 +40,9 @@ const COVERS_DECODE_JS: &str = r#"
 "#;
 
 /// Load-more paging state for the mobile cover grid: whether the first page
-/// is still loading, whether more pages remain, and the fetch-more handler.
-/// Grouped so [`MobileLandingProps`] stays under the prop cap.
+/// is still loading, whether more pages remain, whether a load-more fetch is
+/// in flight, and the fetch-more handler. Grouped so [`MobileLandingProps`]
+/// stays under the prop cap.
 #[derive(Clone, PartialEq)]
 pub(super) struct MobileLandingPaging {
     /// True while the first page is still loading.
