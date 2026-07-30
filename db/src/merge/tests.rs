@@ -574,10 +574,7 @@ async fn reindex_diff_classifies_merged_source_file_as_unchanged() {
 
 #[tokio::test]
 async fn merged_two_epub_book_classifies_both_files_unchanged_on_rescan() {
-    // #1537: a book holding two same-format files (created by merging two
-    // EPUB books) used to reclassify Changed on every scan forever — the
-    // DB-side read aggregated MAX(mtime)/MAX(size) across both `book_files`
-    // rows into one composite stat that matched neither file's real stat.
+    // Each book_files row must diff against its own stat, not a MAX() composite.
     let pool = init_db("sqlite::memory:").await.unwrap();
     crate::sync::sync_books(
         &pool,

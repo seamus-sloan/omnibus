@@ -359,10 +359,7 @@ pub(super) async fn insert_book_row(
     .bind(&file_stem)
     .bind(b.size_bytes)
     .bind(b.mtime_epoch)
-    // Per-file attachment identity (F#1537): stamp this on insert, matching
-    // `insert_book_file_row`'s sibling write — a NULL here forced every
-    // multi-file book through the boot backfill before the per-file diff
-    // match (`list_indexed_rows_for_formats`) could see this row's own key.
+    // Stamp scan_key on insert, matching `insert_book_file_row`'s sibling write.
     .bind(&scan_key)
     .execute(&mut **tx)
     .await?;
