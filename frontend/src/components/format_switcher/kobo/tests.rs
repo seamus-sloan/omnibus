@@ -1,3 +1,7 @@
+//! Tests for `kobo_outcome`: mapping the web Send-to-Kobo picker's outcome
+//! strings (device write, download fallback, cancellation) to a status
+//! message, or `None` when there is nothing to report.
+
 #[cfg(not(feature = "mobile"))]
 #[test]
 fn kobo_outcome_reports_success_for_device_write() {

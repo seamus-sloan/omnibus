@@ -1,3 +1,7 @@
+//! Tests for user account management: first-user admin promotion and
+//! registration lockout, username collision/validation, password changes
+//! (including session revocation on change), and the admin user projection.
+
 use super::*;
 use crate::auth::test_support::pool;
 

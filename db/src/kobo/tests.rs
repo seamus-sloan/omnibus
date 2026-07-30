@@ -1,3 +1,7 @@
+//! Tests for `sync_books`: which books a Kobo sync surfaces from opted-in
+//! manual and smart shelves, per-user scoping, dedup across shelves,
+//! ordering, chunk-boundary and no-cap enumeration, and override reflection.
+
 use omnibus_shared::{
     Contributor, CreateShelfRequest, MatchMode, MetadataOverrides, RuleField, RuleOp, ShelfKind,
     ShelfRule,

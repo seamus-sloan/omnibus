@@ -1,3 +1,8 @@
+//! Tests for author photo storage: manual-upload round-tripping, upsert
+//! replacing an existing row, delete clearing it, and author deletion
+//! cascading (links removed, blocklist entry inserted, FTS rebuilt) while
+//! surviving a reindex.
+
 use super::*;
 use crate::books::list_books;
 use crate::pool::init_db;

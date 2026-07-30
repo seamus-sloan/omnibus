@@ -1,3 +1,7 @@
+//! Tests for audiobook file grouping: which stat entries collapse into one
+//! book (an mp3 folder, a lone m4b) versus stay separate (multiple m4bs
+//! sharing a base stem, mixed m4b/m4a in one dir), and error passthrough.
+
 use super::*;
 use crate::audiobook::stat::AudiobookStatEntry;
 

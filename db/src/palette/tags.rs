@@ -31,24 +31,20 @@ pub async fn search_tags_for_paths(
     if library_paths.is_empty() {
         return Ok(Vec::new());
     }
-    // F5.1: the count uses the effective (override-aware) subject set,
-    // not the raw `books_tags_link` rows. `MetadataOverrides.subjects`
+    // The count uses the effective (override-aware) subject set, not the
+    // raw `books_tags_link` rows. `MetadataOverrides.subjects`
     // (Option<Vec<String>>) replaces the canonical tag list wholesale
     // when Some — including the empty array, which clears all tags.
     // Visibility still requires at least one canonical link in this
-    // library so we don't list tags that exist only inside override
-    // JSON (no navigable id).
-    //
-    // Issue #154: the per-tag correlated `COUNT(*)` is replaced with a
-    // single-pass `effective` membership CTE (scoped to the library up
-    // front) — the UNION of (1) canonical `books_tags_link` rows whose book
-    // has no `subjects` override and (2) override-extracted subject strings
-    // from `json_each(mo.overrides, '$.subjects')`. UNION (not ALL) dedupes
-    // duplicate subject strings within one override array, matching the
-    // prior `EXISTS` semantics. The override match stays BINARY
-    // (`je.value = t.name`, no COLLATE). The empty-array clear-all case
-    // falls out: a `Some([])` override drops the book from arm (1) and
-    // yields no `json_each` rows in arm (2).
+    // library so we don't list tags that exist only inside override JSON
+    // (no navigable id). `effective` is scoped to the library once up
+    // front, but `book_count` is still a per-tag correlated `COUNT(*)`
+    // over it. The `e.tag_name = t.name` override-arm match stays BINARY
+    // even though `tags.name` is `COLLATE NOCASE`: `tag_name` is a CTE
+    // column with no explicit collation, and SQLite's column-collation
+    // precedence favors the left operand, so BINARY wins. The empty-array
+    // clear-all case falls out naturally since a `Some([])` override drops
+    // the book from the canonical arm and yields no `json_each` rows either.
     let rows = sqlx::query(
         r"
         WITH effective AS (

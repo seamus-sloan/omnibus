@@ -1,4 +1,4 @@
-//! Admin user-management client wrappers (F5.4). Web hits the AdminUser-gated
+//! Admin user-management client wrappers. Web hits the AdminUser-gated
 //! `/api/users*` REST routes via `gloo-net` (same-origin cookie session,
 //! mirroring `data::auth`); SSR builds get no-op stubs so the Users settings
 //! page compiles and hydrates with identical markup. Mobile has no admin

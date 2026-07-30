@@ -1,3 +1,8 @@
+//! Tests for EPUB OPF metadata parsing: refinement lookup, contributor
+//! role/file-as extraction across EPUB3 refinements and legacy attributes,
+//! and series extraction from both the EPUB3 `belongs-to-collection` form
+//! and the legacy Calibre series meta.
+
 use std::io::Cursor;
 
 use epub::doc::{EpubDoc, MetadataRefinement};

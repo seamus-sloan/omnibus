@@ -1,4 +1,4 @@
-//! Users settings section (F5.4) — the admin table plus the New / Edit /
+//! Users settings section — the admin table plus the New / Edit /
 //! Delete modals and inline Unlock. Admin-only; rendered as the `users`
 //! section of `/settings`. SSR and the first WASM paint both start from an
 //! empty list (rule 07); the post-mount effect loads the real rows.

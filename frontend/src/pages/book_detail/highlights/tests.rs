@@ -1,3 +1,6 @@
+//! Tests for `highlight_locator`: naming the spine section a highlight's
+//! epub.js CFI falls in, for both range and point CFI forms.
+
 use super::locator::highlight_locator;
 use super::*;
 

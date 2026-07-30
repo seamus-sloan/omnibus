@@ -1,3 +1,7 @@
+//! Tests for the landing-page book filters: facet AND-across-groups /
+//! OR-within-group semantics for tags, formats, and series, including
+//! case-insensitive format matching and the empty-filter passthrough.
+
 use super::*;
 use omnibus_shared::Contributor;
 

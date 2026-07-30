@@ -68,11 +68,11 @@ fn parse_format(raw: &str) -> ProgressFormat {
 /// stores/keys on it.
 ///
 /// The conflict resolution is conditional on `client_updated_at`, not
-/// unconditional last-write-wins on receipt order (issue #1362): the stored
+/// unconditional last-write-wins on receipt order: the stored
 /// `MIN(update.client_updated_at, now)` — clamping a fast client clock so it
 /// can't pin itself as permanently newest — only overwrites the row when it
 /// is `>=` the value already stored. A write with no `client_updated_at`
-/// (older client) is treated as "now", matching the pre-#1362 behaviour. A
+/// (older client) is treated as "now", matching plain last-write-wins. A
 /// rejected (older) write still re-reads and returns the row that won, so
 /// the caller learns it is behind rather than seeing its own rejected
 /// payload echoed back.
@@ -317,7 +317,7 @@ pub async fn get_playback_rate(
 /// The user's most recent progress rows across both formats, newest first
 /// by **client event time** — `COALESCE(client_updated_at, updated_at)`, so
 /// a queued offline replay landing late doesn't jump a week-old book to the
-/// top (issue #1362). Feeds the "pick up where you left off" surfaces via
+/// top. Feeds the "pick up where you left off" surfaces via
 /// [`resume_points`].
 pub async fn recent_progress(
     pool: &SqlitePool,

@@ -1,3 +1,8 @@
+//! Tests for EPUB cover extraction: sidecar-over-embedded precedence,
+//! opt-in sidecar materialization and its reuse on a second scan, repairing
+//! or falling back from an unreadable/failed materialization, and leaving
+//! an unrelated existing sidecar untouched.
+
 use crate::ebook::test_support::*;
 use crate::ebook::{scan_ebook_library, scan_ebook_library_with, ScanOptions};
 

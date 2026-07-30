@@ -1,3 +1,8 @@
+//! Tests for the EPUB library stat walk: missing/empty path handling,
+//! non-EPUB filtering, subdirectory recursion (including continuing past
+//! an unreadable subdirectory), and the `saw_any_file`/completeness flags
+//! `stat_ebook_library` reports for the scan-progress UI.
+
 use crate::ebook::scan_ebook_library;
 use crate::ebook::stat::stat_ebook_library;
 use crate::ebook::test_support::*;

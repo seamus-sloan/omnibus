@@ -1,3 +1,7 @@
+//! Tests for the Users settings section's date helpers: `fmt_date`
+//! formatting known epochs in UTC and staying stable within a civil day,
+//! and `civil_from_days` round-tripping the epoch.
+
 use super::*;
 
 #[test]

@@ -1,4 +1,4 @@
-//! In-place OPF `<metadata>` rewrite (F5.8 #1372). Copies the source OPF
+//! In-place OPF `<metadata>` rewrite. Copies the source OPF
 //! through byte-for-byte via quick-xml events, dropping the descriptive
 //! `<dc:*>` elements (and the two `calibre:series` metas) and re-emitting them
 //! from the book's effective metadata. Everything else — the package

@@ -1,3 +1,7 @@
+//! Tests for the series-index sort/filter helpers: `sort_key`'s leading-
+//! "The" stripping and explicit-sort-field preference, and
+//! `apply_filter_and_sort`'s name/author search and book-count ordering.
+
 use super::*;
 
 fn summary(name: &str, sort: Option<&str>) -> SeriesSummary {

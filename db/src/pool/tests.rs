@@ -1,3 +1,8 @@
+//! Tests for pool init and migrations: `init_db` error surfacing on a bad
+//! URL or a tampered applied-migration checksum, and per-migration
+//! correctness checks (schema cleanup, timestamp coercion, orphan
+//! row handling) run against a fresh `sqlite::memory:` database.
+
 use super::*;
 
 use crate::test_support::count_rows as count;

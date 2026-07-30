@@ -276,7 +276,7 @@ async fn run_legacy_cover_purge() {
     })
     .await
     {
-        tracing::error!("issue #94: legacy cover purge spawn_blocking failed: {join_err}");
+        tracing::error!("legacy cover purge spawn_blocking failed: {join_err}");
     }
 }
 
@@ -324,7 +324,7 @@ fn purge_legacy_covers_once(dir: &Path) {
             tracing::warn!(
                 covers_dir = %dir.display(),
                 error = %err,
-                "issue #94: could not read covers dir to purge legacy files; skipping",
+                "could not read covers dir to purge legacy files; skipping",
             );
             return;
         }
@@ -343,7 +343,7 @@ fn purge_legacy_covers_once(dir: &Path) {
             tracing::warn!(
                 path = %path.display(),
                 error = %err,
-                "issue #94: failed to remove legacy cover file",
+                "failed to remove legacy cover file",
             );
         } else {
             removed += 1;
@@ -354,13 +354,13 @@ fn purge_legacy_covers_once(dir: &Path) {
         tracing::warn!(
             sentinel = %sentinel.display(),
             error = %err,
-            "issue #94: failed to write covers-scheme sentinel; will retry on next boot",
+            "failed to write covers-scheme sentinel; will retry on next boot",
         );
     } else {
         tracing::info!(
             covers_dir = %dir.display(),
             removed,
-            "issue #94: purged legacy cover files and wrote v5 sentinel",
+            "purged legacy cover files and wrote v5 sentinel",
         );
     }
 }
