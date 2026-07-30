@@ -1,8 +1,11 @@
 //! Removed bucket: mirrors `sync::books::removed` — retain each removed
 //! audiobook's `books` row (metadata, links, FTS, soft-ref user data) and
-//! drop only its `book_files` row (parts/chapters cascade), flagging it
-//! missing so the grid/facets hide it via their `EXISTS book_files` filter.
-//! A returning group re-attaches via the Changed bucket, preserving the uuid.
+//! drop only its own native `book_files` row(s) (parts/chapters cascade) —
+//! a row still recorded in `merged_uuids` is a cross-format attachment and
+//! survives — flagging it missing, unless that surviving attachment means
+//! it isn't actually fileless, so the grid/facets hide it via their
+//! `EXISTS book_files` filter. A returning group re-attaches via the
+//! Changed bucket, preserving the uuid.
 
 use sqlx::Transaction;
 
@@ -71,6 +74,13 @@ pub(super) async fn sync_audiobooks_removed(
 /// on a re-run, and `is_missing_files_override = 0` leaves intentionally-fileless
 /// rows (wishlist) un-flagged. `ids` must be non-empty and within the SQLite
 /// 999-param cap (the caller chunks at 500).
+///
+/// The DELETE excludes any row still recorded in `merged_uuids` — a
+/// cross-format attachment (a different format's file, still present) —
+/// so it survives this book's own group going missing. The UPDATE that
+/// follows is guarded on `NOT EXISTS book_files` too, so a book whose
+/// cross-format attachment survived the delete (and so isn't actually
+/// fileless) is not flagged missing.
 async fn mark_book_files_missing_batch(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     ids: &[i64],
@@ -79,7 +89,16 @@ async fn mark_book_files_missing_batch(
         .collect::<Vec<_>>()
         .join(", ");
 
-    let del_sql = format!("DELETE FROM book_files WHERE book_id IN ({placeholders})");
+    let del_sql = format!(
+        "DELETE FROM book_files
+          WHERE book_id IN ({placeholders})
+            AND NOT EXISTS (
+              SELECT 1 FROM merged_uuids mu
+               WHERE mu.book_id = book_files.book_id
+                 AND mu.format = book_files.format
+                 AND mu.scan_key = book_files.scan_key
+            )"
+    );
     let mut del_q = sqlx::query(&del_sql);
     for id in ids {
         del_q = del_q.bind(id);
@@ -89,7 +108,10 @@ async fn mark_book_files_missing_batch(
     let upd_sql = format!(
         "UPDATE books
             SET is_missing_files = 1, missing_files_since = unixepoch()
-          WHERE id IN ({placeholders}) AND is_missing_files = 0 AND is_missing_files_override = 0"
+          WHERE id IN ({placeholders})
+            AND is_missing_files = 0
+            AND is_missing_files_override = 0
+            AND NOT EXISTS (SELECT 1 FROM book_files WHERE book_files.book_id = books.id)"
     );
     let mut upd_q = sqlx::query(&upd_sql);
     for id in ids {

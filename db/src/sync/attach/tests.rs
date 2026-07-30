@@ -640,11 +640,12 @@ async fn removing_one_multipart_sibling_keeps_the_other_parts() {
 }
 
 #[tokio::test]
-async fn removed_ebook_goes_fileless_and_audiobook_reattaches() {
-    // F2: removing the ebook file makes its books row fileless (retained, fileless)
-    // rather than deleting it, so the attachment ledger survives. The book's
-    // identity (and any user data on it) is preserved, and re-scanning the
-    // still-present audiobook re-attaches to the same row — now audiobook-only.
+async fn removed_ebook_leaves_attached_audiobook_intact() {
+    // The ebook's own book_files row is dropped when its file goes missing,
+    // but the cross-format M4B — recorded in merged_uuids — is a different
+    // format's file, still present on disk, and must survive rather than
+    // being dropped and re-attached on a later scan (AC5). The old blanket
+    // `book_id IN (...)` delete used to take both rows.
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_ebook(&pool, "Stoker/Dracula.epub", "Dracula", "Bram Stoker").await;
     seed_audiobook(&pool, "Stoker/Dracula.m4b", "Dracula", "Bram Stoker").await;
@@ -664,16 +665,19 @@ async fn removed_ebook_goes_fileless_and_audiobook_reattaches() {
     )
     .await
     .unwrap();
-    // Fileless: the books row + its merged_uuids ledger survive; all file rows
-    // are dropped.
+
+    // The books row and its merged_uuids ledger survive; only the ebook's own
+    // file row is gone — the attached M4B is untouched, no re-attach needed.
     assert_eq!(count(&pool, "SELECT COUNT(*) FROM books").await, 1);
     assert_eq!(count(&pool, "SELECT COUNT(*) FROM merged_uuids").await, 1);
-    assert_eq!(count(&pool, "SELECT COUNT(*) FROM book_files").await, 0);
-
-    // The audiobook is still on disk; the next scan re-attaches it to the
-    // retained row, which becomes file-backed (audiobook-only) again.
-    seed_audiobook(&pool, "Stoker/Dracula.m4b", "Dracula", "Bram Stoker").await;
-    assert_eq!(count(&pool, "SELECT COUNT(*) FROM books").await, 1);
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT COUNT(*) FROM book_files WHERE format = 'EPUB'"
+        )
+        .await,
+        0
+    );
     assert_eq!(
         count(
             &pool,
@@ -681,6 +685,14 @@ async fn removed_ebook_goes_fileless_and_audiobook_reattaches() {
         )
         .await,
         1
+    );
+    // The surviving M4B means the book isn't actually fileless — it must not
+    // be flagged missing (the flag UPDATE is guarded on `NOT EXISTS
+    // book_files`, so a surviving cross-format attachment excludes it).
+    assert_eq!(
+        count(&pool, "SELECT is_missing_files FROM books").await,
+        0,
+        "a book with a surviving cross-format attachment is not flagged missing"
     );
 }
 

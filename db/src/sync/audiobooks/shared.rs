@@ -4,6 +4,8 @@
 //! `insert_chapters`), the rewrite-in-place and cross-format attach paths,
 //! and the author-link writer.
 
+use std::collections::HashSet;
+
 use sqlx::Transaction;
 
 use crate::helpers::{mint_uuid, sanitize_accent_color, stable_uuid};
@@ -70,10 +72,17 @@ pub(super) async fn insert_new_audiobook(
 /// `books::try_attach_new_ebook`: a `merged_uuids` hit attaches
 /// unconditionally; otherwise exactly one normalized title+author match
 /// without this format attaches. Returns `true` when attached.
+///
+/// `removed_this_scan` is the set of uuids this same sync just dropped from
+/// the Removed bucket. When the title+author match lands on one of them,
+/// this group is that book's own native group returning under a new
+/// directory (a relocation), so it's rewritten in place instead of
+/// minting a `merged_uuids` row.
 pub(super) async fn try_attach_new_audiobook(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     library_path: &str,
     b: &crate::audiobook::IndexedAudiobook,
+    removed_this_scan: &HashSet<&str>,
     covers: &mut Vec<(String, String, Vec<u8>)>,
 ) -> Result<bool, SyncError> {
     if b.error.is_some() {
@@ -96,11 +105,15 @@ pub(super) async fn try_attach_new_audiobook(
         // No author (or empty title): too weak a signal to auto-match.
         return Ok(false);
     };
-    let Some(target_id) =
+    let Some((target_id, target_uuid)) =
         attach::find_attach_target(tx, &title_norm, &author_norm, &b.format).await?
     else {
         return Ok(false);
     };
+    if removed_this_scan.contains(target_uuid.as_str()) {
+        rewrite_audiobook_in_place(tx, target_id, &target_uuid, b, covers).await?;
+        return Ok(true);
+    }
     // find_attach_target already excludes a book that holds this format, so the
     // title+author auto-attach stays one-file-per-format; deliberate multi-part
     // combines come through the manual-merge path, not here.
@@ -436,6 +449,12 @@ async fn insert_audiobook_author_link(
 }
 
 /// UPDATE the `books` row for a Changed audiobook (preserves `books.id`).
+///
+/// Also refreshes `scan_key` from `b.scan_key`. For the Changed bucket and
+/// the New-bucket same-scan_key rewrite this is a no-op (the entry already
+/// matched on that value); it's load-bearing for the New-bucket relocation
+/// rewrite, where the incoming group's directory is the book's *new*
+/// scan_key.
 async fn update_audiobook_row(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
@@ -450,11 +469,12 @@ async fn update_audiobook_row(
 
     sqlx::query(
         "UPDATE books SET \
-            path = ?, title = ?, sort = ?, author_sort = ?, has_cover = ?, \
+            scan_key = ?, path = ?, title = ?, sort = ?, author_sort = ?, has_cover = ?, \
             description = ?, accent_color = ?, title_norm = ?, author_norm = ?, \
             last_modified = strftime('%s','now') \
          WHERE id = ?",
     )
+    .bind(&b.scan_key)
     .bind(&book_path)
     .bind(&b.title)
     .bind(&b.title)

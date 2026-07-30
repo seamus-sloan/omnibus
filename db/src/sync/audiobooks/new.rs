@@ -3,7 +3,7 @@
 //! fileless row in place to preserve `books.uuid`, and tries the
 //! cross-format auto-attach heuristic before minting a fresh row.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use sqlx::Transaction;
 
@@ -13,17 +13,24 @@ use super::shared::{insert_new_audiobook, rewrite_audiobook_in_place, try_attach
 /// Apply the New bucket: for each entry try cross-format attach first,
 /// otherwise insert a fresh `books` + `book_files` + parts + chapters +
 /// author-link + FTS row. Returns the post-commit cover triples.
+///
+/// `removed_uuids` is this same sync's Removed-bucket output — passed through
+/// to the attach heuristic so it can tell a relocation (the matched target's
+/// own group just vanished this scan) from a genuine cross-format
+/// attachment.
 pub(super) async fn sync_audiobooks_new(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     library_id: i64,
     library_path: &str,
     new_books: &[crate::audiobook::IndexedAudiobook],
+    removed_uuids: &[String],
     mut on_book_written: impl FnMut(),
 ) -> Result<Vec<(String, String, Vec<u8>)>, SyncError> {
     let mut new_covers: Vec<(String, String, Vec<u8>)> = Vec::new();
     if new_books.is_empty() {
         return Ok(new_covers);
     }
+    let removed_this_scan: HashSet<&str> = removed_uuids.iter().map(String::as_str).collect();
     // Pre-fetch every same-scan_key `books` row in one batch (chunked at 499 to
     // stay under SQLite's 999-param cap), keyed on the F2 `scan_key` — mirrors
     // `sync_audiobooks_changed`. New entries carry distinct scan_keys, so each
@@ -54,7 +61,9 @@ pub(super) async fn sync_audiobooks_new(
             on_book_written();
             continue;
         }
-        if try_attach_new_audiobook(tx, library_path, b, &mut new_covers).await? {
+        if try_attach_new_audiobook(tx, library_path, b, &removed_this_scan, &mut new_covers)
+            .await?
+        {
             on_book_written();
             continue;
         }

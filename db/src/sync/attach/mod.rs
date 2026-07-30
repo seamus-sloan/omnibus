@@ -35,15 +35,16 @@ pub(super) async fn find_attachment_by_scan_key(
 /// `format` file. Ambiguity (two candidates) returns `None` — better to
 /// surface a duplicate the admin can merge manually than to guess.
 /// Global across libraries: the ebook and audiobook roots are separate
-/// trees.
+/// trees. Returns the candidate's uuid alongside its id so the caller can
+/// test it against this scan's Removed bucket (the relocation check).
 pub(super) async fn find_attach_target(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     title_norm: &str,
     author_norm: &str,
     format: &str,
-) -> Result<Option<i64>, sqlx::Error> {
-    let candidates: Vec<i64> = sqlx::query_scalar(
-        "SELECT b.id FROM books b
+) -> Result<Option<(i64, String)>, sqlx::Error> {
+    let candidates: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT b.id, b.uuid FROM books b
           WHERE b.title_norm = ?1 AND b.author_norm = ?2
             AND NOT EXISTS (SELECT 1 FROM book_files bf
                             WHERE bf.book_id = b.id AND bf.format = ?3)
@@ -54,10 +55,11 @@ pub(super) async fn find_attach_target(
     .bind(format)
     .fetch_all(&mut **tx)
     .await?;
-    Ok(match candidates.as_slice() {
-        [only] => Some(*only),
-        _ => None,
-    })
+    if candidates.len() == 1 {
+        Ok(candidates.into_iter().next())
+    } else {
+        Ok(None)
+    }
 }
 
 /// Return whether another file holds the `(book_id, format)` attachment slot.
