@@ -1208,15 +1208,8 @@ async fn put_state_persists_the_current_bookmark_position() {
 
 #[tokio::test]
 async fn put_state_batch_transaction_rolls_back_a_read_status_write_when_a_later_write_fails() {
-    // `put_state` shares one `Transaction` across a batch's read-status and
-    // bookmark writes and returns without calling `.commit()` on the first
-    // genuine DB error — reproduced here directly against the `_tx`
-    // primitives it composes, since neither write is reachable from a
-    // malformed HTTP body (both are guarded by application-level
-    // validation before any query runs). A cross-format `ProgressUpdate`
-    // (`Audio` format carrying an `epub_cfi`) trips the `reading_progress`
-    // CHECK constraint, standing in for whatever mid-batch DB error a real
-    // device push could hit.
+    // Drives the `_tx` primitives directly, since a genuine mid-batch DB
+    // error isn't reachable through a malformed HTTP body.
     let (_app, pool, _token, uid) = fixture().await;
     let uuid = seed_synced_ebook(&pool, "hyperion.epub", "Hyperion", "Simmons").await;
 
