@@ -1727,8 +1727,11 @@ async fn download_returns_500_on_db_failure_when_resolving_book_id_fails() {
 
 #[tokio::test]
 async fn download_returns_500_on_db_failure_when_locating_the_epub_file_fails() {
-    // kepubify is absent in the test environment (#1391), so `download`
-    // always takes the plain-EPUB fallback and calls `book_file_path`.
+    // Force kepubify absent so `download` deterministically takes the
+    // plain-EPUB fallback and calls `book_file_path`, regardless of whether
+    // kepubify happens to be installed in the environment running this test.
+    let _kepubify_absent =
+        db::test_support::EnvVarGuard::set("OMNIBUS_KEPUBIFY_PATH", Some("/no/such/kepubify"));
     // Keep `books` intact (the uuid must resolve) and drop `book_files`
     // instead, so this reaches that second `internal(...)` call site
     // rather than the earlier `resolve_book_id_by_uuid` one.
