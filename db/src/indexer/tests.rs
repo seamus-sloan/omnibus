@@ -4,11 +4,16 @@
 //! cross-format deletion guard.
 
 use super::*;
-use crate::books::{list_books, IndexedRow};
+use crate::books::{
+    list_books, list_indexed_rows_for_formats, list_merged_rows_for_formats, IndexedRow,
+};
 use crate::ebook::StatEntry;
 use crate::pool::init_db;
-use crate::sync::{replace_books, sync_books, SyncPlan};
-use crate::test_support::{count_rows, indexed, make_test_dir, CoversTempDir};
+use crate::sync::{replace_books, sync_audiobooks, sync_books, AudiobookSyncPlan, SyncPlan};
+use crate::test_support::{
+    count_rows, indexed, indexed_audiobook, indexed_with_stat, make_test_dir, uuid_by_scan_key,
+    CoversTempDir,
+};
 
 /// Seed a `scan_roots` row for `path` with an explicit `last_indexed`
 /// epoch-seconds value. There's no public writer for `last_indexed`
@@ -1158,4 +1163,222 @@ async fn is_stale_propagates_db_error_when_pool_is_closed() {
     pool.close().await;
     let err = is_stale(&pool, "/lib").await.unwrap_err();
     assert!(matches!(err, IndexerError::Db(_)));
+}
+
+// ---------- #1537: a multi-file book is diffed per file, not per book ----------
+
+/// Seed two EPUBs through the real `sync_books` write path with distinct
+/// on-disk stats, then merge the second into the first — the exact repro
+/// shape from #1537 (a book left holding two same-format `book_files`
+/// rows). Returns `(target_uuid, source_uuid)`.
+async fn seed_merged_two_epub_book(pool: &SqlitePool) -> (String, String) {
+    sync_books(
+        pool,
+        "/ebooks",
+        SyncPlan {
+            new_books: vec![indexed_with_stat("A/one.epub", Some("One"), 1000, 500)],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let target = uuid_by_scan_key(pool, "A/one.epub").await;
+
+    sync_books(
+        pool,
+        "/ebooks",
+        SyncPlan {
+            new_books: vec![indexed_with_stat("B/two.epub", Some("Two"), 2000, 100)],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let source = uuid_by_scan_key(pool, "B/two.epub").await;
+
+    crate::merge::merge_books(pool, &source, &target, None)
+        .await
+        .unwrap();
+    (target, source)
+}
+
+/// Build the DB side of the diff exactly as `reindex` does for the ebook
+/// pass: the anchor row(s) via `list_indexed_rows_for_formats`, plus every
+/// attached file via `list_merged_rows_for_formats`.
+async fn ebook_db_rows(pool: &SqlitePool, library_path: &str) -> Vec<IndexedRow> {
+    let mut rows = list_indexed_rows_for_formats(pool, library_path, crate::ebook::EBOOK_FORMATS)
+        .await
+        .unwrap();
+    rows.extend(
+        list_merged_rows_for_formats(pool, library_path, crate::ebook::EBOOK_FORMATS)
+            .await
+            .unwrap(),
+    );
+    rows
+}
+
+#[tokio::test]
+async fn multi_file_book_from_merge_classifies_each_file_independently_when_one_changes() {
+    // AC3: modifying only the second file's stat must classify that file
+    // Changed while the first stays Unchanged, and vice versa. Before the
+    // fix, `list_indexed_rows_for_formats` aggregated MAX(mtime)/MAX(size)
+    // across both `book_files` rows, so this book reclassified Changed
+    // regardless of which file (or neither) actually moved.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let (target, source) = seed_merged_two_epub_book(&pool).await;
+    let db_rows = ebook_db_rows(&pool, "/ebooks").await;
+
+    // Only the second file (`B/two.epub`) changed on disk.
+    let disk_second_changed = vec![
+        entry("A/one.epub", "A/one.epub", 1000, 500),
+        entry("B/two.epub", "B/two.epub", 2000, 999),
+    ];
+    let diff = diff_library(&disk_second_changed, &db_rows, Path::new("/ebooks"), true);
+    assert_eq!(diff.unchanged, vec![target.clone()], "{diff:?}");
+    assert_eq!(diff.changed.len(), 1);
+    assert_eq!(diff.changed[0].filename, "B/two.epub");
+
+    // Only the first file (`A/one.epub`) changed on disk.
+    let disk_first_changed = vec![
+        entry("A/one.epub", "A/one.epub", 1000, 999),
+        entry("B/two.epub", "B/two.epub", 2000, 100),
+    ];
+    let diff = diff_library(&disk_first_changed, &db_rows, Path::new("/ebooks"), true);
+    assert_eq!(diff.unchanged, vec![source], "{diff:?}");
+    assert_eq!(diff.changed.len(), 1);
+    assert_eq!(diff.changed[0].filename, "A/one.epub");
+}
+
+/// AC1 + AC2: a book merged from two same-format EPUBs classifies both
+/// files Unchanged on a rescan where neither changed, and stays that way
+/// across three consecutive full reindexes — no re-parse, so each file's
+/// `book_files.id` (and the book's `last_modified`) survives unchanged.
+/// A Changed rewrite always mints a fresh `book_files` row (DELETE +
+/// INSERT), so a stable id is direct evidence no re-parse happened.
+#[tokio::test]
+async fn merged_two_file_book_stays_unchanged_across_three_consecutive_reindexes() {
+    let _covers = CoversTempDir::new("merge-reparse-guard");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib = make_test_dir("merge-reparse-guard-lib");
+    let lib_path = lib.to_string_lossy().into_owned();
+
+    seed_ebook_at(&pool, &lib_path, "A/one.epub", "One").await;
+    seed_ebook_at(&pool, &lib_path, "B/two.epub", "Two").await;
+    let target = uuid_by_scan_key(&pool, "A/one.epub").await;
+    let source = uuid_by_scan_key(&pool, "B/two.epub").await;
+    crate::merge::merge_books(&pool, &source, &target, None)
+        .await
+        .unwrap();
+
+    let file_ids_before: Vec<i64> = sqlx::query_scalar("SELECT id FROM book_files ORDER BY id")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        file_ids_before.len(),
+        2,
+        "test precondition: two files merged"
+    );
+    let last_modified_before: i64 =
+        sqlx::query_scalar("SELECT last_modified FROM books WHERE uuid = ?")
+            .bind(&target)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    for pass in 1..=3 {
+        reindex(&pool, &lib_path).await.unwrap();
+        let file_ids_after: Vec<i64> = sqlx::query_scalar("SELECT id FROM book_files ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            file_ids_after, file_ids_before,
+            "reindex pass {pass} re-wrote a book_files row (re-parsed) \
+             instead of classifying Unchanged"
+        );
+        let last_modified_after: i64 =
+            sqlx::query_scalar("SELECT last_modified FROM books WHERE uuid = ?")
+                .bind(&target)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            last_modified_after, last_modified_before,
+            "reindex pass {pass} touched books.last_modified (implies a Changed rewrite)"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+/// AC6: an audiobook naturally holding two different-format groups under
+/// one book (auto-attached by title+author match — not a manual merge)
+/// classifies both groups Unchanged on a rescan where neither changed.
+#[tokio::test]
+async fn mixed_format_audiobook_group_classifies_both_parts_unchanged_when_nothing_changed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    let mut m4b = indexed_audiobook("A/Dracula.m4b", "Dracula", Some("Stoker"));
+    m4b.max_mtime_epoch = 1000;
+    m4b.total_size_bytes = 500;
+    sync_audiobooks(
+        &pool,
+        "/audio",
+        AudiobookSyncPlan {
+            new_books: vec![m4b],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let target = uuid_by_scan_key(&pool, "A/Dracula.m4b").await;
+
+    // Same title+author, different format — auto-attaches to the M4B book
+    // instead of minting a second `books` row.
+    let mut mp3 = indexed_audiobook("B/Dracula mp3", "Dracula", Some("Stoker"));
+    mp3.format = "MP3".into();
+    mp3.max_mtime_epoch = 2000;
+    mp3.total_size_bytes = 100;
+    sync_audiobooks(
+        &pool,
+        "/audio",
+        AudiobookSyncPlan {
+            new_books: vec![mp3],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        count_rows(&pool, "SELECT COUNT(*) FROM books").await,
+        1,
+        "test precondition: the MP3 group auto-attached rather than minting a new book"
+    );
+    let source = crate::test_support::uuid_by_scan_key(&pool, "B/Dracula mp3").await;
+    assert_ne!(
+        target, source,
+        "the attached group keeps its own ledger uuid"
+    );
+
+    let disk = vec![
+        entry("A/Dracula.m4b", "A/Dracula.m4b", 1000, 500),
+        entry("B/Dracula mp3", "B/Dracula mp3", 2000, 100),
+    ];
+    let mut db_rows =
+        list_indexed_rows_for_formats(&pool, "/audio", crate::audiobook::AUDIOBOOK_FORMATS)
+            .await
+            .unwrap();
+    db_rows.extend(
+        list_merged_rows_for_formats(&pool, "/audio", crate::audiobook::AUDIOBOOK_FORMATS)
+            .await
+            .unwrap(),
+    );
+
+    let diff = diff_library(&disk, &db_rows, Path::new("/audio"), true);
+    assert_eq!(diff.unchanged.len(), 2, "{diff:?}");
+    assert!(diff.unchanged.contains(&target));
+    assert!(diff.unchanged.contains(&source));
+    assert!(diff.new.is_empty(), "{:?}", diff.new);
+    assert!(diff.changed.is_empty(), "{:?}", diff.changed);
 }

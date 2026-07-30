@@ -50,16 +50,21 @@ pub async fn backfill_scan_keys(pool: &SqlitePool) -> Result<(), IdentityError> 
 
 /// Fill `book_files.scan_key` (migration 0043) for every row from its own
 /// stored `(path, filename, format)` + part count — the same reconstruction
-/// the `books`/`merged_uuids` backfills use. Attached rows carry their file's
-/// real `path` (the attach writer sets it), so this yields the exact
-/// `scan_key` their `merged_uuids` guard matches on; native rows reconstruct
-/// too (only the merged-join needs an exact value, and that only reads
-/// attachment rows). Idempotent — `scan_key IS NULL` only.
+/// the `books`/`merged_uuids` backfills use. Attached rows carry their
+/// file's real `path` (the attach writer sets it) and reconstruct from it
+/// directly. A **native** row never has `book_files.path` set (only
+/// `books.path` is) — `bf.path` is `NULL` there, so this JOINs `books` and
+/// falls back to the book's own `path` for those rows. Without the JOIN a
+/// native row at `A/one.epub` would backfill to the bare leaf `one.epub`,
+/// losing the directory — which broke the per-file `bf.scan_key = b.scan_key`
+/// anchor match `list_indexed_rows_for_formats` relies on (#1537).
+/// Idempotent — `scan_key IS NULL` only.
 async fn backfill_book_files_scan_keys(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let rows: Vec<(i64, String, String, String, i64)> = sqlx::query_as(
-        "SELECT bf.id, COALESCE(bf.path, ''), bf.filename, bf.format,
+        "SELECT bf.id, COALESCE(bf.path, b.path), bf.filename, bf.format,
                 (SELECT COUNT(*) FROM book_file_parts p WHERE p.book_file_id = bf.id)
            FROM book_files bf
+           JOIN books b ON b.id = bf.book_id
           WHERE bf.scan_key IS NULL",
     )
     .fetch_all(pool)
