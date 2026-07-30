@@ -224,7 +224,7 @@ pub fn new_entitlement(
 /// state to decide whether to adopt the server's position, so a stale or
 /// unrelated timestamp would break that arbitration. `book_ts` is only the
 /// fallback for a book with no state at all.
-fn reading_state(uuid: &str, book_ts: &str, state: Option<&KoboBookState>) -> ReadingState {
+pub fn reading_state(uuid: &str, book_ts: &str, state: Option<&KoboBookState>) -> ReadingState {
     ReadingState {
         entitlement_id: uuid.to_owned(),
         created: book_ts.to_owned(),
