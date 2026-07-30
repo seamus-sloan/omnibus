@@ -6,8 +6,8 @@
 
 use omnibus_shared::{
     AudiobookManifest, BookDeletionManifest, DeleteBookFilesResult, EbookLibrary, EbookMetadata,
-    LibraryContents, LibraryPage, MergeBooksResult, MetadataOverrides, OpfExportResult,
-    PaletteResults, Settings, SortDir, SortKey, ViewFilters, WorkerStatus,
+    LibraryContents, LibraryPage, MergeBooksResult, MetadataOverrides, PaletteResults, Settings,
+    SortDir, SortKey, ViewFilters, WorkerStatus,
 };
 
 #[cfg(not(feature = "mobile"))]
@@ -460,20 +460,6 @@ pub async fn delete_overrides(
     Ok(Some(response.json::<EbookMetadata>().await?))
 }
 
-/// POST `/api/ebooks/{uuid}/export-opf` — write the book's `metadata.opf`
-/// sidecar (mobile).
-#[cfg(feature = "mobile")]
-pub async fn export_opf(server_url: &str, uuid: &str) -> Result<OpfExportResult, DataError> {
-    crate::data::require_online()?;
-    let url = format!("{server_url}/api/ebooks/{uuid}/export-opf");
-    let response = with_bearer(http_client().post(&url)).send().await?;
-    let status = note_status(response.status());
-    if !status.is_success() {
-        return Err(drain_error(response, status).await);
-    }
-    Ok(response.json::<OpfExportResult>().await?)
-}
-
 /// Multipart upload of a replacement cover for a book (mobile). Mirrors
 /// `upload_author_photo`'s mobile REST path against the analogous
 /// `/api/ebooks/:uuid/cover` endpoint.
@@ -798,14 +784,6 @@ pub async fn delete_overrides(
     uuid: &str,
 ) -> Result<Option<EbookMetadata>, DataError> {
     crate::rpc::rpc_delete_overrides(uuid.to_string())
-        .await
-        .map_err(note_server_fn_err)
-}
-
-/// Web/SSR `export_opf` — server-function wrapper that proxies to `rpc_export_opf`.
-#[cfg(not(feature = "mobile"))]
-pub async fn export_opf(_server_url: &str, uuid: &str) -> Result<OpfExportResult, DataError> {
-    crate::rpc::rpc_export_opf(uuid.to_string())
         .await
         .map_err(note_server_fn_err)
 }

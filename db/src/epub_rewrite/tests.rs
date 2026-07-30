@@ -151,6 +151,46 @@ fn transform_opf_escapes_values_and_falls_back_to_filename_for_empty_title() {
 }
 
 #[test]
+fn transform_opf_escapes_quotes_and_apostrophes_in_creator_attributes() {
+    let book = EbookMetadata {
+        filename: "x.epub".into(),
+        title: Some("T".into()),
+        creators: vec![Contributor {
+            name: "A & B".into(),
+            role: None,
+            file_as: Some("O'Neil & \"Co\"".into()),
+            id: None,
+        }],
+        ..Default::default()
+    };
+    let out = transform_opf(SAMPLE_OPF.as_bytes(), &book).unwrap();
+    let s = String::from_utf8(out.clone()).unwrap();
+    assert_well_formed(&out);
+    assert!(
+        s.contains("opf:file-as=\"O&apos;Neil &amp; &quot;Co&quot;\""),
+        "{s}"
+    );
+    assert!(s.contains(">A &amp; B</dc:creator>"), "{s}");
+}
+
+#[test]
+fn transform_opf_strips_xml_illegal_control_chars_while_keeping_tab_lf_cr() {
+    let book = EbookMetadata {
+        filename: "x.epub".into(),
+        title: Some("Stray\u{1}Control".into()),
+        description: Some("Tab\tKept\nLF\rCR\u{c}Stripped".into()),
+        ..Default::default()
+    };
+    let out = transform_opf(SAMPLE_OPF.as_bytes(), &book).unwrap();
+    let s = String::from_utf8(out).unwrap();
+    assert!(s.contains("<dc:title>StrayControl</dc:title>"), "{s}");
+    assert!(
+        s.contains("<dc:description>Tab\tKept\nLF\rCRStripped</dc:description>"),
+        "{s}"
+    );
+}
+
+#[test]
 fn transform_opf_drops_managed_fields_when_effective_value_is_absent() {
     // An override that clears series/subjects: the originals must not linger.
     let book = EbookMetadata {
@@ -580,14 +620,14 @@ async fn rewritten_epub_path_returns_failed_when_the_source_epub_is_missing() {
     assert!(matches!(err, EpubRewriteError::Failed(_)));
 }
 
-/// `EpubRewriteError::Io` is declared for completeness (mirroring the
-/// sibling `opf_export::OpfExportError`) but every filesystem failure inside
-/// `rewritten_epub_path` is deliberately routed through `anyhow` context
-/// first — per the enum's own doc comment, "every foreign-system failure...
-/// collapses into `Failed`" — so `Io` is never constructed by that function
-/// today. This exercises the `#[from] std::io::Error` conversion directly
-/// so the variant still has a passing test and a regression catches it if a
-/// future caller starts constructing it.
+/// `EpubRewriteError::Io` is declared for completeness but every filesystem
+/// failure inside `rewritten_epub_path` is deliberately routed through
+/// `anyhow` context first — per the enum's own doc comment, "every
+/// foreign-system failure... collapses into `Failed`" — so `Io` is never
+/// constructed by that function today. This exercises the `#[from]
+/// std::io::Error` conversion directly so the variant still has a passing
+/// test and a regression catches it if a future caller starts constructing
+/// it.
 #[test]
 fn epub_rewrite_error_io_variant_wraps_a_source_io_error_via_from() {
     let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "missing file");
