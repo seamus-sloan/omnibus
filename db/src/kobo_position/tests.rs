@@ -298,6 +298,59 @@ fn span_to_cfi_splits_text_index_across_br_boundaries() {
 }
 
 #[test]
+fn span_to_cfi_numbers_text_nodes_among_text_siblings_like_epubjs() {
+    // `<p><b>LEAD</b> tail…` — the tail text follows an element child, where
+    // the CFI spec would say index 3 but epub.js (the consumer) says 1.
+    // Regression: production row `THEY DIDN’T BURN the boy` resolved to
+    // nothing in the reader because we emitted the spec index.
+    let source = r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head>
+<body><p><b>LEAD IN</b> tail text here.</p></body></html>"#;
+    let kepub = r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head>
+<body><p><b><span class="koboSpan" id="kobo.1.1">LEAD IN</span></b><span class="koboSpan" id="kobo.1.2"> tail text here.</span></p></body></html>"#;
+    let (source, kepub) = fixture_pair("elemled", source, kepub);
+    let cfi = span_to_cfi(&kepub, &source, &loc("c1.xhtml", 1, 2)).expect("derive");
+    // First visible char of the tail is "t" at raw offset 1 of the parent's
+    // first (and only) text node — epub.js index 1, not spec index 3.
+    assert_eq!(cfi.as_deref(), Some("epubcfi(/6/2!/4/2/1:1)"));
+}
+
+#[test]
+fn annotation_cfis_emit_epubjs_indices_for_a_range_leaving_a_child_element() {
+    // The production row-21 shape: start inside `<b>`'s text, end in the
+    // parent's tail text. epub.js emits `,/2/1:0,/1:8)` for this range —
+    // asserting the exact string pins the dialect.
+    let source = r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head>
+<body><p><b>THEY DIDN'T BURN</b> the boy. More prose follows here.</p></body></html>"#;
+    let kepub = r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head>
+<body><p><b><span class="koboSpan" id="kobo.1.1">THEY DIDN'T BURN</span></b><span class="koboSpan" id="kobo.1.2"> the boy. More prose follows here.</span></p></body></html>"#;
+    let (source, kepub) = fixture_pair("row21", source, kepub);
+    let cfis = annotation_cfis(
+        &kepub,
+        &source,
+        &[span_range("c1.xhtml", (1, 1, 0), (1, 2, 9))],
+    )
+    .expect("derive");
+    assert_eq!(cfis, vec![Some("epubcfi(/6/2!/4/2,/2/1:0,/1:9)".into())]);
+}
+
+#[test]
+fn cfi_to_span_resolves_epubjs_text_indices_in_element_led_paragraphs() {
+    // The reverse direction: a web reader position inside the tail text of
+    // an element-led paragraph arrives with epub.js's `/1` index and must
+    // find the right span.
+    let source = r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head>
+<body><p><b>LEAD IN</b> tail text here.</p></body></html>"#;
+    let kepub = r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head>
+<body><p><b><span class="koboSpan" id="kobo.1.1">LEAD IN</span></b><span class="koboSpan" id="kobo.1.2"> tail text here.</span></p></body></html>"#;
+    let (source, kepub) = fixture_pair("revelemled", source, kepub);
+    let derived = cfi_to_span(Some(&kepub), &source, "epubcfi(/6/2!/4/2/1:1)").expect("derive");
+    assert_eq!(
+        derived.location_json.as_deref(),
+        Some(location_json("c1.xhtml", 1, 2).as_str())
+    );
+}
+
+#[test]
 fn span_to_cfi_returns_none_for_missing_span_or_unknown_source() {
     let (source, kepub) = fixture_pair("miss", SOURCE_C1, KEPUB_C1);
     assert_eq!(
