@@ -1206,6 +1206,50 @@ async fn put_state_persists_the_current_bookmark_position() {
     assert!(loc.contains("kobo.9.1"), "got: {loc}");
 }
 
+#[tokio::test]
+async fn put_state_batch_transaction_rolls_back_a_read_status_write_when_a_later_write_fails() {
+    // Drives the `_tx` primitives directly, since a genuine mid-batch DB
+    // error isn't reachable through a malformed HTTP body.
+    let (_app, pool, _token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "hyperion.epub", "Hyperion", "Simmons").await;
+
+    let mut tx = pool.begin().await.unwrap();
+    db::read_status::set_read_status_tx(
+        &mut tx,
+        uid,
+        &omnibus_shared::SetReadStatus {
+            book_uuid: uuid.clone(),
+            status: ReadStatus::Finished,
+        },
+    )
+    .await
+    .unwrap();
+
+    let bad_update = omnibus_shared::ProgressUpdate {
+        book_uuid: uuid.clone(),
+        format: omnibus_shared::ProgressFormat::Audio,
+        epub_cfi: Some("epubcfi(/6/4)".into()),
+        audio_position_seconds: Some(10.0),
+        progress_percent: None,
+        kobo_location: None,
+        book_file_id: None,
+        client_updated_at: None,
+    };
+    let err = db::progress::upsert_progress_tx(&mut tx, uid, &bad_update)
+        .await
+        .expect_err("an audio row carrying an epub_cfi violates the reading_progress CHECK");
+    assert!(matches!(err, db::progress::ProgressError::Sqlx(_)));
+    drop(tx); // no `.commit()` — implicit rollback, matching `put_state`'s early return
+
+    let status = db::read_status::get_read_status(&pool, uid, &uuid)
+        .await
+        .unwrap();
+    assert!(
+        status.is_none(),
+        "the read-status write from the same batch must not survive the rollback"
+    );
+}
+
 /// Source/kepub fixture pair used by the derivation tests: single-chapter
 /// book where span kobo.2.1 starts the second paragraph.
 const STATE_SOURCE_C1: &str = r#"<?xml version="1.0" encoding="utf-8"?>

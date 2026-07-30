@@ -303,6 +303,23 @@ async fn get_author_photo_propagates_db_error_when_pool_is_closed() {
 }
 
 #[tokio::test]
+async fn author_exists_is_true_for_a_known_author_and_false_for_an_unknown_id() {
+    let (pool, _guard) = seed_discovery_fixture().await;
+    let ada_id = author_id_by_name(&pool, "Ada Lovelace").await;
+
+    assert!(author_exists(&pool, ada_id).await.unwrap());
+    assert!(!author_exists(&pool, ada_id + 1_000_000).await.unwrap());
+}
+
+#[tokio::test]
+async fn author_exists_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = author_exists(&pool, 1).await.unwrap_err();
+    assert!(matches!(err, AuthorPhotosDataError::Db(_)));
+}
+
+#[tokio::test]
 async fn author_photo_status_bulk_matches_per_author_lookups_and_omits_unset() {
     let (pool, _guard) = seed_discovery_fixture().await;
     let ada_id = author_id_by_name(&pool, "Ada Lovelace").await;

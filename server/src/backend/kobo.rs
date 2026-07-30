@@ -19,6 +19,7 @@ use omnibus_db::{
     worker::{Task, TaskOutcome},
 };
 use omnibus_shared::{ProgressFormat, ProgressUpdate, ReadStatus, SetReadStatus};
+use sqlx::{Sqlite, Transaction};
 
 use super::{internal, serve_download, AppState};
 
@@ -488,6 +489,12 @@ async fn download(
 /// position lands in `reading_progress` as percent + verbatim `KoboSpan`
 /// plus a server-derived `epub_cfi` when the cached KEPUB allows it
 /// (#925), stamped with the device's own event time when it sends one.
+///
+/// The whole batch's read-status and bookmark writes share one transaction
+/// (begun before the loop, committed after it), so a mid-batch DB failure
+/// rolls back every entry rather than leaving the sync half-applied — a
+/// `BookNotFound` for one entry is not such a failure and is logged and
+/// skipped within the same transaction.
 async fn put_state(
     auth: KoboAuthUser,
     State(state): State<AppState>,
@@ -500,13 +507,17 @@ async fn put_state(
     if let Some(rejected) = reject_oversized_state_request(&body) {
         return rejected;
     }
+    let mut tx = match state.pool().begin().await {
+        Ok(tx) => tx,
+        Err(e) => return internal("kobo put_state begin", e),
+    };
     for entry in &body.reading_states {
         if let Some(info) = &entry.status_info {
             let update = SetReadStatus {
                 book_uuid: uuid.clone(),
                 status: map_status(&info.status),
             };
-            match db::read_status::set_read_status(state.pool(), auth.user_id, &update).await {
+            match db::read_status::set_read_status_tx(&mut tx, auth.user_id, &update).await {
                 Ok(_) => {}
                 // A state push for a book the server never indexed is not fatal
                 // to the sync — log and keep the success envelope.
@@ -529,7 +540,7 @@ async fn put_state(
                 .or(entry.last_modified.as_deref())
                 .or(entry.priority_timestamp.as_deref())
                 .and_then(dto::parse_kobo_timestamp);
-            match persist_bookmark(&state, auth.user_id, &uuid, bookmark, event_ts).await {
+            match persist_bookmark(&state, &mut tx, auth.user_id, &uuid, bookmark, event_ts).await {
                 Ok(()) => {}
                 Err(db::progress::ProgressError::BookNotFound) => {
                     tracing::warn!(%uuid, "kobo position PUT for unknown book");
@@ -545,6 +556,9 @@ async fn put_state(
             tracing::debug!(%uuid, "kobo statistics received");
         }
     }
+    if let Err(e) = tx.commit().await {
+        return internal("kobo put_state commit", e);
+    }
     Json(dto::StateResponse::success(uuid)).into_response()
 }
 
@@ -558,8 +572,13 @@ async fn put_state(
 /// forward clamp bounds a fast device clock. A bookmark carrying neither
 /// percent nor location is a no-op rather than a validation error — the
 /// device sends the field either way.
+///
+/// The final write goes through `tx` so it shares [`put_state`]'s batch
+/// transaction; the CFI derivation above it only reads (via `state.pool()`),
+/// so it stays outside the transaction rather than blocking it.
 async fn persist_bookmark(
     state: &AppState,
+    tx: &mut Transaction<'_, Sqlite>,
     user_id: i64,
     uuid: &str,
     bookmark: &dto::CurrentBookmark,
@@ -604,7 +623,7 @@ async fn persist_bookmark(
         tracing::debug!(%uuid, "kobo bookmark carried no usable position");
         return Ok(());
     }
-    db::progress::upsert_progress(state.pool(), user_id, &update).await?;
+    db::progress::upsert_progress_tx(tx, user_id, &update).await?;
     Ok(())
 }
 

@@ -89,7 +89,22 @@ pub async fn upsert_progress(
     user_id: i64,
     update: &ProgressUpdate,
 ) -> Result<ProgressRecord, ProgressError> {
-    let book_uuid = resolve_canonical_book_uuid(pool, &update.book_uuid)
+    let mut tx = pool.begin().await?;
+    let record = upsert_progress_tx(&mut tx, user_id, update).await?;
+    tx.commit().await?;
+    Ok(record)
+}
+
+/// Transaction-scoped [`upsert_progress`], for callers that batch it with
+/// other writes (e.g. the Kobo `put_state` handler) inside one shared
+/// `Transaction` so a mid-batch failure rolls back every entry, not just the
+/// one that failed. The caller is responsible for committing or rolling back.
+pub async fn upsert_progress_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    user_id: i64,
+    update: &ProgressUpdate,
+) -> Result<ProgressRecord, ProgressError> {
+    let book_uuid = resolve_canonical_book_uuid_exec(&mut **tx, &update.book_uuid)
         .await?
         .ok_or(ProgressError::BookNotFound)?;
     let fmt = format_str(update.format);
@@ -135,7 +150,7 @@ pub async fn upsert_progress(
     )
     .bind(update.book_file_id)
     .bind(update.client_updated_at)
-    .execute(pool)
+    .execute(&mut **tx)
     .await?;
 
     let row = sqlx::query(
@@ -148,7 +163,7 @@ pub async fn upsert_progress(
     .bind(user_id)
     .bind(&book_uuid)
     .bind(fmt)
-    .fetch_one(pool)
+    .fetch_one(&mut **tx)
     .await?;
     Ok(ProgressRecord {
         book_uuid,
