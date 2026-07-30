@@ -4,6 +4,8 @@
 //! the rewrite-in-place and cross-format attach paths, and the
 //! post-commit cover materialization + missing-files marker helper.
 
+use std::collections::HashSet;
+
 use omnibus_shared::EbookMetadata;
 use sqlx::Transaction;
 
@@ -52,10 +54,18 @@ pub(super) async fn rewrite_book_in_place(
 /// `true` when the file was attached (the caller skips its normal
 /// insert). Per-file parse errors never attach — their metadata is a
 /// filename fallback, not a real title.
+///
+/// `removed_this_scan` is the set of uuids this same sync just dropped from
+/// the Removed bucket. When the (2) match lands on one of them, the file
+/// isn't a genuine cross-format attachment — it's that book's own native
+/// file returning under a new path (a relocation) — so it's
+/// rewritten in place (updating `books.scan_key`) instead of minting a
+/// `merged_uuids` row.
 pub(super) async fn try_attach_new_ebook(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     library_path: &str,
     b: &crate::ebook::IndexedBook,
+    removed_this_scan: &HashSet<&str>,
     covers: &mut Vec<(String, String, Vec<u8>)>,
 ) -> Result<bool, sqlx::Error> {
     if b.metadata.error.is_some() {
@@ -97,11 +107,15 @@ pub(super) async fn try_attach_new_ebook(
         // No author (or empty title): too weak a signal to auto-match.
         return Ok(false);
     };
-    let Some(target_id) =
+    let Some((target_id, target_uuid)) =
         attach::find_attach_target(tx, &title_norm, &author_norm, &file_ext).await?
     else {
         return Ok(false);
     };
+    if removed_this_scan.contains(target_uuid.as_str()) {
+        rewrite_book_in_place(tx, target_id, &target_uuid, b, covers).await?;
+        return Ok(true);
+    }
     // A brand-new attachment: mint a stable handle for the ledger row (the
     // lookup above is by scan_key, so this uuid is only an identifier).
     let uuid = stable_uuid(library_path, &m.filename);
@@ -217,6 +231,12 @@ pub(in crate::sync) async fn clear_missing_files_flag(
 /// UPDATE the `books` row for a Changed entry in place (preserving id).
 /// All scalar columns that `insert_book_row` writes get refreshed; the
 /// link tables and FTS row are handled by the caller.
+///
+/// Also refreshes `scan_key` from `b`'s own filename. For the Changed bucket
+/// and the New-bucket same-scan_key rewrite this is a no-op (the entry
+/// already matched on that value); it's load-bearing for the New-bucket
+/// relocation rewrite, where the incoming file's path is the book's *new*
+/// scan_key.
 async fn update_book_row(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
@@ -224,6 +244,7 @@ async fn update_book_row(
 ) -> Result<(), sqlx::Error> {
     let m = &b.metadata;
     let (book_path, _, _) = split_filename(&m.filename);
+    let scan_key = scan_key_for(&m.filename);
     let title = m.display_title();
     let series_index_num = m.series_index.as_deref().and_then(parse_series_index);
     let author_sort = m
@@ -235,12 +256,13 @@ async fn update_book_row(
 
     sqlx::query(
         "UPDATE books SET
-            path = ?, title = ?, sort = ?, author_sort = ?, series_sort = ?, series_index = ?,
-            pubdate = ?, has_cover = ?, description = ?, accent_color = ?,
+            scan_key = ?, path = ?, title = ?, sort = ?, author_sort = ?, series_sort = ?,
+            series_index = ?, pubdate = ?, has_cover = ?, description = ?, accent_color = ?,
             title_norm = ?, author_norm = ?, word_count = ?,
             last_modified = strftime('%s','now')
          WHERE id = ?",
     )
+    .bind(&scan_key)
     .bind(&book_path)
     .bind(&title)
     .bind(&title)

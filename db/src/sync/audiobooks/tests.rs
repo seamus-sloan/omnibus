@@ -4,12 +4,17 @@
 //! `sync_audiobooks` tests in `sync/tests.rs` cover only the composed happy
 //! path, not these per-helper contracts (attach, re-attach, backfill).
 
+use std::collections::HashSet;
+
 use sqlx::SqlitePool;
 
 use super::backfill_audiobook_stats;
 use super::shared::{attach_audiobook_file, insert_new_audiobook, try_attach_new_audiobook};
 use super::stamp_audiobooks_last_indexed;
-use super::{sync_audiobooks_changed, sync_audiobooks_new, sync_audiobooks_removed};
+use super::{
+    sync_audiobooks, sync_audiobooks_changed, sync_audiobooks_new, sync_audiobooks_removed,
+    AudiobookSyncPlan,
+};
 use crate::pool::init_db;
 use crate::sync::books::SyncError;
 use crate::test_support::{count_rows, indexed_audiobook, seed_synced_ebook, CoversTempDir};
@@ -69,7 +74,7 @@ async fn sync_audiobooks_new_inserts_a_new_audiobook_and_its_rows() {
         Some("Author"),
     )];
     let mut tx = pool.begin().await.unwrap();
-    let covers = sync_audiobooks_new(&mut tx, library_id, "/lib", &new_books, || {})
+    let covers = sync_audiobooks_new(&mut tx, library_id, "/lib", &new_books, &[], || {})
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -164,7 +169,7 @@ async fn sync_audiobooks_new_rewrites_a_fileless_book_in_place_when_scan_key_mat
     // … and returned, so the next scan classifies the same scan_key as New.
     let returned = indexed_audiobook("Author/Book.m4b", "Book", Some("Seed Author"));
     let mut tx = pool.begin().await.unwrap();
-    sync_audiobooks_new(&mut tx, library_id, "/lib", &[returned], || {})
+    sync_audiobooks_new(&mut tx, library_id, "/lib", &[returned], &[], || {})
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -198,7 +203,7 @@ async fn sync_audiobooks_new_is_a_noop_for_empty_batch() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let library_id = seed_scan_root(&pool).await;
     let mut tx = pool.begin().await.unwrap();
-    let covers = sync_audiobooks_new(&mut tx, library_id, "/lib", &[], || {})
+    let covers = sync_audiobooks_new(&mut tx, library_id, "/lib", &[], &[], || {})
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -450,6 +455,78 @@ async fn sync_audiobooks_removed_retains_books_row_and_removes_book_files_row() 
     assert_eq!(flagged, 1, "retained row is flagged missing");
 }
 
+/// A book whose own audiobook group is removed, but which still holds a
+/// cross-format attachment (a different format's file, recorded in
+/// `merged_uuids` and still present), is not flagged missing — the
+/// surviving file means the book isn't actually fileless.
+#[tokio::test]
+async fn sync_audiobooks_removed_does_not_flag_missing_when_a_cross_format_attachment_survives() {
+    let _covers = CoversTempDir::new("ab_sync_removed_survives_attach");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let library_id = seed_scan_root(&pool).await;
+    let book_id = seed_audiobook_with_file(&pool, library_id, "Author/Book.m4b").await;
+    let uuid: String = sqlx::query_scalar("SELECT uuid FROM books WHERE id = ?")
+        .bind(book_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // Forge a surviving cross-format attachment: a book_files row in a
+    // different format, backed by its own merged_uuids ledger entry.
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch, scan_key)
+         VALUES (?, 'EPUB', 'Book', 1000, 100, 'Author/Book.epub')",
+    )
+    .bind(book_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO merged_uuids (uuid, book_id, format, library_path, scan_key)
+         VALUES ('attached-epub', ?, 'EPUB', '/ebooks', 'Author/Book.epub')",
+    )
+    .bind(book_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let mut tx = pool.begin().await.unwrap();
+    sync_audiobooks_removed(&mut tx, library_id, &[uuid])
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    // The M4B row is dropped, the EPUB survives, and the book must not be
+    // flagged missing since it still holds a file.
+    assert_eq!(
+        count_rows(
+            &pool,
+            "SELECT COUNT(*) FROM book_files WHERE format = 'M4B'"
+        )
+        .await,
+        0,
+        "the book's own native group row is dropped"
+    );
+    assert_eq!(
+        count_rows(
+            &pool,
+            "SELECT COUNT(*) FROM book_files WHERE format = 'EPUB'"
+        )
+        .await,
+        1,
+        "the cross-format attachment survives"
+    );
+    let is_missing: i64 = sqlx::query_scalar("SELECT is_missing_files FROM books WHERE id = ?")
+        .bind(book_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        is_missing, 0,
+        "a surviving cross-format attachment means the book isn't fileless"
+    );
+}
+
 /// One `sync_audiobooks_removed` call ghosts every uuid in the batch — the
 /// batched resolve + `mark_book_files_missing_batch` covers N groups in a
 /// single invocation.
@@ -667,7 +744,7 @@ async fn try_attach_new_audiobook_attaches_via_recorded_ledger_entry() {
     );
     let mut covers = Vec::new();
     let mut tx = pool.begin().await.unwrap();
-    let attached = try_attach_new_audiobook(&mut tx, "/lib", &b, &mut covers)
+    let attached = try_attach_new_audiobook(&mut tx, "/lib", &b, &HashSet::new(), &mut covers)
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -702,7 +779,7 @@ async fn try_attach_new_audiobook_attaches_via_title_author_match_when_no_ledger
     let b = indexed_audiobook("Stoker/Dracula.m4b", "Dracula", Some("Bram Stoker"));
     let mut covers = Vec::new();
     let mut tx = pool.begin().await.unwrap();
-    let attached = try_attach_new_audiobook(&mut tx, "/lib", &b, &mut covers)
+    let attached = try_attach_new_audiobook(&mut tx, "/lib", &b, &HashSet::new(), &mut covers)
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -721,7 +798,7 @@ async fn try_attach_new_audiobook_declines_when_no_author_present() {
     let b = indexed_audiobook("Author/NoAuthor.m4b", "No Author", None);
     let mut covers = Vec::new();
     let mut tx = pool.begin().await.unwrap();
-    let attached = try_attach_new_audiobook(&mut tx, "/lib", &b, &mut covers)
+    let attached = try_attach_new_audiobook(&mut tx, "/lib", &b, &HashSet::new(), &mut covers)
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -742,7 +819,7 @@ async fn try_attach_new_audiobook_propagates_db_error_when_table_missing() {
         .execute(&mut *tx)
         .await
         .unwrap();
-    let err = try_attach_new_audiobook(&mut tx, "/lib", &b, &mut covers)
+    let err = try_attach_new_audiobook(&mut tx, "/lib", &b, &HashSet::new(), &mut covers)
         .await
         .unwrap_err();
     assert!(matches!(err, SyncError::Db(_)));
@@ -965,4 +1042,64 @@ async fn stamp_audiobooks_last_indexed_sets_scan_roots_last_indexed() {
         after.unwrap_or(0) > 0,
         "last_indexed stamped with wall-clock seconds"
     );
+}
+
+// ── Moved/renamed audiobook group relocation ────────────────────────────
+
+/// AC6: AC1-AC4 hold for an audiobook group directory moved within the
+/// audiobook library. The moved group is classified Removed (old scan_key)
+/// and New (new scan_key) in the same reindex plan; the relocation must be
+/// recognized and rewritten in place — updating `books.scan_key` (AC1),
+/// preserving `books.id`/`books.uuid` (AC4), clearing `is_missing_files`
+/// (AC2), and minting no `merged_uuids` row (AC3) — instead of being
+/// re-bound as a cross-format attachment onto its own just-vacated slot.
+#[tokio::test]
+async fn moved_audiobook_group_relocates_in_place_instead_of_minting_a_merged_uuids_row() {
+    let _covers = CoversTempDir::new("ab_sync_relocation");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let library_id = seed_scan_root(&pool).await;
+    let book_id = seed_audiobook_with_file(&pool, library_id, "Old/Book").await;
+    let uuid_before: String = sqlx::query_scalar("SELECT uuid FROM books WHERE id = ?")
+        .bind(book_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // One reindex pass observing the move: the old scan_key is Removed, the
+    // new group directory is New — exactly what the real diff produces.
+    sync_audiobooks(
+        &pool,
+        "/lib",
+        AudiobookSyncPlan {
+            new_books: vec![indexed_audiobook("New/Book", "Seeded", Some("Seed Author"))],
+            removed_uuids: vec![uuid_before.clone()],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        count_rows(&pool, "SELECT COUNT(*) FROM books").await,
+        1,
+        "no duplicate book was created"
+    );
+    let (id_after, uuid_after, scan_key_after, is_missing): (i64, String, String, i64) =
+        sqlx::query_as("SELECT id, uuid, scan_key, is_missing_files FROM books")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(id_after, book_id, "AC4: books.id preserved");
+    assert_eq!(uuid_after, uuid_before, "AC4: books.uuid preserved");
+    assert_eq!(scan_key_after, "New/Book", "AC1: scan_key follows the move");
+    assert_eq!(
+        is_missing, 0,
+        "AC2: not flagged missing after the relocation"
+    );
+    assert_eq!(
+        count_rows(&pool, "SELECT COUNT(*) FROM merged_uuids").await,
+        0,
+        "AC3: no cross-format ledger row minted for a same-format relocation"
+    );
+    assert_eq!(book_files_count(&pool, book_id).await, 1, "one file row");
 }

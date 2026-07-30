@@ -1,19 +1,22 @@
 //! Removed bucket: every uuid whose file disappeared keeps its `books` row.
-//! One chunked DELETE drops only the `book_files` rows, and one chunked UPDATE
-//! flags each book missing for `missing_files::gc_books_missing_files` — its
-//! metadata, taxonomy links, and FTS row stay, so the book remains in
-//! browse/search; the grid and facets hide it
-//! via their own `EXISTS book_files` filter. Idempotent — a re-run on an
-//! already-fileless row deletes zero `book_files` and the flag UPDATE no-ops
-//! (the `is_missing_files = 0` guard preserves the original
+//! One chunked DELETE drops only the book's own (native) `book_files` rows —
+//! a row still backed by a `merged_uuids` entry is a cross-format attachment
+//! and survives — and one chunked UPDATE flags each book missing for
+//! `missing_files::gc_books_missing_files`. Metadata, taxonomy links, and the
+//! FTS row stay, so the book remains in browse/search; the grid and facets
+//! hide it via their own `EXISTS book_files` filter. Idempotent — a re-run on
+//! an already-fileless row deletes zero `book_files` and the flag UPDATE
+//! no-ops (the `is_missing_files = 0` guard preserves the original
 //! `missing_files_since`).
 
 use sqlx::Transaction;
 
 /// Mark a batch of removed books' files missing. The file is gone, but the
 /// `books` row — its metadata, taxonomy links, FTS row, and every soft-ref
-/// user-data row — is **retained** (only `book_files` is dropped, parts and
-/// chapters cascading), so the book stays in author/series/tag browse and
+/// user-data row — is **retained**; only the book's own native `book_files`
+/// row(s) are dropped (parts and chapters cascading) — a row still recorded
+/// in `merged_uuids` is a cross-format attachment in a different format and
+/// survives — so the book stays in author/series/tag browse and
 /// search while the grid/facets hide it via their `EXISTS book_files` filter. A
 /// returning file re-attaches via the Changed path, preserving the uuid.
 /// Idempotent: a re-run on an already-fileless row deletes zero `book_files`
@@ -56,9 +59,22 @@ pub(super) async fn sync_removed(
             .join(", ");
 
         // One DELETE per chunk: `book_file_parts` + `file_chapters` cascade
-        // off the `book_files` row, so a single sweep drops everything the
-        // file owned.
-        let delete_sql = format!("DELETE FROM book_files WHERE book_id IN ({id_placeholders})");
+        // off the `book_files` row. Scoped to rows with **no** matching
+        // `merged_uuids` entry — a row that IS recorded there is a
+        // cross-format attachment (a different format's file, still present)
+        // and must survive this book's own file going missing; the
+        // old blanket `book_id IN (...)` delete dropped it too, only for it
+        // to re-attach (and re-mint a `book_files` row) on the next scan.
+        let delete_sql = format!(
+            "DELETE FROM book_files
+              WHERE book_id IN ({id_placeholders})
+                AND NOT EXISTS (
+                  SELECT 1 FROM merged_uuids mu
+                   WHERE mu.book_id = book_files.book_id
+                     AND mu.format = book_files.format
+                     AND mu.scan_key = book_files.scan_key
+                )"
+        );
         let mut delete_q = sqlx::query(&delete_sql);
         for id in &ids {
             delete_q = delete_q.bind(id);
@@ -69,13 +85,17 @@ pub(super) async fn sync_removed(
         // clock. The `is_missing_files = 0` guard preserves the original
         // `missing_files_since` on a re-run; the `is_missing_files_override = 0`
         // guard leaves intentionally-fileless rows (wishlist) unflagged so
-        // reads keep showing them.
+        // reads keep showing them. The `NOT EXISTS book_files` guard excludes a
+        // book whose cross-format attachment (a different format's file, still
+        // present) survived the delete above — it isn't actually fileless, so
+        // it must not be flagged missing.
         let update_sql = format!(
             "UPDATE books
                 SET is_missing_files = 1, missing_files_since = unixepoch()
               WHERE id IN ({id_placeholders})
                 AND is_missing_files = 0
-                AND is_missing_files_override = 0"
+                AND is_missing_files_override = 0
+                AND NOT EXISTS (SELECT 1 FROM book_files WHERE book_files.book_id = books.id)"
         );
         let mut update_q = sqlx::query(&update_sql);
         for id in &ids {

@@ -3,7 +3,7 @@
 //! same-scan_key fileless row in place to preserve `books.uuid`, and tries the
 //! cross-format auto-attach heuristic before minting a fresh row.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use sqlx::Transaction;
 
@@ -16,16 +16,22 @@ use super::shared::{
 
 /// Insert a batch of New entries: canonical `books` + `book_files` row,
 /// metadata link rows, FTS row. Returns the post-commit cover triples.
+///
+/// `removed_uuids` is this same sync's Removed-bucket output — passed through
+/// to the attach heuristic so it can tell a relocation (the matched target's
+/// own file just vanished this scan) from a genuine cross-format attachment.
 pub(super) async fn sync_new(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     library_id: i64,
     library_path: &str,
     new_books: &[crate::ebook::IndexedBook],
+    removed_uuids: &[String],
     mut on_book_written: impl FnMut(),
 ) -> Result<Vec<(String, String, Vec<u8>)>, sqlx::Error> {
     if new_books.is_empty() {
         return Ok(Vec::new());
     }
+    let removed_this_scan: HashSet<&str> = removed_uuids.iter().map(String::as_str).collect();
 
     // Pre-compute the `scan_key` (relative path, F2) for every New entry so we
     // can batch the "does a `books` row with this scan_key already exist?"
@@ -71,7 +77,7 @@ pub(super) async fn sync_new(
             on_book_written();
             continue;
         }
-        if try_attach_new_ebook(tx, library_path, b, &mut new_covers).await? {
+        if try_attach_new_ebook(tx, library_path, b, &removed_this_scan, &mut new_covers).await? {
             on_book_written();
             continue;
         }

@@ -144,10 +144,17 @@ pub async fn sync_books_with_progress(
         },
     )
     .await?;
-    let new_covers = sync_new(&mut tx, library_id, library_path, &plan.new_books, || {
-        processed = processed.saturating_add(1);
-        on_progress(processed, total);
-    })
+    let new_covers = sync_new(
+        &mut tx,
+        library_id,
+        library_path,
+        &plan.new_books,
+        &plan.removed_uuids,
+        || {
+            processed = processed.saturating_add(1);
+            on_progress(processed, total);
+        },
+    )
     .await?;
     super::backfill::backfill_stat_chunks(&mut tx, library_id, &plan.backfill).await?;
     // Changed is the only bucket that drops link rows (`wipe_per_book_link_rows`
