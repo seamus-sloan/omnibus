@@ -37,12 +37,14 @@ pub async fn search_tags_for_paths(
     // when Some — including the empty array, which clears all tags.
     // Visibility still requires at least one canonical link in this
     // library so we don't list tags that exist only inside override JSON
-    // (no navigable id). The per-tag count comes from a single-pass
-    // `effective` membership CTE (scoped to the library up front) rather
-    // than a per-tag correlated `COUNT(*)`. The override match stays
-    // BINARY (`je.value = t.name`, no COLLATE); the empty-array clear-all
-    // case falls out naturally since a `Some([])` override drops the book
-    // from the canonical arm and yields no `json_each` rows either.
+    // (no navigable id). `effective` is scoped to the library once up
+    // front, but `book_count` is still a per-tag correlated `COUNT(*)`
+    // over it. The `e.tag_name = t.name` override-arm match stays BINARY
+    // even though `tags.name` is `COLLATE NOCASE`: `tag_name` is a CTE
+    // column with no explicit collation, and SQLite's column-collation
+    // precedence favors the left operand, so BINARY wins. The empty-array
+    // clear-all case falls out naturally since a `Some([])` override drops
+    // the book from the canonical arm and yields no `json_each` rows either.
     let rows = sqlx::query(
         r"
         WITH effective AS (
