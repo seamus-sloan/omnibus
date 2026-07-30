@@ -107,6 +107,7 @@ pub(super) fn ContinueHero(points: Vec<ResumePoint>, server_url: String) -> Elem
                 div { class: "ch-dots",
                     for i in 0..count {
                         button {
+                            key: "{i}",
                             r#type: "button",
                             class: if i == page() { "ch-dot ch-dot--active" } else { "ch-dot" },
                             "data-testid": "hero-dot-{i}",

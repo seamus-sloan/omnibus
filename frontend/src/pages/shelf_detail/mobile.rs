@@ -53,72 +53,15 @@ pub(super) fn MobileShelfDetail(props: MobileShelfDetailProps) -> Element {
         .accent
         .clone()
         .unwrap_or_else(|| "var(--accent)".into());
-    let kicker = format!(
-        "{} {} \u{00b7} {}",
-        shelf.book_count,
-        if shelf.book_count == 1 {
-            "book"
-        } else {
-            "books"
-        },
-        if is_smart {
-            "auto-filled"
-        } else {
-            "hand-picked"
-        },
-    );
-    let kind_label = if is_smart { "Smart" } else { "Hand-picked" };
-    let vis_label = match shelf.visibility {
-        Visibility::Private => "Private",
-        Visibility::Public => "Shared",
-    };
 
     rsx! {
         div {
             class: "m-lib m-shelf-detail",
             style: "--accent: {accent};",
             "data-testid": "shelf-detail",
-            header { class: "m-lib-head",
-                div { class: "omn-brand-word m-lib-brand", "Omnibus" }
-                div { class: "m-lib-head-actions",
-                    Link {
-                        to: Route::MobileSearch {},
-                        class: "m-icon-btn",
-                        "aria-label": "Search",
-                        "data-testid": "mobile-search-entry",
-                        {search_glyph()}
-                    }
-                    // System shelves (Wishlist) are locked server-side — don't
-                    // offer edit/delete the server would reject (mirrors web's
-                    // `can_manage` gate).
-                    if !shelf.kind.is_system() {
-                        MobileShelfActions { shelf: shelf.clone(), on_add, on_edit }
-                    }
-                }
-            }
 
-            div { class: "m-lib-title",
-                span { class: "label", "{kicker}" }
-                h2 { class: "m-head-title", span { class: "m-em", "{shelf.name}" } }
-                div { class: "m-shelf-facets",
-                    span { class: "m-shelf-facet-kind",
-                        if is_smart {
-                            {smart_facet_glyph()}
-                        }
-                        "{kind_label}"
-                    }
-                    span { class: "m-shelf-facet-dot", "\u{00b7}" }
-                    span { class: "m-shelf-facet-vis", "{vis_label}" }
-                    if is_smart {
-                        for (i, rule) in shelf.rules.iter().enumerate() {
-                            span { key: "{i}", class: "m-shelf-facet-chip", "{rule_text(rule)}" }
-                        }
-                    }
-                }
-                if let Some(desc) = shelf.description.as_ref() {
-                    p { class: "m-shelf-desc", "{desc}" }
-                }
-            }
+            {mobile_shelf_head(&shelf, on_add, on_edit)}
+            {mobile_shelf_title_block(&shelf, is_smart)}
 
             // Shelves entry — identical to the mobile landing card.
             Link {
@@ -155,6 +98,83 @@ pub(super) fn MobileShelfDetail(props: MobileShelfDetailProps) -> Element {
                     onclick: move |_| on_add.call(()),
                     "\u{FF0B} Add books"
                 }
+            }
+        }
+    }
+}
+
+/// Persistent header: brand word, search entry, and — for non-system
+/// shelves — the actions menu.
+fn mobile_shelf_head(
+    shelf: &Shelf,
+    on_add: EventHandler<()>,
+    on_edit: EventHandler<()>,
+) -> Element {
+    rsx! {
+        header { class: "m-lib-head",
+            div { class: "omn-brand-word m-lib-brand", "Omnibus" }
+            div { class: "m-lib-head-actions",
+                Link {
+                    to: Route::MobileSearch {},
+                    class: "m-icon-btn",
+                    "aria-label": "Search",
+                    "data-testid": "mobile-search-entry",
+                    {search_glyph()}
+                }
+                // System shelves (Wishlist) are locked server-side — don't
+                // offer edit/delete the server would reject (mirrors web's
+                // `can_manage` gate).
+                if !shelf.kind.is_system() {
+                    MobileShelfActions { shelf: shelf.clone(), on_add, on_edit }
+                }
+            }
+        }
+    }
+}
+
+/// Title block: eyebrow (count + auto-filled/hand-picked), name, the
+/// kind/visibility/rule-chip facet row, and an optional description.
+fn mobile_shelf_title_block(shelf: &Shelf, is_smart: bool) -> Element {
+    let kicker = format!(
+        "{} {} \u{00b7} {}",
+        shelf.book_count,
+        if shelf.book_count == 1 {
+            "book"
+        } else {
+            "books"
+        },
+        if is_smart {
+            "auto-filled"
+        } else {
+            "hand-picked"
+        },
+    );
+    let kind_label = if is_smart { "Smart" } else { "Hand-picked" };
+    let vis_label = match shelf.visibility {
+        Visibility::Private => "Private",
+        Visibility::Public => "Shared",
+    };
+    rsx! {
+        div { class: "m-lib-title",
+            span { class: "label", "{kicker}" }
+            h2 { class: "m-head-title", span { class: "m-em", "{shelf.name}" } }
+            div { class: "m-shelf-facets",
+                span { class: "m-shelf-facet-kind",
+                    if is_smart {
+                        {smart_facet_glyph()}
+                    }
+                    "{kind_label}"
+                }
+                span { class: "m-shelf-facet-dot", "\u{00b7}" }
+                span { class: "m-shelf-facet-vis", "{vis_label}" }
+                if is_smart {
+                    for (i, rule) in shelf.rules.iter().enumerate() {
+                        span { key: "{i}", class: "m-shelf-facet-chip", "{rule_text(rule)}" }
+                    }
+                }
+            }
+            if let Some(desc) = shelf.description.as_ref() {
+                p { class: "m-shelf-desc", "{desc}" }
             }
         }
     }
