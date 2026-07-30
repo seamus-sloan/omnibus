@@ -169,13 +169,16 @@ pub(super) fn RowTitleCell(title: String, error: Option<String>, ctx: CellEditCt
     } = ctx;
     rsx! {
         EditableCell {
-            col_class: "ebook-col-title".to_string(),
-            cell_testid: "ebook-cell-title".to_string(),
+            display: EditableCellDisplay {
+                col_class: "ebook-col-title".to_string(),
+                cell_testid: "ebook-cell-title".to_string(),
+                display_value: title,
+                placeholder: "Title".to_string(),
+                ..Default::default()
+            },
             field: EditField::Title,
-            display_value: title,
             is_admin,
             editing,
-            placeholder: "Title".to_string(),
             on_save: move |v: String| save_field.call((EditField::Title, v)),
             error,
         }
@@ -193,14 +196,16 @@ pub(super) fn RowSeriesCell(series_line: String, series_text: String, ctx: CellE
     } = ctx;
     rsx! {
         EditableCell {
-            col_class: "ebook-col-series".to_string(),
-            cell_testid: "ebook-cell-series".to_string(),
+            display: EditableCellDisplay {
+                col_class: "ebook-col-series".to_string(),
+                cell_testid: "ebook-cell-series".to_string(),
+                display_value: series_line,
+                edit_value: Some(series_text),
+                placeholder: "Series".to_string(),
+            },
             field: EditField::Series,
-            display_value: series_line,
-            edit_value: Some(series_text),
             is_admin,
             editing,
-            placeholder: "Series".to_string(),
             on_save: move |v: String| save_field.call((EditField::Series, v)),
             error: None,
         }
@@ -238,13 +243,16 @@ pub(super) fn RowScalarCell(
     } = ctx;
     rsx! {
         EditableCell {
-            col_class,
-            cell_testid,
+            display: EditableCellDisplay {
+                col_class,
+                cell_testid,
+                display_value: value,
+                placeholder,
+                ..Default::default()
+            },
             field,
-            display_value: value,
             is_admin,
             editing,
-            placeholder,
             on_save: move |v: String| save_field.call((field, v)),
             error: None,
         }
@@ -317,12 +325,13 @@ pub(super) fn EbookRowFormatsCell(formats: Vec<String>, has_physical: bool) -> E
     }
 }
 
-/// Props for the [`EditableCell`] component.
-#[derive(Props, Clone, PartialEq)]
-pub(super) struct EditableCellProps {
+/// Grouped display fields (column class, testid, value, placeholder) for an
+/// [`EditableCell`]. Mirrors [`RowScalarCellDisplay`] so both cell types
+/// stay under the prop cap.
+#[derive(Clone, PartialEq, Default)]
+pub(super) struct EditableCellDisplay {
     pub col_class: String,
     pub cell_testid: String,
-    pub field: EditField,
     pub display_value: String,
     /// Separate value used to seed the input when edit mode opens.
     /// Some cells render a richer display string than the underlying
@@ -330,11 +339,17 @@ pub(super) struct EditableCellProps {
     /// is the series-name override. Pass `Some(bare_value)` so the
     /// input seeds (and the blur-comparison runs against) the editable
     /// scalar, not the rendered text. Defaults to `display_value`.
-    #[props(default)]
     pub edit_value: Option<String>,
+    pub placeholder: String,
+}
+
+/// Props for the [`EditableCell`] component.
+#[derive(Props, Clone, PartialEq)]
+pub(super) struct EditableCellProps {
+    pub display: EditableCellDisplay,
+    pub field: EditField,
     pub is_admin: bool,
     pub editing: Signal<Option<EditField>>,
-    pub placeholder: String,
     pub on_save: EventHandler<String>,
     pub error: Option<String>,
 }
@@ -347,17 +362,20 @@ pub(super) struct EditableCellProps {
 #[component]
 pub(super) fn EditableCell(props: EditableCellProps) -> Element {
     let EditableCellProps {
-        col_class,
-        cell_testid,
+        display,
         field,
-        display_value,
-        edit_value,
         is_admin,
         editing,
-        placeholder,
         on_save,
         error,
     } = props;
+    let EditableCellDisplay {
+        col_class,
+        cell_testid,
+        display_value,
+        edit_value,
+        placeholder,
+    } = display;
     let mut editing = editing;
     let mut draft = use_signal(String::new);
     let is_editing = editing() == Some(field);
@@ -501,7 +519,12 @@ impl ChipCellDisplay {
     }
 }
 
-/// Props for the [`ChipCell`] component.
+/// Props for the [`ChipCell`] component. Already groups its static config
+/// into [`ChipCellDisplay`]; the remaining 6 fields are each a distinct
+/// piece of live state (admin gate, editing signal, draft, suggestions,
+/// change handler) with no further natural grouping, so this sits at the
+/// same accepted-at-6 precedent as `RowScalarCell` (#853) rather than
+/// forcing an arbitrary split.
 #[derive(Props, Clone, PartialEq)]
 pub(super) struct ChipCellProps {
     /// Field/column/testid/options config for this cell.

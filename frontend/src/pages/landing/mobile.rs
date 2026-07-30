@@ -39,14 +39,11 @@ const COVERS_DECODE_JS: &str = r#"
 })();
 "#;
 
-/// Props for [`MobileLanding`] — the already-derived view state handed
-/// down from [`super::LandingPage`].
-#[derive(Props, Clone, PartialEq)]
-pub(super) struct MobileLandingProps {
-    /// Total book count shown in the "N books" label.
-    pub book_count: usize,
-    /// The page of books to render as cover cells.
-    pub books: Vec<EbookMetadata>,
+/// Load-more paging state for the mobile cover grid: whether the first page
+/// is still loading, whether more pages remain, and the fetch-more handler.
+/// Grouped so [`MobileLandingProps`] stays under the prop cap.
+#[derive(Clone, PartialEq)]
+pub(super) struct MobileLandingPaging {
     /// True while the first page is still loading.
     pub is_loading: bool,
     /// True when more pages remain to load.
@@ -55,6 +52,18 @@ pub(super) struct MobileLandingProps {
     pub is_loading_more: bool,
     /// Fired when the "Load more" button is pressed.
     pub on_load_more: EventHandler<()>,
+}
+
+/// Props for [`MobileLanding`] — the already-derived view state handed
+/// down from [`super::LandingPage`].
+#[derive(Props, Clone, PartialEq)]
+pub(super) struct MobileLandingProps {
+    /// Total book count shown in the "N books" label.
+    pub book_count: usize,
+    /// The page of books to render as cover cells.
+    pub books: Vec<EbookMetadata>,
+    /// Load-more paging state for the cover grid.
+    pub paging: MobileLandingPaging,
     /// Current sort/filter prefs, driving the pill + sheet.
     pub prefs: ViewPrefs,
     /// Fired with updated prefs on every sheet interaction.
@@ -198,14 +207,17 @@ pub(super) fn MobileLanding(props: MobileLandingProps) -> Element {
     let MobileLandingProps {
         book_count,
         books,
-        is_loading,
-        has_more,
-        is_loading_more,
-        on_load_more,
+        paging,
         prefs,
         on_prefs_change,
         server_url,
     } = props;
+    let MobileLandingPaging {
+        is_loading,
+        has_more,
+        is_loading_more,
+        on_load_more,
+    } = paging;
 
     let mut sheet_open = use_signal(|| false);
     let resume = use_resume_point(server_url.clone());

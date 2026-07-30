@@ -604,10 +604,12 @@ fn mobile_landing_body(
         mobile::MobileLanding {
             book_count: view.book_count,
             books: view.visible_books,
-            is_loading: view.is_loading,
-            has_more: view.has_more,
-            is_loading_more: view.is_loading_more,
-            on_load_more: handlers.on_load_more,
+            paging: mobile::MobileLandingPaging {
+                is_loading: view.is_loading,
+                has_more: view.has_more,
+                is_loading_more: view.is_loading_more,
+                on_load_more: handlers.on_load_more,
+            },
             prefs: (sigs.prefs)(),
             on_prefs_change: handlers.on_prefs_change_header,
             server_url,
