@@ -1200,10 +1200,322 @@ async fn put_state_persists_the_current_bookmark_position() {
     assert_eq!(rec.progress_percent, Some(43));
     assert_eq!(
         rec.epub_cfi, None,
-        "a KoboSpan must never be written as a CFI"
+        "no cached kepub for this book → no derived CFI, percent+span only"
     );
     let loc = rec.kobo_location.expect("location stored");
     assert!(loc.contains("kobo.9.1"), "got: {loc}");
+}
+
+/// Source/kepub fixture pair used by the derivation tests: single-chapter
+/// book where span kobo.2.1 starts the second paragraph.
+const STATE_SOURCE_C1: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>C1</title></head>
+<body><p>Opening paragraph text.</p><p>Second paragraph target text.</p></body>
+</html>"#;
+
+const STATE_KEPUB_C1: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>C1</title></head>
+<body><div id="book-columns"><div id="book-inner"><p><span class="koboSpan" id="kobo.1.1">Opening paragraph text.</span></p><p><span class="koboSpan" id="kobo.2.1">Second paragraph target text.</span></p></div></div></body>
+</html>"#;
+
+/// Seed a book whose EPUB really exists on disk and (optionally) whose
+/// kepub cache is pre-populated, so span↔CFI derivation has both sides to
+/// walk. Returns the book uuid. Caller holds the returned guards for the
+/// test's lifetime.
+async fn seed_book_with_kepub_cache(
+    pool: &SqlitePool,
+    tag: &str,
+    with_kepub: bool,
+) -> (
+    String,
+    crate::backend::test_support::DataDirGuard,
+    std::path::PathBuf,
+) {
+    let guard = crate::backend::test_support::DataDirGuard::new(tag);
+    let lib = db::test_support::make_test_dir(&format!("kobo_state_{tag}"));
+    let (book_id, uuid) = db::test_support::seed_epub_book_at(pool, &lib).await;
+    std::fs::write(
+        lib.join("sub").join("book.epub"),
+        db::test_support::build_test_epub(&[("c1.xhtml", STATE_SOURCE_C1)]),
+    )
+    .unwrap();
+    if with_kepub {
+        let kepub_dir = guard.path.join("kepub");
+        std::fs::create_dir_all(&kepub_dir).unwrap();
+        std::fs::write(
+            kepub_dir.join(format!("{book_id}.kepub.epub")),
+            db::test_support::build_test_kepub(&[("c1.xhtml", STATE_KEPUB_C1)]),
+        )
+        .unwrap();
+    }
+    (uuid, guard, lib)
+}
+
+fn state_put(token: &str, uuid: &str, body: serde_json::Value) -> Request<Body> {
+    Request::builder()
+        .uri(format!("/kobo/{token}/v1/library/{uuid}/state"))
+        .method("PUT")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn put_state_derives_a_cfi_from_the_kobospan_when_the_kepub_is_cached() {
+    let (app, pool, token, uid) = fixture().await;
+    let (uuid, _guard, _lib) = seed_book_with_kepub_cache(&pool, "derive", true).await;
+    let body = serde_json::json!({
+        "ReadingStates": [{
+            "CurrentBookmark": {
+                "ProgressPercent": 43,
+                "Location": { "Source": "c1.xhtml", "Type": "KoboSpan", "Value": "kobo.2.1" },
+                "LastModified": "2026-01-02T03:04:05Z"
+            }
+        }]
+    });
+
+    let res = app.oneshot(state_put(&token, &uuid, body)).await.unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let rec = db::progress::get_progress(&pool, uid, &uuid, omnibus_shared::ProgressFormat::Epub)
+        .await
+        .unwrap()
+        .unwrap();
+    // Second paragraph = body element child 2 → /4/4; its text node → /1:0.
+    assert_eq!(rec.epub_cfi.as_deref(), Some("epubcfi(/6/2!/4/4/1:0)"));
+    assert_eq!(
+        rec.progress_percent,
+        Some(43),
+        "device percent kept verbatim"
+    );
+    assert!(rec.kobo_location.unwrap().contains("kobo.2.1"));
+    // 2026-01-02T03:04:05Z — the device's own event time, not server-now.
+    assert_eq!(rec.client_updated_at, 1_767_323_045);
+}
+
+#[tokio::test]
+async fn put_state_rejects_a_bookmark_older_than_the_stored_position() {
+    // A test device (or a long-offline Kobo) replaying an old position must
+    // not clobber a newer one — the device's LastModified drives the guard.
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    db::progress::upsert_progress(
+        &pool,
+        uid,
+        &omnibus_shared::ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: omnibus_shared::ProgressFormat::Epub,
+            epub_cfi: Some("epubcfi(/6/2!/4/8/1:0)".into()),
+            audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
+            book_file_id: None,
+            client_updated_at: Some(1_900_000_000),
+        },
+    )
+    .await
+    .unwrap();
+
+    let body = serde_json::json!({
+        "ReadingStates": [{
+            "CurrentBookmark": {
+                "ProgressPercent": 1,
+                "Location": { "Source": "c1.xhtml", "Type": "KoboSpan", "Value": "kobo.1.1" },
+                "LastModified": "2020-01-01T00:00:00Z"
+            }
+        }]
+    });
+    let res = app.oneshot(state_put(&token, &uuid, body)).await.unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK, "a stale write still ACKs");
+    let rec = db::progress::get_progress(&pool, uid, &uuid, omnibus_shared::ProgressFormat::Epub)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rec.epub_cfi.as_deref(),
+        Some("epubcfi(/6/2!/4/8/1:0)"),
+        "the newer web position must survive a stale device replay"
+    );
+    assert_eq!(rec.progress_percent, None);
+}
+
+#[tokio::test]
+async fn put_state_prefers_the_bookmark_timestamp_over_entry_level_ones() {
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    let body = serde_json::json!({
+        "ReadingStates": [{
+            "LastModified": "2026-01-01T00:00:00Z",
+            "PriorityTimestamp": "2026-01-01T00:00:01Z",
+            "CurrentBookmark": {
+                "ProgressPercent": 10,
+                "LastModified": "2026-01-02T00:00:00Z"
+            }
+        }]
+    });
+    let res = app.oneshot(state_put(&token, &uuid, body)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let rec = db::progress::get_progress(&pool, uid, &uuid, omnibus_shared::ProgressFormat::Epub)
+        .await
+        .unwrap()
+        .unwrap();
+    // 2026-01-02T00:00:00Z, from the bookmark, not the entry.
+    assert_eq!(rec.client_updated_at, 1_767_312_000);
+}
+
+#[tokio::test]
+async fn put_state_falls_back_to_server_now_for_garbage_timestamps() {
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    let before = time::OffsetDateTime::now_utc().unix_timestamp();
+    let body = serde_json::json!({
+        "ReadingStates": [{
+            "CurrentBookmark": {
+                "ProgressPercent": 10,
+                "LastModified": "not a timestamp"
+            }
+        }]
+    });
+    let res = app.oneshot(state_put(&token, &uuid, body)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let rec = db::progress::get_progress(&pool, uid, &uuid, omnibus_shared::ProgressFormat::Epub)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        rec.client_updated_at >= before,
+        "unparseable device time must fall back to receipt time"
+    );
+}
+
+/// Pull the first `ReadingState` object out of a `library/sync` body.
+fn first_reading_state(json: &Value) -> Option<Value> {
+    json.as_array()?.iter().find_map(|item| {
+        item.get("NewEntitlement")
+            .or_else(|| item.get("ChangedReadingState"))
+            .and_then(|e| e.get("ReadingState"))
+            .cloned()
+    })
+}
+
+#[tokio::test]
+async fn library_sync_derives_a_kobospan_from_a_web_written_cfi() {
+    let (app, pool, token, uid) = fixture().await;
+    let (uuid, _guard, _lib) = seed_book_with_kepub_cache(&pool, "syncout", true).await;
+    opt_in(&pool, uid, std::slice::from_ref(&uuid)).await;
+    // A web-reader write: CFI only, percent/span cleared by replace-all.
+    db::progress::upsert_progress(
+        &pool,
+        uid,
+        &omnibus_shared::ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: omnibus_shared::ProgressFormat::Epub,
+            epub_cfi: Some("epubcfi(/6/2!/4/4/1:0)".into()),
+            audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
+            book_file_id: None,
+            client_updated_at: Some(100),
+        },
+    )
+    .await
+    .unwrap();
+
+    let res = app
+        .clone()
+        .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let json = body_json(res).await;
+    let reading_state = first_reading_state(&json).expect("a reading state in the sync body");
+
+    let bookmark = &reading_state["CurrentBookmark"];
+    assert_eq!(
+        bookmark["Location"]["Value"], "kobo.2.1",
+        "the CFI at the second paragraph maps to its span: {bookmark}"
+    );
+    assert_eq!(bookmark["Location"]["Source"], "c1.xhtml");
+    assert_eq!(bookmark["Location"]["Type"], "KoboSpan");
+    // Anchor at char 24 of 53 visible chars → 45%.
+    assert_eq!(bookmark["ProgressPercent"], 44);
+    assert_eq!(
+        reading_state["LastModified"], "1970-01-01T00:01:40Z",
+        "the reading state must carry the position's own event time (100)"
+    );
+
+    // Write-back: the derived span is persisted clock-neutrally…
+    let rec = db::progress::get_progress(&pool, uid, &uuid, omnibus_shared::ProgressFormat::Epub)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(rec.kobo_location.unwrap().contains("kobo.2.1"));
+    assert_eq!(rec.progress_percent, Some(44));
+    assert_eq!(
+        rec.client_updated_at, 100,
+        "write-back must not bump the clock"
+    );
+
+    // …so a second sync has nothing new to announce.
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
+        .await
+        .unwrap();
+    let json = body_json(res).await;
+    assert!(
+        json.as_array().unwrap().is_empty(),
+        "derivation write-back must not re-fire the sync delta: {json}"
+    );
+}
+
+#[tokio::test]
+async fn library_sync_emits_percent_only_when_the_kepub_is_absent() {
+    let (app, pool, token, uid) = fixture().await;
+    let (uuid, _guard, _lib) = seed_book_with_kepub_cache(&pool, "nokepub", false).await;
+    opt_in(&pool, uid, std::slice::from_ref(&uuid)).await;
+    db::progress::upsert_progress(
+        &pool,
+        uid,
+        &omnibus_shared::ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: omnibus_shared::ProgressFormat::Epub,
+            epub_cfi: Some("epubcfi(/6/2!/4/4/1:0)".into()),
+            audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
+            book_file_id: None,
+            client_updated_at: Some(100),
+        },
+    )
+    .await
+    .unwrap();
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let json = body_json(res).await;
+    let reading_state = first_reading_state(&json).expect("a reading state in the sync body");
+    let bookmark = &reading_state["CurrentBookmark"];
+    assert_eq!(
+        bookmark["ProgressPercent"], 44,
+        "the percent half needs only the source EPUB: {bookmark}"
+    );
+    assert!(
+        bookmark.get("Location").is_none(),
+        "no kepub → no span to invent: {bookmark}"
+    );
+    // Not persisted: the row still means "no span known" so a later sync
+    // (with the queued conversion done) retries the full derivation.
+    let rec = db::progress::get_progress(&pool, uid, &uuid, omnibus_shared::ProgressFormat::Epub)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rec.kobo_location, None);
 }
 
 #[tokio::test]

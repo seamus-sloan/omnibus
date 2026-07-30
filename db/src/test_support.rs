@@ -35,6 +35,136 @@ pub fn make_test_dir(suffix: &str) -> PathBuf {
 }
 
 // ---------------------------------------------------------------------------
+// In-memory EPUB fixtures
+// ---------------------------------------------------------------------------
+
+/// IEEE CRC32 over `bytes` — the checksum each stored ZIP entry needs.
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc: u32 = 0xFFFF_FFFF;
+    for &b in bytes {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            let mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+/// Assemble an uncompressed (stored) ZIP from `(name, bytes)` entries.
+/// Stored entries keep the writer trivial — no deflate, just headers,
+/// CRCs, and a central directory — and `EpubDoc` reads them fine.
+pub fn build_stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::new();
+    let mut central: Vec<u8> = Vec::new();
+
+    for (name, data) in entries {
+        let offset = out.len() as u32;
+        let crc = crc32(data);
+        let name_len = name.len() as u16;
+        let size = data.len() as u32;
+
+        // Local file header + the (stored) file data.
+        out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+        out.extend_from_slice(&20u16.to_le_bytes()); // version needed
+        out.extend_from_slice(&0u16.to_le_bytes()); // flags
+        out.extend_from_slice(&0u16.to_le_bytes()); // method: stored
+        out.extend_from_slice(&0u16.to_le_bytes()); // mod time
+        out.extend_from_slice(&0u16.to_le_bytes()); // mod date
+        out.extend_from_slice(&crc.to_le_bytes());
+        out.extend_from_slice(&size.to_le_bytes()); // compressed size
+        out.extend_from_slice(&size.to_le_bytes()); // uncompressed size
+        out.extend_from_slice(&name_len.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes()); // extra len
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(data);
+
+        // Matching central-directory record, accumulated for the tail.
+        central.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+        central.extend_from_slice(&20u16.to_le_bytes()); // version made by
+        central.extend_from_slice(&20u16.to_le_bytes()); // version needed
+        central.extend_from_slice(&0u16.to_le_bytes()); // flags
+        central.extend_from_slice(&0u16.to_le_bytes()); // method
+        central.extend_from_slice(&0u16.to_le_bytes()); // mod time
+        central.extend_from_slice(&0u16.to_le_bytes()); // mod date
+        central.extend_from_slice(&crc.to_le_bytes());
+        central.extend_from_slice(&size.to_le_bytes());
+        central.extend_from_slice(&size.to_le_bytes());
+        central.extend_from_slice(&name_len.to_le_bytes());
+        central.extend_from_slice(&0u16.to_le_bytes()); // extra
+        central.extend_from_slice(&0u16.to_le_bytes()); // comment
+        central.extend_from_slice(&0u16.to_le_bytes()); // disk start
+        central.extend_from_slice(&0u16.to_le_bytes()); // internal attrs
+        central.extend_from_slice(&0u32.to_le_bytes()); // external attrs
+        central.extend_from_slice(&offset.to_le_bytes());
+        central.extend_from_slice(name.as_bytes());
+    }
+
+    let cd_offset = out.len() as u32;
+    let cd_size = central.len() as u32;
+    out.extend_from_slice(&central);
+
+    // End-of-central-directory record.
+    out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes()); // this disk
+    out.extend_from_slice(&0u16.to_le_bytes()); // cd start disk
+    out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    out.extend_from_slice(&cd_size.to_le_bytes());
+    out.extend_from_slice(&cd_offset.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes()); // comment len
+    out
+}
+
+/// Minimal valid EPUB container around the given spine documents. Each
+/// `(href, xhtml)` pair becomes one manifest item + spine itemref, in
+/// order, so `href`s map to spine indices 0..n. The OCF-required stored
+/// `mimetype` entry comes first.
+pub fn build_test_epub(spine: &[(&str, &str)]) -> Vec<u8> {
+    let container: &[u8] = br#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+    let mut manifest = String::new();
+    let mut spine_xml = String::new();
+    for (i, (href, _)) in spine.iter().enumerate() {
+        manifest.push_str(&format!(
+            r#"<item id="it{i}" href="{href}" media-type="application/xhtml+xml"/>"#
+        ));
+        spine_xml.push_str(&format!(r#"<itemref idref="it{i}"/>"#));
+    }
+    let opf = format!(
+        r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">test-epub</dc:identifier>
+    <dc:title>Test</dc:title>
+  </metadata>
+  <manifest>{manifest}</manifest>
+  <spine>{spine_xml}</spine>
+</package>"#
+    );
+    let mut entries: Vec<(&str, &[u8])> = vec![
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", container),
+    ];
+    let opf_bytes = opf.as_bytes().to_vec();
+    entries.push(("content.opf", &opf_bytes));
+    for (href, xhtml) in spine {
+        entries.push((href, xhtml.as_bytes()));
+    }
+    build_stored_zip(&entries)
+}
+
+/// Kepub-variant assembler: identical container shape to [`build_test_epub`],
+/// with the caller passing spine bodies already wrapped in
+/// `<span class="koboSpan" id="kobo.N.M">` markup (this helper does not
+/// reimplement kepubify's segmentation).
+pub fn build_test_kepub(spine: &[(&str, &str)]) -> Vec<u8> {
+    build_test_epub(spine)
+}
+
+// ---------------------------------------------------------------------------
 // Generic env-var guard
 // ---------------------------------------------------------------------------
 
