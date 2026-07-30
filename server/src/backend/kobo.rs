@@ -455,12 +455,15 @@ async fn library_metadata(
 }
 
 /// `GET library/<uuid>/state` — the device's pull of the server-side reading
-/// state for one book: a one-element array of the same `ReadingState` shape
-/// the PUT consumes and `library/sync` emits (prosa-kobo contract). This is
-/// the request the firmware adopts a position from — before this route
-/// existed the store wildcard answered it with `200 {}`, so a position set
-/// on the web never reached the device. Reuses the sync path's span
-/// enrichment so a CFI-only position still goes out as an exact KoboSpan.
+/// state for one book, the request the firmware adopts a position from: a
+/// one-element array of the same `ReadingState` shape the PUT consumes and
+/// `library/sync` emits (prosa-kobo contract).
+///
+/// Deliberately shares `library/sync`'s span enrichment, side effects
+/// included: a CFI-only position goes out as an exact KoboSpan, the derived
+/// halves are persisted so later syncs skip the work, and a missing kepub
+/// cache queues a fire-and-forget conversion — all idempotent, mirroring
+/// what the same book would get on its next `library/sync`.
 async fn get_state(
     auth: KoboAuthUser,
     State(state): State<AppState>,
