@@ -174,10 +174,16 @@ pub struct CurrentBookmark {
     pub progress_percent: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_source_progress_percent: Option<i64>,
-    /// Opaque `KoboSpan` position anchor (`kobo.N.M`). Slice A round-trips it
-    /// verbatim but does **not** convert it to an EPUB CFI — see #925.
+    /// `KoboSpan` position anchor (`kobo.N.M`). Stored verbatim and echoed
+    /// back for exact device resume; sync-in also derives an `epub_cfi`
+    /// from it via `db::kobo_position` so the web/iOS readers resume at the
+    /// same sentence (#925).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<serde_json::Value>,
+    /// Device-stamped bookmark time. Parsed for freshness arbitration on
+    /// the state PUT; never serialized on sync-out (wire shape unchanged).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_modified: Option<String>,
 }
 
 /// Build a first-connect `NewEntitlement` for `book`. `base` is the absolute
@@ -212,11 +218,19 @@ pub fn new_entitlement(
 
 /// The device-facing reading state for one book: real status and position when
 /// the user has any, an untouched book's defaults otherwise.
-fn reading_state(uuid: &str, ts: &str, state: Option<&KoboBookState>) -> ReadingState {
+///
+/// `last_modified` is the **state's own** event time (`state_updated_at`),
+/// not the book's file mtime — the device compares it against its local
+/// state to decide whether to adopt the server's position, so a stale or
+/// unrelated timestamp would break that arbitration. `book_ts` is only the
+/// fallback for a book with no state at all.
+fn reading_state(uuid: &str, book_ts: &str, state: Option<&KoboBookState>) -> ReadingState {
     ReadingState {
         entitlement_id: uuid.to_owned(),
-        created: ts.to_owned(),
-        last_modified: ts.to_owned(),
+        created: book_ts.to_owned(),
+        last_modified: state
+            .map(|s| rfc3339(s.state_updated_at))
+            .unwrap_or_else(|| book_ts.to_owned()),
         status_info: StatusInfo {
             status: kobo_status(state).to_owned(),
         },
@@ -230,6 +244,7 @@ fn reading_state(uuid: &str, ts: &str, state: Option<&KoboBookState>) -> Reading
                     .kobo_location
                     .as_deref()
                     .and_then(|raw| serde_json::from_str(raw).ok()),
+                last_modified: None,
             })
             .unwrap_or_default(),
     }
@@ -367,8 +382,9 @@ pub struct Statistics {
 }
 
 /// The `PUT library/<uuid>/state` request body. Kobo batches one or more
-/// reading states; `StatusInfo` persists, `CurrentBookmark` waits on the
-/// KoboSpan decision (#925), `Statistics` is acknowledged (see its doc).
+/// reading states; `StatusInfo` and `CurrentBookmark` persist (the latter
+/// with a derived CFI when possible), `Statistics` is acknowledged (see
+/// its doc).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct StateRequest {
@@ -390,6 +406,25 @@ pub struct StateEntry {
     pub current_bookmark: Option<CurrentBookmark>,
     #[serde(default)]
     pub statistics: Option<Statistics>,
+    /// Entry-level device event time; fallback when the bookmark carries none.
+    #[serde(default)]
+    pub last_modified: Option<String>,
+    /// Older firmware stamps this instead of `LastModified`.
+    #[serde(default)]
+    pub priority_timestamp: Option<String>,
+}
+
+/// Parse a device timestamp: strict RFC 3339 first, then the offset-less
+/// `YYYY-MM-DDThh:mm:ss[.fff]` some firmware emits, re-tried with a `Z`
+/// appended (assumed UTC). `None` sends the caller to the next source /
+/// server-now.
+pub fn parse_kobo_timestamp(raw: &str) -> Option<i64> {
+    use time::format_description::well_known::Rfc3339;
+    let raw = raw.trim();
+    time::OffsetDateTime::parse(raw, &Rfc3339)
+        .or_else(|_| time::OffsetDateTime::parse(&format!("{raw}Z"), &Rfc3339))
+        .ok()
+        .map(|t| t.unix_timestamp())
 }
 
 /// The `state` PUT response. Kobo checks each sub-result is `Success`.

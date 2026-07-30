@@ -55,10 +55,10 @@ pub struct ProgressUpdate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress_percent: Option<i64>,
     /// A Kobo's `CurrentBookmark.Location` object, serialized to a JSON
-    /// string and passed through verbatim. Opaque by design — it is echoed
-    /// back to the same device for exact resume and is never parsed here or
-    /// shown to another surface, so a string keeps `shared` free of a
-    /// `serde_json` runtime dependency.
+    /// string and stored verbatim. Echoed back to the device for exact
+    /// resume; the server may additionally translate it to/from a CFI
+    /// (`db::kobo_position`), but no client ever renders it, and a string
+    /// keeps `shared` free of a `serde_json` runtime dependency.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kobo_location: Option<String>,
     /// The `book_files` row the position was taken in, for books carrying
@@ -106,9 +106,8 @@ impl ProgressUpdate {
         match self.format {
             ProgressFormat::Epub => {
                 // A present-but-blank CFI is rejected outright rather than
-                // ignored: `upsert_progress` merges position fields with
-                // COALESCE, and `Some("   ")` is non-NULL to SQL — it would
-                // overwrite a real stored anchor with whitespace.
+                // ignored: `Some("   ")` is non-NULL to SQL, so it would
+                // store whitespace as a real anchor.
                 if self
                     .epub_cfi
                     .as_deref()

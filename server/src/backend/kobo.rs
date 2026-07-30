@@ -179,10 +179,13 @@ async fn library_sync(
             db::kobo::SyncChange::Removed { .. } => None,
         })
         .collect();
-    let states = match db::kobo::reading_state_for(state.pool(), auth.user_id, &page_uuids).await {
-        Ok(s) => s,
-        Err(e) => return internal("kobo reading_state_for", e),
-    };
+    let mut states =
+        match db::kobo::reading_state_for(state.pool(), auth.user_id, &page_uuids).await {
+            Ok(s) => s,
+            Err(e) => return internal("kobo reading_state_for", e),
+        };
+    enrich_states_with_derived_spans(&state, auth.user_id, &changes, &mut states).await;
+    let states = states;
     let delta = db::kobo::SyncDelta { changes };
 
     // Serialize each item lazily as the device drains the body — no second
@@ -290,6 +293,112 @@ async fn library_sync(
     res
 }
 
+/// Per-sync cap on CFI→span derivations. Each one walks a whole book's
+/// spine for the percent, so a page full of web-written positions must not
+/// stall the sync; the clock-neutral write-back shrinks the candidate set
+/// monotonically, so the remainder heals across subsequent syncs.
+const SPAN_DERIVATIONS_PER_SYNC: usize = 8;
+
+/// For page books whose freshest position is a web CFI (`kobo_location`
+/// NULL, `epub_cfi` present), derive a KoboSpan + percent so the device
+/// gets an exact position, and persist the derived halves clock-neutrally
+/// so later syncs skip the work. Every failure leaves the state untouched —
+/// the device then sees whatever percent exists, exactly as before.
+async fn enrich_states_with_derived_spans(
+    state: &AppState,
+    user_id: i64,
+    changes: &[db::kobo::SyncChange],
+    states: &mut std::collections::HashMap<String, db::kobo::KoboBookState>,
+) {
+    let mut budget = SPAN_DERIVATIONS_PER_SYNC;
+    for change in changes {
+        if budget == 0 {
+            break;
+        }
+        let book = match change {
+            db::kobo::SyncChange::New(b)
+            | db::kobo::SyncChange::Changed(b)
+            | db::kobo::SyncChange::StateChanged(b) => b,
+            db::kobo::SyncChange::Removed { .. } => continue,
+        };
+        let Some(s) = states.get(&book.uuid) else {
+            continue;
+        };
+        let Some(cfi) = (s.kobo_location.is_none())
+            .then(|| s.epub_cfi.clone())
+            .flatten()
+        else {
+            continue;
+        };
+        budget -= 1;
+        let Some(derived) = derive_span_for_cfi(state, book.id, &book.uuid, &cfi).await else {
+            continue;
+        };
+        if let (Some(loc), Some(s)) = (&derived.location_json, states.get_mut(&book.uuid)) {
+            let attach = db::progress::attach_derived_kobo_location(
+                state.pool(),
+                user_id,
+                &book.uuid,
+                loc,
+                derived.percent,
+                s.progress_updated_at,
+            )
+            .await;
+            if let Err(e) = attach {
+                tracing::warn!(uuid = %book.uuid, error = %e, "derived span write-back failed");
+            }
+            s.kobo_location = Some(loc.clone());
+            s.percent = s.percent.or(derived.percent);
+        } else if let Some(s) = states.get_mut(&book.uuid) {
+            // Kepub half unavailable: a truthful percent still beats an
+            // empty bookmark. Not persisted — the row keeps meaning "no
+            // span known" so a later sync retries the full derivation.
+            s.percent = s.percent.or(derived.percent);
+        }
+    }
+}
+
+/// Best-effort CFI→KoboSpan derivation for sync-out. The kepub cache is
+/// used even when stale (content is identical across metadata rebuilds;
+/// the snippet check guards real divergence); when it is absent entirely,
+/// a conversion is queued fire-and-forget so a later sync can succeed, and
+/// the percent half still derives from the source EPUB alone.
+async fn derive_span_for_cfi(
+    state: &AppState,
+    book_id: i64,
+    uuid: &str,
+    cfi: &str,
+) -> Option<db::kobo_position::DerivedSpan> {
+    let source = db::book_file_path(state.pool(), book_id, "EPUB")
+        .await
+        .ok()??;
+    let kepub = db::kepub_path(book_id);
+    let kepub = if tokio::fs::try_exists(&kepub).await.unwrap_or(false) {
+        Some(kepub)
+    } else {
+        // Idempotent and serialized per book by the worker; do NOT await —
+        // the sync response must not stall on a conversion.
+        state.worker().post(Task::KepubConvert { book_id });
+        None
+    };
+    let cfi = cfi.to_owned();
+    let result = tokio::task::spawn_blocking(move || {
+        db::kobo_position::cfi_to_span(kepub.as_deref(), &source, &cfi)
+    })
+    .await;
+    match result {
+        Ok(Ok(derived)) => Some(derived),
+        Ok(Err(e)) => {
+            tracing::warn!(%uuid, error = %e, "kobo cfi→span derivation failed");
+            None
+        }
+        Err(e) => {
+            tracing::warn!(%uuid, error = %e, "kobo cfi→span task panicked");
+            None
+        }
+    }
+}
+
 /// Streaming position for [`library_sync`]'s JSON-array body. `emitted`
 /// counts items already written, since one change can fan out into two items.
 enum SyncPhase {
@@ -374,10 +483,11 @@ async fn download(
     serve_download(req, &path, "application/epub+zip").await
 }
 
-/// `PUT library/<uuid>/state` — persist the device's reading state. Slice A
-/// routes `StatusInfo` into the existing `book_read_status` table; the
-/// `CurrentBookmark` position is a `KoboSpan`, not a CFI, so it is **not**
-/// written to `reading_progress` yet (the span↔CFI decision is #925).
+/// `PUT library/<uuid>/state` — persist the device's reading state.
+/// `StatusInfo` routes into `book_read_status`; the `CurrentBookmark`
+/// position lands in `reading_progress` as percent + verbatim `KoboSpan`
+/// plus a server-derived `epub_cfi` when the cached KEPUB allows it
+/// (#925), stamped with the device's own event time when it sends one.
 async fn put_state(
     auth: KoboAuthUser,
     State(state): State<AppState>,
@@ -409,7 +519,17 @@ async fn put_state(
             }
         }
         if let Some(bookmark) = &entry.current_bookmark {
-            match persist_bookmark(&state, auth.user_id, &uuid, bookmark).await {
+            // Device event time, most-specific first: the bookmark's own
+            // stamp, then the entry-level ones. Absent/unparseable → None,
+            // which `persist_bookmark` treats as server-now (pre-existing
+            // behaviour for firmware that sends no clock).
+            let event_ts = bookmark
+                .last_modified
+                .as_deref()
+                .or(entry.last_modified.as_deref())
+                .or(entry.priority_timestamp.as_deref())
+                .and_then(dto::parse_kobo_timestamp);
+            match persist_bookmark(&state, auth.user_id, &uuid, bookmark, event_ts).await {
                 Ok(()) => {}
                 Err(db::progress::ProgressError::BookNotFound) => {
                     tracing::warn!(%uuid, "kobo position PUT for unknown book");
@@ -430,15 +550,20 @@ async fn put_state(
 
 /// Persist a device's `CurrentBookmark` as an epub position (#925).
 ///
-/// The Kobo location is a `KoboSpan`, not a CFI, so it rides in its own opaque
-/// column and never touches `epub_cfi`; the percent is the half that means the
-/// same thing on every surface. A bookmark carrying neither is a no-op rather
-/// than a validation error — the device sends the field either way.
+/// The `KoboSpan` location rides verbatim in its own column, and — when the
+/// cached KEPUB allows — a CFI derived from it lands in `epub_cfi`, so the
+/// web/iOS readers resume at the same sentence with no client changes. The
+/// percent is the device's own number and is never overwritten by a derived
+/// one. `event_ts` is the device's clock (`None` → server-now); the upsert's
+/// forward clamp bounds a fast device clock. A bookmark carrying neither
+/// percent nor location is a no-op rather than a validation error — the
+/// device sends the field either way.
 async fn persist_bookmark(
     state: &AppState,
     user_id: i64,
     uuid: &str,
     bookmark: &dto::CurrentBookmark,
+    event_ts: Option<i64>,
 ) -> Result<(), db::progress::ProgressError> {
     // The device reports whole-book percent in `ProgressPercent`; the
     // content-source variant is per-chapter and not comparable across surfaces.
@@ -455,26 +580,70 @@ async fn persist_bookmark(
     if percent.is_none() && location.is_none() {
         return Ok(());
     }
+    let epub_cfi = match &location {
+        Some(loc) => derive_cfi_for_location(state, uuid, loc).await,
+        None => None,
+    };
     let update = ProgressUpdate {
         book_uuid: uuid.to_owned(),
         format: ProgressFormat::Epub,
-        epub_cfi: None,
+        epub_cfi,
         audio_position_seconds: None,
         progress_percent: percent,
         kobo_location: location,
         // Epub-format position; `book_file_id` selects among multiple audio
         // files and has no meaning here.
         book_file_id: None,
-        client_updated_at: Some(time::OffsetDateTime::now_utc().unix_timestamp()),
+        client_updated_at: Some(
+            event_ts.unwrap_or_else(|| time::OffsetDateTime::now_utc().unix_timestamp()),
+        ),
     };
-    // A location with no percent can't satisfy the epub position rule, and
-    // there is nothing to store for the web reader in that case either.
+    // A location with no percent (and no derived CFI) can't satisfy the epub
+    // position rule, and there is nothing to store for any reader either.
     if update.validate().is_err() {
         tracing::debug!(%uuid, "kobo bookmark carried no usable position");
         return Ok(());
     }
     db::progress::upsert_progress(state.pool(), user_id, &update).await?;
     Ok(())
+}
+
+/// Best-effort KoboSpan→CFI derivation for a state PUT. Uses the cached
+/// KEPUB **even when stale** — metadata edits rebuild the cache without
+/// touching content, and the snippet check inside `span_to_cfi` guards the
+/// case where the source file really was replaced. No staleness check, no
+/// worker enqueue: the state PUT stays fast, and a `None` simply means the
+/// row stores percent + span exactly as before.
+async fn derive_cfi_for_location(
+    state: &AppState,
+    uuid: &str,
+    location_json: &str,
+) -> Option<String> {
+    let loc = db::kobo_position::parse_location(location_json)?;
+    let book_id = db::resolve_book_id_by_uuid(state.pool(), uuid)
+        .await
+        .ok()??;
+    let kepub = db::kepub_path(book_id);
+    if !tokio::fs::try_exists(&kepub).await.unwrap_or(false) {
+        return None;
+    }
+    let source = db::book_file_path(state.pool(), book_id, "EPUB")
+        .await
+        .ok()??;
+    let result =
+        tokio::task::spawn_blocking(move || db::kobo_position::span_to_cfi(&kepub, &source, &loc))
+            .await;
+    match result {
+        Ok(Ok(cfi)) => cfi,
+        Ok(Err(e)) => {
+            tracing::warn!(%uuid, error = %e, "kobo span→cfi derivation failed");
+            None
+        }
+        Err(e) => {
+            tracing::warn!(%uuid, error = %e, "kobo span→cfi task panicked");
+            None
+        }
+    }
 }
 
 /// `GET library/tags` — device-side collections. Slice A returns an empty set;

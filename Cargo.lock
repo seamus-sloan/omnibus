@@ -4498,6 +4498,7 @@ dependencies = [
  "image",
  "lettre",
  "lofty",
+ "omnibus-db",
  "omnibus-shared",
  "pulldown-cmark",
  "quick-xml",

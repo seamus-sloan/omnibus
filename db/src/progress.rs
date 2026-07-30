@@ -76,6 +76,14 @@ fn parse_format(raw: &str) -> ProgressFormat {
 /// rejected (older) write still re-reads and returns the row that won, so
 /// the caller learns it is behind rather than seeing its own rejected
 /// payload echoed back.
+///
+/// An accepted write replaces the **whole position** — `epub_cfi`,
+/// `progress_percent`, and `kobo_location` are one atomic snapshot, never
+/// field-merged across writers. A row therefore always describes a single
+/// position; a field a writer can't supply (a Kobo bookmark with no
+/// derivable CFI, a web CFI with no span) stays NULL as "not known", and
+/// the Kobo sync-out derives the missing half on demand rather than
+/// trusting a stale leftover.
 pub async fn upsert_progress(
     pool: &SqlitePool,
     user_id: i64,
@@ -100,12 +108,10 @@ pub async fn upsert_progress(
                  CAST(strftime('%s','now') AS INTEGER)
              ))
          ON CONFLICT(user_id, book_uuid, format) DO UPDATE SET
-             epub_cfi = COALESCE(excluded.epub_cfi, reading_progress.epub_cfi),
+             epub_cfi = excluded.epub_cfi,
              audio_position_seconds = excluded.audio_position_seconds,
-             progress_percent =
-                 COALESCE(excluded.progress_percent, reading_progress.progress_percent),
-             kobo_location =
-                 COALESCE(excluded.kobo_location, reading_progress.kobo_location),
+             progress_percent = excluded.progress_percent,
+             kobo_location = excluded.kobo_location,
              book_file_id = excluded.book_file_id,
              updated_at = strftime('%s','now'),
              client_updated_at = excluded.client_updated_at
@@ -115,9 +121,9 @@ pub async fn upsert_progress(
     .bind(user_id)
     .bind(&book_uuid)
     .bind(fmt)
-    // Blank-to-NULL at the bind, not just at `validate` — the COALESCE merge
-    // above treats any non-NULL as a real value, so a whitespace CFI reaching
-    // an internal caller that skipped validation would clobber a good anchor.
+    // Blank-to-NULL at the bind, not just at `validate` — the row CHECK
+    // treats any non-NULL as a real position, so a whitespace CFI reaching
+    // an internal caller that skipped validation would store as an anchor.
     .bind(update.epub_cfi.as_deref().filter(|s| !s.trim().is_empty()))
     .bind(update.audio_position_seconds)
     .bind(update.progress_percent)
@@ -155,6 +161,42 @@ pub async fn upsert_progress(
         updated_at: row.try_get::<i64, _>("updated_at")?,
         client_updated_at: row.try_get::<i64, _>("client_updated_at")?,
     })
+}
+
+/// Attach a server-derived KoboSpan location (and percent, when the row
+/// has none) to an existing epub row WITHOUT advancing any freshness
+/// clock — the derived half describes the same position the row already
+/// holds, so bumping `updated_at`/`client_updated_at` would re-fire the
+/// Kobo sync delta forever. Optimistic: no-ops unless the row still has
+/// no location and its event time is unchanged since the caller read it.
+/// Returns whether a row was updated.
+pub async fn attach_derived_kobo_location(
+    pool: &SqlitePool,
+    user_id: i64,
+    book_uuid: &str,
+    location_json: &str,
+    percent: Option<i64>,
+    expected_client_updated_at: i64,
+) -> Result<bool, ProgressError> {
+    let book_uuid = resolve_canonical_book_uuid(pool, book_uuid)
+        .await?
+        .ok_or(ProgressError::BookNotFound)?;
+    let result = sqlx::query(
+        "UPDATE reading_progress
+            SET kobo_location = ?,
+                progress_percent = COALESCE(progress_percent, ?)
+          WHERE user_id = ? AND book_uuid = ? AND format = 'epub'
+            AND kobo_location IS NULL
+            AND COALESCE(client_updated_at, updated_at) = ?",
+    )
+    .bind(location_json)
+    .bind(percent)
+    .bind(user_id)
+    .bind(&book_uuid)
+    .bind(expected_client_updated_at)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
 }
 
 /// Fetch the current position row for `(user, book_uuid, format)`. Returns

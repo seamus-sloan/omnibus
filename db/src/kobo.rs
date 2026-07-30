@@ -17,7 +17,8 @@ pub use delta::{clear_snapshot, record_synced, sync_delta, SyncChange, SyncDelta
 
 /// SELECT list shared by [`sync_books`] and [`book_for_sync`]. `b` is the
 /// `books` alias; the correlated subquery pulls the lowest-`position` author.
-const SELECT_COLS: &str = "b.uuid,
+const SELECT_COLS: &str = "b.id AS id,
+                b.uuid,
                 COALESCE(b.title, '') AS title,
                 COALESCE((
                     SELECT a.name
@@ -41,6 +42,9 @@ const SELECT_COLS: &str = "b.uuid,
 /// device's metadata-freshness check.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct KoboBookRow {
+    /// `books.id` — lets sync-out reach the kepub cache and source file for
+    /// span derivation without a second lookup.
+    pub id: i64,
     pub uuid: String,
     pub title: String,
     pub author: String,
@@ -219,6 +223,7 @@ async fn apply_title_author_overrides(
 
 fn row_to_book(row: &sqlx::sqlite::SqliteRow) -> KoboBookRow {
     KoboBookRow {
+        id: row.get("id"),
         uuid: row.get("uuid"),
         title: row.get("title"),
         author: row.get("author"),
@@ -235,10 +240,20 @@ pub struct KoboBookState {
     pub percent: Option<i64>,
     /// Opaque `CurrentBookmark.Location` JSON, echoed back verbatim.
     pub kobo_location: Option<String>,
+    /// The stored CFI, when the freshest position came from the web/iOS
+    /// reader. Sync-out derives a KoboSpan from it when `kobo_location`
+    /// is absent; it is never emitted to the device directly.
+    pub epub_cfi: Option<String>,
     /// Newest of the read-status and progress timestamps — the value the
     /// per-device delta compares against its snapshot to decide whether a
     /// device's state is stale.
     pub state_updated_at: i64,
+    /// The progress row's own event time (`COALESCE(client_updated_at,
+    /// updated_at)`), 0 when the book has no progress row. This — not
+    /// [`Self::state_updated_at`], which is MAXed with the read-status
+    /// clock — is the optimistic token for
+    /// `progress::attach_derived_kobo_location`.
+    pub progress_updated_at: i64,
 }
 
 /// Per-user reading state for `uuids`, keyed by book uuid.
@@ -276,6 +291,9 @@ pub async fn reading_state_for(
                     rs.status AS status,
                     rp.progress_percent AS progress_percent,
                     rp.kobo_location AS kobo_location,
+                    rp.epub_cfi AS epub_cfi,
+                    COALESCE(rp.client_updated_at, rp.updated_at, 0)
+                        AS progress_updated_at,
                     MAX(
                         COALESCE(rs.updated_at, 0),
                         COALESCE(rp.client_updated_at, rp.updated_at, 0)
@@ -307,7 +325,9 @@ pub async fn reading_state_for(
                     status,
                     percent: row.try_get::<Option<i64>, _>("progress_percent")?,
                     kobo_location: row.try_get::<Option<String>, _>("kobo_location")?,
+                    epub_cfi: row.try_get::<Option<String>, _>("epub_cfi")?,
                     state_updated_at: row.try_get::<i64, _>("state_updated_at")?,
+                    progress_updated_at: row.try_get::<i64, _>("progress_updated_at")?,
                 },
             );
         }
