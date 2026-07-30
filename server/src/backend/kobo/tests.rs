@@ -1665,3 +1665,133 @@ async fn library_sync_re_announces_a_status_change_to_a_device_that_holds_the_bo
         .unwrap();
     assert!(body_json(third).await.as_array().unwrap().is_empty());
 }
+
+// --- 500-on-DB-failure coverage (#1392) ---
+//
+// `KoboAuthUser` authenticates via `kobo_devices`, so dropping `books`
+// leaves auth intact and forces the failure inside each handler's own
+// `internal(...)` call site rather than at the extractor.
+
+#[tokio::test]
+async fn library_sync_returns_500_on_db_failure() {
+    // `sync_books` short-circuits to an empty `Ok` when the user has no
+    // opted-in shelf, never touching `books` — so a real opted-in book is
+    // required to actually reach (and fail) that query.
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    opt_in(&pool, uid, std::slice::from_ref(&uuid)).await;
+    sqlx::query("DROP TABLE books")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn metadata_returns_500_on_db_failure() {
+    let (app, pool, token, _uid) = fixture().await;
+    sqlx::query("DROP TABLE books")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/library/any-uuid/metadata")))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn download_returns_500_on_db_failure_when_resolving_book_id_fails() {
+    let (app, pool, token, _uid) = fixture().await;
+    sqlx::query("DROP TABLE books")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/download/any-uuid")))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn download_returns_500_on_db_failure_when_locating_the_epub_file_fails() {
+    // Force kepubify absent so `download` deterministically takes the
+    // plain-EPUB fallback and calls `book_file_path`, regardless of whether
+    // kepubify happens to be installed in the environment running this test.
+    let _kepubify_absent =
+        db::test_support::EnvVarGuard::set("OMNIBUS_KEPUBIFY_PATH", Some("/no/such/kepubify"));
+    // Keep `books` intact (the uuid must resolve) and drop `book_files`
+    // instead, so this reaches that second `internal(...)` call site
+    // rather than the earlier `resolve_book_id_by_uuid` one.
+    let (app, pool, token, _uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "solaris.epub", "Solaris", "Lem").await;
+    sqlx::query("DROP TABLE book_files")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/download/{uuid}")))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn put_state_returns_500_on_db_failure() {
+    let (app, pool, token, _uid) = fixture().await;
+    sqlx::query("DROP TABLE books")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let body = serde_json::json!({
+        "ReadingStates": [{
+            "StatusInfo": { "Status": "Finished" }
+        }]
+    });
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/kobo/{token}/v1/library/any-uuid/state"))
+                .method("PUT")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn image_returns_500_on_db_failure() {
+    let (app, pool, token, _uid) = fixture().await;
+    sqlx::query("DROP TABLE books")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(get(format!(
+            "/kobo/{token}/v1/books/any-uuid/thumbnail/400/600/100/false/image.jpg"
+        )))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
