@@ -478,6 +478,20 @@ async fn insert_book_row_writes_books_and_book_files_and_mints_uuid() {
         1,
         "exactly one book_files row"
     );
+    // #1537 AC4: the anchor `book_files` row carries its own scan_key
+    // immediately — no boot backfill needed for the per-file diff match
+    // (`list_indexed_rows_for_formats`) to see it.
+    let file_scan_key: Option<String> =
+        sqlx::query_scalar("SELECT scan_key FROM book_files WHERE book_id = ?")
+            .bind(inserted.book_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        file_scan_key.as_deref(),
+        Some("solo.epub"),
+        "book_files.scan_key is set on insert, matching books.scan_key"
+    );
 }
 
 /// `word_count` round-trips through both the insert and the in-place update:

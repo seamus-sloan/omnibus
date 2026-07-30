@@ -573,6 +573,82 @@ async fn reindex_diff_classifies_merged_source_file_as_unchanged() {
 }
 
 #[tokio::test]
+async fn merged_two_epub_book_classifies_both_files_unchanged_on_rescan() {
+    // #1537: a book holding two same-format files (created by merging two
+    // EPUB books) used to reclassify Changed on every scan forever — the
+    // DB-side read aggregated MAX(mtime)/MAX(size) across both `book_files`
+    // rows into one composite stat that matched neither file's real stat.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    crate::sync::sync_books(
+        &pool,
+        "/ebooks",
+        crate::sync::SyncPlan {
+            new_books: vec![crate::test_support::indexed_with_stat(
+                "A/one.epub",
+                Some("One"),
+                1000,
+                500,
+            )],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let target = crate::test_support::uuid_by_scan_key(&pool, "A/one.epub").await;
+
+    crate::sync::sync_books(
+        &pool,
+        "/ebooks",
+        crate::sync::SyncPlan {
+            new_books: vec![crate::test_support::indexed_with_stat(
+                "B/two.epub",
+                Some("Two"),
+                2000,
+                100,
+            )],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let source = crate::test_support::uuid_by_scan_key(&pool, "B/two.epub").await;
+
+    merge_books(&pool, &source, &target, None).await.unwrap();
+
+    let disk = vec![
+        crate::ebook::StatEntry {
+            filename: "A/one.epub".into(),
+            scan_key: "A/one.epub".into(),
+            mtime_epoch: 1000,
+            size_bytes: 500,
+            error: None,
+        },
+        crate::ebook::StatEntry {
+            filename: "B/two.epub".into(),
+            scan_key: "B/two.epub".into(),
+            mtime_epoch: 2000,
+            size_bytes: 100,
+            error: None,
+        },
+    ];
+    let mut db_rows = list_indexed_rows_for_formats(&pool, "/ebooks", crate::ebook::EBOOK_FORMATS)
+        .await
+        .unwrap();
+    db_rows.extend(
+        list_merged_rows_for_formats(&pool, "/ebooks", crate::ebook::EBOOK_FORMATS)
+            .await
+            .unwrap(),
+    );
+
+    let diff = diff_library(&disk, &db_rows, std::path::Path::new("/ebooks"), true);
+    assert_eq!(diff.unchanged.len(), 2, "{diff:?}");
+    assert!(diff.unchanged.contains(&target));
+    assert!(diff.unchanged.contains(&source));
+    assert!(diff.new.is_empty(), "{:?}", diff.new);
+    assert!(diff.changed.is_empty(), "{:?}", diff.changed);
+}
+
+#[tokio::test]
 async fn undo_merge_restores_source_book_and_moves_file_back() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let target = seed_ebook(&pool, "A/Dracula.epub", "Dracula", "Bram Stoker").await;

@@ -351,14 +351,19 @@ pub(super) async fn insert_book_row(
     // `mtime_epoch INTEGER` holds the filesystem stat the incremental diff
     // compares against (migration 0009).
     sqlx::query(
-        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch)
-         VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch, scan_key)
+         VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(book_id)
     .bind(&file_ext)
     .bind(&file_stem)
     .bind(b.size_bytes)
     .bind(b.mtime_epoch)
+    // Per-file attachment identity (F#1537): stamp this on insert, matching
+    // `insert_book_file_row`'s sibling write — a NULL here forced every
+    // multi-file book through the boot backfill before the per-file diff
+    // match (`list_indexed_rows_for_formats`) could see this row's own key.
+    .bind(&scan_key)
     .execute(&mut **tx)
     .await?;
 

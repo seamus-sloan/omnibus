@@ -1992,26 +1992,31 @@ async fn list_indexed_rows_for_formats_returns_only_matching_format_rows() {
     .fetch_one(&pool)
     .await
     .unwrap();
+    // Both `books.scan_key` and its anchor `book_files.scan_key` are set to
+    // the same value (matching what `insert_book_row` writes in production)
+    // — that equality is what the per-file anchor match now keys on (#1537).
     let epub_id: i64 = sqlx::query_scalar(
-        "INSERT INTO books (uuid, library_id, path, title, sort) \
-         VALUES ('uuid-epub', ?, '/shared/epub', 'EpubTitle', 'EpubTitle') RETURNING id",
+        "INSERT INTO books (uuid, scan_key, library_id, path, title, sort) \
+         VALUES ('uuid-epub', 'shared/epub/EpubTitle.epub', ?, \
+                 '/shared/epub', 'EpubTitle', 'EpubTitle') RETURNING id",
     )
     .bind(lib_id)
     .fetch_one(&pool)
     .await
     .unwrap();
     let m4b_id: i64 = sqlx::query_scalar(
-        "INSERT INTO books (uuid, library_id, path, title, sort) \
-         VALUES ('uuid-m4b', ?, '/shared/audio', 'AudioTitle', 'AudioTitle') RETURNING id",
+        "INSERT INTO books (uuid, scan_key, library_id, path, title, sort) \
+         VALUES ('uuid-m4b', 'shared/audio/AudioTitle.m4b', ?, \
+                 '/shared/audio', 'AudioTitle', 'AudioTitle') RETURNING id",
     )
     .bind(lib_id)
     .fetch_one(&pool)
     .await
     .unwrap();
     sqlx::query(
-        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch) \
-         VALUES (?, 'EPUB', 'EpubTitle', 100, 100), \
-                (?, 'M4B',  'AudioTitle', 200, 200)",
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch, scan_key) \
+         VALUES (?, 'EPUB', 'EpubTitle', 100, 100, 'shared/epub/EpubTitle.epub'), \
+                (?, 'M4B',  'AudioTitle', 200, 200, 'shared/audio/AudioTitle.m4b')",
     )
     .bind(epub_id)
     .bind(m4b_id)
