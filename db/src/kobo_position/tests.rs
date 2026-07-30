@@ -317,7 +317,8 @@ fn span_to_cfi_numbers_text_nodes_among_text_siblings_like_epubjs() {
 #[test]
 fn annotation_cfis_emit_epubjs_indices_for_a_range_leaving_a_child_element() {
     // The production row-21 shape: start inside `<b>`'s text, end in the
-    // parent's tail text. epub.js emits `,/2/1:0,/1:8)` for this range —
+    // parent's tail text. epub.js addresses that tail as text index 1 (the
+    // spec would say 3), so the range must format as `,/2/1:0,/1:9)` —
     // asserting the exact string pins the dialect.
     let source = r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head>
 <body><p><b>THEY DIDN'T BURN</b> the boy. More prose follows here.</p></body></html>"#;
