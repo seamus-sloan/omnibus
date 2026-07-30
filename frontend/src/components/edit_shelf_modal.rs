@@ -186,8 +186,7 @@ fn build_on_save(
 }
 
 /// Modal head: name input, read-only kind badge, and the shared visibility
-/// toggle. Split out of [`EditShelfModal`] to keep it under the line cap,
-/// mirroring `create_shelf_modal`'s `create_shelf_head`.
+/// toggle.
 fn edit_shelf_head(
     mut name: Signal<String>,
     kind_label: &'static str,

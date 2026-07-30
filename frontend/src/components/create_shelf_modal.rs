@@ -154,8 +154,7 @@ fn build_on_submit(
 }
 
 /// Modal head: name input, smart/hand-picked kind toggle, and the shared
-/// visibility toggle. Split out of [`CreateShelfModal`] to keep it under the
-/// line cap, mirroring `shelf_detail::header`'s plain-fn splits.
+/// visibility toggle.
 fn create_shelf_head(
     mut name: Signal<String>,
     mut kind: Signal<ShelfKind>,

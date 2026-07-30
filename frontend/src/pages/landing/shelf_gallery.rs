@@ -78,9 +78,9 @@ pub(super) fn shelf_meta_line(count: i64, kind: ShelfKind, visibility: Visibilit
     parts.join(" \u{00b7} ")
 }
 
-/// Per-render snapshot of the gallery's data + selection state, grouped to
-/// stay under the 5-prop threshold — mirrors `landing::sections`'
-/// `LandingContentProps`.
+/// Per-render snapshot of the gallery's data + selection state: the shelf
+/// list, which one is picked, the "All books" tile's count/covers, the
+/// server URL for thumbnails, and the select/create callbacks.
 #[derive(Clone, PartialEq, Props)]
 pub(super) struct ShelfGalleryProps {
     pub shelves: Vec<ShelfSummary>,

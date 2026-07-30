@@ -104,8 +104,7 @@ pub(super) fn MobileShelfDetail(props: MobileShelfDetailProps) -> Element {
 }
 
 /// Persistent header: brand word, search entry, and — for non-system
-/// shelves — the actions menu. Split out of [`MobileShelfDetail`] to keep it
-/// under the line cap.
+/// shelves — the actions menu.
 fn mobile_shelf_head(
     shelf: &Shelf,
     on_add: EventHandler<()>,
@@ -134,8 +133,7 @@ fn mobile_shelf_head(
 }
 
 /// Title block: eyebrow (count + auto-filled/hand-picked), name, the
-/// kind/visibility/rule-chip facet row, and an optional description. Split
-/// out of [`MobileShelfDetail`] to keep it under the line cap.
+/// kind/visibility/rule-chip facet row, and an optional description.
 fn mobile_shelf_title_block(shelf: &Shelf, is_smart: bool) -> Element {
     let kicker = format!(
         "{} {} \u{00b7} {}",

@@ -258,8 +258,7 @@ struct ConditionHandlers {
 
 /// Builds the field/op/value(s)/unit change handlers for one condition row.
 /// Each clones the row's current draft, applies its one field, and reports
-/// the result through the shared `on_change`. Split out of [`ConditionRow`]
-/// to keep it under the line cap.
+/// the result through the shared `on_change`.
 fn build_condition_handlers(
     draft: RuleDraft,
     on_change: EventHandler<RuleDraft>,
