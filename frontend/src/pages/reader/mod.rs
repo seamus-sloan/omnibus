@@ -497,6 +497,7 @@ fn ReaderLayout(
         document::Script { src: JSZIP_JS }
         document::Script { src: EPUBJS_JS }
         document::Script { src: READER_GLUE_JS }
+        document::Script { src: crate::components::quote_card::QUOTE_CARD_JS }
     };
     #[cfg(feature = "mobile")]
     let reader_scripts = rsx! {};

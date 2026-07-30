@@ -226,6 +226,7 @@ pub(super) fn render_loaded(
         let is_fileless = b.formats.is_empty();
         let isbn13 = b.isbn13.clone();
         let panel_author = primary_author.clone();
+        let accent = b.accent.clone();
         rsx! {
             div { class: "bd-root", style: "{accent_style}",
                 BdHeroSection {
@@ -253,6 +254,7 @@ pub(super) fn render_loaded(
                         uuid: uuid.clone(),
                         title: title.clone(),
                         author: BdAuthorCluster { primary_author, author_id, author_books },
+                        accent,
                         suggestions,
                         ctx: BdPageCtx { server_url, is_admin },
                     }

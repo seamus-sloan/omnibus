@@ -910,6 +910,38 @@ test("opens the reader at the passage via a cfi deep link", async ({
   expect((await request.delete(`/api/highlights/${id}`)).status()).toBe(204);
 });
 
+test("opens the quote-card editor in a modal and closes it again", async ({
+  page,
+  request,
+}) => {
+  const { uuid, id, quote } = await seedPassage(
+    request,
+    "epubcfi(/6/10!/4/2,/1:0,/1:25)",
+  );
+
+  await gotoReady(page, `/books/${uuid}`);
+  const card = page.getByTestId("highlight-card").filter({ hasText: quote });
+  await card.getByTestId("highlight-quote").click();
+
+  // The shared quote-card editor mounts in the app modal shell with the
+  // passage on the preview and the export actions available.
+  const modal = page.getByTestId("quote-card-modal");
+  await expect(modal).toBeVisible();
+  await expect(
+    modal.getByRole("heading", { name: "Make a quote card" }),
+  ).toBeVisible();
+  await expect(modal).toContainText(quote);
+  await expect(modal.getByTestId("quote-download")).toBeVisible();
+
+  // Close via the X — no mutation fires; the card stays listed.
+  await modal.getByRole("button", { name: "Close" }).click();
+  await expect(modal).toHaveCount(0);
+  await expect(card).toHaveCount(1);
+
+  // Clean up the seeded highlight so re-runs start from the empty state.
+  expect((await request.delete(`/api/highlights/${id}`)).status()).toBe(204);
+});
+
 test("breadcrumb author segment links to the author page", async ({
   page,
   request,
