@@ -348,8 +348,10 @@ impl FileIndex {
         })
     }
 
-    /// First visible (non-space) normalized offset at/after `t`; `None`
-    /// when `t` is at/past the end of text.
+    /// First visible (non-space) normalized offset at/after `t`. An offset
+    /// at/past the end of text resolves to the last character (so an
+    /// end-of-file position still lands somewhere); `None` only for a
+    /// document with no text at all.
     fn land(&self, t: u64) -> Option<u64> {
         let mut idx = t;
         let mut chars = self.norm.chars().skip(t as usize);

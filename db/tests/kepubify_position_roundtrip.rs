@@ -17,13 +17,16 @@ const CHAPTER: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 </html>"#;
 
 /// Run kepubify over `src`, producing `out`. `None` when the binary is
-/// unavailable (the test then passes without asserting).
+/// unavailable (the test then passes without asserting). Resolves the
+/// binary the same way `kepubify_available` does — `$OMNIBUS_KEPUBIFY_PATH`
+/// first — so the probe and the spawn can't disagree.
 fn kepubify(src: &std::path::Path, out: &std::path::Path) -> Option<()> {
     if !omnibus_db::kepubify_available() {
-        eprintln!("kepubify not on PATH; skipping real-conversion round-trip");
+        eprintln!("kepubify unavailable; skipping real-conversion round-trip");
         return None;
     }
-    let status = std::process::Command::new("kepubify")
+    let bin = std::env::var("OMNIBUS_KEPUBIFY_PATH").unwrap_or_else(|_| "kepubify".to_string());
+    let status = std::process::Command::new(&bin)
         .arg("-o")
         .arg(out)
         .arg("--")

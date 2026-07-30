@@ -106,8 +106,9 @@ impl ProgressUpdate {
         match self.format {
             ProgressFormat::Epub => {
                 // A present-but-blank CFI is rejected outright rather than
-                // ignored: `Some("   ")` is non-NULL to SQL, so it would
-                // store whitespace as a real anchor.
+                // ignored: the store binds blanks as NULL, so letting one
+                // through would silently clear a stored anchor instead of
+                // recording the position the client thought it sent.
                 if self
                     .epub_cfi
                     .as_deref()
