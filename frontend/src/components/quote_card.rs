@@ -1,9 +1,8 @@
 //! Shareable quote-card editor: live preview, background presets + custom
 //! color, aspect-ratio choice, and PNG export/share/copy actions drawn by the
 //! standalone `quote-card.js` canvas renderer (`window.OmnibusQuoteCard`).
-//! Mounted by the reader's quote drawer and the book-detail passages modal —
-//! each host supplies its own shell (drawer vs modal) and must load
-//! [`QUOTE_CARD_JS`].
+//! Shell-agnostic — the reader's quote drawer and the book-detail passages
+//! modal each wrap it in their own chrome and must load [`QUOTE_CARD_JS`].
 
 use dioxus::prelude::*;
 

@@ -1,9 +1,8 @@
 //! "Passages you saved" — the current user's highlights for this book, listed
-//! outside the reader. Each row carries the quote, its note, a CFI-derived
-//! locator, and the date it was saved, plus open-in-reader / quote / copy /
-//! delete actions mirroring the reader's highlights drawer (Quote opens the
-//! shared quote-card editor in a modal). Entries attach post-mount so SSR and
-//! first-hydration paint stay identical (rule 07).
+//! outside the reader. Each row carries the quote, note, CFI-derived locator,
+//! and saved date, plus open-in-reader / quote / copy / delete actions
+//! mirroring the reader's drawer (Quote opens the shared editor in a modal).
+//! Entries attach post-mount so SSR and first hydration match (rule 07).
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
