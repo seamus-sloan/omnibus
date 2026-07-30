@@ -59,7 +59,7 @@ pub fn SeriesIndexPage() -> Element {
             .cloned()
             .collect::<Vec<SeriesSummary>>()
     });
-    let filtered = filtered();
+    let filtered = filtered.read();
 
     rsx! {
         div { class: "idx-page",

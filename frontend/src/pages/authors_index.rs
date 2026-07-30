@@ -96,7 +96,8 @@ pub fn AuthorsIndexPage() -> Element {
         let letters = group_by_letter(&filtered, matches!(sort_value, IndexSort::Name));
         AuthorGroups { filtered, letters }
     });
-    let AuthorGroups { filtered, letters } = groups();
+    let groups_ref = groups.read();
+    let AuthorGroups { filtered, letters } = &*groups_ref;
 
     // Alphabet strip: A–Z followed by a single '#' bucket for any
     // authors whose surname-equivalent doesn't start with an ASCII
@@ -134,7 +135,7 @@ pub fn AuthorsIndexPage() -> Element {
                     index_prefs::save(&prefs);
                 },
             }
-            {authors_index_body(&filtered, &letters, show_letters, any_in_library, &server_url_for_cards)}
+            {authors_index_body(filtered, letters, show_letters, any_in_library, &server_url_for_cards)}
         }
     }
 }
