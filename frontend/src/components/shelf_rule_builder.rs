@@ -244,21 +244,29 @@ fn render_preview(preview: &Option<RulePreview>, server_url: &str) -> Element {
     }
 }
 
-/// One editable smart-rule condition row.
-#[component]
-fn ConditionRow(
-    index: usize,
-    draft: RuleDraft,
-    can_remove: bool,
-    on_change: EventHandler<RuleDraft>,
-    on_remove: EventHandler<()>,
-) -> Element {
-    let field = draft.field;
-    let op = draft.op;
+/// The five per-row `FormEvent` handlers a [`ConditionRow`] wires up. `Copy`
+/// (Dioxus event handlers), so passing the whole set around — into the rsx
+/// and into [`condition_value_input`] — stays a single value.
+#[derive(Clone, Copy)]
+struct ConditionHandlers {
+    on_field: EventHandler<FormEvent>,
+    on_op: EventHandler<FormEvent>,
+    on_val: EventHandler<FormEvent>,
+    on_val2: EventHandler<FormEvent>,
+    on_unit: EventHandler<FormEvent>,
+}
 
+/// Builds the field/op/value(s)/unit change handlers for one condition row.
+/// Each clones the row's current draft, applies its one field, and reports
+/// the result through the shared `on_change`. Split out of [`ConditionRow`]
+/// to keep it under the line cap.
+fn build_condition_handlers(
+    draft: RuleDraft,
+    on_change: EventHandler<RuleDraft>,
+) -> ConditionHandlers {
     // On a field change, snap the op to the first one the new field accepts.
     let d_field = draft.clone();
-    let on_field = move |e: FormEvent| {
+    let on_field = EventHandler::new(move |e: FormEvent| {
         if let Some(f) = RuleField::from_str(&e.value()) {
             let mut d = d_field.clone();
             d.field = f;
@@ -278,33 +286,55 @@ fn ConditionRow(
             }
             on_change.call(d);
         }
-    };
+    });
     let d_op = draft.clone();
-    let on_op = move |e: FormEvent| {
+    let on_op = EventHandler::new(move |e: FormEvent| {
         if let Some(o) = RuleOp::from_str(&e.value()) {
             let mut d = d_op.clone();
             d.op = o;
             on_change.call(d);
         }
-    };
+    });
     let d_val = draft.clone();
-    let on_val = move |e: FormEvent| {
+    let on_val = EventHandler::new(move |e: FormEvent| {
         let mut d = d_val.clone();
         d.value = e.value();
         on_change.call(d);
-    };
+    });
     let d_val2 = draft.clone();
-    let on_val2 = move |e: FormEvent| {
+    let on_val2 = EventHandler::new(move |e: FormEvent| {
         let mut d = d_val2.clone();
         d.value2 = e.value();
         on_change.call(d);
-    };
+    });
     let d_unit = draft.clone();
-    let on_unit = move |e: FormEvent| {
+    let on_unit = EventHandler::new(move |e: FormEvent| {
         let mut d = d_unit.clone();
         d.unit = e.value();
         on_change.call(d);
-    };
+    });
+
+    ConditionHandlers {
+        on_field,
+        on_op,
+        on_val,
+        on_val2,
+        on_unit,
+    }
+}
+
+/// One editable smart-rule condition row.
+#[component]
+fn ConditionRow(
+    index: usize,
+    draft: RuleDraft,
+    can_remove: bool,
+    on_change: EventHandler<RuleDraft>,
+    on_remove: EventHandler<()>,
+) -> Element {
+    let field = draft.field;
+    let op = draft.op;
+    let handlers = build_condition_handlers(draft.clone(), on_change);
 
     rsx! {
         div { class: "shelf-condition", "data-testid": "condition-row-{index}",
@@ -312,7 +342,7 @@ fn ConditionRow(
                 class: "shelf-select",
                 "data-testid": "condition-field-{index}",
                 value: field.as_str(),
-                onchange: on_field,
+                onchange: move |e| handlers.on_field.call(e),
                 for (f, label) in FIELDS.iter() {
                     option { key: "{f.as_str()}", value: f.as_str(), "{label}" }
                 }
@@ -321,12 +351,12 @@ fn ConditionRow(
                 class: "shelf-select",
                 "data-testid": "condition-op-{index}",
                 value: op.as_str(),
-                onchange: on_op,
+                onchange: move |e| handlers.on_op.call(e),
                 for (o, label) in OPS.iter().filter(|(o, _)| field.accepts(*o)) {
                     option { key: "{o.as_str()}", value: o.as_str(), "{label}" }
                 }
             }
-            {condition_value_input(&draft, on_val, on_val2, on_unit)}
+            {condition_value_input(&draft, handlers)}
             if can_remove {
                 button {
                     r#type: "button",
@@ -342,15 +372,13 @@ fn ConditionRow(
 }
 
 /// Field-aware value input(s) for a condition row.
-fn condition_value_input(
-    draft: &RuleDraft,
-    on_val: impl FnMut(FormEvent) + 'static,
-    on_val2: impl FnMut(FormEvent) + 'static,
-    on_unit: impl FnMut(FormEvent) + 'static,
-) -> Element {
+fn condition_value_input(draft: &RuleDraft, handlers: ConditionHandlers) -> Element {
     let value = draft.value.clone();
     let value2 = draft.value2.clone();
     let unit = draft.unit.clone();
+    let on_val = move |e| handlers.on_val.call(e);
+    let on_val2 = move |e| handlers.on_val2.call(e);
+    let on_unit = move |e| handlers.on_unit.call(e);
 
     // Date fields carry op-specific inputs.
     if draft.field.is_date() {

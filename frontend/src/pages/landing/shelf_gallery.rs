@@ -78,18 +78,33 @@ pub(super) fn shelf_meta_line(count: i64, kind: ShelfKind, visibility: Visibilit
     parts.join(" \u{00b7} ")
 }
 
+/// Per-render snapshot of the gallery's data + selection state, grouped to
+/// stay under the 5-prop threshold — mirrors `landing::sections`'
+/// `LandingContentProps`.
+#[derive(Clone, PartialEq, Props)]
+pub(super) struct ShelfGalleryProps {
+    pub shelves: Vec<ShelfSummary>,
+    pub selection: ShelfSelection,
+    pub all_count: Option<i64>,
+    pub all_cover_uuids: Vec<String>,
+    pub server_url: String,
+    pub on_select: EventHandler<ShelfSelection>,
+    pub on_created: EventHandler<()>,
+}
+
 /// The gallery. Tiles are toggle buttons (`aria-pressed` marks the pick);
 /// the create-shelf modal mounts locally, same wiring as the shelf rail.
 #[component]
-pub(super) fn ShelfGallery(
-    shelves: Vec<ShelfSummary>,
-    selection: ShelfSelection,
-    all_count: Option<i64>,
-    all_cover_uuids: Vec<String>,
-    server_url: String,
-    on_select: EventHandler<ShelfSelection>,
-    on_created: EventHandler<()>,
-) -> Element {
+pub(super) fn ShelfGallery(props: ShelfGalleryProps) -> Element {
+    let ShelfGalleryProps {
+        shelves,
+        selection,
+        all_count,
+        all_cover_uuids,
+        server_url,
+        on_select,
+        on_created,
+    } = props;
     let mut show_create = use_signal(|| false);
     let all_active = selection == ShelfSelection::All;
     let all_meta = match all_count {
