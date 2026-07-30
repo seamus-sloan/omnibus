@@ -1,12 +1,8 @@
-//! Background ETag revalidation of the proxied-image cache.
-//!
-//! A cached image is served immediately and, if old enough, checked against
-//! the server *after* the response has already gone out — so revalidation
-//! never adds latency to a cover render. [`Fetched`] is what one upstream
-//! fetch produced; the claim/lock machinery below exists so a grid scroll
-//! turns into one background check per stale image, not one per render, and
-//! so a foreground `?v=` bust and a background check can never write the
-//! same cache entry at once.
+//! Background ETag revalidation of the proxied-image cache: a cached image
+//! is served immediately, then checked against the server *after* the
+//! response has gone out, so revalidation never adds latency. [`Fetched`]
+//! is one upstream fetch's outcome; the claim/lock machinery caps a grid
+//! scroll to one check per stale image and stops it racing a `?v=` bust.
 
 use std::collections::HashMap;
 use std::path::PathBuf;

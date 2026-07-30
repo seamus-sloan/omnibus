@@ -1,11 +1,8 @@
-//! "Update available" detection and its two remedies.
-//!
-//! [`is_stale`]/[`note_book`] answer the question per book, immediately,
-//! from whatever metadata just landed — driven by opening a book detail
-//! page. [`refresh_stale_flags`] answers it for every completed download in
-//! bulk, on a TTL, via `POST /api/downloads/validators`, so the Downloads
-//! list learns about a replaced file without the reader opening each book.
-//! [`redownload`] is what a stale flag leads to.
+//! "Update available" detection and its remedy. [`is_stale`]/[`note_book`]
+//! answer the question per book immediately; [`refresh_stale_flags`] answers
+//! it for every completed download in bulk, on a TTL, via
+//! `POST /api/downloads/validators`, so Downloads learns of a replaced file
+//! without the reader opening each book. [`redownload`] is the remedy.
 
 use super::{bump, get_entry, registry, set_error, start, target_file, upsert};
 use super::{engine, media, store, sync};
