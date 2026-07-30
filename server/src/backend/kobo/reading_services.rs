@@ -1,15 +1,8 @@
-//! Kobo Reading Services — the wireless annotation channel (#1278), served at
-//! the bare origin (`/api/v3/content/*`) because `reading_services_host` in
-//! the initialization map is a host, not a path. No session and no path
-//! token: every route authenticates via the `x-kobo-deviceid` header
-//! ([`KoboHardwareUser`]). Exempted from `require_auth` in `auth::gate`.
-//!
-//! Protocol quirks this module honors: the device never echoes a real ETag
-//! (always `If-None-Match: W/"0"`) and drives change detection through
-//! `checkforchanges`; deletions propagate **by omission** (anything absent
-//! from a GET body is removed on-device — tombstone flags are ignored); and
-//! a (device, book) pair is answered `304` until its first clean PATCH, so a
-//! first sync can never wipe highlights made before wireless sync existed.
+//! Kobo Reading Services — the wireless annotation channel, served at the
+//! bare origin (`/api/v3/content/*`) since `reading_services_host` in the
+//! initialization map is a host, not a path. Every route authenticates via
+//! the `x-kobo-deviceid` header ([`KoboHardwareUser`]) rather than a session
+//! or path token, and is exempted from `require_auth` in `auth::gate`.
 
 use axum::{
     body::{Body, Bytes},
@@ -67,10 +60,67 @@ async fn get_annotations(
     if let Some(reject) = reject_oversized_uuid(uuid) {
         return reject;
     }
+
+    let (canonical, served) = match resolve_adopted_served(&state, &auth, uuid).await {
+        Ok(Some(pair)) => pair,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(NotAdopted) => {
+            return (
+                StatusCode::NOT_MODIFIED,
+                [(header::ETAG, "W/\"0\"".to_string())],
+            )
+                .into_response();
+        }
+        Err(Failed(response)) => return response,
+    };
+
+    let fingerprint = db::kobo::annotations::fingerprint(&served);
+    let etag = format!("W/\"{fingerprint}\"");
+    if if_none_match_matches(&headers, &etag) {
+        return not_modified_and_ack(&state, auth.device_id, &canonical, &fingerprint, etag).await;
+    }
+
+    let body = match serde_json::to_vec(&dto::AnnotationsResponse {
+        annotations: served.iter().map(dto::AnnotationOut::from_served).collect(),
+        next_page_offset_token: None,
+    }) {
+        Ok(b) => Bytes::from(b),
+        Err(e) => return internal("reading-services serialize", e),
+    };
+
+    stream_annotations(
+        state.pool().clone(),
+        auth.device_id,
+        canonical,
+        fingerprint,
+        etag,
+        body,
+    )
+}
+
+/// Outcome of [`resolve_adopted_served`] when the pair isn't ready to serve.
+enum Unready {
+    /// No prior PATCH and nothing to serve — the AC5 first-sync guard.
+    NotAdopted,
+    /// A resolve/fetch/adoption-check db call failed; already an HTTP response.
+    Failed(Response),
+}
+use Unready::{Failed, NotAdopted};
+
+/// Resolve `uuid` to its canonical book, fetch the served annotation set, and
+/// check first-PATCH adoption — the second driver stage: canonical-uuid
+/// resolution plus the adoption gate that must run before any ETag is
+/// computed. `Ok(None)` is an unknown book (404); `Err(NotAdopted)` is the
+/// AC5 guard against wiping a device's pre-wireless backlog by omission.
+async fn resolve_adopted_served(
+    state: &AppState,
+    auth: &KoboHardwareUser,
+    uuid: &str,
+) -> Result<Option<(String, Vec<db::annotations::ServedKoboAnnotation>)>, Unready> {
     let canonical = match db::resolve_canonical_book_uuid(state.pool(), uuid).await {
         Ok(Some(c)) => c,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return internal("reading-services resolve uuid", e),
+        Ok(None) => return Ok(None),
+        Err(e) => return Err(Failed(internal("reading-services resolve uuid", e))),
     };
 
     let served = match db::annotations::served_kobo_annotations(
@@ -81,7 +131,7 @@ async fn get_annotations(
     .await
     {
         Ok(s) => s,
-        Err(e) => return internal("reading-services served set", e),
+        Err(e) => return Err(Failed(internal("reading-services served set", e))),
     };
 
     // A pair no device has uploaded for — and with nothing to serve from
@@ -92,47 +142,45 @@ async fn get_annotations(
     let adopted =
         match db::kobo::annotations::is_adopted(state.pool(), auth.device_id, &canonical).await {
             Ok(a) => a || !served.is_empty(),
-            Err(e) => return internal("reading-services adoption check", e),
+            Err(e) => return Err(Failed(internal("reading-services adoption check", e))),
         };
     if !adopted {
-        return (
-            StatusCode::NOT_MODIFIED,
-            [(header::ETAG, "W/\"0\"".to_string())],
-        )
-            .into_response();
+        return Err(NotAdopted);
     }
+    Ok(Some((canonical, served)))
+}
 
-    let fingerprint = db::kobo::annotations::fingerprint(&served);
-    let etag = format!("W/\"{fingerprint}\"");
-
-    // Firmware always sends `If-None-Match: W/"0"`, so this arm is
-    // theoretical — but a correct 304 is cheap, and it still acks: a matched
-    // ETag means the device already holds exactly this set.
-    if if_none_match_matches(&headers, &etag) {
-        if let Err(e) = db::kobo::annotations::ack_served(
-            state.pool(),
-            auth.device_id,
-            &canonical,
-            &fingerprint,
-        )
-        .await
-        {
-            tracing::warn!(error = %e, "reading-services 304 ack failed");
-        }
-        return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response();
+/// `If-None-Match` matched: ack what the device already holds and answer
+/// `304`. Firmware always sends `If-None-Match: W/"0"`, so this path is
+/// theoretical — but a correct 304 is cheap, and it still acks: a matched
+/// ETag means the device already holds exactly this set.
+async fn not_modified_and_ack(
+    state: &AppState,
+    device_id: i64,
+    canonical: &str,
+    fingerprint: &str,
+    etag: String,
+) -> Response {
+    if let Err(e) =
+        db::kobo::annotations::ack_served(state.pool(), device_id, canonical, fingerprint).await
+    {
+        tracing::warn!(error = %e, "reading-services 304 ack failed");
     }
+    (StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response()
+}
 
-    let response = dto::AnnotationsResponse {
-        annotations: served.iter().map(dto::AnnotationOut::from_served).collect(),
-        next_page_offset_token: None,
-    };
-    let body = match serde_json::to_vec(&response) {
-        Ok(b) => Bytes::from(b),
-        Err(e) => return internal("reading-services serialize", e),
-    };
-
-    let pool = state.pool().clone();
-    let device_id = auth.device_id;
+/// Stream `body` as the `200` response, acking on the final poll — the same
+/// pattern as `library_sync`'s snapshot commit: a connection dropped
+/// mid-body never acks, so `checkforchanges` re-reports the book, which is
+/// the protocol's only redelivery mechanism.
+fn stream_annotations(
+    pool: sqlx::SqlitePool,
+    device_id: i64,
+    canonical: String,
+    fingerprint: String,
+    etag: String,
+    body: Bytes,
+) -> Response {
     let stream = stream::unfold(
         (Some(body), canonical, fingerprint, false),
         move |(body, canonical, fingerprint, acked)| {

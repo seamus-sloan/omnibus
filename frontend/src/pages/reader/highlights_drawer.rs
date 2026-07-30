@@ -7,6 +7,9 @@ use dioxus::prelude::*;
 
 use omnibus_shared::{Highlight, HighlightColor};
 
+#[cfg(test)]
+mod tests;
+
 pub(super) const PALETTE: [(HighlightColor, &str); 5] = [
     (HighlightColor::Amber, "amber"),
     (HighlightColor::Green, "green"),
