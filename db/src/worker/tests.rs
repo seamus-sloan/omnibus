@@ -915,3 +915,160 @@ async fn task_scan_reports_ghost_warning_in_the_warn_band_below_abort() {
 
     let _ = std::fs::remove_dir_all(&lib);
 }
+
+// ---------- #953: `Worker::metrics` (queue depth + recent completions) ----------
+
+/// `metrics().queue_depth` reflects a task's own [`TaskKind`] while it's
+/// still queued/running, and drops back to zero once it completes — mirrors
+/// `queued_task_shows_as_running_immediately`'s use of `progress_snapshot`
+/// but asserts the aggregate accessor instead.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn metrics_reports_queue_depth_for_in_flight_tasks() {
+    let w = make_worker_default(pool().await);
+    let id = w.post(Task::Test {
+        tag: "depth",
+        latency_ms: 80,
+        resource: Some("depth".into()),
+        route_through_scan_sem: false,
+        on_run: None,
+        on_done: None,
+    });
+
+    // Test tasks report as TaskKind::Scan (see `Task::kind`'s doc comment).
+    let m = w.metrics();
+    assert_eq!(m.queue_depth.get(&TaskKind::Scan), Some(&1));
+
+    let _ = w.await_completion(id).await;
+    let m_after = w.metrics();
+    assert_eq!(
+        m_after
+            .queue_depth
+            .get(&TaskKind::Scan)
+            .copied()
+            .unwrap_or(0),
+        0,
+        "a completed task must not still count against queue depth"
+    );
+}
+
+/// Two concurrently queued tasks of the same kind both count toward that
+/// kind's depth — the accessor aggregates, not just reports presence.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn metrics_aggregates_queue_depth_across_same_kind_tasks() {
+    let w = make_worker_default(pool().await);
+    let mk = |key: &'static str| {
+        w.post(Task::Test {
+            tag: key,
+            latency_ms: 80,
+            resource: Some(key.into()),
+            route_through_scan_sem: false,
+            on_run: None,
+            on_done: None,
+        })
+    };
+    let id1 = mk("m1");
+    let id2 = mk("m2");
+
+    let m = w.metrics();
+    assert_eq!(m.queue_depth.get(&TaskKind::Scan), Some(&2));
+
+    let _ = tokio::join!(w.await_completion(id1), w.await_completion(id2));
+}
+
+/// A completed task's duration lands in `recent_completions` for its
+/// `TaskKind`, and `progress_snapshot` keeps reporting the same terminal
+/// state unchanged — `metrics()` is purely additive.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn metrics_records_a_recent_completion_timing_without_disturbing_progress() {
+    let w = make_worker_default(pool().await);
+    let id = w.post(Task::Test {
+        tag: "timing",
+        latency_ms: 20,
+        resource: None,
+        route_through_scan_sem: false,
+        on_run: None,
+        on_done: None,
+    });
+    let _ = w.await_completion(id).await;
+
+    let m = w.metrics();
+    let timings = m
+        .recent_completions
+        .get(&TaskKind::Scan)
+        .expect("one completion recorded for TaskKind::Scan");
+    assert_eq!(timings.len(), 1);
+
+    // progress_snapshot is unaffected: the terminal entry is still present
+    // and still Done, same as before metrics() was ever called.
+    let snap = w.progress_snapshot();
+    let entry = snap
+        .recent_complete
+        .iter()
+        .find(|p| p.task_id == id)
+        .expect("terminal entry still present in progress_snapshot");
+    assert!(matches!(entry.state, ProgressState::Done { .. }));
+}
+
+/// The recent-completions window per `TaskKind` is bounded: posting more
+/// than the cap evicts the oldest entries, keeping only the most recent
+/// `RECENT_COMPLETIONS_CAP` durations.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn metrics_bounds_the_recent_completions_window_per_kind() {
+    let w = make_worker_default(pool().await);
+    // One more than the cap (20) so eviction must have kicked in at least
+    // once; each task is posted and awaited serially so ordering is stable.
+    for _ in 0..21 {
+        let id = w.post(Task::Test {
+            tag: "bound",
+            latency_ms: 0,
+            resource: None,
+            route_through_scan_sem: false,
+            on_run: None,
+            on_done: None,
+        });
+        let _ = w.await_completion(id).await;
+    }
+
+    let m = w.metrics();
+    let timings = m
+        .recent_completions
+        .get(&TaskKind::Scan)
+        .expect("completions recorded for TaskKind::Scan");
+    assert_eq!(
+        timings.len(),
+        20,
+        "recent-completions window must stay capped at 20 entries"
+    );
+}
+
+/// Different task kinds keep independent queue-depth and recent-completion
+/// buckets — a burst of one kind must not appear under another's key.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn metrics_keeps_separate_buckets_per_task_kind() {
+    let w = make_worker_default(pool().await);
+    let scan_id = w.post(Task::Test {
+        tag: "scan-kind",
+        latency_ms: 0,
+        resource: None,
+        route_through_scan_sem: false,
+        on_run: None,
+        on_done: None,
+    });
+    let _ = w.await_completion(scan_id).await;
+
+    let thumb_id = w.post(Task::GenerateThumbs {
+        book_id: 1,
+        last_modified_epoch: 0,
+    });
+    let _ = w.await_completion(thumb_id).await;
+
+    let m = w.metrics();
+    assert!(
+        m.recent_completions.contains_key(&TaskKind::Scan),
+        "Test task should record under TaskKind::Scan"
+    );
+    assert!(
+        m.recent_completions.contains_key(&TaskKind::GenerateThumbs),
+        "GenerateThumbs task should record under its own TaskKind"
+    );
+}
