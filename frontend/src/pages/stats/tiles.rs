@@ -14,6 +14,9 @@ fn duration_value(secs: i64) -> (String, &'static str) {
     if secs < 3600 {
         return ((secs / 60).to_string(), "m");
     }
+    // Display-only: listening totals sit far below f64's 2^52 exact-integer
+    // range.
+    #[allow(clippy::cast_precision_loss)]
     let hours = secs as f64 / 3600.0;
     if hours < 10.0 {
         (format!("{hours:.1}"), "h")

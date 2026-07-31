@@ -315,7 +315,7 @@ fn BdOtherRatingStars(stars: f32) -> Element {
 /// Render a star value without a trailing `.0` (`4.5` stays, `4.0` → `4`).
 fn fmt_stars(v: f32) -> String {
     if v.fract().abs() < f32::EPSILON {
-        format!("{}", v as i64)
+        format!("{v:.0}")
     } else {
         format!("{v:.1}")
     }

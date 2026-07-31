@@ -58,7 +58,7 @@ fn intensity(secs: i64, max: i64) -> u8 {
     if secs <= 0 || max <= 0 {
         return 0;
     }
-    (1 + (secs.saturating_mul(4).saturating_sub(1)) / max).min(4) as u8
+    u8::try_from((1 + (secs.saturating_mul(4).saturating_sub(1)) / max).min(4)).unwrap_or(4)
 }
 
 /// Human duration for cell tooltips: "42 m", "3 h", "3 h 20 m".

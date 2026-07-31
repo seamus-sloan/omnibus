@@ -527,7 +527,8 @@ async fn finished_books(
             let half_stars: Option<i64> = r.get("half_stars");
             FinishedBook {
                 cover_url: (has_cover != 0).then(|| format!("/api/covers/{uuid}")),
-                rating: half_stars.map(|h| h as f64 / 2.0),
+                rating: half_stars
+                    .map(|h| f64::from(u32::try_from(h.clamp(0, 10)).unwrap_or(0)) / 2.0),
                 book_uuid: uuid,
                 title: r.get("title"),
                 author: r.get("author"),

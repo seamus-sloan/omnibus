@@ -57,7 +57,9 @@ impl JournalComposerState {
     /// The optional progress payload derived from the footer toggle/slider.
     fn progress_payload(&self) -> Option<u8> {
         if (self.track_progress)() {
-            Some((self.progress)() as u8)
+            // The slider bounds the signal to 0..=100; clamp repeats it so
+            // the conversion cannot fail.
+            Some(u8::try_from((self.progress)().clamp(0, 100)).unwrap_or(0))
         } else {
             None
         }

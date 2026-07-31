@@ -142,7 +142,10 @@ pub async fn list_books_page(
     }
     let rows = q.fetch_all(pool).await?;
 
-    let take = rows.len().min(limit as usize);
+    // Saturating fallback: a (never-expected) negative limit degrades to
+    // "take everything" like the old `as usize` wrap did, rather than a
+    // zero take that would underflow the `take - 1` index below.
+    let take = rows.len().min(usize::try_from(limit).unwrap_or(usize::MAX));
     let next = (rows.len() as i64 > limit).then(|| cursor_from_row(&rows[take - 1]));
 
     let mut books = Vec::with_capacity(take);

@@ -14,6 +14,8 @@ pub(super) fn resume_meta(point: &ResumePoint) -> (String, Option<i64>) {
     let pos = point.record.audio_position_seconds.unwrap_or(0.0);
     match point.total_duration_seconds.filter(|t| *t > 0.0) {
         Some(total) => {
+            // Clamped to 0..=100 above, so the cast is in-range (NaN → 0).
+            #[allow(clippy::cast_possible_truncation)]
             let pct = ((pos / total).clamp(0.0, 1.0) * 100.0).round() as i64;
             let left = format_hm_left((total - pos).max(0.0));
             let ch = point
@@ -28,7 +30,10 @@ pub(super) fn resume_meta(point: &ResumePoint) -> (String, Option<i64>) {
 
 /// `7h 50m` / `50m` label for a remaining-seconds span.
 pub(super) fn format_hm_left(seconds: f64) -> String {
-    let total_min = (seconds / 60.0).round() as i64;
+    // Durations are finite and non-negative at both call sites; the clamp
+    // keeps an absurd input from saturating the cast.
+    #[allow(clippy::cast_possible_truncation)]
+    let total_min = (seconds / 60.0).round().clamp(0.0, f64::from(i32::MAX)) as i64;
     let h = total_min / 60;
     let m = total_min % 60;
     if h > 0 {
@@ -40,8 +45,10 @@ pub(super) fn format_hm_left(seconds: f64) -> String {
 
 /// `H:MM:SS` (or `M:SS`) for an absolute position.
 pub(super) fn format_hms_short(seconds: f64) -> String {
+    // The finite/positive guard plus the clamp keep the cast in-range.
+    #[allow(clippy::cast_possible_truncation)]
     let s = if seconds.is_finite() && seconds > 0.0 {
-        seconds as i64
+        seconds.min(f64::from(i32::MAX)) as i64
     } else {
         0
     };

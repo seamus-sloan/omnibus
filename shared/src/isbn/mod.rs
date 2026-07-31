@@ -67,7 +67,9 @@ fn validate_isbn10(s: &str) -> Result<(), IsbnError> {
             'X' | 'x' if i == 9 => 10,
             _ => return Err(IsbnError::InvalidChars),
         };
-        sum += value * (10 - i as u32);
+        // The caller guarantees a 10-char string, so `i` fits u32 and the
+        // impossible fallback just zeroes the weight.
+        sum += value * (10 - u32::try_from(i).unwrap_or(10));
     }
     if sum.is_multiple_of(11) {
         Ok(())

@@ -67,7 +67,10 @@ fn percent_delta(current: f64, previous: f64) -> Option<Delta> {
             label: "No change".to_string(),
         });
     }
-    let pct = change.abs().round() as i64;
+    // Display-only percentage; the clamp keeps a divide-by-near-zero blowup
+    // from saturating the cast.
+    #[allow(clippy::cast_possible_truncation)]
+    let pct = change.abs().round().clamp(0.0, f64::from(i32::MAX)) as i64;
     Some(if change > 0.0 {
         Delta {
             glyph: "\u{25B2}",
@@ -128,7 +131,11 @@ fn build_trend_bars(points: &[(String, f64)]) -> Vec<TrendBar> {
             height_pct: if max <= 0.0 {
                 0
             } else {
-                ((value.max(0.0) / max) * 100.0).round() as u32
+                // `max` is the series maximum, so the ratio is 0..=1 and the
+                // scaled value 0..=100.
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let pct = ((value.max(0.0) / max) * 100.0).round().clamp(0.0, 100.0) as u32;
+                pct
             },
         })
         .collect()
@@ -136,6 +143,9 @@ fn build_trend_bars(points: &[(String, f64)]) -> Vec<TrendBar> {
 
 /// The metric's trend series as `(short label, value)` pairs, drawn from the
 /// fields already on `summary` — no metric needs a fresh fetch to drill in.
+// Display-only trend values: counts and seconds sit far below f64's 2^52
+// exact-integer range.
+#[allow(clippy::cast_precision_loss)]
 fn trend_points(metric: Metric, summary: &StatsSummary) -> Vec<(String, f64)> {
     match metric {
         Metric::Finished => summary
@@ -186,6 +196,9 @@ fn short_day(day: &str) -> String {
 /// The metric's current/previous values as `(current, previous)` for the
 /// percent-based deltas (Finished, Listening). Avg rating uses
 /// `stars_delta` directly since it's `Option<f64>` on both sides.
+// Display-only deltas: counts and seconds sit far below f64's 2^52
+// exact-integer range.
+#[allow(clippy::cast_precision_loss)]
 fn delta_for(metric: Metric, summary: &StatsSummary, range: StatsRange) -> Option<Delta> {
     if range == StatsRange::AllTime {
         return None;
