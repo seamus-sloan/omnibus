@@ -344,9 +344,7 @@ mod tests {
 
     use dioxus::prelude::*;
 
-    use super::{
-        append_cache_bust, bump_cover_cache_bust, cover_bust_for, format_page_title, use_can_upload,
-    };
+    use super::*;
 
     #[test]
     fn format_page_title_prefixes_subtitle_and_omits_when_none() {
@@ -425,5 +423,97 @@ mod tests {
             rsx! {}
         }
         VirtualDom::new(AssertCanUpload).rebuild_in_place();
+    }
+
+    // Same blind spot as `use_can_upload`'s test: the `web` arm (deriving
+    // `is_admin` from `CurrentUser` via `use_memo`) needs the wasm32 target,
+    // so only the non-web fallback compiles into this native test run. This
+    // is the value SSR and the first WASM paint both render before the boot
+    // effect resolves the real permission (rule 07) — a regression here
+    // would flash admin-only affordances (author Delete, landing inline
+    // edits) to every visitor.
+    #[test]
+    fn use_is_admin_defaults_to_false_on_the_non_web_fallback() {
+        #[component]
+        fn AssertIsAdmin() -> Element {
+            let is_admin = use_is_admin();
+            assert!(!is_admin());
+            rsx! {}
+        }
+        VirtualDom::new(AssertIsAdmin).rebuild_in_place();
+    }
+
+    // This native `server`-feature test run compiles neither the `web` arm
+    // (derives from `CurrentUser` via `use_memo`) nor the `mobile` arm
+    // (fetches `/api/auth/me` in an effect) of `use_current_user_summary` —
+    // only the SSR fallback. It's still worth pinning: it's the value every
+    // owner-only affordance (journal edit/delete) starts from before the
+    // real resolution lands, on every target (rule 07).
+    #[test]
+    fn use_current_user_summary_defaults_to_none_on_the_ssr_fallback() {
+        #[component]
+        fn AssertCurrentUserSummary() -> Element {
+            let user = use_current_user_summary();
+            assert_eq!(user(), None);
+            rsx! {}
+        }
+        VirtualDom::new(AssertCurrentUserSummary).rebuild_in_place();
+    }
+
+    // `use_server_url`'s mobile arm reads a reactive context signal and
+    // isn't compiled into this non-mobile test run; the non-mobile arm below
+    // is a plain function with no hooks, so it needs no Dioxus runtime at
+    // all — web/SSR co-locate with the server, so every media/API call is
+    // same-origin and relative.
+    #[test]
+    fn use_server_url_is_empty_on_the_non_mobile_target() {
+        assert_eq!(use_server_url(), "");
+    }
+
+    // `media_url`'s mobile arm (token-proxied, offline-cache-aware) isn't
+    // compiled into this non-mobile test run; the non-mobile arm is the one
+    // every web/SSR render actually uses.
+    #[test]
+    fn media_url_returns_the_path_unchanged_on_the_non_mobile_target() {
+        assert_eq!(
+            media_url("http://example.com", "/api/covers/abc"),
+            "/api/covers/abc"
+        );
+    }
+
+    #[test]
+    fn thumb_url_builds_the_sized_thumbnail_path() {
+        assert_eq!(
+            thumb_url("http://example.com", "book-uuid", "md"),
+            "/api/thumbs/book-uuid/md"
+        );
+    }
+
+    // `use_search_query`/`use_cover_cache_bust`/`use_current_user`/
+    // `use_playback` are one-line `use_context` accessors; the meaningful
+    // behaviour they expose (`cover_bust_for`/`bump_cover_cache_bust`,
+    // `PlaybackState::new`'s defaults) already has direct coverage above and
+    // in the `PlaybackState` doc example. This test pins the accessors
+    // themselves: each must resolve to the exact value the provider handed
+    // it, so a future refactor that reaches for the wrong context type still
+    // fails loudly here rather than only inside a much larger page test.
+    #[test]
+    fn context_accessors_resolve_to_the_values_their_providers_set() {
+        #[component]
+        fn AssertAccessors() -> Element {
+            use_context_provider(|| SearchQuery(Signal::new("dune".to_string())));
+            use_context_provider(|| {
+                CoverCacheBust(Signal::new(HashMap::from([("book-1".to_string(), 3u32)])))
+            });
+            use_context_provider(|| CurrentUser(Signal::new(None)));
+            use_context_provider(PlaybackState::new);
+
+            assert_eq!(use_search_query().0(), "dune");
+            assert_eq!(cover_bust_for(use_cover_cache_bust().0, "book-1"), 3);
+            assert_eq!(use_current_user().0(), None);
+            assert_eq!((use_playback().rate)(), 1.0);
+            rsx! {}
+        }
+        VirtualDom::new(AssertAccessors).rebuild_in_place();
     }
 }

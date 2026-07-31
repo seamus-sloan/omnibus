@@ -42,3 +42,48 @@ pub fn PageNotFound(
         Link { to: back_to, class: "btn", "{back_label}" }
     }
 }
+
+// `PageError`/`PageNotFound` both render a `dioxus_router::Link`, which
+// panics without a live `RouterContext` — only obtainable by mounting
+// `dioxus_router::Router`, and there's no route in this crate's `Route` enum
+// that resolves to a bare `PageError`/`PageNotFound` to mount it through.
+// This is the same constraint that keeps `TopNav`'s full render untested
+// (`components::top_nav`): Dioxus catches the panic per-component (it
+// doesn't abort the whole render), so the assertions below on the
+// surrounding, Link-free markup still hold — only the link's own text is
+// unverifiable here.
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::*;
+    use crate::test_support::render;
+
+    #[test]
+    fn page_loading_renders_the_shared_subtitle_placeholder() {
+        let html = render(rsx! { PageLoading {} });
+        assert!(html.contains("class=\"subtitle\""));
+        assert!(html.contains("Loading"));
+    }
+
+    #[test]
+    fn page_error_renders_the_message_as_an_alert() {
+        let html = render(rsx! {
+            PageError {
+                message: "Could not load this book.".to_string(),
+                back_to: Route::Landing {},
+            }
+        });
+        assert!(html.contains("role=\"alert\""));
+        assert!(html.contains("Could not load this book."));
+    }
+
+    #[test]
+    fn page_not_found_renders_the_subject() {
+        let html = render(rsx! {
+            PageNotFound {
+                subject: "This book".to_string(),
+                back_to: Route::Landing {},
+            }
+        });
+        assert!(html.contains("This book not found."));
+    }
+}

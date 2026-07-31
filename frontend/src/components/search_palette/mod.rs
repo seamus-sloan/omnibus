@@ -143,3 +143,50 @@ pub fn use_palette_global_shortcut() {
 /// non-mobile targets (SSR + native) without dragging in `web_sys`.
 #[cfg(all(not(feature = "web"), not(feature = "mobile")))]
 pub fn use_palette_global_shortcut() {}
+
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::*;
+    use crate::test_support::render_in_vdom;
+
+    /// Provides the `PaletteOpen` context both public components read, then
+    /// mounts them side by side, starting closed — mirrors how `App`
+    /// provides the context and `TopNav`/`ScreenLayout` mount the trigger
+    /// and overlay separately. The `open` branch renders `SpOverlay`, whose
+    /// body calls `use_navigator()`, which needs a live `Router` no test in
+    /// this crate constructs (the same reason `TopNav`'s own render is
+    /// untested) — so only the closed state (the SSR/first-paint default,
+    /// rule 07) is exercised here.
+    fn closed_harness() -> Element {
+        use_context_provider(|| PaletteOpen(Signal::new(false)));
+        rsx! {
+            SearchPaletteTrigger {}
+            SearchPaletteOverlay {}
+        }
+    }
+
+    #[test]
+    fn search_palette_trigger_renders_the_trigger_button() {
+        let html = render_in_vdom(closed_harness);
+        assert!(html.contains("data-testid=\"search-trigger\""));
+        assert!(html.contains("Search"));
+    }
+
+    #[test]
+    fn search_palette_overlay_renders_nothing_while_closed() {
+        let html = render_in_vdom(closed_harness);
+        assert!(!html.contains("sp-scrim"));
+        assert!(!html.contains("sp-panel"));
+    }
+
+    // The `web` arm registers a real `keydown` listener via `web_sys` and
+    // needs the wasm32 target, so only the non-web no-op is exercisable
+    // here — same blind spot `contexts::use_can_upload`'s test already has.
+    // It's still worth pinning: `App` calls this unconditionally on every
+    // non-mobile target, so a panic here would take the whole app down.
+    #[cfg(not(feature = "mobile"))]
+    #[test]
+    fn use_palette_global_shortcut_non_web_fallback_is_a_no_op() {
+        use_palette_global_shortcut();
+    }
+}

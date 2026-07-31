@@ -114,3 +114,37 @@ pub fn AuthShell(
         }
     }
 }
+
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::*;
+    use crate::test_support::render;
+
+    #[test]
+    fn auth_shell_renders_kicker_title_lede_and_children() {
+        let html = render(rsx! {
+            AuthShell {
+                kicker: "Sign in".to_string(),
+                title: rsx! { "Welcome back" },
+                lede: Some("Pick up where you left off.".to_string()),
+                p { "the form goes here" }
+            }
+        });
+        assert!(html.contains("Sign in"));
+        assert!(html.contains("Welcome back"));
+        assert!(html.contains("Pick up where you left off."));
+        assert!(html.contains("the form goes here"));
+    }
+
+    #[test]
+    fn auth_shell_omits_the_lede_when_none() {
+        let html = render(rsx! {
+            AuthShell {
+                kicker: "Create account".to_string(),
+                title: rsx! { "Join Omnibus" },
+                p { "the form goes here" }
+            }
+        });
+        assert!(!html.contains("auth-shell-lede"));
+    }
+}

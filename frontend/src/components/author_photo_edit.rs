@@ -307,6 +307,30 @@ mod tests {
     use super::*;
     use crate::test_support::render_in_vdom;
 
+    /// Mounts the public `AuthorPhotoEditOverlay` in its default (closed)
+    /// state — the SSR/first-paint default (rule 07), since `open` starts
+    /// `false`.
+    fn overlay_harness() -> Element {
+        rsx! {
+            AuthorPhotoEditOverlay {
+                author_id: 1,
+                author_name: "Susanna Clarke".to_string(),
+                server_url: String::new(),
+                on_change: move |_| {},
+                span { "avatar" }
+            }
+        }
+    }
+
+    #[test]
+    fn author_photo_edit_overlay_renders_the_edit_button_and_children_but_no_modal_when_closed() {
+        let html = render_in_vdom(overlay_harness);
+        assert!(html.contains("data-testid=\"author-photo-edit\""));
+        assert!(html.contains("Edit photo for Susanna Clarke"));
+        assert!(html.contains("avatar"));
+        assert!(!html.contains("data-testid=\"author-photo-edit-modal\""));
+    }
+
     /// Mounts the real (private) `AuthorPhotoEditModal` — none of its three
     /// photo-source sections fetch on mount, so a single rebuild renders the
     /// full steady state, including the `ConfirmModal` wiring.

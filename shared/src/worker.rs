@@ -63,18 +63,6 @@ pub struct GhostFilesWarning {
     pub total: u32,
 }
 
-impl ProgressState {
-    /// Terminal states (`Done`, `Failed`) live in the "recently completed"
-    /// bucket; non-terminal states live in "active." Used by both the worker
-    /// snapshot partitioner and the client renderer.
-    pub fn is_terminal(&self) -> bool {
-        matches!(
-            self,
-            ProgressState::Done { .. } | ProgressState::Failed { .. }
-        )
-    }
-}
-
 /// One row of the worker progress feed. `task_id` is the process-local
 /// worker id (not stable across server restarts); the UI uses it only as a
 /// stable key for list rendering and dismiss-tracking.
@@ -102,13 +90,6 @@ pub struct TaskProgress {
 pub struct WorkerStatus {
     pub active: Vec<TaskProgress>,
     pub recent_complete: Vec<TaskProgress>,
-}
-
-impl WorkerStatus {
-    /// `true` when no tasks are active or recently completed.
-    pub fn is_empty(&self) -> bool {
-        self.active.is_empty() && self.recent_complete.is_empty()
-    }
 }
 
 #[cfg(test)]
