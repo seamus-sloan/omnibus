@@ -4,8 +4,8 @@
 //!
 //! These are presentational: every write goes back out through an
 //! [`EventHandler`] so [`super::CheckInPage`] owns the transport and the
-//! [`super::Stage`] transitions. Visible text here is the Maestro selector
-//! contract — keep it stable (rule 04, Mobile E2E).
+//! [`super::Stage`] transitions. Visible text here is the E2E selector
+//! contract — keep it stable (rule 04).
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
