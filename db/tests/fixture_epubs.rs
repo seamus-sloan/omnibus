@@ -82,6 +82,30 @@ const EXPECTED: &[Expected] = &[
         series_index: None,
         has_cover: true,
     },
+    // Reserved for the bulk-edit Playwright spec — see the matching entries
+    // (and reservation comment) in `ui_tests/playwright/tests/fixtures/epubs.ts`.
+    Expected {
+        filename: "bulk-target-1.epub",
+        title: "Bulk Target One",
+        authors: &["Katherine Johnson"],
+        publisher: Some("Bulk Test House"),
+        published: Some("1972-02-02"),
+        language: "en",
+        series: None,
+        series_index: None,
+        has_cover: true,
+    },
+    Expected {
+        filename: "bulk-target-2.epub",
+        title: "Bulk Target Two",
+        authors: &["Katherine Johnson"],
+        publisher: Some("Bulk Test House"),
+        published: Some("1974-03-03"),
+        language: "en",
+        series: None,
+        series_index: None,
+        has_cover: true,
+    },
     Expected {
         filename: "pioneers-3.epub",
         title: "Pioneers Vol 3: Cipher",

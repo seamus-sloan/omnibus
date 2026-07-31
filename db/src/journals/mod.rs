@@ -303,7 +303,7 @@ fn row_to_entry(row: &sqlx::sqlite::SqliteRow) -> Result<JournalEntry, JournalEr
         author_name: row.try_get("author_name")?,
         body_md,
         body_html,
-        progress: progress.map(|p| p as u8),
+        progress: progress.and_then(|p| u8::try_from(p).ok()),
         status: omnibus_shared::JournalStatus::from_db(&status),
         client_id: row.try_get("client_id")?,
         created_at: row.try_get("created_at")?,

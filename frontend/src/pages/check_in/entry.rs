@@ -1,7 +1,7 @@
 //! Manual ISBN entry — the scanner's always-available fallback. A text input
 //! (so a hardware keyboard, and a scanner gun emulating one, still works) over
 //! an on-screen keypad, with a 13-slot progress strip. Visible text is the
-//! Maestro selector contract — keep it stable (rule 04, Mobile E2E).
+//! E2E selector contract — keep it stable (rule 04).
 
 use dioxus::prelude::*;
 

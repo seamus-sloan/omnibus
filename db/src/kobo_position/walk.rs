@@ -11,11 +11,14 @@
 //!   stream. kepubify's injected markup (`koboSpan` wrappers, the
 //!   `book-columns` divs) contributes no characters, so the kepub and
 //!   source streams are identical whenever the underlying text is.
-//! - **CFI step accounting** mirrors the DOM epub.js sees: element child k
-//!   (1-based) is even step `2k`; consecutive character-data nodes coalesce
-//!   into one text cluster with odd index `2e+1` after e element children
-//!   (comments/PIs neither count nor split a cluster). Terminal offsets are
-//!   UTF-16 code units into the cluster's raw (uncollapsed) text.
+//! - **CFI step accounting** mirrors epub.js, the only consumer: element
+//!   child k (1-based) is even step `2k`; consecutive character-data nodes
+//!   coalesce into one text cluster whose odd index is `2t+1` after t
+//!   *earlier text clusters in the same parent* — epub.js numbers text
+//!   nodes among text siblings only, which diverges from the CFI spec's
+//!   interleaved numbering whenever an element precedes the cluster
+//!   (comments/PIs neither count nor split a cluster). Terminal offsets
+//!   are UTF-16 code units into the cluster's raw (uncollapsed) text.
 //! - **Anchors land on visible characters.** A span's position is the first
 //!   non-space normalized character at/after its start tag; a normalized
 //!   offset falling in collapsed whitespace resolves to the next visible
@@ -149,6 +152,10 @@ struct Builder {
     /// Per-open-element count of element children seen so far. One frame
     /// per open element, root included.
     child_counts: Vec<u32>,
+    /// Per-open-element count of text clusters closed or open so far —
+    /// the epub.js text-index counter (text nodes numbered among text
+    /// siblings only). Frames mirror `child_counts`.
+    text_counts: Vec<u32>,
     /// Element steps from the root element's children down to the open
     /// element — `<body>` itself contributes the leading step (its
     /// position among `<html>`'s children), matching the CFI tail path.
@@ -183,11 +190,13 @@ impl Builder {
             self.body_depth += 1;
         }
         self.child_counts.push(0);
+        self.text_counts.push(0);
     }
 
     fn element_end(&mut self, _local: &str) {
         self.open_cluster = None;
         self.child_counts.pop();
+        self.text_counts.pop();
         if !self.child_counts.is_empty() {
             self.steps.pop();
         }
@@ -203,10 +212,13 @@ impl Builder {
         let cluster = match self.open_cluster {
             Some(i) => i,
             None => {
-                let elements_so_far = self.child_counts.last().copied().unwrap_or(0);
+                let clusters_so_far = self.text_counts.last().copied().unwrap_or(0);
+                if let Some(t) = self.text_counts.last_mut() {
+                    *t += 1;
+                }
                 self.clusters.push(Cluster {
                     element_steps: self.steps.clone(),
-                    text_index: elements_so_far * 2 + 1,
+                    text_index: clusters_so_far * 2 + 1,
                     norm_start: self.norm_len,
                     norm_len: 0,
                     entered_in_run: self.in_run || !self.emitted_any,
@@ -277,7 +289,7 @@ impl FileIndex {
     pub(super) fn snippet_at(&self, offset: u64) -> String {
         self.norm
             .chars()
-            .skip(offset as usize)
+            .skip(usize::try_from(offset).unwrap_or(usize::MAX))
             .take(SNIPPET_CHARS)
             .collect()
     }
@@ -419,7 +431,7 @@ impl FileIndex {
     fn back_land(&self, t: u64) -> Option<u64> {
         self.norm
             .chars()
-            .take(t as usize + 1)
+            .take(usize::try_from(t).map_or(usize::MAX, |t| t.saturating_add(1)))
             .enumerate()
             .filter(|(_, c)| *c != ' ')
             .last()
@@ -432,7 +444,10 @@ impl FileIndex {
     /// document with no text at all.
     fn land(&self, t: u64) -> Option<u64> {
         let mut idx = t;
-        let mut chars = self.norm.chars().skip(t as usize);
+        let mut chars = self
+            .norm
+            .chars()
+            .skip(usize::try_from(t).unwrap_or(usize::MAX));
         loop {
             match chars.next() {
                 Some(' ') => idx += 1,
@@ -446,6 +461,11 @@ impl FileIndex {
             }
         }
     }
+}
+
+/// `char::len_utf16` as `u32` — the length is always 1 or 2.
+fn len_utf16_u32(c: char) -> u32 {
+    u32::try_from(c.len_utf16()).unwrap_or(2)
 }
 
 /// Replay whitespace collapsing inside one cluster to convert a normalized
@@ -472,7 +492,7 @@ fn replay_offset(cluster: &Cluster, norm_target: u64) -> Option<u32> {
             norm_pos += 1;
             in_run = false;
         }
-        utf16 += c.len_utf16() as u32;
+        utf16 += len_utf16_u32(c);
     }
     None
 }
@@ -492,7 +512,7 @@ fn replay_offset_after(cluster: &Cluster, norm_target: u64) -> Option<u32> {
             in_run = false;
             true
         };
-        utf16 += c.len_utf16() as u32;
+        utf16 += len_utf16_u32(c);
         if emits {
             if norm_pos == norm_target {
                 return Some(utf16);
@@ -523,7 +543,7 @@ fn replay_norm(cluster: &Cluster, utf16_target: u32) -> u64 {
             norm_pos += 1;
             in_run = false;
         }
-        utf16 += c.len_utf16() as u32;
+        utf16 += len_utf16_u32(c);
     }
     norm_pos
 }

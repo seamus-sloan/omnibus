@@ -120,6 +120,9 @@ fn check_mass_missing(removed: usize, db_file_backed: usize) -> Result<(), MassM
     if removed <= MASS_MISSING_MIN_ABSOLUTE || db_file_backed == 0 {
         return Ok(());
     }
+    // Ratio only feeds a threshold comparison and a log line; library sizes
+    // sit far below f64's 2^52 exact-integer range.
+    #[allow(clippy::cast_precision_loss)]
     let fraction = removed as f64 / db_file_backed as f64;
     if fraction > MASS_MISSING_FRACTION {
         return Err(MassMissingError {
@@ -141,7 +144,10 @@ fn ghost_warning_threshold_exceeded(removed: usize, db_file_backed: usize) -> bo
     if removed <= MASS_MISSING_MIN_ABSOLUTE || db_file_backed == 0 {
         return false;
     }
-    removed as f64 / db_file_backed as f64 > MASS_MISSING_WARN_FRACTION
+    // Same threshold-only ratio as `check_mass_missing` above.
+    #[allow(clippy::cast_precision_loss)]
+    let fraction = removed as f64 / db_file_backed as f64;
+    fraction > MASS_MISSING_WARN_FRACTION
 }
 
 /// Per-scan tallies handed back to the worker so it can decide whether to

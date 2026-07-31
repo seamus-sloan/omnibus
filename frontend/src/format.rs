@@ -9,6 +9,9 @@ use omnibus_shared::BookFileInfo;
 /// `"0 B"`.
 pub fn file_size(size_bytes: i64) -> Option<String> {
     let bytes = u64::try_from(size_bytes).ok().filter(|bytes| *bytes > 0)?;
+    // Display-only, rendered at one decimal — precision loss above f64's
+    // 2^52 exact-integer range is invisible at that granularity.
+    #[allow(clippy::cast_precision_loss)]
     let (value, unit) = if bytes >= 1_000_000_000 {
         (bytes as f64 / 1_000_000_000.0, "GB")
     } else if bytes >= 1_000_000 {

@@ -129,9 +129,8 @@ jobs:
 
       # XCUITest drives a real simulator, so it wears flakiness the unit suite
       # doesn't; -retry-tests-on-failure gives each failed test one retry
-      # before the run counts as red (mirrors mobile-e2e.yml's whole-suite
-      # retry posture). Test Analytics only — UI-test line coverage isn't
-      # meaningful, matching the Playwright/Maestro suites.
+      # before the run counts as red. Test Analytics only — UI-test line
+      # coverage isn't meaningful, matching the Playwright suite.
       - name: Run UI tests
         env:
           OMNIBUS_IOS_RESULTS_DIR: ${{ github.workspace }}/ios-test-results

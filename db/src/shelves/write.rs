@@ -281,7 +281,7 @@ async fn pick_accent(pool: &SqlitePool, owner_id: i64) -> Result<String, ShelfEr
         .bind(owner_id)
         .fetch_one(pool)
         .await?;
-    Ok(ACCENTS[(n as usize) % ACCENTS.len()].to_string())
+    Ok(ACCENTS[usize::try_from(n).unwrap_or(0) % ACCENTS.len()].to_string())
 }
 
 async fn next_shelf_position(pool: &SqlitePool, owner_id: i64) -> Result<i64, ShelfError> {

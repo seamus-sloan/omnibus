@@ -38,6 +38,9 @@ pub(super) struct RowContext {
     pub save_field: EventHandler<(EditField, String)>,
     pub save_authors: EventHandler<Vec<String>>,
     pub save_tags: EventHandler<Vec<String>>,
+    /// Bulk-edit selection shared with the whole table (see
+    /// [`super::BookTableContext::selected`]).
+    pub selected: Signal<std::collections::BTreeSet<String>>,
 }
 
 /// Build the single-field override payload for a grid quick-edit save.

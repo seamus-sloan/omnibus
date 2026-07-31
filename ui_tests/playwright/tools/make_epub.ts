@@ -389,6 +389,33 @@ const FIXTURES: EpubInput[] = [
     language: "en",
     withCover: true,
   },
+
+  // --- Bulk-edit targets (2 books) ---
+  // Reserved for landing_bulk_edit.spec.ts, which bulk-writes publisher/tag
+  // overrides to BOTH books (reverted at test end, but the suite is
+  // fullyParallel, so no other spec may read them). Author is unique across
+  // ALL fixtures (ebook + audiobook) — shelves.spec.ts asserts exact
+  // author-scoped match counts.
+  {
+    filename: "bulk-target-1.epub",
+    id: "urn:omnibus-test:bulk-target-1",
+    title: "Bulk Target One",
+    authors: ["Katherine Johnson"],
+    publisher: "Bulk Test House",
+    published: "1972-02-02",
+    language: "en",
+    withCover: true,
+  },
+  {
+    filename: "bulk-target-2.epub",
+    id: "urn:omnibus-test:bulk-target-2",
+    title: "Bulk Target Two",
+    authors: ["Katherine Johnson"],
+    publisher: "Bulk Test House",
+    published: "1974-03-03",
+    language: "en",
+    withCover: true,
+  },
 ];
 
 /**

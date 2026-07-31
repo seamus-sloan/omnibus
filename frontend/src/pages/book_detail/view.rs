@@ -22,7 +22,7 @@ use super::hero::{self, BdHeroSection};
 use super::mobile;
 #[cfg(not(feature = "mobile"))]
 use super::physical;
-use super::{BdCrumbItem, DescriptionSignals};
+use super::{BdCrumbItem, DescriptionSignals, PhysSignals};
 
 fn kicker_label(year: &str) -> String {
     if year.is_empty() {
@@ -163,6 +163,7 @@ pub(super) struct LoadedCtx {
     pub(super) server_url: String,
     pub(super) is_admin: bool,
     pub(super) refresh: Signal<u32>,
+    pub(super) phys: PhysSignals,
 }
 
 /// Render the fully-loaded book detail view.
@@ -178,6 +179,7 @@ pub(super) fn render_loaded(
         server_url,
         is_admin,
         refresh,
+        phys,
     } = ctx;
     // Mobile re-flows the same loaded data into a single column; the web body
     // (hero + rail + suggestions + merge UI) isn't rendered there.
@@ -185,9 +187,10 @@ pub(super) fn render_loaded(
     let out = {
         // The merge and delete affordances stay web-only; the discovery blocks
         // (author cluster + suggestions) now render on mobile too. The physical
-        // panel is web-only too (issue #1186 scope), so `refresh` is unused here.
+        // panel + wishlist rail are web-only too (issue #1186 scope), so
+        // `refresh` and `phys` are unused here.
         let _ = rail;
-        let _ = refresh;
+        let _ = (refresh, phys);
         mobile::render_loaded_mobile(mobile::MobileBookView {
             b,
             author_books,
@@ -224,8 +227,6 @@ pub(super) fn render_loaded(
         let uuid = b.unique_identifier.clone().unwrap_or_default();
         // Extract the physical-panel inputs before `b` is moved into the rail.
         let is_fileless = b.formats.is_empty();
-        let isbn13 = b.isbn13.clone();
-        let panel_author = primary_author.clone();
         let accent = b.accent.clone();
         rsx! {
             div { class: "bd-root", style: "{accent_style}",
@@ -238,16 +239,13 @@ pub(super) fn render_loaded(
                         has_ebook,
                         has_audio,
                     },
+                    phys,
                 }
                 physical::BdPhysicalPanel {
-                    identity: physical::BdBookIdentity {
-                        uuid: uuid.clone(),
-                        is_fileless,
-                        isbn: isbn13,
-                        title: title.clone(),
-                        author: panel_author,
-                    },
+                    uuid: uuid.clone(),
+                    is_fileless,
                     refresh,
+                    phys,
                 }
                 section { class: "bd-body-grid",
                     BdBodyMain {

@@ -304,7 +304,11 @@ fn parse_half_stars(v: &str) -> Result<i64, ShelfError> {
             "rating must be between 0.5 and 5".into(),
         ));
     }
-    Ok((stars * 2.0).round() as i64)
+    // The 0.5..=5.0 range check above bounds the scaled value to 1..=10, so
+    // the cast cannot truncate or saturate.
+    #[allow(clippy::cast_possible_truncation)]
+    let half_stars = (stars * 2.0).round() as i64;
+    Ok(half_stars)
 }
 
 /// Parse a relative window (`"30d"`, `"2w"`, `"3m"`, `"1y"`) into a SQLite

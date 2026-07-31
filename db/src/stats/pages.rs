@@ -53,7 +53,11 @@ pub(super) async fn pages_read(
 /// rounding to the nearest page rather than truncating (a 260-word "book"
 /// is one page, not zero).
 fn words_to_pages(words: i64) -> i64 {
-    (words as f64 / WORDS_PER_PAGE).round() as i64
+    // Word totals sit far below f64's 2^52 exact-integer range, and dividing
+    // by `WORDS_PER_PAGE` only shrinks the value, so both casts are in-range.
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+    let pages = (words as f64 / WORDS_PER_PAGE).round() as i64;
+    pages
 }
 
 #[cfg(test)]

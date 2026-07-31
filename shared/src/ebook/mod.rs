@@ -13,7 +13,7 @@ mod validator;
 mod tests;
 
 pub use metadata::{BookFileInfo, Contributor, EbookMetadata, Identifier};
-pub use overrides::MetadataOverrides;
+pub use overrides::{BulkMetadataEdit, MetadataOverrides};
 pub use validator::{
     file_etag, DownloadFormat, DownloadValidator, DownloadValidatorQuery, DownloadValidatorRequest,
     DownloadValidatorResponse, MAX_VALIDATOR_QUERY,
