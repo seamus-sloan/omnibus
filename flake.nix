@@ -39,9 +39,8 @@
         # to install them at runtime — they must be declared here instead.
         rustMobileTargets = [
           fenix.packages.${system}.targets.aarch64-linux-android.latest.rust-std
-          # x86_64 Android: CI emulators (mobile-e2e.yml) run x86_64 system
-          # images — arm64 images need an arm64 host, which GHA Linux KVM
-          # runners aren't.
+          # x86_64 Android: x86_64 hosts run x86_64 emulator system images —
+          # arm64 images need an arm64 host.
           fenix.packages.${system}.targets.x86_64-linux-android.latest.rust-std
         ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
           fenix.packages.${system}.targets.aarch64-apple-ios.latest.rust-std
@@ -207,10 +206,6 @@
           # matched `wasm-bindgen` — `dx serve --platform ios/android` never
           # invokes wasm-bindgen/binaryen.
           pkgs-unstable.dioxus-cli
-          # Maestro drives the mobile E2E suite (ui_tests/maestro) against a
-          # booted simulator/emulator. It's a JVM app, so it rides the same
-          # jdk21 as the Android toolchain above.
-          pkgs-unstable.maestro
         ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
           pkgs.glib
           pkgs.gtk3

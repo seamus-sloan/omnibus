@@ -2,7 +2,7 @@
 //!
 //! Thin chrome around the reusable [`BarcodeScanner`]: the flow owns what a
 //! decode means, the component owns the camera. Visible text here is the
-//! Maestro selector contract — keep it stable (rule 04, Mobile E2E).
+//! E2E selector contract — keep it stable (rule 04).
 
 use dioxus::prelude::*;
 

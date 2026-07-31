@@ -186,8 +186,8 @@ pnpm exec playwright test
 pnpm run lint               # biome check (or `just lint-ts` for biome + tsc)
 ```
 
-Mobile tests are using [Maestro](https://maestro.dev/) to allow for writing a test once
-validating on both operating systems.
+Native iOS UI coverage lives in the `omnibusUITests` suite under `omnibus-ios/`
+(`just ios-test-ui` locally; `ios-tests.yml` in CI).
 
 ## Project layout
 

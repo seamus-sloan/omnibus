@@ -108,9 +108,6 @@ cargo build -p omnibus-mobile
 xcrun simctl boot "iPhone 17" 2>/dev/null; dx serve --platform ios --package omnibus-mobile
 dx serve --platform android --package omnibus-mobile
 adb reverse tcp:3000 tcp:3000                               # after Android emulator boots
-
-# Mobile E2E (Maestro; needs booted sim with app installed + running server)
-just e2e-mobile                                             # port from dev-up env.sh, else :3000
 ```
 
 ## Project direction
