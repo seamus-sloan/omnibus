@@ -120,7 +120,15 @@ pub async fn reindex_audiobooks_with_progress(
     }
     let diff = diff_library(&groups_as_stat, &db_rows, &library_root, trustworthy);
     let removed_count = diff.removed.len();
+    let moved_count = diff.moved.len();
     check_mass_missing(removed_count, db_file_backed)?;
+    if moved_count > 0 {
+        tracing::info!(
+            library_path,
+            moved = moved_count,
+            "reindex_audiobooks: matched relocated groups by stat pair"
+        );
+    }
 
     // Phase B: parse only the New and Changed groups.
     let groups_by_group_path: std::collections::HashMap<String, audiobook::AudiobookGroup> = groups
@@ -151,6 +159,7 @@ pub async fn reindex_audiobooks_with_progress(
     let plan = sync::AudiobookSyncPlan {
         new_books: parsed.0,
         changed_books: parsed.1,
+        moved: diff.moved,
         removed_uuids: diff.removed,
         backfill: diff.backfill,
     };
@@ -159,5 +168,6 @@ pub async fn reindex_audiobooks_with_progress(
     Ok(ReindexStats {
         removed: removed_count,
         file_backed_total: db_file_backed,
+        moved: moved_count,
     })
 }

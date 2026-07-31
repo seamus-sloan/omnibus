@@ -13,6 +13,7 @@ use super::attach;
 
 mod backfill;
 mod changed;
+mod moved;
 mod new;
 mod removed;
 mod shared;
@@ -21,6 +22,9 @@ mod shared;
 mod tests;
 
 pub(super) use shared::{clear_missing_files_flag, materialize_new_covers};
+// Shared with the audiobook pipeline: a relocation is the same write for both
+// library kinds (see the `moved` module doc).
+pub(super) use moved::sync_moved;
 
 use backfill::stamp_last_indexed;
 use changed::sync_changed;
@@ -52,16 +56,36 @@ impl From<crate::settings::SettingsError> for SyncError {
     }
 }
 
+/// One file the diff recognized as **relocated** rather than
+/// deleted-and-re-added. Deliberately not a `ParseTarget`: a move needs no
+/// Phase-B parse, and carrying one would invite a caller to hand it to the
+/// parser. See the Moved section of the [`crate::indexer::diff_library`]
+/// bucket contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MovedFile {
+    /// The identity to relocate: `books.uuid` for the file a book is anchored
+    /// on, the `merged_uuids.uuid` for an attached file. Which one it is
+    /// decides whether the book's own `scan_key` moves — see [`sync_moved`].
+    pub uuid: String,
+    /// The file's new library-relative path — its new `scan_key`, and the
+    /// source of the new `books.path` / `book_files.filename`.
+    pub filename: String,
+}
+
 /// Per-bucket payload for [`sync_books`]. Built by
 /// `crate::indexer::diff_library` (plus the Phase-B parse for new + changed).
 ///
-/// The four buckets are mutually exclusive — a given uuid appears in at
+/// The five buckets are mutually exclusive — a given uuid appears in at
 /// most one of them per sync — and the diff already ordered them
 /// deterministically.
 #[derive(Debug, Default)]
 pub struct SyncPlan {
     pub new_books: Vec<crate::ebook::IndexedBook>,
     pub changed_books: Vec<crate::ebook::IndexedBook>,
+    /// Files that changed path but not content. Applied before `new_books`
+    /// so an unrelated new file can't claim a moved file's format slot by
+    /// title+author first.
+    pub moved: Vec<MovedFile>,
     pub removed_uuids: Vec<String>,
     /// `(uuid, mtime_epoch, size_bytes)` — see the Backfill section of
     /// the [`crate::indexer`] module doc for why this exists.
@@ -78,14 +102,16 @@ pub struct SyncPlan {
 ///    `book_files` row but retain the `books` row, its links, FTS, and
 ///    soft-ref user data so the book stays in browse/search (the grid
 ///    hides it via `EXISTS book_files`) and the uuid survives.
-/// 3. Update Changed in place (preserves `books.id`); wipe-and-rewrite
+/// 3. Relocate Moved files: repoint the path columns of rows that already
+///    exist. No parse, no insert, no delete.
+/// 4. Update Changed in place (preserves `books.id`); wipe-and-rewrite
 ///    link rows + FTS row for each.
-/// 4. Insert New (autoincrement assigns a fresh id).
-/// 5. Backfill: UPDATE `book_files.(mtime_epoch, size_bytes)` only — no
+/// 5. Insert New (autoincrement assigns a fresh id).
+/// 6. Backfill: UPDATE `book_files.(mtime_epoch, size_bytes)` only — no
 ///    OPF re-parse, no link writes, no FTS write. See the Backfill rule
 ///    in the [`crate::indexer`] module doc.
-/// 6. Delete taxonomy rows left with zero books by step 3's link wipe.
-/// 7. Stamp `scan_roots.last_indexed`.
+/// 7. Delete taxonomy rows left with zero books by step 4's link wipe.
+/// 8. Stamp `scan_roots.last_indexed`.
 ///
 /// Post-commit (best-effort, logged on failure — covers are a
 /// rebuildable cache):
@@ -108,9 +134,9 @@ pub async fn sync_books(
 /// [`sync_books`] variant that calls `on_progress(processed, total)`
 /// after each per-book write so the worker can surface a determinate
 /// progress bar. `total` is the count of buckets that loop per book —
-/// Changed + New. Removed and Backfill are batched and not reported as
-/// per-book progress (they're invisible to the user-facing "Scanning"
-/// step).
+/// Changed + New. Removed, Moved and Backfill are cheap path-column
+/// writes with no parse behind them, so they are not reported as per-book
+/// progress (they're invisible to the user-facing "Scanning" step).
 pub async fn sync_books_with_progress(
     pool: &SqlitePool,
     library_path: &str,
@@ -132,6 +158,11 @@ pub async fn sync_books_with_progress(
     // row — drop their `book_files` row + `merged_uuids` entry instead
     // (the target book survives, possibly fileless).
     attach::remove_attached_files(&mut tx, &plan.removed_uuids).await?;
+    // Before New: the move path never drops a `book_files` row, so it can't
+    // open an attach slot — but if `sync_new` ran first, an unrelated new file
+    // could claim a book by title+author and the moved file would then find
+    // its own format slot occupied.
+    sync_moved(&mut tx, library_id, library_path, &plan.moved).await?;
     let mut processed: u32 = 0;
     let changed_covers = sync_changed(
         &mut tx,
@@ -215,9 +246,8 @@ pub async fn replace_books(
         library_path,
         SyncPlan {
             new_books: books,
-            changed_books: vec![],
             removed_uuids,
-            backfill: vec![],
+            ..Default::default()
         },
     )
     .await

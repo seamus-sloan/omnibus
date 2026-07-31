@@ -29,6 +29,45 @@ pub(super) async fn find_attachment_by_scan_key(
     .await
 }
 
+/// The attachment `uuid` names under `library_path`, as
+/// `(book_id, scan_key)`. The move detector's uuids come from both diff
+/// projections; this is the lookup for the `merged_uuids`-backed half, and
+/// the inverse of [`find_attachment_by_scan_key`] (which keys on the path
+/// because it starts from a file on disk).
+pub(super) async fn find_attachment_by_uuid(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    library_path: &str,
+    uuid: &str,
+) -> Result<Option<(i64, String)>, sqlx::Error> {
+    let row: Option<(i64, String)> = sqlx::query_as(
+        "SELECT book_id, COALESCE(scan_key, '') FROM merged_uuids
+          WHERE uuid = ? AND library_path = ?",
+    )
+    .bind(uuid)
+    .bind(library_path)
+    .fetch_optional(&mut **tx)
+    .await?;
+    // A ledger row with no `scan_key` predates migration 0026 and has no
+    // path for the caller to move off of.
+    Ok(row.filter(|(_, scan_key)| !scan_key.is_empty()))
+}
+
+/// Repoint an attachment's ledger row at `new_scan_key` after its file
+/// moved. The uuid is the row's durable handle, so it is deliberately left
+/// alone — re-deriving it from the new path would orphan the attachment.
+pub(super) async fn relocate_attachment(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    uuid: &str,
+    new_scan_key: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE merged_uuids SET scan_key = ? WHERE uuid = ?")
+        .bind(new_scan_key)
+        .bind(uuid)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
 /// Conservative title+author match for a brand-new file: the book this
 /// file should attach to, if there is **exactly one** candidate with the
 /// same normalized title and author that doesn't already have a

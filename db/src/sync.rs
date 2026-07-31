@@ -16,7 +16,7 @@ mod tests;
 
 pub(crate) use audiobooks::insert_chapters;
 pub use audiobooks::{sync_audiobooks, sync_audiobooks_with_progress, AudiobookSyncPlan};
-pub use books::{replace_books, sync_books, sync_books_with_progress, SyncPlan};
+pub use books::{replace_books, sync_books, sync_books_with_progress, MovedFile, SyncPlan};
 
 // The single `books_fts` door. `upsert_fts` / `delete_fts` are
 // `pub(crate)` for the in-tx write sites (sync / merge / undo /
