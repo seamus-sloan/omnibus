@@ -179,7 +179,7 @@ test("surfaces an error when the wishlist add fails", async ({
     async () => page.getByTestId("add-to-wishlist").click(),
   );
 
-  await expect(page.getByTestId("physical-error")).toBeVisible();
+  await expect(page.getByTestId("wishlist-error")).toBeVisible();
   // The optimistic state reverted — still offering to add.
   await expect(page.getByTestId("add-to-wishlist")).toBeVisible();
 });

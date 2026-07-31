@@ -193,8 +193,11 @@ pub(super) fn BdWishlistRailSlot(identity: BdBookIdentity, phys: PhysSignals) ->
         div { class: "divider" }
         div { class: "label bd-wishlist-head", "Physical wishlist" }
         {content}
+        // Distinct testid from the panel's `physical-error`: both surfaces can
+        // error at once (load failure + failed add/remove), and a shared id
+        // would make Playwright selectors ambiguous.
         if let Some(e) = err.read().clone() {
-            p { role: "alert", class: "bd-phys-error", "data-testid": "physical-error", "{e}" }
+            p { role: "alert", class: "bd-phys-error", "data-testid": "wishlist-error", "{e}" }
         }
     }
 }
