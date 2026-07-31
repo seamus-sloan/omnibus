@@ -13,6 +13,7 @@ pub mod book_summary;
 pub mod bookmarks;
 pub mod books;
 pub mod browse;
+pub mod comic;
 pub mod covers;
 pub mod deletion;
 pub mod discovery;

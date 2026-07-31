@@ -238,11 +238,19 @@ fn public_domain_epubs_parse_with_expected_metadata() {
     let dir = fixtures_dir();
     let result = omnibus_db::ebook::scan_ebook_library(Some(dir.to_str().unwrap()));
     assert!(result.error.is_none(), "scan errored: {:?}", result.error);
+    // Count only `.epub` rows: the scanner also indexes CBZ archives, and
+    // developers may keep local (unpublished) comics in this directory to
+    // exercise that path — those must not fail the EPUB pinning here.
+    let epub_count = result
+        .books
+        .iter()
+        .filter(|b| b.metadata.filename.ends_with(".epub"))
+        .count();
     assert_eq!(
-        result.books.len(),
+        epub_count,
         EXPECTED.len(),
         "public-domain fixture count drifted: scanner found {}, EXPECTED has {}",
-        result.books.len(),
+        epub_count,
         EXPECTED.len(),
     );
 

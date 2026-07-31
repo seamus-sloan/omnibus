@@ -1,8 +1,9 @@
-//! EPUB metadata extraction (server-only). Walks the configured library
-//! directory, parses the OPF for each `.epub`, and produces an
-//! [`IndexedBook`] per file — metadata plus the raw cover bytes. Parse
-//! failures surface as a per-book error rather than hiding the rest of the
-//! library. Consumed by [`crate::indexer`], which writes the output to the DB.
+//! Ebook metadata extraction (server-only). Walks the configured library
+//! directory, parses the OPF for each `.epub` (CBZ archives dispatch to
+//! [`crate::comic`]), and produces an [`IndexedBook`] per file — metadata
+//! plus the raw cover bytes. Parse failures surface as a per-book error
+//! rather than hiding the rest of the library. Consumed by
+//! [`crate::indexer`], which writes the output to the DB.
 
 use std::path::Path;
 
@@ -15,6 +16,7 @@ mod stat;
 mod wordcount;
 
 pub use accent::extract_accent;
+pub(crate) use cover::resolve_cover_with;
 pub use parse::{parse_ebook_targets, ParseTarget};
 pub use stat::{stat_ebook_library, StatEntry, StatScanResult};
 pub use wordcount::estimate_word_count;
@@ -23,9 +25,10 @@ pub use wordcount::estimate_word_count;
 /// [`crate::indexer::reindex`] to scope the diff's "currently indexed"
 /// view to ebook rows — prevents `sync_books` from classifying foreign
 /// (audiobook) rows under a shared `library_path` as Removed and
-/// deleting them. Uppercased to match
-/// [`crate::helpers::split_filename`]'s output.
-pub const EBOOK_FORMATS: &[&str] = &["EPUB"];
+/// deleting them. Also (lowercased) the extensions the stat walk picks
+/// up, so the diff's view and the walk can never disagree. Uppercased to
+/// match [`crate::helpers::split_filename`]'s output.
+pub const EBOOK_FORMATS: &[&str] = &["CBZ", "EPUB"];
 
 /// A single scanner output row — metadata plus the raw cover image bytes
 /// (and mime), if the epub included one. Consumed by [`crate::sync::sync_books`].
@@ -98,7 +101,7 @@ pub fn scan_ebook_library_with(path: Option<&str>, opts: ScanOptions) -> ScanRes
     };
     let dir = Path::new(root);
     // Skip the synthetic placeholders the stat walk emits for unreadable
-    // subdirectories — Phase B should only see real `.epub` files.
+    // subdirectories — Phase B should only see real ebook files.
     // Without this filter, parse_ebook_targets calls extract_metadata on
     // the directory path (wasted work + bogus parse-error row), and the
     // explicit error-row append below produces a duplicate.

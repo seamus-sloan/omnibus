@@ -56,10 +56,10 @@ pub struct StatScanResult {
     pub saw_any_file: bool,
 }
 
-/// Phase A: walk the library and `stat` every `.epub` without opening the
-/// zip. Returns one `StatEntry` per file plus a synthetic entry (empty
-/// `uuid`) for any unreadable subdirectory — the legacy
-/// `scan_ebook_library_with` shape surfaces these as error rows.
+/// Phase A: walk the library and `stat` every indexed ebook file (`.epub`
+/// / `.cbz`) without opening the zip. Returns one `StatEntry` per file
+/// plus a synthetic entry (empty `uuid`) for any unreadable subdirectory —
+/// the legacy `scan_ebook_library_with` shape surfaces these as error rows.
 ///
 /// `library_path_key` is retained for signature compatibility with the
 /// audiobook walker; the diff key is now the library-relative path (F2), so
@@ -162,7 +162,8 @@ fn unreadable_subdir_entry(base: &Path, current: &Path, err: &std::io::Error) ->
 }
 
 /// Process one `read_dir` entry: push subdirectories onto `stack` for the
-/// walk, and append a stat row for each `.epub` file. Non-epub files and
+/// walk, and append a stat row for each indexed ebook file (an extension in
+/// [`crate::ebook::EBOOK_FORMATS`] — `.epub` / `.cbz`). Other files and
 /// entries whose `file_type()` can't be read are skipped. `saw_any_file` is
 /// set for every regular file regardless of extension (the "root isn't
 /// empty" signal, see the caller).
@@ -185,12 +186,17 @@ fn push_dir_entry(
         return;
     }
     *saw_any_file = true;
-    let is_epub = entry_path
+    // Keyed off EBOOK_FORMATS so the walk picks up exactly the formats the
+    // reindex diff scopes to — the two can never drift apart.
+    let is_indexed_ebook = entry_path
         .extension()
         .and_then(|s| s.to_str())
-        .map(|s| s.eq_ignore_ascii_case("epub"))
-        .unwrap_or(false);
-    if !is_epub {
+        .is_some_and(|s| {
+            crate::ebook::EBOOK_FORMATS
+                .iter()
+                .any(|f| s.eq_ignore_ascii_case(f))
+        });
+    if !is_indexed_ebook {
         return;
     }
     let relative = entry_path
