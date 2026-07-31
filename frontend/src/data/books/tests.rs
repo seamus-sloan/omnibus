@@ -7,7 +7,7 @@
 // its own thread + runtime, so there is no interleaving to deadlock on.
 #![allow(clippy::await_holding_lock)]
 
-use omnibus_shared::Contributor;
+use omnibus_shared::{Contributor, EbookMetadata, LibraryPage, SortDir, SortKey, ViewFilters};
 
 use crate::offline::cache;
 use crate::offline::store;
