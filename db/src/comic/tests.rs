@@ -248,6 +248,20 @@ fn read_page_returns_none_when_index_is_out_of_range() {
 }
 
 #[test]
+fn read_page_errors_when_a_page_exceeds_the_decompressed_byte_cap() {
+    let dir = make_test_dir("comic-read-page-cap");
+    // One byte past the (test-sized) cap — the bounded read must refuse it
+    // rather than buffer whatever the archive claims.
+    let oversized = vec![0u8; MAX_PAGE_BYTES as usize + 1];
+    let path = write_cbz(&dir, "bomb.cbz", &[("p1.jpg", &oversized)]);
+
+    let err = read_page(&path, 0).expect_err("over-cap page must error");
+    assert!(err.to_string().contains("byte cap"), "got: {err}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn read_page_propagates_error_when_file_is_not_a_zip() {
     let dir = make_test_dir("comic-read-page-err");
     let path = dir.join("broken.cbz");

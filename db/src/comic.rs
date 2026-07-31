@@ -36,10 +36,25 @@ pub fn list_pages(path: &Path) -> anyhow::Result<Vec<String>> {
     Ok(page_names(&archive))
 }
 
+/// Hard cap on a single decompressed page. A crafted archive can declare a
+/// false entry size or lean on deflate's ~1000:1 worst-case ratio to make a
+/// small `.cbz` decompress to gigabytes (a "zip bomb") — this bounds memory
+/// regardless of what the entry claims. 64 MiB comfortably covers any real
+/// scanned page while staying far below an OOM. Same shape as
+/// `epub_rewrite::archive::MAX_ENTRY_BYTES`.
+#[cfg(not(test))]
+const MAX_PAGE_BYTES: u64 = 64 * 1024 * 1024;
+/// Test builds use a much smaller cap so the zip-bomb regression test isn't
+/// compressing 64 MiB on every run — the bounded-read behavior under test
+/// doesn't depend on the cap's exact value.
+#[cfg(test)]
+const MAX_PAGE_BYTES: u64 = 64 * 1024;
+
 /// Read page `index` (0-based, in [`list_pages`] order) out of the archive:
-/// its mime type and decompressed bytes. `Ok(None)` when the index is out of
-/// range; `Err` only when the archive or entry itself is unreadable. One
-/// entry is decompressed per call — the archive is never extracted whole.
+/// its mime type and decompressed bytes, capped at [`MAX_PAGE_BYTES`].
+/// `Ok(None)` when the index is out of range; `Err` when the archive or
+/// entry is unreadable or the page exceeds the cap. One entry is
+/// decompressed per call — the archive is never extracted whole.
 pub fn read_page(path: &Path, index: usize) -> anyhow::Result<Option<(&'static str, Vec<u8>)>> {
     let file = File::open(path)?;
     let mut archive = zip::ZipArchive::new(file)?;
@@ -47,11 +62,16 @@ pub fn read_page(path: &Path, index: usize) -> anyhow::Result<Option<(&'static s
     let Some(name) = pages.get(index) else {
         return Ok(None);
     };
-    let mut entry = archive.by_name(name)?;
-    // Sized from the actual read, not the header's declared size — an
-    // attacker-controlled length field must not drive the allocation.
+    let entry = archive.by_name(name)?;
+    // Sized by the actual read, not the header's declared size — an
+    // attacker-controlled length field must not drive the allocation. One
+    // byte past the cap so a page landing exactly on the boundary reads
+    // clean while anything larger is distinguishable.
     let mut bytes = Vec::new();
-    entry.read_to_end(&mut bytes)?;
+    let read = entry.take(MAX_PAGE_BYTES + 1).read_to_end(&mut bytes)?;
+    if read as u64 > MAX_PAGE_BYTES {
+        anyhow::bail!("page {name} exceeds {MAX_PAGE_BYTES} byte cap");
+    }
     Ok(Some((mime_for_page(name), bytes)))
 }
 

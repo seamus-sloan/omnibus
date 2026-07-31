@@ -38,6 +38,9 @@ fn is_media_read_path(path: &str) -> bool {
         // a cross-origin XHR that carries neither cookie nor bearer header.
         // Only `/file` opts in; `/download` and `/kepub` stay header/cookie-only.
         || (path.starts_with("/api/ebooks/") && path.ends_with("/file"))
+        // CBZ pages feed the comic pager's `<img src>`, which from the mobile
+        // WebView can only carry the session as `?token=` — same as covers.
+        || (path.starts_with("/api/ebooks/") && path.contains("/pages/"))
         // Embedded journal images render into `<img src>` in the mobile
         // WebView's journal feed — same fetch constraints as covers/thumbs.
         || path.starts_with("/api/journals/images/")
