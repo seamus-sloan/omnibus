@@ -36,7 +36,7 @@ async fn second_user_needs_registration_enabled() {
 }
 
 #[tokio::test]
-async fn username_collision_nocase() {
+async fn create_user_rejects_case_insensitive_username_collision() {
     let p = pool().await;
     create_user(&p, "Alice", "hunter2-real-long").await.unwrap();
     set_registration_enabled(&p, true).await.unwrap();

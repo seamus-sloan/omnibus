@@ -974,7 +974,7 @@ async fn reindex_keeps_fts_row_count_in_sync() {
     );
 }
 #[tokio::test]
-async fn overrides_survive_reindex() {
+async fn replace_books_preserves_metadata_overrides_across_reindex() {
     let _covers = CoversTempDir::new("reindex_survive");
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")

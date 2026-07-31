@@ -97,7 +97,7 @@ fn status_defaults_keep_pre_drafts_payloads_compatible() {
 }
 
 #[test]
-fn status_serializes_lowercase() {
+fn journal_status_serializes_and_parses_lowercase_values() {
     assert_eq!(
         serde_json::to_string(&JournalStatus::Draft).expect("serializes"),
         r#""draft""#

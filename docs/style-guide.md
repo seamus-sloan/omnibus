@@ -315,9 +315,9 @@ like `search_books_finds_by_title_and_ranks_by_bm25`,
 `list_books_populates_formats_from_book_files`.
 
 **Anti-pattern.** [db/src/journals/markdown/tests.rs](../db/src/journals/markdown/tests.rs)
-names like `strips_script_tags` and `strips_event_handler_attributes`
-elide the function-under-test convention entirely — both test `render`,
-the function whose behavior they're checking, but neither name says so.
+has a name like `strips_event_handler_attributes` that elides the
+function-under-test convention entirely — it tests `render`, the
+function whose behavior it's checking, but the name doesn't say so.
 Compare `render_emits_del_for_strikethrough` a few lines above in the
 same file, which correctly prefixes with the function it tests.
 

@@ -351,7 +351,7 @@ async fn post_unlock_returns_403_for_non_admin() {
 }
 
 #[tokio::test]
-async fn unlock_clears_lockout() {
+async fn post_unlock_clears_lockout() {
     let (app, _, pool) = fixture().await;
     let token = admin_token(&pool, "alice").await;
     let bob = auth_test_support::create_user(&pool, "bob").await;
@@ -405,7 +405,7 @@ async fn delete_user_returns_403_for_non_admin() {
 }
 
 #[tokio::test]
-async fn delete_user_succeeds() {
+async fn delete_user_removes_user() {
     let (app, _, pool) = fixture().await;
     let token = admin_token(&pool, "alice").await;
     let bob = auth_test_support::create_user(&pool, "bob").await;

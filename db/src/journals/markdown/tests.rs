@@ -6,7 +6,7 @@
 use super::*;
 
 #[test]
-fn renders_basic_markdown() {
+fn render_emits_strong_and_em_for_bold_and_italic_markdown() {
     let html = render("**bold** and *italic*");
     assert!(html.contains("<strong>bold</strong>"), "got: {html}");
     assert!(html.contains("<em>italic</em>"), "got: {html}");
@@ -19,7 +19,7 @@ fn render_emits_del_for_strikethrough() {
 }
 
 #[test]
-fn strips_script_tags() {
+fn render_strips_script_tags() {
     let html = render("hi <script>alert('x')</script> there");
     assert!(!html.contains("<script"), "script must be stripped: {html}");
     assert!(!html.contains("alert("), "script body removed: {html}");
