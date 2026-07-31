@@ -550,8 +550,11 @@ async fn prev_window_bounds(
             "strftime('%s', 'now', '-6 days', 'start of day')",
         )),
         StatsRange::Month => Some((
-            "strftime('%s', strftime('%Y-%m-01 00:00:00', 'now', '-1 month'))",
-            "strftime('%s', strftime('%Y-%m-01 00:00:00', 'now'))",
+            // Month arithmetic runs on a month-start anchor: applying
+            // '-1 month' to a month-end 'now' (e.g. July 31) normalizes to
+            // day 1 of the *current* month and collapses the window.
+            "strftime('%s', 'now', 'start of month', '-1 month')",
+            "strftime('%s', 'now', 'start of month')",
         )),
         StatsRange::Year => Some((
             "strftime('%s', strftime('%Y-01-01 00:00:00', 'now', '-1 year'))",
@@ -692,7 +695,7 @@ async fn listening_daily(
 async fn rating_monthly(pool: &SqlitePool, user_id: i64) -> Result<Vec<TrendPoint>, StatsError> {
     let rows = sqlx::query(
         "WITH RECURSIVE months(month) AS (
-             SELECT strftime('%Y-%m', 'now', '-11 months')
+             SELECT strftime('%Y-%m', 'now', 'start of month', '-11 months')
              UNION ALL
              SELECT strftime('%Y-%m', month || '-01', '+1 month')
              FROM months
@@ -734,7 +737,7 @@ async fn rating_monthly(pool: &SqlitePool, user_id: i64) -> Result<Vec<TrendPoin
 async fn books_per_month(pool: &SqlitePool, user_id: i64) -> Result<Vec<MonthCount>, StatsError> {
     let sql = format!(
         "WITH RECURSIVE months(month) AS (
-             SELECT strftime('%Y-%m', 'now', '-11 months')
+             SELECT strftime('%Y-%m', 'now', 'start of month', '-11 months')
              UNION ALL
              SELECT strftime('%Y-%m', month || '-01', '+1 month')
              FROM months
