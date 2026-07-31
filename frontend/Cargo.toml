@@ -48,8 +48,9 @@ js-sys = { version = "0.3", optional = true }
 # pulled in with no default features so each consuming feature opts into
 # only what it needs — mobile gets `sync` for `watch`, server gets the
 # multi-thread runtime + macros for `#[tokio::main]`-style usage in rpc.rs.
-# held at 0.8: see db/Cargo.toml — 0.9's SqlSafeStr requirement is a nontrivial
-# migration across the db crate; keep all three crates on 0.8 in lockstep.
+# PIN RATIONALE (#1529): held at 0.8 — see db/Cargo.toml for the full
+# SqlSafeStr migration rationale; keep all three crates (`server/`, `db/`,
+# `frontend/`) on 0.8 in lockstep, lifted only when that migration lands.
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite"], optional = true }
 tokio = { workspace = true, optional = true }
 # Server-side structured logging for #[cfg(feature = "server")] code paths
@@ -78,6 +79,11 @@ tokio-util = { version = "0.7", default-features = false, features = ["io"], opt
 # version already resolved in Cargo.lock (avoids adding a third duplicate).
 getrandom = { version = "0.2", optional = true }
 
+# PIN RATIONALE (#1529): frozen at v3, same reasoning as db/Cargo.toml's zip
+# pin — mirrors the version already resolved transitively via `epub`, so
+# bumping here alone would just reintroduce the duplicate this pin avoids.
+# Lift both crates' `zip` deps together, after the v4-v9 changelog audit.
+#
 # Real ZIP validation for a downloaded EPUB: reading each member to EOF is
 # what checks the CRC-32 the central directory recorded for it, which is the
 # only thing that catches a same-length splice preserving the archive's
