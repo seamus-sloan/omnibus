@@ -38,8 +38,10 @@ pub async fn rpc_save_overrides(
 /// Apply one bulk edit to many books (the table view's bulk-edit modal).
 /// Requires `can_edit` or admin. All-or-nothing: the db layer applies every
 /// book in one transaction, so a bad uuid edits nothing. Returns the merged
-/// `EbookMetadata` for every edited book so the client can update its table
-/// rows without a refetch.
+/// `EbookMetadata` for the edited books so the client can update its table
+/// rows without a refetch — a book deleted concurrently between the commit
+/// and the re-read is omitted from the result rather than failing the
+/// already-committed edit.
 #[post("/api/rpc/ebook/overrides/bulk", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_bulk_save_overrides(
     uuids: Vec<String>,

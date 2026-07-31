@@ -221,14 +221,24 @@ impl BulkMetadataEdit {
 
     /// Validate field lengths and counts against the same caps as
     /// [`MetadataOverrides::validate`]. Call at the handler boundary.
+    ///
+    /// The tag lists are validated *separately*, not concatenated: they are
+    /// deltas, so their combined length is not a per-book subject count — a
+    /// large remove plus a small add is legal even past `MAX_SUBJECTS`. The
+    /// true post-delta cap is enforced per book by the db merge, which is
+    /// the only place that sees the resulting subject list.
     pub fn validate(&self) -> Result<(), String> {
         // Route through the existing validators so the caps and messages
         // cannot drift from the single-book path.
-        let as_overrides = MetadataOverrides {
-            subjects: Some([self.add_tags.clone(), self.remove_tags.clone()].concat()),
-            ..self.scalar_overrides()
-        };
-        as_overrides.validate()
+        self.scalar_overrides().validate()?;
+        for list in [&self.add_tags, &self.remove_tags] {
+            MetadataOverrides {
+                subjects: Some(list.clone()),
+                ..Default::default()
+            }
+            .validate()?;
+        }
+        Ok(())
     }
 
     /// The scalar/creators part as a per-book [`MetadataOverrides`]. Subjects

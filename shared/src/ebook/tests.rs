@@ -583,3 +583,26 @@ fn bulk_metadata_edit_apply_tags_add_and_remove_of_same_tag_readds_it() {
     assert_eq!(edit.apply_tags(&tags(&["fantasy"])), tags(&["fantasy"]));
     assert_eq!(edit.apply_tags(&[]), tags(&["fantasy"]));
 }
+
+#[test]
+fn bulk_metadata_edit_validate_caps_each_tag_list_separately_not_combined() {
+    // A large remove plus a large add is legal even though the two lists
+    // together exceed MAX_SUBJECTS — they are deltas, not a subject list;
+    // the per-book cap is enforced by the db merge on the true result.
+    let forty: Vec<String> = (0..40).map(|i| format!("tag{i}")).collect();
+    let edit = BulkMetadataEdit {
+        add_tags: forty.clone(),
+        remove_tags: forty,
+        ..Default::default()
+    };
+    assert!(edit.validate().is_ok());
+
+    let oversized: Vec<String> = (0..MetadataOverrides::MAX_SUBJECTS + 1)
+        .map(|i| format!("tag{i}"))
+        .collect();
+    let edit = BulkMetadataEdit {
+        add_tags: oversized,
+        ..Default::default()
+    };
+    assert!(edit.validate().is_err());
+}
