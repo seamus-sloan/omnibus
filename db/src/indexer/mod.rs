@@ -288,8 +288,10 @@ pub struct ReindexDiff {
 /// no `IndexedBook` to fall back on: a declined relocation is a **skip**,
 /// not a fallback, which is why the emit conditions stay conservative.
 /// The pair must be unique on both sides — ambiguity declines rather than
-/// guessing — and `(0, 0)`, the never-observed sentinel a failed stat and
-/// a pre-backfill row both carry, never participates.
+/// guessing — `(0, 0)`, the never-observed sentinel a failed stat and a
+/// pre-backfill row both carry, never participates, and the match is scoped
+/// to a single **format**: a relocation rewrites path columns only, so it
+/// cannot carry a file whose extension changed (see [`match_moved_files`]).
 ///
 /// This detector is a byte identity and the writer's `(title_norm,
 /// author_norm)` auto-attach is a semantic one, so each covers the other's
@@ -450,8 +452,9 @@ fn sort_buckets(out: &mut ReindexDiff) {
 }
 
 /// Pair vanished rows with arrived files on the `(size_bytes, mtime_epoch)`
-/// pair both sides of the diff already carry. Returns `(removed index, new
-/// index)` pairs; every index appears at most once.
+/// pair both sides of the diff already carry, **within one format**.
+/// Returns `(removed index, new index)` pairs; every index appears at most
+/// once.
 ///
 /// A pair only matches when it is unique on **both** sides. An ambiguous
 /// group falls through to filename-stem equality, and only where the stem
@@ -460,29 +463,57 @@ fn sort_buckets(out: &mut ReindexDiff) {
 /// case. `(0, 0)` is the never-observed sentinel: a failed stat and a
 /// pre-backfill row both carry it, so without skipping it every unstattable
 /// file would match every other one.
+///
+/// ## Why the format is part of the key
+///
+/// A relocation rewrites path columns and nothing else, so it cannot change
+/// `book_files.format` — and `format` is not decoration: `books::book_file_path`
+/// rebuilds the on-disk path as `library / path / filename + "." +
+/// lower(format)`, so a row whose format no longer matches its extension
+/// resolves to a file that isn't there. Retyping `Book.m4a` to `Book.m4b`
+/// preserves the bytes, so it would otherwise match on the stat pair alone
+/// (and `path_stem` drops the extension, so the tiebreaker would *help* it
+/// pair) — leaving a book unreachable from every endpoint, and stuck that
+/// way, since the next scan finds the new path with a matching stat and
+/// classifies it Unchanged.
+///
+/// A format change genuinely needs a Phase-B re-parse — a `.cbz` and a
+/// `.epub` parse differently, and format drives HLS/transcode and reader
+/// routing — so declining here, and letting the file fall through to the
+/// Removed and New buckets, is the correct answer rather than a missed
+/// optimization. Note that scoping the diff to a format *set*
+/// (`EBOOK_FORMATS` / `AUDIOBOOK_FORMATS`) is not the same as scoping to a
+/// format: both sets hold more than one today.
 fn match_moved_files(
     removed: &[&books::IndexedRow],
     new: &[&ebook::StatEntry],
 ) -> Vec<(usize, usize)> {
     use std::collections::HashMap;
 
-    let mut removed_by_pair: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    // `(size_bytes, mtime_epoch, format)`.
+    type MatchKey = (i64, i64, String);
+
+    let mut removed_by_pair: HashMap<MatchKey, Vec<usize>> = HashMap::new();
     for (i, row) in removed.iter().enumerate() {
         if row.size_bytes == 0 && row.mtime_epoch == 0 {
             continue;
         }
         removed_by_pair
-            .entry((row.size_bytes, row.mtime_epoch))
+            .entry((row.size_bytes, row.mtime_epoch, path_format(&row.scan_key)))
             .or_default()
             .push(i);
     }
-    let mut new_by_pair: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    let mut new_by_pair: HashMap<MatchKey, Vec<usize>> = HashMap::new();
     for (j, entry) in new.iter().enumerate() {
         if entry.size_bytes == 0 && entry.mtime_epoch == 0 {
             continue;
         }
         new_by_pair
-            .entry((entry.size_bytes, entry.mtime_epoch))
+            .entry((
+                entry.size_bytes,
+                entry.mtime_epoch,
+                path_format(&entry.scan_key),
+            ))
             .or_default()
             .push(j);
     }
@@ -546,6 +577,19 @@ fn path_stem(scan_key: &str) -> &str {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or(scan_key)
+}
+
+/// The uppercase extension of a scan key, derived exactly as
+/// `crate::helpers::split_filename` derives `book_files.format` — so the
+/// match key above gates on the value that actually drives path
+/// resolution, not on a lookalike. A directory-shaped audiobook group key
+/// carries no extension and yields `UNKNOWN`, so multi-part groups compare
+/// equal to each other and never to a single-file group.
+fn path_format(scan_key: &str) -> String {
+    Path::new(scan_key)
+        .extension()
+        .map(|s| s.to_string_lossy().to_ascii_uppercase())
+        .unwrap_or_else(|| "UNKNOWN".to_string())
 }
 
 /// Scan `library_path`, diff against the existing index, and apply only

@@ -1867,3 +1867,178 @@ async fn each_file_of_a_merged_two_epub_book_is_independently_move_matched() {
     assert!(diff.removed.is_empty());
     assert!(diff.new.is_empty());
 }
+
+/// A relocation that also changed the file's **extension** must not be
+/// classified Moved. `book_files.format` drives path resolution
+/// (`book_file_path` rebuilds `…/filename + "." + lower(format)`), and the
+/// move writer rewrites path columns only — so a Moved classification here
+/// would leave the format naming a file that is no longer on disk, with no
+/// self-healing: the next scan finds the new path with a matching stat and
+/// calls it Unchanged. Falling through to Removed + New is correct, because
+/// a format change genuinely needs a Phase-B re-parse.
+#[test]
+fn diff_declines_a_move_when_only_the_extension_changed() {
+    // Retyping `.m4a` to `.m4b` — a real thing readers do so players show
+    // chapters — preserves the bytes, so the stat pair matches exactly.
+    let disk = vec![entry("Author/Book.m4b", "Author/Book.m4b", 100, 1000)];
+    let db = vec![row("Author/Book.m4a", 100, 1000)];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert!(
+        d.moved.is_empty(),
+        "a format change is not a relocation: {:?}",
+        d.moved
+    );
+    assert_eq!(d.removed, vec!["Author/Book.m4a"]);
+    assert_eq!(d.new.len(), 1, "the retyped file is re-parsed as New");
+    assert_eq!(d.new[0].filename, "Author/Book.m4b");
+}
+
+/// The extension guard is case-insensitive, matching how
+/// `split_filename` uppercases into `book_files.format`: renaming
+/// `Book.epub` to `BOOK.EPUB` is still one relocation, not a format change.
+#[test]
+fn diff_still_matches_a_move_when_only_the_extension_case_changed() {
+    let disk = vec![entry("New/BOOK.EPUB", "New/BOOK.EPUB", 100, 1000)];
+    let db = vec![row("Old/book.epub", 100, 1000)];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert_eq!(
+        d.moved.len(),
+        1,
+        "case-only extension change still relocates"
+    );
+    assert_eq!(d.moved[0].filename, "New/BOOK.EPUB");
+    assert!(d.removed.is_empty());
+}
+
+/// The stem tiebreaker must not smuggle a format change past the guard —
+/// `path_stem` drops the extension, so before the format was part of the
+/// match key an ambiguous group would actively *help* pair `.m4a` with
+/// `.m4b`.
+#[test]
+fn diff_stem_tiebreaker_does_not_pair_across_formats() {
+    let disk = vec![entry("New/Book.m4b", "New/Book.m4b", 100, 1000)];
+    let db = vec![
+        row("Old/Book.m4a", 100, 1000),
+        row("Old/Other.m4a", 100, 1000),
+    ];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert!(
+        d.moved.is_empty(),
+        "the shared stem must not bridge two formats: {:?}",
+        d.moved
+    );
+    assert_eq!(d.removed.len(), 2);
+    assert_eq!(d.new.len(), 1);
+}
+
+/// Scoping the key by format also makes the *same-format* match sharper:
+/// two vanished files sharing a stat pair no longer make each other
+/// ambiguous when they are different formats, so each is matched against
+/// its own format's arrival.
+#[test]
+fn diff_matches_same_stat_moves_of_different_formats_independently() {
+    let disk = vec![
+        entry("New/Book.epub", "New/Book.epub", 100, 1000),
+        entry("New/Book.cbz", "New/Book.cbz", 100, 1000),
+    ];
+    let db = vec![
+        row("Old/Book.epub", 100, 1000),
+        row("Old/Book.cbz", 100, 1000),
+    ];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert_eq!(
+        d.moved,
+        vec![
+            crate::sync::MovedFile {
+                uuid: "Old/Book.cbz".into(),
+                filename: "New/Book.cbz".into(),
+            },
+            crate::sync::MovedFile {
+                uuid: "Old/Book.epub".into(),
+                filename: "New/Book.epub".into(),
+            },
+        ],
+        "each format resolves within its own group"
+    );
+    assert!(d.removed.is_empty());
+    assert!(d.new.is_empty());
+}
+
+/// Two books swapping paths in one scan cannot reach the Moved bucket at
+/// all, so the writer's destination pre-check can never deadlock a cycle.
+/// The buckets make it structurally impossible: a Removed candidate
+/// requires its `scan_key` to be **absent** from disk, while a New
+/// candidate requires its path to be **present** — so a moved entry's
+/// destination can never be another moved entry's source. A real swap
+/// leaves both paths occupied, so neither row is a departure and both
+/// classify Changed against the bytes that are now at their path.
+#[test]
+fn diff_classifies_a_path_swap_as_changed_never_as_a_moved_cycle() {
+    // A was at X and B at Y; their contents have been exchanged.
+    let disk = vec![
+        entry("X.epub", "X.epub", 200, 2000),
+        entry("Y.epub", "Y.epub", 100, 1000),
+    ];
+    let db = vec![row("X.epub", 100, 1000), row("Y.epub", 200, 2000)];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert!(
+        d.moved.is_empty(),
+        "a swap is not a relocation — no cycle can form: {:?}",
+        d.moved
+    );
+    assert!(d.removed.is_empty(), "neither path vanished");
+    assert!(d.new.is_empty(), "neither path is new");
+    assert_eq!(
+        d.changed.len(),
+        2,
+        "both files re-parse against their new bytes"
+    );
+}
+
+/// The byte-identical variant of the same swap: both paths are still
+/// occupied, so both classify Unchanged and nothing needs doing — the two
+/// files are interchangeable by definition.
+#[test]
+fn diff_classifies_a_byte_identical_path_swap_as_unchanged() {
+    let disk = vec![
+        entry("X.epub", "X.epub", 100, 1000),
+        entry("Y.epub", "Y.epub", 100, 1000),
+    ];
+    let db = vec![row("X.epub", 100, 1000), row("Y.epub", 100, 1000)];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert!(d.moved.is_empty());
+    assert_eq!(d.unchanged.len(), 2);
+    assert!(d.removed.is_empty());
+    assert!(d.new.is_empty());
+}
+
+/// The general form of the invariant the two tests above rely on: no
+/// destination emitted into Moved is the current `scan_key` of any other
+/// Moved entry. Exercised over a chained relocation (A→B, B→C) — the shape
+/// closest to a cycle that the buckets actually admit — plus a genuine
+/// departure and arrival alongside it.
+#[test]
+fn moved_destinations_never_collide_with_another_moved_entrys_source() {
+    // Only `C.epub` is on disk; `A.epub` and `B.epub` both vanished. Their
+    // stat pairs differ, so each is matched independently — but there is
+    // exactly one arrival, so only one can pair.
+    let disk = vec![entry("C.epub", "C.epub", 100, 1000)];
+    let db = vec![row("A.epub", 100, 1000), row("B.epub", 200, 2000)];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert_eq!(
+        d.moved.len(),
+        1,
+        "one arrival can absorb only one departure"
+    );
+    assert_eq!(d.moved[0].uuid, "A.epub");
+    assert_eq!(d.moved[0].filename, "C.epub");
+    assert_eq!(d.removed, vec!["B.epub"], "the unmatched departure ghosts");
+
+    let sources: std::collections::HashSet<&str> = db.iter().map(|r| r.scan_key.as_str()).collect();
+    for m in &d.moved {
+        assert!(
+            !sources.contains(m.filename.as_str()) || disk.iter().any(|e| e.scan_key == m.filename),
+            "a Moved destination must be a path that exists on disk"
+        );
+    }
+}

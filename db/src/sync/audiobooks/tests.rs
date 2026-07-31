@@ -1336,3 +1336,102 @@ async fn three_reindexes_after_a_moved_audiobook_group_converge_without_ghosting
         );
     }
 }
+
+/// End-to-end on the regression the format guard exists for: retyping
+/// `Book.m4a` to `Book.m4b` preserves the bytes, so the stat pair matches
+/// exactly — but `book_files.format` drives path resolution, and the move
+/// writer rewrites path columns only. The classifier must therefore route
+/// it Removed + New, where the Phase-B re-parse writes the *correct*
+/// format and #1534's title+author relocation still preserves the uuid.
+/// Asserting through `book_file_path` is the point: a stale format leaves a
+/// book that resolves to a file which is not on disk.
+#[tokio::test]
+async fn retyping_an_audiobook_extension_reindexes_with_the_new_format_and_keeps_its_uuid() {
+    let _covers = CoversTempDir::new("ab_retype_extension");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let mut seed = indexed_audiobook("Author/Book.m4a", "Book", Some("Seed Author"));
+    seed.format = "M4A".into();
+    seed.parts[0].filename = "Author/Book.m4a".into();
+    sync_audiobooks(
+        &pool,
+        "/lib",
+        AudiobookSyncPlan {
+            new_books: vec![seed],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let (book_id, uuid_before): (i64, String) =
+        sqlx::query_as("SELECT id, uuid FROM books WHERE scan_key = 'Author/Book.m4a'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    // The same group, same bytes, now carrying the `.m4b` extension.
+    let disk = [crate::ebook::StatEntry {
+        filename: "Author/Book.m4b".into(),
+        scan_key: "Author/Book.m4b".into(),
+        mtime_epoch: 100,
+        size_bytes: 1000,
+        error: None,
+    }];
+    let db_rows = crate::books::list_indexed_rows_for_formats(
+        &pool,
+        "/lib",
+        crate::audiobook::AUDIOBOOK_FORMATS,
+    )
+    .await
+    .unwrap();
+    let diff = crate::indexer::diff_library(&disk, &db_rows, std::path::Path::new("/lib"), true);
+    assert!(diff.moved.is_empty(), "a format change is not a relocation");
+    assert_eq!(diff.removed.len(), 1);
+    assert_eq!(diff.new.len(), 1);
+
+    let mut retyped = indexed_audiobook("Author/Book.m4b", "Book", Some("Seed Author"));
+    retyped.format = "M4B".into();
+    retyped.parts[0].filename = "Author/Book.m4b".into();
+    sync_audiobooks(
+        &pool,
+        "/lib",
+        AudiobookSyncPlan {
+            new_books: vec![retyped],
+            moved: diff.moved,
+            removed_uuids: diff.removed,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        count_rows(&pool, "SELECT COUNT(*) FROM books").await,
+        1,
+        "no duplicate book"
+    );
+    let (uuid_after, scan_key, format): (String, String, String) = sqlx::query_as(
+        "SELECT b.uuid, b.scan_key, bf.format FROM books b
+           JOIN book_files bf ON bf.book_id = b.id WHERE b.id = ?",
+    )
+    .bind(book_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(uuid_after, uuid_before, "identity survives the retype");
+    assert_eq!(scan_key, "Author/Book.m4b");
+    assert_eq!(format, "M4B", "the re-parse wrote the new format");
+    assert_eq!(
+        crate::books::book_file_path(&pool, book_id, "M4B")
+            .await
+            .unwrap(),
+        Some(std::path::PathBuf::from("/lib/Author/Book.m4b")),
+        "the book resolves to the file that is actually on disk"
+    );
+    assert_eq!(
+        crate::books::book_file_path(&pool, book_id, "M4A")
+            .await
+            .unwrap(),
+        None,
+        "no row is left claiming the old extension"
+    );
+}

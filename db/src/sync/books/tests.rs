@@ -1373,3 +1373,93 @@ async fn replaying_the_same_moved_plan_is_idempotent() {
         );
     }
 }
+
+/// A moved attachment must not land on a `(library_path, scan_key)` another
+/// ledger row already holds. `merged_uuids` has only a non-unique index
+/// there, so the UPDATE cannot abort the transaction — it would silently
+/// leave two rows sharing one key, and `find_attachment_by_scan_key` uses
+/// `fetch_optional`, so a later scan would resolve the attachment
+/// arbitrarily. Reachable because a ledger row whose `book_files` row was
+/// dropped (the Changed path wipes a book's rows per format) is excluded
+/// from the diff's merged projection, so its path is offered as an arrival.
+/// Mirrors the `books`-side `idx_books_scan_key` pre-check.
+#[tokio::test]
+async fn moved_attachment_onto_a_scan_key_another_ledger_row_holds_is_skipped() {
+    let _covers = CoversTempDir::new("sync_moved_ledger_collision");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let library_id = seed_scan_root(&pool).await;
+    let book_id = seed_book_with_file(&pool, library_id, "Ebooks/book.epub").await;
+    // The attachment that is about to move, with its backing file row.
+    sqlx::query(
+        "INSERT INTO book_files
+            (book_id, format, filename, size_bytes, mtime_epoch, scan_key, library_path, path, ordinal)
+         VALUES (?, 'M4B', 'book', 4242, 777, 'Audio/Old/book.m4b', '/lib', 'Audio/Old', 1)",
+    )
+    .bind(book_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO merged_uuids (uuid, book_id, format, library_path, scan_key)
+         VALUES ('mover', ?, 'M4B', '/lib', 'Audio/Old/book.m4b')",
+    )
+    .bind(book_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    // A stale ledger row already holding the destination — no `book_files`
+    // row behind it, which is exactly why the diff can offer that path.
+    sqlx::query(
+        "INSERT INTO merged_uuids (uuid, book_id, format, library_path, scan_key)
+         VALUES ('squatter', ?, 'M4B', '/lib', 'Audio/New/book.m4b')",
+    )
+    .bind(book_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sync_books(
+        &pool,
+        "/lib",
+        SyncPlan {
+            moved: vec![crate::sync::MovedFile {
+                uuid: "mover".into(),
+                filename: "Audio/New/book.m4b".into(),
+            }],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let sharing: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM merged_uuids WHERE library_path = '/lib'
+           AND scan_key = 'Audio/New/book.m4b'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        sharing, 1,
+        "two ledger rows must never share one (library_path, scan_key)"
+    );
+    let mover_scan_key: String =
+        sqlx::query_scalar("SELECT scan_key FROM merged_uuids WHERE uuid = 'mover'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        mover_scan_key, "Audio/Old/book.m4b",
+        "the refused relocation left the ledger row alone"
+    );
+    let file_scan_key: String =
+        sqlx::query_scalar("SELECT scan_key FROM book_files WHERE book_id = ? AND format = 'M4B'")
+            .bind(book_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        file_scan_key, "Audio/Old/book.m4b",
+        "declining writes nothing at all — not even the file row"
+    );
+}

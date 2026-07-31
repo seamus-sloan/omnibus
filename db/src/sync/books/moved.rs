@@ -5,6 +5,14 @@
 //! `book_file_parts.filename`, and the `merged_uuids` ledger. `books_fts`
 //! indexes no path column, so it needs no refresh either.
 //!
+//! `book_files.format` is deliberately **not** in that list, and the
+//! classifier is what makes that safe: `match_moved_files` keys on the
+//! format alongside the stat pair, so a file whose extension changed never
+//! reaches this writer. Rewriting `format` here instead would be worse than
+//! the bug it papers over — it would claim a Phase-B re-parse happened when
+//! none did, and `format` is exactly what `books::book_file_path` rebuilds
+//! the on-disk path from.
+//!
 //! Shared by both pipelines: `sync_audiobooks` calls the same writer,
 //! because a relocated group differs from a relocated ebook only in
 //! having `book_file_parts` rows to carry along.
@@ -38,10 +46,12 @@ struct NewLocation<'a> {
 /// an attached file's move must leave the target book's `scan_key` alone
 /// (it names a *different* file).
 ///
-/// A relocation the `idx_books_scan_key` unique index would refuse is
-/// logged and skipped per-book: the destination path already belongs to
-/// another book under this scan root, and failing the whole reindex over
-/// one ambiguous path would be worse than leaving the book where it is.
+/// A relocation whose destination is already spoken for is logged and
+/// skipped per-book, on both branches: the `books` side would be refused by
+/// the `idx_books_scan_key` unique index, and the ledger side has no such
+/// index but must preserve the same uniqueness by hand (see
+/// `attach::attachment_scan_key_taken`). Failing a whole reindex over one
+/// ambiguous path would be worse than leaving the book where it is.
 ///
 /// Skipping is stable, not self-healing, and that is the accepted cost:
 /// the diff took the arrival out of New and the departure out of Removed
@@ -132,12 +142,24 @@ async fn relocate_one(
         );
         return Ok(false);
     };
+    if attach::attachment_scan_key_taken(tx, library_path, to.scan_key, &m.uuid).await? {
+        tracing::warn!(
+            uuid = %m.uuid,
+            new_scan_key = %to.scan_key,
+            "sync: skipping relocation — another ledger row already holds the \
+             destination path under this scan root"
+        );
+        return Ok(false);
+    }
     // An attachment's identity is its ledger row; the target book's own
     // `scan_key` / `path` name a different file and must not move. Its
     // `book_files.path` override is therefore the *only* column pointing at
     // the file, so it must be written whether or not it was set before.
-    relocate_file_row(tx, book_id, &old_scan_key, &to, true).await?;
+    // Ledger first, mirroring the `books` branch: it carries the uniqueness
+    // this path has to preserve by hand, so nothing else is written until it
+    // has been shown to land.
     attach::relocate_attachment(tx, &m.uuid, to.scan_key).await?;
+    relocate_file_row(tx, book_id, &old_scan_key, &to, true).await?;
     Ok(true)
 }
 
@@ -164,10 +186,17 @@ async fn anchor_row(
 /// `idx_books_scan_key` unique index? Checked rather than caught: the diff
 /// can't see a book scoped out of its own format projection (a book whose
 /// only remaining file is an M4B still owns its `.epub` scan_key), so this
-/// is reachable, and a pre-check keeps the transaction clean. No two
-/// entries in one Moved bucket share a destination — each arrival is
-/// matched at most once — so the only possible holder is a row that was
-/// already there.
+/// is reachable, and a pre-check keeps the transaction clean.
+///
+/// The holder is always a **stationary** row, never another entry in this
+/// same bucket, so skipping cannot deadlock a swap or a cycle. Two things
+/// rule that out: each arrival is matched at most once, so no two entries
+/// share a destination; and a departure requires its `scan_key` to be
+/// absent from disk while an arrival requires its path to be present, so an
+/// entry's destination can never be another entry's source. A real
+/// path swap leaves both paths occupied, so neither row is a departure and
+/// both classify Changed — see
+/// `diff_classifies_a_path_swap_as_changed_never_as_a_moved_cycle`.
 async fn scan_key_taken(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     library_id: i64,
