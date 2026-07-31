@@ -170,9 +170,14 @@ pub fn chapter_prev_seek(chapters: &[ChapterInfo], elapsed: f64, idx: usize) -> 
 }
 
 /// Pick the next playable part after `idx` given a part count. Returns `None`
-/// when `idx` is the last part (playback should stop, not wrap). The runtime
-/// auto-advance runs in the JS `ended` handler ([`super::interop`]); this
-/// mirrors that decision in Rust so the boundary math is unit-tested.
+/// when `idx` is the last part (playback should stop, not wrap).
+///
+/// Intentionally kept unwired: the runtime decision runs synchronously inside
+/// the JS `ended` handler ([`super::interop`]) so the next part's `src` can be
+/// set with zero playback gap — routing through a Rust/WASM round-trip
+/// (`dioxus.send` + a response) would add audible latency at every part
+/// boundary. This mirrors that same `idx + 1 < part_count` check so the
+/// boundary arithmetic stays unit-tested in Rust.
 #[allow(dead_code)]
 pub fn next_part_index(part_count: usize, idx: usize) -> Option<usize> {
     let next = idx + 1;
