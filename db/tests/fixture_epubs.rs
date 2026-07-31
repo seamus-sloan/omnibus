@@ -381,6 +381,32 @@ const EXPECTED: &[Expected] = &[
         series_index: None,
         has_cover: true,
     },
+    // The two CBZ fixtures from `tools/make_cbz.ts` — metadata comes from
+    // `ComicInfo.xml` via the comic parser, which carries no publisher,
+    // date, or language. The empty-string language mirrors the Playwright
+    // table's empty cell.
+    Expected {
+        filename: "aurora-station-01.cbz",
+        title: "Aurora Station, Vol. 1",
+        authors: &["Sora Inkwell"],
+        publisher: None,
+        published: None,
+        language: "",
+        series: Some("Aurora Station"),
+        series_index: Some("1"),
+        has_cover: true,
+    },
+    Expected {
+        filename: "aurora-station-02.cbz",
+        title: "Aurora Station, Vol. 2",
+        authors: &["Sora Inkwell"],
+        publisher: None,
+        published: None,
+        language: "",
+        series: Some("Aurora Station"),
+        series_index: Some("2"),
+        has_cover: true,
+    },
 ];
 
 #[test]
@@ -433,9 +459,11 @@ fn fixture_epubs_parse_with_expected_metadata() {
             "{} published",
             exp.filename,
         );
+        // `unwrap_or("")` so a format with no language metadata (CBZ) pins
+        // the empty string rather than needing an Option in every row.
         assert_eq!(
-            m.language.as_deref(),
-            Some(exp.language),
+            m.language.as_deref().unwrap_or(""),
+            exp.language,
             "{} language",
             exp.filename,
         );

@@ -91,6 +91,7 @@ pub(super) struct LoadedBookView {
     pub(super) accent_style: String,
     pub(super) has_audio: bool,
     pub(super) has_ebook: bool,
+    pub(super) has_comic: bool,
     pub(super) crumbs: Vec<BdCrumbItem>,
 }
 
@@ -130,6 +131,7 @@ pub(super) fn derive_loaded_view(b: &EbookMetadata) -> LoadedBookView {
         .formats
         .iter()
         .any(|f| f.eq_ignore_ascii_case("epub") || f.eq_ignore_ascii_case("pdf"));
+    let has_comic = b.formats.iter().any(|f| f.eq_ignore_ascii_case("cbz"));
     let crumbs = build_crumbs(b, &title, &primary_author, &series);
     LoadedBookView {
         title,
@@ -141,6 +143,7 @@ pub(super) fn derive_loaded_view(b: &EbookMetadata) -> LoadedBookView {
         accent_style,
         has_audio,
         has_ebook,
+        has_comic,
         crumbs,
     }
 }
@@ -221,6 +224,7 @@ pub(super) fn render_loaded(
             accent_style,
             has_audio,
             has_ebook,
+            has_comic,
             crumbs,
         } = derive_loaded_view(&b);
 
@@ -238,6 +242,7 @@ pub(super) fn render_loaded(
                     avail: hero::Availability {
                         has_ebook,
                         has_audio,
+                        has_comic,
                     },
                     phys,
                 }

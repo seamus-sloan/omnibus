@@ -70,6 +70,7 @@ pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
         accent_style,
         has_audio,
         has_ebook,
+        has_comic,
         ..
     } = derive_loaded_view(&b);
 
@@ -191,6 +192,13 @@ pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
                         label: "Read",
                         button_class: "btn primary lg",
                         single_testid: "start-reading",
+                    }
+                } else if has_comic {
+                    Link {
+                        to: crate::Route::ComicRead { uuid: uuid.clone() },
+                        class: "btn primary lg",
+                        "data-testid": "start-reading-comic",
+                        "Read"
                     }
                 }
                 if has_audio {

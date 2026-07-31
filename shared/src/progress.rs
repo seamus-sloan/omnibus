@@ -26,6 +26,25 @@ pub const SESSION_BATCH_CAP: usize = 500;
 /// kind of value — so the two ceilings can't drift apart.
 pub const EPUB_CFI_MAX_LEN: usize = CreateHighlight::EPUB_CFI_RANGE_MAX_LEN;
 
+/// Position anchor for a comic (CBZ) page, stored in the `epub_cfi` slot of
+/// an `Epub`-format progress row. Comics reuse the existing ebook progress
+/// record — the row CHECK admits any text position plus a percent — so
+/// Continue Reading and cross-device sync work unchanged, but a page index
+/// is not a CFI: the `comic-page:` prefix makes the value self-describing,
+/// and every client (web pager, iOS pager) round-trips it through these two
+/// helpers rather than inventing its own encoding. The percent alongside it
+/// is the cross-surface half, same as a Kobo's percent-only write.
+pub fn comic_page_anchor(page: usize) -> String {
+    format!("comic-page:{page}")
+}
+
+/// Parse a [`comic_page_anchor`] back to its 0-based page index. `None` for
+/// anything else — including a real EPUB CFI — so callers can fall back to
+/// `progress_percent` without misreading a foreign position.
+pub fn parse_comic_page_anchor(anchor: &str) -> Option<usize> {
+    anchor.strip_prefix("comic-page:")?.parse().ok()
+}
+
 /// Discriminator for the format-specific payload variant in [`ProgressUpdate`]
 /// / [`ProgressRecord`] / [`SessionReport`]. Serializes as a plain
 /// lowercase string (`"epub"` / `"audio"`) so the wire shape stays compact.
