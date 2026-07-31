@@ -1689,11 +1689,12 @@ async fn reindex_recovers_a_whole_library_reorganization_without_tripping_the_br
     let lib = make_test_dir("reindex-reorg-lib");
     let lib_path = lib.to_string_lossy().into_owned();
 
+    // Enough books to clear the absolute floor, so the percentage guard is
+    // actually reachable — below it the scan would be waved through for a
+    // reason that has nothing to do with move detection, and the test would
+    // prove nothing. A `const` block so the precondition is a compile error.
     const BOOKS: usize = 12;
-    assert!(
-        BOOKS > MASS_MISSING_MIN_ABSOLUTE,
-        "test precondition: enough books to reach the percentage guard"
-    );
+    const { assert!(BOOKS > MASS_MISSING_MIN_ABSOLUTE) };
     for i in 0..BOOKS {
         seed_sized_ebook_at(&pool, &lib_path, &format!("Old/{i}.epub"), 100 + i * 7).await;
     }

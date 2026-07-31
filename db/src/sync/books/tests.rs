@@ -921,20 +921,24 @@ async fn moved_file_onto_a_scan_key_another_book_holds_is_skipped_without_failin
     .await
     .unwrap();
 
-    let (mover_scan_key, mover_filename): (String, String) = sqlx::query_as(
-        "SELECT b.scan_key, bf.filename FROM books b
-           JOIN book_files bf ON bf.book_id = b.id WHERE b.id = ?",
-    )
-    .bind(mover_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let (mover_scan_key, mover_path, mover_file_scan_key): (String, String, String) =
+        sqlx::query_as(
+            "SELECT b.scan_key, b.path, COALESCE(bf.scan_key, '') FROM books b
+               JOIN book_files bf ON bf.book_id = b.id WHERE b.id = ?",
+        )
+        .bind(mover_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(
         mover_scan_key, "Old/book.epub",
         "AC10: the refused relocation left books.scan_key alone"
     );
+    assert_eq!(mover_path, "Old", "AC10: books.path is untouched too");
+    // The two seeded books share a `book_files.filename` of "book", so only
+    // the file row's own scan_key distinguishes moved from not-moved here.
     assert_eq!(
-        mover_filename, "book",
+        mover_file_scan_key, "Old/book.epub",
         "AC10: declining writes nothing at all — not even the file row"
     );
     let squatter_scan_key: String = sqlx::query_scalar("SELECT scan_key FROM books WHERE id = ?")
