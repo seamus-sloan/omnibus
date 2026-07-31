@@ -142,7 +142,7 @@ pub async fn list_books_page(
     }
     let rows = q.fetch_all(pool).await?;
 
-    let take = rows.len().min(limit as usize);
+    let take = rows.len().min(usize::try_from(limit).unwrap_or(0));
     let next = (rows.len() as i64 > limit).then(|| cursor_from_row(&rows[take - 1]));
 
     let mut books = Vec::with_capacity(take);

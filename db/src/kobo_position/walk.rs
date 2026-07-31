@@ -289,7 +289,7 @@ impl FileIndex {
     pub(super) fn snippet_at(&self, offset: u64) -> String {
         self.norm
             .chars()
-            .skip(offset as usize)
+            .skip(usize::try_from(offset).unwrap_or(usize::MAX))
             .take(SNIPPET_CHARS)
             .collect()
     }
@@ -431,7 +431,7 @@ impl FileIndex {
     fn back_land(&self, t: u64) -> Option<u64> {
         self.norm
             .chars()
-            .take(t as usize + 1)
+            .take(usize::try_from(t).map_or(usize::MAX, |t| t.saturating_add(1)))
             .enumerate()
             .filter(|(_, c)| *c != ' ')
             .last()
@@ -444,7 +444,10 @@ impl FileIndex {
     /// document with no text at all.
     fn land(&self, t: u64) -> Option<u64> {
         let mut idx = t;
-        let mut chars = self.norm.chars().skip(t as usize);
+        let mut chars = self
+            .norm
+            .chars()
+            .skip(usize::try_from(t).unwrap_or(usize::MAX));
         loop {
             match chars.next() {
                 Some(' ') => idx += 1,
@@ -458,6 +461,11 @@ impl FileIndex {
             }
         }
     }
+}
+
+/// `char::len_utf16` as `u32` — the length is always 1 or 2.
+fn len_utf16_u32(c: char) -> u32 {
+    u32::try_from(c.len_utf16()).unwrap_or(2)
 }
 
 /// Replay whitespace collapsing inside one cluster to convert a normalized
@@ -484,7 +492,7 @@ fn replay_offset(cluster: &Cluster, norm_target: u64) -> Option<u32> {
             norm_pos += 1;
             in_run = false;
         }
-        utf16 += c.len_utf16() as u32;
+        utf16 += len_utf16_u32(c);
     }
     None
 }
@@ -504,7 +512,7 @@ fn replay_offset_after(cluster: &Cluster, norm_target: u64) -> Option<u32> {
             in_run = false;
             true
         };
-        utf16 += c.len_utf16() as u32;
+        utf16 += len_utf16_u32(c);
         if emits {
             if norm_pos == norm_target {
                 return Some(utf16);
@@ -535,7 +543,7 @@ fn replay_norm(cluster: &Cluster, utf16_target: u32) -> u64 {
             norm_pos += 1;
             in_run = false;
         }
-        utf16 += c.len_utf16() as u32;
+        utf16 += len_utf16_u32(c);
     }
     norm_pos
 }

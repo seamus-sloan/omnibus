@@ -355,7 +355,7 @@ pub fn book_metadata(base: &str, token: &str, book: &KoboBookRow) -> BookMetadat
             format: "KEPUB",
             // Best-effort: the source EPUB's size (the served KEPUB differs
             // slightly). Only drives device-side progress UI.
-            size: book.epub_size_bytes.max(0) as u64,
+            size: u64::try_from(book.epub_size_bytes.max(0)).unwrap_or(0),
             url: format!("{base}/kobo/{token}/v1/download/{uuid}"),
             platform: "Generic",
             drm_type: "None",
