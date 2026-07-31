@@ -2,7 +2,7 @@
 //! its FTS rebuild, and the series-link / tag-link materialization. Mirrors
 //! the pre-split inline `#[cfg(test)] mod tests` block.
 
-use omnibus_shared::{Contributor, MetadataOverrides, MetadataSource};
+use omnibus_shared::{BulkMetadataEdit, Contributor, MetadataOverrides, MetadataSource};
 
 use super::upsert::override_match_keys;
 use super::*;
@@ -1579,4 +1579,311 @@ async fn delete_metadata_overrides_bumps_book_last_modified() {
         last_modified > 1,
         "reverting overrides must bump last_modified so exports drop back to source, got {last_modified}"
     );
+}
+
+// -----------------------------------------------------------------
+// Bulk merge (table-view bulk edit)
+// -----------------------------------------------------------------
+
+/// Seed two scanned books under `/lib` with distinct subjects and return
+/// their `(uuid, id)` pairs keyed by filename order (a.epub, b.epub).
+async fn seed_two_books_for_bulk(pool: &sqlx::SqlitePool) -> Vec<(String, i64)> {
+    replace_books(
+        pool,
+        "/lib",
+        vec![
+            indexed(
+                "a.epub",
+                Some("Alpha"),
+                &["Old Author"],
+                &["scifi", "classic"],
+                None,
+                None,
+            ),
+            indexed(
+                "b.epub",
+                Some("Beta"),
+                &["Old Author"],
+                &["romance"],
+                None,
+                None,
+            ),
+        ],
+    )
+    .await
+    .unwrap();
+    let mut books = list_books(pool, "/lib").await.unwrap();
+    books.sort_by(|a, b| a.filename.cmp(&b.filename));
+    books
+        .iter()
+        .map(|b| (b.unique_identifier.clone().unwrap(), b.id))
+        .collect()
+}
+
+#[tokio::test]
+async fn bulk_merge_metadata_overrides_applies_scalars_and_authors_to_every_book() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let seeded = seed_two_books_for_bulk(&pool).await;
+    let uuids: Vec<String> = seeded.iter().map(|(u, _)| u.clone()).collect();
+
+    let edit = BulkMetadataEdit {
+        authors: Some(vec!["New Author".into()]),
+        publisher: Some("Bulk House".into()),
+        series: Some("Bulk Series".into()),
+        language: Some("en".into()),
+        ..Default::default()
+    };
+    bulk_merge_metadata_overrides(&pool, &uuids, &edit, user_id)
+        .await
+        .unwrap();
+
+    for (_, id) in &seeded {
+        let book = get_book(&pool, *id).await.unwrap().unwrap();
+        assert_eq!(book.publisher, Some("Bulk House".into()));
+        assert_eq!(book.series, Some("Bulk Series".into()));
+        assert_eq!(book.language, Some("en".into()));
+        assert_eq!(book.creators.len(), 1);
+        assert_eq!(book.creators[0].name, "New Author");
+    }
+}
+
+#[tokio::test]
+async fn bulk_merge_metadata_overrides_adds_and_removes_tags_against_each_books_effective_subjects()
+{
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let seeded = seed_two_books_for_bulk(&pool).await;
+    let uuids: Vec<String> = seeded.iter().map(|(u, _)| u.clone()).collect();
+
+    let edit = BulkMetadataEdit {
+        add_tags: vec!["fantasy".into()],
+        remove_tags: vec!["scifi".into()],
+        ..Default::default()
+    };
+    bulk_merge_metadata_overrides(&pool, &uuids, &edit, user_id)
+        .await
+        .unwrap();
+
+    let alpha = get_book(&pool, seeded[0].1).await.unwrap().unwrap();
+    let beta = get_book(&pool, seeded[1].1).await.unwrap().unwrap();
+    assert_eq!(alpha.subjects, vec!["classic", "fantasy"]);
+    assert_eq!(beta.subjects, vec!["romance", "fantasy"]);
+}
+
+#[tokio::test]
+async fn bulk_merge_metadata_overrides_uses_existing_override_subjects_as_the_tag_base() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let seeded = seed_two_books_for_bulk(&pool).await;
+    let (uuid, id) = seeded[0].clone();
+
+    merge_metadata_overrides(
+        &pool,
+        &uuid,
+        &MetadataOverrides {
+            subjects: Some(vec!["ov1".into(), "ov2".into()]),
+            ..Default::default()
+        },
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    let edit = BulkMetadataEdit {
+        add_tags: vec!["new".into()],
+        remove_tags: vec!["ov1".into()],
+        ..Default::default()
+    };
+    bulk_merge_metadata_overrides(&pool, &[uuid], &edit, user_id)
+        .await
+        .unwrap();
+
+    let book = get_book(&pool, id).await.unwrap().unwrap();
+    assert_eq!(
+        book.subjects,
+        vec!["ov2", "new"],
+        "base must be the prior override subjects, not the scanned list"
+    );
+}
+
+#[tokio::test]
+async fn bulk_merge_metadata_overrides_preserves_prior_override_fields_and_cover_flag() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let seeded = seed_two_books_for_bulk(&pool).await;
+    let (uuid, _) = seeded[0].clone();
+
+    upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &MetadataOverrides {
+            title: Some("Prior Title".into()),
+            ..Default::default()
+        },
+        true,
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    let edit = BulkMetadataEdit {
+        publisher: Some("Bulk House".into()),
+        ..Default::default()
+    };
+    bulk_merge_metadata_overrides(&pool, std::slice::from_ref(&uuid), &edit, user_id)
+        .await
+        .unwrap();
+
+    let (loaded, has_cover) = get_metadata_overrides(&pool, &uuid)
+        .await
+        .unwrap()
+        .expect("override row should exist");
+    assert_eq!(loaded.title, Some("Prior Title".into()));
+    assert_eq!(loaded.publisher, Some("Bulk House".into()));
+    assert!(has_cover, "a bulk text edit must not clear the cover flag");
+}
+
+#[tokio::test]
+async fn bulk_merge_metadata_overrides_leaves_subjects_untouched_when_no_tag_deltas() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let seeded = seed_two_books_for_bulk(&pool).await;
+    let (uuid, _) = seeded[0].clone();
+
+    let edit = BulkMetadataEdit {
+        publisher: Some("Bulk House".into()),
+        ..Default::default()
+    };
+    bulk_merge_metadata_overrides(&pool, std::slice::from_ref(&uuid), &edit, user_id)
+        .await
+        .unwrap();
+
+    let (loaded, _) = get_metadata_overrides(&pool, &uuid)
+        .await
+        .unwrap()
+        .expect("override row should exist");
+    assert_eq!(
+        loaded.subjects, None,
+        "a scalar-only bulk edit must not freeze the scanned tag list into an override"
+    );
+}
+
+#[tokio::test]
+async fn bulk_merge_metadata_overrides_rolls_back_everything_when_a_uuid_is_unknown() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let seeded = seed_two_books_for_bulk(&pool).await;
+    let (good_uuid, _) = seeded[0].clone();
+
+    let edit = BulkMetadataEdit {
+        publisher: Some("Bulk House".into()),
+        ..Default::default()
+    };
+    let err = bulk_merge_metadata_overrides(
+        &pool,
+        &[good_uuid.clone(), "no-such-uuid".into()],
+        &edit,
+        user_id,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, MetadataOverridesError::BookNotFound(u) if u == "no-such-uuid"));
+
+    assert!(
+        get_metadata_overrides(&pool, &good_uuid)
+            .await
+            .unwrap()
+            .is_none(),
+        "the known book must not have gained an override row"
+    );
+}
+
+#[tokio::test]
+async fn bulk_merge_metadata_overrides_errors_with_too_many_tags_when_a_book_would_exceed_the_cap()
+{
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let seeded = seed_two_books_for_bulk(&pool).await;
+    let (uuid, _) = seeded[0].clone();
+
+    let full: Vec<String> = (0..MetadataOverrides::MAX_SUBJECTS)
+        .map(|i| format!("tag{i}"))
+        .collect();
+    merge_metadata_overrides(
+        &pool,
+        &uuid,
+        &MetadataOverrides {
+            subjects: Some(full),
+            ..Default::default()
+        },
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    let edit = BulkMetadataEdit {
+        add_tags: vec!["one-too-many".into()],
+        ..Default::default()
+    };
+    let err = bulk_merge_metadata_overrides(&pool, std::slice::from_ref(&uuid), &edit, user_id)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        MetadataOverridesError::TooManyTags { uuid: u, max } if u == uuid && max == MetadataOverrides::MAX_SUBJECTS
+    ));
+}
+
+#[tokio::test]
+async fn bulk_merge_metadata_overrides_rebuilds_fts_for_each_book() {
+    let _covers = CoversTempDir::new("fts_bulk_override");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let seeded = seed_two_books_for_bulk(&pool).await;
+    let uuids: Vec<String> = seeded.iter().map(|(u, _)| u.clone()).collect();
+
+    let edit = BulkMetadataEdit {
+        add_tags: vec!["bulktag".into()],
+        ..Default::default()
+    };
+    bulk_merge_metadata_overrides(&pool, &uuids, &edit, user_id)
+        .await
+        .unwrap();
+
+    for (_, id) in &seeded {
+        let tags: String = sqlx::query_scalar("SELECT tags FROM books_fts WHERE rowid = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(
+            tags.contains("bulktag"),
+            "books_fts.tags for rowid {id} should contain the bulk-added tag, got: {tags}"
+        );
+    }
 }

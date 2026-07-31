@@ -425,6 +425,34 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     hasCover: true,
   },
 
+  // Reserved for landing_bulk_edit.spec.ts — it bulk-writes publisher/tag
+  // overrides to BOTH books (reverted at test end, but the suite is
+  // fullyParallel, so no other spec may read them). `tags` is deliberately
+  // omitted (like standalone-ocean) so the landing spec skips the tags-cell
+  // assertion these mutations would race. "Katherine Johnson" is unique
+  // across ALL fixtures (ebook + audiobook) — shelves.spec.ts asserts exact
+  // author-scoped match counts.
+  {
+    slug: "bulk-target-1",
+    filename: "bulk-target-1.epub",
+    title: "Bulk Target One",
+    authors: ["Katherine Johnson"],
+    publisher: "Bulk Test House",
+    published: "1972-02-02",
+    language: "en",
+    hasCover: true,
+  },
+  {
+    slug: "bulk-target-2",
+    filename: "bulk-target-2.epub",
+    title: "Bulk Target Two",
+    authors: ["Katherine Johnson"],
+    publisher: "Bulk Test House",
+    published: "1974-03-03",
+    language: "en",
+    hasCover: true,
+  },
+
   // Public-domain Project Gutenberg / Standard Ebooks EPUBs under
   // `test_data/epubs/public_domain/`. Metadata below is what each file's OPF
   // actually claims — `db/tests/public_domain_epubs.rs` keeps the parser honest.

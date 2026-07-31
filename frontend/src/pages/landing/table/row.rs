@@ -25,6 +25,7 @@ pub(super) fn EbookRow(book: EbookMetadata, ctx: BookTableContext) -> Element {
         is_admin,
         author_suggestions,
         tag_suggestions,
+        selected,
     } = ctx;
 
     let uuid = book.unique_identifier.clone().unwrap_or_default();
@@ -51,6 +52,7 @@ pub(super) fn EbookRow(book: EbookMetadata, ctx: BookTableContext) -> Element {
         save_field: EventHandler::new(save_field),
         save_authors: EventHandler::new(save_authors),
         save_tags: EventHandler::new(save_tags),
+        selected,
     };
 
     rsx! {
@@ -266,6 +268,7 @@ fn EbookRowCells(display: RowDisplay, ctx: RowContext) -> Element {
         save_field,
         save_authors,
         save_tags,
+        mut selected,
     } = ctx;
     // Cloned per scalar cell so each wrapper owns its own copy of the shared
     // admin/editing/save context.
@@ -291,8 +294,31 @@ fn EbookRowCells(display: RowDisplay, ctx: RowContext) -> Element {
         language,
     } = display;
     let cover_alt = title.clone();
+    let select_uuid = book.unique_identifier.clone().unwrap_or_default();
+    let is_selected = selected.read().contains(&select_uuid);
+    let select_aria = format!("Select {title}");
 
     rsx! {
+        if is_admin {
+            // `stop_propagation` on the whole cell (not just the checkbox) so a
+            // near-miss click can't fire the row's navigate handler.
+            td {
+                class: "ebook-col-select",
+                onclick: move |evt| evt.stop_propagation(),
+                input {
+                    r#type: "checkbox",
+                    "data-testid": "ebook-select",
+                    aria_label: "{select_aria}",
+                    checked: is_selected,
+                    onchange: move |_| {
+                        let mut set = selected.write();
+                        if !set.remove(&select_uuid) {
+                            set.insert(select_uuid.clone());
+                        }
+                    },
+                }
+            }
+        }
         EbookRowCoverCell { thumb_src, thumb_srcset, has_cover, alt_title: cover_alt }
         RowTitleCell { title, error: book.error, ctx: cell_ctx.clone() }
         ChipCell {
