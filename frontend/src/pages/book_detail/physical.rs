@@ -1,8 +1,8 @@
-//! Web-only physical-collection + wishlist panel for the book-detail page.
-//! Renders checked-in copies (edit-note / delete), the wishlist tracking card,
-//! and the add-to-wishlist affordance. Self-loads post-mount for SSR/WASM
-//! hydration parity; bumps the page `refresh` signal after mutations that
-//! change the book's physical/visibility state.
+//! Web-only physical-collection + wishlist UI for the book-detail page: the
+//! full-width checked-in-copies panel (edit-note / delete) and the rail-card
+//! wishlist slot (tracking card / add-to-wishlist affordance) the hero embeds.
+//! Self-loads post-mount for SSR/WASM hydration parity; bumps the page
+//! `refresh` signal after mutations that change physical/visibility state.
 
 use dioxus::prelude::*;
 use omnibus_shared::physical::{PhysicalCopy, WishlistEntry, WishlistSource};
@@ -11,7 +11,7 @@ use crate::components::{confirm_modal_body, ConfirmModal, ConfirmModalAction, Co
 use crate::time::now_unix;
 use crate::{data, use_server_url};
 
-use super::BdSectionHead;
+use super::{BdSectionHead, PhysSignals};
 
 /// A pending copy deletion awaiting confirmation. `last_fileless` marks the
 /// only copy of a book with no files — deleting it needs the remove-or-wishlist
@@ -37,37 +37,37 @@ struct PhysPanelState {
     refresh: Signal<u32>,
 }
 
-/// Book-identity fields the panel needs, bundled to keep `BdPhysicalPanel`
-/// under the 5-prop guideline (mirrors `body::BdPageCtx`). `is_fileless` is
-/// `b.formats.is_empty()` (no ebook/audiobook files); `isbn`/`title`/`author`
-/// feed the "Find a copy" search.
+/// Book-identity fields the rail wishlist slot needs, bundled to keep
+/// [`BdWishlistRailSlot`] under the 5-prop guideline (mirrors
+/// `body::BdPageCtx`). `isbn`/`title`/`author` feed the "Find a copy" search;
+/// `has_physical` suppresses the add affordance for an already-owned book.
 #[derive(Clone, PartialEq, Props)]
 pub(super) struct BdBookIdentity {
     pub uuid: String,
-    pub is_fileless: bool,
+    pub has_physical: bool,
     pub isbn: Option<String>,
     pub title: String,
     pub author: String,
 }
 
-/// Physical-collection + wishlist panel. `refresh` is the page's book-refetch
-/// signal.
+/// Checked-in physical-copies panel. Owns the post-mount copies+wishlist load
+/// (writing the shared `phys` signals the hero's chip and rail slot read);
+/// the wishlist UI itself lives in [`BdWishlistRailSlot`]. `refresh` is the
+/// page's book-refetch signal.
 #[component]
-pub(super) fn BdPhysicalPanel(identity: BdBookIdentity, refresh: Signal<u32>) -> Element {
-    let BdBookIdentity {
-        uuid,
-        is_fileless,
-        isbn,
-        title,
-        author,
-    } = identity;
+pub(super) fn BdPhysicalPanel(
+    uuid: String,
+    is_fileless: bool,
+    refresh: Signal<u32>,
+    phys: PhysSignals,
+) -> Element {
     let server_url = use_server_url();
     let user = crate::use_current_user_summary();
     let can_edit = user().map(|u| u.is_admin || u.can_edit).unwrap_or(false);
 
     let copies = use_signal(Vec::<PhysicalCopy>::new);
-    let wishlist = use_signal(|| None::<WishlistEntry>);
-    let loaded = use_signal(|| false);
+    let wishlist = phys.wishlist;
+    let loaded = phys.loaded;
     let err = use_signal(|| None::<String>);
     let state = PhysPanelState {
         copies,
@@ -90,27 +90,114 @@ pub(super) fn BdPhysicalPanel(identity: BdBookIdentity, refresh: Signal<u32>) ->
     );
 
     // First paint (SSR + first WASM) renders nothing; the post-mount load fills
-    // it in. No hooks past this point, so the early return keeps hook order
-    // fixed across the empty and loaded renders (rule 07).
-    if !loaded() {
+    // it in. No hooks past this point, so the early returns keep hook order
+    // fixed across the empty and loaded renders (rule 07). A copy-less book
+    // without a load error renders nothing here either — its wishlist state
+    // shows in the hero rail instead.
+    if !loaded() || (copies().is_empty() && state.err.read().is_none()) {
         return rsx! {};
     }
 
-    let content = if !copies().is_empty() {
-        render_physical_section(state, server_url.clone(), is_fileless, can_edit)
-    } else if wishlist().is_some() {
-        render_wishlist_section(state, server_url.clone(), uuid.clone(), isbn, title, author)
-    } else {
-        render_add_wishlist(state, server_url.clone(), uuid.clone())
-    };
-
     rsx! {
         section { class: "bd-physical-panel", "data-testid": "bd-physical-panel",
-            {content}
+            if !copies().is_empty() {
+                {render_physical_section(state, server_url.clone(), is_fileless, can_edit)}
+            }
             if let Some(e) = state.err.read().clone() {
                 p { role: "alert", class: "bd-phys-error", "data-testid": "physical-error", "{e}" }
             }
             {render_delete_modal(state, server_url, uuid)}
+        }
+    }
+}
+
+/// Rail-card wishlist slot the hero embeds under the rating + reading-status
+/// blocks: the tracking card for a wishlisted book, or the add-to-wishlist
+/// affordance for a book with no physical copy. Renders nothing until the
+/// panel's shared post-mount load resolves (rule 07 — SSR and first WASM
+/// paint both empty), and nothing for a book already in the collection.
+#[component]
+pub(super) fn BdWishlistRailSlot(identity: BdBookIdentity, phys: PhysSignals) -> Element {
+    let BdBookIdentity {
+        uuid,
+        has_physical,
+        isbn,
+        title,
+        author,
+    } = identity;
+    let server_url = use_server_url();
+    let wishlist = phys.wishlist;
+    let busy = use_signal(|| false);
+    let err = use_signal(|| None::<String>);
+
+    // No hooks past this point (rule 07).
+    if !(phys.loaded)() {
+        return rsx! {};
+    }
+    let entry = wishlist.read().clone();
+    if entry.is_none() && has_physical {
+        return rsx! {};
+    }
+
+    let content = match entry {
+        Some(e) => {
+            let added = time_ago(now_unix(), e.added_at);
+            let source = source_label(e.source);
+            let find_url = find_a_copy_url(isbn.as_deref(), &title, &author);
+            let remove_url = server_url.clone();
+            let remove_uuid = uuid.clone();
+            rsx! {
+                div { class: "bd-wishlist-rail", "data-testid": "wishlist-card",
+                    p { class: "bd-wishlist-meta",
+                        "Tracking this title \u{00b7} added {added} from {source}"
+                    }
+                    div { class: "bd-wishlist-actions",
+                        a {
+                            class: "btn sm",
+                            "data-testid": "find-a-copy",
+                            href: "{find_url}",
+                            target: "_blank",
+                            rel: "noopener noreferrer",
+                            "Find a copy"
+                        }
+                        button {
+                            class: "btn ghost sm",
+                            "data-testid": "wishlist-remove",
+                            disabled: busy(),
+                            onclick: move |_| {
+                                remove_from_wishlist(
+                                    wishlist, busy, err, remove_url.clone(), remove_uuid.clone(),
+                                )
+                            },
+                            "Remove from wishlist"
+                        }
+                    }
+                }
+            }
+        }
+        None => rsx! {
+            div { class: "bd-wishlist-rail", "data-testid": "wishlist-add-card",
+                p { class: "bd-wishlist-add-blurb", "Track this title to find a physical copy later." }
+                button {
+                    class: "btn sm",
+                    "data-testid": "add-to-wishlist",
+                    disabled: busy(),
+                    onclick: move |_| add_to_wishlist(wishlist, busy, err, server_url.clone(), uuid.clone()),
+                    "Add to physical wishlist"
+                }
+            }
+        },
+    };
+
+    rsx! {
+        div { class: "divider" }
+        div { class: "label bd-wishlist-head", "Physical wishlist" }
+        {content}
+        // Distinct testid from the panel's `physical-error`: both surfaces can
+        // error at once (load failure + failed add/remove), and a shared id
+        // would make Playwright selectors ambiguous.
+        if let Some(e) = err.read().clone() {
+            p { role: "alert", class: "bd-phys-error", "data-testid": "wishlist-error", "{e}" }
         }
     }
 }
@@ -270,76 +357,6 @@ fn render_note_editor(state: PhysPanelState, url: String, copy_id: i64) -> Eleme
                     onclick: move |_| editing.set(None),
                     "Cancel"
                 }
-            }
-        }
-    }
-}
-
-/// Wishlisted-book state: pill + tracking card with Remove and Find a copy.
-fn render_wishlist_section(
-    state: PhysPanelState,
-    url: String,
-    uuid: String,
-    isbn: Option<String>,
-    title: String,
-    author: String,
-) -> Element {
-    let busy = state.busy;
-    let entry = state.wishlist.read().clone();
-    let added = entry
-        .as_ref()
-        .map(|e| time_ago(now_unix(), e.added_at))
-        .unwrap_or_default();
-    let source = entry.map(|e| source_label(e.source)).unwrap_or("a scan");
-    let find_url = find_a_copy_url(isbn.as_deref(), &title, &author);
-    rsx! {
-        BdSectionHead { kicker: "Wishlist", title: "On your wishlist" }
-        div { class: "bd-phys-pill-row",
-            span { class: "chip bd-phys-pill bd-wishlist-pill", "data-testid": "wishlist-pill",
-                "On your wishlist"
-            }
-        }
-        div { class: "card bd-wishlist-card", "data-testid": "wishlist-card",
-            p { class: "bd-wishlist-meta",
-                "Tracking this title \u{00b7} added {added} from {source}"
-            }
-            div { class: "bd-wishlist-actions",
-                a {
-                    class: "btn sm",
-                    "data-testid": "find-a-copy",
-                    href: "{find_url}",
-                    target: "_blank",
-                    rel: "noopener noreferrer",
-                    "Find a copy"
-                }
-                button {
-                    class: "btn ghost sm",
-                    "data-testid": "wishlist-remove",
-                    disabled: busy(),
-                    onclick: move |_| remove_from_wishlist(state, url.clone(), uuid.clone()),
-                    "Remove from wishlist"
-                }
-            }
-        }
-    }
-}
-
-/// The "Add to physical wishlist" affordance, shown for any book without a
-/// physical copy — including one owned only digitally.
-fn render_add_wishlist(state: PhysPanelState, url: String, uuid: String) -> Element {
-    let busy = state.busy;
-    rsx! {
-        div { class: "card bd-wishlist-add", "data-testid": "wishlist-add-card",
-            div { class: "bd-wishlist-add-text",
-                div { class: "label bd-section-kicker", "Physical wishlist" }
-                p { class: "bd-wishlist-add-blurb", "Track this title to find a physical copy later." }
-            }
-            button {
-                class: "btn sm",
-                "data-testid": "add-to-wishlist",
-                disabled: busy(),
-                onclick: move |_| add_to_wishlist(state, url.clone(), uuid.clone()),
-                "Add to physical wishlist"
             }
         }
     }
@@ -557,14 +574,15 @@ fn delete_last_and_wishlist(state: PhysPanelState, url: String, uuid: String, co
     });
 }
 
-/// Add the book to the caller's wishlist.
-fn add_to_wishlist(state: PhysPanelState, url: String, uuid: String) {
-    let PhysPanelState {
-        mut wishlist,
-        mut busy,
-        mut err,
-        ..
-    } = state;
+/// Add the book to the caller's wishlist. Takes the individual signals (not
+/// `PhysPanelState`) because its caller is the rail slot, not the panel.
+fn add_to_wishlist(
+    mut wishlist: Signal<Option<WishlistEntry>>,
+    mut busy: Signal<bool>,
+    mut err: Signal<Option<String>>,
+    url: String,
+    uuid: String,
+) {
     busy.set(true);
     err.set(None);
     spawn(async move {
@@ -576,14 +594,15 @@ fn add_to_wishlist(state: PhysPanelState, url: String, uuid: String) {
     });
 }
 
-/// Remove the book from the caller's wishlist.
-fn remove_from_wishlist(state: PhysPanelState, url: String, uuid: String) {
-    let PhysPanelState {
-        mut wishlist,
-        mut busy,
-        mut err,
-        ..
-    } = state;
+/// Remove the book from the caller's wishlist. Same signal-taking shape as
+/// [`add_to_wishlist`].
+fn remove_from_wishlist(
+    mut wishlist: Signal<Option<WishlistEntry>>,
+    mut busy: Signal<bool>,
+    mut err: Signal<Option<String>>,
+    url: String,
+    uuid: String,
+) {
     busy.set(true);
     err.set(None);
     spawn(async move {
@@ -630,14 +649,14 @@ fn source_label(source: WishlistSource) -> &'static str {
     }
 }
 
-/// "Find a copy" target URL: a web search on the ISBN when present, else on
-/// title + author.
+/// "Find a copy" target URL: an Amazon search on the ISBN when present, else
+/// on title + author.
 fn find_a_copy_url(isbn: Option<&str>, title: &str, author: &str) -> String {
     let query = match isbn {
         Some(i) if !i.trim().is_empty() => i.trim().to_string(),
         _ => format!("{title} {author}").trim().to_string(),
     };
-    format!("https://www.google.com/search?q={}", encode_query(&query))
+    format!("https://www.amazon.com/s?k={}", encode_query(&query))
 }
 
 /// Percent-encode a query string (RFC 3986 unreserved kept literal, the rest

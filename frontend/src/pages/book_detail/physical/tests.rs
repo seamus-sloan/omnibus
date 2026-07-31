@@ -40,7 +40,7 @@ fn source_label_covers_every_variant() {
 #[test]
 fn find_a_copy_url_prefers_isbn_when_present() {
     let url = find_a_copy_url(Some("9780451524935"), "1984", "George Orwell");
-    assert_eq!(url, "https://www.google.com/search?q=9780451524935");
+    assert_eq!(url, "https://www.amazon.com/s?k=9780451524935");
 }
 
 #[test]
@@ -48,7 +48,7 @@ fn find_a_copy_url_falls_back_to_title_and_author() {
     let url = find_a_copy_url(None, "Brave New World", "Aldous Huxley");
     assert_eq!(
         url,
-        "https://www.google.com/search?q=Brave%20New%20World%20Aldous%20Huxley"
+        "https://www.amazon.com/s?k=Brave%20New%20World%20Aldous%20Huxley"
     );
 }
 
@@ -70,18 +70,42 @@ mod render_tests {
     use super::*;
     use crate::test_support::render_in_vdom;
 
+    /// Build the shared wishlist signals a preview needs, seeded to a state.
+    fn seeded_phys(entry: Option<WishlistEntry>, loaded: bool) -> PhysSignals {
+        PhysSignals {
+            wishlist: use_signal(move || entry.clone()),
+            loaded: use_signal(move || loaded),
+        }
+    }
+
+    fn sample_entry() -> WishlistEntry {
+        WishlistEntry {
+            id: 1,
+            user_id: 1,
+            book_uuid: "u".to_string(),
+            added_at: 0,
+            source: WishlistSource::Detail,
+        }
+    }
+
+    fn slot_identity(has_physical: bool) -> BdBookIdentity {
+        BdBookIdentity {
+            uuid: "u".to_string(),
+            has_physical,
+            isbn: None,
+            title: "Dune".to_string(),
+            author: "Frank Herbert".to_string(),
+        }
+    }
+
     /// The panel's first paint, before the post-mount load resolves.
     fn panel_first_paint() -> Element {
         rsx! {
             BdPhysicalPanel {
-                identity: BdBookIdentity {
-                    uuid: "book-uuid".to_string(),
-                    is_fileless: false,
-                    isbn: None,
-                    title: "Dracula".to_string(),
-                    author: "Bram Stoker".to_string(),
-                },
+                uuid: "book-uuid".to_string(),
+                is_fileless: false,
                 refresh: use_signal(|| 0u32),
+                phys: seeded_phys(None, false),
             }
         }
     }
@@ -93,6 +117,26 @@ mod render_tests {
         // against (rule 07).
         let html = render_in_vdom(panel_first_paint);
         assert!(!html.contains("data-testid=\"bd-physical-panel\""));
+    }
+
+    /// A loaded, copy-less book: wishlist state lives in the hero rail, so the
+    /// full-width panel renders nothing at all.
+    fn panel_loaded_copyless() -> Element {
+        rsx! {
+            BdPhysicalPanel {
+                uuid: "book-uuid".to_string(),
+                is_fileless: false,
+                refresh: use_signal(|| 0u32),
+                phys: seeded_phys(Some(sample_entry()), true),
+            }
+        }
+    }
+
+    #[test]
+    fn panel_renders_nothing_for_a_loaded_book_without_copies() {
+        let html = render_in_vdom(panel_loaded_copyless);
+        assert!(!html.contains("data-testid=\"bd-physical-panel\""));
+        assert!(!html.contains("data-testid=\"wishlist-card\""));
     }
 
     /// Seed a state with one copy and render the physical section directly, so
@@ -132,44 +176,77 @@ mod render_tests {
         assert!(html.contains("data-testid=\"copy-delete\""));
     }
 
-    /// Seed a wishlisted state and render its section (pill + tracking card).
-    fn wishlist_section_preview() -> Element {
-        let state = PhysPanelState {
-            copies: use_signal(Vec::new),
-            wishlist: use_signal(|| {
-                Some(WishlistEntry {
-                    id: 1,
-                    user_id: 1,
-                    book_uuid: "u".to_string(),
-                    added_at: 0,
-                    source: WishlistSource::Detail,
-                })
-            }),
-            busy: use_signal(|| false),
-            err: use_signal(|| None),
-            editing: use_signal(|| None),
-            note_draft: use_signal(String::new),
-            delete_target: use_signal(|| None),
-            refresh: use_signal(|| 0u32),
-        };
-        render_wishlist_section(
-            state,
-            "".to_string(),
-            "u".to_string(),
-            None,
-            "Dune".to_string(),
-            "Frank Herbert".to_string(),
-        )
+    /// The rail slot for a wishlisted book (tracking card + actions).
+    fn wishlisted_slot_preview() -> Element {
+        rsx! {
+            BdWishlistRailSlot {
+                identity: slot_identity(false),
+                phys: seeded_phys(Some(sample_entry()), true),
+            }
+        }
     }
 
     #[test]
-    fn wishlist_section_renders_pill_tracking_card_and_find_a_copy() {
-        let html = render_in_vdom(wishlist_section_preview);
-        assert!(html.contains("data-testid=\"wishlist-pill\""));
-        assert!(html.contains("On your wishlist"));
+    fn wishlist_slot_renders_tracking_card_and_find_a_copy_when_wishlisted() {
+        let html = render_in_vdom(wishlisted_slot_preview);
+        assert!(html.contains("Physical wishlist"));
         assert!(html.contains("data-testid=\"wishlist-card\""));
+        assert!(html.contains("Tracking this title"));
         assert!(html.contains("data-testid=\"wishlist-remove\""));
         assert!(html.contains("data-testid=\"find-a-copy\""));
+    }
+
+    /// The rail slot for a book that is neither wishlisted nor owned
+    /// physically (the add affordance).
+    fn add_slot_preview() -> Element {
+        rsx! {
+            BdWishlistRailSlot {
+                identity: slot_identity(false),
+                phys: seeded_phys(None, true),
+            }
+        }
+    }
+
+    #[test]
+    fn wishlist_slot_offers_add_when_not_wishlisted() {
+        let html = render_in_vdom(add_slot_preview);
+        assert!(html.contains("data-testid=\"wishlist-add-card\""));
+        assert!(html.contains("data-testid=\"add-to-wishlist\""));
+    }
+
+    /// The rail slot for a book already in the physical collection.
+    fn physical_owned_slot_preview() -> Element {
+        rsx! {
+            BdWishlistRailSlot {
+                identity: slot_identity(true),
+                phys: seeded_phys(None, true),
+            }
+        }
+    }
+
+    #[test]
+    fn wishlist_slot_renders_nothing_for_a_physically_owned_book() {
+        let html = render_in_vdom(physical_owned_slot_preview);
+        assert!(!html.contains("Physical wishlist"));
+        assert!(!html.contains("data-testid=\"add-to-wishlist\""));
+    }
+
+    /// The rail slot before the shared load resolves — must be empty so the
+    /// SSR and first-hydration paints match (rule 07).
+    fn unloaded_slot_preview() -> Element {
+        rsx! {
+            BdWishlistRailSlot {
+                identity: slot_identity(false),
+                phys: seeded_phys(None, false),
+            }
+        }
+    }
+
+    #[test]
+    fn wishlist_slot_renders_nothing_before_the_load_resolves() {
+        let html = render_in_vdom(unloaded_slot_preview);
+        assert!(!html.contains("Physical wishlist"));
+        assert!(!html.contains("data-testid=\"wishlist-add-card\""));
     }
 
     fn state_with_target(last_fileless: bool) -> PhysPanelState {

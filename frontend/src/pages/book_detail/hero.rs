@@ -1,4 +1,6 @@
-//! Hero section of the book-detail page — breadcrumb, cover with format badges, title row, CTAs, tag chips, rating card.
+//! Hero section of the book-detail page — breadcrumb, cover with format badges
+//! and tag chips, title row, CTAs, and the rating rail card (rating,
+//! reading status, wishlist slot, shelves).
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
@@ -12,9 +14,10 @@ use crate::{data, use_server_url, Route};
 use super::export_menu::BdExportMenu;
 use super::file_picker::{is_audio_book_file, BdFilePickerMenu, FilePickerKind};
 use super::immersive::BdImmersiveButton;
+use super::physical::{BdBookIdentity, BdWishlistRailSlot};
 use super::rating::BdRatingWidget;
 use super::read_status::BdReadStatusControl;
-use super::{BdCrumb, BdCrumbItem, BdFormatBadge};
+use super::{BdCrumb, BdCrumbItem, BdFormatBadge, PhysSignals};
 
 /// Which formats this book has, driving the hero's CTA buttons and format badges.
 #[derive(Clone, Copy, PartialEq)]
@@ -37,7 +40,24 @@ fn BdPhysBadge() -> Element {
     }
 }
 
-/// Hero section: breadcrumb, cover + format badges, title + CTAs, rating card.
+/// "Physical Wishlist" badge shown in the format-badge row when the book is on
+/// the caller's wishlist. Client-only by construction: the wishlist signal is
+/// `None` on SSR and the first WASM paint, so it appears after the post-mount
+/// load (rule 07 holds).
+#[component]
+fn BdWishlistBadge() -> Element {
+    rsx! {
+        span {
+            class: "bd-fmt-badge bd-fmt-badge--physical",
+            "data-testid": "format-badge-wishlist",
+            title: "On your physical wishlist",
+            "Physical Wishlist"
+        }
+    }
+}
+
+/// Hero section: breadcrumb, cover + format badges + tags, title + CTAs, and
+/// the rating rail card (rating, reading status, wishlist slot, shelves).
 #[component]
 pub(super) fn BdHeroSection(
     b: EbookMetadata,
@@ -45,21 +65,33 @@ pub(super) fn BdHeroSection(
     kicker: String,
     crumbs: Vec<BdCrumbItem>,
     avail: Availability,
+    phys: PhysSignals,
 ) -> Element {
     let uuid = b.unique_identifier.clone().unwrap_or_default();
+    let on_wishlist = phys.wishlist.read().is_some();
     rsx! {
         section { class: "bd-hero",
             BdCrumb { items: crumbs }
             div { class: "bd-hero-grid",
                 div { class: "bd-cover-col",
                     Cover { book: b.clone() }
-                    if !b.formats.is_empty() || b.has_physical {
+                    if !b.formats.is_empty() || b.has_physical || on_wishlist {
                         div { class: "bd-format-badges",
                             for f in b.formats.iter() {
                                 BdFormatBadge { key: "{f}", fmt: f.clone() }
                             }
                             if b.has_physical {
                                 BdPhysBadge {}
+                            }
+                            if on_wishlist {
+                                BdWishlistBadge {}
+                            }
+                        }
+                    }
+                    if !b.subjects.is_empty() {
+                        ul { class: "bd-tag-list",
+                            for tag in b.subjects.iter() {
+                                li { key: "{tag}", class: "chip", "{tag}" }
                             }
                         }
                     }
@@ -75,21 +107,17 @@ pub(super) fn BdHeroSection(
                     div { class: "label", "Your rating" }
                     BdRatingWidget { uuid: uuid.clone() }
                     div { class: "divider" }
-                    div { class: "label bd-action-head", "Actions" }
-                    div { class: "bd-actions",
-                        a { class: "btn ghost bd-action-row", href: "#journal",
-                            "data-testid": "hero-write-journal",
-                            span { "Write a journal entry" }
-                            span { class: "bd-action-row-arrow", "\u{2192}" }
-                        }
-                        button { class: "btn ghost bd-action-row", disabled: true,
-                            span { "Add a highlight" }
-                            span { class: "bd-action-row-arrow", "\u{2192}" }
-                        }
-                        button { class: "btn ghost bd-action-row", disabled: true,
-                            span { "Share or export\u{2026}" }
-                            span { class: "bd-action-row-arrow", "\u{2192}" }
-                        }
+                    div { class: "label bd-readstatus-head", "Reading status" }
+                    BdReadStatusControl { uuid: uuid.clone() }
+                    BdWishlistRailSlot {
+                        identity: BdBookIdentity {
+                            uuid: uuid.clone(),
+                            has_physical: b.has_physical,
+                            isbn: b.isbn13.clone(),
+                            title: title.clone(),
+                            author: b.creators.first().map(|c| c.name.clone()).unwrap_or_default(),
+                        },
+                        phys,
                     }
                     div { class: "divider" }
                     div { class: "label bd-shelves-head", "On your shelves" }
@@ -194,16 +222,6 @@ fn BdTitleCol(
                     epub_size_bytes: b.epub_size_bytes,
                     book_files: b.book_files.clone(),
                 },
-            }
-            div { class: "bd-progress-meta",
-                BdReadStatusControl { uuid: uuid.clone() }
-            }
-            if !b.subjects.is_empty() {
-                ul { class: "bd-tag-list",
-                    for tag in b.subjects.iter() {
-                        li { key: "{tag}", class: "chip", "{tag}" }
-                    }
-                }
             }
         }
     }
@@ -371,5 +389,12 @@ mod tests {
         let html = dioxus::ssr::render_element(rsx! { BdPhysBadge {} });
         assert!(html.contains("data-testid=\"format-badge-physical\""));
         assert!(html.contains("Physical"));
+    }
+
+    #[test]
+    fn wishlist_badge_renders_its_testid_and_label() {
+        let html = dioxus::ssr::render_element(rsx! { BdWishlistBadge {} });
+        assert!(html.contains("data-testid=\"format-badge-wishlist\""));
+        assert!(html.contains("Physical Wishlist"));
     }
 }
