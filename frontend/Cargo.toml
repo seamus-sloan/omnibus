@@ -80,9 +80,12 @@ tokio-util = { version = "0.7", default-features = false, features = ["io"], opt
 getrandom = { version = "0.2", optional = true }
 
 # PIN RATIONALE (#1529): frozen at v3, same reasoning as db/Cargo.toml's zip
-# pin — mirrors the version already resolved transitively via `epub`, so
-# bumping here alone would just reintroduce the duplicate this pin avoids.
-# Lift both crates' `zip` deps together, after the v4-v9 changelog audit.
+# pin. This crate's `mobile` feature enables `dep:zip` directly, without
+# `dep:omnibus-db` — but building the workspace (or this crate's `server`
+# feature, which does pull in `omnibus-db`) resolves one shared `zip` via
+# Cargo's version unification, so bumping here alone, out of step with
+# `db/Cargo.toml`, would reintroduce that duplicate. Lift both crates' `zip`
+# deps together, after the v4-v9 changelog audit.
 #
 # Real ZIP validation for a downloaded EPUB: reading each member to EOF is
 # what checks the CRC-32 the central directory recorded for it, which is the
