@@ -1486,8 +1486,11 @@ async fn reindex_preserves_cbz_uuid_and_ghosts_the_book_when_the_file_is_removed
     let _ = std::fs::remove_dir_all(&lib);
 }
 
-/// AC3: a malformed CBZ (not a zip) lands as a per-book error row — the
-/// scan completes and the row records the failure instead of aborting.
+/// AC3: a malformed CBZ (not a zip) degrades to a metadata-less book row —
+/// filename-fallback title, no cover — and the scan completes. (The parse
+/// error itself lives on the in-memory `IndexedBook`, pinned by the
+/// `comic::tests` failure-mode tests; the `books` schema has no error
+/// column to persist it.)
 #[tokio::test]
 async fn reindex_surfaces_a_malformed_cbz_as_an_error_row_without_aborting() {
     let _covers = CoversTempDir::new("reindex-cbz-bad");
@@ -1510,6 +1513,16 @@ async fn reindex_surfaces_a_malformed_cbz_as_an_error_row_without_aborting() {
             .await
             .unwrap();
     assert_eq!(good_title, "The Longing", "the healthy CBZ still indexes");
+    let (bad_title, bad_cover): (String, i64) =
+        sqlx::query_as("SELECT title, has_cover FROM books WHERE scan_key = 'bad.cbz'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        bad_title, "bad.cbz",
+        "the error row falls back to the filename title"
+    );
+    assert_eq!(bad_cover, 0, "the error row carries no cover");
 
     let _ = std::fs::remove_dir_all(&lib);
 }

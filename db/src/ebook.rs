@@ -25,9 +25,10 @@ pub use wordcount::estimate_word_count;
 /// [`crate::indexer::reindex`] to scope the diff's "currently indexed"
 /// view to ebook rows — prevents `sync_books` from classifying foreign
 /// (audiobook) rows under a shared `library_path` as Removed and
-/// deleting them. Also (lowercased) the extensions the stat walk picks
-/// up, so the diff's view and the walk can never disagree. Uppercased to
-/// match [`crate::helpers::split_filename`]'s output.
+/// deleting them. Also doubles as the stat walk's extension allowlist
+/// (compared case-insensitively), so the diff's view and the walk can
+/// never disagree. Uppercased to match
+/// [`crate::helpers::split_filename`]'s output.
 pub const EBOOK_FORMATS: &[&str] = &["CBZ", "EPUB"];
 
 /// A single scanner output row — metadata plus the raw cover image bytes
