@@ -15,17 +15,17 @@ fn temp_dir(suffix: &str) -> PathBuf {
 }
 
 #[test]
-fn slugify_basic_ascii() {
+fn slugify_handles_basic_ascii() {
     assert_eq!(slugify("Hello World"), "hello-world");
 }
 
 #[test]
-fn slugify_strips_punctuation() {
+fn slugify_strips_out_punctuation() {
     assert_eq!(slugify("What?! Really..."), "what-really");
 }
 
 #[test]
-fn slugify_collapses_runs() {
+fn slugify_collapses_repeated_separator_runs() {
     assert_eq!(slugify("a---b___c"), "a-b-c");
 }
 
@@ -35,12 +35,12 @@ fn slugify_trims_leading_and_trailing() {
 }
 
 #[test]
-fn slugify_folds_accents() {
+fn slugify_folds_accented_characters_to_ascii() {
     assert_eq!(slugify("Café au Lait"), "cafe-au-lait");
 }
 
 #[test]
-fn slugify_transliterates_cjk() {
+fn slugify_transliterates_cjk_to_ascii() {
     // Locks in deunicode's transliteration. The exact letters matter less
     // than the fact that the result is non-empty ASCII.
     let out = slugify("東京物語");
@@ -56,7 +56,7 @@ fn slugify_transliterates_cjk() {
 }
 
 #[test]
-fn slugify_handles_cyrillic() {
+fn slugify_transliterates_cyrillic_to_ascii() {
     let out = slugify("Война и мир");
     assert!(!out.is_empty());
     assert!(
@@ -84,7 +84,7 @@ fn slugify_caps_at_80_chars() {
 }
 
 #[test]
-fn slugify_preserves_digits() {
+fn slugify_preserves_digits_in_slug() {
     assert_eq!(slugify("Volume 2: The Sequel"), "volume-2-the-sequel");
 }
 
@@ -99,7 +99,7 @@ fn slugify_cap_does_not_leave_trailing_dash() {
 }
 
 #[test]
-fn canonical_path_typical() {
+fn canonical_path_builds_typical_nested_path() {
     let p = canonical_path(
         Path::new("/lib"),
         "Brandon Sanderson",
@@ -113,7 +113,7 @@ fn canonical_path_typical() {
 }
 
 #[test]
-fn canonical_path_apostrophe() {
+fn canonical_path_slugifies_apostrophe_in_author_name() {
     let p = canonical_path(
         Path::new("/lib"),
         "Madeleine L'Engle",
