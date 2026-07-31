@@ -2,15 +2,15 @@
 //!
 //! Mounted outside the `/api/*` auth gate; each route authenticates via its
 //! path token ([`KoboAuthUser`]). Serves the initialization handshake, the
-//! library enumeration, per-book metadata, KEPUB download, the read-state PUT,
-//! tags, and cover images.
+//! library enumeration, per-book metadata, KEPUB download, the read-state
+//! GET/PUT, tags, and cover images.
 
 use axum::{
     body::{Body, Bytes},
     extract::{Path, Request, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{any, get, post, put},
+    routing::{any, get, post},
     Extension, Json, Router,
 };
 use futures_util::stream;
@@ -68,7 +68,10 @@ pub fn kobo_router(state: AppState) -> Router {
             "/kobo/{token}/v1/library/{uuid}/metadata",
             get(library_metadata),
         )
-        .route("/kobo/{token}/v1/library/{uuid}/state", put(put_state))
+        .route(
+            "/kobo/{token}/v1/library/{uuid}/state",
+            get(get_state).put(put_state),
+        )
         .route("/kobo/{token}/v1/library/tags", get(library_tags))
         .route("/kobo/{token}/v1/download/{uuid}", get(download))
         .route(
@@ -449,6 +452,50 @@ async fn library_metadata(
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => internal("kobo book_for_sync", e),
     }
+}
+
+/// `GET library/<uuid>/state` — the device's pull of the server-side reading
+/// state for one book, the request the firmware adopts a position from: a
+/// one-element array of the same `ReadingState` shape the PUT consumes and
+/// `library/sync` emits (prosa-kobo contract).
+///
+/// Deliberately shares `library/sync`'s span enrichment, side effects
+/// included: a CFI-only position goes out as an exact KoboSpan, the derived
+/// halves are persisted so later syncs skip the work, and a missing kepub
+/// cache queues a fire-and-forget conversion — all idempotent, mirroring
+/// what the same book would get on its next `library/sync`.
+async fn get_state(
+    auth: KoboAuthUser,
+    State(state): State<AppState>,
+    Path((_token, uuid)): Path<(String, String)>,
+) -> Response {
+    if let Some(rejected) = reject_oversized_uuid(&uuid) {
+        return rejected;
+    }
+    let book = match db::kobo::book_for_sync(state.pool(), &uuid).await {
+        Ok(Some(b)) => b,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return internal("kobo book_for_sync", e),
+    };
+    let mut states = match db::kobo::reading_state_for(
+        state.pool(),
+        auth.user_id,
+        std::slice::from_ref(&book.uuid),
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => return internal("kobo reading_state_for", e),
+    };
+    let ts = dto::rfc3339(book.last_modified_epoch);
+    let changes = [db::kobo::SyncChange::StateChanged(book.clone())];
+    enrich_states_with_derived_spans(&state, auth.user_id, &changes, &mut states).await;
+    Json(vec![dto::reading_state(
+        &book.uuid,
+        &ts,
+        states.get(&book.uuid),
+    )])
+    .into_response()
 }
 
 /// `GET download/<uuid>` — serve the book as KEPUB (converting via the worker,

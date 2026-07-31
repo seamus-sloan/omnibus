@@ -1340,6 +1340,79 @@ async fn put_state_derives_a_cfi_from_the_kobospan_when_the_kepub_is_cached() {
 }
 
 #[tokio::test]
+async fn get_state_returns_the_position_a_device_previously_put() {
+    let (app, pool, token, _uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    let body = serde_json::json!({
+        "ReadingStates": [{
+            "CurrentBookmark": {
+                "ProgressPercent": 43,
+                "Location": { "Source": "c1.xhtml", "Type": "KoboSpan", "Value": "kobo.9.1" }
+            }
+        }]
+    });
+    let res = app
+        .clone()
+        .oneshot(state_put(&token, &uuid, body))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/library/{uuid}/state")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let states = body_json(res).await;
+    let state = &states.as_array().expect("array of one state")[0];
+    assert_eq!(state["EntitlementId"], uuid.as_str());
+    assert_eq!(state["CurrentBookmark"]["ProgressPercent"], 43);
+    assert_eq!(state["CurrentBookmark"]["Location"]["Value"], "kobo.9.1");
+    assert_eq!(state["StatusInfo"]["Status"], "ReadyToRead");
+}
+
+#[tokio::test]
+async fn get_state_derives_a_kobospan_from_a_web_cfi_when_the_kepub_is_cached() {
+    let (app, pool, token, uid) = fixture().await;
+    let (uuid, _guard, _lib) = seed_book_with_kepub_cache(&pool, "get_state", true).await;
+    // A web-reader position: CFI only, no Kobo anchor yet.
+    let update = omnibus_shared::ProgressUpdate {
+        book_uuid: uuid.clone(),
+        format: omnibus_shared::ProgressFormat::Epub,
+        epub_cfi: Some("epubcfi(/6/2!/4/4/1:0)".into()),
+        audio_position_seconds: None,
+        progress_percent: None,
+        kobo_location: None,
+        book_file_id: None,
+        client_updated_at: None,
+    };
+    db::progress::upsert_progress(&pool, uid, &update)
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/library/{uuid}/state")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let states = body_json(res).await;
+    let bookmark = &states.as_array().expect("array of one state")[0]["CurrentBookmark"];
+    // The CFI points at the second paragraph → kobo.2.1 in the cached kepub.
+    assert_eq!(bookmark["Location"]["Value"], "kobo.2.1");
+    assert_eq!(bookmark["Location"]["Type"], "KoboSpan");
+}
+
+#[tokio::test]
+async fn get_state_returns_404_for_an_unknown_book() {
+    let (app, _pool, token, _uid) = fixture().await;
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/library/no-such-uuid/state")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn put_state_rejects_a_bookmark_older_than_the_stored_position() {
     // A test device (or a long-offline Kobo) replaying an old position must
     // not clobber a newer one — the device's LastModified drives the guard.
