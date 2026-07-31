@@ -1,6 +1,6 @@
 # Dependency Audit — Cargo.lock Duplicate Families
 
-Last updated: 2026-07-30 (issue #1530; previously issues #1100, #1268, #1147, #643).
+Last updated: 2026-07-31 (issue #1529; previously issues #1530, #1100, #1268, #1147, #643).
 
 Run `cargo tree -d` and inspect the output any time Dioxus or Axum are bumped.
 The `deny.toml` `[bans]` section has matching `skip` entries for all accepted
@@ -44,6 +44,14 @@ this list.
 
 ## Policy
 
+- **Plain version-currency pins** (issue #1529): a dependency frozen behind
+  current stable earns a `# PIN RATIONALE: ...` comment at its pin site even
+  when it isn't part of a duplicate-family split — the same "explain, don't
+  silently drift" principle this doc has always applied to duplicates, now
+  extended to any deliberately-stale single-version pin (`zip`, `sqlx`,
+  `rusqlite`, `argon2`, etc.). State *why* the freeze is intentional and
+  *what* would need to change to lift it, so the next person to touch that
+  line doesn't have to reconstruct the reasoning from a git-blame.
 - **Adding a new crate:** check `cargo tree -d` after `cargo update`; any new duplicate must be classified here before the PR lands.
 - **Bumping Dioxus:** re-run this audit. The websocket and const-serialize clusters will be the first to collapse.
 - **Promoting `getrandom`:** when `argon2`/`password-hash` ship a version that supports `getrandom@0.3`, consolidate the 0.2 + 0.3 entries. Until then the three-way split is intentional.

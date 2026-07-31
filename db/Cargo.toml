@@ -11,11 +11,14 @@ license.workspace = true
 
 [dependencies]
 omnibus-shared = { path = "../shared" }
-# held at 0.8: 0.9 requires `impl SqlSafeStr` on every `query*()` call — the ~55
-# dynamic-SQL sites here (`sqlx::query(&sql)` / `&format!(...)`) would each need
-# an `AssertSqlSafe(...)` wrap, and the combined `runtime-tokio-rustls` feature
-# is split into `runtime-tokio` + `tls-rustls-*`. That's a nontrivial migration,
-# out of scope for this staleness bump; track it as a follow-up.
+# PIN RATIONALE (#1529): held at 0.8 — 0.9 requires `impl SqlSafeStr` on every
+# `query*()` call — the ~55 dynamic-SQL sites here (`sqlx::query(&sql)` /
+# `&format!(...)`) would each need an `AssertSqlSafe(...)` wrap, and the
+# combined `runtime-tokio-rustls` feature is split into `runtime-tokio` +
+# `tls-rustls-*`. That's a nontrivial migration, out of scope for this
+# staleness bump; lifting it means doing that migration deliberately, in
+# lockstep across `server/`, `db/`, and `frontend/` (see their matching
+# comments) — track it as a follow-up.
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "macros", "migrate"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time", "process", "io-util"] }
 anyhow = "1"
@@ -28,6 +31,14 @@ thiserror.workspace = true
 futures = "0.3"
 epub = "2"
 
+# PIN RATIONALE (#1529): frozen at v3 (current stable is several majors
+# ahead) pending a deliberate audit of the v4-v9 changelog against this
+# crate's untrusted-input parsing path — it reads user-uploaded EPUB and
+# audiobook zip archives via the "add your own books" path. Lifting it
+# means that audit plus re-verifying the `deflate-flate2`/`deflate` feature
+# names still resolve (they've moved across `zip` majors before), done in
+# lockstep with the `frontend/Cargo.toml` copy below so both stay unified.
+#
 # F5.8 export-with-overrides (#1372): the `epub` crate is read-only, so baking
 # DB metadata/cover overrides *into* the exported EPUB needs a zip *writer*. We
 # read-through the source archive and rewrite only the OPF + cover entries.
