@@ -3,7 +3,7 @@ import type { Page } from "@playwright/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
-import { fetchBookIdByTitle } from "../utils/ebooks";
+import { fetchBookIdByTitle, switchToTableView } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
 
@@ -36,6 +36,7 @@ test("renders the bulk edit layout: checkboxes, select-all, and no bar while not
   page,
 }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   await expect(page.getByTestId("ebook-select-all")).toBeVisible();
   for (const target of [PRIMARY, SECONDARY]) {
@@ -50,6 +51,7 @@ test("selecting rows reveals the bulk edit bar and checkbox clicks do not naviga
   page,
 }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   await selectTargets(page);
   // The checkbox cell stops propagation — the row's click-to-navigate
@@ -65,6 +67,7 @@ test("selecting rows reveals the bulk edit bar and checkbox clicks do not naviga
 
 test("select all toggles every visible row", async ({ page }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   const selectAll = page.getByTestId("ebook-select-all");
   await selectAll.check();
@@ -82,6 +85,7 @@ test("bulk edits publisher and tags across the selected books via rpc_bulk_save_
   request,
 }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   await selectTargets(page);
   await page.getByTestId("bulk-edit-open").click();
@@ -136,6 +140,7 @@ test("bulk edit save error keeps the modal open and the rows unchanged", async (
   page,
 }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   await selectTargets(page);
   await page.getByTestId("bulk-edit-open").click();
