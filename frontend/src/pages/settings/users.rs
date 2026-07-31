@@ -1,4 +1,4 @@
-//! Users settings section â the admin table plus the New / Edit /
+//! Users settings section — the admin table plus the New / Edit /
 //! Delete modals and inline Unlock. Admin-only; rendered as the `users`
 //! section of `/settings`. SSR and the first WASM paint both start from an
 //! empty list (rule 07); the post-mount effect loads the real rows.
@@ -25,7 +25,7 @@ enum Modal {
 pub fn UsersSection() -> Element {
     let mut users = use_signal(Vec::<AdminUserRow>::new);
     let mut load_error = use_signal(|| None::<String>);
-    // Errors from inline row actions (currently Unlock) â surfaced in the
+    // Errors from inline row actions (currently Unlock) — surfaced in the
     // section banner rather than swallowed.
     let mut action_error = use_signal(|| None::<String>);
     let mut reload = use_signal(|| 0u32);
@@ -465,7 +465,7 @@ fn EditUserModal(
 /// Delete-confirmation modal. Warns when the admin is deleting their own
 /// account; the last-admin guard is enforced server-side and surfaced inline.
 /// Built on the shared `ConfirmModal` shell (see `components::confirm_modal`)
-/// rather than `ModalShell`, so the backdrop can't be dismissed mid-delete â
+/// rather than `ModalShell`, so the backdrop can't be dismissed mid-delete —
 /// `ModalShell`'s own backdrop has no busy gate at all.
 #[component]
 fn DeleteUserModal(
@@ -508,7 +508,7 @@ fn DeleteUserModal(
             on_dismiss: move |_| on_close.call(()),
             if is_self {
                 p { class: "settings-status error", "data-testid": "delete-self-warning",
-                    "This is your own account â you'll be signed out."
+                    "This is your own account — you'll be signed out."
                 }
             }
             ModalError { error: error() }
@@ -582,10 +582,10 @@ fn ModalError(error: Option<String>) -> Element {
     }
 }
 
-// ââ Pure helpers âââââââââââââââââââââââââââââââââââââââââââââââââ
+// ── Pure helpers ─────────────────────────────────────────────────
 
 /// Permission chips for a row: a single "Admin" chip when `is_admin`,
-/// otherwise one chip per granted capability (or "â" when none).
+/// otherwise one chip per granted capability (or "—" when none).
 fn permission_chips(user: &AdminUserRow) -> Element {
     if user.is_admin {
         return rsx! { span { class: "users-chip users-chip-admin", "Admin" } };
@@ -624,7 +624,7 @@ fn fmt_date(unix_secs: i64) -> String {
     format!("{name} {d}, {y}")
 }
 
-/// Days since the Unix epoch â `(year, month, day)` civil date (Howard
+/// Days since the Unix epoch → `(year, month, day)` civil date (Howard
 /// Hinnant's `civil_from_days`).
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
