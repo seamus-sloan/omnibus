@@ -12,7 +12,7 @@ use super::discovery::{
     cover_src, list_count_label, same_hand_author_label, same_hand_title, same_hand_year,
     suggestion_cover_book, SuggestionsSpinner,
 };
-use super::highlights::BdHighlightsSection;
+use super::highlights::{BdHighlightsSection, BdQuoteMeta};
 use super::journal::BdJournalSection;
 use super::{BdInsightCell, BdMetaRow, BdSectionHead};
 
@@ -38,6 +38,7 @@ pub(super) fn BdBodyMain(
     uuid: String,
     title: String,
     author: BdAuthorCluster,
+    accent: Option<String>,
     suggestions: Option<SuggestionsResponse>,
     ctx: BdPageCtx,
 ) -> Element {
@@ -45,7 +46,14 @@ pub(super) fn BdBodyMain(
         div { class: "bd-body-main",
             BdJournalSection { uuid: uuid.clone() }
             div { class: "divider" }
-            BdHighlightsSection { uuid }
+            BdHighlightsSection {
+                uuid,
+                quote_meta: BdQuoteMeta {
+                    title: title.clone(),
+                    author: author.primary_author.clone(),
+                    accent,
+                },
+            }
             div { class: "divider" }
             BdSameHand { author }
             BdSuggestionsStrip {

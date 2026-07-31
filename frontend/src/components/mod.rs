@@ -86,6 +86,11 @@ pub mod author_photo_edit;
 pub mod confirm_modal;
 pub use confirm_modal::{confirm_modal_body, ConfirmModal, ConfirmModalAction, ConfirmModalTone};
 
+// Shareable quote-card editor (preview + presets + PNG export), shared by
+// the reader's quote drawer and the book-detail saved-passages modal.
+pub mod quote_card;
+pub use quote_card::QuoteCardPanel;
+
 // Shared file-picker upload `onchange` builder used by `author_photo_edit`'s
 // file section and the journal composer's image-insert toolbar button.
 pub(crate) mod image_upload;
