@@ -184,9 +184,12 @@ fn require_upload(user: &AuthUser) -> Result<(), UploadError> {
     }
 }
 
-/// Magic-byte + size gate for a fully-buffered upload. Kept as a unit-testable
-/// utility; the streaming path enforces both invariants incrementally inside
-/// [`stream_upload_to_tempfile`].
+/// Magic-byte + size gate for a fully-buffered upload. Intentionally kept
+/// unwired: [`stream_upload_to_tempfile`] enforces the same two invariants
+/// incrementally, chunk-by-chunk, specifically so an upload is never fully
+/// buffered in RAM — swapping this in would mean buffering the whole file
+/// first, defeating that streaming design. Kept as a unit-tested reference
+/// for the two invariants the streaming path must independently uphold.
 #[allow(dead_code)]
 fn validate_file_bytes(bytes: &[u8], cap: usize) -> Result<(), UploadError> {
     if bytes.len() > cap {
