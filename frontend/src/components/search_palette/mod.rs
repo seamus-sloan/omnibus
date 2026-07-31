@@ -153,10 +153,11 @@ mod tests {
     /// mounts them side by side, starting closed — mirrors how `App`
     /// provides the context and `TopNav`/`ScreenLayout` mount the trigger
     /// and overlay separately. The `open` branch renders `SpOverlay`, whose
-    /// body calls `use_navigator()`, which needs a live `Router` no test in
-    /// this crate constructs (the same reason `TopNav`'s own render is
-    /// untested) — so only the closed state (the SSR/first-paint default,
-    /// rule 07) is exercised here.
+    /// body calls `use_navigator()`, which needs a live `Router` this test
+    /// doesn't mount (the same reason `TopNav`'s own render is untested;
+    /// `book_detail/highlights/tests.rs` does mount one for `Link` coverage,
+    /// but wiring that harness here is out of scope) — so only the closed
+    /// state (the SSR/first-paint default, rule 07) is exercised here.
     fn closed_harness() -> Element {
         use_context_provider(|| PaletteOpen(Signal::new(false)));
         rsx! {

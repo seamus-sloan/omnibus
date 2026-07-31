@@ -464,7 +464,9 @@ mod tests {
     // isn't compiled into this non-mobile test run; the non-mobile arm below
     // is a plain function with no hooks, so it needs no Dioxus runtime at
     // all — web/SSR co-locate with the server, so every media/API call is
-    // same-origin and relative.
+    // same-origin and relative. Gated to match: under `mobile`, calling the
+    // context-reading arm outside a live `VirtualDom` panics.
+    #[cfg(not(feature = "mobile"))]
     #[test]
     fn use_server_url_is_empty_on_the_non_mobile_target() {
         assert_eq!(use_server_url(), "");
@@ -472,7 +474,8 @@ mod tests {
 
     // `media_url`'s mobile arm (token-proxied, offline-cache-aware) isn't
     // compiled into this non-mobile test run; the non-mobile arm is the one
-    // every web/SSR render actually uses.
+    // every web/SSR render actually uses. Gated to match the arm it asserts.
+    #[cfg(not(feature = "mobile"))]
     #[test]
     fn media_url_returns_the_path_unchanged_on_the_non_mobile_target() {
         assert_eq!(
@@ -481,6 +484,9 @@ mod tests {
         );
     }
 
+    // `thumb_url` delegates to `media_url`, so it inherits the same
+    // mobile-vs-non-mobile split and gate.
+    #[cfg(not(feature = "mobile"))]
     #[test]
     fn thumb_url_builds_the_sized_thumbnail_path() {
         assert_eq!(
@@ -497,6 +503,9 @@ mod tests {
     // themselves: each must resolve to the exact value the provider handed
     // it, so a future refactor that reaches for the wrong context type still
     // fails loudly here rather than only inside a much larger page test.
+    // `CurrentUser`/`PlaybackState`/`use_current_user`/`use_playback` are
+    // themselves `#[cfg(not(feature = "mobile"))]`, so this test must match.
+    #[cfg(not(feature = "mobile"))]
     #[test]
     fn context_accessors_resolve_to_the_values_their_providers_set() {
         #[component]

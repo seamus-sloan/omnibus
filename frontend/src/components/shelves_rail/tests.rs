@@ -51,11 +51,13 @@ fn is_row_active_is_false_when_the_all_books_row_is_active() {
 //
 // `ShelvesRail` renders a `dioxus_router::Link` for the "All books" row (and
 // one per shelf), which panics without a live `RouterContext` — only
-// obtainable by mounting `dioxus_router::Router`, which this crate's tests
-// don't do (same constraint noted on `components::top_nav`'s untested full
-// render). Dioxus catches that panic per-component rather than aborting the
-// whole render, so the assertions below on the surrounding, Link-free markup
-// still hold — the "All books" row itself is unverifiable here.
+// obtainable by mounting `dioxus_router::Router`, which this test doesn't do
+// (same constraint noted on `components::top_nav`'s untested full render;
+// `book_detail/highlights/tests.rs` mounts a `Router` for `Link` coverage,
+// but wiring that harness here is out of scope). Dioxus catches that panic
+// per-component rather than aborting the whole render, so the assertions
+// below on the surrounding, Link-free markup still hold — the "All books"
+// row itself is unverifiable here.
 #[cfg(feature = "server")]
 mod render {
     use dioxus::prelude::*;
