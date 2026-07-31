@@ -93,13 +93,29 @@ impl Worker {
 
     /// Internal terminal write. Called from `run` (Ok/Err) and from the
     /// `ProgressTerminalGuard` (panic). The `terminal_at` Instant is
-    /// monotonic so eviction is robust to wall-clock drift.
+    /// monotonic so eviction is robust to wall-clock drift. Also records
+    /// this task's wall-clock run duration into
+    /// [`Worker::record_completion`]'s per-kind window, backing
+    /// [`Worker::metrics`] — the two mutexes involved (`progress` and
+    /// `completion_timings`) are never held at once, so this can't
+    /// introduce a lock-order deadlock with `metrics()`.
     pub(super) fn write_terminal_progress(&self, id: TaskId, state: ProgressState) {
-        let mut map = lock_unpoison(&self.progress);
-        if let Some(entry) = map.get_mut(&id) {
-            entry.progress.last_update_ms = wall_clock_ms();
-            entry.progress.state = state;
-            entry.terminal_at = Some(Instant::now());
+        let recorded = {
+            let mut map = lock_unpoison(&self.progress);
+            map.get_mut(&id).map(|entry| {
+                let now_ms = wall_clock_ms();
+                entry.progress.last_update_ms = now_ms;
+                entry.progress.state = state;
+                entry.terminal_at = Some(Instant::now());
+                let elapsed_ms = now_ms.saturating_sub(entry.progress.started_at_ms).max(0);
+                (
+                    entry.progress.kind,
+                    Duration::from_millis(elapsed_ms as u64),
+                )
+            })
+        };
+        if let Some((kind, duration)) = recorded {
+            self.record_completion(kind, duration);
         }
     }
 

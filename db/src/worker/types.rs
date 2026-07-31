@@ -4,7 +4,7 @@
 //! struct, `ProgressEntry`, `TERMINAL_RETENTION`, and the `lock_unpoison` /
 //! `wall_clock_ms` helpers the sibling modules share.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -296,6 +296,13 @@ pub struct Worker {
     /// paths are `post` (initial Running) and `run` (terminal Done/Failed,
     /// plus the panic-safety guard).
     pub(super) progress: Arc<StdMutex<BTreeMap<TaskId, ProgressEntry>>>,
+    /// Bounded per-[`TaskKind`] window of recent completion durations,
+    /// backing [`Worker::metrics`]. Written once per terminal transition by
+    /// [`super::progress::write_terminal_progress`]; capped at
+    /// [`super::metrics::RECENT_COMPLETIONS_CAP`] entries per kind. A
+    /// separate `StdMutex` from `progress` so reading metrics never
+    /// contends with the live progress feed's own lock.
+    pub(super) completion_timings: Arc<StdMutex<HashMap<TaskKind, VecDeque<Duration>>>>,
     pub(super) next_id: std::sync::atomic::AtomicU64,
 }
 
@@ -355,6 +362,7 @@ impl Worker {
             resource_locks: Arc::new(Mutex::new(HashMap::new())),
             completions: Arc::new(StdMutex::new(HashMap::new())),
             progress: Arc::new(StdMutex::new(BTreeMap::new())),
+            completion_timings: Arc::new(StdMutex::new(HashMap::new())),
             next_id: std::sync::atomic::AtomicU64::new(1),
         })
     }
