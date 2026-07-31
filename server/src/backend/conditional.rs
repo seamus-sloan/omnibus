@@ -193,6 +193,23 @@ fn resolve_range(headers: &HeaderMap, validator: &Validator, len: u64) -> RangeO
     http_range::parse(header_str(headers, header::RANGE), len)
 }
 
+/// Cheap content-derived `ETag` for bytes a handler already holds in memory
+/// (covers, thumbs, comic pages — rule 09's "the hash is free here" cases).
+/// Not cryptographic, so a hash collision between two genuinely different
+/// byte sequences is possible — that's a *correctness* failure, not a benign
+/// inefficiency: [`if_none_match_hits`] would treat a stale `If-None-Match`
+/// as current, the handler would return a bodyless 304, and the client would
+/// keep showing the old bytes indefinitely instead of fetching the real
+/// update. A stronger digest would shrink that (already astronomically
+/// small) probability further, but isn't applied here since collisions
+/// self-heal on the next byte change anyway.
+pub(super) fn content_etag(bytes: &[u8]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    format!("\"{:016x}\"", hasher.finish())
+}
+
 /// Build a `304 Not Modified` carrying the same `Cache-Control` / `Vary` a
 /// 200 from the same endpoint would, so a hit neither resets the client's
 /// notion of freshness nor opens the cross-user cache gap [`MEDIA_VARY`]

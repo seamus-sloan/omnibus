@@ -192,6 +192,73 @@ fn list_pages_returns_images_in_natural_sort_order() {
 }
 
 #[test]
+fn list_pages_excludes_hidden_entries_and_appledouble_forks() {
+    let dir = make_test_dir("comic-pages-hidden");
+    let path = write_cbz(
+        &dir,
+        "book.cbz",
+        &[
+            ("__MACOSX/._p001.png", b"appledouble fork"),
+            (".hidden.png", b"hidden"),
+            ("art/.thumbs/t1.jpg", b"hidden dir"),
+            ("p001.png", b"real cover"),
+        ],
+    );
+
+    let pages = list_pages(&path).unwrap();
+
+    assert_eq!(
+        pages,
+        vec!["p001.png"],
+        "hidden segments never count as pages"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn read_page_returns_mime_and_bytes_in_natural_order() {
+    let dir = make_test_dir("comic-read-page");
+    let path = write_cbz(
+        &dir,
+        "book.cbz",
+        &[
+            ("p10.jpg", b"tenth"),
+            ("p2.png", b"second"),
+            ("p1.jpg", b"first"),
+        ],
+    );
+
+    let (mime, bytes) = read_page(&path, 1).unwrap().expect("page 1 exists");
+
+    assert_eq!(mime, "image/png");
+    assert_eq!(bytes, b"second");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn read_page_returns_none_when_index_is_out_of_range() {
+    let dir = make_test_dir("comic-read-page-oob");
+    let path = write_cbz(&dir, "book.cbz", &[("p1.jpg", b"only page")]);
+
+    assert!(read_page(&path, 1).unwrap().is_none());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn read_page_propagates_error_when_file_is_not_a_zip() {
+    let dir = make_test_dir("comic-read-page-err");
+    let path = dir.join("broken.cbz");
+    std::fs::write(&path, b"not a zip").unwrap();
+
+    assert!(read_page(&path, 0).is_err());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn list_pages_propagates_error_when_file_is_not_a_zip() {
     let dir = make_test_dir("comic-pages-err");
     let path = dir.join("broken.cbz");

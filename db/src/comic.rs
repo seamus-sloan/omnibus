@@ -1,8 +1,9 @@
 //! CBZ comic-archive metadata extraction (server-only). Sibling to
 //! [`crate::ebook`]'s EPUB parser: opens the zip, lists image pages in
 //! natural-sort order, parses `ComicInfo.xml` when present, and produces
-//! the same [`IndexedBook`] shape the sync writer consumes. Ingestion
-//! only — the reading surface is a separate concern.
+//! the same [`IndexedBook`] shape the sync writer consumes. Also the read
+//! surface's page source: [`read_page`] hands the page endpoint one
+//! decompressed entry at a time.
 
 use std::cmp::Ordering;
 use std::fs::File;
@@ -33,6 +34,25 @@ pub fn list_pages(path: &Path) -> anyhow::Result<Vec<String>> {
     let file = File::open(path)?;
     let archive = zip::ZipArchive::new(file)?;
     Ok(page_names(&archive))
+}
+
+/// Read page `index` (0-based, in [`list_pages`] order) out of the archive:
+/// its mime type and decompressed bytes. `Ok(None)` when the index is out of
+/// range; `Err` only when the archive or entry itself is unreadable. One
+/// entry is decompressed per call — the archive is never extracted whole.
+pub fn read_page(path: &Path, index: usize) -> anyhow::Result<Option<(&'static str, Vec<u8>)>> {
+    let file = File::open(path)?;
+    let mut archive = zip::ZipArchive::new(file)?;
+    let pages = page_names(&archive);
+    let Some(name) = pages.get(index) else {
+        return Ok(None);
+    };
+    let mut entry = archive.by_name(name)?;
+    // Sized from the actual read, not the header's declared size — an
+    // attacker-controlled length field must not drive the allocation.
+    let mut bytes = Vec::new();
+    entry.read_to_end(&mut bytes)?;
+    Ok(Some((mime_for_page(name), bytes)))
 }
 
 /// Extract the [`IndexedBook`] for a single CBZ file. Mirrors the EPUB
@@ -128,11 +148,18 @@ fn indexed_book_from(
 fn page_names<R: Read + std::io::Seek>(archive: &zip::ZipArchive<R>) -> Vec<String> {
     let mut pages: Vec<String> = archive
         .file_names()
-        .filter(|name| !name.ends_with('/') && is_page_name(name))
+        .filter(|name| !name.ends_with('/') && !is_hidden_name(name) && is_page_name(name))
         .map(str::to_string)
         .collect();
     pages.sort_by(|a, b| natural_cmp(a, b));
     pages
+}
+
+/// `true` when any path segment starts with `.` — macOS AppleDouble forks
+/// (`__MACOSX/._p001.jpg`) and other hidden junk carry image extensions but
+/// aren't pages, and their sort keys would land them ahead of the real cover.
+fn is_hidden_name(name: &str) -> bool {
+    name.split('/').any(|segment| segment.starts_with('.'))
 }
 
 fn is_page_name(name: &str) -> bool {
