@@ -13,7 +13,7 @@ use axum::{
 };
 use omnibus_db::{self as db};
 
-use super::conditional::{MEDIA_CACHE_CONTROL, MEDIA_VARY};
+use super::conditional::{content_etag, MEDIA_CACHE_CONTROL, MEDIA_VARY};
 use super::{internal, AppState};
 use crate::auth::MediaAuthUser;
 
@@ -71,22 +71,6 @@ pub(super) async fn get_cover(
         }
         Err(error) => internal("read cover", error),
     }
-}
-
-/// Cheap content-derived `ETag` for a served image. Not cryptographic, so
-/// a hash collision between two genuinely different byte sequences is
-/// possible — that's a *correctness* failure, not a benign inefficiency:
-/// [`if_none_match_hits`] would treat a stale `If-None-Match` as current,
-/// the handler would return a bodyless 304, and the client would keep
-/// showing the old image indefinitely instead of fetching the real
-/// update. A stronger digest would shrink that (already astronomically
-/// small) probability further, but isn't applied here since collisions
-/// self-heal on the next byte change anyway.
-fn content_etag(bytes: &[u8]) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    bytes.hash(&mut hasher);
-    format!("\"{:016x}\"", hasher.finish())
 }
 
 /// Whether the request's `If-None-Match` already carries the current

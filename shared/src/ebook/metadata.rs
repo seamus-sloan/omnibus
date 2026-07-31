@@ -129,6 +129,13 @@ pub struct EbookMetadata {
     /// oversized-file gate on the email button — see `kindle_email_oversize`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub epub_size_bytes: Option<i64>,
+
+    /// Page count of the CBZ archive `/api/ebooks/{uuid}/pages/{n}` would
+    /// serve, so the comic pager can render a slider and map progress onto
+    /// page indices. Populated only on the detail read, and only for books
+    /// with a CBZ file; `None` everywhere else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_count: Option<i64>,
 }
 
 impl EbookMetadata {

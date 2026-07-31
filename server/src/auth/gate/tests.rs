@@ -23,6 +23,10 @@ async fn app() -> (Router, sqlx::SqlitePool) {
             get(|| async { "part ok" }),
         )
         .route("/api/ebooks/{uuid}/file", get(|| async { "file ok" }))
+        .route(
+            "/api/ebooks/{uuid}/pages/{page}",
+            get(|| async { "page ok" }),
+        )
         .route("/api/journals/images/{name}", get(|| async { "image ok" }))
         .route("/api/auth/login", get(|| async { "login ok" }))
         .route("/api/_health", get(|| async { "health ok" }))
@@ -362,6 +366,40 @@ async fn ebook_file_get_without_auth_is_401() {
         .oneshot(
             Request::builder()
                 .uri("/api/ebooks/some-uuid/file")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn ebook_page_get_with_query_token_passes() {
+    // The comic pager loads CBZ pages via `<img src>`, which from the mobile
+    // WebView can only carry the session as `?token=` — same as covers/thumbs.
+    let (app, pool) = app().await;
+    let token = seed_bearer_token(&pool).await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/ebooks/some-uuid/pages/0?token={token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn ebook_page_get_without_auth_is_401() {
+    let (app, pool) = app().await;
+    seed_bearer_token(&pool).await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/ebooks/some-uuid/pages/0")
                 .body(Body::empty())
                 .unwrap(),
         )

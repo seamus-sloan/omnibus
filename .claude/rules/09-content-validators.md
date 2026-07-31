@@ -27,8 +27,8 @@ statement, so they cannot disagree.
 - **Never add a manual version counter**, for the same reason.
 - **Never hash file contents** to build it. Byte-hashing a library of
   multi-hundred-MB audiobooks on every scan is not a validator, it's a
-  rescan. (The cover/thumb handlers *do* hash — they have already read the
-  bytes into memory to serve them, so it's free there.)
+  rescan. (The cover/thumb/comic-page handlers *do* hash — they have
+  already read the bytes into memory to serve them, so it's free there.)
 - `(0, 0)` is the never-observed sentinel and must map to `None`, so the
   one-time stat backfill never reads as a content change on a device
   holding a download.

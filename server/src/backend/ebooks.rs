@@ -9,7 +9,7 @@
 
 use axum::{
     extract::{Path, Query, Request, State},
-    http::{header, HeaderValue, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -20,6 +20,7 @@ use omnibus_db::{
 use omnibus_shared::{EbookLibrary, SortDir, SortKey, ViewFilters};
 use serde::Deserialize;
 
+use super::conditional::{self, MEDIA_CACHE_CONTROL, MEDIA_VARY};
 use super::{internal, with_pagination_headers, AppState};
 use crate::auth::{AuthUser, MediaAuthUser};
 
@@ -186,9 +187,40 @@ pub(super) async fn get_ebook_by_uuid(
     Path(uuid): Path<String>,
 ) -> Response {
     match db::get_book_by_uuid(&state.pool, &uuid).await {
-        Ok(Some(book)) => Json(book).into_response(),
+        Ok(Some(mut book)) => {
+            attach_comic_page_count(&state, &mut book).await;
+            Json(book).into_response()
+        }
         Ok(None) => axum::http::StatusCode::NOT_FOUND.into_response(),
         Err(error) => internal("read book", error),
+    }
+}
+
+/// Fill `page_count` on a detail payload when the book carries a CBZ, by
+/// listing the archive's pages — the count the pager's slider and progress
+/// mapping key on. Best-effort: a missing or malformed archive logs and
+/// leaves `None`, because a broken file must not take the whole detail read
+/// down with it.
+async fn attach_comic_page_count(state: &AppState, book: &mut omnibus_shared::EbookMetadata) {
+    if !book.formats.iter().any(|f| f.eq_ignore_ascii_case("cbz")) {
+        return;
+    }
+    let path = match db::book_file_path(&state.pool, book.id, "CBZ").await {
+        Ok(Some(p)) => p,
+        Ok(None) => return,
+        Err(e) => {
+            tracing::warn!(book_id = book.id, error = %e, "comic page count: file path lookup failed");
+            return;
+        }
+    };
+    match tokio::task::spawn_blocking(move || db::comic::list_pages(&path)).await {
+        Ok(Ok(pages)) => book.page_count = Some(pages.len() as i64),
+        Ok(Err(e)) => {
+            tracing::warn!(book_id = book.id, error = %e, "comic page count: archive unreadable")
+        }
+        Err(e) => {
+            tracing::warn!(book_id = book.id, error = %e, "comic page count: task join failed")
+        }
     }
 }
 
@@ -273,6 +305,65 @@ async fn read_ebook_file(
         Err(resp) => return resp,
     };
     super::serve_file(req, &path, "application/epub+zip", None).await
+}
+
+/// Serve one page image out of the book's CBZ archive, extracted
+/// server-side so clients never download or unzip whole archives. `page`
+/// is the 0-based index into the natural-sort page order — the same order
+/// `page_count` on the detail payload counts.
+///
+/// Gated by [`MediaAuthUser`] like the other media routes: the pager loads
+/// pages via plain `<img>` fetches, which from the mobile WebView carry
+/// neither a cookie nor a bearer header, so the session token rides
+/// `?token=`.
+///
+/// The single entry is decompressed into memory, so the validator is a
+/// content hash — the covers/thumbs shape, with the 304 carrying the same
+/// `Cache-Control`/`Vary` as a 200. 404 covers an unknown uuid, a book
+/// without a CBZ file, and an out-of-range index; an unreadable archive
+/// surfaces as a 500.
+pub(super) async fn get_ebook_page(
+    _user: MediaAuthUser,
+    State(state): State<AppState>,
+    Path((uuid, page)): Path<(String, usize)>,
+    headers: HeaderMap,
+) -> Response {
+    let id = match db::resolve_book_id_by_uuid(&state.pool, &uuid).await {
+        Ok(Some(id)) => id,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return internal("resolve_book_id_by_uuid", e),
+    };
+    let path = match db::book_file_path(&state.pool, id, "CBZ").await {
+        Ok(Some(p)) => p,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return internal("book_file_path", e),
+    };
+    let read = tokio::task::spawn_blocking(move || db::comic::read_page(&path, page)).await;
+    let (mime, bytes) = match read {
+        Ok(Ok(Some(entry))) => entry,
+        Ok(Ok(None)) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => return internal("read comic page", e),
+        Err(e) => return internal("read comic page", e),
+    };
+    let etag = conditional::content_etag(&bytes);
+    let inm_hit = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| conditional::if_none_match_hits(v, &etag));
+    if inm_hit {
+        return conditional::not_modified(&etag, MEDIA_CACHE_CONTROL, MEDIA_VARY);
+    }
+    (
+        [
+            (header::CONTENT_TYPE, mime),
+            (header::CACHE_CONTROL, MEDIA_CACHE_CONTROL),
+            (header::ETAG, etag.as_str()),
+            (header::VARY, MEDIA_VARY),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        bytes,
+    )
+        .into_response()
 }
 
 /// Wall-clock budget for an inline KEPUB conversion before we give up and
