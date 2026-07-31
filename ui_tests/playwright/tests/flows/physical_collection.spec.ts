@@ -13,6 +13,11 @@ import { fixturesDir, seedLibrary } from "../utils/seed";
 // keeps the suite race-free: nothing here mutates library-wide physical copies
 // or the admin's real wishlist, so no parallel spec's assertions are disturbed
 // and no extra book leaks into any count.
+//
+// Layout note: the wishlist UI (tracking card / add affordance) lives in the
+// hero's rating rail card, and a wishlisted book shows a "Physical Wishlist"
+// badge next to the cover's format facets. The full-width panel below the
+// hero renders only checked-in physical copies.
 
 // A plain single-format ebook to land on. Which book is immaterial — the
 // physical endpoints are mocked — but a real uuid exercises the real SSR +
@@ -80,7 +85,7 @@ test.beforeAll(async ({ request }) => {
   await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
 });
 
-test("renders the physical panel with the add-to-wishlist default state", async ({
+test("renders the add-to-wishlist default state in the hero rail", async ({
   page,
   request,
 }) => {
@@ -92,10 +97,11 @@ test("renders the physical panel with the add-to-wishlist default state", async 
   await gotoReady(page, `/books/${uuid}`);
   await expectNavVisible(page);
 
-  await expect(page.getByTestId("bd-physical-panel")).toBeVisible();
   await expect(page.getByTestId("add-to-wishlist")).toBeVisible();
-  // Nothing checked in, so no physical pill.
+  // Nothing checked in, so no physical pill — and the full-width copies
+  // panel renders nothing at all for a copy-less book.
   await expect(page.getByTestId("physical-pill")).toBeHidden();
+  await expect(page.getByTestId("bd-physical-panel")).toBeHidden();
 });
 
 test("adds then removes a wishlist entry", async ({ page, request }) => {
@@ -122,7 +128,9 @@ test("adds then removes a wishlist entry", async ({ page, request }) => {
     async () => page.getByTestId("add-to-wishlist").click(),
   );
 
-  await expect(page.getByTestId("wishlist-pill")).toBeVisible();
+  // Wishlisted: the cover badge row gains the "Physical Wishlist" facet and
+  // the rail slot shows the tracking card.
+  await expect(page.getByTestId("format-badge-wishlist")).toBeVisible();
   await expect(page.getByTestId("wishlist-card")).toBeVisible();
   await expect(page.getByTestId("find-a-copy")).toBeVisible();
 
