@@ -461,7 +461,7 @@ async fn sync_mixed_diff_in_one_transaction() {
         new_books: vec![indexed_with_stat("add.epub", Some("Added"), 100, 100)],
         changed_books: vec![indexed_with_stat("edit.epub", Some("New Edit"), 200, 200)],
         removed_uuids: vec![gone_uuid],
-        backfill: vec![],
+        ..Default::default()
     };
     sync_books(&pool, "/lib", plan).await.unwrap();
 

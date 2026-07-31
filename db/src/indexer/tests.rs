@@ -279,6 +279,265 @@ fn diff_isolates_an_unreadable_file_from_its_siblings_in_the_same_root() {
     );
 }
 
+// ---------- #1536: the Moved bucket (stat-pair relocation detector) ----------
+
+/// AC1: a relocation whose stat pair is unique on both sides is classified
+/// Moved and leaves both New and Removed empty — so no Phase-B parse runs
+/// for it and the writer's title+author auto-attach never sees it.
+#[test]
+fn diff_classifies_an_unambiguous_relocation_as_moved_and_not_new() {
+    let disk = vec![entry("New/book.epub", "New/book.epub", 100, 1000)];
+    let db = vec![row("Old/book.epub", 100, 1000)];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert_eq!(
+        d.moved,
+        vec![crate::sync::MovedFile {
+            uuid: "Old/book.epub".into(),
+            filename: "New/book.epub".into(),
+        }]
+    );
+    assert!(d.new.is_empty(), "the arrival must not also be New");
+    assert!(
+        d.removed.is_empty(),
+        "the departure must not also be Removed"
+    );
+    assert!(d.changed.is_empty());
+    assert!(d.unchanged.is_empty());
+}
+
+/// A pure rename inside one directory is the common real case, and it is
+/// exactly what requiring a stem match would have killed.
+#[test]
+fn diff_classifies_a_pure_rename_as_moved() {
+    let disk = vec![entry("Lib/new-name.epub", "Lib/new-name.epub", 100, 1000)];
+    let db = vec![row("Lib/old-name.epub", 100, 1000)];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert_eq!(d.moved.len(), 1);
+    assert_eq!(d.moved[0].filename, "Lib/new-name.epub");
+}
+
+/// AC3: a wholesale reorganization leaves `removed` empty, so the
+/// mass-missing breaker — which reads `removed.len()` — never trips on the
+/// exact scenario move detection exists for.
+#[test]
+fn diff_leaves_removed_empty_for_a_whole_library_reorganization() {
+    let disk: Vec<StatEntry> = (0..40)
+        .map(|i| {
+            let path = format!("New/{i}.epub");
+            entry(&path, &path, 1000 + i, 5000 + i)
+        })
+        .collect();
+    let db: Vec<IndexedRow> = (0..40)
+        .map(|i| row(&format!("Old/{i}.epub"), 1000 + i, 5000 + i))
+        .collect();
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert_eq!(d.moved.len(), 40, "every file matched its own stat pair");
+    assert!(d.removed.is_empty());
+    assert!(d.new.is_empty());
+    assert!(
+        check_mass_missing(d.removed.len(), 40).is_ok(),
+        "AC3: reorganizing the whole library must not trip the breaker"
+    );
+}
+
+/// AC4: two removed files sharing one stat pair are ambiguous, so the
+/// detector declines rather than guessing — both stay in Removed and the
+/// arrival stays in New, where the writer's title+author path still gets a
+/// chance at it.
+#[test]
+fn diff_declines_a_move_when_the_stat_pair_is_ambiguous_on_the_removed_side() {
+    let disk = vec![entry("New/c.epub", "New/c.epub", 100, 1000)];
+    let db = vec![row("Old/a.epub", 100, 1000), row("Old/b.epub", 100, 1000)];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert!(
+        d.moved.is_empty(),
+        "ambiguity declines rather than guessing"
+    );
+    assert_eq!(d.removed, vec!["Old/a.epub", "Old/b.epub"]);
+    assert_eq!(d.new.len(), 1);
+    assert_eq!(d.new[0].filename, "New/c.epub");
+}
+
+/// The mirror of AC4 on the arrival side: one departure, two same-pair
+/// arrivals with no shared stem, so nothing is matched.
+#[test]
+fn diff_declines_a_move_when_the_stat_pair_is_ambiguous_on_the_new_side() {
+    let disk = vec![
+        entry("New/b.epub", "New/b.epub", 100, 1000),
+        entry("New/c.epub", "New/c.epub", 100, 1000),
+    ];
+    let db = vec![row("Old/a.epub", 100, 1000)];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert!(d.moved.is_empty());
+    assert_eq!(d.removed, vec!["Old/a.epub"]);
+    assert_eq!(d.new.len(), 2);
+}
+
+/// AC5: the `(0, 0)` never-observed sentinel never participates, on either
+/// side. Without this, every unstattable file would match every other one.
+#[test]
+fn diff_never_matches_a_move_on_the_zero_zero_sentinel() {
+    let disk = vec![entry("New/book.epub", "New/book.epub", 0, 0)];
+    let db = vec![row("Old/book.epub", 0, 0)];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert!(d.moved.is_empty(), "AC5: (0, 0) is not a content identity");
+    assert_eq!(d.removed, vec!["Old/book.epub"]);
+    assert_eq!(d.new.len(), 1);
+}
+
+/// AC5, one-sided: a stattable arrival must not match a pre-backfill row
+/// whose stat was never observed.
+#[test]
+fn diff_never_matches_a_move_when_only_one_side_carries_the_sentinel() {
+    let disk = vec![entry("New/book.epub", "New/book.epub", 100, 1000)];
+    let db = vec![row("Old/book.epub", 0, 0)];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert!(d.moved.is_empty());
+    assert_eq!(d.removed, vec!["Old/book.epub"]);
+    assert_eq!(d.new.len(), 1);
+}
+
+/// AC6: a relocation that also changed the file's bytes falls through to
+/// Removed + New unchanged — the pair is a byte identity, not a fuzzy one.
+#[test]
+fn diff_declines_a_move_when_the_size_differs() {
+    let disk = vec![entry("New/book.epub", "New/book.epub", 100, 1001)];
+    let db = vec![row("Old/book.epub", 100, 1000)];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert!(d.moved.is_empty());
+    assert_eq!(d.removed, vec!["Old/book.epub"]);
+    assert_eq!(d.new.len(), 1);
+}
+
+/// AC6, the other half of the pair.
+#[test]
+fn diff_declines_a_move_when_the_mtime_differs() {
+    let disk = vec![entry("New/book.epub", "New/book.epub", 101, 1000)];
+    let db = vec![row("Old/book.epub", 100, 1000)];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert!(d.moved.is_empty());
+    assert_eq!(d.removed, vec!["Old/book.epub"]);
+    assert_eq!(d.new.len(), 1);
+}
+
+/// AC11: an ambiguous stat-pair group in which exactly one candidate on
+/// each side also shares the filename stem is matched via the tiebreaker;
+/// the candidates the stem can't separate stay in Removed.
+#[test]
+fn diff_breaks_an_ambiguous_stat_group_on_the_filename_stem() {
+    let disk = vec![entry("New/book.epub", "New/book.epub", 100, 1000)];
+    let db = vec![
+        row("Old/book.epub", 100, 1000),
+        row("Old/other.epub", 100, 1000),
+    ];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert_eq!(
+        d.moved,
+        vec![crate::sync::MovedFile {
+            uuid: "Old/book.epub".into(),
+            filename: "New/book.epub".into(),
+        }],
+        "AC11: the shared stem breaks the tie"
+    );
+    assert_eq!(
+        d.removed,
+        vec!["Old/other.epub"],
+        "the unmatched candidate still ghosts"
+    );
+    assert!(d.new.is_empty());
+}
+
+/// The stem is only a tiebreaker, never a licence to guess: when it is
+/// itself ambiguous the whole group declines.
+#[test]
+fn diff_declines_when_the_filename_stem_is_ambiguous_too() {
+    let disk = vec![
+        entry("A/book.epub", "A/book.epub", 100, 1000),
+        entry("B/book.epub", "B/book.epub", 100, 1000),
+    ];
+    let db = vec![
+        row("Old/book.epub", 100, 1000),
+        row("Old/other.epub", 100, 1000),
+    ];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert!(
+        d.moved.is_empty(),
+        "two candidates share the stem — decline"
+    );
+    assert_eq!(d.removed.len(), 2);
+    assert_eq!(d.new.len(), 2);
+}
+
+/// A fileless book has no file to relocate, and its projected stat is the
+/// `(0, 0)` sentinel — it must never be adopted as a move source, or an
+/// unrelated arrival would silently claim a ghost's identity.
+#[test]
+fn diff_never_treats_a_fileless_book_as_a_move_source() {
+    let disk = vec![entry("New/book.epub", "New/book.epub", 100, 1000)];
+    let db = vec![fileless_row("Old/book.epub")];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert!(d.moved.is_empty());
+    assert!(
+        d.removed.is_empty(),
+        "an already-fileless book is left alone"
+    );
+    assert_eq!(d.new.len(), 1);
+}
+
+/// Moved rides on Removed, which an untrustworthy enumeration suppresses:
+/// with nothing to match arrivals against, a partial scan must not invent
+/// relocations either.
+#[test]
+fn diff_suppresses_moved_bucket_when_enumeration_is_untrustworthy() {
+    let disk = vec![entry("New/book.epub", "New/book.epub", 100, 1000)];
+    let db = vec![row("Old/book.epub", 100, 1000)];
+    let d = diff_library(&disk, &db, Path::new("/lib"), false);
+    assert!(d.moved.is_empty());
+    assert!(d.removed.is_empty());
+    assert_eq!(d.new.len(), 1, "the arrival is still indexed");
+}
+
+/// Each moved pair consumes one candidate from each side, so several
+/// independent relocations in one scan all land — and the emitted order is
+/// stable (sorted on content, not on `HashMap` iteration order).
+#[test]
+fn diff_matches_several_independent_relocations_in_one_scan() {
+    let disk = vec![
+        entry("New/b.epub", "New/b.epub", 200, 2000),
+        entry("New/a.epub", "New/a.epub", 100, 1000),
+    ];
+    let db = vec![row("Old/a.epub", 100, 1000), row("Old/b.epub", 200, 2000)];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert_eq!(
+        d.moved,
+        vec![
+            crate::sync::MovedFile {
+                uuid: "Old/a.epub".into(),
+                filename: "New/a.epub".into(),
+            },
+            crate::sync::MovedFile {
+                uuid: "Old/b.epub".into(),
+                filename: "New/b.epub".into(),
+            },
+        ]
+    );
+    assert!(d.removed.is_empty());
+    assert!(d.new.is_empty());
+}
+
+/// A genuine delete and a genuine add in the same scan, with unrelated
+/// stats, must stay in their own buckets — the detector only claims pairs
+/// it can prove.
+#[test]
+fn diff_keeps_an_unrelated_delete_and_add_in_removed_and_new() {
+    let disk = vec![entry("New/fresh.epub", "New/fresh.epub", 300, 3000)];
+    let db = vec![row("Old/gone.epub", 100, 1000)];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert!(d.moved.is_empty());
+    assert_eq!(d.removed, vec!["Old/gone.epub"]);
+    assert_eq!(d.new.len(), 1);
+}
+
 #[test]
 fn enumeration_trustworthy_true_for_healthy_populated_scan() {
     // Complete walk, files present (saw_any_file), DB has files — normal case.
@@ -390,6 +649,7 @@ fn reindex_stats_ghost_warning_is_none_below_the_warn_threshold() {
     let stats = ReindexStats {
         removed: 5,
         file_backed_total: 100,
+        ..Default::default()
     };
     assert_eq!(stats.ghost_warning(), None);
 }
@@ -399,6 +659,7 @@ fn reindex_stats_ghost_warning_carries_the_removed_and_total_counts_in_the_warn_
     let stats = ReindexStats {
         removed: 15,
         file_backed_total: 100,
+        ..Default::default()
     };
     assert_eq!(
         stats.ghost_warning(),
@@ -536,9 +797,7 @@ async fn seed_audiobook_row(pool: &SqlitePool, library_path: &str, group_path: &
             description: None,
             error: None,
         }],
-        changed_books: vec![],
-        removed_uuids: vec![],
-        backfill: vec![],
+        ..Default::default()
     };
     crate::sync::sync_audiobooks(pool, library_path, plan)
         .await
@@ -1381,6 +1640,407 @@ async fn mixed_format_audiobook_group_classifies_both_parts_unchanged_when_nothi
     assert!(diff.unchanged.contains(&source));
     assert!(diff.new.is_empty(), "{:?}", diff.new);
     assert!(diff.changed.is_empty(), "{:?}", diff.changed);
+}
+
+// ---------- #1536: relocation, end-to-end through `reindex` ----------
+
+/// Index one stub EPUB of a caller-chosen byte length at `library_path`,
+/// seeding the row with the file's real stat so a later `reindex`
+/// classifies it Unchanged on a healthy pass. Distinct lengths give each
+/// book a distinct `(size, mtime)` pair — the relocation detector's primary
+/// uniqueness path, rather than its stem tiebreaker.
+async fn seed_sized_ebook_at(pool: &SqlitePool, library_path: &str, filename: &str, len: usize) {
+    let abs = std::path::Path::new(library_path).join(filename);
+    if let Some(parent) = abs.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::write(&abs, vec![b'x'; len]).unwrap();
+    let meta = std::fs::metadata(&abs).unwrap();
+    let mut book = indexed(filename, Some("Title"), &["Author"], &[], None, None);
+    book.mtime_epoch = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    book.size_bytes = meta.len() as i64;
+    sync_books(
+        pool,
+        library_path,
+        SyncPlan {
+            new_books: vec![book],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// AC3, end-to-end: reorganizing a whole library on disk — far past both
+/// `MASS_MISSING_MIN_ABSOLUTE` and `MASS_MISSING_FRACTION` — no longer
+/// aborts the reindex, because every file lands in Moved instead of
+/// Removed. Before this detector the same scan was a hard
+/// `MassMissingError`, which is why the title+author path never got the
+/// chance to recover it.
+#[tokio::test]
+async fn reindex_recovers_a_whole_library_reorganization_without_tripping_the_breaker() {
+    let _covers = CoversTempDir::new("reindex-reorg");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib = make_test_dir("reindex-reorg-lib");
+    let lib_path = lib.to_string_lossy().into_owned();
+
+    // Enough books to clear the absolute floor, so the percentage guard is
+    // actually reachable — below it the scan would be waved through for a
+    // reason that has nothing to do with move detection, and the test would
+    // prove nothing. A `const` block so the precondition is a compile error.
+    const BOOKS: usize = 12;
+    const { assert!(BOOKS > MASS_MISSING_MIN_ABSOLUTE) };
+    for i in 0..BOOKS {
+        seed_sized_ebook_at(&pool, &lib_path, &format!("Old/{i}.epub"), 100 + i * 7).await;
+    }
+    let before: Vec<(String, String)> =
+        sqlx::query_as("SELECT scan_key, uuid FROM books ORDER BY scan_key")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(before.len(), BOOKS);
+
+    // Reorganize every file into a different directory, preserving bytes
+    // and timestamps — what `mv` does within one filesystem.
+    std::fs::create_dir_all(lib.join("New")).unwrap();
+    for i in 0..BOOKS {
+        std::fs::rename(
+            lib.join(format!("Old/{i}.epub")),
+            lib.join(format!("New/{i}.epub")),
+        )
+        .unwrap();
+    }
+    std::fs::remove_dir(lib.join("Old")).unwrap();
+
+    let stats = reindex(&pool, &lib_path).await.unwrap();
+
+    assert_eq!(stats.moved, BOOKS, "AC3: every file was matched as moved");
+    assert_eq!(
+        stats.removed, 0,
+        "AC3: nothing ghosted, so nothing to abort"
+    );
+    assert_eq!(stats.ghost_warning(), None, "a move is not a ghost");
+
+    let after: Vec<(String, String)> =
+        sqlx::query_as("SELECT scan_key, uuid FROM books ORDER BY scan_key")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(after.len(), BOOKS, "no duplicates were inserted");
+    for ((old_key, old_uuid), (new_key, new_uuid)) in before.iter().zip(after.iter()) {
+        assert_eq!(old_key.replace("Old/", "New/"), *new_key);
+        assert_eq!(old_uuid, new_uuid, "identity rode along with the move");
+    }
+    assert_eq!(
+        count_rows(&pool, "SELECT COUNT(*) FROM merged_uuids").await,
+        0,
+        "AC1: no ledger rows minted for same-format relocations"
+    );
+    assert_eq!(
+        count_rows(
+            &pool,
+            "SELECT COUNT(*) FROM books WHERE is_missing_files = 1"
+        )
+        .await,
+        0,
+        "no book was flagged missing"
+    );
+    // Every file row followed its book.
+    let stale: i64 = count_rows(
+        &pool,
+        "SELECT COUNT(*) FROM book_files WHERE scan_key NOT LIKE 'New/%'",
+    )
+    .await;
+    assert_eq!(
+        stale, 0,
+        "AC2: every book_files.scan_key names the new path"
+    );
+
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+/// The same library, with the same reorganization, but one file's bytes
+/// changed on the way: it falls out of Moved into Removed + New (AC6)
+/// while its neighbours still relocate.
+#[tokio::test]
+async fn reindex_leaves_a_relocation_that_also_changed_bytes_in_removed_and_new() {
+    let _covers = CoversTempDir::new("reindex-reorg-edited");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib = make_test_dir("reindex-reorg-edited-lib");
+    let lib_path = lib.to_string_lossy().into_owned();
+
+    for i in 0..3 {
+        seed_sized_ebook_at(&pool, &lib_path, &format!("Old/{i}.epub"), 100 + i * 7).await;
+    }
+    std::fs::create_dir_all(lib.join("New")).unwrap();
+    for i in 0..3 {
+        std::fs::rename(
+            lib.join(format!("Old/{i}.epub")),
+            lib.join(format!("New/{i}.epub")),
+        )
+        .unwrap();
+    }
+    // Rewrite one file at a different length — its stat pair no longer
+    // matches the row it came from.
+    std::fs::write(lib.join("New/1.epub"), vec![b'y'; 4096]).unwrap();
+
+    let stats = reindex(&pool, &lib_path).await.unwrap();
+
+    assert_eq!(stats.moved, 2, "AC6: only the untouched files relocated");
+    assert_eq!(stats.removed, 1, "AC6: the edited file's old row ghosted");
+
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+/// AC8, at the classifier: for a book holding two EPUBs (via
+/// `merge_books`), moving **either** file is detected independently.
+/// Candidacy is deliberately not gated on the book's file count — that
+/// would silently exclude the anchor file of every merged book, which is
+/// exactly the case this detector most needs to handle.
+#[tokio::test]
+async fn each_file_of_a_merged_two_epub_book_is_independently_move_matched() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let (target, source) = seed_merged_two_epub_book(&pool).await;
+    let db_rows = ebook_db_rows(&pool, "/ebooks").await;
+
+    // The anchor file — the one `books.scan_key` names — moved.
+    let disk = vec![
+        entry("Moved/one.epub", "Moved/one.epub", 1000, 500),
+        entry("B/two.epub", "B/two.epub", 2000, 100),
+    ];
+    let diff = diff_library(&disk, &db_rows, Path::new("/ebooks"), true);
+    assert_eq!(
+        diff.moved,
+        vec![crate::sync::MovedFile {
+            uuid: target.clone(),
+            filename: "Moved/one.epub".into(),
+        }],
+        "the anchor of a merged book is move-matched by its own books.uuid: {diff:?}"
+    );
+    assert_eq!(
+        diff.unchanged,
+        vec![source.clone()],
+        "the sibling is untouched"
+    );
+    assert!(diff.removed.is_empty());
+    assert!(diff.new.is_empty());
+
+    // The merged-in file moved instead — matched by its ledger uuid.
+    let disk = vec![
+        entry("A/one.epub", "A/one.epub", 1000, 500),
+        entry("Moved/two.epub", "Moved/two.epub", 2000, 100),
+    ];
+    let diff = diff_library(&disk, &db_rows, Path::new("/ebooks"), true);
+    assert_eq!(
+        diff.moved,
+        vec![crate::sync::MovedFile {
+            uuid: source.clone(),
+            filename: "Moved/two.epub".into(),
+        }],
+        "the merged-in file is move-matched by its merged_uuids handle: {diff:?}"
+    );
+    assert_eq!(diff.unchanged, vec![target.clone()]);
+
+    // Both moved in one scan — their stat pairs differ, so both land.
+    let disk = vec![
+        entry("Moved/one.epub", "Moved/one.epub", 1000, 500),
+        entry("Moved/two.epub", "Moved/two.epub", 2000, 100),
+    ];
+    let diff = diff_library(&disk, &db_rows, Path::new("/ebooks"), true);
+    let mut moved: Vec<(String, String)> = diff
+        .moved
+        .iter()
+        .map(|m| (m.uuid.clone(), m.filename.clone()))
+        .collect();
+    moved.sort();
+    let mut expected = vec![
+        (target, "Moved/one.epub".to_string()),
+        (source, "Moved/two.epub".to_string()),
+    ];
+    expected.sort();
+    assert_eq!(moved, expected);
+    assert!(diff.removed.is_empty());
+    assert!(diff.new.is_empty());
+}
+
+/// A relocation that also changed the file's **extension** must not be
+/// classified Moved. `book_files.format` drives path resolution
+/// (`book_file_path` rebuilds `…/filename + "." + lower(format)`), and the
+/// move writer rewrites path columns only — so a Moved classification here
+/// would leave the format naming a file that is no longer on disk, with no
+/// self-healing: the next scan finds the new path with a matching stat and
+/// calls it Unchanged. Falling through to Removed + New is correct, because
+/// a format change genuinely needs a Phase-B re-parse.
+#[test]
+fn diff_declines_a_move_when_only_the_extension_changed() {
+    // Retyping `.m4a` to `.m4b` — a real thing readers do so players show
+    // chapters — preserves the bytes, so the stat pair matches exactly.
+    let disk = vec![entry("Author/Book.m4b", "Author/Book.m4b", 100, 1000)];
+    let db = vec![row("Author/Book.m4a", 100, 1000)];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert!(
+        d.moved.is_empty(),
+        "a format change is not a relocation: {:?}",
+        d.moved
+    );
+    assert_eq!(d.removed, vec!["Author/Book.m4a"]);
+    assert_eq!(d.new.len(), 1, "the retyped file is re-parsed as New");
+    assert_eq!(d.new[0].filename, "Author/Book.m4b");
+}
+
+/// The extension guard is case-insensitive, matching how
+/// `split_filename` uppercases into `book_files.format`: renaming
+/// `Book.epub` to `BOOK.EPUB` is still one relocation, not a format change.
+#[test]
+fn diff_still_matches_a_move_when_only_the_extension_case_changed() {
+    let disk = vec![entry("New/BOOK.EPUB", "New/BOOK.EPUB", 100, 1000)];
+    let db = vec![row("Old/book.epub", 100, 1000)];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert_eq!(
+        d.moved.len(),
+        1,
+        "case-only extension change still relocates"
+    );
+    assert_eq!(d.moved[0].filename, "New/BOOK.EPUB");
+    assert!(d.removed.is_empty());
+}
+
+/// The stem tiebreaker must not smuggle a format change past the guard —
+/// `path_stem` drops the extension, so before the format was part of the
+/// match key an ambiguous group would actively *help* pair `.m4a` with
+/// `.m4b`.
+#[test]
+fn diff_stem_tiebreaker_does_not_pair_across_formats() {
+    let disk = vec![entry("New/Book.m4b", "New/Book.m4b", 100, 1000)];
+    let db = vec![
+        row("Old/Book.m4a", 100, 1000),
+        row("Old/Other.m4a", 100, 1000),
+    ];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert!(
+        d.moved.is_empty(),
+        "the shared stem must not bridge two formats: {:?}",
+        d.moved
+    );
+    assert_eq!(d.removed.len(), 2);
+    assert_eq!(d.new.len(), 1);
+}
+
+/// Scoping the key by format also makes the *same-format* match sharper:
+/// two vanished files sharing a stat pair no longer make each other
+/// ambiguous when they are different formats, so each is matched against
+/// its own format's arrival.
+#[test]
+fn diff_matches_same_stat_moves_of_different_formats_independently() {
+    let disk = vec![
+        entry("New/Book.epub", "New/Book.epub", 100, 1000),
+        entry("New/Book.cbz", "New/Book.cbz", 100, 1000),
+    ];
+    let db = vec![
+        row("Old/Book.epub", 100, 1000),
+        row("Old/Book.cbz", 100, 1000),
+    ];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert_eq!(
+        d.moved,
+        vec![
+            crate::sync::MovedFile {
+                uuid: "Old/Book.cbz".into(),
+                filename: "New/Book.cbz".into(),
+            },
+            crate::sync::MovedFile {
+                uuid: "Old/Book.epub".into(),
+                filename: "New/Book.epub".into(),
+            },
+        ],
+        "each format resolves within its own group"
+    );
+    assert!(d.removed.is_empty());
+    assert!(d.new.is_empty());
+}
+
+/// Two books swapping paths in one scan cannot reach the Moved bucket at
+/// all, so the writer's destination pre-check can never deadlock a cycle.
+/// The buckets make it structurally impossible: a Removed candidate
+/// requires its `scan_key` to be **absent** from disk, while a New
+/// candidate requires its path to be **present** — so a moved entry's
+/// destination can never be another moved entry's source. A real swap
+/// leaves both paths occupied, so neither row is a departure and both
+/// classify Changed against the bytes that are now at their path.
+#[test]
+fn diff_classifies_a_path_swap_as_changed_never_as_a_moved_cycle() {
+    // A was at X and B at Y; their contents have been exchanged.
+    let disk = vec![
+        entry("X.epub", "X.epub", 200, 2000),
+        entry("Y.epub", "Y.epub", 100, 1000),
+    ];
+    let db = vec![row("X.epub", 100, 1000), row("Y.epub", 200, 2000)];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert!(
+        d.moved.is_empty(),
+        "a swap is not a relocation — no cycle can form: {:?}",
+        d.moved
+    );
+    assert!(d.removed.is_empty(), "neither path vanished");
+    assert!(d.new.is_empty(), "neither path is new");
+    assert_eq!(
+        d.changed.len(),
+        2,
+        "both files re-parse against their new bytes"
+    );
+}
+
+/// The byte-identical variant of the same swap: both paths are still
+/// occupied, so both classify Unchanged and nothing needs doing — the two
+/// files are interchangeable by definition.
+#[test]
+fn diff_classifies_a_byte_identical_path_swap_as_unchanged() {
+    let disk = vec![
+        entry("X.epub", "X.epub", 100, 1000),
+        entry("Y.epub", "Y.epub", 100, 1000),
+    ];
+    let db = vec![row("X.epub", 100, 1000), row("Y.epub", 100, 1000)];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert!(d.moved.is_empty());
+    assert_eq!(d.unchanged.len(), 2);
+    assert!(d.removed.is_empty());
+    assert!(d.new.is_empty());
+}
+
+/// The general form of the invariant the two tests above rely on: no
+/// destination emitted into Moved is the current `scan_key` of any other
+/// Moved entry. Exercised over a chained relocation (A→B, B→C) — the shape
+/// closest to a cycle that the buckets actually admit — plus a genuine
+/// departure and arrival alongside it.
+#[test]
+fn moved_destinations_never_collide_with_another_moved_entrys_source() {
+    // Only `C.epub` is on disk; `A.epub` and `B.epub` both vanished. Their
+    // stat pairs differ, so each is matched independently — but there is
+    // exactly one arrival, so only one can pair.
+    let disk = vec![entry("C.epub", "C.epub", 100, 1000)];
+    let db = vec![row("A.epub", 100, 1000), row("B.epub", 200, 2000)];
+    let d = diff_library(&disk, &db, Path::new("/lib"), true);
+    assert_eq!(
+        d.moved.len(),
+        1,
+        "one arrival can absorb only one departure"
+    );
+    assert_eq!(d.moved[0].uuid, "A.epub");
+    assert_eq!(d.moved[0].filename, "C.epub");
+    assert_eq!(d.removed, vec!["B.epub"], "the unmatched departure ghosts");
+
+    let sources: std::collections::HashSet<&str> = db.iter().map(|r| r.scan_key.as_str()).collect();
+    for m in &d.moved {
+        assert!(
+            !sources.contains(m.filename.as_str()) || disk.iter().any(|e| e.scan_key == m.filename),
+            "a Moved destination must be a path that exists on disk"
+        );
+    }
 }
 
 // ---------- #1562: CBZ ingestion through the normal diff/sync path ----------

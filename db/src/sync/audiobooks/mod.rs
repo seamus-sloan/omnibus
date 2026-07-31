@@ -9,7 +9,7 @@ use sqlx::SqlitePool;
 use crate::covers::delete_cover_files_for;
 use crate::settings::upsert_library;
 
-use super::books::materialize_new_covers;
+use super::books::{materialize_new_covers, sync_moved, MovedFile};
 
 mod backfill;
 mod changed;
@@ -34,6 +34,10 @@ use removed::sync_audiobooks_removed;
 pub struct AudiobookSyncPlan {
     pub new_books: Vec<crate::audiobook::IndexedAudiobook>,
     pub changed_books: Vec<crate::audiobook::IndexedAudiobook>,
+    /// Groups that changed directory but not content. Applied by the same
+    /// writer the ebook pipeline uses — a relocated group differs only in
+    /// having `book_file_parts` rows to carry along.
+    pub moved: Vec<MovedFile>,
     pub removed_uuids: Vec<String>,
     /// `(uuid, mtime_epoch, size_bytes)` stat-only backfill (no re-parse).
     pub backfill: Vec<(String, i64, i64)>,
@@ -45,12 +49,14 @@ pub struct AudiobookSyncPlan {
 /// Transaction order:
 /// 1. Upsert `scan_roots` row.
 /// 2. Mark Removed files missing (drop `book_files`, retain the `books` row).
-/// 3. Update Changed in-place: wipe `book_files` + `book_file_parts` + author
+/// 3. Relocate Moved groups: repoint path columns (including every
+///    `book_file_parts.filename`) without re-parsing.
+/// 4. Update Changed in-place: wipe `book_files` + `book_file_parts` + author
 ///    link + FTS, then re-insert them.
-/// 4. Insert New.
-/// 5. Backfill `book_files.(mtime_epoch, size_bytes)` only.
-/// 6. Delete taxonomy rows left with zero books by step 3's link wipe.
-/// 7. Stamp `scan_roots.last_indexed`.
+/// 5. Insert New.
+/// 6. Backfill `book_files.(mtime_epoch, size_bytes)` only.
+/// 7. Delete taxonomy rows left with zero books by step 4's link wipe.
+/// 8. Stamp `scan_roots.last_indexed`.
 ///
 /// Post-commit: write / delete cover files (best-effort, same as sync_books).
 ///
@@ -85,6 +91,10 @@ pub async fn sync_audiobooks_with_progress(
     let library_id = upsert_library(&mut tx, library_path).await?;
 
     sync_audiobooks_removed(&mut tx, library_id, &plan.removed_uuids).await?;
+    // Before New, for the reason `sync_books` documents: a relocation frees
+    // no attach slot, but a new file inserted first could occupy the one the
+    // moved group is about to want.
+    sync_moved(&mut tx, library_id, library_path, &plan.moved).await?;
     let changed_covers = sync_audiobooks_changed(
         &mut tx,
         library_id,

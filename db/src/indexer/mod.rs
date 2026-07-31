@@ -158,6 +158,12 @@ fn ghost_warning_threshold_exceeded(removed: usize, db_file_backed: usize) -> bo
 pub struct ReindexStats {
     pub removed: usize,
     pub file_backed_total: usize,
+    /// Relocations this scan **recognized**. Reported separately from
+    /// `removed` and deliberately absent from both the abort breaker and
+    /// the ghost warning — a move is not a ghost. Counts what the diff
+    /// detected, not what the writer applied; a relocation the writer
+    /// declines is logged on its own.
+    pub moved: usize,
 }
 
 impl ReindexStats {
@@ -229,6 +235,10 @@ pub struct ReindexDiff {
     /// In the DB but the stat differs. Writer parses + UPDATEs in place
     /// (`books.id` preserved).
     pub changed: Vec<ebook::ParseTarget>,
+    /// A file that changed path but not content: its stat pair matched
+    /// exactly one vanished row and one arrived file. Writer repoints path
+    /// columns only — no parse, no insert, no delete.
+    pub moved: Vec<sync::MovedFile>,
     /// A file-backed book whose file is gone (by `books.uuid`). The writer
     /// drops its `book_files` row + clears FTS, retaining the `books` row as
     /// a fileless book; cover files get cleaned up post-commit.
@@ -240,7 +250,7 @@ pub struct ReindexDiff {
 }
 
 /// Pure classifier — no I/O. Compares a Phase-A stat output against the
-/// current DB state and routes each file into one of the five buckets.
+/// current DB state and routes each file into one of the six buckets.
 /// `library_root` is the absolute path the scanner walked; we join it
 /// with each `filename` to fill `ParseTarget.absolute` so Phase B can
 /// open files directly without re-walking.
@@ -250,7 +260,9 @@ pub struct ReindexDiff {
 /// once-populated root read empty) it passes `false`, and `diff_library`
 /// leaves `removed` empty so a partial scan can never flag a book missing.
 /// The New / Changed / Backfill buckets are unaffected — an incomplete
-/// scan still safely indexes the files it *did* see.
+/// scan still safely indexes the files it *did* see. **Moved** rides on
+/// Removed: with no removal pass there is nothing to match arrivals
+/// against, so it stays empty too.
 ///
 /// # Bucket semantics
 ///
@@ -259,6 +271,9 @@ pub struct ReindexDiff {
 /// - **New** — on disk, not in DB. Full Phase-B parse + insert.
 /// - **Changed** — on disk, in DB, stat differs. Full Phase-B parse, then
 ///   UPDATE in place (preserves `books.id`).
+/// - **Moved** — a vanished row and an arrived file carrying the same
+///   `(size_bytes, mtime_epoch)`. Writer repoints path columns; identity
+///   and every soft-ref user-data row ride along untouched. See below.
 /// - **Removed** — a file-backed book whose file is gone. Its `book_files`
 ///   row is dropped so the book becomes a **fileless book** (the `books`
 ///   row + its soft-ref user data are retained, not deleted); a returning
@@ -270,6 +285,29 @@ pub struct ReindexDiff {
 ///   updates the stat columns; the OPF is not re-parsed. Without this,
 ///   the first reindex after the migration would treat every existing
 ///   row as Changed.
+///
+/// ## Moved, and what it deliberately can't see
+///
+/// The buckets are disjoint, so a file classified Moved never enters New
+/// and the writer's title+author auto-attach never sees it. Phase B parses
+/// only New + Changed, so a moved file is never parsed and the writer has
+/// no `IndexedBook` to fall back on: a declined relocation is a **skip**,
+/// not a fallback, which is why the emit conditions stay conservative.
+/// The pair must be unique on both sides — ambiguity declines rather than
+/// guessing — `(0, 0)`, the never-observed sentinel a failed stat and a
+/// pre-backfill row both carry, never participates, and the match is scoped
+/// to a single **format**: a relocation rewrites path columns only, so it
+/// cannot carry a file whose extension changed (see [`match_moved_files`]).
+///
+/// This detector is a byte identity and the writer's `(title_norm,
+/// author_norm)` auto-attach is a semantic one, so each covers the other's
+/// blind spot. Byte identity survives missing author metadata and tells
+/// two editions of one book apart; it does not survive a move that also
+/// retagged the title, or an mtime-lossy copy (`cp` without `-p`). The
+/// title+author path is the fallback for both of those, at the cost of a
+/// full parse plus ghost / DELETE / re-INSERT / FTS churn — and it runs in
+/// the writer, *after* the `check_mass_missing` breaker, which a large
+/// reorganization would otherwise trip before ever reaching it.
 pub fn diff_library(
     disk: &[ebook::StatEntry],
     db: &[books::IndexedRow],
@@ -294,22 +332,46 @@ pub fn diff_library(
         .collect();
 
     let mut out = ReindexDiff::default();
+    // New and Removed are held back until the move matcher has had its pass
+    // over them: a match takes one entry out of each, and only the leftovers
+    // become the buckets the writer sees.
+    let arrivals = classify_arrivals(&disk_by_key, &db_by_key, library_root, &mut out);
+    let departures = collect_departures(db, &disk_by_key, enumeration_trustworthy);
+    split_moved(&departures, &arrivals, library_root, &mut out);
+    sort_buckets(&mut out);
+    out
+}
 
-    let target = |entry: &ebook::StatEntry| ebook::ParseTarget {
+/// Turn one disk entry into a Phase-B parse target. The absolute path is
+/// pre-joined so Phase B opens files directly without re-walking.
+fn parse_target(entry: &ebook::StatEntry, library_root: &Path) -> ebook::ParseTarget {
+    ebook::ParseTarget {
         filename: entry.filename.clone(),
         absolute: library_root.join(&entry.filename),
         mtime_epoch: entry.mtime_epoch,
         size_bytes: entry.size_bytes,
-    };
+    }
+}
 
-    for (scan_key, entry) in &disk_by_key {
+/// Classify every file on disk against the DB, filling the Unchanged /
+/// Changed / Backfill buckets directly. Files with no DB row of their own
+/// are **returned** rather than pushed into New — the move matcher gets
+/// first refusal on them.
+fn classify_arrivals<'a>(
+    disk_by_key: &std::collections::HashMap<&'a str, &'a ebook::StatEntry>,
+    db_by_key: &std::collections::HashMap<&str, &books::IndexedRow>,
+    library_root: &Path,
+    out: &mut ReindexDiff,
+) -> Vec<&'a ebook::StatEntry> {
+    let mut arrivals: Vec<&ebook::StatEntry> = Vec::new();
+    for (scan_key, entry) in disk_by_key {
         match db_by_key.get(scan_key) {
-            None => out.new.push(target(entry)),
+            None => arrivals.push(entry),
             Some(row) if !row.has_file => {
                 // A fileless book whose file is back on disk. Route through
                 // Changed: the writer re-creates the `book_files` row while
                 // preserving the existing `books.uuid` (auto-relink, F2).
-                out.changed.push(target(entry));
+                out.changed.push(parse_target(entry, library_root));
             }
             Some(row) => {
                 let never_observed = row.mtime_epoch == 0 && row.size_bytes == 0;
@@ -321,41 +383,219 @@ pub fn diff_library(
                 } else if matches {
                     out.unchanged.push(row.uuid.clone());
                 } else {
-                    out.changed.push(target(entry));
+                    out.changed.push(parse_target(entry, library_root));
                 }
             }
         }
     }
+    arrivals
+}
 
-    // The removal pass runs only on a fully-trusted enumeration. On a
-    // partial scan (unreadable subdir, or a once-populated root now
-    // reading empty) we leave `removed` empty so no book is flagged
-    // missing and no `merged_uuids` row is eroded (issue #819).
-    if enumeration_trustworthy {
-        for row in db {
-            if row.scan_key.is_empty() {
-                continue;
-            }
-            if !disk_by_key.contains_key(row.scan_key.as_str()) {
-                // A file-backed book whose file is gone becomes a fileless
-                // book (the row + its soft-ref user data are retained, not
-                // deleted). An already-fileless book is left untouched.
-                if row.has_file {
-                    out.removed.push(row.uuid.clone());
-                }
-            }
+/// File-backed rows whose path is no longer on disk — Removed candidates,
+/// held back for the move matcher the same way arrivals are.
+///
+/// The removal pass runs only on a fully-trusted enumeration. On a partial
+/// scan (unreadable subdir, or a once-populated root now reading empty) this
+/// returns nothing, so no book is flagged missing and no `merged_uuids` row
+/// is eroded (issue #819). An already-fileless book is left untouched.
+fn collect_departures<'a>(
+    db: &'a [books::IndexedRow],
+    disk_by_key: &std::collections::HashMap<&str, &ebook::StatEntry>,
+    enumeration_trustworthy: bool,
+) -> Vec<&'a books::IndexedRow> {
+    if !enumeration_trustworthy {
+        return Vec::new();
+    }
+    db.iter()
+        .filter(|row| !row.scan_key.is_empty() && row.has_file)
+        .filter(|row| !disk_by_key.contains_key(row.scan_key.as_str()))
+        .collect()
+}
+
+/// Pair departures with arrivals carrying the same bytes — one relocation,
+/// not a deletion plus an insertion — then drain whatever is left into the
+/// Removed and New buckets.
+fn split_moved(
+    departures: &[&books::IndexedRow],
+    arrivals: &[&ebook::StatEntry],
+    library_root: &Path,
+    out: &mut ReindexDiff,
+) {
+    let mut departure_moved = vec![false; departures.len()];
+    let mut arrival_moved = vec![false; arrivals.len()];
+    for (d, a) in match_moved_files(departures, arrivals) {
+        departure_moved[d] = true;
+        arrival_moved[a] = true;
+        out.moved.push(sync::MovedFile {
+            uuid: departures[d].uuid.clone(),
+            filename: arrivals[a].filename.clone(),
+        });
+    }
+    for (i, entry) in arrivals.iter().enumerate() {
+        if !arrival_moved[i] {
+            out.new.push(parse_target(entry, library_root));
         }
     }
+    for (i, row) in departures.iter().enumerate() {
+        if !departure_moved[i] {
+            out.removed.push(row.uuid.clone());
+        }
+    }
+}
 
-    // Stable order keeps the writer's behavior predictable across runs
-    // (matters for the cover-file post-commit step, and for tests).
+/// Stable order keeps the writer's behavior predictable across runs
+/// (matters for the cover-file post-commit step, and for tests). `moved`
+/// sorts on its content, not on the candidate indices the matcher returned
+/// — those index vecs built by iterating a `HashMap`.
+fn sort_buckets(out: &mut ReindexDiff) {
     out.new.sort_by(|a, b| a.filename.cmp(&b.filename));
     out.changed.sort_by(|a, b| a.filename.cmp(&b.filename));
+    out.moved
+        .sort_by(|a, b| (&a.filename, &a.uuid).cmp(&(&b.filename, &b.uuid)));
     out.unchanged.sort();
     out.removed.sort();
     out.backfill.sort_by(|a, b| a.0.cmp(&b.0));
+}
 
+/// Pair vanished rows with arrived files on the `(size_bytes, mtime_epoch)`
+/// pair both sides of the diff already carry, **within one format**.
+/// Returns `(removed index, new index)` pairs; every index appears at most
+/// once.
+///
+/// A pair only matches when it is unique on **both** sides. An ambiguous
+/// group falls through to filename-stem equality, and only where the stem
+/// is itself unique on both sides — a tiebreaker, never a requirement,
+/// because requiring it would kill pure renames, which are the common real
+/// case. `(0, 0)` is the never-observed sentinel: a failed stat and a
+/// pre-backfill row both carry it, so without skipping it every unstattable
+/// file would match every other one.
+///
+/// ## Why the format is part of the key
+///
+/// A relocation rewrites path columns and nothing else, so it cannot change
+/// `book_files.format` — and `format` is not decoration: `books::book_file_path`
+/// rebuilds the on-disk path as `library / path / filename + "." +
+/// lower(format)`, so a row whose format no longer matches its extension
+/// resolves to a file that isn't there. Retyping `Book.m4a` to `Book.m4b`
+/// preserves the bytes, so it would otherwise match on the stat pair alone
+/// (and `path_stem` drops the extension, so the tiebreaker would *help* it
+/// pair) — leaving a book unreachable from every endpoint, and stuck that
+/// way, since the next scan finds the new path with a matching stat and
+/// classifies it Unchanged.
+///
+/// A format change genuinely needs a Phase-B re-parse — a `.cbz` and a
+/// `.epub` parse differently, and format drives HLS/transcode and reader
+/// routing — so declining here, and letting the file fall through to the
+/// Removed and New buckets, is the correct answer rather than a missed
+/// optimization. Note that scoping the diff to a format *set*
+/// (`EBOOK_FORMATS` / `AUDIOBOOK_FORMATS`) is not the same as scoping to a
+/// format: both sets hold more than one today.
+fn match_moved_files(
+    removed: &[&books::IndexedRow],
+    new: &[&ebook::StatEntry],
+) -> Vec<(usize, usize)> {
+    use std::collections::HashMap;
+
+    // `(size_bytes, mtime_epoch, format)`.
+    type MatchKey = (i64, i64, String);
+
+    let mut removed_by_pair: HashMap<MatchKey, Vec<usize>> = HashMap::new();
+    for (i, row) in removed.iter().enumerate() {
+        if row.size_bytes == 0 && row.mtime_epoch == 0 {
+            continue;
+        }
+        removed_by_pair
+            .entry((row.size_bytes, row.mtime_epoch, path_format(&row.scan_key)))
+            .or_default()
+            .push(i);
+    }
+    let mut new_by_pair: HashMap<MatchKey, Vec<usize>> = HashMap::new();
+    for (j, entry) in new.iter().enumerate() {
+        if entry.size_bytes == 0 && entry.mtime_epoch == 0 {
+            continue;
+        }
+        new_by_pair
+            .entry((
+                entry.size_bytes,
+                entry.mtime_epoch,
+                path_format(&entry.scan_key),
+            ))
+            .or_default()
+            .push(j);
+    }
+
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    for (pair, removed_group) in &removed_by_pair {
+        let Some(new_group) = new_by_pair.get(pair) else {
+            continue;
+        };
+        if let ([r], [n]) = (removed_group.as_slice(), new_group.as_slice()) {
+            out.push((*r, *n));
+        } else {
+            push_stem_matches(removed, new, removed_group, new_group, &mut out);
+        }
+    }
     out
+}
+
+/// Break an ambiguous stat-pair group on filename-stem equality, emitting
+/// only the stems that resolve to exactly one candidate on each side.
+/// Candidates the stem can't separate stay in Removed + New, where the
+/// writer's title+author path still gets its chance at them.
+fn push_stem_matches(
+    removed: &[&books::IndexedRow],
+    new: &[&ebook::StatEntry],
+    removed_group: &[usize],
+    new_group: &[usize],
+    out: &mut Vec<(usize, usize)>,
+) {
+    use std::collections::HashMap;
+
+    let mut removed_by_stem: HashMap<&str, Vec<usize>> = HashMap::new();
+    for &i in removed_group {
+        removed_by_stem
+            .entry(path_stem(&removed[i].scan_key))
+            .or_default()
+            .push(i);
+    }
+    let mut new_by_stem: HashMap<&str, Vec<usize>> = HashMap::new();
+    for &j in new_group {
+        new_by_stem
+            .entry(path_stem(&new[j].scan_key))
+            .or_default()
+            .push(j);
+    }
+    for (stem, removed_stem_group) in &removed_by_stem {
+        let Some(new_stem_group) = new_by_stem.get(stem) else {
+            continue;
+        };
+        if let ([r], [n]) = (removed_stem_group.as_slice(), new_stem_group.as_slice()) {
+            out.push((*r, *n));
+        }
+    }
+}
+
+/// The leaf stem of a scan key — `Author/Title.epub` and the audiobook
+/// group `Author/Title` both yield `Title`. Borrowed from the input, so the
+/// tiebreaker's maps allocate nothing per candidate.
+fn path_stem(scan_key: &str) -> &str {
+    Path::new(scan_key)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(scan_key)
+}
+
+/// The uppercase extension of a scan key, derived exactly as
+/// `crate::helpers::split_filename` derives `book_files.format` — so the
+/// match key above gates on the value that actually drives path
+/// resolution, not on a lookalike. A directory-shaped audiobook group key
+/// carries no extension and yields `UNKNOWN`, so multi-part groups compare
+/// equal to each other and never to a single-file group.
+fn path_format(scan_key: &str) -> String {
+    Path::new(scan_key)
+        .extension()
+        .map(|s| s.to_string_lossy().to_ascii_uppercase())
+        .unwrap_or_else(|| "UNKNOWN".to_string())
 }
 
 /// Scan `library_path`, diff against the existing index, and apply only
@@ -419,7 +659,17 @@ pub async fn reindex_with_progress(
     }
     let mut diff = diff_library(&stat.entries, &db_rows, &library_root, trustworthy);
     let removed_count = diff.removed.len();
+    let moved_count = diff.moved.len();
+    // Moved files never entered `removed`, so a reorganization — however
+    // large — can't trip the breaker that exists to catch a vanished mount.
     check_mass_missing(removed_count, db_file_backed)?;
+    if moved_count > 0 {
+        tracing::info!(
+            library_path,
+            moved = moved_count,
+            "reindex: matched relocated files by stat pair"
+        );
+    }
 
     // Parse Phase B only for the buckets that need it. `diff.removed`/
     // `.backfill` are read again below, but `.new`/`.changed` are not, so
@@ -442,6 +692,7 @@ pub async fn reindex_with_progress(
     let plan = sync::SyncPlan {
         new_books: parsed.0,
         changed_books: parsed.1,
+        moved: diff.moved,
         removed_uuids: diff.removed,
         backfill: diff.backfill,
     };
@@ -450,6 +701,7 @@ pub async fn reindex_with_progress(
     Ok(ReindexStats {
         removed: removed_count,
         file_backed_total: db_file_backed,
+        moved: moved_count,
     })
 }
 
