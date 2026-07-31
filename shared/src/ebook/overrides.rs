@@ -58,8 +58,9 @@ impl MetadataOverrides {
     /// intentional. `NAME_MAX_LEN = 250` applies to author/series/publisher
     /// names.
     pub const TAG_MAX_LEN: usize = 128;
-    /// Maximum number of tags (subjects).
-    pub(crate) const MAX_SUBJECTS: usize = 64;
+    /// Maximum number of tags (subjects). `pub` because the db-layer bulk
+    /// merge re-checks it after computing each book's tag delta.
+    pub const MAX_SUBJECTS: usize = 64;
     /// Maximum number of creators.
     pub(crate) const MAX_CREATORS: usize = 32;
 
@@ -180,5 +181,92 @@ impl MetadataOverrides {
             creators: incoming.creators.clone().or(self.creators.clone()),
             subjects: incoming.subjects.clone().or(self.subjects.clone()),
         }
+    }
+}
+
+/// One edit applied to many books at once from the table view's bulk-edit
+/// modal. Scalar fields: `None` = leave every book unchanged; `Some(v)` = set
+/// on every book (`Some("")` stays reserved for a future explicit-clear
+/// affordance). `authors` replaces each book's full creator list when `Some`
+/// — an empty chip list in the UI maps to `None`, so bulk cannot clear
+/// authors. Tags are add/remove deltas applied per book against that book's
+/// current effective subjects — never a wholesale replace.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BulkMetadataEdit {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authors: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publisher: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub add_tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remove_tags: Vec<String>,
+}
+
+impl BulkMetadataEdit {
+    /// True when no field would change any book — callers reject such an
+    /// edit rather than writing no-op override rows.
+    pub fn is_empty(&self) -> bool {
+        self.authors.is_none()
+            && self.series.is_none()
+            && self.publisher.is_none()
+            && self.language.is_none()
+            && self.add_tags.is_empty()
+            && self.remove_tags.is_empty()
+    }
+
+    /// Validate field lengths and counts against the same caps as
+    /// [`MetadataOverrides::validate`]. Call at the handler boundary.
+    pub fn validate(&self) -> Result<(), String> {
+        // Route through the existing validators so the caps and messages
+        // cannot drift from the single-book path.
+        let as_overrides = MetadataOverrides {
+            subjects: Some([self.add_tags.clone(), self.remove_tags.clone()].concat()),
+            ..self.scalar_overrides()
+        };
+        as_overrides.validate()
+    }
+
+    /// The scalar/creators part as a per-book [`MetadataOverrides`]. Subjects
+    /// are left `None` — tag deltas are applied per book by the caller via
+    /// [`Self::apply_tags`].
+    pub fn scalar_overrides(&self) -> MetadataOverrides {
+        MetadataOverrides {
+            publisher: self.publisher.clone(),
+            language: self.language.clone(),
+            series: self.series.clone(),
+            creators: self.authors.as_ref().map(|names| {
+                names
+                    .iter()
+                    .map(|name| Contributor {
+                        name: name.clone(),
+                        ..Default::default()
+                    })
+                    .collect()
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// Apply the tag deltas to one book's current effective subject list:
+    /// remove exact matches first, then append `add_tags` not already
+    /// present, preserving order (existing, then added). Remove-before-add
+    /// means a tag in both lists ends up present.
+    pub fn apply_tags(&self, current: &[String]) -> Vec<String> {
+        let mut result: Vec<String> = current
+            .iter()
+            .filter(|t| !self.remove_tags.contains(t))
+            .cloned()
+            .collect();
+        for tag in &self.add_tags {
+            if !result.contains(tag) {
+                result.push(tag.clone());
+            }
+        }
+        result
     }
 }

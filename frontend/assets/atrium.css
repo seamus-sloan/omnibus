@@ -5134,6 +5134,16 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 .ebook-row:last-child td { border-bottom: 0; }
 
+/* Bulk-edit selection column. Never hidden by the responsive column
+   drops below — selection must stay reachable at every width. */
+.ebook-col-select { width: 34px; text-align: center; }
+.ebook-col-select input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
 .ebook-col-cover { width: 40px; }
 .ebook-thumb {
   width: 26px;
@@ -6566,6 +6576,59 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   display: flex; justify-content: flex-end; gap: 8px;
   border-top: 1px solid var(--line-2); padding-top: 12px;
 }
+
+/* Table-view bulk edit: floating action bar + modal. The bar sits under
+   the modal backdrop (z-index 100) so the open dialog covers it. */
+.bulk-edit-bar {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  box-shadow: 0 16px 40px color-mix(in oklch, black 50%, transparent);
+}
+.bulk-edit-count { font-family: var(--mono); font-size: 12.5px; color: var(--ink-1); }
+.bulk-edit-dialog {
+  width: min(560px, 100%);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: 16px;
+  box-shadow: 0 24px 60px color-mix(in oklch, black 55%, transparent);
+  overflow-y: auto;
+}
+.bulk-edit-title { margin: 0; font-size: 16px; font-weight: 600; color: var(--ink-0); }
+.bulk-edit-hint { margin: 0; font-size: 12.5px; color: var(--ink-2); }
+.bulk-edit-fields { display: flex; flex-direction: column; gap: 12px; }
+.bulk-edit-field { display: flex; flex-direction: column; gap: 4px; }
+.bulk-edit-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-2);
+}
+.bulk-edit-input {
+  padding: 8px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  color: var(--ink-0);
+  font-size: 13px;
+}
+.bulk-edit-input:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.bulk-edit-error { margin: 0; font-size: 12.5px; color: var(--bad); }
 .shelf-btn-ghost { background: transparent; border-color: transparent; color: var(--ink-1); }
 @media (hover: hover) { .shelf-btn-ghost:hover { color: var(--ink-0); background: var(--bg-2); } }
 .shelf-btn-primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }

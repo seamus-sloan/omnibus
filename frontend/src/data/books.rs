@@ -11,7 +11,7 @@ use omnibus_shared::{
 };
 
 #[cfg(not(feature = "mobile"))]
-use omnibus_shared::MetadataSource;
+use omnibus_shared::{BulkMetadataEdit, MetadataSource};
 
 #[cfg(not(feature = "mobile"))]
 use super::note_server_fn_err;
@@ -780,6 +780,20 @@ pub async fn save_overrides(
     overrides: &MetadataOverrides,
 ) -> Result<Option<EbookMetadata>, DataError> {
     crate::rpc::rpc_save_overrides(uuid.to_string(), overrides.clone())
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Web/SSR `bulk_save_overrides` — server-function wrapper that proxies to
+/// `rpc_bulk_save_overrides` (the table view's bulk-edit modal; web-only, so
+/// no mobile counterpart).
+#[cfg(not(feature = "mobile"))]
+pub async fn bulk_save_overrides(
+    _server_url: &str,
+    uuids: Vec<String>,
+    edit: &BulkMetadataEdit,
+) -> Result<Vec<EbookMetadata>, DataError> {
+    crate::rpc::rpc_bulk_save_overrides(uuids, edit.clone())
         .await
         .map_err(note_server_fn_err)
 }

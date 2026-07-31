@@ -2,7 +2,7 @@
 
 use dioxus::fullstack::post;
 use dioxus::prelude::*;
-use omnibus_shared::{EbookMetadata, MetadataOverrides, OpfExportResult};
+use omnibus_shared::{BulkMetadataEdit, EbookMetadata, MetadataOverrides, OpfExportResult};
 
 #[cfg(feature = "server")]
 use omnibus_db as db;
@@ -33,6 +33,63 @@ pub async fn rpc_save_overrides(
     Ok(db::get_book_by_uuid(&pool.0, &uuid)
         .await
         .map_err(|e| internal_rpc_error("get ebook", e))?)
+}
+
+/// Apply one bulk edit to many books (the table view's bulk-edit modal).
+/// Requires `can_edit` or admin. All-or-nothing: the db layer applies every
+/// book in one transaction, so a bad uuid edits nothing. Returns the merged
+/// `EbookMetadata` for every edited book so the client can update its table
+/// rows without a refetch.
+#[post("/api/rpc/ebook/overrides/bulk", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_bulk_save_overrides(
+    uuids: Vec<String>,
+    edit: BulkMetadataEdit,
+) -> Result<Vec<EbookMetadata>> {
+    if !user.is_admin && !user.can_edit {
+        return Err(ServerFnError::new("forbidden: edit permission required").into());
+    }
+    Ok(bulk_save_overrides(&pool.0, &uuids, &edit, user.id).await?)
+}
+
+/// Server-side body of [`rpc_bulk_save_overrides`], extracted so the
+/// validation branches and the merge-then-reload composition can be
+/// unit-tested without the server-fn transport.
+#[cfg(feature = "server")]
+async fn bulk_save_overrides(
+    pool: &sqlx::SqlitePool,
+    uuids: &[String],
+    edit: &BulkMetadataEdit,
+    user_id: i64,
+) -> Result<Vec<EbookMetadata>, ServerFnError> {
+    if uuids.is_empty() {
+        return Err(ServerFnError::new("no books selected"));
+    }
+    omnibus_shared::validate_book_uuids(uuids).map_err(ServerFnError::new)?;
+    if edit.is_empty() {
+        return Err(ServerFnError::new("no fields to apply"));
+    }
+    edit.validate().map_err(ServerFnError::new)?;
+    db::bulk_merge_metadata_overrides(pool, uuids, edit, user_id)
+        .await
+        .map_err(|e| match e {
+            // Caller-actionable failures keep their own message; everything
+            // else is an internal error that must not leak details.
+            db::MetadataOverridesError::BookNotFound(_)
+            | db::MetadataOverridesError::TooManyTags { .. } => ServerFnError::new(e.to_string()),
+            other => internal_rpc_error("bulk save overrides", other),
+        })?;
+    let mut updated = Vec::with_capacity(uuids.len());
+    for uuid in uuids {
+        // A book ghosted between the merge and this read is skipped rather
+        // than failing the already-committed edit.
+        if let Some(book) = db::get_book_by_uuid(pool, uuid)
+            .await
+            .map_err(|e| internal_rpc_error("get ebook", e))?
+        {
+            updated.push(book);
+        }
+    }
+    Ok(updated)
 }
 
 /// Export a book's merged metadata to its `metadata.opf` sidecar. Requires
@@ -130,4 +187,108 @@ pub async fn rpc_delete_ebook_cover(uuid: String) -> Result<Option<EbookMetadata
     Ok(db::get_book_by_uuid(&pool.0, &uuid)
         .await
         .map_err(|e| internal_rpc_error("get ebook", e))?)
+}
+
+// `server`-gated: exercises the extracted server-side body against an
+// in-memory DB. CI runs this via `cargo test -p omnibus-frontend --features
+// server`.
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::bulk_save_overrides;
+    use omnibus_db::test_support::seed_synced_ebook;
+    use omnibus_shared::{BulkMetadataEdit, MetadataOverrides};
+
+    async fn pool_with_admin() -> (sqlx::SqlitePool, i64) {
+        let pool = omnibus_db::init_db("sqlite::memory:").await.unwrap();
+        let user_id = omnibus_db::auth::create_user(&pool, "admin", "securepassword1")
+            .await
+            .unwrap()
+            .id;
+        (pool, user_id)
+    }
+
+    #[tokio::test]
+    async fn bulk_save_overrides_returns_the_updated_metadata_for_each_book() {
+        let (pool, user_id) = pool_with_admin().await;
+        let uuid_a = seed_synced_ebook(&pool, "a.epub", "Alpha", "Ann Author").await;
+        let uuid_b = seed_synced_ebook(&pool, "b.epub", "Beta", "Bob Author").await;
+
+        let edit = BulkMetadataEdit {
+            publisher: Some("Bulk House".into()),
+            add_tags: vec!["bulktag".into()],
+            ..Default::default()
+        };
+        let updated = bulk_save_overrides(&pool, &[uuid_a, uuid_b], &edit, user_id)
+            .await
+            .unwrap();
+
+        assert_eq!(updated.len(), 2);
+        for book in &updated {
+            assert_eq!(book.publisher.as_deref(), Some("Bulk House"));
+            assert!(book.subjects.iter().any(|t| t == "bulktag"));
+            assert!(book.has_override);
+        }
+    }
+
+    #[tokio::test]
+    async fn bulk_save_overrides_rejects_an_empty_uuid_list() {
+        let (pool, user_id) = pool_with_admin().await;
+        let edit = BulkMetadataEdit {
+            publisher: Some("P".into()),
+            ..Default::default()
+        };
+        let err = bulk_save_overrides(&pool, &[], &edit, user_id)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("no books selected"));
+    }
+
+    #[tokio::test]
+    async fn bulk_save_overrides_rejects_an_empty_edit() {
+        let (pool, user_id) = pool_with_admin().await;
+        let uuid = seed_synced_ebook(&pool, "a.epub", "Alpha", "Ann Author").await;
+        let err = bulk_save_overrides(&pool, &[uuid], &BulkMetadataEdit::default(), user_id)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("no fields to apply"));
+    }
+
+    #[tokio::test]
+    async fn bulk_save_overrides_rejects_an_invalid_edit() {
+        let (pool, user_id) = pool_with_admin().await;
+        let uuid = seed_synced_ebook(&pool, "a.epub", "Alpha", "Ann Author").await;
+        let edit = BulkMetadataEdit {
+            add_tags: vec!["x".repeat(MetadataOverrides::TAG_MAX_LEN + 1)],
+            ..Default::default()
+        };
+        let err = bulk_save_overrides(&pool, &[uuid], &edit, user_id)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("tag exceeds"));
+    }
+
+    #[tokio::test]
+    async fn bulk_save_overrides_surfaces_an_unknown_uuid_without_editing_anything() {
+        let (pool, user_id) = pool_with_admin().await;
+        let uuid = seed_synced_ebook(&pool, "a.epub", "Alpha", "Ann Author").await;
+        let edit = BulkMetadataEdit {
+            publisher: Some("Bulk House".into()),
+            ..Default::default()
+        };
+        let err = bulk_save_overrides(
+            &pool,
+            &[uuid.clone(), "no-such-uuid".into()],
+            &edit,
+            user_id,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("book not found"));
+
+        let book = omnibus_db::get_book_by_uuid(&pool, &uuid)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(book.publisher, None, "the known book must be untouched");
+    }
 }

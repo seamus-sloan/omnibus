@@ -2,6 +2,8 @@
 //! for the browse-paginates / search-stays-client-side split. View mode +
 //! sort + filters persist per library path via [`crate::view_prefs`].
 
+use std::collections::BTreeSet;
+
 use dioxus::prelude::*;
 use omnibus_shared::{EbookMetadata, ResumePoint, Shelf, ShelfSummary, ViewFilters, ViewPrefs};
 
@@ -18,6 +20,8 @@ mod sorting;
 
 // Web-only presentation cluster (hero + gallery + toolbar + table/grid). The
 // mobile build renders `mobile::MobileLanding` instead and never pulls these in.
+#[cfg(not(feature = "mobile"))]
+mod bulk_edit;
 #[cfg(not(feature = "mobile"))]
 mod filters;
 #[cfg(not(feature = "mobile"))]
@@ -108,6 +112,11 @@ struct LandingSignals {
     edit_shelf: Signal<bool>,
     /// Continue-reading hero feed. Starts empty (hero hidden) for SSR parity.
     hero_points: Signal<Vec<ResumePoint>>,
+    /// Table-view bulk-edit selection: the checked rows' uuids. Cleared
+    /// whenever the visible list changes wholesale (refetch or shelf pick).
+    bulk_selected: Signal<BTreeSet<String>>,
+    /// True while the bulk-edit modal is open.
+    bulk_modal_open: Signal<bool>,
 }
 
 /// Construct every signal the landing page owns and arm the effects that
@@ -154,6 +163,8 @@ fn setup_landing_signals(server_url: &str, query: Signal<String>) -> LandingSign
     let selected_shelf = use_signal(|| None::<Shelf>);
     let edit_shelf = use_signal(|| false);
     let hero_points = use_signal(Vec::<ResumePoint>::new);
+    let bulk_selected = use_signal(BTreeSet::<String>::new);
+    let bulk_modal_open = use_signal(|| false);
     let fetch_sigs = FetchSignals {
         books,
         next_cursor,
@@ -190,6 +201,7 @@ fn setup_landing_signals(server_url: &str, query: Signal<String>) -> LandingSign
         pools,
         fetch_sigs,
         shelf_wiring,
+        bulk_selected,
     );
     LandingSignals {
         books,
@@ -213,6 +225,8 @@ fn setup_landing_signals(server_url: &str, query: Signal<String>) -> LandingSign
         selected_shelf,
         edit_shelf,
         hero_points,
+        bulk_selected,
+        bulk_modal_open,
     }
 }
 
@@ -243,6 +257,7 @@ fn wire_landing_effects(
     pools: SuggestionPools,
     fetch_sigs: FetchSignals,
     shelf_wiring: ShelfWiring,
+    mut bulk_selected: Signal<BTreeSet<String>>,
 ) {
     spawn_suggestion_pools_effect(server_url.to_string(), is_admin, pools);
 
@@ -262,6 +277,19 @@ fn wire_landing_effects(
     spawn_load_more_effect(server_url.to_string(), want_more, prefs, fetch_sigs);
     #[cfg(feature = "web")]
     spawn_load_more_observer(fetch_sigs.next_cursor);
+
+    // Drop the bulk-edit selection whenever the visible list changes
+    // wholesale — a refetch (query/sort/filter change) or a gallery pick.
+    // Checked rows that are no longer rendered would otherwise be edited
+    // invisibly from a stale selection.
+    let selection_for_bulk = shelf_wiring.selection;
+    use_effect(move || {
+        let _ = fetch_key();
+        let _ = selection_for_bulk();
+        if !bulk_selected.peek().is_empty() {
+            bulk_selected.write().clear();
+        }
+    });
 
     // Hydrate persisted prefs when the library path resolves. The `!=` guard
     // makes this idempotent: re-running it after a page-1 refetch (which re-sets
@@ -639,6 +667,28 @@ fn web_landing_body(
     let selected_shelf = (sigs.selected_shelf)();
     let mut edit_shelf = sigs.edit_shelf;
     let mut shelves_tick = sigs.shelves_tick;
+    let mut bulk_selected = sigs.bulk_selected;
+    let mut bulk_modal_open = sigs.bulk_modal_open;
+    let bulk_count = bulk_selected.read().len();
+    let show_bulk_bar = (sigs.is_admin)() && bulk_count > 0;
+    // Snapshot the selection for the modal only while it's open — the
+    // backdrop blocks further checkbox toggles, so this stays stable for
+    // the modal's lifetime.
+    let (bulk_uuids, bulk_books) = if bulk_modal_open() {
+        let set = bulk_selected.read();
+        (
+            set.iter().cloned().collect::<Vec<String>>(),
+            selected_bulk_books(&set, &sigs.books.read(), sigs.shelf_books.read().as_deref()),
+        )
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    let mut books_sig = sigs.books;
+    let mut shelf_books_sig = sigs.shelf_books;
+    // Annotated outside the rsx props — a bare `.into()` there is ambiguous
+    // between the dioxus_core and dioxus_stores `SuperInto` impls.
+    let author_pool: ReadSignal<Vec<SuggestionItem>> = sigs.pools.authors.into();
+    let tag_pool: ReadSignal<Vec<SuggestionItem>> = sigs.pools.tags.into();
     // All Books mosaic: first four cover-bearing books of the (always-warm)
     // browse page. Before it lands, the tile falls back to its accent plate.
     let all_cover_uuids: Vec<String> = sigs
@@ -701,6 +751,7 @@ fn web_landing_body(
                         is_admin: (sigs.is_admin)(),
                         author_suggestions: sigs.pools.authors.into(),
                         tag_suggestions: sigs.pools.tags.into(),
+                        selected: bulk_selected,
                     },
                     handlers: LandingContentHandlers {
                         on_prefs_change: on_prefs_change_content,
@@ -711,6 +762,27 @@ fn web_landing_body(
                 }
             }
 
+            if show_bulk_bar {
+                bulk_edit::BulkEditBar {
+                    count: bulk_count,
+                    on_edit: move |_| bulk_modal_open.set(true),
+                    on_clear: move |_| bulk_selected.write().clear(),
+                }
+            }
+            if bulk_modal_open() {
+                bulk_edit::BulkEditModal {
+                    uuids: bulk_uuids,
+                    selected_books: bulk_books,
+                    author_suggestions: author_pool,
+                    tag_suggestions: tag_pool,
+                    on_close: move |_| bulk_modal_open.set(false),
+                    on_saved: move |updated: Vec<EbookMetadata>| {
+                        install_updated_books(&mut books_sig, &mut shelf_books_sig, &updated);
+                        bulk_selected.write().clear();
+                        bulk_modal_open.set(false);
+                    },
+                }
+            }
             if edit_shelf() {
                 if let Some(shelf) = selected_shelf {
                     EditShelfModal {
@@ -727,6 +799,66 @@ fn web_landing_body(
             }
         }
     }
+}
+
+/// Collect the selected books' current metadata from the browse list plus
+/// (when a shelf lens is active) the shelf member list, deduped by uuid —
+/// feeds the bulk-edit modal's remove-tag suggestions.
+#[cfg(not(feature = "mobile"))]
+fn selected_bulk_books(
+    selected: &BTreeSet<String>,
+    books: &[EbookMetadata],
+    shelf_books: Option<&[EbookMetadata]>,
+) -> Vec<EbookMetadata> {
+    let mut found: Vec<EbookMetadata> = Vec::with_capacity(selected.len());
+    let picked = |b: &EbookMetadata| {
+        b.unique_identifier
+            .as_deref()
+            .is_some_and(|u| selected.contains(u))
+    };
+    for book in books.iter().filter(|b| picked(b)) {
+        found.push(book.clone());
+    }
+    for book in shelf_books.unwrap_or_default().iter().filter(|b| picked(b)) {
+        if !found
+            .iter()
+            .any(|f| f.unique_identifier == book.unique_identifier)
+        {
+            found.push(book.clone());
+        }
+    }
+    found
+}
+
+/// Replace, by uuid, every book in `list` that the bulk save returned. Pure
+/// so it's testable without a Dioxus runtime.
+#[cfg(not(feature = "mobile"))]
+fn replace_updated_books(list: &mut [EbookMetadata], updated: &[EbookMetadata]) {
+    for book in list.iter_mut() {
+        if let Some(fresh) = updated
+            .iter()
+            .find(|u| u.unique_identifier == book.unique_identifier)
+        {
+            *book = fresh.clone();
+        }
+    }
+}
+
+/// Install the bulk save's returned metadata into the browse and shelf list
+/// signals — the same optimistic-install idiom the inline cell editors use,
+/// so no refetch is needed.
+#[cfg(not(feature = "mobile"))]
+fn install_updated_books(
+    books: &mut Signal<Vec<EbookMetadata>>,
+    shelf_books: &mut Signal<Option<Vec<EbookMetadata>>>,
+    updated: &[EbookMetadata],
+) {
+    books.with_mut(|list| replace_updated_books(list, updated));
+    shelf_books.with_mut(|maybe| {
+        if let Some(list) = maybe.as_mut() {
+            replace_updated_books(list, updated);
+        }
+    });
 }
 
 /// Short, human-friendly tail of an absolute library path. We show only the
@@ -763,6 +895,38 @@ mod tests {
             visible_source(false, ShelfSelection::All),
             VisibleSource::Browse
         );
+    }
+
+    #[cfg(not(feature = "mobile"))]
+    fn book_with_uuid(uuid: &str, publisher: &str) -> EbookMetadata {
+        EbookMetadata {
+            unique_identifier: Some(uuid.to_string()),
+            publisher: Some(publisher.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[cfg(not(feature = "mobile"))]
+    #[test]
+    fn selected_bulk_books_gathers_from_both_lists_without_duplicates() {
+        let selected: BTreeSet<String> = ["a".to_string(), "b".to_string()].into();
+        let books = vec![book_with_uuid("a", "P1"), book_with_uuid("c", "P3")];
+        let shelf = vec![book_with_uuid("a", "P1"), book_with_uuid("b", "P2")];
+        let found = selected_bulk_books(&selected, &books, Some(&shelf));
+        let uuids: Vec<_> = found
+            .iter()
+            .filter_map(|b| b.unique_identifier.clone())
+            .collect();
+        assert_eq!(uuids, vec!["a", "b"]);
+    }
+
+    #[cfg(not(feature = "mobile"))]
+    #[test]
+    fn replace_updated_books_replaces_matching_uuids_and_keeps_the_rest() {
+        let mut list = vec![book_with_uuid("a", "Old"), book_with_uuid("c", "Keep")];
+        replace_updated_books(&mut list, &[book_with_uuid("a", "New")]);
+        assert_eq!(list[0].publisher.as_deref(), Some("New"));
+        assert_eq!(list[1].publisher.as_deref(), Some("Keep"));
     }
 
     #[test]

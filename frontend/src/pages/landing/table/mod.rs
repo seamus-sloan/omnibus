@@ -7,6 +7,8 @@
 mod cells;
 mod row;
 
+use std::collections::BTreeSet;
+
 use dioxus::prelude::*;
 use omnibus_shared::{EbookMetadata, SortDir, SortKey, ViewPrefs};
 
@@ -41,6 +43,9 @@ pub(super) struct BookTableContext {
     pub(super) is_admin: bool,
     pub(super) author_suggestions: ReadSignal<Vec<SuggestionItem>>,
     pub(super) tag_suggestions: ReadSignal<Vec<SuggestionItem>>,
+    /// Bulk-edit selection: the uuids of the checked rows. Owned by the
+    /// landing page so the floating action bar can read it too.
+    pub(super) selected: Signal<BTreeSet<String>>,
 }
 
 /// Power-user table view of `books`: sortable column headers and inline-editable cells.
@@ -51,6 +56,17 @@ pub(super) fn BookTable(
     on_sort: EventHandler<SortKey>,
     ctx: BookTableContext,
 ) -> Element {
+    // Snapshot the visible uuids before `books` is consumed by the row loop —
+    // select-all operates on exactly the rows this render shows.
+    let visible_uuids: Vec<String> = books
+        .iter()
+        .filter_map(|b| b.unique_identifier.clone())
+        .collect();
+    let mut selected = ctx.selected;
+    let all_selected = !visible_uuids.is_empty() && {
+        let set = selected.read();
+        visible_uuids.iter().all(|u| set.contains(u))
+    };
     rsx! {
         div {
             id: "ebook-table",
@@ -59,6 +75,26 @@ pub(super) fn BookTable(
             table { class: "ebook-table",
                 thead {
                     tr {
+                        if ctx.is_admin {
+                            th { class: "ebook-col-select",
+                                input {
+                                    r#type: "checkbox",
+                                    "data-testid": "ebook-select-all",
+                                    aria_label: "Select all books",
+                                    checked: all_selected,
+                                    onchange: move |_| {
+                                        let mut set = selected.write();
+                                        if all_selected {
+                                            for uuid in &visible_uuids {
+                                                set.remove(uuid);
+                                            }
+                                        } else {
+                                            set.extend(visible_uuids.iter().cloned());
+                                        }
+                                    },
+                                }
+                            }
+                        }
                         th { class: "ebook-col-cover", "Cover" }
                         SortableHeader {
                             class: "ebook-col-title".to_string(),

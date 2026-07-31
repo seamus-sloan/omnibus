@@ -34,6 +34,9 @@ pub(super) struct RowContext {
     pub author_suggestions: ReadSignal<Vec<SuggestionItem>>,
     pub save_field: EventHandler<(EditField, String)>,
     pub save_authors: EventHandler<Vec<String>>,
+    /// Bulk-edit selection shared with the whole table (see
+    /// [`super::BookTableContext::selected`]).
+    pub selected: Signal<std::collections::BTreeSet<String>>,
 }
 
 /// Build the single-field override payload for a grid quick-edit save.

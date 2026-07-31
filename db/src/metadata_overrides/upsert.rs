@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use omnibus_shared::{EbookMetadata, MetadataOverrides, MetadataSource};
+use omnibus_shared::{BulkMetadataEdit, EbookMetadata, MetadataOverrides, MetadataSource};
 use sqlx::{Executor, SqliteConnection, SqlitePool};
 
 use crate::books::resolve_book_id_by_uuid_exec;
@@ -25,6 +25,13 @@ pub enum MetadataOverridesError {
     Db(#[from] sqlx::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    /// A bulk edit named a uuid with no live book row — the whole bulk
+    /// call rolls back rather than applying to a subset.
+    #[error("book not found: {0}")]
+    BookNotFound(String),
+    /// A bulk tag delta would push one book past the per-book tag cap.
+    #[error("tag list for {uuid} would exceed {max} tags")]
+    TooManyTags { uuid: String, max: usize },
 }
 
 impl From<crate::books::BooksError> for MetadataOverridesError {
@@ -270,12 +277,30 @@ pub async fn merge_metadata_overrides(
     // issues a structured ROLLBACK — no reliance on connection-drop implicit
     // cleanup.
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    merge_one_in_tx(&mut tx, book_uuid, incoming, user_id).await?;
+    tx.commit().await?;
 
+    if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
+        tracing::warn!(book_uuid, error = %e, "books_fts rebuild after override merge failed");
+    }
+    Ok(())
+}
+
+/// The tx-scoped body shared by [`merge_metadata_overrides`] and
+/// [`bulk_merge_metadata_overrides`]: read the existing override row, merge
+/// `incoming` on top, upsert, materialize the series link, and bump
+/// `books.last_modified` — all on the caller's transaction.
+async fn merge_one_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    book_uuid: &str,
+    incoming: &MetadataOverrides,
+    user_id: i64,
+) -> Result<(), MetadataOverridesError> {
     let existing: Option<(String, i64)> = sqlx::query_as(
         "SELECT overrides, has_cover_override FROM metadata_overrides WHERE book_uuid = ?",
     )
     .bind(book_uuid)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(&mut **tx)
     .await?;
 
     let (merged, has_cover_override) = match existing {
@@ -288,7 +313,7 @@ pub async fn merge_metadata_overrides(
 
     let json = serde_json::to_string(&merged)?;
     upsert_overrides_row(
-        &mut *tx,
+        &mut **tx,
         book_uuid,
         &merged,
         &json,
@@ -296,12 +321,73 @@ pub async fn merge_metadata_overrides(
         user_id,
     )
     .await?;
-    materialize_series_link(&mut tx, book_uuid, &merged).await?;
-    touch_book_last_modified(&mut tx, book_uuid).await?;
+    materialize_series_link(tx, book_uuid, &merged).await?;
+    touch_book_last_modified(tx, book_uuid).await?;
+    Ok(())
+}
+
+/// Apply one [`BulkMetadataEdit`] to every uuid inside a single
+/// `BEGIN IMMEDIATE` transaction — all books update or none do (an unknown
+/// uuid fails the whole call with [`MetadataOverridesError::BookNotFound`]).
+///
+/// Tag deltas are computed per book against its effective subjects: the
+/// in-tx override row's `subjects` when one exists, else the merged
+/// metadata fetched just before the transaction (equal to the scanned
+/// subjects when no override exists — and any concurrent subjects write
+/// would have created the override row this transaction reads, so the
+/// pre-tx fetch cannot serve a stale base). FTS rebuilds run best-effort
+/// per book after commit, matching [`merge_metadata_overrides`].
+pub async fn bulk_merge_metadata_overrides(
+    pool: &SqlitePool,
+    uuids: &[String],
+    edit: &BulkMetadataEdit,
+    user_id: i64,
+) -> Result<(), MetadataOverridesError> {
+    let mut effective_subjects = HashMap::with_capacity(uuids.len());
+    for uuid in uuids {
+        let book = crate::books::get_book_by_uuid(pool, uuid)
+            .await?
+            .ok_or_else(|| MetadataOverridesError::BookNotFound(uuid.clone()))?;
+        effective_subjects.insert(uuid.clone(), book.subjects);
+    }
+
+    let has_tag_deltas = !edit.add_tags.is_empty() || !edit.remove_tags.is_empty();
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    for uuid in uuids {
+        let mut incoming = edit.scalar_overrides();
+        if has_tag_deltas {
+            // The in-tx override row wins as the tag base; the pre-tx fetch
+            // only covers books with no subjects override at all.
+            let row_subjects: Option<String> =
+                sqlx::query_scalar("SELECT overrides FROM metadata_overrides WHERE book_uuid = ?")
+                    .bind(uuid.as_str())
+                    .fetch_optional(&mut *tx)
+                    .await?;
+            let override_subjects = match row_subjects {
+                Some(json) => serde_json::from_str::<MetadataOverrides>(&json)?.subjects,
+                None => None,
+            };
+            let base = override_subjects
+                .as_deref()
+                .or(effective_subjects.get(uuid).map(Vec::as_slice))
+                .unwrap_or_default();
+            let subjects = edit.apply_tags(base);
+            if subjects.len() > MetadataOverrides::MAX_SUBJECTS {
+                return Err(MetadataOverridesError::TooManyTags {
+                    uuid: uuid.clone(),
+                    max: MetadataOverrides::MAX_SUBJECTS,
+                });
+            }
+            incoming.subjects = Some(subjects);
+        }
+        merge_one_in_tx(&mut tx, uuid, &incoming, user_id).await?;
+    }
     tx.commit().await?;
 
-    if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
-        tracing::warn!(book_uuid, error = %e, "books_fts rebuild after override merge failed");
+    for uuid in uuids {
+        if let Err(e) = rebuild_fts_for_book(pool, uuid).await {
+            tracing::warn!(book_uuid = %uuid, error = %e, "books_fts rebuild after bulk override merge failed");
+        }
     }
     Ok(())
 }
