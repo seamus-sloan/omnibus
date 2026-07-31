@@ -70,6 +70,8 @@ pub(crate) async fn note_user(user: &omnibus_shared::UserSummary) {
         Some(prev) if prev == user.username => {}
         Some(_) => {
             tracing::info!("account switch detected; clearing user-scoped offline data");
+            crate::reader_progress::clear_for_user_switch();
+            crate::audiobook_progress::clear_for_user_switch();
             for prefix in USER_SCOPED_PREFIXES {
                 st.kv_delete_prefix(prefix);
             }

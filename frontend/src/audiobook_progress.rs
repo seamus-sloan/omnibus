@@ -156,7 +156,6 @@ mod mobile_store {
         }
     }
 
-    #[cfg(test)]
     pub fn clear() {
         if let Ok(mut g) = map().write() {
             g.clear();
@@ -192,6 +191,13 @@ pub fn hydrate_from_offline_store() {
         })
         .collect();
     mobile_store::seed(entries);
+}
+
+/// Clear the process-local mobile audiobook-position cache. Used when a
+/// different account signs in so resume fallback cannot bleed across users.
+#[cfg(feature = "mobile")]
+pub(crate) fn clear_for_user_switch() {
+    mobile_store::clear();
 }
 
 // SSR / server-only build — no persistence.

@@ -65,3 +65,19 @@ async fn note_user_preserves_fresh_me_row_across_account_switch() {
         Some(new_user.username.as_str())
     );
 }
+
+#[tokio::test]
+async fn note_user_clears_mobile_resume_fallbacks_on_account_switch() {
+    store::init_global_for_tests();
+    let _guard = test_state_lock().lock().unwrap();
+    let st = store::store().expect("test store");
+
+    crate::reader_progress::save("switch-book-epub", "epubcfi(/6/4!/4/2/1:0)");
+    crate::audiobook_progress::save("switch-book-audio", 321.0);
+    st.meta_put("last_user", "resume-switch-old".into());
+
+    note_user(&user(9, "resume-switch-new")).await;
+
+    assert_eq!(crate::reader_progress::load("switch-book-epub"), None);
+    assert_eq!(crate::audiobook_progress::load("switch-book-audio"), None);
+}
