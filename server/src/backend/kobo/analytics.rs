@@ -97,8 +97,10 @@ async fn ingest_session(
     user_id: i64,
     event: &AnalyticsEvent,
 ) -> Result<(), String> {
+    // The finite/positive guard plus the clamp keep the cast in-range.
+    #[allow(clippy::cast_possible_truncation)]
     let seconds = match event.metrics.seconds_read {
-        Some(s) if s.is_finite() && s >= 1.0 => s as i64,
+        Some(s) if s.is_finite() && s >= 1.0 => s.min(f64::from(i32::MAX)) as i64,
         // A zero/absent duration is a glance, not a session — drop silently.
         _ => return Ok(()),
     };
@@ -147,6 +149,9 @@ async fn ingest_rating(
             .map(|_| ())
             .map_err(|e| e.to_string());
     }
+    // Whole stars 1..=5 survive f64 → f32 exactly; anything out of range is
+    // rejected by the validator right below.
+    #[allow(clippy::cast_possible_truncation)]
     let update = RatingUpdate {
         book_uuid: event.attributes.volumeid.clone(),
         stars: stars as f32,

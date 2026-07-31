@@ -7,7 +7,10 @@
 //! header. Every response carries `Access-Control-Allow-Origin: *` because
 //! the WebView origin is wry's custom scheme (`dioxus://` on iOS), exactly
 //! mirroring the server's own `/api/ebooks/{uuid}/file` CORS behavior.
+//! Background ETag revalidation of the cached images lives in
+//! [`revalidate`].
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 
@@ -23,6 +26,10 @@ use tokio_util::io::ReaderStream;
 
 use omnibus_shared::http_range::{self as range, RangeOutcome};
 
+mod revalidate;
+
+use revalidate::{lock_cache_key, Fetched};
+
 /// Where the running loopback server can be reached this boot.
 pub struct LoopbackInfo {
     pub port: u16,
@@ -31,6 +38,14 @@ pub struct LoopbackInfo {
 
 /// Soft cap for the proxied-image disk cache; pruned oldest-first at boot.
 const IMG_CACHE_CAP_BYTES: u64 = 256 * 1024 * 1024;
+
+/// How stale a cached image may be before the proxy checks back with the
+/// server. Covers change rarely and revalidation is a background 304, but
+/// without a window a grid scroll would fire one conditional request per
+/// visible cover every time it came into view. Five minutes keeps a cover
+/// edited on another device arriving promptly while leaving scrolling free;
+/// the `?v=` cache-bust remains the immediate path for an edit made here.
+const IMG_REVALIDATE_AFTER_SECS: u64 = 300;
 
 static LOOPBACK: OnceLock<Option<LoopbackInfo>> = OnceLock::new();
 static RUNTIME: OnceLock<tokio::runtime::Handle> = OnceLock::new();
@@ -209,10 +224,10 @@ pub(crate) async fn warm_image(server_url: &str, path: &str) {
     if !proxy_path_allowed(path) {
         return;
     }
-    if cached_image(&img_dir, path).is_some() {
+    if cached_image(&img_dir, path).await.is_some() {
         return;
     }
-    let _ = fetch_and_cache(&img_dir, path).await;
+    let _ = fetch_and_cache(&img_dir, path, None).await;
 }
 
 struct MediaState {
@@ -262,7 +277,11 @@ async fn dl_handler(
     serve_file(&path, ext_mime(&file), range_header.as_deref()).await
 }
 
-async fn img_handler(State(st): State<Arc<MediaState>>, Query(q): Query<ImgQuery>) -> Response {
+async fn img_handler(
+    State(st): State<Arc<MediaState>>,
+    Query(q): Query<ImgQuery>,
+    headers: HeaderMap,
+) -> Response {
     if q.token.as_deref() != Some(st.token.as_str()) {
         return plain(StatusCode::FORBIDDEN, "bad token");
     }
@@ -270,23 +289,49 @@ async fn img_handler(State(st): State<Arc<MediaState>>, Query(q): Query<ImgQuery
         return plain(StatusCode::NOT_FOUND, "not found");
     };
     let bust = q.v.unwrap_or(0) > 0;
+    let cached = cached_image(&st.img_dir, &path).await;
     if !bust {
-        if let Some((bytes, ct)) = cached_image(&st.img_dir, &path) {
-            return img_response(bytes, &ct);
+        if let Some(hit) = cached {
+            // Answer from disk immediately — as a 304 when the WebView
+            // already holds these bytes — then ask the server whether they
+            // are still current. A cover replaced from another device lands
+            // on the next render rather than costing this one a round-trip.
+            revalidate::revalidate_in_background(st.img_dir.clone(), path.clone(), &hit);
+            return img_answer(&headers, hit.bytes, &hit.content_type);
         }
     }
-    match fetch_and_cache(&st.img_dir, &path).await {
-        Some((bytes, ct)) => img_response(bytes, &ct),
-        // A bust-requested refetch that fails offline still prefers the
-        // stale cached copy over a broken image; an uncached thumb falls
-        // back to the cached full cover (thumbs 202 until generated, so a
-        // download may have only warmed the cover).
-        None => match cached_image(&st.img_dir, &path)
-            .or_else(|| thumb_cover_fallback(&path).and_then(|p| cached_image(&st.img_dir, &p)))
-        {
-            Some((bytes, ct)) => img_response(bytes, &ct),
-            None => plain(StatusCode::NOT_FOUND, "not cached"),
+    // An explicit `?v=` bust still revalidates rather than blindly
+    // refetching: offering the stored validator turns "the cover I just
+    // edited" into a full body and "nothing actually changed" into a 304.
+    let if_none_match = cached.as_ref().and_then(|c| c.etag.clone());
+    // Same lock a background revalidation takes, so the two can't write the
+    // same entry at once — and so this write, being the explicit one, is
+    // never overwritten by an answer describing the pre-edit cover.
+    let guard = lock_cache_key(&path).await;
+    let fetched = fetch_and_cache(&st.img_dir, &path, if_none_match.as_deref()).await;
+    drop(guard);
+    if let Fetched::Replaced {
+        bytes,
+        content_type,
+    } = fetched
+    {
+        return img_answer(&headers, bytes, &content_type);
+    }
+    // `Unchanged` means the cached copy is confirmed current; `Failed`
+    // means offline or an answer we won't cache, and a stale image still
+    // beats a broken one. Either way the disk copy is what to serve — and
+    // an uncached thumb falls back to the cached full cover, since thumbs
+    // 202 until generated and a download may have only warmed the cover.
+    let fallback = match cached {
+        Some(hit) => Some(hit),
+        None => match thumb_cover_fallback(&path) {
+            Some(cover) => cached_image(&st.img_dir, &cover).await,
+            None => None,
         },
+    };
+    match fallback {
+        Some(hit) => img_answer(&headers, hit.bytes, &hit.content_type),
+        None => plain(StatusCode::NOT_FOUND, "not cached"),
     }
 }
 
@@ -350,15 +395,73 @@ fn base_response(
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
 }
 
+/// `Cache-Control` for every loopback image response.
+///
+/// **Not** a `max-age`. The WebView honours one, and a day-long one meant
+/// re-rendering a cover never reached this handler at all — so the
+/// revalidation below never ran, and on the rare render that did reach it
+/// the *old* bytes went back with another day of freshness. A cover
+/// replaced elsewhere could take two days or an app restart to appear.
+///
+/// `no-cache` makes the WebView ask every time, which costs a loopback
+/// round-trip and, thanks to the `ETag`, usually a bodyless 304 — the
+/// WebView keeps its decoded image. Real network traffic is still governed
+/// by [`IMG_REVALIDATE_AFTER_SECS`].
+const IMG_CACHE_CONTROL: &str = "private, no-cache";
+
+/// Content-derived `ETag` for a loopback image response, so the WebView's
+/// conditional re-render is answered with a 304 instead of the bytes.
+///
+/// Derived from the bytes rather than the upstream validator: it has to
+/// exist even for an entry cached before validators, or from a server that
+/// publishes none. Not stable across toolchain versions (`DefaultHasher`),
+/// which costs one extra transfer per image after an upgrade and nothing
+/// else — the same trade `backend::covers` makes.
+fn img_etag(bytes: &[u8]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    format!("\"{:016x}\"", hasher.finish())
+}
+
 fn img_response(bytes: Vec<u8>, content_type: &str) -> Response {
+    let etag = img_etag(&bytes);
     Response::builder()
         .status(StatusCode::OK)
         .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .header(header::CONTENT_TYPE, content_type)
-        .header(header::CACHE_CONTROL, "private, max-age=86400")
+        .header(header::CACHE_CONTROL, IMG_CACHE_CONTROL)
+        .header(header::ETAG, etag)
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
         .body(Body::from(bytes))
         .unwrap_or_else(|_| plain(StatusCode::INTERNAL_SERVER_ERROR, "response"))
+}
+
+/// The bodyless answer to a WebView re-render of an unchanged image.
+fn img_not_modified(etag: &str) -> Response {
+    Response::builder()
+        .status(StatusCode::NOT_MODIFIED)
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .header(header::CACHE_CONTROL, IMG_CACHE_CONTROL)
+        .header(header::ETAG, etag)
+        .body(Body::empty())
+        .unwrap_or_else(|_| plain(StatusCode::INTERNAL_SERVER_ERROR, "response"))
+}
+
+/// Serve `bytes` as 200, or 304 when the WebView already holds them.
+fn img_answer(request: &HeaderMap, bytes: Vec<u8>, content_type: &str) -> Response {
+    let etag = img_etag(&bytes);
+    let matches = request
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            v.split(',')
+                .any(|c| c.trim().trim_start_matches("W/") == etag)
+        });
+    if matches {
+        return img_not_modified(&etag);
+    }
+    img_response(bytes, content_type)
 }
 
 fn plain(status: StatusCode, msg: &'static str) -> Response {
@@ -369,29 +472,94 @@ fn plain(status: StatusCode, msg: &'static str) -> Response {
         .unwrap_or_default()
 }
 
-/// Read a cached image + its recorded content type.
-fn cached_image(img_dir: &Path, path: &str) -> Option<(Vec<u8>, String)> {
+/// A disk-cache hit: the bytes, the content type recorded alongside them,
+/// and the `ETag` the server published for them (absent for entries cached
+/// before validators existed, or by a server that sent none).
+struct CachedImage {
+    bytes: Vec<u8>,
+    content_type: String,
+    etag: Option<String>,
+    /// How long ago these bytes were written, in seconds.
+    age_secs: u64,
+}
+
+/// Read a cached image + its recorded content type and validator.
+async fn cached_image(img_dir: &Path, path: &str) -> Option<CachedImage> {
     let name = cache_file_name(path);
-    let bytes = std::fs::read(img_dir.join(&name)).ok()?;
-    let ct = std::fs::read_to_string(img_dir.join(format!("{name}.ct")))
+    let file = img_dir.join(&name);
+    let bytes = tokio::fs::read(&file).await.ok()?;
+    let content_type = tokio::fs::read_to_string(img_dir.join(format!("{name}.ct")))
+        .await
         .unwrap_or_else(|_| "image/jpeg".into());
-    Some((bytes, ct))
+    let etag = tokio::fs::read_to_string(img_dir.join(format!("{name}.etag")))
+        .await
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let age_secs = tokio::fs::metadata(&file)
+        .await
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(u64::MAX);
+    Some(CachedImage {
+        bytes,
+        content_type,
+        etag,
+        age_secs,
+    })
+}
+
+/// Restart a cached entry's freshness window without rewriting its bytes.
+///
+/// A 304 is the server confirming the copy on disk is current, which is
+/// exactly as good as having refetched it. Leaving the mtime alone would
+/// make the entry look overdue forever, so every later render would fire
+/// another conditional request — the in-flight guard only collapses
+/// *overlapping* checks, not sequential ones.
+async fn mark_checked(img_dir: &Path, path: &str) {
+    let file = img_dir.join(cache_file_name(path));
+    let now = std::time::SystemTime::now();
+    let _ = tokio::task::spawn_blocking(move || {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&file)
+            .and_then(|f| f.set_modified(now))
+    })
+    .await;
 }
 
 /// Fetch `path` from the upstream server with the bearer token and cache the
-/// bytes + content type on disk. `None` when offline / unauthorized / error.
-/// Strictly 200-only: `/api/thumbs/*` answers 202 while a thumbnail is still
-/// being generated, and caching that placeholder would wedge the thumb
-/// offline forever.
-async fn fetch_and_cache(img_dir: &Path, path: &str) -> Option<(Vec<u8>, String)> {
-    let base = upstream_url()?;
+/// bytes + content type + validator on disk. `None` when offline /
+/// unauthorized / error, and — deliberately — when the server answers 304,
+/// which means the caller's cached copy is already current.
+///
+/// Strictly 200-only otherwise: `/api/thumbs/*` answers 202 while a
+/// thumbnail is still being generated, and caching that placeholder would
+/// wedge the thumb offline forever.
+async fn fetch_and_cache(img_dir: &Path, path: &str, if_none_match: Option<&str>) -> Fetched {
+    let Some(base) = upstream_url() else {
+        return Fetched::Failed;
+    };
     let url = format!("{base}{path}");
-    let resp = crate::data::with_bearer(crate::data::http_client().get(&url))
-        .send()
-        .await
-        .ok()?;
+    let mut req = crate::data::with_bearer(crate::data::http_client().get(&url));
+    if let Some(etag) = if_none_match {
+        if let Ok(value) = reqwest::header::HeaderValue::from_str(etag) {
+            req = req.header(reqwest::header::IF_NONE_MATCH, value);
+        }
+    }
+    let Ok(resp) = req.send().await else {
+        return Fetched::Failed;
+    };
+    if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
+        // The copy on disk is current. Restart its window so the next
+        // render doesn't ask again.
+        mark_checked(img_dir, path).await;
+        return Fetched::Unchanged;
+    }
     if resp.status() != reqwest::StatusCode::OK {
-        return None;
+        return Fetched::Failed;
     }
     let ct = resp
         .headers()
@@ -399,47 +567,112 @@ async fn fetch_and_cache(img_dir: &Path, path: &str) -> Option<(Vec<u8>, String)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("image/jpeg")
         .to_string();
-    let bytes = resp.bytes().await.ok()?.to_vec();
+    let etag = resp
+        .headers()
+        .get(header::ETAG)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let Ok(body) = resp.bytes().await else {
+        return Fetched::Failed;
+    };
+    let bytes = body.to_vec();
     let name = cache_file_name(path);
-    // Best-effort cache write; serving the fetched bytes matters more.
-    let tmp = img_dir.join(format!("{name}.tmp"));
-    if std::fs::write(&tmp, &bytes).is_ok() {
-        let _ = std::fs::rename(&tmp, img_dir.join(&name));
-        let _ = std::fs::write(img_dir.join(format!("{name}.ct")), &ct);
+    // Best-effort cache write, and async throughout: this runs on the
+    // loopback's single-threaded runtime — from a detached task, now that
+    // revalidation is a thing — so a blocking write here stalls the
+    // `/dl/*` Range reads feeding playback.
+    // Unique per write: a shared `{name}.tmp` is a corruption path the
+    // moment two writers overlap, and defence in depth is cheap here.
+    static WRITE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = WRITE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = img_dir.join(format!("{name}.{seq}.tmp"));
+    if tokio::fs::write(&tmp, &bytes).await.is_ok() {
+        let _ = tokio::fs::rename(&tmp, img_dir.join(&name)).await;
+        let _ = tokio::fs::write(img_dir.join(format!("{name}.ct")), &ct).await;
+        let etag_path = img_dir.join(format!("{name}.etag"));
+        match &etag {
+            Some(etag) => {
+                let _ = tokio::fs::write(&etag_path, etag).await;
+            }
+            // A server that stopped publishing a validator must not leave
+            // the previous one behind to be replayed against new bytes.
+            None => {
+                let _ = tokio::fs::remove_file(&etag_path).await;
+            }
+        }
     }
-    Some((bytes, ct))
+    Fetched::Replaced {
+        bytes,
+        content_type: ct,
+    }
 }
 
 /// Oldest-first prune of the image cache down to `cap` bytes.
 fn prune_img_cache(img_dir: &Path, cap: u64) {
-    let Ok(entries) = std::fs::read_dir(img_dir) else {
+    let Ok(dir) = std::fs::read_dir(img_dir) else {
         return;
     };
-    let mut files: Vec<(PathBuf, u64, std::time::SystemTime)> = entries
-        .filter_map(|e| {
-            let e = e.ok()?;
-            let meta = e.metadata().ok()?;
-            if !meta.is_file() {
-                return None;
-            }
-            let modified = meta.modified().ok()?;
-            Some((e.path(), meta.len(), modified))
-        })
-        .collect();
-    let total: u64 = files.iter().map(|(_, len, _)| len).sum();
+
+    // Group by cache key rather than by file. The bytes, the `.ct` and the
+    // `.etag` are one logical entry, and their mtimes drift apart — a 304
+    // touches only the bytes — so pruning them independently deletes an
+    // entry's validator while keeping its image. That image then has
+    // nothing to revalidate with and is skipped forever, which is exactly
+    // the stale cover this cache exists to prevent.
+    let mut entries: HashMap<String, CacheEntryFiles> = HashMap::new();
+    for file in dir.flatten() {
+        let Ok(meta) = file.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        let path = file.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        // `{key}`, `{key}.ct`, `{key}.etag`, and any `{key}.tmp` left by an
+        // interrupted write all belong to `{key}`.
+        let key = name
+            .rsplit_once('.')
+            .filter(|(_, ext)| matches!(*ext, "ct" | "etag" | "tmp"))
+            .map(|(stem, _)| stem)
+            .unwrap_or(name);
+        let entry = entries.entry(key.to_string()).or_default();
+        entry.bytes += meta.len();
+        entry.paths.push(path);
+        // Freshest wins: the bytes carry the last-checked time, so an entry
+        // confirmed current by a 304 is treated as recently used.
+        if let Ok(modified) = meta.modified() {
+            entry.modified = entry.modified.max(Some(modified));
+        }
+    }
+
+    let total: u64 = entries.values().map(|e| e.bytes).sum();
     if total <= cap {
         return;
     }
-    files.sort_by_key(|(_, _, modified)| *modified);
+    let mut ordered: Vec<CacheEntryFiles> = entries.into_values().collect();
+    ordered.sort_by_key(|e| e.modified);
+
     let mut excess = total - cap;
-    for (path, len, _) in files {
+    for entry in ordered {
         if excess == 0 {
             break;
         }
-        if std::fs::remove_file(&path).is_ok() {
-            excess = excess.saturating_sub(len);
+        // All of an entry's files go together, so a survivor is never left
+        // without its validator.
+        for path in &entry.paths {
+            let _ = std::fs::remove_file(path);
         }
+        excess = excess.saturating_sub(entry.bytes);
     }
+}
+
+/// Every file making up one cached image, so pruning treats them as a unit.
+#[derive(Default)]
+struct CacheEntryFiles {
+    paths: Vec<PathBuf>,
+    bytes: u64,
+    modified: Option<std::time::SystemTime>,
 }
 
 /// Path-segment allowlist for `/dl/{uuid}/{file}`: uuids and our own file

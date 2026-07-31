@@ -15,6 +15,23 @@ avoidance, or lock-screen audio. This app talks to the same server over the same
 
 ## Running it
 
+Quickest path, from the repo root (system xcodebuild + simctl — no nix shell):
+
+```bash
+just ios-sim       # boot the newest iPhone simulator, build, install, launch
+just ios-build     # compile check only (generic simulator destination)
+just ios-test      # omnibusTests — the same scripts/ios-test.sh invocation CI runs
+just ios-test-ui   # omnibusUITests
+```
+
+`ios-sim` builds into `~/.cache/omnibus-ios-derived/<worktree>` (build artifacts
+stay out of the tree, like `CARGO_TARGET_DIR`) and, when `just dev-up` has run,
+prints this workspace's dev-server URL to enter on the Connect screen. Pin a
+simulator with `OMNIBUS_IOS_SIM_UDID`; test results land as
+`.claude/runtime/ios-tests/<suite>.xcresult`.
+
+Or through Xcode:
+
 1. Start a server the simulator can reach, pointed at the full fixture set:
 
 ```bash

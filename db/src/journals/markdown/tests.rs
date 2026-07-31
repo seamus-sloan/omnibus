@@ -1,3 +1,8 @@
+//! Tests for journal markdown rendering: basic formatting and strikethrough,
+//! HTML sanitization (script tags, event-handler attributes, non-checkbox
+//! inputs), spoiler-marker wrapping, task-list checkboxes, and image
+//! handling (captioned figures, offsite-source stripping).
+
 use super::*;
 
 #[test]

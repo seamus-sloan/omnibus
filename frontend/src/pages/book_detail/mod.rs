@@ -6,6 +6,7 @@
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
+use omnibus_shared::physical::WishlistEntry;
 use omnibus_shared::{EbookMetadata, MergeBooksResult, SuggestionsResponse};
 
 use crate::components::{PageError, PageLoading, PageNotFound};
@@ -86,6 +87,15 @@ pub fn BookDetailPage(uuid: String) -> Element {
     // Delete-dialog state, declared unconditionally for the same reason.
     let delete_open = use_signal(|| false);
 
+    // Physical-wishlist state, lifted here because two web sections share it:
+    // the hero (cover chip + rail wishlist slot) and the physical panel (whose
+    // post-mount load populates it, and whose last-copy delete can write it).
+    // Declared unconditionally per rule 07; mobile discards it.
+    let phys = PhysSignals {
+        wishlist: use_signal(|| None::<WishlistEntry>),
+        loaded: use_signal(|| false),
+    };
+
     // Fetch Summary override (mobile only). Declared unconditionally per
     // rule 07 — `render_loaded_mobile` is a plain fn with no hook scope,
     // reached only past the early returns below. `epoch` is bumped
@@ -134,6 +144,7 @@ pub fn BookDetailPage(uuid: String) -> Element {
         PageSignals {
             description,
             delete_open,
+            phys,
         },
         author_books(),
         suggestions(),
@@ -161,6 +172,17 @@ struct DescriptionSignals {
 struct PageSignals {
     description: DescriptionSignals,
     delete_open: Signal<bool>,
+    phys: PhysSignals,
+}
+
+/// Shared physical-wishlist state: the entry itself plus the loaded flag for
+/// the panel's post-mount copies+wishlist fetch. Both the hero (chip + rail
+/// slot) and the physical panel hold the same signals, so a mutation in either
+/// place is immediately visible in the other.
+#[derive(Clone, Copy, PartialEq)]
+struct PhysSignals {
+    wishlist: Signal<Option<WishlistEntry>>,
+    loaded: Signal<bool>,
 }
 
 /// The book-page data signals written by the fetch effects. `Copy` (Dioxus
@@ -244,6 +266,7 @@ fn render_book_shell(
     let PageSignals {
         description,
         delete_open,
+        phys,
     } = page;
 
     // `is_admin` starts at `false` and only flips to `true` on the web
@@ -314,6 +337,7 @@ fn render_book_shell(
             server_url,
             is_admin: is_admin_flag,
             refresh: merge.refresh,
+            phys,
         },
     );
     rsx! {

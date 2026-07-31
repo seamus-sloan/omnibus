@@ -161,5 +161,9 @@ lettre = { version = "0.11", default-features = false, features = [
 test-support = []
 
 [dev-dependencies]
+# Self-reference so `db/tests/*` integration tests see `test_support` (the
+# module is feature-gated and integration tests build the lib without
+# `cfg(test)`); unified into test builds only, per rule 03.
+omnibus-db = { path = ".", features = ["test-support"] }
 tempfile.workspace = true
 wiremock = "0.6"

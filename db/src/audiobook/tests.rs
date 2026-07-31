@@ -1,17 +1,11 @@
+//! Tests for audiobook scanning and parsing: directory stat walks, m4b/mp3
+//! grouping into books, tag-derived title/metadata extraction (including
+//! error rows for unreadable or undecodable files), and duration formatting.
+
 use std::fs;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;
-
-fn make_test_dir(suffix: &str) -> std::path::PathBuf {
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
-    let pid = std::process::id();
-    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("omnibus_audiobook_{suffix}_{pid}_{seq}"));
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).expect("should create test dir");
-    dir
-}
+use crate::test_support::make_test_dir;
 
 #[test]
 fn stat_with_no_path_returns_empty() {

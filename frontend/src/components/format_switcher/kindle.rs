@@ -10,7 +10,7 @@ use omnibus_shared::KindleSendStatus;
 // Only the non-mobile `SendToKindleButton`/`poll_send_result` await the shared
 // sleeper; the mobile action is a disabled placeholder, so gate to match.
 #[cfg(not(feature = "mobile"))]
-use super::async_sleep_ms;
+use crate::platform_sleep::async_sleep_ms;
 
 /// "Send to Kindle" CTA. Web/SSR renders the interactive
 /// [`SendToKindleButton`]; when the EPUB is over Kindle's email cap

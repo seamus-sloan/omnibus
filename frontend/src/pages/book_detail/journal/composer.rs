@@ -8,6 +8,7 @@ use omnibus_shared::{CreateJournalEntry, Highlight, JournalStatus, UpdateJournal
 
 use crate::data;
 use crate::pages::book_detail::journal_editor::*;
+use crate::platform_sleep::async_sleep_ms;
 
 /// Draft-composer signals owned by [`BdJournalComposer`] and threaded into
 /// its footer. Grouped so the composer sub-components stay under the prop cap.
@@ -56,7 +57,9 @@ impl JournalComposerState {
     /// The optional progress payload derived from the footer toggle/slider.
     fn progress_payload(&self) -> Option<u8> {
         if (self.track_progress)() {
-            Some((self.progress)() as u8)
+            // The slider bounds the signal to 0..=100; clamp repeats it so
+            // the conversion cannot fail.
+            Some(u8::try_from((self.progress)().clamp(0, 100)).unwrap_or(0))
         } else {
             None
         }
@@ -597,17 +600,4 @@ fn BdJournalComposerFoot(
             }
         }
     }
-}
-
-// Platform-gated async sleep for the autosave debounce + indicator ticker:
-// web uses `gloo_timers`; mobile and the SSR/server build use `tokio::time`
-// (mirrors `search_palette::overlay`).
-#[cfg(feature = "web")]
-async fn async_sleep_ms(ms: u32) {
-    gloo_timers::future::TimeoutFuture::new(ms).await;
-}
-
-#[cfg(not(feature = "web"))]
-async fn async_sleep_ms(ms: u32) {
-    tokio::time::sleep(std::time::Duration::from_millis(u64::from(ms))).await;
 }

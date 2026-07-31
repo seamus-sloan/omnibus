@@ -13,6 +13,9 @@ pub(super) struct ReaderScripts {
     pub jszip: String,
     pub epub: String,
     pub glue: String,
+    /// Standalone quote-card renderer (`window.OmnibusQuoteCard`) — no
+    /// ordering dependency, chained last so init still gates on the glue.
+    pub quote_card: String,
 }
 
 /// Build the tokened, absolute EPUB-file URL epub.js fetches from the WebView.
@@ -50,6 +53,7 @@ pub(super) fn install_surface_js(
     let jszip = serde_json::to_string(&scripts.jszip).unwrap_or_else(|_| "\"\"".into());
     let epub = serde_json::to_string(&scripts.epub).unwrap_or_else(|_| "\"\"".into());
     let glue = serde_json::to_string(&scripts.glue).unwrap_or_else(|_| "\"\"".into());
+    let quote_card = serde_json::to_string(&scripts.quote_card).unwrap_or_else(|_| "\"\"".into());
     let share_shims = if native_share {
         r#"
   window.__omnibusOnShareText=function(t){dioxus.send({kind:"ShareText",text:t});};
@@ -77,6 +81,7 @@ pub(super) fn install_surface_js(
   ensure(function(){{return !!window.JSZip;}},{jszip})
     .then(function(){{return ensure(function(){{return !!window.ePub;}},{epub});}})
     .then(function(){{return ensure(function(){{return !!window.OmnibusReader;}},{glue});}})
+    .then(function(){{return ensure(function(){{return !!window.OmnibusQuoteCard;}},{quote_card});}})
     .then(function(){{
       if(window.OmnibusReader&&window.ePub){{
         window.OmnibusReader.init("omnibus-viewer",{url_lit},{opts_lit});
@@ -121,6 +126,7 @@ mod tests {
             jszip: "/assets/jszip.js".into(),
             epub: "/assets/epub.js".into(),
             glue: "/assets/glue.js".into(),
+            quote_card: "/assets/quote-card.js".into(),
         };
         let js = install_surface_js("http://h/api/ebooks/x/file?token=t", &opts, &scripts, true);
         // Every glue callback is shimmed into the Dioxus eval channel.
@@ -148,7 +154,11 @@ mod tests {
         let jz = js.find("/assets/jszip.js").expect("loads jszip");
         let ep = js.find("/assets/epub.js").expect("loads epub");
         let gl = js.find("/assets/glue.js").expect("loads glue");
-        assert!(jz < ep && ep < gl, "runtime must load JSZip → epub → glue");
+        let qc = js.find("/assets/quote-card.js").expect("loads quote-card");
+        assert!(
+            jz < ep && ep < gl && gl < qc,
+            "runtime must load JSZip → epub → glue → quote-card"
+        );
         // Each load is time-boxed so a stalled request can't hang init forever.
         assert!(js.contains("setTimeout") && js.contains("clearTimeout"));
         assert!(js.contains("window.OmnibusReader&&window.ePub"));
@@ -164,6 +174,7 @@ mod tests {
             jszip: "/a.js".into(),
             epub: "/b.js".into(),
             glue: "/c.js".into(),
+            quote_card: "/d.js".into(),
         };
         let js = install_surface_js("u", &serde_json::json!({}), &scripts, false);
         // Android / other targets keep the glue's in-WebView Web Share path,

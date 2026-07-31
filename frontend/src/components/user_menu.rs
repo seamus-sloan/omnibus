@@ -9,6 +9,7 @@ use omnibus_shared::{ProgressFormat, ResumePoint, UserSummary};
 
 use crate::components::atrium::{persist_theme, Cover, Theme};
 use crate::components::glyphs::{book_glyph, play_glyph};
+use crate::focus_after_paint::focus_after_paint;
 use crate::{use_current_user, Route};
 
 /// Derive 1–2 character avatar initials from a username. Empty input falls
@@ -145,10 +146,10 @@ fn UserMenuPanel(user: UserSummary, open: Signal<bool>) -> Element {
                 // browser has finished layout before `.focus()` lands.
                 //
                 // Hydration parity (rule 07): closure body stays identical
-                // across SSR/WASM; `focus_user_menu_panel` has a non-web
-                // no-op stub so the gate lives at the function definition,
-                // not inside the rsx-attached handler.
-                focus_user_menu_panel(&evt);
+                // across SSR/WASM; `focus_after_paint` has a non-web no-op
+                // stub so the gate lives at the function definition, not
+                // inside the rsx-attached handler.
+                focus_after_paint(&evt);
             },
 
             UmHeader { user }
@@ -461,38 +462,6 @@ fn UmVersion() -> Element {
         }
     }
 }
-
-/// Focus the user-menu panel after the browser has painted it so the
-/// `onkeydown` handler attached to it actually receives ESC. Same
-/// requestAnimationFrame timing pattern as
-/// `search_palette::focus_palette_input`: calling `.focus()` synchronously
-/// inside `onmounted` lands before layout completes and the focus call
-/// no-ops.
-#[cfg(feature = "web")]
-fn focus_user_menu_panel(evt: &MountedEvent) {
-    use dioxus::web::WebEventExt;
-    use wasm_bindgen::prelude::*;
-
-    let Some(element) = evt.try_as_web_event() else {
-        return;
-    };
-    let Some(window) = web_sys::window() else {
-        return;
-    };
-    let cb = Closure::once_into_js(move || {
-        if let Some(html_el) = element.dyn_ref::<web_sys::HtmlElement>() {
-            let _ = html_el.focus();
-        }
-    });
-    let _ = window.request_animation_frame(cb.unchecked_ref());
-}
-
-/// Non-web stub: SSR never paints the panel and native shells don't
-/// drive the user menu, so there is nothing to focus. Defined so the
-/// `onmounted` handler can call `focus_user_menu_panel` unconditionally
-/// (rule 07: hydration parity — keep cfg gates out of rsx bodies).
-#[cfg(not(feature = "web"))]
-fn focus_user_menu_panel(_evt: &MountedEvent) {}
 
 #[cfg(test)]
 mod tests {

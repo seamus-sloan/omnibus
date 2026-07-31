@@ -1,3 +1,8 @@
+//! Tests for password hashing and policy: Argon2id hash/verify
+//! round-tripping (including a compatibility guard against a stored PHC
+//! string from an earlier dependency version), and username/password
+//! validation rules.
+
 use super::*;
 
 #[test]

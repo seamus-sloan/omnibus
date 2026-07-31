@@ -4498,6 +4498,7 @@ dependencies = [
  "image",
  "lettre",
  "lofty",
+ "omnibus-db",
  "omnibus-shared",
  "pulldown-cmark",
  "quick-xml",
@@ -4552,6 +4553,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "zip",
 ]
 
 [[package]]

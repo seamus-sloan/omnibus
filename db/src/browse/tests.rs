@@ -506,6 +506,14 @@ async fn list_authors_propagates_db_error_when_pool_is_closed() {
     assert!(matches!(err, BrowseError::Db(_)));
 }
 
+#[tokio::test]
+async fn list_series_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = list_series(&pool, &["/lib"]).await.unwrap_err();
+    assert!(matches!(err, BrowseError::Db(_)));
+}
+
 // -----------------------------------------------------------------
 // Physical-only visibility — #1181
 // -----------------------------------------------------------------

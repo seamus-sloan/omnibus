@@ -26,6 +26,11 @@ final class DownloadManager: NSObject {
     /// finished handling a background session's completions.
     var backgroundCompletion: (() -> Void)?
 
+    /// The completed record a re-download is standing in for, keyed by
+    /// `DownloadRecord.id`. Held only while a replacement is in flight; the
+    /// delegate puts it back if the replacement never lands.
+    private var replacing: [String: DownloadRecord] = [:]
+
     private var session: URLSession!
 
     private override init() {
@@ -119,6 +124,67 @@ final class DownloadManager: NSObject {
         return kinds
     }
 
+    /// The `book_files` row a download of `kind` targets: the lowest-ordinal
+    /// file of a format the download endpoint actually **serves**, which is
+    /// the same row the server resolves (`db::book_file_path`'s
+    /// `ORDER BY bf.ordinal LIMIT 1`).
+    ///
+    /// The narrow format sets matter. `Book.ebookFormats` and
+    /// `Book.audioFormats` describe what a library can *contain*; the
+    /// endpoints serve EPUB, and M4B/M4A/MP3. Matching on the broad sets lets
+    /// a mixed book — a PDF at ordinal 0, the EPUB at ordinal 1 — snapshot
+    /// the PDF's validator while downloading the EPUB, which then reports a
+    /// stale download whenever the PDF changes and misses every change to the
+    /// file actually on the device.
+    nonisolated static func targetFile(_ book: Book, kind: DownloadKind) -> BookFileInfo? {
+        let formats = kind == .audio
+            ? Book.selectableAudioFormats
+            : Book.downloadableEbookFormats
+        return book.bookFiles
+            .filter { formats.contains($0.format.lowercased()) }
+            .min { $0.ordinal < $1.ordinal }
+    }
+
+    /// Whether the library file has moved under a downloaded copy — the
+    /// "Update available" condition.
+    ///
+    /// `false` for a download that never finished — there is no local copy
+    /// for a newer file to be newer *than*, which is an answer rather than a
+    /// guess. `nil` only when the question genuinely cannot be answered: no
+    /// download at all, a record predating validators, or metadata carrying
+    /// no file rows (the library listing projection doesn't).
+    /// Deliberately three-valued — a caller that *renders* may collapse
+    /// "don't know" to false, but a caller that *stores* the answer must
+    /// not, or it would clear a flag a real comparison had set.
+    func staleness(of uuid: String, kind: DownloadKind, against book: Book) -> Bool? {
+        guard let record = record(for: uuid, kind: kind) else { return nil }
+        guard record.state == .complete else { return false }
+        return Self.staleness(snapshot: record.sourceEtag, against: book, kind: kind)
+    }
+
+    /// The comparison itself, free of the registry so it can be exercised
+    /// directly. `nil` whenever a validator is missing on either side — an
+    /// older record, a file the scanner hasn't stat'd, or metadata with no
+    /// file rows at all (the library listing projection has none).
+    nonisolated static func staleness(
+        snapshot: String?, against book: Book, kind: DownloadKind
+    ) -> Bool? {
+        guard let snapshot, let current = targetFile(book, kind: kind)?.etag else { return nil }
+        return snapshot != current
+    }
+
+    /// Renderer-facing form of [`staleness(of:kind:against:)`]: "don't know"
+    /// reads as "not stale", because prompting a reader to re-download on a
+    /// guess is worse than staying quiet.
+    func isStale(_ uuid: String, kind: DownloadKind, against book: Book) -> Bool {
+        staleness(of: uuid, kind: kind, against: book) ?? false
+    }
+
+    /// Whether any downloaded format of this book has been superseded.
+    func isAnyStale(_ book: Book) -> Bool {
+        DownloadKind.allCases.contains { isStale(book.uuid, kind: $0, against: book) }
+    }
+
     /// Total bytes held on disk by completed downloads — shown on the You tab.
     func totalBytesOnDisk() -> Int64 {
         records.values.filter { $0.state == .complete }.reduce(0) { $0 + $1.totalBytes }
@@ -126,9 +192,33 @@ final class DownloadManager: NSObject {
 
     // MARK: - Writes
 
+    /// Replace a completed download with the library's current bytes.
+    ///
+    /// **Not** `remove` followed by `start`. That deletes the only copy on
+    /// the device before knowing a replacement will arrive, so any failure
+    /// afterwards — unconfigured server, expired auth, no connectivity, a
+    /// full disk, a dropped transfer — leaves the reader with nothing where
+    /// a perfectly readable book used to be. A stale book beats no book.
+    ///
+    /// The existing file stays exactly where it is. `URLSession` stages the
+    /// replacement in its own temp location and the delegate only swaps it
+    /// in once the bytes are down; if anything fails first, the previous
+    /// record is restored and the file it points at was never touched.
+    func redownload(book: Book, kind: DownloadKind) async {
+        guard let previous = record(for: book.uuid, kind: kind), previous.state == .complete
+        else {
+            await start(book: book, kind: kind)
+            return
+        }
+        await start(book: book, kind: kind, replacing: previous)
+    }
+
     /// Begin (or restart) a download. `kind` picks the endpoint: an ebook pulls
     /// `/api/ebooks/{uuid}/file`, an audiobook `/api/audiobooks/{uuid}/download`.
-    func start(book: Book, kind: DownloadKind) async {
+    ///
+    /// `replacing` carries the completed record this download is standing in
+    /// for, so the book stays readable throughout and is restored on failure.
+    func start(book: Book, kind: DownloadKind, replacing previous: DownloadRecord? = nil) async {
         let uuid = book.uuid
         let path = kind == .audio
             ? "/api/audiobooks/\(uuid)/download"
@@ -144,10 +234,18 @@ final class DownloadManager: NSObject {
         }
 
         let record = DownloadRecord(
-            bookUUID: uuid, kind: kind, format: format, state: .running, localPath: nil,
+            bookUUID: uuid, kind: kind, format: format, state: .running,
+            // A replacement keeps pointing at the file already on disk, so
+            // the reader can go on opening the book while it downloads —
+            // and so a failure leaves something to fall back to.
+            localPath: previous?.localPath,
             totalBytes: 0, receivedBytes: 0, updatedAt: Int64(Date().timeIntervalSince1970),
-            error: nil
+            error: nil,
+            // Snapshot what the library says this file is right now, so a
+            // later refresh can tell us it has been replaced since.
+            sourceEtag: Self.targetFile(book, kind: kind)?.etag
         )
+        if let previous { replacing[record.id] = previous }
         records[record.id] = record
         await OfflineStore.shared.upsertDownload(record)
 
@@ -203,6 +301,25 @@ final class DownloadManager: NSObject {
             guard records[DownloadRecord.key(uuid, kind)] != nil else { continue }
             await remove(uuid, kind: kind)
         }
+    }
+
+    /// Put back the copy a failed replacement was standing in for, and
+    /// report `true` when one was restored so the caller doesn't also write
+    /// a failure over it.
+    ///
+    /// The file itself was never touched — `URLSession` stages into its own
+    /// temp location and the swap only happens on success — so restoring the
+    /// record is enough to make the book readable again.
+    fileprivate func restoreReplaced(key: String) async -> Bool {
+        guard let previous = replacing.removeValue(forKey: key) else { return false }
+        records[key] = previous
+        await OfflineStore.shared.upsertDownload(previous)
+        return true
+    }
+
+    /// A replacement landed, so the copy it stood in for is superseded.
+    fileprivate func forgetReplaced(key: String) {
+        replacing[key] = nil
     }
 
     fileprivate func update(key: String, mutate: (inout DownloadRecord) -> Void) async {
@@ -265,6 +382,10 @@ extension DownloadManager: URLSessionDownloadDelegate {
 
             guard (200..<300).contains(status), moved else {
                 try? FileManager.default.removeItem(at: staged)
+                // A replacement that never arrived leaves the reader with
+                // the book they already had, rather than a failed row over
+                // a file that is still perfectly readable.
+                if await self.restoreReplaced(key: key) { return }
                 await self.update(key: key) { record in
                     record.state = .failed
                     record.error = "Download failed (\(status))"
@@ -280,6 +401,7 @@ extension DownloadManager: URLSessionDownloadDelegate {
                 try FileManager.default.moveItem(at: staged, to: destination)
             } catch {
                 try? FileManager.default.removeItem(at: staged)
+                if await self.restoreReplaced(key: key) { return }
                 await self.update(key: key) { record in
                     record.state = .failed
                     record.error = error.localizedDescription
@@ -289,6 +411,7 @@ extension DownloadManager: URLSessionDownloadDelegate {
 
             let size = (try? FileManager.default
                 .attributesOfItem(atPath: destination.path)[.size] as? Int64) ?? 0
+            self.forgetReplaced(key: key)
             await self.update(key: key) { record in
                 record.state = .complete
                 record.localPath = name
@@ -312,6 +435,7 @@ extension DownloadManager: URLSessionDownloadDelegate {
             // A cancel tears the record down on its own; reporting it as a
             // failure would resurrect the row the cancel just removed.
             guard (error as? URLError)?.code != .cancelled else { return }
+            if await self.restoreReplaced(key: key) { return }
             await self.update(key: key) { record in
                 record.state = .failed
                 record.error = error.localizedDescription

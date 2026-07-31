@@ -4,9 +4,11 @@
 //! alias; the rule set combines with `OR` (match any) or `AND` (match all).
 //! Text fields (tag/author/series/format) match by **name**, case-insensitively
 //! — equality via `COLLATE NOCASE`, substring/prefix via `LIKE` (`contains` /
-//! `starts with`). Owner-scoped fields (`rating`, `status`) bind the shelf
-//! owner's id: `status` matches the owner's read state in `book_read_status`,
-//! treating a missing row as `unread`.
+//! `starts with`). Tag rules match the *effective* (override-aware) tag set,
+//! not just `books_tags_link` — see [`tag_condition`]. Owner-scoped fields
+//! (`rating`, `status`) bind the shelf owner's id: `status` matches the
+//! owner's read state in `book_read_status`, treating a missing row as
+//! `unread`.
 
 use omnibus_shared::{MatchMode, ReadStatus, RuleField, RuleOp, ShelfRule};
 
@@ -66,12 +68,7 @@ fn condition_sql(rule: &ShelfRule, owner_id: i64) -> Result<(String, Vec<Bind>),
     match rule.field {
         // Text fields resolve against the normalized taxonomy `name` columns
         // (all `COLLATE NOCASE`), so the user types a name, not an id.
-        RuleField::Tag => text_condition(
-            rule,
-            "SELECT 1 FROM books_tags_link btl JOIN tags t ON t.id = btl.tag \
-             WHERE btl.book = b.id AND ",
-            "t.name",
-        ),
+        RuleField::Tag => tag_condition(rule),
         RuleField::Author => text_condition(
             rule,
             "SELECT 1 FROM books_authors_link bal JOIN authors a ON a.id = bal.author \
@@ -184,8 +181,8 @@ fn date_condition(rule: &ShelfRule, v: &str) -> Result<(String, Vec<Bind>), Shel
 /// name column.
 ///
 /// `inner` is the subquery up to (but not including) the column comparison, e.g.
-/// `"SELECT 1 FROM books_tags_link btl JOIN tags t ON t.id = btl.tag WHERE
-/// btl.book = b.id AND "`; `col` is the compared column (`"t.name"`). Equality
+/// `"SELECT 1 FROM books_authors_link bal JOIN authors a ON a.id = bal.author
+/// WHERE bal.book = b.id AND "`; `col` is the compared column (`"a.name"`). Equality
 /// (`is`/`is_not`/`includes`) uses `COLLATE NOCASE`; `contains`/`starts_with`
 /// use `LIKE` (case-insensitive for ASCII) with metacharacters escaped so user
 /// text matches literally.
@@ -227,6 +224,58 @@ fn text_condition(
     Ok((sql, vec![bind]))
 }
 
+/// Build a tag predicate over the book's *effective* tag set.
+///
+/// A `subjects` override replaces a book's scanned tags wholesale, and its
+/// memberships live only in the override JSON — `materialize_tag_rows`
+/// deliberately keeps them out of `books_tags_link` so revert-to-scanned
+/// works. Mirroring `get_tag_cloud`'s membership CTE, a book matches through
+/// exactly one arm: its canonical `books_tags_link` rows when it has no
+/// subjects override, or `json_each` over the override array when it does.
+/// A single-arm canonical predicate both misses override-added tags and
+/// keeps matching scanned tags the override removed.
+fn tag_condition(rule: &ShelfRule) -> Result<(String, Vec<Bind>), ShelfError> {
+    let v = rule.value.trim();
+    let (canonical_cmp, override_cmp, pattern, negate) = match rule.op {
+        RuleOp::Is | RuleOp::IsNot => (
+            "t.name = ? COLLATE NOCASE",
+            "je.value = ? COLLATE NOCASE",
+            v.to_string(),
+            rule.op == RuleOp::IsNot,
+        ),
+        RuleOp::Contains => (
+            "t.name LIKE ? ESCAPE '\\'",
+            "je.value LIKE ? ESCAPE '\\'",
+            format!("%{}%", like_escape(v)),
+            false,
+        ),
+        RuleOp::StartsWith => (
+            "t.name LIKE ? ESCAPE '\\'",
+            "je.value LIKE ? ESCAPE '\\'",
+            format!("{}%", like_escape(v)),
+            false,
+        ),
+        _ => return Err(unsupported(rule)),
+    };
+    let matched = format!(
+        "((NOT EXISTS (SELECT 1 FROM metadata_overrides mo \
+           WHERE mo.book_uuid = b.uuid \
+             AND json_type(mo.overrides, '$.subjects') IS NOT NULL) \
+          AND EXISTS (SELECT 1 FROM books_tags_link btl \
+           JOIN tags t ON t.id = btl.tag \
+           WHERE btl.book = b.id AND {canonical_cmp})) \
+         OR EXISTS (SELECT 1 FROM metadata_overrides mo \
+           JOIN json_each(mo.overrides, '$.subjects') je \
+           WHERE mo.book_uuid = b.uuid AND {override_cmp}))"
+    );
+    let sql = if negate {
+        format!("NOT {matched}")
+    } else {
+        matched
+    };
+    Ok((sql, vec![Bind::Text(pattern.clone()), Bind::Text(pattern)]))
+}
+
 /// Escape `LIKE` metacharacters (`\`, `%`, `_`) so user text matches literally.
 /// Pairs with the `ESCAPE '\'` clause in [`text_condition`].
 fn like_escape(v: &str) -> String {
@@ -255,7 +304,11 @@ fn parse_half_stars(v: &str) -> Result<i64, ShelfError> {
             "rating must be between 0.5 and 5".into(),
         ));
     }
-    Ok((stars * 2.0).round() as i64)
+    // The 0.5..=5.0 range check above bounds the scaled value to 1..=10, so
+    // the cast cannot truncate or saturate.
+    #[allow(clippy::cast_possible_truncation)]
+    let half_stars = (stars * 2.0).round() as i64;
+    Ok(half_stars)
 }
 
 /// Parse a relative window (`"30d"`, `"2w"`, `"3m"`, `"1y"`) into a SQLite
@@ -328,7 +381,9 @@ mod rule_tests {
         )
         .unwrap();
         assert!(p.sql.contains(" OR "));
-        assert_eq!(p.binds.len(), 2);
+        // Each tag rule binds its pattern twice: once for the canonical-link
+        // arm, once for the override-JSON arm.
+        assert_eq!(p.binds.len(), 4);
     }
 
     #[test]
@@ -489,7 +544,15 @@ mod rule_tests {
             "sql was {}",
             c.sql
         );
-        assert_eq!(c.binds, vec![Bind::Text("%sci%".into())]);
+        assert!(
+            c.sql.contains("je.value LIKE ? ESCAPE '\\'"),
+            "sql was {}",
+            c.sql
+        );
+        assert_eq!(
+            c.binds,
+            vec![Bind::Text("%sci%".into()), Bind::Text("%sci%".into())]
+        );
 
         let s = membership_predicate(
             &[rule(RuleField::Author, RuleOp::StartsWith, "Le")],
@@ -512,6 +575,48 @@ mod rule_tests {
             1,
         )
         .unwrap();
-        assert_eq!(p.binds, vec![Bind::Text("%50\\%%".into())]);
+        assert_eq!(
+            p.binds,
+            vec![Bind::Text("%50\\%%".into()), Bind::Text("%50\\%%".into())]
+        );
+    }
+
+    #[test]
+    fn tag_condition_is_override_aware() {
+        // Both membership arms must be present: canonical links gated on "no
+        // subjects override", and json_each over the override array.
+        let p = membership_predicate(
+            &[rule(RuleField::Tag, RuleOp::StartsWith, "Sea")],
+            MatchMode::Any,
+            1,
+        )
+        .unwrap();
+        assert!(
+            p.sql
+                .contains("json_type(mo.overrides, '$.subjects') IS NOT NULL"),
+            "sql was {}",
+            p.sql
+        );
+        assert!(
+            p.sql.contains("json_each(mo.overrides, '$.subjects')"),
+            "sql was {}",
+            p.sql
+        );
+        assert_eq!(
+            p.binds,
+            vec![Bind::Text("Sea%".into()), Bind::Text("Sea%".into())]
+        );
+    }
+
+    #[test]
+    fn tag_is_not_negates_the_effective_match() {
+        let p = membership_predicate(
+            &[rule(RuleField::Tag, RuleOp::IsNot, "fiction")],
+            MatchMode::Any,
+            1,
+        )
+        .unwrap();
+        assert!(p.sql.starts_with("(NOT ("), "sql was {}", p.sql);
+        assert!(p.sql.contains("je.value = ? COLLATE NOCASE"));
     }
 }

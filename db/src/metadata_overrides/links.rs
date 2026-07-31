@@ -1,8 +1,9 @@
 //! Materialize the side tables an override touches so downstream reads
-//! still resolve. Today only the series-name override has a link to
-//! materialize; the author/tag override path replaces those m2m lists at
-//! read time via `apply_overrides` and doesn't yet need a sibling helper
-//! here.
+//! still resolve. The series-name override gets a canonical row + link; the
+//! subjects (tags) override gets a `tags` row only — its memberships stay
+//! override-JSON-side so revert-to-scanned keeps working (see
+//! [`materialize_tag_rows`]). The author override path replaces its m2m
+//! list at read time via `apply_overrides` and doesn't need a helper here.
 
 use omnibus_shared::MetadataOverrides;
 use sqlx::SqliteConnection;
@@ -37,6 +38,35 @@ pub(super) async fn materialize_series_link(
     };
     let series_id = find_or_create_series(&mut *conn, series_name).await?;
     link_book_to_series(&mut *conn, book_id, series_id).await
+}
+
+/// When an override sets a subjects list, ensure a `tags` row exists for
+/// every tag in it, so `get_tag_cloud` — which feeds the `/tags` cloud and
+/// the inline-edit autocomplete pool — has a canonical row to surface a
+/// tag created through the override path.
+///
+/// Deliberately rows-only, **not** `books_tags_link` rows: the canonical
+/// link table is the sole record of a book's *scanned* tags, so writing
+/// override memberships into it would make "delete overrides → revert to
+/// scanned" impossible. Memberships stay in the override JSON, which
+/// `get_tag_cloud` already counts via `json_each`. A row whose every
+/// membership is override-side can still be reaped by
+/// `delete_orphan_taxonomy` after an unrelated book delete — it resurfaces
+/// on the next subjects-override save that names it.
+pub(super) async fn materialize_tag_rows(
+    conn: &mut SqliteConnection,
+    overrides: &MetadataOverrides,
+) -> Result<(), sqlx::Error> {
+    let Some(subjects) = overrides.subjects.as_ref() else {
+        return Ok(());
+    };
+    for tag in subjects.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        sqlx::query("INSERT OR IGNORE INTO tags (name) VALUES (?)")
+            .bind(tag)
+            .execute(&mut *conn)
+            .await?;
+    }
+    Ok(())
 }
 
 /// Resolve `books.uuid` → `books.id`. Returns `None` if the row was

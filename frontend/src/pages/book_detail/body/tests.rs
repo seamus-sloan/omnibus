@@ -1,3 +1,7 @@
+//! Tests for `bd_identifier_key`: the rendered-list key for a book's
+//! identifiers must stay unique across same-scheme, schemeless, and
+//! delimiter-containing values so React/Dioxus keying never collides.
+
 use super::*;
 
 #[test]

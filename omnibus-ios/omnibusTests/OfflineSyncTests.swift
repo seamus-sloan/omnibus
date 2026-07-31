@@ -478,3 +478,188 @@ struct UserScopedPrefixTests {
         }
     }
 }
+
+// MARK: - Content validators (#1231)
+
+@Suite("Download staleness")
+struct DownloadStalenessTests {
+    private func file(
+        _ id: Int64, format: String, ordinal: Int64, etag: String?
+    ) -> BookFileInfo {
+        BookFileInfo(
+            id: id, format: format, filename: "file-\(id).\(format.lowercased())",
+            ordinal: ordinal, etag: etag
+        )
+    }
+
+    private func book(_ files: [BookFileInfo]) -> Book {
+        var book = Book(id: 1, filename: "b.epub")
+        book.uniqueIdentifier = "u1"
+        book.bookFiles = files
+        return book
+    }
+
+    @Test("the validator moving under a download is what marks it stale")
+    func aMovedFileIsStale() {
+        let current = book([file(1, format: "EPUB", ordinal: 0, etag: "\"new\"")])
+        #expect(
+            DownloadManager.staleness(snapshot: "\"old\"", against: current, kind: .ebook) == true
+        )
+        #expect(
+            DownloadManager.staleness(snapshot: "\"new\"", against: current, kind: .ebook) == false
+        )
+    }
+
+    @Test("a missing validator on either side is unanswerable, not fresh")
+    func missingValidatorsAreUnanswerable() {
+        // Three-valued on purpose: a caller that renders may treat this as
+        // "not stale", but a caller that stores the answer must not, or it
+        // would clear a chip a real comparison had set.
+        let current = book([file(1, format: "EPUB", ordinal: 0, etag: "\"new\"")])
+        #expect(DownloadManager.staleness(snapshot: nil, against: current, kind: .ebook) == nil)
+
+        let unstatted = book([file(1, format: "EPUB", ordinal: 0, etag: nil)])
+        #expect(
+            DownloadManager.staleness(snapshot: "\"old\"", against: unstatted, kind: .ebook) == nil
+        )
+
+        // The library listing projection carries no file rows at all.
+        #expect(DownloadManager.staleness(snapshot: "\"old\"", against: book([]), kind: .ebook) == nil)
+    }
+
+    @Test("each format is compared against its own file")
+    func formatsAreComparedIndependently() {
+        // A replaced audiobook must not mark the ebook copy stale, and vice
+        // versa — they are two files and two downloads.
+        let current = book([
+            file(1, format: "EPUB", ordinal: 0, etag: "\"epub-v1\""),
+            file(2, format: "M4B", ordinal: 0, etag: "\"audio-v2\""),
+        ])
+        #expect(
+            DownloadManager.staleness(snapshot: "\"epub-v1\"", against: current, kind: .ebook)
+                == false
+        )
+        #expect(
+            DownloadManager.staleness(snapshot: "\"audio-v1\"", against: current, kind: .audio)
+                == true
+        )
+    }
+
+    @Test("the compared file is the one the server would serve")
+    func targetFileMatchesTheServersSelection() {
+        // `db::book_file_path` resolves `ORDER BY bf.ordinal LIMIT 1`, so a
+        // book with two EPUB editions must be compared against the lower
+        // ordinal — the one a download without an explicit file actually got.
+        let current = book([
+            file(10, format: "EPUB", ordinal: 1, etag: "\"second\""),
+            file(11, format: "EPUB", ordinal: 0, etag: "\"first\""),
+            file(20, format: "M4B", ordinal: 1, etag: "\"audio-second\""),
+            file(21, format: "M4B", ordinal: 0, etag: "\"audio-first\""),
+        ])
+        #expect(DownloadManager.targetFile(current, kind: .ebook)?.id == 11)
+        #expect(DownloadManager.targetFile(current, kind: .audio)?.id == 21)
+    }
+
+    @Test("a book with no file of that format has nothing to compare")
+    func absentFormatIsUnanswerable() {
+        let audioOnly = book([file(1, format: "M4B", ordinal: 0, etag: "\"a\"")])
+        #expect(DownloadManager.targetFile(audioOnly, kind: .ebook) == nil)
+        #expect(
+            DownloadManager.staleness(snapshot: "\"old\"", against: audioOnly, kind: .ebook) == nil
+        )
+    }
+}
+
+@Suite("Book file validator wire shape")
+struct BookFileEtagCodecTests {
+    @Test("the validator decodes from the server's snake_case payload")
+    func etagDecodes() throws {
+        let json = #"""
+        {"id":7,"format":"EPUB","filename":"b","ordinal":0,"size_bytes":4096,"etag":"\"ff-1000\""}
+        """#
+        let file = try JSONDecoder().decode(BookFileInfo.self, from: Data(json.utf8))
+        #expect(file.etag == "\"ff-1000\"")
+        #expect(file.sizeBytes == 4096)
+    }
+
+    @Test("a payload from a server that predates validators still decodes")
+    func absentEtagDecodes() throws {
+        // The server omits `etag` for a file the scanner hasn't stat'd, so
+        // this shape has to keep decoding — as "can't tell", not an error.
+        let json = #"{"id":7,"format":"EPUB","filename":"b","ordinal":0,"size_bytes":0}"#
+        let file = try JSONDecoder().decode(BookFileInfo.self, from: Data(json.utf8))
+        #expect(file.etag == nil)
+    }
+}
+
+@Suite("Downloaded-file selection")
+struct DownloadTargetFileTests {
+    private func file(
+        _ id: Int64, format: String, ordinal: Int64, etag: String?
+    ) -> BookFileInfo {
+        BookFileInfo(
+            id: id, format: format, filename: "file-\(id).\(format.lowercased())",
+            ordinal: ordinal, etag: etag
+        )
+    }
+
+    private func book(_ files: [BookFileInfo]) -> Book {
+        var book = Book(id: 1, filename: "b.epub")
+        book.uniqueIdentifier = "u1"
+        book.bookFiles = files
+        return book
+    }
+
+    @Test("a lower-ordinal format the endpoint never serves is skipped")
+    func nonServedFormatsAreSkipped() {
+        // `/api/ebooks/{uuid}/file` resolves EPUB and nothing else, so a PDF
+        // sitting at a lower ordinal must not be what the download snapshots
+        // its validator against — that reports staleness about the PDF while
+        // the device holds the EPUB, wrong in both directions.
+        let mixed = book([
+            file(1, format: "PDF", ordinal: 0, etag: "\"pdf\""),
+            file(2, format: "EPUB", ordinal: 1, etag: "\"epub\""),
+        ])
+        #expect(DownloadManager.targetFile(mixed, kind: .ebook)?.id == 2)
+
+        // Same on the audio side: the manifest resolver admits M4B/M4A/MP3,
+        // so a FLAC at ordinal 0 is not the file being downloaded.
+        let audio = book([
+            file(3, format: "FLAC", ordinal: 0, etag: "\"flac\""),
+            file(4, format: "M4B", ordinal: 1, etag: "\"m4b\""),
+        ])
+        #expect(DownloadManager.targetFile(audio, kind: .audio)?.id == 4)
+    }
+
+    @Test("staleness is judged against the served file, not a sibling")
+    func stalenessFollowsTheServedFile() {
+        let before = book([
+            file(1, format: "PDF", ordinal: 0, etag: "\"pdf-v1\""),
+            file(2, format: "EPUB", ordinal: 1, etag: "\"epub-v1\""),
+        ])
+        // The PDF changed; the EPUB on the device did not.
+        let after = book([
+            file(1, format: "PDF", ordinal: 0, etag: "\"pdf-v2\""),
+            file(2, format: "EPUB", ordinal: 1, etag: "\"epub-v1\""),
+        ])
+        let snapshot = DownloadManager.targetFile(before, kind: .ebook)?.etag
+        #expect(snapshot == "\"epub-v1\"")
+        #expect(
+            DownloadManager.staleness(snapshot: snapshot, against: after, kind: .ebook) == false,
+            "a sibling format changing must not report the downloaded file stale"
+        )
+    }
+
+    @Test("a book with no servable file of that kind has nothing to compare")
+    func unservableKindsAreUnanswerable() {
+        // Every ebook-ish format except the one the endpoint serves.
+        let noEpub = book([
+            file(1, format: "PDF", ordinal: 0, etag: "\"pdf\""),
+            file(2, format: "CBZ", ordinal: 1, etag: "\"cbz\""),
+        ])
+        #expect(DownloadManager.targetFile(noEpub, kind: .ebook) == nil)
+        #expect(
+            DownloadManager.staleness(snapshot: "\"old\"", against: noEpub, kind: .ebook) == nil
+        )
+    }
+}

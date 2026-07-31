@@ -116,18 +116,25 @@ pub async fn list_indexed_rows(
     pool: &SqlitePool,
     library_path: &str,
 ) -> Result<Vec<IndexedRow>, super::BooksError> {
+    // Match on `bf.scan_key = b.scan_key` rather than aggregating over every
+    // `book_files` row for the book: a book that carries more than one file
+    // (a manual same-format merge, or a cross-format attach) has one row per
+    // extra file that is *not* this book's own — those are diffed
+    // separately via `merged_uuids` (`list_merged_rows_for_formats`). Folding
+    // them into a MAX/MAX pair here produced a composite that matched
+    // neither file's real stat (#1537).
     let rows = sqlx::query(
         r"
-        SELECT b.uuid                                  AS uuid,
-               COALESCE(b.scan_key, '')                AS scan_key,
-               COALESCE(MAX(bf.mtime_epoch), 0)        AS mtime_epoch,
-               COALESCE(MAX(bf.size_bytes), 0)         AS size_bytes,
-               (COUNT(bf.id) > 0)                      AS has_file
+        SELECT b.uuid                     AS uuid,
+               COALESCE(b.scan_key, '')   AS scan_key,
+               COALESCE(bf.mtime_epoch, 0) AS mtime_epoch,
+               COALESCE(bf.size_bytes, 0)  AS size_bytes,
+               (bf.id IS NOT NULL)         AS has_file
           FROM books b
-          JOIN scan_roots l   ON l.id = b.library_id
-          LEFT JOIN book_files bf ON bf.book_id = b.id
+          JOIN scan_roots l ON l.id = b.library_id
+          LEFT JOIN book_files bf
+                 ON bf.book_id = b.id AND bf.scan_key = b.scan_key
          WHERE l.path = ?
-         GROUP BY b.id, b.uuid
         ",
     )
     .bind(library_path)
@@ -186,21 +193,35 @@ pub async fn list_indexed_rows_for_formats(
     // (`has_file = 0` and it still has files), preserving the cross-format
     // scoping from #328. Bind order: the format placeholders appear before
     // `l.path` in the statement text, so they bind first.
+    //
+    // The join also pins `bf.scan_key = b.scan_key` — this book's *own*
+    // anchor file — instead of aggregating over every matching-format row.
+    // A book carrying more than one file of the scanned formats (a manual
+    // same-format merge, or a cross-format attach) has an extra
+    // `book_files` row per additional file that isn't this book's own; each
+    // is diffed separately via its `merged_uuids` entry
+    // (`list_merged_rows_for_formats`). Aggregating them here with
+    // MAX/MAX produced a composite `(mtime, size)` pair that matched
+    // neither file's real on-disk stat, so the book reclassified Changed on
+    // every scan forever (#1537). The trailing `WHERE` clause carries the
+    // old `HAVING`'s "still return a fully fileless book" branch — with no
+    // `GROUP BY` left, that's now a plain post-join predicate.
     let sql = format!(
         r"
-        SELECT b.uuid                                  AS uuid,
-               COALESCE(b.scan_key, '')                AS scan_key,
-               COALESCE(MAX(bf.mtime_epoch), 0)        AS mtime_epoch,
-               COALESCE(MAX(bf.size_bytes), 0)         AS size_bytes,
-               (COUNT(bf.id) > 0)                      AS has_file
+        SELECT b.uuid                     AS uuid,
+               COALESCE(b.scan_key, '')   AS scan_key,
+               COALESCE(bf.mtime_epoch, 0) AS mtime_epoch,
+               COALESCE(bf.size_bytes, 0)  AS size_bytes,
+               (bf.id IS NOT NULL)         AS has_file
           FROM books b
           JOIN scan_roots l ON l.id = b.library_id
           LEFT JOIN book_files bf
-                 ON bf.book_id = b.id AND bf.format IN ({placeholders})
+                 ON bf.book_id = b.id
+                AND bf.format IN ({placeholders})
+                AND bf.scan_key = b.scan_key
          WHERE l.path = ?
-         GROUP BY b.id
-        HAVING (COUNT(bf.id) > 0)
-            OR NOT EXISTS (SELECT 1 FROM book_files bf2 WHERE bf2.book_id = b.id)
+           AND (bf.id IS NOT NULL
+                OR NOT EXISTS (SELECT 1 FROM book_files bf2 WHERE bf2.book_id = b.id))
         "
     );
     let mut q = sqlx::query(&sql);

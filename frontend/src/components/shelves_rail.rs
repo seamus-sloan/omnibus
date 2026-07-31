@@ -11,6 +11,9 @@ use omnibus_shared::{ShelfKind, ShelfSummary, Visibility};
 use crate::components::CreateShelfModal;
 use crate::{data, use_server_url, Route};
 
+#[cfg(test)]
+mod tests;
+
 /// Which rail row is currently active — drives the highlight.
 #[derive(Clone, Copy, PartialEq)]
 pub enum RailActive {
@@ -98,17 +101,14 @@ pub fn ShelvesRail(active: RailActive) -> Element {
 /// count, visibility icon.
 fn render_shelf_row(s: &ShelfSummary, active: RailActive, viewer_id: Option<i64>) -> Element {
     let id = s.id;
-    let is_active = matches!(active, RailActive::Shelf(other) if other == id);
+    let is_active = is_row_active(active, id);
     let class = if is_active {
         "shelf-row shelf-row--active"
     } else {
         "shelf-row"
     };
     let accent = s.accent.clone().unwrap_or_else(|| "var(--accent)".into());
-    // Attribute a shelf that isn't the viewer's (only once the viewer is known);
-    // a wishlist's name already opens with the owner, so the chip would repeat it.
-    let not_mine =
-        viewer_id.is_some_and(|vid| vid != s.owner_user_id) && s.kind != ShelfKind::Wishlist;
+    let not_mine = shows_owner_attribution(viewer_id, s.owner_user_id, s.kind);
 
     rsx! {
         Link {
@@ -143,6 +143,19 @@ fn render_shelf_row(s: &ShelfSummary, active: RailActive, viewer_id: Option<i64>
             }
         }
     }
+}
+
+/// `true` when `id` is the rail's currently active shelf row.
+fn is_row_active(active: RailActive, id: i64) -> bool {
+    matches!(active, RailActive::Shelf(other) if other == id)
+}
+
+/// `true` when a row should show "by <owner>" attribution: the shelf isn't
+/// the viewer's own (only once the viewer is known — `None` withholds
+/// attribution rather than guessing), and it isn't the Wishlist, whose name
+/// already opens with the owner so the chip would repeat it.
+fn shows_owner_attribution(viewer_id: Option<i64>, owner_user_id: i64, kind: ShelfKind) -> bool {
+    viewer_id.is_some_and(|vid| vid != owner_user_id) && kind != ShelfKind::Wishlist
 }
 
 /// Stack-of-books glyph for the "All books" row.

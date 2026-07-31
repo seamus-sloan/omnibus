@@ -13,7 +13,7 @@ use crate::normalize::{normalize_author, normalize_title};
 use crate::sync::upsert_fts;
 
 use super::fts::rebuild_fts_for_book;
-use super::links::materialize_series_link;
+use super::links::{materialize_series_link, materialize_tag_rows};
 
 /// Errors returned by the metadata overrides data layer.
 #[derive(Debug, thiserror::Error)]
@@ -212,11 +212,11 @@ pub(crate) async fn backfill_override_norm_columns(
 /// Upsert user metadata overrides for a book identified by its stable UUID.
 /// The `overrides` are JSON-serialized into the `metadata_overrides` table.
 ///
-/// The override row write and the `books_series_link` materialization run
-/// inside one `BEGIN IMMEDIATE` transaction — matching the
-/// [`merge_metadata_overrides`] pattern — so a failure in the series-link
+/// The override row write, the `books_series_link` materialization, and the
+/// `tags`-row materialization run inside one `BEGIN IMMEDIATE` transaction —
+/// matching the [`merge_metadata_overrides`] pattern — so a failure in a
 /// materialize rolls back the override row instead of leaving the book
-/// detail page reading a fresh override against a stale series link.
+/// detail page reading a fresh override against a stale link.
 ///
 /// The `books_fts` rebuild runs best-effort after commit: a stale FTS row
 /// is recoverable (next reindex / next save corrects it) and is far less
@@ -246,6 +246,7 @@ pub async fn upsert_metadata_overrides(
     )
     .await?;
     materialize_series_link(&mut tx, book_uuid, overrides).await?;
+    materialize_tag_rows(&mut tx, overrides).await?;
     touch_book_last_modified(&mut tx, book_uuid).await?;
     tx.commit().await?;
 
@@ -260,9 +261,9 @@ pub async fn upsert_metadata_overrides(
 /// transaction, so two concurrent edits to the same book can't interleave
 /// and silently drop each other's changes. The existing `has_cover_override`
 /// flag is carried forward — a text-only edit must not clear a cover the
-/// user uploaded earlier. The series-link materialization runs inside the
-/// same transaction so the override row and `books_series_link` land
-/// atomically; the `books_fts` rebuild runs best-effort after commit.
+/// user uploaded earlier. The series-link and tags-row materializations run
+/// inside the same transaction so the override row and its canonical rows
+/// land atomically; the `books_fts` rebuild runs best-effort after commit.
 pub async fn merge_metadata_overrides(
     pool: &SqlitePool,
     book_uuid: &str,
@@ -322,6 +323,7 @@ async fn merge_one_in_tx(
     )
     .await?;
     materialize_series_link(tx, book_uuid, &merged).await?;
+    materialize_tag_rows(tx, &merged).await?;
     touch_book_last_modified(tx, book_uuid).await?;
     Ok(())
 }
@@ -570,7 +572,7 @@ pub(crate) async fn load_overrides_bulk(
 
 /// Apply a `MetadataOverrides` to an `EbookMetadata`, mutating it in place,
 /// gated by whether `precedence` (the owning scan root's configured
-/// metadata-source order, F5.1 #972) ranks `OmnibusOverrides` above
+/// metadata-source order) ranks `OmnibusOverrides` above
 /// `EmbeddedTags` — the two sources with a real data provider today (see
 /// [`overrides_outrank_embedded`]). Scalar fields are replaced when `Some`;
 /// m2m fields (`creators`, `subjects`) replace entirely when present.

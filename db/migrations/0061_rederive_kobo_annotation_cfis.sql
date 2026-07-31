@@ -1,0 +1,12 @@
+-- The KoboSpan→CFI deriver emitted CFI-spec text-node indices, but epub.js
+-- (the only consumer of these ranges) numbers text nodes among text siblings
+-- only — the two agree for text-first paragraphs and diverge whenever an
+-- element child precedes the text cluster (e.g. a small-caps opener span),
+-- where the derived range resolved to nothing in the readers.
+--
+-- Clear every derived Kobo-annotation CFI; the boot backfill re-derives them
+-- with the corrected dialect on next start. Web-created rows
+-- (kobo_location IS NULL) never held a derived value and are untouched.
+-- `updated_at` is deliberately not bumped: the wire fingerprint excludes the
+-- CFI, so this must not re-report every book through checkforchanges.
+UPDATE annotations SET epub_cfi_range = NULL WHERE kobo_location IS NOT NULL;

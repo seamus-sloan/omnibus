@@ -1,3 +1,6 @@
+//! Tests for the authors-index sort/grouping helpers: `sort_key` prefers
+//! the explicit sort field, and `first_letter` groups by that same key.
+
 use super::*;
 
 fn author(name: &str, sort: Option<&str>) -> AuthorSummary {

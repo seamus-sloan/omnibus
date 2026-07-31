@@ -29,6 +29,28 @@ pub(crate) fn resolve_cover<R: std::io::Read + std::io::Seek>(
     doc: &mut EpubDoc<R>,
     opts: &ScanOptions,
 ) -> Option<(String, Vec<u8>)> {
+    resolve_cover_with(path, opts, || {
+        doc.get_cover().map(|(bytes, mime)| {
+            let mime = if mime.is_empty() {
+                "image/jpeg".to_string()
+            } else {
+                mime
+            };
+            (mime, bytes)
+        })
+    })
+}
+
+/// Format-agnostic core of [`resolve_cover`]: the sidecar-first lookup and
+/// materialization around a caller-supplied embedded-cover extractor.
+/// `embedded` is only invoked when no valid sidecar exists, so a sidecar
+/// hit never pays the archive read. Shared with [`crate::comic`], whose
+/// "embedded cover" is the archive's first page.
+pub(crate) fn resolve_cover_with(
+    path: &Path,
+    opts: &ScanOptions,
+    embedded: impl FnOnce() -> Option<(String, Vec<u8>)>,
+) -> Option<(String, Vec<u8>)> {
     let mut corrupt_sidecar: Option<PathBuf> = None;
     if let Some(sidecar) = library_layout::sidecar_cover_for(path) {
         if let Some(bytes) = read_sidecar(&sidecar) {
@@ -42,14 +64,7 @@ pub(crate) fn resolve_cover<R: std::io::Read + std::io::Seek>(
         corrupt_sidecar = Some(sidecar);
     }
 
-    let embedded = doc.get_cover().map(|(bytes, mime)| {
-        let mime = if mime.is_empty() {
-            "image/jpeg".to_string()
-        } else {
-            mime
-        };
-        (mime, bytes)
-    });
+    let embedded = embedded();
 
     if opts.materialize_sidecars {
         if let Some((mime, bytes)) = embedded.as_ref() {

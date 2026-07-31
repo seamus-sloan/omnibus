@@ -1,3 +1,8 @@
+//! Tests for EPUB OPF metadata parsing: refinement lookup, contributor
+//! role/file-as extraction across EPUB3 refinements and legacy attributes,
+//! and series extraction from both the EPUB3 `belongs-to-collection` form
+//! and the legacy Calibre series meta.
+
 use std::io::Cursor;
 
 use epub::doc::{EpubDoc, MetadataRefinement};
@@ -5,6 +10,7 @@ use epub::doc::{EpubDoc, MetadataRefinement};
 use super::{collect_contributors, collect_identifiers, collect_series, first, lookup_refinement};
 use crate::ebook::scan_ebook_library;
 use crate::ebook::test_support::*;
+use crate::test_support::build_stored_zip;
 
 // --- In-memory OPF harness ---------------------------------------------
 //
@@ -16,87 +22,9 @@ use crate::ebook::test_support::*;
 // refinement/attribute branches disk fixtures would. `MetadataRefinement`
 // *is* fully public, so `lookup_refinement` is tested on it directly.
 
-/// IEEE CRC32 over `bytes` — the checksum each stored ZIP entry needs.
-fn crc32(bytes: &[u8]) -> u32 {
-    let mut crc: u32 = 0xFFFF_FFFF;
-    for &b in bytes {
-        crc ^= b as u32;
-        for _ in 0..8 {
-            let mask = (crc & 1).wrapping_neg();
-            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
-        }
-    }
-    !crc
-}
-
-/// Assemble an uncompressed (stored) ZIP from `(name, bytes)` entries.
-/// Stored entries keep the writer trivial — no deflate, just headers,
-/// CRCs, and a central directory — and `EpubDoc` reads them fine.
-fn build_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
-    let mut out: Vec<u8> = Vec::new();
-    let mut central: Vec<u8> = Vec::new();
-
-    for (name, data) in entries {
-        let offset = out.len() as u32;
-        let crc = crc32(data);
-        let name_len = name.len() as u16;
-        let size = data.len() as u32;
-
-        // Local file header + the (stored) file data.
-        out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
-        out.extend_from_slice(&20u16.to_le_bytes()); // version needed
-        out.extend_from_slice(&0u16.to_le_bytes()); // flags
-        out.extend_from_slice(&0u16.to_le_bytes()); // method: stored
-        out.extend_from_slice(&0u16.to_le_bytes()); // mod time
-        out.extend_from_slice(&0u16.to_le_bytes()); // mod date
-        out.extend_from_slice(&crc.to_le_bytes());
-        out.extend_from_slice(&size.to_le_bytes()); // compressed size
-        out.extend_from_slice(&size.to_le_bytes()); // uncompressed size
-        out.extend_from_slice(&name_len.to_le_bytes());
-        out.extend_from_slice(&0u16.to_le_bytes()); // extra len
-        out.extend_from_slice(name.as_bytes());
-        out.extend_from_slice(data);
-
-        // Matching central-directory record, accumulated for the tail.
-        central.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
-        central.extend_from_slice(&20u16.to_le_bytes()); // version made by
-        central.extend_from_slice(&20u16.to_le_bytes()); // version needed
-        central.extend_from_slice(&0u16.to_le_bytes()); // flags
-        central.extend_from_slice(&0u16.to_le_bytes()); // method
-        central.extend_from_slice(&0u16.to_le_bytes()); // mod time
-        central.extend_from_slice(&0u16.to_le_bytes()); // mod date
-        central.extend_from_slice(&crc.to_le_bytes());
-        central.extend_from_slice(&size.to_le_bytes());
-        central.extend_from_slice(&size.to_le_bytes());
-        central.extend_from_slice(&name_len.to_le_bytes());
-        central.extend_from_slice(&0u16.to_le_bytes()); // extra
-        central.extend_from_slice(&0u16.to_le_bytes()); // comment
-        central.extend_from_slice(&0u16.to_le_bytes()); // disk start
-        central.extend_from_slice(&0u16.to_le_bytes()); // internal attrs
-        central.extend_from_slice(&0u32.to_le_bytes()); // external attrs
-        central.extend_from_slice(&offset.to_le_bytes());
-        central.extend_from_slice(name.as_bytes());
-    }
-
-    let cd_offset = out.len() as u32;
-    let cd_size = central.len() as u32;
-    out.extend_from_slice(&central);
-
-    // End-of-central-directory record.
-    out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
-    out.extend_from_slice(&0u16.to_le_bytes()); // this disk
-    out.extend_from_slice(&0u16.to_le_bytes()); // cd start disk
-    out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
-    out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
-    out.extend_from_slice(&cd_size.to_le_bytes());
-    out.extend_from_slice(&cd_offset.to_le_bytes());
-    out.extend_from_slice(&0u16.to_le_bytes()); // comment len
-    out
-}
-
 // The OCF spec requires the archive to open with an uncompressed
 // `mimetype` entry holding exactly `application/epub+zip` (no trailing
-// newline). `build_zip` stores every entry, and `doc_from_opf` lists this
+// newline). `build_stored_zip` stores every entry, and `doc_from_opf` lists this
 // first, so the fixtures are spec-complete rather than leaning on the
 // `epub` crate's tolerance for a missing mimetype.
 const MIMETYPE: &[u8] = b"application/epub+zip";
@@ -120,7 +48,7 @@ const NAV_XHTML: &[u8] = br#"<?xml version="1.0" encoding="utf-8"?>
 /// required by the parser, so every fixture below wraps its `<metadata>`
 /// in [`opf_package`]. The `mimetype` entry comes first per the OCF spec.
 fn doc_from_opf(opf: &str) -> EpubDoc<Cursor<Vec<u8>>> {
-    let zip = build_zip(&[
+    let zip = build_stored_zip(&[
         ("mimetype", MIMETYPE),
         ("META-INF/container.xml", CONTAINER_XML),
         ("content.opf", opf.as_bytes()),

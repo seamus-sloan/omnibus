@@ -49,7 +49,7 @@ mod ssr_tests {
     #[test]
     fn save_is_a_noop_and_does_not_affect_subsequent_loads() {
         let prefs = ViewPrefs {
-            view_mode: ViewMode::Grid,
+            view_mode: ViewMode::Table,
             sort_key: SortKey::Author,
             sort_dir: SortDir::Desc,
             filters: ViewFilters {
@@ -65,10 +65,10 @@ mod ssr_tests {
 
     #[test]
     fn default_prefs_match_documented_shape() {
-        // First-hydration markup depends on these defaults: Table view, sorted
+        // First-hydration markup depends on these defaults: Grid view, sorted
         // by Title ascending, no active filters, sidebar closed.
         let d = ViewPrefs::default();
-        assert_eq!(d.view_mode, ViewMode::Table);
+        assert_eq!(d.view_mode, ViewMode::Grid);
         assert_eq!(d.sort_key, SortKey::Title);
         assert_eq!(d.sort_dir, SortDir::Asc);
         assert!(d.filters.is_empty());

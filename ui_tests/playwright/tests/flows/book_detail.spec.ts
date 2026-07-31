@@ -9,7 +9,11 @@ import {
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
-import { fetchBookUuidByTitle, getRow } from "../utils/ebooks";
+import {
+  fetchBookUuidByTitle,
+  getRow,
+  switchToTableView,
+} from "../utils/ebooks";
 import { withLock } from "../utils/lock";
 import { gotoReady } from "../utils/nav";
 import {
@@ -230,6 +234,7 @@ test("navigates from a landing row to the detail page and back", async ({
   page,
 }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   // Click the row's cover cell to follow the SPA navigation. We target the
   // cover specifically because the seeded admin sees inline-editable cells
@@ -248,7 +253,8 @@ test("navigates from a landing row to the detail page and back", async ({
   await expect(backLink).toBeVisible();
 
   // The back link must return us to the landing route, not just visually
-  // re-render — assert URL plus that the table comes back.
+  // re-render — assert URL plus that the table view (persisted above) comes
+  // back.
   await backLink.click();
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByTestId("ebook-table")).toBeVisible();
@@ -358,12 +364,12 @@ test("renders the detail contents for the selected book", async ({
     page.getByRole("heading", { name: "Suggested for you" }),
   ).toBeVisible();
 
-  // Back link still navigates to landing
+  // Back link still navigates to landing (default Grid view)
   const backLink = page.getByRole("link", { name: "Back to library" });
   await expect(backLink).toBeVisible();
   await backLink.click();
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByTestId("ebook-table")).toBeVisible();
+  await expect(page.getByTestId("lib-grid")).toBeVisible();
 });
 
 // Action — Send to Kobo (F4.1 KEPUB direct write / download fallback)
@@ -899,6 +905,38 @@ test("opens the reader at the passage via a cfi deep link", async ({
       url.pathname === `/read/${uuid}` && url.searchParams.get("cfi") === cfi,
   );
   await expect(page.getByTestId("reader-viewer")).toBeVisible();
+
+  // Clean up the seeded highlight so re-runs start from the empty state.
+  expect((await request.delete(`/api/highlights/${id}`)).status()).toBe(204);
+});
+
+test("opens the quote-card editor in a modal and closes it again", async ({
+  page,
+  request,
+}) => {
+  const { uuid, id, quote } = await seedPassage(
+    request,
+    "epubcfi(/6/10!/4/2,/1:0,/1:25)",
+  );
+
+  await gotoReady(page, `/books/${uuid}`);
+  const card = page.getByTestId("highlight-card").filter({ hasText: quote });
+  await card.getByTestId("highlight-quote").click();
+
+  // The shared quote-card editor mounts in the app modal shell with the
+  // passage on the preview and the export actions available.
+  const modal = page.getByTestId("quote-card-modal");
+  await expect(modal).toBeVisible();
+  await expect(
+    modal.getByRole("heading", { name: "Make a quote card" }),
+  ).toBeVisible();
+  await expect(modal).toContainText(quote);
+  await expect(modal.getByTestId("quote-download")).toBeVisible();
+
+  // Close via the X — no mutation fires; the card stays listed.
+  await modal.getByRole("button", { name: "Close" }).click();
+  await expect(modal).toHaveCount(0);
+  await expect(card).toHaveCount(1);
 
   // Clean up the seeded highlight so re-runs start from the empty state.
   expect((await request.delete(`/api/highlights/${id}`)).status()).toBe(204);

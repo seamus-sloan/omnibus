@@ -7,7 +7,7 @@ use dioxus::prelude::*;
 // Only the non-mobile `SendToKoboButton` awaits the shared sleeper; the mobile
 // action is a disabled placeholder, so gate the import to match.
 #[cfg(not(feature = "mobile"))]
-use super::async_sleep_ms;
+use crate::platform_sleep::async_sleep_ms;
 
 /// "Send to Kobo" CTA. Web/SSR renders the interactive
 /// [`SendToKoboButton`]; mobile renders a disabled placeholder (the copy-over-

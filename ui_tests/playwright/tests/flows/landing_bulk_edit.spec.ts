@@ -104,15 +104,17 @@ test("bulk edits publisher and tags across the selected books via rpc_bulk_save_
     async () => page.getByTestId("bulk-edit-submit").click(),
   );
 
-  // Modal and bar close; the rows re-render from the returned metadata.
+  // Modal and bar close; the rows re-render from the returned metadata —
+  // the added tag lands in each row's Tags cell (publisher has no table
+  // column; it's covered by the request/response contract above).
   await expect(modal).toHaveCount(0);
   await expect(page.getByTestId("bulk-edit-bar")).toHaveCount(0);
   for (const target of [PRIMARY, SECONDARY]) {
     await expect(
       page
         .getByTestId(`ebook-row-${target.slug}`)
-        .getByTestId("ebook-cell-publisher"),
-    ).toContainText("Bulk Edited Press");
+        .getByTestId("ebook-cell-tags"),
+    ).toContainText("bulk-tagged");
   }
 
   // Cleanup: revert both books' overrides so subsequent runs start from
@@ -139,6 +141,8 @@ test("bulk edit save error keeps the modal open and the rows unchanged", async (
   await page.getByTestId("bulk-edit-open").click();
   const modal = page.getByTestId("bulk-edit-modal");
   await modal.getByLabel("Publisher").fill("Should Not Persist");
+  await modal.getByTestId("bulk-add-tags-input").fill("should-not-persist");
+  await modal.getByTestId("bulk-add-tags-input").press("Enter");
 
   await page.route("**/api/rpc/ebook/overrides/bulk", (route) => {
     if (route.request().method() === "POST") {
@@ -162,14 +166,15 @@ test("bulk edit save error keeps the modal open and the rows unchanged", async (
   );
   await page.unroute("**/api/rpc/ebook/overrides/bulk");
 
-  // The modal surfaces the failure and stays open; nothing was written.
+  // The modal surfaces the failure and stays open; nothing was written —
+  // the rejected tag never reaches the rows' Tags cells.
   await expect(page.getByTestId("bulk-edit-error")).toBeVisible();
   await expect(page.getByTestId("bulk-edit-modal")).toBeVisible();
   for (const target of [PRIMARY, SECONDARY]) {
     await expect(
       page
         .getByTestId(`ebook-row-${target.slug}`)
-        .getByTestId("ebook-cell-publisher"),
-    ).toContainText(target.publisher!);
+        .getByTestId("ebook-cell-tags"),
+    ).not.toContainText("should-not-persist");
   }
 });

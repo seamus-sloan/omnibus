@@ -44,7 +44,8 @@ fn build_bars(months: &[MonthCount]) -> Vec<MonthBar> {
             height_pct: if max <= 0 {
                 0
             } else {
-                (m.books.max(0) * 100 / max) as u32
+                // `max` is the window maximum, so the ratio is 0..=100.
+                u32::try_from(m.books.max(0) * 100 / max).unwrap_or(100)
             },
             current: i + 1 == months.len(),
         })
@@ -58,7 +59,10 @@ fn monthly_average(months: &[MonthCount]) -> Option<f64> {
         return None;
     }
     let total: i64 = months.iter().map(|m| m.books).sum();
-    Some(total as f64 / months.len() as f64)
+    // Display-only average over at most 12 small counts.
+    #[allow(clippy::cast_precision_loss)]
+    let avg = total as f64 / months.len() as f64;
+    Some(avg)
 }
 
 /// The all-time books-per-month card: header with the per-month average,

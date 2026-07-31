@@ -1,3 +1,7 @@
+//! Tests for `build_overrides`: diffing an edited form against the source
+//! book to emit only the changed fields, clearing a populated field as an
+//! empty string, and replacing creator/subject lists wholesale.
+
 use super::*;
 
 fn book_with(title: Option<&str>, creators: &[&str], subjects: &[&str]) -> EbookMetadata {

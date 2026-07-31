@@ -357,3 +357,158 @@ test("surfaces an error when the shelf edit save fails", async ({
   // The header keeps the saved name — the failed edit must not leak in.
   await expect(page.getByTestId("shelf-detail-header")).toContainText(name);
 });
+
+test("cancelling the delete confirmation leaves the shelf intact", async ({
+  page,
+  request,
+}) => {
+  const name = `E2E Delete Cancel ${Date.now()}`;
+  const createResp = await request.post("/api/rpc/shelves/create", {
+    data: {
+      req: {
+        kind: "manual",
+        name,
+        description: null,
+        visibility: "private",
+        match_mode: null,
+        rules: [],
+        book_uuids: [],
+      },
+    },
+  });
+  expect(createResp.status(), "POST /api/rpc/shelves/create failed").toBe(200);
+  const shelf = (await createResp.json()) as { id: number };
+
+  await gotoReady(page, `/shelves/${shelf.id}`);
+  await page.getByTestId("shelf-actions").click();
+  await page.getByTestId("shelf-delete").click();
+
+  const modal = page.getByTestId("shelf-delete-modal");
+  await expect(modal).toBeVisible();
+  await expect(modal).toContainText(name);
+
+  await modal.getByTestId("shelf-delete-cancel").click();
+
+  await expect(modal).not.toBeVisible();
+  // Still on the shelf's page and the shelf still exists.
+  await expect(page.getByTestId("shelf-detail-header")).toContainText(name);
+  expect(new URL(page.url()).pathname).toBe(`/shelves/${shelf.id}`);
+});
+
+test("confirming the delete removes the shelf and returns to the library", async ({
+  page,
+  request,
+}) => {
+  const name = `E2E Delete Confirm ${Date.now()}`;
+  const createResp = await request.post("/api/rpc/shelves/create", {
+    data: {
+      req: {
+        kind: "manual",
+        name,
+        description: null,
+        visibility: "private",
+        match_mode: null,
+        rules: [],
+        book_uuids: [],
+      },
+    },
+  });
+  expect(createResp.status(), "POST /api/rpc/shelves/create failed").toBe(200);
+  const shelf = (await createResp.json()) as { id: number };
+
+  await gotoReady(page, `/shelves/${shelf.id}`);
+  await page.getByTestId("shelf-actions").click();
+  await page.getByTestId("shelf-delete").click();
+
+  const modal = page.getByTestId("shelf-delete-modal");
+  await expect(modal).toBeVisible();
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/shelves/delete",
+      expectedBody: { id: shelf.id },
+      expectedStatus: 200,
+    },
+    async () => modal.getByTestId("shelf-delete-confirm").click(),
+  );
+
+  await expect(page).toHaveURL("/");
+  await expect(page.getByTestId("gallery-all-books")).toBeVisible();
+  // The deleted shelf's tile is gone from the gallery on the next fetch.
+  await expect(page.getByTestId(`gallery-shelf-${shelf.id}`)).toHaveCount(0);
+});
+
+test("surfaces the delete request in flight and keeps the shelf on failure", async ({
+  page,
+  request,
+}) => {
+  const name = `E2E Delete Fail ${Date.now()}`;
+  const createResp = await request.post("/api/rpc/shelves/create", {
+    data: {
+      req: {
+        kind: "manual",
+        name,
+        description: null,
+        visibility: "private",
+        match_mode: null,
+        rules: [],
+        book_uuids: [],
+      },
+    },
+  });
+  expect(createResp.status(), "POST /api/rpc/shelves/create failed").toBe(200);
+  const shelf = (await createResp.json()) as { id: number };
+
+  await gotoReady(page, `/shelves/${shelf.id}`);
+  // Only intercept the delete for *this* shelf, and hold it open briefly so
+  // the busy state below is actually observed in flight rather than racing
+  // straight to the resolved response.
+  await page.route("**/api/rpc/shelves/delete", async (route) => {
+    if (route.request().postDataJSON()?.id !== shelf.id) {
+      await route.continue();
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: "boom",
+    });
+  });
+
+  try {
+    await page.getByTestId("shelf-actions").click();
+    await page.getByTestId("shelf-delete").click();
+
+    const modal = page.getByTestId("shelf-delete-modal");
+    const confirmBtn = modal.getByTestId("shelf-delete-confirm");
+
+    const mutation = expectMutation(
+      page,
+      {
+        method: "POST",
+        url: "/api/rpc/shelves/delete",
+        expectedBody: { id: shelf.id },
+        expectedStatus: 500,
+      },
+      async () => confirmBtn.click(),
+    );
+
+    // While the delayed response is in flight, the confirm button is busy —
+    // disabled and relabeled — and the cancel button is disabled too.
+    await expect(confirmBtn).toBeDisabled();
+    await expect(confirmBtn).toHaveText("Deleting…");
+    await expect(modal.getByTestId("shelf-delete-cancel")).toBeDisabled();
+
+    await mutation;
+
+    // The failed delete leaves the shelf, and the modal, in place.
+    await expect(modal).toBeVisible();
+    await expect(page.getByTestId("shelf-detail-header")).toContainText(name);
+    expect(new URL(page.url()).pathname).toBe(`/shelves/${shelf.id}`);
+  } finally {
+    await page.unroute("**/api/rpc/shelves/delete");
+  }
+});

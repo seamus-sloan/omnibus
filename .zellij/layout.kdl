@@ -26,6 +26,16 @@ layout {
         }
     }
     tab name="ios" {
+        // Native SwiftUI app (omnibus-ios/): boot the newest iPhone simulator,
+        // build, install, launch. System xcodebuild — no nix shell; `just`
+        // comes from the direnv slim shell this session inherits.
+        pane command="just" start_suspended=true {
+            args "ios-sim"
+        }
+    }
+    tab name="ios-hybrid" {
+        // Hybrid WebView shell (mobile/ crate) on iOS. The native app above
+        // is the iOS surface going forward.
         pane command="nix" start_suspended=true {
             args "develop" ".#mobile" "--command" "dx" "serve" "--platform" "ios" "--package" "omnibus-mobile"
         }
@@ -33,17 +43,6 @@ layout {
     tab name="playwright" {
         pane cwd="ui_tests/playwright" command="nix" start_suspended=true {
             args "develop" "../..#e2e" "--command" "npx" "playwright" "test" "--ui"
-        }
-    }
-    tab name="maestro" {
-        // Mobile E2E suite, one run per Enter. Prereqs: the ios tab's app
-        // installed on a booted simulator, and the server tab running —
-        // OMNIBUS_PORT=3000 pins the flows at that tab's fixed port (the
-        // e2e-mobile recipe would otherwise read a stale dev-up env.sh).
-        // `just` comes from the direnv slim shell this session inherits;
-        // the recipe self-wraps in `.#mobile` like dev-up does with `.#web`.
-        pane command="bash" start_suspended=true {
-            args "-c" "OMNIBUS_PORT=3000 just e2e-mobile"
         }
     }
 }

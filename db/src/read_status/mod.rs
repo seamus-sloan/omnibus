@@ -5,9 +5,9 @@
 //! aggregations can window completions like the journal path windows `created_at`.
 
 use omnibus_shared::{ReadStatus, ReadStatusRecord, SetReadStatus};
-use sqlx::{Row, SqlitePool};
+use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 
-use crate::resolve_canonical_book_uuid;
+use crate::{resolve_canonical_book_uuid, resolve_canonical_book_uuid_exec};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReadStatusError {
@@ -57,7 +57,22 @@ pub async fn set_read_status(
     user_id: i64,
     update: &SetReadStatus,
 ) -> Result<ReadStatusRecord, ReadStatusError> {
-    let book_uuid = resolve_canonical_book_uuid(pool, &update.book_uuid)
+    let mut tx = pool.begin().await?;
+    let record = set_read_status_tx(&mut tx, user_id, update).await?;
+    tx.commit().await?;
+    Ok(record)
+}
+
+/// Transaction-scoped [`set_read_status`], for callers that batch it with
+/// other writes (e.g. the Kobo `put_state` handler) inside one shared
+/// `Transaction` so a mid-batch failure rolls back every entry, not just the
+/// one that failed. The caller is responsible for committing or rolling back.
+pub async fn set_read_status_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    user_id: i64,
+    update: &SetReadStatus,
+) -> Result<ReadStatusRecord, ReadStatusError> {
+    let book_uuid = resolve_canonical_book_uuid_exec(&mut **tx, &update.book_uuid)
         .await?
         .ok_or(ReadStatusError::BookNotFound)?;
     let status = update.status.as_str();
@@ -81,7 +96,7 @@ pub async fn set_read_status(
     .bind(&book_uuid)
     .bind(status)
     .bind(status)
-    .execute(pool)
+    .execute(&mut **tx)
     .await?;
 
     let row = sqlx::query(
@@ -90,7 +105,7 @@ pub async fn set_read_status(
     )
     .bind(user_id)
     .bind(&book_uuid)
-    .fetch_one(pool)
+    .fetch_one(&mut **tx)
     .await?;
     Ok(record_from_row(book_uuid, &row)?)
 }

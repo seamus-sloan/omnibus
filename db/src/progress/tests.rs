@@ -124,20 +124,20 @@ async fn upsert_round_trips_a_percent_only_epub_position() {
 }
 
 #[tokio::test]
-async fn upsert_merges_a_kobo_percent_into_an_existing_web_cfi_row() {
-    // Different surfaces carry different halves of a position. Plain
-    // assignment would have the Kobo write null out the web reader's CFI.
+async fn upsert_replaces_a_web_cfi_row_with_a_kobo_position_atomically() {
+    // An accepted write replaces the whole position: a newer Kobo bookmark
+    // must not leave the older web CFI dangling next to it (the row would
+    // then describe two different places at once).
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
     let (_, uuid) = seed(&pool, "/lib", "Book A").await;
-    let cfi = "epubcfi(/6/4!/4/2/1:0)";
     upsert_progress(
         &pool,
         user,
         &ProgressUpdate {
             book_uuid: uuid.clone(),
             format: ProgressFormat::Epub,
-            epub_cfi: Some(cfi.into()),
+            epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
             audio_position_seconds: None,
             progress_percent: None,
             kobo_location: None,
@@ -148,7 +148,7 @@ async fn upsert_merges_a_kobo_percent_into_an_existing_web_cfi_row() {
     .await
     .unwrap();
 
-    let merged = upsert_progress(
+    let replaced = upsert_progress(
         &pool,
         user,
         &ProgressUpdate {
@@ -165,17 +165,15 @@ async fn upsert_merges_a_kobo_percent_into_an_existing_web_cfi_row() {
     .await
     .unwrap();
 
-    assert_eq!(
-        merged.epub_cfi.as_deref(),
-        Some(cfi),
-        "web CFI must survive"
-    );
-    assert_eq!(merged.progress_percent, Some(55));
+    assert_eq!(replaced.epub_cfi, None, "stale web CFI must be cleared");
+    assert_eq!(replaced.progress_percent, Some(55));
+    assert_eq!(replaced.kobo_location.as_deref(), Some("{}"));
 }
 
 #[tokio::test]
-async fn upsert_merges_a_web_cfi_into_an_existing_kobo_percent_row() {
-    // The mirror of the above — a later web write must not drop the percent.
+async fn upsert_replaces_a_kobo_position_row_with_a_web_cfi_atomically() {
+    // The mirror: a later web CFI clears the Kobo percent + span, and the
+    // sync-out derivation recomputes them from the CFI on demand.
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
     let (_, uuid) = seed(&pool, "/lib", "Book A").await;
@@ -196,7 +194,7 @@ async fn upsert_merges_a_web_cfi_into_an_existing_kobo_percent_row() {
     .await
     .unwrap();
 
-    let merged = upsert_progress(
+    let replaced = upsert_progress(
         &pool,
         user,
         &ProgressUpdate {
@@ -213,9 +211,177 @@ async fn upsert_merges_a_web_cfi_into_an_existing_kobo_percent_row() {
     .await
     .unwrap();
 
-    assert_eq!(merged.progress_percent, Some(20), "percent must survive");
-    assert_eq!(merged.kobo_location.as_deref(), Some("{}"));
-    assert_eq!(merged.epub_cfi.as_deref(), Some("epubcfi(/6/12!/4/8/3:7)"));
+    assert_eq!(replaced.progress_percent, None, "stale percent must clear");
+    assert_eq!(replaced.kobo_location, None, "stale span must clear");
+    assert_eq!(
+        replaced.epub_cfi.as_deref(),
+        Some("epubcfi(/6/12!/4/8/3:7)")
+    );
+}
+
+#[tokio::test]
+async fn upsert_rejects_a_stale_write_wholly_without_field_bleed() {
+    // A rejected (older) write must not leak any of its fields into the
+    // stored row — the guard is row-level, all or nothing.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Epub,
+            epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
+            audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
+            client_updated_at: Some(200),
+            book_file_id: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let survived = upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Epub,
+            epub_cfi: None,
+            audio_position_seconds: None,
+            progress_percent: Some(99),
+            kobo_location: Some("{}".into()),
+            client_updated_at: Some(100),
+            book_file_id: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(survived.epub_cfi.as_deref(), Some("epubcfi(/6/4!/4/2/1:0)"));
+    assert_eq!(survived.progress_percent, None);
+    assert_eq!(survived.kobo_location, None);
+}
+
+#[tokio::test]
+async fn attach_derived_kobo_location_fills_the_span_without_touching_clocks() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    let stored = upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Epub,
+            epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
+            audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
+            client_updated_at: Some(100),
+            book_file_id: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let updated = attach_derived_kobo_location(
+        &pool,
+        user,
+        &uuid,
+        r#"{"Source":"c1.xhtml","Type":"KoboSpan","Value":"kobo.2.1"}"#,
+        Some(42),
+        stored.client_updated_at,
+    )
+    .await
+    .unwrap();
+    assert!(updated);
+
+    let row = get_progress(&pool, user, &uuid, ProgressFormat::Epub)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        row.kobo_location.as_deref(),
+        Some(r#"{"Source":"c1.xhtml","Type":"KoboSpan","Value":"kobo.2.1"}"#)
+    );
+    assert_eq!(row.progress_percent, Some(42));
+    assert_eq!(
+        row.client_updated_at, stored.client_updated_at,
+        "write-back must not advance the freshness clock"
+    );
+    assert_eq!(
+        row.updated_at, stored.updated_at,
+        "write-back must not advance the receipt clock"
+    );
+}
+
+#[tokio::test]
+async fn attach_derived_kobo_location_noops_when_the_row_moved_or_has_a_span() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    let stored = upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Epub,
+            epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
+            audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
+            client_updated_at: Some(100),
+            book_file_id: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Wrong expected timestamp: the row moved since the caller read it.
+    let updated = attach_derived_kobo_location(&pool, user, &uuid, "{}", None, 999)
+        .await
+        .unwrap();
+    assert!(!updated);
+
+    // Row already carries a device-authored span: never overwrite it.
+    upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Epub,
+            epub_cfi: None,
+            audio_position_seconds: None,
+            progress_percent: Some(10),
+            kobo_location: Some(r#"{"Value":"kobo.9.1"}"#.into()),
+            client_updated_at: Some(200),
+            book_file_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    let updated = attach_derived_kobo_location(&pool, user, &uuid, "{}", None, 200)
+        .await
+        .unwrap();
+    assert!(!updated);
+    let row = get_progress(&pool, user, &uuid, ProgressFormat::Epub)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        row.kobo_location.as_deref(),
+        Some(r#"{"Value":"kobo.9.1"}"#)
+    );
+
+    // Unknown book propagates BookNotFound like every other write path.
+    let err = attach_derived_kobo_location(&pool, user, "no-such-uuid", "{}", None, 100)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ProgressError::BookNotFound));
+    let _ = stored;
 }
 
 #[tokio::test]
@@ -1788,11 +1954,11 @@ async fn record_session_without_client_id_still_inserts_every_report() {
 }
 
 #[tokio::test]
-async fn upsert_does_not_let_a_blank_cfi_clobber_a_stored_one() {
-    // Defense in depth for the COALESCE merge: `validate` rejects a blank CFI
-    // at the API boundary, and the bind normalizes it to NULL so an internal
-    // caller that skipped validation still can't overwrite a good anchor with
-    // whitespace.
+async fn upsert_stores_a_blank_cfi_as_null_never_as_an_anchor() {
+    // Defense in depth: `validate` rejects a blank CFI at the API boundary,
+    // and the bind normalizes it to NULL so an internal caller that skipped
+    // validation replaces the position with an honest "no CFI" rather than
+    // storing whitespace as an anchor.
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
     let (_, uuid) = seed(&pool, "/lib", "Book A").await;
@@ -1831,8 +1997,12 @@ async fn upsert_does_not_let_a_blank_cfi_clobber_a_stored_one() {
     .await
     .unwrap();
 
-    assert_eq!(after.epub_cfi.as_deref(), Some(cfi), "anchor must survive");
+    assert_eq!(
+        after.epub_cfi, None,
+        "whitespace must not store as an anchor"
+    );
     assert_eq!(after.progress_percent, Some(70));
+    let _ = cfi;
 }
 
 #[tokio::test]

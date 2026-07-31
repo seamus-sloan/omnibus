@@ -1,7 +1,7 @@
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
-import { fetchBookIdByTitle } from "../utils/ebooks";
+import { fetchBookIdByTitle, switchToTableView } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
 
@@ -25,10 +25,17 @@ test.beforeAll(async ({ request }) => {
 // standard "small fixture" target used by metadata_edit.spec.ts.
 const TARGET = FIXTURE_BOOKS.find((b) => b.slug === "alpha")!;
 
+// The Tags-cell tests get their own reserved fixture: the suite is
+// `fullyParallel` (even within one file), and the Authors tests' cleanup
+// deletes ALL of TARGET's overrides — which would wipe an in-flight tags
+// override mid-test. standalone-ocean is read by no other spec.
+const TAGS_TARGET = FIXTURE_BOOKS.find((b) => b.slug === "standalone-ocean")!;
+
 test("renders editable cell affordances on the landing table for admins", async ({
   page,
 }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   const titleCell = page
     .getByTestId(`ebook-row-${TARGET.slug}`)
@@ -45,6 +52,7 @@ test("edits a title inline and saves the override via rpc_save_overrides", async
   request,
 }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   const row = page.getByTestId(`ebook-row-${TARGET.slug}`);
   const titleCell = row.getByTestId("ebook-cell-title");
@@ -87,6 +95,7 @@ test("inline edit save error keeps the row showing the prior value", async ({
   page,
 }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   const row = page.getByTestId(`ebook-row-${TARGET.slug}`);
   const titleCell = row.getByTestId("ebook-cell-title");
@@ -130,6 +139,7 @@ test("clicking the Authors cell renders the chip editor inline", async ({
   page,
 }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   const row = page.getByTestId(`ebook-row-${TARGET.slug}`);
   const authorsCell = row.getByTestId("ebook-cell-author");
@@ -163,6 +173,7 @@ test("clicking away from an open Authors cell editor closes it", async ({
   page,
 }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   const row = page.getByTestId(`ebook-row-${TARGET.slug}`);
   const authorsCell = row.getByTestId("ebook-cell-author");
@@ -184,6 +195,7 @@ test("Tab from the chip input reaches a chip's Remove button without closing the
   page,
 }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   const row = page.getByTestId(`ebook-row-${TARGET.slug}`);
   const authorsCell = row.getByTestId("ebook-cell-author");
@@ -212,6 +224,7 @@ test("selecting an author suggestion keeps the editor open; a later click away c
   request,
 }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   const row = page.getByTestId(`ebook-row-${TARGET.slug}`);
   const authorsCell = row.getByTestId("ebook-cell-author");
@@ -250,6 +263,118 @@ test("selecting an author suggestion keeps the editor open; a later click away c
 
   // Cleanup: revert the accumulated authors override.
   const uuid = await fetchBookIdByTitle(request, TARGET.title);
+  const revertResp = await request.post(`/api/rpc/ebook/overrides/delete`, {
+    data: { uuid },
+  });
+  expect(revertResp.status(), "cleanup revert must succeed").toBe(200);
+});
+
+test("clicking the Tags cell renders the chip editor inline", async ({
+  page,
+}) => {
+  await gotoReady(page, "/");
+  await switchToTableView(page);
+
+  const row = page.getByTestId(`ebook-row-${TAGS_TARGET.slug}`);
+  const tagsCell = row.getByTestId("ebook-cell-tags");
+  await tagsCell.click();
+
+  // The chip-editor input is rendered *inside* the cell, mirroring the
+  // Authors cell — testid-prefixed `ebook-cell-tags` per ChipCellDisplay.
+  const chipInput = tagsCell.getByTestId("ebook-cell-tags-input");
+  await expect(chipInput).toBeVisible();
+  await expect(chipInput).toHaveAttribute("placeholder", "+ add tag…");
+  await expect(tagsCell).toHaveClass(/ebook-cell-editing/);
+
+  // Escape exits edit mode.
+  await chipInput.press("Escape");
+  await expect(chipInput).toHaveCount(0);
+  await expect(tagsCell).not.toHaveClass(/ebook-cell-editing/);
+});
+
+test("creates a new tag inline, then autocompletes it from the pool after reload", async ({
+  page,
+  request,
+}) => {
+  await gotoReady(page, "/");
+  await switchToTableView(page);
+
+  const row = page.getByTestId(`ebook-row-${TAGS_TARGET.slug}`);
+  const tagsCell = row.getByTestId("ebook-cell-tags");
+  await tagsCell.click();
+
+  const chipInput = tagsCell.getByTestId("ebook-cell-tags-input");
+  await expect(chipInput).toBeVisible();
+
+  // Create a brand-new tag. Nothing in the pool matches, so Enter commits
+  // the raw typed text and posts the full `subjects` override.
+  await chipInput.fill("Speculative Fiction");
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: /\/api\/rpc\/ebook\/overrides$/,
+      expectedStatus: 200,
+    },
+    async () => chipInput.press("Enter"),
+  );
+  await expect(
+    tagsCell.getByText("Speculative Fiction", { exact: true }),
+  ).toBeVisible();
+
+  // Reload so the landing page refetches the tag suggestion pool — the
+  // override save materialized a `tags` row, so the freshly created tag now
+  // surfaces through `get_tag_cloud` (the autocomplete source).
+  await page.reload();
+  await page.waitForLoadState("networkidle");
+  await switchToTableView(page);
+
+  const rowAfter = page.getByTestId(`ebook-row-${TAGS_TARGET.slug}`);
+  const tagsCellAfter = rowAfter.getByTestId("ebook-cell-tags");
+  await tagsCellAfter.click();
+  const chipInputAfter = tagsCellAfter.getByTestId("ebook-cell-tags-input");
+  await expect(chipInputAfter).toBeVisible();
+
+  // Remove the chip first — the dropdown excludes values already on the
+  // chip list, so the tag must be off the book for its suggestion to show.
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: /\/api\/rpc\/ebook\/overrides$/,
+      expectedStatus: 200,
+    },
+    async () =>
+      tagsCellAfter
+        .getByRole("button", { name: "Remove tag Speculative Fiction" })
+        .click(),
+  );
+
+  // Typing a prefix surfaces the pool entry under the ADD TAG header;
+  // picking it commits the chip and posts the override.
+  await chipInputAfter.fill("Specul");
+  const dropdown = tagsCellAfter.getByTestId("ebook-cell-tags-suggestions");
+  await expect(dropdown).toBeVisible();
+  await expect(dropdown.getByText("ADD TAG")).toBeVisible();
+  const suggestion = dropdown.getByRole("option", {
+    name: /Speculative Fiction/,
+  });
+  await expect(suggestion).toBeVisible();
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: /\/api\/rpc\/ebook\/overrides$/,
+      expectedStatus: 200,
+    },
+    async () => suggestion.click(),
+  );
+  await expect(
+    tagsCellAfter.getByText("Speculative Fiction", { exact: true }),
+  ).toBeVisible();
+
+  // Cleanup: revert the accumulated tags override.
+  const uuid = await fetchBookIdByTitle(request, TAGS_TARGET.title);
   const revertResp = await request.post(`/api/rpc/ebook/overrides/delete`, {
     data: { uuid },
   });

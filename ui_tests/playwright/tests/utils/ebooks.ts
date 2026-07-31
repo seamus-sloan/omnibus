@@ -71,6 +71,15 @@ export function getRow(page: Page, slug: string): Locator {
   return page.getByTestId(`ebook-row-${slug}`);
 }
 
+/**
+ * Switch the landing library to the table view. Grid is the default view
+ * mode, so any spec that asserts against table rows/cells must opt in first.
+ */
+export async function switchToTableView(page: Page): Promise<void> {
+  await page.getByTestId("view-toggle-table").click();
+  await expect(page.getByTestId("ebook-table")).toBeVisible();
+}
+
 /** Expected text for the series cell, mirroring the Rust formatter:
  *  `${name} #${idx}` when both are present, just `${name}` when no index,
  *  empty string otherwise. */
@@ -84,8 +93,8 @@ function expectedSeriesText(book: ExpectedBook): string {
 /**
  * Assert every visible cell in a fixture's row matches the expected metadata.
  * Each per-cell testid (`ebook-cell-title`, `-author`, `-series`,
- * `-publisher`, `-published`, `-language`, `-cover`) is scoped under the row
- * locator so two books with the same e.g. publisher don't collide.
+ * `-tags`, `-published`, `-language`, `-cover`) is scoped under the row
+ * locator so two books with the same e.g. series don't collide.
  */
 export async function expectRowMatches(
   page: Page,
@@ -104,9 +113,15 @@ export async function expectRowMatches(
   await expect(row.getByTestId("ebook-cell-series")).toHaveText(
     expectedSeriesText(expected),
   );
-  await expect(row.getByTestId("ebook-cell-publisher")).toHaveText(
-    expected.publisher ?? "",
-  );
+  // Tags are asserted only when the fixture pins them (`tags` present):
+  // public-domain EPUBs carry long real-world subject lists that the db
+  // parser tests already cover, and standalone-ocean's tags are mutated by
+  // the inline-edit spec — both leave `tags` undefined to opt out.
+  if (expected.tags) {
+    await expect(row.getByTestId("ebook-cell-tags")).toHaveText(
+      expected.tags.join(", "),
+    );
+  }
   await expect(row.getByTestId("ebook-cell-published")).toHaveText(
     expected.published ?? "",
   );

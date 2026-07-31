@@ -32,13 +32,18 @@ fn list_files_counts_by_extension() {
     fs::write(dir.join("b.epub"), b"").unwrap();
     fs::write(dir.join("c.pdf"), b"").unwrap();
     fs::write(dir.join("d.txt"), b"").unwrap();
+    fs::write(dir.join("e.cbz"), b"").unwrap();
     let result = list_files(Some(dir.to_str().unwrap()), EBOOK_EXTENSIONS);
     fs::remove_dir_all(&dir).unwrap();
     assert!(result.error.is_none());
-    assert_eq!(result.total_files, 4);
+    assert_eq!(result.total_files, 5);
     assert_eq!(
         result.counts_by_ext,
-        vec![("epub".to_string(), 2), ("pdf".to_string(), 1)]
+        vec![
+            ("epub".to_string(), 2),
+            ("pdf".to_string(), 1),
+            ("cbz".to_string(), 1)
+        ]
     );
 }
 
@@ -55,7 +60,11 @@ fn list_files_recurses_into_subdirectories() {
     assert_eq!(result.total_files, 3);
     assert_eq!(
         result.counts_by_ext,
-        vec![("epub".to_string(), 2), ("pdf".to_string(), 0)]
+        vec![
+            ("epub".to_string(), 2),
+            ("pdf".to_string(), 0),
+            ("cbz".to_string(), 0)
+        ]
     );
 }
 
@@ -64,11 +73,16 @@ fn list_files_extension_match_is_case_insensitive() {
     let dir = make_test_dir("case");
     fs::write(dir.join("A.EPUB"), b"").unwrap();
     fs::write(dir.join("b.Pdf"), b"").unwrap();
+    fs::write(dir.join("c.CbZ"), b"").unwrap();
     let result = list_files(Some(dir.to_str().unwrap()), EBOOK_EXTENSIONS);
     fs::remove_dir_all(&dir).unwrap();
     assert_eq!(
         result.counts_by_ext,
-        vec![("epub".to_string(), 1), ("pdf".to_string(), 1)]
+        vec![
+            ("epub".to_string(), 1),
+            ("pdf".to_string(), 1),
+            ("cbz".to_string(), 1)
+        ]
     );
 }
 
@@ -96,7 +110,11 @@ fn list_files_returns_section_with_error_when_path_missing() {
     // Counts slot is preallocated for each requested extension, all zero.
     assert_eq!(
         result.counts_by_ext,
-        vec![("epub".to_string(), 0), ("pdf".to_string(), 0)],
+        vec![
+            ("epub".to_string(), 0),
+            ("pdf".to_string(), 0),
+            ("cbz".to_string(), 0)
+        ],
     );
     let err = result.error.expect("missing path should populate error");
     assert!(
@@ -149,7 +167,11 @@ fn list_files_surfaces_io_error_on_unreadable_dir() {
     assert_eq!(result.total_files, 0);
     assert_eq!(
         result.counts_by_ext,
-        vec![("epub".to_string(), 0), ("pdf".to_string(), 0)],
+        vec![
+            ("epub".to_string(), 0),
+            ("pdf".to_string(), 0),
+            ("cbz".to_string(), 0)
+        ],
     );
     let err = result.error.expect("unreadable dir should populate error");
     assert!(

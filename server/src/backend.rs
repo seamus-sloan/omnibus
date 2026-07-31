@@ -18,6 +18,7 @@ use omnibus_db::{
 };
 use sqlx::SqlitePool;
 
+use crate::http_errors::internal;
 use crate::rate_limit::{rate_limit_by_ip, RateLimiter};
 
 mod audiobooks;
@@ -27,7 +28,6 @@ mod bookmarks;
 mod conditional;
 mod covers;
 mod ebooks;
-mod export_opf;
 mod health;
 mod highlights;
 mod image_upload;
@@ -75,18 +75,6 @@ pub const SEARCH_RATE_LIMIT_MAX: u32 = 30;
 pub const UPLOAD_RATE_LIMIT_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
 /// Max upload requests per [`UPLOAD_RATE_LIMIT_WINDOW`] per IP.
 pub const UPLOAD_RATE_LIMIT_MAX: u32 = 10;
-
-/// Generic 500 response that never leaks internal error details to the wire.
-/// The full error is logged server-side via `tracing::error!` so it remains
-/// available in structured logs; the client sees only the boilerplate body.
-fn internal<E: std::fmt::Display>(context: &'static str, e: E) -> Response {
-    tracing::error!(error = %e, context = context, "internal server error");
-    (
-        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-        "internal server error",
-    )
-        .into_response()
-}
 
 /// Serve a file from disk as a browser download: streamed (so large
 /// audiobook files aren't buffered into memory), Range-capable, conditional,
@@ -352,10 +340,6 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
         .route(
             "/api/ebooks/{uuid}/overrides",
             post(overrides::post_ebook_overrides).delete(overrides::delete_ebook_overrides),
-        )
-        .route(
-            "/api/ebooks/{uuid}/export-opf",
-            post(export_opf::post_export_opf),
         )
         // Cover-only revert. Carries no upload body (unlike the POST in
         // `upload_router`), so it stays outside the upload rate limiter —

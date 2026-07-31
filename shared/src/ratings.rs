@@ -12,7 +12,9 @@ pub const MAX_STARS: f32 = 5.0;
 
 /// Convert a stored half-star count (`1..=10`) to a `0.5..=5.0` star value.
 pub fn stars_from_half_stars(half_stars: i64) -> f32 {
-    half_stars as f32 / 2.0
+    // Stored counts are 1..=10 by construction; the clamp documents that
+    // bound and keeps the u16 → f32 conversion lossless.
+    f32::from(u16::try_from(half_stars.clamp(0, 10)).unwrap_or(0)) / 2.0
 }
 
 /// Write payload: set (or change) the current user's rating for a book.
@@ -41,7 +43,12 @@ impl RatingUpdate {
 
     /// Storage form: the rating expressed as a count of half-stars (`1..=10`).
     pub fn half_stars(&self) -> i64 {
-        (self.stars * 2.0).round() as i64
+        // `validate` bounds stars to 0.5..=5.0; the clamp repeats the bound so
+        // an unvalidated value still lands in-range (NaN casts to 0).
+        let scaled = (self.stars * 2.0).round().clamp(0.0, 10.0);
+        #[allow(clippy::cast_possible_truncation)]
+        let half = scaled as i64;
+        half
     }
 }
 

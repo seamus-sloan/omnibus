@@ -2,7 +2,8 @@
 //! with live progress for the UI. The in-memory map is the runtime source
 //! of truth (synchronously readable from components and URL builders);
 //! every transition is mirrored to the SQLite `downloads` table so state
-//! survives a cold start. The fetch loop itself lives in [`engine`].
+//! survives a cold start. The fetch loop lives in [`engine`]; staleness
+//! detection, the validators poll, and redownload live in [`staleness`].
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{OnceLock, RwLock};
@@ -14,6 +15,15 @@ use super::store::{self, DownloadRow};
 use super::sync;
 
 mod engine;
+mod staleness;
+mod verify;
+
+pub(super) use staleness::refresh_stale_flags;
+#[cfg(test)]
+use staleness::{
+    apply_validators, completed_validator_queries, last_stale_check, sweep_validators,
+};
+pub use staleness::{is_stale, note_book, redownload};
 
 /// Downloadable format of a book — one registry row per (uuid, format), so
 /// dual-format books hold two independent downloads.
@@ -42,6 +52,12 @@ impl DlFormat {
 }
 
 /// One planned (or fetched) file of a download.
+///
+/// The two validators answer different questions and are deliberately not
+/// one field. Both are `#[serde(default)]` because this struct is stored as
+/// JSON in `downloads.files`, so rows written before they existed still
+/// load — as a download with no validators, which reads as "can't tell",
+/// never as "stale".
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PlannedFile {
     /// File name inside `downloads/{uuid}/` (also the `/dl` URL segment).
@@ -53,6 +69,18 @@ pub struct PlannedFile {
     /// Final on-disk size once fetched.
     pub bytes: Option<i64>,
     pub done: bool,
+    /// `ETag` the server sent for *this URL* when the file was fetched.
+    /// Replayed as `If-Range` on a resume so the server can tell us the
+    /// bytes moved and hand back the whole new body instead of a 206 that
+    /// would splice onto the wrong head.
+    #[serde(default)]
+    pub http_etag: Option<String>,
+    /// `BookFileInfo.etag` — the wire validator of the `book_files` row
+    /// this file came from — as it read at download time. Compared against
+    /// a later metadata refresh to surface "Update available". Every part
+    /// of one audiobook carries the same value, since they share a row.
+    #[serde(default)]
+    pub source_etag: Option<String>,
 }
 
 /// UI-facing status of one (uuid, format) download.
@@ -75,6 +103,17 @@ pub struct DownloadEntry {
     pub status: DownloadStatus,
     pub files: Vec<PlannedFile>,
     pub updated_at: i64,
+    /// The library file moved under this download — drives the "Update
+    /// available" chip.
+    ///
+    /// In memory only, and recomputed by [`note_book`] whenever fresh
+    /// metadata lands. Persisting it would mean a chip that outlived the
+    /// evidence for it: the flag is a *comparison* against current server
+    /// state, and after a cold start there is no current state until
+    /// something refreshes. A missing chip that reappears seconds later
+    /// beats a stale chip that tells a reader to re-download a book that is
+    /// already current.
+    pub stale: bool,
 }
 
 fn registry() -> &'static RwLock<HashMap<(String, DlFormat), DownloadEntry>> {
@@ -167,6 +206,17 @@ pub fn is_complete(uuid: &str, format: DlFormat) -> bool {
     matches!(status(uuid, format), DownloadStatus::Complete { .. })
 }
 
+/// Whether the last metadata refresh found the library file had moved under
+/// this download. Synchronous registry read for the UI; the comparison
+/// itself happens in [`note_book`].
+pub fn is_marked_stale(uuid: &str, format: DlFormat) -> bool {
+    registry()
+        .read()
+        .ok()
+        .and_then(|m| m.get(&(uuid.to_string(), format)).map(|e| e.stale))
+        .unwrap_or(false)
+}
+
 /// Book uuids with at least one complete download (landing-grid badges).
 pub fn downloaded_uuids() -> HashSet<String> {
     registry()
@@ -248,6 +298,7 @@ pub fn start(
         },
         files: prior_files,
         updated_at: store::now_secs(),
+        stale: false,
     };
     // Known-offline fast-fail: surface the error row instantly instead of
     // letting the engine burn a doomed connect attempt.
@@ -263,6 +314,12 @@ pub fn start(
     if !spawned {
         set_error(&uuid, format, "Offline storage unavailable".into());
     }
+}
+
+/// Put back the entry a failed replacement was standing in for, so the copy
+/// still on disk goes on being usable.
+pub(super) fn restore(previous: DownloadEntry) {
+    upsert(previous);
 }
 
 /// Remove a download: drop the registry row and delete the book's download
@@ -406,6 +463,36 @@ fn persist_progress(
     });
 }
 
+/// Persist the response validator for one file of a download, immediately.
+///
+/// Called by the engine the moment a response's headers arrive, *before*
+/// any of its body is read. That timing is the whole point: the process can
+/// be killed or the task cancelled at any point during a transfer, and the
+/// `.part` it leaves behind is only safely resumable if the tag naming the
+/// file those bytes came from already reached disk. Anything that waits for
+/// the transfer to return — success or failure — misses exactly the
+/// interruptions a mobile client actually suffers.
+pub(super) fn record_file_etag(uuid: &str, format: DlFormat, rel: &str, etag: Option<String>) {
+    let Ok(mut guard) = registry().write() else {
+        return;
+    };
+    let Some(entry) = guard.get_mut(&(uuid.to_string(), format)) else {
+        return;
+    };
+    let Some(file) = entry.files.iter_mut().find(|f| f.rel == rel) else {
+        return;
+    };
+    if file.http_etag == etag {
+        return;
+    }
+    file.http_etag = etag;
+    let snapshot = entry.clone();
+    // Release before the DB write — persistence never needs the lock.
+    drop(guard);
+    persist(&snapshot);
+    bump();
+}
+
 pub(super) fn set_error(uuid: &str, format: DlFormat, message: String) {
     let Some(mut entry) = get_entry(uuid, format) else {
         return;
@@ -490,6 +577,7 @@ fn entry_from_row(row: DownloadRow) -> Option<DownloadEntry> {
         status,
         files,
         updated_at: row.updated_at,
+        stale: false,
     })
 }
 
@@ -497,6 +585,12 @@ fn entry_from_row(row: DownloadRow) -> Option<DownloadEntry> {
 /// Mirrors the HLS resolver's accepted formats; shared with the mobile
 /// listen host so download and playback pick the same file.
 pub fn default_audio_file_id(files: &[omnibus_shared::BookFileInfo]) -> Option<i64> {
+    default_audio_file(files).map(|f| f.id)
+}
+
+fn default_audio_file(
+    files: &[omnibus_shared::BookFileInfo],
+) -> Option<&omnibus_shared::BookFileInfo> {
     files
         .iter()
         .filter(|f| {
@@ -505,7 +599,28 @@ pub fn default_audio_file_id(files: &[omnibus_shared::BookFileInfo]) -> Option<i
                 || f.format.eq_ignore_ascii_case("MP3")
         })
         .min_by_key(|f| f.ordinal)
-        .map(|f| f.id)
+}
+
+/// The `book_files` row a download of `format` targets: the explicitly
+/// chosen `file_id`, else the same default the server would resolve —
+/// lowest ordinal of the format, matching `db::book_file_path`'s
+/// `ORDER BY bf.ordinal LIMIT 1` and [`default_audio_file_id`].
+pub(super) fn target_file(
+    book: &omnibus_shared::EbookMetadata,
+    format: DlFormat,
+    file_id: Option<i64>,
+) -> Option<&omnibus_shared::BookFileInfo> {
+    if let Some(id) = file_id {
+        return book.book_files.iter().find(|f| f.id == id);
+    }
+    match format {
+        DlFormat::Epub => book
+            .book_files
+            .iter()
+            .filter(|f| f.format.eq_ignore_ascii_case("EPUB"))
+            .min_by_key(|f| f.ordinal),
+        DlFormat::Audio => default_audio_file(&book.book_files),
+    }
 }
 
 /// Human-readable size for the download UI (binary units, one decimal).

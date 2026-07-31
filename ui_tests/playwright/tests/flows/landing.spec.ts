@@ -1,6 +1,6 @@
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expect, test } from "../fixtures/test";
-import { expectRowMatches } from "../utils/ebooks";
+import { expectRowMatches, switchToTableView } from "../utils/ebooks";
 import { expectNavVisible, gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
 
@@ -24,7 +24,8 @@ test("renders the landing page layout", async ({ page }) => {
   await expect(
     page.getByRole("heading", { level: 1, name: "Your Library" }),
   ).toBeVisible();
-  await expect(page.getByTestId("ebook-table")).toBeVisible();
+  // Grid is the default view mode; the table is opt-in via the toolbar.
+  await expect(page.getByTestId("lib-grid")).toBeVisible();
   await expect(page.getByTestId("lib-toolbar")).toBeVisible();
   // The shelf gallery replaced the left rail on the landing: an "All Books"
   // tile (selected by default) plus a New-shelf tile. In-place selection is
@@ -39,6 +40,7 @@ test("renders every fixture book with the expected metadata", async ({
   page,
 }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   // Every ebook fixture must appear; audiobooks may also be present when
   // parallel specs have seeded the audiobook library on the shared server.
@@ -61,37 +63,38 @@ test("browse fits the fixture library in one keyset page (no Load more)", async 
   // 100-book page size, so the first page contains the whole library and the
   // pagination sentinel must not render. (Above the page size, a
   // `lib-load-more` button appears and appends further pages.)
-  await expect(page.getByTestId(/^ebook-row-/).first()).toBeVisible();
-  const rowCount = await page.getByTestId(/^ebook-row-/).count();
-  expect(rowCount).toBeGreaterThanOrEqual(FIXTURE_BOOKS.length);
+  await expect(page.getByTestId(/^ebook-tile-/).first()).toBeVisible();
+  const tileCount = await page.getByTestId(/^ebook-tile-/).count();
+  expect(tileCount).toBeGreaterThanOrEqual(FIXTURE_BOOKS.length);
   await expect(page.getByTestId("lib-load-more")).toHaveCount(0);
 });
 
-test("toggles to grid view and persists across reload", async ({ page }) => {
+test("toggles to table view and persists across reload", async ({ page }) => {
   await gotoReady(page, "/");
 
-  await expect(page.getByTestId("ebook-table")).toBeVisible();
-  await page.getByTestId("view-toggle-grid").click();
-
   await expect(page.getByTestId("lib-grid")).toBeVisible();
-  await expect(page.getByTestId("ebook-table")).toHaveCount(0);
-  const tileCount = await page.getByTestId(/^ebook-tile-/).count();
-  expect(tileCount).toBeGreaterThanOrEqual(FIXTURE_BOOKS.length);
-  await expect(page.getByTestId("view-toggle-grid")).toHaveAttribute(
+  await page.getByTestId("view-toggle-table").click();
+
+  await expect(page.getByTestId("ebook-table")).toBeVisible();
+  await expect(page.getByTestId("lib-grid")).toHaveCount(0);
+  const rowCount = await page.getByTestId(/^ebook-row-/).count();
+  expect(rowCount).toBeGreaterThanOrEqual(FIXTURE_BOOKS.length);
+  await expect(page.getByTestId("view-toggle-table")).toHaveAttribute(
     "aria-pressed",
     "true",
   );
 
   await page.reload();
   await page.waitForLoadState("networkidle");
-  await expect(page.getByTestId("lib-grid")).toBeVisible();
-  await expect(page.getByTestId("ebook-table")).toHaveCount(0);
+  await expect(page.getByTestId("ebook-table")).toBeVisible();
+  await expect(page.getByTestId("lib-grid")).toHaveCount(0);
 });
 
 test("sorts by title descending when the Title header is clicked", async ({
   page,
 }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   // Default sort is title asc — click once to flip to desc.
   await page.getByRole("button", { name: /^Title( ↑| ↓)?$/ }).click();

@@ -12,6 +12,7 @@ pub mod client_store;
 pub mod components;
 pub mod contexts;
 pub mod data;
+pub mod focus_after_paint;
 pub mod format;
 pub mod index_prefs;
 pub mod js_interop;
@@ -20,6 +21,7 @@ pub(crate) mod native_share;
 #[cfg(feature = "mobile")]
 pub mod offline;
 pub mod pages;
+pub mod platform_sleep;
 pub mod reader_progress;
 pub mod routes;
 pub mod rpc;
@@ -31,6 +33,7 @@ pub mod shelf_selection;
 // too — otherwise the wasm `web --all-targets` lint would compile it and fail.
 #[cfg(all(any(test, feature = "test-support"), feature = "server"))]
 pub mod test_support;
+pub mod time;
 pub mod version;
 pub mod view_prefs;
 

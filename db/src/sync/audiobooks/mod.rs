@@ -17,6 +17,9 @@ mod new;
 mod removed;
 mod shared;
 
+#[cfg(test)]
+mod tests;
+
 pub(crate) use shared::insert_chapters;
 
 use backfill::{backfill_audiobook_stats, stamp_audiobooks_last_indexed};
@@ -93,12 +96,18 @@ pub async fn sync_audiobooks_with_progress(
         },
     )
     .await?;
-    let new_covers =
-        sync_audiobooks_new(&mut tx, library_id, library_path, &plan.new_books, || {
+    let new_covers = sync_audiobooks_new(
+        &mut tx,
+        library_id,
+        library_path,
+        &plan.new_books,
+        &plan.removed_uuids,
+        || {
             processed = processed.saturating_add(1);
             on_progress(processed, total);
-        })
-        .await?;
+        },
+    )
+    .await?;
     backfill_audiobook_stats(&mut tx, library_id, &plan.backfill).await?;
     // Only Changed wipes link rows before re-inserting, so it's the only bucket
     // that can leave an author or series with zero books. See `sync_books`.

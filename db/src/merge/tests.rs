@@ -265,6 +265,19 @@ async fn merge_books_rejects_same_book() {
 }
 
 #[tokio::test]
+async fn merge_books_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let target = seed_ebook(&pool, "A/Dracula.epub", "Dracula", "Bram Stoker").await;
+    let source = seed_audiobook(&pool, "B/Drakula.m4b", "Drakula", "Bram Stoker").await;
+    pool.close().await;
+
+    let err = merge_books(&pool, &source, &target, None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, MergeError::Db(_)));
+}
+
+#[tokio::test]
 async fn merge_books_rejects_unknown_uuid() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let uuid = seed_ebook(&pool, "Stoker/Dracula.epub", "Dracula", "Bram Stoker").await;
@@ -557,6 +570,79 @@ async fn reindex_diff_classifies_merged_source_file_as_unchanged() {
     // source book's (now-deleted) uuid, which equals `source`.
     assert_eq!(diff.unchanged, vec![source]);
     assert!(diff.new.is_empty());
+}
+
+#[tokio::test]
+async fn merged_two_epub_book_classifies_both_files_unchanged_on_rescan() {
+    // Each book_files row must diff against its own stat, not a MAX() composite.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    crate::sync::sync_books(
+        &pool,
+        "/ebooks",
+        crate::sync::SyncPlan {
+            new_books: vec![crate::test_support::indexed_with_stat(
+                "A/one.epub",
+                Some("One"),
+                1000,
+                500,
+            )],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let target = crate::test_support::uuid_by_scan_key(&pool, "A/one.epub").await;
+
+    crate::sync::sync_books(
+        &pool,
+        "/ebooks",
+        crate::sync::SyncPlan {
+            new_books: vec![crate::test_support::indexed_with_stat(
+                "B/two.epub",
+                Some("Two"),
+                2000,
+                100,
+            )],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let source = crate::test_support::uuid_by_scan_key(&pool, "B/two.epub").await;
+
+    merge_books(&pool, &source, &target, None).await.unwrap();
+
+    let disk = vec![
+        crate::ebook::StatEntry {
+            filename: "A/one.epub".into(),
+            scan_key: "A/one.epub".into(),
+            mtime_epoch: 1000,
+            size_bytes: 500,
+            error: None,
+        },
+        crate::ebook::StatEntry {
+            filename: "B/two.epub".into(),
+            scan_key: "B/two.epub".into(),
+            mtime_epoch: 2000,
+            size_bytes: 100,
+            error: None,
+        },
+    ];
+    let mut db_rows = list_indexed_rows_for_formats(&pool, "/ebooks", crate::ebook::EBOOK_FORMATS)
+        .await
+        .unwrap();
+    db_rows.extend(
+        list_merged_rows_for_formats(&pool, "/ebooks", crate::ebook::EBOOK_FORMATS)
+            .await
+            .unwrap(),
+    );
+
+    let diff = diff_library(&disk, &db_rows, std::path::Path::new("/ebooks"), true);
+    assert_eq!(diff.unchanged.len(), 2, "{diff:?}");
+    assert!(diff.unchanged.contains(&target));
+    assert!(diff.unchanged.contains(&source));
+    assert!(diff.new.is_empty(), "{:?}", diff.new);
+    assert!(diff.changed.is_empty(), "{:?}", diff.changed);
 }
 
 #[tokio::test]

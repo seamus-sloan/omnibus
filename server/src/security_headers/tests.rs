@@ -1,3 +1,7 @@
+//! Tests for the security-headers middleware: baseline headers present on
+//! every response, CSP permissiveness for Dioxus hydration and fonts,
+//! handler-supplied overrides winning over the baseline, and HSTS toggling.
+
 use super::*;
 use axum::{
     body::{to_bytes, Body},

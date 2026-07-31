@@ -1,4 +1,4 @@
-//! Users settings section (F5.4) — the admin table plus the New / Edit /
+//! Users settings section — the admin table plus the New / Edit /
 //! Delete modals and inline Unlock. Admin-only; rendered as the `users`
 //! section of `/settings`. SSR and the first WASM paint both start from an
 //! empty list (rule 07); the post-mount effect loads the real rows.
@@ -8,6 +8,7 @@ use dioxus_router::use_navigator;
 use omnibus_shared::{AdminUserRow, CreateUserRequest, UserPermissions};
 
 use crate::components::auth::{score_password, PasswordRequirements, StrengthMeter};
+use crate::components::{confirm_modal_body, ConfirmModal, ConfirmModalAction, ConfirmModalTone};
 use crate::{data, Route};
 
 /// Which modal, if any, is open over the Users table.
@@ -463,6 +464,9 @@ fn EditUserModal(
 
 /// Delete-confirmation modal. Warns when the admin is deleting their own
 /// account; the last-admin guard is enforced server-side and surfaced inline.
+/// Built on the shared `ConfirmModal` shell (see `components::confirm_modal`)
+/// rather than `ModalShell`, so the backdrop can't be dismissed mid-delete —
+/// `ModalShell`'s own backdrop has no busy gate at all.
 #[component]
 fn DeleteUserModal(
     user: AdminUserRow,
@@ -473,6 +477,12 @@ fn DeleteUserModal(
     let uid = user.id;
     let mut error = use_signal(|| None::<String>);
     let mut deleting = use_signal(|| false);
+    let busy = deleting();
+    let title = format!("Delete {}", user.username);
+    let body = format!(
+        "Permanently delete {} and all of their reading data. This can't be undone.",
+        user.username
+    );
 
     let confirm = move |_| {
         if deleting() {
@@ -490,29 +500,38 @@ fn DeleteUserModal(
     };
 
     rsx! {
-        ModalShell { title: "Delete {user.username}", testid: "users-delete-modal", on_close,
-            p {
-                "Permanently delete "
-                b { "{user.username}" }
-                " and all of their reading data. This can't be undone."
-            }
+        ConfirmModal {
+            testid: "users-delete-modal".to_string(),
+            aria_label: title.clone(),
+            dialog_class: "users-modal-card".to_string(),
+            busy,
+            on_dismiss: move |_| on_close.call(()),
             if is_self {
                 p { class: "settings-status error", "data-testid": "delete-self-warning",
                     "This is your own account — you'll be signed out."
                 }
             }
             ModalError { error: error() }
-            div { class: "settings-actions",
-                button {
-                    r#type: "button",
-                    class: "btn users-danger",
-                    "data-testid": "delete-user-confirm",
-                    disabled: deleting(),
-                    onclick: confirm,
-                    "Delete user"
-                }
-                button { r#type: "button", class: "btn ghost", onclick: move |_| on_close.call(()), "Cancel" }
-            }
+            {confirm_modal_body(
+                &title,
+                &body,
+                vec![
+                    ConfirmModalAction {
+                        testid: "delete-user-cancel".to_string(),
+                        label: "Cancel".to_string(),
+                        tone: ConfirmModalTone::Ghost,
+                        disabled: busy,
+                        on_click: EventHandler::new(move |_| on_close.call(())),
+                    },
+                    ConfirmModalAction {
+                        testid: "delete-user-confirm".to_string(),
+                        label: if busy { "Deleting\u{2026}".to_string() } else { "Delete user".to_string() },
+                        tone: ConfirmModalTone::Danger,
+                        disabled: busy,
+                        on_click: EventHandler::new(confirm),
+                    },
+                ],
+            )}
         }
     }
 }
@@ -615,8 +634,10 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let y = yoe + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    // `mp` ∈ 0..=11 and the day term ∈ 1..=31 by construction of the
+    // algorithm, so both conversions are in-range.
+    let d = u32::try_from(doy - (153 * mp + 2) / 5 + 1).unwrap_or(1);
+    let m = u32::try_from(if mp < 10 { mp + 3 } else { mp - 9 }).unwrap_or(1);
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 

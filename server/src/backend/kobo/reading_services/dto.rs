@@ -181,6 +181,8 @@ fn parse_upsert(entry: &Value) -> Option<(IngestKoboAnnotation, bool)> {
             text: text.map(str::to_owned),
             note: note.map(str::to_owned),
             kobo_location,
+            // Filled in by the handler's best-effort CFI derivation.
+            epub_cfi_range: None,
         },
         deleted,
     ))

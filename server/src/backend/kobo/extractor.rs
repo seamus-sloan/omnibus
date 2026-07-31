@@ -13,6 +13,8 @@ use axum::{
 use omnibus_db as db;
 use sqlx::SqlitePool;
 
+use crate::http_errors::internal;
+
 /// Authenticated principal resolved from the `/kobo/<TOKEN>/…` path segment:
 /// the owning user, the resolved device row, and the raw token (so handlers can
 /// build device-facing absolute URLs — download / image — that echo the same
@@ -38,12 +40,17 @@ where
             .extensions
             .get::<SqlitePool>()
             .cloned()
-            .ok_or_else(|| internal("missing SqlitePool extension on kobo route"))?;
+            .ok_or_else(|| {
+                internal(
+                    "kobo extractor",
+                    "missing SqlitePool extension on kobo route",
+                )
+            })?;
 
         let resolved = match db::kobo_devices::resolve_device_by_token(&pool, &token).await {
             Ok(Some(r)) => r,
             Ok(None) => return Err(unauthorized()),
-            Err(e) => return Err(internal(e)),
+            Err(e) => return Err(internal("kobo extractor", e)),
         };
 
         // Bind the `x-kobo-deviceid` hardware id to this row (steal-on-learn,
@@ -90,7 +97,12 @@ where
             .extensions
             .get::<SqlitePool>()
             .cloned()
-            .ok_or_else(|| internal("missing SqlitePool extension on reading-services route"))?;
+            .ok_or_else(|| {
+                internal(
+                    "kobo extractor",
+                    "missing SqlitePool extension on reading-services route",
+                )
+            })?;
 
         match db::kobo_devices::resolve_device_by_hardware_id(&pool, &hw).await {
             Ok(Some(r)) => Ok(KoboHardwareUser {
@@ -98,7 +110,7 @@ where
                 device_id: r.device_id,
             }),
             Ok(None) => Err(unauthorized()),
-            Err(e) => Err(internal(e)),
+            Err(e) => Err(internal("kobo extractor", e)),
         }
     }
 }
@@ -117,11 +129,6 @@ fn hardware_id_header(headers: &axum::http::HeaderMap) -> Option<&str> {
 
 fn unauthorized() -> Response {
     (StatusCode::UNAUTHORIZED, "unauthorized").into_response()
-}
-
-fn internal<E: std::fmt::Display>(e: E) -> Response {
-    tracing::error!(error = %e, "kobo auth extractor error");
-    (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
 }
 
 /// Extract the `<TOKEN>` segment from a `/kobo/<TOKEN>/v1/…` path. Kobo device

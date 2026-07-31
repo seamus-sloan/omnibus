@@ -491,15 +491,13 @@ test("shows the mini-dock on the immersive reader while an audiobook is loaded",
   // way — a native page load at any hop would remount `App` and drop the
   // in-memory playback context the dock reads from.
   await spaNavigateToLibrary(page);
-  // Click the cover cell, not the bare row: a plain `.click()` on the `<tr>`
-  // lands at its horizontal center, which is one of the inline-editable
-  // cells (authors/series/etc.) — those stop propagation on click, so the
-  // row's own navigate-on-click handler never fires. The cover cell has no
-  // click handler of its own and safely bubbles to the row.
-  await page
-    .getByTestId(`ebook-row-${READER_BOOK.slug}`)
-    .getByTestId("ebook-cell-cover")
-    .click();
+  // The default Grid view's tiles navigate via `nav.push` (SPA), so clicking
+  // one keeps the in-memory playback context alive — no editable-cell click
+  // interception to route around like the table rows have. Assert the tile
+  // rendered before clicking so the click can't race the landing paint.
+  const readerTile = page.getByTestId(`ebook-tile-${READER_BOOK.slug}`);
+  await expect(readerTile).toBeVisible();
+  await readerTile.click();
   await expect(page).toHaveURL(new RegExp(`/books/${readerUuid}$`));
   await page.getByTestId("start-reading").click();
   await expect(page).toHaveURL(new RegExp(`/read/${readerUuid}$`));

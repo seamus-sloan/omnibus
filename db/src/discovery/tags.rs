@@ -1,7 +1,8 @@
 //! Tag-cloud read: the global tag list with per-tag book counts. Counts
 //! use the merged (override-aware) subject set so user-edited subjects on
-//! a book are reflected here; visibility still requires a canonical
-//! `books_tags_link` row so override-only tags never surface.
+//! a book are reflected here; a tag is visible with either a canonical
+//! `books_tags_link` row or an override membership (the override write
+//! path materializes a `tags` row for every override subject).
 
 use omnibus_shared::TagWeight;
 use sqlx::{Row, SqlitePool};
@@ -16,46 +17,32 @@ const TAG_CLOUD_LIMIT: i64 = 500;
 /// Return up to [`TAG_CLOUD_LIMIT`] tags with their book counts, ordered
 /// by count descending then name ascending. Used by the tag cloud page.
 ///
-/// Currently returns results across all users (single-tenant). When F4.x
-/// per-user ACL lands, add a `user_id: i64` parameter and scope the query
-/// to books accessible to that user.
+/// Currently returns results across all users (single-tenant); scoping to a
+/// per-user `user_id` is a future extension, not yet needed.
 pub async fn get_tag_cloud(pool: &SqlitePool) -> Result<Vec<TagWeight>, DiscoveryError> {
-    // TODO: scope by `user_id` once per-user ACLs land (single-tenant today).
+    // Counts use the effective (override-aware) subject set, not the raw
+    // `books_tags_link` rows — `overrides.subjects` replaces a book's
+    // canonical tag list wholesale when Some. Visibility requires a
+    // canonical link OR an effective override membership: the override
+    // write path materializes a `tags` row for every override subject
+    // (`materialize_tag_rows`), so a tag created via the inline table
+    // editor feeds this cloud — and therefore the editor's own autocomplete
+    // pool — without polluting the scanned link table.
     //
-    // F5.1: counts use the effective (override-aware) subject set, not
-    // the raw `books_tags_link` rows — `overrides.subjects` replaces a
-    // book's canonical tag list wholesale when Some. Visibility still
-    // requires at least one canonical link so tags that exist only as a
-    // string inside override JSON don't surface (no `tags` row to point
-    // at). The single-library, single-tenant scope means the cloud is
-    // global; if/when per-library scoping lands this picks up a path
-    // filter alongside the existing `WHERE EXISTS`.
-    //
-    // Issue #154: counts are taken from an `effective` membership CTE —
-    // the UNION of (1) canonical `books_tags_link` rows whose book has no
-    // `subjects` override and (2) override-extracted `(tag_name, book_id)`
-    // pairs from `json_each(mo.overrides, '$.subjects')`. The CTE is
-    // `AS MATERIALIZED` (like `matches` in `fetch_search_rows`) so the
-    // override extraction — `json_each` over every `metadata_overrides`
-    // row — is built once per call rather than re-scanned per tag. Counts
-    // come from a single `GROUP BY` pass: `effective` is `LEFT JOIN`ed to
-    // `tags` on the OR predicate (`e.tag_id = t.id OR e.tag_name = t.name`)
-    // and aggregated with `COUNT(e.book_id)`. The `LEFT JOIN` preserves the
-    // prior correlated-subquery `cnt = 0` semantics for a visible tag whose
-    // every canonical book got overridden away (the `EXISTS` keeps it
-    // visible while `COUNT(e.book_id)` over zero matched rows yields 0).
-    // The two arms are disjoint on the key columns (arm 1 sets
-    // `tag_name = NULL`, arm 2 sets `tag_id = NULL`), and a book with a
-    // subjects override is excluded from arm 1, so no single book reaches a
-    // tag through both arms — the OR-join sums without double-counting.
-    // The empty-array clear-all case falls out naturally: a `Some([])`
-    // override drops the book from arm (1) and yields no rows from
-    // `json_each` in arm (2). UNION (not ALL) in arm (2) dedupes duplicate
-    // subject strings within one override array so a book tagged
-    // `["fiction","fiction"]` still counts once. Override match stays
-    // BINARY (`je.value = t.name`, no COLLATE) to match the prior behavior.
-    // Visibility still requires ≥1 canonical link (the `EXISTS`), so a tag
-    // that exists only inside override JSON never surfaces.
+    // The `effective` CTE is `AS MATERIALIZED` (like `matches` in
+    // `fetch_search_rows`) so the override extraction — `json_each` over
+    // every `metadata_overrides` row — is built once per call rather than
+    // re-scanned per tag. The two UNION arms are disjoint on the key
+    // columns (arm 1 sets `tag_name = NULL`, arm 2 sets `tag_id = NULL`)
+    // and a book with a subjects override is excluded from arm 1, so no
+    // single book reaches a tag through both arms — the OR-join in the
+    // final `GROUP BY` sums without double-counting. The `LEFT JOIN`
+    // preserves the prior correlated-subquery `cnt = 0` semantics for a
+    // visible tag whose every canonical book got overridden away. Override
+    // names are folded with `lower()` on both sides of the match so a
+    // case-variant override ("fiction" against a canonical "Fiction" row)
+    // counts toward — and keeps visible — the NOCASE-unique `tags` row it
+    // already deduplicated into at materialize time.
     let rows = sqlx::query(
         r#"WITH effective AS MATERIALIZED (
              -- (1) Canonical tag memberships with no subjects override.
@@ -70,7 +57,7 @@ pub async fn get_tag_cloud(pool: &SqlitePool) -> Result<Vec<TagWeight>, Discover
              -- dedupes duplicate subject strings within one override array
              -- so a book with `["fiction","fiction"]` still counts once,
              -- matching the prior `EXISTS` semantics.
-             SELECT NULL AS tag_id, je.value AS tag_name, b.id AS book_id
+             SELECT NULL AS tag_id, lower(je.value) AS tag_name, b.id AS book_id
                FROM books b
                JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
                JOIN json_each(mo.overrides, '$.subjects') je
@@ -79,9 +66,12 @@ pub async fn get_tag_cloud(pool: &SqlitePool) -> Result<Vec<TagWeight>, Discover
            SELECT t.name, COUNT(e.book_id) AS cnt
            FROM tags t
            LEFT JOIN effective e
-             ON e.tag_id = t.id OR e.tag_name = t.name
+             ON e.tag_id = t.id OR e.tag_name = lower(t.name)
            WHERE EXISTS (
              SELECT 1 FROM books_tags_link btl WHERE btl.tag = t.id
+           )
+           OR EXISTS (
+             SELECT 1 FROM effective e2 WHERE e2.tag_name = lower(t.name)
            )
            GROUP BY t.id, t.name
            ORDER BY cnt DESC, t.name ASC

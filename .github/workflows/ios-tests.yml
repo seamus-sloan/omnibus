@@ -1,0 +1,162 @@
+# omnibus-ios native SwiftUI app — unit tests on a simulator, with coverage.
+#
+# The Xcode project isn't a Cargo crate, so rust.yml never touches it; this
+# workflow is its test gate. Coverage converts the .xcresult archive to lcov
+# (scripts/xccov-to-lcov.sh) for the same report-only Codecov posture as
+# rust.yml, and the JUnit output feeds Codecov Test Analytics like every
+# other suite.
+name: iOS
+
+on:
+  # No workflow-level `paths:` filter — same reasoning as rust.yml: a required
+  # check keyed on a path-filtered workflow never resolves on a PR that doesn't
+  # touch the paths. Path gating lives in the `changes` job; the gate treats
+  # skipped as pass.
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ios-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: detect changes
+    runs-on: ubuntu-latest
+    # dorny/paths-filter lists the PR's changed files via the GitHub API on
+    # pull_request events; under the workflow's restrictive `contents: read`
+    # it needs `pull-requests: read` too. Matches rust.yml.
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      ios: ${{ steps.filter.outputs.ios }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            ios:
+              - "omnibus-ios/**"
+              - "scripts/ios-test.sh"
+              - "scripts/xccov-to-lcov.sh"
+              - ".github/workflows/ios-tests.yml"
+              - ".github/actions/ci-gate/action.yml"
+
+  unit:
+    name: unit tests (omnibusTests)
+    needs: changes
+    if: ${{ needs.changes.outputs.ios == 'true' || github.event_name != 'pull_request' }}
+    # omnibus-ios needs the Xcode 26 / iOS 26 SDK, only on macos-26 — same
+    # pinning as testflight.yml's swiftui job.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      # Both come preinstalled on GitHub's macOS images today, but an image
+      # refresh dropping one would otherwise fail this required check before
+      # any test ran — install-if-missing keeps the job deterministic.
+      - name: Ensure jq + xcbeautify
+        run: |
+          set -euo pipefail
+          command -v jq >/dev/null 2>&1 || brew install jq
+          command -v xcbeautify >/dev/null 2>&1 || brew install xcbeautify
+
+      # ios-test.sh picks the newest installed iPhone simulator runtime, so
+      # the workflow never hardcodes a device name the image may not ship.
+      # Results land inside the workspace because the upload conditions below
+      # use hashFiles(), which only sees workspace-relative paths.
+      - name: Run unit tests
+        env:
+          OMNIBUS_IOS_RESULTS_DIR: ${{ github.workspace }}/ios-test-results
+        run: |
+          set -euo pipefail
+          scripts/ios-test.sh unit -derivedDataPath "$RUNNER_TEMP/DerivedData" 2>&1 \
+            | xcbeautify --report junit --report-path ios-test-results
+
+      - name: Convert coverage to lcov
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          if [ -d ios-test-results/unit.xcresult ]; then
+            scripts/xccov-to-lcov.sh ios-test-results/unit.xcresult > lcov-ios.info
+          fi
+
+      # Report-only, like every Codecov upload in this repo: tokenless OIDC
+      # works for the public repo but is rate-limited, so both uploads want
+      # the CODECOV_TOKEN repo secret to be reliable.
+      - name: Upload coverage to Codecov
+        if: ${{ !cancelled() && hashFiles('lcov-ios.info') != '' }}
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./lcov-ios.info
+          flags: ios
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      # Test results → Codecov Test Analytics. `!cancelled()` so failures
+      # still upload (that's the point of the analytics); never gates the job.
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() && hashFiles('ios-test-results/junit.xml') != '' }}
+        uses: codecov/codecov-action@v5
+        with:
+          files: ios-test-results/junit.xml
+          report_type: test_results
+          flags: ios
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  ui:
+    name: UI tests (omnibusUITests)
+    needs: changes
+    if: ${{ needs.changes.outputs.ios == 'true' || github.event_name != 'pull_request' }}
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same determinism guard as the unit job.
+      - name: Ensure jq + xcbeautify
+        run: |
+          set -euo pipefail
+          command -v jq >/dev/null 2>&1 || brew install jq
+          command -v xcbeautify >/dev/null 2>&1 || brew install xcbeautify
+
+      # XCUITest drives a real simulator, so it wears flakiness the unit suite
+      # doesn't; -retry-tests-on-failure gives each failed test one retry
+      # before the run counts as red. Test Analytics only — UI-test line
+      # coverage isn't meaningful, matching the Playwright suite.
+      - name: Run UI tests
+        env:
+          OMNIBUS_IOS_RESULTS_DIR: ${{ github.workspace }}/ios-test-results
+        run: |
+          set -euo pipefail
+          scripts/ios-test.sh ui -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -retry-tests-on-failure -test-iterations 2 2>&1 \
+            | xcbeautify --report junit --report-path ios-test-results
+
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() && hashFiles('ios-test-results/junit.xml') != '' }}
+        uses: codecov/codecov-action@v5
+        with:
+          files: ios-test-results/junit.xml
+          report_type: test_results
+          flags: ios
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  ios-tests-required:
+    name: 🔒 iOS Tests Required
+    needs: [changes, unit, ui]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/ci-gate
+        with:
+          needs: ${{ toJSON(needs) }}

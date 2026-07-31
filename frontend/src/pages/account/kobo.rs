@@ -15,6 +15,147 @@ fn endpoint_url(server_url: &str, token: &str) -> String {
     format!("{}/kobo/{token}", server_url.trim_end_matches('/'))
 }
 
+/// The numbered "how to connect" list at the top of the card.
+fn render_kobo_setup_steps() -> Element {
+    rsx! {
+        ol { class: "subtitle kobo-setup-steps", "data-testid": "kobo-setup-steps",
+            li {
+                "Give your Kobo a name and click "
+                b { "Add a Kobo" }
+            }
+            li {
+                "Copy the device's wireless sync endpoint URL. ("
+                code { "/kobo/<token>" }
+                ")"
+            }
+            li { "Connect the Kobo over USB," }
+            li {
+                "Edit "
+                code { ".kobo/Kobo/Kobo eReader.conf" }
+                " and set "
+                code { "api_endpoint=" }
+                " under "
+                code { "[OneStoreServices]" }
+                " to "
+                code { "<your_omnibus_server_url>/kobo/<token>" }
+                "."
+            }
+            li { "Eject safely. Your next sync on the device talks to Omnibus." }
+        }
+    }
+}
+
+/// The unconditional first-sync data-loss warning, with backup tool links.
+fn render_kobo_warning() -> Element {
+    rsx! {
+        div { class: "kobo-warning", "data-testid": "kobo-data-loss-warning",
+            p { class: "kobo-warning-title", "First sync can erase your Kobo's highlights" }
+            p {
+                "An improper sync can potentially wipe data on the Kobo like your "
+                "annotations, notes, bookmarks, reading progress, and books."
+            }
+            p {
+                "It is highly recommended to back up your device before attempting "
+                "a sync with one of these tools:"
+            }
+            ul { class: "kobo-warning-tools",
+                li {
+                    a {
+                        href: "https://github.com/seamus-sloan/kobo-backup#kobo-backup",
+                        target: "_blank",
+                        rel: "noopener noreferrer",
+                        "seamus-sloan/kobo-backup"
+                    }
+                }
+                li {
+                    a {
+                        href: "https://github.com/karlicoss/kobuddy#usage",
+                        target: "_blank",
+                        rel: "noopener noreferrer",
+                        "karlicoss/kobuddy"
+                    }
+                }
+            }
+            p {
+                "At minimum, copy "
+                code { ".kobo/KoboReader.sqlite" }
+                " off the device over USB."
+            }
+        }
+    }
+}
+
+/// Registered-device list, or the empty-state line when there are none yet.
+fn render_kobo_device_list(
+    device_list: &[KoboDeviceView],
+    server_url: &str,
+    in_flight: bool,
+    on_regenerate: Callback<i64>,
+    on_remove: Callback<i64>,
+) -> Element {
+    if device_list.is_empty() {
+        return rsx! {
+            p {
+                class: "settings-status",
+                "data-testid": "kobo-devices-empty",
+                "No Kobo registered yet."
+            }
+        };
+    }
+    rsx! {
+        ul { class: "kobo-device-list", "data-testid": "kobo-device-list",
+            for dev in device_list.iter() {
+                KoboDeviceRow {
+                    key: "{dev.id}",
+                    endpoint: endpoint_url(server_url, &dev.token),
+                    device: dev.clone(),
+                    disabled: in_flight,
+                    on_regenerate,
+                    on_remove,
+                }
+            }
+        }
+    }
+}
+
+/// The "Add a Kobo" name form.
+fn render_kobo_add_form(
+    name_input: Signal<String>,
+    in_flight: bool,
+    on_add: impl FnMut(Event<FormData>) + 'static,
+) -> Element {
+    rsx! {
+        form {
+            id: "kobo-add-form",
+            class: "settings-form",
+            onsubmit: on_add,
+            div { class: "settings-field",
+                label { r#for: "kobo-device-name", "Device name" }
+                input {
+                    r#type: "text",
+                    id: "kobo-device-name",
+                    name: "kobo_device_name",
+                    "data-testid": "kobo-device-name-input",
+                    autocomplete: "off",
+                    placeholder: "Kobo Clara",
+                    maxlength: "100",
+                    value: "{name_input}",
+                    oninput: move |e| { let mut name_input = name_input; name_input.set(e.value()) },
+                }
+            }
+            div { class: "settings-actions",
+                button {
+                    r#type: "submit",
+                    class: "btn",
+                    disabled: in_flight,
+                    "data-testid": "kobo-device-add",
+                    "Add a Kobo"
+                }
+            }
+        }
+    }
+}
+
 /// Card body: device list + add form. Every mutation re-fetches the list so the
 /// rendered state always matches the server.
 #[component]
@@ -117,116 +258,11 @@ pub fn KoboDevicesCard() -> Element {
     rsx! {
         section { class: "card", "data-testid": "kobo-devices-card",
             h2 { "Kobo wireless sync" }
-            ol { class: "subtitle kobo-setup-steps", "data-testid": "kobo-setup-steps",
-                li {
-                    "Give your Kobo a name and click "
-                    b { "Add a Kobo" }
-                }
-                li {
-                    "Copy the device's wireless sync endpoint URL. ("
-                    code { "/kobo/<token>" }
-                    ")"
-                }
-                li { "Connect the Kobo over USB," }
-                li {
-                    "Edit "
-                    code { ".kobo/Kobo/Kobo eReader.conf" }
-                    " and set "
-                    code { "api_endpoint=" }
-                    " under "
-                    code { "[OneStoreServices]" }
-                    " to "
-                    code { "<your_omnibus_server_url>/kobo/<token>" }
-                    "."
-                }
-                li { "Eject safely. Your next sync on the device talks to Omnibus." }
-            }
-
+            {render_kobo_setup_steps()}
             // Unconditional: the hazard applies the moment a URL is copied.
-            div { class: "kobo-warning", "data-testid": "kobo-data-loss-warning",
-                p { class: "kobo-warning-title", "First sync can erase your Kobo's highlights" }
-                p {
-                    "An improper sync can potentially wipe data on the Kobo like your "
-                    "annotations, notes, bookmarks, reading progress, and books."
-                }
-                p {
-                    "It is highly recommended to back up your device before attempting "
-                    "a sync with one of these tools:"
-                }
-                ul { class: "kobo-warning-tools",
-                    li {
-                        a {
-                            href: "https://github.com/seamus-sloan/kobo-backup#kobo-backup",
-                            target: "_blank",
-                            rel: "noopener noreferrer",
-                            "seamus-sloan/kobo-backup"
-                        }
-                    }
-                    li {
-                        a {
-                            href: "https://github.com/karlicoss/kobuddy#usage",
-                            target: "_blank",
-                            rel: "noopener noreferrer",
-                            "karlicoss/kobuddy"
-                        }
-                    }
-                }
-                p {
-                    "At minimum, copy "
-                    code { ".kobo/KoboReader.sqlite" }
-                    " off the device over USB."
-                }
-            }
-
-            if device_list.is_empty() {
-                p {
-                    class: "settings-status",
-                    "data-testid": "kobo-devices-empty",
-                    "No Kobo registered yet."
-                }
-            } else {
-                ul { class: "kobo-device-list", "data-testid": "kobo-device-list",
-                    for dev in device_list.iter().cloned() {
-                        KoboDeviceRow {
-                            key: "{dev.id}",
-                            device: dev.clone(),
-                            endpoint: endpoint_url(&server_url, &dev.token),
-                            disabled: in_flight(),
-                            on_regenerate,
-                            on_remove,
-                        }
-                    }
-                }
-            }
-
-            form {
-                id: "kobo-add-form",
-                class: "settings-form",
-                onsubmit: on_add,
-                div { class: "settings-field",
-                    label { r#for: "kobo-device-name", "Device name" }
-                    input {
-                        r#type: "text",
-                        id: "kobo-device-name",
-                        name: "kobo_device_name",
-                        "data-testid": "kobo-device-name-input",
-                        autocomplete: "off",
-                        placeholder: "Kobo Clara",
-                        maxlength: "100",
-                        value: "{name_input}",
-                        oninput: move |e| name_input.set(e.value()),
-                    }
-                }
-                div { class: "settings-actions",
-                    button {
-                        r#type: "submit",
-                        class: "btn",
-                        disabled: in_flight(),
-                        "data-testid": "kobo-device-add",
-                        "Add a Kobo"
-                    }
-                }
-            }
+            {render_kobo_warning()}
+            {render_kobo_device_list(&device_list, &server_url, in_flight(), on_regenerate, on_remove)}
+            {render_kobo_add_form(name_input, in_flight(), on_add)}
 
             if let Some(m) = msg() {
                 p {

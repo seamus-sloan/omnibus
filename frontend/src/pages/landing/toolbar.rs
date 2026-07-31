@@ -131,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn toolbar_renders_the_view_toggle_with_table_pressed_by_default() {
+    fn toolbar_renders_the_view_toggle_with_grid_pressed_by_default() {
         let html = render_toolbar(ViewPrefs::default());
 
         assert!(html.contains("data-testid=\"lib-toolbar\""));
@@ -140,22 +140,25 @@ mod tests {
         assert!(html.contains("data-testid=\"view-toggle-grid\""));
         assert!(html.contains("Table"));
         assert!(html.contains("Grid"));
-        // Default view mode is Table, so its button is the pressed one and the
-        // grid-only sort controls stay out of the markup.
+        // Default view mode is Grid, so its button is the pressed one and the
+        // grid-only sort controls are part of the default markup.
         assert!(html.contains("aria-pressed=\"true\""));
-        assert!(!html.contains("data-testid=\"lib-sort-select\""));
+        assert!(html.contains("data-testid=\"lib-sort-select\""));
+        assert!(html.contains("data-testid=\"lib-sort-dir\""));
+        assert!(html.contains("Sort by"));
     }
 
     #[test]
-    fn toolbar_reveals_the_sort_controls_in_grid_mode() {
+    fn toolbar_hides_the_sort_controls_in_table_mode() {
         let prefs = ViewPrefs {
-            view_mode: ViewMode::Grid,
+            view_mode: ViewMode::Table,
             ..ViewPrefs::default()
         };
         let html = render_toolbar(prefs);
 
-        assert!(html.contains("data-testid=\"lib-sort-select\""));
-        assert!(html.contains("data-testid=\"lib-sort-dir\""));
-        assert!(html.contains("Sort by"));
+        // Table view sorts via its own column headers, so the grid-only sort
+        // dropdown stays out of the markup.
+        assert!(!html.contains("data-testid=\"lib-sort-select\""));
+        assert!(!html.contains("data-testid=\"lib-sort-dir\""));
     }
 }

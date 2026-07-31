@@ -8,8 +8,9 @@ use omnibus_shared::{Contributor, EbookMetadata, Identifier};
 use sqlx::SqlitePool;
 
 use super::shared::{insert_book_row, insert_metadata_links};
-use super::{sync_changed, sync_new, sync_removed, wipe_per_book_link_rows};
+use super::{sync_books, sync_changed, sync_new, sync_removed, wipe_per_book_link_rows, SyncPlan};
 use crate::ebook::IndexedBook;
+use crate::indexer::diff_library;
 use crate::pool::init_db;
 use crate::test_support::{count_rows, indexed, CoversTempDir};
 
@@ -123,6 +124,75 @@ async fn sync_removed_retains_books_row_and_removes_book_files_row() {
         .await
         .unwrap();
     assert_eq!(flagged, 1, "retained row is flagged missing");
+}
+
+/// A book whose own ebook file is removed, but which still holds a
+/// cross-format attachment (a different format's file, recorded in
+/// `merged_uuids` and still present), is not flagged missing — the surviving
+/// file means the book isn't actually fileless.
+#[tokio::test]
+async fn sync_removed_does_not_flag_missing_when_a_cross_format_attachment_survives() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let library_id = seed_scan_root(&pool).await;
+    let book_id = seed_book_with_file(&pool, library_id, "a.epub").await;
+    let uuid: String = sqlx::query_scalar("SELECT uuid FROM books WHERE id = ?")
+        .bind(book_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // Forge a surviving cross-format attachment: a book_files row in a
+    // different format, backed by its own merged_uuids ledger entry.
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch, scan_key)
+         VALUES (?, 'M4B', 'a', 1000, 100, 'a.m4b')",
+    )
+    .bind(book_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO merged_uuids (uuid, book_id, format, library_path, scan_key)
+         VALUES ('attached-m4b', ?, 'M4B', '/audio', 'a.m4b')",
+    )
+    .bind(book_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let mut tx = pool.begin().await.unwrap();
+    sync_removed(&mut tx, library_id, &[uuid]).await.unwrap();
+    tx.commit().await.unwrap();
+
+    // The EPUB row is dropped, the M4B survives, and the book must not be
+    // flagged missing since it still holds a file.
+    assert_eq!(
+        count_rows(
+            &pool,
+            "SELECT COUNT(*) FROM book_files WHERE format = 'EPUB'"
+        )
+        .await,
+        0,
+        "the book's own native file row is dropped"
+    );
+    assert_eq!(
+        count_rows(
+            &pool,
+            "SELECT COUNT(*) FROM book_files WHERE format = 'M4B'"
+        )
+        .await,
+        1,
+        "the cross-format attachment survives"
+    );
+    let is_missing: i64 = sqlx::query_scalar("SELECT is_missing_files FROM books WHERE id = ?")
+        .bind(book_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        is_missing, 0,
+        "a surviving cross-format attachment means the book isn't fileless"
+    );
 }
 
 /// One `sync_removed` call ghosts every uuid in the batch — proving the
@@ -253,7 +323,7 @@ async fn sync_new_inserts_a_new_book_and_its_link_rows() {
 
     let new_books = vec![book_with_all_links("fresh.epub", "Fresh")];
     let mut tx = pool.begin().await.unwrap();
-    let covers = sync_new(&mut tx, library_id, "/lib", &new_books, || {})
+    let covers = sync_new(&mut tx, library_id, "/lib", &new_books, &[], || {})
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -408,6 +478,18 @@ async fn insert_book_row_writes_books_and_book_files_and_mints_uuid() {
         1,
         "exactly one book_files row"
     );
+    // The anchor row's scan_key must be set on insert, not left for a boot backfill.
+    let file_scan_key: Option<String> =
+        sqlx::query_scalar("SELECT scan_key FROM book_files WHERE book_id = ?")
+            .bind(inserted.book_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        file_scan_key.as_deref(),
+        Some("solo.epub"),
+        "book_files.scan_key is set on insert, matching books.scan_key"
+    );
 }
 
 /// `word_count` round-trips through both the insert and the in-place update:
@@ -449,6 +531,132 @@ async fn word_count_persists_on_insert_and_refreshes_on_change() {
         .await
         .unwrap();
     assert_eq!(refreshed, Some(2500), "the update refreshes word_count");
+}
+
+// ── Moved/renamed ebook relocation ───────────────────────────────────
+
+/// A moved/renamed ebook is classified Removed (old scan_key) and New (new
+/// scan_key) in the same reindex plan. The relocation must be recognized and
+/// written as the book's own native row — updating `books.scan_key` (AC1),
+/// preserving `books.id`/`books.uuid` (AC4), clearing `is_missing_files`
+/// (AC2), and minting no `merged_uuids` row (AC3) — rather than the
+/// title+author attach heuristic re-binding it as a cross-format attachment
+/// onto its own just-vacated slot.
+#[tokio::test]
+async fn moved_ebook_relocates_in_place_instead_of_minting_a_merged_uuids_row() {
+    let _covers = CoversTempDir::new("sync_books_relocation");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let library_id = seed_scan_root(&pool).await;
+    let book_id = seed_book_with_file(&pool, library_id, "Old/book.epub").await;
+    let uuid_before: String = sqlx::query_scalar("SELECT uuid FROM books WHERE id = ?")
+        .bind(book_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // One reindex pass observing the move: the old scan_key is Removed, the
+    // new path is New — exactly what the real diff produces.
+    sync_books(
+        &pool,
+        "/lib",
+        SyncPlan {
+            new_books: vec![book_with_all_links("New/book.epub", "Seeded")],
+            removed_uuids: vec![uuid_before.clone()],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        count_rows(&pool, "SELECT COUNT(*) FROM books").await,
+        1,
+        "no duplicate book was created"
+    );
+    let (id_after, uuid_after, scan_key_after, is_missing): (i64, String, String, i64) =
+        sqlx::query_as("SELECT id, uuid, scan_key, is_missing_files FROM books")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(id_after, book_id, "AC4: books.id preserved");
+    assert_eq!(uuid_after, uuid_before, "AC4: books.uuid preserved");
+    assert_eq!(
+        scan_key_after, "New/book.epub",
+        "AC1: scan_key follows the move"
+    );
+    assert_eq!(
+        is_missing, 0,
+        "AC2: not flagged missing after the relocation"
+    );
+    assert_eq!(
+        count_rows(&pool, "SELECT COUNT(*) FROM merged_uuids").await,
+        0,
+        "AC3: no cross-format ledger row minted for a same-format relocation"
+    );
+    assert_eq!(book_files_count(&pool, book_id).await, 1, "one file row");
+}
+
+/// AC2: three consecutive reindexes after a move converge. Each pass derives
+/// its plan the way the real indexer does — `diff_library` classifying the
+/// current DB rows against a fixed on-disk state — so a bug that leaves
+/// `books.scan_key` stale (still naming the old path) would keep
+/// reclassifying the book Removed every pass, flapping it between
+/// present and missing forever.
+#[tokio::test]
+async fn three_consecutive_reindexes_after_a_move_converge_on_one_file_backed_row() {
+    let _covers = CoversTempDir::new("sync_books_relocation_convergence");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let library_id = seed_scan_root(&pool).await;
+    let book_id = seed_book_with_file(&pool, library_id, "Old/book.epub").await;
+
+    let disk = [crate::ebook::StatEntry {
+        filename: "New/book.epub".into(),
+        scan_key: "New/book.epub".into(),
+        mtime_epoch: 0,
+        size_bytes: 0,
+        error: None,
+    }];
+
+    for pass in 0..3 {
+        let db_rows = crate::books::list_indexed_rows_for_formats(&pool, "/lib", &["EPUB"])
+            .await
+            .unwrap();
+        let diff = diff_library(&disk, &db_rows, std::path::Path::new("/lib"), true);
+        let new_books = if diff.new.is_empty() {
+            vec![]
+        } else {
+            vec![book_with_all_links("New/book.epub", "Seeded")]
+        };
+
+        sync_books(
+            &pool,
+            "/lib",
+            SyncPlan {
+                new_books,
+                removed_uuids: diff.removed,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            book_files_count(&pool, book_id).await,
+            1,
+            "pass {pass}: exactly one file row, no flapping"
+        );
+        let is_missing: i64 = sqlx::query_scalar("SELECT is_missing_files FROM books WHERE id = ?")
+            .bind(book_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(is_missing, 0, "pass {pass}: is_missing_files stays 0");
+        assert_eq!(
+            count_rows(&pool, "SELECT COUNT(*) FROM merged_uuids").await,
+            0,
+            "pass {pass}: still no merged_uuids row"
+        );
+    }
 }
 
 #[tokio::test]

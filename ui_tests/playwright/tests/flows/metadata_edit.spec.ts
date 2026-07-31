@@ -78,9 +78,6 @@ test.describe
       await expect(page.getByTestId("me-save")).toBeVisible();
       await expect(page.getByTestId("me-discard")).toBeVisible();
 
-      // Export-to-OPF control is present in the sidebar.
-      await expect(page.getByTestId("me-export-opf")).toBeVisible();
-
       // Save is initially disabled (no dirty fields).
       await expect(page.getByTestId("me-save")).toBeDisabled();
     });
@@ -293,53 +290,6 @@ test.describe
       // Save button has come out of its "Saving…" state and is re-enabled so
       // the user can retry. `toBeEnabled` auto-retries until the signal settles.
       await expect(page.getByTestId("me-save")).toBeEnabled();
-    });
-
-    // ---------------------------------------------------------------------------
-    // OPF export — force a 500 on the export RPC and assert the sidebar surfaces
-    // the failure and re-enables the button. Intercept-only: a real export would
-    // write a metadata.opf into the committed fixture library; the success path
-    // is covered by the db + server Rust tests.
-    // ---------------------------------------------------------------------------
-
-    test("surfaces error when the OPF export mutation fails", async ({
-      page,
-      request,
-    }) => {
-      const id = await fetchBookIdByTitle(request, TARGET.title);
-      await gotoReady(page, `/books/${id}/edit`);
-
-      const exportBtn = page.getByTestId("me-export-opf");
-      await expect(exportBtn).toBeEnabled();
-
-      await page.route("**/api/rpc/ebook/export-opf", (route) => {
-        if (route.request().method() === "POST") {
-          return route.fulfill({
-            status: 500,
-            contentType: "text/plain",
-            body: "forced failure",
-          });
-        }
-        return route.continue();
-      });
-
-      await expectMutation(
-        page,
-        {
-          method: "POST",
-          url: /\/api\/rpc\/ebook\/export-opf$/,
-          expectedStatus: 500,
-        },
-        async () => exportBtn.click(),
-      );
-
-      // Sidebar status line surfaces the failure; the button re-enables for retry.
-      await expect(page.getByTestId("me-export-status")).toContainText(
-        "Export failed",
-      );
-      await expect(exportBtn).toBeEnabled();
-
-      await page.unroute("**/api/rpc/ebook/export-opf");
     });
 
     // ---------------------------------------------------------------------------

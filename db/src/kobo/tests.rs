@@ -1,3 +1,7 @@
+//! Tests for `sync_books`: which books a Kobo sync surfaces from opted-in
+//! manual and smart shelves, per-user scoping, dedup across shelves,
+//! ordering, chunk-boundary and no-cap enumeration, and override reflection.
+
 use omnibus_shared::{
     Contributor, CreateShelfRequest, MatchMode, MetadataOverrides, RuleField, RuleOp, ShelfKind,
     ShelfRule,
@@ -469,6 +473,17 @@ async fn reading_state_for_is_scoped_to_the_requesting_user() {
         !alice_states.contains_key(&uuid),
         "another user's read state must not leak"
     );
+}
+
+#[tokio::test]
+async fn reading_state_for_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+
+    assert!(matches!(
+        reading_state_for(&pool, 1, &["any-uuid".to_string()]).await,
+        Err(KoboError::Sqlx(_))
+    ));
 }
 
 #[tokio::test]

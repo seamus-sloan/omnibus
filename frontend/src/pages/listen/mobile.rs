@@ -14,6 +14,7 @@ use super::helpers::effective_scrub_position;
 use crate::components::atrium::Cover;
 use crate::contexts::use_server_url;
 use crate::data;
+use crate::time::now_unix;
 use crate::Route;
 
 mod bookmarks_sheet;
@@ -219,18 +220,6 @@ fn persist_position(uuid: &str, file_id: Option<i64>, server_url: &str, seconds:
         };
         let _ = data::save_progress(&server_url, update).await;
     });
-}
-
-/// Current unix time in seconds from the device clock — stamped onto every
-/// `ProgressUpdate` so most-recent-wins resolves on client event time
-/// rather than server receipt time (issue #1362). This module only
-/// compiles under `feature = "mobile"` (native, not wasm32), so the
-/// platform clock is always `std::time::SystemTime`.
-fn now_unix() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 /// Marquee-ready title markup: `.m-player-title` is the fixed-width clipping

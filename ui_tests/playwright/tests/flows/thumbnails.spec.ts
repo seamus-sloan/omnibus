@@ -1,5 +1,6 @@
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expect, test } from "../fixtures/test";
+import { switchToTableView } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
 
@@ -10,8 +11,9 @@ test.beforeAll(async ({ request }) => {
   await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
 });
 
-test("renders book grid with srcset cover images", async ({ page }) => {
+test("renders table cover images with a srcset", async ({ page }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   // Pick a fixture book that has a cover and target its row directly by slug.
   // Earlier this filtered by `ebook-cell-cover`, but every row has that
@@ -41,8 +43,9 @@ test("renders book grid with srcset cover images", async ({ page }) => {
 
 test("thumb endpoint serves an image", async ({ page, request }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
-  // Extract a real book ID from the srcset of the first cover <img> in the grid.
+  // Extract a real book UUID from the srcset of the first table row's cover <img>.
   const coverImg = page
     .getByTestId(/^ebook-row-/)
     .filter({ has: page.getByRole("img", { name: /^Cover of/ }) })
@@ -84,6 +87,7 @@ test("thumb endpoint serves an image", async ({ page, request }) => {
 
 test("books without covers render fallback dash", async ({ page }) => {
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   // "gamma" is the fixture book with hasCover=false.
   const bookWithoutCover = FIXTURE_BOOKS.find((b) => !b.hasCover);

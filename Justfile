@@ -1,10 +1,12 @@
-# Launch the dev multiplexer with Zellij. Server tab auto-starts; android/ios/playwright
-# tabs are preloaded with their commands suspended — press Enter in the pane to start them.
+# Launch the dev multiplexer with Zellij. Server tab auto-starts; the
+# android/ios/ios-hybrid/playwright tabs are preloaded with their
+# commands suspended — press Enter in the pane to start them.
 serve:
     zellij --layout .zellij/layout.kdl
 
 # Launch the dev multiplexer with process-compose. Server process auto-starts;
-# android/ios/playwright are disabled by default — select one in the TUI and press F7 to start.
+# android/ios/ios-hybrid/playwright are disabled by default — select
+# one in the TUI and press F7 to start.
 serve-pc:
     process-compose up
 
@@ -140,17 +142,6 @@ lint: lint-css
 # Lint then test — the pre-push gate referenced by rule 99.
 check: lint test
 
-# Maestro mobile E2E suite (ui_tests/maestro/flows). Needs a booted simulator
-# with the app installed (`dx serve --platform ios` handles build+install) and
-# a running dev server for the happy-path flows. Port resolution: an explicit
-# $OMNIBUS_PORT wins (the multiplexer panes pin 3000 to match their server
-# tab), else `just dev-up`'s .claude/runtime/env.sh, else 3000. Extra args
-# pass through to maestro (e.g. `just e2e-mobile --include-tags smoke`).
-e2e-mobile *args:
-    nix develop .#mobile --command bash -ec '\
-        if [ -z "${OMNIBUS_PORT:-}" ] && [ -f .claude/runtime/env.sh ]; then source .claude/runtime/env.sh; fi; \
-        maestro test -e SERVER_URL="http://127.0.0.1:${OMNIBUS_PORT:-3000}" {{args}} ui_tests/maestro/flows/'
-
 # Inject the Omnibus launcher icon into a built iOS `.app`. dx 0.7 installs no
 # iOS app icon and `[bundle] icon` only feeds the desktop bundlers
 # (DioxusLabs/dioxus#3685), so run this after `dx build --platform ios` and
@@ -171,3 +162,36 @@ ios-icon app="":
 # and installs. Pass a device name to disambiguate. See scripts/install-ios.sh.
 install-ios device="":
     nix develop .#mobile --command scripts/install-ios.sh "{{device}}"
+
+# --- Native SwiftUI app (omnibus-ios/, scheme `omnibus`). xcodebuild + simctl
+# are system Xcode, so none of these wrap in a nix shell — the opposite: the
+# `env -u LD -u CC -u CXX` prefixes strip the nix dev shell's toolchain exports
+# (direnv loads them into every interactive shell), because xcodebuild adopts
+# $LD as the linker driver and raw ld can't parse the clang-style args it then
+# receives. Derived data lives under ~/.cache/omnibus-ios-derived/<worktree> —
+# outside the repo, same philosophy as CARGO_TARGET_DIR.
+
+# Compile check against a generic simulator destination — no booted device
+# needed. Shares derived data with `ios-sim`, so a later sim run reuses it.
+ios-build:
+    env -u LD -u CC -u CXX xcodebuild build \
+        -project omnibus-ios/omnibus.xcodeproj -scheme omnibus \
+        -configuration Debug \
+        -destination 'generic/platform=iOS Simulator' \
+        -derivedDataPath "${OMNIBUS_IOS_DERIVED_DIR:-$HOME/.cache/omnibus-ios-derived/$(basename "$PWD")}"
+
+# Unit tests (omnibusTests) via scripts/ios-test.sh — the exact invocation CI
+# runs (.github/workflows/ios-tests.yml), so local and CI agree. Results land
+# as .claude/runtime/ios-tests/<suite>.xcresult.
+ios-test:
+    env -u LD -u CC -u CXX scripts/ios-test.sh unit
+
+# UI tests (omnibusUITests), same script/invocation as CI.
+ios-test-ui:
+    env -u LD -u CC -u CXX scripts/ios-test.sh ui
+
+# Boot the newest iPhone simulator, build, install, and launch the native app.
+# Prints this workspace's dev-server URL (from `just dev-up`'s env.sh) as a
+# hint for the Connect screen. See scripts/ios-sim.sh.
+ios-sim:
+    scripts/ios-sim.sh

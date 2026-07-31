@@ -1,6 +1,6 @@
 //! Tests for the metadata-overrides write path (upsert/merge/get/delete),
-//! its FTS rebuild, and the series-link materialization. Mirrors the
-//! pre-split inline `#[cfg(test)] mod tests` block.
+//! its FTS rebuild, and the series-link / tag-link materialization. Mirrors
+//! the pre-split inline `#[cfg(test)] mod tests` block.
 
 use omnibus_shared::{BulkMetadataEdit, Contributor, MetadataOverrides, MetadataSource};
 
@@ -1132,6 +1132,61 @@ async fn upsert_metadata_overrides_materializes_series_link_for_new_series() {
     assert!(
         book.series_id.is_some(),
         "series_id should be set after override materializes the link"
+    );
+}
+
+#[tokio::test]
+async fn upsert_metadata_overrides_materializes_tag_links_for_new_tags() {
+    let _covers = CoversTempDir::new("materialize_tags");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+
+    replace_books(
+        &pool,
+        "/lib",
+        vec![indexed(
+            "book.epub",
+            Some("Tagged Book"),
+            &["Author"],
+            &[],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+    let book = list_books(&pool, "/lib").await.unwrap();
+    let uuid = book[0].unique_identifier.clone().unwrap();
+
+    upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &MetadataOverrides {
+            subjects: Some(vec!["Brand New Tag".into(), "  ".into()]),
+            ..Default::default()
+        },
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    // `get_tag_cloud` only surfaces tags with a canonical `books_tags_link`
+    // row, so the override-created tag appearing here proves the
+    // materialization — this is what feeds the inline-edit autocomplete pool.
+    let cloud = crate::get_tag_cloud(&pool).await.unwrap();
+    assert!(
+        cloud.iter().any(|t| t.name == "Brand New Tag"),
+        "override-created tag should appear in the tag cloud, got: {:?}",
+        cloud.iter().map(|t| &t.name).collect::<Vec<_>>()
+    );
+    // The blank entry is trimmed/skipped, never materialized.
+    assert!(
+        cloud.iter().all(|t| !t.name.trim().is_empty()),
+        "blank subjects must not materialize tag rows"
     );
 }
 

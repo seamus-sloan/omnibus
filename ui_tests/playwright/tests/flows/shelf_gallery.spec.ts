@@ -3,7 +3,7 @@ import type { APIRequestContext } from "@playwright/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
-import { fetchBookUuidByTitle } from "../utils/ebooks";
+import { fetchBookUuidByTitle, switchToTableView } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
 
@@ -49,6 +49,7 @@ test("selects a shelf in place: glow moves, list filters, URL stays put", async 
   const shelfId = await createManualShelf(request, name, [alphaUuid]);
 
   await gotoReady(page, "/");
+  await switchToTableView(page);
 
   // All Books glows (is selected) by default.
   await expect(page.getByTestId("gallery-all-books")).toHaveAttribute(
@@ -87,6 +88,7 @@ test("persists the selected shelf across a reload", async ({
   const shelfId = await createManualShelf(request, name, [alphaUuid]);
 
   await gotoReady(page, "/");
+  await switchToTableView(page);
   const tile = page.getByTestId(`gallery-shelf-${shelfId}`);
   await expectMutation(
     page,
@@ -120,6 +122,7 @@ test("returns to All Books and restores the full library", async ({
   const shelfId = await createManualShelf(request, name, [alphaUuid]);
 
   await gotoReady(page, "/");
+  await switchToTableView(page);
   await expectMutation(
     page,
     { method: "POST", url: "/api/rpc/shelves/page", expectedStatus: 200 },

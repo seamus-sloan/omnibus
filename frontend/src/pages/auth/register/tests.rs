@@ -1,6 +1,8 @@
-// Password-scoring coverage lives with the shared helper in
-// `components::auth::strength`; these tests cover only register-specific
-// error routing.
+//! Tests for `classify_register_error`: routing a server error string to
+//! the matching `RegisterError` variant. Password-scoring coverage lives
+//! with the shared helper in `components::auth::strength`; these tests
+//! cover only register-specific error routing.
+
 use super::*;
 
 #[test]

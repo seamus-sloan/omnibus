@@ -1,8 +1,9 @@
 //! Per-cell components for the landing table's inline-editable rows.
 //!
-//! Each helper wraps an [`EditableCell`] (or, for authors, hosts a [`ChipEditor`]
-//! directly) and is composed by `EbookRowCells` in [`super::row`].
-//! `build_save_*` produce the row's per-field save callbacks.
+//! Each helper wraps an [`EditableCell`] (or, for authors/tags, hosts a
+//! [`ChipEditor`] directly via [`ChipCell`]) and is composed by
+//! `EbookRowCells` in [`super::row`]. `build_save_*` produce the row's
+//! per-field save callbacks.
 
 use dioxus::prelude::*;
 use omnibus_shared::{Contributor, EbookMetadata, MetadataOverrides};
@@ -23,17 +24,20 @@ pub(super) struct CellEditCtx {
 }
 
 /// Per-row context threaded from `EbookRow` through `EbookRowMarkup` into
-/// `EbookRowCells`: admin gating, editing state, the authors chip draft +
-/// suggestion pool, and the two save callbacks. Grouped so the row markup
-/// components stay under the prop cap.
+/// `EbookRowCells`: admin gating, editing state, the authors/tags chip
+/// drafts + suggestion pools, and the save callbacks. Grouped so the row
+/// markup components stay under the prop cap.
 #[derive(Clone, PartialEq)]
 pub(super) struct RowContext {
     pub is_admin: bool,
     pub editing: Signal<Option<EditField>>,
     pub authors_draft: Signal<Vec<String>>,
+    pub tags_draft: Signal<Vec<String>>,
     pub author_suggestions: ReadSignal<Vec<SuggestionItem>>,
+    pub tag_suggestions: ReadSignal<Vec<SuggestionItem>>,
     pub save_field: EventHandler<(EditField, String)>,
     pub save_authors: EventHandler<Vec<String>>,
+    pub save_tags: EventHandler<Vec<String>>,
     /// Bulk-edit selection shared with the whole table (see
     /// [`super::BookTableContext::selected`]).
     pub selected: Signal<std::collections::BTreeSet<String>>,
@@ -59,12 +63,12 @@ pub(super) fn field_override(field: EditField, value: &str) -> MetadataOverrides
     match field {
         EditField::Title => overrides.title = value,
         EditField::Series => overrides.series = value,
-        EditField::Publisher => overrides.publisher = value,
         EditField::Published => overrides.published = value,
         EditField::Language => overrides.language = value,
-        // Authors edits go through `build_save_authors` so they can set
-        // the `creators` override instead of a scalar.
-        EditField::Authors => {}
+        // Authors / Tags edits go through `build_save_authors` /
+        // `build_save_tags` so they can set the `creators` / `subjects`
+        // list overrides instead of a scalar.
+        EditField::Authors | EditField::Tags => {}
     }
     overrides
 }
@@ -80,7 +84,7 @@ pub(super) fn build_save_field(
 ) -> impl FnMut((EditField, String)) + 'static {
     move |args: (EditField, String)| {
         let (field, value) = args;
-        if field == EditField::Authors {
+        if matches!(field, EditField::Authors | EditField::Tags) {
             return;
         }
         let uuid = uuid.clone();
@@ -132,6 +136,31 @@ pub(super) fn build_save_authors(
     }
 }
 
+/// Build the tags-cell save callback. Mirrors [`build_save_authors`] but
+/// posts a `subjects` override (full replacement list) instead of `creators`.
+pub(super) fn build_save_tags(
+    uuid: String,
+    server_url: String,
+    mut book_state: Signal<EbookMetadata>,
+) -> impl FnMut(Vec<String>) + 'static {
+    move |new_tags: Vec<String>| {
+        let uuid = uuid.clone();
+        let url = server_url.clone();
+        spawn(async move {
+            let overrides = MetadataOverrides {
+                subjects: Some(new_tags),
+                ..Default::default()
+            };
+            if overrides.validate().is_err() {
+                return;
+            }
+            if let Ok(Some(merged)) = data::save_overrides(&url, &uuid, &overrides).await {
+                book_state.set(merged);
+            }
+        });
+    }
+}
+
 /// Title cell wrapper — pre-wires the title field's [`EditableCell`] props
 /// and routes its `on_save` through the shared row save callback.
 #[component]
@@ -143,13 +172,16 @@ pub(super) fn RowTitleCell(title: String, error: Option<String>, ctx: CellEditCt
     } = ctx;
     rsx! {
         EditableCell {
-            col_class: "ebook-col-title".to_string(),
-            cell_testid: "ebook-cell-title".to_string(),
+            display: EditableCellDisplay {
+                col_class: "ebook-col-title".to_string(),
+                cell_testid: "ebook-cell-title".to_string(),
+                display_value: title,
+                placeholder: "Title".to_string(),
+                ..Default::default()
+            },
             field: EditField::Title,
-            display_value: title,
             is_admin,
             editing,
-            placeholder: "Title".to_string(),
             on_save: move |v: String| save_field.call((EditField::Title, v)),
             error,
         }
@@ -167,14 +199,16 @@ pub(super) fn RowSeriesCell(series_line: String, series_text: String, ctx: CellE
     } = ctx;
     rsx! {
         EditableCell {
-            col_class: "ebook-col-series".to_string(),
-            cell_testid: "ebook-cell-series".to_string(),
+            display: EditableCellDisplay {
+                col_class: "ebook-col-series".to_string(),
+                cell_testid: "ebook-cell-series".to_string(),
+                display_value: series_line,
+                edit_value: Some(series_text),
+                placeholder: "Series".to_string(),
+            },
             field: EditField::Series,
-            display_value: series_line,
-            edit_value: Some(series_text),
             is_admin,
             editing,
-            placeholder: "Series".to_string(),
             on_save: move |v: String| save_field.call((EditField::Series, v)),
             error: None,
         }
@@ -212,13 +246,16 @@ pub(super) fn RowScalarCell(
     } = ctx;
     rsx! {
         EditableCell {
-            col_class,
-            cell_testid,
+            display: EditableCellDisplay {
+                col_class,
+                cell_testid,
+                display_value: value,
+                placeholder,
+                ..Default::default()
+            },
             field,
-            display_value: value,
             is_admin,
             editing,
-            placeholder,
             on_save: move |v: String| save_field.call((field, v)),
             error: None,
         }
@@ -291,12 +328,13 @@ pub(super) fn EbookRowFormatsCell(formats: Vec<String>, has_physical: bool) -> E
     }
 }
 
-/// Props for the [`EditableCell`] component.
-#[derive(Props, Clone, PartialEq)]
-pub(super) struct EditableCellProps {
+/// Grouped display fields (column class, testid, display/edit value,
+/// placeholder) for an [`EditableCell`]. Mirrors [`RowScalarCellDisplay`] so
+/// both cell types stay under the prop cap.
+#[derive(Clone, PartialEq, Default)]
+pub(super) struct EditableCellDisplay {
     pub col_class: String,
     pub cell_testid: String,
-    pub field: EditField,
     pub display_value: String,
     /// Separate value used to seed the input when edit mode opens.
     /// Some cells render a richer display string than the underlying
@@ -304,11 +342,17 @@ pub(super) struct EditableCellProps {
     /// is the series-name override. Pass `Some(bare_value)` so the
     /// input seeds (and the blur-comparison runs against) the editable
     /// scalar, not the rendered text. Defaults to `display_value`.
-    #[props(default)]
     pub edit_value: Option<String>,
+    pub placeholder: String,
+}
+
+/// Props for the [`EditableCell`] component.
+#[derive(Props, Clone, PartialEq)]
+pub(super) struct EditableCellProps {
+    pub display: EditableCellDisplay,
+    pub field: EditField,
     pub is_admin: bool,
     pub editing: Signal<Option<EditField>>,
-    pub placeholder: String,
     pub on_save: EventHandler<String>,
     pub error: Option<String>,
 }
@@ -321,17 +365,20 @@ pub(super) struct EditableCellProps {
 #[component]
 pub(super) fn EditableCell(props: EditableCellProps) -> Element {
     let EditableCellProps {
-        col_class,
-        cell_testid,
+        display,
         field,
-        display_value,
-        edit_value,
         is_admin,
         editing,
-        placeholder,
         on_save,
         error,
     } = props;
+    let EditableCellDisplay {
+        col_class,
+        cell_testid,
+        display_value,
+        edit_value,
+        placeholder,
+    } = display;
     let mut editing = editing;
     let mut draft = use_signal(String::new);
     let is_editing = editing() == Some(field);
@@ -423,87 +470,140 @@ pub(super) fn EditableCell(props: EditableCellProps) -> Element {
     }
 }
 
-/// Props for the [`AuthorsCell`] component.
+/// Static config for a [`ChipCell`]: which field it edits, its column
+/// class and cell testid, the display-mode text, and the chip-editor
+/// options. Grouped so [`ChipCell`] stays under the prop cap.
+#[derive(Clone, PartialEq)]
+pub(super) struct ChipCellDisplay {
+    pub field: EditField,
+    pub col_class: String,
+    pub cell_testid: String,
+    pub display_text: String,
+    pub options: ChipEditorOptions,
+}
+
+impl ChipCellDisplay {
+    /// Authors-cell config — comma-joined names, `ebook-cell-author` testids.
+    pub(super) fn authors(display_text: String) -> Self {
+        Self {
+            field: EditField::Authors,
+            col_class: "ebook-col-author".to_string(),
+            cell_testid: "ebook-cell-author".to_string(),
+            display_text,
+            options: ChipEditorOptions {
+                placeholder: "+ add author\u{2026}".to_string(),
+                show_avatar: false,
+                aria_remove_prefix: "Remove".to_string(),
+                testid_prefix: "ebook-cell-author".to_string(),
+                autofocus: true,
+                dropdown_header: "ADD AUTHOR".to_string(),
+                ..ChipEditorOptions::default()
+            },
+        }
+    }
+
+    /// Tags-cell config — comma-joined tags, `ebook-cell-tags` testids.
+    pub(super) fn tags(display_text: String) -> Self {
+        Self {
+            field: EditField::Tags,
+            col_class: "ebook-col-tags".to_string(),
+            cell_testid: "ebook-cell-tags".to_string(),
+            display_text,
+            options: ChipEditorOptions {
+                placeholder: "+ add tag\u{2026}".to_string(),
+                show_avatar: false,
+                aria_remove_prefix: "Remove tag".to_string(),
+                testid_prefix: "ebook-cell-tags".to_string(),
+                autofocus: true,
+                dropdown_header: "ADD TAG".to_string(),
+                ..ChipEditorOptions::default()
+            },
+        }
+    }
+}
+
+/// Props for the [`ChipCell`] component. `display` already groups the static
+/// config; the other 5 fields are each distinct live state with no further
+/// natural grouping — accepted at 6 total, same precedent as `RowScalarCell`.
 #[derive(Props, Clone, PartialEq)]
-pub(super) struct AuthorsCellProps {
+pub(super) struct ChipCellProps {
+    /// Field/column/testid/options config for this cell.
+    pub display: ChipCellDisplay,
     /// Gates edit affordances — only admins can open the chip editor.
     pub is_admin: bool,
     /// Which field (if any) the row is currently editing.
     pub editing: Signal<Option<EditField>>,
-    /// The in-progress author chip list shared with the row.
-    pub authors_draft: Signal<Vec<String>>,
-    /// Comma-joined author names shown in display mode.
-    pub authors_text: String,
-    /// Library-wide author pool surfaced in the dropdown.
+    /// The in-progress chip list shared with the row.
+    pub draft: Signal<Vec<String>>,
+    /// Library-wide suggestion pool surfaced in the dropdown.
     pub suggestions: ReadSignal<Vec<SuggestionItem>>,
-    /// Fired with the new full author list on every add/remove.
+    /// Fired with the new full list on every add/remove.
     pub on_change: EventHandler<Vec<String>>,
 }
 
-/// Inline-editable Authors cell. Unlike [`EditableCell`] (which hosts
-/// a single-line text input), the Authors cell renders the full
-/// [`ChipEditor`] *inside* the `<td>` when the row's editing signal
-/// matches `EditField::Authors`. The cell grows vertically to fit the
-/// chips + input + dropdown, matching the design comp.
+/// Inline-editable multi-value cell (Authors, Tags). Unlike [`EditableCell`]
+/// (which hosts a single-line text input), this cell renders the full
+/// [`ChipEditor`] *inside* the `<td>` when the row's editing signal matches
+/// its field. The cell grows vertically to fit the chips + input + dropdown,
+/// matching the design comp.
 ///
-/// Display mode: comma-joined names. Hover: dashed amber outline.
+/// Display mode: comma-joined values. Hover: dashed amber outline.
 /// Click: swaps to chip editor (auto-focused) with the library-wide
-/// author pool surfaced in the dropdown. Escape exits edit mode.
+/// pool surfaced in the dropdown. Escape exits edit mode.
 #[component]
-pub(super) fn AuthorsCell(props: AuthorsCellProps) -> Element {
-    let AuthorsCellProps {
+pub(super) fn ChipCell(props: ChipCellProps) -> Element {
+    let ChipCellProps {
+        display,
         is_admin,
         editing,
-        authors_draft,
-        authors_text,
+        draft,
         suggestions,
         on_change,
     } = props;
+    let ChipCellDisplay {
+        field,
+        col_class,
+        cell_testid,
+        display_text,
+        options,
+    } = display;
     let mut editing = editing;
-    let is_editing = editing() == Some(EditField::Authors);
+    let is_editing = editing() == Some(field);
     let active_class = if is_editing {
         " ebook-cell-editing"
     } else {
         ""
     };
     let admin_class = if is_admin { " ebook-cell-editable" } else { "" };
-    let combined_class = format!("ebook-col-author{admin_class}{active_class}");
+    let combined_class = format!("{col_class}{admin_class}{active_class}");
 
     rsx! {
         td {
             class: "{combined_class}",
-            "data-testid": "ebook-cell-author",
+            "data-testid": "{cell_testid}",
             onclick: move |e| {
                 if !is_admin {
                     return;
                 }
                 e.stop_propagation();
                 if !is_editing {
-                    editing.set(Some(EditField::Authors));
+                    editing.set(Some(field));
                 }
             },
             if is_editing {
                 div { class: "ebook-cell-chip-host",
                     ChipEditor {
-                        values: authors_draft,
+                        values: draft,
                         on_change,
                         suggestions,
-                        options: ChipEditorOptions {
-                            placeholder: "+ add author\u{2026}".to_string(),
-                            show_avatar: false,
-                            aria_remove_prefix: "Remove".to_string(),
-                            testid_prefix: "ebook-cell-author".to_string(),
-                            autofocus: true,
-                            dropdown_header: "ADD AUTHOR".to_string(),
-                            ..ChipEditorOptions::default()
-                        },
+                        options,
                         on_close: move |_| {
                             editing.set(None);
                         },
                     }
                 }
             } else {
-                div { class: "ebook-title-cell", "{authors_text}" }
+                div { class: "ebook-title-cell", "{display_text}" }
             }
         }
     }

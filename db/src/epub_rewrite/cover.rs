@@ -1,5 +1,5 @@
 //! Re-encode a user's override cover to match the format of the EPUB's
-//! existing cover resource (F5.8 #1372). The in-place rewrite swaps only the
+//! existing cover resource. The in-place rewrite swaps only the
 //! *bytes* of the cover entry, so the replacement must decode to the same
 //! image format the manifest already declares — otherwise the entry's
 //! `media-type` and href extension would lie about its contents.

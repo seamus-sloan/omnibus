@@ -341,6 +341,55 @@ async fn get_tag_cloud_dedupes_duplicate_subject_strings_within_one_override() {
     );
 }
 #[tokio::test]
+async fn get_tag_cloud_matches_override_subjects_case_insensitively() {
+    // `tags.name` dedupes NOCASE, so a case-variant override ("fiction"
+    // typed against a canonical "Fiction" row) materializes no new row —
+    // the membership match must fold case too, or the override member is
+    // silently dropped from the canonical row's count.
+    let _guard = CoversTempDir::new("tag_cloud_case_fold");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+
+    replace_books(
+        &pool,
+        "/lib",
+        vec![
+            indexed("a.epub", Some("A"), &["X"], &["Fiction"], None, None),
+            indexed("b.epub", Some("B"), &["X"], &[], None, None),
+        ],
+    )
+    .await
+    .unwrap();
+
+    let books = list_books(&pool, "/lib").await.unwrap();
+    let b = books.iter().find(|x| x.filename == "b.epub").unwrap();
+    let uuid = b.unique_identifier.clone().unwrap();
+    let ov = MetadataOverrides {
+        subjects: Some(vec!["fiction".into()]),
+        ..Default::default()
+    };
+    upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+        .await
+        .unwrap();
+
+    let tags = get_tag_cloud(&pool).await.unwrap();
+    let fiction = tags
+        .iter()
+        .find(|t| t.name == "Fiction")
+        .expect("canonical Fiction row present");
+    assert_eq!(
+        fiction.count, 2,
+        "case-variant override subject must count toward the NOCASE-unique row, got {tags:?}",
+    );
+    assert!(
+        !tags.iter().any(|t| t.name == "fiction"),
+        "no separate lowercase row may surface, got {tags:?}",
+    );
+}
+#[tokio::test]
 async fn get_author_includes_books_whose_override_names_this_author() {
     // Repro of the bug where renaming a book's author via the
     // metadata form (e.g. "Sanderson, Brandon" → "Brandon Sanderson")

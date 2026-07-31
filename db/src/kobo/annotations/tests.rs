@@ -37,6 +37,7 @@ fn upload(client_id: &str, color: HighlightColor, note: Option<&str>) -> IngestK
         text: Some("highlighted prose".into()),
         note: note.map(Into::into),
         kobo_location: r#"{"span":{"startPath":"span#kobo\\.1\\.1","startChar":0}}"#.into(),
+        epub_cfi_range: None,
     }
 }
 
