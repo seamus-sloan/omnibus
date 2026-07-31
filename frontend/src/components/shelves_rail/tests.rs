@@ -45,3 +45,42 @@ fn is_row_active_is_false_for_a_different_shelf_id() {
 fn is_row_active_is_false_when_the_all_books_row_is_active() {
     assert!(!is_row_active(RailActive::All, 7));
 }
+
+// Render-smoke coverage for the public `ShelvesRail` component itself,
+// unlike the helper tests above. Gated on `server` (needs `dioxus::ssr`).
+//
+// `ShelvesRail` renders a `dioxus_router::Link` for the "All books" row (and
+// one per shelf), which panics without a live `RouterContext` — only
+// obtainable by mounting `dioxus_router::Router`, which this test doesn't do
+// (same constraint noted on `components::top_nav`'s untested full render;
+// `book_detail/highlights/tests.rs` mounts a `Router` for `Link` coverage,
+// but wiring that harness here is out of scope). Dioxus catches that panic
+// per-component rather than aborting the whole render, so the assertions
+// below on the surrounding, Link-free markup still hold — the "All books"
+// row itself is unverifiable here.
+#[cfg(feature = "server")]
+mod render {
+    use dioxus::prelude::*;
+
+    use crate::components::shelves_rail::{RailActive, ShelvesRail};
+    use crate::test_support::render_in_vdom;
+
+    /// A single `rebuild_in_place()` doesn't drive the mount-fetch effect to
+    /// completion, so the rail renders in its pre-fetch state: empty shelf
+    /// list and the "New shelf" trigger — the SSR/first-paint steady state
+    /// (rule 07) before the list arrives.
+    fn harness() -> Element {
+        rsx! {
+            ShelvesRail { active: RailActive::All }
+        }
+    }
+
+    #[test]
+    fn shelves_rail_renders_the_shell_and_new_shelf_trigger() {
+        let html = render_in_vdom(harness);
+        assert!(html.contains("data-testid=\"shelves-rail\""));
+        assert!(html.contains("data-testid=\"new-shelf\""));
+        // The create-shelf modal only mounts once "New shelf" is clicked.
+        assert!(!html.contains("data-testid=\"create-shelf-modal\""));
+    }
+}

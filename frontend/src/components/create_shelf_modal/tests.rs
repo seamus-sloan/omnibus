@@ -88,3 +88,55 @@ fn create_label_shows_picked_count_for_manual_shelves() {
 fn create_label_shows_picked_count_for_wishlist_kind_too() {
     assert_eq!(create_label(ShelfKind::Wishlist, 0), "Create \u{b7} 0");
 }
+
+// Render-smoke coverage for the two `pub` components, which the helper tests
+// above don't otherwise exercise. Gated on `server` (needs `dioxus::ssr`),
+// unlike this file's other tests, which need no runtime at all.
+#[cfg(feature = "server")]
+mod render {
+    use dioxus::prelude::*;
+    use omnibus_shared::Visibility;
+
+    use crate::components::create_shelf_modal::{CreateShelfModal, VisibilityToggle};
+    use crate::test_support::render_in_vdom;
+
+    #[test]
+    fn visibility_toggle_marks_the_current_value_as_pressed() {
+        let html = render_in_vdom(|| {
+            rsx! {
+                VisibilityToggle { visibility: Visibility::Public, on_change: move |_| {} }
+            }
+        });
+        assert!(html.contains("data-testid=\"shelf-vis-public\""));
+        assert!(html.contains("data-testid=\"shelf-vis-private\""));
+        // The active option gets `aria-pressed="true"`; there's no assertion
+        // on *which* attribute string maps to which button beyond the
+        // presence of both states, since dioxus renders attributes in
+        // declaration order and this keeps the test resilient to that.
+        assert!(html.contains("aria-pressed=\"true\""));
+        assert!(html.contains("aria-pressed=\"false\""));
+    }
+
+    /// Mounts the real `CreateShelfModal`. It defaults to `ShelfKind::Smart`
+    /// (the Smart body has no fetch-on-mount and no context deps), so a
+    /// single rebuild renders the full steady state without needing a
+    /// server response or the `CoverCacheBust` context the hand-picked
+    /// body's cover grid would otherwise require.
+    fn modal_harness() -> Element {
+        rsx! {
+            CreateShelfModal { on_close: move |_| {}, on_created: move |_| {} }
+        }
+    }
+
+    #[test]
+    fn create_shelf_modal_renders_the_smart_body_by_default() {
+        let html = render_in_vdom(modal_harness);
+        assert!(html.contains("data-testid=\"create-shelf-modal\""));
+        assert!(html.contains("data-testid=\"shelf-name-input\""));
+        assert!(html.contains("data-testid=\"shelf-kind-smart\""));
+        assert!(html.contains("data-testid=\"shelf-create-submit\""));
+        // Smart is the default kind, so the hand-picked search field must
+        // not be present.
+        assert!(!html.contains("data-testid=\"shelf-picker-search\""));
+    }
+}

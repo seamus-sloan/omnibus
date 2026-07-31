@@ -160,3 +160,46 @@ async fn poll_send_result(url: &str, task_id: u64) -> (bool, String) {
         }
     }
 }
+
+// Every test here renders SSR markup, so the whole module is `server`-gated —
+// under `web` its contents would be dead code and CI lints with `-D warnings`.
+#[cfg(all(test, feature = "server", not(feature = "mobile")))]
+mod tests {
+    use super::*;
+    use crate::test_support::render_in_vdom;
+
+    fn harness() -> Element {
+        rsx! {
+            SendToKindleButton {
+                uuid: "book-uuid".to_string(),
+                file_id: None,
+            }
+        }
+    }
+
+    #[test]
+    fn send_to_kindle_button_renders_idle_with_no_toast() {
+        let html = render_in_vdom(harness);
+        assert!(html.contains("data-testid=\"action-kindle\""));
+        assert!(html.contains("Send to Kindle"));
+        // The in-flight/result toast only appears after a click resolves —
+        // absent on the idle first render.
+        assert!(!html.contains("kindle-toast"));
+    }
+
+    #[test]
+    fn send_to_kindle_button_applies_custom_class_and_testid() {
+        let html = render_in_vdom(|| {
+            rsx! {
+                SendToKindleButton {
+                    uuid: "book-uuid".to_string(),
+                    file_id: Some(7),
+                    class: "btn ghost lg".to_string(),
+                    testid: "hero-kindle".to_string(),
+                }
+            }
+        });
+        assert!(html.contains("data-testid=\"hero-kindle\""));
+        assert!(html.contains("class=\"btn ghost lg\""));
+    }
+}
