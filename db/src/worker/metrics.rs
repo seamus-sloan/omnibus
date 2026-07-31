@@ -1,10 +1,8 @@
-//! Aggregate worker metrics for a future admin health page (issue #953,
-//! part of the "Admin Server Health" epic alongside #952/#954/#955): a
-//! per-task-type queue depth plus a bounded window of recent completion
-//! timings. Distinct from [`super::progress`]'s `progress_snapshot`, which
-//! is a live per-task feed — this module summarizes across every
-//! currently-tracked task by [`TaskKind`] and never mutates or evicts the
-//! progress map's own state.
+//! Aggregate worker metrics: per-task-type queue depth plus a bounded
+//! window of recent completion timings. Distinct from [`super::progress`]'s
+//! `progress_snapshot`, which is a live per-task feed — this module
+//! summarizes across every currently-tracked task by [`TaskKind`] and never
+//! mutates or evicts the progress map's own state.
 
 use std::collections::HashMap;
 use std::time::Duration;

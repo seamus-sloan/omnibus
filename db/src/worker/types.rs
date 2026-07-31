@@ -300,8 +300,10 @@ pub struct Worker {
     /// backing [`Worker::metrics`]. Written once per terminal transition by
     /// [`super::progress::write_terminal_progress`]; capped at
     /// [`super::metrics::RECENT_COMPLETIONS_CAP`] entries per kind. A
-    /// separate `StdMutex` from `progress` so reading metrics never
-    /// contends with the live progress feed's own lock.
+    /// separate `StdMutex` from `progress`, so recording a completion
+    /// releases the `progress` lock first rather than extending its hold
+    /// time — `Worker::metrics` still takes `progress` separately to
+    /// compute queue depth.
     pub(super) completion_timings: Arc<StdMutex<HashMap<TaskKind, VecDeque<Duration>>>>,
     pub(super) next_id: std::sync::atomic::AtomicU64,
 }

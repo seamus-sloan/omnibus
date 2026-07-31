@@ -1017,7 +1017,7 @@ async fn metrics_bounds_the_recent_completions_window_per_kind() {
     let w = make_worker_default(pool().await);
     // One more than the cap (20) so eviction must have kicked in at least
     // once; each task is posted and awaited serially so ordering is stable.
-    for i in 0..21 {
+    for _ in 0..21 {
         let id = w.post(Task::Test {
             tag: "bound",
             latency_ms: 0,
@@ -1027,7 +1027,6 @@ async fn metrics_bounds_the_recent_completions_window_per_kind() {
             on_done: None,
         });
         let _ = w.await_completion(id).await;
-        let _ = i;
     }
 
     let m = w.metrics();
