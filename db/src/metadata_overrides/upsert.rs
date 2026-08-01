@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use omnibus_shared::{BulkMetadataEdit, EbookMetadata, MetadataOverrides, MetadataSource};
 use sqlx::{Executor, SqliteConnection, SqlitePool};
 
-use crate::books::resolve_book_id_by_uuid_exec;
+use crate::books::{get_books_by_ids, resolve_book_id_by_uuid_exec, resolve_book_ids_bulk};
 use crate::normalize::{normalize_author, normalize_title};
 use crate::sync::upsert_fts;
 
@@ -337,38 +337,35 @@ async fn merge_one_in_tx(
 /// metadata fetched just before the transaction (equal to the scanned
 /// subjects when no override exists — and any concurrent subjects write
 /// would have created the override row this transaction reads, so the
-/// pre-tx fetch cannot serve a stale base). FTS rebuilds run best-effort
-/// per book after commit, matching [`merge_metadata_overrides`].
+/// pre-tx fetch cannot serve a stale base). Both the pre-tx effective-subjects
+/// fetch and the in-tx override-row read are batched via chunked `IN (...)`
+/// queries (mirroring [`load_overrides_bulk`]) rather than looped per uuid,
+/// so a 2000-book selection holds the write lock for a handful of round
+/// trips instead of one per book (#1576). FTS rebuilds run best-effort per
+/// book after commit, matching [`merge_metadata_overrides`].
 pub async fn bulk_merge_metadata_overrides(
     pool: &SqlitePool,
     uuids: &[String],
     edit: &BulkMetadataEdit,
     user_id: i64,
 ) -> Result<(), MetadataOverridesError> {
-    let mut effective_subjects = HashMap::with_capacity(uuids.len());
-    for uuid in uuids {
-        let book = crate::books::get_book_by_uuid(pool, uuid)
-            .await?
-            .ok_or_else(|| MetadataOverridesError::BookNotFound(uuid.clone()))?;
-        effective_subjects.insert(uuid.clone(), book.subjects);
-    }
+    let effective_subjects = effective_subjects_bulk(pool, uuids).await?;
 
     let has_tag_deltas = !edit.add_tags.is_empty() || !edit.remove_tags.is_empty();
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    // Pre-loaded once for the whole batch, chunked, instead of a
+    // `SELECT … WHERE book_uuid = ?` per uuid inside the loop below.
+    let override_rows = if has_tag_deltas {
+        load_overrides_bulk_tx(&mut tx, uuids).await?
+    } else {
+        HashMap::new()
+    };
     for uuid in uuids {
         let mut incoming = edit.scalar_overrides();
         if has_tag_deltas {
             // The in-tx override row wins as the tag base; the pre-tx fetch
             // only covers books with no subjects override at all.
-            let row_subjects: Option<String> =
-                sqlx::query_scalar("SELECT overrides FROM metadata_overrides WHERE book_uuid = ?")
-                    .bind(uuid.as_str())
-                    .fetch_optional(&mut *tx)
-                    .await?;
-            let override_subjects = match row_subjects {
-                Some(json) => serde_json::from_str::<MetadataOverrides>(&json)?.subjects,
-                None => None,
-            };
+            let override_subjects = override_rows.get(uuid).and_then(|ov| ov.subjects.clone());
             let base = override_subjects
                 .as_deref()
                 .or(effective_subjects.get(uuid).map(Vec::as_slice))
@@ -392,6 +389,85 @@ pub async fn bulk_merge_metadata_overrides(
         }
     }
     Ok(())
+}
+
+/// Batch-resolve the effective (scanned + override-merged) `subjects` for a
+/// whole uuid set, for [`bulk_merge_metadata_overrides`]'s pre-transaction
+/// tag-delta base. Two chunked bulk queries regardless of batch size —
+/// [`resolve_book_ids_bulk`] then [`get_books_by_ids`], the same
+/// join-in-memory pattern [`super::fts::rebuild_fts_for_books_batch`] uses —
+/// replacing the former `get_book_by_uuid` call per uuid. A uuid absent from
+/// either step (unknown, or resolved to a book row that vanished
+/// concurrently) fails the whole call with `BookNotFound`, matching the
+/// former per-uuid loop's behavior.
+async fn effective_subjects_bulk(
+    pool: &SqlitePool,
+    uuids: &[String],
+) -> Result<HashMap<String, Vec<String>>, MetadataOverridesError> {
+    let id_map = resolve_book_ids_bulk(pool, uuids).await?;
+    let mut ids: Vec<i64> = id_map.values().copied().collect();
+    ids.sort_unstable();
+    ids.dedup();
+
+    let subjects_by_id: HashMap<i64, Vec<String>> = get_books_by_ids(pool, &ids)
+        .await?
+        .into_iter()
+        .map(|b| (b.id, b.subjects))
+        .collect();
+
+    let mut out = HashMap::with_capacity(uuids.len());
+    for uuid in uuids {
+        let id = id_map
+            .get(uuid)
+            .copied()
+            .ok_or_else(|| MetadataOverridesError::BookNotFound(uuid.clone()))?;
+        let subjects = subjects_by_id
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| MetadataOverridesError::BookNotFound(uuid.clone()))?;
+        out.insert(uuid.clone(), subjects);
+    }
+    Ok(out)
+}
+
+/// Tx-scoped counterpart to [`load_overrides_bulk`]: batch-read
+/// `metadata_overrides.overrides` for a whole uuid set on the caller's open
+/// transaction, chunked the same way, so [`bulk_merge_metadata_overrides`]'s
+/// per-book tag-delta base comes from one pre-loaded `HashMap` instead of a
+/// `SELECT … WHERE book_uuid = ?` per uuid — the second half of #1576's
+/// fix, bounding the `BEGIN IMMEDIATE` write-lock hold time instead of
+/// letting it scale linearly with the selection size.
+async fn load_overrides_bulk_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    uuids: &[String],
+) -> Result<HashMap<String, MetadataOverrides>, sqlx::Error> {
+    let mut map = HashMap::with_capacity(uuids.len());
+    for chunk in uuids.chunks(500) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT book_uuid, overrides FROM metadata_overrides WHERE book_uuid IN ({placeholders})"
+        );
+        let mut q = sqlx::query_as::<_, (String, String)>(&sql);
+        for uuid in chunk {
+            q = q.bind(uuid);
+        }
+        let rows = q.fetch_all(&mut **tx).await?;
+        for (uuid, json) in rows {
+            match serde_json::from_str::<MetadataOverrides>(&json) {
+                Ok(ov) => {
+                    map.insert(uuid, ov);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        book_uuid = %uuid,
+                        error = %e,
+                        "corrupt metadata_overrides JSON — skipping row"
+                    );
+                }
+            }
+        }
+    }
+    Ok(map)
 }
 
 /// Load overrides for a single book UUID. Returns `None` if no overrides
