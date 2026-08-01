@@ -339,10 +339,9 @@ async fn merge_one_in_tx(
 /// would have created the override row this transaction reads, so the
 /// pre-tx fetch cannot serve a stale base). Both the pre-tx effective-subjects
 /// fetch and the in-tx override-row read are batched via chunked `IN (...)`
-/// queries (mirroring [`load_overrides_bulk`]) rather than looped per uuid,
-/// so a 2000-book selection holds the write lock for a handful of round
-/// trips instead of one per book (#1576). FTS rebuilds run best-effort per
-/// book after commit, matching [`merge_metadata_overrides`].
+/// queries (mirroring [`load_overrides_bulk`]) rather than looped per uuid.
+/// FTS rebuilds run best-effort per book after commit, matching
+/// [`merge_metadata_overrides`].
 pub async fn bulk_merge_metadata_overrides(
     pool: &SqlitePool,
     uuids: &[String],
@@ -365,9 +364,10 @@ pub async fn bulk_merge_metadata_overrides(
         if has_tag_deltas {
             // The in-tx override row wins as the tag base; the pre-tx fetch
             // only covers books with no subjects override at all.
-            let override_subjects = override_rows.get(uuid).and_then(|ov| ov.subjects.clone());
+            let override_subjects = override_rows
+                .get(uuid)
+                .and_then(|ov| ov.subjects.as_deref());
             let base = override_subjects
-                .as_deref()
                 .or(effective_subjects.get(uuid).map(Vec::as_slice))
                 .unwrap_or_default();
             let subjects = edit.apply_tags(base);
@@ -393,13 +393,11 @@ pub async fn bulk_merge_metadata_overrides(
 
 /// Batch-resolve the effective (scanned + override-merged) `subjects` for a
 /// whole uuid set, for [`bulk_merge_metadata_overrides`]'s pre-transaction
-/// tag-delta base. Two chunked bulk queries regardless of batch size —
+/// tag-delta base. Chunked bulk queries regardless of batch size —
 /// [`resolve_book_ids_bulk`] then [`get_books_by_ids`], the same
-/// join-in-memory pattern [`super::fts::rebuild_fts_for_books_batch`] uses —
-/// replacing the former `get_book_by_uuid` call per uuid. A uuid absent from
-/// either step (unknown, or resolved to a book row that vanished
-/// concurrently) fails the whole call with `BookNotFound`, matching the
-/// former per-uuid loop's behavior.
+/// join-in-memory pattern [`super::fts::rebuild_fts_for_books_batch`] uses.
+/// A uuid absent from either step (unknown, or resolved to a book row that
+/// vanished concurrently) fails the whole call with `BookNotFound`.
 async fn effective_subjects_bulk(
     pool: &SqlitePool,
     uuids: &[String],
@@ -434,9 +432,7 @@ async fn effective_subjects_bulk(
 /// `metadata_overrides.overrides` for a whole uuid set on the caller's open
 /// transaction, chunked the same way, so [`bulk_merge_metadata_overrides`]'s
 /// per-book tag-delta base comes from one pre-loaded `HashMap` instead of a
-/// `SELECT … WHERE book_uuid = ?` per uuid — the second half of #1576's
-/// fix, bounding the `BEGIN IMMEDIATE` write-lock hold time instead of
-/// letting it scale linearly with the selection size.
+/// `SELECT … WHERE book_uuid = ?` per uuid.
 async fn load_overrides_bulk_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     uuids: &[String],

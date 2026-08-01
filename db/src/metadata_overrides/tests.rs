@@ -1890,18 +1890,8 @@ async fn bulk_merge_metadata_overrides_rebuilds_fts_for_each_book() {
 
 #[tokio::test]
 async fn bulk_merge_metadata_overrides_applies_correctly_across_a_batch_past_the_chunk_boundary() {
-    // #1576: both the pre-tx effective-subjects fetch and the in-tx
-    // metadata_overrides read are chunked at 500 uuids. Seed one book past a
-    // single chunk (520) so this exercises the two-chunk path for both
-    // batch queries, not just the common single-chunk case.
-    //
-    // sqlx has no query-counter hook to assert round-trip *count* directly,
-    // so this test asserts the batched implementation's *correctness* at
-    // chunk-boundary scale instead — every one of the 520 books, including
-    // one that straddles the chunk boundary with a pre-existing override,
-    // must come out right. This is the accepted approach per #1576's
-    // acceptance criteria (an exact query-count assertion was judged
-    // impractical without new test-only instrumentation).
+    // Both batch fetches chunk at 500 uuids; 520 books exercises the
+    // two-chunk path for each, including a boundary-straddling override.
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
         .await
