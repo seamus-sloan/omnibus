@@ -64,10 +64,20 @@ pub fn parse_range_cfi(raw: &str) -> Option<CfiRange> {
         return None;
     }
     let (package, common) = parent.split_once('!')?;
+    // Concatenation below is only sound when every component is a rooted
+    // `/`-path: an unrooted part would splice into a *different* but still
+    // parseable step (`/4/4` + `1:0` → `/4/41:0`) and derive a wrong
+    // anchor instead of degrading.
+    if !common.is_empty() && !common.starts_with('/') {
+        return None;
+    }
+    if !start_rel.starts_with('/') || !end_rel.starts_with('/') {
+        return None;
+    }
     Some(CfiRange {
         spine_index: parse_package(package)?,
         // Each endpoint's full tail is the shared parent path plus its
-        // relative part — plain concatenation, since both are `/`-paths.
+        // relative part.
         start: parse_tail(&format!("{common}{start_rel}"))?,
         end: parse_tail(&format!("{common}{end_rel}"))?,
     })

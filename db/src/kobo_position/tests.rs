@@ -265,6 +265,19 @@ fn parse_range_cfi_rejects_points_extra_parts_and_spatiotemporal_terms() {
 }
 
 #[test]
+fn parse_range_cfi_rejects_unrooted_components_rather_than_splicing_them() {
+    // An unrooted relative part would concatenate into a *different* but
+    // still parseable tail (`/4/4` + `1:0` → `/4/41:0`) — it must degrade,
+    // never reinterpret.
+    assert_eq!(parse_range_cfi("epubcfi(/6/2!/4/4,1:0,/1:5)"), None);
+    assert_eq!(parse_range_cfi("epubcfi(/6/2!/4/4,/1:0,1:5)"), None);
+    // Same for an unrooted (non-empty) shared parent path.
+    assert_eq!(parse_range_cfi("epubcfi(/6/2!4/4,/1:0,/1:5)"), None);
+    // An empty parent stays legal — both endpoints carry rooted paths.
+    assert!(parse_range_cfi("epubcfi(/6/2!,/4/4/1:0,/4/6/1:5)").is_some());
+}
+
+#[test]
 fn annotation_location_json_round_trips_through_parse_annotation_location() {
     let json = annotation_location_json(
         "OEBPS/ch1.xhtml",

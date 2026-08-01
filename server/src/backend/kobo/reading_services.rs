@@ -127,6 +127,13 @@ async fn resolve_adopted_served(
     // read — a device asking for a book is the moment a fresh kepub cache
     // is most likely present (it just downloaded one). Every failure
     // degrades to "not served", never a wire error.
+    //
+    // Running before the adoption check is deliberate: a converted row can
+    // flip an unadopted pair to servable, which is the same rule that lets
+    // a second or factory-reset device receive existing annotations — the
+    // AC5 guard below protects only against the *empty*-but-valid answer,
+    // and gating converted rows on adoption would leave a web-only book
+    // permanently unserved to a device that never uploads anything.
     if let Err(e) =
         db::annotations::downsync_book_annotations(state.pool(), auth.user_id, &canonical).await
     {
