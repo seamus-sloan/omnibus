@@ -173,7 +173,13 @@ test.describe
       await page.getByTestId("hardcover-fetch-apply").click();
 
       // Title updated; Author(s) and Description (unchecked) stayed as-is.
-      await expect(page.getByLabel("Title")).toHaveValue(
+      // `#me-title` rather than `getByLabel("Title")`: Playwright's
+      // getByLabel does substring, case-insensitive name matching, and the
+      // Hardcover-fetch checkbox's own "Apply fetched Title" aria-label
+      // contains "Title" too, so `getByLabel("Title")` is ambiguous between
+      // the two controls (`.me-chip-item`/`#me-description` below use the
+      // same id-locator pattern for the same reason).
+      await expect(page.locator("#me-title")).toHaveValue(
         "La Foret des Algorithmes: Deuxieme Edition",
       );
       await expect(
@@ -207,17 +213,22 @@ test.describe
       await page.getByTestId("hardcover-fetch-select-all").click();
       await page.getByTestId("hardcover-fetch-apply").click();
 
-      await expect(page.getByLabel("Title")).toHaveValue(
+      // Real form-field ids (`#me-*`, from `label_to_id` in
+      // `frontend/src/pages/metadata_edit/fields.rs`) rather than
+      // `getByLabel`: every Hardcover-fetch checkbox's "Apply fetched
+      // {Field}" aria-label substring-matches the same field name, so
+      // `getByLabel` is ambiguous for every field this panel previews.
+      await expect(page.locator("#me-title")).toHaveValue(
         "La Foret des Algorithmes: Deuxieme Edition",
       );
       await expect(page.locator("#me-description")).toHaveValue(
         "A revised survey of recursive structures in the deep woods.",
       );
-      await expect(page.getByLabel("Series")).toHaveValue(
+      await expect(page.locator("#me-series")).toHaveValue(
         "Mathematique Moderne",
       );
-      await expect(page.getByLabel("Book #")).toHaveValue("2");
-      await expect(page.getByLabel("ISBN-13")).toHaveValue("9781234567897");
+      await expect(page.locator("#me-book--")).toHaveValue("2");
+      await expect(page.locator("#me-isbn-13")).toHaveValue("9781234567897");
       await expect(
         page.locator(".me-chip-item").getByText("Emmy Noether"),
       ).toBeVisible();
