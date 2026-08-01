@@ -8,7 +8,31 @@ import { gotoReady } from "../utils/nav";
 // session cookie that globalSetup wrote.
 test.use({ storageState: { cookies: [], origins: [] } });
 
+/**
+ * Pin the registration-status probe both auth pages issue on mount.
+ *
+ * Every spec that asserts a register affordance must call this. Whether signup
+ * is open is *server* state that differs by environment, so inheriting it
+ * makes a spec pass or fail on which database it happens to be pointed at: a
+ * fresh CI database is registration-**closed** (`utils/auth.ts` creates the
+ * test user via `POST /api/auth/register`, and the first user's creation flips
+ * `registration_enabled` to '0' in the same transaction), while a `just dev-up`
+ * box is registration-**open** (`seed_dev_user` restores the pre-seed value).
+ * Stubbing also keeps these specs off the shared setting the Settings → Users
+ * toggle writes — see the note in `users.spec.ts`.
+ */
+async function stubRegistrationStatus(page: Page, enabled: boolean) {
+  await page.route("**/api/auth/registration", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ enabled }),
+    });
+  });
+}
+
 test("renders the login page layout", async ({ page }) => {
+  await stubRegistrationStatus(page, true);
   await gotoReady(page, "/login");
 
   await expect(
@@ -22,6 +46,7 @@ test("renders the login page layout", async ({ page }) => {
 });
 
 test("renders the register page layout", async ({ page }) => {
+  await stubRegistrationStatus(page, true);
   await page.goto("/register");
 
   await expect(
@@ -126,6 +151,7 @@ test("Enter from Password submits the login form", async ({ page }) => {
 test("register routes a password error to the password Field", async ({
   page,
 }) => {
+  await stubRegistrationStatus(page, true);
   await gotoReady(page, "/register");
 
   await page.route("**/api/auth/register", async (route) => {
@@ -175,22 +201,9 @@ test("register routes a password error to the password Field", async ({
 
 // ── Self-registration closed ──────────────────────────────────────────
 //
-// `registration_enabled` is global server state the layout specs above also
-// read, so these stub `GET /api/auth/registration` instead of flipping it —
-// see the note in `users.spec.ts`. The server-side refusal is covered by
+// The server-side refusal is covered by
 // `register_is_refused_with_403_when_registration_is_disabled`
 // (`server/src/auth/handlers/tests.rs`).
-
-/** Pin the registration-status probe both auth pages issue on mount. */
-async function stubRegistrationStatus(page: Page, enabled: boolean) {
-  await page.route("**/api/auth/registration", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ enabled }),
-    });
-  });
-}
 
 test("register page shows a closed notice instead of the form when signup is off", async ({
   page,
