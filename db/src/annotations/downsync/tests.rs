@@ -4,7 +4,7 @@
 //! cache, underivable CFI), and the whole-backlog boot pass.
 
 use omnibus_shared::{CreateHighlight, EbookMetadata, HighlightColor};
-use sqlx::{Row, SqlitePool};
+use sqlx::SqlitePool;
 
 use super::*;
 use crate::annotations::{
