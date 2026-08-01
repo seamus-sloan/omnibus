@@ -390,12 +390,14 @@ async fn googlebooks_gives_up_after_the_retry_budget() {
 // query hits. The provider retries once as bare text before calling it a miss.
 
 /// Mount a GB mock that only matches a specific `q` value, so the field and
-/// bare queries can answer differently within one test.
+/// bare queries can answer differently within one test. Expects exactly one
+/// request — `server.verify()` then proves the query pattern actually ran.
 async fn mount_gb_q(server: &MockServer, q: &str, body: serde_json::Value) {
     Mock::given(method("GET"))
         .and(path(GB_PATH))
         .and(query_param("q", q))
         .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .expect(1)
         .mount(server)
         .await;
 }
@@ -415,6 +417,7 @@ async fn googlebooks_falls_back_to_bare_query_when_isbn_search_is_empty() {
     // Bare-text search may return a sibling edition; the meta must still carry
     // the *scanned* ISBN so a check-in stores the barcode that was scanned.
     assert_eq!(meta.isbn13, ISBN13);
+    server.verify().await;
 }
 
 #[tokio::test]
@@ -452,10 +455,11 @@ async fn googlebooks_double_miss_is_still_a_clean_miss() {
         .await
         .unwrap();
     assert!(meta.is_none(), "double miss must be a clean miss, not an error");
+    server.verify().await;
 }
 
 #[tokio::test]
-async fn googlebooks_bare_query_failure_degrades_to_the_field_querys_miss() {
+async fn googlebooks_bare_query_failure_degrades_to_a_clean_miss() {
     // The bare query is a bonus attempt: if it fails outright after the field
     // query answered cleanly, the lookup reports the miss it already had
     // rather than turning a would-be "unresolved" into a user-facing outage.
@@ -465,6 +469,8 @@ async fn googlebooks_bare_query_failure_degrades_to_the_field_querys_miss() {
         .and(path(GB_PATH))
         .and(query_param("q", ISBN13))
         .respond_with(ResponseTemplate::new(503))
+        // A 503 is retryable, so the bare query burns the full retry budget.
+        .expect(3)
         .mount(&server)
         .await;
 
@@ -472,6 +478,7 @@ async fn googlebooks_bare_query_failure_degrades_to_the_field_querys_miss() {
         .await
         .unwrap();
     assert!(meta.is_none(), "bare-query failure must degrade to a miss");
+    server.verify().await;
 }
 
 #[test]
