@@ -103,6 +103,7 @@ struct BookDetailView: View {
 
     @Environment(\.palette) private var palette
     @Environment(AppState.self) private var app
+    @Environment(AudioPlayer.self) private var player
     @Environment(\.bookZoomNamespace) private var bookZoom
     @State private var model = BookDetailModel()
     @State private var showJournalComposer = false
@@ -229,7 +230,15 @@ struct BookDetailView: View {
                     }
                     .screenPadding()
                     .padding(.top, Spacing.xl)
-                    .padding(.bottom, 48)
+                    // 48 clears the docked tab bar on its own; that fixed
+                    // value doesn't grow when the audio mini player docks
+                    // above it mid-navigation, so the last section (often
+                    // Journal) renders under the bar with no gap (#1482).
+                    // Reserving the bar's own height here — rather than
+                    // trusting it to arrive via the ancestor `TabView`'s
+                    // `safeAreaInset` — is what `ReaderView` already does
+                    // for the same bar.
+                    .padding(.bottom, 48 + (player.isActive ? MiniPlayerBar.reservedHeight : 0))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(palette.bg0Color)
                 }
