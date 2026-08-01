@@ -38,6 +38,16 @@ pub(super) fn BulkEditBar(
     }
 }
 
+/// The two suggestion pools the modal's chip editors read, bundled to keep
+/// [`BulkEditModal`] under the 5-prop guideline (mirrors
+/// `book_detail::physical::BdBookIdentity`, whose doc comment explains the
+/// pattern this one follows).
+#[derive(Clone, Copy, PartialEq)]
+pub(super) struct BulkEditSuggestions {
+    pub author_suggestions: ReadSignal<Vec<SuggestionItem>>,
+    pub tag_suggestions: ReadSignal<Vec<SuggestionItem>>,
+}
+
 /// The bulk-edit modal. Blank scalar fields leave every book unchanged;
 /// authors replace each book's full list; tags are add/remove deltas.
 /// On success fires `on_saved` with the server's merged metadata for every
@@ -46,8 +56,7 @@ pub(super) fn BulkEditBar(
 pub(super) fn BulkEditModal(
     uuids: Vec<String>,
     selected_books: Vec<EbookMetadata>,
-    author_suggestions: ReadSignal<Vec<SuggestionItem>>,
-    tag_suggestions: ReadSignal<Vec<SuggestionItem>>,
+    suggestions: BulkEditSuggestions,
     on_close: EventHandler<()>,
     on_saved: EventHandler<Vec<EbookMetadata>>,
 ) -> Element {
@@ -60,8 +69,8 @@ pub(super) fn BulkEditModal(
         add_tags: use_signal(Vec::<String>::new),
         remove_tags: use_signal(Vec::<String>::new),
     };
-    let mut busy = use_signal(|| false);
-    let mut error = use_signal(|| None::<String>);
+    let busy = use_signal(|| false);
+    let error = use_signal(|| None::<String>);
 
     // Remove-tag candidates: the union of the selected books' current tags,
     // with per-tag counts — removing a tag no book carries is meaningless.
@@ -73,31 +82,7 @@ pub(super) fn BulkEditModal(
     let nothing_to_apply = fields.current_edit().is_empty();
     let count = uuids.len();
     let noun = if count == 1 { "book" } else { "books" };
-
-    let on_submit = move |_| {
-        if busy() {
-            return;
-        }
-        let edit = fields.current_edit();
-        if edit.is_empty() {
-            return;
-        }
-        if let Err(msg) = edit.validate() {
-            error.set(Some(msg));
-            return;
-        }
-        let url = server_url.clone();
-        let uuids = uuids.clone();
-        busy.set(true);
-        error.set(None);
-        spawn(async move {
-            match data::bulk_save_overrides(&url, uuids, &edit).await {
-                Ok(updated) => on_saved.call(updated),
-                Err(e) => error.set(Some(format!("Save failed: {e}"))),
-            }
-            busy.set(false);
-        });
-    };
+    let on_submit = build_bulk_edit_submit(server_url, uuids, fields, busy, error, on_saved);
 
     rsx! {
         ConfirmModal {
@@ -110,8 +95,8 @@ pub(super) fn BulkEditModal(
             p { class: "bulk-edit-hint", "Blank fields are left unchanged on every book." }
             BulkEditFields {
                 fields,
-                author_suggestions,
-                tag_suggestions,
+                author_suggestions: suggestions.author_suggestions,
+                tag_suggestions: suggestions.tag_suggestions,
                 removable_pool,
             }
             if let Some(msg) = error() {
@@ -137,6 +122,44 @@ pub(super) fn BulkEditModal(
             }
         }
     }
+}
+
+/// Builds the bulk-edit submit handler: snapshots and validates the current
+/// field state, then saves it and reports the merged metadata back through
+/// `error`/`busy`/`on_saved`. Mirrors
+/// `create_shelf_modal::build_on_submit`.
+fn build_bulk_edit_submit(
+    server_url: String,
+    uuids: Vec<String>,
+    fields: BulkEditFieldSignals,
+    mut busy: Signal<bool>,
+    mut error: Signal<Option<String>>,
+    on_saved: EventHandler<Vec<EbookMetadata>>,
+) -> EventHandler<MouseEvent> {
+    EventHandler::new(move |_| {
+        if busy() {
+            return;
+        }
+        let edit = fields.current_edit();
+        if edit.is_empty() {
+            return;
+        }
+        if let Err(msg) = edit.validate() {
+            error.set(Some(msg));
+            return;
+        }
+        let url = server_url.clone();
+        let uuids = uuids.clone();
+        busy.set(true);
+        error.set(None);
+        spawn(async move {
+            match data::bulk_save_overrides(&url, uuids, &edit).await {
+                Ok(updated) => on_saved.call(updated),
+                Err(e) => error.set(Some(format!("Save failed: {e}"))),
+            }
+            busy.set(false);
+        });
+    })
 }
 
 /// The modal's six field signals, grouped so [`BulkEditModal`] and

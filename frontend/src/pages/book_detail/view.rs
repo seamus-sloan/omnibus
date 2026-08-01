@@ -233,8 +233,7 @@ pub(super) fn render_loaded(
                 BdHeroSection {
                     b: b.clone(),
                     title: title.clone(),
-                    kicker,
-                    crumbs,
+                    chrome: hero::BdHeroChrome { kicker, crumbs },
                     avail: hero::Availability {
                         has_ebook,
                         has_audio,
