@@ -6,6 +6,7 @@ use dioxus::prelude::*;
 use omnibus_shared::EbookMetadata;
 
 use super::fields::{label_to_id, MeArea, MeField, MeLabel};
+use super::hardcover_fetch::HardcoverFetchPanel;
 use crate::components::chip_editor::{ChipEditor, ChipEditorOptions, SuggestionItem};
 use crate::components::{FetchSummaryButton, SuggestField};
 
@@ -46,6 +47,7 @@ pub(super) fn FormGrid(
 ) -> Element {
     rsx! {
         div { class: "me-form",
+            HardcoverFetchPanel { uuid: uuid.clone(), fields }
             FieldGrid { orig, fields, suggestions, uuid }
             TagsSection { tags: fields.tags, tag_suggestions: suggestions.tags }
             SeriesSection {

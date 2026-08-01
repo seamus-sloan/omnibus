@@ -6337,6 +6337,62 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   color: var(--bad);
 }
 
+/* "Fetch from Hardcover" panel (metadata-edit page): the fetch button,
+   plus the current-vs-fetched diff preview with per-field apply
+   checkboxes. Mirrors `.fs-fetch`'s accent-tinted button treatment. */
+.hcf-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.hcf-fetch-btn {
+  gap: 9px;
+  background: color-mix(in oklch, var(--accent) 16%, var(--bg-1));
+  border-color: color-mix(in oklch, var(--accent) 55%, transparent);
+  color: var(--ink-0);
+}
+.hcf-fetch-btn[disabled] { opacity: 0.65; cursor: not-allowed; }
+.hcf-note { font-size: 13px; color: var(--ink-2); }
+.hcf-error { font-size: 13px; color: var(--bad); }
+
+.hcf-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  border: 1px solid var(--line-2);
+  padding: 12px 14px;
+}
+.hcf-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px 0;
+  cursor: pointer;
+}
+.hcf-row input[type="checkbox"] { margin-top: 3px; }
+.hcf-row-body { min-width: 0; flex: 1; }
+.hcf-row-label {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+.hcf-row-values {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13.5px;
+  flex-wrap: wrap;
+}
+.hcf-row-current { color: var(--ink-2); text-decoration: line-through; }
+.hcf-row-arrow { color: var(--ink-3); }
+.hcf-row-fetched { color: var(--ink-0); font-weight: 500; }
+.hcf-actions { display: flex; gap: 10px; margin-top: 8px; }
+
 .bd-suggest-connect { display: flex; align-items: center; justify-content: space-between;
   gap: 22px; padding: 22px 24px; border: 1px dashed var(--line-2); }
 .bd-suggest-connect-title { font-size: 18px; margin: 0; }

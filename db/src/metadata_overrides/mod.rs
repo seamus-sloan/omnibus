@@ -11,6 +11,7 @@
 // leaf-submodule-private precedent in `db/src/discovery/mod.rs`; only
 // the named items are re-exported below.
 mod fts;
+mod hardcover_fetch;
 mod links;
 mod upsert;
 
@@ -25,3 +26,4 @@ pub use upsert::{
 };
 
 pub(crate) use fts::rebuild_fts_for_books_batch;
+pub use hardcover_fetch::{fetch_hardcover_metadata, fetch_hardcover_metadata_with};
