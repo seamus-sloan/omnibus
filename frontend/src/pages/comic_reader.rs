@@ -1,8 +1,9 @@
 //! Immersive CBZ comic pager (`/comic/:uuid`). Pure `<img>` rendering
 //! against `/api/ebooks/{uuid}/pages/{n}` — no epub.js, no JS reader
 //! library; the browser's image decoder does the work and this module owns
-//! the state: current page, n±1 prefetch, fit modes, and progress mapped
-//! onto the Epub-format record via `omnibus_shared::comic_page_anchor`.
+//! the state: current page, n±1 prefetch, fit modes, reading-session
+//! capture, and progress mapped onto the Epub-format record via
+//! `omnibus_shared::comic_page_anchor`.
 
 use dioxus::prelude::*;
 use dioxus_router::use_navigator;
@@ -69,6 +70,12 @@ pub fn ComicReadPage(uuid: String) -> Element {
     let mut error: Signal<bool> = use_signal(|| false);
     let mut page: Signal<usize> = use_signal(|| 0);
     let fit: Signal<FitMode> = use_signal(|| FitMode::Height);
+
+    // Record reading time against this comic while the pager is open (and,
+    // on web, the tab visible) — the rows behind the `/stats` aggregates,
+    // exactly as the EPUB reader does. Effect-only (no rsx), so SSR is a
+    // no-op and hydration is unaffected.
+    crate::session_tracker::use_reading_session(uuid.clone(), server_url.clone());
 
     // Metadata + saved-position bootstrap, post-mount only (rule 07: SSR and
     // the first WASM paint both render the loading state). The restore lands
