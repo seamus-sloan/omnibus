@@ -203,3 +203,35 @@ mod tests {
         assert!(html.contains("class=\"btn ghost lg\""));
     }
 }
+
+// The mobile arm of `send_to_kindle_action` above is a plain hookless
+// function (no `use_signal`/context), so `test_support::render` can
+// serialize its `Element` directly with no `VirtualDom` needed — unlike the
+// interactive `SendToKindleButton` tests above, this exercises the
+// `#[cfg(feature = "mobile")]` half of the split (rule 07 worked example),
+// so it needs `mobile` *and* `server` together:
+// `cargo test -p omnibus-frontend --features mobile,server` (see
+// `crate::test_support` for the pattern writeup).
+#[cfg(all(test, feature = "mobile", feature = "server"))]
+mod mobile_render_tests {
+    use crate::test_support::render;
+
+    #[test]
+    fn send_to_kindle_action_renders_a_disabled_mobile_placeholder() {
+        let html = render(super::send_to_kindle_action("book-uuid", None, 0));
+        assert!(html.contains("data-testid=\"action-kindle\""));
+        assert!(html.contains("disabled"));
+        assert!(html.contains("Send to Kindle"));
+        assert!(html.contains("Send-to-Kindle on mobile coming soon"));
+    }
+
+    // The mobile placeholder ignores `size_bytes` entirely (no oversize-link
+    // branch on this platform), so a size that would trip the oversize link
+    // off-mobile still renders the same plain disabled button.
+    #[test]
+    fn send_to_kindle_action_ignores_size_bytes_on_mobile() {
+        let html = render(super::send_to_kindle_action("book-uuid", Some(3), i64::MAX));
+        assert!(html.contains("data-testid=\"action-kindle\""));
+        assert!(!html.contains("action-kindle-oversize"));
+    }
+}
