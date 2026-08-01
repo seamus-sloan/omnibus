@@ -6,6 +6,20 @@
 //! otherwise touch the runtime) before rendering. Both exist only under the
 //! `server` feature, where `dioxus::ssr` is available and where these tests
 //! count toward llvm-cov.
+//!
+//! **Testing `#[cfg(feature = "mobile")]`-only markup** needs both cfgs at
+//! once — `mobile` to compile the gated component, `server` for this
+//! module's `dioxus::ssr` backing — so those tests run under
+//! `cargo test -p omnibus-frontend --features mobile,server`, a combination
+//! neither CI feature-matrix leg (`frontend` / `frontend-mobile`) exercises
+//! on its own. Gate such a test module on `#[cfg(all(test, feature =
+//! "server"))]` inside a file the `mobile` feature already pulls in (e.g. a
+//! submodule of `pages::listen::mobile`, or a `#[cfg(feature = "mobile")]`
+//! function's own module) — the surrounding file's mobile-only compilation
+//! is what supplies the other half. See `pages::listen::mobile::sheets` and
+//! `components::format_switcher::kindle` for worked examples: build a
+//! zero-prop harness component (or a bare `Element` for a hookless
+//! function), render it, and assert on substrings of the HTML.
 
 use dioxus::prelude::*;
 

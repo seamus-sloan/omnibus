@@ -125,3 +125,28 @@ fn kobo_path_segment_leaves_non_reserved_lookalikes_alone() {
     );
     assert_eq!(super::kobo_path_segment("Conan").as_deref(), Some("Conan"));
 }
+
+// `send_to_kobo_action`'s mobile arm is a plain hookless function, so
+// `test_support::render` serializes its `Element` with no `VirtualDom`
+// needed. Exercises the `#[cfg(feature = "mobile")]` half of the split (rule
+// 07 worked example, mirroring `format_switcher::kindle`'s equivalent test);
+// needs `mobile` *and* `server` together:
+// `cargo test -p omnibus-frontend --features mobile,server`.
+#[cfg(all(test, feature = "mobile", feature = "server"))]
+mod mobile_render_tests {
+    use super::super::send_to_kobo_action;
+    use crate::test_support::render;
+
+    #[test]
+    fn send_to_kobo_action_renders_a_disabled_mobile_placeholder() {
+        let html = render(send_to_kobo_action(
+            "book-uuid",
+            "Ada Lovelace",
+            "Notes on the Engine",
+        ));
+        assert!(html.contains("data-testid=\"action-kobo\""));
+        assert!(html.contains("disabled"));
+        assert!(html.contains("Send to Kobo"));
+        assert!(html.contains("Send-to-Kobo coming soon"));
+    }
+}
