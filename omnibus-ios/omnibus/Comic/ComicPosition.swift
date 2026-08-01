@@ -21,10 +21,16 @@ enum ComicPosition {
 
     /// Parse an [`anchor(page:)`] back to its 0-based page index. `nil` for
     /// anything else — including a real EPUB CFI — so callers can fall back
-    /// to `progress_percent` without misreading a foreign position.
+    /// to `progress_percent` without misreading a foreign position. A
+    /// negative index is malformed, not a page: `startPage`'s clamp only
+    /// bounds the top end, so letting one through would aim the pager at a
+    /// selection that doesn't exist.
     static func parseAnchor(_ anchor: String) -> Int? {
-        guard anchor.hasPrefix(anchorPrefix) else { return nil }
-        return Int(anchor.dropFirst(anchorPrefix.count))
+        guard anchor.hasPrefix(anchorPrefix),
+              let page = Int(anchor.dropFirst(anchorPrefix.count)),
+              page >= 0
+        else { return nil }
+        return page
     }
 
     /// Whole-book percent for a 0-based `page` of `count` — the

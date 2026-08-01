@@ -207,6 +207,27 @@ struct ComicArchiveVerifyTests {
         #expect(!ComicArchive.verify(url: url))
     }
 
+    @Test("the verdict is about the pages — damaged metadata doesn't fail it")
+    func nonPageEntriesAreNotVerified() throws {
+        // Corrupt a *non-page* entry and leave the page clean: the comic is
+        // still fully readable offline, so the download must not be refused
+        // for it — and verifying only pages is also what keeps a crafted
+        // non-page entry from becoming a zip-bomb lever in the check.
+        var bytes = buildStoredZip([
+            ("p1.jpg", pageOne),
+            ("ComicInfo.xml", Data("<ComicInfo/>".utf8)),
+        ])
+        let junk = Data("<ComicInfo/>".utf8)
+        let range = bytes.range(of: junk)!
+        bytes[range.lowerBound] ^= 0xFF
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("comic-junk-\(UUID().uuidString).cbz")
+        try bytes.write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        #expect(ComicArchive.verify(url: url))
+    }
+
     @Test("an archive with no pages is a broken download, not an empty book")
     func pagelessArchiveIsDamage() throws {
         let url = try writeCBZ([("ComicInfo.xml", Data("<ComicInfo/>".utf8))])

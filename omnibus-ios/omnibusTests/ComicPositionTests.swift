@@ -28,6 +28,9 @@ struct ComicAnchorTests {
         #expect(ComicPosition.parseAnchor("comic-page:") == nil)
         #expect(ComicPosition.parseAnchor("comic-page:12b") == nil)
         #expect(ComicPosition.parseAnchor("") == nil)
+        // A negative index is malformed, not a page — `startPage` only
+        // clamps the top end, so parsing one would aim below page zero.
+        #expect(ComicPosition.parseAnchor("comic-page:-1") == nil)
     }
 }
 

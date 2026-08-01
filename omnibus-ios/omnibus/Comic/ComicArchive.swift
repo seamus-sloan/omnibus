@@ -4,8 +4,9 @@
 //  Mirror of the server's `db::comic` reader: the page list, its ordering,
 //  and the hidden-file rules must match exactly, because a saved
 //  `comic-page:N` anchor is an index into that order — a device that sorted
-//  differently would resume on the wrong page. Every read checks the entry's
-//  recorded CRC-32 (ZIPFoundation verifies on extract), which is what makes
+//  differently would resume on the wrong page. Every read compares the
+//  entry's recorded CRC-32 against the checksum ZIPFoundation computes on
+//  extract (the comparison is ours — see `page(at:)`), which is what makes
 //  a downloaded CBZ part of the CRC-backed tier of integrity checking.
 
 import Foundation
@@ -81,24 +82,41 @@ final class ComicArchive {
         return bytes
     }
 
-    /// Whether every entry in the archive reads clean against its recorded
-    /// CRC-32 — the post-download integrity check. Reading each entry to EOF
-    /// is what performs the comparison; structure alone would pass a
-    /// same-length splice whose offsets all still resolve.
+    /// Whether every page entry reads clean against its recorded CRC-32 —
+    /// the post-download integrity check. Reading each to EOF is what
+    /// performs the comparison; structure alone would pass a same-length
+    /// splice whose offsets all still resolve.
+    ///
+    /// Pages only, under the same per-entry decompression bound as a read:
+    /// the verdict is about whether the comic can be *read* offline, and
+    /// extracting arbitrary non-page entries unbounded would hand a crafted
+    /// archive a zip-bomb lever in the very check meant to reject it.
     static func verify(url: URL) -> Bool {
         guard let archive = try? Archive(url: url, accessMode: .read) else { return false }
         let pages = pageNames(in: archive)
         // An archive with nothing to show is a broken download, not an
         // intact empty book — the scanner refuses to index one either.
         guard !pages.isEmpty else { return false }
-        for entry in archive where entry.type == .file {
-            // Same explicit comparison as `page(at:)` — extract only
-            // computes the checksum, it never judges it.
-            guard let checksum = try? archive.extract(entry, skipCRC32: false, consumer: { _ in }),
-                  checksum == entry.checksum
-            else { return false }
+        for name in pages {
+            guard let entry = archive[name], entryReadsClean(archive, entry) else {
+                return false
+            }
         }
         return true
+    }
+
+    /// Extract `entry` to EOF under [`maxPageBytes`] and answer whether its
+    /// bytes match the recorded CRC-32. The comparison is ours — extract
+    /// only computes the checksum, it never judges it.
+    private static func entryReadsClean(_ archive: Archive, _ entry: Entry) -> Bool {
+        var seen = 0
+        let checksum = try? archive.extract(entry, skipCRC32: false) { chunk in
+            seen += chunk.count
+            guard seen <= maxPageBytes else {
+                throw ComicArchiveError.pageTooLarge(entry.path)
+            }
+        }
+        return checksum == entry.checksum
     }
 
     /// List the archive's page entries the way the server does: image
