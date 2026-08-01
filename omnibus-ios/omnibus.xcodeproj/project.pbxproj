@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		9FC0DEC3301436B1004AB003 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = 9FC0DEC2301436B1004AB002 /* ZIPFoundation */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		9F0BACB4301436B1004AB339 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +56,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9FC0DEC3301436B1004AB003 /* ZIPFoundation in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +117,7 @@
 			);
 			name = omnibus;
 			packageProductDependencies = (
+				9FC0DEC2301436B1004AB002 /* ZIPFoundation */,
 			);
 			productName = omnibus;
 			productReference = 9F0BACA6301436B0004AB339 /* omnibus.app */;
@@ -195,6 +201,9 @@
 			);
 			mainGroup = 9F0BAC9D301436B0004AB339;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				9FC0DEC1301436B1004AB001 /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 9F0BACA7301436B0004AB339 /* Products */;
 			projectDirPath = "";
@@ -615,6 +624,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		9FC0DEC1301436B1004AB001 /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/weichsel/ZIPFoundation.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.9.19;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		9FC0DEC2301436B1004AB002 /* ZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9FC0DEC1301436B1004AB001 /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ZIPFoundation;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 9F0BAC9E301436B0004AB339 /* Project object */;
 }

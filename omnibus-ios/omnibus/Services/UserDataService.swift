@@ -69,6 +69,7 @@ enum UserDataService {
             format: update.format,
             epubCFI: update.epubCFI,
             audioPositionSeconds: update.audioPositionSeconds,
+            progressPercent: update.progressPercent,
             // The device clock on both, because that is what this write will
             // be ordered on when it reaches the server. Leaving `clientUpdatedAt`
             // unset here would make the optimistic row the one thing in the

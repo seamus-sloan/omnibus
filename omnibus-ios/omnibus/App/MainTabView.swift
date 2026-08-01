@@ -68,7 +68,15 @@ struct MainTabView: View {
             AddBooksSheet()
         }
         .fullScreenCover(item: readerBinding) { session in
-            ReaderView(book: session.book)
+            // Comic-only books get the native pager; everything else the
+            // epub.js host. A book carrying both formats keeps the EPUB as
+            // its primary read, matching the web pager and the server's
+            // `/file` resolution.
+            if session.book.opensAsComic {
+                ComicReaderView(book: session.book)
+            } else {
+                ReaderView(book: session.book)
+            }
         }
         .fullScreenCover(item: playerBinding) { session in
             PlayerView(book: session.book, fileID: session.fileID)

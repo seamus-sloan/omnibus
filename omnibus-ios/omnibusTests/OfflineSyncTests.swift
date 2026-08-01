@@ -652,14 +652,44 @@ struct DownloadTargetFileTests {
 
     @Test("a book with no servable file of that kind has nothing to compare")
     func unservableKindsAreUnanswerable() {
-        // Every ebook-ish format except the one the endpoint serves.
-        let noEpub = book([
-            file(1, format: "PDF", ordinal: 0, etag: "\"pdf\""),
-            file(2, format: "CBZ", ordinal: 1, etag: "\"cbz\""),
-        ])
-        #expect(DownloadManager.targetFile(noEpub, kind: .ebook) == nil)
+        // Every ebook-ish format except the ones the endpoint serves.
+        let noServable = book([file(1, format: "PDF", ordinal: 0, etag: "\"pdf\"")])
+        #expect(DownloadManager.targetFile(noServable, kind: .ebook) == nil)
         #expect(
-            DownloadManager.staleness(snapshot: "\"old\"", against: noEpub, kind: .ebook) == nil
+            DownloadManager.staleness(snapshot: "\"old\"", against: noServable, kind: .ebook) == nil
         )
+    }
+
+    @Test("a comic-only book targets its CBZ — the file `/file` falls back to")
+    func comicOnlyBookTargetsTheArchive() {
+        let comic = book([
+            file(1, format: "PDF", ordinal: 0, etag: "\"pdf\""),
+            file(2, format: "CBZ", ordinal: 2, etag: "\"cbz-v1\""),
+            file(3, format: "CBZ", ordinal: 1, etag: "\"cbz-first\""),
+        ])
+        // Lowest-ordinal CBZ, same as `db::book_file_path(id, "CBZ")`.
+        #expect(DownloadManager.targetFile(comic, kind: .ebook)?.id == 3)
+        // The wire etag drives staleness for the archive like any other
+        // downloaded format.
+        #expect(
+            DownloadManager.staleness(snapshot: "\"cbz-old\"", against: comic, kind: .ebook)
+                == true
+        )
+        #expect(
+            DownloadManager.staleness(snapshot: "\"cbz-first\"", against: comic, kind: .ebook)
+                == false
+        )
+    }
+
+    @Test("a dual-format book keeps the EPUB as the served file")
+    func epubStillWinsOverAComicSibling() {
+        // `/file` resolves the EPUB first however the ordinals fall, so the
+        // snapshot must not follow a lower-ordinal CBZ — that would report
+        // staleness about the archive while the device holds the EPUB.
+        let dual = book([
+            file(1, format: "CBZ", ordinal: 0, etag: "\"cbz\""),
+            file(2, format: "EPUB", ordinal: 1, etag: "\"epub\""),
+        ])
+        #expect(DownloadManager.targetFile(dual, kind: .ebook)?.id == 2)
     }
 }

@@ -106,9 +106,14 @@ private struct HeroCard: View {
 
     private var isAudio: Bool { format == .audio }
 
-    /// Only a listening position has an honest fraction, and only while the card
-    /// is still presenting itself as one.
-    private var fraction: Double? { isAudio ? point.fraction : nil }
+    /// The record's own honest fraction — audio's position over its duration,
+    /// or a reading record's cross-surface percent (a comic position always
+    /// carries one; a CFI-only EPUB save never does) — but not a listening
+    /// fraction on a card no longer presenting itself as one.
+    private var fraction: Double? {
+        if isAudio != point.isAudio { return nil }
+        return point.fraction
+    }
 
     private var washTone: OKLCH {
         OKLCH(palette.bg0.l > 0.5 ? 0.93 : 0.24, tone.c * 0.6, tone.h)
@@ -154,8 +159,8 @@ private struct HeroCard: View {
 
                     Spacer(minLength: 4)
 
-                    // An EPUB resume point carries a CFI, not a percentage, so
-                    // there is no honest bar to draw for one. The band the bar
+                    // A CFI-only EPUB resume point has no honest percentage,
+                    // so there is no bar to draw for one. The band the bar
                     // would occupy goes to when you left off instead of sitting
                     // empty — which is what made the card read as underfilled.
                     if let fraction {

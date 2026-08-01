@@ -62,6 +62,7 @@ to scope an exception to.
 | `omnibus/Services/` | Read/write facades over the API + cache |
 | `omnibus/Features/` | One folder per screen |
 | `omnibus/Reader/` | EPUB reader: native chrome over the vendored epub.js engine |
+| `omnibus/Comic/` | CBZ comic pager: paged `TabView` + `UIScrollView` zoom, no WebView |
 
 ## Shell
 
@@ -158,6 +159,20 @@ against exactly the contract the server expects. `Reader/Web/` is a copy of
 gestures, persistence — is native. Assets and the book are served over a custom
 `omnibus-reader://` scheme so epub.js sees one same-origin space and needs no
 cookie.
+
+**Comics are native, and the WebView host stays EPUB-only.** A CBZ is a zip of
+images, so `Comic/ComicReaderView` pages them in a `TabView` with a
+`UIScrollView` zoom wrapper per page — pinch, pan-while-zoomed, double-tap, and
+deference at 1x (an unzoomed page must not claim the horizontal drag that turns
+pages) all come from the platform. Online it reads
+`GET /api/ebooks/{uuid}/pages/{n}` with an n±1 prefetch; offline the whole CBZ
+comes down through the ordinary download machinery (`/file` serves the archive
+for a comic-only book) and **ZIPFoundation** — the app's only SPM dependency —
+reads pages out of it in the same natural-sort order the server uses, CRC-checked
+per entry. A saved position is the shared `comic-page:N` anchor in the
+Epub-format progress row plus a whole-book percent, so comics resume across
+devices and surface on Continue Reading with a real progress bar, with no
+comic-specific server state.
 
 **The glue owns gestures, not SwiftUI.** `epub-reader-glue.js` already
 implements swipe-to-turn (the page tracks your finger, with velocity and
