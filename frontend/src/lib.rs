@@ -22,6 +22,7 @@ pub(crate) mod native_share;
 pub mod offline;
 pub mod pages;
 pub mod platform_sleep;
+pub mod read_status_auto;
 pub mod reader_progress;
 pub mod routes;
 pub mod rpc;

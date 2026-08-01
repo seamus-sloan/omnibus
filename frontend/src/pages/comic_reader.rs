@@ -77,6 +77,19 @@ pub fn ComicReadPage(uuid: String) -> Element {
     // no-op and hydration is unaffected.
     crate::session_tracker::use_reading_session(uuid.clone(), server_url.clone());
 
+    // Auto read-status, the same lifecycle the EPUB reader drives: opening
+    // an `Unread` comic marks it `Reading`, and landing on the last page
+    // marks it `Finished` (never a downgrade). Effect-only, no rsx.
+    let at_end = use_memo(move || {
+        let count = meta
+            .read()
+            .as_ref()
+            .and_then(|m| m.page_count)
+            .unwrap_or(0)
+            .max(0) as usize;
+        count > 0 && page() + 1 == count
+    });
+    crate::read_status_auto::use_auto_read_status(uuid.clone(), server_url.clone(), at_end);
     // Metadata + saved-position bootstrap, post-mount only (rule 07: SSR and
     // the first WASM paint both render the loading state). The restore lands
     // in `page` before `meta` is set so the first painted page is the saved

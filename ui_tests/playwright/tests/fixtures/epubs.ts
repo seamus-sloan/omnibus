@@ -455,11 +455,12 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
 
   // The two CBZ fixtures (tools/make_cbz.ts) are reserved for the
   // comic-pager spec (comic_reader.spec.ts): `aurora-station-01` receives
-  // that spec's progress writes, and `aurora-station-02` must stay
-  // progress-free — the layout test asserts it opens on page 1, so no spec
-  // (including the pager spec's own write path) may save a position on it.
-  // Their author appears in no other fixture. CBZ carries no
-  // publisher/date/language metadata, hence the empty cells.
+  // that spec's progress and read-status writes (the pager auto-marks
+  // reading on open and finished on the last page), and `aurora-station-02`
+  // must stay progress-free — the layout test asserts it opens on page 1,
+  // so no spec (including the pager spec's own write path) may save a
+  // position on it. Their author appears in no other fixture. CBZ carries
+  // no publisher/date/language metadata, hence the empty cells.
   {
     slug: "aurora-station-01",
     filename: "aurora-station-01.cbz",

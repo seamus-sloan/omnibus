@@ -41,6 +41,11 @@ pub(crate) struct RelocateData {
     pub(crate) page: u32,
     pub(crate) total_pages: u32,
     pub(crate) pct: u32,
+    // True when the rendered range reaches the book's end (epub.js
+    // `location.atEnd`) — the auto `Finished` trigger. `pct` can't stand in:
+    // it tracks the start of the visible range, so it tops out below 100.
+    #[serde(default)]
+    pub(crate) at_end: bool,
     pub(crate) chapter: u32,
     pub(crate) total_chapters: u32,
     pub(crate) chapter_title: String,
@@ -165,6 +170,7 @@ mod tests {
             page: 42,
             total_pages: 300,
             pct: 14,
+            at_end: false,
             chapter: 3,
             total_chapters: 24,
             chapter_title: String::new(),
@@ -263,6 +269,7 @@ mod tests {
             page: 0,
             total_pages: 0,
             pct: 7,
+            at_end: false,
             chapter: 0,
             total_chapters: 0,
             chapter_title: String::new(),
