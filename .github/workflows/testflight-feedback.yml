@@ -1,11 +1,11 @@
-# Opens a GitHub issue for each new TestFlight screenshot feedback submission,
-# across both iOS clients (com.omnibus.mobile and com.omnibus.swiftui).
+# Opens a GitHub issue for each new TestFlight screenshot feedback submission
+# for the native SwiftUI app (com.omnibus.swiftui).
 #
 # Runs once a day (and on demand). Reuses the App Store Connect API key already
 # configured for the build-upload workflow (testflight.yml) — no new secrets:
 #   ASC_API_KEY_BASE64, ASC_KEY_ID, ASC_ISSUER_ID
-# That key is team-scoped, so it reads both app records; only the provisioning
-# profiles in testflight.yml are per-app.
+# That key is team-scoped; only the provisioning profile in testflight.yml is
+# app-specific.
 #
 # Screenshots are committed to the `testflight-feedback` branch so they render
 # inline in issues and survive App Store Connect's short-lived image URLs.
@@ -50,6 +50,6 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
-          BUNDLE_IDS: com.omnibus.mobile,com.omnibus.swiftui
+          BUNDLE_IDS: com.omnibus.swiftui
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
         run: python scripts/testflight_feedback_to_issues.py

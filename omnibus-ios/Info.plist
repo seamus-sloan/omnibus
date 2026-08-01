@@ -41,8 +41,7 @@
 	     TestFlight distribution until it's answered by hand. The app adds no
 	     encryption of its own: transport is TLS via the OS, and the only
 	     CryptoKit use is SHA-256 over a cache key in RemoteImage, which is a
-	     hash rather than encryption. scripts/ios-package-ipa.sh declares the
-	     same for the WebView build. -->
+	     hash rather than encryption. -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<!-- Instrument Serif is the display face shared with the web client, which

@@ -100,4 +100,4 @@ The committed fixtures live under `test_data/epubs/generated/` and are produced 
 
 ## Mobile E2E
 
-The iOS surface is the native SwiftUI app (`omnibus-ios/`); its UI coverage is the `omnibusUITests` XCUITest suite (`just ios-test-ui`, CI's `ios-tests.yml`) — not Playwright. The `mobile/` crate survives as the Android **hybrid app** — a thin native shell (`mobile/src/main.rs`) hosting the system WebView rendering the shared `omnibus-frontend` markup with `features = ["mobile"]` — and currently has no E2E lane. Playwright isn't used for it: it reaches the Android WebView but not iOS WKWebView (WebKit inspector protocol, not CDP).
+The iOS surface is the native SwiftUI app (`omnibus-ios/`); its UI coverage is the `omnibusUITests` XCUITest suite (`just ios-test-ui`, CI's `ios-tests.yml`) — not Playwright. The `mobile/` crate is the Android **hybrid app** — a thin native shell (`mobile/src/main.rs`) hosting the system WebView rendering the shared `omnibus-frontend` markup with `features = ["mobile"]` — and currently has no E2E lane (Playwright can reach the Android WebView over CDP, but none is wired up).
