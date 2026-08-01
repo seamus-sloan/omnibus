@@ -12,6 +12,7 @@ use futures::future::join_all;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
+use crate::helpers::format_series_index;
 use crate::suggestions::filter::Candidate;
 
 /// Process-wide `reqwest::Client` for Hardcover GraphQL calls, built once and
@@ -163,6 +164,12 @@ struct BookRow {
     book_series: Vec<BookSeries>,
     #[serde(default)]
     image: Option<HcImage>,
+    /// Only populated when the query appends `description` to
+    /// [`BOOK_FIELDS`] (see [`fetch_book_details`]) — absent from the
+    /// response JSON on every other query, which `#[serde(default)]`
+    /// turns into `None` rather than a deserialization error.
+    #[serde(default)]
+    description: Option<String>,
 }
 #[derive(Debug, Deserialize)]
 struct Contribution {
@@ -305,6 +312,81 @@ async fn fetch_resolved_book(
     );
     let data: BooksData = post_graphql(config, &query, serde_json::json!({})).await?;
     Ok(data.books.first().map(resolved_from_row))
+}
+
+/// Rich single-book detail for the metadata-edit "Fetch from Hardcover"
+/// action: title/authors/series (the same fields [`ResolvedBook`] carries)
+/// plus the description and a representative edition's ISBN-13, which the
+/// suggestions ranking path never needed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BookDetails {
+    pub title: Option<String>,
+    pub authors: Vec<String>,
+    pub description: Option<String>,
+    pub series: Option<String>,
+    /// Book-number position formatted for display (e.g. `"1"`, `"2.5"`),
+    /// or `None` when the book has no series or no known position.
+    pub series_index: Option<String>,
+    pub isbn13: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EditionIsbnData {
+    editions: Vec<EditionIsbnRow>,
+}
+#[derive(Debug, Deserialize)]
+struct EditionIsbnRow {
+    #[serde(default)]
+    isbn_13: Option<String>,
+}
+
+/// Fetch [`BookDetails`] for a resolved Hardcover book id — the same fields
+/// query as [`resolve_book`]'s `books` lookup plus `description`, and a
+/// second small query for a representative edition's ISBN-13 (Hardcover has
+/// no single "primary edition" scalar to read it from directly). `Ok(None)`
+/// when the id no longer resolves (deleted/merged on Hardcover's side
+/// between resolution and this call).
+pub async fn fetch_book_details(
+    config: &HardcoverConfig,
+    book_id: i64,
+) -> Result<Option<BookDetails>, HardcoverError> {
+    let query = format!(
+        "query {{ books(where: {{id: {{_eq: {book_id}}}}}, limit: 1) {{ {BOOK_FIELDS} description }} }}"
+    );
+    let data: BooksData = post_graphql(config, &query, serde_json::json!({})).await?;
+    let Some(b) = data.books.into_iter().next() else {
+        return Ok(None);
+    };
+    let isbn13 = fetch_primary_isbn13(config, book_id).await?;
+    let series_row = b.book_series.first();
+    Ok(Some(BookDetails {
+        title: b.title.clone(),
+        authors: author_names(&b),
+        description: b
+            .description
+            .clone()
+            .map(|d| d.trim().to_string())
+            .filter(|d| !d.is_empty()),
+        series: series_name(&b),
+        series_index: series_row.and_then(|s| s.position).map(format_series_index),
+        isbn13,
+    }))
+}
+
+/// A representative edition's ISBN-13 for `book_id`, preferring the edition
+/// with the most readers (mirrors the `users_count desc` ordering
+/// [`resolve_book`]'s title fallback uses to prefer the canonical edition).
+/// `Ok(None)` when no edition carries an ISBN-13.
+async fn fetch_primary_isbn13(
+    config: &HardcoverConfig,
+    book_id: i64,
+) -> Result<Option<String>, HardcoverError> {
+    let query = format!(
+        "query {{ editions(where: {{book_id: {{_eq: {book_id}}}, isbn_13: {{_is_null: false}}}}, \
+         order_by: {{users_count: desc}}, limit: 1) {{ isbn_13 }} }}"
+    );
+    let data: EditionIsbnData = post_graphql(config, &query, serde_json::json!({})).await?;
+    Ok(data.editions.into_iter().find_map(|e| e.isbn_13))
 }
 
 #[derive(Debug, Deserialize)]
