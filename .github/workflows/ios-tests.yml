@@ -54,7 +54,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.ios == 'true' || github.event_name != 'pull_request' }}
     # omnibus-ios needs the Xcode 26 / iOS 26 SDK, only on macos-26 — same
-    # pinning as testflight.yml's swiftui job.
+    # pinning as testflight.yml's ios job.
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4

@@ -8,7 +8,7 @@ name: TestFlight
 run-name: "TestFlight ${{ inputs.marketing_version && format('v{0}', inputs.marketing_version) || 'latest tag' }}"
 
 # Manually-triggered iOS build + TestFlight upload for the native SwiftUI app
-# (omnibus-ios/ Xcode project, bundle com.omnibus.swiftui). The Apple side
+# (omnibus-ios/ Xcode project, bundle com.omnibus.mobile). The Apple side
 # (App ID, app record, distribution cert, App Store Connect API key, App Store
 # provisioning profile) must already exist.
 #
@@ -25,7 +25,7 @@ run-name: "TestFlight ${{ inputs.marketing_version && format('v{0}', inputs.mark
 #     ASC_KEY_ID                        App Store Connect API key ID
 #     ASC_ISSUER_ID                     App Store Connect API issuer ID
 #   Per-app (a profile is bound to one bundle ID):
-#     IOS_SWIFTUI_PROVISION_PROFILE_BASE64   App Store profile for com.omnibus.swiftui
+#     IOS_PROVISIONING_PROFILE_BASE64   App Store profile for com.omnibus.mobile
 
 on:
   workflow_dispatch:
@@ -83,9 +83,9 @@ jobs:
           echo "Marketing version: $version"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
-  # ---- swiftui: native SwiftUI app (com.omnibus.swiftui) ----------------------
-  swiftui:
-    name: swiftui (native · com.omnibus.swiftui)
+  # ---- ios: native SwiftUI app (com.omnibus.mobile) ---------------------------
+  ios:
+    name: ios (native · com.omnibus.mobile)
     needs: version
     # omnibus-ios targets iOS 26.5, so it needs the Xcode 26 / iOS 26 SDK on
     # macos-26. App Store Connect also rejects any upload built with an older
@@ -102,7 +102,7 @@ jobs:
       MARKETING_VERSION: ${{ needs.version.outputs.marketing_version }}
       # The team the omnibus-ios project + the distribution cert belong to.
       DEVELOPMENT_TEAM: "D33VSDXHA6"
-      BUNDLE_ID: com.omnibus.swiftui
+      BUNDLE_ID: com.omnibus.mobile
     steps:
       - uses: actions/checkout@v4
 
@@ -112,7 +112,7 @@ jobs:
         with:
           cert-p12-base64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
           cert-password: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
-          profile-base64: ${{ secrets.IOS_SWIFTUI_PROVISION_PROFILE_BASE64 }}
+          profile-base64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
           expected-team: ${{ env.DEVELOPMENT_TEAM }}
 
       # Archive with manual signing against the installed profile. MARKETING_VERSION
@@ -172,7 +172,7 @@ jobs:
             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
           # exportArchive names the .ipa after the product; copy to a stable path.
           IPA="$(ls "$RUNNER_TEMP"/export/*.ipa | head -n1)"
-          cp "$IPA" "$GITHUB_WORKSPACE/omnibus-swiftui.ipa"
+          cp "$IPA" "$GITHUB_WORKSPACE/omnibus-ios.ipa"
 
       - name: Upload to TestFlight
         env:
@@ -184,7 +184,7 @@ jobs:
           mkdir -p "$HOME/.appstoreconnect/private_keys"
           KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
           echo "$ASC_API_KEY_BASE64" | base64 -D > "$KEY_PATH"
-          xcrun altool --upload-app -f "$GITHUB_WORKSPACE/omnibus-swiftui.ipa" -t ios \
+          xcrun altool --upload-app -f "$GITHUB_WORKSPACE/omnibus-ios.ipa" -t ios \
             --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
           rm -f "$KEY_PATH"
 
@@ -192,8 +192,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: omnibus-swiftui-ipa
-          path: omnibus-swiftui.ipa
+          name: omnibus-ios-ipa
+          path: omnibus-ios.ipa
           if-no-files-found: ignore
 
       - name: Clean up signing keychain

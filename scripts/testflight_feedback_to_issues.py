@@ -35,7 +35,7 @@ ASC_BASE = "https://api.appstoreconnect.apple.com"
 GH_BASE = "https://api.github.com"
 DRY_RUN = os.environ.get("DRY_RUN") == "1"
 # Bundle id -> the name shown in the issue title and Environment block.
-APP_NAMES = {"com.omnibus.swiftui": "SwiftUI"}
+APP_NAMES = {"com.omnibus.mobile": "SwiftUI"}
 BUNDLE_IDS = [b.strip() for b in
               os.environ.get("BUNDLE_IDS", ",".join(APP_NAMES.keys())).split(",") if b.strip()]
 ASSET_BRANCH = os.environ.get("ASSET_BRANCH", "testflight-feedback")
