@@ -30,7 +30,7 @@ use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
 use super::cfi::CfiTail;
-use super::location::parse_span_id;
+use super::location::{parse_span_id, SpanPoint};
 
 /// Normalized characters of following text captured per anchor; the two
 /// sides of a derivation must produce byte-identical snippets or the
@@ -398,6 +398,79 @@ impl FileIndex {
         Some(Anchor {
             norm_offset: landed,
             snippet: self.snippet_at(landed),
+        })
+    }
+
+    /// Source walk: the anchor for an *exclusive end* CFI tail — the last
+    /// visible character before the boundary the tail addresses, the
+    /// reading-direction counterpart of [`FileIndex::offset_at`]. `None`
+    /// when nothing visible precedes the boundary (a degenerate range).
+    pub(super) fn offset_end_at(&self, tail: &CfiTail) -> Option<Anchor> {
+        let cluster = self
+            .clusters
+            .iter()
+            .find(|c| c.element_steps == tail.element_steps && c.text_index == tail.text_index)
+            .or_else(|| {
+                // Element-anchored fallback, mirroring `offset_at`.
+                self.clusters
+                    .iter()
+                    .find(|c| c.element_steps.starts_with(&tail.element_steps))
+            })?;
+        let boundary = replay_norm(cluster, tail.offset_utf16);
+        let landed = self.back_land(boundary.checked_sub(1)?)?;
+        Some(Anchor {
+            norm_offset: landed,
+            snippet: self.snippet_at(landed),
+        })
+    }
+
+    /// Kepub walk: the KoboSpan endpoint for the character at normalized
+    /// offset `t` — the covering span's counters plus the DOM UTF-16 offset
+    /// of that character within the span's text node.
+    pub(super) fn span_point_at(&self, t: u64) -> Option<SpanPoint> {
+        self.span_point(t, false)
+    }
+
+    /// Like [`FileIndex::span_point_at`] but the offset is the exclusive
+    /// DOM-Range end *after* the character at `t`.
+    pub(super) fn span_point_after(&self, t: u64) -> Option<SpanPoint> {
+        self.span_point(t, true)
+    }
+
+    /// Shared body of the two span-point queries. Strictly the last span
+    /// starting at/before `t` — none of `span_at`'s first/last-span
+    /// leniency, which suits a resume position but would anchor an
+    /// annotation endpoint to text outside the highlight. `None` when `t`'s
+    /// character lives in a different text node than the span's first
+    /// visible character: kepubify wraps every text node in its own span,
+    /// so that means the two walks disagree about the document.
+    fn span_point(&self, t: u64, exclusive_end: bool) -> Option<SpanPoint> {
+        let mut chosen: Option<&SpanMark> = None;
+        for s in &self.spans {
+            if s.norm_start <= t {
+                chosen = Some(s);
+            } else {
+                break;
+            }
+        }
+        let mark = chosen?;
+        let cluster = self.clusters.iter().find(|c| {
+            c.norm_len > 0
+                && mark.norm_start >= c.norm_start
+                && mark.norm_start < c.norm_start + c.norm_len
+        })?;
+        if t < cluster.norm_start || t >= cluster.norm_start + cluster.norm_len {
+            return None;
+        }
+        let char_utf16 = if exclusive_end {
+            replay_offset_after(cluster, t)?
+        } else {
+            replay_offset(cluster, t)?
+        };
+        Some(SpanPoint {
+            n: mark.n,
+            m: mark.m,
+            char_utf16,
         })
     }
 

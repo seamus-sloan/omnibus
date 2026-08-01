@@ -16,10 +16,10 @@ mod walk;
 
 use std::path::Path;
 
-pub use cfi::{format_cfi, format_range_cfi, parse_cfi, Cfi, CfiTail};
+pub use cfi::{format_cfi, format_range_cfi, parse_cfi, parse_range_cfi, Cfi, CfiRange, CfiTail};
 pub use location::{
-    location_json, parse_annotation_location, parse_location, parse_span_id, span_id, KoboLoc,
-    KoboSpanRange, SpanPoint,
+    annotation_location_json, location_json, parse_annotation_location, parse_location,
+    parse_span_id, span_id, KoboLoc, KoboSpanRange, SpanPoint,
 };
 
 /// Web→Kobo derivation result. The span needs the kepub cache; the percent
@@ -131,6 +131,71 @@ fn annotation_cfi(
         return None;
     }
     Some(format_range_cfi(s_idx, &start_tail, &end_tail))
+}
+
+/// Web→Kobo: derive Kobo annotation `location` objects for a batch of
+/// stored range CFIs from one book, opening each container (and indexing
+/// each content document) once — the inverse of [`annotation_cfis`].
+/// Per-anchor failures — an unparseable or point CFI, unknown spine index,
+/// missing kepub span, snippet mismatch — yield `None` in that slot rather
+/// than failing the batch; `Err` is reserved for not being able to open
+/// either container at all.
+pub fn annotation_locations(
+    kepub: &Path,
+    source_epub: &Path,
+    cfis: &[String],
+) -> anyhow::Result<Vec<Option<String>>> {
+    if cfis.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut kdoc = book::open_doc(kepub)?;
+    let mut sdoc = book::open_doc(source_epub)?;
+    let mut k_cache: std::collections::HashMap<usize, walk::FileIndex> = Default::default();
+    let mut s_cache: std::collections::HashMap<usize, walk::FileIndex> = Default::default();
+    Ok(cfis
+        .iter()
+        .map(|cfi| annotation_location(&mut kdoc, &mut sdoc, &mut k_cache, &mut s_cache, cfi))
+        .collect())
+}
+
+/// One anchor of [`annotation_locations`]: source walk for both endpoints,
+/// kepub walk with the mandatory snippet-equality proof at each, then the
+/// span-range location. Any miss is a `None`.
+fn annotation_location(
+    kdoc: &mut book::Doc,
+    sdoc: &mut book::Doc,
+    k_cache: &mut std::collections::HashMap<usize, walk::FileIndex>,
+    s_cache: &mut std::collections::HashMap<usize, walk::FileIndex>,
+    cfi: &str,
+) -> Option<String> {
+    let range = parse_range_cfi(cfi)?;
+    if range.spine_index >= sdoc.spine.len() {
+        return None;
+    }
+    let href = book::spine_href(sdoc, range.spine_index)?;
+    let s_index = cached_index(sdoc, s_cache, range.spine_index)?;
+    let s_start = s_index.offset_at(&range.start)?;
+    let s_end = s_index.offset_end_at(&range.end)?;
+    if s_end.norm_offset < s_start.norm_offset {
+        return None;
+    }
+
+    let k_idx = book::spine_index_for_source(kdoc, &href)?;
+    let k_index = cached_index(kdoc, k_cache, k_idx)?;
+    // The proof of alignment, at both endpoints: the kepub walk must see
+    // the same following text at the same normalized offsets, or the
+    // derivation is abandoned.
+    if k_index.snippet_at(s_start.norm_offset) != s_start.snippet
+        || k_index.snippet_at(s_end.norm_offset) != s_end.snippet
+    {
+        return None;
+    }
+    let start = k_index.span_point_at(s_start.norm_offset)?;
+    let end = k_index.span_point_after(s_end.norm_offset)?;
+    // The device resolves `chapterFilename` against its downloaded KEPUB,
+    // so the kepub's own spine href is the one to carry.
+    let k_href = book::spine_href(kdoc, k_idx)?;
+    Some(annotation_location_json(&k_href, start, end))
 }
 
 /// Read + index spine entry `idx`, memoized per batch so a book with many

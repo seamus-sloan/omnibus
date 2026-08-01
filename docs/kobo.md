@@ -100,3 +100,15 @@ From **Account → Kobo wireless sync**:
 
 Only shelves you've opted in are synced — mark a shelf **Sync to Kobo** in its
 settings to include it.
+
+### Highlights and notes
+
+Highlights sync both ways. Highlights made **on the device** flow up to
+Omnibus automatically and appear in the web reader. Highlights created **in
+the web reader** are converted into device-placeable anchors and delivered to
+the Kobo on its next sync — recolors, note edits, and deletes follow.
+
+A web highlight only converts when the book's KEPUB copy and its source EPUB
+still carry the same text — a conversion that can't be proven correct is
+skipped (the highlight simply stays web-only) rather than placed somewhere
+wrong.

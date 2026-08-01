@@ -53,6 +53,7 @@ mod server {
         spawn_session_pruner(pool.clone());
         spawn_periodic_scan(pool.clone(), worker.clone());
         spawn_annotation_cfi_backfill(pool.clone());
+        spawn_annotation_downsync(pool.clone());
 
         let router = build_router(state, pool, worker);
         Ok(apply_security_headers(router))
@@ -180,6 +181,29 @@ mod server {
                 Ok(_) => {}
                 Err(e) => {
                     tracing::warn!(error = %e, "kobo annotation CFI backfill failed");
+                }
+            }
+        });
+    }
+
+    /// Spawn the boot-time Web→Kobo annotation materialization — the retry
+    /// for rows whose kepub cache was absent (or whose text had diverged)
+    /// when they were written, and the backlog pass for highlights that
+    /// predate down-sync. Mirrors `spawn_annotation_cfi_backfill`: cheap
+    /// once caught up.
+    fn spawn_annotation_downsync(pool: SqlitePool) {
+        tokio::spawn(async move {
+            match omnibus_db::annotations::downsync_all_kobo_annotations(&pool).await {
+                Ok(stats) if stats.derived > 0 || stats.unresolved > 0 => {
+                    tracing::info!(
+                        derived = stats.derived,
+                        unresolved = stats.unresolved,
+                        "kobo annotation downsync finished"
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(error = %e, "kobo annotation downsync failed");
                 }
             }
         });

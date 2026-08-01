@@ -19,7 +19,12 @@ pub async fn rpc_create_highlight(input: CreateHighlight) -> Result<Highlight> {
         return Err(ServerFnError::new(msg).into());
     }
     match db::annotations::create_highlight(&pool.0, user.id, &input).await {
-        Ok(h) => Ok(h),
+        Ok(h) => {
+            // Kobo down-sync: convert the fresh row in the background so it
+            // reaches the device on its next sync.
+            db::annotations::spawn_kobo_downsync(pool.0.clone(), user.id, h.book_uuid.clone());
+            Ok(h)
+        }
         Err(db::annotations::HighlightError::BookNotFound) => {
             Err(ServerFnError::new("book not found").into())
         }

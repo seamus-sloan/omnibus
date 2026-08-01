@@ -38,6 +38,9 @@ test("renders the account section layout", async ({ page }) => {
   await expect(newPassword(page)).toBeVisible();
   await expect(page.getByTestId("change-password-submit")).toBeVisible();
 
+  // Kobo wireless sync card (#927/#1439).
+  await expect(page.getByTestId("kobo-devices-card")).toBeVisible();
+
   await expectNavVisible(page);
 });
 

@@ -87,6 +87,29 @@ pub fn parse_annotation_location(raw_json: &str) -> Option<KoboSpanRange> {
     })
 }
 
+/// Format an annotation `location` JSON string for a derived span range —
+/// the exact `span` shape a device's own uploads carry (and
+/// [`parse_annotation_location`] reads back), so a converted web highlight
+/// is indistinguishable from a native one on the wire.
+pub fn annotation_location_json(source: &str, start: SpanPoint, end: SpanPoint) -> String {
+    serde_json::json!({
+        "span": {
+            "chapterFilename": source,
+            "startPath": span_path(start.n, start.m),
+            "startChar": start.char_utf16,
+            "endPath": span_path(end.n, end.m),
+            "endChar": end.char_utf16,
+        }
+    })
+    .to_string()
+}
+
+/// The CSS-ish selector an annotation endpoint path carries:
+/// `span#kobo\.N\.M` (dots backslash-escaped).
+fn span_path(n: u32, m: u32) -> String {
+    format!("span#kobo\\.{n}\\.{m}")
+}
+
 /// Extract the `(n, m)` counters from an annotation endpoint path — a
 /// CSS-ish selector like `span#kobo\.55\.1` (dots backslash-escaped).
 fn parse_span_path(path: &str) -> Option<(u32, u32)> {

@@ -10,8 +10,12 @@ use sqlx::{Row, SqlitePool};
 use crate::resolve_canonical_book_uuid;
 
 mod backfill;
+mod downsync;
 
 pub use backfill::{backfill_kobo_annotation_cfis, BackfillStats};
+pub use downsync::{
+    downsync_all_kobo_annotations, downsync_book_annotations, spawn_kobo_downsync, DownsyncStats,
+};
 
 /// Hard cap on how many highlights `list_highlights` returns for a single
 /// `(user, book)` pair. Practical usage stays well under this; the cap
@@ -251,9 +255,9 @@ pub struct IngestKoboAnnotation {
 }
 
 /// List the Kobo-placeable annotations for a user + book — rows that carry a
-/// `kobo_location` anchor (today that means device-origin rows; a future
-/// CFI→KoboSpan converter widens the set with no query change). Unknown book
-/// resolves to an empty list, mirroring [`list_highlights`].
+/// `kobo_location` anchor: device-origin rows always, plus web-origin rows the
+/// downsync pass has materialized (see [`downsync_book_annotations`]).
+/// Unknown book resolves to an empty list, mirroring [`list_highlights`].
 pub async fn served_kobo_annotations(
     pool: &SqlitePool,
     user_id: i64,

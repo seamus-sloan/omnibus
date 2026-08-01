@@ -223,6 +223,81 @@ fn format_range_cfi_handles_same_text_node_endpoints() {
     );
 }
 
+#[test]
+fn parse_range_cfi_recombines_the_parent_with_each_endpoint() {
+    let range = parse_range_cfi("epubcfi(/6/2!/4/6,/1:0,/2/1:8)").expect("parse");
+    assert_eq!(range.spine_index, 0);
+    assert_eq!(range.start.element_steps, vec![4, 6]);
+    assert_eq!(range.start.text_index, 1);
+    assert_eq!(range.start.offset_utf16, 0);
+    assert_eq!(range.end.element_steps, vec![4, 6, 2]);
+    assert_eq!(range.end.text_index, 1);
+    assert_eq!(range.end.offset_utf16, 8);
+}
+
+#[test]
+fn parse_range_cfi_round_trips_format_range_cfi() {
+    let start = CfiTail {
+        element_steps: vec![4, 4],
+        text_index: 1,
+        offset_utf16: 21,
+    };
+    let end = CfiTail {
+        element_steps: vec![4, 4],
+        text_index: 1,
+        offset_utf16: 45,
+    };
+    let formatted = format_range_cfi(0, &start, &end);
+    let parsed = parse_range_cfi(&formatted).expect("parse");
+    assert_eq!(parsed.spine_index, 0);
+    assert_eq!(parsed.start, start);
+    assert_eq!(parsed.end, end);
+}
+
+#[test]
+fn parse_range_cfi_rejects_points_extra_parts_and_spatiotemporal_terms() {
+    // A point CFI has no comma components.
+    assert_eq!(parse_range_cfi("epubcfi(/6/2!/4/4/1:0)"), None);
+    // Four comma-separated components is off-grammar.
+    assert_eq!(parse_range_cfi("epubcfi(/6/2!/4/4,/1:0,/1:5,/1:9)"), None);
+    assert_eq!(parse_range_cfi("epubcfi(/6/2!/4/4,/1:0~3.5,/1:5)"), None);
+    assert_eq!(parse_range_cfi("garbage"), None);
+}
+
+#[test]
+fn parse_range_cfi_rejects_unrooted_components_rather_than_splicing_them() {
+    // An unrooted relative part would concatenate into a *different* but
+    // still parseable tail (`/4/4` + `1:0` → `/4/41:0`) — it must degrade,
+    // never reinterpret.
+    assert_eq!(parse_range_cfi("epubcfi(/6/2!/4/4,1:0,/1:5)"), None);
+    assert_eq!(parse_range_cfi("epubcfi(/6/2!/4/4,/1:0,1:5)"), None);
+    // Same for an unrooted (non-empty) shared parent path.
+    assert_eq!(parse_range_cfi("epubcfi(/6/2!4/4,/1:0,/1:5)"), None);
+    // An empty parent stays legal — both endpoints carry rooted paths.
+    assert!(parse_range_cfi("epubcfi(/6/2!,/4/4/1:0,/4/6/1:5)").is_some());
+}
+
+#[test]
+fn annotation_location_json_round_trips_through_parse_annotation_location() {
+    let json = annotation_location_json(
+        "OEBPS/ch1.xhtml",
+        SpanPoint {
+            n: 1,
+            m: 2,
+            char_utf16: 3,
+        },
+        SpanPoint {
+            n: 1,
+            m: 4,
+            char_utf16: 9,
+        },
+    );
+    assert_eq!(
+        parse_annotation_location(&json),
+        Some(span_range("OEBPS/ch1.xhtml", (1, 2, 3), (1, 4, 9)))
+    );
+}
+
 // --- span_to_cfi -------------------------------------------------------
 
 #[test]
@@ -464,6 +539,91 @@ fn annotation_cfis_errors_when_a_container_cannot_be_opened() {
         &missing,
         &source,
         &[span_range("c1.xhtml", (2, 2, 0), (2, 2, 24))]
+    )
+    .is_err());
+}
+
+// --- annotation_locations ----------------------------------------------
+
+#[test]
+fn annotation_locations_maps_a_same_node_range_back_to_its_span() {
+    let (source, kepub) = fixture_pair("loc1", SOURCE_C1, KEPUB_C1);
+    // The web highlight covering "Second sentence follows." — the exact CFI
+    // `annotation_cfis` derives for all of kobo.2.2.
+    let locations = annotation_locations(
+        &kepub,
+        &source,
+        &["epubcfi(/6/2!/4/4,/1:21,/1:45)".to_string()],
+    )
+    .expect("derive");
+    assert_eq!(locations.len(), 1);
+    let parsed = parse_annotation_location(locations[0].as_deref().expect("location"));
+    assert_eq!(parsed, Some(span_range("c1.xhtml", (2, 2, 0), (2, 2, 24))));
+}
+
+#[test]
+fn annotation_locations_round_trips_annotation_cfis_output() {
+    let (source, kepub) = fixture_pair("loc2", SOURCE_C1, KEPUB_C1);
+    let ranges = [
+        // All of kobo.2.2, single text node.
+        span_range("c1.xhtml", (2, 2, 0), (2, 2, 24)),
+        // kobo.3.1 through the em's text — endpoints in different nodes.
+        span_range("c1.xhtml", (3, 1, 0), (3, 2, 8)),
+    ];
+    let cfis: Vec<String> = annotation_cfis(&kepub, &source, &ranges)
+        .expect("forward")
+        .into_iter()
+        .map(|c| c.expect("cfi"))
+        .collect();
+    let locations = annotation_locations(&kepub, &source, &cfis).expect("reverse");
+    for (location, original) in locations.iter().zip(&ranges) {
+        let parsed = parse_annotation_location(location.as_deref().expect("location"));
+        assert_eq!(parsed.as_ref(), Some(original));
+    }
+}
+
+#[test]
+fn annotation_locations_degrades_bad_slots_alone() {
+    let (source, kepub) = fixture_pair("loc3", SOURCE_C1, KEPUB_C1);
+    let locations = annotation_locations(
+        &kepub,
+        &source,
+        &[
+            // Point CFI: not a range, degrades.
+            "epubcfi(/6/2!/4/4/1:0)".to_string(),
+            // Spine index past the one-chapter book.
+            "epubcfi(/6/40!/4/4,/1:0,/1:5)".to_string(),
+            // A good slot still derives.
+            "epubcfi(/6/2!/4/4,/1:21,/1:45)".to_string(),
+        ],
+    )
+    .expect("derive");
+    assert_eq!(locations[0], None);
+    assert_eq!(locations[1], None);
+    assert!(locations[2].is_some());
+}
+
+#[test]
+fn annotation_locations_refuses_when_kepub_text_diverges() {
+    let kepub = KEPUB_C1.replace("Second sentence follows.", "Entirely different text!");
+    let (source, kepub) = fixture_pair("loc4", SOURCE_C1, &kepub);
+    let locations = annotation_locations(
+        &kepub,
+        &source,
+        &["epubcfi(/6/2!/4/4,/1:21,/1:45)".to_string()],
+    )
+    .expect("derive");
+    assert_eq!(locations, vec![None]);
+}
+
+#[test]
+fn annotation_locations_errors_when_a_container_cannot_be_opened() {
+    let (source, _kepub) = fixture_pair("loc5", SOURCE_C1, KEPUB_C1);
+    let missing = source.with_file_name("nope.kepub.epub");
+    assert!(annotation_locations(
+        &missing,
+        &source,
+        &["epubcfi(/6/2!/4/4,/1:21,/1:45)".to_string()]
     )
     .is_err());
 }
