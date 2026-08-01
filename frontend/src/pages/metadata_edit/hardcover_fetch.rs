@@ -288,7 +288,14 @@ fn apply_handler(
     }
 }
 
-/// One current-vs-fetched diff row with its apply checkbox.
+/// One current-vs-fetched diff row with its apply checkbox. The checkbox
+/// carries its own `aria-label` ("Apply fetched {label}") rather than
+/// inheriting the wrapping `<label>`'s visible "{label}" text as its
+/// accessible name — that text is identical to the real form field's own
+/// label (e.g. both say "Title"), which made `getByLabel("Title")` resolve
+/// to two elements and, for a screen-reader user, made the two controls
+/// indistinguishable by name. `aria-label` takes precedence over the
+/// implicit label association, so the visible row heading is unchanged.
 #[component]
 fn HcfRow(
     label: &'static str,
@@ -298,11 +305,13 @@ fn HcfRow(
     testid: String,
 ) -> Element {
     let mut selected = selected;
+    let checkbox_label = format!("Apply fetched {label}");
     rsx! {
         label { class: "hcf-row", "data-testid": "{testid}",
             input {
                 r#type: "checkbox",
                 "data-testid": "{testid}-checkbox",
+                aria_label: "{checkbox_label}",
                 checked: selected(),
                 onchange: move |e| selected.set(e.checked()),
             }
