@@ -258,8 +258,44 @@ async fn resolve_epub_path(
     }
 }
 
-/// Streams the raw EPUB bytes. Accepts optional `?file_id=N` to target
-/// a specific `book_files` row for multi-EPUB books.
+/// Wire mime for a served CBZ archive. The registered comic-book zip type,
+/// which downloaders and shelf apps recognize where a bare
+/// `application/zip` would not say what the bytes are.
+const CBZ_MIME: &str = "application/vnd.comicbook+zip";
+
+/// Resolve the file `/file` streams for `uuid`: the EPUB when the book has
+/// one, else its CBZ archive. The fallback is what lets a comic-only book be
+/// taken offline whole — the per-page endpoint answers reading, not
+/// downloading — while a dual-format book keeps serving the EPUB, matching
+/// the pager's rule that the EPUB stays the primary read. An explicit
+/// `?file_id=` stays EPUB-scoped: multi-file selection exists for
+/// multi-EPUB books and must not silently resolve to an archive.
+async fn resolve_readable_path(
+    state: &AppState,
+    uuid: &str,
+    file_id: Option<i64>,
+) -> Result<(std::path::PathBuf, &'static str), Response> {
+    match resolve_epub_path(state, uuid, file_id).await {
+        Ok(path) => Ok((path, "application/epub+zip")),
+        Err(resp) if file_id.is_none() && resp.status() == StatusCode::NOT_FOUND => {
+            let id = match db::resolve_book_id_by_uuid(&state.pool, uuid).await {
+                Ok(Some(id)) => id,
+                Ok(None) => return Err(StatusCode::NOT_FOUND.into_response()),
+                Err(e) => return Err(internal("resolve_book_id_by_uuid", e)),
+            };
+            match db::book_file_path(&state.pool, id, "CBZ").await {
+                Ok(Some(path)) => Ok((path, CBZ_MIME)),
+                Ok(None) => Err(StatusCode::NOT_FOUND.into_response()),
+                Err(e) => Err(internal("book_file_path", e)),
+            }
+        }
+        Err(resp) => Err(resp),
+    }
+}
+
+/// Streams the raw EPUB bytes — or, for a comic-only book, the CBZ archive
+/// (the whole-file download the offline clients pull). Accepts optional
+/// `?file_id=N` to target a specific `book_files` row for multi-EPUB books.
 ///
 /// Gated by [`MediaAuthUser`] rather than [`AuthUser`]: epub.js fetches this
 /// URL from inside the mobile WebView, which can carry neither a session
@@ -285,9 +321,9 @@ pub(super) async fn get_ebook_file(
     resp
 }
 
-/// Resolve the on-disk EPUB and stream its bytes, or report the resolution
-/// failure as a 404 / 500. CORS is layered on by the caller so it covers
-/// every arm uniformly.
+/// Resolve the book's readable file (EPUB, else CBZ) and stream its bytes,
+/// or report the resolution failure as a 404 / 500. CORS is layered on by
+/// the caller so it covers every arm uniformly.
 ///
 /// Goes through the shared `serve_file` path rather than buffering the whole
 /// book, which is what gives the endpoint `Range` support — without which
@@ -300,11 +336,11 @@ async fn read_ebook_file(
     file_id: Option<i64>,
     req: Request,
 ) -> Response {
-    let path = match resolve_epub_path(state, uuid, file_id).await {
-        Ok(p) => p,
+    let (path, mime) = match resolve_readable_path(state, uuid, file_id).await {
+        Ok(resolved) => resolved,
         Err(resp) => return resp,
     };
-    super::serve_file(req, &path, "application/epub+zip", None).await
+    super::serve_file(req, &path, mime, None).await
 }
 
 /// Serve one page image out of the book's CBZ archive, extracted
