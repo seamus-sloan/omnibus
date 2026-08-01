@@ -12,8 +12,9 @@ run-name: "TestFlight ${{ inputs.marketing_version && format('v{0}', inputs.mark
 # (App ID, app record, distribution cert, App Store Connect API key, App Store
 # provisioning profile) must already exist.
 #
-# The build is a real .xcodeproj archived + signed by `xcodebuild archive` +
-# `xcodebuild -exportArchive` (manual signing against the profile below) and
+# The build is a real .xcodeproj archived unsigned by `xcodebuild archive`,
+# signed at `xcodebuild -exportArchive` time (manual signing against the
+# profile below, scoped to the app bundle id via ExportOptions.plist) and
 # uploaded with `xcrun altool`. The cert-import + profile-install lives in
 # .github/actions/ios-signing.
 #
@@ -115,14 +116,14 @@ jobs:
           profile-base64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
           expected-team: ${{ env.DEVELOPMENT_TEAM }}
 
-      # Archive with manual signing against the installed profile. MARKETING_VERSION
-      # + CURRENT_PROJECT_VERSION are passed as build settings so the archive is
-      # stamped without editing the pbxproj. OTHER_CODE_SIGN_FLAGS points codesign
-      # at our throwaway keychain explicitly.
+      # Archive unsigned. Signing settings passed on the xcodebuild command line
+      # apply to every target in the build — including SPM-generated resource
+      # bundles (ZIPFoundation_ZIPFoundation), which reject a manually specified
+      # profile and fail the archive. Signing happens at export instead, where
+      # ExportOptions.plist scopes the profile to the app's bundle id.
+      # MARKETING_VERSION + CURRENT_PROJECT_VERSION are passed as build settings
+      # so the archive is stamped without editing the pbxproj.
       - name: Archive
-        env:
-          PROFILE_NAME: ${{ steps.signing.outputs.profile-name }}
-          SIGNING_KEYCHAIN: ${{ steps.signing.outputs.keychain-path }}
         run: |
           set -euo pipefail
           xcodebuild \
@@ -132,13 +133,10 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/omnibus.xcarchive" \
             archive \
-            CODE_SIGN_STYLE=Manual \
-            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
-            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
             MARKETING_VERSION="$MARKETING_VERSION" \
-            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
-            OTHER_CODE_SIGN_FLAGS="--keychain $SIGNING_KEYCHAIN"
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
 
       # Build ExportOptions.plist with PlistBuddy (avoids heredoc-in-YAML
       # indentation pitfalls). method=app-store-connect is the Xcode 26 name for
@@ -163,6 +161,9 @@ jobs:
           pb "Add :uploadSymbols bool true"
           pb "Add :destination string export"
 
+      # Signs the (unsigned) archive: cert + profile come from ExportOptions.plist,
+      # and codesign finds the identity because the ios-signing action prepended
+      # the throwaway keychain to the user search list.
       - name: Export .ipa
         run: |
           set -euo pipefail
