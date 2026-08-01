@@ -1,0 +1,11 @@
+-- Book-uuid-first index for `shelf_books`, now on the missing-files GC guard
+-- list.
+--
+-- `gc_books_missing_files` (db/src/missing_files.rs) probes shelf membership
+-- with `NOT EXISTS (SELECT 1 FROM shelf_books WHERE book_uuid = b.uuid)` on
+-- every reindex cycle. The table's `(shelf_id, book_uuid)` primary key can't
+-- serve that probe — SQLite skips a multi-column index when the leading
+-- column isn't in the predicate — so the subquery would degrade to a
+-- full-table scan. Mirrors 0036's fix for the older user-data tables;
+-- `wishlist_entries` already ships `idx_wishlist_book` (0045).
+CREATE INDEX IF NOT EXISTS idx_shelf_books_book_uuid ON shelf_books(book_uuid);
