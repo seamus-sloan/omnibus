@@ -258,6 +258,11 @@ Reader/             — SwiftUI reader chrome, the host-drawn selection layer,
                       the passage menu, the typography sheet and the quote-card
                       composer, over Web/ (vendored epub.js + JSZip + glue,
                       hosted in a WKWebView)
+Comic/              — the native CBZ pager: ComicReaderView (paged TabView +
+                      UIScrollView zoom per page), ComicPages (per-page server
+                      reads online, ZIPFoundation over the downloaded archive
+                      offline), ComicPosition (the `comic-page:N` anchor ↔
+                      progress-record mapping shared with the web pager)
 Services/           — AuthService, LibraryService, UserDataService
 ```
 
@@ -281,6 +286,14 @@ generation compatibly. Assets and book bytes are served over a custom
 `omnibus-reader://` scheme so epub.js sees one same-origin space and needs no
 cookie. Everything around it — chrome, gestures, sheets, persistence — is
 native.
+
+**Comics skip the WebView entirely.** A CBZ is images, so `Comic/` pages them
+natively (pinch zoom, paged `TabView`) against the server's per-page endpoint,
+or against the downloaded archive via **ZIPFoundation** — the app's only Swift
+package dependency, pinned in the project's `Package.resolved`. Positions ride
+the same Epub-format progress row as every reader, as a `comic-page:N` anchor
+plus the cross-surface percent (`omnibus_shared::comic_page_anchor`), and a
+downloaded archive is CRC-verified before it replaces anything on disk.
 
 **Selection is drawn by the app, not by WebKit.** The iOS glue disables
 WebKit's own touch selection inside each section (`user-select: none` in the

@@ -131,18 +131,28 @@ final class DownloadManager: NSObject {
     ///
     /// The narrow format sets matter. `Book.ebookFormats` and
     /// `Book.audioFormats` describe what a library can *contain*; the
-    /// endpoints serve EPUB, and M4B/M4A/MP3. Matching on the broad sets lets
-    /// a mixed book — a PDF at ordinal 0, the EPUB at ordinal 1 — snapshot
-    /// the PDF's validator while downloading the EPUB, which then reports a
-    /// stale download whenever the PDF changes and misses every change to the
-    /// file actually on the device.
+    /// endpoints serve EPUB (else CBZ for a comic-only book), and
+    /// M4B/M4A/MP3. Matching on the broad sets lets a mixed book — a PDF at
+    /// ordinal 0, the EPUB at ordinal 1 — snapshot the PDF's validator while
+    /// downloading the EPUB, which then reports a stale download whenever
+    /// the PDF changes and misses every change to the file actually on the
+    /// device.
     nonisolated static func targetFile(_ book: Book, kind: DownloadKind) -> BookFileInfo? {
-        let formats = kind == .audio
-            ? Book.selectableAudioFormats
-            : Book.downloadableEbookFormats
-        return book.bookFiles
-            .filter { formats.contains($0.format.lowercased()) }
-            .min { $0.ordinal < $1.ordinal }
+        if kind == .audio {
+            return book.bookFiles
+                .filter { Book.selectableAudioFormats.contains($0.format.lowercased()) }
+                .min { $0.ordinal < $1.ordinal }
+        }
+        // Mirror `/file`'s two-step resolution exactly: the EPUB wins when
+        // the book has one, and the CBZ answers only after that — not the
+        // lowest ordinal across both, which would snapshot the CBZ's
+        // validator on a dual-format book whose EPUB is what downloads.
+        func lowest(_ format: String) -> BookFileInfo? {
+            book.bookFiles
+                .filter { $0.format.lowercased() == format }
+                .min { $0.ordinal < $1.ordinal }
+        }
+        return lowest("epub") ?? lowest("cbz")
     }
 
     /// Whether the library file has moved under a downloaded copy — the
@@ -214,7 +224,8 @@ final class DownloadManager: NSObject {
     }
 
     /// Begin (or restart) a download. `kind` picks the endpoint: an ebook pulls
-    /// `/api/ebooks/{uuid}/file`, an audiobook `/api/audiobooks/{uuid}/download`.
+    /// `/api/ebooks/{uuid}/file` (the EPUB, or a comic-only book's CBZ), an
+    /// audiobook `/api/audiobooks/{uuid}/download`.
     ///
     /// `replacing` carries the completed record this download is standing in
     /// for, so the book stays readable throughout and is restored on failure.
@@ -223,9 +234,13 @@ final class DownloadManager: NSObject {
         let path = kind == .audio
             ? "/api/audiobooks/\(uuid)/download"
             : "/api/ebooks/\(uuid)/file"
+        // The stored format names the file the endpoint will actually send —
+        // it becomes the local file's extension, which is how the comic
+        // reader recognises a downloaded archive.
         let format = kind == .audio
             ? (book.formats.first { Book.audioFormats.contains($0.lowercased()) } ?? "m4b")
-            : "epub"
+            : (Self.targetFile(book, kind: .ebook)?.format.lowercased()
+                ?? (book.opensAsComic ? "cbz" : "epub"))
 
         guard let url = await APIClient.shared.absoluteURL(path) else { return }
         var request = URLRequest(url: url)
@@ -394,6 +409,28 @@ extension DownloadManager: URLSessionDownloadDelegate {
             }
 
             guard let record = self.records[key] else { return }
+
+            // CBZ integrity check *before* the swap, so a damaged transfer
+            // never replaces a readable copy: every zip entry carries a
+            // recorded CRC-32, and reading each to EOF verifies it — the
+            // CRC-backed tier of rule 09's post-download backstop. Only
+            // comics get this today; the EPUB/audio formats have no
+            // verifier on this client yet.
+            if record.format.lowercased() == "cbz" {
+                let intact = await Task.detached(priority: .utility) {
+                    ComicArchive.verify(url: staged)
+                }.value
+                guard intact else {
+                    try? FileManager.default.removeItem(at: staged)
+                    if await self.restoreReplaced(key: key) { return }
+                    await self.update(key: key) { record in
+                        record.state = .failed
+                        record.error = "The download failed its integrity check."
+                    }
+                    return
+                }
+            }
+
             let name = "\(record.bookUUID).\(record.kind.rawValue).\(record.format)"
             let destination = OfflineStore.downloadsDirectory.appendingPathComponent(name)
             try? FileManager.default.removeItem(at: destination)

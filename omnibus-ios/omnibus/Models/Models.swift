@@ -93,6 +93,10 @@ struct Book: Codable, Hashable, Sendable, Identifiable {
     var hasCoverOverride: Bool = false
     var bookFiles: [BookFileInfo] = []
     var epubSizeBytes: Int64?
+    /// Page count of the book's CBZ archive, attached by the detail read for
+    /// comic books only — the pager's slider range and progress mapping.
+    /// `nil` on every other payload (list projections, non-comics).
+    var pageCount: Int64?
 
     enum CodingKeys: String, CodingKey {
         case id, filename, title, description, publisher, published, modified
@@ -108,6 +112,7 @@ struct Book: Codable, Hashable, Sendable, Identifiable {
         case hasCoverOverride = "has_cover_override"
         case bookFiles = "book_files"
         case epubSizeBytes = "epub_size_bytes"
+        case pageCount = "page_count"
     }
 
     /// Stable identity used for every `/books/:uuid` and `/api/covers/:uuid`
@@ -136,6 +141,19 @@ struct Book: Codable, Hashable, Sendable, Identifiable {
         formats.contains { Self.audioFormats.contains($0.lowercased()) }
     }
 
+    var hasEpub: Bool {
+        formats.contains { $0.caseInsensitiveCompare("epub") == .orderedSame }
+    }
+
+    var hasComic: Bool {
+        formats.contains { $0.caseInsensitiveCompare("cbz") == .orderedSame }
+    }
+
+    /// Whether "Read" opens the native comic pager rather than the EPUB
+    /// reader. A book carrying both keeps the EPUB as its primary read —
+    /// the same rule the web pager and the server's `/file` resolution use.
+    var opensAsComic: Bool { hasComic && !hasEpub }
+
     static let ebookFormats: Set<String> = ["epub", "kepub", "pdf", "mobi", "azw3", "cbz", "cbr"]
     static let audioFormats: Set<String> = ["m4b", "m4a", "mp3", "aac", "flac", "ogg", "opus", "wav"]
 
@@ -143,16 +161,6 @@ struct Book: Codable, Hashable, Sendable, Identifiable {
     /// `resolve_audiobook_file` in `db/src/hls/query.rs` filters on exactly
     /// these, so offering any other format as a selection would 404.
     static let selectableAudioFormats: Set<String> = ["m4b", "m4a", "mp3"]
-
-    /// The ebook formats a download actually pulls.
-    ///
-    /// `/api/ebooks/{uuid}/file` resolves `book_file_path(id, "EPUB")` — EPUB
-    /// and nothing else — so this is deliberately narrower than
-    /// ``ebookFormats``, which is the set the library *contains*. Snapshotting
-    /// a validator against the broader set means a mixed PDF/EPUB book records
-    /// the PDF's tag while downloading the EPUB, and then reports staleness
-    /// about the wrong file in both directions.
-    static let downloadableEbookFormats: Set<String> = ["epub"]
 
     /// The audiobook files a listener can choose between, in the order the
     /// server resolves them — its default (no `file_id`) is the first of
@@ -399,6 +407,10 @@ struct ProgressUpdate: Codable, Sendable {
     var format: ProgressFormat
     var epubCFI: String?
     var audioPositionSeconds: Double?
+    /// Whole-book percent, 0...100 — the cross-surface half of a position.
+    /// Set by the comic pager (whose `epubCFI` is a page anchor, not a CFI)
+    /// so the landing surfaces can draw a bar without parsing the anchor.
+    var progressPercent: Int64?
     /// When the reader actually moved here, by this device's clock.
     ///
     /// Stamped at the gesture rather than left to the server, because a write
@@ -416,6 +428,7 @@ struct ProgressUpdate: Codable, Sendable {
         case bookUUID = "book_uuid"
         case epubCFI = "epub_cfi"
         case audioPositionSeconds = "audio_position_seconds"
+        case progressPercent = "progress_percent"
         case clientUpdatedAt = "client_updated_at"
         case bookFileID = "book_file_id"
     }
@@ -426,6 +439,10 @@ struct ProgressRecord: Codable, Sendable {
     var format: ProgressFormat
     var epubCFI: String?
     var audioPositionSeconds: Double?
+    /// Whole-book percent, 0...100, when the write carried one — a comic
+    /// position always does, a Kobo's percent-only write does, a CFI-only
+    /// EPUB save does not.
+    var progressPercent: Int64?
     /// When the server stored this row, on the *server's* clock.
     var updatedAt: Int64
     /// When the reader moved here, on the clock of the device that moved them.
@@ -454,6 +471,7 @@ struct ProgressRecord: Codable, Sendable {
         case bookUUID = "book_uuid"
         case epubCFI = "epub_cfi"
         case audioPositionSeconds = "audio_position_seconds"
+        case progressPercent = "progress_percent"
         case updatedAt = "updated_at"
         case clientUpdatedAt = "client_updated_at"
         case bookFileID = "book_file_id"
@@ -493,13 +511,20 @@ struct ResumePoint: Codable, Sendable, Identifiable {
 
     /// Fraction complete for the progress bar, when the format supports one.
     ///
-    /// Audio only — an EPUB position is a CFI, and there is no honest
-    /// percentage to derive from one. The format check is what keeps a reading
-    /// card from borrowing the listening card's bar.
+    /// Audio derives it from the position over the whole-book duration. A
+    /// reading record has one only when it carries the cross-surface percent
+    /// — a comic position always does, a CFI-only EPUB save does not, and
+    /// there is no honest percentage to derive from a bare CFI. The format
+    /// check is what keeps a reading card from borrowing the listening
+    /// card's bar.
     var fraction: Double? {
-        guard isAudio, let total = totalDurationSeconds, total > 0,
-              let position = record.audioPositionSeconds else { return nil }
-        return min(1, max(0, position / total))
+        if isAudio {
+            guard let total = totalDurationSeconds, total > 0,
+                  let position = record.audioPositionSeconds else { return nil }
+            return min(1, max(0, position / total))
+        }
+        guard let percent = record.progressPercent else { return nil }
+        return min(1, max(0, Double(percent) / 100))
     }
 }
 
