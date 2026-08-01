@@ -3,6 +3,9 @@
 //! backfill, and the sync-wired lifecycle (a removed file flags the row, a
 //! returning file clears it, identity + overrides survive a repoint).
 
+use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider};
+use omnibus_shared::physical::WishlistSource;
+use omnibus_shared::shelves::{CreateShelfRequest, ShelfKind};
 use omnibus_shared::{MetadataOverrides, Settings};
 use sqlx::SqlitePool;
 
@@ -137,6 +140,117 @@ async fn gc_keeps_book_with_physical_copy() {
     assert!(
         book_exists(&pool, &uuid).await,
         "a book with a physical copy is never purged"
+    );
+}
+
+#[tokio::test]
+async fn gc_keeps_book_on_a_wishlist_and_purges_after_the_entry_is_removed() {
+    let _covers = CoversTempDir::new("gc_wishlist");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let uuid = seed_and_make_missing(&pool, "wanted.epub").await;
+    backdate_missing_since(&pool, &uuid, 40).await;
+    crate::physical::add_wishlist_entry(&pool, user_id, &uuid, WishlistSource::Manual)
+        .await
+        .unwrap();
+
+    let purged = gc_books_missing_files(&pool, MISSING_FILES_RETENTION_DAYS)
+        .await
+        .unwrap();
+    assert_eq!(purged, 0);
+    assert!(
+        book_exists(&pool, &uuid).await,
+        "a wishlisted book is never purged"
+    );
+
+    // Removing the last entry lifts the guard; the still-running clock makes
+    // the book eligible on the next sweep.
+    crate::physical::remove_wishlist_entry(&pool, user_id, &uuid)
+        .await
+        .unwrap();
+    let purged = gc_books_missing_files(&pool, MISSING_FILES_RETENTION_DAYS)
+        .await
+        .unwrap();
+    assert_eq!(purged, 1);
+    assert!(!book_exists(&pool, &uuid).await);
+}
+
+#[tokio::test]
+async fn gc_keeps_book_on_a_manual_shelf_past_retention() {
+    let _covers = CoversTempDir::new("gc_shelf");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let uuid = seed_and_make_missing(&pool, "shelved.epub").await;
+    backdate_missing_since(&pool, &uuid, 40).await;
+    crate::shelves::create_shelf(
+        &pool,
+        user_id,
+        &CreateShelfRequest {
+            kind: ShelfKind::Manual,
+            name: "Keepers".into(),
+            description: None,
+            visibility: Default::default(),
+            match_mode: None,
+            rules: vec![],
+            book_uuids: vec![uuid.clone()],
+        },
+    )
+    .await
+    .unwrap();
+
+    let purged = gc_books_missing_files(&pool, MISSING_FILES_RETENTION_DAYS)
+        .await
+        .unwrap();
+    assert_eq!(purged, 0);
+    assert!(
+        book_exists(&pool, &uuid).await,
+        "a book on a hand-picked shelf is never purged"
+    );
+}
+
+#[tokio::test]
+async fn gc_keeps_fileless_wishlist_book_stamped_by_boot_backfill() {
+    let _covers = CoversTempDir::new("gc_wishlist_fileless");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    // The real path: scanning an ISBN for a book not in the library and
+    // wishlisting it mints a fileless book with no override flag set.
+    let meta = ExternalBookMeta {
+        isbn13: "9780306406157".into(),
+        title: "Wanted in Print".into(),
+        authors: vec!["A. Author".into()],
+        year: None,
+        pages: None,
+        publisher: None,
+        description: None,
+        cover_url: None,
+        source: MetadataProvider::OpenLibrary,
+    };
+    let uuid = crate::scan::wishlist_add(&pool, user_id, None, Some(&meta), WishlistSource::Scan)
+        .await
+        .unwrap();
+
+    // The next boot stamps it missing and starts the clock; backdate it past
+    // the retention window to prove the wishlist guard alone keeps it.
+    backfill_missing_files_flags(&pool).await.unwrap();
+    backdate_missing_since(&pool, &uuid, 40).await;
+
+    let purged = gc_books_missing_files(&pool, MISSING_FILES_RETENTION_DAYS)
+        .await
+        .unwrap();
+    assert_eq!(purged, 0);
+    assert!(
+        book_exists(&pool, &uuid).await,
+        "a wishlist-only fileless book survives the GC"
     );
 }
 
@@ -291,7 +405,8 @@ async fn gc_keeps_book_with_missing_files_override_set() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let uuid = seed_and_make_missing(&pool, "wishlist.epub").await;
     backdate_missing_since(&pool, &uuid, 40).await;
-    // Intentionally fileless (future "wishlist") → exempt from GC.
+    // The manual escape hatch: nothing in production sets the override yet —
+    // wishlist/shelf books are protected by their own guards, not this flag.
     sqlx::query("UPDATE books SET is_missing_files_override = 1 WHERE uuid = ?")
         .bind(&uuid)
         .execute(&pool)
@@ -644,8 +759,8 @@ async fn backfill_skips_intentionally_fileless_override_rows() {
         .execute(&pool)
         .await
         .unwrap();
-    // An intentionally-fileless (wishlist) row must stay un-flagged so reads
-    // keep showing it.
+    // An intentionally-fileless row (override = 1) must stay un-flagged so
+    // reads keep showing it.
     sqlx::query(
         "INSERT INTO books (uuid, library_id, path, title, is_missing_files_override)
          VALUES ('wish', 1, '', 'W', 1)",
@@ -708,13 +823,14 @@ async fn gc_purges_orphan_author_when_its_last_book_is_deleted() {
     assert_eq!(after, 0, "the purged book's now-bookless author is GC'd");
 }
 
-/// The GC's five `NOT EXISTS ... WHERE book_uuid = b.uuid` subqueries need a
-/// `book_uuid`-first index on each table — the pre-existing
-/// `(user_id, book_uuid)` composites can't serve the probe because SQLite
-/// skips a multi-column index when the leading column isn't in the predicate.
-/// Assert every table's plan uses its `idx_<table>_book_uuid` covering index
-/// (a `SEARCH` — a `SCAN` would mean the migration was lost or the index name
-/// drifted). Same shape as the GC's per-table subquery.
+/// The GC's `NOT EXISTS ... WHERE book_uuid = b.uuid` subqueries need a
+/// `book_uuid`-first index on each table — pre-existing composites like
+/// `(user_id, book_uuid)` or the `(shelf_id, book_uuid)` primary key can't
+/// serve the probe because SQLite skips a multi-column index when the leading
+/// column isn't in the predicate. Assert every table's plan uses its
+/// book-uuid covering index (a `SEARCH` — a `SCAN` would mean the migration
+/// was lost or the index name drifted). Same shape as the GC's per-table
+/// subquery.
 #[tokio::test]
 async fn user_data_book_uuid_probes_use_the_book_uuid_first_index() {
     let pool = init_db("sqlite::memory:").await.unwrap();
@@ -724,6 +840,8 @@ async fn user_data_book_uuid_probes_use_the_book_uuid_first_index() {
         ("reading_sessions", "idx_reading_sessions_book_uuid"),
         ("listening_sessions", "idx_listening_sessions_book_uuid"),
         ("annotations", "idx_annotations_book_uuid"),
+        ("wishlist_entries", "idx_wishlist_book"),
+        ("shelf_books", "idx_shelf_books_book_uuid"),
     ];
     for (table, index) in cases {
         let sql = format!("EXPLAIN QUERY PLAN SELECT 1 FROM {table} WHERE book_uuid = ?");
