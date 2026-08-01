@@ -88,6 +88,10 @@ struct RelocateData: Codable {
     var page: Int = 0
     var totalPages: Int = 0
     var pct: Int = 0
+    /// True when the rendered range reaches the book's end (epub.js
+    /// `location.atEnd`) — the auto `finished` trigger. `pct` can't stand in:
+    /// it tracks the start of the visible range, so it tops out below 100.
+    var atEnd: Bool = false
     var chapter: Int = 0
     var totalChapters: Int = 0
     var chapterTitle: String = ""

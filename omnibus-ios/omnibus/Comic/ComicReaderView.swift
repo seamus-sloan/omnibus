@@ -35,6 +35,9 @@ struct ComicReaderView: View {
     @State private var sessionStart: Date?
     @State private var lastSave = Date.distantPast
     @State private var showPlayer = false
+    /// Auto read-status for the open comic — unread marks reading on open,
+    /// the last page marks finished. Created in `prepare`, driven by turns.
+    @State private var autoStatus: ReadStatusAuto?
 
     /// How long a single stretch of reading may run before it is reported
     /// as its own session rather than held until the book closes.
@@ -79,6 +82,9 @@ struct ComicReaderView: View {
             Task {
                 await pages?.prefetch(around: newPage)
                 await persist(force: false)
+                if let count = pages?.count, count > 0 {
+                    await autoStatus?.positionChanged(atEnd: newPage == count - 1)
+                }
             }
         }
         .onChange(of: audio.isActive) { _, active in
@@ -256,6 +262,21 @@ struct ComicReaderView: View {
         page = start
         pages = source
         sessionStart = Date()
+
+        // Auto read-status, the same lifecycle the EPUB reader drives: opening
+        // an unread comic marks it reading, landing on the last page marks it
+        // finished, and a failed status fetch keeps it inert. The opening page
+        // is fed first — a comic restored onto its last page never turns a
+        // page, so `onChange` alone would miss the finish. Spawned so opening
+        // never waits on the fetch.
+        let tracker = ReadStatusAuto(uuid: book.uuid)
+        autoStatus = tracker
+        let openedAtEnd = start == source.count - 1
+        Task {
+            await tracker.positionChanged(atEnd: openedAtEnd)
+            await tracker.bookOpened()
+        }
+
         await source.prefetch(around: start)
 
         LifecycleSync.shared.register(source) {

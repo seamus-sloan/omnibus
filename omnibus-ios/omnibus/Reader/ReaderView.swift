@@ -78,6 +78,9 @@ struct ReaderView: View {
     /// hours read.
     @State private var sessionStart: Date?
     @State private var lastSave = Date.distantPast
+    /// Auto read-status for the open book — unread marks reading on open, the
+    /// book's end marks finished. Created in `prepare`, driven by relocates.
+    @State private var autoStatus: ReadStatusAuto?
     /// The full player, raised over the page from the audio dock — a sheet
     /// rather than the app-global cover, so the book stays open underneath.
     @State private var showPlayer = false
@@ -177,6 +180,9 @@ struct ReaderView: View {
         }
         .onChange(of: controller.location?.cfi) { _, _ in
             Task { await persist(force: false) }
+        }
+        .onChange(of: controller.location?.atEnd) { _, atEnd in
+            Task { await autoStatus?.positionChanged(atEnd: atEnd ?? false) }
         }
         // A handle drag ends when the finger lifts — unless the selection goes
         // out from under it first, which a re-pagination does (the glue drops
@@ -654,6 +660,14 @@ struct ReaderView: View {
         controller.configure(book: book, startCFI: startCFI, highlights: highlights)
         didConfigure = true
         sessionStart = Date()
+
+        // Auto read-status, the same lifecycle the web reader drives: opening
+        // an unread book marks it reading, the first relocate that reaches the
+        // book's end marks it finished, and a failed status fetch keeps it
+        // inert. Spawned so opening never waits on the fetch.
+        let tracker = ReadStatusAuto(uuid: book.uuid)
+        autoStatus = tracker
+        Task { await tracker.bookOpened() }
 
         LifecycleSync.shared.register(controller) {
             await persist(force: true)

@@ -206,6 +206,31 @@ enum UserDataService {
         }
     }
 
+    /// The stored status the readers' auto transitions decide against.
+    ///
+    /// The replica answers when a queued write makes it the newest truth, and
+    /// again when the server can't be asked; otherwise the server does, where
+    /// `null` is a real answer — a book nobody has marked is `unread`. (The
+    /// `readStatus` stream can't carry that distinction: it decodes the record
+    /// non-optionally, so "no row" and "no answer" fail alike.) `nil` here
+    /// means nothing is known, and the caller must stay inert — acting on a
+    /// guess could downgrade an unfetched `finished`.
+    static func storedReadStatus(uuid: String) async -> ReadStatus? {
+        let key = CacheKey.readStatus(uuid)
+        let cached: ReadStatusRecord? = await Cache.cachedOnly(key)
+        // Same guard as `Cache.live`'s revalidation: with a write queued for
+        // this book, the server's answer predates the replica.
+        if await Cache.isBlocked(key) { return cached?.status }
+        do {
+            let fresh: ReadStatusRecord? = try await APIClient.shared.get(
+                "/api/read-status/\(uuid)"
+            )
+            return fresh?.status ?? .unread
+        } catch {
+            return cached?.status
+        }
+    }
+
     static func setReadStatus(uuid: String, status: ReadStatus) async {
         let update = SetReadStatus(bookUUID: uuid, status: status)
         await Cache.write(
