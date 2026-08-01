@@ -146,14 +146,11 @@ fn HeroCard(point: ResumePoint, server_url: String) -> Element {
     } else {
         ("Continue reading", "Read")
     };
-    let resume_route = if is_audio {
-        Route::BookListen {
-            uuid: uuid.clone(),
-            file_id: None,
-        }
-    } else {
-        Route::BookRead { uuid: uuid.clone() }
-    };
+    // Shared dispatch (routes::resume_route) rather than a local format
+    // match: it carries the audio point's `book_file_id` and sends a
+    // CBZ-only book to the comic pager — the mobile resume card already
+    // routes through it.
+    let resume_route = crate::routes::resume_route(&point);
     let (meta, pct) = resume_meta(&point);
     let cover_bust =
         crate::contexts::cover_bust_for(crate::contexts::use_cover_cache_bust().0, &uuid);

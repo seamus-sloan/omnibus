@@ -24,6 +24,7 @@ use super::{BdCrumb, BdCrumbItem, BdFormatBadge, PhysSignals};
 pub(super) struct Availability {
     pub has_ebook: bool,
     pub has_audio: bool,
+    pub has_comic: bool,
 }
 
 /// Accent-colored "Physical" badge shown in the format-badge row when the book
@@ -149,6 +150,7 @@ fn BdTitleCol(
     let Availability {
         has_ebook,
         has_audio,
+        has_comic,
     } = avail;
 
     // Local copy of the effective summary so a fetch-and-save can refresh the
@@ -222,6 +224,7 @@ fn BdTitleCol(
             BdCtaRow {
                 has_ebook,
                 has_audio,
+                has_comic,
                 meta: BookActionMeta {
                     uuid: uuid.clone(),
                     author: b.creators.first().map(|c| c.name.clone()).unwrap_or_default(),
@@ -239,7 +242,7 @@ fn BdTitleCol(
 /// per-device send/download actions. Over the line cap by design — the body
 /// is one declarative rsx! block whose branches mirror the CTA layout.
 #[component]
-fn BdCtaRow(has_ebook: bool, has_audio: bool, meta: BookActionMeta) -> Element {
+fn BdCtaRow(has_ebook: bool, has_audio: bool, has_comic: bool, meta: BookActionMeta) -> Element {
     let BookActionMeta {
         uuid,
         author: book_author,
@@ -258,10 +261,10 @@ fn BdCtaRow(has_ebook: bool, has_audio: bool, meta: BookActionMeta) -> Element {
         .cloned()
         .collect();
 
-    // A fileless book (no ebook/audiobook files — physical-only or wishlist)
-    // has nothing to read, listen to, or export, so the reading CTAs give way
-    // to a disclaimer.
-    let is_fileless = !has_ebook && !has_audio;
+    // A fileless book (no ebook/audiobook/comic files — physical-only or
+    // wishlist) has nothing to read, listen to, or export, so the reading
+    // CTAs give way to a disclaimer.
+    let is_fileless = !has_ebook && !has_audio && !has_comic;
 
     rsx! {
         div { class: "bd-cta-row",
@@ -278,6 +281,16 @@ fn BdCtaRow(has_ebook: bool, has_audio: bool, meta: BookActionMeta) -> Element {
                     label: "Start reading",
                     button_class: "btn primary lg",
                     single_testid: "start-reading",
+                }
+            } else if has_comic {
+                // CBZ books open the comic pager. A book carrying both an
+                // EPUB and a CBZ keeps the EPUB as its primary read — the
+                // pager stays reachable via Continue Reading once started.
+                Link {
+                    to: Route::ComicRead { uuid: uuid.clone() },
+                    class: "btn primary lg",
+                    "data-testid": "start-reading-comic",
+                    "Start reading"
                 }
             } else if has_audio {
                 {
@@ -345,10 +358,15 @@ mod tests {
 
     /// SSR-render the CTA row for a book with the given format availability.
     fn render_cta_row(has_ebook: bool, has_audio: bool) -> String {
+        render_cta_row_with_comic(has_ebook, has_audio, false)
+    }
+
+    fn render_cta_row_with_comic(has_ebook: bool, has_audio: bool, has_comic: bool) -> String {
         dioxus::ssr::render_element(rsx! {
             BdCtaRow {
                 has_ebook,
                 has_audio,
+                has_comic,
                 meta: BookActionMeta {
                     uuid: "book-uuid".to_string(),
                     ..Default::default()
@@ -389,6 +407,83 @@ mod tests {
     fn book_with_files_shows_no_disclaimer() {
         let html = render_cta_row(true, false);
         assert!(!html.contains("data-testid=\"no-files-disclaimer\""));
+    }
+
+    // The comic CTA (and the single-file picker) render `dioxus_router::Link`,
+    // which panics without a parent router, so these two variants mount
+    // behind one-route test routers — the highlights-card pattern.
+    #[derive(Clone, Debug, PartialEq, dioxus_router::Routable)]
+    enum ComicOnlyRoute {
+        #[route("/")]
+        ComicOnlyHost {},
+    }
+
+    #[component]
+    fn ComicOnlyHost() -> Element {
+        rsx! {
+            BdCtaRow {
+                has_ebook: false,
+                has_audio: false,
+                has_comic: true,
+                meta: BookActionMeta {
+                    uuid: "book-uuid".to_string(),
+                    ..Default::default()
+                },
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, dioxus_router::Routable)]
+    enum EpubAndComicRoute {
+        #[route("/")]
+        EpubAndComicHost {},
+    }
+
+    #[component]
+    fn EpubAndComicHost() -> Element {
+        rsx! {
+            BdCtaRow {
+                has_ebook: true,
+                has_audio: false,
+                has_comic: true,
+                meta: BookActionMeta {
+                    uuid: "book-uuid".to_string(),
+                    ..Default::default()
+                },
+            }
+        }
+    }
+
+    #[test]
+    fn comic_only_book_shows_the_pager_cta_instead_of_the_disclaimer() {
+        let html = crate::test_support::render_in_vdom(|| {
+            rsx! {
+                dioxus_router::Router::<ComicOnlyRoute> {}
+            }
+        });
+        assert!(
+            html.contains("data-testid=\"start-reading-comic\""),
+            "{html}"
+        );
+        assert!(html.contains("/comic/book-uuid"), "{html}");
+        assert!(
+            !html.contains("data-testid=\"no-files-disclaimer\""),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn epub_primary_wins_over_the_comic_cta_when_both_formats_exist() {
+        let html = crate::test_support::render_in_vdom(|| {
+            rsx! {
+                dioxus_router::Router::<EpubAndComicRoute> {}
+            }
+        });
+        assert!(html.contains("data-testid=\"start-reading\""), "{html}");
+        assert!(
+            !html.contains("data-testid=\"start-reading-comic\""),
+            "{html}"
+        );
     }
 
     #[test]

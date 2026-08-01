@@ -36,6 +36,34 @@ pub fn list_pages(path: &Path) -> anyhow::Result<Vec<String>> {
     Ok(page_names(&archive))
 }
 
+/// Best-effort CBZ page count for `book_id`: the length of the archive's
+/// page list. `None` when the book has no CBZ file, the archive is
+/// unreadable, or the blocking read fails — detail reads must not fail
+/// because one file is broken, so failures log and read as "no count".
+/// Shared by the REST detail handler and the web RPC so the two payloads
+/// can't disagree.
+pub async fn page_count_for_book(pool: &sqlx::SqlitePool, book_id: i64) -> Option<i64> {
+    let path = match crate::books::book_file_path(pool, book_id, "CBZ").await {
+        Ok(Some(p)) => p,
+        Ok(None) => return None,
+        Err(e) => {
+            tracing::warn!(book_id, error = %e, "comic page count: file path lookup failed");
+            return None;
+        }
+    };
+    match tokio::task::spawn_blocking(move || list_pages(&path)).await {
+        Ok(Ok(pages)) => Some(pages.len() as i64),
+        Ok(Err(e)) => {
+            tracing::warn!(book_id, error = %e, "comic page count: archive unreadable");
+            None
+        }
+        Err(e) => {
+            tracing::warn!(book_id, error = %e, "comic page count: task join failed");
+            None
+        }
+    }
+}
+
 /// Hard cap on a single decompressed page. A crafted archive can declare a
 /// false entry size or lean on deflate's ~1000:1 worst-case ratio to make a
 /// small `.cbz` decompress to gigabytes (a "zip bomb") — this bounds memory

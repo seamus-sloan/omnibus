@@ -9,7 +9,12 @@ use omnibus_shared::{ProgressFormat, ResumePoint};
 /// the raw position; epub rows read as a plain continue affordance.
 pub(super) fn resume_meta(point: &ResumePoint) -> (String, Option<i64>) {
     if point.record.format == ProgressFormat::Epub {
-        return ("Continue reading".to_string(), None);
+        // A stored whole-book percent (a Kobo's write, or the comic pager's
+        // page/count mapping) is honest enough for a bar; a bare CFI is not.
+        return match point.record.progress_percent {
+            Some(pct) => (format!("{pct}% \u{00b7} Continue reading"), Some(pct)),
+            None => ("Continue reading".to_string(), None),
+        };
     }
     let pos = point.record.audio_position_seconds.unwrap_or(0.0);
     match point.total_duration_seconds.filter(|t| *t > 0.0) {
@@ -101,6 +106,15 @@ mod tests {
 
         let (meta, pct) = resume_meta(&point(ProgressFormat::Audio, Some(95.0), None));
         assert_eq!((meta.as_str(), pct), ("1:35 in", None));
+    }
+
+    #[test]
+    fn resume_meta_shows_a_bar_for_epub_rows_carrying_a_percent() {
+        let mut p = point(ProgressFormat::Epub, None, None);
+        p.record.progress_percent = Some(37);
+        let (meta, pct) = resume_meta(&p);
+        assert_eq!(pct, Some(37));
+        assert_eq!(meta, "37% \u{00b7} Continue reading");
     }
 
     #[test]

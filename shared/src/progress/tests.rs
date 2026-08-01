@@ -392,3 +392,17 @@ fn session_report_accepts_a_missing_client_id() {
     };
     assert!(r.validate().is_ok());
 }
+
+#[test]
+fn comic_page_anchor_round_trips_through_parse() {
+    assert_eq!(parse_comic_page_anchor(&comic_page_anchor(0)), Some(0));
+    assert_eq!(parse_comic_page_anchor(&comic_page_anchor(217)), Some(217));
+}
+
+#[test]
+fn parse_comic_page_anchor_rejects_real_cfis_and_junk() {
+    assert_eq!(parse_comic_page_anchor("epubcfi(/6/4!/4/2:0)"), None);
+    assert_eq!(parse_comic_page_anchor("comic-page:"), None);
+    assert_eq!(parse_comic_page_anchor("comic-page:-3"), None);
+    assert_eq!(parse_comic_page_anchor(""), None);
+}

@@ -198,30 +198,14 @@ pub(super) async fn get_ebook_by_uuid(
 
 /// Fill `page_count` on a detail payload when the book carries a CBZ, by
 /// listing the archive's pages — the count the pager's slider and progress
-/// mapping key on. Best-effort: a missing or malformed archive logs and
-/// leaves `None`, because a broken file must not take the whole detail read
-/// down with it.
+/// mapping key on. Best-effort via `db::comic::page_count_for_book`, which
+/// logs and leaves `None` on a missing or malformed archive; the formats
+/// check keeps non-comic detail reads free of the extra file query.
 async fn attach_comic_page_count(state: &AppState, book: &mut omnibus_shared::EbookMetadata) {
     if !book.formats.iter().any(|f| f.eq_ignore_ascii_case("cbz")) {
         return;
     }
-    let path = match db::book_file_path(&state.pool, book.id, "CBZ").await {
-        Ok(Some(p)) => p,
-        Ok(None) => return,
-        Err(e) => {
-            tracing::warn!(book_id = book.id, error = %e, "comic page count: file path lookup failed");
-            return;
-        }
-    };
-    match tokio::task::spawn_blocking(move || db::comic::list_pages(&path)).await {
-        Ok(Ok(pages)) => book.page_count = Some(pages.len() as i64),
-        Ok(Err(e)) => {
-            tracing::warn!(book_id = book.id, error = %e, "comic page count: archive unreadable")
-        }
-        Err(e) => {
-            tracing::warn!(book_id = book.id, error = %e, "comic page count: task join failed")
-        }
-    }
+    book.page_count = db::comic::page_count_for_book(&state.pool, book.id).await;
 }
 
 /// Resolve the on-disk EPUB path for `uuid`, honouring an optional

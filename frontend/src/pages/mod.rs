@@ -11,6 +11,7 @@ mod author;
 mod authors_index;
 mod book_detail;
 mod check_in;
+mod comic_reader;
 mod index_shell;
 mod landing;
 mod listen;
@@ -37,6 +38,7 @@ pub use author::AuthorPage;
 pub use authors_index::AuthorsIndexPage;
 pub use book_detail::BookDetailPage;
 pub use check_in::{CheckInOpen, CheckInOverlay, CheckInPage};
+pub use comic_reader::ComicReadPage;
 pub use landing::LandingPage;
 #[cfg(feature = "web")]
 pub(crate) use listen::install_audio_bootstrap;

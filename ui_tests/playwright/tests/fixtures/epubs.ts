@@ -453,6 +453,36 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     hasCover: true,
   },
 
+  // The two CBZ fixtures (tools/make_cbz.ts) are reserved for the
+  // comic-pager spec (comic_reader.spec.ts): `aurora-station-01` receives
+  // that spec's progress writes, and `aurora-station-02` must stay
+  // progress-free — the layout test asserts it opens on page 1, so no spec
+  // (including the pager spec's own write path) may save a position on it.
+  // Their author appears in no other fixture. CBZ carries no
+  // publisher/date/language metadata, hence the empty cells.
+  {
+    slug: "aurora-station-01",
+    filename: "aurora-station-01.cbz",
+    title: "Aurora Station, Vol. 1",
+    authors: ["Sora Inkwell"],
+    series: "Aurora Station",
+    seriesIndex: "1",
+    tags: [],
+    language: "",
+    hasCover: true,
+  },
+  {
+    slug: "aurora-station-02",
+    filename: "aurora-station-02.cbz",
+    title: "Aurora Station, Vol. 2",
+    authors: ["Sora Inkwell"],
+    series: "Aurora Station",
+    seriesIndex: "2",
+    tags: [],
+    language: "",
+    hasCover: true,
+  },
+
   // Public-domain Project Gutenberg / Standard Ebooks EPUBs under
   // `test_data/epubs/public_domain/`. Metadata below is what each file's OPF
   // actually claims — `db/tests/public_domain_epubs.rs` keeps the parser honest.

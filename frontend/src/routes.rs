@@ -31,6 +31,8 @@ pub enum Route {
     MetadataEdit { uuid: String },
     #[route("/read/:uuid")]
     BookRead { uuid: String },
+    #[route("/comic/:uuid")]
+    ComicRead { uuid: String },
     #[route("/listen/:uuid?:file_id")]
     BookListen { uuid: String, file_id: Option<i64> },
     #[route("/authors")]
@@ -230,6 +232,40 @@ pub fn BookRead(uuid: String) -> Element {
     }
 }
 
+/// Route target for `/comic/:uuid` — the immersive CBZ comic pager.
+/// Same no-chrome + docked-audio contract as [`BookRead`], but a pure
+/// `<img>` pager with no epub.js involvement, so it gets its own route
+/// instead of threading a format branch through the EPUB reader.
+#[cfg(not(feature = "mobile"))]
+#[component]
+pub fn ComicRead(uuid: String) -> Element {
+    use_page_title(|| Some("Comic".into()));
+    let playback = crate::use_playback();
+    let docked = dock_is_active(&playback.book.read(), &playback.uuid.read());
+    rsx! {
+        div { class: if docked { "rd-host rd-dock-full rd-immersive" } else { "rd-host rd-dock-full" },
+            ComicReadPage { uuid }
+            MiniDock {}
+        }
+    }
+}
+
+/// Mobile variant of [`ComicRead`] — same [`crate::pages::MobileMiniPlayer`]
+/// docking contract as the mobile [`BookRead`].
+#[cfg(feature = "mobile")]
+#[component]
+pub fn ComicRead(uuid: String) -> Element {
+    use_page_title(|| Some("Comic".into()));
+    let ctx = use_context::<MobilePlayback>();
+    let docked = mobile_dock_is_active(&ctx.view.read(), (ctx.unsupported)());
+    rsx! {
+        div { class: if docked { "rd-host rd-immersive" } else { "rd-host" },
+            ComicReadPage { uuid }
+            MobileMiniPlayer {}
+        }
+    }
+}
+
 /// Route target for `/listen/:uuid` — the immersive audiobook player.
 /// Same uuid-keyed stability + no-chrome rationale as [`BookRead`]; the
 /// player owns its own slim top bar.
@@ -382,7 +418,19 @@ pub fn resume_route(point: &omnibus_shared::ResumePoint) -> Route {
             uuid,
             file_id: point.record.book_file_id,
         },
-        omnibus_shared::ProgressFormat::Epub => Route::BookRead { uuid },
+        // Comics reuse the Epub-format progress record (see
+        // `omnibus_shared::comic_page_anchor`), so the format alone can't
+        // pick the reader — a CBZ-only book resumes into the pager, while
+        // anything with a real EPUB keeps the epub.js reader.
+        omnibus_shared::ProgressFormat::Epub => {
+            let formats = &point.book.formats;
+            let has = |ext: &str| formats.iter().any(|f| f.eq_ignore_ascii_case(ext));
+            if has("cbz") && !has("epub") {
+                Route::ComicRead { uuid }
+            } else {
+                Route::BookRead { uuid }
+            }
+        }
     }
 }
 
@@ -410,6 +458,30 @@ mod tests {
             chapter_number: None,
             chapter_count: None,
         }
+    }
+
+    #[test]
+    fn resume_route_sends_a_cbz_only_book_to_the_comic_pager() {
+        let mut p = point(ProgressFormat::Epub, None);
+        p.book.formats = vec!["CBZ".into()];
+        assert_eq!(
+            resume_route(&p),
+            Route::ComicRead {
+                uuid: "book-a".into()
+            }
+        );
+    }
+
+    #[test]
+    fn resume_route_keeps_the_epub_reader_when_a_book_has_both_formats() {
+        let mut p = point(ProgressFormat::Epub, None);
+        p.book.formats = vec!["EPUB".into(), "CBZ".into()];
+        assert_eq!(
+            resume_route(&p),
+            Route::BookRead {
+                uuid: "book-a".into()
+            }
+        );
     }
 
     #[test]

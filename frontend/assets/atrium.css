@@ -8860,3 +8860,55 @@ html {
   animation: m-ptr-spin .7s linear infinite;
 }
 @keyframes m-ptr-spin { to { transform: rotate(360deg); } }
+
+/* ============================= Comic pager ============================= */
+/* /comic/:uuid — the CBZ pager (frontend/src/pages/comic_reader.rs). Own
+   cr- namespace beside the epub reader's rd-; shares the app vars. */
+.cr-root { display: flex; flex-direction: column; height: 100dvh;
+  background: var(--bg); color: var(--ink); outline: none; }
+.cr-top { display: flex; align-items: center; gap: 12px; flex: 0 0 auto;
+  height: calc(52px + env(safe-area-inset-top)); padding: env(safe-area-inset-top) 12px 0;
+  border-bottom: 1px solid var(--line-2); }
+.cr-btn { display: inline-flex; align-items: center; justify-content: center;
+  height: 32px; min-width: 32px; padding: 0 10px; border-radius: 9px; cursor: pointer;
+  background: transparent; border: 1px solid transparent; color: var(--ink-2);
+  font-family: var(--sans); font-size: 13px; transition: .14s; }
+.cr-btn:hover { border-color: var(--line); color: var(--ink); }
+.cr-back { font-size: 20px; }
+.cr-title-block { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+/* Scoped under .cr-top so the global `.atrium h1` display-serif rule
+   (higher specificity than a bare class) can't inflate the bar title. */
+.cr-top .cr-title { font-family: var(--sans); font-size: 14px; font-weight: 600;
+  margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cr-author { font-size: 12px; color: var(--ink-3); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.cr-fit-controls { display: flex; gap: 4px; }
+.cr-fit.active { border-color: var(--line); color: var(--ink); background: var(--bg-2); }
+.cr-state { flex: 1; display: flex; align-items: center; justify-content: center;
+  color: var(--ink-3); font-family: var(--mono); font-size: 13px; }
+.cr-stage { position: relative; flex: 1; min-height: 0; display: flex;
+  justify-content: center; overflow: auto; background: var(--bg-2); }
+.cr-page { display: block; margin: 0 auto; }
+.cr-fit-width { align-items: flex-start; }
+.cr-fit-width .cr-page { width: 100%; height: auto; }
+.cr-fit-height { align-items: center; }
+.cr-fit-height .cr-page { max-height: 100%; max-width: 100%; width: auto;
+  height: auto; object-fit: contain; }
+.cr-prefetch { display: none; }
+.cr-nav { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 40px; height: 64px; border-radius: 12px; border: 1px solid var(--line-2);
+  background: color-mix(in oklab, var(--bg) 72%, transparent); color: var(--ink-2);
+  font-size: 22px; cursor: pointer; transition: .14s; }
+.cr-nav:hover:not(:disabled) { color: var(--ink); border-color: var(--line); }
+.cr-nav:disabled { opacity: .35; cursor: default; }
+.cr-nav-prev { left: 10px; }
+.cr-nav-next { right: 10px; }
+.cr-bottom { position: relative; display: flex; align-items: center; gap: 14px;
+  flex: 0 0 auto; height: calc(46px + env(safe-area-inset-bottom));
+  padding: 0 14px env(safe-area-inset-bottom); border-top: 1px solid var(--line-2);
+  font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+.cr-slider { flex: 1; accent-color: var(--accent, var(--ink)); }
+.cr-page-label { white-space: nowrap; }
+.cr-ribbon { position: absolute; left: 0; top: -1px; height: 2px; width: 100%; }
+.cr-ribbon i { display: block; height: 100%; background: var(--accent, var(--ink)); }
