@@ -163,7 +163,7 @@ async fn gc_keeps_book_on_a_wishlist_and_purges_after_the_entry_is_removed() {
     assert_eq!(purged, 0);
     assert!(
         book_exists(&pool, &uuid).await,
-        "a wishlisted book is never purged"
+        "a book is kept while it is on a wishlist"
     );
 
     // Removing the last entry lifts the guard; the still-running clock makes
@@ -210,7 +210,7 @@ async fn gc_keeps_book_on_a_manual_shelf_past_retention() {
     assert_eq!(purged, 0);
     assert!(
         book_exists(&pool, &uuid).await,
-        "a book on a hand-picked shelf is never purged"
+        "a book is kept while on a hand-picked shelf"
     );
 }
 
@@ -777,7 +777,7 @@ async fn backfill_skips_intentionally_fileless_override_rows() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(flag, 0, "wishlist row is never flagged missing");
+    assert_eq!(flag, 0, "override row is never flagged missing");
     assert!(since.is_none());
 }
 

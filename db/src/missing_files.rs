@@ -23,11 +23,11 @@ pub enum MissingFilesError {
 }
 
 /// Hard-delete books whose files have been missing longer than
-/// `retention_days`, **except** any that carry user data (a row in one of the
-/// soft-ref user-data tables — including a physical copy, a wishlist entry,
-/// or hand-picked shelf membership), are intentionally fileless
-/// (`is_missing_files_override = 1`), or still anchor a cross-format
-/// attachment (`merged_uuids`). Each purged book's regenerable
+/// `retention_days`. A book is exempt while any of these hold: it carries
+/// user data (a row in one of the soft-ref user-data tables, including a
+/// physical copy, a wishlist entry, or hand-picked shelf membership), it is
+/// intentionally fileless (`is_missing_files_override = 1`), or it still
+/// anchors a cross-format attachment (`merged_uuids`). Each purged book's regenerable
 /// `metadata_overrides` row and cover files go with it. Returns the purged
 /// count.
 ///
