@@ -405,7 +405,12 @@ async fn mount_gb_q(server: &MockServer, q: &str, body: serde_json::Value) {
 #[tokio::test]
 async fn googlebooks_falls_back_to_bare_query_when_isbn_search_is_empty() {
     let server = MockServer::start().await;
-    mount_gb_q(&server, &format!("isbn:{ISBN13}"), json!({ "totalItems": 0 })).await;
+    mount_gb_q(
+        &server,
+        &format!("isbn:{ISBN13}"),
+        json!({ "totalItems": 0 }),
+    )
+    .await;
     mount_gb_q(&server, ISBN13, gb_hit()).await;
 
     let meta = super::providers::googlebooks_lookup(&config_for(&server), ISBN13)
@@ -448,13 +453,21 @@ async fn googlebooks_hit_never_issues_a_bare_query() {
 #[tokio::test]
 async fn googlebooks_double_miss_is_still_a_clean_miss() {
     let server = MockServer::start().await;
-    mount_gb_q(&server, &format!("isbn:{ISBN13}"), json!({ "totalItems": 0 })).await;
+    mount_gb_q(
+        &server,
+        &format!("isbn:{ISBN13}"),
+        json!({ "totalItems": 0 }),
+    )
+    .await;
     mount_gb_q(&server, ISBN13, json!({ "totalItems": 0 })).await;
 
     let meta = super::providers::googlebooks_lookup(&config_for(&server), ISBN13)
         .await
         .unwrap();
-    assert!(meta.is_none(), "double miss must be a clean miss, not an error");
+    assert!(
+        meta.is_none(),
+        "double miss must be a clean miss, not an error"
+    );
     server.verify().await;
 }
 
@@ -464,7 +477,12 @@ async fn googlebooks_bare_query_failure_degrades_to_a_clean_miss() {
     // query answered cleanly, the lookup reports the miss it already had
     // rather than turning a would-be "unresolved" into a user-facing outage.
     let server = MockServer::start().await;
-    mount_gb_q(&server, &format!("isbn:{ISBN13}"), json!({ "totalItems": 0 })).await;
+    mount_gb_q(
+        &server,
+        &format!("isbn:{ISBN13}"),
+        json!({ "totalItems": 0 }),
+    )
+    .await;
     Mock::given(method("GET"))
         .and(path(GB_PATH))
         .and(query_param("q", ISBN13))
