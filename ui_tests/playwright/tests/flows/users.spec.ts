@@ -169,3 +169,106 @@ test("surfaces a 409 when creating a duplicate username", async ({ page }) => {
     "username is already taken",
   );
 });
+
+// ── Self-registration switch ──────────────────────────────────────────
+//
+// `registration_enabled` is a single global settings row that the whole
+// server reads, and `auth.spec.ts` asserts the register page and the login
+// page's Register link — both of which key off it. Flipping it for real would
+// be visible to those specs the instant it landed (the suite is
+// `fullyParallel` against one shared server), and a spec-local restore
+// wouldn't help: readers don't take the writers' lock. So these specs stub
+// both the read and the write, asserting the network contract and the UI's
+// reaction without ever touching shared state. The real persistence path is
+// covered by the server integration tests
+// (`api_post_registration_*` in `server/src/backend/settings/tests.rs`).
+
+/** Pin the registration-status read so the switch starts from a known value. */
+async function stubRegistrationStatus(page: Page, enabled: boolean) {
+  await page.route("**/api/auth/registration", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ enabled }),
+    });
+  });
+}
+
+test("reflects the current self-registration setting", async ({ page }) => {
+  await stubRegistrationStatus(page, false);
+  await gotoReady(page, USERS);
+
+  const toggle = page.getByTestId("registration-toggle");
+  await expect(toggle).not.toBeChecked();
+  await expect(page.getByTestId("registration-card")).toContainText(
+    "Only an administrator can create accounts.",
+  );
+  await expect(toggle).toBeEnabled();
+});
+
+test("turning self-registration on posts the new value and updates the card", async ({
+  page,
+}) => {
+  await stubRegistrationStatus(page, false);
+  await page.route("**/api/settings/registration", async (route) => {
+    await route.fulfill({ status: 204, body: "" });
+  });
+  await gotoReady(page, USERS);
+
+  const toggle = page.getByTestId("registration-toggle");
+  await expect(toggle).not.toBeChecked();
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/settings/registration",
+      expectedBody: { enabled: true },
+      expectedStatus: 204,
+    },
+    async () => toggle.check(),
+  );
+
+  await expect(toggle).toBeChecked();
+  await expect(page.getByTestId("registration-card")).toContainText(
+    "Anyone who can reach this server can create an account.",
+  );
+  await expect(page.getByTestId("registration-error")).toHaveCount(0);
+});
+
+test("a failed save surfaces the error and leaves the switch as it was", async ({
+  page,
+}) => {
+  await stubRegistrationStatus(page, true);
+  await page.route("**/api/settings/registration", async (route) => {
+    await route.fulfill({
+      status: 500,
+      contentType: "text/plain",
+      body: "set registration enabled failed",
+    });
+  });
+  await gotoReady(page, USERS);
+
+  const toggle = page.getByTestId("registration-toggle");
+  await expect(toggle).toBeChecked();
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/settings/registration",
+      expectedBody: { enabled: false },
+      expectedStatus: 500,
+    },
+    async () => toggle.uncheck(),
+  );
+
+  await expect(page.getByTestId("registration-error")).toContainText(
+    "set registration enabled failed",
+  );
+  // The switch must not claim a state the server rejected.
+  await expect(toggle).toBeChecked();
+  await expect(page.getByTestId("registration-card")).toContainText(
+    "Anyone who can reach this server can create an account.",
+  );
+});

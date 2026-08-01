@@ -4169,6 +4169,15 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .auth-strength-label-rhs.auth-strength-tier-ok   { color: var(--auth-ok); }
 
 .auth-form-inner { display: block; }
+/* Reserves roughly the resolved form's height while the registration-open
+   probe is in flight, so the shell doesn't jump when it settles. */
+.auth-form-pending { min-height: 22rem; }
+.auth-closed-note {
+  font-size: 0.9rem;
+  color: var(--ink-2);
+  line-height: 1.5;
+  margin-top: 1rem;
+}
 .auth-submit {
   width: 100%;
   justify-content: center;

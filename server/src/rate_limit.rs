@@ -431,4 +431,49 @@ mod tests {
         assert!(rl.allow(ip).await);
         assert!(rl.inner.lock().await.len() < MAX_BUCKETS);
     }
+    #[tokio::test]
+    async fn registration_status_bypasses_the_auth_limiter() {
+        // `/api/auth/registration` is hit on every login/register page mount,
+        // so it must stay out of the brute-force bucket for the same reason
+        // `/api/auth/me` was taken out of it: parallel Playwright workers and
+        // ordinary navigation share one loopback IP and would 429.
+        //
+        // Today it escapes only because `starts_with("/api/auth/register")` is
+        // false for "registration" ("registr-ation" diverges from "regist-er"
+        // at the 7th character). That is a spelling accident, not a decision —
+        // this test is what turns it into one. Broadening the prefix (e.g. to
+        // "/api/auth/regist") must fail here rather than silently throttling
+        // page loads in production.
+        use axum::middleware::from_fn_with_state;
+        use axum::{body::Body, routing::get, Router};
+        use tower::ServiceExt;
+
+        let limiter = Arc::new(RateLimiter::new()); // default 10/60s
+        let prefixes: Arc<Vec<&'static str>> = Arc::new(vec![
+            "/api/auth/login",
+            "/api/auth/register",
+            "/api/auth/logout",
+        ]);
+        let app = Router::new()
+            .route("/api/auth/registration", get(|| async { "ok" }))
+            .layer(from_fn_with_state((limiter, prefixes), rate_limit_paths));
+
+        for i in 0..(MAX_REQUESTS as usize * 3) {
+            let res = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/auth/registration")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                res.status(),
+                StatusCode::OK,
+                "/api/auth/registration must bypass the auth limiter (request #{i})"
+            );
+        }
+    }
 }

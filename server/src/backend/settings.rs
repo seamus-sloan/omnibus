@@ -13,7 +13,7 @@ use omnibus_db::{
     self as db,
     worker::{Task, TaskOutcome},
 };
-use omnibus_shared::Settings;
+use omnibus_shared::{RegistrationStatus, Settings};
 
 use super::{internal, AppState};
 use crate::auth::AdminUser;
@@ -62,6 +62,23 @@ pub(super) async fn post_settings(
             Err(error) => internal("read updated settings", error),
         },
         Err(error) => internal("save settings", error),
+    }
+}
+
+/// `POST /api/settings/registration` — admin-only open/close of
+/// self-registration. `204` on success.
+///
+/// The matching read is the *unauthenticated* `GET /api/auth/registration`:
+/// the login and register pages need it before a session exists, so only the
+/// write is gated here.
+pub(super) async fn post_registration(
+    _admin: AdminUser,
+    State(state): State<AppState>,
+    Json(status): Json<RegistrationStatus>,
+) -> Response {
+    match db::auth::set_registration_enabled(&state.pool, status.enabled).await {
+        Ok(()) => axum::http::StatusCode::NO_CONTENT.into_response(),
+        Err(error) => internal("set registration enabled", error),
     }
 }
 

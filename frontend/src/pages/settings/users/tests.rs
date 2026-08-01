@@ -24,3 +24,47 @@ fn fmt_date_is_stable_within_a_day() {
 fn civil_from_days_round_trips_epoch() {
     assert_eq!(civil_from_days(0), (1970, 1, 1));
 }
+
+// ── Self-registration switch ──────────────────────────────────────────
+
+#[test]
+fn registration_status_line_describes_who_can_create_an_account() {
+    assert_eq!(
+        registration_status_line(Some(true)),
+        "Anyone who can reach this server can create an account."
+    );
+    assert_eq!(
+        registration_status_line(Some(false)),
+        "Only an administrator can create accounts."
+    );
+}
+
+#[test]
+fn registration_status_line_is_noncommittal_before_the_load_settles() {
+    // The unresolved state must not claim either policy — the switch is
+    // disabled until it settles, and asserting the wrong one would be worse
+    // than saying nothing.
+    let pending = registration_status_line(None);
+    assert_eq!(pending, "Checking…");
+    assert_ne!(pending, registration_status_line(Some(true)));
+    assert_ne!(pending, registration_status_line(Some(false)));
+}
+
+// `test_support`'s SSR renderer only exists on the `server` feature.
+#[cfg(feature = "server")]
+#[test]
+fn registration_toggle_renders_unresolved_and_disabled_before_load() {
+    // SSR (and the first WASM paint) must both emit the unresolved state, or
+    // hydration mis-adopts the checkbox — rule 07. `rebuild_in_place` never
+    // polls the load effect's future, so this is exactly that first paint.
+    let html = crate::test_support::render_in_vdom(RegistrationToggle);
+    assert!(html.contains("registration-toggle"), "toggle must render");
+    assert!(
+        html.contains("disabled"),
+        "the switch must be inert until the current value arrives, got: {html}"
+    );
+    assert!(
+        html.contains("Checking"),
+        "expected the unresolved subtitle, got: {html}"
+    );
+}

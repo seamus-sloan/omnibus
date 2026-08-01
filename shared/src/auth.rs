@@ -70,6 +70,15 @@ pub struct SetPasswordRequest {
     pub password: String,
 }
 
+/// Whether self-registration is open, as carried by
+/// `GET /api/auth/registration` (public) and `POST /api/settings/registration`
+/// (admin write). One type for both directions — the fact is a single boolean
+/// and a separate request/response pair would only be two names for it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RegistrationStatus {
+    pub enabled: bool,
+}
+
 /// Request body for `POST /api/auth/login`.
 ///
 /// Deliberately does not derive `Debug`: the struct holds a plaintext

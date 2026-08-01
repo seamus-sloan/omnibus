@@ -12,7 +12,7 @@ use crate::{use_server_url, Route};
 
 #[cfg(feature = "mobile")]
 use super::m_auth_shell;
-use super::submit_login;
+use super::{fetch_registration_open, registration_open_or_default, submit_login};
 
 /// Signals plus the submit/keydown handlers backing `LoginPage`'s form.
 struct LoginFormState {
@@ -21,6 +21,9 @@ struct LoginFormState {
     error: Signal<Option<String>>,
     submitting: Signal<bool>,
     keep_signed_in: Signal<bool>,
+    /// `None` until the registration-open probe answers; gates the "create an
+    /// account" link so it is never offered on a server that would 403 it.
+    registration_open: Signal<Option<bool>>,
     on_submit: EventHandler<FormEvent>,
     on_keydown: EventHandler<Event<KeyboardData>>,
 }
@@ -41,6 +44,22 @@ fn use_login_form_state() -> LoginFormState {
     // `use_server_url()` is feature-aware: empty string on web/server (where
     // requests are same-origin) and the `ServerUrl` context value on mobile.
     let server_url = use_server_url();
+
+    // Starts `None` on every target so SSR and the first WASM paint agree
+    // (rule 07), then settles. A failed probe resolves to `Some(true)` —
+    // mirroring the register page, an unreachable status read must not hide a
+    // link that would have worked.
+    let mut registration_open = use_signal(|| Option::<bool>::None);
+    use_effect({
+        let server_url = server_url.clone();
+        move || {
+            let server_url = server_url.clone();
+            spawn(async move {
+                let probe = fetch_registration_open(&server_url).await;
+                registration_open.set(Some(registration_open_or_default(probe)));
+            });
+        }
+    });
 
     let submit_now = use_callback(move |_: ()| {
         if submitting() {
@@ -73,6 +92,7 @@ fn use_login_form_state() -> LoginFormState {
         error,
         submitting,
         keep_signed_in,
+        registration_open,
         on_submit: EventHandler::new(move |evt: FormEvent| {
             evt.prevent_default();
             submit_now.call(());
@@ -95,6 +115,7 @@ pub fn LoginPage() -> Element {
         error,
         submitting,
         keep_signed_in,
+        registration_open,
         on_submit,
         on_keydown,
     } = use_login_form_state();
@@ -120,6 +141,7 @@ pub fn LoginPage() -> Element {
                 error,
                 submitting,
                 keep_signed_in,
+                registration_open,
                 on_submit,
                 on_keydown,
             }
@@ -138,6 +160,7 @@ pub fn LoginPage() -> Element {
                 password,
                 error,
                 submitting,
+                registration_open,
                 on_submit,
                 on_keydown,
             }
@@ -156,6 +179,7 @@ fn MobileLoginForm(
     mut password: Signal<String>,
     error: Signal<Option<String>>,
     submitting: Signal<bool>,
+    registration_open: Signal<Option<bool>>,
     on_submit: EventHandler<FormEvent>,
     on_keydown: EventHandler<Event<KeyboardData>>,
 ) -> Element {
@@ -224,9 +248,14 @@ fn MobileLoginForm(
                 disabled: submitting(),
                 if submitting() { "Signing in…" } else { "Sign in" }
             }
-            p { class: "auth-footer",
-                "New here? "
-                Link { to: Route::Register {}, "Create an account" }
+            // Only once the probe has confirmed signup is open — offering the
+            // link while unresolved would mean withdrawing it a beat later on
+            // a closed server.
+            if registration_open() == Some(true) {
+                p { class: "auth-footer",
+                    "New here? "
+                    Link { to: Route::Register {}, "Create an account" }
+                }
             }
         }
     }
@@ -245,6 +274,8 @@ struct LoginFormProps {
     submitting: Signal<bool>,
     /// "Keep me signed in" checkbox state.
     keep_signed_in: Signal<bool>,
+    /// Whether self-registration is open; `None` until the probe answers.
+    registration_open: Signal<Option<bool>>,
     /// Fired on form submission (submit-button click or Enter).
     on_submit: EventHandler<FormEvent>,
     /// Fired on Enter keydown in either input.
@@ -261,6 +292,7 @@ fn LoginForm(props: LoginFormProps) -> Element {
         error,
         submitting,
         mut keep_signed_in,
+        registration_open,
         on_submit,
         on_keydown,
     } = props;
@@ -290,9 +322,11 @@ fn LoginForm(props: LoginFormProps) -> Element {
                 disabled: submitting(),
                 if submitting() { "Logging in…" } else { "Log in" }
             }
-            p { class: "auth-footer",
-                "No account? "
-                Link { to: Route::Register {}, "Register" }
+            if registration_open() == Some(true) {
+                p { class: "auth-footer",
+                    "No account? "
+                    Link { to: Route::Register {}, "Register" }
+                }
             }
             div { class: "auth-footer-note",
                 "omnibus · v"

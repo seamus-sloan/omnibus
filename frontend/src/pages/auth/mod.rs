@@ -76,6 +76,26 @@ async fn submit_register(
     .map(|_| ())
 }
 
+/// Resolve a registration-open probe into the value the auth pages render.
+///
+/// A probe that *failed* reads as open. The server's `403` on
+/// `POST /api/auth/register` is the real gate, so a status read that couldn't
+/// complete — offline, a proxy hiccup, an SSR-only build — must never be what
+/// hides the register form or its link. Erring the other way would lock
+/// first-run users out of the only account-creation path the server has.
+fn registration_open_or_default(probe: Result<bool, String>) -> bool {
+    probe.unwrap_or(true)
+}
+
+/// Whether self-registration is open, for the login and register pages. Same
+/// three-arm cfg split as `submit_register` above; SSR answers `None` so the
+/// prerendered markup matches the first WASM paint (rule 07) and the real
+/// value arrives from the post-mount effect.
+#[cfg(all(feature = "web", not(feature = "mobile")))]
+async fn fetch_registration_open(_server_url: &str) -> Result<bool, String> {
+    crate::data::registration_status().await
+}
+
 #[cfg(feature = "mobile")]
 async fn submit_login(server_url: &str, username: String, password: String) -> Result<(), String> {
     crate::data::mobile_login(server_url, username, password, default_device_name())
@@ -93,6 +113,13 @@ async fn submit_register(
     crate::data::mobile_register(server_url, username, password, default_device_name())
         .await
         .map(|_| ())
+        .map_err(data_error_message)
+}
+
+#[cfg(feature = "mobile")]
+async fn fetch_registration_open(server_url: &str) -> Result<bool, String> {
+    crate::data::registration_status(server_url)
+        .await
         .map_err(data_error_message)
 }
 
@@ -140,4 +167,27 @@ async fn submit_register(
     _password: String,
 ) -> Result<(), String> {
     Err("registration is only available in the web or mobile client".into())
+}
+
+#[cfg(not(any(feature = "web", feature = "mobile")))]
+async fn fetch_registration_open(_server_url: &str) -> Result<bool, String> {
+    Err("registration status is only available in the web or mobile client".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::registration_open_or_default;
+
+    #[test]
+    fn registration_open_or_default_passes_through_a_successful_probe() {
+        assert!(registration_open_or_default(Ok(true)));
+        assert!(!registration_open_or_default(Ok(false)));
+    }
+
+    #[test]
+    fn registration_open_or_default_treats_a_failed_probe_as_open() {
+        // Fail-open is deliberate: the server still refuses the register POST,
+        // and fail-closed would strand a first-run admin with no way in.
+        assert!(registration_open_or_default(Err("network error".into())));
+    }
 }

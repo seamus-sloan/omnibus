@@ -1,3 +1,4 @@
+import type { Page } from "@playwright/test";
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { TEST_PASSWORD, TEST_USERNAME } from "../utils/auth";
@@ -170,4 +171,61 @@ test("register routes a password error to the password Field", async ({
   await expect(
     page.getByRole("button", { name: /fix to continue/i }),
   ).toBeDisabled();
+});
+
+// ── Self-registration closed ──────────────────────────────────────────
+//
+// `registration_enabled` is global server state the layout specs above also
+// read, so these stub `GET /api/auth/registration` instead of flipping it —
+// see the note in `users.spec.ts`. The server-side refusal is covered by
+// `register_is_refused_with_403_when_registration_is_disabled`
+// (`server/src/auth/handlers/tests.rs`).
+
+/** Pin the registration-status probe both auth pages issue on mount. */
+async function stubRegistrationStatus(page: Page, enabled: boolean) {
+  await page.route("**/api/auth/registration", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ enabled }),
+    });
+  });
+}
+
+test("register page shows a closed notice instead of the form when signup is off", async ({
+  page,
+}) => {
+  await stubRegistrationStatus(page, false);
+  await page.goto("/register");
+
+  await expect(page.getByTestId("register-closed")).toBeVisible();
+  await expect(page.getByText("Registration is closed")).toBeVisible();
+  // The form must be absent, not merely disabled — a user should never be
+  // able to fill in credentials the server will refuse.
+  await expect(page.getByTestId("register-form")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Create account" }),
+  ).toHaveCount(0);
+  // The way back in is still offered.
+  await expect(page.getByRole("link", { name: "Log in" })).toBeVisible();
+});
+
+test("login page hides the register link when signup is off", async ({
+  page,
+}) => {
+  await stubRegistrationStatus(page, false);
+  await gotoReady(page, "/login");
+
+  // The form itself is unaffected.
+  await expect(page.getByRole("button", { name: "Log in" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Register" })).toHaveCount(0);
+});
+
+test("login page offers the register link when signup is on", async ({
+  page,
+}) => {
+  await stubRegistrationStatus(page, true);
+  await gotoReady(page, "/login");
+
+  await expect(page.getByRole("link", { name: "Register" })).toBeVisible();
 });

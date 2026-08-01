@@ -13,7 +13,7 @@ use crate::{use_server_url, Route};
 
 #[cfg(feature = "mobile")]
 use super::m_auth_shell;
-use super::submit_register;
+use super::{fetch_registration_open, registration_open_or_default, submit_register};
 
 /// Form-input signals shared across the register form body and its fields:
 /// the two inputs, the routed error, the in-flight flag, and the terms
@@ -38,6 +38,23 @@ pub fn RegisterPage() -> Element {
     let nav = use_navigator();
 
     let server_url = use_server_url();
+
+    // `None` until the probe answers — SSR and the first WASM paint both
+    // render the placeholder, so hydration matches (rule 07) and the form
+    // never appears only to be pulled back when registration turns out to be
+    // closed. A *failed* probe resolves to `Some(true)`: the server's 403 is
+    // the real gate, so a flaky read must not lock anyone out of the form.
+    let mut registration_open = use_signal(|| Option::<bool>::None);
+    use_effect({
+        let server_url = server_url.clone();
+        move || {
+            let server_url = server_url.clone();
+            spawn(async move {
+                let probe = fetch_registration_open(&server_url).await;
+                registration_open.set(Some(registration_open_or_default(probe)));
+            });
+        }
+    });
 
     let submit_now = use_callback(move |_: ()| {
         if submitting() {
@@ -66,19 +83,23 @@ pub fn RegisterPage() -> Element {
         });
     });
 
-    // Same target split as `LoginPage`: the register form body is shared
-    // (`RegisterForm`), only the surrounding shell differs.
-    let form = rsx! {
-        RegisterForm {
-            state: RegisterFormState {
-                username,
-                password,
-                error,
-                submitting,
-                terms_ack,
-            },
-            on_submit_now: move |_| submit_now.call(()),
-        }
+    // Same target split as `LoginPage`: the body is shared, only the
+    // surrounding shell differs.
+    let form = match registration_open() {
+        None => rsx! { RegistrationProbePlaceholder {} },
+        Some(false) => rsx! { RegistrationClosed {} },
+        Some(true) => rsx! {
+            RegisterForm {
+                state: RegisterFormState {
+                    username,
+                    password,
+                    error,
+                    submitting,
+                    terms_ack,
+                },
+                on_submit_now: move |_| submit_now.call(()),
+            }
+        },
     };
 
     #[cfg(not(feature = "mobile"))]
@@ -99,6 +120,45 @@ pub fn RegisterPage() -> Element {
     let out = m_auth_shell("Make yourself at home.", form);
 
     out
+}
+
+/// Placeholder shown while the registration-open probe is in flight. Renders
+/// on SSR and the first WASM paint alike, so the page settles into exactly one
+/// of the two real states instead of correcting itself in view.
+#[component]
+fn RegistrationProbePlaceholder() -> Element {
+    rsx! {
+        div {
+            class: "auth-form-inner auth-form-pending",
+            "data-testid": "register-pending",
+            role: "status",
+            "aria-busy": "true",
+            span { class: "sr-only", "Checking whether registration is open…" }
+        }
+    }
+}
+
+/// Shown in place of the form when an admin has closed self-registration.
+/// The server refuses the write regardless; this just stops the user filling
+/// out a form that cannot succeed.
+#[component]
+fn RegistrationClosed() -> Element {
+    rsx! {
+        div { class: "auth-form-inner", "data-testid": "register-closed",
+            Banner {
+                kind: BannerKind::Info,
+                title: "Registration is closed".to_string(),
+                dismissible: false,
+            }
+            p { class: "auth-closed-note",
+                "This server isn't accepting new accounts. Ask an administrator to create one for you."
+            }
+            p { class: "auth-footer",
+                "Already have an account? "
+                Link { to: Route::Login {}, "Log in" }
+            }
+        }
+    }
 }
 
 /// Splits an `Option<RegisterError>` into the three field-specific

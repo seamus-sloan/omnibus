@@ -773,3 +773,130 @@ async fn api_post_settings_returns_403_when_not_admin() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
 }
+
+// ── POST /api/settings/registration (admin self-registration switch) ──
+
+/// Build an admin-authenticated `POST /api/settings/registration` request.
+fn post_registration_req(token: &str, enabled: bool) -> Request<Body> {
+    Request::builder()
+        .uri("/api/settings/registration")
+        .method("POST")
+        .header("content-type", "application/json")
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::from(
+            serde_json::json!({ "enabled": enabled }).to_string(),
+        ))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn api_post_registration_closes_self_registration_for_admin() {
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+    omnibus_db::auth::set_registration_enabled(&pool, true)
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(post_registration_req(&token, false))
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert!(
+        !omnibus_db::auth::registration_enabled(&pool).await.unwrap(),
+        "the switch must have reached the settings row"
+    );
+}
+
+#[tokio::test]
+async fn api_post_registration_reopens_self_registration_for_admin() {
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+    omnibus_db::auth::set_registration_enabled(&pool, false)
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(post_registration_req(&token, true))
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert!(omnibus_db::auth::registration_enabled(&pool).await.unwrap());
+}
+
+#[tokio::test]
+async fn api_post_registration_rejects_non_admin() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "reader").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    omnibus_db::auth::set_registration_enabled(&pool, false)
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(post_registration_req(&token, true))
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert!(
+        !omnibus_db::auth::registration_enabled(&pool).await.unwrap(),
+        "a rejected request must not have changed the setting"
+    );
+}
+
+#[tokio::test]
+async fn api_post_registration_returns_500_on_db_failure() {
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+    sqlx::query("DROP TABLE settings")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(post_registration_req(&token, true))
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn reopening_registration_through_the_api_lets_a_second_user_sign_up() {
+    // The acceptance criterion for #909: an admin must be able to onboard
+    // user #2 through the running app, with no direct SQL and no
+    // OMNIBUS_INITIAL_ADMIN boot hook. `create_user` is what
+    // `POST /api/auth/register` calls, so driving it here proves the gate the
+    // endpoint just moved is the one self-registration actually consults.
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+    omnibus_db::auth::set_registration_enabled(&pool, false)
+        .await
+        .unwrap();
+
+    let refused = omnibus_db::auth::create_user(&pool, "bob", "correct horse battery staple").await;
+    assert!(
+        matches!(
+            refused,
+            Err(omnibus_db::auth::AuthError::RegistrationDisabled)
+        ),
+        "precondition: signup must be closed before the admin reopens it"
+    );
+
+    let res = app
+        .oneshot(post_registration_req(&token, true))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    omnibus_db::auth::create_user(&pool, "bob", "correct horse battery staple")
+        .await
+        .expect("a second user must be able to self-register once reopened");
+}

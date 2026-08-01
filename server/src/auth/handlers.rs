@@ -14,18 +14,21 @@ use axum::{
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use omnibus_db::auth::{self as auth_db, AuthError, NewSession, SessionKind};
-use omnibus_shared::{LoginRequest, LoginResponse, RegisterRequest, UserSummary};
+use omnibus_shared::{
+    LoginRequest, LoginResponse, RegisterRequest, RegistrationStatus, UserSummary,
+};
 
 use super::extractor::{extract_token, AuthUser};
 use super::{session_cookie_name, BEARER_TTL_SECS, COOKIE_TTL_SECS};
 use crate::backend::AppState;
 use crate::http_errors::internal;
 
-/// Build the `/api/auth/{register,login,logout,me}` router.
+/// Build the `/api/auth/{register,registration,login,logout,me}` router.
 pub fn auth_router(state: AppState) -> Router {
     let pool = state.pool().clone();
     Router::new()
         .route("/api/auth/register", post(register_handler))
+        .route("/api/auth/registration", get(registration_handler))
         .route("/api/auth/login", post(login_handler))
         .route("/api/auth/logout", post(logout_handler))
         .route("/api/auth/me", get(me_handler))
@@ -165,6 +168,20 @@ async fn register_handler(
         req.client_version,
     )
     .await
+}
+
+/// `GET /api/auth/registration` — whether self-registration is open.
+///
+/// Unauthenticated by design: it sits in the gate-exempt `/api/auth/*` prefix
+/// because the login and register pages must read it before any session
+/// exists, and it discloses nothing a `POST /api/auth/register` wouldn't
+/// already reveal. The admin *write* lives on the gated side
+/// (`POST /api/settings/registration`).
+async fn registration_handler(State(state): State<AppState>) -> Response {
+    match auth_db::registration_enabled(state.pool()).await {
+        Ok(enabled) => Json(RegistrationStatus { enabled }).into_response(),
+        Err(e) => auth_error_to_response(e),
+    }
 }
 
 async fn login_handler(
