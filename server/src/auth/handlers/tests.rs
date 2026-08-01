@@ -421,3 +421,95 @@ async fn logout_revokes_session_and_next_me_is_401() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 }
+
+// ── GET /api/auth/registration (public read) ──────────────────────────
+
+/// Read `enabled` out of a `GET /api/auth/registration` response.
+async fn registration_enabled_over_http(app: &Router) -> bool {
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/auth/registration")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    serde_json::from_slice::<omnibus_shared::RegistrationStatus>(&body)
+        .expect("valid RegistrationStatus body")
+        .enabled
+}
+
+#[tokio::test]
+async fn registration_status_is_readable_without_a_session() {
+    // No Authorization header and no cookie: the login and register pages
+    // read this before any session exists, so it must answer anonymously.
+    let (app, pool) = app().await;
+    db::auth::set_registration_enabled(&pool, true)
+        .await
+        .unwrap();
+
+    assert!(registration_enabled_over_http(&app).await);
+}
+
+#[tokio::test]
+async fn registration_status_reports_disabled_after_admin_closes_it() {
+    let (app, pool) = app().await;
+    db::auth::set_registration_enabled(&pool, false)
+        .await
+        .unwrap();
+
+    assert!(!registration_enabled_over_http(&app).await);
+}
+
+#[tokio::test]
+async fn register_is_refused_with_403_when_registration_is_disabled() {
+    // The status endpoint is advisory; this is the real gate. A client that
+    // ignores the closed state still cannot create an account.
+    let (app, pool) = app().await;
+    db::auth::create_user(&pool, "alice", "correct horse battery staple")
+        .await
+        .expect("first user always allowed");
+    db::auth::set_registration_enabled(&pool, false)
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(json_req(
+            "/api/auth/register",
+            "POST",
+            json!({"username": "bob", "password": "correct horse battery staple"}),
+        ))
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn registration_status_returns_500_when_the_settings_read_fails() {
+    let (app, pool) = app().await;
+    sqlx::query("DROP TABLE settings")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/auth/registration")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+
+    // Must not fall open to `{"enabled": true}` on a broken read — that would
+    // advertise signup on a server that cannot tell whether it is allowed.
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}

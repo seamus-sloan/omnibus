@@ -112,6 +112,24 @@ pub(crate) async fn get_me_online(server_url: &str) -> Result<UserSummary, DataE
     Ok(response.json::<UserSummary>().await?)
 }
 
+/// GET `{server_url}/api/auth/registration` (mobile) — whether self-signup is
+/// open, so the register screen can say so instead of presenting a form that
+/// 403s. Unauthenticated and deliberately uncached: the answer gates a screen
+/// the user is looking at right now, and an admin can flip it at any time.
+#[cfg(feature = "mobile")]
+pub async fn registration_status(server_url: &str) -> Result<bool, DataError> {
+    let url = format!("{server_url}/api/auth/registration");
+    let response = http_client().get(&url).send().await?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(drain_error(response, status).await);
+    }
+    Ok(response
+        .json::<omnibus_shared::RegistrationStatus>()
+        .await?
+        .enabled)
+}
+
 /// POST `/api/auth/logout` (mobile) — best-effort revoke, then clear local token.
 #[cfg(feature = "mobile")]
 pub async fn mobile_logout(server_url: &str) -> Result<(), DataError> {
@@ -226,6 +244,50 @@ pub async fn register(req: RegisterRequest) -> Result<LoginResponse, String> {
     Ok(resp)
 }
 
+/// GET `/api/auth/registration` (web) — whether self-signup is open. Read by
+/// the login page (to decide whether to offer a register link) and the
+/// register page (to render a closed notice instead of a dead form), both of
+/// which run before any session exists.
+#[cfg(feature = "web")]
+pub async fn registration_status() -> Result<bool, String> {
+    use gloo_net::http::Request;
+    let res = Request::get("/api/auth/registration")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !res.ok() {
+        return Err(format!("registration status failed: {}", res.status()));
+    }
+    res.json::<omnibus_shared::RegistrationStatus>()
+        .await
+        .map(|s| s.enabled)
+        .map_err(|e| e.to_string())
+}
+
+/// POST `/api/settings/registration` (web) — admin open/close of self-signup.
+/// The read counterpart is [`registration_status`]; only the write is
+/// admin-gated server-side.
+#[cfg(feature = "web")]
+pub async fn set_registration_enabled(enabled: bool) -> Result<(), String> {
+    use gloo_net::http::Request;
+    let res = Request::post("/api/settings/registration")
+        .json(&omnibus_shared::RegistrationStatus { enabled })
+        .map_err(|e| e.to_string())?
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !res.ok() {
+        let status = res.status();
+        let body = res.text().await.unwrap_or_default();
+        return if body.trim().is_empty() {
+            Err(format!("request failed ({status})"))
+        } else {
+            Err(body)
+        };
+    }
+    Ok(())
+}
+
 /// POST `/api/auth/logout` (web) — clears the session cookie and notifies subscribers.
 #[cfg(feature = "web")]
 pub async fn logout() -> Result<(), String> {
@@ -284,6 +346,20 @@ pub async fn current_user() -> Result<Option<UserSummary>, String> {
 #[cfg(all(any(feature = "server", feature = "mobile"), not(feature = "web")))]
 pub async fn current_user() -> Result<Option<UserSummary>, String> {
     Ok(None)
+}
+
+/// SSR stubs for the registration read/write. Neither runs: the Users
+/// settings section loads and mutates only after the WASM client mounts.
+/// Present so its effect and click closure compile unconditionally, keeping
+/// the hook count identical across targets (rule 07).
+#[cfg(all(feature = "server", not(feature = "web")))]
+pub async fn registration_status() -> Result<bool, String> {
+    Ok(true)
+}
+
+#[cfg(all(feature = "server", not(feature = "web")))]
+pub async fn set_registration_enabled(_enabled: bool) -> Result<(), String> {
+    Ok(())
 }
 
 #[cfg(feature = "web")]

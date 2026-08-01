@@ -70,6 +70,13 @@ pub struct SetPasswordRequest {
     pub password: String,
 }
 
+/// Whether self-registration is open; the body of `GET /api/auth/registration`
+/// and `POST /api/settings/registration`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RegistrationStatus {
+    pub enabled: bool,
+}
+
 /// Request body for `POST /api/auth/login`.
 ///
 /// Deliberately does not derive `Debug`: the struct holds a plaintext

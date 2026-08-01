@@ -278,6 +278,11 @@ fn content_routes() -> Router<AppState> {
         .route("/api/_health", get(health::get_health))
         .route("/api/settings", get(settings::get_settings))
         .route("/api/settings", post(settings::post_settings))
+        // Admin write only; the public read is GET /api/auth/registration.
+        .route(
+            "/api/settings/registration",
+            post(settings::post_registration),
+        )
         .route("/api/reindex", post(settings::post_reindex))
         .route("/api/scan-library", post(settings::post_scan_library))
         .route("/api/fts/rebuild", post(settings::post_rebuild_fts))

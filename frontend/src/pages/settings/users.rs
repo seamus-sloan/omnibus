@@ -50,6 +50,8 @@ pub fn UsersSection() -> Element {
     let current_id = current().map(|u| u.id);
 
     rsx! {
+        RegistrationToggle {}
+
         section { class: "card", "data-testid": "users-card",
             div { class: "users-head",
                 div {
@@ -131,6 +133,125 @@ pub fn UsersSection() -> Element {
                             }
                         },
                     }
+                }
+            }
+        }
+    }
+}
+
+/// Subtitle describing what the current self-registration setting means, in
+/// terms of who can create an account rather than restating the switch.
+fn registration_status_line(enabled: Option<bool>) -> &'static str {
+    match enabled {
+        None => "Checking…",
+        Some(true) => "Anyone who can reach this server can create an account.",
+        Some(false) => "Only an administrator can create accounts.",
+    }
+}
+
+/// `onchange` for the self-registration switch, extracted from
+/// [`RegistrationToggle`] so its guards and its failure revert are reachable
+/// from a test without a browser.
+///
+/// Ignores the event: the click already flipped the DOM checkbox, and the
+/// value this writes comes from `confirmed`, not from the input.
+fn registration_toggle_handler(
+    confirmed: Signal<Option<bool>>,
+    mut shown: Signal<Option<bool>>,
+    mut error: Signal<Option<String>>,
+    mut saving: Signal<bool>,
+) -> impl FnMut(Event<FormData>) {
+    move |_| {
+        let Some(current) = confirmed() else {
+            return;
+        };
+        if saving() {
+            return;
+        }
+        saving.set(true);
+        // Track the native flip so a later revert is a real vdom change.
+        let next = !current;
+        shown.set(Some(next));
+        let mut confirmed = confirmed;
+        spawn(async move {
+            match data::set_registration_enabled(next).await {
+                Ok(()) => {
+                    confirmed.set(Some(next));
+                    error.set(None);
+                }
+                Err(e) => {
+                    // Push the checkbox back to what the server still holds.
+                    shown.set(Some(current));
+                    error.set(Some(e));
+                }
+            }
+            saving.set(false);
+        });
+    }
+}
+
+/// Self-registration switch. Renders above the users table because it governs
+/// who may join without an admin creating the account first.
+///
+/// Both signals start `None` so SSR and the first WASM paint emit the same
+/// markup (rule 07); the checkbox is disabled until the load settles, so the
+/// control can never be flipped against a value that hasn't arrived.
+///
+/// `confirmed` is the value the server has acknowledged and drives the
+/// subtitle, which therefore never describes a policy that isn't in force.
+/// `shown` is what the checkbox renders. They are separate because a click
+/// flips the DOM checkbox *natively*: if the rendered value never moved,
+/// Dioxus would diff it as unchanged, emit no patch, and a rejected save would
+/// leave the box sitting in a state the server refused.
+#[component]
+fn RegistrationToggle() -> Element {
+    let mut confirmed = use_signal(|| Option::<bool>::None);
+    let mut shown = use_signal(|| Option::<bool>::None);
+    let mut error = use_signal(|| None::<String>);
+    let saving = use_signal(|| false);
+
+    use_effect(move || {
+        spawn(async move {
+            match data::registration_status().await {
+                Ok(open) => {
+                    confirmed.set(Some(open));
+                    shown.set(Some(open));
+                    error.set(None);
+                }
+                Err(e) => error.set(Some(e)),
+            }
+        });
+    });
+
+    let toggle = registration_toggle_handler(confirmed, shown, error, saving);
+
+    let is_on = shown() == Some(true);
+    let status = registration_status_line(confirmed());
+
+    rsx! {
+        section { class: "card", "data-testid": "registration-card",
+            div { class: "users-head",
+                div {
+                    h2 { "Self-registration" }
+                    p { class: "subtitle", "{status}" }
+                }
+                label { class: "auth-checkbox",
+                    input {
+                        r#type: "checkbox",
+                        "data-testid": "registration-toggle",
+                        checked: is_on,
+                        disabled: confirmed().is_none() || saving(),
+                        onchange: toggle,
+                    }
+                    span { "Allow new users to register" }
+                }
+            }
+            if let Some(err) = error() {
+                p {
+                    role: "alert",
+                    class: "settings-status error",
+                    "data-testid": "registration-error",
+                    "{err}"
                 }
             }
         }
