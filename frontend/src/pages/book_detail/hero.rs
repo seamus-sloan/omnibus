@@ -56,17 +56,24 @@ fn BdWishlistBadge() -> Element {
     }
 }
 
+/// Breadcrumb trail + title-column kicker text, grouped to keep [`BdHeroSection`] under the 5-prop guideline.
+#[derive(Clone, PartialEq)]
+pub(super) struct BdHeroChrome {
+    pub kicker: String,
+    pub crumbs: Vec<BdCrumbItem>,
+}
+
 /// Hero section: breadcrumb, cover + format badges + tags, title + CTAs, and
 /// the rating rail card (rating, reading status, wishlist slot, shelves).
 #[component]
 pub(super) fn BdHeroSection(
     b: EbookMetadata,
     title: String,
-    kicker: String,
-    crumbs: Vec<BdCrumbItem>,
+    chrome: BdHeroChrome,
     avail: Availability,
     phys: PhysSignals,
 ) -> Element {
+    let BdHeroChrome { kicker, crumbs } = chrome;
     let uuid = b.unique_identifier.clone().unwrap_or_default();
     let on_wishlist = phys.wishlist.read().is_some();
     rsx! {

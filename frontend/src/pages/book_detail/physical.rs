@@ -111,6 +111,19 @@ pub(super) fn BdPhysicalPanel(
     }
 }
 
+/// Book-identity + mutation signals the two wishlist rail cards share,
+/// bundled so [`BdWishlistTrackingCard`] and [`BdWishlistAddCard`] each take
+/// one prop beyond their card-specific display fields (mirrors
+/// [`BdBookIdentity`]).
+#[derive(Clone, PartialEq)]
+struct WishlistCardState {
+    uuid: String,
+    server_url: String,
+    wishlist: Signal<Option<WishlistEntry>>,
+    busy: Signal<bool>,
+    err: Signal<Option<String>>,
+}
+
 /// Rail-card wishlist slot the hero embeds under the rating + reading-status
 /// blocks: the tracking card for a wishlisted book, or the add-to-wishlist
 /// affordance for a book with no physical copy. Renders nothing until the
@@ -139,65 +152,115 @@ pub(super) fn BdWishlistRailSlot(identity: BdBookIdentity, phys: PhysSignals) ->
         return rsx! {};
     }
 
-    let content = match entry {
-        Some(e) => {
-            let added = time_ago(now_unix(), e.added_at);
-            let source = source_label(e.source);
-            let find_url = find_a_copy_url(isbn.as_deref(), &title, &author);
-            let remove_url = server_url.clone();
-            let remove_uuid = uuid.clone();
-            rsx! {
-                div { class: "bd-wishlist-rail", "data-testid": "wishlist-card",
-                    p { class: "bd-wishlist-meta",
-                        "Tracking this title \u{00b7} added {added} from {source}"
-                    }
-                    div { class: "bd-wishlist-actions",
-                        a {
-                            class: "btn sm",
-                            "data-testid": "find-a-copy",
-                            href: "{find_url}",
-                            target: "_blank",
-                            rel: "noopener noreferrer",
-                            "Find a copy"
-                        }
-                        button {
-                            class: "btn ghost sm",
-                            "data-testid": "wishlist-remove",
-                            disabled: busy(),
-                            onclick: move |_| {
-                                remove_from_wishlist(
-                                    wishlist, busy, err, remove_url.clone(), remove_uuid.clone(),
-                                )
-                            },
-                            "Remove from wishlist"
-                        }
-                    }
-                }
-            }
-        }
-        None => rsx! {
-            div { class: "bd-wishlist-rail", "data-testid": "wishlist-add-card",
-                p { class: "bd-wishlist-add-blurb", "Track this title to find a physical copy later." }
-                button {
-                    class: "btn sm",
-                    "data-testid": "add-to-wishlist",
-                    disabled: busy(),
-                    onclick: move |_| add_to_wishlist(wishlist, busy, err, server_url.clone(), uuid.clone()),
-                    "Add to physical wishlist"
-                }
-            }
-        },
+    let state = WishlistCardState {
+        uuid,
+        server_url,
+        wishlist,
+        busy,
+        err,
     };
 
     rsx! {
         div { class: "divider" }
         div { class: "label bd-wishlist-head", "Physical wishlist" }
-        {content}
+        {render_wishlist_card(entry, isbn, title, author, state)}
         // Distinct testid from the panel's `physical-error`: both surfaces can
         // error at once (load failure + failed add/remove), and a shared id
         // would make Playwright selectors ambiguous.
         if let Some(e) = err.read().clone() {
             p { role: "alert", class: "bd-phys-error", "data-testid": "wishlist-error", "{e}" }
+        }
+    }
+}
+
+/// Selects the tracking-card view for a wishlisted book, or the
+/// add-affordance view for a book with none.
+fn render_wishlist_card(
+    entry: Option<WishlistEntry>,
+    isbn: Option<String>,
+    title: String,
+    author: String,
+    state: WishlistCardState,
+) -> Element {
+    match entry {
+        Some(e) => {
+            let added = time_ago(now_unix(), e.added_at);
+            let source = source_label(e.source).to_string();
+            let find_url = find_a_copy_url(isbn.as_deref(), &title, &author);
+            rsx! {
+                BdWishlistTrackingCard { added, source, find_url, state }
+            }
+        }
+        None => rsx! {
+            BdWishlistAddCard { state }
+        },
+    }
+}
+
+/// Tracking card for a wishlisted book: relative added-date + source, "Find a
+/// copy" link, and a remove action.
+#[component]
+fn BdWishlistTrackingCard(
+    added: String,
+    source: String,
+    find_url: String,
+    state: WishlistCardState,
+) -> Element {
+    let WishlistCardState {
+        uuid,
+        server_url,
+        wishlist,
+        busy,
+        err,
+    } = state;
+    rsx! {
+        div { class: "bd-wishlist-rail", "data-testid": "wishlist-card",
+            p { class: "bd-wishlist-meta",
+                "Tracking this title \u{00b7} added {added} from {source}"
+            }
+            div { class: "bd-wishlist-actions",
+                a {
+                    class: "btn sm",
+                    "data-testid": "find-a-copy",
+                    href: "{find_url}",
+                    target: "_blank",
+                    rel: "noopener noreferrer",
+                    "Find a copy"
+                }
+                button {
+                    class: "btn ghost sm",
+                    "data-testid": "wishlist-remove",
+                    disabled: busy(),
+                    onclick: move |_| {
+                        remove_from_wishlist(wishlist, busy, err, server_url.clone(), uuid.clone())
+                    },
+                    "Remove from wishlist"
+                }
+            }
+        }
+    }
+}
+
+/// Add-to-wishlist affordance for a book with no tracked entry.
+#[component]
+fn BdWishlistAddCard(state: WishlistCardState) -> Element {
+    let WishlistCardState {
+        uuid,
+        server_url,
+        wishlist,
+        busy,
+        err,
+    } = state;
+    rsx! {
+        div { class: "bd-wishlist-rail", "data-testid": "wishlist-add-card",
+            p { class: "bd-wishlist-add-blurb", "Track this title to find a physical copy later." }
+            button {
+                class: "btn sm",
+                "data-testid": "add-to-wishlist",
+                disabled: busy(),
+                onclick: move |_| add_to_wishlist(wishlist, busy, err, server_url.clone(), uuid.clone()),
+                "Add to physical wishlist"
+            }
         }
     }
 }

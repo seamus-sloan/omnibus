@@ -277,7 +277,9 @@ struct SearchResultsView: View {
     @State private var books: [Book] = []
     @State private var isLoading = true
 
-    private let columns = [GridItem(.adaptive(minimum: 104, maximum: 150), spacing: 14)]
+    // `.top` keeps `BookGridCell`s aligned by their cover art when captions
+    // in the same row wrap to different line counts — see LibraryView.swift.
+    private let columns = [GridItem(.adaptive(minimum: 104, maximum: 150), spacing: 14, alignment: .top)]
 
     var body: some View {
         Group {

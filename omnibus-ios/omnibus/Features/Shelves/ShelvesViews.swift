@@ -105,7 +105,9 @@ struct ShelfDetailView: View {
     @State private var showAddBooks = false
     @State private var scrollY: CGFloat = 0
 
-    private let columns = [GridItem(.adaptive(minimum: 112, maximum: 168), spacing: 16)]
+    // `.top` keeps `BookGridCell`s aligned by their cover art when captions
+    // in the same row wrap to different line counts — see LibraryView.swift.
+    private let columns = [GridItem(.adaptive(minimum: 112, maximum: 168), spacing: 16, alignment: .top)]
 
     /// Only a manual shelf can be filled by hand — a smart shelf's membership
     /// is whatever its rules match.

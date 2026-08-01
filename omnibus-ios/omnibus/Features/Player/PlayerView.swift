@@ -543,6 +543,29 @@ struct MiniPlayerBar: View {
     /// book underneath stays open.
     var onExpand: (() -> Void)? = nil
 
+    /// Height of the hairline progress rail along the top edge.
+    private static let progressRailHeight: CGFloat = 2
+    /// Top and bottom padding around the button row's content.
+    private static let buttonRowVerticalPadding: CGFloat = 9
+    /// Width the cover is pinned to in the button row.
+    private static let coverWidth: CGFloat = 34
+    /// `BookCover`'s fixed width:height aspect (see `BookCover`'s
+    /// `.aspectRatio(2.0 / 3.0, contentMode: .fit)`) — the cover is the
+    /// button row's tallest element, so this is what actually sets its height.
+    private static let coverAspectRatio: CGFloat = 2.0 / 3.0
+
+    /// The bar's own on-screen height, derived from the same constants its
+    /// `body` lays out with — the progress rail, the button row's vertical
+    /// padding, and the cover's height at its fixed aspect ratio — so a later
+    /// tweak to any of those moves this with it instead of drifting out of
+    /// sync. Screens that reserve their own clearance for the docked bar
+    /// rather than trusting an ancestor `safeAreaInset` to reach them (see
+    /// `BookDetailView`, #1482) use this.
+    static let reservedHeight: CGFloat =
+        progressRailHeight
+        + buttonRowVerticalPadding * 2
+        + coverWidth / coverAspectRatio
+
     var body: some View {
         if let book = player.book {
             VStack(spacing: 0) {
@@ -553,7 +576,7 @@ struct MiniPlayerBar: View {
                 ProgressBar(
                     fraction: player.duration > 0 ? player.position / player.duration : 0,
                     tint: palette.accentColor,
-                    height: 2
+                    height: Self.progressRailHeight
                 )
 
                 Button {
@@ -566,7 +589,7 @@ struct MiniPlayerBar: View {
                 } label: {
                     HStack(spacing: 11) {
                         BookCover(identity: CoverIdentity(book), size: .sm, cornerRadius: 4)
-                            .frame(width: 34)
+                            .frame(width: Self.coverWidth)
 
                         VStack(alignment: .leading, spacing: 1) {
                             Text(book.displayTitle)
@@ -590,7 +613,7 @@ struct MiniPlayerBar: View {
                             .accessibilityLabel("Stop playback")
                     }
                     .padding(.horizontal, Spacing.screen)
-                    .padding(.vertical, 9)
+                    .padding(.vertical, Self.buttonRowVerticalPadding)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)

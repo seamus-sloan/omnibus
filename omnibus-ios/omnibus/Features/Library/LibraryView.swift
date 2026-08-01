@@ -204,7 +204,13 @@ struct LibraryView: View {
     @Namespace private var bookZoom
     private var presentation = Presentation.shared
 
-    private let columns = [GridItem(.adaptive(minimum: 112, maximum: 168), spacing: 16)]
+    // `alignment: .top` matters here: GridItem defaults to centering each
+    // item within its row, so a row of `BookGridCell`s whose captions wrap to
+    // a different number of lines (a book with a one-line title next to one
+    // that wraps to two) gets its shorter cells pushed down to stay centered
+    // — the cover art itself renders at the same 2:3 size, but sits at a
+    // different vertical offset, which reads as "a different size" (#1481).
+    private let columns = [GridItem(.adaptive(minimum: 112, maximum: 168), spacing: 16, alignment: .top)]
 
     /// The library wears the colour of whatever you're currently reading.
     private var ambientTone: OKLCH? {
