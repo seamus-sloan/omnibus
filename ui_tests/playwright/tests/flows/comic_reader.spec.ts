@@ -14,8 +14,11 @@ test.beforeAll(async ({ request }) => {
 
 // Both CBZ fixtures are reserved for this spec (see fixtures/epubs.ts), and
 // the split matters even within it: the suite is fullyParallel, so the
-// write-path test (COMIC) and the read-only tests (PRISTINE, which assert a
-// page-1 open) can run concurrently — a shared book would race.
+// write-path test (COMIC, which takes the progress AND read-status writes)
+// and the read-only tests (PRISTINE, which assert a page-1 open) can run
+// concurrently — a shared book would race. Opening PRISTINE still fires the
+// pager's automatic unread→reading status write; that's fine because no
+// test asserts PRISTINE's status, only that it carries no saved position.
 const COMIC = FIXTURE_BOOKS.find((b) => b.slug === "aurora-station-01")!;
 const COMIC_PAGES = 8;
 const PRISTINE = FIXTURE_BOOKS.find((b) => b.slug === "aurora-station-02")!;
@@ -25,6 +28,15 @@ const PRISTINE_PAGES = 5;
 const PROGRESS_POST = {
   method: "POST" as const,
   url: /\/api\/rpc\/progress(?:\?|$)/,
+  expectedStatus: 200,
+};
+
+// Automatic read-status transitions (open → reading, last page → finished)
+// go through the read-status set RPC. The exact-path string cannot match
+// the sibling `/api/rpc/read-status/get` fetch the pager issues on open.
+const READ_STATUS_POST = {
+  method: "POST" as const,
+  url: "/api/rpc/read-status/set",
   expectedStatus: 200,
 };
 
@@ -88,12 +100,44 @@ test("fit modes toggle the stage layout class", async ({ page, request }) => {
   ).toHaveAttribute("aria-pressed", "false");
 });
 
-test("pages forward, saves each turn, and resumes at the saved page", async ({
+test("pages forward, saves each turn, resumes, and auto-marks reading then finished", async ({
   page,
   request,
 }) => {
   const uuid = await fetchBookUuidByTitle(request, COMIC.title);
-  await openComic(page, uuid);
+
+  // Reset the state a previous run left behind — a run that died mid-test
+  // never reaches the tail resets, and the leftovers change this test's
+  // behavior: a saved position reopens on the last page (auto-finishing on
+  // open instead of marking reading), and a leftover finished status never
+  // auto-downgrades. Reset both up front so the transitions are
+  // deterministic.
+  const progressReset = await request.post("/api/progress", {
+    data: {
+      book_uuid: uuid,
+      format: "epub",
+      epub_cfi: "comic-page:0",
+      progress_percent: Math.round(100 / COMIC_PAGES),
+    },
+  });
+  expect(progressReset.status()).toBe(200);
+  const reset = await request.put("/api/read-status", {
+    data: { book_uuid: uuid, status: "unread" },
+  });
+  expect(reset.status()).toBe(200);
+
+  // Opening an unread comic marks it reading, exactly once. The write fires
+  // after hydration + the metadata/status fetches settle, so give it the
+  // full-page-load allowance.
+  await expectMutation(
+    page,
+    {
+      ...READ_STATUS_POST,
+      expectedBody: { update: { book_uuid: uuid, status: "reading" } },
+      timeout: 15_000,
+    },
+    async () => openComic(page, uuid),
+  );
 
   // Three forward turns; each must POST the exact page anchor + percent.
   for (let target = 1; target <= 3; target++) {
@@ -137,21 +181,42 @@ test("pages forward, saves each turn, and resumes at the saved page", async ({
     `/api/ebooks/${uuid}/pages/3`,
   );
 
-  // The slider jumps to an arbitrary page and saves it too.
-  await expectMutation(page, PROGRESS_POST, async () =>
-    page
-      .getByRole("slider", { name: "Page slider" })
-      .fill(String(COMIC_PAGES - 1)),
+  // The slider jumps to the last page: the position saves, and landing on
+  // the final page auto-marks the book finished.
+  await expectMutation(
+    page,
+    {
+      ...READ_STATUS_POST,
+      expectedBody: { update: { book_uuid: uuid, status: "finished" } },
+    },
+    async () =>
+      expectMutation(page, PROGRESS_POST, async () =>
+        page
+          .getByRole("slider", { name: "Page slider" })
+          .fill(String(COMIC_PAGES - 1)),
+      ),
   );
   await expect(pageLabel(page)).toHaveText(
     `Page ${COMIC_PAGES} of ${COMIC_PAGES}`,
   );
   await expect(page.getByRole("button", { name: "Next page" })).toBeDisabled();
 
-  // Reset to page 0 so re-runs of this spec start from a known position.
+  // Paging back off the last page saves the position but must not
+  // downgrade the status: the server still reports finished afterwards.
   await expectMutation(page, PROGRESS_POST, async () =>
     page.getByRole("slider", { name: "Page slider" }).fill("0"),
   );
+  const after = await request.get(`/api/read-status/${uuid}`);
+  expect(after.status()).toBe(200);
+  const statusAfter = (await after.json()) as { status: string } | null;
+  expect(statusAfter?.status).toBe("finished");
+
+  // Reset the status for the next run (the page-0 save above already reset
+  // the position).
+  const cleanup = await request.put("/api/read-status", {
+    data: { book_uuid: uuid, status: "unread" },
+  });
+  expect(cleanup.status()).toBe(200);
 });
 
 // PRISTINE stays progress-free here: the route interception answers the

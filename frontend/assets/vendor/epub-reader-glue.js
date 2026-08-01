@@ -177,6 +177,10 @@
       page: page,
       totalPages: totalPages,
       pct: pct,
+      // epub.js sets `atEnd` when the displayed range reaches the last page
+      // of the last spine item — `pct` alone tops out below 100 because it
+      // tracks the *start* of the visible range.
+      atEnd: !!(location && location.atEnd),
       chapter: ch ? ch.index : 0,
       totalChapters: ch ? ch.total : tocFlat.length,
       chapterTitle: ch ? ch.title : "",
