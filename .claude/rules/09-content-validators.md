@@ -108,10 +108,10 @@ compare it against a later metadata refresh — `PlannedFile.source_etag` in
   `ORDER BY bf.ordinal LIMIT 1`. Two ways to get this wrong, and both have
   happened: comparing against the wrong row of a two-edition book, and
   matching on the formats a library can *contain* rather than the narrow set
-  a download pulls — `/api/ebooks/{uuid}/file` serves EPUB alone, the
-  audiobook routes M4B/M4A/MP3 alone. A mixed PDF/EPUB book that snapshots
-  the PDF reports staleness about a file the device doesn't hold and misses
-  every change to the one it does.
+  a download pulls — `/api/ebooks/{uuid}/file` serves the EPUB, else the CBZ
+  for a comic-only book; the audiobook routes M4B/M4A/MP3 alone. A mixed
+  PDF/EPUB book that snapshots the PDF reports staleness about a file the
+  device doesn't hold and misses every change to the one it does.
 
 Cached cover bytes carry their own `ETag` sibling and revalidate with
 `If-None-Match` *after* the cached image has been served, never before —

@@ -503,6 +503,103 @@ async fn api_get_ebook_file_returns_200_with_query_token() {
     std::fs::remove_dir_all(&tmp).ok();
 }
 
+/// The whole-file fallback for comic-only books: with no EPUB row, `/file`
+/// streams the CBZ archive itself under the comic mime — the download the
+/// offline clients pull, as opposed to the per-page reads the pager makes.
+#[tokio::test]
+async fn api_get_ebook_file_serves_cbz_when_book_has_no_epub() {
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let (uuid, tmp) = seed_cbz_on_disk(&pool).await;
+    let archive = std::fs::read(tmp.join("alpha.cbz")).unwrap();
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    let res = app
+        .oneshot(get_with_bearer(&format!("/api/ebooks/{uuid}/file"), &token))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("application/vnd.comicbook+zip"),
+    );
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&bytes[..], &archive[..]);
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+/// A dual-format book keeps serving the EPUB — the fallback is only for
+/// books with nothing else to read, matching the pager's rule that the
+/// EPUB stays the primary read.
+#[tokio::test]
+async fn api_get_ebook_file_prefers_epub_when_book_has_both_formats() {
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let (uuid, tmp) = seed_cbz_on_disk(&pool).await;
+    std::fs::write(tmp.join("alpha.epub"), b"PK\x03\x04 fake-epub").unwrap();
+    let book_id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE uuid = ?")
+        .bind(&uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES (?, 'EPUB', 'alpha', 0)",
+    )
+    .bind(book_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    let res = app
+        .oneshot(get_with_bearer(&format!("/api/ebooks/{uuid}/file"), &token))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("application/epub+zip"),
+    );
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&bytes[..], b"PK\x03\x04 fake-epub");
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+/// `?file_id=` exists for multi-EPUB selection, so on a comic-only book it
+/// stays a 404 rather than silently resolving to the archive.
+#[tokio::test]
+async fn api_get_ebook_file_with_file_id_returns_404_for_comic_only_book() {
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let (uuid, tmp) = seed_cbz_on_disk(&pool).await;
+    let file_id: i64 = sqlx::query_scalar("SELECT id FROM book_files WHERE format = 'CBZ'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    let res = app
+        .oneshot(get_with_bearer(
+            &format!("/api/ebooks/{uuid}/file?file_id={file_id}"),
+            &token,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
 /// Drives the first `internal(...)` arm of `get_ebook_file`: when
 /// `db::resolve_book_id_by_uuid` returns `Err`, the handler must
 /// surface 500 (not 404). The induce-sqlx-error idiom is to drop
