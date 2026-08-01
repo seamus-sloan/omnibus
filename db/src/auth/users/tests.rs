@@ -189,6 +189,20 @@ async fn set_kindle_email_rejects_malformed_address() {
 }
 
 #[tokio::test]
+async fn set_sync_annotations_to_kobo_round_trips_and_defaults_off() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    // Off by default, and an unknown user also reads as off.
+    assert!(!sync_annotations_to_kobo(&p, u.id).await.unwrap());
+    assert!(!sync_annotations_to_kobo(&p, 9999).await.unwrap());
+
+    set_sync_annotations_to_kobo(&p, u.id, true).await.unwrap();
+    assert!(sync_annotations_to_kobo(&p, u.id).await.unwrap());
+    set_sync_annotations_to_kobo(&p, u.id, false).await.unwrap();
+    assert!(!sync_annotations_to_kobo(&p, u.id).await.unwrap());
+}
+
+#[tokio::test]
 async fn change_password_updates_hash_and_stamp_and_new_password_logs_in() {
     use crate::auth::verify_login;
 

@@ -38,6 +38,10 @@ test("renders the account section layout", async ({ page }) => {
   await expect(newPassword(page)).toBeVisible();
   await expect(page.getByTestId("change-password-submit")).toBeVisible();
 
+  // Kobo wireless sync card, with the annotation down-sync opt-in (#1439).
+  await expect(page.getByTestId("kobo-devices-card")).toBeVisible();
+  await expect(page.getByTestId("kobo-annotation-sync-toggle")).toBeVisible();
+
   await expectNavVisible(page);
 });
 
@@ -205,4 +209,43 @@ test("rejects an invalid new password", async ({ page }) => {
   );
 
   await expect(changeStatus(page)).toHaveClass(/error/);
+});
+
+// Kobo annotation down-sync opt-in (#1439). Per-user state on the seeded
+// admin, read by no other spec; the test restores it to off on the way out.
+test("toggles Kobo highlight down-sync and persists the choice", async ({
+  page,
+}) => {
+  await gotoReady(page, ACCOUNT);
+  const toggle = page.getByTestId("kobo-annotation-sync-toggle");
+  // Disabled until the saved value loads; enabled means we can drive it.
+  await expect(toggle).toBeEnabled();
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/kobo/annotation-sync/set",
+      expectedBody: { enabled: true },
+      expectedStatus: 200,
+    },
+    async () => toggle.check(),
+  );
+  await expect(page.getByTestId("kobo-devices-status")).toHaveClass(/success/);
+
+  // The choice survives a reload — the load effect reads it back.
+  await gotoReady(page, ACCOUNT);
+  await expect(toggle).toBeChecked();
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/kobo/annotation-sync/set",
+      expectedBody: { enabled: false },
+      expectedStatus: 200,
+    },
+    async () => toggle.uncheck(),
+  );
+  await expect(toggle).not.toBeChecked();
 });

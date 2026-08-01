@@ -184,6 +184,31 @@ pub async fn get_kindle_email(pool: &SqlitePool, user_id: i64) -> AuthResult<Opt
     Ok(v.filter(|s| !s.trim().is_empty()))
 }
 
+/// Read a user's Kobo annotation down-sync opt-in. An unknown user reads
+/// as opted out, matching the migration default.
+pub async fn sync_annotations_to_kobo(pool: &SqlitePool, user_id: i64) -> AuthResult<bool> {
+    let v: Option<bool> =
+        sqlx::query_scalar("SELECT sync_annotations_to_kobo FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(v.unwrap_or(false))
+}
+
+/// Set a user's Kobo annotation down-sync opt-in.
+pub async fn set_sync_annotations_to_kobo(
+    pool: &SqlitePool,
+    user_id: i64,
+    enabled: bool,
+) -> AuthResult<()> {
+    sqlx::query("UPDATE users SET sync_annotations_to_kobo = ? WHERE id = ?")
+        .bind(enabled)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Change a user's password. Verifies `current` against the stored hash to
 /// authorize the change, validates `new` against the password policy, then
 /// re-hashes with Argon2id and stamps `password_changed_at` — all in one

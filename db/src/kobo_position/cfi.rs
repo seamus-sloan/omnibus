@@ -1,8 +1,8 @@
-//! Minimal EPUB CFI parser/formatter for reading positions — the
-//! `epubcfi(/6/N!/4/…/K:off)` shape epub.js emits on relocate. Range CFIs
-//! and temporal/spatial terms are deliberately rejected (`None`): a resume
-//! position is always a point, and an unsupported dialect must degrade to
-//! percent-only rather than resolve to a wrong location.
+//! Minimal EPUB CFI parser/formatter — the point `epubcfi(/6/N!/4/…/K:off)`
+//! shape epub.js emits on relocate, plus the `epubcfi(parent,start,end)`
+//! range shape its highlights carry. Temporal/spatial terms are rejected
+//! (`None`), and each parser accepts only its own shape: an unsupported
+//! dialect must degrade rather than resolve to a wrong location.
 
 /// A parsed point CFI: which spine document, then the path within it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,6 +24,16 @@ pub struct CfiTail {
     pub offset_utf16: u32,
 }
 
+/// A parsed range CFI: which spine document, then the start/end paths
+/// within it. Both endpoints live in the same document — the only shape
+/// epub.js's `cfiFromRange` can emit for a highlight.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CfiRange {
+    pub spine_index: usize,
+    pub start: CfiTail,
+    pub end: CfiTail,
+}
+
 /// Parse an `epubcfi(…)` string. `None` for anything but a supported point
 /// CFI: ranges (`,`), temporal/spatial terms (`~`/`@`), or a package path
 /// that isn't the conventional `/6/N` spine step.
@@ -33,20 +43,48 @@ pub fn parse_cfi(raw: &str) -> Option<Cfi> {
         return None;
     }
     let (package, tail) = inner.split_once('!')?;
+    Some(Cfi {
+        spine_index: parse_package(package)?,
+        tail: parse_tail(tail)?,
+    })
+}
+
+/// Parse an `epubcfi(parent,start,end)` range — the inverse of
+/// [`format_range_cfi`]. `None` for point CFIs, temporal/spatial terms, or
+/// anything else off the epub.js highlight dialect: an annotation converter
+/// must degrade to "no derived anchor" rather than guess an extent.
+pub fn parse_range_cfi(raw: &str) -> Option<CfiRange> {
+    let inner = raw.trim().strip_prefix("epubcfi(")?.strip_suffix(')')?;
+    if inner.contains('~') || inner.contains('@') {
+        return None;
+    }
+    let mut parts = inner.split(',');
+    let (parent, start_rel, end_rel) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some() {
+        return None;
+    }
+    let (package, common) = parent.split_once('!')?;
+    Some(CfiRange {
+        spine_index: parse_package(package)?,
+        // Each endpoint's full tail is the shared parent path plus its
+        // relative part — plain concatenation, since both are `/`-paths.
+        start: parse_tail(&format!("{common}{start_rel}"))?,
+        end: parse_tail(&format!("{common}{end_rel}"))?,
+    })
+}
+
+/// Resolve the package half of a CFI to its spine index. The conventional
+/// package path is /6 (the spine element) then the itemref step; anything
+/// deeper points outside the spine model.
+fn parse_package(package: &str) -> Option<usize> {
     let package_steps = parse_steps(package)?;
-    // The conventional package path is /6 (the spine element) then the
-    // itemref step; anything deeper points outside the spine model.
     let [six, item] = package_steps.as_slice() else {
         return None;
     };
     if six.step != 6 || item.step % 2 != 0 || item.step == 0 {
         return None;
     }
-    let spine_index = (item.step / 2 - 1) as usize;
-    Some(Cfi {
-        spine_index,
-        tail: parse_tail(tail)?,
-    })
+    Some((item.step / 2 - 1) as usize)
 }
 
 /// Format a range CFI (`epubcfi(parent,start,end)`) for two tails in the

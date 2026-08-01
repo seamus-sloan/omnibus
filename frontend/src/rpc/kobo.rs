@@ -1,7 +1,7 @@
-//! Per-user Kobo device server functions: list, add, regenerate, and revoke
-//! the wireless-sync path tokens shown in the Account settings card.
-//! Every function is scoped to the authenticated `AuthUser`, so one user's
-//! request can only touch their own devices (AC4).
+//! Per-user Kobo server functions for the Account settings card: list, add,
+//! regenerate, and revoke wireless-sync device tokens, plus the annotation
+//! down-sync opt-in. Every function is scoped to the authenticated
+//! `AuthUser`, so one user's request can only touch their own state (AC4).
 
 use dioxus::fullstack::post;
 use dioxus::prelude::*;
@@ -76,5 +76,30 @@ pub async fn rpc_revoke_kobo_device(id: i64) -> Result<()> {
     match db::kobo_devices::revoke_device(&pool.0, user.id, id).await {
         Ok(()) => Ok(()),
         Err(e) => Err(map_err("revoke kobo device", e).into()),
+    }
+}
+
+/// Read the caller's "sync my annotations to Kobo" opt-in.
+#[post("/api/rpc/kobo/annotation-sync", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_kobo_annotation_sync() -> Result<bool> {
+    match db::auth::sync_annotations_to_kobo(&pool.0, user.id).await {
+        Ok(v) => Ok(v),
+        Err(e) => Err(internal_rpc_error("read annotation sync opt-in", e).into()),
+    }
+}
+
+/// Set the caller's annotation down-sync opt-in. Enabling also kicks off
+/// the backlog conversion in the background, so highlights made before the
+/// opt-in reach the device on its next sync.
+#[post("/api/rpc/kobo/annotation-sync/set", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_set_kobo_annotation_sync(enabled: bool) -> Result<()> {
+    match db::auth::set_sync_annotations_to_kobo(&pool.0, user.id, enabled).await {
+        Ok(()) => {
+            if enabled {
+                db::annotations::spawn_kobo_downsync_backlog(pool.0.clone(), user.id);
+            }
+            Ok(())
+        }
+        Err(e) => Err(internal_rpc_error("set annotation sync opt-in", e).into()),
     }
 }
