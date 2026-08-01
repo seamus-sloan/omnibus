@@ -490,3 +490,26 @@ async fn register_is_refused_with_403_when_registration_is_disabled() {
 
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn registration_status_returns_500_when_the_settings_read_fails() {
+    let (app, pool) = app().await;
+    sqlx::query("DROP TABLE settings")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/auth/registration")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+
+    // Must not fall open to `{"enabled": true}` on a broken read — that would
+    // advertise signup on a server that cannot tell whether it is allowed.
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}

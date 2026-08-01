@@ -68,3 +68,103 @@ fn registration_toggle_renders_unresolved_and_disabled_before_load() {
         "expected the unresolved subtitle, got: {html}"
     );
 }
+
+// `registration_toggle_handler` runs inside a `VirtualDom::new(...)
+// .rebuild_in_place()` so `Signal::new` has a runtime — the pattern in
+// `frontend/src/pages/settings/library/tests.rs`. The futures it spawns are
+// never polled, so no request actually fires; these assert the synchronous
+// guards and the pre-spawn state the handler commits to.
+
+#[cfg(feature = "server")]
+fn blank_form_event() -> Event<FormData> {
+    use std::rc::Rc;
+
+    use dioxus::prelude::SerializedFormData;
+
+    Event::new(
+        Rc::new(FormData::new(SerializedFormData::new(
+            String::new(),
+            vec![],
+        ))),
+        false,
+    )
+}
+
+#[cfg(feature = "server")]
+#[test]
+fn registration_toggle_handler_ignores_a_click_before_the_value_loads() {
+    #[component]
+    fn AssertIgnores() -> Element {
+        let confirmed = Signal::new(None::<bool>);
+        let shown = Signal::new(None::<bool>);
+        let error = Signal::new(None::<String>);
+        let saving = Signal::new(false);
+
+        let mut handler = registration_toggle_handler(confirmed, shown, error, saving);
+        handler(blank_form_event());
+
+        // Nothing may be sent before we know what we'd be changing *from* —
+        // the switch is also `disabled` in this state, so this is the
+        // belt-and-braces half of the same guard.
+        assert!(!saving(), "must not start a save with no loaded value");
+        assert_eq!(shown(), None, "the checkbox must stay unresolved");
+
+        rsx! {}
+    }
+    VirtualDom::new(AssertIgnores).rebuild_in_place();
+}
+
+#[cfg(feature = "server")]
+#[test]
+fn registration_toggle_handler_ignores_a_click_while_a_save_is_in_flight() {
+    #[component]
+    fn AssertIgnores() -> Element {
+        let confirmed = Signal::new(Some(true));
+        let shown = Signal::new(Some(true));
+        let error = Signal::new(None::<String>);
+        let saving = Signal::new(true);
+
+        let mut handler = registration_toggle_handler(confirmed, shown, error, saving);
+        handler(blank_form_event());
+
+        // A second click must not queue a second write against a value the
+        // first one may be about to change.
+        assert_eq!(shown(), Some(true), "in-flight save must swallow the click");
+
+        rsx! {}
+    }
+    VirtualDom::new(AssertIgnores).rebuild_in_place();
+}
+
+#[cfg(feature = "server")]
+#[test]
+fn registration_toggle_handler_moves_the_checkbox_but_not_the_subtitle() {
+    #[component]
+    fn AssertSplit() -> Element {
+        let confirmed = Signal::new(Some(false));
+        let shown = Signal::new(Some(false));
+        let error = Signal::new(None::<String>);
+        let saving = Signal::new(false);
+
+        let mut handler = registration_toggle_handler(confirmed, shown, error, saving);
+        handler(blank_form_event());
+
+        // `shown` tracks the native DOM flip so a later revert is a real vdom
+        // change; `confirmed` must not move until the server answers, so the
+        // subtitle never describes a policy that isn't in force yet.
+        assert_eq!(shown(), Some(true), "checkbox must track the native flip");
+        assert_eq!(
+            confirmed(),
+            Some(false),
+            "subtitle must still describe the server's value"
+        );
+        assert_eq!(
+            registration_status_line(confirmed()),
+            "Only an administrator can create accounts."
+        );
+        assert!(saving(), "the switch must be inert while the write is out");
+
+        rsx! {}
+    }
+    VirtualDom::new(AssertSplit).rebuild_in_place();
+}

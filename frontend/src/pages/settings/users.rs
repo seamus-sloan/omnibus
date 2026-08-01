@@ -149,6 +149,47 @@ fn registration_status_line(enabled: Option<bool>) -> &'static str {
     }
 }
 
+/// `onchange` for the self-registration switch, extracted from
+/// [`RegistrationToggle`] so its guards and its failure revert are reachable
+/// from a test without a browser.
+///
+/// Ignores the event: the click already flipped the DOM checkbox, and the
+/// value this writes comes from `confirmed`, not from the input.
+fn registration_toggle_handler(
+    confirmed: Signal<Option<bool>>,
+    mut shown: Signal<Option<bool>>,
+    mut error: Signal<Option<String>>,
+    mut saving: Signal<bool>,
+) -> impl FnMut(Event<FormData>) {
+    move |_| {
+        let Some(current) = confirmed() else {
+            return;
+        };
+        if saving() {
+            return;
+        }
+        saving.set(true);
+        // Track the native flip so a later revert is a real vdom change.
+        let next = !current;
+        shown.set(Some(next));
+        let mut confirmed = confirmed;
+        spawn(async move {
+            match data::set_registration_enabled(next).await {
+                Ok(()) => {
+                    confirmed.set(Some(next));
+                    error.set(None);
+                }
+                Err(e) => {
+                    // Push the checkbox back to what the server still holds.
+                    shown.set(Some(current));
+                    error.set(Some(e));
+                }
+            }
+            saving.set(false);
+        });
+    }
+}
+
 /// Self-registration switch. Renders above the users table because it governs
 /// who may join without an admin creating the account first.
 ///
@@ -167,7 +208,7 @@ fn RegistrationToggle() -> Element {
     let mut confirmed = use_signal(|| Option::<bool>::None);
     let mut shown = use_signal(|| Option::<bool>::None);
     let mut error = use_signal(|| None::<String>);
-    let mut saving = use_signal(|| false);
+    let saving = use_signal(|| false);
 
     use_effect(move || {
         spawn(async move {
@@ -182,32 +223,7 @@ fn RegistrationToggle() -> Element {
         });
     });
 
-    let toggle = move |_| {
-        let Some(current) = confirmed() else {
-            return;
-        };
-        if saving() {
-            return;
-        }
-        saving.set(true);
-        // Track the native flip so a later revert is a real vdom change.
-        let next = !current;
-        shown.set(Some(next));
-        spawn(async move {
-            match data::set_registration_enabled(next).await {
-                Ok(()) => {
-                    confirmed.set(Some(next));
-                    error.set(None);
-                }
-                Err(e) => {
-                    // Push the checkbox back to what the server still holds.
-                    shown.set(Some(current));
-                    error.set(Some(e));
-                }
-            }
-            saving.set(false);
-        });
-    };
+    let toggle = registration_toggle_handler(confirmed, shown, error, saving);
 
     let is_on = shown() == Some(true);
     let status = registration_status_line(confirmed());
