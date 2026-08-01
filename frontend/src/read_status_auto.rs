@@ -31,35 +31,49 @@ pub fn auto_transition(current: ReadStatus, at_end: bool) -> Option<ReadStatus> 
 /// open retries. Call unconditionally from the page (rule 07); on SSR the
 /// effects never fire and this is a no-op.
 pub fn use_auto_read_status(uuid: String, server_url: String, at_end: Memo<bool>) {
-    // `None` until the fetch lands — and stays `None` when it fails, so a
-    // transition is never decided against a guessed status (writing
-    // `Reading` over an unfetched `Finished` would be a downgrade).
-    let mut status: Signal<Option<ReadStatus>> = use_signal(|| None);
+    // The fetched status, keyed by the uuid the fetch answered for: the
+    // write effect reads the pair together, so it can never decide against
+    // — or write to — a book the fetch didn't describe. `None` until the
+    // fetch lands, and stays `None` when it fails, so a transition is never
+    // decided against a guessed status (writing `Reading` over an unfetched
+    // `Finished` would be a downgrade).
+    let mut status: Signal<Option<(String, ReadStatus)>> = use_signal(|| None);
+    // Monotonic fetch guard (`load_seq` in `pages/book_detail/read_status.rs`
+    // is the model): a route-param book swap reuses the mounted page, so a
+    // slow response for the previous book must not land as the current one's.
+    let mut load_seq = use_signal(|| 0u64);
 
     {
         let server_url = server_url.clone();
         use_effect(use_reactive!(|uuid| {
-            let server_url = server_url.clone();
+            let my_load = *load_seq.peek() + 1;
+            load_seq.set(my_load);
             status.set(None);
+            let server_url = server_url.clone();
             spawn(async move {
                 if let Ok(stored) = data::get_read_status(&server_url, &uuid).await {
-                    status.set(Some(stored.map(|r| r.status).unwrap_or_default()));
+                    if *load_seq.peek() == my_load {
+                        let fetched = stored.map(|r| r.status).unwrap_or_default();
+                        status.set(Some((uuid, fetched)));
+                    }
                 }
             });
         }));
     }
 
     use_effect(move || {
-        let Some(current) = status() else { return };
+        let Some((book_uuid, current)) = status() else {
+            return;
+        };
         let Some(next) = auto_transition(current, at_end()) else {
             return;
         };
         // Optimistic: move the signal first so the re-run settles on `None`
         // instead of repeating the write while the POST is in flight.
-        status.set(Some(next));
+        status.set(Some((book_uuid.clone(), next)));
         let server_url = server_url.clone();
         let update = SetReadStatus {
-            book_uuid: uuid.clone(),
+            book_uuid,
             status: next,
         };
         spawn(async move {

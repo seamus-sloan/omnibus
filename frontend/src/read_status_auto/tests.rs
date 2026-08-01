@@ -1,3 +1,6 @@
+//! Transition-table tests for [`auto_transition`]: open vs at-end for each
+//! stored status, including the never-downgrade rule.
+
 use omnibus_shared::ReadStatus;
 
 use super::auto_transition;
