@@ -5,7 +5,9 @@
 
 use omnibus_shared::metadata_fetch::HardcoverFetchResult;
 
-use super::{note_server_fn_err, DataError};
+#[cfg(not(feature = "mobile"))]
+use super::note_server_fn_err;
+use super::DataError;
 
 /// Web/SSR: look up `uuid` on Hardcover via `rpc_fetch_hardcover_metadata`.
 #[cfg(not(feature = "mobile"))]

@@ -110,9 +110,13 @@ test.describe
       page,
       request,
     }) => {
-      // No mocking — the fixtures/CI server genuinely has no Hardcover key, so
-      // the real `rpc_hardcover_fetch_available` response drives this.
+      // Mocked rather than relying on the fixtures/CI server's ambient
+      // Hardcover-key state (per `.claude/rules/03-unit-testing.md`'s "no
+      // ambient environment" principle) — a locally or future-CI configured
+      // `HARDCOVER_API_KEY` would otherwise legitimately show the button and
+      // fail this test.
       const id = await fetchBookIdByTitle(request, TARGET.title);
+      await mockAvailable(page, false);
       await gotoReady(page, `/books/${id}/edit`);
 
       await expect(page.getByTestId("hardcover-fetch-btn")).toHaveCount(0);

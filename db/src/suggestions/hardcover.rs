@@ -12,6 +12,7 @@ use futures::future::join_all;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
+use crate::helpers::format_series_index;
 use crate::suggestions::filter::Candidate;
 
 /// Process-wide `reqwest::Client` for Hardcover GraphQL calls, built once and
@@ -386,17 +387,6 @@ async fn fetch_primary_isbn13(
     );
     let data: EditionIsbnData = post_graphql(config, &query, serde_json::json!({})).await?;
     Ok(data.editions.into_iter().find_map(|e| e.isbn_13))
-}
-
-/// Format a Hardcover series position for display: whole numbers drop the
-/// trailing `.0` (`1.0` → `"1"`); fractional positions (half-books, novella
-/// insertions) keep their decimal (`2.5` → `"2.5"`).
-fn format_series_index(position: f64) -> String {
-    if position.fract() == 0.0 {
-        format!("{}", position as i64)
-    } else {
-        position.to_string()
-    }
 }
 
 #[derive(Debug, Deserialize)]
