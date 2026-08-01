@@ -1887,3 +1887,80 @@ async fn bulk_merge_metadata_overrides_rebuilds_fts_for_each_book() {
         );
     }
 }
+
+#[tokio::test]
+async fn bulk_merge_metadata_overrides_applies_correctly_across_a_batch_past_the_chunk_boundary() {
+    // Both batch fetches chunk at 500 uuids; 520 books exercises the
+    // two-chunk path for each, including a boundary-straddling override.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+
+    const BOOK_COUNT: usize = 520;
+    let books: Vec<_> = (0..BOOK_COUNT)
+        .map(|i| {
+            indexed(
+                &format!("book-{i:04}.epub"),
+                Some(&format!("Title {i}")),
+                &["Old Author"],
+                &["shared"],
+                None,
+                None,
+            )
+        })
+        .collect();
+    replace_books(&pool, "/lib", books).await.unwrap();
+    let mut seeded = list_books(&pool, "/lib").await.unwrap();
+    seeded.sort_by(|a, b| a.filename.cmp(&b.filename));
+    assert_eq!(seeded.len(), BOOK_COUNT);
+    let uuids: Vec<String> = seeded
+        .iter()
+        .map(|b| b.unique_identifier.clone().unwrap())
+        .collect();
+
+    // Give one book past the first 500-uuid chunk boundary a pre-existing
+    // override with its own subjects, so the in-tx override-row batch read
+    // (not just the pre-tx effective-subjects fetch) is exercised for a
+    // second-chunk uuid too.
+    let boundary_uuid = uuids[510].clone();
+    merge_metadata_overrides(
+        &pool,
+        &boundary_uuid,
+        &MetadataOverrides {
+            subjects: Some(vec!["preexisting".into()]),
+            ..Default::default()
+        },
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    let edit = BulkMetadataEdit {
+        publisher: Some("Batch House".into()),
+        add_tags: vec!["bulklabel".into()],
+        remove_tags: vec!["shared".into(), "preexisting".into()],
+        ..Default::default()
+    };
+    bulk_merge_metadata_overrides(&pool, &uuids, &edit, user_id)
+        .await
+        .unwrap();
+
+    let merged = list_books(&pool, "/lib").await.unwrap();
+    assert_eq!(merged.len(), BOOK_COUNT);
+    for book in &merged {
+        assert_eq!(
+            book.publisher,
+            Some("Batch House".into()),
+            "book {:?} missed the bulk publisher edit",
+            book.unique_identifier
+        );
+        assert_eq!(
+            book.subjects,
+            vec!["bulklabel".to_string()],
+            "book {:?} has the wrong effective subjects after the bulk tag delta",
+            book.unique_identifier
+        );
+    }
+}
