@@ -543,6 +543,14 @@ struct MiniPlayerBar: View {
     /// book underneath stays open.
     var onExpand: (() -> Void)? = nil
 
+    /// The bar's own on-screen height: the 2pt progress rail, plus the button
+    /// row's 9+9 vertical padding, plus its tallest element — the 34pt-wide
+    /// cover at its native 2:3 aspect (51pt). Screens that reserve their own
+    /// clearance for the docked bar rather than trusting an ancestor
+    /// `safeAreaInset` to reach them (see `BookDetailView`, #1482) use this
+    /// so the two never drift apart.
+    static let reservedHeight: CGFloat = 72
+
     var body: some View {
         if let book = player.book {
             VStack(spacing: 0) {
