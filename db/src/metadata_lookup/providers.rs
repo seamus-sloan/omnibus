@@ -166,10 +166,17 @@ async fn googlebooks_get(
 /// Kept separate so a test can assert the key is attached (and absent when
 /// unset) without a live request.
 pub(super) fn googlebooks_url(config: &MetadataLookupConfig, isbn13: &str) -> String {
-    let base = format!(
-        "{}/books/v1/volumes?q=isbn:{isbn13}",
-        config.googlebooks_base
-    );
+    googlebooks_volumes_url(config, &format!("isbn:{isbn13}"))
+}
+
+/// Build the bare-text variant of the volumes URL (`q=<isbn13>`, no `isbn:`
+/// field restriction) for the fallback in [`googlebooks_lookup`].
+pub(super) fn googlebooks_bare_url(config: &MetadataLookupConfig, isbn13: &str) -> String {
+    googlebooks_volumes_url(config, isbn13)
+}
+
+fn googlebooks_volumes_url(config: &MetadataLookupConfig, q: &str) -> String {
+    let base = format!("{}/books/v1/volumes?q={q}", config.googlebooks_base);
     match config.googlebooks_api_key.as_deref() {
         Some(key) => format!("{base}&key={key}"),
         None => base,
@@ -301,13 +308,50 @@ struct GbImageLinks {
     small_thumbnail: Option<String>,
 }
 
-/// Look up an ISBN-13 against Google Books `volumes?q=isbn:`. `Ok(None)` when no
-/// volume matches; `Err` on transport/parse failure.
+/// Look up an ISBN-13 against Google Books `volumes?q=isbn:`, falling back to
+/// a bare-text `q=<isbn13>` query when the field search answers empty.
+/// `Ok(None)` when no volume matches either way; `Err` on transport/parse
+/// failure of the field query (the bare query is best-effort — see below).
 pub async fn googlebooks_lookup(
     config: &MetadataLookupConfig,
     isbn13: &str,
 ) -> anyhow::Result<Option<ExternalBookMeta>> {
-    let resp = googlebooks_get(config, &googlebooks_url(config, isbn13)).await?;
+    if let Some(meta) = googlebooks_query(config, isbn13, &googlebooks_url(config, isbn13)).await? {
+        return Ok(Some(meta));
+    }
+    // The `isbn:` field search has been observed answering 200/totalItems=0
+    // for volumes the corpus demonstrably holds (2026-08: every field-scoped
+    // query returned empty while the same bare-text query hit). The bare query
+    // may surface a sibling edition, which is acceptable: the scan flow always
+    // confirms with the user, and the stored ISBN is the scanned one either
+    // way (`meta.isbn13` below). A bare-query *failure* degrades to the field
+    // query's clean miss rather than erroring — without this fallback the
+    // outcome would have been a miss anyway.
+    match googlebooks_query(config, isbn13, &googlebooks_bare_url(config, isbn13)).await {
+        Ok(meta) => {
+            if meta.is_some() {
+                tracing::info!(
+                    isbn13,
+                    "google books isbn: search missed but bare-text query hit — field search degraded upstream"
+                );
+            }
+            Ok(meta)
+        }
+        Err(e) => {
+            tracing::warn!(isbn13, "google books bare-text fallback failed: {e:#}");
+            Ok(None)
+        }
+    }
+}
+
+/// Run one volumes query and map its first usable volume. `Ok(None)` when no
+/// volume matches; `Err` on transport/parse failure.
+async fn googlebooks_query(
+    config: &MetadataLookupConfig,
+    isbn13: &str,
+    url: &str,
+) -> anyhow::Result<Option<ExternalBookMeta>> {
+    let resp = googlebooks_get(config, url).await?;
 
     let body: GbResponse = resp
         .json()
