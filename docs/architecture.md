@@ -258,8 +258,11 @@ Offline/            — Cache (read-through policies), OfflineStore (SQLite
                       mutation outbox — see rule 08), Connectivity
 Reader/             — SwiftUI reader chrome, the host-drawn selection layer,
                       the passage menu, the typography sheet and the quote-card
-                      composer, over Web/ (vendored epub.js + JSZip + glue,
-                      hosted in a WKWebView)
+                      composer, and ReadStatusAuto (the readers' automatic
+                      read-status transitions — unread marks reading on open,
+                      the book's end marks finished, never a downgrade; the
+                      comic pager drives the same tracker), over Web/ (vendored
+                      epub.js + JSZip + glue, hosted in a WKWebView)
 Comic/              — the native CBZ pager: ComicReaderView (paged TabView +
                       UIScrollView zoom per page), ComicPages (per-page server
                       reads online, ZIPFoundation over the downloaded archive
