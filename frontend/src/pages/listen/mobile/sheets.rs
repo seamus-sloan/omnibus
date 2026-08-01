@@ -449,6 +449,31 @@ mod tests {
             // has been passed and picks up the check mark.
             assert!(!first.contains("m-ch-trail m-ch-done"));
             assert!(second.contains("m-ch-trail m-ch-done"));
+
+            // The `current` row class and the playing marker sit on whichever
+            // row is `current_index`. HTML preserves chapter order (Intro,
+            // then Part One), so "current appears before Part One" /
+            // "current appears after Intro" pins it to the right row without
+            // needing a DOM query.
+            assert!(first.contains("m-ch-trail m-ch-playing"));
+            let first_current = first
+                .find("m-ch-row current")
+                .expect("current_index 0 should mark a row current");
+            let first_part_one = first.find("Part One").expect("Part One should render");
+            assert!(
+                first_current < first_part_one,
+                "at current_index 0 the current row should be Intro, before Part One"
+            );
+
+            assert!(second.contains("m-ch-trail m-ch-playing"));
+            let second_current = second
+                .find("m-ch-row current")
+                .expect("current_index 1 should mark a row current");
+            let second_intro = second.find("Intro").expect("Intro should render");
+            assert!(
+                second_current > second_intro,
+                "at current_index 1 the current row should be Part One, after Intro"
+            );
         }
     }
 }
