@@ -41,17 +41,3 @@ pub async fn revoke_kobo_device(_server_url: &str, id: i64) -> Result<(), DataEr
         .await
         .map_err(note_server_fn_err)
 }
-
-/// Read the caller's annotation down-sync opt-in.
-pub async fn kobo_annotation_sync(_server_url: &str) -> Result<bool, DataError> {
-    crate::rpc::rpc_kobo_annotation_sync()
-        .await
-        .map_err(note_server_fn_err)
-}
-
-/// Set the caller's annotation down-sync opt-in.
-pub async fn set_kobo_annotation_sync(_server_url: &str, enabled: bool) -> Result<(), DataError> {
-    crate::rpc::rpc_set_kobo_annotation_sync(enabled)
-        .await
-        .map_err(note_server_fn_err)
-}

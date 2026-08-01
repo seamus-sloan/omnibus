@@ -30,8 +30,8 @@ pub use token::{
 pub use users::{
     admin_create_user, admin_set_password, change_password, create_user, delete_user,
     get_kindle_email, get_user_by_id, get_user_by_username, list_users, promote_to_admin,
-    registration_enabled, set_kindle_email, set_registration_enabled, set_sync_annotations_to_kobo,
-    sync_annotations_to_kobo, unlock_user, update_user_permissions,
+    registration_enabled, set_kindle_email, set_registration_enabled, unlock_user,
+    update_user_permissions,
 };
 
 use sqlx::Row;

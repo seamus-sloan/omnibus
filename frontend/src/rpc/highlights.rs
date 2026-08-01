@@ -20,13 +20,9 @@ pub async fn rpc_create_highlight(input: CreateHighlight) -> Result<Highlight> {
     }
     match db::annotations::create_highlight(&pool.0, user.id, &input).await {
         Ok(h) => {
-            // Kobo down-sync opt-in: convert the fresh row in the background
-            // so it reaches the device on its next sync.
-            db::annotations::spawn_kobo_downsync_if_enabled(
-                pool.0.clone(),
-                user.id,
-                h.book_uuid.clone(),
-            );
+            // Kobo down-sync: convert the fresh row in the background so it
+            // reaches the device on its next sync.
+            db::annotations::spawn_kobo_downsync(pool.0.clone(), user.id, h.book_uuid.clone());
             Ok(h)
         }
         Err(db::annotations::HighlightError::BookNotFound) => {

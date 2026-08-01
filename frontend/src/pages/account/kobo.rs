@@ -118,35 +118,6 @@ fn render_kobo_device_list(
     }
 }
 
-/// The per-user annotation down-sync opt-in: converts highlights created in
-/// the web reader into device-placeable anchors so they appear on the Kobo
-/// after its next sync. `None` = still loading (rendered unchecked and
-/// disabled, identically on SSR and first hydration).
-fn render_annotation_sync_toggle(
-    annotation_sync: Option<bool>,
-    in_flight: bool,
-    on_toggle: EventHandler<bool>,
-) -> Element {
-    rsx! {
-        div { class: "settings-field", "data-testid": "kobo-annotation-sync",
-            label { class: "auth-checkbox",
-                input {
-                    r#type: "checkbox",
-                    "data-testid": "kobo-annotation-sync-toggle",
-                    checked: annotation_sync == Some(true),
-                    disabled: annotation_sync.is_none() || in_flight,
-                    oninput: move |e| on_toggle.call(e.value() == "true"),
-                }
-                span { "Sync my highlights to my Kobo" }
-            }
-            p { class: "subtitle",
-                "Highlights and notes created in the web reader are converted "
-                "and delivered to your Kobo on its next sync."
-            }
-        }
-    }
-}
-
 /// The "Add a Kobo" name form.
 fn render_kobo_add_form(
     name_input: Signal<String>,
@@ -195,8 +166,6 @@ pub fn KoboDevicesCard() -> Element {
     let mut msg = use_signal(|| None::<String>);
     let mut msg_is_error = use_signal(|| false);
     let mut in_flight = use_signal(|| false);
-    // `None` until loaded, so SSR and the first WASM paint agree (rule 07).
-    let mut annotation_sync = use_signal(|| None::<bool>);
 
     let load_url = server_url.clone();
     use_effect(move || {
@@ -205,34 +174,6 @@ pub fn KoboDevicesCard() -> Element {
             if let Ok(list) = data::list_kobo_devices(&url).await {
                 devices.set(list);
             }
-            if let Ok(enabled) = data::kobo_annotation_sync(&url).await {
-                annotation_sync.set(Some(enabled));
-            }
-        });
-    });
-
-    let sync_url = server_url.clone();
-    let on_annotation_sync = use_callback(move |enabled: bool| {
-        let url = sync_url.clone();
-        in_flight.set(true);
-        spawn(async move {
-            match data::set_kobo_annotation_sync(&url, enabled).await {
-                Ok(()) => {
-                    annotation_sync.set(Some(enabled));
-                    msg.set(Some(if enabled {
-                        "Highlight sync enabled. Existing highlights convert in the background."
-                            .to_string()
-                    } else {
-                        "Highlight sync disabled for new highlights.".to_string()
-                    }));
-                    msg_is_error.set(false);
-                }
-                Err(e) => {
-                    msg.set(Some(e.to_string()));
-                    msg_is_error.set(true);
-                }
-            }
-            in_flight.set(false);
         });
     });
 
@@ -321,7 +262,6 @@ pub fn KoboDevicesCard() -> Element {
             // Unconditional: the hazard applies the moment a URL is copied.
             {render_kobo_warning()}
             {render_kobo_device_list(&device_list, &server_url, in_flight(), on_regenerate, on_remove)}
-            {render_annotation_sync_toggle(annotation_sync(), in_flight(), on_annotation_sync)}
             {render_kobo_add_form(name_input, in_flight(), on_add)}
 
             if let Some(m) = msg() {
@@ -477,14 +417,5 @@ mod render_tests {
     fn kobo_device_row_renders_the_endpoint_url() {
         let html = render_in_vdom(device_row);
         assert!(html.contains("https://omni.example.com/kobo/tok123"));
-    }
-
-    /// The annotation down-sync opt-in renders on first paint — disabled
-    /// until the saved value loads, so SSR and hydration agree (rule 07).
-    #[test]
-    fn kobo_card_renders_the_annotation_sync_toggle() {
-        let html = render_in_vdom(card);
-        assert!(html.contains("data-testid=\"kobo-annotation-sync-toggle\""));
-        assert!(html.contains("Sync my highlights to my Kobo"));
     }
 }

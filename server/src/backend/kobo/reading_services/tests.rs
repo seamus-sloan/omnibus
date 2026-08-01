@@ -504,12 +504,9 @@ fn annotations_by_id(body: &Value) -> std::collections::BTreeMap<String, Value> 
 }
 
 #[tokio::test]
-async fn get_serves_a_mixed_set_of_device_and_converted_web_annotations_when_opted_in() {
+async fn get_serves_a_mixed_set_of_device_and_converted_web_annotations() {
     let (app, pool, user, _device) = fixture().await;
     let (uuid, _dir, _guard) = disk_book(&pool, "mixed").await;
-    db::auth::set_sync_annotations_to_kobo(&pool, user, true)
-        .await
-        .unwrap();
 
     // The real device flow: PATCH the backlog (adopting the pair), a web
     // highlight lands, checkforchanges reports the never-acked book, and
@@ -554,9 +551,6 @@ async fn get_serves_a_mixed_set_of_device_and_converted_web_annotations_when_opt
 async fn web_edit_of_a_converted_row_reports_and_flows_down_on_the_next_get() {
     let (app, pool, user, _device) = fixture().await;
     let (uuid, _dir, _guard) = disk_book(&pool, "edit").await;
-    db::auth::set_sync_annotations_to_kobo(&pool, user, true)
-        .await
-        .unwrap();
     upload_and_ack(&app, &uuid, "kobo-native-1", "yellow", None).await;
     let web_id = create_web_highlight(&pool, user, &uuid, WEB_CFI).await;
     // Drain the mixed set so the device is fully caught up.
@@ -590,45 +584,9 @@ async fn web_edit_of_a_converted_row_reports_and_flows_down_on_the_next_get() {
 }
 
 #[tokio::test]
-async fn web_rows_stay_unserved_without_the_opt_in() {
-    let (app, pool, user, _device) = fixture().await;
-    let (uuid, _dir, _guard) = disk_book(&pool, "optout").await;
-
-    upload_and_ack(&app, &uuid, "kobo-native-1", "yellow", None).await;
-    create_web_highlight(&pool, user, &uuid, WEB_CFI).await;
-
-    // With the toggle off nothing materializes: the served set stays
-    // device-origin only (the pre-#1439 contract) and the web row keeps a
-    // bare CFI anchor.
-    let res = app
-        .clone()
-        .oneshot(request("GET", &annotations_uri(&uuid), Some(HW_ID), None))
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
-    let body = body_json(res).await;
-    let ids: Vec<&str> = body["annotations"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|a| a["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(ids, vec!["kobo-native-1"]);
-    let kobo_location: Option<String> =
-        sqlx::query_scalar("SELECT kobo_location FROM annotations WHERE client_id = 'web-1'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(kobo_location, None);
-}
-
-#[tokio::test]
 async fn an_underivable_web_cfi_degrades_to_not_served_never_an_error() {
     let (app, pool, user, _device) = fixture().await;
     let (uuid, _dir, _guard) = disk_book(&pool, "degrade").await;
-    db::auth::set_sync_annotations_to_kobo(&pool, user, true)
-        .await
-        .unwrap();
 
     upload_and_ack(&app, &uuid, "kobo-native-1", "yellow", None).await;
     // A point CFI can never derive a range: the row must simply stay off

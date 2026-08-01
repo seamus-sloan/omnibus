@@ -1,9 +1,8 @@
 //! Web→Kobo annotation materialization: rows holding only an
 //! `epub_cfi_range` get a derived `kobo_location` (and a minted
 //! `client_id`) so the Reading Services channel can serve them to a
-//! device. Gated on the per-user `users.sync_annotations_to_kobo` opt-in;
-//! the serving queries never change — a materialized row simply starts
-//! matching `kobo_location IS NOT NULL`.
+//! device. The serving queries never change — a materialized row simply
+//! starts matching `kobo_location IS NOT NULL`.
 
 use sqlx::SqlitePool;
 
@@ -17,21 +16,6 @@ pub struct DownsyncStats {
     /// Candidate rows left without one (point/unparseable CFI, missing
     /// kepub cache or source file, or a derivation miss).
     pub unresolved: usize,
-}
-
-/// Book uuids holding this user's web-placeable rows that aren't yet
-/// Kobo-placeable — the worklist for [`downsync_book_annotations`].
-pub async fn books_needing_kobo_downsync(
-    pool: &SqlitePool,
-    user_id: i64,
-) -> anyhow::Result<Vec<String>> {
-    Ok(sqlx::query_scalar(
-        "SELECT DISTINCT book_uuid FROM annotations
-         WHERE user_id = ? AND epub_cfi_range IS NOT NULL AND kobo_location IS NULL",
-    )
-    .bind(user_id)
-    .fetch_all(pool)
-    .await?)
 }
 
 /// Materialize `kobo_location` for one (user, book): derive a KoboSpan
@@ -100,68 +84,40 @@ pub async fn downsync_book_annotations(
     Ok(stats)
 }
 
-/// Boot-time pass: materialize every opted-in user's pending rows, one
-/// book at a time — the retry for rows whose kepub cache didn't exist (or
-/// whose text had diverged) when they were written. Cheap once caught up:
-/// the worklist query returns nothing for a user with no pending rows.
+/// Boot-time pass: materialize every pending (user, book) pair — the retry
+/// for rows whose kepub cache didn't exist (or whose text had diverged)
+/// when they were written, and the backlog conversion for highlights made
+/// before down-sync existed. Cheap once caught up: the worklist query
+/// returns nothing.
 pub async fn downsync_all_kobo_annotations(pool: &SqlitePool) -> anyhow::Result<DownsyncStats> {
-    let users: Vec<i64> =
-        sqlx::query_scalar("SELECT id FROM users WHERE sync_annotations_to_kobo = 1")
-            .fetch_all(pool)
-            .await?;
+    let pairs: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT DISTINCT user_id, book_uuid FROM annotations
+         WHERE epub_cfi_range IS NOT NULL AND kobo_location IS NULL",
+    )
+    .fetch_all(pool)
+    .await?;
     let mut stats = DownsyncStats::default();
-    for user_id in users {
-        for book_uuid in books_needing_kobo_downsync(pool, user_id).await? {
-            match downsync_book_annotations(pool, user_id, &book_uuid).await {
-                Ok(s) => {
-                    stats.derived += s.derived;
-                    stats.unresolved += s.unresolved;
-                }
-                Err(e) => {
-                    tracing::warn!(user_id, book_uuid, error = %e, "annotation downsync failed for book");
-                }
+    for (user_id, book_uuid) in pairs {
+        match downsync_book_annotations(pool, user_id, &book_uuid).await {
+            Ok(s) => {
+                stats.derived += s.derived;
+                stats.unresolved += s.unresolved;
+            }
+            Err(e) => {
+                tracing::warn!(user_id, book_uuid, error = %e, "annotation downsync failed for book");
             }
         }
     }
     Ok(stats)
 }
 
-/// Fire-and-forget materialization after a highlight write: checks the
-/// author's opt-in and spawns the per-book pass when it's on. Callers stay
+/// Fire-and-forget materialization after a highlight write. Callers stay
 /// on their own latency budget — a highlight create never waits on an
 /// EPUB walk.
-pub fn spawn_kobo_downsync_if_enabled(pool: SqlitePool, user_id: i64, book_uuid: String) {
+pub fn spawn_kobo_downsync(pool: SqlitePool, user_id: i64, book_uuid: String) {
     tokio::spawn(async move {
-        match crate::auth::sync_annotations_to_kobo(&pool, user_id).await {
-            Ok(true) => {}
-            Ok(false) => return,
-            Err(e) => {
-                tracing::warn!(user_id, error = %e, "annotation downsync opt-in check failed");
-                return;
-            }
-        }
         if let Err(e) = downsync_book_annotations(&pool, user_id, &book_uuid).await {
             tracing::warn!(user_id, book_uuid, error = %e, "annotation downsync failed");
-        }
-    });
-}
-
-/// Fire-and-forget whole-backlog materialization — the toggle-on hook:
-/// every book with pending rows for this user, converted in the
-/// background so enabling the setting returns immediately.
-pub fn spawn_kobo_downsync_backlog(pool: SqlitePool, user_id: i64) {
-    tokio::spawn(async move {
-        let books = match books_needing_kobo_downsync(&pool, user_id).await {
-            Ok(books) => books,
-            Err(e) => {
-                tracing::warn!(user_id, error = %e, "annotation downsync worklist failed");
-                return;
-            }
-        };
-        for book_uuid in books {
-            if let Err(e) = downsync_book_annotations(&pool, user_id, &book_uuid).await {
-                tracing::warn!(user_id, book_uuid, error = %e, "annotation downsync failed");
-            }
         }
     });
 }

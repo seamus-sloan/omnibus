@@ -1,7 +1,7 @@
 //! Unit tests for the Web→Kobo annotation materialization: the happy
 //! derivation path against real on-disk source/kepub fixtures (including
 //! client-id minting), the degrade-to-unresolved paths (missing kepub
-//! cache, underivable CFI), and the opt-in gating of the boot pass.
+//! cache, underivable CFI), and the whole-backlog boot pass.
 
 use omnibus_shared::{CreateHighlight, EbookMetadata, HighlightColor};
 use sqlx::{Row, SqlitePool};
@@ -242,27 +242,8 @@ async fn downsync_book_annotations_noops_when_nothing_is_pending() {
 }
 
 #[tokio::test]
-async fn books_needing_kobo_downsync_lists_only_books_with_pending_rows() {
-    let (pool, user, book_id, uuid, dir) = fixture("worklist").await;
-    let _guard = kepub_cache(&dir, book_id);
-    create_highlight(&pool, user, &web_highlight(&uuid, WEB_CFI, None))
-        .await
-        .unwrap();
-
-    assert_eq!(
-        books_needing_kobo_downsync(&pool, user).await.unwrap(),
-        vec![uuid.clone()]
-    );
-    downsync_book_annotations(&pool, user, &uuid).await.unwrap();
-    assert!(books_needing_kobo_downsync(&pool, user)
-        .await
-        .unwrap()
-        .is_empty());
-}
-
-#[tokio::test]
-async fn downsync_all_kobo_annotations_converts_only_opted_in_users() {
-    let (pool, alice, book_id, uuid, dir) = fixture("optin").await;
+async fn downsync_all_kobo_annotations_converts_every_users_pending_rows() {
+    let (pool, alice, book_id, uuid, dir) = fixture("bootpass").await;
     let _guard = kepub_cache(&dir, book_id);
     let bob = seed_user(&pool, "bob").await;
     for user in [alice, bob] {
@@ -270,31 +251,30 @@ async fn downsync_all_kobo_annotations_converts_only_opted_in_users() {
             .await
             .unwrap();
     }
-    crate::auth::set_sync_annotations_to_kobo(&pool, alice, true)
-        .await
-        .unwrap();
 
     let stats = downsync_all_kobo_annotations(&pool).await.unwrap();
 
     assert_eq!(
         stats,
         DownsyncStats {
-            derived: 1,
+            derived: 2,
             unresolved: 0
         }
     );
+    for user in [alice, bob] {
+        assert_eq!(
+            served_kobo_annotations(&pool, user, &uuid)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+    // Caught up: a second pass finds nothing pending.
     assert_eq!(
-        served_kobo_annotations(&pool, alice, &uuid)
-            .await
-            .unwrap()
-            .len(),
-        1
+        downsync_all_kobo_annotations(&pool).await.unwrap(),
+        DownsyncStats::default()
     );
-    // Bob never opted in: his row stays web-only.
-    assert!(served_kobo_annotations(&pool, bob, &uuid)
-        .await
-        .unwrap()
-        .is_empty());
 }
 
 #[tokio::test]

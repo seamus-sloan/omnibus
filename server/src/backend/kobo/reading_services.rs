@@ -123,21 +123,14 @@ async fn resolve_adopted_served(
         Err(e) => return Err(Failed(internal("reading-services resolve uuid", e))),
     };
 
-    // Opted-in users get their web-origin rows materialized lazily here,
-    // before the served set is read — a device asking for a book is the
-    // moment a fresh kepub cache is most likely present (it just downloaded
-    // one). Every failure degrades to "not served", never a wire error.
-    match db::auth::sync_annotations_to_kobo(state.pool(), auth.user_id).await {
-        Ok(true) => {
-            if let Err(e) =
-                db::annotations::downsync_book_annotations(state.pool(), auth.user_id, &canonical)
-                    .await
-            {
-                tracing::warn!(error = %e, "reading-services annotation downsync failed");
-            }
-        }
-        Ok(false) => {}
-        Err(e) => tracing::warn!(error = %e, "reading-services downsync opt-in check failed"),
+    // Web-origin rows materialize lazily here, before the served set is
+    // read — a device asking for a book is the moment a fresh kepub cache
+    // is most likely present (it just downloaded one). Every failure
+    // degrades to "not served", never a wire error.
+    if let Err(e) =
+        db::annotations::downsync_book_annotations(state.pool(), auth.user_id, &canonical).await
+    {
+        tracing::warn!(error = %e, "reading-services annotation downsync failed");
     }
 
     let served = match db::annotations::served_kobo_annotations(

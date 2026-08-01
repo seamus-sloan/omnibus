@@ -186,10 +186,11 @@ mod server {
         });
     }
 
-    /// Spawn the boot-time Web→Kobo annotation materialization for users who
-    /// opted into down-sync — the retry for rows whose kepub cache was absent
-    /// (or whose text had diverged) when they were written. Mirrors
-    /// `spawn_annotation_cfi_backfill`: cheap once caught up.
+    /// Spawn the boot-time Web→Kobo annotation materialization — the retry
+    /// for rows whose kepub cache was absent (or whose text had diverged)
+    /// when they were written, and the backlog pass for highlights that
+    /// predate down-sync. Mirrors `spawn_annotation_cfi_backfill`: cheap
+    /// once caught up.
     fn spawn_annotation_downsync(pool: SqlitePool) {
         tokio::spawn(async move {
             match omnibus_db::annotations::downsync_all_kobo_annotations(&pool).await {

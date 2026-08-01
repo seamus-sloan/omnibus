@@ -14,8 +14,7 @@ mod downsync;
 
 pub use backfill::{backfill_kobo_annotation_cfis, BackfillStats};
 pub use downsync::{
-    books_needing_kobo_downsync, downsync_all_kobo_annotations, downsync_book_annotations,
-    spawn_kobo_downsync_backlog, spawn_kobo_downsync_if_enabled, DownsyncStats,
+    downsync_all_kobo_annotations, downsync_book_annotations, spawn_kobo_downsync, DownsyncStats,
 };
 
 /// Hard cap on how many highlights `list_highlights` returns for a single
