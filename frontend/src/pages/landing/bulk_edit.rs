@@ -38,10 +38,7 @@ pub(super) fn BulkEditBar(
     }
 }
 
-/// The two suggestion pools the modal's chip editors read, bundled to keep
-/// [`BulkEditModal`] under the 5-prop guideline (mirrors
-/// `book_detail::physical::BdBookIdentity`, whose doc comment explains the
-/// pattern this one follows).
+/// The two suggestion pools the modal's chip editors read, grouped to keep [`BulkEditModal`] under the 5-prop guideline.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) struct BulkEditSuggestions {
     pub author_suggestions: ReadSignal<Vec<SuggestionItem>>,

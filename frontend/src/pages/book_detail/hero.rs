@@ -56,10 +56,7 @@ fn BdWishlistBadge() -> Element {
     }
 }
 
-/// Breadcrumb trail + title-column kicker text, bundled to keep
-/// [`BdHeroSection`] under the 5-prop guideline (mirrors
-/// `physical::BdBookIdentity`, whose doc comment explains the pattern this
-/// one follows).
+/// Breadcrumb trail + title-column kicker text, grouped to keep [`BdHeroSection`] under the 5-prop guideline.
 #[derive(Clone, PartialEq)]
 pub(super) struct BdHeroChrome {
     pub kicker: String,
