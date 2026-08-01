@@ -775,8 +775,10 @@ fn web_landing_body(
                 bulk_edit::BulkEditModal {
                     uuids: bulk_uuids,
                     selected_books: bulk_books,
-                    author_suggestions: author_pool,
-                    tag_suggestions: tag_pool,
+                    suggestions: bulk_edit::BulkEditSuggestions {
+                        author_suggestions: author_pool,
+                        tag_suggestions: tag_pool,
+                    },
                     on_close: move |_| bulk_modal_open.set(false),
                     on_saved: move |updated: Vec<EbookMetadata>| {
                         install_updated_books(&mut books_sig, &mut shelf_books_sig, &updated);
