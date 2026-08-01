@@ -1,10 +1,10 @@
 name: "iOS signing setup"
 description: >
   Import an Apple Distribution certificate into a throwaway keychain and install
-  an App Store provisioning profile. Shared by the mobile (WebView) and swiftui
-  (native) TestFlight jobs so the security-sensitive keychain code lives in one
-  place. The keychain persists for the rest of the job; delete it in an
-  always() cleanup step using the `keychain-path` output.
+  an App Store provisioning profile. Used by the TestFlight ios job; kept as a
+  composite action so the security-sensitive keychain code lives in one place.
+  The keychain persists for the rest of the job; delete it in an always()
+  cleanup step using the `keychain-path` output.
 
 inputs:
   cert-p12-base64:

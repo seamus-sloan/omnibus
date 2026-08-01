@@ -270,7 +270,7 @@ Services/           — AuthService, LibraryService, UserDataService
 `.github/workflows/testflight.yml` (workflow_dispatch, `macos-26` runner —
 Xcode 26 / iOS 26 SDK, which App Store Connect now requires) archives the
 Xcode project with manual signing (`xcodebuild archive` +
-`-exportArchive`, bundle `com.omnibus.swiftui`) and uploads the `.ipa`
+`-exportArchive`, bundle `com.omnibus.mobile`) and uploads the `.ipa`
 with `xcrun altool`, stamping the marketing version from the latest `v*`
 release tag so TestFlight tracks the server release. Signing is six
 CI-only repo secrets (distribution cert + password, provisioning profile,
