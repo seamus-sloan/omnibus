@@ -38,9 +38,9 @@ Do not use Chrome DevTools MCP or Claude in Chrome for routine agent verificatio
 
 ## Architecture
 
-Five-crate Cargo workspace: `shared/` (serde types), `db/` (data layer + indexer), `frontend/` (Dioxus UI + server functions), `server/` (fullstack binary + REST router), `mobile/` (thin native shell).
+Five-crate Cargo workspace: `shared/` (serde types), `db/` (data layer + indexer), `frontend/` (Dioxus UI + server functions), `server/` (fullstack binary + REST router), `mobile/` (thin native shell, Android-only).
 
-Alongside it, `omnibus-ios/` is a native SwiftUI client — an Xcode project, not a Cargo crate; `just ios-build` / `ios-test` / `ios-test-ui` / `ios-sim` wrap xcodebuild + simctl for it (no cargo target touches it). It is the iOS surface going forward; `mobile/` remains the Android shell. It speaks the same `/api/*` REST surface.
+Alongside it, `omnibus-ios/` is a native SwiftUI client — an Xcode project, not a Cargo crate; `just ios-build` / `ios-test` / `ios-test-ui` / `ios-sim` wrap xcodebuild + simctl for it (no cargo target touches it). It is the iOS surface; `mobile/` is the Android shell (nothing builds the `mobile/` crate for iOS anymore). It speaks the same `/api/*` REST surface.
 
 Full crate descriptions, per-crate module maps, request flow diagrams, and mobile-auth details live in [docs/architecture.md](docs/architecture.md).
 
@@ -57,7 +57,7 @@ Operator-specific conventions (ticket prefixes, standing workspace names) live i
 ## Quick commands
 
 ```bash
-# Multiplexed dev stack (server + native ios + ios-hybrid + android + playwright panes)
+# Multiplexed dev stack (server + native ios + android + playwright panes)
 just serve                                                  # Zellij
 just serve-pc                                               # process-compose
 
@@ -103,9 +103,8 @@ just ios-test                                               # omnibusTests unit 
 just ios-test-ui                                            # omnibusUITests
 just ios-sim                                                # boot newest iPhone sim, build, install, launch
 
-# Hybrid mobile shell (mobile/ crate — Android surface; iOS build survives as ios-hybrid pane)
+# Hybrid mobile shell (mobile/ crate — Android surface)
 cargo build -p omnibus-mobile
-xcrun simctl boot "iPhone 17" 2>/dev/null; dx serve --platform ios --package omnibus-mobile
 dx serve --platform android --package omnibus-mobile
 adb reverse tcp:3000 tcp:3000                               # after Android emulator boots
 ```

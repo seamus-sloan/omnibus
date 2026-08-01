@@ -16,7 +16,7 @@ The flake exposes five purpose-built shells so daily cargo work doesn't pay for 
 | `default` (slim) | rust core (+ `llvm-tools-preview`) + sqlite + openssl + just + zellij + process-compose + stylelint + cargo-llvm-cov | Daily `cargo test`/`clippy`/`fmt`, editor, rust-analyzer, `just lint-css`, `just coverage` — this is what direnv auto-loads via `.envrc` |
 | `web` | default + dioxus-cli + matched `wasm-bindgen` + node + pnpm | `dx serve --platform web`, `just dev-up`, `just lint-ts`, anything that bundles the WASM client or drives the Playwright npm project |
 | `e2e` | web + Playwright Chromium bundle | `pnpm exec playwright test`, the `playwright` pane in the multiplexer, CI's E2E job |
-| `mobile` | own package set (not `default`-based) — rust core (mobile targets) + sqlite + openssl + just + zellij + process-compose + sccache + dioxus-cli (`dx`) + Android + iOS rust-std targets + JDK 21 + Xcode/Android SDK auto-detect (+ GTK 3 / WebKitGTK on Linux) | `dx serve --platform ios`/`android`, `cargo build -p omnibus-mobile`; CI's `cargo clippy (mobile)` host-target lint |
+| `mobile` | own package set (not `default`-based) — rust core (Android targets) + sqlite + openssl + just + zellij + process-compose + sccache + dioxus-cli (`dx`) + Android rust-std targets + JDK 21 + Android SDK auto-detect (+ GTK 3 / WebKitGTK on Linux) | `dx serve --platform android`, `cargo build -p omnibus-mobile`; CI's `cargo clippy (mobile)` host-target lint |
 | `audit` | default + cargo-audit + cargo-deny | Local `cargo audit` / `cargo deny`, mirrors CI's security job |
 
 One-shot pattern for any non-default shell:
@@ -24,10 +24,10 @@ One-shot pattern for any non-default shell:
 ```bash
 nix develop .#web    --command dx serve --platform web -p omnibus
 nix develop .#audit  --command cargo deny check advisories sources bans
-nix develop .#mobile                  # interactive shell with Android NDK + iOS targets
+nix develop .#mobile                  # interactive shell with the Android NDK + targets
 ```
 
-`.envrc` resolves `use flake` to `default`, so the editor stays on the slim shell at all times. `just serve` works from default because zellij + process-compose live there; each multiplexer pane internally wraps its command in the right `.#shell` (server → `.#web`, android/ios-hybrid → `.#mobile`, playwright → `.#e2e`), so only the panes you actually start realize their extras — except the native `ios` pane, which runs `just ios-sim` on system xcodebuild + simctl and needs no nix shell at all. `just dev-up` and `just dev-bounce` self-wrap in `.#web`, so they work straight from default too.
+`.envrc` resolves `use flake` to `default`, so the editor stays on the slim shell at all times. `just serve` works from default because zellij + process-compose live there; each multiplexer pane internally wraps its command in the right `.#shell` (server → `.#web`, android → `.#mobile`, playwright → `.#e2e`), so only the panes you actually start realize their extras — except the native `ios` pane, which runs `just ios-sim` on system xcodebuild + simctl and needs no nix shell at all. `just dev-up` and `just dev-bounce` self-wrap in `.#web`, so they work straight from default too.
 
 ## Cached dev-env for hot recipes
 

@@ -9,7 +9,7 @@ Cargo workspace with five crates:
   - `mobile` — Native Dioxus build; uses `reqwest` against `/api/*` REST routes.
   - `server` — SSR/native build; pulls in `omnibus-db` and compiles server-function bodies. Name is hardcoded by the dioxus_fullstack_macro — can't be renamed.
 - **`server/`** (`omnibus`) — **unified Dioxus fullstack binary**. Built twice by `dx serve`: once native (feature `server`) for the axum backend + SSR, once WASM (feature `web`) for the hydrated client. Hosts the hand-written `/api/*` REST router for mobile. Depends directly on `omnibus-db`.
-- **`mobile/`** (`omnibus-mobile`) — thin Dioxus Native shell that seeds the reactive `ServerUrl` context from `data::server_url_store` and launches `omnibus_frontend::App`.
+- **`mobile/`** (`omnibus-mobile`) — thin Dioxus Native shell that seeds the reactive `ServerUrl` context from `data::server_url_store` and launches `omnibus_frontend::App`. Android-only: nothing builds this crate for iOS anymore — the iOS surface is the native `omnibus-ios/` app below.
 
 Default `cargo build` / `clippy` covers `server`, `shared`, `frontend` only. Mobile is excluded via workspace `default-members` because its `mobile` feature is mutually exclusive with `web`; build it explicitly: `cargo build -p omnibus-mobile`.
 
@@ -225,25 +225,6 @@ empty — see the Server URL (mobile) note above). At-rest protection is the
 iOS sandbox + Data Protection / Android's per-app UID sandbox + the `0o600`
 perms; **TODO**: harden with iOS Keychain / Android Keystore.
 
-**iOS TestFlight release:** the manually-triggered
-`.github/workflows/testflight.yml` (workflow_dispatch, `macos-26` runner —
-Xcode 26 / iOS 26 SDK, which App Store Connect now requires) builds the
-universal iPhone/iPad app and ships it to TestFlight. `dx` has no signing
-and emits a bare `.app`, so `scripts/ios-package-ipa.sh` does everything
-Xcode normally would: patches Info.plist (the keys dx omits —
-`DTPlatformName`, `CFBundlePackageType`, the `DT*` toolchain-provenance
-keys, `CFBundleSupportedPlatforms`, `UILaunchScreen`, build number, and the
-marketing version — `CFBundleShortVersionString`, resolved from the latest
-`v*` release tag so the TestFlight version tracks the server release rather
-than the stale `Cargo.toml` `0.1.0`), compiles the app-icon asset catalog
-(`mobile/assets/Assets.xcassets`) with
-`actool`, embeds the provisioning profile, `codesign`s with the identity
-derived from the imported cert, and zips a `Payload/` `.ipa` that
-`xcrun altool` uploads. Bundle ID `com.omnibus.mobile` lives in
-`mobile/Dioxus.toml`. Signing is six CI-only repo secrets (distribution
-cert + password, provisioning profile, App Store Connect API key + key-id
-+ issuer-id) — enumerated in the workflow file's header comment.
-
 ## omnibus-ios/
 
 Native SwiftUI client, and the iOS surface going forward — an Xcode project
@@ -279,6 +260,19 @@ Reader/             — SwiftUI reader chrome, the host-drawn selection layer,
                       hosted in a WKWebView)
 Services/           — AuthService, LibraryService, UserDataService
 ```
+
+**TestFlight release:** the manually-triggered
+`.github/workflows/testflight.yml` (workflow_dispatch, `macos-26` runner —
+Xcode 26 / iOS 26 SDK, which App Store Connect now requires) archives the
+Xcode project with manual signing (`xcodebuild archive` +
+`-exportArchive`, bundle `com.omnibus.swiftui`) and uploads the `.ipa`
+with `xcrun altool`, stamping the marketing version from the latest `v*`
+release tag so TestFlight tracks the server release. Signing is six
+CI-only repo secrets (distribution cert + password, provisioning profile,
+App Store Connect API key + key-id + issuer-id) — enumerated in the
+workflow file's header comment. A daily companion workflow
+(`testflight-feedback.yml`) turns new TestFlight screenshot feedback into
+GitHub issues via `scripts/testflight_feedback_to_issues.py`.
 
 **Why the reader is a WebView.** iOS ships no EPUB renderer, and epub.js already
 produces the CFI positions the server's `epub_cfi` / `epub_cfi_range` contract

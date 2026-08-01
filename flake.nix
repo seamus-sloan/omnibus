@@ -33,8 +33,9 @@
           fenix.packages.${system}.targets.wasm32-unknown-unknown.latest.rust-std
         ];
 
-        # Mobile-only Rust cross-compilation targets. Pulled into the `mobile`
-        # shell only — daily cargo work doesn't pay for them.
+        # Android cross-compilation targets for the `mobile` shell only — daily
+        # cargo work doesn't pay for them. (The mobile/ crate is the Android
+        # shell; iOS is the native omnibus-ios app, built by system xcodebuild.)
         # fenix packages are read-only Nix store paths, so dx can't call rustup
         # to install them at runtime — they must be declared here instead.
         rustMobileTargets = [
@@ -42,9 +43,6 @@
           # x86_64 Android: x86_64 hosts run x86_64 emulator system images —
           # arm64 images need an arm64 host.
           fenix.packages.${system}.targets.x86_64-linux-android.latest.rust-std
-        ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
-          fenix.packages.${system}.targets.aarch64-apple-ios.latest.rust-std
-          fenix.packages.${system}.targets.aarch64-apple-ios-sim.latest.rust-std
         ];
 
         # Slim core + mobile targets, combined into a single fenix toolchain so
@@ -201,9 +199,9 @@
         # glib/cairo/pango/gdk-pixbuf/atk into PKG_CONFIG_PATH transitively.
         mobileExtras = [
           pkgs.jdk21
-          # `dx` for native iOS/Android serve. Mobile is Dioxus Native (no
+          # `dx` for native Android serve. Mobile is Dioxus Native (no
           # wasm target), so unlike `webExtras` this needs the CLI but not a
-          # matched `wasm-bindgen` — `dx serve --platform ios/android` never
+          # matched `wasm-bindgen` — `dx serve --platform android` never
           # invokes wasm-bindgen/binaryen.
           pkgs-unstable.dioxus-cli
         ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
@@ -310,23 +308,10 @@
           export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
         '';
 
-        # `mobile` shell auto-detects Xcode + Android SDK/NDK on the host.
+        # `mobile` shell auto-detects the Android SDK/NDK on the host.
         # These detections only make sense when actually building mobile
         # targets, so they live outside the common hook.
         mobileHook = ''
-          # Nix injects xcbuild's fake xcrun and its own cc wrapper, both of which
-          # break iOS builds. Fix: prepend /usr/bin so the real Xcode xcrun and
-          # Apple clang shadow Nix's stubs. Set DEVELOPER_DIR so the real xcrun
-          # can locate all platform SDKs (including iphonesimulator). Set SDKROOT
-          # to the Xcode macOS SDK so Apple clang and xcrun agree on the sysroot.
-          # Rust (fenix) uses absolute store paths and is unaffected by PATH order.
-          if [ -d "/Applications/Xcode.app/Contents/Developer" ]; then
-            export PATH="/usr/bin:$PATH"
-            export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
-            export SDKROOT="$DEVELOPER_DIR/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
-            echo "DEVELOPER_DIR=$DEVELOPER_DIR"
-          fi
-
           # Auto-detect Android SDK + NDK on macOS.
           if [ -z "$ANDROID_HOME" ]; then
             for sdk_base in \
@@ -380,9 +365,9 @@
             extraHook = playwrightHook;
           };
 
-          # Mobile builds: Android + iOS rust-std targets, JDK 21, and
-          # the Xcode/Android SDK auto-detection hook. Used by the
-          # mobile panes in the multiplexer and `cargo build -p omnibus-mobile`.
+          # Mobile builds: Android rust-std targets, JDK 21, and the Android
+          # SDK auto-detection hook. Used by the android pane in the
+          # multiplexer and `cargo build -p omnibus-mobile`.
           mobile = pkgs.mkShell {
             packages = [
               pkgs-unstable.git

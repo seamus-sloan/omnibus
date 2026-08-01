@@ -33,13 +33,6 @@ layout {
             args "ios-sim"
         }
     }
-    tab name="ios-hybrid" {
-        // Hybrid WebView shell (mobile/ crate) on iOS. The native app above
-        // is the iOS surface going forward.
-        pane command="nix" start_suspended=true {
-            args "develop" ".#mobile" "--command" "dx" "serve" "--platform" "ios" "--package" "omnibus-mobile"
-        }
-    }
     tab name="playwright" {
         pane cwd="ui_tests/playwright" command="nix" start_suspended=true {
             args "develop" "../..#e2e" "--command" "npx" "playwright" "test" "--ui"

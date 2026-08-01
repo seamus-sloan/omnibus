@@ -1,53 +1,35 @@
 name: TestFlight
 
-# The run title carries the version and which app(s) were dispatched, so the
-# Actions list distinguishes builds without opening the run (e.g. "TestFlight
-# v0.14.3 · swiftui"). run-name is evaluated before any job starts, so it can
-# only see the dispatch inputs — when marketing_version is left blank the
-# version job resolves it from the latest v* tag, which run-name can't know yet.
-run-name: "TestFlight ${{ inputs.marketing_version && format('v{0}', inputs.marketing_version) || 'latest tag' }} · ${{ inputs.apps }}"
+# The run title carries the version, so the Actions list distinguishes builds
+# without opening the run (e.g. "TestFlight v0.14.3"). run-name is evaluated
+# before any job starts, so it can only see the dispatch inputs — when
+# marketing_version is left blank the version job resolves it from the latest
+# v* tag, which run-name can't know yet.
+run-name: "TestFlight ${{ inputs.marketing_version && format('v{0}', inputs.marketing_version) || 'latest tag' }}"
 
-# Manually-triggered iOS build + TestFlight upload for both iOS clients:
+# Manually-triggered iOS build + TestFlight upload for the native SwiftUI app
+# (omnibus-ios/ Xcode project, bundle com.omnibus.swiftui). The Apple side
+# (App ID, app record, distribution cert, App Store Connect API key, App Store
+# provisioning profile) must already exist.
 #
-#   mobile   Dioxus/WKWebView shell (omnibus-mobile crate, bundle com.omnibus.mobile)
-#   swiftui  Native SwiftUI app     (omnibus-ios/ Xcode project, bundle com.omnibus.swiftui)
-#
-# The `apps` dispatch input selects which to build (default: both). Each app has
-# its own App Store Connect app record; the Apple side (App IDs, app records,
-# distribution cert, App Store Connect API key, App Store provisioning profiles)
-# must already exist.
-#
-# The two builds are fundamentally different pipelines:
-#   * mobile  — `dx` has no signing, so `dx bundle` emits an unsigned .app that
-#     scripts/ios-package-ipa.sh signs + packages into a .ipa.
-#   * swiftui — a real .xcodeproj built + signed by `xcodebuild archive` +
-#     `xcodebuild -exportArchive` (manual signing against the profile below).
-# Both upload with `xcrun altool`. The shared cert-import + profile-install lives
-# in .github/actions/ios-signing.
+# The build is a real .xcodeproj archived + signed by `xcodebuild archive` +
+# `xcodebuild -exportArchive` (manual signing against the profile below) and
+# uploaded with `xcrun altool`. The cert-import + profile-install lives in
+# .github/actions/ios-signing.
 #
 # Required repository secrets:
-#   Shared (team/account-scoped, reused by both apps):
+#   Shared (team/account-scoped):
 #     IOS_DIST_CERT_P12_BASE64          base64 of the Apple Distribution .p12
 #     IOS_DIST_CERT_PASSWORD            password for that .p12
 #     ASC_API_KEY_BASE64                base64 of the App Store Connect AuthKey_*.p8
 #     ASC_KEY_ID                        App Store Connect API key ID
 #     ASC_ISSUER_ID                     App Store Connect API issuer ID
-#   Per-app (a profile is bound to one bundle ID, so each app needs its own):
-#     IOS_PROVISIONING_PROFILE_BASE64        App Store profile for com.omnibus.mobile
+#   Per-app (a profile is bound to one bundle ID):
 #     IOS_SWIFTUI_PROVISION_PROFILE_BASE64   App Store profile for com.omnibus.swiftui
 
 on:
   workflow_dispatch:
     inputs:
-      apps:
-        description: "Which app(s) to build and upload."
-        required: false
-        default: both
-        type: choice
-        options:
-          - both
-          - mobile
-          - swiftui
       build_number:
         description: "CFBundleVersion to stamp (must be higher than the last uploaded build). Defaults to the workflow run number."
         required: false
@@ -65,9 +47,9 @@ permissions:
   contents: read
 
 jobs:
-  # Resolve the user-visible marketing version once so both builds stamp the same
-  # value. Prefer the dispatch input; otherwise the latest v* git tag (the same
-  # tags release.yml mints), so TestFlight tracks the server release.
+  # Resolve the user-visible marketing version. Prefer the dispatch input;
+  # otherwise the latest v* git tag (the same tags release.yml mints), so
+  # TestFlight tracks the server release.
   version:
     name: resolve marketing version
     runs-on: ubuntu-latest
@@ -94,136 +76,26 @@ jobs:
           fi
           # Reject anything but digits and dots before writing to $GITHUB_OUTPUT: a
           # dispatch input containing a newline would otherwise inject extra output
-          # assignments. Same guard the packaging script uses.
+          # assignments.
           case "$version" in
             '' | *[!0-9.]*) echo "::error::marketing version must be numeric/dot-separated, got: '$version'"; exit 1 ;;
           esac
           echo "Marketing version: $version"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
-  # ---- mobile: Dioxus/WKWebView shell (com.omnibus.mobile) --------------------
-  mobile:
-    name: mobile (WebView · com.omnibus.mobile)
-    needs: version
-    if: ${{ github.event.inputs.apps == 'both' || github.event.inputs.apps == 'mobile' }}
-    # macos-26 ships Xcode 26 / the iOS 26 SDK. App Store Connect rejects any
-    # upload built with an older SDK, so macos-14/15 (Xcode 15/16) can't be used.
-    runs-on: macos-26
-    permissions:
-      contents: read
-      # nix-installer-action needs the OIDC token endpoints to auth to FlakeHub.
-      id-token: write
-      # cache-nix-action `purge: true` deletes its own expired cache entries.
-      actions: write
-    env:
-      # Pin the target dir so the .app lands where the packaging script expects
-      # (target/dx/omnibus-mobile/release/ios) and so rust-cache actually caches.
-      CARGO_TARGET_DIR: ./target
-      BUILD_NUMBER: ${{ github.event.inputs.build_number || github.run_number }}
-      # Pin the iOS deployment target so the C crypto deps (aws-lc-sys, ring) and
-      # the final Rust link agree on the min-iOS version. 14.0 is the floor for
-      # the storyboard-free UILaunchScreen the iPad build needs, and matches the
-      # MinimumOSVersion the packaging script stamps.
-      IPHONEOS_DEPLOYMENT_TARGET: "14.0"
-      MARKETING_VERSION: ${{ needs.version.outputs.marketing_version }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@v22
-
-      - name: Cache Nix store
-        uses: nix-community/cache-nix-action@v7
-        with:
-          primary-key: nix-testflight-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
-          restore-prefixes-first-match: nix-testflight-${{ runner.os }}-
-          purge: true
-          purge-prefixes: nix-testflight-${{ runner.os }}-
-          purge-last-accessed: 604800
-          purge-primary-key: never
-
-      - name: Cache cargo registry and target
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ". -> target"
-          shared-key: omnibus-mobile
-
-      - name: iOS signing setup
-        id: signing
-        uses: ./.github/actions/ios-signing
-        with:
-          cert-p12-base64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
-          cert-password: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
-          profile-base64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
-
-      # Build the unsigned .app. Runs in `.#mobile` for `dx` + the
-      # aarch64-apple-ios rust-std + the Xcode DEVELOPER_DIR/SDKROOT shim.
-      # `--package-types ios` pins output to the raw .app (the pre-zipped .ipa dx
-      # can emit neither embeds the profile nor patches DTPlatformName — the
-      # packaging script does both).
-      - name: dx bundle (iOS release)
-        # OMNIBUS_VERSION mirrors MARKETING_VERSION so frontend::version::app_version
-        # reports the real release instead of the crate's pinned 0.1.0 fallback.
-        env:
-          OMNIBUS_VERSION: ${{ env.MARKETING_VERSION }}
-        run: nix develop .#mobile --command dx bundle --platform ios --release --package omnibus-mobile --package-types ios
-
-      - name: Sign and package .ipa
-        env:
-          SIGNING_IDENTITY: ${{ steps.signing.outputs.signing-identity }}
-          PROVISIONING_PROFILE: ${{ steps.signing.outputs.profile-path }}
-          MARKETING_VERSION: ${{ env.MARKETING_VERSION }}
-          IPA_OUT: ${{ github.workspace }}/omnibus-mobile.ipa
-        run: |
-          set -euo pipefail
-          ./scripts/ios-package-ipa.sh
-
-      - name: Upload to TestFlight
-        env:
-          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$HOME/.appstoreconnect/private_keys"
-          KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
-          echo "$ASC_API_KEY_BASE64" | base64 -D > "$KEY_PATH"
-          xcrun altool --upload-app -f "$GITHUB_WORKSPACE/omnibus-mobile.ipa" -t ios \
-            --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
-          rm -f "$KEY_PATH"
-
-      - name: Upload .ipa artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: omnibus-mobile-ipa
-          path: omnibus-mobile.ipa
-          if-no-files-found: ignore
-
-      - name: Clean up signing keychain
-        if: always()
-        env:
-          SIGNING_KEYCHAIN: ${{ steps.signing.outputs.keychain-path }}
-        run: |
-          set -euo pipefail
-          if [ -n "${SIGNING_KEYCHAIN:-}" ] && [ -f "$SIGNING_KEYCHAIN" ]; then
-            security delete-keychain "$SIGNING_KEYCHAIN" || true
-          fi
-          rm -f "$HOME/.appstoreconnect/private_keys"/*.p8 2>/dev/null || true
-
   # ---- swiftui: native SwiftUI app (com.omnibus.swiftui) ----------------------
   swiftui:
     name: swiftui (native · com.omnibus.swiftui)
     needs: version
-    if: ${{ github.event.inputs.apps == 'both' || github.event.inputs.apps == 'swiftui' }}
-    # omnibus-ios targets iOS 26.5, so it needs the Xcode 26 / iOS 26 SDK on macos-26.
+    # omnibus-ios targets iOS 26.5, so it needs the Xcode 26 / iOS 26 SDK on
+    # macos-26. App Store Connect also rejects any upload built with an older
+    # SDK, so macos-14/15 (Xcode 15/16) can't be used.
     runs-on: macos-26
     permissions:
       contents: read
       # Granted for the .ipa upload step. Belt-and-braces rather than load-bearing:
       # upload-artifact@v4 authenticates with ACTIONS_RUNTIME_TOKEN, which is
-      # injected per-job and isn't governed by `permissions:`. The mobile job's
-      # own `actions: write` is load-bearing — cache-nix-action's `purge: true`.
+      # injected per-job and isn't governed by `permissions:`.
       actions: write
     env:
       BUILD_NUMBER: ${{ github.event.inputs.build_number || github.run_number }}

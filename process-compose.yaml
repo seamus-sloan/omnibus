@@ -18,12 +18,6 @@ processes:
     command: just ios-sim
     disabled: true
 
-  ios-hybrid:
-    # Hybrid WebView shell (mobile/ crate) on iOS. The native `ios` process
-    # above is the iOS surface going forward.
-    command: nix develop .#mobile --command dx serve --platform ios --package omnibus-mobile
-    disabled: true
-
   playwright:
     command: nix develop ../..#e2e --command pnpm exec playwright test --ui
     working_dir: ui_tests/playwright

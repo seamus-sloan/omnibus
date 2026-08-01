@@ -8,8 +8,7 @@ Idempotent: each issue embeds a hidden `asc-feedback-id` marker and the script
 skips a submission whose marker already appears in an existing issue.
 
 Reuses the App Store Connect API key already configured for the build-upload
-workflow (`ASC_API_KEY_BASE64` / `ASC_KEY_ID` / `ASC_ISSUER_ID`). Both iOS
-clients live under one App Store Connect team, so that one key reads both.
+workflow (`ASC_API_KEY_BASE64` / `ASC_KEY_ID` / `ASC_ISSUER_ID`).
 Screenshots are committed to a dedicated `testflight-feedback` branch so they
 render inline and persist past App Store Connect's short-lived signed URLs.
 
@@ -18,7 +17,7 @@ Env:
   ASC_API_KEY_BASE64 | ASC_PRIVATE_KEY   The .p8 private key (base64, or raw PEM).
   GITHUB_TOKEN                           Repo token (issues:write + contents:write).
   GITHUB_REPOSITORY                      "owner/repo" (set automatically in Actions).
-  BUNDLE_IDS                             Comma-separated bundle ids (default: both iOS clients).
+  BUNDLE_IDS                             Comma-separated bundle ids (default: the SwiftUI app).
   ASSET_BRANCH                           Branch for screenshot assets (default testflight-feedback).
   MAX_PAGES                              Submission pages to scan per run (default 5).
   DRY_RUN=1                              Print instead of creating issues/assets.
@@ -36,7 +35,7 @@ ASC_BASE = "https://api.appstoreconnect.apple.com"
 GH_BASE = "https://api.github.com"
 DRY_RUN = os.environ.get("DRY_RUN") == "1"
 # Bundle id -> the name shown in the issue title and Environment block.
-APP_NAMES = {"com.omnibus.mobile": "Dioxus", "com.omnibus.swiftui": "SwiftUI"}
+APP_NAMES = {"com.omnibus.swiftui": "SwiftUI"}
 BUNDLE_IDS = [b.strip() for b in
               os.environ.get("BUNDLE_IDS", ",".join(APP_NAMES.keys())).split(",") if b.strip()]
 ASSET_BRANCH = os.environ.get("ASSET_BRANCH", "testflight-feedback")
