@@ -301,27 +301,87 @@ fn scan_library_handler(
     }
 }
 
+/// Returns the "Refetch Author Pictures" button's `onclick` handler, mirroring
+/// [`scan_library_handler`]'s immediate-disable-then-report shape.
+fn refetch_author_photos_handler(
+    url: String,
+    mut status: Signal<Option<String>>,
+    mut status_is_error: Signal<bool>,
+    mut refetch_in_flight: Signal<bool>,
+) -> impl FnMut(MouseEvent) {
+    move |_evt: MouseEvent| {
+        let url = url.clone();
+        refetch_in_flight.set(true);
+        spawn(async move {
+            match data::refetch_author_photos(&url).await {
+                Ok(()) => {
+                    status.set(Some("Author photo refetch queued.".into()));
+                    status_is_error.set(false);
+                }
+                Err(e) => {
+                    status.set(Some(format!("Failed to start photo refetch: {e}")));
+                    status_is_error.set(true);
+                }
+            }
+            refetch_in_flight.set(false);
+        });
+    }
+}
+
+/// Returns the "Extract Audiobook Chapters" button's `onclick` handler,
+/// mirroring [`scan_library_handler`]'s immediate-disable-then-report shape.
+fn backfill_chapters_handler(
+    url: String,
+    mut status: Signal<Option<String>>,
+    mut status_is_error: Signal<bool>,
+    mut backfill_in_flight: Signal<bool>,
+) -> impl FnMut(MouseEvent) {
+    move |_evt: MouseEvent| {
+        let url = url.clone();
+        backfill_in_flight.set(true);
+        spawn(async move {
+            match data::backfill_chapters(&url).await {
+                Ok(()) => {
+                    status.set(Some("Chapter extraction queued.".into()));
+                    status_is_error.set(false);
+                }
+                Err(e) => {
+                    status.set(Some(format!("Failed to start chapter extraction: {e}")));
+                    status_is_error.set(true);
+                }
+            }
+            backfill_in_flight.set(false);
+        });
+    }
+}
+
 /// Ghost buttons for one-off maintenance jobs (library rescan, author photo
 /// refetch, chapter backfill).
 #[component]
 fn MaintenanceActions(
-    mut status: Signal<Option<String>>,
-    mut status_is_error: Signal<bool>,
+    status: Signal<Option<String>>,
+    status_is_error: Signal<bool>,
     mut refetch_in_flight: Signal<bool>,
     mut backfill_in_flight: Signal<bool>,
     scan_in_flight: Signal<bool>,
     library_refresh: Signal<u32>,
 ) -> Element {
     let server_url = use_server_url();
-    let url_for_refetch = server_url.clone();
-    let url_for_backfill = server_url.clone();
     let on_scan = scan_library_handler(
-        server_url,
+        server_url.clone(),
         status,
         status_is_error,
         scan_in_flight,
         library_refresh,
     );
+    let on_refetch = refetch_author_photos_handler(
+        server_url.clone(),
+        status,
+        status_is_error,
+        refetch_in_flight,
+    );
+    let on_backfill =
+        backfill_chapters_handler(server_url, status, status_is_error, backfill_in_flight);
 
     rsx! {
         button {
@@ -337,24 +397,7 @@ fn MaintenanceActions(
             class: "btn ghost",
             disabled: refetch_in_flight(),
             "data-testid": "refetch-author-photos",
-            onclick: move |_| {
-                let url = url_for_refetch.clone();
-                refetch_in_flight.set(true);
-                spawn(async move {
-                    match data::refetch_author_photos(&url).await {
-                        Ok(()) => {
-                            status.set(Some("Author photo refetch queued.".into()));
-                            status_is_error.set(false);
-                            refetch_in_flight.set(false);
-                        }
-                        Err(e) => {
-                            status.set(Some(format!("Failed to start photo refetch: {e}")));
-                            status_is_error.set(true);
-                            refetch_in_flight.set(false);
-                        }
-                    }
-                });
-            },
+            onclick: on_refetch,
             "Refetch Author Pictures"
         }
         button {
@@ -362,24 +405,7 @@ fn MaintenanceActions(
             class: "btn ghost",
             disabled: backfill_in_flight(),
             "data-testid": "backfill-chapters",
-            onclick: move |_| {
-                let url = url_for_backfill.clone();
-                backfill_in_flight.set(true);
-                spawn(async move {
-                    match data::backfill_chapters(&url).await {
-                        Ok(()) => {
-                            status.set(Some("Chapter extraction queued.".into()));
-                            status_is_error.set(false);
-                            backfill_in_flight.set(false);
-                        }
-                        Err(e) => {
-                            status.set(Some(format!("Failed to start chapter extraction: {e}")));
-                            status_is_error.set(true);
-                            backfill_in_flight.set(false);
-                        }
-                    }
-                });
-            },
+            onclick: on_backfill,
             "Extract Audiobook Chapters"
         }
     }

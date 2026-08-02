@@ -68,32 +68,57 @@ pub async fn get_ebooks_page(
     // the TTL-gated background sync on every online browse.
     crate::offline::replica::ensure_fresh(server_url.to_string());
     if cursor.is_none() {
-        // First page: cache-first via the SWR policy, so landing paints
-        // instantly (server-exact ordering as of the last visit) and
-        // revalidates in the background.
-        let key = crate::offline::cache::keys::ebooks_first(
-            sort_key.as_wire(),
-            sort_dir.as_wire(),
-            &filters.formats.join(","),
-        );
-        let url = server_url.to_string();
-        let f = filters.clone();
-        let result = crate::offline::cache::read_through(key, async move {
-            get_ebooks_page_online(&url, sort_key, sort_dir, f, None, limit).await
-        })
-        .await;
-        return match result {
-            // Went offline mid-request with a cold first-page cache — the
-            // full replica may still save the paint.
-            Err(e) if crate::offline::sync::is_offline_error(&e) => {
-                crate::offline::replica::page_from_cache(sort_key, sort_dir, &filters, None, limit)
-                    .await
-                    .ok_or(e)
-            }
-            r => r,
-        };
+        first_page_ebooks(server_url, sort_key, sort_dir, filters, limit).await
+    } else {
+        cursor_page_ebooks(server_url, sort_key, sort_dir, filters, cursor, limit).await
     }
-    // Cursor pages ("load more"): network-first with replica fallback.
+}
+
+/// First page: cache-first via the SWR policy, so landing paints instantly
+/// (server-exact ordering as of the last visit) and revalidates in the
+/// background. Falls back to the full replica if the network attempt itself
+/// went offline against a cold first-page cache.
+#[cfg(feature = "mobile")]
+async fn first_page_ebooks(
+    server_url: &str,
+    sort_key: SortKey,
+    sort_dir: SortDir,
+    filters: ViewFilters,
+    limit: i64,
+) -> Result<LibraryPage, DataError> {
+    let key = crate::offline::cache::keys::ebooks_first(
+        sort_key.as_wire(),
+        sort_dir.as_wire(),
+        &filters.formats.join(","),
+    );
+    let url = server_url.to_string();
+    let f = filters.clone();
+    let result = crate::offline::cache::read_through(key, async move {
+        get_ebooks_page_online(&url, sort_key, sort_dir, f, None, limit).await
+    })
+    .await;
+    match result {
+        // Went offline mid-request with a cold first-page cache — the full
+        // replica may still save the paint.
+        Err(e) if crate::offline::sync::is_offline_error(&e) => {
+            crate::offline::replica::page_from_cache(sort_key, sort_dir, &filters, None, limit)
+                .await
+                .ok_or(e)
+        }
+        r => r,
+    }
+}
+
+/// Cursor pages ("load more"): network-first with replica fallback.
+#[cfg(feature = "mobile")]
+async fn cursor_page_ebooks(
+    server_url: &str,
+    sort_key: SortKey,
+    sort_dir: SortDir,
+    filters: ViewFilters,
+    cursor: Option<String>,
+    limit: i64,
+) -> Result<LibraryPage, DataError> {
     let attempt = get_ebooks_page_online(
         server_url,
         sort_key,

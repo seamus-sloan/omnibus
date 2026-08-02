@@ -53,104 +53,118 @@ use view::{derive_loaded_view, LoadedBookView};
 #[component]
 pub fn BookDetailPage(uuid: String) -> Element {
     let server_url = use_server_url();
-    let book: Signal<Option<EbookMetadata>> = use_signal(|| None);
+    let sig = use_book_detail_signals();
     // Reflect the loaded book title in the browser tab (e.g. "Omnibus | Dracula").
+    let book = sig.book;
     crate::use_page_title(move || book.read().as_ref().and_then(|b| b.title.clone()));
-    let author_books: Signal<Vec<EbookMetadata>> = use_signal(Vec::new);
-    // F3.3 suggestions. Starts `None` on both SSR and the first WASM paint so
-    // hydration markup matches (rule 07); the client effect below populates it.
-    let suggestions: Signal<Option<SuggestionsResponse>> = use_signal(|| None);
-    // Epoch guard so a poll loop left over from a previous book can't write its
-    // result onto the current book after navigation (mirrors landing's
-    // `fetch_epoch`).
-    let suggestions_epoch = use_signal(|| 0u64);
-    let loading = use_signal(|| true);
-    let error: Signal<Option<String>> = use_signal(|| None);
-    // Bumped after a merge/undo so the effect below refetches the book
-    // (signals read inside `use_effect` re-arm it).
-    let refresh = use_signal(|| 0u32);
-
-    // Admin gating for the "Merge with…" affordance — derived from the
-    // app-wide `CurrentUser` context (`crate::use_is_admin`) instead of an
-    // independent per-mount `/api/auth/me` fetch. Mobile/SSR stay at the
-    // `false` default since the context is web-only; the server-side
-    // `AdminUser` extractor on `rpc_merge_books` is the actual security
-    // boundary.
-    let is_admin = crate::use_is_admin();
-
-    // Merge dialog state. Declared unconditionally per rule 07 so the hook
-    // count is identical on every target — mobile compiles the signals but
-    // `render_book_shell` stubs the builders that read them.
-    let merge_open = use_signal(|| false);
-    let merge_result: Signal<Option<MergeBooksResult>> = use_signal(|| None);
-    let undo_error: Signal<Option<String>> = use_signal(|| None);
-    // Delete-dialog state, declared unconditionally for the same reason.
-    let delete_open = use_signal(|| false);
-
-    // Physical-wishlist state, lifted here because two web sections share it:
-    // the hero (cover chip + rail wishlist slot) and the physical panel (whose
-    // post-mount load populates it, and whose last-copy delete can write it).
-    // Declared unconditionally per rule 07; mobile discards it.
-    let phys = PhysSignals {
-        wishlist: use_signal(|| None::<WishlistEntry>),
-        loaded: use_signal(|| false),
-    };
-
-    // Fetch Summary override (mobile only). Declared unconditionally per
-    // rule 07 — `render_loaded_mobile` is a plain fn with no hook scope,
-    // reached only past the early returns below. `epoch` is bumped
-    // alongside `value` on every fresh book load; the Fetch Summary save in
-    // `render_loaded_mobile` checks it's unchanged before writing, so a save
-    // left over from a since-navigated-away book can't clobber the new
-    // book's description.
-    let description = DescriptionSignals {
-        value: use_signal(String::new),
-        epoch: use_signal(|| 0u64),
-    };
 
     use_book_data_effects(
         uuid.clone(),
         server_url.clone(),
         BookDataSignals {
-            book,
-            author_books,
-            loading,
-            error,
-            refresh,
-            suggestions_epoch,
-            suggestions,
-            description,
+            book: sig.book,
+            author_books: sig.author_books,
+            loading: sig.loading,
+            error: sig.error,
+            refresh: sig.merge.refresh,
+            suggestions_epoch: sig.suggestions_epoch,
+            suggestions: sig.suggestions,
+            description: sig.description,
         },
     );
 
-    if loading() {
+    if (sig.loading)() {
         return rsx! { PageLoading {} };
     }
-    if let Some(msg) = error() {
+    if let Some(msg) = (sig.error)() {
         return rsx! { PageError { message: msg, back_to: Route::Landing {} } };
     }
-    let Some(b) = book() else {
+    let Some(b) = (sig.book)() else {
         return rsx! { PageNotFound { subject: "Book", back_to: Route::Landing {} } };
     };
 
     render_book_shell(
         b,
-        MergeSignals {
-            open: merge_open,
-            result: merge_result,
-            undo_error,
-            refresh,
-        },
+        sig.merge,
         PageSignals {
-            description,
-            delete_open,
-            phys,
+            description: sig.description,
+            delete_open: sig.delete_open,
+            phys: sig.phys,
         },
-        author_books(),
-        suggestions(),
-        is_admin,
+        (sig.author_books)(),
+        (sig.suggestions)(),
+        sig.is_admin,
         server_url,
     )
+}
+
+/// Every signal [`BookDetailPage`] owns, declared unconditionally (rule 07)
+/// so the hook count and order stay identical on every platform target.
+/// Bundled into one custom-hook-style helper — called unconditionally, so
+/// Dioxus's per-scope hook-order tracking sees the same sequence of
+/// `use_signal` calls every render — so the component body reads as a
+/// data-fetch + dispatch shell instead of a wall of hook declarations.
+struct BookDetailSignals {
+    book: Signal<Option<EbookMetadata>>,
+    author_books: Signal<Vec<EbookMetadata>>,
+    // F3.3 suggestions. Starts `None` on both SSR and the first WASM paint so
+    // hydration markup matches (rule 07); the client effect below populates it.
+    suggestions: Signal<Option<SuggestionsResponse>>,
+    // Epoch guard so a poll loop left over from a previous book can't write
+    // its result onto the current book after navigation (mirrors landing's
+    // `fetch_epoch`).
+    suggestions_epoch: Signal<u64>,
+    loading: Signal<bool>,
+    error: Signal<Option<String>>,
+    // Admin gating for the "Merge with…" affordance — derived from the
+    // app-wide `CurrentUser` context instead of an independent per-mount
+    // `/api/auth/me` fetch. Mobile/SSR stay at the `false` default since the
+    // context is web-only; the server-side `AdminUser` extractor on
+    // `rpc_merge_books` is the actual security boundary.
+    is_admin: ReadSignal<bool>,
+    // Merge-dialog state; mobile compiles the signals but `render_book_shell`
+    // stubs the builders that read them.
+    merge: MergeSignals,
+    // Delete-dialog state, declared unconditionally for the same reason.
+    delete_open: Signal<bool>,
+    // Physical-wishlist state, lifted here because two web sections share it:
+    // the hero (cover chip + rail wishlist slot) and the physical panel
+    // (whose post-mount load populates it, and whose last-copy delete can
+    // write it). Mobile discards it.
+    phys: PhysSignals,
+    // Fetch Summary override (mobile only); reached only past the early
+    // returns below. `epoch` bumps alongside `value` on every fresh book
+    // load, so the Fetch Summary save in `render_loaded_mobile` can detect
+    // and drop a result left over from a since-navigated-away book.
+    description: DescriptionSignals,
+}
+
+fn use_book_detail_signals() -> BookDetailSignals {
+    let refresh = use_signal(|| 0u32);
+    BookDetailSignals {
+        book: use_signal(|| None),
+        author_books: use_signal(Vec::new),
+        suggestions: use_signal(|| None),
+        suggestions_epoch: use_signal(|| 0u64),
+        loading: use_signal(|| true),
+        error: use_signal(|| None),
+        is_admin: crate::use_is_admin(),
+        merge: MergeSignals {
+            open: use_signal(|| false),
+            result: use_signal(|| None),
+            undo_error: use_signal(|| None),
+            refresh,
+        },
+        delete_open: use_signal(|| false),
+        phys: PhysSignals {
+            wishlist: use_signal(|| None::<WishlistEntry>),
+            loaded: use_signal(|| false),
+        },
+        description: DescriptionSignals {
+            value: use_signal(String::new),
+            epoch: use_signal(|| 0u64),
+        },
+    }
 }
 
 /// Fetch Summary override signals (mobile only): the effective description
@@ -274,55 +288,9 @@ fn render_book_shell(
     // returns `false` during SSR and for non-admins on every platform.
     let is_admin_flag = is_admin();
 
-    // Rail "Merge with…" button (admin, web only) — threaded down as a
-    // prebuilt Element so the rail component stays platform-agnostic.
-    #[cfg(not(feature = "mobile"))]
-    let merge_button: Option<Element> = merge::build_merge_button(is_admin_flag, merge.open);
-    #[cfg(feature = "mobile")]
-    let merge_button: Option<Element> = merge::build_merge_button(is_admin_flag);
-
-    #[cfg(not(feature = "mobile"))]
-    let merge_ui: Option<Element> = merge::build_merge_ui(
-        merge.open,
-        merge.result,
-        merge.undo_error,
-        merge.refresh,
-        server_url.clone(),
-        b.clone(),
-    );
-    #[cfg(feature = "mobile")]
-    let merge_ui: Option<Element> = {
-        // Mobile's builders take no args; read every field so the signals
-        // (declared unconditionally in `BookDetailPage` for hook parity)
-        // aren't flagged as never-read on this target.
-        let MergeSignals {
-            open,
-            result,
-            undo_error,
-            refresh,
-        } = merge;
-        let _ = (open, result, undo_error, refresh);
-        merge::build_merge_ui()
-    };
-
-    // Rail "Delete files…" button + its dialog, same web-only shape as merge.
-    #[cfg(not(feature = "mobile"))]
-    let delete_button: Option<Element> = delete::build_delete_button(is_admin_flag, delete_open);
-    #[cfg(feature = "mobile")]
-    let delete_button: Option<Element> = delete::build_delete_button(is_admin_flag);
-
-    #[cfg(not(feature = "mobile"))]
-    let delete_ui: Option<Element> = delete::build_delete_ui(
-        delete_open,
-        merge.refresh,
-        b.unique_identifier.clone().unwrap_or_default(),
-        b.display_title(),
-    );
-    #[cfg(feature = "mobile")]
-    let delete_ui: Option<Element> = {
-        let _ = delete_open;
-        delete::build_delete_ui()
-    };
+    let (merge_button, merge_ui) = build_merge_pieces(is_admin_flag, merge, &server_url, &b);
+    let (delete_button, delete_ui) =
+        build_delete_pieces(is_admin_flag, delete_open, merge.refresh, &b);
 
     let body = render_loaded(
         b,
@@ -345,6 +313,76 @@ fn render_book_shell(
         {merge_ui}
         {delete_ui}
     }
+}
+
+/// Rail "Merge with…" button (admin, web only) plus its dialog, threaded down
+/// as prebuilt `Element`s so the rail component stays platform-agnostic.
+fn build_merge_pieces(
+    is_admin_flag: bool,
+    merge: MergeSignals,
+    server_url: &str,
+    b: &EbookMetadata,
+) -> (Option<Element>, Option<Element>) {
+    #[cfg(not(feature = "mobile"))]
+    let merge_button: Option<Element> = merge::build_merge_button(is_admin_flag, merge.open);
+    #[cfg(feature = "mobile")]
+    let merge_button: Option<Element> = merge::build_merge_button(is_admin_flag);
+
+    #[cfg(not(feature = "mobile"))]
+    let merge_ui: Option<Element> = merge::build_merge_ui(
+        merge.open,
+        merge.result,
+        merge.undo_error,
+        merge.refresh,
+        server_url.to_string(),
+        b.clone(),
+    );
+    #[cfg(feature = "mobile")]
+    let merge_ui: Option<Element> = {
+        // Mobile's builders take no args; read every field (plus the
+        // web-only params) so the signals — declared unconditionally in
+        // `BookDetailPage` for hook parity — aren't flagged as never-read
+        // on this target.
+        let MergeSignals {
+            open,
+            result,
+            undo_error,
+            refresh,
+        } = merge;
+        let _ = (open, result, undo_error, refresh, server_url, b);
+        merge::build_merge_ui()
+    };
+
+    (merge_button, merge_ui)
+}
+
+/// Rail "Delete files…" button + its dialog, same web-only shape as
+/// [`build_merge_pieces`].
+fn build_delete_pieces(
+    is_admin_flag: bool,
+    delete_open: Signal<bool>,
+    refresh: Signal<u32>,
+    b: &EbookMetadata,
+) -> (Option<Element>, Option<Element>) {
+    #[cfg(not(feature = "mobile"))]
+    let delete_button: Option<Element> = delete::build_delete_button(is_admin_flag, delete_open);
+    #[cfg(feature = "mobile")]
+    let delete_button: Option<Element> = delete::build_delete_button(is_admin_flag);
+
+    #[cfg(not(feature = "mobile"))]
+    let delete_ui: Option<Element> = delete::build_delete_ui(
+        delete_open,
+        refresh,
+        b.unique_identifier.clone().unwrap_or_default(),
+        b.display_title(),
+    );
+    #[cfg(feature = "mobile")]
+    let delete_ui: Option<Element> = {
+        let _ = (delete_open, refresh, b);
+        delete::build_delete_ui()
+    };
+
+    (delete_button, delete_ui)
 }
 
 // View helpers — the loaded-book case is the only thing rendered, so the

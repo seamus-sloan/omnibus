@@ -563,98 +563,115 @@ struct SheetProps {
     server_url: String,
 }
 
-/// Mount whichever bottom sheet is open.
+/// Mount whichever bottom sheet is open. Each variant's markup lives in its
+/// own `render_*_sheet` helper below so this stays a pure dispatch.
 fn render_sheets(p: &SheetProps) -> Element {
-    let mut sheet = p.sheet;
-    let close = move |_: MouseEvent| sheet.set(OpenSheet::None);
-
     match (p.sheet)() {
         OpenSheet::None => rsx! {},
-        OpenSheet::Chapters => rsx! {
-            ChaptersSheet {
-                list: sheets::ChaptersListView {
-                    chapters: p.chapters.as_ref().clone(),
-                    current_index: p.chapter_index,
-                    elapsed: p.elapsed,
-                    total_label: p.total_label.clone(),
-                },
-                on_seek: EventHandler::new(move |secs: f64| {
-                    interop::seek(secs);
-                    sheet.set(OpenSheet::None);
-                }),
-                on_close: close,
-            }
-        },
-        OpenSheet::Speed => {
-            let uuid = p.uuid.clone();
-            let server_url = p.server_url.clone();
-            let mut rate_sig = p.ctx.rate;
-            let rate_error = p.ctx.rate_error;
-            let user_id = *p.ctx.user_id.peek();
-            rsx! {
-                SpeedSheet {
-                    rate: p.rate,
-                    on_set: EventHandler::new(move |r: f64| {
-                        let snapped = snap_rate(r);
-                        rate_sig.set(snapped);
-                        if let Some(user_id) = user_id {
-                            crate::audiobook_progress::save_rate(user_id, &uuid, snapped);
-                        }
-                        interop::set_rate(snapped);
-                        let uuid = uuid.clone();
-                        let server_url = server_url.clone();
-                        spawn(async move {
-                            let mut rate_error = rate_error;
-                            let update = omnibus_shared::AudiobookPlaybackRateUpdate {
-                                playback_rate: snapped,
-                            };
-                            match data::set_playback_rate(&server_url, &uuid, update).await {
-                                Ok(_) => rate_error.set(None),
-                                Err(error) => rate_error.set(Some(format!(
-                                    "Could not save playback speed: {error}"
-                                ))),
-                            }
-                        });
-                    }),
-                    on_close: close,
-                }
-            }
+        OpenSheet::Chapters => render_chapters_sheet(p),
+        OpenSheet::Speed => render_speed_sheet(p),
+        OpenSheet::Sleep => render_sleep_sheet(p),
+        OpenSheet::Bookmarks => render_bookmarks_sheet(p),
+    }
+}
+
+/// Build the `on_close` handler shared by every sheet: closes the sheet
+/// layer by resetting `sheet` to [`OpenSheet::None`].
+fn close_sheet_handler(sheet: Signal<OpenSheet>) -> impl FnMut(MouseEvent) {
+    let mut sheet = sheet;
+    move |_: MouseEvent| sheet.set(OpenSheet::None)
+}
+
+fn render_chapters_sheet(p: &SheetProps) -> Element {
+    let mut sheet = p.sheet;
+    rsx! {
+        ChaptersSheet {
+            list: sheets::ChaptersListView {
+                chapters: p.chapters.as_ref().clone(),
+                current_index: p.chapter_index,
+                elapsed: p.elapsed,
+                total_label: p.total_label.clone(),
+            },
+            on_seek: EventHandler::new(move |secs: f64| {
+                interop::seek(secs);
+                sheet.set(OpenSheet::None);
+            }),
+            on_close: close_sheet_handler(p.sheet),
         }
-        OpenSheet::Sleep => {
-            let chapter_end = p
-                .chapters
-                .get(p.chapter_index)
-                .map(|c| c.start_seconds + c.duration_seconds);
-            let mut sleep_sig = p.ctx.sleep;
-            rsx! {
-                SleepSheet {
-                    view: sheets::SleepSheetView {
-                        sleep: p.sleep,
-                        elapsed: p.elapsed,
-                        chapter_end,
-                        chapter_no: p.chapter_index + 1,
-                    },
-                    on_set: EventHandler::new(move |s: SleepState| sleep_sig.set(s)),
-                    on_close: close,
+    }
+}
+
+fn render_speed_sheet(p: &SheetProps) -> Element {
+    let uuid = p.uuid.clone();
+    let server_url = p.server_url.clone();
+    let mut rate_sig = p.ctx.rate;
+    let rate_error = p.ctx.rate_error;
+    let user_id = *p.ctx.user_id.peek();
+    rsx! {
+        SpeedSheet {
+            rate: p.rate,
+            on_set: EventHandler::new(move |r: f64| {
+                let snapped = snap_rate(r);
+                rate_sig.set(snapped);
+                if let Some(user_id) = user_id {
+                    crate::audiobook_progress::save_rate(user_id, &uuid, snapped);
                 }
-            }
+                interop::set_rate(snapped);
+                let uuid = uuid.clone();
+                let server_url = server_url.clone();
+                spawn(async move {
+                    let mut rate_error = rate_error;
+                    let update = omnibus_shared::AudiobookPlaybackRateUpdate {
+                        playback_rate: snapped,
+                    };
+                    match data::set_playback_rate(&server_url, &uuid, update).await {
+                        Ok(_) => rate_error.set(None),
+                        Err(error) => rate_error.set(Some(format!(
+                            "Could not save playback speed: {error}"
+                        ))),
+                    }
+                });
+            }),
+            on_close: close_sheet_handler(p.sheet),
         }
-        OpenSheet::Bookmarks => {
-            let uuid = p.uuid.clone();
-            let server_url = p.server_url.clone();
-            let file_sig = p.ctx.file_id;
-            rsx! {
-                BookmarksSheet {
-                    bookmarks: p.bookmarks,
-                    chapters: p.chapters.as_ref().clone(),
-                    on_seek: EventHandler::new(move |secs: f64| {
-                        interop::seek(secs);
-                        persist_position(&uuid, *file_sig.peek(), &server_url, secs);
-                        sheet.set(OpenSheet::None);
-                    }),
-                    on_close: close,
-                }
-            }
+    }
+}
+
+fn render_sleep_sheet(p: &SheetProps) -> Element {
+    let chapter_end = p
+        .chapters
+        .get(p.chapter_index)
+        .map(|c| c.start_seconds + c.duration_seconds);
+    let mut sleep_sig = p.ctx.sleep;
+    rsx! {
+        SleepSheet {
+            view: sheets::SleepSheetView {
+                sleep: p.sleep,
+                elapsed: p.elapsed,
+                chapter_end,
+                chapter_no: p.chapter_index + 1,
+            },
+            on_set: EventHandler::new(move |s: SleepState| sleep_sig.set(s)),
+            on_close: close_sheet_handler(p.sheet),
+        }
+    }
+}
+
+fn render_bookmarks_sheet(p: &SheetProps) -> Element {
+    let uuid = p.uuid.clone();
+    let server_url = p.server_url.clone();
+    let file_sig = p.ctx.file_id;
+    let mut sheet = p.sheet;
+    rsx! {
+        BookmarksSheet {
+            bookmarks: p.bookmarks,
+            chapters: p.chapters.as_ref().clone(),
+            on_seek: EventHandler::new(move |secs: f64| {
+                interop::seek(secs);
+                persist_position(&uuid, *file_sig.peek(), &server_url, secs);
+                sheet.set(OpenSheet::None);
+            }),
+            on_close: close_sheet_handler(p.sheet),
         }
     }
 }

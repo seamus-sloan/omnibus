@@ -125,22 +125,48 @@ pub struct ChipEditorProps {
     pub options: ChipEditorOptions,
 }
 
+/// Local reactive state for one [`ChipEditor`] instance. A custom-hook-style
+/// helper — called unconditionally so Dioxus's per-scope hook-order tracking
+/// sees the same `use_signal` sequence every render — so [`ChipEditor`]
+/// itself starts from the derived selection instead of a wall of signal
+/// declarations.
+///
+/// `focused` seeds from `autofocus`: the browser's autofocus does not always
+/// emit `onfocus` for a freshly-mounted node (e.g. the landing cell's
+/// editor, mounted on click), so without seeding the open-on-focus dropdown
+/// never surfaces. `suppress_open` flips true after a commit so the
+/// just-emptied input does not instantly re-surface the pool; any keystroke
+/// / fresh focus clears it. `root_el` is captured by the wrapper's
+/// `onmounted` in [`ChipEditor`]'s rsx; read by
+/// `close_unless_focus_stayed_inside` on blur.
+struct ChipEditorState {
+    input: Signal<String>,
+    highlight: Signal<Option<usize>>,
+    focused: Signal<bool>,
+    suppress_open: Signal<bool>,
+    root_el: Signal<Option<ChipEditorRoot>>,
+}
+
+fn use_chip_editor_state(autofocus: bool) -> ChipEditorState {
+    ChipEditorState {
+        input: use_signal(String::new),
+        highlight: use_signal(|| None),
+        focused: use_signal(|| autofocus),
+        suppress_open: use_signal(|| false),
+        root_el: use_signal(|| None),
+    }
+}
+
 /// Add/remove chip editor with autocomplete dropdown.
 #[component]
 pub fn ChipEditor(props: ChipEditorProps) -> Element {
-    // Seed `focused` from `autofocus`: the browser's autofocus does not
-    // always emit `onfocus` for a freshly-mounted node (e.g. the landing
-    // cell's editor, mounted on click), so without seeding the
-    // open-on-focus dropdown never surfaces. `suppress_open` flips true
-    // after a commit so the just-emptied input does not instantly
-    // re-surface the pool; any keystroke / fresh focus clears it.
-    let mut input = use_signal(String::new);
-    let mut highlight = use_signal::<Option<usize>>(|| None);
-    let mut focused = use_signal(|| props.options.autofocus);
-    let mut suppress_open = use_signal(|| false);
-    // Captured by the wrapper's `onmounted` below; read by
-    // `close_unless_focus_stayed_inside` on blur.
-    let mut root_el = use_signal(|| None::<ChipEditorRoot>);
+    let ChipEditorState {
+        mut input,
+        mut highlight,
+        mut focused,
+        mut suppress_open,
+        mut root_el,
+    } = use_chip_editor_state(props.options.autofocus);
 
     let selection = compute_selection(&props, input(), focused(), suppress_open());
     let selection_kd = selection.clone();

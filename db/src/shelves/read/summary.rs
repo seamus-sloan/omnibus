@@ -15,12 +15,45 @@ use super::{
 };
 use crate::shelves::rules::{membership_predicate, Bind};
 
+struct VisibleShelfRow {
+    id: i64,
+    owner_user_id: i64,
+    owner_username: String,
+    kind: ShelfKind,
+    name: String,
+    visibility: Visibility,
+    accent: Option<String>,
+    match_mode: Option<String>,
+}
+
+/// Per-kind id groups used to fan the batch loaders out to the right query
+/// (smart shelves count via their rule predicate, manual/wishlist via a
+/// single `GROUP BY`).
+struct ShelfIdGroups {
+    smart_ids: Vec<i64>,
+    manual_ids: Vec<i64>,
+    wishlist_owner_ids: Vec<i64>,
+}
+
 /// Every shelf `viewer_id` can see: own + public, or all when `is_admin`.
 pub async fn list_visible_shelves(
     pool: &SqlitePool,
     viewer_id: i64,
     is_admin: bool,
 ) -> Result<Vec<ShelfSummary>, ShelfError> {
+    let (parsed, groups) = fetch_visible_shelf_rows(pool, viewer_id, is_admin).await?;
+    let (counts, covers) = load_shelf_batches(pool, &parsed, &groups).await?;
+    Ok(assemble_shelf_summaries(parsed, counts, covers))
+}
+
+/// Run the visibility-scoped shelf query and parse each row into a
+/// [`VisibleShelfRow`], grouping ids by kind for the batch loaders that
+/// follow.
+async fn fetch_visible_shelf_rows(
+    pool: &SqlitePool,
+    viewer_id: i64,
+    is_admin: bool,
+) -> Result<(Vec<VisibleShelfRow>, ShelfIdGroups), ShelfError> {
     let rows = sqlx::query(
         "SELECT s.id, s.owner_user_id, u.username AS owner_username,
                 s.kind, s.name, s.visibility, s.accent, s.match_mode
@@ -36,16 +69,6 @@ pub async fn list_visible_shelves(
     .fetch_all(pool)
     .await?;
 
-    struct VisibleShelfRow {
-        id: i64,
-        owner_user_id: i64,
-        owner_username: String,
-        kind: ShelfKind,
-        name: String,
-        visibility: Visibility,
-        accent: Option<String>,
-        match_mode: Option<String>,
-    }
     let mut parsed = Vec::with_capacity(rows.len());
     let mut smart_ids = Vec::new();
     let mut manual_ids = Vec::new();
@@ -72,44 +95,95 @@ pub async fn list_visible_shelves(
             match_mode: r.try_get("match_mode")?,
         });
     }
+    Ok((
+        parsed,
+        ShelfIdGroups {
+            smart_ids,
+            manual_ids,
+            wishlist_owner_ids,
+        },
+    ))
+}
 
-    let mut rules_by_shelf = load_rules_batch(pool, &smart_ids).await?;
-    let manual_counts = count_manual_batch(pool, &manual_ids).await?;
-    let wishlist_counts = count_wishlist_batch(pool, &wishlist_owner_ids).await?;
-    let mut manual_covers = covers_manual_batch(pool, &manual_ids).await?;
-    let mut wishlist_covers = covers_wishlist_batch(pool, &wishlist_owner_ids).await?;
+/// Per-kind book counts, keyed to match how each kind's batch loader groups
+/// its rows (shelf id for smart/manual, owner id for wishlist).
+struct ShelfCounts {
+    smart: HashMap<i64, i64>,
+    manual: HashMap<i64, i64>,
+    wishlist: HashMap<i64, i64>,
+}
 
-    // Each smart shelf's membership predicate is unique, so unlike the manual
-    // counts above these can't fold into one `GROUP BY` — fan them out
-    // concurrently instead of one sequential query per shelf.
-    let mut smart_inputs = Vec::with_capacity(smart_ids.len());
-    for row in &parsed {
+/// Per-kind mosaic cover uuids, same keying convention as [`ShelfCounts`].
+struct ShelfCovers {
+    smart: HashMap<i64, Vec<String>>,
+    manual: HashMap<i64, Vec<String>>,
+    wishlist: HashMap<i64, Vec<String>>,
+}
+
+/// Run every count/cover batch loader, fanning the smart-shelf ones out
+/// concurrently since each shelf's membership predicate is unique and can't
+/// fold into one `GROUP BY` like manual/wishlist can.
+async fn load_shelf_batches(
+    pool: &SqlitePool,
+    parsed: &[VisibleShelfRow],
+    groups: &ShelfIdGroups,
+) -> Result<(ShelfCounts, ShelfCovers), ShelfError> {
+    let mut rules_by_shelf = load_rules_batch(pool, &groups.smart_ids).await?;
+    let manual_counts = count_manual_batch(pool, &groups.manual_ids).await?;
+    let wishlist_counts = count_wishlist_batch(pool, &groups.wishlist_owner_ids).await?;
+    let manual_covers = covers_manual_batch(pool, &groups.manual_ids).await?;
+    let wishlist_covers = covers_wishlist_batch(pool, &groups.wishlist_owner_ids).await?;
+
+    let mut smart_inputs = Vec::with_capacity(groups.smart_ids.len());
+    for row in parsed {
         if row.kind == ShelfKind::Smart {
             let mode = parse_mode(row.match_mode.clone());
             let rules = rules_by_shelf.remove(&row.id).unwrap_or_default();
             smart_inputs.push((row.id, row.owner_user_id, mode, rules));
         }
     }
-    let mut smart_covers = covers_smart_fan_out(pool, &smart_inputs).await?;
+    let smart_covers = covers_smart_fan_out(pool, &smart_inputs).await?;
     let smart_counts = count_smart_fan_out(pool, smart_inputs).await?;
 
+    Ok((
+        ShelfCounts {
+            smart: smart_counts,
+            manual: manual_counts,
+            wishlist: wishlist_counts,
+        },
+        ShelfCovers {
+            smart: smart_covers,
+            manual: manual_covers,
+            wishlist: wishlist_covers,
+        },
+    ))
+}
+
+/// Zip parsed rows with their batch-loaded counts/covers into the wire type.
+fn assemble_shelf_summaries(
+    parsed: Vec<VisibleShelfRow>,
+    counts: ShelfCounts,
+    mut covers: ShelfCovers,
+) -> Vec<ShelfSummary> {
     let mut out = Vec::with_capacity(parsed.len());
     for row in parsed {
         let book_count = match row.kind {
-            ShelfKind::Smart => smart_counts.get(&row.id).copied().unwrap_or(0),
-            ShelfKind::Manual => manual_counts.get(&row.id).copied().unwrap_or(0),
-            ShelfKind::Wishlist => wishlist_counts
+            ShelfKind::Smart => counts.smart.get(&row.id).copied().unwrap_or(0),
+            ShelfKind::Manual => counts.manual.get(&row.id).copied().unwrap_or(0),
+            ShelfKind::Wishlist => counts
+                .wishlist
                 .get(&row.owner_user_id)
                 .copied()
                 .unwrap_or(0),
         };
         let cover_uuids = match row.kind {
-            ShelfKind::Smart => smart_covers.remove(&row.id).unwrap_or_default(),
-            ShelfKind::Manual => manual_covers.remove(&row.id).unwrap_or_default(),
+            ShelfKind::Smart => covers.smart.remove(&row.id).unwrap_or_default(),
+            ShelfKind::Manual => covers.manual.remove(&row.id).unwrap_or_default(),
             // Two visible rows can share an owner's wishlist covers only if the
             // same user somehow owned two wishlists; `remove` keeps the map
             // drain simple and the first row wins.
-            ShelfKind::Wishlist => wishlist_covers
+            ShelfKind::Wishlist => covers
+                .wishlist
                 .remove(&row.owner_user_id)
                 .unwrap_or_default(),
         };
@@ -125,7 +199,7 @@ pub async fn list_visible_shelves(
             cover_uuids,
         });
     }
-    Ok(out)
+    out
 }
 
 /// Load rules for every shelf id in `shelf_ids` in one query, keyed by shelf

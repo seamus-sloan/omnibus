@@ -69,28 +69,7 @@ fn kepub_outcome(result: Result<std::path::PathBuf, crate::kepub::KepubError>) -
 impl Worker {
     pub(super) async fn execute(self: &Arc<Self>, task: Task, id: TaskId) -> TaskOutcome {
         match task {
-            Task::Scan { library_path } => {
-                match crate::indexer::reindex_with_progress(
-                    &self.pool,
-                    &library_path,
-                    |processed, total| {
-                        self.report_progress(id, processed, Some(total));
-                    },
-                )
-                .await
-                {
-                    Ok(stats) => {
-                        // Fill word counts for any pre-0049 rows this library
-                        // still carries. Same resource key as the scan, so it
-                        // waits for this task to fully finish; the post itself
-                        // is instant. Mirrors the audiobook chapter backfill.
-                        let warning = stats.ghost_warning();
-                        self.post(Task::BackfillWordCounts { library_path });
-                        TaskOutcome::Ok(warning)
-                    }
-                    Err(e) => sanitized_err("library scan", e),
-                }
-            }
+            Task::Scan { library_path } => self.handle_scan(library_path, id).await,
             Task::ScanAudiobooks { library_path } => {
                 self.handle_scan_audiobooks(library_path, id).await
             }
@@ -114,16 +93,7 @@ impl Worker {
                 "author photo lookup",
                 crate::author_photos::resolve(&self.pool, author_id).await,
             ),
-            Task::RefetchAuthorPhotos => {
-                match crate::author_photos::refetch_all(&self.pool, |processed, total| {
-                    self.report_progress(id, processed, total);
-                })
-                .await
-                {
-                    Ok(()) => TaskOutcome::Ok(None),
-                    Err(e) => sanitized_err("author photo refetch", e),
-                }
-            }
+            Task::RefetchAuthorPhotos => self.handle_refetch_author_photos(id).await,
             Task::BackfillChapters { library_path } => anyhow_outcome(
                 "chapter backfill",
                 crate::indexer::backfill_chapters(&self.pool, &library_path, |processed, total| {
@@ -175,6 +145,42 @@ impl Worker {
                 on_done,
                 ..
             } => handle_test_task(latency_ms, on_run, on_done).await,
+        }
+    }
+
+    /// Reindex an ebook library, then (on success) post the follow-up
+    /// word-count backfill task for any pre-0049 rows this library still
+    /// carries. Same resource key as the scan, so it waits for this task to
+    /// fully finish; the post itself is instant. Mirrors the audiobook
+    /// chapter backfill.
+    async fn handle_scan(self: &Arc<Self>, library_path: String, id: TaskId) -> TaskOutcome {
+        match crate::indexer::reindex_with_progress(
+            &self.pool,
+            &library_path,
+            |processed, total| {
+                self.report_progress(id, processed, Some(total));
+            },
+        )
+        .await
+        {
+            Ok(stats) => {
+                let warning = stats.ghost_warning();
+                self.post(Task::BackfillWordCounts { library_path });
+                TaskOutcome::Ok(warning)
+            }
+            Err(e) => sanitized_err("library scan", e),
+        }
+    }
+
+    /// Re-resolve every author's photo, reporting progress as it goes.
+    async fn handle_refetch_author_photos(self: &Arc<Self>, id: TaskId) -> TaskOutcome {
+        match crate::author_photos::refetch_all(&self.pool, |processed, total| {
+            self.report_progress(id, processed, total);
+        })
+        .await
+        {
+            Ok(()) => TaskOutcome::Ok(None),
+            Err(e) => sanitized_err("author photo refetch", e),
         }
     }
 

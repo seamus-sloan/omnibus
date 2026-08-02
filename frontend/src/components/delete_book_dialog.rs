@@ -157,6 +157,52 @@ fn build_do_delete(
     }
 }
 
+/// Precomputed copy/state for the choose-step body, so [`render_choose`]
+/// itself only has the rsx tree left to build.
+struct ChooseLabels {
+    /// The continue button's label — names the action rather than a count
+    /// while nothing is picked, since the button is disabled at zero.
+    action: String,
+    intro: &'static str,
+    /// With copies in play the count would misread as the item total, so
+    /// the section header drops it (as the design's variant does).
+    files_head: String,
+    all_picked: bool,
+}
+
+/// Compute [`ChooseLabels`] from the manifest and the current selection
+/// count.
+fn choose_labels(manifest: &BookDeletionManifest, has_copies: bool, picked: usize) -> ChooseLabels {
+    // "1 item…" once physical copies are in play, since not every row is a file.
+    let noun = match (has_copies, picked) {
+        (true, 1) => "item",
+        (true, _) => "items",
+        (false, 1) => "file",
+        (false, _) => "files",
+    };
+    let action = if picked == 0 {
+        format!("Delete {noun}\u{2026}")
+    } else {
+        format!("Delete {picked} {noun}\u{2026}")
+    };
+    let intro = if has_copies {
+        "Choose what to remove. Files are deleted from disk; a physical copy is only un-recorded."
+    } else {
+        "Choose the files to remove. Each one is deleted from disk and from the library database. This cannot be undone."
+    };
+    let files_head = match (has_copies, manifest.files.len()) {
+        (true, _) => "FILES ON DISK".to_string(),
+        (false, 1) => "1 FILE ON DISK".to_string(),
+        (false, n) => format!("{n} FILES ON DISK"),
+    };
+    ChooseLabels {
+        action,
+        intro,
+        files_head,
+        all_picked: picked == manifest.item_count(),
+    }
+}
+
 /// Step 1 — the item checklist, files first and physical copies below.
 fn render_choose(
     title: String,
@@ -172,47 +218,22 @@ fn render_choose(
     } = signals;
     let picked = files.read().len() + copies.read().len();
     let has_copies = !manifest.copies.is_empty();
-    // "1 item…" once physical copies are in play, since not every row is a file.
-    let noun = match (has_copies, picked) {
-        (true, 1) => "item",
-        (true, _) => "items",
-        (false, 1) => "file",
-        (false, _) => "files",
-    };
-    // The button is disabled at zero, so it names the action rather than a count.
-    let action = if picked == 0 {
-        format!("Delete {noun}\u{2026}")
-    } else {
-        format!("Delete {picked} {noun}\u{2026}")
-    };
-    let all_picked = picked == manifest.item_count();
-    let intro = if has_copies {
-        "Choose what to remove. Files are deleted from disk; a physical copy is only un-recorded."
-    } else {
-        "Choose the files to remove. Each one is deleted from disk and from the library database. This cannot be undone."
-    };
-    let files_head = match (has_copies, manifest.files.len()) {
-        // With copies in play the count would misread as the item total, so
-        // the section header drops it (as the design's variant does).
-        (true, _) => "FILES ON DISK".to_string(),
-        (false, 1) => "1 FILE ON DISK".to_string(),
-        (false, n) => format!("{n} FILES ON DISK"),
-    };
-    let select_all = build_select_all(&manifest, signals, all_picked);
+    let labels = choose_labels(&manifest, has_copies, picked);
+    let select_all = build_select_all(&manifest, signals, labels.all_picked);
 
     rsx! {
         div { class: "del-body",
             h2 { class: "del-title", "Delete files from \u{201c}{title}\u{201d}?" }
-            p { class: "del-copy", "{intro}" }
+            p { class: "del-copy", "{labels.intro}" }
 
             div { class: "del-section-head",
-                span { class: "label del-section-label", "{files_head}" }
+                span { class: "label del-section-label", "{labels.files_head}" }
                 button {
                     class: "del-select-all",
                     "data-testid": "delete-select-all",
                     r#type: "button",
                     onclick: select_all,
-                    if all_picked { "Clear selection" } else { "Select all" }
+                    if labels.all_picked { "Clear selection" } else { "Select all" }
                 }
             }
             ul { class: "del-items",
@@ -242,7 +263,7 @@ fn render_choose(
                     r#type: "button",
                     disabled: picked == 0,
                     onclick: move |_| stage.set(Stage::Confirm),
-                    "{action}"
+                    "{labels.action}"
                 }
             }, on_close, signals.busy)}
         }
@@ -373,24 +394,27 @@ fn render_item_row(row: ItemRow) -> Element {
     }
 }
 
-/// Step 2 — the confirm pane. Three shapes: no items at all, a partial
-/// delete the book survives, and a total delete that takes the book.
-fn render_confirm(
-    title: String,
-    manifest: BookDeletionManifest,
+/// Precomputed copy/state for the confirm-step body, so [`render_confirm`]
+/// itself only has the rsx tree left to build. Three shapes: no items at
+/// all, a partial delete the book survives, and a total delete that takes
+/// the book.
+struct ConfirmLabels {
+    heading: String,
+    copy: String,
+    action: String,
+    /// Only a total delete takes the uuid-keyed user data with it.
+    losses: Option<Vec<String>>,
+    empty: bool,
+}
+
+/// Compute [`ConfirmLabels`] from the manifest, current selection, and
+/// pick counts.
+fn confirm_labels(
+    title: &str,
+    manifest: &BookDeletionManifest,
     signals: DeleteDialogSignals,
-    on_confirm: impl FnMut(()) + 'static,
-    on_close: EventHandler<()>,
-) -> Element {
-    let DeleteDialogSignals {
-        files,
-        copies,
-        mut stage,
-        busy,
-        ..
-    } = signals;
-    let mut on_confirm = on_confirm;
-    let picked = files.read().len() + copies.read().len();
+    picked: usize,
+) -> ConfirmLabels {
     let empty = manifest.item_count() == 0;
     let total = empty || picked == manifest.item_count();
     let remaining = manifest.item_count().saturating_sub(picked);
@@ -421,23 +445,50 @@ fn render_confirm(
             (false, 1) => "item",
             (false, _) => "items",
         };
-        format!("{} will be deleted from disk and removed from this book. {title} stays in your library with its {remaining} remaining {left}.", picked_label(&manifest, signals))
+        format!("{} will be deleted from disk and removed from this book. {title} stays in your library with its {remaining} remaining {left}.", picked_label(manifest, signals))
     };
     let action = match (empty, total, noun) {
         (true, _, _) => "Delete record".to_string(),
         (_, true, _) => "Delete book".to_string(),
         (_, _, n) => format!("Delete {n}"),
     };
-    // Only a total delete takes the uuid-keyed user data with it.
     let losses = total
         .then(|| manifest.impact.losses())
         .filter(|l| !l.is_empty());
 
+    ConfirmLabels {
+        heading,
+        copy,
+        action,
+        losses,
+        empty,
+    }
+}
+
+/// Step 2 — the confirm pane.
+fn render_confirm(
+    title: String,
+    manifest: BookDeletionManifest,
+    signals: DeleteDialogSignals,
+    on_confirm: impl FnMut(()) + 'static,
+    on_close: EventHandler<()>,
+) -> Element {
+    let DeleteDialogSignals {
+        files,
+        copies,
+        mut stage,
+        busy,
+        ..
+    } = signals;
+    let mut on_confirm = on_confirm;
+    let picked = files.read().len() + copies.read().len();
+    let labels = confirm_labels(&title, &manifest, signals, picked);
+
     rsx! {
         div { class: "del-body",
-            h2 { class: "del-title", "{heading}" }
-            p { class: "del-copy", "data-testid": "delete-confirm-copy", "{copy}" }
-            if let Some(losses) = losses {
+            h2 { class: "del-title", "{labels.heading}" }
+            p { class: "del-copy", "data-testid": "delete-confirm-copy", "{labels.copy}" }
+            if let Some(losses) = &labels.losses {
                 p { class: "del-copy del-losses", "data-testid": "delete-losses",
                     "Also deleted: {losses.join(\", \")}."
                 }
@@ -446,7 +497,7 @@ fn render_confirm(
                 p { role: "alert", class: "bd-merge-error", "{msg}" }
             }
             {render_actions(rsx! {
-                if !empty {
+                if !labels.empty {
                     button {
                         class: "del-btn-ghost",
                         "data-testid": "delete-back",
@@ -462,7 +513,7 @@ fn render_confirm(
                     r#type: "button",
                     disabled: busy(),
                     onclick: move |_| on_confirm(()),
-                    if busy() { "Deleting\u{2026}" } else { "{action}" }
+                    if busy() { "Deleting\u{2026}" } else { "{labels.action}" }
                 }
             }, on_close, signals.busy)}
         }

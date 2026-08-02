@@ -74,18 +74,34 @@ pub async fn list_authors(
     pool: &SqlitePool,
     library_paths: &[&str],
 ) -> Result<Vec<AuthorSummary>, BrowseError> {
-    let ph = placeholders(library_paths.len());
+    let sql = list_authors_sql(library_paths.len());
+    let mut q = sqlx::query(&sql);
+    for path in library_paths {
+        q = q.bind(*path);
+    }
+    q = q.bind(INDEX_LIMIT);
+    let rows = q.fetch_all(pool).await?;
+
+    Ok(rows.iter().map(map_author_row).collect())
+}
+
+/// Build the `list_authors` query text for an `n`-entry `library_paths`
+/// binding. Split out from [`list_authors`] because the SQL, not the
+/// bind/fetch/map plumbing, is the bulk of that function's length.
+///
+/// `effective(author_id, book_id)` is the override-aware membership set,
+/// built once: arm (1) canonical link rows whose book has no creators
+/// override, arm (2) override-derived `(authors.id, book_id)` pairs. A
+/// single `GROUP BY author_id` over it replaces the old per-author
+/// correlated `COUNT(*)` subquery, so the books table is scanned once
+/// rather than once per author. UNION (not ALL) collapses a duplicate
+/// author name inside one override array. The inner `JOIN counts` is also
+/// what enforces the `book_count > 0` invariant.
+fn list_authors_sql(n: usize) -> String {
+    let ph = placeholders(n);
     let vis = visible("b", "l");
     let vis2 = visible("b2", "l2");
-    // `effective(author_id, book_id)` is the override-aware membership set,
-    // built once: arm (1) canonical link rows whose book has no creators
-    // override, arm (2) override-derived `(authors.id, book_id)` pairs.
-    // A single `GROUP BY author_id` over it replaces the old per-author
-    // correlated `COUNT(*)` subquery, so the books table is scanned once
-    // rather than once per author. UNION (not ALL) collapses a duplicate
-    // author name inside one override array. The inner `JOIN counts` is also
-    // what enforces the `book_count > 0` invariant.
-    let sql = format!(
+    format!(
         r"
         WITH lib_paths(p) AS (VALUES {ph}),
         effective AS (
@@ -137,25 +153,19 @@ pub async fn list_authors(
         ORDER BY COALESCE(a.sort, a.name) COLLATE NOCASE ASC
         LIMIT ?
         "
-    );
-    let mut q = sqlx::query(&sql);
-    for path in library_paths {
-        q = q.bind(*path);
-    }
-    q = q.bind(INDEX_LIMIT);
-    let rows = q.fetch_all(pool).await?;
+    )
+}
 
-    Ok(rows
-        .iter()
-        .map(|r| AuthorSummary {
-            id: r.get("id"),
-            name: r.get("name"),
-            sort: r.get("sort"),
-            book_count: usize::try_from(r.get::<i64, _>("book_count")).unwrap_or(0),
-            accent: r.get("accent"),
-            has_photo: r.get::<i64, _>("has_photo") != 0,
-        })
-        .collect())
+/// Map one `list_authors` result row to the wire type.
+fn map_author_row(r: &sqlx::sqlite::SqliteRow) -> AuthorSummary {
+    AuthorSummary {
+        id: r.get("id"),
+        name: r.get("name"),
+        sort: r.get("sort"),
+        book_count: usize::try_from(r.get::<i64, _>("book_count")).unwrap_or(0),
+        accent: r.get("accent"),
+        has_photo: r.get::<i64, _>("has_photo") != 0,
+    }
 }
 
 /// Return every series with book count, primary author, and an optional

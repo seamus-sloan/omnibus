@@ -10,6 +10,10 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{OnceLock, RwLock};
 
+use omnibus_shared::{
+    AudiobookPlaybackRateUpdate, CreateBookmark, CreateHighlight, CreateJournalEntry,
+    CreateShelfRequest, ProgressUpdate, RatingUpdate, UpdateJournalEntry,
+};
 use tokio::sync::watch;
 
 use crate::data::{self, DataError};
@@ -423,59 +427,22 @@ fn ok_or<T>(result: Result<T, DataError>, target_may_be_gone: bool) -> (Option<T
 }
 
 /// Replay one op against the server, applying remaps / cache refreshes on
-/// success.
+/// success. Each variant's real work lives in a per-variant `exec_*` helper
+/// below; guard arms (negative temp ids that never reached the server) stay
+/// inline since they're a single `Outcome::Done`.
 async fn execute_op(url: &str, op: Op) -> Outcome {
     match op {
         Op::SaveProgress {
             update,
             captured_at,
-        } => {
-            // LWW stale guard: if another device wrote a *newer* position
-            // while this one was offline, keep the server's copy.
-            if let Ok(Some(server)) =
-                data::get_progress_online(url, &update.book_uuid, update.format).await
-            {
-                if server.updated_at > captured_at {
-                    outbox::apply::progress_saved(&server).await;
-                    return Outcome::Done;
-                }
-            }
-            let (record, outcome) = ok_or(data::save_progress_online(url, update).await, false);
-            if let Some(record) = record {
-                outbox::apply::progress_saved(&record).await;
-            }
-            outcome
-        }
-        Op::SetPlaybackRate { uuid, update } => {
-            let (record, outcome) = ok_or(
-                data::set_playback_rate_online(url, &uuid, update).await,
-                false,
-            );
-            if let Some(record) = record {
-                super::cache::put_json(&super::cache::keys::playback_rate(&uuid), &Some(record));
-            }
-            outcome
-        }
+        } => exec_save_progress(url, update, captured_at).await,
+        Op::SetPlaybackRate { uuid, update } => exec_set_playback_rate(url, uuid, update).await,
         Op::RecordSessions { reports } => {
             ok_or(data::record_sessions_online(url, reports).await, false).1
         }
-        Op::SetRating { update } => {
-            let uuid = update.book_uuid.clone();
-            let (record, outcome) = ok_or(data::set_rating_online(url, update).await, false);
-            if let Some(record) = record {
-                super::cache::put_json(&super::cache::keys::rating(&uuid), &Some(record));
-            }
-            outcome
-        }
+        Op::SetRating { update } => exec_set_rating(url, update).await,
         Op::ClearRating { uuid } => ok_or(data::clear_rating_online(url, &uuid).await, true).1,
-        Op::CreateHighlight { temp_id, input } => {
-            let (created, outcome) = ok_or(data::create_highlight_online(url, input).await, false);
-            if let Some(created) = created {
-                outbox::apply::highlight_remapped(temp_id, &created).await;
-                outbox::remap_queued(temp_id, created.id).await;
-            }
-            outcome
-        }
+        Op::CreateHighlight { temp_id, input } => exec_create_highlight(url, temp_id, input).await,
         Op::UpdateHighlightColor { id, .. } if id < 0 => Outcome::Done,
         Op::UpdateHighlightColor { id, color, .. } => {
             ok_or(
@@ -496,28 +463,14 @@ async fn execute_op(url: &str, op: Op) -> Outcome {
         Op::DeleteHighlight { id, .. } => {
             ok_or(data::delete_highlight_online(url, id).await, true).1
         }
-        Op::CreateBookmark { temp_id, input } => {
-            let (created, outcome) = ok_or(data::create_bookmark_online(url, input).await, false);
-            if let Some(created) = created {
-                outbox::apply::bookmark_remapped(temp_id, &created).await;
-                outbox::remap_queued(temp_id, created.id).await;
-            }
-            outcome
-        }
+        Op::CreateBookmark { temp_id, input } => exec_create_bookmark(url, temp_id, input).await,
         Op::UpdateBookmark { id, .. } if id < 0 => Outcome::Done,
         Op::UpdateBookmark { id, title, .. } => {
             ok_or(data::update_bookmark_online(url, id, title).await, true).1
         }
         Op::DeleteBookmark { id, .. } if id < 0 => Outcome::Done,
         Op::DeleteBookmark { id, .. } => ok_or(data::delete_bookmark_online(url, id).await, true).1,
-        Op::CreateShelf { temp_id, req } => {
-            let (created, outcome) = ok_or(data::create_shelf_online(url, req).await, false);
-            if let Some(created) = created {
-                outbox::apply::shelf_remapped(temp_id, &created).await;
-                outbox::remap_queued(temp_id, created.id).await;
-            }
-            outcome
-        }
+        Op::CreateShelf { temp_id, req } => exec_create_shelf(url, temp_id, req).await,
         Op::UpdateShelf { id, .. } if id < 0 => Outcome::Done,
         Op::UpdateShelf { id, req } => ok_or(data::update_shelf_online(url, id, req).await, true).1,
         Op::DeleteShelf { id } if id < 0 => Outcome::Done,
@@ -544,26 +497,9 @@ async fn execute_op(url: &str, op: Op) -> Outcome {
             )
             .1
         }
-        Op::CreateJournal { temp_id, input } => {
-            let (created, outcome) =
-                ok_or(data::create_journal_entry_online(url, input).await, false);
-            if let Some(created) = created {
-                outbox::apply::journal_remapped(temp_id, &created).await;
-                outbox::remap_queued(temp_id, created.id).await;
-            }
-            outcome
-        }
+        Op::CreateJournal { temp_id, input } => exec_create_journal(url, temp_id, input).await,
         Op::UpdateJournal { id, .. } if id < 0 => Outcome::Done,
-        Op::UpdateJournal { id, input, .. } => {
-            let (updated, outcome) = ok_or(
-                data::update_journal_entry_online(url, id, input).await,
-                true,
-            );
-            if let Some(updated) = updated {
-                outbox::apply::journal_remapped(id, &updated).await;
-            }
-            outcome
-        }
+        Op::UpdateJournal { id, input, .. } => exec_update_journal(url, id, input).await,
         Op::DeleteJournal { id, .. } if id < 0 => Outcome::Done,
         Op::DeleteJournal { id, .. } => {
             ok_or(data::delete_journal_entry_online(url, id).await, true).1
@@ -572,6 +508,105 @@ async fn execute_op(url: &str, op: Op) -> Outcome {
             ok_or(data::set_kindle_email_online(url, email).await, true).1
         }
     }
+}
+
+/// Replay a queued progress write, honoring the LWW stale guard: if another
+/// device wrote a *newer* position while this one was offline, keep the
+/// server's copy instead of overwriting it.
+async fn exec_save_progress(url: &str, update: ProgressUpdate, captured_at: i64) -> Outcome {
+    if let Ok(Some(server)) = data::get_progress_online(url, &update.book_uuid, update.format).await
+    {
+        if server.updated_at > captured_at {
+            outbox::apply::progress_saved(&server).await;
+            return Outcome::Done;
+        }
+    }
+    let (record, outcome) = ok_or(data::save_progress_online(url, update).await, false);
+    if let Some(record) = record {
+        outbox::apply::progress_saved(&record).await;
+    }
+    outcome
+}
+
+/// Replay a queued playback-rate write, refreshing the cached rate on
+/// success.
+async fn exec_set_playback_rate(
+    url: &str,
+    uuid: String,
+    update: AudiobookPlaybackRateUpdate,
+) -> Outcome {
+    let (record, outcome) = ok_or(
+        data::set_playback_rate_online(url, &uuid, update).await,
+        false,
+    );
+    if let Some(record) = record {
+        super::cache::put_json(&super::cache::keys::playback_rate(&uuid), &Some(record));
+    }
+    outcome
+}
+
+/// Replay a queued rating write, refreshing the cached rating on success.
+async fn exec_set_rating(url: &str, update: RatingUpdate) -> Outcome {
+    let uuid = update.book_uuid.clone();
+    let (record, outcome) = ok_or(data::set_rating_online(url, update).await, false);
+    if let Some(record) = record {
+        super::cache::put_json(&super::cache::keys::rating(&uuid), &Some(record));
+    }
+    outcome
+}
+
+/// Replay a queued highlight creation, remapping the client-minted temp id
+/// to the server-assigned one so later ops against the same handle land.
+async fn exec_create_highlight(url: &str, temp_id: i64, input: CreateHighlight) -> Outcome {
+    let (created, outcome) = ok_or(data::create_highlight_online(url, input).await, false);
+    if let Some(created) = created {
+        outbox::apply::highlight_remapped(temp_id, &created).await;
+        outbox::remap_queued(temp_id, created.id).await;
+    }
+    outcome
+}
+
+/// Replay a queued bookmark creation, remapping the client-minted temp id.
+async fn exec_create_bookmark(url: &str, temp_id: i64, input: CreateBookmark) -> Outcome {
+    let (created, outcome) = ok_or(data::create_bookmark_online(url, input).await, false);
+    if let Some(created) = created {
+        outbox::apply::bookmark_remapped(temp_id, &created).await;
+        outbox::remap_queued(temp_id, created.id).await;
+    }
+    outcome
+}
+
+/// Replay a queued shelf creation, remapping the client-minted temp id.
+async fn exec_create_shelf(url: &str, temp_id: i64, req: CreateShelfRequest) -> Outcome {
+    let (created, outcome) = ok_or(data::create_shelf_online(url, req).await, false);
+    if let Some(created) = created {
+        outbox::apply::shelf_remapped(temp_id, &created).await;
+        outbox::remap_queued(temp_id, created.id).await;
+    }
+    outcome
+}
+
+/// Replay a queued journal creation, remapping the client-minted temp id.
+async fn exec_create_journal(url: &str, temp_id: i64, input: CreateJournalEntry) -> Outcome {
+    let (created, outcome) = ok_or(data::create_journal_entry_online(url, input).await, false);
+    if let Some(created) = created {
+        outbox::apply::journal_remapped(temp_id, &created).await;
+        outbox::remap_queued(temp_id, created.id).await;
+    }
+    outcome
+}
+
+/// Replay a queued journal edit, refreshing the cached entry with the
+/// server-rendered body on success.
+async fn exec_update_journal(url: &str, id: i64, input: UpdateJournalEntry) -> Outcome {
+    let (updated, outcome) = ok_or(
+        data::update_journal_entry_online(url, id, input).await,
+        true,
+    );
+    if let Some(updated) = updated {
+        outbox::apply::journal_remapped(id, &updated).await;
+    }
+    outcome
 }
 
 /// Serializes tests (across offline test modules) that assert on the

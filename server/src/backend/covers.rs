@@ -96,16 +96,13 @@ pub(super) async fn get_thumb(
     headers: HeaderMap,
 ) -> Response {
     tracing::debug!(uuid, size = %size_str, "thumb: request received");
-    let size: db::ThumbSize = match size_str.parse() {
-        Ok(s) => s,
-        Err(_) => {
-            tracing::warn!(uuid, size = %size_str, "thumb: invalid size parameter (400)");
-            return (
-                axum::http::StatusCode::BAD_REQUEST,
-                "invalid size; use sm, md, or lg",
-            )
-                .into_response();
-        }
+    let Some(size) = parse_thumb_size(&size_str) else {
+        tracing::warn!(uuid, size = %size_str, "thumb: invalid size parameter (400)");
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            "invalid size; use sm, md, or lg",
+        )
+            .into_response();
     };
     // uuid → id translation: see the comment in `get_cover` for why we
     // resolve at the edge rather than rewriting the thumbnail pipeline
@@ -132,67 +129,105 @@ pub(super) async fn get_thumb(
         Err(e) => return internal("read last_modified_epoch", e),
     };
 
-    // Cache hit: thumb exists and is fresh. Use async I/O here so a hot
-    // `srcset` grid doesn't pin tokio worker threads on the synchronous read.
-    let thumb_path = db::thumb_path_for(id, size);
-    if !db::thumbs::is_stale_async(id, size, last_modified_epoch).await {
-        if let Ok(bytes) = tokio::fs::read(&thumb_path).await {
-            // Fire-and-forget mtime bump so `evict_if_over_cap` treats this
-            // as recently-used (LRU) instead of evicting frequently-viewed
-            // thumbs just because they're old. Detached via `tokio::spawn`
-            // (never adds latency to this response) but still awaits the
-            // `spawn_blocking` JoinHandle and distinguishes panic from
-            // cancellation, matching the worker's convention
-            // (`handle_generate_thumbs` in db/src/worker/handlers.rs)
-            // instead of silently dropping it.
-            tokio::spawn(async move {
-                if let Err(join_err) =
-                    tokio::task::spawn_blocking(move || db::thumbs::touch_thumb(id, size)).await
-                {
-                    let kind = if join_err.is_panic() {
-                        "panicked"
-                    } else {
-                        "was cancelled"
-                    };
-                    tracing::warn!(error = %join_err, book_id = id, "thumbs: touch_thumb {kind}");
-                }
-            });
-            let etag = content_etag(&bytes);
-            if if_none_match_hits(&headers, &etag) {
-                tracing::debug!(uuid, book_id = id, ?size, "thumb: not modified (304)");
-                return not_modified(&etag);
-            }
-            tracing::debug!(
-                uuid,
-                book_id = id,
-                ?size,
-                bytes = bytes.len(),
-                "thumb: cache hit"
-            );
-            // Same rationale as `get_cover` (#1086): the server regenerates
-            // this WebP as soon as the underlying cover changes
-            // (`invalidate_thumbs`), but a `max-age`-only Cache-Control never
-            // lets the browser notice — it keeps serving its own day-old
-            // copy from the identical URL. `no-cache` + `ETag` make every
-            // reload check back, cheaply, via a 304 when nothing changed.
-            return (
-                [
-                    (header::CONTENT_TYPE, "image/webp"),
-                    (header::CACHE_CONTROL, MEDIA_CACHE_CONTROL),
-                    (header::ETAG, etag.as_str()),
-                    (header::VARY, MEDIA_VARY),
-                    (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-                ],
-                bytes,
-            )
-                .into_response();
-        }
+    if let Some(resp) =
+        thumb_cache_hit_response(&uuid, id, size, last_modified_epoch, &headers).await
+    {
+        return resp;
     }
 
-    // Cache miss or stale: fetch the original cover first so we only queue
-    // generation when there's actually something to thumbnail. Queuing for
-    // a coverless book just produces a guaranteed `no cover for book …`
-    // worker error on every request, polluting the log.
+    thumb_cache_miss_response(&state, &uuid, id, size, last_modified_epoch).await
+}
+
+/// Parse the `sm`/`md`/`lg` size path segment. `None` on an unrecognized
+/// value; the caller owns logging + building the 400 response (kept out of
+/// this helper so its `Err` isn't a full `Response` — clippy's
+/// `result_large_err`).
+fn parse_thumb_size(size_str: &str) -> Option<db::ThumbSize> {
+    size_str.parse().ok()
+}
+
+/// Cache-hit stage: thumb exists and is fresh. Returns `None` to fall
+/// through to the miss/regenerate path when the file isn't there (stale or
+/// never generated) so the caller doesn't need to duplicate that decision.
+/// Async I/O here so a hot `srcset` grid doesn't pin tokio worker threads on
+/// the synchronous read.
+async fn thumb_cache_hit_response(
+    uuid: &str,
+    id: i64,
+    size: db::ThumbSize,
+    last_modified_epoch: i64,
+    headers: &HeaderMap,
+) -> Option<Response> {
+    if db::thumbs::is_stale_async(id, size, last_modified_epoch).await {
+        return None;
+    }
+    let thumb_path = db::thumb_path_for(id, size);
+    let bytes = tokio::fs::read(&thumb_path).await.ok()?;
+
+    // Fire-and-forget mtime bump so `evict_if_over_cap` treats this as
+    // recently-used (LRU) instead of evicting frequently-viewed thumbs just
+    // because they're old. Detached via `tokio::spawn` (never adds latency
+    // to this response) but still awaits the `spawn_blocking` JoinHandle and
+    // distinguishes panic from cancellation, matching the worker's
+    // convention (`handle_generate_thumbs` in db/src/worker/handlers.rs)
+    // instead of silently dropping it.
+    tokio::spawn(async move {
+        if let Err(join_err) =
+            tokio::task::spawn_blocking(move || db::thumbs::touch_thumb(id, size)).await
+        {
+            let kind = if join_err.is_panic() {
+                "panicked"
+            } else {
+                "was cancelled"
+            };
+            tracing::warn!(error = %join_err, book_id = id, "thumbs: touch_thumb {kind}");
+        }
+    });
+
+    let etag = content_etag(&bytes);
+    if if_none_match_hits(headers, &etag) {
+        tracing::debug!(uuid, book_id = id, ?size, "thumb: not modified (304)");
+        return Some(not_modified(&etag));
+    }
+    tracing::debug!(
+        uuid,
+        book_id = id,
+        ?size,
+        bytes = bytes.len(),
+        "thumb: cache hit"
+    );
+    // Same rationale as `get_cover` (#1086): the server regenerates this
+    // WebP as soon as the underlying cover changes (`invalidate_thumbs`),
+    // but a `max-age`-only Cache-Control never lets the browser notice — it
+    // keeps serving its own day-old copy from the identical URL. `no-cache`
+    // + `ETag` make every reload check back, cheaply, via a 304 when
+    // nothing changed.
+    Some(
+        (
+            [
+                (header::CONTENT_TYPE, "image/webp"),
+                (header::CACHE_CONTROL, MEDIA_CACHE_CONTROL),
+                (header::ETAG, etag.as_str()),
+                (header::VARY, MEDIA_VARY),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            ],
+            bytes,
+        )
+            .into_response(),
+    )
+}
+
+/// Cache-miss (or stale) stage: fetch the original cover first so we only
+/// queue generation when there's actually something to thumbnail. Queuing
+/// for a coverless book just produces a guaranteed `no cover for book …`
+/// worker error on every request, polluting the log.
+async fn thumb_cache_miss_response(
+    state: &AppState,
+    uuid: &str,
+    id: i64,
+    size: db::ThumbSize,
+    last_modified_epoch: i64,
+) -> Response {
     match db::get_cover(&state.pool, id).await {
         Ok(Some((mime, bytes))) => {
             tracing::debug!(
