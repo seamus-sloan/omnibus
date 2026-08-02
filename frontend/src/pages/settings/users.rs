@@ -271,7 +271,8 @@ fn RegistrationToggle() -> Element {
 
     let is_on = shown() == Some(true);
     let status = registration_status_line(confirmed());
-    let show_retry = needs_registration_retry(error().as_ref(), confirmed());
+    let load_err = error();
+    let show_retry = needs_registration_retry(load_err.as_ref(), confirmed());
 
     rsx! {
         section { class: "card", "data-testid": "registration-card",
@@ -291,7 +292,7 @@ fn RegistrationToggle() -> Element {
                     span { "Allow new users to register" }
                 }
             }
-            if let Some(err) = error() {
+            if let Some(err) = load_err {
                 p {
                     role: "alert",
                     class: "settings-status error",
