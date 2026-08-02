@@ -11,7 +11,7 @@ use sqlx::{Row, SqlitePool};
 
 use super::{
     count_smart, order_by_sql, parse_kind, parse_mode, parse_visibility, row_to_rule, ShelfError,
-    FILE_EXISTS, HAS_COVER, LIST_SHELVES_LIMIT, MOSAIC_COVERS, SMART_COUNT_CONCURRENCY,
+    HAS_COVER, LIST_SHELVES_LIMIT, MOSAIC_COVERS, SMART_COUNT_CONCURRENCY, SMART_VISIBLE,
 };
 use crate::shelves::rules::{membership_predicate, Bind};
 
@@ -275,7 +275,7 @@ async fn covers_smart_fan_out(
         let pred = membership_predicate(rules, mode, owner_id)?;
         let sql = format!(
             "SELECT b.uuid FROM books b \
-             WHERE {FILE_EXISTS} AND {HAS_COVER} AND {} \
+             WHERE {SMART_VISIBLE} AND {HAS_COVER} AND {} \
              ORDER BY {} LIMIT {MOSAIC_COVERS}",
             pred.sql,
             order_by_sql(SortKey::Title, SortDir::Asc),

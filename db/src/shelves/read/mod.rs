@@ -21,9 +21,17 @@ pub use detail::{
 };
 pub use summary::list_visible_shelves;
 
-/// Books hidden from smart shelves unless they still have a file on disk —
-/// mirrors the landing read path's fileless filter (F2).
+/// Strict downloadable gate for the Kobo sync uuid paths: the book must still
+/// have a file on disk — an entitlement the device can't then download is
+/// worse than an absent one.
 const FILE_EXISTS: &str = "EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id)";
+
+/// Visibility gate for the hydrated smart-shelf reads: file-backed, or
+/// physical-only via a checked-in copy — mirrors the landing read path's rule
+/// (`list_books` in `db/src/books/list.rs`). A ghosted book (file removed, no
+/// copy) stays hidden.
+const SMART_VISIBLE: &str = "(EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id) \
+     OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid))";
 
 /// Cover count in the create-modal live preview.
 const PREVIEW_SAMPLE: i64 = 12;
@@ -72,7 +80,7 @@ async fn count_smart(
 ) -> Result<i64, ShelfError> {
     let pred = membership_predicate(rules, match_mode, owner_id)?;
     let sql = format!(
-        "SELECT COUNT(*) FROM books b WHERE {FILE_EXISTS} AND {}",
+        "SELECT COUNT(*) FROM books b WHERE {SMART_VISIBLE} AND {}",
         pred.sql
     );
     let mut q = sqlx::query_scalar::<_, i64>(&sql);
