@@ -219,8 +219,7 @@ fn page_names<R: Read + std::io::Seek>(archive: &zip::ZipArchive<R>) -> Vec<Stri
 /// AppleDouble forks (`__MACOSX/._p001.jpg`): it excludes every dot-prefixed
 /// segment, including a legitimately named `.chapter1/` directory or page.
 /// Kept broad deliberately: narrowing to an AppleDouble-only pattern risks
-/// letting some other archiver's leading-dot junk resurface as a page, and
-/// no known CBZ producer needs a leading dot for real content.
+/// letting some other archiver's leading-dot junk resurface as a page.
 fn is_hidden_name(name: &str) -> bool {
     name.split('/').any(|segment| segment.starts_with('.'))
 }
