@@ -132,7 +132,7 @@ struct ShelfDetailView: View {
                                     }
                                     .buttonStyle(BookPressStyle())
                                     .cascadeIn(index: index)
-                                    .contextMenu {
+                                    .bookContextMenu(book, onEdited: { Task { await load() } }) {
                                         if shelf?.kind == .manual {
                                             Button(role: .destructive) {
                                                 Task {

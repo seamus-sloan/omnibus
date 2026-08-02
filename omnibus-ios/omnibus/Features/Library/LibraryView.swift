@@ -324,6 +324,7 @@ struct LibraryView: View {
                     BookGridCell(book: book)
                 }
                 .buttonStyle(BookPressStyle())
+                .bookContextMenu(book, onEdited: { Task { await model.reload() } })
                 .bookZoomSource(book.uuid, in: bookZoom)
                 .cascadeIn(index: index)
                 .task { await model.loadMoreIfNeeded(currentItem: book) }

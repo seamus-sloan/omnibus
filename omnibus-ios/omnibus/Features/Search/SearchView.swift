@@ -295,6 +295,7 @@ struct SearchResultsView: View {
                                 BookGridCell(book: book)
                             }
                             .buttonStyle(BookPressStyle())
+                            .bookContextMenu(book, onEdited: { Task { await load() } })
                             .cascadeIn(index: index)
                         }
                     }
@@ -307,12 +308,14 @@ struct SearchResultsView: View {
         .background(ScreenBackground())
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
-        .task {
-            for await hits in LibraryService.searchFull(query: query) {
-                books = hits
-                isLoading = false
-            }
+        .task { await load() }
+    }
+
+    private func load() async {
+        for await hits in LibraryService.searchFull(query: query) {
+            books = hits
             isLoading = false
         }
+        isLoading = false
     }
 }

@@ -247,6 +247,7 @@ struct AuthorDetailView: View {
                                     BookGridCell(book: book)
                                 }
                                 .buttonStyle(BookPressStyle())
+                                .bookContextMenu(book, onEdited: { Task { await load() } })
                                 .cascadeIn(index: index)
                             }
                         }
@@ -399,6 +400,7 @@ struct SeriesDetailView: View {
                                 bookRow(book, isFirst: index == 0)
                             }
                             .buttonStyle(PressableStyle())
+                            .bookContextMenu(book, onEdited: { Task { await load() } })
                         }
                         RecordRule()
                     }
@@ -411,13 +413,15 @@ struct SeriesDetailView: View {
         .background(ScreenBackground())
         .navigationTitle(detail?.name ?? "Series")
         .navigationBarTitleDisplayMode(.inline)
-        .task {
-            for await value in LibraryService.series(id: id).values() {
-                detail = value
-                isLoading = false
-            }
+        .task { await load() }
+    }
+
+    private func load() async {
+        for await value in LibraryService.series(id: id).values() {
+            detail = value
             isLoading = false
         }
+        isLoading = false
     }
 
     /// The volume number keeps its column whether or not a book carries one, so
