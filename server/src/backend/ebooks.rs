@@ -209,18 +209,20 @@ async fn attach_comic_page_count(state: &AppState, book: &mut omnibus_shared::Eb
 }
 
 /// Resolve the on-disk EPUB path for `uuid`, honouring an optional
-/// `?file_id=N` (multi-EPUB books). Returns the error `Response`
-/// (404 / 500) already formed on the failure paths so callers can `?`-style
-/// early-return with `Err`.
+/// `?file_id=N` (multi-EPUB books). Returns the resolved book id alongside
+/// the path on success so callers that need it (the override-baked download,
+/// the CBZ fallback) don't re-resolve uuid→id. On failure the error carries
+/// the id too, when it was resolved before the failure — `None` only when
+/// the uuid itself didn't match a book.
 async fn resolve_epub_path(
     state: &AppState,
     uuid: &str,
     file_id: Option<i64>,
-) -> Result<std::path::PathBuf, Response> {
+) -> Result<(std::path::PathBuf, i64), (Response, Option<i64>)> {
     let id = match db::resolve_book_id_by_uuid(&state.pool, uuid).await {
         Ok(Some(id)) => id,
-        Ok(None) => return Err(axum::http::StatusCode::NOT_FOUND.into_response()),
-        Err(e) => return Err(internal("resolve_book_id_by_uuid", e)),
+        Ok(None) => return Err((axum::http::StatusCode::NOT_FOUND.into_response(), None)),
+        Err(e) => return Err((internal("resolve_book_id_by_uuid", e), None)),
     };
     // Carry the context alongside the chosen query so a 500 points at the
     // call that actually failed rather than always blaming `book_file_path`.
@@ -236,9 +238,9 @@ async fn resolve_epub_path(
         )
     };
     match resolved {
-        Ok(Some(p)) => Ok(p),
-        Ok(None) => Err(axum::http::StatusCode::NOT_FOUND.into_response()),
-        Err(e) => Err(internal(ctx, e)),
+        Ok(Some(p)) => Ok((p, id)),
+        Ok(None) => Err((axum::http::StatusCode::NOT_FOUND.into_response(), Some(id))),
+        Err(e) => Err((internal(ctx, e), Some(id))),
     }
 }
 
@@ -260,20 +262,17 @@ async fn resolve_readable_path(
     file_id: Option<i64>,
 ) -> Result<(std::path::PathBuf, &'static str), Response> {
     match resolve_epub_path(state, uuid, file_id).await {
-        Ok(path) => Ok((path, "application/epub+zip")),
-        Err(resp) if file_id.is_none() && resp.status() == StatusCode::NOT_FOUND => {
-            let id = match db::resolve_book_id_by_uuid(&state.pool, uuid).await {
-                Ok(Some(id)) => id,
-                Ok(None) => return Err(StatusCode::NOT_FOUND.into_response()),
-                Err(e) => return Err(internal("resolve_book_id_by_uuid", e)),
-            };
+        Ok((path, _id)) => Ok((path, "application/epub+zip")),
+        // The uuid resolved to a book (we have `id`) but it has no EPUB —
+        // reuse that id rather than re-querying `resolve_book_id_by_uuid`.
+        Err((resp, Some(id))) if file_id.is_none() && resp.status() == StatusCode::NOT_FOUND => {
             match db::book_file_path(&state.pool, id, "CBZ").await {
                 Ok(Some(path)) => Ok((path, CBZ_MIME)),
                 Ok(None) => Err(StatusCode::NOT_FOUND.into_response()),
                 Err(e) => Err(internal("book_file_path", e)),
             }
         }
-        Err(resp) => Err(resp),
+        Err((resp, _)) => Err(resp),
     }
 }
 
@@ -500,17 +499,14 @@ pub(super) async fn get_ebook_download(
     Query(query): Query<EbookFileQuery>,
     req: Request,
 ) -> Response {
-    let source = match resolve_epub_path(&state, &uuid, query.file_id).await {
-        Ok(p) => p,
-        Err(resp) => return resp,
+    let (source, id) = match resolve_epub_path(&state, &uuid, query.file_id).await {
+        Ok(resolved) => resolved,
+        Err((resp, _)) => return resp,
     };
     // A saved download must carry the user's metadata/cover edits (F5.8 #1372),
     // so serve the override-baked EPUB when the book has any; otherwise the
     // source verbatim.
-    let path = match db::resolve_book_id_by_uuid(&state.pool, &uuid).await {
-        Ok(Some(id)) => rewritten_or_source(&state, id, source).await,
-        _ => source,
-    };
+    let path = rewritten_or_source(&state, id, source).await;
     // The validator is taken from whichever file is actually sent. For an
     // override-having book that is the export-cache copy, whose own stat
     // moves when `books.last_modified` invalidates it — so it tracks the
