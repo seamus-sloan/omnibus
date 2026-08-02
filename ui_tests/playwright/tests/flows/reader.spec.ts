@@ -24,6 +24,10 @@ const NOTE_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "gamma")!;
 // A fourth book for the recolor test so its seeded highlight is isolated from
 // the other highlight specs running in parallel.
 const RECOLOR_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "pioneers-3")!;
+// A fifth book, reserved for the highlight-overlay regression: it asserts on
+// where the highlight SVG is painted, so no other spec may write highlights
+// or drive typography on it.
+const OVERLAY_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "standalone-river")!;
 // Reserved books for the progress-restore tests (see fixtures/epubs.ts):
 // saved position is per-book state on the shared server, so any other spec
 // opening these in the reader would race the restore assertions. They must
@@ -313,6 +317,93 @@ test("recolors an existing highlight from the drawer", async ({
   await expect(
     row.getByTestId("reader-highlight-recolor-amber"),
   ).toHaveAttribute("aria-pressed", "false");
+});
+
+test("keeps a seeded highlight glued to its text across font-size changes", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, OVERLAY_BOOK.title);
+
+  // Seed a mid-paragraph range — chars 10–24 of the `<p>` (`/4/4`, after the
+  // `<h1>` at `/4/2`) in the single-item spine (`/6/2`). Its painted position
+  // genuinely moves when the font grows, so a stale overlay can't pass by
+  // accident the way a range anchored at the paragraph origin would. (The
+  // drawer specs above seed `/6/4!/4/2` anchors, but those are never
+  // resolved against the DOM — this one is, so it must be exact.)
+  const quote = `overlay passage ${Date.now()}`;
+  const created = await request.post("/api/highlights", {
+    data: {
+      book_uuid: uuid,
+      epub_cfi_range: "epubcfi(/6/2!/4/4,/1:10,/1:24)",
+      color: "amber",
+      text: quote,
+    },
+  });
+  expect(created.status(), "seed highlight").toBe(200);
+
+  await gotoReady(page, `/read/${uuid}`);
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
+
+  // Intentional exception to the "never assert on rendered EPUB text" rule
+  // (same rationale as the black-theme regression above): the defect under
+  // test is epub.js painting the highlight SVG at a stale layout's pixel
+  // rects, so the assertion must compare the painted overlay against the
+  // rendered prose itself. Returns the worst axis drift between the SVG
+  // union box and the live range's union box; Infinity while unmeasurable.
+  const overlayDrift = (): Promise<number> =>
+    page.evaluate(() => {
+      const view = document.querySelector("#omnibus-viewer .epub-view");
+      const iframe = view?.querySelector("iframe");
+      const rects = view
+        ? Array.from(view.querySelectorAll(":scope > svg rect"))
+        : [];
+      const doc = iframe?.contentDocument;
+      // The seeded CFI targets the <p> after the <h1> — mirror it exactly.
+      const text = doc?.body?.querySelector("p")?.firstChild;
+      if (
+        !iframe ||
+        !doc ||
+        rects.length === 0 ||
+        !text ||
+        text.nodeType !== Node.TEXT_NODE
+      ) {
+        return Number.POSITIVE_INFINITY;
+      }
+      const range = doc.createRange();
+      const len = (text as Text).data.length;
+      range.setStart(text, Math.min(10, len));
+      range.setEnd(text, Math.min(24, len));
+      const t = range.getBoundingClientRect();
+      const ifr = iframe.getBoundingClientRect();
+      const union = rects
+        .map((r) => r.getBoundingClientRect())
+        .reduce(
+          (a, b) => ({
+            left: Math.min(a.left, b.left),
+            top: Math.min(a.top, b.top),
+          }),
+          { left: Number.POSITIVE_INFINITY, top: Number.POSITIVE_INFINITY },
+        );
+      return Math.max(
+        Math.abs(union.left - (t.left + ifr.left)),
+        Math.abs(union.top - (t.top + ifr.top)),
+      );
+    });
+
+  // Painted over the prose on first open, with no font-size nudge — the add
+  // used to be dropped entirely when it raced the epub.js bootstrap.
+  await expect.poll(overlayDrift, { timeout: 20_000 }).toBeLessThan(3);
+
+  // Grow the text twice (18 → 20px). Each step reflows the prose without
+  // changing the section's one-spread width — exactly the case where
+  // epub.js skips the reframe that would have repositioned the marks.
+  await page.getByTestId("reader-aa").click();
+  await expect(page.getByTestId("reader-font-increase")).toBeVisible();
+  await page.getByTestId("reader-font-increase").click();
+  await page.getByTestId("reader-font-increase").click();
+
+  await expect.poll(overlayDrift, { timeout: 10_000 }).toBeLessThan(3);
 });
 
 test("opens the reader from the book detail Read action", async ({

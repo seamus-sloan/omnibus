@@ -85,6 +85,13 @@
   // otherwise leave the last line of prose clipped behind stale pagination.
   var stageResizeObserver = null;
   var stageResizeTimer = null;
+  // addAnnotation calls that arrived before init() built the rendition — the
+  // host seeds saved highlights in parallel with the bootstrap poll, so the
+  // highlight list can win that race. Flushed (and emptied) by init(); not
+  // cleared in teardown(), because init() tears down first and must still
+  // flush adds that raced it.
+  var pendingAnnotations = [];
+  var annotationRepaintTimer = null;
 
   function emitStatus(state) {
     if (typeof window.__omnibusOnStatus === "function") {
@@ -104,6 +111,10 @@
     if (stageResizeTimer) {
       clearTimeout(stageResizeTimer);
       stageResizeTimer = null;
+    }
+    if (annotationRepaintTimer) {
+      clearTimeout(annotationRepaintTimer);
+      annotationRepaintTimer = null;
     }
     if (stageResizeObserver) {
       try {
@@ -280,6 +291,20 @@
     } catch (e) {
       emitStatus("error");
       return;
+    }
+
+    // Saved highlights seeded while the bootstrap poll was still waiting on
+    // this init now have a rendition to land in; without this flush they
+    // were silently dropped and never painted. Guarded per-add so one
+    // unparseable CFI can't abort the rest of init.
+    var queued = pendingAnnotations;
+    pendingAnnotations = [];
+    for (var qi = 0; qi < queued.length; qi++) {
+      try {
+        addAnnotation(queued[qi].cfiRange, queued[qi].color);
+      } catch (e) {
+        /* skip the bad CFI, keep the rest */
+      }
     }
 
     // The whole-book `pct` figure comes from epub.js "locations" — a
@@ -784,6 +809,14 @@
 
       applyThemeColors(doc);
 
+      // Webfont activation reflows the prose without changing the section's
+      // quantized width, so epub.js never reframes — repaint the marks once
+      // the section's fonts settle or highlights sit where the fallback-font
+      // text used to be.
+      if (doc.fonts && doc.fonts.ready && doc.fonts.ready.then) {
+        doc.fonts.ready.then(scheduleAnnotationRepaint, function () {});
+      }
+
       // Reader baseline / override layer. The split mirrors Apple Books and
       // Kindle: the reading system owns colour (and font, size, spacing,
       // margins, justification — set elsewhere), while the publisher keeps
@@ -1224,6 +1257,7 @@
   function setFontSize(px) {
     if (!rendition) return;
     rendition.themes.fontSize(px + "px");
+    scheduleAnnotationRepaint();
   }
 
   function setTheme(name) {
@@ -1243,22 +1277,26 @@
   function setFont(family) {
     if (!rendition) return;
     rendition.themes.font(family);
+    scheduleAnnotationRepaint();
   }
 
   function setLineHeight(value) {
     if (!rendition) return;
     rendition.themes.override("line-height", value);
+    scheduleAnnotationRepaint();
   }
 
   function setMargins(maxWidth) {
     if (!rendition) return;
     rendition.themes.override("max-width", maxWidth);
     rendition.themes.override("margin", "0 auto");
+    scheduleAnnotationRepaint();
   }
 
   function setJustify(on) {
     if (!rendition) return;
     rendition.themes.override("text-align", on ? "justify" : "start");
+    scheduleAnnotationRepaint();
   }
 
   // Single vs two-page spread. "none" forces one column; "auto" lets epub.js
@@ -1270,6 +1308,41 @@
     } catch (e) {
       /* older epub.js builds may not expose spread() */
     }
+    scheduleAnnotationRepaint();
+  }
+
+  // Re-render every attached view's marks pane from live range rects.
+  // epub.js only repaints marks inside a view reframe, and expand() skips
+  // the reframe whenever a reflow lands on the same quantized column count —
+  // so a font-size step (or webfont swap) that keeps the page count leaves
+  // every highlight frozen at the previous layout's pixel rects.
+  function repaintAnnotations() {
+    if (!rendition || !rendition.manager || !rendition.manager.views) return;
+    var views = rendition.manager.views;
+    var all = typeof views.all === "function" ? views.all() : [];
+    for (var i = 0; i < all.length; i++) {
+      var pane = all[i] && all[i].pane;
+      if (!pane) continue;
+      try {
+        pane.render();
+      } catch (e) {
+        /* view mid-teardown */
+      }
+    }
+  }
+
+  // Repaint once the pending reflow has settled: after the next paint
+  // (double rAF), plus a timer backstop for settles the frame pass runs
+  // ahead of (webfont activation, epub.js's own debounced expand).
+  function scheduleAnnotationRepaint() {
+    requestAnimationFrame(function () {
+      requestAnimationFrame(repaintAnnotations);
+    });
+    if (annotationRepaintTimer) clearTimeout(annotationRepaintTimer);
+    annotationRepaintTimer = setTimeout(function () {
+      annotationRepaintTimer = null;
+      repaintAnnotations();
+    }, 450);
   }
 
   // Solid fills — transparency is applied once via the `fill-opacity`
@@ -1284,7 +1357,10 @@
   };
 
   function addAnnotation(cfiRange, color) {
-    if (!rendition) return;
+    if (!rendition) {
+      pendingAnnotations.push({ cfiRange: cfiRange, color: color });
+      return;
+    }
     var fill = HIGHLIGHT_COLORS[color] || HIGHLIGHT_COLORS.amber;
     rendition.annotations.add(
       "highlight", cfiRange, {}, undefined,
@@ -1294,11 +1370,15 @@
   }
 
   function removeAnnotation(cfiRange) {
+    pendingAnnotations = pendingAnnotations.filter(function (p) {
+      return p.cfiRange !== cfiRange;
+    });
     if (!rendition) return;
     rendition.annotations.remove(cfiRange, "highlight");
   }
 
   function clearAnnotations() {
+    pendingAnnotations = [];
     if (!rendition || !rendition.annotations) return;
     var store = rendition.annotations._annotations;
     if (!store) return;
