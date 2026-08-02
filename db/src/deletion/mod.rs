@@ -138,20 +138,63 @@ pub async fn delete_book_items(
     let file_ids = &dedup(file_ids);
     let copy_ids = &dedup(copy_ids);
 
-    // `BEGIN IMMEDIATE` takes the RESERVED write lock at open time, before
-    // the count below runs, matching `auth::users::create_user`'s guard
-    // against the same class of race. A plain `pool.begin()` issues a
-    // DEFERRED `BEGIN` that acquires the lock lazily on first write, which
-    // would leave the count read outside the lock and reopen the TOCTOU
-    // window this closes.
-    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-    // Selecting nothing on a book that still has items is a no-op; the same
-    // call on a book with no items at all is the "delete this record" case
-    // `total_delete` handles below.
-    let Some(total_delete) =
-        selection_total_delete(&mut tx, book_id, &uuid, file_ids, copy_ids).await?
-    else {
+    let Some(committed) = run_deletion_tx(pool, book_id, &uuid, file_ids, copy_ids).await? else {
         return Ok(DeleteOutcome::default());
+    };
+
+    // Post-commit, so an image another book's entry still embeds survives.
+    let journal_images = purge::orphaned_images(pool, committed.journal_images).await?;
+
+    fs::cleanup(fs::Cleanup {
+        paths: committed.paths,
+        library_roots: committed.library_roots,
+        book: committed.total_delete.then_some(fs::BookCleanup {
+            book_id,
+            uuid,
+            journal_images,
+        }),
+    })
+    .await;
+
+    Ok(DeleteOutcome {
+        deleted_file_ids: file_ids.to_vec(),
+        deleted_copy_ids: copy_ids.to_vec(),
+        book_deleted: committed.total_delete,
+    })
+}
+
+/// What a committed [`run_deletion_tx`] hands back for the post-commit,
+/// best-effort filesystem cleanup.
+struct CommittedDeletion {
+    total_delete: bool,
+    paths: Vec<std::path::PathBuf>,
+    library_roots: Vec<String>,
+    journal_images: Vec<String>,
+}
+
+/// Open the `BEGIN IMMEDIATE` transaction, decide `total_delete`, resolve
+/// the on-disk state the caller needs after commit, and write the row
+/// deletions. Returns `None` for the no-op case (nothing selected on a book
+/// that still has items).
+///
+/// `BEGIN IMMEDIATE` takes the RESERVED write lock at open time, before the
+/// count inside `selection_total_delete` runs, matching
+/// `auth::users::create_user`'s guard against the same class of race. A
+/// plain `pool.begin()` issues a DEFERRED `BEGIN` that acquires the lock
+/// lazily on first write, which would leave the count read outside the lock
+/// and reopen the TOCTOU window this closes.
+async fn run_deletion_tx(
+    pool: &SqlitePool,
+    book_id: i64,
+    uuid: &str,
+    file_ids: &[i64],
+    copy_ids: &[i64],
+) -> Result<Option<CommittedDeletion>, DeleteError> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let Some(total_delete) =
+        selection_total_delete(&mut tx, book_id, uuid, file_ids, copy_ids).await?
+    else {
+        return Ok(None);
     };
 
     // Resolve on-disk paths before the rows they're derived from disappear.
@@ -166,37 +209,24 @@ pub async fn delete_book_items(
     }
     let library_roots = library_roots(pool).await?;
     let journal_images = if total_delete {
-        purge::journal_image_names(pool, &uuid).await?
+        purge::journal_image_names(pool, uuid).await?
     } else {
         Vec::new()
     };
 
     purge::delete_file_rows(&mut tx, book_id, file_ids).await?;
-    purge::delete_copy_rows(&mut tx, &uuid, copy_ids).await?;
+    purge::delete_copy_rows(&mut tx, uuid, copy_ids).await?;
     if total_delete {
-        purge::purge_book(&mut tx, book_id, &uuid).await?;
+        purge::purge_book(&mut tx, book_id, uuid).await?;
     }
     tx.commit().await?;
 
-    // Post-commit, so an image another book's entry still embeds survives.
-    let journal_images = purge::orphaned_images(pool, journal_images).await?;
-
-    fs::cleanup(fs::Cleanup {
+    Ok(Some(CommittedDeletion {
+        total_delete,
         paths,
         library_roots,
-        book: total_delete.then_some(fs::BookCleanup {
-            book_id,
-            uuid,
-            journal_images,
-        }),
-    })
-    .await;
-
-    Ok(DeleteOutcome {
-        deleted_file_ids: file_ids.to_vec(),
-        deleted_copy_ids: copy_ids.to_vec(),
-        book_deleted: total_delete,
-    })
+        journal_images,
+    }))
 }
 
 /// Validate `file_ids`/`copy_ids` against the book's *current* items and

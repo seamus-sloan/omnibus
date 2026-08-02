@@ -72,6 +72,36 @@ pub fn stat_audiobook_library(
         };
     }
 
+    match walk_audiobook_tree(dir) {
+        Ok((mut entries, incomplete, saw_any_file)) => {
+            entries.sort_by(|a, b| a.filename.cmp(&b.filename));
+            AudiobookStatScanResult {
+                path: Some(path_str.to_string()),
+                entries,
+                error: None,
+                incomplete,
+                saw_any_file,
+            }
+        }
+        // A read failure on the root is fatal (unlike a subdir, which
+        // becomes a synthetic placeholder row inside the walk instead).
+        Err(e) => AudiobookStatScanResult {
+            path: Some(path_str.to_string()),
+            entries: vec![],
+            error: Some(format!("could not read directory: {e}")),
+            incomplete: true,
+            saw_any_file: false,
+        },
+    }
+}
+
+/// Depth-first walk of the tree rooted at `dir`, stat-ing every accepted
+/// file. Returns `(entries, incomplete, saw_any_file)`; a root `read_dir`
+/// failure is the only case that aborts the walk (`Err`) — a subdir
+/// failure instead flags `incomplete` and continues.
+fn walk_audiobook_tree(
+    dir: &Path,
+) -> Result<(Vec<AudiobookStatEntry>, bool, bool), std::io::Error> {
     let mut entries: Vec<AudiobookStatEntry> = Vec::new();
     // Set when any subdir read fails — partial enumeration; see the
     // ebook walker for the rationale.
@@ -84,16 +114,8 @@ pub fn stat_audiobook_library(
         let read = match std::fs::read_dir(&current) {
             Ok(e) => e,
             Err(e) => {
-                // A read failure on the root is fatal; on a subdir it becomes a
-                // synthetic placeholder row the diff classifier ignores.
                 if current == dir {
-                    return AudiobookStatScanResult {
-                        path: Some(path_str.to_string()),
-                        entries: vec![],
-                        error: Some(format!("could not read directory: {e}")),
-                        incomplete: true,
-                        saw_any_file: false,
-                    };
+                    return Err(e);
                 }
                 incomplete = true;
                 entries.push(unreadable_subdir_entry(dir, &current, &e));
@@ -129,16 +151,7 @@ pub fn stat_audiobook_library(
             }
         }
     }
-
-    entries.sort_by(|a, b| a.filename.cmp(&b.filename));
-
-    AudiobookStatScanResult {
-        path: Some(path_str.to_string()),
-        entries,
-        error: None,
-        incomplete,
-        saw_any_file,
-    }
+    Ok((entries, incomplete, saw_any_file))
 }
 
 /// Build the empty-uuid placeholder row for a subdirectory that couldn't be

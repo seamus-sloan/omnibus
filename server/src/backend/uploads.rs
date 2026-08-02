@@ -7,7 +7,7 @@
 //! metadata overrides. Audiobooks accept a single `.m4a`/`.m4b` container or a
 //! set of `.mp3` parts filed together into one folder.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use axum::{
     extract::{multipart::Field, Multipart, State},
@@ -414,7 +414,31 @@ pub(super) async fn post_upload_ebook(
     let root_path = PathBuf::from(&root);
     let dest = library_layout::allocate_canonical_path(&root_path, &author, &title, "epub")
         .map_err(|e| UploadError::internal("allocate_canonical_path", e))?;
-    let dest_for_copy = dest.clone();
+    copy_uploaded_ebook_to_library(&dest, tmp).await?;
+
+    let uuid = match reindex_and_resolve_uploaded_uuid(&state, &root, &root_path, &dest).await {
+        Ok(uuid) => uuid,
+        Err(e) => {
+            // Don't strand a file whose scan or lookup failed.
+            let _ = tokio::fs::remove_file(&dest).await;
+            return Err(e);
+        }
+    };
+
+    // Make the displayed metadata match what the user confirmed.
+    apply_user_edits(&state, &uuid, &form, user.id).await?;
+
+    Ok((StatusCode::CREATED, Json(UploadCommitResult { uuid })).into_response())
+}
+
+/// Copy the streamed-to-tempfile upload to its final canonical `dest`,
+/// creating parent directories as needed. The tempfile is deleted as a side
+/// effect of `tmp` dropping once the blocking closure returns.
+async fn copy_uploaded_ebook_to_library(
+    dest: &Path,
+    tmp: tempfile::NamedTempFile,
+) -> Result<(), UploadError> {
+    let dest_for_copy = dest.to_path_buf();
     tokio::task::spawn_blocking(move || -> std::io::Result<()> {
         if let Some(parent) = dest_for_copy.parent() {
             std::fs::create_dir_all(parent)?;
@@ -431,48 +455,38 @@ pub(super) async fn post_upload_ebook(
             UploadError::LibraryNotWritable
         }
         _ => UploadError::internal("file uploaded ebook", e),
-    })?;
+    })
+}
 
-    // Reindex so the indexer mints the uuid, extracts the cover, and updates
-    // FTS — the single source of truth for inserting books.
+/// Reindex the library so the indexer mints the uuid, extracts the cover,
+/// and updates FTS — the single source of truth for inserting books — then
+/// map the just-placed file back to its row via the durable scan_key.
+async fn reindex_and_resolve_uploaded_uuid(
+    state: &AppState,
+    root: &str,
+    root_path: &Path,
+    dest: &Path,
+) -> Result<String, UploadError> {
     let task_id = state.worker.post(Task::Scan {
-        library_path: root.clone(),
+        library_path: root.to_string(),
     });
     if let TaskOutcome::Err(e) = state.worker.await_completion(task_id).await {
-        // Don't strand a file whose scan failed.
-        let _ = tokio::fs::remove_file(&dest).await;
         return Err(UploadError::internal("reindex after upload", e));
     }
 
-    // Map the file we just placed back to its row via the durable scan_key.
-    // Clean up dest on any failure to avoid orphaning the file on disk.
     let scan_key = dest
-        .strip_prefix(&root_path)
+        .strip_prefix(root_path)
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
-    let uuid_result = db::get_book_uuid_by_scan_key(&state.pool, &root, &scan_key)
+    db::get_book_uuid_by_scan_key(&state.pool, root, &scan_key)
         .await
-        .map_err(|e| UploadError::internal("get_book_uuid_by_scan_key", e))
-        .and_then(|opt| {
-            opt.ok_or_else(|| {
-                UploadError::internal(
-                    "resolve uploaded book",
-                    "reindex did not surface the uploaded file",
-                )
-            })
-        });
-    let uuid = match uuid_result {
-        Ok(uuid) => uuid,
-        Err(e) => {
-            let _ = tokio::fs::remove_file(&dest).await;
-            return Err(e);
-        }
-    };
-
-    // Make the displayed metadata match what the user confirmed.
-    apply_user_edits(&state, &uuid, &form, user.id).await?;
-
-    Ok((StatusCode::CREATED, Json(UploadCommitResult { uuid })).into_response())
+        .map_err(|e| UploadError::internal("get_book_uuid_by_scan_key", e))?
+        .ok_or_else(|| {
+            UploadError::internal(
+                "resolve uploaded book",
+                "reindex did not surface the uploaded file",
+            )
+        })
 }
 
 /// Collect the user's text fields and stream the file field to a tempfile.

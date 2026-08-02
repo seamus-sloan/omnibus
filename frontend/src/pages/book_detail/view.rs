@@ -169,7 +169,11 @@ pub(super) struct LoadedCtx {
     pub(super) phys: PhysSignals,
 }
 
-/// Render the fully-loaded book detail view.
+/// Render the fully-loaded book detail view — mobile re-flow into a single
+/// column via [`mobile::render_loaded_mobile`]. Merge/delete and the
+/// physical/wishlist rail stay web-only, so `rail`/`refresh`/`phys` are
+/// unused here.
+#[cfg(feature = "mobile")]
 pub(super) fn render_loaded(
     b: EbookMetadata,
     description: DescriptionSignals,
@@ -184,99 +188,103 @@ pub(super) fn render_loaded(
         refresh,
         phys,
     } = ctx;
-    // Mobile re-flows the same loaded data into a single column; the web body
-    // (hero + rail + suggestions + merge UI) isn't rendered there.
-    #[cfg(feature = "mobile")]
-    let out = {
-        // The merge and delete affordances stay web-only; the discovery blocks
-        // (author cluster + suggestions) now render on mobile too. The physical
-        // panel + wishlist rail are web-only too (issue #1186 scope), so
-        // `refresh` and `phys` are unused here.
-        let _ = rail;
-        let _ = (refresh, phys);
-        mobile::render_loaded_mobile(mobile::MobileBookView {
-            b,
-            author_books,
-            suggestions,
-            is_admin,
-            server_url,
-            description,
-        })
-    };
+    let _ = rail;
+    let _ = (refresh, phys);
+    mobile::render_loaded_mobile(mobile::MobileBookView {
+        b,
+        author_books,
+        suggestions,
+        is_admin,
+        server_url,
+        description,
+    })
+}
 
-    #[cfg(not(feature = "mobile"))]
-    let out = {
-        // Web keeps its own local copy inside `BdTitleCol` (hero.rs), a real
-        // `#[component]` that gets a fresh scope per mount — no hook-order
-        // risk there, so this param is unused on this target.
-        let _ = description;
-        let RailButtons {
-            merge: merge_button,
-            delete: delete_button,
-        } = rail;
-        let LoadedBookView {
-            title,
-            primary_author,
-            author_id,
-            authors_line,
-            kicker,
-            series,
-            accent_style,
-            has_audio,
-            has_ebook,
-            has_comic,
-            crumbs,
-        } = derive_loaded_view(&b);
+/// Render the fully-loaded book detail view — web hero + rail + physical
+/// panel + suggestions grid.
+#[cfg(not(feature = "mobile"))]
+pub(super) fn render_loaded(
+    b: EbookMetadata,
+    description: DescriptionSignals,
+    author_books: Vec<EbookMetadata>,
+    rail: RailButtons,
+    suggestions: Option<SuggestionsResponse>,
+    ctx: LoadedCtx,
+) -> Element {
+    let LoadedCtx {
+        server_url,
+        is_admin,
+        refresh,
+        phys,
+    } = ctx;
+    // Web keeps its own local copy inside `BdTitleCol` (hero.rs), a real
+    // `#[component]` that gets a fresh scope per mount — no hook-order risk
+    // there, so this param is unused on this target.
+    let _ = description;
+    let RailButtons {
+        merge: merge_button,
+        delete: delete_button,
+    } = rail;
+    let LoadedBookView {
+        title,
+        primary_author,
+        author_id,
+        authors_line,
+        kicker,
+        series,
+        accent_style,
+        has_audio,
+        has_ebook,
+        has_comic,
+        crumbs,
+    } = derive_loaded_view(&b);
 
-        let uuid = b.unique_identifier.clone().unwrap_or_default();
-        // Extract the physical-panel inputs before `b` is moved into the rail.
-        let is_fileless = b.formats.is_empty();
-        let accent = b.accent.clone();
-        rsx! {
-            div { class: "bd-root", style: "{accent_style}",
-                BdHeroSection {
-                    b: b.clone(),
-                    title: title.clone(),
-                    chrome: hero::BdHeroChrome { kicker, crumbs },
-                    avail: hero::Availability {
-                        has_ebook,
-                        has_audio,
-                        has_comic,
-                    },
-                    phys,
-                }
-                physical::BdPhysicalPanel {
+    let uuid = b.unique_identifier.clone().unwrap_or_default();
+    // Extract the physical-panel inputs before `b` is moved into the rail.
+    let is_fileless = b.formats.is_empty();
+    let accent = b.accent.clone();
+    rsx! {
+        div { class: "bd-root", style: "{accent_style}",
+            BdHeroSection {
+                b: b.clone(),
+                title: title.clone(),
+                chrome: hero::BdHeroChrome { kicker, crumbs },
+                avail: hero::Availability {
+                    has_ebook,
+                    has_audio,
+                    has_comic,
+                },
+                phys,
+            }
+            physical::BdPhysicalPanel {
+                uuid: uuid.clone(),
+                is_fileless,
+                refresh,
+                phys,
+            }
+            section { class: "bd-body-grid",
+                BdBodyMain {
                     uuid: uuid.clone(),
-                    is_fileless,
-                    refresh,
-                    phys,
+                    title: title.clone(),
+                    author: BdAuthorCluster { primary_author, author_id, author_books },
+                    accent,
+                    suggestions,
+                    ctx: BdPageCtx { server_url, is_admin },
                 }
-                section { class: "bd-body-grid",
-                    BdBodyMain {
-                        uuid: uuid.clone(),
-                        title: title.clone(),
-                        author: BdAuthorCluster { primary_author, author_id, author_books },
-                        accent,
-                        suggestions,
-                        ctx: BdPageCtx { server_url, is_admin },
-                    }
-                    BdRailSection {
-                        b,
-                        title,
-                        authors_line,
-                        series,
-                        merge_button,
-                        delete_button,
-                    }
-                }
-                div { class: "bd-footer",
-                    Link { to: Route::Landing {}, class: "btn", "Back to library" }
+                BdRailSection {
+                    b,
+                    title,
+                    authors_line,
+                    series,
+                    merge_button,
+                    delete_button,
                 }
             }
+            div { class: "bd-footer",
+                Link { to: Route::Landing {}, class: "btn", "Back to library" }
+            }
         }
-    };
-
-    out
+    }
 }
 
 #[cfg(test)]
