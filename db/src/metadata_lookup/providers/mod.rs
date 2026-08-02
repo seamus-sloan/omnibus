@@ -1,0 +1,131 @@
+//! The provider clients and the single point that dispatches to them.
+//!
+//! **Every provider module implements the same pair**, and nothing else:
+//!
+//! ```ignore
+//! pub async fn by_isbn(&MetadataLookupConfig, isbn13: &str)
+//!     -> anyhow::Result<Option<ExternalBookMeta>>;
+//! pub async fn by_title(&MetadataLookupConfig, query: &str)
+//!     -> anyhow::Result<Vec<ExternalBookMeta>>;
+//! ```
+//!
+//! A clean miss is an empty answer (`None` / `vec![]`); an `Err` means the
+//! provider could not be asked, which is a different thing and is what lets
+//! the ladder in [`super`] tell "this book isn't out there" apart from "we
+//! never got an answer". Adding a provider is: a module implementing the pair,
+//! a [`MetadataProvider`] variant, and an arm in [`run`].
+
+// `pub(super)` rather than private so the sibling test module can drive one
+// provider in isolation — the bare-text fallback, the key-leak guard, and the
+// per-provider parse failures are all provider-level behaviour that the
+// ladder's own tests would only reach indirectly.
+pub(super) mod googlebooks;
+pub(super) mod hardcover;
+mod http;
+pub(super) mod openlibrary;
+
+/// Re-exported for the sibling test module, which pins the year-trimming rule
+/// directly; the providers reach it through `http` instead.
+#[cfg(test)]
+pub(super) use http::publication_year;
+pub use openlibrary::{enrich as openlibrary_enrich, OlEnrichment};
+
+use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider};
+
+use super::MetadataLookupConfig;
+
+/// The two things a rung can be asked. Carrying the operation as data (rather
+/// than passing an async closure) keeps the ladder a single non-generic
+/// function — a generic `AsyncFn`-bound helper trips a rustc higher-ranked
+/// lifetime inference bug in this crate, the same one documented on
+/// `suggestions::hardcover::resolve_book`.
+#[derive(Debug, Clone, Copy)]
+pub enum Query<'a> {
+    /// A canonical ISBN-13.
+    Isbn(&'a str),
+    /// Free title text as the reader typed it.
+    Title(&'a str),
+}
+
+/// Ask one provider one question.
+///
+/// Both operations answer with a `Vec` so the ladder needs only one shape: an
+/// ISBN lookup returns at most one entry, and empty means a clean miss either
+/// way.
+pub async fn run(
+    provider: MetadataProvider,
+    config: &MetadataLookupConfig,
+    query: Query<'_>,
+) -> anyhow::Result<Vec<ExternalBookMeta>> {
+    match (provider, query) {
+        (MetadataProvider::OpenLibrary, Query::Isbn(isbn)) => {
+            Ok(openlibrary::by_isbn(config, isbn)
+                .await?
+                .into_iter()
+                .collect())
+        }
+        (MetadataProvider::OpenLibrary, Query::Title(q)) => openlibrary::by_title(config, q).await,
+        (MetadataProvider::GoogleBooks, Query::Isbn(isbn)) => {
+            Ok(googlebooks::by_isbn(config, isbn)
+                .await?
+                .into_iter()
+                .collect())
+        }
+        (MetadataProvider::GoogleBooks, Query::Title(q)) => googlebooks::by_title(config, q).await,
+        (MetadataProvider::Hardcover, Query::Isbn(isbn)) => Ok(hardcover::by_isbn(config, isbn)
+            .await?
+            .into_iter()
+            .collect()),
+        (MetadataProvider::Hardcover, Query::Title(q)) => hardcover::by_title(config, q).await,
+    }
+}
+
+/// One rung of the ladder.
+pub struct Rung {
+    pub provider: MetadataProvider,
+    /// Whether this rung's failure is allowed to fail the whole lookup. Set on
+    /// exactly one rung — see [`ladder`].
+    pub terminal: bool,
+}
+
+/// The rungs to try, in order, for `config`.
+///
+/// **The two catalogs come first**, in a key-dependent order: with a Google
+/// Books key configured Google leads, since keyless it shares an anonymous
+/// quota it quickly exhausts (HTTP 429) but a keyed instance gets richer, more
+/// reliable data. Without a key Open Library leads and Google Books is the
+/// (usually-throttled) fallback — the historical order.
+///
+/// **Hardcover is appended last, and only when keyed.** It costs an extra
+/// round trip and its title search is exact-match only, so it earns its place
+/// answering what the catalogs couldn't rather than slowing down the common
+/// case. Being non-terminal, a Hardcover outage can never turn a clean
+/// "we couldn't find it" into a user-facing provider error.
+///
+/// The **terminal** rung is the last catalog: if nothing hit and that rung
+/// failed, we never actually got an answer, and saying "not found" would be a
+/// lie. Every other rung is best-effort.
+pub fn ladder(config: &MetadataLookupConfig) -> Vec<Rung> {
+    let [primary, fallback] = if config.keys.googlebooks.is_some() {
+        [MetadataProvider::GoogleBooks, MetadataProvider::OpenLibrary]
+    } else {
+        [MetadataProvider::OpenLibrary, MetadataProvider::GoogleBooks]
+    };
+    let mut rungs = vec![
+        Rung {
+            provider: primary,
+            terminal: false,
+        },
+        Rung {
+            provider: fallback,
+            terminal: true,
+        },
+    ];
+    if config.keys.hardcover.is_some() {
+        rungs.push(Rung {
+            provider: MetadataProvider::Hardcover,
+            terminal: false,
+        });
+    }
+    rungs
+}

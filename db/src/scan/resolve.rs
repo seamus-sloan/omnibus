@@ -9,7 +9,7 @@ use omnibus_shared::scan::{ScanBook, ScanOutcome};
 
 use crate::author_photos::fetch_remote_image;
 use crate::metadata_lookup::{
-    lookup_isbn, openlibrary_enrich, MetadataLookupConfig, MetadataLookupError,
+    openlibrary_enrich, search_provider_by_isbn, MetadataLookupConfig, MetadataLookupError,
 };
 use crate::normalize::{normalize_author, normalize_title};
 use crate::physical::{
@@ -62,7 +62,7 @@ pub async fn resolve_scan(
         return library_outcome(pool, user_id, book).await;
     }
 
-    match lookup_isbn(config, &isbn13).await? {
+    match search_provider_by_isbn(config, &isbn13).await? {
         Some(meta) => match find_book_by_norm(pool, &meta).await? {
             Some(book) => Ok(ScanOutcome::CloseMatch {
                 book,
@@ -88,17 +88,24 @@ pub async fn resolve_meta(
     meta: &ExternalBookMeta,
     config: &MetadataLookupConfig,
 ) -> Result<ScanOutcome, ScanError> {
-    // `meta` is untrusted wire input; only a canonicalized ISBN reaches SQL.
-    if let Some(isbn13) = canonical_isbn(meta) {
-        if let Some(book) = find_book_by_isbn(pool, &isbn13).await? {
+    // `meta` is untrusted wire input, so its ISBN is canonicalized once here
+    // and the raw string never leaves this function: it reaches neither SQL
+    // nor — since enrichment interpolates it into a provider URL path — an
+    // outbound request. `None` means it didn't validate, which skips both.
+    let isbn13 = canonical_isbn(meta);
+
+    if let Some(isbn13) = &isbn13 {
+        if let Some(book) = find_book_by_isbn(pool, isbn13).await? {
             return library_outcome(pool, user_id, book).await;
         }
     }
 
     let mut meta = meta.clone();
-    let enrichment = openlibrary_enrich(config, &meta.isbn13).await;
-    meta.series = meta.series.or(enrichment.series);
-    meta.first_publish_year = meta.first_publish_year.or(enrichment.first_publish_year);
+    if let Some(isbn13) = &isbn13 {
+        let enrichment = openlibrary_enrich(config, isbn13).await;
+        meta.series = meta.series.or(enrichment.series);
+        meta.first_publish_year = meta.first_publish_year.or(enrichment.first_publish_year);
+    }
 
     match find_book_by_norm(pool, &meta).await? {
         Some(book) => Ok(ScanOutcome::CloseMatch {

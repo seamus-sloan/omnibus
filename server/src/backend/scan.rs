@@ -22,6 +22,15 @@ use serde::Deserialize;
 use super::{internal, AppState};
 use crate::auth::{AdminUser, AuthUser};
 
+/// The provider ladder's config for this instance: saved settings keys win
+/// over the `GOOGLE_BOOKS_API_KEY` / `HARDCOVER_API_KEY` env vars, and a
+/// provider with no key is simply one the ladder skips.
+async fn provider_config(state: &AppState) -> Result<db::MetadataLookupConfig, db::SettingsError> {
+    Ok(db::MetadataLookupConfig::live(
+        db::provider_keys(&state.pool).await?,
+    ))
+}
+
 /// Map a scan-flow error to a response: user-actionable cases become 400/404,
 /// an unreachable metadata provider becomes 503, DB failures become 500.
 fn scan_error(context: &'static str, e: ScanError) -> Response {
@@ -54,13 +63,10 @@ pub(super) async fn post_resolve(
     if let Err(msg) = req.validate() {
         return (StatusCode::BAD_REQUEST, msg).into_response();
     }
-    // Saved settings key wins over `GOOGLE_BOOKS_API_KEY`; both absent is a
-    // keyless (shared-quota) lookup.
-    let key = match db::effective_google_books_api_key(&state.pool).await {
-        Ok(k) => k,
-        Err(e) => return internal("scan_resolve_google_books_key", e),
+    let config = match provider_config(&state).await {
+        Ok(c) => c,
+        Err(e) => return internal("scan_resolve_provider_keys", e),
     };
-    let config = db::MetadataLookupConfig::live_with_key(key);
     match db::resolve_scan(&state.pool, user.id, &req.isbn, &config).await {
         Ok(outcome) => Json(outcome).into_response(),
         Err(e) => scan_error("scan_resolve", e),
@@ -78,12 +84,11 @@ pub(super) async fn post_search(
     if let Err(msg) = req.validate() {
         return (StatusCode::BAD_REQUEST, msg).into_response();
     }
-    let key = match db::effective_google_books_api_key(&state.pool).await {
-        Ok(k) => k,
-        Err(e) => return internal("scan_search_google_books_key", e),
+    let config = match provider_config(&state).await {
+        Ok(c) => c,
+        Err(e) => return internal("scan_search_provider_keys", e),
     };
-    let config = db::MetadataLookupConfig::live_with_key(key);
-    match db::search_title(&config, req.query.trim()).await {
+    match db::search_provider_by_title(&config, req.query.trim()).await {
         Ok(results) => Json(ScanSearchResponse { results }).into_response(),
         Err(e) => scan_error("scan_search", e.into()),
     }
@@ -99,13 +104,10 @@ pub(super) async fn post_resolve_meta(
     if let Err(msg) = req.validate() {
         return (StatusCode::BAD_REQUEST, msg).into_response();
     }
-    // The key only feeds best-effort enrichment here, but resolve the
-    // effective one anyway so behavior matches `post_resolve`.
-    let key = match db::effective_google_books_api_key(&state.pool).await {
-        Ok(k) => k,
-        Err(e) => return internal("scan_resolve_meta_google_books_key", e),
+    let config = match provider_config(&state).await {
+        Ok(c) => c,
+        Err(e) => return internal("scan_resolve_meta_provider_keys", e),
     };
-    let config = db::MetadataLookupConfig::live_with_key(key);
     match db::resolve_meta(&state.pool, user.id, &req.meta, &config).await {
         Ok(outcome) => Json(outcome).into_response(),
         Err(e) => scan_error("scan_resolve_meta", e),

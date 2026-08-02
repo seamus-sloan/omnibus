@@ -9,7 +9,7 @@ use omnibus_shared::physical::WishlistSource;
 use omnibus_shared::scan::ScanOutcome;
 
 use super::*;
-use crate::metadata_lookup::{MetadataLookupConfig, MetadataLookupError};
+use crate::metadata_lookup::{MetadataLookupConfig, MetadataLookupError, ProviderKeys};
 use crate::normalize::{normalize_author, normalize_title};
 use crate::physical::{
     add_physical_copy, add_wishlist_entry, list_physical_copies, list_wishlist, PhysicalError,
@@ -134,7 +134,8 @@ fn config_for(server: &MockServer) -> MetadataLookupConfig {
         googlebooks_base: server.uri(),
         // Keyless on purpose: the mock never checks it, and reading the real
         // env here would make the suite depend on the developer's `.env`.
-        googlebooks_api_key: None,
+        hardcover_base: server.uri(),
+        keys: ProviderKeys::default(),
         timeout: Duration::from_secs(5),
     }
 }
@@ -759,6 +760,33 @@ async fn resolve_meta_skips_the_exact_rung_on_an_invalid_isbn() {
         outcome,
         ScanOutcome::CloseMatch { book, .. } if book.uuid == "u1"
     ));
+}
+
+#[tokio::test]
+async fn resolve_meta_makes_no_enrichment_request_for_an_unvalidatable_isbn() {
+    // `meta` is untrusted wire input and enrichment interpolates the ISBN into
+    // a provider URL path, so a value that fails canonicalization must never
+    // reach an outbound request — a path-traversal payload would otherwise
+    // address whatever endpoint it liked on the provider's host.
+    let pool = pool().await;
+    let server = MockServer::start().await;
+    // Any request at all to the provider host fails this test.
+    Mock::given(wiremock::matchers::any())
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let outcome = resolve_meta(
+        &pool,
+        USER_ID,
+        &picked_meta("Effective Java", "Joshua Bloch", "../../../admin/secrets"),
+        &config_for(&server),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome, ScanOutcome::NotInLibrary { .. }));
+    server.verify().await;
 }
 
 #[tokio::test]

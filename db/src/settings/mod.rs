@@ -370,6 +370,18 @@ pub async fn effective_hardcover_api_key(
     HARDCOVER_KEY.effective(pool).await
 }
 
+/// Every provider key the metadata-search ladder can use, resolved
+/// settings-over-env in one call. The scan routes want all of them at once —
+/// which providers are reachable is the ladder's business, not each handler's.
+pub async fn provider_keys(
+    pool: &SqlitePool,
+) -> Result<crate::metadata_lookup::ProviderKeys, SettingsError> {
+    Ok(crate::metadata_lookup::ProviderKeys {
+        googlebooks: effective_google_books_api_key(pool).await?,
+        hardcover: effective_hardcover_api_key(pool).await?,
+    })
+}
+
 /// Masked status of the server-wide Hardcover key (settings wins over env).
 /// Never returns the raw key — only a short masked preview.
 pub async fn hardcover_key_status(pool: &SqlitePool) -> Result<HardcoverKeyStatus, SettingsError> {

@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 pub enum MetadataProvider {
     OpenLibrary,
     GoogleBooks,
+    /// Only reachable on an instance with a Hardcover API key configured.
+    Hardcover,
 }
 
 /// Maximum byte length of a stored Google Books API key. Google keys are short

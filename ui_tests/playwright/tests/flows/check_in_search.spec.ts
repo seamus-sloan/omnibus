@@ -54,7 +54,19 @@ async function reachSearch(page: Page): Promise<void> {
   await gotoReady(page, "/check-in");
   await page.getByTestId("barcode-scanner-manual").click();
   await page.getByTestId("check-in-isbn").fill(ISBN);
-  await page.getByTestId("check-in-submit").click();
+
+  // Dioxus keys a server-fn body by parameter name, so `req` wraps the struct.
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: /\/api\/rpc\/scan\/resolve$/,
+      expectedBody: { req: { isbn: ISBN } },
+      expectedStatus: 200,
+    },
+    async () => page.getByTestId("check-in-submit").click(),
+  );
+
   await expect(page.getByTestId("check-in-unresolved")).toBeVisible();
   await page.getByTestId("check-in-search-instead").click();
   await expect(page.getByTestId("check-in-search")).toBeVisible();
@@ -94,7 +106,12 @@ test.describe("check-in title search", () => {
     await page.getByLabel("Title").fill("name of the wind");
     await expectMutation(
       page,
-      { method: "POST", url: "/api/rpc/scan/search", expectedStatus: 200 },
+      {
+        method: "POST",
+        url: "/api/rpc/scan/search",
+        expectedBody: { req: { query: "name of the wind" } },
+        expectedStatus: 200,
+      },
       async () => page.getByTestId("check-in-search-submit").click(),
     );
 
