@@ -196,16 +196,31 @@ fn indexed_book_from(
 fn page_names<R: Read + std::io::Seek>(archive: &zip::ZipArchive<R>) -> Vec<String> {
     let mut pages: Vec<String> = archive
         .file_names()
-        .filter(|name| !name.ends_with('/') && !is_hidden_name(name) && is_page_name(name))
+        .filter(|name| {
+            if name.ends_with('/') {
+                return false;
+            }
+            if is_hidden_name(name) {
+                // Fires on every legitimate AppleDouble fork too, so this is
+                // routine noise, not a problem to warn about — `debug!`
+                // keeps it out of the default log level.
+                tracing::debug!(entry = %name, "comic page list: excluding hidden entry");
+                return false;
+            }
+            is_page_name(name)
+        })
         .map(str::to_string)
         .collect();
     pages.sort_by(|a, b| natural_cmp(a, b));
     pages
 }
 
-/// `true` when any path segment starts with `.` — macOS AppleDouble forks
-/// (`__MACOSX/._p001.jpg`) and other hidden junk carry image extensions but
-/// aren't pages, and their sort keys would land them ahead of the real cover.
+/// `true` when any path segment starts with `.` — broader than just macOS
+/// AppleDouble forks (`__MACOSX/._p001.jpg`): it excludes every dot-prefixed
+/// segment, including a legitimately named `.chapter1/` directory or page.
+/// Kept broad deliberately: narrowing to an AppleDouble-only pattern risks
+/// letting some other archiver's leading-dot junk resurface as a page, and
+/// no known CBZ producer needs a leading dot for real content.
 fn is_hidden_name(name: &str) -> bool {
     name.split('/').any(|segment| segment.starts_with('.'))
 }
