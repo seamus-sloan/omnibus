@@ -3,7 +3,7 @@
 //! the byline/notes formatting used by the confirm screens.
 
 use super::entry::apply_key;
-use super::screens::byline;
+use super::screens::{byline, meta_details};
 use super::*;
 use omnibus_shared::MetadataProvider;
 
@@ -28,6 +28,8 @@ fn external() -> ExternalBookMeta {
         publisher: None,
         description: None,
         cover_url: None,
+        series: None,
+        first_publish_year: None,
         source: MetadataProvider::OpenLibrary,
     }
 }
@@ -185,6 +187,29 @@ fn friendly_error_keeps_the_original_when_stripping_leaves_nothing() {
         friendly_error("error running server function:(details: None)"),
         "error running server function:(details: None)"
     );
+}
+
+#[test]
+fn meta_details_joins_the_facts_the_provider_carried() {
+    let mut meta = external();
+    meta.first_publish_year = Some(1965);
+    meta.publisher = Some("Chilton Books".into());
+    meta.pages = Some(412);
+    assert_eq!(
+        meta_details(&meta).as_deref(),
+        Some("First published 1965 \u{b7} Chilton Books \u{b7} 412 pages")
+    );
+}
+
+#[test]
+fn meta_details_is_none_when_the_provider_carried_nothing() {
+    // `external()` has no first-publish year, publisher, or page count.
+    assert_eq!(meta_details(&external()), None);
+    // A blank publisher and a zero page count don't count as facts either.
+    let mut meta = external();
+    meta.publisher = Some("   ".into());
+    meta.pages = Some(0);
+    assert_eq!(meta_details(&meta), None);
 }
 
 #[test]

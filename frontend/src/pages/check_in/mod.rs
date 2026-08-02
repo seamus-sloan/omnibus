@@ -7,14 +7,15 @@
 mod entry;
 mod scan;
 mod screens;
+mod search;
 #[cfg(test)]
 mod tests;
 
 use dioxus::prelude::*;
 use dioxus_router::{use_navigator, use_route, Link};
 use omnibus_shared::{
-    isbn::normalize_isbn, AddPhysicalOnlyRequest, CheckInRequest, ExternalBookMeta, ResolveRequest,
-    ScanBook, ScanOutcome, WishlistAddRequest, WishlistSource,
+    isbn::normalize_isbn, AddPhysicalOnlyRequest, CheckInRequest, ExternalBookMeta,
+    ResolveMetaRequest, ResolveRequest, ScanBook, ScanOutcome, WishlistAddRequest, WishlistSource,
 };
 
 use crate::focus_after_paint::focus_after_paint;
@@ -24,6 +25,7 @@ use scan::ScanScreen;
 use screens::{
     ChooseScreen, CloseMatchScreen, ConfirmScreen, ResolvingScreen, SuccessScreen, UnresolvedScreen,
 };
+use search::SearchScreen;
 
 /// Whether the check-in overlay is open. Provided at [`crate::App`] scope so
 /// every entry point (top nav, add-books sheet, account row) can raise it and
@@ -132,6 +134,8 @@ pub(crate) enum Stage {
     Choose { online: ExternalBookMeta },
     /// Neither the library nor any provider knew the ISBN.
     Unresolved { isbn: String },
+    /// Title search — the unresolved screen's "type the name instead" fallback.
+    Search,
     /// 4 — the copy is checked in.
     CheckedIn { uuid: String, title: String },
     /// The book went on the caller's physical wishlist instead.
@@ -227,6 +231,7 @@ pub fn CheckInPage() -> Element {
     let on_resolve = make_on_resolve(server_url.clone(), state, nav);
     let on_check_in = make_on_check_in(server_url.clone(), state);
     let on_own_it = make_on_own_it(server_url.clone(), state);
+    let on_pick = make_on_pick(server_url.clone(), state, nav);
     let on_wishlist = make_on_wishlist(server_url, state);
 
     rsx! {
@@ -245,6 +250,7 @@ pub fn CheckInPage() -> Element {
                 on_resolve: EventHandler::new(on_resolve),
                 on_check_in: EventHandler::new(on_check_in),
                 on_own_it: EventHandler::new(on_own_it),
+                on_pick: EventHandler::new(on_pick),
                 on_wishlist: EventHandler::new(on_wishlist),
             }
             if let Some(msg) = (state.error)() {
@@ -267,6 +273,7 @@ fn CheckInStage(
     on_resolve: EventHandler<String>,
     on_check_in: EventHandler<ScanBook>,
     on_own_it: EventHandler<ExternalBookMeta>,
+    on_pick: EventHandler<ExternalBookMeta>,
     on_wishlist: EventHandler<WishlistAddRequest>,
 ) -> Element {
     let mut stage = state.stage;
@@ -338,7 +345,17 @@ fn CheckInStage(
             }
         },
         Stage::Unresolved { isbn } => rsx! {
-            UnresolvedScreen { isbn, on_restart: EventHandler::new(restart) }
+            UnresolvedScreen {
+                isbn,
+                on_search: EventHandler::new(move |_| {
+                    error.set(None);
+                    stage.set(Stage::Search);
+                }),
+                on_restart: EventHandler::new(restart),
+            }
+        },
+        Stage::Search => rsx! {
+            SearchScreen { state, on_pick, on_restart: EventHandler::new(restart) }
         },
         Stage::CheckedIn { uuid, title } => rsx! {
             SuccessScreen {
@@ -402,6 +419,49 @@ fn make_on_resolve(
                         friendly_error(&e.to_string())
                     )));
                     stage.set(Stage::Entry);
+                }
+            }
+            busy.set(false);
+        });
+    }
+}
+
+/// Build the search-pick handler: resolve a picked candidate against the
+/// library (no provider re-lookup, which could miss on a book the search just
+/// surfaced), then navigate or open the matching screen like a scan would.
+fn make_on_pick(
+    server_url: String,
+    state: FlowState,
+    nav: dioxus_router::Navigator,
+) -> impl FnMut(ExternalBookMeta) {
+    let FlowState {
+        mut stage,
+        mut busy,
+        mut error,
+        ..
+    } = state;
+    move |meta: ExternalBookMeta| {
+        let server_url = server_url.clone();
+        let isbn = meta.isbn13.clone();
+        error.set(None);
+        busy.set(true);
+        spawn(async move {
+            let req = ResolveMetaRequest { meta };
+            match data::resolve_scan_meta(&server_url, req).await {
+                Ok(ScanOutcome::AlreadyOwned { book }) | Ok(ScanOutcome::OnWishlist { book }) => {
+                    nav.push(Route::BookDetail { uuid: book.uuid });
+                }
+                Ok(outcome) => {
+                    if let Some(next) = stage_for(outcome, &isbn) {
+                        stage.set(next);
+                    }
+                }
+                // Stay on the search screen with the results intact to retry.
+                Err(e) => {
+                    error.set(Some(format!(
+                        "Could not match that book: {}",
+                        friendly_error(&e.to_string())
+                    )));
                 }
             }
             busy.set(false);

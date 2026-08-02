@@ -7,8 +7,11 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::Context;
+use omnibus_shared::isbn::normalize_isbn;
 use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider};
 use serde::Deserialize;
+
+use super::SEARCH_LIMIT;
 
 /// Per-request timeout for a provider call. A single lookup runs per scan, so
 /// this bounds how long the check-in flow waits on a slow provider.
@@ -264,8 +267,201 @@ pub async fn openlibrary_lookup(
         publisher: book.publishers.into_iter().find_map(|p| p.name),
         description: None,
         cover_url,
+        series: None,
+        first_publish_year: None,
         source: MetadataProvider::OpenLibrary,
     }))
+}
+
+// ── Open Library title search ────────────────────────────────────
+
+/// `search.json` answers works, not editions: `isbn` carries every edition's
+/// identifiers and `first_publish_year` is computed across all of them.
+#[derive(Debug, Deserialize)]
+struct OlSearchResponse {
+    #[serde(default)]
+    docs: Vec<OlSearchDoc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OlSearchDoc {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    author_name: Vec<String>,
+    #[serde(default)]
+    first_publish_year: Option<i64>,
+    #[serde(default)]
+    isbn: Vec<String>,
+    #[serde(default)]
+    cover_i: Option<i64>,
+    #[serde(default)]
+    number_of_pages_median: Option<i64>,
+}
+
+/// Build the Open Library title-search URL. The query is user text, so it goes
+/// through `Url`'s percent-encoding rather than string interpolation.
+pub(super) fn openlibrary_search_url(
+    config: &MetadataLookupConfig,
+    query: &str,
+) -> anyhow::Result<String> {
+    let mut url = reqwest::Url::parse(&format!("{}/search.json", config.openlibrary_base))
+        .context("invalid open library base url")?;
+    url.query_pairs_mut()
+        .append_pair("title", query)
+        .append_pair(
+            "fields",
+            "title,author_name,first_publish_year,isbn,cover_i,number_of_pages_median",
+        )
+        .append_pair("limit", &SEARCH_LIMIT.to_string());
+    Ok(url.into())
+}
+
+/// Search Open Library by title text. `Ok(empty)` on no matches; `Err` on
+/// transport/parse failure.
+pub async fn openlibrary_search(
+    config: &MetadataLookupConfig,
+    query: &str,
+) -> anyhow::Result<Vec<ExternalBookMeta>> {
+    let url = openlibrary_search_url(config, query)?;
+    let resp = client()?
+        .get(&url)
+        .timeout(config.timeout)
+        .send()
+        .await
+        .context("open library request failed")?
+        .error_for_status()
+        .context("open library returned an error status")?;
+    let body: OlSearchResponse = resp
+        .json()
+        .await
+        .context("open library response was not valid json")?;
+    Ok(body
+        .docs
+        .into_iter()
+        .filter_map(map_ol_search_doc)
+        .collect())
+}
+
+/// Map one search doc into `ExternalBookMeta`. A doc without a title or a
+/// valid ISBN maps to `None` — the whole check-in flow keys on the ISBN
+/// downstream (stored per copy, printed on the confirm screens), so a
+/// candidate that can't supply one isn't actionable.
+fn map_ol_search_doc(doc: OlSearchDoc) -> Option<ExternalBookMeta> {
+    let title = doc.title.filter(|t| !t.trim().is_empty())?;
+    let isbn13 = doc.isbn.iter().find_map(|v| normalize_isbn(v).ok())?;
+    Some(ExternalBookMeta {
+        isbn13,
+        title,
+        authors: doc.author_name,
+        year: None,
+        pages: doc.number_of_pages_median.filter(|p| *p > 0),
+        publisher: None,
+        description: None,
+        // Work-level cover id; the covers host is fixed in production and the
+        // URL is only fetched at create time (SSRF-guarded), never at search.
+        cover_url: doc
+            .cover_i
+            .map(|id| format!("https://covers.openlibrary.org/b/id/{id}-L.jpg")),
+        series: None,
+        first_publish_year: doc.first_publish_year,
+        source: MetadataProvider::OpenLibrary,
+    })
+}
+
+// ── Open Library enrichment ──────────────────────────────────────
+
+/// Bonus fields for an already-resolved ISBN, filled best-effort from Open
+/// Library: the edition's series statement and the work's first-publish year.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OlEnrichment {
+    pub series: Option<String>,
+    pub first_publish_year: Option<i64>,
+}
+
+/// Fetch [`OlEnrichment`] for an ISBN. Never fails — a provider hiccup or an
+/// ISBN Open Library doesn't know just means fewer fields. The two lookups
+/// run concurrently and each is bounded by the config timeout.
+pub async fn openlibrary_enrich(config: &MetadataLookupConfig, isbn13: &str) -> OlEnrichment {
+    let (series, first_publish_year) = tokio::join!(
+        edition_series(config, isbn13),
+        work_first_publish_year(config, isbn13)
+    );
+    OlEnrichment {
+        series,
+        first_publish_year,
+    }
+}
+
+/// The edition record (`/isbn/<isbn>.json`) is the only Open Library surface
+/// that carries a series statement.
+async fn edition_series(config: &MetadataLookupConfig, isbn13: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct OlEdition {
+        #[serde(default)]
+        series: Vec<String>,
+    }
+    let url = format!("{}/isbn/{isbn13}.json", config.openlibrary_base);
+    let edition: OlEdition = get_json_best_effort(config, &url).await?;
+    // An oversized statement is dropped rather than truncated: the meta is
+    // posted back on the write paths, where `validate` would reject it.
+    edition
+        .series
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .find(|s| !s.is_empty() && s.chars().count() <= ExternalBookMeta::NAME_MAX_LEN)
+}
+
+/// `first_publish_year` lives on the work, surfaced through the search API's
+/// `isbn:` field query.
+async fn work_first_publish_year(config: &MetadataLookupConfig, isbn13: &str) -> Option<i64> {
+    #[derive(Deserialize)]
+    struct Docs {
+        #[serde(default)]
+        docs: Vec<Doc>,
+    }
+    #[derive(Deserialize)]
+    struct Doc {
+        #[serde(default)]
+        first_publish_year: Option<i64>,
+    }
+    // isbn13 is digit-only (post-normalization), so no query encoding needed.
+    let url = format!(
+        "{}/search.json?q=isbn:{isbn13}&fields=first_publish_year&limit=1",
+        config.openlibrary_base
+    );
+    let body: Docs = get_json_best_effort(config, &url).await?;
+    body.docs
+        .into_iter()
+        .next()
+        .and_then(|d| d.first_publish_year)
+}
+
+/// GET + parse JSON, degrading every failure to `None` with a debug log —
+/// enrichment is strictly best-effort and must never fail a scan.
+async fn get_json_best_effort<T: serde::de::DeserializeOwned>(
+    config: &MetadataLookupConfig,
+    url: &str,
+) -> Option<T> {
+    let result: anyhow::Result<T> = async {
+        let resp = client()?
+            .get(url)
+            .timeout(config.timeout)
+            .send()
+            .await
+            .map_err(strip_url)?
+            .error_for_status()
+            .map_err(strip_url)?;
+        Ok(resp.json::<T>().await.map_err(strip_url)?)
+    }
+    .await;
+    match result {
+        Ok(v) => Some(v),
+        Err(e) => {
+            tracing::debug!("open library enrichment miss: {e:#}");
+            None
+        }
+    }
 }
 
 // ── Google Books ─────────────────────────────────────────────────
@@ -298,6 +494,14 @@ struct GbVolumeInfo {
     description: Option<String>,
     #[serde(rename = "imageLinks", default)]
     image_links: Option<GbImageLinks>,
+    #[serde(rename = "industryIdentifiers", default)]
+    industry_identifiers: Vec<GbIndustryId>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GbIndustryId {
+    #[serde(default)]
+    identifier: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -370,8 +574,24 @@ async fn googlebooks_query(
     let Some(info) = body.items.into_iter().find_map(|i| i.volume_info) else {
         return Ok(None);
     };
-    let Some(title) = info.title.filter(|t| !t.trim().is_empty()) else {
-        return Ok(None);
+    Ok(map_gb_volume(info, Some(isbn13)))
+}
+
+/// Map one Google Books volume into `ExternalBookMeta`. `isbn13` is the
+/// caller's authoritative ISBN when it has one (the ISBN-lookup path stores
+/// the *scanned* barcode); title search derives it from the volume's own
+/// industry identifiers instead. A volume without a title, or a search result
+/// without a valid ISBN, maps to `None` — the check-in flow keys on the ISBN
+/// downstream.
+fn map_gb_volume(info: GbVolumeInfo, isbn13: Option<&str>) -> Option<ExternalBookMeta> {
+    let title = info.title.filter(|t| !t.trim().is_empty())?;
+    let isbn13 = match isbn13 {
+        Some(scanned) => scanned.to_string(),
+        None => info
+            .industry_identifiers
+            .iter()
+            .filter_map(|i| i.identifier.as_deref())
+            .find_map(|v| normalize_isbn(v).ok())?,
     };
     // Google Books serves image links over `http://`; upgrade to `https://`
     // so the cover isn't blocked as mixed content (or by the https-only CSP
@@ -381,8 +601,8 @@ async fn googlebooks_query(
         .and_then(|l| l.thumbnail.or(l.small_thumbnail))
         .map(|u| upgrade_to_https(&u));
 
-    Ok(Some(ExternalBookMeta {
-        isbn13: isbn13.to_string(),
+    Some(ExternalBookMeta {
+        isbn13,
         title,
         authors: info.authors,
         year: info.published_date.as_deref().and_then(publication_year),
@@ -392,8 +612,52 @@ async fn googlebooks_query(
         publisher: info.publisher,
         description: info.description,
         cover_url,
+        series: None,
+        first_publish_year: None,
         source: MetadataProvider::GoogleBooks,
-    }))
+    })
+}
+
+// ── Google Books title search ────────────────────────────────────
+
+/// Build the Google Books title-search URL: a bare-text `q` (their general
+/// search ranks title matches well and tolerates typos better than an
+/// `intitle:` field query), books only, key appended when configured. The
+/// query is user text, so it goes through `Url`'s percent-encoding.
+pub(super) fn googlebooks_search_url(
+    config: &MetadataLookupConfig,
+    query: &str,
+) -> anyhow::Result<String> {
+    let mut url = reqwest::Url::parse(&format!("{}/books/v1/volumes", config.googlebooks_base))
+        .context("invalid google books base url")?;
+    url.query_pairs_mut()
+        .append_pair("q", query)
+        .append_pair("printType", "books")
+        .append_pair("maxResults", &SEARCH_LIMIT.to_string());
+    if let Some(key) = config.googlebooks_api_key.as_deref() {
+        url.query_pairs_mut().append_pair("key", key);
+    }
+    Ok(url.into())
+}
+
+/// Search Google Books by title text. `Ok(empty)` on no usable volumes; `Err`
+/// on transport/parse failure.
+pub async fn googlebooks_search(
+    config: &MetadataLookupConfig,
+    query: &str,
+) -> anyhow::Result<Vec<ExternalBookMeta>> {
+    let url = googlebooks_search_url(config, query)?;
+    let resp = googlebooks_get(config, &url).await?;
+    let body: GbResponse = resp
+        .json()
+        .await
+        .context("google books response was not valid json")?;
+    Ok(body
+        .items
+        .into_iter()
+        .filter_map(|i| i.volume_info)
+        .filter_map(|info| map_gb_volume(info, None))
+        .collect())
 }
 
 /// Upgrade an `http://` URL to `https://`; other schemes pass through

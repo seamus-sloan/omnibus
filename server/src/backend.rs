@@ -412,6 +412,8 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
         // Physical Check-In scan flow — mobile-facing REST. Web hits the
         // analogous `/api/rpc/scan/*` server functions.
         .route("/api/scan/resolve", post(scan::post_resolve))
+        .route("/api/scan/search", post(scan::post_search))
+        .route("/api/scan/resolve-meta", post(scan::post_resolve_meta))
         .route("/api/scan/check-in", post(scan::post_check_in))
         .route(
             "/api/scan/physical-only",

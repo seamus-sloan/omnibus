@@ -8,7 +8,9 @@ use omnibus_shared::physical::WishlistSource;
 use omnibus_shared::scan::{ScanBook, ScanOutcome};
 
 use crate::author_photos::fetch_remote_image;
-use crate::metadata_lookup::{lookup_isbn, MetadataLookupConfig, MetadataLookupError};
+use crate::metadata_lookup::{
+    lookup_isbn, openlibrary_enrich, MetadataLookupConfig, MetadataLookupError,
+};
 use crate::normalize::{normalize_author, normalize_title};
 use crate::physical::{
     add_physical_copy, add_wishlist_entry, create_fileless_book, get_wishlist_entry, FilelessBook,
@@ -57,17 +59,7 @@ pub async fn resolve_scan(
     let isbn13 = normalize_isbn(raw_isbn)?;
 
     if let Some(book) = find_book_by_isbn(pool, &isbn13).await? {
-        if book.has_physical {
-            return Ok(ScanOutcome::AlreadyOwned { book });
-        }
-        let on_wishlist = get_wishlist_entry(pool, user_id, &book.uuid)
-            .await?
-            .is_some();
-        return Ok(if on_wishlist {
-            ScanOutcome::OnWishlist { book }
-        } else {
-            ScanOutcome::InLibraryUnowned { book }
-        });
+        return library_outcome(pool, user_id, book).await;
     }
 
     match lookup_isbn(config, &isbn13).await? {
@@ -80,6 +72,61 @@ pub async fn resolve_scan(
         },
         None => Ok(ScanOutcome::Unresolved),
     }
+}
+
+/// Resolve a picked title-search candidate down the same ladder as
+/// [`resolve_scan`], minus the provider ISBN lookup — the metadata is already
+/// in hand, and a re-lookup could miss on a flaky provider and turn a book
+/// the search just surfaced back into "unresolved".
+///
+/// Series / first-publish enrichment still runs (search results don't carry
+/// those fields), so the outcome screens show the same detail either way a
+/// book was found.
+pub async fn resolve_meta(
+    pool: &SqlitePool,
+    user_id: i64,
+    meta: &ExternalBookMeta,
+    config: &MetadataLookupConfig,
+) -> Result<ScanOutcome, ScanError> {
+    // `meta` is untrusted wire input; only a canonicalized ISBN reaches SQL.
+    if let Some(isbn13) = canonical_isbn(meta) {
+        if let Some(book) = find_book_by_isbn(pool, &isbn13).await? {
+            return library_outcome(pool, user_id, book).await;
+        }
+    }
+
+    let mut meta = meta.clone();
+    let enrichment = openlibrary_enrich(config, &meta.isbn13).await;
+    meta.series = meta.series.or(enrichment.series);
+    meta.first_publish_year = meta.first_publish_year.or(enrichment.first_publish_year);
+
+    match find_book_by_norm(pool, &meta).await? {
+        Some(book) => Ok(ScanOutcome::CloseMatch {
+            book,
+            scanned: meta,
+        }),
+        None => Ok(ScanOutcome::NotInLibrary { online: meta }),
+    }
+}
+
+/// Map an exact-identifier library hit onto its outcome: physically owned,
+/// wishlisted by this caller, or in the library digitally only.
+async fn library_outcome(
+    pool: &SqlitePool,
+    user_id: i64,
+    book: ScanBook,
+) -> Result<ScanOutcome, ScanError> {
+    if book.has_physical {
+        return Ok(ScanOutcome::AlreadyOwned { book });
+    }
+    let on_wishlist = get_wishlist_entry(pool, user_id, &book.uuid)
+        .await?
+        .is_some();
+    Ok(if on_wishlist {
+        ScanOutcome::OnWishlist { book }
+    } else {
+        ScanOutcome::InLibraryUnowned { book }
+    })
 }
 
 /// Add a physical-only book from resolved external metadata: mint a fileless

@@ -517,6 +517,131 @@ async fn api_scan_wishlist_add_returns_400_when_neither_uuid_nor_meta_given() {
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 }
 
+// ── title search + resolve-meta ──────────────────────────────────
+//
+// The search happy path needs a live provider, so it lives in the
+// `omnibus_db::metadata_lookup` wiremock tests; resolve-meta's exact-ISBN
+// rung answers before any provider call, keeping its happy path
+// network-free here.
+
+#[tokio::test]
+async fn api_scan_search_requires_auth() {
+    let (app, _state, _pool) = fixture().await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/scan/search")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "query": "dune" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn api_scan_search_rejects_a_blank_query() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let res = app
+        .oneshot(post(
+            "/api/scan/search",
+            &token,
+            serde_json::json!({ "query": "   " }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body = body_string(res).await;
+    assert!(body.contains("query"), "got: {body}");
+}
+
+#[tokio::test]
+async fn api_scan_search_rejects_an_oversized_query() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let res = app
+        .oneshot(post(
+            "/api/scan/search",
+            &token,
+            serde_json::json!({
+                "query": "x".repeat(omnibus_shared::scan::SEARCH_QUERY_MAX_LEN + 1),
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn api_scan_resolve_meta_requires_auth() {
+    let (app, _state, _pool) = fixture().await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/scan/resolve-meta")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "meta": external_meta_json("Some Book", ISBN) })
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn api_scan_resolve_meta_rejects_an_oversized_meta_title() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let oversized_title =
+        "x".repeat(omnibus_shared::metadata_lookup::ExternalBookMeta::TITLE_MAX_LEN + 1);
+    let res = app
+        .oneshot(post(
+            "/api/scan/resolve-meta",
+            &token,
+            serde_json::json!({ "meta": external_meta_json(&oversized_title, ISBN) }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body = body_string(res).await;
+    assert!(body.contains("title"), "got: {body}");
+}
+
+#[tokio::test]
+async fn api_scan_resolve_meta_exact_hit_returns_in_library_unowned() {
+    let (app, _state, pool) = fixture().await;
+    let uuid = seed_book_with_isbn(&pool, "Effective Java", ISBN).await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let res = app
+        .oneshot(post(
+            "/api/scan/resolve-meta",
+            &token,
+            serde_json::json!({ "meta": external_meta_json("Effective Java", ISBN) }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    match json_body::<ScanOutcome>(res).await {
+        ScanOutcome::InLibraryUnowned { book } => assert_eq!(book.uuid, uuid),
+        other => panic!("expected InLibraryUnowned, got {other:?}"),
+    }
+}
+
 // ── Google Books API key (admin) ─────────────────────────────────
 
 #[tokio::test]

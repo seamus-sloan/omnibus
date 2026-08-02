@@ -5,8 +5,8 @@
 use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
 use omnibus_shared::{
-    AddPhysicalOnlyRequest, BookRef, CheckInRequest, GoogleBooksKeyStatus, ResolveRequest,
-    ScanOutcome, WishlistAddRequest,
+    AddPhysicalOnlyRequest, BookRef, CheckInRequest, GoogleBooksKeyStatus, ResolveMetaRequest,
+    ResolveRequest, ScanOutcome, ScanSearchRequest, ScanSearchResponse, WishlistAddRequest,
 };
 
 #[cfg(feature = "server")]
@@ -51,6 +51,39 @@ pub async fn rpc_resolve_scan(req: ResolveRequest) -> Result<ScanOutcome> {
         .map_err(|e| internal_rpc_error("resolve google books key", e))?;
     let config = db::MetadataLookupConfig::live_with_key(key);
     Ok(db::resolve_scan(&pool.0, user.id, &req.isbn, &config)
+        .await
+        .map_err(map_scan_err)?)
+}
+
+/// Search the providers by title text — the fallback when an ISBN resolves to
+/// `Unresolved`. Any authenticated user may search.
+#[post("/api/rpc/scan/search", pool: PoolExt, _user: AuthUser)]
+pub async fn rpc_scan_search(req: ScanSearchRequest) -> Result<ScanSearchResponse> {
+    if let Err(msg) = req.validate() {
+        return Err(ServerFnError::new(msg).into());
+    }
+    let key = db::effective_google_books_api_key(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("resolve google books key", e))?;
+    let config = db::MetadataLookupConfig::live_with_key(key);
+    let results = db::search_title(&config, req.query.trim())
+        .await
+        .map_err(|e| map_scan_err(e.into()))?;
+    Ok(ScanSearchResponse { results })
+}
+
+/// Resolve a picked title-search candidate against the library — the ladder's
+/// library rungs applied to metadata already in hand, no provider ISBN lookup.
+#[post("/api/rpc/scan/resolve-meta", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_resolve_scan_meta(req: ResolveMetaRequest) -> Result<ScanOutcome> {
+    if let Err(msg) = req.validate() {
+        return Err(ServerFnError::new(msg).into());
+    }
+    let key = db::effective_google_books_api_key(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("resolve google books key", e))?;
+    let config = db::MetadataLookupConfig::live_with_key(key);
+    Ok(db::resolve_meta(&pool.0, user.id, &req.meta, &config)
         .await
         .map_err(map_scan_err)?)
 }

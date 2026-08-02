@@ -14,7 +14,8 @@ use axum::{
 };
 use omnibus_db::{self as db, MetadataLookupError, PhysicalError, ScanError};
 use omnibus_shared::{
-    AddPhysicalOnlyRequest, BookRef, CheckInRequest, ResolveRequest, WishlistAddRequest,
+    AddPhysicalOnlyRequest, BookRef, CheckInRequest, ResolveMetaRequest, ResolveRequest,
+    ScanSearchRequest, ScanSearchResponse, WishlistAddRequest,
 };
 use serde::Deserialize;
 
@@ -63,6 +64,51 @@ pub(super) async fn post_resolve(
     match db::resolve_scan(&state.pool, user.id, &req.isbn, &config).await {
         Ok(outcome) => Json(outcome).into_response(),
         Err(e) => scan_error("scan_resolve", e),
+    }
+}
+
+/// Search the providers by title text — the fallback when an ISBN resolves to
+/// `Unresolved`. Always 200 with a (possibly empty) candidate list; 400 for a
+/// blank/oversized query, 503 when both providers are down.
+pub(super) async fn post_search(
+    _user: AuthUser,
+    State(state): State<AppState>,
+    Json(req): Json<ScanSearchRequest>,
+) -> Response {
+    if let Err(msg) = req.validate() {
+        return (StatusCode::BAD_REQUEST, msg).into_response();
+    }
+    let key = match db::effective_google_books_api_key(&state.pool).await {
+        Ok(k) => k,
+        Err(e) => return internal("scan_search_google_books_key", e),
+    };
+    let config = db::MetadataLookupConfig::live_with_key(key);
+    match db::search_title(&config, req.query.trim()).await {
+        Ok(results) => Json(ScanSearchResponse { results }).into_response(),
+        Err(e) => scan_error("scan_search", e.into()),
+    }
+}
+
+/// Resolve a picked title-search candidate against the library — the ladder's
+/// library rungs applied to metadata already in hand, no provider ISBN lookup.
+pub(super) async fn post_resolve_meta(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Json(req): Json<ResolveMetaRequest>,
+) -> Response {
+    if let Err(msg) = req.validate() {
+        return (StatusCode::BAD_REQUEST, msg).into_response();
+    }
+    // The key only feeds best-effort enrichment here, but resolve the
+    // effective one anyway so behavior matches `post_resolve`.
+    let key = match db::effective_google_books_api_key(&state.pool).await {
+        Ok(k) => k,
+        Err(e) => return internal("scan_resolve_meta_google_books_key", e),
+    };
+    let config = db::MetadataLookupConfig::live_with_key(key);
+    match db::resolve_meta(&state.pool, user.id, &req.meta, &config).await {
+        Ok(outcome) => Json(outcome).into_response(),
+        Err(e) => scan_error("scan_resolve_meta", e),
     }
 }
 

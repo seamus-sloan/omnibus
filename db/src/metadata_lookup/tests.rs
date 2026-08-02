@@ -9,7 +9,7 @@ use serde_json::json;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use omnibus_shared::metadata_lookup::MetadataProvider;
+use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider};
 
 use super::*;
 
@@ -547,6 +547,301 @@ fn googlebooks_bare_url_drops_the_field_restriction_and_keeps_the_key() {
     assert_eq!(
         super::providers::googlebooks_bare_url(&keyed, ISBN13),
         format!("http://gb.test/books/v1/volumes?q={ISBN13}&key=sekret")
+    );
+}
+
+// ── Open Library enrichment (series, first-publish year) ─────────
+
+/// Mount the two enrichment endpoints: the edition record (series) and the
+/// search API's `isbn:` field query (first-publish year).
+async fn mount_enrichment(server: &MockServer) {
+    Mock::given(method("GET"))
+        .and(path(format!("/isbn/{ISBN13}.json")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "series": ["Addison-Wesley Java series"],
+        })))
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/search.json"))
+        .and(query_param("q", format!("isbn:{ISBN13}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "docs": [{ "first_publish_year": 2001 }],
+        })))
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn lookup_enriches_a_hit_with_series_and_first_publish_year() {
+    let server = MockServer::start().await;
+    mount_ol(&server, ol_hit()).await;
+    mount_enrichment(&server).await;
+
+    let meta = lookup_isbn(&config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(meta.series.as_deref(), Some("Addison-Wesley Java series"));
+    assert_eq!(meta.first_publish_year, Some(2001));
+    // The edition's own date stays what the provider reported.
+    assert_eq!(meta.year.as_deref(), Some("2018"));
+}
+
+#[tokio::test]
+async fn lookup_enriches_a_google_books_hit_too() {
+    // Enrichment keys on the ISBN alone, so a Google Books resolution still
+    // gets Open Library's series / first-publish fields.
+    let server = MockServer::start().await;
+    mount_ol(&server, json!({})).await;
+    mount_gb(&server, gb_hit()).await;
+    mount_enrichment(&server).await;
+
+    let meta = lookup_isbn(&config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(meta.source, MetadataProvider::GoogleBooks);
+    assert_eq!(meta.series.as_deref(), Some("Addison-Wesley Java series"));
+    assert_eq!(meta.first_publish_year, Some(2001));
+}
+
+#[tokio::test]
+async fn lookup_survives_enrichment_failure_with_fields_unset() {
+    // No enrichment endpoints mounted: both GETs 404. The lookup must still
+    // resolve — enrichment is strictly best-effort.
+    let server = MockServer::start().await;
+    mount_ol(&server, ol_hit()).await;
+
+    let meta = lookup_isbn(&config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(meta.title, "Effective Java");
+    assert_eq!(meta.series, None);
+    assert_eq!(meta.first_publish_year, None);
+}
+
+#[tokio::test]
+async fn openlibrary_enrich_drops_a_blank_or_oversized_series() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/isbn/{ISBN13}.json")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "series": ["   ", "x".repeat(ExternalBookMeta::NAME_MAX_LEN + 1), "Real Series"],
+        })))
+        .mount(&server)
+        .await;
+
+    let enrichment = openlibrary_enrich(&config_for(&server), ISBN13).await;
+    // Blank and oversized statements are skipped, not truncated — the meta is
+    // posted back on the write paths, where `validate` would reject them.
+    assert_eq!(enrichment.series.as_deref(), Some("Real Series"));
+    assert_eq!(enrichment.first_publish_year, None);
+}
+
+// ── title search ─────────────────────────────────────────────────
+
+const OL_SEARCH_PATH: &str = "/search.json";
+const QUERY: &str = "effective java";
+
+fn ol_search_hit() -> serde_json::Value {
+    json!({
+        "docs": [
+            {
+                "title": "Effective Java",
+                "author_name": ["Joshua Bloch"],
+                "first_publish_year": 2001,
+                "isbn": ["not-an-isbn", "0134685997", "9780134685991"],
+                "cover_i": 8511809,
+                "number_of_pages_median": 416,
+            },
+            // No usable ISBN in any edition: not actionable, must be skipped.
+            {
+                "title": "Effective Java Notes",
+                "author_name": ["Someone Else"],
+                "isbn": ["garbage"],
+            },
+        ]
+    })
+}
+
+fn gb_search_hit() -> serde_json::Value {
+    json!({
+        "totalItems": 2,
+        "items": [
+            { "volumeInfo": {
+                "title": "Effective Java",
+                "authors": ["Joshua Bloch"],
+                "publishedDate": "2018-01-01",
+                "industryIdentifiers": [
+                    { "type": "ISBN_10", "identifier": "0134685997" },
+                    { "type": "ISBN_13", "identifier": "9780134685991" },
+                ],
+            }},
+            // The same ISBN again (Google Books answers repeat editions):
+            // deduped away by `search_title`.
+            { "volumeInfo": {
+                "title": "Effective Java (reprint)",
+                "authors": ["Joshua Bloch"],
+                "industryIdentifiers": [
+                    { "type": "ISBN_13", "identifier": "9780134685991" },
+                ],
+            }},
+        ]
+    })
+}
+
+async fn mount_ol_search(server: &MockServer, body: serde_json::Value) {
+    Mock::given(method("GET"))
+        .and(path(OL_SEARCH_PATH))
+        .and(query_param("title", QUERY))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .mount(server)
+        .await;
+}
+
+async fn mount_gb_search(server: &MockServer, body: serde_json::Value) {
+    Mock::given(method("GET"))
+        .and(path(GB_PATH))
+        .and(query_param("q", QUERY))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn search_title_maps_open_library_docs_and_skips_isbnless_ones() {
+    let server = MockServer::start().await;
+    mount_ol_search(&server, ol_search_hit()).await;
+
+    let results = search_title(&config_for(&server), QUERY).await.unwrap();
+    assert_eq!(results.len(), 1, "the isbn-less doc must be skipped");
+    let meta = &results[0];
+    assert_eq!(meta.source, MetadataProvider::OpenLibrary);
+    assert_eq!(meta.title, "Effective Java");
+    assert_eq!(meta.authors, vec!["Joshua Bloch".to_string()]);
+    // The first normalizable entry wins; the ISBN-10 folds to the same 13.
+    assert_eq!(meta.isbn13, ISBN13);
+    assert_eq!(meta.first_publish_year, Some(2001));
+    assert_eq!(meta.pages, Some(416));
+    assert_eq!(
+        meta.cover_url.as_deref(),
+        Some("https://covers.openlibrary.org/b/id/8511809-L.jpg")
+    );
+}
+
+#[tokio::test]
+async fn search_title_falls_through_to_google_books_when_open_library_is_empty() {
+    let server = MockServer::start().await;
+    mount_ol_search(&server, json!({ "docs": [] })).await;
+    mount_gb_search(&server, gb_search_hit()).await;
+
+    let results = search_title(&config_for(&server), QUERY).await.unwrap();
+    assert_eq!(results.len(), 1, "repeat editions must be deduped by isbn");
+    assert_eq!(results[0].source, MetadataProvider::GoogleBooks);
+    assert_eq!(results[0].isbn13, ISBN13);
+    assert_eq!(results[0].year.as_deref(), Some("2018"));
+}
+
+#[tokio::test]
+async fn search_title_falls_through_to_google_books_on_open_library_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(OL_SEARCH_PATH))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+    mount_gb_search(&server, gb_search_hit()).await;
+
+    let results = search_title(&config_for(&server), QUERY).await.unwrap();
+    assert_eq!(results[0].source, MetadataProvider::GoogleBooks);
+}
+
+#[tokio::test]
+async fn search_title_prefers_google_books_when_a_key_is_configured() {
+    let server = MockServer::start().await;
+    mount_ol_search(&server, ol_search_hit()).await;
+    mount_gb_search(&server, gb_search_hit()).await;
+
+    let results = search_title(&keyed_config_for(&server), QUERY)
+        .await
+        .unwrap();
+    assert_eq!(results[0].source, MetadataProvider::GoogleBooks);
+}
+
+#[tokio::test]
+async fn search_title_returns_empty_when_both_providers_are_empty() {
+    let server = MockServer::start().await;
+    mount_ol_search(&server, json!({ "docs": [] })).await;
+    mount_gb_search(&server, json!({ "totalItems": 0 })).await;
+
+    let results = search_title(&config_for(&server), QUERY).await.unwrap();
+    assert!(
+        results.is_empty(),
+        "a double miss is an empty list, not an error"
+    );
+}
+
+#[tokio::test]
+async fn search_title_surfaces_provider_error_when_fallback_fails() {
+    let server = MockServer::start().await;
+    mount_ol_search(&server, json!({ "docs": [] })).await;
+    Mock::given(method("GET"))
+        .and(path(GB_PATH))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    let err = search_title(&config_for(&server), QUERY).await.unwrap_err();
+    assert!(matches!(err, MetadataLookupError::Provider(_)));
+}
+
+#[tokio::test]
+async fn search_title_caps_the_candidate_list() {
+    let docs: Vec<serde_json::Value> = (0..20)
+        .map(|i| {
+            json!({
+                "title": format!("Book {i}"),
+                // Distinct valid ISBN-13s: vary the payload, recompute the check digit.
+                "isbn": [with_check_digit(&format!("9780000000{i:02}"))],
+            })
+        })
+        .collect();
+    let server = MockServer::start().await;
+    mount_ol_search(&server, json!({ "docs": docs })).await;
+
+    let results = search_title(&config_for(&server), QUERY).await.unwrap();
+    assert_eq!(results.len(), SEARCH_LIMIT);
+}
+
+/// Recompute the EAN-13 check digit for a 12-digit prefix.
+fn with_check_digit(prefix12: &str) -> String {
+    let sum: u32 = prefix12
+        .chars()
+        .enumerate()
+        .map(|(i, c)| c.to_digit(10).unwrap() * if i % 2 == 0 { 1 } else { 3 })
+        .sum();
+    format!("{prefix12}{}", (10 - (sum % 10)) % 10)
+}
+
+#[test]
+fn search_urls_percent_encode_the_query_and_carry_the_key() {
+    let keyed = MetadataLookupConfig {
+        openlibrary_base: "http://ol.test".into(),
+        googlebooks_base: "http://gb.test".into(),
+        googlebooks_api_key: Some("sekret".into()),
+        timeout: Duration::from_secs(5),
+    };
+    let gb = super::providers::googlebooks_search_url(&keyed, "war & peace").unwrap();
+    assert!(
+        gb.contains("q=war+%26+peace") && gb.ends_with("&key=sekret"),
+        "got: {gb}"
+    );
+    let ol = super::providers::openlibrary_search_url(&keyed, "war & peace").unwrap();
+    assert!(
+        ol.starts_with("http://ol.test/search.json?title=war+%26+peace"),
+        "got: {ol}"
     );
 }
 

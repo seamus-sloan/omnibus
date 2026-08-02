@@ -12,6 +12,8 @@ fn valid_meta() -> ExternalBookMeta {
         publisher: Some("Penguin Classics".into()),
         description: Some("A classic novel.".into()),
         cover_url: Some("https://example.com/cover.jpg".into()),
+        series: Some("Penguin English Library".into()),
+        first_publish_year: Some(1813),
         source: MetadataProvider::OpenLibrary,
     }
 }
@@ -61,6 +63,16 @@ fn external_book_meta_validate_rejects_an_oversized_publisher() {
         .validate()
         .expect_err("oversized publisher must be rejected");
     assert!(err.contains("publisher"), "got: {err}");
+}
+
+#[test]
+fn external_book_meta_validate_rejects_an_oversized_series() {
+    let mut meta = valid_meta();
+    meta.series = Some("x".repeat(ExternalBookMeta::NAME_MAX_LEN + 1));
+    let err = meta
+        .validate()
+        .expect_err("oversized series must be rejected");
+    assert!(err.contains("series"), "got: {err}");
 }
 
 #[test]

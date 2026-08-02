@@ -8573,6 +8573,38 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .check-in-book-meta { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .check-in-book-title { font-family: var(--serif); font-size: 16px; }
 .check-in-book-byline { font-size: 13px; color: var(--ink-2); }
+.check-in-book-series {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.check-in-book-detail { font-size: 12.5px; color: var(--ink-3); }
+
+/* ── Title-search results ─────────────────────────────────────────── */
+.check-in-search-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+/* The whole candidate card is the button; the inner card keeps its look. */
+.check-in-search-result {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+.check-in-search-result:hover .check-in-book,
+.check-in-search-result:focus-visible .check-in-book { border-color: var(--accent); }
+.check-in-search-result:disabled { cursor: default; opacity: 0.55; }
 
 /* ── Matching spinner ─────────────────────────────────────────────── */
 .check-in-spinner {

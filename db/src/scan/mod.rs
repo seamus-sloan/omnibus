@@ -9,4 +9,4 @@ mod resolve;
 #[cfg(test)]
 mod tests;
 
-pub use resolve::{add_physical_only, resolve_scan, wishlist_add, ScanError};
+pub use resolve::{add_physical_only, resolve_meta, resolve_scan, wishlist_add, ScanError};

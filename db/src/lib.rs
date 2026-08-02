@@ -87,7 +87,7 @@ pub use epub_rewrite::{export_epub_dir, rewritten_epub_path, EpubRewriteError};
 pub use helpers::{build_fts_match, sanitize_fts_query};
 pub use kepub::{convert_book, kepub_path, kepubify_available, warn_if_unavailable, KepubError};
 pub use merge::{merge_books, undo_merge, MergeError, MergeOutcome};
-pub use metadata_lookup::{lookup_isbn, MetadataLookupConfig, MetadataLookupError};
+pub use metadata_lookup::{lookup_isbn, search_title, MetadataLookupConfig, MetadataLookupError};
 pub use metadata_overrides::*;
 pub use missing_files::{
     backfill_missing_files_flags, gc_books_missing_files, MissingFilesError,
@@ -100,7 +100,7 @@ pub use physical::{
     remove_wishlist_entry, update_physical_copy_note, FilelessBook, FilelessCover, PhysicalError,
 };
 pub use pool::*;
-pub use scan::{add_physical_only, resolve_scan, wishlist_add, ScanError};
+pub use scan::{add_physical_only, resolve_meta, resolve_scan, wishlist_add, ScanError};
 pub use settings::*;
 pub use shelves::{
     add_books, can_edit, can_view, create_shelf, delete_shelf, get_shelf, list_visible_shelves,
