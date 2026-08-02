@@ -60,13 +60,8 @@ fn start_page(anchor: Option<&str>, percent: Option<i64>, count: usize) -> usize
     0
 }
 
-/// Apply a bootstrap fetch's outcome to `meta`/`page`/`error`, but only if
-/// `load_seq` still equals `my_load`. This is the guard that keeps a
-/// still-in-flight fetch for a previous comic from landing on the current
-/// one's state after a route-param swap reuses this mounted instance
-/// (#1612): a later navigation bumps `load_seq` past `my_load`, so a slower,
-/// now-stale response for the earlier comic is silently dropped here rather
-/// than overwriting what the newer navigation already set.
+/// Apply a bootstrap fetch's outcome to `meta`/`page`/`error`, dropping it
+/// if a later navigation has already bumped `load_seq` past `my_load`.
 fn apply_bootstrap_outcome(
     outcome: Option<(EbookMetadata, usize)>,
     my_load: u64,
