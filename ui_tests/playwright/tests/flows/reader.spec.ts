@@ -325,14 +325,17 @@ test("keeps a seeded highlight glued to its text across font-size changes", asyn
 }) => {
   const uuid = await fetchBookUuidByTitle(request, OVERLAY_BOOK.title);
 
-  // Seed a mid-paragraph range (chars 20–40): its painted position genuinely
-  // moves when the font grows, so a stale overlay can't pass by accident the
-  // way a range anchored at the paragraph origin would.
+  // Seed a mid-paragraph range — chars 10–24 of the `<p>` (`/4/4`, after the
+  // `<h1>` at `/4/2`) in the single-item spine (`/6/2`). Its painted position
+  // genuinely moves when the font grows, so a stale overlay can't pass by
+  // accident the way a range anchored at the paragraph origin would. (The
+  // drawer specs above seed `/6/4!/4/2` anchors, but those are never
+  // resolved against the DOM — this one is, so it must be exact.)
   const quote = `overlay passage ${Date.now()}`;
   const created = await request.post("/api/highlights", {
     data: {
       book_uuid: uuid,
-      epub_cfi_range: "epubcfi(/6/4!/4/2,/1:20,/1:40)",
+      epub_cfi_range: "epubcfi(/6/2!/4/4,/1:10,/1:24)",
       color: "amber",
       text: quote,
     },
@@ -356,7 +359,8 @@ test("keeps a seeded highlight glued to its text across font-size changes", asyn
         ? Array.from(view.querySelectorAll(":scope > svg rect"))
         : [];
       const doc = iframe?.contentDocument;
-      const text = doc?.body?.firstElementChild?.firstChild;
+      // The seeded CFI targets the <p> after the <h1> — mirror it exactly.
+      const text = doc?.body?.querySelector("p")?.firstChild;
       if (
         !iframe ||
         !doc ||
@@ -368,8 +372,8 @@ test("keeps a seeded highlight glued to its text across font-size changes", asyn
       }
       const range = doc.createRange();
       const len = (text as Text).data.length;
-      range.setStart(text, Math.min(20, len));
-      range.setEnd(text, Math.min(40, len));
+      range.setStart(text, Math.min(10, len));
+      range.setEnd(text, Math.min(24, len));
       const t = range.getBoundingClientRect();
       const ifr = iframe.getBoundingClientRect();
       const union = rects
