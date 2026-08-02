@@ -17,6 +17,9 @@ use omnibus_shared::metadata_fetch::{FetchedBookMetadata, HardcoverFetchResult};
 use super::form_grid::FormFields;
 use crate::{data, use_server_url};
 
+#[cfg(test)]
+mod tests;
+
 /// What the fetch action is currently doing.
 #[derive(Clone, PartialEq)]
 enum FetchState {
@@ -34,6 +37,13 @@ enum FetchState {
 pub(super) fn HardcoverFetchPanel(uuid: String, fields: FormFields) -> Element {
     let server_url = use_server_url();
     let mut available = use_signal(|| false);
+    // Declared unconditionally, before the `available` gate below, so this
+    // scope calls the same number of hooks in the same order on every
+    // render — the gate only skips the visible markup, never a hook
+    // (rule 07; #1590 was this component calling one hook pre-availability
+    // and three post-availability on the same mounted instance).
+    let mut state = use_signal(|| FetchState::Idle);
+    let mut busy = use_signal(|| false);
 
     let url = server_url.clone();
     use_effect(move || {
@@ -49,8 +59,6 @@ pub(super) fn HardcoverFetchPanel(uuid: String, fields: FormFields) -> Element {
         return rsx! {};
     }
 
-    let mut state = use_signal(|| FetchState::Idle);
-    let mut busy = use_signal(|| false);
     let on_fetch = move |_| {
         if busy() {
             return;
