@@ -168,3 +168,139 @@ fn registration_toggle_handler_moves_the_checkbox_but_not_the_subtitle() {
     }
     VirtualDom::new(AssertSplit).rebuild_in_place();
 }
+
+// ── Retry after a failed initial load ───────────────────────────────────
+//
+// `data::registration_status()` is stubbed to always return `Ok(true)` under
+// `--features server` (the SSR/native test target never actually runs the
+// web fetch — see the stub's doc comment in `frontend/src/data/auth.rs`), so
+// these drive `apply_registration_status` and `registration_retry_handler`
+// directly with a synthetic `Result` rather than a real network failure.
+
+#[test]
+fn needs_registration_retry_is_true_only_when_load_failed_and_never_resolved() {
+    assert!(!needs_registration_retry(None, None));
+    assert!(needs_registration_retry(Some(&"boom".to_string()), None));
+    // A stale error alongside an already-confirmed value shouldn't occur in
+    // practice (`apply_registration_status` clears `error` on success), but
+    // the predicate must still favor "resolved" if it ever does.
+    assert!(!needs_registration_retry(
+        Some(&"boom".to_string()),
+        Some(true)
+    ));
+    assert!(!needs_registration_retry(None, Some(false)));
+}
+
+#[cfg(feature = "server")]
+#[test]
+fn apply_registration_status_sets_error_and_leaves_the_checkbox_unresolved_on_err() {
+    #[component]
+    fn AssertErr() -> Element {
+        let confirmed = Signal::new(None::<bool>);
+        let shown = Signal::new(None::<bool>);
+        let error = Signal::new(None::<String>);
+
+        apply_registration_status(confirmed, shown, error, Err("network error".to_string()));
+
+        assert_eq!(
+            confirmed(),
+            None,
+            "an errored load must not resolve a value"
+        );
+        assert_eq!(shown(), None);
+        assert_eq!(error(), Some("network error".to_string()));
+        assert!(
+            needs_registration_retry(error().as_ref(), confirmed()),
+            "the failure must leave the retry affordance visible"
+        );
+
+        rsx! {}
+    }
+    VirtualDom::new(AssertErr).rebuild_in_place();
+}
+
+#[cfg(feature = "server")]
+#[test]
+fn apply_registration_status_clears_a_prior_error_and_enables_the_checkbox_on_retry_success() {
+    #[component]
+    fn AssertRetrySucceeds() -> Element {
+        // Start where a failed initial load leaves things: unresolved and
+        // errored — this is the state the new retry button appears in.
+        let confirmed = Signal::new(None::<bool>);
+        let shown = Signal::new(None::<bool>);
+        let error = Signal::new(Some("network error".to_string()));
+
+        apply_registration_status(confirmed, shown, error, Ok(true));
+
+        assert_eq!(
+            confirmed(),
+            Some(true),
+            "retry must resolve the confirmed value"
+        );
+        assert_eq!(shown(), Some(true), "retry must re-enable the checkbox");
+        assert_eq!(
+            error(),
+            None,
+            "a successful retry must clear the prior error"
+        );
+        assert!(!needs_registration_retry(error().as_ref(), confirmed()));
+
+        rsx! {}
+    }
+    VirtualDom::new(AssertRetrySucceeds).rebuild_in_place();
+}
+
+/// A no-op `MouseEvent` — `registration_retry_handler` ignores its argument.
+#[cfg(feature = "server")]
+fn blank_mouse_event() -> MouseEvent {
+    use dioxus::prelude::SerializedMouseData;
+
+    Event::new(
+        std::rc::Rc::new(MouseData::new(SerializedMouseData::default())),
+        false,
+    )
+}
+
+#[cfg(feature = "server")]
+#[test]
+fn registration_retry_handler_flips_retrying_immediately_on_click() {
+    #[component]
+    fn AssertRetryInFlight() -> Element {
+        let confirmed = Signal::new(None::<bool>);
+        let shown = Signal::new(None::<bool>);
+        let error = Signal::new(Some("network error".to_string()));
+        let retrying = Signal::new(false);
+
+        let mut handler = registration_retry_handler(confirmed, shown, error, retrying);
+        handler(blank_mouse_event());
+
+        // Disables synchronously, before the retried fetch resolves — same
+        // shape as `scan_library_handler_flips_in_flight_immediately_on_click`.
+        assert!(retrying());
+
+        rsx! {}
+    }
+    VirtualDom::new(AssertRetryInFlight).rebuild_in_place();
+}
+
+#[cfg(feature = "server")]
+#[test]
+fn registration_retry_handler_ignores_a_click_while_a_retry_is_in_flight() {
+    #[component]
+    fn AssertIgnores() -> Element {
+        let confirmed = Signal::new(None::<bool>);
+        let shown = Signal::new(None::<bool>);
+        let error = Signal::new(Some("network error".to_string()));
+        let retrying = Signal::new(true);
+
+        let mut handler = registration_retry_handler(confirmed, shown, error, retrying);
+        handler(blank_mouse_event());
+
+        // A second click must not queue a second fetch on top of the one
+        // already in flight.
+        assert!(retrying());
+
+        rsx! {}
+    }
+    VirtualDom::new(AssertIgnores).rebuild_in_place();
+}

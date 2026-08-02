@@ -829,6 +829,34 @@ async fn api_post_registration_reopens_self_registration_for_admin() {
 }
 
 #[tokio::test]
+async fn api_post_registration_returns_401_when_anonymous() {
+    let (app, _state, pool) = fixture().await;
+    omnibus_db::auth::set_registration_enabled(&pool, true)
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/settings/registration")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "enabled": false }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    assert!(
+        omnibus_db::auth::registration_enabled(&pool).await.unwrap(),
+        "an unauthenticated request must not have changed the setting"
+    );
+}
+
+#[tokio::test]
 async fn api_post_registration_rejects_non_admin() {
     let (app, _state, pool) = fixture().await;
     let user = auth_test_support::create_user(&pool, "reader").await;

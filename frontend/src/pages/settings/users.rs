@@ -149,6 +149,55 @@ fn registration_status_line(enabled: Option<bool>) -> &'static str {
     }
 }
 
+/// Applies the result of `data::registration_status()` to the load signals.
+/// Extracted from the effect (and shared with the retry handler) so the
+/// `Err` branch — and the retry-affordance condition it leaves behind — is
+/// directly testable without a network call.
+fn apply_registration_status(
+    mut confirmed: Signal<Option<bool>>,
+    mut shown: Signal<Option<bool>>,
+    mut error: Signal<Option<String>>,
+    result: Result<bool, String>,
+) {
+    match result {
+        Ok(open) => {
+            confirmed.set(Some(open));
+            shown.set(Some(open));
+            error.set(None);
+        }
+        Err(e) => error.set(Some(e)),
+    }
+}
+
+/// Whether the initial load failed and never resolved — the case that used
+/// to leave the checkbox `disabled` forever with no way to recover. Extracted
+/// as a pure predicate so the retry-button condition is unit-testable.
+fn needs_registration_retry(error: Option<&String>, confirmed: Option<bool>) -> bool {
+    error.is_some() && confirmed.is_none()
+}
+
+/// `onclick` for the retry affordance shown after a failed initial load.
+/// Re-runs the same fetch the mount effect runs and hands the result to
+/// [`apply_registration_status`], so a successful retry re-enables the
+/// checkbox exactly like a successful first load would have.
+fn registration_retry_handler(
+    confirmed: Signal<Option<bool>>,
+    shown: Signal<Option<bool>>,
+    error: Signal<Option<String>>,
+    mut retrying: Signal<bool>,
+) -> impl FnMut(Event<MouseData>) {
+    move |_| {
+        if retrying() {
+            return;
+        }
+        retrying.set(true);
+        spawn(async move {
+            apply_registration_status(confirmed, shown, error, data::registration_status().await);
+            retrying.set(false);
+        });
+    }
+}
+
 /// `onchange` for the self-registration switch, extracted from
 /// [`RegistrationToggle`] so its guards and its failure revert are reachable
 /// from a test without a browser.
@@ -205,28 +254,24 @@ fn registration_toggle_handler(
 /// leave the box sitting in a state the server refused.
 #[component]
 fn RegistrationToggle() -> Element {
-    let mut confirmed = use_signal(|| Option::<bool>::None);
-    let mut shown = use_signal(|| Option::<bool>::None);
-    let mut error = use_signal(|| None::<String>);
+    let confirmed = use_signal(|| Option::<bool>::None);
+    let shown = use_signal(|| Option::<bool>::None);
+    let error = use_signal(|| None::<String>);
     let saving = use_signal(|| false);
+    let retrying = use_signal(|| false);
 
     use_effect(move || {
         spawn(async move {
-            match data::registration_status().await {
-                Ok(open) => {
-                    confirmed.set(Some(open));
-                    shown.set(Some(open));
-                    error.set(None);
-                }
-                Err(e) => error.set(Some(e)),
-            }
+            apply_registration_status(confirmed, shown, error, data::registration_status().await);
         });
     });
 
     let toggle = registration_toggle_handler(confirmed, shown, error, saving);
+    let retry = registration_retry_handler(confirmed, shown, error, retrying);
 
     let is_on = shown() == Some(true);
     let status = registration_status_line(confirmed());
+    let show_retry = needs_registration_retry(error().as_ref(), confirmed());
 
     rsx! {
         section { class: "card", "data-testid": "registration-card",
@@ -252,6 +297,16 @@ fn RegistrationToggle() -> Element {
                     class: "settings-status error",
                     "data-testid": "registration-error",
                     "{err}"
+                }
+            }
+            if show_retry {
+                button {
+                    r#type: "button",
+                    class: "btn ghost sm",
+                    "data-testid": "registration-retry",
+                    disabled: retrying(),
+                    onclick: retry,
+                    if retrying() { "Retrying\u{2026}" } else { "Retry" }
                 }
             }
         }
