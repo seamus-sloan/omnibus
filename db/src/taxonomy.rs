@@ -79,9 +79,11 @@ pub(crate) async fn delete_orphan_taxonomy(
 /// override write paths, which can orphan a tag without touching any link
 /// row (a subjects save dropping the tag's last membership, or an override
 /// delete). The membership match mirrors `get_tag_cloud`'s override arm:
-/// scoped to live `books` rows and case-folded with `lower()` on both sides.
-/// A JSON-null or absent `$.subjects` yields no matching `json_each` rows,
-/// so such overrides protect nothing.
+/// scoped to live `books` rows, filtered to overrides that actually set
+/// `$.subjects`, and compared `COLLATE NOCASE` — equivalent to the cloud's
+/// `lower()` fold (both are ASCII-only) without recomputing `lower()` per
+/// row. A JSON-null or absent `$.subjects` yields no matching `json_each`
+/// rows, so such overrides protect nothing.
 pub(crate) async fn delete_orphan_tags(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
 ) -> Result<(), sqlx::Error> {
@@ -93,7 +95,8 @@ pub(crate) async fn delete_orphan_tags(
                 FROM books b
                 JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
                 JOIN json_each(mo.overrides, '$.subjects') je
-               WHERE lower(je.value) = lower(tags.name)
+               WHERE json_type(mo.overrides, '$.subjects') IS NOT NULL
+                 AND je.value = tags.name COLLATE NOCASE
             )",
     )
     .execute(&mut **tx)
