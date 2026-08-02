@@ -170,10 +170,8 @@ pub(super) struct LoadedCtx {
 }
 
 /// Render the fully-loaded book detail view — mobile re-flow into a single
-/// column via [`mobile::render_loaded_mobile`]. The merge and delete
-/// affordances stay web-only; the discovery blocks (author cluster +
-/// suggestions) render on mobile too. The physical panel + wishlist rail
-/// are web-only too (issue #1186 scope), so `rail`/`refresh`/`phys` are
+/// column via [`mobile::render_loaded_mobile`]. Merge/delete and the
+/// physical/wishlist rail stay web-only, so `rail`/`refresh`/`phys` are
 /// unused here.
 #[cfg(feature = "mobile")]
 pub(super) fn render_loaded(
