@@ -2,10 +2,17 @@
 //! macro generates the three resolvers, so all three contracts (insert,
 //! idempotency, case-insensitivity) are covered on `series` and spot-checked
 //! on `publishers` / `languages` to catch a bad expansion.
-//! `delete_orphan_taxonomy` gets its own drop/keep pair.
+//! `delete_orphan_taxonomy` gets its own drop/keep pair;
+//! `delete_orphan_tags` adds the override-aware keep/drop cases.
+
+use omnibus_shared::MetadataOverrides;
 
 use super::*;
+use crate::books::list_books;
+use crate::metadata_overrides::upsert_metadata_overrides;
 use crate::pool::init_db;
+use crate::sync::replace_books;
+use crate::test_support::{indexed, CoversTempDir};
 
 #[tokio::test]
 async fn resolve_or_insert_series_inserts_and_returns_id() {
@@ -174,4 +181,121 @@ async fn delete_orphan_taxonomy_keeps_rows_that_still_have_a_linked_book() {
         .await
         .unwrap();
     assert_eq!(authors, 1, "linked author retained");
+}
+
+#[tokio::test]
+async fn delete_orphan_tags_keeps_a_tag_named_only_by_a_live_books_override() {
+    let _covers = CoversTempDir::new("orphan_tags_override_keep");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    replace_books(
+        &pool,
+        "/lib",
+        vec![indexed("a.epub", Some("A"), &["X"], &[], None, None)],
+    )
+    .await
+    .unwrap();
+    let books = list_books(&pool, "/lib").await.unwrap();
+    let uuid = books[0].unique_identifier.clone().unwrap();
+    upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &MetadataOverrides {
+            subjects: Some(vec!["Keeper".into()]),
+            ..Default::default()
+        },
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    let mut tx = pool.begin().await.unwrap();
+    delete_orphan_tags(&mut tx).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let kept: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tags WHERE name = 'Keeper'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(kept, 1, "an override membership must protect the tag row");
+}
+
+#[tokio::test]
+async fn delete_orphan_tags_matches_override_subjects_case_insensitively() {
+    let _covers = CoversTempDir::new("orphan_tags_case_fold");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    // A linkless canonical-cased row, protected only by a lower-cased
+    // override subject on a live book — the NOCASE tags unique means the
+    // override materializes no second row, so the sweep's membership match
+    // must fold case or the row is wrongly reaped.
+    let mut tx = pool.begin().await.unwrap();
+    resolve_or_insert_tag(&mut tx, "Fiction").await.unwrap();
+    tx.commit().await.unwrap();
+    replace_books(
+        &pool,
+        "/lib",
+        vec![indexed("a.epub", Some("A"), &["X"], &[], None, None)],
+    )
+    .await
+    .unwrap();
+    let books = list_books(&pool, "/lib").await.unwrap();
+    let uuid = books[0].unique_identifier.clone().unwrap();
+    upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &MetadataOverrides {
+            subjects: Some(vec!["fiction".into()]),
+            ..Default::default()
+        },
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    let mut tx = pool.begin().await.unwrap();
+    delete_orphan_tags(&mut tx).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let kept: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tags WHERE name = 'Fiction'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        kept, 1,
+        "a case-variant override membership must protect the row"
+    );
+}
+
+#[tokio::test]
+async fn delete_orphan_tags_ignores_override_rows_whose_book_no_longer_exists() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    // An override row keyed to a uuid with no live `books` row — e.g. left
+    // behind by an out-of-band delete — must not keep its tags alive. The
+    // membership check joins to `books`, mirroring `get_tag_cloud`.
+    sqlx::query(
+        r#"INSERT INTO metadata_overrides (book_uuid, overrides)
+           VALUES ('no-such-book', '{"subjects":["Ghosted"]}')"#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    resolve_or_insert_tag(&mut tx, "Ghosted").await.unwrap();
+    delete_orphan_tags(&mut tx).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tags WHERE name = 'Ghosted'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 0, "a dead book's override must not protect a tag row");
 }

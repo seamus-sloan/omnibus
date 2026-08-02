@@ -42,23 +42,22 @@ resolve_or_insert_simple!(resolve_or_insert_tag, "tags", "name");
 resolve_or_insert_simple!(resolve_or_insert_publisher, "publishers", "name");
 resolve_or_insert_simple!(resolve_or_insert_language, "languages", "code");
 
-/// Delete taxonomy rows (`authors`, `series`, `tags`, `publishers`,
-/// `languages`) no longer referenced by any book. Run wherever the last link
-/// to a taxonomy row can disappear — the missing-files GC purge, the merge
-/// source delete, and the indexer's Changed bucket, which wipes a book's link
-/// rows before re-inserting them from the re-parsed file — so an author or
-/// series left with zero books doesn't linger. `author_photos`
-/// cascades on the author delete; the link tables have no taxonomy-side
-/// cascade, so a row is only deletable once its last link is gone, which is
-/// exactly the set this targets. Table/column names are compile-time literals,
-/// not caller input.
+/// Delete taxonomy rows (`authors`, `series`, `publishers`, `languages`)
+/// no longer referenced by any book, then reap orphaned tags via
+/// [`delete_orphan_tags`]. Run wherever the last link to a taxonomy row can
+/// disappear — the missing-files GC purge, the merge source delete, and the
+/// indexer's Changed bucket, which wipes a book's link rows before
+/// re-inserting them from the re-parsed file — so an author or series left
+/// with zero books doesn't linger. `author_photos` cascades on the author
+/// delete; the link tables have no taxonomy-side cascade, so a row is only
+/// deletable once its last link is gone, which is exactly the set this
+/// targets. Table/column names are compile-time literals, not caller input.
 pub(crate) async fn delete_orphan_taxonomy(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
 ) -> Result<(), sqlx::Error> {
     for (table, link, col) in [
         ("authors", "books_authors_link", "author"),
         ("series", "books_series_link", "series"),
-        ("tags", "books_tags_link", "tag"),
         ("publishers", "books_publishers_link", "publisher"),
         ("languages", "books_languages_link", "language"),
     ] {
@@ -68,6 +67,37 @@ pub(crate) async fn delete_orphan_taxonomy(
         );
         sqlx::query(&sql).execute(&mut **tx).await?;
     }
+    delete_orphan_tags(tx).await
+}
+
+/// Delete `tags` rows with no book left to justify them: no canonical
+/// `books_tags_link` row **and** no subjects-override membership on a live
+/// book. Tags need the second clause because override memberships live in
+/// `metadata_overrides` JSON rather than the link table (see
+/// `materialize_tag_rows`) — a link-only check would reap a tag an override
+/// still names. Called from [`delete_orphan_taxonomy`] and directly from the
+/// override write paths, which can orphan a tag without touching any link
+/// row (a subjects save dropping the tag's last membership, or an override
+/// delete). The membership match mirrors `get_tag_cloud`'s override arm:
+/// scoped to live `books` rows and case-folded with `lower()` on both sides.
+/// A JSON-null or absent `$.subjects` yields no matching `json_each` rows,
+/// so such overrides protect nothing.
+pub(crate) async fn delete_orphan_tags(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "DELETE FROM tags
+          WHERE NOT EXISTS (SELECT 1 FROM books_tags_link WHERE tag = tags.id)
+            AND NOT EXISTS (
+              SELECT 1
+                FROM books b
+                JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+                JOIN json_each(mo.overrides, '$.subjects') je
+               WHERE lower(je.value) = lower(tags.name)
+            )",
+    )
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 

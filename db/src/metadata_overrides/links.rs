@@ -49,10 +49,10 @@ pub(super) async fn materialize_series_link(
 /// link table is the sole record of a book's *scanned* tags, so writing
 /// override memberships into it would make "delete overrides → revert to
 /// scanned" impossible. Memberships stay in the override JSON, which
-/// `get_tag_cloud` already counts via `json_each`. A row whose every
-/// membership is override-side can still be reaped by
-/// `delete_orphan_taxonomy` after an unrelated book delete — it resurfaces
-/// on the next subjects-override save that names it.
+/// `get_tag_cloud` already counts via `json_each`. The orphan sweep
+/// (`delete_orphan_tags`) counts those memberships too, so a materialized
+/// row lives exactly as long as a canonical link or a live book's override
+/// still names it — and is deleted the moment neither does.
 pub(super) async fn materialize_tag_rows(
     conn: &mut SqliteConnection,
     overrides: &MetadataOverrides,
