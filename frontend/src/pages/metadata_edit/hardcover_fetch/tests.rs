@@ -51,7 +51,7 @@ fn fixed_shape_harness(props: HarnessProps) -> Element {
         return rsx! {};
     }
 
-    state += 1;
+    state.with_mut(|v| *v += 1);
     busy.set(true);
     rsx! { div { "{state()}-{busy()}" } }
 }

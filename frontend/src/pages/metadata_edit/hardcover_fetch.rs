@@ -17,7 +17,7 @@ use omnibus_shared::metadata_fetch::{FetchedBookMetadata, HardcoverFetchResult};
 use super::form_grid::FormFields;
 use crate::{data, use_server_url};
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server"))]
 mod tests;
 
 /// What the fetch action is currently doing.
