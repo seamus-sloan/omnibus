@@ -60,6 +60,28 @@ fn start_page(anchor: Option<&str>, percent: Option<i64>, count: usize) -> usize
     0
 }
 
+/// Apply a bootstrap fetch's outcome to `meta`/`page`/`error`, dropping it
+/// if a later navigation has already bumped `load_seq` past `my_load`.
+fn apply_bootstrap_outcome(
+    outcome: Option<(EbookMetadata, usize)>,
+    my_load: u64,
+    load_seq: Signal<u64>,
+    mut meta: Signal<Option<EbookMetadata>>,
+    mut error: Signal<bool>,
+    mut page: Signal<usize>,
+) {
+    if *load_seq.peek() != my_load {
+        return;
+    }
+    match outcome {
+        Some((book, start)) => {
+            page.set(start);
+            meta.set(Some(book));
+        }
+        None => error.set(true),
+    }
+}
+
 /// The full-page comic pager: top bar (back, title, fit modes), the image
 /// stage with edge page-turn buttons, and a footer slider + page label.
 #[component]
@@ -70,6 +92,11 @@ pub fn ComicReadPage(uuid: String) -> Element {
     let mut error: Signal<bool> = use_signal(|| false);
     let mut page: Signal<usize> = use_signal(|| 0);
     let fit: Signal<FitMode> = use_signal(|| FitMode::Height);
+    // Monotonic fetch guard (`load_seq` in `read_status_auto::use_auto_read_status`
+    // is the model): the router reuses this mounted instance across a
+    // same-route uuid change, so a slow response for the previous comic
+    // must not land as the current one's state.
+    let mut load_seq: Signal<u64> = use_signal(|| 0u64);
 
     // Record reading time against this comic while the pager is open (and,
     // on web, the tab visible) — the rows behind the `/stats` aggregates,
@@ -94,14 +121,22 @@ pub fn ComicReadPage(uuid: String) -> Element {
     // the first WASM paint both render the loading state). The restore lands
     // in `page` before `meta` is set so the first painted page is the saved
     // one, never a flash of page 1.
+    //
+    // `use_reactive!` re-runs this whenever `uuid` changes on an
+    // already-mounted instance — the router reuses `ComicReadPage` across a
+    // same-route param swap rather than remounting it (#1612) — and
+    // `load_seq` (applied via `apply_bootstrap_outcome`) discards a
+    // still-in-flight fetch for whichever comic was open before the swap.
     {
-        let uuid = uuid.clone();
         let server_url = server_url.clone();
-        use_effect(move || {
-            let uuid = uuid.clone();
+        use_effect(use_reactive!(|uuid| {
+            let my_load = *load_seq.peek() + 1;
+            load_seq.set(my_load);
+            meta.set(None);
+            error.set(false);
             let server_url = server_url.clone();
             spawn(async move {
-                match data::get_ebook(&server_url, &uuid).await {
+                let outcome = match data::get_ebook(&server_url, &uuid).await {
                     Ok(Some(book)) => {
                         let count = book.page_count.unwrap_or(0).max(0) as usize;
                         let saved = data::get_progress(&server_url, &uuid, ProgressFormat::Epub)
@@ -111,13 +146,13 @@ pub fn ComicReadPage(uuid: String) -> Element {
                         let start = saved
                             .map(|r| start_page(r.epub_cfi.as_deref(), r.progress_percent, count))
                             .unwrap_or(0);
-                        page.set(start);
-                        meta.set(Some(book));
+                        Some((book, start))
                     }
-                    Ok(None) | Err(_) => error.set(true),
-                }
+                    Ok(None) | Err(_) => None,
+                };
+                apply_bootstrap_outcome(outcome, my_load, load_seq, meta, error, page);
             });
-        });
+        }));
     }
 
     let count = meta
@@ -361,6 +396,89 @@ mod render_tests {
         assert!(html.contains("data-testid=\"comic-back\""), "{html}");
         assert!(html.contains("data-testid=\"comic-fit-width\""), "{html}");
         assert!(!html.contains("data-testid=\"comic-page-image\""), "{html}");
+    }
+
+    // Regression for #1612: the router reuses a mounted `ComicReadPage`
+    // across a `/comic/:uuid` param swap instead of remounting it, so two
+    // navigations can leave two fetches in flight at once. This drives
+    // `apply_bootstrap_outcome` — the exact guard the bootstrap effect calls
+    // when each fetch resolves — through that interleaving directly, without
+    // needing a live network fetch: navigate to book A, then (before A's
+    // fetch would have resolved) navigate on to book B, then land A's
+    // now-stale response followed by B's current one.
+    #[test]
+    fn apply_bootstrap_outcome_drops_a_response_superseded_by_a_newer_navigation() {
+        #[component]
+        fn AssertBootstrapGuard() -> Element {
+            let mut load_seq: Signal<u64> = Signal::new(0);
+            let meta: Signal<Option<EbookMetadata>> = Signal::new(None);
+            let error: Signal<bool> = Signal::new(false);
+            let page: Signal<usize> = Signal::new(0);
+
+            let book_a = EbookMetadata {
+                title: Some("Book A".to_string()),
+                ..Default::default()
+            };
+            let book_b = EbookMetadata {
+                title: Some("Book B".to_string()),
+                ..Default::default()
+            };
+
+            // Navigate to A (load 1), then on to B (load 2) before A's fetch
+            // has resolved — the router-reuse precondition.
+            load_seq.set(1);
+            load_seq.set(2);
+
+            // A's fetch lands late: superseded by B's navigation, so it must
+            // not populate `meta`.
+            apply_bootstrap_outcome(Some((book_a, 5)), 1, load_seq, meta, error, page);
+            assert!(
+                meta.read().is_none(),
+                "a response superseded by a newer navigation must not land"
+            );
+
+            // B's fetch lands and is still the current navigation: it must
+            // be what renders.
+            apply_bootstrap_outcome(Some((book_b, 9)), 2, load_seq, meta, error, page);
+            assert_eq!(
+                meta.read().as_ref().and_then(|m| m.title.clone()),
+                Some("Book B".to_string()),
+                "the current navigation's book must render, not the superseded one's"
+            );
+            assert_eq!(*page.read(), 9);
+
+            rsx! {}
+        }
+        VirtualDom::new(AssertBootstrapGuard).rebuild_in_place();
+    }
+
+    #[test]
+    fn apply_bootstrap_outcome_ignores_a_failure_superseded_by_a_newer_navigation() {
+        #[component]
+        fn AssertBootstrapGuardOnFailure() -> Element {
+            let mut load_seq: Signal<u64> = Signal::new(0);
+            let meta: Signal<Option<EbookMetadata>> = Signal::new(None);
+            let error: Signal<bool> = Signal::new(false);
+            let page: Signal<usize> = Signal::new(0);
+
+            load_seq.set(1);
+            load_seq.set(2);
+
+            // Load 1's fetch fails after load 2 has already started — must
+            // not flip `error` for the book that's no longer open.
+            apply_bootstrap_outcome(None, 1, load_seq, meta, error, page);
+            assert!(!*error.read(), "a superseded failure must not surface");
+
+            // Load 2's own failure is current and must surface.
+            apply_bootstrap_outcome(None, 2, load_seq, meta, error, page);
+            assert!(
+                *error.read(),
+                "the current navigation's failure must surface"
+            );
+
+            rsx! {}
+        }
+        VirtualDom::new(AssertBootstrapGuardOnFailure).rebuild_in_place();
     }
 
     #[test]
