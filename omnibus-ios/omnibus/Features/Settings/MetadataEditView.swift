@@ -36,11 +36,11 @@ struct MetadataEditView: View {
     @State private var pendingTag = ""
 
     private var pendingAuthorName: String {
-        pendingAuthor.trimmingCharacters(in: .whitespaces)
+        pendingAuthor.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var pendingTagName: String {
-        pendingTag.trimmingCharacters(in: .whitespaces)
+        pendingTag.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var isDirty: Bool {
@@ -352,7 +352,7 @@ private struct ChipListField: View {
                         .tint(palette.accentColor)
                         .onSubmit(commit)
 
-                    if !entry.trimmingCharacters(in: .whitespaces).isEmpty {
+                    if !entry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         Button("Add", action: commit)
                             .font(.ui(13, weight: .semibold))
                             .foregroundStyle(palette.accentColor)

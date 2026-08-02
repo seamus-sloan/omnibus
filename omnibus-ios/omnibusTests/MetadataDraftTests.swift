@@ -93,6 +93,15 @@ struct ChipEntryTests {
     @Test func committedRefusesABlankEntry() {
         #expect(ChipEntry.committed(from: "   ", existing: [], deduplicating: false) == nil)
         #expect(ChipEntry.committed(from: "", existing: [], deduplicating: true) == nil)
+        // Pasted values commonly carry a trailing newline; newline-only input
+        // is still blank.
+        #expect(ChipEntry.committed(from: "\n", existing: [], deduplicating: true) == nil)
+        #expect(ChipEntry.committed(from: " \n ", existing: [], deduplicating: false) == nil)
+    }
+
+    @Test func committedTrimsATrailingNewlineFromAPastedValue() {
+        let chip = ChipEntry.committed(from: "Jazz Age\n", existing: [], deduplicating: true)
+        #expect(chip == "Jazz Age")
     }
 
     @Test func committedRefusesADuplicateTagIgnoringCase() {

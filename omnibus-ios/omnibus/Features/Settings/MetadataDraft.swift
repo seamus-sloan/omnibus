@@ -103,7 +103,7 @@ enum ChipEntry {
     /// web chip editor — a duplicate tag means nothing, while two credited
     /// contributors can legitimately share a name.
     static func committed(from entry: String, existing: [String], deduplicating: Bool) -> String? {
-        let trimmed = entry.trimmingCharacters(in: .whitespaces)
+        let trimmed = entry.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         if deduplicating {
             let lowered = trimmed.lowercased()
