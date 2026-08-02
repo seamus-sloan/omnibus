@@ -95,4 +95,27 @@ struct CheckInFlowTests {
         )
         #expect(ref.bookUUID == "b-9")
     }
+
+    @Test func detailLinesCarrySeriesThenTheJoinedFacts() {
+        var meta = externalMeta()
+        meta.series = "The Kingkiller Chronicle"
+        meta.firstPublishYear = 2007
+        meta.publisher = "DAW Books"
+        meta.pages = 662
+        #expect(
+            CheckInFlow.detailLines(for: meta) == [
+                "The Kingkiller Chronicle",
+                "First published 2007 \u{b7} DAW Books \u{b7} 662 pages",
+            ]
+        )
+    }
+
+    @Test func detailLinesAreEmptyWhenTheProviderCarriedNothing() {
+        var meta = externalMeta()
+        meta.publisher = "   "
+        meta.pages = 0
+        // externalMeta() has no series or first-publish year; a blank
+        // publisher and a zero page count don't count as facts either.
+        #expect(CheckInFlow.detailLines(for: meta).isEmpty)
+    }
 }

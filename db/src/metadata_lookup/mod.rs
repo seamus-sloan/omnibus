@@ -1,28 +1,38 @@
-//! Server-side ISBN → book-metadata resolution for scans that miss the
-//! library. The ISBN is validated and folded to a canonical ISBN-13, then
-//! resolved against two providers in a key-dependent order (see
-//! [`lookup_isbn`]). Both missing is a clean "unresolved" (`Ok(None)`) so the
-//! caller can offer a manual-entry form; an invalid ISBN is a typed error the
-//! UI can act on.
+//! Server-side book-metadata resolution for scans that miss the library.
+//!
+//! Two entry points, one per question a caller can ask —
+//! [`search_provider_by_isbn`] and [`search_provider_by_title`]. Each walks the
+//! same ladder of providers (Open Library, Google Books, Hardcover) so callers
+//! never name a provider or know which are configured; see
+//! [`providers`][self::providers] for the per-provider contract and
+//! [`providers::ladder`] for the order.
 
+mod config;
 mod providers;
 
 #[cfg(test)]
 mod tests;
 
-pub use providers::MetadataLookupConfig;
+pub use config::{MetadataLookupConfig, ProviderKeys};
+pub use providers::{openlibrary_enrich, OlEnrichment};
 
 use omnibus_shared::isbn::{normalize_isbn, IsbnError};
-use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider};
+use omnibus_shared::metadata_lookup::ExternalBookMeta;
+use providers::Query;
 
-/// Errors from an ISBN metadata lookup.
+/// Maximum candidates a title search returns after dedupe. Small on purpose:
+/// the picker is a phone-screen list, and a title that needs more than a
+/// handful of candidates needs a better query, not a longer page.
+pub const SEARCH_LIMIT: usize = 8;
+
+/// Errors from a provider search.
 #[derive(Debug, thiserror::Error)]
 pub enum MetadataLookupError {
     /// The input ISBN failed validation (bad length, chars, or check digit).
     #[error(transparent)]
     Isbn(#[from] IsbnError),
-    /// A provider was unreachable or returned an unparseable response. Distinct
-    /// from a clean miss, which is `Ok(None)`, not an error.
+    /// No provider could be asked. Distinct from a clean miss, which is an
+    /// empty answer, not an error.
     ///
     /// The message is deliberately the caller-facing sentence rather than the
     /// provider's own wording: "google books returned an error status" reads as
@@ -33,51 +43,86 @@ pub enum MetadataLookupError {
     Provider(#[from] anyhow::Error),
 }
 
-/// Resolve `raw_isbn` to external book metadata.
+/// Resolve an ISBN to book metadata, asking each configured provider in turn.
 ///
-/// Validates and normalizes the ISBN (→ [`MetadataLookupError::Isbn`] on a bad
-/// input), then tries two providers in order: the primary is best-effort (a
-/// miss *or* an error falls through), and only a failure of the fallback
-/// surfaces as [`MetadataLookupError::Provider`]. Returns `Ok(None)` when both
-/// cleanly miss — the manual-entry signal — and `Ok(Some(_))` on the first hit.
+/// Validates and normalizes the ISBN first (→ [`MetadataLookupError::Isbn`] on
+/// a bad input), so no provider is ever handed an unvalidated string. Returns
+/// `Ok(None)` when the providers answered and none knew the book — the
+/// unresolved signal that sends the UI to manual entry or a title search.
 ///
-/// **Order depends on the Google Books key.** With a key configured, Google
-/// Books leads: keyless it shares an anonymous quota it quickly exhausts (HTTP
-/// 429), but a keyed instance gets richer, more reliable data, so it's the
-/// better primary. Without a key, Open Library leads and Google Books is the
-/// (usually-throttled) fallback — the historical order.
-pub async fn lookup_isbn(
+/// Series and first-publish year are filled in concurrently from Open Library
+/// (see [`openlibrary_enrich`]) for whichever fields the answering provider
+/// left empty — a hit therefore pays no extra latency for them, and a miss
+/// only wastes two cheap best-effort GETs.
+pub async fn search_provider_by_isbn(
     config: &MetadataLookupConfig,
     raw_isbn: &str,
 ) -> Result<Option<ExternalBookMeta>, MetadataLookupError> {
     let isbn13 = normalize_isbn(raw_isbn)?;
 
-    let [primary, fallback] = if config.googlebooks_api_key.is_some() {
-        [MetadataProvider::GoogleBooks, MetadataProvider::OpenLibrary]
-    } else {
-        [MetadataProvider::OpenLibrary, MetadataProvider::GoogleBooks]
-    };
-
-    match run_provider(config, &isbn13, primary).await {
-        Ok(Some(meta)) => return Ok(Some(meta)),
-        Ok(None) => {}
-        // The primary is best-effort: a transport/parse failure falls through
-        // to the fallback rather than failing the whole lookup.
-        Err(e) => tracing::warn!("{primary:?} lookup failed, trying fallback: {e:#}"),
-    }
-
-    Ok(run_provider(config, &isbn13, fallback).await?)
+    let (found, enrichment) = tokio::join!(
+        climb(config, Query::Isbn(&isbn13)),
+        providers::openlibrary_enrich(config, &isbn13)
+    );
+    Ok(found?.into_iter().next().map(|mut meta| {
+        meta.series = meta.series.or(enrichment.series);
+        meta.first_publish_year = meta.first_publish_year.or(enrichment.first_publish_year);
+        meta
+    }))
 }
 
-/// Dispatch a single provider lookup, so [`lookup_isbn`] can order the two
-/// providers by name rather than duplicating the miss/error handling per order.
-async fn run_provider(
+/// Search the providers by title text — the scan flow's fallback when the ISBN
+/// itself resolved nothing. Same ladder and semantics as
+/// [`search_provider_by_isbn`]; `Ok(vec![])` when the providers answered and
+/// none matched. Callers validate the query shape
+/// (`ScanSearchRequest::validate`) before this is reached.
+pub async fn search_provider_by_title(
     config: &MetadataLookupConfig,
-    isbn13: &str,
-    provider: MetadataProvider,
-) -> anyhow::Result<Option<ExternalBookMeta>> {
-    match provider {
-        MetadataProvider::OpenLibrary => providers::openlibrary_lookup(config, isbn13).await,
-        MetadataProvider::GoogleBooks => providers::googlebooks_lookup(config, isbn13).await,
+    query: &str,
+) -> Result<Vec<ExternalBookMeta>, MetadataLookupError> {
+    climb(config, Query::Title(query)).await
+}
+
+/// Walk the provider ladder until one answers.
+///
+/// The first non-empty answer wins. A rung that *fails* is skipped rather than
+/// aborting the walk, because a provider being down says nothing about whether
+/// the book exists — but if the walk ends empty and the terminal rung was one
+/// of the failures, we never got a real answer, so that error surfaces instead
+/// of a "not found" we can't stand behind.
+async fn climb(
+    config: &MetadataLookupConfig,
+    query: Query<'_>,
+) -> Result<Vec<ExternalBookMeta>, MetadataLookupError> {
+    let mut terminal_error: Option<anyhow::Error> = None;
+
+    for rung in providers::ladder(config) {
+        match providers::run(rung.provider, config, query).await {
+            Ok(found) if !found.is_empty() => return Ok(dedupe_by_isbn(found)),
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!("{:?} lookup failed, trying next: {e:#}", rung.provider);
+                if rung.terminal {
+                    terminal_error = Some(e);
+                }
+            }
+        }
     }
+
+    match terminal_error {
+        Some(e) => Err(MetadataLookupError::Provider(e)),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// Drop repeat editions (Google Books in particular answers the same ISBN
+/// more than once) and cap the picker's length, keeping first-seen order. A
+/// no-op on the ISBN path, which answers with at most one entry.
+fn dedupe_by_isbn(results: Vec<ExternalBookMeta>) -> Vec<ExternalBookMeta> {
+    let mut seen = std::collections::HashSet::new();
+    results
+        .into_iter()
+        .filter(|m| seen.insert(m.isbn13.clone()))
+        .take(SEARCH_LIMIT)
+        .collect()
 }

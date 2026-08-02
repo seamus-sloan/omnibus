@@ -13,6 +13,8 @@ fn valid_meta() -> ExternalBookMeta {
         publisher: Some("Penguin Classics".into()),
         description: Some("A classic novel.".into()),
         cover_url: Some("https://example.com/cover.jpg".into()),
+        series: None,
+        first_publish_year: Some(1813),
         source: MetadataProvider::OpenLibrary,
     }
 }
@@ -211,4 +213,47 @@ fn resolve_request_validate_rejects_an_oversized_isbn() {
     };
     let err = req.validate().expect_err("oversized isbn must be rejected");
     assert!(err.contains("isbn"), "got: {err}");
+}
+
+#[test]
+fn scan_search_request_validate_accepts_a_well_formed_query() {
+    let req = ScanSearchRequest {
+        query: "The Name of the Wind".into(),
+    };
+    assert!(req.validate().is_ok());
+}
+
+#[test]
+fn scan_search_request_validate_rejects_a_blank_query() {
+    let req = ScanSearchRequest {
+        query: "   ".into(),
+    };
+    let err = req.validate().expect_err("blank query must be rejected");
+    assert!(err.contains("query"), "got: {err}");
+}
+
+#[test]
+fn scan_search_request_validate_rejects_an_oversized_query() {
+    let req = ScanSearchRequest {
+        query: "x".repeat(SEARCH_QUERY_MAX_LEN + 1),
+    };
+    let err = req
+        .validate()
+        .expect_err("oversized query must be rejected");
+    assert!(err.contains("query"), "got: {err}");
+}
+
+#[test]
+fn resolve_meta_request_validate_accepts_a_well_formed_meta() {
+    let req = ResolveMetaRequest { meta: valid_meta() };
+    assert!(req.validate().is_ok());
+}
+
+#[test]
+fn resolve_meta_request_validate_rejects_an_invalid_meta() {
+    let mut meta = valid_meta();
+    meta.title = "x".repeat(ExternalBookMeta::TITLE_MAX_LEN + 1);
+    let req = ResolveMetaRequest { meta };
+    let err = req.validate().expect_err("invalid meta must be rejected");
+    assert!(err.contains("title"), "got: {err}");
 }

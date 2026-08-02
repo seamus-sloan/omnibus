@@ -20,6 +20,11 @@ struct CheckInView: View {
     @State private var isResolving = false
     @State private var isWriting = false
     @State private var error: String?
+    @State private var searchQuery = ""
+    @State private var isSearching = false
+    /// `nil` until a title search lands, so the no-matches line can't show
+    /// before anyone has searched.
+    @State private var searchResults: [ExternalBookMeta]?
     @State private var scannerAvailable = DataScannerViewController.isSupported
         && DataScannerViewController.isAvailable
     @State private var note = ""
@@ -217,6 +222,11 @@ struct CheckInView: View {
                             Text(scanned.authorDisplay)
                                 .font(.ui(12.5))
                                 .foregroundStyle(palette.ink2Color)
+                            ForEach(CheckInFlow.detailLines(for: scanned), id: \.self) { line in
+                                Text(line)
+                                    .font(.ui(11.5))
+                                    .foregroundStyle(palette.ink3Color)
+                            }
                         }
                     }
                     .padding(Spacing.md)
@@ -238,7 +248,8 @@ struct CheckInView: View {
                     resultCard(
                         title: online.title, authors: online.authors,
                         cover: externalCover(online),
-                        badge: "Not in your library", tint: palette.ink2Color
+                        badge: "Not in your library", tint: palette.ink2Color,
+                        details: CheckInFlow.detailLines(for: online)
                     )
                     Button("Add as physical book") {
                         Task { await addPhysicalOnly(online) }
@@ -260,6 +271,7 @@ struct CheckInView: View {
                         title: "Couldn't identify that book",
                         message: "Neither your library nor the online providers recognised that ISBN."
                     )
+                    searchSection
                 }
 
                 // Without this the outcome screen's writes failed in silence —
@@ -291,6 +303,99 @@ struct CheckInView: View {
         TextField("Edition note (optional)", text: $note, axis: .vertical)
             .textFieldStyle(OmnibusFieldStyle())
             .lineLimit(1...3)
+    }
+
+    // MARK: - Title search (unresolved fallback)
+
+    /// Some editions simply aren't in any ISBN index — typing the book's name
+    /// is the way forward from an unresolved scan.
+    private var searchSection: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            Text("Or search by title")
+                .font(.ui(13, weight: .medium))
+                .foregroundStyle(palette.ink2Color)
+            HStack {
+                TextField("The Name of the Wind", text: $searchQuery)
+                    .textFieldStyle(OmnibusFieldStyle())
+                    .autocorrectionDisabled()
+                    .submitLabel(.search)
+                    .onSubmit { Task { await search() } }
+                Button {
+                    Task { await search() }
+                } label: {
+                    if isSearching {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "magnifyingglass.circle.fill").font(.system(size: 26))
+                    }
+                }
+                .disabled(searchQuery.nilIfBlank == nil || isSearching)
+                .foregroundStyle(palette.accentColor)
+            }
+            if let results = searchResults {
+                if results.isEmpty {
+                    Text("No books match that title. Check the spelling, or try just the main title.")
+                        .font(.ui(13))
+                        .foregroundStyle(palette.ink2Color)
+                } else {
+                    VStack(spacing: Spacing.sm) {
+                        ForEach(results, id: \.isbn13) { meta in
+                            Button {
+                                Task { await resolvePick(meta) }
+                            } label: {
+                                searchResultRow(meta)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(isResolving)
+                            .opacity(isResolving ? 0.55 : 1)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// One pickable candidate: cover, title, authors, and the provider facts
+    /// (series, first publish, publisher, pages) when carried.
+    private func searchResultRow(_ meta: ExternalBookMeta) -> some View {
+        HStack(alignment: .top, spacing: Spacing.md) {
+            Group {
+                if let cover = meta.coverURL, CheckInFlow.isExternalURL(cover) {
+                    ExternalImage(url: cover) { coverPlate(title: meta.title) }
+                        .aspectRatio(2.0 / 3.0, contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
+                } else {
+                    coverPlate(title: meta.title)
+                }
+            }
+            .frame(width: 44)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(meta.title)
+                    .font(.ui(14, weight: .medium))
+                    .foregroundStyle(palette.ink0Color)
+                    .multilineTextAlignment(.leading)
+                Text(meta.authorDisplay)
+                    .font(.ui(12.5))
+                    .foregroundStyle(palette.ink2Color)
+                ForEach(CheckInFlow.detailLines(for: meta), id: \.self) { line in
+                    Text(line)
+                        .font(.ui(11.5))
+                        .foregroundStyle(palette.ink3Color)
+                }
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(palette.ink3Color)
+                .padding(.top, 4)
+        }
+        .padding(Spacing.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                .fill(palette.bg1Color)
+        )
     }
 
     private enum DetailsLinkStyle { case filled, quiet }
@@ -335,7 +440,7 @@ struct CheckInView: View {
 
     private func resultCard(
         title: String, authors: [String], cover: CheckInSuccess.Cover,
-        badge: String, tint: Color
+        badge: String, tint: Color, details: [String] = []
     ) -> some View {
         HStack(alignment: .top, spacing: Spacing.md) {
             Group {
@@ -363,6 +468,11 @@ struct CheckInView: View {
                 Text(authors.isEmpty ? "Unknown author" : authors.joined(separator: ", "))
                     .font(.ui(13))
                     .foregroundStyle(palette.ink2Color)
+                ForEach(details, id: \.self) { line in
+                    Text(line)
+                        .font(.ui(12))
+                        .foregroundStyle(palette.ink3Color)
+                }
             }
             Spacer(minLength: 0)
         }
@@ -410,6 +520,42 @@ struct CheckInView: View {
             manualISBN = ""
             note = ""
             error = nil
+            searchQuery = ""
+            searchResults = nil
+        }
+    }
+
+    /// Search the providers by title — the unresolved screen's fallback.
+    private func search() async {
+        guard let query = searchQuery.nilIfBlank, !isSearching else { return }
+        isSearching = true
+        error = nil
+        defer { isSearching = false }
+        do {
+            let response: ScanSearchResponse = try await APIClient.shared.post(
+                "/api/scan/search", body: ScanSearchRequest(query: query)
+            )
+            searchResults = response.results
+        } catch {
+            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// Resolve a picked candidate against the library — no provider re-lookup,
+    /// which could miss on a book the search itself just surfaced.
+    private func resolvePick(_ meta: ExternalBookMeta) async {
+        guard !isResolving else { return }
+        isResolving = true
+        error = nil
+        defer { isResolving = false }
+        do {
+            let outcome: ScanOutcome = try await APIClient.shared.post(
+                "/api/scan/resolve-meta", body: ResolveMetaRequest(meta: meta)
+            )
+            Haptics.success()
+            withAnimation(Motion.settle) { stage = .outcome(outcome) }
+        } catch {
+            self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
     }
 

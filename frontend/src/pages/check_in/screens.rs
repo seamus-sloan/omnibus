@@ -170,9 +170,14 @@ pub(super) fn ChooseScreen(
     }
 }
 
-/// Neither the library nor any provider knew the ISBN.
+/// Neither the library nor any provider knew the ISBN. Offers the title
+/// search as the way forward — some editions simply aren't in any ISBN index.
 #[component]
-pub(super) fn UnresolvedScreen(isbn: String, on_restart: EventHandler<()>) -> Element {
+pub(super) fn UnresolvedScreen(
+    isbn: String,
+    on_search: EventHandler<()>,
+    on_restart: EventHandler<()>,
+) -> Element {
     rsx! {
         div { class: "check-in-screen", "data-testid": "check-in-unresolved",
             h1 { "We couldn't find that ISBN" }
@@ -182,7 +187,14 @@ pub(super) fn UnresolvedScreen(isbn: String, on_restart: EventHandler<()>) -> El
             div { class: "settings-actions",
                 button {
                     r#type: "button",
-                    class: "btn",
+                    class: "btn primary",
+                    "data-testid": "check-in-search-instead",
+                    onclick: move |_| on_search.call(()),
+                    "Search by title instead"
+                }
+                button {
+                    r#type: "button",
+                    class: "btn ghost",
                     "data-testid": "check-in-restart",
                     onclick: move |_| on_restart.call(()),
                     "Try another ISBN"
@@ -246,10 +258,11 @@ fn LibraryBookCard(book: ScanBook) -> Element {
     }
 }
 
-/// Cover + title + byline for a provider-resolved book on the 3c chooser. The
-/// cover URL is provider-hosted and used verbatim.
+/// Cover + title + byline + provider facts for a resolved book — the 3c
+/// chooser card, reused as a title-search result row. The cover URL is
+/// provider-hosted and used verbatim.
 #[component]
-fn ExternalBookCard(meta: ExternalBookMeta) -> Element {
+pub(super) fn ExternalBookCard(meta: ExternalBookMeta) -> Element {
     let byline = match (byline(&meta.authors), meta.year.as_deref()) {
         (a, Some(y)) if !a.is_empty() => format!("{a} \u{b7} {y}"),
         (a, _) if !a.is_empty() => a,
@@ -257,13 +270,26 @@ fn ExternalBookCard(meta: ExternalBookMeta) -> Element {
         _ => String::new(),
     };
     rsx! {
-        BookCard { cover: meta.cover_url.clone(), title: meta.title.clone(), byline }
+        BookCard {
+            cover: meta.cover_url.clone(),
+            title: meta.title.clone(),
+            byline,
+            series: meta.series.clone(),
+            detail: meta_details(&meta),
+        }
     }
 }
 
-/// Shared card shell for both book flavors.
+/// Shared card shell for both book flavors. `series` and `detail` are the
+/// provider-fact lines only [`ExternalBookCard`] fills.
 #[component]
-fn BookCard(cover: Option<String>, title: String, byline: String) -> Element {
+fn BookCard(
+    cover: Option<String>,
+    title: String,
+    byline: String,
+    series: Option<String>,
+    detail: Option<String>,
+) -> Element {
     // A provider cover can 404 or be blocked outright; fall back to the blank
     // plate rather than leaving the browser's broken-image glyph on screen.
     let mut broken = use_signal(|| false);
@@ -282,12 +308,44 @@ fn BookCard(cover: Option<String>, title: String, byline: String) -> Element {
             }
             div { class: "check-in-book-meta",
                 strong { class: "check-in-book-title", "{title}" }
+                if let Some(series) = series {
+                    span { class: "check-in-book-series", "data-testid": "check-in-book-series",
+                        "{series}"
+                    }
+                }
                 if !byline.is_empty() {
                     span { class: "check-in-book-byline", "{byline}" }
+                }
+                if let Some(detail) = detail {
+                    span { class: "check-in-book-detail", "data-testid": "check-in-book-detail",
+                        "{detail}"
+                    }
                 }
             }
         }
     }
+}
+
+/// The dot-separated fact line under a provider card's byline: first-publish
+/// year, publisher, page count — whichever the provider carried. `None` when
+/// it carried none of them, so the card renders no empty line.
+pub(super) fn meta_details(meta: &ExternalBookMeta) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(year) = meta.first_publish_year {
+        parts.push(format!("First published {year}"));
+    }
+    if let Some(publisher) = meta
+        .publisher
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
+        parts.push(publisher.to_string());
+    }
+    if let Some(pages) = meta.pages.filter(|p| *p > 0) {
+        parts.push(format!("{pages} pages"));
+    }
+    (!parts.is_empty()).then(|| parts.join(" \u{b7} "))
 }
 
 /// Join contributor names for display: "A", "A and B", "A, B and C".

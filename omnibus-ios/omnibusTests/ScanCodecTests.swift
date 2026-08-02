@@ -65,6 +65,66 @@ struct WishlistAddRequestCodecTests {
     }
 }
 
+// MARK: - Title-search wire types
+
+@Suite("Title-search codec")
+struct ScanSearchCodecTests {
+    @Test("the search request carries the query verbatim")
+    func encodesQuery() throws {
+        let object = try encodedObject(ScanSearchRequest(query: "name of the wind"))
+        #expect(object["query"] as? String == "name of the wind")
+    }
+
+    @Test("resolve-meta nests the candidate under meta with snake_case keys")
+    func encodesResolveMeta() throws {
+        var candidate = meta()
+        candidate.series = "A Series"
+        candidate.firstPublishYear = 2007
+        let object = try encodedObject(ResolveMetaRequest(meta: candidate))
+        let nested = try #require(object["meta"] as? [String: Any])
+        #expect(nested["isbn13"] as? String == "9780000000002")
+        #expect(nested["series"] as? String == "A Series")
+        #expect(nested["first_publish_year"] as? Int == 2007)
+    }
+
+    @Test("search results decode the enrichment fields when present")
+    func decodesEnrichedResult() throws {
+        let response = try JSONDecoder().decode(
+            ScanSearchResponse.self,
+            from: Data(
+                """
+                {"results":[{"isbn13":"9780000000002","title":"Verify Book",
+                 "authors":["A Author"],"year":null,"pages":662,"publisher":"DAW",
+                 "description":null,"cover_url":null,"series":"A Series",
+                 "first_publish_year":2007,"source":"open_library"}]}
+                """.utf8
+            )
+        )
+        let result = try #require(response.results.first)
+        #expect(result.series == "A Series")
+        #expect(result.firstPublishYear == 2007)
+    }
+
+    @Test("a response without the enrichment fields still decodes")
+    func decodesWithoutEnrichment() throws {
+        // Older servers omit `series` / `first_publish_year` entirely
+        // (`skip_serializing_if` on the Rust side) — both must read as nil.
+        let response = try JSONDecoder().decode(
+            ScanSearchResponse.self,
+            from: Data(
+                """
+                {"results":[{"isbn13":"9780000000002","title":"Verify Book",
+                 "authors":["A Author"],"year":null,"pages":null,"publisher":null,
+                 "description":null,"cover_url":null,"source":"open_library"}]}
+                """.utf8
+            )
+        )
+        let result = try #require(response.results.first)
+        #expect(result.series == nil)
+        #expect(result.firstPublishYear == nil)
+    }
+}
+
 // MARK: - Outcome decoding
 
 @Suite("Scan outcome decoding")

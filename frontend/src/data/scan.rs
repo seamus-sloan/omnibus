@@ -4,8 +4,8 @@
 //! signature is shared across platforms; the `#[cfg]` gates carry the split.
 
 use omnibus_shared::{
-    AddPhysicalOnlyRequest, BookRef, CheckInRequest, GoogleBooksKeyStatus, ResolveRequest,
-    ScanOutcome, WishlistAddRequest,
+    AddPhysicalOnlyRequest, BookRef, CheckInRequest, GoogleBooksKeyStatus, ResolveMetaRequest,
+    ResolveRequest, ScanOutcome, ScanSearchRequest, ScanSearchResponse, WishlistAddRequest,
 };
 
 #[cfg(not(feature = "mobile"))]
@@ -36,6 +36,25 @@ async fn post_json<B: serde::Serialize, T: serde::de::DeserializeOwned>(
 #[cfg(feature = "mobile")]
 pub async fn resolve_scan(server_url: &str, req: ResolveRequest) -> Result<ScanOutcome, DataError> {
     post_json(server_url, "/api/scan/resolve", &req).await
+}
+
+/// POST `/api/scan/search` — search the providers by title text.
+#[cfg(feature = "mobile")]
+pub async fn scan_search(
+    server_url: &str,
+    req: ScanSearchRequest,
+) -> Result<ScanSearchResponse, DataError> {
+    post_json(server_url, "/api/scan/search", &req).await
+}
+
+/// POST `/api/scan/resolve-meta` — resolve a picked search candidate against
+/// the library, no provider ISBN lookup.
+#[cfg(feature = "mobile")]
+pub async fn resolve_scan_meta(
+    server_url: &str,
+    req: ResolveMetaRequest,
+) -> Result<ScanOutcome, DataError> {
+    post_json(server_url, "/api/scan/resolve-meta", &req).await
 }
 
 /// POST `/api/scan/check-in` — check in a physical copy of a library book.
@@ -112,6 +131,28 @@ pub async fn resolve_scan(
     req: ResolveRequest,
 ) -> Result<ScanOutcome, DataError> {
     crate::rpc::rpc_resolve_scan(req)
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Search the providers by title text.
+#[cfg(not(feature = "mobile"))]
+pub async fn scan_search(
+    _server_url: &str,
+    req: ScanSearchRequest,
+) -> Result<ScanSearchResponse, DataError> {
+    crate::rpc::rpc_scan_search(req)
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Resolve a picked title-search candidate against the library.
+#[cfg(not(feature = "mobile"))]
+pub async fn resolve_scan_meta(
+    _server_url: &str,
+    req: ResolveMetaRequest,
+) -> Result<ScanOutcome, DataError> {
+    crate::rpc::rpc_resolve_scan_meta(req)
         .await
         .map_err(note_server_fn_err)
 }

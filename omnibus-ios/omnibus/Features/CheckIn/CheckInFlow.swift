@@ -102,6 +102,31 @@ enum CheckInFlow {
         path.hasPrefix("https://") || path.hasPrefix("http://")
     }
 
+    /// The provider fact lines under an online book card: the series statement
+    /// on its own line, then first-publish year / publisher / page count joined
+    /// with dots — whichever the provider carried. Empty when it carried none,
+    /// so a card renders no blank lines.
+    static func detailLines(for meta: ExternalBookMeta) -> [String] {
+        var lines: [String] = []
+        if let series = meta.series?.nilIfBlank {
+            lines.append(series)
+        }
+        var facts: [String] = []
+        if let year = meta.firstPublishYear {
+            facts.append("First published \(year)")
+        }
+        if let publisher = meta.publisher?.nilIfBlank {
+            facts.append(publisher)
+        }
+        if let pages = meta.pages, pages > 0 {
+            facts.append("\(pages) pages")
+        }
+        if !facts.isEmpty {
+            lines.append(facts.joined(separator: " \u{b7} "))
+        }
+        return lines
+    }
+
     private static func externalCover(_ meta: ExternalBookMeta) -> CheckInSuccess.Cover {
         if let url = meta.coverURL, isExternalURL(url) {
             return .external(url: url)

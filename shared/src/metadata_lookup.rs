@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 pub enum MetadataProvider {
     OpenLibrary,
     GoogleBooks,
+    /// Only reachable on an instance with a Hardcover API key configured.
+    Hardcover,
 }
 
 /// Maximum byte length of a stored Google Books API key. Google keys are short
@@ -45,6 +47,14 @@ pub struct ExternalBookMeta {
     pub publisher: Option<String>,
     pub description: Option<String>,
     pub cover_url: Option<String>,
+    /// Series statement as the provider reports it (free text, e.g.
+    /// "The Kingkiller Chronicle (1)"). Best-effort Open Library enrichment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series: Option<String>,
+    /// Year the *work* was first published, across all editions — distinct
+    /// from `year`, which is this edition's own date.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_publish_year: Option<i64>,
     pub source: MetadataProvider,
 }
 
@@ -100,6 +110,7 @@ impl ExternalBookMeta {
         };
         check("year", &self.year, Self::NAME_MAX_LEN)?;
         check("publisher", &self.publisher, Self::NAME_MAX_LEN)?;
+        check("series", &self.series, Self::NAME_MAX_LEN)?;
         check("description", &self.description, Self::DESCRIPTION_MAX_LEN)?;
         if let Some(ref cover_url) = self.cover_url {
             if cover_url.len() > Self::COVER_URL_MAX_LEN {

@@ -9,7 +9,7 @@ use omnibus_shared::physical::WishlistSource;
 use omnibus_shared::scan::ScanOutcome;
 
 use super::*;
-use crate::metadata_lookup::{MetadataLookupConfig, MetadataLookupError};
+use crate::metadata_lookup::{MetadataLookupConfig, MetadataLookupError, ProviderKeys};
 use crate::normalize::{normalize_author, normalize_title};
 use crate::physical::{
     add_physical_copy, add_wishlist_entry, list_physical_copies, list_wishlist, PhysicalError,
@@ -134,7 +134,8 @@ fn config_for(server: &MockServer) -> MetadataLookupConfig {
         googlebooks_base: server.uri(),
         // Keyless on purpose: the mock never checks it, and reading the real
         // env here would make the suite depend on the developer's `.env`.
-        googlebooks_api_key: None,
+        hardcover_base: server.uri(),
+        keys: ProviderKeys::default(),
         timeout: Duration::from_secs(5),
     }
 }
@@ -658,6 +659,189 @@ async fn resolve_rejects_invalid_isbn() {
     assert!(matches!(err, ScanError::Isbn(_)));
 }
 
+// ── resolve_meta (title-search pick) ───────────────────────────────
+
+/// A picked search candidate for `resolve_meta` tests.
+fn picked_meta(title: &str, author: &str, isbn13: &str) -> omnibus_shared::ExternalBookMeta {
+    omnibus_shared::ExternalBookMeta {
+        isbn13: isbn13.into(),
+        title: title.into(),
+        authors: vec![author.into()],
+        year: None,
+        pages: None,
+        publisher: None,
+        description: None,
+        cover_url: None,
+        series: None,
+        first_publish_year: None,
+        source: MetadataProvider::OpenLibrary,
+    }
+}
+
+#[tokio::test]
+async fn resolve_meta_returns_library_outcome_on_an_exact_isbn_hit() {
+    let pool = pool().await;
+    seed_book(&pool, "u1", "Effective Java", "Joshua Bloch", Some(ISBN)).await;
+    let server = MockServer::start().await; // enrichment 404s are best-effort
+
+    let outcome = resolve_meta(
+        &pool,
+        USER_ID,
+        &picked_meta("Effective Java", "Joshua Bloch", ISBN),
+        &config_for(&server),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        outcome,
+        ScanOutcome::InLibraryUnowned { book } if book.uuid == "u1"
+    ));
+}
+
+#[tokio::test]
+async fn resolve_meta_close_match_via_norm_without_a_provider_round_trip() {
+    let pool = pool().await;
+    // Library edition has a different ISBN, so only the norm rung bridges.
+    seed_book(&pool, "u1", "Effective Java", "Joshua Bloch", None).await;
+    let server = MockServer::start().await; // no lookup mocks: must not re-resolve
+
+    let outcome = resolve_meta(
+        &pool,
+        USER_ID,
+        &picked_meta("Effective Java", "Joshua Bloch", ISBN),
+        &config_for(&server),
+    )
+    .await
+    .unwrap();
+    match outcome {
+        ScanOutcome::CloseMatch { book, scanned } => {
+            assert_eq!(book.uuid, "u1");
+            assert_eq!(scanned.isbn13, ISBN);
+        }
+        other => panic!("expected CloseMatch, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn resolve_meta_not_in_library_when_nothing_matches() {
+    let pool = pool().await;
+    let server = MockServer::start().await;
+
+    let outcome = resolve_meta(
+        &pool,
+        USER_ID,
+        &picked_meta("Some Other Book", "Nobody Here", ISBN),
+        &config_for(&server),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        outcome,
+        ScanOutcome::NotInLibrary { online } if online.isbn13 == ISBN
+    ));
+}
+
+#[tokio::test]
+async fn resolve_meta_skips_the_exact_rung_on_an_invalid_isbn() {
+    // A junk wire ISBN must not reach SQL — but the norm rung still matches.
+    let pool = pool().await;
+    seed_book(&pool, "u1", "Effective Java", "Joshua Bloch", None).await;
+    let server = MockServer::start().await;
+
+    let outcome = resolve_meta(
+        &pool,
+        USER_ID,
+        &picked_meta("Effective Java", "Joshua Bloch", "garbage"),
+        &config_for(&server),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        outcome,
+        ScanOutcome::CloseMatch { book, .. } if book.uuid == "u1"
+    ));
+}
+
+#[tokio::test]
+async fn resolve_meta_makes_no_enrichment_request_for_an_unvalidatable_isbn() {
+    // `meta` is untrusted wire input and enrichment interpolates the ISBN into
+    // a provider URL path, so a value that fails canonicalization must never
+    // reach an outbound request — a path-traversal payload would otherwise
+    // address whatever endpoint it liked on the provider's host.
+    let pool = pool().await;
+    let server = MockServer::start().await;
+    // Any request at all to the provider host fails this test.
+    Mock::given(wiremock::matchers::any())
+        .respond_with(ResponseTemplate::new(200))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let outcome = resolve_meta(
+        &pool,
+        USER_ID,
+        &picked_meta("Effective Java", "Joshua Bloch", "../../../admin/secrets"),
+        &config_for(&server),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(outcome, ScanOutcome::NotInLibrary { .. }));
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn resolve_meta_enriches_the_pick_with_series_and_first_publish_year() {
+    let pool = pool().await;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("/isbn/{ISBN}.json")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "series": ["The Java Series"],
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/search.json"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "docs": [{ "first_publish_year": 2001 }],
+        })))
+        .mount(&server)
+        .await;
+
+    let outcome = resolve_meta(
+        &pool,
+        USER_ID,
+        &picked_meta("Effective Java", "Joshua Bloch", ISBN),
+        &config_for(&server),
+    )
+    .await
+    .unwrap();
+    match outcome {
+        ScanOutcome::NotInLibrary { online } => {
+            assert_eq!(online.series.as_deref(), Some("The Java Series"));
+            assert_eq!(online.first_publish_year, Some(2001));
+        }
+        other => panic!("expected NotInLibrary, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn resolve_meta_surfaces_sqlx_error_when_pool_is_closed() {
+    let pool = pool().await;
+    pool.close().await;
+    let server = MockServer::start().await;
+
+    let err = resolve_meta(
+        &pool,
+        USER_ID,
+        &picked_meta("Effective Java", "Joshua Bloch", ISBN),
+        &config_for(&server),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, ScanError::Sqlx(_)), "got {err:?}");
+}
+
 // ── write composition ──────────────────────────────────────────────
 
 #[tokio::test]
@@ -672,6 +856,8 @@ async fn add_physical_only_creates_fileless_book_with_copy() {
         publisher: None,
         description: None,
         cover_url: None, // no cover → no fetch, no CoversTempDir needed
+        series: None,
+        first_publish_year: None,
         source: MetadataProvider::OpenLibrary,
     };
     let uuid = add_physical_only(&pool, &meta, Some("first ed"), None)
@@ -715,6 +901,8 @@ async fn wishlist_add_by_meta_creates_fileless_book() {
         publisher: None,
         description: None,
         cover_url: None,
+        series: None,
+        first_publish_year: None,
         source: MetadataProvider::GoogleBooks,
     };
 

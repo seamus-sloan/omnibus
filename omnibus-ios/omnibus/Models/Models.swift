@@ -1248,16 +1248,41 @@ struct ExternalBookMeta: Codable, Hashable, Sendable {
     var publisher: String?
     var description: String?
     var coverURL: String?
+    /// Series statement, best-effort (Open Library enrichment). Defaulted so
+    /// pre-existing call sites and older servers' responses stay valid.
+    var series: String? = nil
+    /// Year the work was first published across all editions; `year` is this
+    /// edition's own date.
+    var firstPublishYear: Int64? = nil
     var source: String
 
     enum CodingKeys: String, CodingKey {
-        case isbn13, title, authors, year, pages, publisher, description, source
+        case isbn13, title, authors, year, pages, publisher, description, series, source
         case coverURL = "cover_url"
+        case firstPublishYear = "first_publish_year"
     }
 
     var authorDisplay: String {
         authors.isEmpty ? "Unknown author" : authors.joined(separator: ", ")
     }
+}
+
+/// `POST /api/scan/search` — title-text search, the fallback when an ISBN
+/// resolves to `unresolved`.
+struct ScanSearchRequest: Codable, Sendable {
+    var query: String
+}
+
+/// The search answer: provider candidates, each complete enough to feed
+/// `ResolveMetaRequest`.
+struct ScanSearchResponse: Codable, Sendable {
+    var results: [ExternalBookMeta]
+}
+
+/// `POST /api/scan/resolve-meta` — resolve a picked search candidate against
+/// the library without a second provider round trip.
+struct ResolveMetaRequest: Codable, Sendable {
+    var meta: ExternalBookMeta
 }
 
 /// `#[serde(tag = "kind", rename_all = "snake_case")]` on the Rust side.

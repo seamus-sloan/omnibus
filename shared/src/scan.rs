@@ -73,6 +73,53 @@ impl ResolveRequest {
 /// Mirrors `omnibus_shared::highlight::UpdateHighlightNote::NOTE_MAX_LEN`.
 pub const NOTE_MAX_LEN: usize = 4096;
 
+/// Maximum length (in chars) for a title-search `query` — generous for any
+/// real book title while still bounding the provider request.
+pub const SEARCH_QUERY_MAX_LEN: usize = 200;
+
+/// Search the external providers by title text — the fallback offered when an
+/// ISBN scan resolves to [`ScanOutcome::Unresolved`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScanSearchRequest {
+    pub query: String,
+}
+
+impl ScanSearchRequest {
+    /// Reject a blank or oversized `query`. Handlers translate `Err(_)` into 400.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.query.trim().is_empty() {
+            return Err("query is required".into());
+        }
+        if self.query.chars().count() > SEARCH_QUERY_MAX_LEN {
+            return Err(format!("query exceeds {SEARCH_QUERY_MAX_LEN} characters"));
+        }
+        Ok(())
+    }
+}
+
+/// Title-search results: provider-resolved candidates for the reader to pick
+/// from, each complete enough to feed [`ResolveMetaRequest`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScanSearchResponse {
+    pub results: Vec<ExternalBookMeta>,
+}
+
+/// Resolve a picked title-search candidate against the library — the ladder's
+/// library rungs applied to metadata already in hand, so no provider round
+/// trip (which could miss on an ISBN the search itself just surfaced).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolveMetaRequest {
+    pub meta: ExternalBookMeta,
+}
+
+impl ResolveMetaRequest {
+    /// Delegates field-length checks to [`ExternalBookMeta::validate`].
+    /// Handlers translate `Err(_)` into 400.
+    pub fn validate(&self) -> Result<(), String> {
+        self.meta.validate()
+    }
+}
+
 /// Maximum length (in chars) for a scanned/typed `isbn` string on
 /// [`CheckInRequest`], measured before separators are stripped — generous
 /// headroom over the 13-digit canonical form.
