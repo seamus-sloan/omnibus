@@ -248,6 +248,9 @@ pub async fn upsert_metadata_overrides(
     materialize_series_link(&mut tx, book_uuid, overrides).await?;
     materialize_tag_rows(&mut tx, overrides).await?;
     touch_book_last_modified(&mut tx, book_uuid).await?;
+    // A subjects replacement may have dropped a tag's last membership — reap
+    // orphans in the same tx so no surface ever serves a bookless tag.
+    crate::taxonomy::delete_orphan_tags(&mut tx).await?;
     tx.commit().await?;
 
     if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
@@ -279,6 +282,9 @@ pub async fn merge_metadata_overrides(
     // cleanup.
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     merge_one_in_tx(&mut tx, book_uuid, incoming, user_id).await?;
+    // The merged subjects may have dropped a tag's last membership (m2m
+    // fields replace wholesale when `Some`) — reap orphans before commit.
+    crate::taxonomy::delete_orphan_tags(&mut tx).await?;
     tx.commit().await?;
 
     if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
@@ -381,6 +387,9 @@ pub async fn bulk_merge_metadata_overrides(
         }
         merge_one_in_tx(&mut tx, uuid, &incoming, user_id).await?;
     }
+    // One sweep for the whole batch, not per book: a `remove_tags` delta can
+    // drop a tag's last membership anywhere in the set.
+    crate::taxonomy::delete_orphan_tags(&mut tx).await?;
     tx.commit().await?;
 
     for uuid in uuids {
@@ -519,6 +528,9 @@ pub async fn delete_metadata_overrides(
         upsert_fts(&mut tx, id).await?;
     }
     touch_book_last_modified(&mut tx, book_uuid).await?;
+    // Reverting to scanned drops every override membership this row held —
+    // tags that existed only through it are now orphans.
+    crate::taxonomy::delete_orphan_tags(&mut tx).await?;
     tx.commit().await?;
 
     // The override state is now fully cleared, so any cached rewritten

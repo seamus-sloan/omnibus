@@ -288,15 +288,21 @@ async fn get_tag_cloud_counts_canonical_and_override_subjects_without_double_cou
         essay.count, 2,
         "essay must sum the canonical and override members exactly once each, got {tags:?}",
     );
-    // "fiction" loses its only member to the override; the tag stays
-    // visible via its canonical link but its merged count drops to 0.
-    let fiction = tags
-        .iter()
-        .find(|t| t.name == "fiction")
-        .expect("fiction stays visible via canonical link");
+    // "fiction" loses its only member to the override; with zero effective
+    // books it drops out of the cloud entirely. Its `tags` row and canonical
+    // link survive underneath (revert-to-scanned needs them) — hidden, not
+    // deleted.
+    assert!(
+        !tags.iter().any(|t| t.name == "fiction"),
+        "a fully-overridden-away tag must be hidden from the cloud, got {tags:?}",
+    );
+    let fiction_row: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tags WHERE name = 'fiction'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(
-        fiction.count, 0,
-        "a fully-overridden-away tag stays visible at cnt=0, got {tags:?}",
+        fiction_row, 1,
+        "the canonical tags row must survive for revert-to-scanned"
     );
 }
 #[tokio::test]

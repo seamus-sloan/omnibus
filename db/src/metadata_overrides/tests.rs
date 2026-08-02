@@ -1174,9 +1174,9 @@ async fn upsert_metadata_overrides_materializes_tag_links_for_new_tags() {
     .await
     .unwrap();
 
-    // `get_tag_cloud` only surfaces tags with a canonical `books_tags_link`
-    // row, so the override-created tag appearing here proves the
-    // materialization — this is what feeds the inline-edit autocomplete pool.
+    // `get_tag_cloud` selects FROM `tags`, so the override-created tag
+    // appearing here proves the materialized row and its override membership
+    // joined up — this is what feeds the inline-edit autocomplete pool.
     let cloud = crate::get_tag_cloud(&pool).await.unwrap();
     assert!(
         cloud.iter().any(|t| t.name == "Brand New Tag"),
@@ -1188,6 +1188,185 @@ async fn upsert_metadata_overrides_materializes_tag_links_for_new_tags() {
         cloud.iter().all(|t| !t.name.trim().is_empty()),
         "blank subjects must not materialize tag rows"
     );
+}
+
+/// Count `tags` rows matching `name` (NOCASE column, so case variants match).
+async fn tag_row_count(pool: &sqlx::SqlitePool, name: &str) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM tags WHERE name = ?")
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// Seed one scanned book under `/lib` with the given canonical tags and
+/// return its `(uuid, id)`.
+async fn seed_one_book_with_tags(pool: &sqlx::SqlitePool, tags: &[&str]) -> (String, i64) {
+    replace_books(
+        pool,
+        "/lib",
+        vec![indexed(
+            "book.epub",
+            Some("Book"),
+            &["Author"],
+            tags,
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+    let books = list_books(pool, "/lib").await.unwrap();
+    (books[0].unique_identifier.clone().unwrap(), books[0].id)
+}
+
+#[tokio::test]
+async fn upsert_metadata_overrides_deletes_a_tag_orphaned_by_dropping_its_last_membership() {
+    let _covers = CoversTempDir::new("reap_tag_upsert");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let (uuid, _) = seed_one_book_with_tags(&pool, &[]).await;
+
+    let with_subjects = |subjects: &[&str]| MetadataOverrides {
+        subjects: Some(subjects.iter().map(|s| s.to_string()).collect()),
+        ..Default::default()
+    };
+    upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &with_subjects(&["keep", "drop"]),
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+    assert_eq!(tag_row_count(&pool, "drop").await, 1);
+
+    upsert_metadata_overrides(&pool, &uuid, &with_subjects(&["keep"]), false, user_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        tag_row_count(&pool, "drop").await,
+        0,
+        "the save dropped the tag's last membership, so the row must be reaped"
+    );
+    assert_eq!(tag_row_count(&pool, "keep").await, 1);
+}
+
+#[tokio::test]
+async fn upsert_metadata_overrides_keeps_canonical_tag_rows_shadowed_by_an_override() {
+    let _covers = CoversTempDir::new("reap_tag_shadowed");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let (uuid, id) = seed_one_book_with_tags(&pool, &["scanned"]).await;
+
+    // Clear-all override: the tag's every *effective* membership is gone,
+    // but its canonical link row is the scanned truth — reaping it would
+    // make revert-to-scanned lossy.
+    upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &MetadataOverrides {
+            subjects: Some(vec![]),
+            ..Default::default()
+        },
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+    assert_eq!(tag_row_count(&pool, "scanned").await, 1);
+    let links: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM books_tags_link")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(links, 1, "the canonical link row must survive the override");
+
+    delete_metadata_overrides(&pool, &uuid).await.unwrap();
+    let reverted = get_book(&pool, id).await.unwrap().unwrap();
+    assert_eq!(
+        reverted.subjects,
+        vec!["scanned"],
+        "revert-to-scanned must still restore the tag"
+    );
+}
+
+#[tokio::test]
+async fn delete_metadata_overrides_deletes_tags_that_existed_only_through_the_override() {
+    let _covers = CoversTempDir::new("reap_tag_delete");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let (uuid, _) = seed_one_book_with_tags(&pool, &[]).await;
+
+    upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &MetadataOverrides {
+            subjects: Some(vec!["solo".into()]),
+            ..Default::default()
+        },
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+    assert_eq!(tag_row_count(&pool, "solo").await, 1);
+
+    delete_metadata_overrides(&pool, &uuid).await.unwrap();
+    assert_eq!(
+        tag_row_count(&pool, "solo").await,
+        0,
+        "reverting to scanned must reap the override-only tag"
+    );
+}
+
+#[tokio::test]
+async fn merge_metadata_overrides_deletes_a_tag_dropped_by_the_replacing_subjects_list() {
+    let _covers = CoversTempDir::new("reap_tag_merge");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let (uuid, _) = seed_one_book_with_tags(&pool, &[]).await;
+
+    upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &MetadataOverrides {
+            subjects: Some(vec!["a".into(), "b".into()]),
+            ..Default::default()
+        },
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    // `merge` replaces m2m fields wholesale when `Some` — "b" loses its
+    // only membership.
+    merge_metadata_overrides(
+        &pool,
+        &uuid,
+        &MetadataOverrides {
+            subjects: Some(vec!["a".into()]),
+            ..Default::default()
+        },
+        user_id,
+    )
+    .await
+    .unwrap();
+    assert_eq!(tag_row_count(&pool, "b").await, 0, "dropped tag reaped");
+    assert_eq!(tag_row_count(&pool, "a").await, 1);
 }
 
 /// The batch FTS rebuild resolves and rewrites more than one uuid in a
@@ -1714,6 +1893,47 @@ async fn bulk_merge_metadata_overrides_uses_existing_override_subjects_as_the_ta
         vec!["ov2", "new"],
         "base must be the prior override subjects, not the scanned list"
     );
+}
+
+#[tokio::test]
+async fn bulk_merge_metadata_overrides_deletes_tags_orphaned_by_a_remove_delta() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let seeded = seed_two_books_for_bulk(&pool).await;
+    let (uuid, _) = seeded[0].clone();
+
+    merge_metadata_overrides(
+        &pool,
+        &uuid,
+        &MetadataOverrides {
+            subjects: Some(vec!["ov1".into(), "ov2".into()]),
+            ..Default::default()
+        },
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    let edit = BulkMetadataEdit {
+        remove_tags: vec!["ov1".into()],
+        ..Default::default()
+    };
+    bulk_merge_metadata_overrides(&pool, std::slice::from_ref(&uuid), &edit, user_id)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        tag_row_count(&pool, "ov1").await,
+        0,
+        "the remove delta dropped ov1's last membership — row reaped"
+    );
+    assert_eq!(tag_row_count(&pool, "ov2").await, 1);
+    // a.epub's canonical tags are shadowed by the override but still
+    // linked — scanned truth survives for revert.
+    assert_eq!(tag_row_count(&pool, "scifi").await, 1);
 }
 
 #[tokio::test]
