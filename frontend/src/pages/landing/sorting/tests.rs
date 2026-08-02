@@ -287,7 +287,7 @@ fn series_sort_keeps_seriesless_last_in_desc_too() {
 fn sort_by_title_is_stable_on_equal_keys_via_id_tiebreak() {
     // Two books share the same title; the id tiebreak keeps a deterministic
     // order regardless of input order or sort direction.
-    let mut a = book(BookSpec {
+    let a = book(BookSpec {
         id: 5,
         filename: "a.epub",
         title: Some("Same"),
@@ -297,7 +297,7 @@ fn sort_by_title_is_stable_on_equal_keys_via_id_tiebreak() {
         added_at: None,
         subjects: &[],
     });
-    let mut b = book(BookSpec {
+    let b = book(BookSpec {
         id: 2,
         filename: "b.epub",
         title: Some("Same"),
@@ -307,8 +307,6 @@ fn sort_by_title_is_stable_on_equal_keys_via_id_tiebreak() {
         added_at: None,
         subjects: &[],
     });
-    a.title = Some("Same".into());
-    b.title = Some("Same".into());
     let asc = sort_books(vec![a.clone(), b.clone()], SortKey::Title, SortDir::Asc);
     assert_eq!(ids(&asc), vec![2, 5]);
     // Reversed direction does not reverse the tiebreak: ids stay ascending.
@@ -327,8 +325,8 @@ fn series_index_to_sort_key_scales_finite_values_by_one_thousand() {
 #[test]
 fn series_index_to_sort_key_returns_zero_for_non_finite_input() {
     // The bug this guards against: a NaN/inf parsed from a corrupt OPF
-    // would `as i64` to `i64::MIN`, shoving the book to the top of the
-    // series sort.
+    // would `as i64` to 0/i64::MAX/i64::MIN (saturating cast), throwing the
+    // book wildly out of its natural series-sort position.
     assert_eq!(series_index_to_sort_key(f64::NAN), 0);
     assert_eq!(series_index_to_sort_key(f64::INFINITY), 0);
     assert_eq!(series_index_to_sort_key(f64::NEG_INFINITY), 0);
