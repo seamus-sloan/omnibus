@@ -156,6 +156,126 @@ async fn smart_shelf_tag_rule_skips_scanned_tags_replaced_by_override() {
     assert_eq!(shelf.book_count, 1);
 }
 
+/// Create a fileless book tagged via a subjects override — the only way a
+/// physical-only book carries tags (fileless creation writes no tag links).
+async fn make_tagged_fileless_book(
+    pool: &sqlx::SqlitePool,
+    title: &str,
+    tag: &str,
+    editor: i64,
+) -> String {
+    let uuid = crate::physical::create_fileless_book(
+        pool,
+        crate::physical::FilelessBook {
+            title: title.into(),
+            authors: vec!["Ada Lovelace".into()],
+            isbn: None,
+            pubdate: None,
+            description: None,
+            cover: None,
+        },
+    )
+    .await
+    .unwrap();
+    let overrides = omnibus_shared::MetadataOverrides {
+        subjects: Some(vec![tag.into()]),
+        ..Default::default()
+    };
+    crate::upsert_metadata_overrides(pool, &uuid, &overrides, false, editor)
+        .await
+        .unwrap();
+    uuid
+}
+
+#[tokio::test]
+async fn smart_shelf_tag_rule_matches_physical_only_book_with_copy() {
+    let _covers = crate::test_support::CoversTempDir::new("smart_physical_copy");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let owner = make_user(&pool, "owner", false).await;
+
+    // A checked-in physical book has no `book_files` row; it must still land
+    // on a smart shelf whose tag rule its override subjects match, mirroring
+    // the landing visibility rule (file-backed OR physical copy).
+    let uuid = make_tagged_fileless_book(&pool, "Paper Only", "fantasy", owner).await;
+    crate::physical::add_physical_copy(&pool, &uuid, None, Some(owner), None)
+        .await
+        .unwrap();
+
+    let shelf = create_shelf(
+        &pool,
+        owner,
+        &smart_req("Fantasy", MatchMode::Any, vec![tag_rule("fantasy")]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(shelf.book_count, 1);
+
+    let page = shelf_page(&pool, &shelf, SortKey::Title, SortDir::Asc)
+        .await
+        .unwrap();
+    assert_eq!(page.books.len(), 1);
+    assert_eq!(page.books[0].title.as_deref(), Some("Paper Only"));
+}
+
+#[tokio::test]
+async fn smart_shelf_hides_fileless_book_without_physical_copy() {
+    let _covers = crate::test_support::CoversTempDir::new("smart_no_copy");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let owner = make_user(&pool, "owner", false).await;
+
+    // No file and no copy — a removed-file ghost or pure wishlist row. The
+    // visibility gate must keep hiding it even though the tag rule matches.
+    make_tagged_fileless_book(&pool, "Someday Maybe", "fantasy", owner).await;
+
+    let shelf = create_shelf(
+        &pool,
+        owner,
+        &smart_req("Fantasy", MatchMode::Any, vec![tag_rule("fantasy")]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(shelf.book_count, 0);
+}
+
+#[tokio::test]
+async fn kobo_sync_excludes_physical_only_smart_members() {
+    let (pool, _covers) = seed_discovery_fixture().await;
+    let owner = make_user(&pool, "owner", false).await;
+
+    let physical = make_tagged_fileless_book(&pool, "Paper Only", "fiction", owner).await;
+    crate::physical::add_physical_copy(&pool, &physical, None, Some(owner), None)
+        .await
+        .unwrap();
+
+    let shelf = create_shelf(
+        &pool,
+        owner,
+        &smart_req("Fiction", MatchMode::Any, vec![tag_rule("fiction")]),
+    )
+    .await
+    .unwrap();
+    // The web read includes the physical book alongside the two file-backed
+    // fixture books…
+    assert_eq!(shelf.book_count, 3);
+
+    update_shelf(
+        &pool,
+        shelf.id,
+        &UpdateShelfRequest {
+            sync_to_kobo: Some(true),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    // …but the Kobo entitlement union stays file-backed only: a device can't
+    // download a book that has no file.
+    let uuids = kobo_synced_book_uuids(&pool, owner).await.unwrap();
+    assert_eq!(uuids.len(), 2);
+    assert!(!uuids.contains(&physical));
+}
+
 #[tokio::test]
 async fn smart_shelf_date_added_rules_match_epoch_column() {
     // `books.timestamp` is INTEGER unix-seconds (migration 0038); the date-rule

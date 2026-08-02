@@ -9,7 +9,7 @@ use sqlx::{Row, SqlitePool};
 
 use super::{
     count_smart, order_by_sql, parse_kind, parse_visibility, row_to_rule, ShelfError, FILE_EXISTS,
-    LIST_SHELVES_LIMIT, PREVIEW_SAMPLE,
+    LIST_SHELVES_LIMIT, PREVIEW_SAMPLE, SMART_VISIBLE,
 };
 use crate::books::{
     backfill_creator_ids, merge_overrides_into_books, row_to_ebook, BOOK_COLUMNS,
@@ -202,10 +202,11 @@ pub async fn preview_rule(
     rules: &[ShelfRule],
 ) -> Result<RulePreview, ShelfError> {
     let matched = count_smart(pool, owner_id, match_mode, rules).await?;
-    let total: i64 =
-        sqlx::query_scalar(&format!("SELECT COUNT(*) FROM books b WHERE {FILE_EXISTS}"))
-            .fetch_one(pool)
-            .await?;
+    let total: i64 = sqlx::query_scalar(&format!(
+        "SELECT COUNT(*) FROM books b WHERE {SMART_VISIBLE}"
+    ))
+    .fetch_one(pool)
+    .await?;
     let sample = fetch_smart(
         pool,
         owner_id,
@@ -257,7 +258,7 @@ async fn count_wishlist(pool: &SqlitePool, owner_id: i64) -> Result<i64, ShelfEr
 }
 
 /// One page of the owner's wishlist, newest-added first. Deliberately **omits**
-/// the `FILE_EXISTS` gate the smart/manual reads apply: a wishlist-only
+/// the visibility gate the smart reads apply: a wishlist-only
 /// (fileless) book is hidden from All Books but must appear inside its own
 /// wishlist shelf (#1187, AC4).
 async fn fetch_wishlist(
@@ -289,7 +290,7 @@ async fn fetch_smart(
     let pred = membership_predicate(rules, match_mode, owner_id)?;
     let sql = format!(
         "SELECT {BOOK_COLUMNS} FROM books b \
-         WHERE {FILE_EXISTS} AND {} ORDER BY {order_by} LIMIT ?",
+         WHERE {SMART_VISIBLE} AND {} ORDER BY {order_by} LIMIT ?",
         pred.sql
     );
     let mut q = sqlx::query(&sql);
@@ -361,8 +362,9 @@ async fn wishlist_member_uuids(
     rows.iter().map(|r| Ok(r.try_get("book_uuid")?)).collect()
 }
 
-/// Rule-derived membership as bare uuids. Keeps the same `FILE_EXISTS` filter
-/// the hydrated smart path uses, so a ghosted book doesn't sync.
+/// Rule-derived membership as bare uuids. Deliberately stricter than the
+/// hydrated smart path's visibility gate: `FILE_EXISTS` only, so neither a
+/// ghosted book nor a physical-only one syncs to a device.
 async fn smart_member_uuids(
     pool: &SqlitePool,
     owner_id: i64,
