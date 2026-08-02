@@ -9,32 +9,15 @@
 
 import SwiftUI
 
-/// Every editable value on the screen, as one comparable value.
-///
-/// Kept as a single struct rather than nine `@State` strings so "has anything
-/// changed" is a plain `!=` against the loaded snapshot — which is what lets
-/// Save disable itself until there's something to save, and what drives the
-/// per-field edited markers.
-private struct MetadataDraft: Equatable {
-    var title = ""
-    /// A real list, not a comma-joined string: authors are structured on the
-    /// wire, and asking someone to maintain delimiters by hand made the one
-    /// genuinely multi-value field the most error-prone on the screen.
-    var authors: [String] = []
-    var series = ""
-    var seriesIndex = ""
-    var publisher = ""
-    var published = ""
-    var language = ""
-    var isbn13 = ""
-    var description = ""
-}
-
 struct MetadataEditView: View {
     let uuid: String
+    /// Runs after a save or revert lands, before the editor dismisses — the
+    /// long-press entry points use it to refresh the grid behind their sheet.
+    var onSaved: (() -> Void)?
 
-    init(uuid: String) {
+    init(uuid: String, onSaved: (() -> Void)? = nil) {
         self.uuid = uuid
+        self.onSaved = onSaved
     }
 
     @Environment(\.palette) private var palette
@@ -47,14 +30,22 @@ struct MetadataEditView: View {
     @State private var isSaving = false
     @State private var error: String?
     /// An author typed into the add field but not yet committed to a chip.
-    /// Held here rather than inside `AuthorsField` so saving can flush it.
+    /// Held here rather than inside the chip field so saving can flush it.
     @State private var pendingAuthor = ""
+    /// Same, for the tags field.
+    @State private var pendingTag = ""
 
     private var pendingAuthorName: String {
         pendingAuthor.trimmingCharacters(in: .whitespaces)
     }
 
-    private var isDirty: Bool { draft != loaded || !pendingAuthorName.isEmpty }
+    private var pendingTagName: String {
+        pendingTag.trimmingCharacters(in: .whitespaces)
+    }
+
+    private var isDirty: Bool {
+        draft != loaded || !pendingAuthorName.isEmpty || !pendingTagName.isEmpty
+    }
 
     var body: some View {
         Group {
@@ -79,8 +70,10 @@ struct MetadataEditView: View {
                 group("Title & authors") {
                     Plate {
                         field("Title", \.title, isFirst: true)
-                        AuthorsField(
-                            authors: $draft.authors,
+                        ChipListField(
+                            label: "Authors",
+                            placeholder: "Add an author",
+                            values: $draft.authors,
                             entry: $pendingAuthor,
                             isEdited: draft.authors != loaded.authors
                         )
@@ -100,6 +93,20 @@ struct MetadataEditView: View {
                         field("Published", \.published, hint: "YYYY-MM-DD")
                         field("Language", \.language, hint: "e.g. en")
                         field("ISBN-13", \.isbn13, keyboard: .numberPad)
+                    }
+                }
+
+                group("Tags") {
+                    Plate {
+                        ChipListField(
+                            label: "Tags",
+                            placeholder: "Add a tag",
+                            values: $draft.tags,
+                            entry: $pendingTag,
+                            isEdited: draft.tags != loaded.tags,
+                            deduplicates: true,
+                            isFirst: true
+                        )
                     }
                 }
 
@@ -225,30 +232,9 @@ struct MetadataEditView: View {
             isLoading = false
             return
         }
-        loaded = MetadataDraft(
-            title: book.title ?? "",
-            authors: book.creators.map(\.name),
-            series: book.series ?? "",
-            seriesIndex: book.seriesIndex ?? "",
-            publisher: book.publisher ?? "",
-            published: book.published ?? "",
-            language: book.language ?? "",
-            isbn13: book.isbn13 ?? "",
-            description: book.description ?? ""
-        )
+        loaded = MetadataDraft(book: book)
         draft = loaded
         isLoading = false
-    }
-
-    /// A field's value, but only when the user actually changed it.
-    ///
-    /// Sending every field on every save wrote overrides for fields nobody
-    /// touched, pinning scanned values so a later rescan could no longer update
-    /// them. The endpoint merges, so omitting a field leaves it as it was, and
-    /// an empty string clears an existing override.
-    private func changed(_ key: KeyPath<MetadataDraft, String>) -> String? {
-        let value = draft[keyPath: key]
-        return value == loaded[keyPath: key] ? nil : value
     }
 
     private func save() async {
@@ -256,50 +242,29 @@ struct MetadataEditView: View {
         error = nil
         defer { isSaving = false }
 
-        // A name typed into the add field but never committed to a chip is
+        // A value typed into an add field but never committed to a chip is
         // still what the user meant to save; dropping it silently is worse
         // than accepting it.
-        if !pendingAuthorName.isEmpty {
-            draft.authors.append(pendingAuthorName)
-            pendingAuthor = ""
+        if let chip = ChipEntry.committed(
+            from: pendingAuthor, existing: draft.authors, deduplicating: false
+        ) {
+            draft.authors.append(chip)
         }
-
-        // `creators` is a list of Contributor *objects* on the wire, not bare
-        // strings: sending `["E. M. Forster"]` fails the server's JSON
-        // extraction outright, so every save with a non-empty Authors field
-        // was rejected before it reached validation.
-        struct Creator: Encodable {
-            var name: String
+        pendingAuthor = ""
+        if let chip = ChipEntry.committed(
+            from: pendingTag, existing: draft.tags, deduplicating: true
+        ) {
+            draft.tags.append(chip)
         }
-
-        struct Overrides: Encodable {
-            var title: String?
-            var creators: [Creator]?
-            var series: String?
-            var series_index: String?
-            var publisher: String?
-            var published: String?
-            var language: String?
-            var isbn13: String?
-            var description: String?
-        }
-
-        let payload = Overrides(
-            title: changed(\.title),
-            creators: draft.authors == loaded.authors ? nil : draft.authors.map(Creator.init),
-            series: changed(\.series),
-            series_index: changed(\.seriesIndex),
-            publisher: changed(\.publisher),
-            published: changed(\.published),
-            language: changed(\.language),
-            isbn13: changed(\.isbn13),
-            description: changed(\.description)
-        )
+        pendingTag = ""
 
         do {
-            let _: Empty = try await APIClient.shared.post("/api/ebooks/\(uuid)/overrides", body: payload)
+            let _: Empty = try await APIClient.shared.post(
+                "/api/ebooks/\(uuid)/overrides", body: draft.payload(since: loaded)
+            )
             await OfflineStore.shared.cacheDelete(CacheKey.book(uuid))
             Haptics.success()
+            onSaved?()
             dismiss()
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
@@ -311,6 +276,7 @@ struct MetadataEditView: View {
             let _: Empty = try await APIClient.shared.delete("/api/ebooks/\(uuid)/overrides")
             await OfflineStore.shared.cacheDelete(CacheKey.book(uuid))
             Haptics.success()
+            onSaved?()
             dismiss()
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
@@ -318,26 +284,36 @@ struct MetadataEditView: View {
     }
 }
 
-/// Authors as removable chips plus an add field.
-///
-/// Order is meaningful (it's the byline), so entries append and can be removed
-/// individually rather than being re-typed as one delimited string.
-private struct AuthorsField: View {
-    @Binding var authors: [String]
+/// A list-valued field: removable chips plus an add field. Authors and tags
+/// share it — order is meaningful in both (the byline; the tag order the
+/// server stores), so entries append and can be removed individually rather
+/// than being re-typed as one delimited string.
+private struct ChipListField: View {
+    let label: String
+    let placeholder: String
+    @Binding var values: [String]
     @Binding var entry: String
     var isEdited = false
+    /// Tags refuse an exact re-add (ignoring case) the way the web chip
+    /// editor does; authors keep duplicates because two credited
+    /// contributors can legitimately share a name.
+    var deduplicates = false
+    /// First row of its plate — no leading hairline.
+    var isFirst = false
 
     @Environment(\.palette) private var palette
 
     var body: some View {
         VStack(spacing: 0) {
-            Rectangle()
-                .fill(palette.line2.color)
-                .frame(height: 0.5)
+            if !isFirst {
+                Rectangle()
+                    .fill(palette.line2.color)
+                    .frame(height: 0.5)
+            }
 
             VStack(alignment: .leading, spacing: 9) {
                 HStack(spacing: 6) {
-                    Text("AUTHORS")
+                    Text(label.uppercased())
                         .font(.monoUI(10, weight: .medium))
                         .tracking(0.7)
                         .foregroundStyle(isEdited ? palette.accentColor : palette.ink3Color)
@@ -352,11 +328,11 @@ private struct AuthorsField: View {
                     Spacer(minLength: 0)
                 }
 
-                if !authors.isEmpty {
+                if !values.isEmpty {
                     FlowLayout(spacing: 6, lineSpacing: 6) {
-                        // Index-identified: two contributors can legitimately
-                        // share a name, and the name is also what changes.
-                        ForEach(Array(authors.enumerated()), id: \.offset) { index, name in
+                        // Index-identified: authors can legitimately repeat a
+                        // name, and the name is also what changes.
+                        ForEach(Array(values.enumerated()), id: \.offset) { index, name in
                             chip(name, at: index)
                         }
                     }
@@ -367,7 +343,7 @@ private struct AuthorsField: View {
                         .font(.system(size: 14))
                         .foregroundStyle(palette.ink3Color)
 
-                    TextField("Add an author", text: $entry)
+                    TextField(placeholder, text: $entry)
                         .font(.ui(15))
                         .foregroundStyle(palette.ink0Color)
                         .textInputAutocapitalization(.words)
@@ -386,7 +362,7 @@ private struct AuthorsField: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .animation(Motion.snap, value: isEdited)
-            .animation(Motion.snap, value: authors)
+            .animation(Motion.snap, value: values)
         }
     }
 
@@ -398,7 +374,7 @@ private struct AuthorsField: View {
 
             Button {
                 Haptics.tap()
-                authors.remove(at: index)
+                values.remove(at: index)
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .bold))
@@ -415,10 +391,13 @@ private struct AuthorsField: View {
     }
 
     private func commit() {
-        let name = entry.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { return }
+        // A refused duplicate still clears the field: the input was
+        // understood, and leaving the text sitting there reads as a failure.
+        defer { entry = "" }
+        guard let chip = ChipEntry.committed(
+            from: entry, existing: values, deduplicating: deduplicates
+        ) else { return }
         Haptics.select()
-        authors.append(name)
-        entry = ""
+        values.append(chip)
     }
 }
