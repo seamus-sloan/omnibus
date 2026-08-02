@@ -38,36 +38,3 @@ pub struct FetchedBookMetadata {
     pub series_index: Option<String>,
     pub isbn13: Option<String>,
 }
-
-impl FetchedBookMetadata {
-    /// `true` when every field is empty — nothing a preview panel could show
-    /// or a user could apply.
-    pub fn is_empty(&self) -> bool {
-        self.title.is_none()
-            && self.authors.is_empty()
-            && self.description.is_none()
-            && self.series.is_none()
-            && self.series_index.is_none()
-            && self.isbn13.is_none()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn is_empty_is_true_only_when_every_field_is_absent() {
-        assert!(FetchedBookMetadata::default().is_empty());
-        assert!(!FetchedBookMetadata {
-            title: Some("Fourth Wing".to_string()),
-            ..Default::default()
-        }
-        .is_empty());
-        assert!(!FetchedBookMetadata {
-            authors: vec!["Rebecca Yarros".to_string()],
-            ..Default::default()
-        }
-        .is_empty());
-    }
-}
