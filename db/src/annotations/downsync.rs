@@ -4,9 +4,37 @@
 //! device. The serving queries never change — a materialized row simply
 //! starts matching `kobo_location IS NOT NULL`.
 
+use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock};
+
 use sqlx::SqlitePool;
 
 use crate::kobo_position::annotation_locations;
+
+/// Process-wide guard for [`spawn_kobo_downsync`]: the key of every
+/// `(user_id, book_uuid)` pair with a materialization task currently
+/// in flight.
+fn inflight_downsyncs() -> &'static Mutex<HashSet<(i64, String)>> {
+    static INFLIGHT: OnceLock<Mutex<HashSet<(i64, String)>>> = OnceLock::new();
+    INFLIGHT.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Removes its key from [`inflight_downsyncs`] on drop, not just on the
+/// task's normal-completion path — so a panic inside the task, or the task
+/// being aborted, still releases the key instead of permanently suppressing
+/// future downsyncs for it.
+struct InflightGuard {
+    key: (i64, String),
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        inflight_downsyncs()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.key);
+    }
+}
 
 /// What one materialization pass accomplished, for logs.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -114,8 +142,28 @@ pub async fn downsync_all_kobo_annotations(pool: &SqlitePool) -> anyhow::Result<
 /// Fire-and-forget materialization after a highlight write. Callers stay
 /// on their own latency budget — a highlight create never waits on an
 /// EPUB walk.
+///
+/// Coalesced per `(user_id, book_uuid)` via [`inflight_downsyncs`]: several
+/// highlights written on the same book in quick succession would otherwise
+/// each fan out their own full-book recompute, since every call re-walks
+/// every still-unresolved row on the book rather than just its own row. A
+/// call that finds one already running for the same key skips the spawn —
+/// this is a best-effort guard, not a correctness one: a row written after
+/// the in-flight task has already read its worklist stays unresolved until
+/// the *next* highlight write or the boot-time [`downsync_all_kobo_annotations`]
+/// pass, rather than being covered by the task it skipped spawning behind.
 pub fn spawn_kobo_downsync(pool: SqlitePool, user_id: i64, book_uuid: String) {
+    let key = (user_id, book_uuid.clone());
+    {
+        let mut inflight = inflight_downsyncs()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !inflight.insert(key.clone()) {
+            return;
+        }
+    }
     tokio::spawn(async move {
+        let _guard = InflightGuard { key };
         if let Err(e) = downsync_book_annotations(&pool, user_id, &book_uuid).await {
             tracing::warn!(user_id, book_uuid, error = %e, "annotation downsync failed");
         }

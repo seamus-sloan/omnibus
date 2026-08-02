@@ -309,15 +309,24 @@ struct GbImageLinks {
 }
 
 /// Look up an ISBN-13 against Google Books `volumes?q=isbn:`, falling back to
-/// a bare-text `q=<isbn13>` query when the field search answers empty.
-/// `Ok(None)` when no volume matches either way; `Err` on transport/parse
-/// failure of the field query (the bare query is best-effort — see below).
+/// a bare-text `q=<isbn13>` query when the field search answers empty and a
+/// key is configured. `Ok(None)` when no volume matches either way (or the
+/// fallback is skipped keyless); `Err` on transport/parse failure of the
+/// field query (the bare query is best-effort — see below).
 pub async fn googlebooks_lookup(
     config: &MetadataLookupConfig,
     isbn13: &str,
 ) -> anyhow::Result<Option<ExternalBookMeta>> {
     if let Some(meta) = googlebooks_query(config, isbn13, &googlebooks_url(config, isbn13)).await? {
         return Ok(Some(meta));
+    }
+    // Keyless requests share Google's anonymous daily quota (see
+    // .claude/rules/01-dev-environment.md) and exhaust it almost
+    // immediately, so doubling every miss into a second request is a cost
+    // only a keyed instance can afford — gate the fallback on one being
+    // configured.
+    if config.googlebooks_api_key.is_none() {
+        return Ok(None);
     }
     // The `isbn:` field search has been observed answering 200/totalItems=0
     // for volumes the corpus demonstrably holds (2026-08: every field-scoped

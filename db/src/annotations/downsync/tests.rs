@@ -278,6 +278,94 @@ async fn downsync_all_kobo_annotations_converts_every_users_pending_rows() {
 }
 
 #[tokio::test]
+async fn downsync_all_kobo_annotations_continues_past_a_failing_book_and_reports_the_rest() {
+    let (pool, alice, book_id, uuid, dir) = fixture("bootfail_good").await;
+    let kepub_dir = dir.join("kepub");
+    std::fs::create_dir_all(&kepub_dir).unwrap();
+    std::fs::write(
+        kepub_dir.join(format!("{book_id}.kepub.epub")),
+        build_test_kepub(&[("c1.xhtml", KEPUB_C1)]),
+    )
+    .unwrap();
+    let _guard = EnvVarGuard::set_os("OMNIBUS_KEPUB_DIR", Some(kepub_dir.as_os_str()));
+    create_highlight(&pool, alice, &web_highlight(&uuid, WEB_CFI, None))
+        .await
+        .unwrap();
+
+    // A second book whose kepub cache file exists but isn't a valid zip:
+    // `annotation_locations` errors opening it, so its
+    // `downsync_book_annotations` call returns `Err` and must not abort the
+    // pass before the first (good) book is processed.
+    let bad_dir = make_test_dir("annotation_downsync_bootfail_bad");
+    std::fs::write(
+        bad_dir.join("bad.epub"),
+        build_test_epub(&[("c1.xhtml", SOURCE_C1)]),
+    )
+    .unwrap();
+    crate::replace_books(
+        &pool,
+        bad_dir.to_str().unwrap(),
+        vec![crate::ebook::IndexedBook {
+            metadata: EbookMetadata {
+                filename: "bad.epub".into(),
+                title: Some("Bad Book".into()),
+                ..Default::default()
+            },
+            cover: None,
+            mtime_epoch: 0,
+            size_bytes: 0,
+            word_count: None,
+        }],
+    )
+    .await
+    .unwrap();
+    let bad_book = crate::list_books(&pool, bad_dir.to_str().unwrap())
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    let bad_uuid = bad_book.unique_identifier.clone().unwrap();
+    std::fs::write(
+        kepub_dir.join(format!("{}.kepub.epub", bad_book.id)),
+        b"not a zip file",
+    )
+    .unwrap();
+    create_highlight(&pool, alice, &web_highlight(&bad_uuid, WEB_CFI, None))
+        .await
+        .unwrap();
+
+    let stats = downsync_all_kobo_annotations(&pool).await.unwrap();
+
+    // Only the good book's row is counted — the failing book's error was
+    // caught and logged, not folded into the pass's stats.
+    assert_eq!(
+        stats,
+        DownsyncStats {
+            derived: 1,
+            unresolved: 0
+        }
+    );
+    assert_eq!(
+        served_kobo_annotations(&pool, alice, &uuid)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    // The failing book's row is untouched — proof the loop reached it and
+    // moved on, rather than the pass having stopped before it.
+    let (kobo_location,): (Option<String>,) =
+        sqlx::query_as("SELECT kobo_location FROM annotations WHERE user_id = ? AND book_uuid = ?")
+            .bind(alice)
+            .bind(&bad_uuid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(kobo_location.is_none());
+}
+
+#[tokio::test]
 async fn downsync_book_annotations_propagates_db_error_when_pool_is_closed() {
     let (pool, user, _book_id, uuid, _dir) = fixture("dberr").await;
     pool.close().await;

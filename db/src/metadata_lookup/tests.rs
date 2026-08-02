@@ -29,6 +29,16 @@ fn config_for(server: &MockServer) -> MetadataLookupConfig {
     }
 }
 
+/// Same as [`config_for`] but with a key configured — the bare-text fallback
+/// gate requires one (#1614: keyless requests share Google's anonymous
+/// quota, so the fallback only fires when a key is present).
+fn keyed_config_for(server: &MockServer) -> MetadataLookupConfig {
+    MetadataLookupConfig {
+        googlebooks_api_key: Some("k".into()),
+        ..config_for(server)
+    }
+}
+
 async fn mount_ol(server: &MockServer, body: serde_json::Value) {
     Mock::given(method("GET"))
         .and(path(OL_PATH))
@@ -413,7 +423,7 @@ async fn googlebooks_falls_back_to_bare_query_when_isbn_search_is_empty() {
     .await;
     mount_gb_q(&server, ISBN13, gb_hit()).await;
 
-    let meta = super::providers::googlebooks_lookup(&config_for(&server), ISBN13)
+    let meta = super::providers::googlebooks_lookup(&keyed_config_for(&server), ISBN13)
         .await
         .unwrap()
         .expect("bare-text fallback must resolve the ISBN");
@@ -422,6 +432,33 @@ async fn googlebooks_falls_back_to_bare_query_when_isbn_search_is_empty() {
     // Bare-text search may return a sibling edition; the meta must still carry
     // the *scanned* ISBN so a check-in stores the barcode that was scanned.
     assert_eq!(meta.isbn13, ISBN13);
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn googlebooks_lookup_skips_the_bare_query_without_a_key() {
+    // Keyless requests share Google's anonymous daily quota (#1614), so a
+    // field-search miss must stay a clean miss rather than doubling into a
+    // second request.
+    let server = MockServer::start().await;
+    mount_gb_q(
+        &server,
+        &format!("isbn:{ISBN13}"),
+        json!({ "totalItems": 0 }),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(GB_PATH))
+        .and(query_param("q", ISBN13))
+        .respond_with(ResponseTemplate::new(200).set_body_json(gb_hit()))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let meta = super::providers::googlebooks_lookup(&config_for(&server), ISBN13)
+        .await
+        .unwrap();
+    assert!(meta.is_none(), "keyless miss must not issue a bare query");
     server.verify().await;
 }
 
@@ -461,7 +498,7 @@ async fn googlebooks_double_miss_is_still_a_clean_miss() {
     .await;
     mount_gb_q(&server, ISBN13, json!({ "totalItems": 0 })).await;
 
-    let meta = super::providers::googlebooks_lookup(&config_for(&server), ISBN13)
+    let meta = super::providers::googlebooks_lookup(&keyed_config_for(&server), ISBN13)
         .await
         .unwrap();
     assert!(
@@ -492,7 +529,7 @@ async fn googlebooks_bare_query_failure_degrades_to_a_clean_miss() {
         .mount(&server)
         .await;
 
-    let meta = super::providers::googlebooks_lookup(&config_for(&server), ISBN13)
+    let meta = super::providers::googlebooks_lookup(&keyed_config_for(&server), ISBN13)
         .await
         .unwrap();
     assert!(meta.is_none(), "bare-query failure must degrade to a miss");
