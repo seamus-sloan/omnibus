@@ -19,6 +19,23 @@ fn inflight_downsyncs() -> &'static Mutex<HashSet<(i64, String)>> {
     INFLIGHT.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
+/// Removes its key from [`inflight_downsyncs`] on drop, not just on the
+/// task's normal-completion path — so a panic inside the task, or the task
+/// being aborted, still releases the key instead of permanently suppressing
+/// future downsyncs for it.
+struct InflightGuard {
+    key: (i64, String),
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        inflight_downsyncs()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.key);
+    }
+}
+
 /// What one materialization pass accomplished, for logs.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct DownsyncStats {
@@ -146,13 +163,10 @@ pub fn spawn_kobo_downsync(pool: SqlitePool, user_id: i64, book_uuid: String) {
         }
     }
     tokio::spawn(async move {
+        let _guard = InflightGuard { key };
         if let Err(e) = downsync_book_annotations(&pool, user_id, &book_uuid).await {
             tracing::warn!(user_id, book_uuid, error = %e, "annotation downsync failed");
         }
-        inflight_downsyncs()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&key);
     });
 }
 

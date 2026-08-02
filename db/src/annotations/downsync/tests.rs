@@ -287,7 +287,7 @@ async fn downsync_all_kobo_annotations_continues_past_a_failing_book_and_reports
         build_test_kepub(&[("c1.xhtml", KEPUB_C1)]),
     )
     .unwrap();
-    let _guard = EnvVarGuard::set("OMNIBUS_KEPUB_DIR", Some(kepub_dir.to_str().unwrap()));
+    let _guard = EnvVarGuard::set_os("OMNIBUS_KEPUB_DIR", Some(kepub_dir.as_os_str()));
     create_highlight(&pool, alice, &web_highlight(&uuid, WEB_CFI, None))
         .await
         .unwrap();
