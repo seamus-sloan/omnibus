@@ -192,6 +192,35 @@ fn list_pages_returns_images_in_natural_sort_order() {
 }
 
 #[test]
+fn list_pages_excludes_plain_dot_prefixed_names_same_as_appledouble_forks() {
+    let dir = make_test_dir("comic-pages-hidden-broad");
+    let path = write_cbz(
+        &dir,
+        "book.cbz",
+        &[
+            // The canonical case this filter was written for: a macOS
+            // AppleDouble resource fork sitting next to a real page.
+            ("__MACOSX/._page1.jpg", b"appledouble fork"),
+            // Not AppleDouble at all — a directory an archiver could
+            // plausibly name for real content — but excluded too, since
+            // `is_hidden_name` treats any leading dot as hidden.
+            (".chapter1/page1.jpg", b"legit dot-prefixed name"),
+            ("page1.jpg", b"real page"),
+        ],
+    );
+
+    let pages = list_pages(&path).unwrap();
+
+    assert_eq!(
+        pages,
+        vec!["page1.jpg"],
+        "both the AppleDouble fork and the plain dot-prefixed name are excluded"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn list_pages_excludes_hidden_entries_and_appledouble_forks() {
     let dir = make_test_dir("comic-pages-hidden");
     let path = write_cbz(

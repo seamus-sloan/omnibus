@@ -2027,6 +2027,59 @@ async fn api_get_ebook_page_returns_500_when_resolve_book_id_by_uuid_fails() {
     assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
+/// Drives `get_ebook_page`'s second `internal(...)` arm — the sibling of
+/// `api_get_ebook_file_returns_500_when_book_file_path_fails`: when
+/// `db::resolve_book_id_by_uuid` returns `Ok(Some(_))` but
+/// `db::book_file_path` returns `Err`, the handler must surface 500. Seed a
+/// book row so the first call succeeds, then drop `book_files` so the
+/// second call's JOIN errors out.
+#[tokio::test]
+async fn api_get_ebook_page_returns_500_when_book_file_path_fails() {
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
+        .bind("/lib")
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    let uuid = "66666666-6666-6666-6666-666666666666";
+    sqlx::query("INSERT INTO books (uuid, library_id, path, title) VALUES (?, ?, ?, 'B')")
+        .bind(uuid)
+        .bind(lib_id)
+        .bind("/lib")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // FKs off because `book_file_parts` references `book_files`; we want
+    // the single DROP to succeed without cascading further. PRAGMA + DROP
+    // pinned to a single connection — see the `/file` sibling test above
+    // for the rationale.
+    let mut conn = pool.acquire().await.unwrap();
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE book_files")
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    drop(conn);
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    let res = app
+        .oneshot(get_with_bearer(
+            &format!("/api/ebooks/{uuid}/pages/0"),
+            &token,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
 /// A `book_files` row that points at bytes which aren't a zip archive is a
 /// server-side failure, not a client error.
 #[tokio::test]
