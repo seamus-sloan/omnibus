@@ -98,7 +98,7 @@ fn gb_hit() -> serde_json::Value {
 // ── provider chain (AC1–AC3) ─────────────────────────────────────
 
 #[tokio::test]
-async fn lookup_resolves_via_open_library() {
+async fn search_by_isbn_resolves_via_open_library() {
     let server = MockServer::start().await;
     mount_ol(&server, ol_hit()).await;
 
@@ -115,7 +115,7 @@ async fn lookup_resolves_via_open_library() {
 }
 
 #[tokio::test]
-async fn lookup_falls_through_to_google_books_on_open_library_miss() {
+async fn search_by_isbn_falls_through_to_google_books_on_open_library_miss() {
     let server = MockServer::start().await;
     mount_ol(&server, json!({})).await; // empty body = ISBN unknown
     mount_gb(&server, gb_hit()).await;
@@ -136,7 +136,7 @@ async fn lookup_falls_through_to_google_books_on_open_library_miss() {
 }
 
 #[tokio::test]
-async fn lookup_falls_through_to_google_books_on_open_library_error() {
+async fn search_by_isbn_falls_through_to_google_books_on_open_library_error() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path(OL_PATH))
@@ -153,7 +153,7 @@ async fn lookup_falls_through_to_google_books_on_open_library_error() {
 }
 
 #[tokio::test]
-async fn lookup_prefers_google_books_when_a_key_is_configured() {
+async fn search_by_isbn_prefers_google_books_when_a_key_is_configured() {
     // Both providers would answer; the key makes Google Books the primary.
     let server = MockServer::start().await;
     mount_ol(&server, ol_hit()).await;
@@ -174,7 +174,7 @@ async fn lookup_prefers_google_books_when_a_key_is_configured() {
 }
 
 #[tokio::test]
-async fn lookup_prefers_open_library_when_no_key_is_configured() {
+async fn search_by_isbn_prefers_open_library_when_no_key_is_configured() {
     // The keyless default: Open Library leads even when Google Books would hit.
     let server = MockServer::start().await;
     mount_ol(&server, ol_hit()).await;
@@ -188,7 +188,7 @@ async fn lookup_prefers_open_library_when_no_key_is_configured() {
 }
 
 #[tokio::test]
-async fn lookup_with_key_falls_back_to_open_library_when_google_books_misses() {
+async fn search_by_isbn_with_key_falls_back_to_open_library_when_google_books_misses() {
     // Keyed Google Books is primary; on its miss the ladder still reaches
     // Open Library rather than giving up.
     let server = MockServer::start().await;
@@ -210,7 +210,7 @@ async fn lookup_with_key_falls_back_to_open_library_when_google_books_misses() {
 }
 
 #[tokio::test]
-async fn lookup_returns_unresolved_when_both_providers_miss() {
+async fn search_by_isbn_returns_unresolved_when_both_providers_miss() {
     let server = MockServer::start().await;
     mount_ol(&server, json!({})).await;
     mount_gb(&server, json!({ "totalItems": 0 })).await;
@@ -225,7 +225,7 @@ async fn lookup_returns_unresolved_when_both_providers_miss() {
 }
 
 #[tokio::test]
-async fn lookup_surfaces_provider_error_when_fallback_fails() {
+async fn search_by_isbn_surfaces_provider_error_when_fallback_fails() {
     let server = MockServer::start().await;
     mount_ol(&server, json!({})).await;
     Mock::given(method("GET"))
@@ -253,7 +253,7 @@ async fn lookup_surfaces_provider_error_when_fallback_fails() {
 }
 
 #[tokio::test]
-async fn lookup_rejects_invalid_isbn_without_calling_a_provider() {
+async fn search_by_isbn_rejects_invalid_isbn_without_calling_a_provider() {
     // No mocks mounted: if validation didn't short-circuit, the request would
     // 404 against the mock server and this would be a Provider error instead.
     let server = MockServer::start().await;
@@ -344,7 +344,7 @@ fn gb_search_hit() -> serde_json::Value {
                 ],
             }},
             // The same ISBN again (Google Books answers repeat editions):
-            // deduped away by `search_title`.
+            // deduped away by `search_provider_by_title`.
             { "volumeInfo": {
                 "title": "Effective Java (reprint)",
                 "authors": ["Joshua Bloch"],
@@ -375,7 +375,7 @@ async fn mount_gb_search(server: &MockServer, body: serde_json::Value) {
 }
 
 #[tokio::test]
-async fn search_title_maps_open_library_docs_and_skips_isbnless_ones() {
+async fn search_by_title_maps_open_library_docs_and_skips_isbnless_ones() {
     let server = MockServer::start().await;
     mount_ol_search(&server, ol_search_hit()).await;
 
@@ -398,7 +398,7 @@ async fn search_title_maps_open_library_docs_and_skips_isbnless_ones() {
 }
 
 #[tokio::test]
-async fn search_title_falls_through_to_google_books_when_open_library_is_empty() {
+async fn search_by_title_falls_through_to_google_books_when_open_library_is_empty() {
     let server = MockServer::start().await;
     mount_ol_search(&server, json!({ "docs": [] })).await;
     mount_gb_search(&server, gb_search_hit()).await;
@@ -413,7 +413,7 @@ async fn search_title_falls_through_to_google_books_when_open_library_is_empty()
 }
 
 #[tokio::test]
-async fn search_title_falls_through_to_google_books_on_open_library_error() {
+async fn search_by_title_falls_through_to_google_books_on_open_library_error() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path(OL_SEARCH_PATH))
@@ -429,7 +429,7 @@ async fn search_title_falls_through_to_google_books_on_open_library_error() {
 }
 
 #[tokio::test]
-async fn search_title_prefers_google_books_when_a_key_is_configured() {
+async fn search_by_title_prefers_google_books_when_a_key_is_configured() {
     let server = MockServer::start().await;
     mount_ol_search(&server, ol_search_hit()).await;
     mount_gb_search(&server, gb_search_hit()).await;
@@ -441,7 +441,7 @@ async fn search_title_prefers_google_books_when_a_key_is_configured() {
 }
 
 #[tokio::test]
-async fn search_title_returns_empty_when_both_providers_are_empty() {
+async fn search_by_title_returns_empty_when_both_providers_are_empty() {
     let server = MockServer::start().await;
     mount_ol_search(&server, json!({ "docs": [] })).await;
     mount_gb_search(&server, json!({ "totalItems": 0 })).await;
@@ -456,7 +456,7 @@ async fn search_title_returns_empty_when_both_providers_are_empty() {
 }
 
 #[tokio::test]
-async fn search_title_surfaces_provider_error_when_fallback_fails() {
+async fn search_by_title_surfaces_provider_error_when_fallback_fails() {
     let server = MockServer::start().await;
     mount_ol_search(&server, json!({ "docs": [] })).await;
     Mock::given(method("GET"))
@@ -472,7 +472,7 @@ async fn search_title_surfaces_provider_error_when_fallback_fails() {
 }
 
 #[tokio::test]
-async fn search_title_caps_the_candidate_list() {
+async fn search_by_title_caps_the_candidate_list() {
     let docs: Vec<serde_json::Value> = (0..20)
         .map(|i| {
             json!({

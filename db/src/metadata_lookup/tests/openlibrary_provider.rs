@@ -55,7 +55,7 @@ async fn mount_enrichment(server: &MockServer) {
 }
 
 #[tokio::test]
-async fn lookup_enriches_a_hit_with_series_and_first_publish_year() {
+async fn search_by_isbn_enriches_a_hit_with_series_and_first_publish_year() {
     let server = MockServer::start().await;
     mount_ol(&server, ol_hit()).await;
     mount_enrichment(&server).await;
@@ -71,7 +71,7 @@ async fn lookup_enriches_a_hit_with_series_and_first_publish_year() {
 }
 
 #[tokio::test]
-async fn lookup_enriches_a_google_books_hit_too() {
+async fn search_by_isbn_enriches_a_google_books_hit_too() {
     // Enrichment keys on the ISBN alone, so a Google Books resolution still
     // gets Open Library's series / first-publish fields.
     let server = MockServer::start().await;
@@ -89,7 +89,7 @@ async fn lookup_enriches_a_google_books_hit_too() {
 }
 
 #[tokio::test]
-async fn lookup_survives_enrichment_failure_with_fields_unset() {
+async fn search_by_isbn_survives_enrichment_failure_with_fields_unset() {
     // No enrichment endpoints mounted: both GETs 404. The lookup must still
     // resolve — enrichment is strictly best-effort.
     let server = MockServer::start().await;
