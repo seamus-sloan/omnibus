@@ -94,12 +94,10 @@ final class LibraryModel {
             group.addTask { @MainActor in
                 for await previews in UserDataService.shelfPreviews().values() {
                     guard self.loadToken == token else { return }
-                    // Only the user's own shelves belong on the landing rail; a
-                    // public shelf from another account is browsable but isn't
-                    // "yours".
-                    self.shelves = previews.filter {
-                        $0.shelf.bookCount > 0 || $0.shelf.kind != .wishlist
-                    }
+                    // Held unfiltered: which of these belong on the rail depends
+                    // on who is signed in, and the identity can confirm after
+                    // this read lands. `railShelves` decides at render.
+                    self.shelves = previews
                 }
             }
         }
@@ -143,6 +141,25 @@ final class LibraryModel {
         isOnline: Bool, isLoading: Bool, isLoadingMore: Bool, hasPaginated: Bool
     ) -> Bool {
         isOnline && !isLoading && !isLoadingMore && !hasPaginated
+    }
+
+    /// What the landing rail shows: your own shelves, minus a wishlist you have
+    /// never put anything on.
+    ///
+    /// `GET /api/shelves` answers with every shelf you are *allowed* to see —
+    /// other people's public ones, and for an admin everyone's. Those are still
+    /// reachable through All; the rail is yours. A nil id means the identity
+    /// hasn't confirmed yet (`setServer` reaches `.ready` before it does), and
+    /// showing the superset for that moment beats blanking a rail that is about
+    /// to be right.
+    nonisolated static func railShelves(
+        _ previews: [ShelfPreview], userId: Int64?
+    ) -> [ShelfPreview] {
+        previews.filter { preview in
+            let isOwn = userId.map { preview.shelf.ownerUserId == $0 } ?? true
+            let isUnusedWishlist = preview.shelf.kind == .wishlist && preview.shelf.bookCount == 0
+            return isOwn && !isUnusedWishlist
+        }
     }
 
     /// Re-reads the first page through the replica cache. `Cache.live` yields
@@ -212,6 +229,11 @@ struct LibraryView: View {
     // different vertical offset, which reads as "a different size" (#1481).
     private let columns = [GridItem(.adaptive(minimum: 112, maximum: 168), spacing: 16, alignment: .top)]
 
+    /// Named so a test can prove it resolves. A misspelt SF Symbol doesn't fail
+    /// to compile or warn — `Image(systemName:)` just draws nothing, so the
+    /// button would ship as an empty circle.
+    static let addGlyph = "plus.viewfinder"
+
     /// The library wears the colour of whatever you're currently reading.
     private var ambientTone: OKLCH? {
         model.resume.first.map { CoverIdentity($0.book).tone }
@@ -279,8 +301,8 @@ struct LibraryView: View {
     }
 
     /// Continue, then shelves, then the collection. Everything else that used
-    /// to sit here — a search pill, an add button, a category strip, a browse
-    /// row — moved to the tab that owns it, so the landing is mostly books.
+    /// to sit here — a search pill, a category strip, a browse row — moved to
+    /// the tab that owns it, so the landing is mostly books.
     private var content: some View {
         ScrollView {
             // Deliberately not a `LazyVStack`: it releases subviews that scroll
@@ -293,7 +315,7 @@ struct LibraryView: View {
                 Masthead(title: "Library") {
                     HStack(spacing: Spacing.sm) {
                         OfflinePill()
-                        filterMenu
+                        addButton
                     }
                 }
 
@@ -301,8 +323,8 @@ struct LibraryView: View {
                     ContinueHero(points: Array(model.resume.prefix(5)))
                 }
 
-                if !model.shelves.isEmpty {
-                    ShelvesRail(previews: Array(model.shelves.prefix(8))) {
+                if !railShelves.isEmpty {
+                    ShelvesRail(previews: Array(railShelves.prefix(8))) {
                         path.append(Destination.shelves)
                     }
                 }
@@ -341,15 +363,56 @@ struct LibraryView: View {
         }
     }
 
+    /// The rail is "your shelves", so it answers to who is signed in as well as
+    /// to what the server returned — and `app.user` can arrive after the read.
+    private var railShelves: [ShelfPreview] {
+        LibraryModel.railShelves(model.shelves, userId: app.user?.id)
+    }
+
+    /// The control sits here rather than in the masthead because this is the
+    /// heading it acts on: sort, direction and category all reshape the grid
+    /// directly below, and the label restates the category it's set to.
     private var sectionHeading: some View {
-        HStack(alignment: .firstTextBaseline, spacing: Spacing.sm) {
+        HStack(spacing: Spacing.sm) {
             Text(model.category == .all ? "All books" : model.category.label)
                 .font(.display(24))
                 .foregroundStyle(palette.ink0Color)
 
             Spacer(minLength: 0)
+
+            filterMenu
         }
         .screenPadding()
+    }
+
+    /// Upload or scan, from the screen the new book will land on. The You tab
+    /// keeps its own row into the same sheet — `MainTabView` owns the
+    /// presentation, so both entrances are the one sheet rather than two.
+    ///
+    /// The glyph names both of the sheet's actions: viewfinder brackets are the
+    /// camera affordance the barcode scanner needs to advertise, and the plus
+    /// inside them keeps the upload. A bare plus hid the scanner behind a sheet
+    /// nobody had a reason to open.
+    ///
+    /// The glyph carries the accent while the circle stays neutral: an
+    /// accent-*filled* circle is how `filterMenu` says "a filter is on", and
+    /// two filled circles side by side would read as one state.
+    private var addButton: some View {
+        Button {
+            Haptics.tap()
+            addSheetPresented = true
+        } label: {
+            Image(systemName: Self.addGlyph)
+                .font(.system(size: 17, weight: .regular))
+                .foregroundStyle(palette.accentColor)
+                .frame(width: 32, height: 32)
+                .background(Circle().fill(palette.bg2Color))
+                .overlay(Circle().strokeBorder(palette.line2.color, lineWidth: 0.5))
+        }
+        .buttonStyle(PressableStyle())
+        // Says what the sheet offers, since the glyph now implies a camera and
+        // VoiceOver would otherwise announce only half of it.
+        .accessibilityLabel("Add books by upload or barcode scan")
     }
 
     /// One control for everything that shapes the grid. Sort and format used to
