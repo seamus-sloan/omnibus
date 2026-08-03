@@ -1,5 +1,6 @@
-//! Tests for the shared quote-card editor: SSR render of the panel and the
-//! luminance-based ink picker behind the custom background swatch.
+//! Tests for the shared quote-card editor: SSR render of the panel, the
+//! luminance-based ink picker behind the custom background swatch, and the
+//! typeface/size token lookups that style the preview.
 
 use super::*;
 use crate::test_support::render_in_vdom;
@@ -31,6 +32,59 @@ fn quote_card_panel_renders_the_preview_controls_and_export_actions() {
     assert!(html.contains("data-testid=\"quote-download\""));
     assert!(html.contains("data-testid=\"quote-copy-image\""));
     assert!(html.contains("data-testid=\"quote-share\""));
+}
+
+#[test]
+fn quote_card_panel_renders_the_typography_controls() {
+    let html = render_in_vdom(panel);
+    for label in ["Font", "Size", "Style"] {
+        assert!(html.contains(label), "missing {label} control");
+    }
+    for chip in ["Serif", "Sans", "Mono", "Bold", "Italic"] {
+        assert!(html.contains(chip), "missing {chip} chip");
+    }
+    // Defaults: serif face on the card, medium italic body.
+    assert!(html.contains("font-family:var(--serif)"));
+    assert!(html.contains("font-size:22px; font-weight:400; font-style:italic"));
+}
+
+#[test]
+fn quote_card_chip_rows_expose_their_selection_via_aria_pressed() {
+    // The `on` class is the only *visual* selection cue, so without this the
+    // choice is invisible to assistive tech. Every chip row carries it.
+    let html = render_in_vdom(panel);
+    assert_eq!(html.matches("aria-pressed=\"true\"").count(), 4);
+    for label in ["Font", "Text size", "Style", "Aspect ratio"] {
+        assert!(
+            html.contains(&format!("aria-label=\"{label}\"")),
+            "chip row {label} is unlabelled"
+        );
+    }
+}
+
+#[test]
+fn quote_card_panel_drops_the_composer_action() {
+    // The disabled "Open in composer" placeholder was removed — a disabled
+    // control that never activates is noise in an otherwise live panel.
+    let html = render_in_vdom(panel);
+    assert!(!html.contains("composer"));
+}
+
+#[test]
+fn font_css_maps_every_token_and_falls_back_to_serif() {
+    assert_eq!(font_css("serif"), "var(--serif)");
+    assert_eq!(font_css("sans"), "var(--sans)");
+    assert_eq!(font_css("mono"), "var(--mono)");
+    // An unknown token must land on the card's designed default, not panic.
+    assert_eq!(font_css("cursive"), "var(--serif)");
+}
+
+#[test]
+fn size_css_maps_every_token_and_falls_back_to_medium() {
+    assert_eq!(size_css("s"), "18px");
+    assert_eq!(size_css("m"), "22px");
+    assert_eq!(size_css("l"), "27px");
+    assert_eq!(size_css("xl"), "22px");
 }
 
 #[test]

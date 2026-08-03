@@ -939,6 +939,23 @@ test("opens the quote-card editor in a modal and closes it again", async ({
   ).toBeVisible();
   await expect(modal).toContainText(quote);
   await expect(modal.getByTestId("quote-download")).toBeVisible();
+  await expect(modal.getByTestId("quote-copy-image")).toBeVisible();
+
+  // Typography controls restyle the preview in place — no request fires, so
+  // assert the rendered card rather than a network contract.
+  const preview = modal.getByTestId("quote-preview");
+  const previewBody = modal.getByTestId("quote-preview-body");
+  await expect(preview).toHaveCSS("font-family", /Instrument Serif/);
+  await modal.getByRole("button", { name: "Sans", exact: true }).click();
+  await expect(preview).toHaveCSS("font-family", /Geist/);
+
+  await expect(previewBody).toHaveCSS("font-style", "italic");
+  await modal.getByRole("button", { name: "Italic", exact: true }).click();
+  await expect(previewBody).toHaveCSS("font-style", "normal");
+  await modal.getByRole("button", { name: "Bold", exact: true }).click();
+  await expect(previewBody).toHaveCSS("font-weight", "700");
+  await modal.getByRole("button", { name: "L", exact: true }).click();
+  await expect(previewBody).toHaveCSS("font-size", "27px");
 
   // Close via the X — no mutation fires; the card stays listed.
   await modal.getByRole("button", { name: "Close" }).click();

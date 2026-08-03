@@ -12,7 +12,9 @@
  *                                   download fallback
  *   copyQuoteCardImage(json)        canvas PNG → clipboard, download fallback
  *
- * `json` is { text, author, subtitle, bg, ink, ratio, filename }.
+ * `json` is { text, author, subtitle, bg, ink, ratio, font, size, bold,
+ * italic, filename } — `font`/`size` are the editor's tokens, mapped to the
+ * canvas stacks and scales below.
  *
  * Native-share shim (optional; mobile shell only): when
  * `window.__omnibusOnShareImage` is defined, shareQuoteCard routes here
@@ -23,19 +25,59 @@
 (function () {
   "use strict";
 
+  // Canvas mirrors of the editor's `font` tokens. `primary` is the single
+  // family document.fonts.load() is asked for; `stack` is what ctx.font gets.
+  var FONTS = {
+    serif: { primary: "'Instrument Serif'", stack: "'Instrument Serif', 'EB Garamond', Georgia, serif" },
+    sans: { primary: "'Geist'", stack: "'Geist', ui-sans-serif, system-ui, sans-serif" },
+    mono: { primary: "'Geist Mono'", stack: "'Geist Mono', ui-monospace, monospace" },
+  };
+  // Canvas mirrors of the editor's `size` tokens, relative to the card width.
+  var SIZES = { s: 0.82, m: 1, l: 1.24 };
+
+  function fontFor(o) {
+    return FONTS[o.font] || FONTS.serif;
+  }
+
+  function fontSpec(px, family, weight, italic) {
+    return (italic ? "italic " : "") + weight + " " + px + "px " + family;
+  }
+
+  // A webfont the document hasn't loaded yet silently falls back to a system
+  // face mid-draw — and measureText would wrap against the wrong metrics — so
+  // every face this card needs is resolved before the first measurement.
+  // Failures resolve too: a fallback export beats no export.
+  function withFonts(specs, done) {
+    if (!document.fonts || typeof document.fonts.load !== "function") return done();
+    try {
+      // Already-loaded is the norm — the preview on screen is rendering in
+      // these very faces — so stay synchronous when we can, which keeps the
+      // copy action inside the click's user-activation window.
+      if (
+        typeof document.fonts.check === "function" &&
+        specs.every(function (s) {
+          return document.fonts.check(s);
+        })
+      ) {
+        return done();
+      }
+      Promise.all(
+        specs.map(function (s) {
+          return document.fonts.load(s);
+        }),
+      ).then(done, done);
+    } catch (e) {
+      done();
+    }
+  }
+
   // Draw the quote card onto an offscreen canvas — the shared renderer behind
   // the export / share / copy actions. Drawn directly (rather than
   // rasterizing DOM) because the card is a fixed, bespoke layout — a solid
-  // background, an italic serif quote, and an attribution footer — so
-  // hand-drawing yields crisp output with no heavyweight DOM-capture
-  // dependency. Returns null on a bad payload.
-  function renderQuoteCanvas(json) {
-    var o;
-    try {
-      o = JSON.parse(json);
-    } catch (e) {
-      return null;
-    }
+  // background, a serif quote, and an attribution footer — so hand-drawing
+  // yields crisp output with no heavyweight DOM-capture dependency.
+  // Returns null when the canvas context is unavailable.
+  function drawQuoteCanvas(o) {
     var ratios = { "1:1": [1080, 1080], "4:5": [1080, 1350], "9:16": [1080, 1920], "3:4": [1080, 1440] };
     var dim = ratios[o.ratio] || ratios["1:1"];
     var W = dim[0], H = dim[1];
@@ -56,10 +98,11 @@
     ctx.fillText("OMNIBUS · QUOTE", pad, pad);
     ctx.globalAlpha = 1;
 
-    // Quote body — word-wrapped italic serif.
+    // Quote body — word-wrapped in the editor's chosen face/size/weight.
+    var face = fontFor(o);
     var quote = "“" + (o.text || "") + "”";
-    var fontPx = Math.round(W * 0.052);
-    ctx.font = "italic " + fontPx + "px Georgia, 'Times New Roman', serif";
+    var fontPx = Math.round(W * 0.052 * (SIZES[o.size] || 1));
+    ctx.font = fontSpec(fontPx, face.stack, o.bold ? 700 : 400, o.italic);
     var maxW = W - pad * 2;
     var words = quote.split(/\s+/);
     var lines = [];
@@ -87,10 +130,33 @@
     ctx.fillRect(pad, footY - Math.round(W * 0.02), W - pad * 2, 2);
     ctx.font = Math.round(W * 0.022) + "px ui-sans-serif, system-ui, sans-serif";
     ctx.fillText((o.author || "").toUpperCase(), pad, footY);
-    ctx.font = "italic " + Math.round(W * 0.026) + "px Georgia, serif";
+    ctx.font = fontSpec(Math.round(W * 0.026), face.stack, 400, true);
     ctx.fillText(o.subtitle || "", pad, footY + Math.round(W * 0.035));
     ctx.globalAlpha = 1;
     return { canvas: canvas, name: (o.filename || "omnibus-quote") + ".png", title: o.subtitle || "Quote" };
+  }
+
+  // Parse, load the faces, then draw — `cb` receives the drawn canvas, or is
+  // never called on a bad payload or a missing 2D context.
+  function renderQuoteCanvas(json, cb) {
+    var o;
+    try {
+      o = JSON.parse(json);
+    } catch (e) {
+      return;
+    }
+    var face = fontFor(o);
+    var px = Math.round(1080 * 0.052 * (SIZES[o.size] || 1));
+    withFonts(
+      [
+        fontSpec(px, face.primary, o.bold ? 700 : 400, o.italic),
+        fontSpec(Math.round(1080 * 0.026), face.primary, 400, true),
+      ],
+      function () {
+        var r = drawQuoteCanvas(o);
+        if (r) cb(r);
+      },
+    );
   }
 
   function downloadBlob(blob, name) {
@@ -107,12 +173,12 @@
   }
 
   function exportQuoteCard(json) {
-    var r = renderQuoteCanvas(json);
-    if (!r) return;
-    r.canvas.toBlob(function (blob) {
-      if (!blob) return;
-      downloadBlob(blob, r.name);
-    }, "image/png");
+    renderQuoteCanvas(json, function (r) {
+      r.canvas.toBlob(function (blob) {
+        if (!blob) return;
+        downloadBlob(blob, r.name);
+      }, "image/png");
+    });
   }
 
   // Native share sheet with the rendered PNG. The mobile shell's
@@ -120,56 +186,56 @@
   // Share API — Rust presents the real sheet); after that, Web Share where it
   // can take files, then a plain download (desktop browsers, older WebViews).
   function shareQuoteCard(json) {
-    var r = renderQuoteCanvas(json);
-    if (!r) return;
-    if (typeof window.__omnibusOnShareImage === "function") {
-      try {
-        window.__omnibusOnShareImage(JSON.stringify({
-          name: r.name,
-          dataUrl: r.canvas.toDataURL("image/png"),
-        }));
-      } catch (e) {
-        /* ignore handler errors */
-      }
-      return;
-    }
-    r.canvas.toBlob(function (blob) {
-      if (!blob) return;
-      try {
-        var f = new File([blob], r.name, { type: "image/png" });
-        if (navigator.canShare && navigator.canShare({ files: [f] })) {
-          navigator.share({ files: [f], title: r.title }).catch(function () {
-            /* user dismissed the sheet */
-          });
-          return;
+    renderQuoteCanvas(json, function (r) {
+      if (typeof window.__omnibusOnShareImage === "function") {
+        try {
+          window.__omnibusOnShareImage(JSON.stringify({
+            name: r.name,
+            dataUrl: r.canvas.toDataURL("image/png"),
+          }));
+        } catch (e) {
+          /* ignore handler errors */
         }
-      } catch (e) {
-        /* File/Web Share unsupported */
+        return;
       }
-      downloadBlob(blob, r.name);
-    }, "image/png");
+      r.canvas.toBlob(function (blob) {
+        if (!blob) return;
+        try {
+          var f = new File([blob], r.name, { type: "image/png" });
+          if (navigator.canShare && navigator.canShare({ files: [f] })) {
+            navigator.share({ files: [f], title: r.title }).catch(function () {
+              /* user dismissed the sheet */
+            });
+            return;
+          }
+        } catch (e) {
+          /* File/Web Share unsupported */
+        }
+        downloadBlob(blob, r.name);
+      }, "image/png");
+    });
   }
 
   // Copy the rendered PNG to the clipboard; falls back to a download when
   // ClipboardItem is unavailable.
   function copyQuoteCardImage(json) {
-    var r = renderQuoteCanvas(json);
-    if (!r) return;
-    r.canvas.toBlob(function (blob) {
-      if (!blob) return;
-      try {
-        if (navigator.clipboard && window.ClipboardItem) {
-          var item = new ClipboardItem({ "image/png": blob });
-          navigator.clipboard.write([item]).catch(function () {
-            downloadBlob(blob, r.name);
-          });
-          return;
+    renderQuoteCanvas(json, function (r) {
+      r.canvas.toBlob(function (blob) {
+        if (!blob) return;
+        try {
+          if (navigator.clipboard && window.ClipboardItem) {
+            var item = new ClipboardItem({ "image/png": blob });
+            navigator.clipboard.write([item]).catch(function () {
+              downloadBlob(blob, r.name);
+            });
+            return;
+          }
+        } catch (e) {
+          /* ClipboardItem unsupported */
         }
-      } catch (e) {
-        /* ClipboardItem unsupported */
-      }
-      downloadBlob(blob, r.name);
-    }, "image/png");
+        downloadBlob(blob, r.name);
+      }, "image/png");
+    });
   }
 
   window.OmnibusQuoteCard = {
