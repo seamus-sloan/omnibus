@@ -83,80 +83,99 @@ struct CheckInView: View {
 
     // MARK: - Scanning
 
+    /// Scrolls because a title search lands up to `SEARCH_LIMIT` (8) candidate
+    /// rows beneath a 300pt camera view, and because the keyboard covers both
+    /// fields the moment either is tapped. The outcome screen already scrolls
+    /// for the same reason.
     private var scannerSection: some View {
-        VStack(spacing: Spacing.lg) {
-            if scannerAvailable {
-                BarcodeScannerView { code in
-                    guard !isResolving else { return }
-                    Haptics.success()
-                    Task { await resolve(code) }
+        ScrollView {
+            VStack(spacing: Spacing.lg) {
+                if scannerAvailable {
+                    BarcodeScannerView { code in
+                        guard !isResolving else { return }
+                        Haptics.success()
+                        Task { await resolve(code) }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 300)
+                    .clipShape(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
+                            .strokeBorder(palette.lineColor, lineWidth: 1)
+                    )
+                    // VisionKit's guidance text ("Find nearby barcodes") isn't
+                    // customizable, so guidance is disabled and drawn here instead.
+                    .overlay(alignment: .top) {
+                        Text("Move barcode into view")
+                            .font(.ui(13, weight: .medium))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, Spacing.md)
+                            .padding(.vertical, 6)
+                            .background(Capsule().fill(.black.opacity(0.55)))
+                            .padding(.top, Spacing.md)
+                    }
+                    .screenPadding()
+                    .padding(.top, Spacing.lg)
+
+                    Text("Point the camera at the book's barcode.")
+                        .font(.ui(13))
+                        .foregroundStyle(palette.ink2Color)
+                } else {
+                    EmptyStateView(
+                        icon: "barcode.viewfinder",
+                        title: "Camera unavailable",
+                        message: "Enter the book's details by hand instead."
+                    )
                 }
-                .frame(maxWidth: .infinity)
-                .frame(height: 300)
-                .clipShape(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
-                        .strokeBorder(palette.lineColor, lineWidth: 1)
-                )
-                // VisionKit's guidance text ("Find nearby barcodes") isn't
-                // customizable, so guidance is disabled and drawn here instead.
-                .overlay(alignment: .top) {
-                    Text("Move barcode into view")
+
+                // Either field alone is enough, so both are offered up front rather
+                // than making a title search something you reach only by failing an
+                // ISBN first: plenty of copies — old paperbacks, book-club editions
+                // — carry a barcode no ISBN index knows.
+                VStack(alignment: .leading, spacing: Spacing.sm) {
+                    Text("Or enter book details")
                         .font(.ui(13, weight: .medium))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, Spacing.md)
-                        .padding(.vertical, 6)
-                        .background(Capsule().fill(.black.opacity(0.55)))
-                        .padding(.top, Spacing.md)
+                        .foregroundStyle(palette.ink2Color)
+                    isbnField
+                    titleField(placeholder: "Book Title (Optional)")
+                    searchResultsList
                 }
                 .screenPadding()
-                .padding(.top, Spacing.lg)
 
-                Text("Point the camera at the book's barcode.")
-                    .font(.ui(13))
-                    .foregroundStyle(palette.ink2Color)
-            } else {
-                EmptyStateView(
-                    icon: "barcode.viewfinder",
-                    title: "Camera unavailable",
-                    message: "Enter the ISBN by hand instead."
-                )
-            }
-
-            VStack(alignment: .leading, spacing: Spacing.sm) {
-                Text("Or enter an ISBN")
-                    .font(.ui(13, weight: .medium))
-                    .foregroundStyle(palette.ink2Color)
-                HStack {
-                    TextField("9780000000000", text: $manualISBN)
-                        .textFieldStyle(OmnibusFieldStyle())
-                        .keyboardType(.numbersAndPunctuation)
-                        .autocorrectionDisabled()
-                        .submitLabel(.search)
-                        .onSubmit { Task { await resolve(manualISBN) } }
-                    Button {
-                        Task { await resolve(manualISBN) }
-                    } label: {
-                        if isResolving {
-                            ProgressView()
-                        } else {
-                            Image(systemName: "arrow.right.circle.fill").font(.system(size: 26))
-                        }
-                    }
-                    .disabled(manualISBN.count < 10 || isResolving)
-                    .foregroundStyle(palette.accentColor)
+                if let error {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.ui(13))
+                        .foregroundStyle(palette.badColor)
+                        .screenPadding()
                 }
             }
-            .screenPadding()
+            .padding(.bottom, Spacing.lg)
+        }
+        .scrollIndicators(.hidden)
+    }
 
-            if let error {
-                Label(error, systemImage: "exclamationmark.triangle")
-                    .font(.ui(13))
-                    .foregroundStyle(palette.badColor)
-                    .screenPadding()
+    /// Names one edition, so it takes the precise `resolve` path rather than the
+    /// provider title search.
+    private var isbnField: some View {
+        HStack {
+            TextField("ISBN (13 digit) (Optional)", text: $manualISBN)
+                .textFieldStyle(OmnibusFieldStyle())
+                .keyboardType(.numbersAndPunctuation)
+                .autocorrectionDisabled()
+                .submitLabel(.search)
+                .onSubmit { Task { await resolve(manualISBN) } }
+            Button {
+                Task { await resolve(manualISBN) }
+            } label: {
+                if isResolving {
+                    ProgressView()
+                } else {
+                    Image(systemName: "arrow.right.circle.fill").font(.system(size: 26))
+                }
             }
-
-            Spacer()
+            .disabled(manualISBN.count < 10 || isResolving)
+            .foregroundStyle(palette.accentColor)
+            .accessibilityLabel("Look up ISBN")
         }
     }
 
@@ -314,41 +333,56 @@ struct CheckInView: View {
             Text("Or search by title")
                 .font(.ui(13, weight: .medium))
                 .foregroundStyle(palette.ink2Color)
-            HStack {
-                TextField("The Name of the Wind", text: $searchQuery)
-                    .textFieldStyle(OmnibusFieldStyle())
-                    .autocorrectionDisabled()
-                    .submitLabel(.search)
-                    .onSubmit { Task { await search() } }
-                Button {
-                    Task { await search() }
-                } label: {
-                    if isSearching {
-                        ProgressView()
-                    } else {
-                        Image(systemName: "magnifyingglass.circle.fill").font(.system(size: 26))
-                    }
-                }
-                .disabled(searchQuery.nilIfBlank == nil || isSearching)
-                .foregroundStyle(palette.accentColor)
-            }
-            if let results = searchResults {
-                if results.isEmpty {
-                    Text("No books match that title. Check the spelling, or try just the main title.")
-                        .font(.ui(13))
-                        .foregroundStyle(palette.ink2Color)
+            titleField(placeholder: "The Name of the Wind")
+            searchResultsList
+        }
+    }
+
+    /// One field and one results list, shared by the scanner page and this
+    /// fallback — they drive the same `search`, so a second copy would be two
+    /// things to keep in step. Only the placeholder differs: on the scanner page
+    /// the title sits beside an ISBN box and is genuinely optional, here it is
+    /// the only way forward, so an example query coaches better than "optional".
+    private func titleField(placeholder: String) -> some View {
+        HStack {
+            TextField(placeholder, text: $searchQuery)
+                .textFieldStyle(OmnibusFieldStyle())
+                .autocorrectionDisabled()
+                .submitLabel(.search)
+                .onSubmit { Task { await search() } }
+            Button {
+                Task { await search() }
+            } label: {
+                if isSearching {
+                    ProgressView()
                 } else {
-                    VStack(spacing: Spacing.sm) {
-                        ForEach(results, id: \.isbn13) { meta in
-                            Button {
-                                Task { await resolvePick(meta) }
-                            } label: {
-                                searchResultRow(meta)
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(isResolving)
-                            .opacity(isResolving ? 0.55 : 1)
+                    Image(systemName: "magnifyingglass.circle.fill").font(.system(size: 26))
+                }
+            }
+            .disabled(searchQuery.nilIfBlank == nil || isSearching)
+            .foregroundStyle(palette.accentColor)
+            .accessibilityLabel("Search by title")
+        }
+    }
+
+    @ViewBuilder
+    private var searchResultsList: some View {
+        if let results = searchResults {
+            if results.isEmpty {
+                Text("No books match that title. Check the spelling, or try just the main title.")
+                    .font(.ui(13))
+                    .foregroundStyle(palette.ink2Color)
+            } else {
+                VStack(spacing: Spacing.sm) {
+                    ForEach(results, id: \.isbn13) { meta in
+                        Button {
+                            Task { await resolvePick(meta) }
+                        } label: {
+                            searchResultRow(meta)
                         }
+                        .buttonStyle(.plain)
+                        .disabled(isResolving)
+                        .opacity(isResolving ? 0.55 : 1)
                     }
                 }
             }
