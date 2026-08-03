@@ -564,6 +564,11 @@ struct CheckInView: View {
     /// Search the providers by title — the unresolved screen's fallback.
     private func search() async {
         guard let query = searchQuery.nilIfBlank, !isSearching else { return }
+        // A resolve can land while this request is still in flight — guard the
+        // assignment on the stage/query at request time so a late response
+        // can't reintroduce the stale-search bug `resolve(_:)` clears against.
+        let startedStage = stage
+        let startedQuery = query
         isSearching = true
         error = nil
         defer { isSearching = false }
@@ -571,6 +576,12 @@ struct CheckInView: View {
             let response: ScanSearchResponse = try await APIClient.shared.post(
                 "/api/scan/search", body: ScanSearchRequest(query: query)
             )
+            guard
+                CheckInFlow.searchResponseShouldApply(
+                    startedStage: startedStage, currentStage: stage,
+                    startedQuery: startedQuery, currentQuery: searchQuery
+                )
+            else { return }
             searchResults = response.results
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription

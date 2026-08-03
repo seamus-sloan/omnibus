@@ -95,6 +95,18 @@ enum CheckInFlow {
         return false
     }
 
+    /// A title search is a separate in-flight request that can outlive a
+    /// resolve landing elsewhere (or a restart, or a newer keystroke) —
+    /// its response must only apply if the stage and query it was asked
+    /// with are still current, or a late answer reintroduces the same
+    /// stale-search bug `resolveShouldClearSearch` guards against.
+    static func searchResponseShouldApply(
+        startedStage: CheckInStage, currentStage: CheckInStage,
+        startedQuery: String, currentQuery: String
+    ) -> Bool {
+        startedStage == currentStage && startedQuery == currentQuery
+    }
+
     /// Outcomes whose card links straight to the book's detail page.
     static func detailUUID(for outcome: ScanOutcome) -> String? {
         switch outcome {
