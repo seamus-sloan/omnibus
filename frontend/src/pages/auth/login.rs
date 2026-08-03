@@ -170,19 +170,44 @@ pub fn LoginPage() -> Element {
     out
 }
 
+/// Props for the [`MobileLoginForm`] component — mirrors [`LoginFormProps`]
+/// (the web path already groups the same fields) with `host` added and
+/// `keep_signed_in` dropped, since the mobile design omits that control.
+#[cfg(feature = "mobile")]
+#[derive(Props, Clone, PartialEq)]
+struct MobileLoginFormProps {
+    /// Host the login targets, shown in the connected-to bar.
+    host: String,
+    /// Username input value, shared with the parent.
+    username: Signal<String>,
+    /// Password input value, shared with the parent.
+    password: Signal<String>,
+    /// Current submission error, if any.
+    error: Signal<Option<String>>,
+    /// True while a login request is in flight.
+    submitting: Signal<bool>,
+    /// Whether self-registration is open; `None` until the probe answers.
+    registration_open: Signal<Option<bool>>,
+    /// Fired on form submission (submit-button click or Enter).
+    on_submit: EventHandler<FormEvent>,
+    /// Fired on Enter keydown in either input.
+    on_keydown: EventHandler<Event<KeyboardData>>,
+}
+
 /// Mobile login body: connected-server bar plus the credentials form.
 #[cfg(feature = "mobile")]
 #[component]
-fn MobileLoginForm(
-    host: String,
-    mut username: Signal<String>,
-    mut password: Signal<String>,
-    error: Signal<Option<String>>,
-    submitting: Signal<bool>,
-    registration_open: Signal<Option<bool>>,
-    on_submit: EventHandler<FormEvent>,
-    on_keydown: EventHandler<Event<KeyboardData>>,
-) -> Element {
+fn MobileLoginForm(props: MobileLoginFormProps) -> Element {
+    let MobileLoginFormProps {
+        host,
+        mut username,
+        mut password,
+        error,
+        submitting,
+        registration_open,
+        on_submit,
+        on_keydown,
+    } = props;
     let nav = use_navigator();
     rsx! {
         // Connected-to bar: shows which server this login targets, with a

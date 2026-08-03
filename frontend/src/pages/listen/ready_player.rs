@@ -14,7 +14,7 @@ use super::bookmarks_drawer::BookmarksDrawer;
 use super::chapter_nav::{chapter_index_for_elapsed, chapter_next_target, chapter_prev_target};
 use super::chapters_drawer::ChaptersDrawer;
 use super::overlays::{FailedOverlay, PreparingOverlay};
-use super::sleep::{end_of_chapter_seconds, sleep_toolbar_label, use_sleep, SleepChoice};
+use super::sleep::{end_of_chapter_seconds, sleep_toolbar_label, use_sleep};
 use super::sleep_panel::{SleepPanel, SleepPanelState};
 use super::speed_panel::SpeedPanel;
 use super::stage::{
@@ -139,11 +139,14 @@ pub(super) fn ReadyPlayer(
     // Reactive sleep-timer reads — re-render the toolbar label + panel live.
     let sleep_remaining = (sleep.remaining)();
     let sleep_active = matches!(sleep_remaining, Some(s) if s > 0);
-    let sleep_display = SleepDisplay {
+    let sleep_state = SleepPanelState {
         remaining: sleep_remaining,
         choice: (sleep.choice)(),
         fade: (sleep.fade)(),
         has_chapters: !chs.is_empty(),
+        on_select: EventHandler::new(on_sleep_select),
+        on_end_of_chapter: EventHandler::new(on_sleep_end_of_chapter),
+        on_toggle_fade: EventHandler::new(on_sleep_toggle_fade),
     };
     let bookmark_toast = (bookmarks.toast)();
     let current_user = crate::use_current_user_summary();
@@ -162,38 +165,64 @@ pub(super) fn ReadyPlayer(
             }
 
             PlayerStageBinding {
-                book: book.clone(),
-                title,
-                author,
+                book_meta: BookMeta { book: book.clone(), title, author },
                 signals,
                 panes,
-                chapters,
-                current_chapter_index,
-                sleep_active: sleep_active || sleep_panel_open(),
-                sleep_label: sleep_toolbar_label(sleep_remaining),
-                on_chapter_seek: EventHandler::new(on_chapter_seek),
+                chapter_state: ChapterSignals {
+                    chapters,
+                    current_chapter_index,
+                    on_chapter_seek: EventHandler::new(on_chapter_seek),
+                },
+                sleep_toolbar: SleepToolbarState {
+                    active: sleep_active || sleep_panel_open(),
+                    label: sleep_toolbar_label(sleep_remaining),
+                },
             }
 
             PlayerOverlays {
                 panes,
-                uuid: uuid.clone(),
-                rate,
-                rate_error,
-                user_id,
-                sleep_display,
-                bookmarks,
-                bookmark_toast,
-                chapters: chs.clone(),
-                current_chapter_index: ch_idx,
-                elapsed: elapsed(),
-                on_chapter_seek: EventHandler::new(on_chapter_seek),
-                on_sleep_select: EventHandler::new(on_sleep_select),
-                on_sleep_end_of_chapter: EventHandler::new(on_sleep_end_of_chapter),
-                on_sleep_toggle_fade: EventHandler::new(on_sleep_toggle_fade),
-                on_bookmark_add: EventHandler::new(on_bookmark_add),
+                speed: SpeedPanelData { rate, rate_error, user_id, uuid: uuid.clone() },
+                sleep_state,
+                bookmark: BookmarkPanelData {
+                    controller: bookmarks,
+                    toast: bookmark_toast,
+                    on_add: EventHandler::new(on_bookmark_add),
+                },
+                chapter_nav: ChapterNavData {
+                    chapters: chs.clone(),
+                    current_chapter_index: ch_idx,
+                    elapsed: elapsed(),
+                    on_seek: EventHandler::new(on_chapter_seek),
+                },
             }
         }
     }
+}
+
+/// Book identity fields for [`PlayerStageBinding`]'s content pane. Grouped
+/// so the binding component stays under the prop cap.
+#[derive(Clone, PartialEq)]
+pub(super) struct BookMeta {
+    pub book: EbookMetadata,
+    pub title: String,
+    pub author: String,
+}
+
+/// Chapter list, derived current-chapter index, and the shared seek handler.
+/// Grouped so [`PlayerStageBinding`] stays under the prop cap.
+#[derive(Clone, PartialEq)]
+pub(super) struct ChapterSignals {
+    pub chapters: Signal<Vec<ChapterInfo>>,
+    pub current_chapter_index: Memo<usize>,
+    pub on_chapter_seek: EventHandler<f64>,
+}
+
+/// Sleep-toolbar badge state: lit or not, and its countdown/preset label.
+/// Grouped so [`PlayerStageBinding`] stays under the prop cap.
+#[derive(Clone, PartialEq)]
+pub(super) struct SleepToolbarState {
+    pub active: bool,
+    pub label: String,
 }
 
 /// Assemble the transport + toolbar handlers and derived display values, then
@@ -201,17 +230,27 @@ pub(super) fn ReadyPlayer(
 /// the mutually-exclusive toolbar toggles.
 #[component]
 pub(super) fn PlayerStageBinding(
-    book: EbookMetadata,
-    title: String,
-    author: String,
+    book_meta: BookMeta,
     signals: PlaybackSignals,
     panes: OverlayPanes,
-    chapters: Signal<Vec<ChapterInfo>>,
-    current_chapter_index: Memo<usize>,
-    sleep_active: bool,
-    sleep_label: String,
-    on_chapter_seek: EventHandler<f64>,
+    chapter_state: ChapterSignals,
+    sleep_toolbar: SleepToolbarState,
 ) -> Element {
+    let BookMeta {
+        book,
+        title,
+        author,
+    } = book_meta;
+    let ChapterSignals {
+        chapters,
+        current_chapter_index,
+        on_chapter_seek,
+    } = chapter_state;
+    let SleepToolbarState {
+        active: sleep_active,
+        label: sleep_label,
+    } = sleep_toolbar;
+
     let duration = signals.duration;
     let elapsed = signals.elapsed;
     let playing = signals.playing;
@@ -332,42 +371,70 @@ pub(super) struct OverlayPanes {
     pub chapters_open: Signal<bool>,
 }
 
-/// Reactive sleep-timer values rendered by the sleep panel.
-#[derive(Copy, Clone, PartialEq)]
-pub(super) struct SleepDisplay {
-    pub remaining: Option<i32>,
-    pub choice: SleepChoice,
-    pub fade: bool,
-    pub has_chapters: bool,
+/// Rate + user context needed to open [`SpeedPanel`] — mirrors that panel's
+/// own prop list (minus `on_close`). Grouped so [`PlayerOverlays`] stays
+/// under the prop cap.
+#[derive(Clone, PartialEq)]
+pub(super) struct SpeedPanelData {
+    pub rate: Signal<f64>,
+    pub rate_error: Signal<Option<String>>,
+    pub user_id: Option<i64>,
+    pub uuid: String,
+}
+
+/// Bookmark controller, pending save-toast, and the "add bookmark" handler.
+/// Grouped so [`PlayerOverlays`] stays under the prop cap.
+#[derive(Clone, PartialEq)]
+pub(super) struct BookmarkPanelData {
+    pub controller: super::bookmarks::BookmarksController,
+    pub toast: Option<super::bookmarks::BookmarkToast>,
+    pub on_add: EventHandler<()>,
+}
+
+/// Chapter list, current position, and the seek handler shared by the
+/// bookmarks/chapters drawers. Grouped so [`PlayerOverlays`] stays under the
+/// prop cap.
+#[derive(Clone, PartialEq)]
+pub(super) struct ChapterNavData {
+    pub chapters: Vec<ChapterInfo>,
+    pub current_chapter_index: usize,
+    pub elapsed: f64,
+    pub on_seek: EventHandler<f64>,
 }
 
 /// The four toolbar-toggled surfaces plus the bookmark-saved toast. Each
 /// renders only when its backing open-signal (or toast option) is set. Sleep
-/// mutations arrive as `EventHandler`s so the non-`PartialEq` `SleepController`
-/// stays out of props.
+/// mutations arrive inside `sleep_state` as `EventHandler`s so the
+/// non-`PartialEq` `SleepController` stays out of props.
 #[component]
 pub(super) fn PlayerOverlays(
     panes: OverlayPanes,
-    uuid: String,
-    rate: Signal<f64>,
-    rate_error: Signal<Option<String>>,
-    user_id: Option<i64>,
-    sleep_display: SleepDisplay,
-    bookmarks: super::bookmarks::BookmarksController,
-    bookmark_toast: Option<super::bookmarks::BookmarkToast>,
-    chapters: Vec<ChapterInfo>,
-    current_chapter_index: usize,
-    elapsed: f64,
-    on_chapter_seek: EventHandler<f64>,
-    on_sleep_select: EventHandler<i32>,
-    on_sleep_end_of_chapter: EventHandler<()>,
-    on_sleep_toggle_fade: EventHandler<()>,
-    on_bookmark_add: EventHandler<()>,
+    speed: SpeedPanelData,
+    sleep_state: SleepPanelState,
+    bookmark: BookmarkPanelData,
+    chapter_nav: ChapterNavData,
 ) -> Element {
     let mut speed_panel_open = panes.speed_panel_open;
     let mut sleep_panel_open = panes.sleep_panel_open;
     let mut bookmarks_open = panes.bookmarks_open;
     let mut chapters_open = panes.chapters_open;
+    let SpeedPanelData {
+        rate,
+        rate_error,
+        user_id,
+        uuid,
+    } = speed;
+    let BookmarkPanelData {
+        controller: bookmarks,
+        toast: bookmark_toast,
+        on_add: on_bookmark_add,
+    } = bookmark;
+    let ChapterNavData {
+        chapters,
+        current_chapter_index,
+        elapsed,
+        on_seek: on_chapter_seek,
+    } = chapter_nav;
     rsx! {
         if speed_panel_open() {
             SpeedPanel {
@@ -380,15 +447,7 @@ pub(super) fn PlayerOverlays(
         }
         if sleep_panel_open() {
             SleepPanel {
-                state: SleepPanelState {
-                    remaining: sleep_display.remaining,
-                    choice: sleep_display.choice,
-                    fade: sleep_display.fade,
-                    has_chapters: sleep_display.has_chapters,
-                    on_select: EventHandler::new(move |secs: i32| on_sleep_select.call(secs)),
-                    on_end_of_chapter: EventHandler::new(move |_| on_sleep_end_of_chapter.call(())),
-                    on_toggle_fade: EventHandler::new(move |_| on_sleep_toggle_fade.call(())),
-                },
+                state: sleep_state,
                 on_close: move |_| sleep_panel_open.set(false),
             }
         }

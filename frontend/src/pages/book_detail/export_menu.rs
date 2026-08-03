@@ -43,10 +43,33 @@ pub(super) fn BdExportMenu(
                     "data-testid": "hero-export-scrim",
                     onclick: move |_| open.set(false),
                 }
-                BdExportPanel { uuid, has_ebook, has_audio, book_author, book_title, epub_size_bytes, open }
+                BdExportPanel {
+                    ctx: BdExportContext {
+                        uuid,
+                        has_ebook,
+                        has_audio,
+                        book_author,
+                        book_title,
+                        epub_size_bytes,
+                    },
+                    open,
+                }
             }
         }
     }
+}
+
+/// The uuid, available formats, author/title (for Send-to-Kindle/Kobo
+/// filenames), and EPUB size gating the oversize-email fallback. Grouped so
+/// [`BdExportPanel`] stays under the prop cap.
+#[derive(Clone, PartialEq)]
+struct BdExportContext {
+    uuid: String,
+    has_ebook: bool,
+    has_audio: bool,
+    book_author: String,
+    book_title: String,
+    epub_size_bytes: Option<i64>,
 }
 
 /// The open dropdown body. Split out so `onmounted` can focus it (so ESC
@@ -56,15 +79,15 @@ pub(super) fn BdExportMenu(
 /// this is a scrim-dismissed popover with plain links/buttons, not an ARIA
 /// menu with roving-tabindex / arrow-key navigation.
 #[component]
-fn BdExportPanel(
-    uuid: String,
-    has_ebook: bool,
-    has_audio: bool,
-    book_author: String,
-    book_title: String,
-    epub_size_bytes: Option<i64>,
-    open: Signal<bool>,
-) -> Element {
+fn BdExportPanel(ctx: BdExportContext, open: Signal<bool>) -> Element {
+    let BdExportContext {
+        uuid,
+        has_ebook,
+        has_audio,
+        book_author,
+        book_title,
+        epub_size_bytes,
+    } = ctx;
     let mut open = open;
     let on_keydown = move |evt: Event<KeyboardData>| {
         if evt.key() == Key::Escape {
