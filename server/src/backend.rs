@@ -376,8 +376,8 @@ fn metadata_override_routes() -> Router<AppState> {
         )
         // Cover-only revert. Carries no upload body (unlike the POST in
         // `upload_router`), so it stays outside the upload rate limiter —
-        // same split as the author-photo GET/DELETE vs PUT routes in
-        // `discovery_routes`.
+        // same split as the author-photo GET/DELETE (`discovery_routes`) vs
+        // its PUT (`upload_router`).
         .route(
             "/api/ebooks/{uuid}/cover",
             delete(overrides::delete_ebook_cover),
