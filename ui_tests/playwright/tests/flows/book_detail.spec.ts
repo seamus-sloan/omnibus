@@ -779,11 +779,8 @@ async function seedPassage(
   return { uuid, id, quote };
 }
 
-// Start from a known-empty book. These tests assert the empty state *returns*
-// after a delete, so residue from an interrupted earlier run would fail them
-// for the wrong reason.
-test.beforeAll(async ({ request }) => {
-  const uuid = await fetchBookUuidByTitle(request, PASSAGES_BOOK.title);
+/// Delete every highlight on `uuid`.
+async function clearPassages(request: APIRequestContext, uuid: string) {
   const list = await request.get(`/api/highlights/book/${uuid}`);
   expect(list.status(), "list highlights").toBe(200);
   for (const h of (await list.json()) as { id: number }[]) {
@@ -791,6 +788,16 @@ test.beforeAll(async ({ request }) => {
       204,
     );
   }
+}
+
+// Start from a known-empty book. These tests assert the empty state *returns*
+// after a delete, so residue from an interrupted earlier run would fail them
+// for the wrong reason.
+test.beforeAll(async ({ request }) => {
+  await clearPassages(
+    request,
+    await fetchBookUuidByTitle(request, PASSAGES_BOOK.title),
+  );
 });
 
 test("lists a saved passage with its locator, note and date, then deletes it", async ({
@@ -940,6 +947,37 @@ test("opens the quote-card editor in a modal and closes it again", async ({
 
   // Clean up the seeded highlight so re-runs start from the empty state.
   expect((await request.delete(`/api/highlights/${id}`)).status()).toBe(204);
+});
+
+test("collapses a long passage list behind a show-more control", async ({
+  page,
+  request,
+}) => {
+  // Earlier tests in this serial file leave passages behind on PASSAGES_BOOK,
+  // so clear it first — the visible count is the whole assertion here.
+  const uuid = await fetchBookUuidByTitle(request, PASSAGES_BOOK.title);
+  await clearPassages(request, uuid);
+  const ids: number[] = [];
+  for (let i = 0; i < 8; i++) {
+    ids.push((await seedPassage(request, `epubcfi(/6/${4 + i * 2}!/4/2)`)).id);
+  }
+
+  await gotoReady(page, `/books/${uuid}`);
+  const cards = page.getByTestId("highlight-card");
+  await expect(cards).toHaveCount(5);
+
+  const showMore = page.getByTestId("highlights-show-more");
+  await expect(showMore).toHaveText("Show 3 more ↓");
+  await showMore.click();
+
+  // Expanding is one-way: every passage lists and the control goes away.
+  await expect(cards).toHaveCount(8);
+  await expect(showMore).toHaveCount(0);
+
+  // Clean up shared state so the next run starts from the empty state.
+  for (const id of ids) {
+    expect((await request.delete(`/api/highlights/${id}`)).status()).toBe(204);
+  }
 });
 
 test("breadcrumb author segment links to the author page", async ({

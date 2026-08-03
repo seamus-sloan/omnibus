@@ -67,20 +67,62 @@ pub(super) fn BdHighlightsSection(uuid: String, quote_meta: BdQuoteMeta) -> Elem
                     }
                 }
             } else {
-                div { class: "bd-hl-list", "data-testid": "highlights-list",
-                    for h in list.iter() {
-                        BdHighlightCard {
-                            key: "{h.id}",
-                            highlight: h.clone(),
-                            highlights,
-                            server_url: server_url.clone(),
-                            quote_target,
-                        }
-                    }
+                BdHighlightList {
+                    highlights,
+                    server_url: server_url.clone(),
+                    quote_target,
                 }
             }
         }
         {render_quote_modal(quote_target, quote_meta)}
+    }
+}
+
+/// Passages listed before the reader expands the section. A heavily
+/// highlighted book runs to hundreds of rows, and this is one section of
+/// several on the page.
+const COLLAPSED_PASSAGES: usize = 5;
+
+/// The passage list, capped at [`COLLAPSED_PASSAGES`] rows until the reader
+/// expands it. Both renders start collapsed so SSR and hydration match
+/// (rule 07).
+#[component]
+fn BdHighlightList(
+    highlights: Signal<Vec<Highlight>>,
+    server_url: String,
+    quote_target: Signal<Option<Highlight>>,
+) -> Element {
+    let mut expanded = use_signal(|| false);
+    let list = highlights();
+    let total = list.len();
+    let visible = if expanded() {
+        total
+    } else {
+        total.min(COLLAPSED_PASSAGES)
+    };
+
+    rsx! {
+        div { class: "bd-hl-list", "data-testid": "highlights-list",
+            for h in list.iter().take(visible) {
+                BdHighlightCard {
+                    key: "{h.id}",
+                    highlight: h.clone(),
+                    highlights,
+                    server_url: server_url.clone(),
+                    quote_target,
+                }
+            }
+        }
+        if total > visible {
+            button {
+                r#type: "button",
+                class: "btn ghost sm bd-hl-show-more",
+                "data-testid": "highlights-show-more",
+                "aria-expanded": "{expanded()}",
+                onclick: move |_| expanded.set(true),
+                "Show {total - visible} more \u{2193}"
+            }
+        }
     }
 }
 

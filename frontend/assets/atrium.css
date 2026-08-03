@@ -1101,6 +1101,8 @@ html, body { overscroll-behavior: none; }
 }
 .bd-hl-meta { font-size: 11px; color: var(--ink-3); }
 .bd-hl-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+/* Matches `.bd-hl-list`'s row gap so the control reads as one more row. */
+.bd-hl-show-more { margin-top: 14px; font-family: var(--sans); font-size: 12px; }
 @media (hover: hover) { .bd-hl-delete:hover { color: var(--bad); } }
 
 /* Quote-card modal — the shared reader editor (rd-quote-*) hosted in the
