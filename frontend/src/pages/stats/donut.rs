@@ -103,7 +103,11 @@ pub(super) fn GenreDonut(summary: StatsSummary) -> Element {
                 }
                 ul { class: "st-donut-legend",
                     for (i, ((name, _), pct)) in folded.iter().zip(percents.iter()).enumerate() {
-                        li { key: "{name}", class: "st-donut-row",
+                        // Indexed, not name-keyed: a real genre named "Other"
+                        // would otherwise collide with the synthetic fold-row
+                        // above, and the parent's `content_key` already forces
+                        // a full remount whenever the data itself changes.
+                        li { key: "{i}", class: "st-donut-row",
                             span {
                                 class: "st-donut-swatch",
                                 style: "background: {SLICE_VARS[i.min(SLICE_VARS.len() - 1)]};",

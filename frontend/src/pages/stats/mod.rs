@@ -250,7 +250,7 @@ fn RangeMenu(range: Signal<StatsRange>, menu_open: Signal<bool>) -> Element {
             onmounted: move |evt: MountedEvent| focus_range_menu(&evt),
             for r in StatsRange::ALL {
                 button {
-                    key: "{r:?}",
+                    key: "{r.as_query()}",
                     class: if r == current { "st-range-row on" } else { "st-range-row" },
                     r#type: "button",
                     "aria-pressed": if r == current { "true" } else { "false" },
