@@ -5,7 +5,7 @@
 //! players call from their media-event callbacks.
 
 use dioxus::prelude::*;
-use omnibus_shared::{ReadStatus, SetReadStatus};
+use omnibus_shared::{ReadStatus, ReadStatusRecord, SetReadStatus};
 
 use crate::data;
 
@@ -51,6 +51,44 @@ pub async fn apply_auto_read_status(server_url: &str, uuid: &str, at_end: bool) 
     .await;
 }
 
+/// Apply a status fetch's outcome to `status`, dropping it if a later
+/// navigation has already bumped `load_seq` past `my_load`. Same guard shape
+/// as `apply_bootstrap_outcome` in `pages/comic_reader.rs` — pulled out of
+/// the fetch effect so the guard is exercised directly, without a network
+/// round trip.
+fn apply_fetched_status(
+    fetched: Option<ReadStatusRecord>,
+    my_load: u64,
+    load_seq: Signal<u64>,
+    uuid: String,
+    mut status: Signal<Option<(String, ReadStatus)>>,
+) {
+    if *load_seq.peek() != my_load {
+        return;
+    }
+    let fetched = fetched.map(|r| r.status).unwrap_or_default();
+    status.set(Some((uuid, fetched)));
+}
+
+/// Decide the write effect's next move: `None` when nothing has been
+/// fetched yet or [`auto_transition`] has nothing to do (including the
+/// never-downgrade case — opening a `Finished` book with `at_end: false`).
+/// On `Some`, `status` has already been moved to the optimistic next value
+/// (so a re-run settles on it instead of repeating the write while the POST
+/// is in flight) and the returned payload is what the caller persists.
+fn decide_transition_write(
+    mut status: Signal<Option<(String, ReadStatus)>>,
+    at_end: bool,
+) -> Option<SetReadStatus> {
+    let (book_uuid, current) = status()?;
+    let next = auto_transition(current, at_end)?;
+    status.set(Some((book_uuid.clone(), next)));
+    Some(SetReadStatus {
+        book_uuid,
+        status: next,
+    })
+}
+
 /// Drive [`auto_transition`] for the book open in a reader: fetch the stored
 /// status once per book, then re-apply whenever the status or the reader's
 /// `at_end` position changes. Writes are best-effort like the readers'
@@ -77,32 +115,20 @@ pub fn use_auto_read_status(uuid: String, server_url: String, at_end: Memo<bool>
             load_seq.set(my_load);
             status.set(None);
             let server_url = server_url.clone();
+            let uuid_for_apply = uuid.clone();
             spawn(async move {
                 if let Ok(stored) = data::get_read_status(&server_url, &uuid).await {
-                    if *load_seq.peek() == my_load {
-                        let fetched = stored.map(|r| r.status).unwrap_or_default();
-                        status.set(Some((uuid, fetched)));
-                    }
+                    apply_fetched_status(stored, my_load, load_seq, uuid_for_apply, status);
                 }
             });
         }));
     }
 
     use_effect(move || {
-        let Some((book_uuid, current)) = status() else {
+        let Some(update) = decide_transition_write(status, at_end()) else {
             return;
         };
-        let Some(next) = auto_transition(current, at_end()) else {
-            return;
-        };
-        // Optimistic: move the signal first so the re-run settles on `None`
-        // instead of repeating the write while the POST is in flight.
-        status.set(Some((book_uuid.clone(), next)));
         let server_url = server_url.clone();
-        let update = SetReadStatus {
-            book_uuid,
-            status: next,
-        };
         spawn(async move {
             let _ = data::set_read_status(&server_url, update).await;
         });

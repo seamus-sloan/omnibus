@@ -1,6 +1,9 @@
 //! Unit tests for the CBZ comic-archive parser: page listing + natural
-//! sort, `ComicInfo.xml` mapping, filename fallback, and the malformed-
-//! archive failure modes (not a zip, zero pages).
+//! sort, `ComicInfo.xml` mapping, filename fallback, the malformed-archive
+//! failure modes (not a zip, zero pages), and `page_count_for_book`'s
+//! three outcomes (real archive, no CBZ file, unreadable archive).
+
+use sqlx::SqlitePool;
 
 use super::*;
 use crate::test_support::{build_stored_zip, make_test_dir};
@@ -355,4 +358,100 @@ fn is_comic_path_matches_cbz_case_insensitively() {
     assert!(is_comic_path(std::path::Path::new("a/b.CBZ")));
     assert!(!is_comic_path(std::path::Path::new("a/b.epub")));
     assert!(!is_comic_path(std::path::Path::new("cbz")));
+}
+
+/// Seed one book whose `book_files` CBZ row resolves (via `book_file_path`)
+/// to `<lib>/sub/book.cbz`, writing `bytes` there. Mirrors
+/// `test_support::seed_epub_book_at`'s shape for the CBZ format
+/// `page_count_for_book` reads. Returns the new `books.id`.
+async fn seed_cbz_book_at(pool: &SqlitePool, lib: &std::path::Path, bytes: &[u8]) -> i64 {
+    let lib_str = lib.to_string_lossy().to_string();
+    sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
+        .bind(&lib_str)
+        .execute(pool)
+        .await
+        .unwrap();
+    let lib_id: i64 = sqlx::query_scalar("SELECT id FROM scan_roots WHERE path = ?")
+        .bind(&lib_str)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let book_id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, scan_key, library_id, path, title) \
+         VALUES ('uuid-cbz', 'sub/book.cbz', ?, 'sub', 'Title') RETURNING id",
+    )
+    .bind(lib_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch) \
+         VALUES (?, 'CBZ', 'book', ?, 1)",
+    )
+    .bind(book_id)
+    .bind(bytes.len() as i64)
+    .execute(pool)
+    .await
+    .unwrap();
+    std::fs::create_dir_all(lib.join("sub")).unwrap();
+    std::fs::write(lib.join("sub").join("book.cbz"), bytes).unwrap();
+    book_id
+}
+
+#[tokio::test]
+async fn page_count_for_book_counts_pages_in_a_real_cbz() {
+    let dir = make_test_dir("comic-page-count-happy");
+    let bytes = build_stored_zip(&[("p1.jpg", b"one"), ("p2.jpg", b"two"), ("p3.jpg", b"three")]);
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    let book_id = seed_cbz_book_at(&pool, &dir, &bytes).await;
+
+    let count = page_count_for_book(&pool, book_id).await;
+
+    assert_eq!(count, Some(3));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn page_count_for_book_returns_none_when_book_has_no_cbz_file() {
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES ('/lib', 'lib')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let lib_id: i64 = sqlx::query_scalar("SELECT id FROM scan_roots WHERE path = '/lib'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    // Book row exists but carries no `book_files` row of any format, let
+    // alone CBZ — `book_file_path` resolves to `None` and the count must
+    // read as "no count", not an error.
+    let book_id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, scan_key, library_id, path, title) \
+         VALUES ('uuid-nofile', 'sub/book', ?, 'sub', 'Title') RETURNING id",
+    )
+    .bind(lib_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let count = page_count_for_book(&pool, book_id).await;
+
+    assert_eq!(count, None);
+}
+
+#[tokio::test]
+async fn page_count_for_book_returns_none_when_archive_is_unreadable() {
+    let dir = make_test_dir("comic-page-count-unreadable");
+    // `book_files` points at a file that isn't a valid zip — the archive
+    // open fails inside the blocking task, and that must degrade to `None`
+    // rather than propagate an error into the detail read.
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    let book_id = seed_cbz_book_at(&pool, &dir, b"not a zip").await;
+
+    let count = page_count_for_book(&pool, book_id).await;
+
+    assert_eq!(count, None);
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
