@@ -246,11 +246,11 @@ async fn fetch_word_count_candidates(
 /// Fill `books.page_count` for CBZ-backed books under `library_path` that
 /// have none yet (NULL `page_count`).
 ///
-/// Page counts were added after the initial comic indexer (migration
-/// `0063`, tech-debt #1593), so books indexed before it carry a NULL. The
-/// normal diff-based reindex only re-parses new/changed files, so it never
-/// revisits them; this backfill runs as a separate worker task posted after
-/// each ebook library scan (mirroring [`backfill_word_counts`]) and is a
+/// Page counts were added after the initial comic indexer, so books indexed
+/// before that carry a NULL. The normal diff-based reindex only re-parses
+/// new/changed files, so it never revisits them; this backfill runs as a
+/// separate worker task posted after each ebook library scan (mirroring
+/// [`backfill_word_counts`]) and is a
 /// no-op once every CBZ book has a count. `on_progress(processed, total)` is
 /// called per book for the UI.
 ///

@@ -187,10 +187,6 @@ pub(super) async fn get_ebook_by_uuid(
     Path(uuid): Path<String>,
 ) -> Response {
     match db::get_book_by_uuid(&state.pool, &uuid).await {
-        // `page_count` for a CBZ book rides straight off `books.page_count`
-        // (#1593) — the projection already carries it, so the detail read
-        // no longer reopens the archive to recompute what the indexer
-        // already persisted.
         Ok(Some(book)) => Json(book).into_response(),
         Ok(None) => axum::http::StatusCode::NOT_FOUND.into_response(),
         Err(error) => internal("read book", error),
@@ -328,10 +324,11 @@ async fn read_ebook_file(
 /// The validator is derived from the CBZ file's own stat (via
 /// [`conditional::open`], same inode/mtime/size shape the byte-serving
 /// routes use) combined with the page index, rather than a hash of the
-/// decompressed page — so a cache hit is answered from [`db::comic::list_pages`]'s
-/// central-directory read alone, without ever paying for the page's DEFLATE
-/// decode (#1593). 404 covers an unknown uuid, a book without a CBZ file,
-/// and an out-of-range index; an unreadable archive surfaces as a 500.
+/// decompressed page. Listing and (on a cache miss) decompressing both
+/// reuse that same opened handle, so a replace racing this request can't
+/// splice a validator from one file onto bytes from another. 404 covers an
+/// unknown uuid, a book without a CBZ file, and an out-of-range index; an
+/// unreadable archive surfaces as a 500.
 pub(super) async fn get_ebook_page(
     _user: MediaAuthUser,
     State(state): State<AppState>,
@@ -349,10 +346,16 @@ pub(super) async fn get_ebook_page(
         Err(e) => return internal("book_file_path", e),
     };
 
-    let list_path = path.clone();
-    let listed = tokio::task::spawn_blocking(move || db::comic::list_pages(&list_path)).await;
-    let pages = match listed {
-        Ok(Ok(pages)) => pages,
+    let open = match conditional::open(&path).await {
+        Ok(o) => o,
+        Err(e) => return internal("open cbz for page validator", e),
+    };
+    let etag = format!("\"{}-p{page}\"", open.validator.etag.trim_matches('"'));
+    let file = open.into_std().await;
+
+    let listed = tokio::task::spawn_blocking(move || db::comic::list_pages_from_file(file)).await;
+    let (file, pages) = match listed {
+        Ok(Ok(v)) => v,
         Ok(Err(e)) => return internal("list comic pages", e),
         Err(e) => return internal("list comic pages", e),
     };
@@ -360,11 +363,6 @@ pub(super) async fn get_ebook_page(
         return StatusCode::NOT_FOUND.into_response();
     };
 
-    let open = match conditional::open(&path).await {
-        Ok(o) => o,
-        Err(e) => return internal("open cbz for page validator", e),
-    };
-    let etag = format!("\"{}-p{page}\"", open.validator.etag.trim_matches('"'));
     if headers
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
@@ -373,7 +371,8 @@ pub(super) async fn get_ebook_page(
         return conditional::not_modified(&etag, MEDIA_CACHE_CONTROL, MEDIA_VARY);
     }
 
-    let read = tokio::task::spawn_blocking(move || db::comic::read_page_named(&path, &name)).await;
+    let read =
+        tokio::task::spawn_blocking(move || db::comic::read_page_from_file(file, &name)).await;
     let (mime, bytes) = match read {
         Ok(Ok(entry)) => entry,
         Ok(Err(e)) => return internal("read comic page", e),

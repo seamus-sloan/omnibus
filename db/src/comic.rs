@@ -32,8 +32,17 @@ pub fn is_comic_path(path: &Path) -> bool {
 /// first entry is the cover page.
 pub fn list_pages(path: &Path) -> anyhow::Result<Vec<String>> {
     let file = File::open(path)?;
+    let (_, pages) = list_pages_from_file(file)?;
+    Ok(pages)
+}
+
+/// [`list_pages`], but from a handle the caller already has open, handing
+/// it back alongside the names so a later call can read a specific entry
+/// from that same handle rather than reopening the path.
+pub fn list_pages_from_file(file: File) -> anyhow::Result<(File, Vec<String>)> {
     let archive = zip::ZipArchive::new(file)?;
-    Ok(page_names(&archive))
+    let pages = page_names(&archive);
+    Ok((archive.into_inner(), pages))
 }
 
 /// Best-effort CBZ page count for `book_id`: the length of the archive's
@@ -101,12 +110,17 @@ pub fn read_page(path: &Path, index: usize) -> anyhow::Result<Option<(&'static s
 
 /// Decompress one already-resolved entry (as named by [`list_pages`]),
 /// skipping the central-directory listing [`read_page`] would otherwise
-/// redo. Used by the page-serving route (#1593): it lists once to answer
-/// the `If-None-Match` precondition without decompressing, then calls this
-/// — the expensive DEFLATE step — only when the client's cached copy is
-/// stale.
+/// redo.
 pub fn read_page_named(path: &Path, name: &str) -> anyhow::Result<(&'static str, Vec<u8>)> {
     let file = File::open(path)?;
+    read_page_from_file(file, name)
+}
+
+/// [`read_page_named`], but from a handle the caller already has open (as
+/// [`list_pages_from_file`] returns it) — the page-serving route's shape,
+/// so the validator, the page list, and the decompressed bytes all come
+/// from one opened inode rather than three separate opens of the path.
+pub fn read_page_from_file(file: File, name: &str) -> anyhow::Result<(&'static str, Vec<u8>)> {
     let mut archive = zip::ZipArchive::new(file)?;
     let entry = archive.by_name(name)?;
     // Sized by the actual read, not the header's declared size — an

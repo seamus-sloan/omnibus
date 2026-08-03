@@ -1,8 +1,8 @@
 //! Unit tests for the CBZ comic-archive parser: page listing + natural
 //! sort, `ComicInfo.xml` mapping, filename fallback, the malformed-archive
 //! failure modes (not a zip, zero pages), `extract_comic`'s persisted
-//! `page_count` (#1593), and `page_count_for_book`'s three outcomes (real
-//! archive, no CBZ file, unreadable archive).
+//! `page_count`, and `page_count_for_book`'s three outcomes (real archive,
+//! no CBZ file, unreadable archive).
 
 use sqlx::SqlitePool;
 

@@ -51,6 +51,16 @@ pub(super) struct OpenFile {
     pub(super) validator: Validator,
 }
 
+impl OpenFile {
+    /// Hand back the handle the validator was derived from, for a caller
+    /// (the CBZ page route) that needs synchronous access instead of
+    /// [`serve`]'s streaming path — still the same inode, so it can't
+    /// disagree with the validator the way a fresh open-by-path could.
+    pub(super) async fn into_std(self) -> std::fs::File {
+        self.file.into_std().await
+    }
+}
+
 /// The identity of the bytes behind an [`OpenFile`].
 pub(super) struct Validator {
     pub(super) etag: String,
