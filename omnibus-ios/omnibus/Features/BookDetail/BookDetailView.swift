@@ -648,29 +648,7 @@ struct BookDetailView: View {
 
     private func highlightsSection(_ book: Book) -> some View {
         DisclosureSection(title: "Highlights (\(model.highlights.count))") {
-            VStack(alignment: .leading, spacing: Spacing.md) {
-                ForEach(model.highlights.prefix(6)) { highlight in
-                    VStack(alignment: .leading, spacing: 4) {
-                        if let text = highlight.text?.nilIfBlank {
-                            Text(text)
-                                .font(.display(15))
-                                .foregroundStyle(palette.ink0Color)
-                                .lineLimit(4)
-                        }
-                        if let note = highlight.note?.nilIfBlank {
-                            Text(note)
-                                .font(.ui(12.5))
-                                .foregroundStyle(palette.ink2Color)
-                        }
-                    }
-                    .padding(.leading, Spacing.md)
-                    .overlay(alignment: .leading) {
-                        Capsule()
-                            .fill(highlight.color.tint)
-                            .frame(width: 3)
-                    }
-                }
-            }
+            HighlightsList(highlights: model.highlights)
         }
     }
 
@@ -813,6 +791,67 @@ struct BookDetailView: View {
 }
 
 // MARK: - Support views
+
+/// The book's saved passages, capped until the reader opens the rest. A
+/// heavily highlighted book otherwise pushes every section below it off the
+/// screen. Mirrors the web book-detail list: same cap, one-way expand.
+struct HighlightsList: View {
+    let highlights: [Highlight]
+
+    @Environment(\.palette) private var palette
+    @State private var expanded = false
+
+    /// Passages shown before the reader expands the section.
+    static let collapsedCount = 5
+
+    /// How many of `total` passages a list in this state renders.
+    static func visibleCount(total: Int, expanded: Bool) -> Int {
+        expanded ? total : min(total, collapsedCount)
+    }
+
+    private var visible: ArraySlice<Highlight> {
+        highlights.prefix(Self.visibleCount(total: highlights.count, expanded: expanded))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            ForEach(visible) { highlight in
+                VStack(alignment: .leading, spacing: 4) {
+                    if let text = highlight.text?.nilIfBlank {
+                        Text(text)
+                            .font(.display(15))
+                            .foregroundStyle(palette.ink0Color)
+                            .lineLimit(4)
+                    }
+                    if let note = highlight.note?.nilIfBlank {
+                        Text(note)
+                            .font(.ui(12.5))
+                            .foregroundStyle(palette.ink2Color)
+                    }
+                }
+                .padding(.leading, Spacing.md)
+                .overlay(alignment: .leading) {
+                    Capsule()
+                        .fill(highlight.color.tint)
+                        .frame(width: 3)
+                }
+            }
+
+            let held = highlights.count - visible.count
+            if held > 0 {
+                Button {
+                    withAnimation(Motion.settle) { expanded = true }
+                } label: {
+                    Text("Show \(held) more")
+                        .font(.ui(12.5, weight: .semibold))
+                        .foregroundStyle(palette.accentColor)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("highlights-show-more")
+            }
+        }
+    }
+}
 
 /// A collapsible section that starts expanded — used for the long-form blocks.
 struct DisclosureSection<Content: View>: View {
