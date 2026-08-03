@@ -1,8 +1,7 @@
 //  ReadStatusAuto.swift
-//  Automatic read-status transitions driven by the readers: opening an
-//  unread book marks it reading, and reaching the end marks it finished —
-//  the reader-side sibling of the audio player's finish-on-playback-end,
-//  and the native port of the web readers' `read_status_auto`.
+//  Automatic read-status transitions driven by the readers and the audio
+//  player: starting an unread book marks it reading, and reaching its end
+//  marks it finished. The native port of the web `read_status_auto`.
 
 import Foundation
 
@@ -51,8 +50,16 @@ final class ReadStatusAuto {
 
     /// Fetch the stored status and apply the open transition. Call once per
     /// open, off the reader's critical path — the fetch may cost a round trip.
+    ///
+    /// A status this tracker already holds is kept rather than refetched: it
+    /// is either the one this fetch would return, or the newer one this
+    /// tracker just wrote. Overwriting the second with a response that
+    /// predates it re-runs a transition that has already happened, and writes
+    /// `finished` twice.
     func bookOpened() async {
-        status = await fetch()
+        if status == nil {
+            status = await fetch()
+        }
         await applyIfNeeded()
     }
 
@@ -62,6 +69,14 @@ final class ReadStatusAuto {
     func positionChanged(atEnd: Bool) async {
         guard atEnd != self.atEnd else { return }
         self.atEnd = atEnd
+        // Reaching the end is the one observation worth a second round trip
+        // when the opening fetch failed or never ran: unlike the open
+        // transition it cannot downgrade anything, and dropping it loses the
+        // strongest completion signal the app gets. The audio player relies
+        // on this — it finishes books it was never asked to open.
+        if atEnd, status == nil {
+            status = await fetch()
+        }
         await applyIfNeeded()
     }
 

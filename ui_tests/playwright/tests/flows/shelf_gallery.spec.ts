@@ -243,3 +243,48 @@ test("shows the continue-reading hero once a book has progress", async ({
     `/read/${alphaUuid}`,
   );
 });
+
+test("drops a book from the continue-reading hero once it is finished", async ({
+  page,
+  request,
+}) => {
+  // `standalone-island` is reserved for this test. Read status is per-(user,
+  // book) server state and the suite is fullyParallel against one server, so
+  // marking it finished is globally visible the moment it lands — no other
+  // spec may read this book. It is also why the test above uses Alpha, whose
+  // status row stays absent.
+  const uuid = await fetchBookUuidByTitle(request, "The Isle of Functions");
+  const seeded = await request.post("/api/progress", {
+    data: {
+      book_uuid: uuid,
+      format: "epub",
+      epub_cfi: "epubcfi(/6/4!/4/2/2[c01]/2/1:0)",
+    },
+  });
+  expect(seeded.status(), "POST /api/progress failed").toBe(200);
+
+  // Explicitly `reading` rather than relying on the absent-row default: this
+  // test's own last act is to mark the book finished, and that state outlives
+  // the run against the shared dev server. Without the reset a second run
+  // would fail here on the state the first one left.
+  const reading = await request.put("/api/read-status", {
+    data: { book_uuid: uuid, status: "reading" },
+  });
+  expect(reading.status(), "PUT /api/read-status failed").toBe(200);
+
+  await gotoReady(page, "/");
+  await expect(page.getByTestId(`hero-card-${uuid}`)).toBeVisible();
+
+  const finished = await request.put("/api/read-status", {
+    data: { book_uuid: uuid, status: "finished" },
+  });
+  expect(finished.status(), "PUT /api/read-status failed").toBe(200);
+
+  await gotoReady(page, "/");
+  // Anchor on a landing element that is always present: the hero hides itself
+  // when it has no cards, and whether it has others depends on specs running
+  // in parallel — so asserting the page rendered has to come from elsewhere,
+  // or a card missing because nothing loaded would read as a pass.
+  await expect(page.getByTestId("lib-section-title")).toBeVisible();
+  await expect(page.getByTestId(`hero-card-${uuid}`)).toBeHidden();
+});

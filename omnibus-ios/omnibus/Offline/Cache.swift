@@ -94,7 +94,15 @@ enum OutboxScope {
             // which has always declared it. Leaving this one undeclared let
             // the stats screen revalidate against a server that had not seen
             // the change and read back the pre-change count.
-            return key == CacheKey.readStatus(uuid) || key.hasPrefix("stats:")
+            //
+            // The Continue rail is the third: `db::progress::recent_progress`
+            // filters out books marked `unread` or `finished`, so a queued
+            // status write changes which cards it returns. A revalidation
+            // against a server that has not seen the write would put a
+            // finished book back on the rail.
+            return key == CacheKey.readStatus(uuid)
+                || key == CacheKey.recentProgress
+                || key.hasPrefix("stats:")
         }
         if kind.hasPrefix("progress:") {
             // The kind is the progress key verbatim, and any position write

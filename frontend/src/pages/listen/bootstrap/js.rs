@@ -202,12 +202,19 @@ fn listeners_js() -> &'static str {
     // actual end (which we leave as-is so the UI naturally stops).
     el.addEventListener('ended', function(){
       var oa = window.OmnibusAudio;
-      if (!oa || oa._mode !== 'direct' || !oa._parts) return;
-      if (oa._index + 1 < oa._parts.length) {
+      if (oa && oa._mode === 'direct' && oa._parts
+          && oa._index + 1 < oa._parts.length) {
         oa._index += 1;
         el.src = oa._parts[oa._index].url;
         el.load();
         var p = el.play(); if (p && p.catch) p.catch(function(){});
+        return;
+      }
+      // Nothing left to advance to: either the last part of a direct-mode
+      // book just played out, or the single HLS stream did. Both mean every
+      // file of the book has been listened through.
+      if (window.__omnibusOnAudioEnded) {
+        window.__omnibusOnAudioEnded(absTime());
       }
     });"#
 }

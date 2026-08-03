@@ -28,6 +28,14 @@ final class AudioPlayer {
     private(set) var isLoading = false
     private(set) var duration: Double = 0
     private(set) var error: String?
+    /// Automatic read-status transitions for the loaded book — the same
+    /// tracker the readers use, so listening and reading move a book through
+    /// the lifecycle identically. Rebuilt on every load; `nil` between books.
+    private var autoStatus: ReadStatusAuto?
+    /// Whether this load has already claimed the `unread` → `reading`
+    /// transition. `play()` runs on every resume from pause; the book is only
+    /// started once.
+    private var markedReading = false
 
     /// Current position on the whole-book timeline, in seconds.
     var position: Double = 0
@@ -152,6 +160,8 @@ final class AudioPlayer {
         }
         teardown()
         self.book = book
+        autoStatus = ReadStatusAuto(uuid: book.uuid)
+        markedReading = false
         // Backgrounding mid-chapter has to persist the position the same way
         // pausing does — the player keeps running behind the lock screen, so
         // "the app went away" is not the same event as "playback stopped".
@@ -393,6 +403,13 @@ final class AudioPlayer {
         isPlaying = true
         if sessionStart == nil { sessionStart = Date() }
         updateNowPlaying()
+        // Listening to a book is starting it, the audio counterpart of the
+        // readers' mark-on-open. Off the critical path — the fetch behind it
+        // may cost a round trip and playback has already begun.
+        if !markedReading {
+            markedReading = true
+            Task { await autoStatus?.bookOpened() }
+        }
     }
 
     func pause() {
@@ -538,6 +555,10 @@ final class AudioPlayer {
         // checkpoint first, and anything left is not the next book's.
         sessionStart = nil
         listenedSeconds = 0
+        // Tracks one book's lifecycle, so it must not outlive it — a stale
+        // tracker would apply the previous book's status to the next one.
+        autoStatus = nil
+        markedReading = false
         // Cleared with the player, not with the book: `load` awaits the next
         // manifest, and leaving this up means the chapter bar spends that window
         // offering to seek inside the book that was just closed.
@@ -576,11 +597,12 @@ final class AudioPlayer {
                 self?.isPlaying = false
                 await self?.persistPosition(force: true)
                 await self?.checkpointSession()
-                // Finishing an audiobook is the strongest completion signal we
-                // get, so mark it read rather than waiting for a manual tap.
-                if let uuid = self?.book?.uuid {
-                    await UserDataService.setReadStatus(uuid: uuid, status: .finished)
-                }
+                // The manifest streams every part of the book as one item, so
+                // this fires once the last file has played out — finishing an
+                // audiobook is the strongest completion signal we get, and it
+                // goes through the same tracker as the readers rather than
+                // writing `finished` blind.
+                await self?.autoStatus?.positionChanged(atEnd: true)
             }
         }
 

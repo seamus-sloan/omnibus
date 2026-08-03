@@ -319,18 +319,38 @@ pub async fn get_playback_rate(
 /// a queued offline replay landing late doesn't jump a week-old book to the
 /// top. Feeds the "pick up where you left off" surfaces via
 /// [`resume_points`].
+///
+/// Books the user has marked `unread` or `finished` are excluded: both are
+/// statements that they are not mid-book, and a completed book otherwise sat
+/// at the top of the rail until five newer positions pushed it off.
+///
+/// A **missing** `book_read_status` row keeps its position. 0046 treats
+/// absence as `unread` everywhere else, and this is the deliberate exception:
+/// absence here means "nothing has been said", not "not reading". Every
+/// status write is best-effort (`read_status_auto`, the players), so hiding on
+/// absence would drop a book off the rail whenever one of those requests was
+/// lost — and would hide every row written before that auto-transition
+/// existed.
+///
+/// The join is per-book while progress is per-`(book, format)`, so finishing
+/// a dual-format book clears both its reading and its listening card. Read
+/// status is a fact about the book, not about one of its files.
 pub async fn recent_progress(
     pool: &SqlitePool,
     user_id: i64,
     limit: i64,
 ) -> Result<Vec<ProgressRecord>, ProgressError> {
     let rows = sqlx::query(
-        "SELECT book_uuid, format, epub_cfi, audio_position_seconds,
-                progress_percent, kobo_location, book_file_id,
-                updated_at, COALESCE(client_updated_at, updated_at) AS client_updated_at
-         FROM reading_progress
-         WHERE user_id = ?
-         ORDER BY COALESCE(client_updated_at, updated_at) DESC, book_uuid
+        "SELECT rp.book_uuid, rp.format, rp.epub_cfi, rp.audio_position_seconds,
+                rp.progress_percent, rp.kobo_location, rp.book_file_id,
+                rp.updated_at,
+                COALESCE(rp.client_updated_at, rp.updated_at) AS client_updated_at
+         FROM reading_progress rp
+         LEFT JOIN book_read_status rs
+                ON rs.user_id = rp.user_id AND rs.book_uuid = rp.book_uuid
+         WHERE rp.user_id = ?
+           AND (rs.status IS NULL OR rs.status = 'reading')
+         ORDER BY COALESCE(rp.client_updated_at, rp.updated_at) DESC, rp.book_uuid
          LIMIT ?",
     )
     .bind(user_id)

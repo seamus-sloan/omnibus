@@ -1314,6 +1314,148 @@ async fn recent_progress_returns_rows_newest_first_within_limit() {
     assert_eq!(capped[0].book_uuid, uuid_b);
 }
 
+/// Seed an epub position for `(user, uuid)` so the row shows up on the rail.
+async fn seed_epub_position(pool: &SqlitePool, user: i64, uuid: &str) {
+    upsert_progress(
+        pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.to_string(),
+            format: ProgressFormat::Epub,
+            epub_cfi: Some("epubcfi(/6/4!/4/2/1:0)".into()),
+            audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
+            book_file_id: None,
+            client_updated_at: None,
+        },
+    )
+    .await
+    .expect("seed position");
+}
+
+async fn set_status(pool: &SqlitePool, user: i64, uuid: &str, status: omnibus_shared::ReadStatus) {
+    crate::read_status::set_read_status(
+        pool,
+        user,
+        &omnibus_shared::SetReadStatus {
+            book_uuid: uuid.to_string(),
+            status,
+        },
+    )
+    .await
+    .expect("set read status");
+}
+
+#[tokio::test]
+async fn recent_progress_excludes_books_marked_finished() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    seed_epub_position(&pool, user, &uuid).await;
+    assert_eq!(recent_progress(&pool, user, 10).await.unwrap().len(), 1);
+
+    set_status(&pool, user, &uuid, omnibus_shared::ReadStatus::Finished).await;
+
+    assert!(
+        recent_progress(&pool, user, 10).await.unwrap().is_empty(),
+        "a finished book is not something to continue"
+    );
+}
+
+#[tokio::test]
+async fn recent_progress_excludes_books_marked_unread() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    seed_epub_position(&pool, user, &uuid).await;
+    set_status(&pool, user, &uuid, omnibus_shared::ReadStatus::Unread).await;
+
+    assert!(
+        recent_progress(&pool, user, 10).await.unwrap().is_empty(),
+        "clearing a book to unread takes it off the rail"
+    );
+}
+
+#[tokio::test]
+async fn recent_progress_keeps_a_book_whose_read_status_row_is_absent() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    seed_epub_position(&pool, user, &uuid).await;
+
+    // 0046 reads absence as `unread`; the rail is the deliberate exception.
+    // Every status write is best-effort, so a book whose write was lost — or
+    // one whose position predates the auto-transition — must still show.
+    let rows = recent_progress(&pool, user, 10).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].book_uuid, uuid);
+}
+
+#[tokio::test]
+async fn recent_progress_keeps_a_book_marked_reading() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    seed_epub_position(&pool, user, &uuid).await;
+    set_status(&pool, user, &uuid, omnibus_shared::ReadStatus::Reading).await;
+
+    let rows = recent_progress(&pool, user, 10).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].book_uuid, uuid);
+}
+
+#[tokio::test]
+async fn recent_progress_applies_its_limit_after_the_read_status_filter() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, finished) = seed(&pool, "/lib", "Finished Book").await;
+    let (_, active) = seed(&pool, "/lib", "Active Book").await;
+    seed_epub_position(&pool, user, &finished).await;
+    seed_epub_position(&pool, user, &active).await;
+    // The finished book is the *newer* row, so a filter applied after the
+    // LIMIT would consume the only slot and hand back an empty rail.
+    sqlx::query(
+        "UPDATE reading_progress SET updated_at = ?, client_updated_at = ? WHERE book_uuid = ?",
+    )
+    .bind(100)
+    .bind(100)
+    .bind(&active)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE reading_progress SET updated_at = ?, client_updated_at = ? WHERE book_uuid = ?",
+    )
+    .bind(200)
+    .bind(200)
+    .bind(&finished)
+    .execute(&pool)
+    .await
+    .unwrap();
+    set_status(&pool, user, &finished, omnibus_shared::ReadStatus::Finished).await;
+
+    let rows = recent_progress(&pool, user, 1).await.unwrap();
+    assert_eq!(rows.len(), 1, "the filter runs in SQL, ahead of the LIMIT");
+    assert_eq!(rows[0].book_uuid, active);
+}
+
+#[tokio::test]
+async fn recent_progress_read_status_filter_is_scoped_to_the_reading_user() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let alice = seed_user(&pool, "alice").await;
+    let bob = seed_user(&pool, "bob").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    seed_epub_position(&pool, alice, &uuid).await;
+    seed_epub_position(&pool, bob, &uuid).await;
+    // Read status is per-user: Bob finishing the book says nothing about
+    // whether Alice is still reading it.
+    set_status(&pool, bob, &uuid, omnibus_shared::ReadStatus::Finished).await;
+
+    assert_eq!(recent_progress(&pool, alice, 10).await.unwrap().len(), 1);
+    assert!(recent_progress(&pool, bob, 10).await.unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn resume_points_enrich_audio_rows_with_duration_and_chapter() {
     let pool = init_db("sqlite::memory:").await.unwrap();

@@ -1,8 +1,8 @@
-//! Automatic read-status transitions driven by the readers: opening an
-//! `Unread` book marks it `Reading`, and reaching the end marks it
-//! `Finished` — the reader-side sibling of the iOS audio player's
-//! finish-on-playback-end. Pure decision logic plus the hook the EPUB
-//! reader and the CBZ pager both mount.
+//! Automatic read-status transitions driven by the readers and the audio
+//! players: starting an `Unread` book marks it `Reading`, and reaching its
+//! end marks it `Finished`. Pure decision logic, the hook the EPUB reader and
+//! the CBZ pager mount, and the one-shot [`apply_auto_read_status`] the
+//! players call from their media-event callbacks.
 
 use dioxus::prelude::*;
 use omnibus_shared::{ReadStatus, SetReadStatus};
@@ -22,6 +22,33 @@ pub fn auto_transition(current: ReadStatus, at_end: bool) -> Option<ReadStatus> 
     } else {
         (current == ReadStatus::Unread).then_some(ReadStatus::Reading)
     }
+}
+
+/// Apply [`auto_transition`] once, outside a component.
+///
+/// The readers observe `at_end` as reactive state and drive it through
+/// [`use_auto_read_status`]. The audio players have no such signal — they are
+/// driven by media events fired from JS — so they call this directly: `false`
+/// on the first play of a book, `true` when the last part reaches its end.
+///
+/// Best-effort like the readers' writes, and for the same reason a failed
+/// *fetch* decides nothing: writing `Reading` over an unfetched `Finished`
+/// would be a downgrade. The next event retries.
+pub async fn apply_auto_read_status(server_url: &str, uuid: &str, at_end: bool) {
+    let Ok(stored) = data::get_read_status(server_url, uuid).await else {
+        return;
+    };
+    let Some(next) = auto_transition(stored.map(|r| r.status).unwrap_or_default(), at_end) else {
+        return;
+    };
+    let _ = data::set_read_status(
+        server_url,
+        SetReadStatus {
+            book_uuid: uuid.to_string(),
+            status: next,
+        },
+    )
+    .await;
 }
 
 /// Drive [`auto_transition`] for the book open in a reader: fetch the stored
