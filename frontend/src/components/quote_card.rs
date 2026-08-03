@@ -1,9 +1,8 @@
 //! Shareable quote-card editor: live preview, background presets + custom
-//! color, typeface/size/weight choice, aspect-ratio choice, and PNG
-//! export/share/copy actions drawn by the standalone `quote-card.js` canvas
-//! renderer (`window.OmnibusQuoteCard`). Shell-agnostic — the reader's quote
-//! drawer and the book-detail passages modal each wrap it in their own chrome
-//! and must load [`QUOTE_CARD_JS`].
+//! color, typeface/size/style and aspect-ratio choice, and PNG
+//! export/share/copy drawn by the standalone `quote-card.js` canvas renderer
+//! (`window.OmnibusQuoteCard`). Shell-agnostic — the reader's quote drawer and
+//! the book-detail passages modal wrap it and must load [`QUOTE_CARD_JS`].
 
 use dioxus::prelude::*;
 
@@ -230,9 +229,7 @@ fn render_background_swatches(
                     },
                 }
             }
-            // Reads as a picker rather than a sixth preset: the swatch is a
-            // fixed rainbow (CSS), and the native input sits transparent on
-            // top of it so the wheel shows through whatever color is chosen.
+            // Transparent input over a CSS rainbow: reads as a picker, not a preset.
             label { class: "rd-quote-custom", title: "Custom color",
                 input {
                     r#type: "color",
@@ -250,19 +247,21 @@ fn render_background_swatches(
     }
 }
 
-/// Typeface chip row — each chip previews in the face it selects.
+/// Typeface chip row — each chip previews in the face it selects. Pressed-button
+/// toggle group, so the selection carries on `aria-pressed` (as in `landing/toolbar.rs`).
 fn render_font_controls(font: Signal<String>) -> Element {
     let mut font = font;
     let cur = font();
     rsx! {
         div { class: "rd-quote-label", "Font" }
-        div { class: "rd-quote-chips",
+        div { class: "rd-quote-chips", role: "group", "aria-label": "Font",
             for f in FONTS.iter() {
                 button {
                     key: "{f.key}",
                     class: if cur == f.key { "rd-chip on" } else { "rd-chip" },
                     r#type: "button",
                     style: "font-family:{f.css};",
+                    "aria-pressed": "{cur == f.key}",
                     onclick: move |_| font.set(f.key.to_string()),
                     "{f.label}"
                 }
@@ -277,12 +276,13 @@ fn render_size_controls(size: Signal<String>) -> Element {
     let cur = size();
     rsx! {
         div { class: "rd-quote-label", "Size" }
-        div { class: "rd-quote-chips",
+        div { class: "rd-quote-chips", role: "group", "aria-label": "Text size",
             for s in SIZES.iter() {
                 button {
                     key: "{s.key}",
                     class: if cur == s.key { "rd-chip on" } else { "rd-chip" },
                     r#type: "button",
+                    "aria-pressed": "{cur == s.key}",
                     onclick: move |_| size.set(s.key.to_string()),
                     "{s.label}"
                 }
@@ -299,7 +299,7 @@ fn render_style_controls(bold: Signal<bool>, italic: Signal<bool>) -> Element {
     let (is_bold, is_italic) = (bold(), italic());
     rsx! {
         div { class: "rd-quote-label", "Style" }
-        div { class: "rd-quote-chips",
+        div { class: "rd-quote-chips", role: "group", "aria-label": "Style",
             button {
                 class: if is_bold { "rd-chip on" } else { "rd-chip" },
                 r#type: "button",
@@ -325,12 +325,13 @@ fn render_ratio_controls(ratio: Signal<String>, cur_ratio: &str) -> Element {
     let mut ratio = ratio;
     rsx! {
         div { class: "rd-quote-label", "Aspect" }
-        div { class: "rd-quote-ratios",
+        div { class: "rd-quote-ratios", role: "group", "aria-label": "Aspect ratio",
             for r in RATIOS {
                 button {
                     key: "{r}",
                     class: if cur_ratio == r { "rd-chip on" } else { "rd-chip" },
                     r#type: "button",
+                    "aria-pressed": "{cur_ratio == r}",
                     onclick: move |_| ratio.set(r.to_string()),
                     "{r}"
                 }

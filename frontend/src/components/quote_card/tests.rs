@@ -49,6 +49,20 @@ fn quote_card_panel_renders_the_typography_controls() {
 }
 
 #[test]
+fn quote_card_chip_rows_expose_their_selection_via_aria_pressed() {
+    // The `on` class is the only *visual* selection cue, so without this the
+    // choice is invisible to assistive tech. Every chip row carries it.
+    let html = render_in_vdom(panel);
+    assert_eq!(html.matches("aria-pressed=\"true\"").count(), 4);
+    for label in ["Font", "Text size", "Style", "Aspect ratio"] {
+        assert!(
+            html.contains(&format!("aria-label=\"{label}\"")),
+            "chip row {label} is unlabelled"
+        );
+    }
+}
+
+#[test]
 fn quote_card_panel_drops_the_composer_action() {
     // The disabled "Open in composer" placeholder was removed — a disabled
     // control that never activates is noise in an otherwise live panel.
