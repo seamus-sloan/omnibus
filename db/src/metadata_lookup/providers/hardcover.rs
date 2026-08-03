@@ -13,6 +13,7 @@
 //! that slows down the common case. In exchange it is the one provider that
 //! carries a series statement natively.
 
+use omnibus_shared::isbn::normalize_isbn;
 use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider};
 use serde::Deserialize;
 
@@ -178,7 +179,10 @@ fn map_book(b: BookRow, isbn13: Option<&str>) -> Option<ExternalBookMeta> {
     let title = b.title.filter(|t| !t.trim().is_empty())?;
     let isbn13 = match isbn13 {
         Some(scanned) => scanned.to_string(),
-        None => b.editions.into_iter().find_map(|e| e.isbn_13)?,
+        None => b
+            .editions
+            .into_iter()
+            .find_map(|e| e.isbn_13.and_then(|v| normalize_isbn(&v).ok()))?,
     };
     Some(ExternalBookMeta {
         isbn13,
@@ -210,3 +214,6 @@ fn map_book(b: BookRow, isbn13: Option<&str>) -> Option<ExternalBookMeta> {
         source: MetadataProvider::Hardcover,
     })
 }
+
+#[cfg(test)]
+mod tests;

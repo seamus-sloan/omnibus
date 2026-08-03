@@ -215,6 +215,18 @@ pub(crate) struct FlowState {
     pub(crate) error: Signal<Option<String>>,
 }
 
+/// [`CheckInStage`]'s per-outcome callbacks, bundled into one prop so the
+/// component stays under the 5-prop soft cap. One field per terminal action
+/// a stage can trigger; [`CheckInPage`] wires each to its `make_on_*` handler.
+#[derive(Clone, PartialEq)]
+struct CheckInHandlers {
+    on_resolve: EventHandler<String>,
+    on_check_in: EventHandler<ScanBook>,
+    on_own_it: EventHandler<ExternalBookMeta>,
+    on_pick: EventHandler<ExternalBookMeta>,
+    on_wishlist: EventHandler<WishlistAddRequest>,
+}
+
 /// Check-in page: type an ISBN, then follow it wherever the ladder lands.
 #[component]
 pub fn CheckInPage() -> Element {
@@ -233,6 +245,13 @@ pub fn CheckInPage() -> Element {
     let on_own_it = make_on_own_it(server_url.clone(), state);
     let on_pick = make_on_pick(server_url.clone(), state, nav);
     let on_wishlist = make_on_wishlist(server_url, state);
+    let handlers = CheckInHandlers {
+        on_resolve: EventHandler::new(on_resolve),
+        on_check_in: EventHandler::new(on_check_in),
+        on_own_it: EventHandler::new(on_own_it),
+        on_pick: EventHandler::new(on_pick),
+        on_wishlist: EventHandler::new(on_wishlist),
+    };
 
     rsx! {
         section { class: "card check-in", "data-testid": "check-in",
@@ -245,14 +264,7 @@ pub fn CheckInPage() -> Element {
                 title: "Cancel",
                 "\u{00d7}"
             }
-            CheckInStage {
-                state,
-                on_resolve: EventHandler::new(on_resolve),
-                on_check_in: EventHandler::new(on_check_in),
-                on_own_it: EventHandler::new(on_own_it),
-                on_pick: EventHandler::new(on_pick),
-                on_wishlist: EventHandler::new(on_wishlist),
-            }
+            CheckInStage { state, handlers }
             if let Some(msg) = (state.error)() {
                 p {
                     "data-testid": "check-in-error",
@@ -266,103 +278,55 @@ pub fn CheckInPage() -> Element {
 }
 
 /// Render whichever screen the current [`Stage`] calls for. Split out of
-/// [`CheckInPage`] so the page body stays a thin handler-wiring shell.
+/// [`CheckInPage`] so the page body stays a thin handler-wiring shell, and
+/// each verbose arm is further split into a named `_stage` helper so this
+/// dispatcher stays under the line cap.
 #[component]
-fn CheckInStage(
-    state: FlowState,
-    on_resolve: EventHandler<String>,
-    on_check_in: EventHandler<ScanBook>,
-    on_own_it: EventHandler<ExternalBookMeta>,
-    on_pick: EventHandler<ExternalBookMeta>,
-    on_wishlist: EventHandler<WishlistAddRequest>,
-) -> Element {
-    let mut stage = state.stage;
-    let mut isbn = state.isbn;
-    let mut error = state.error;
-    let mut note = state.note;
-    let mut busy = state.busy;
+fn CheckInStage(state: FlowState, handlers: CheckInHandlers) -> Element {
     // Clear the per-flow scratch (edition note, typed ISBN, in-flight flag) on
     // every restart so neither a note nor an ISBN typed for one book can be
     // reused on the next confirm after Cancel / "Try another ISBN" /
     // "Check in another".
-    let restart = move |_| {
+    let on_restart = EventHandler::new(move |_| {
+        let FlowState {
+            mut stage,
+            mut isbn,
+            mut note,
+            mut busy,
+            mut error,
+        } = state;
         error.set(None);
         note.set(String::new());
         isbn.set(String::new());
         busy.set(false);
         stage.set(Stage::Scan);
-    };
+    });
 
-    match stage() {
-        Stage::Scan => rsx! {
-            ScanScreen {
-                on_detect: EventHandler::new(move |scanned: String| {
-                    // Seed the keypad too, so a decode the check digit rejects
-                    // lands on manual entry with the digits ready to fix.
-                    isbn.set(scanned.clone());
-                    on_resolve.call(scanned);
-                }),
-                on_manual: EventHandler::new(move |_| {
-                    error.set(None);
-                    stage.set(Stage::Entry);
-                }),
-            }
-        },
-        Stage::Entry => rsx! {
-            EntryScreen {
-                isbn: state.isbn,
-                busy: state.busy,
-                on_resolve,
-                on_scan: EventHandler::new(move |_| {
-                    error.set(None);
-                    stage.set(Stage::Scan);
-                }),
-            }
-        },
+    match (state.stage)() {
+        Stage::Scan => scan_stage(state, handlers.on_resolve),
+        Stage::Entry => entry_stage(state, handlers.on_resolve),
         Stage::Resolving => rsx! { ResolvingScreen {} },
         Stage::Confirm { book, isbn } => rsx! {
-            ConfirmScreen { book, isbn, state, on_check_in, on_cancel: EventHandler::new(restart) }
+            ConfirmScreen { book, isbn, state, on_check_in: handlers.on_check_in, on_cancel: on_restart }
         },
-        Stage::CloseMatch { book, scanned } => rsx! {
-            CloseMatchScreen {
-                book: book.clone(),
-                scanned: scanned.clone(),
-                on_yes: EventHandler::new(move |_| {
-                    stage.set(Stage::Confirm { book: book.clone(), isbn: scanned.isbn13.clone() });
-                }),
-                on_no: EventHandler::new(move |online: ExternalBookMeta| {
-                    stage.set(Stage::Choose { online });
-                }),
-            }
-        },
+        Stage::CloseMatch { book, scanned } => close_match_stage(book, scanned, state),
         Stage::Choose { online } => rsx! {
             ChooseScreen {
                 online,
                 busy: state.busy,
-                on_own_it,
-                on_wishlist,
-                on_restart: EventHandler::new(restart),
+                on_own_it: handlers.on_own_it,
+                on_wishlist: handlers.on_wishlist,
+                on_restart,
             }
         },
-        Stage::Unresolved { isbn } => rsx! {
-            UnresolvedScreen {
-                isbn,
-                on_search: EventHandler::new(move |_| {
-                    error.set(None);
-                    stage.set(Stage::Search);
-                }),
-                on_restart: EventHandler::new(restart),
-            }
-        },
-        Stage::Search => rsx! {
-            SearchScreen { state, on_pick, on_restart: EventHandler::new(restart) }
-        },
+        Stage::Unresolved { isbn } => unresolved_stage(isbn, state, on_restart),
+        Stage::Search => search_stage(state, handlers.on_pick, on_restart),
         Stage::CheckedIn { uuid, title } => rsx! {
             SuccessScreen {
                 title,
                 headline: "In your physical collection".to_string(),
                 book_uuid: Some(uuid),
-                on_restart: EventHandler::new(restart),
+                on_restart,
             }
         },
         Stage::Wishlisted { title } => rsx! {
@@ -370,9 +334,91 @@ fn CheckInStage(
                 title,
                 headline: "On your wishlist".to_string(),
                 book_uuid: None,
-                on_restart: EventHandler::new(restart),
+                on_restart,
             }
         },
+    }
+}
+
+/// [`Stage::Scan`]: the camera screen, seeding the keypad on every decode so a
+/// scan the check digit rejects lands on manual entry ready to fix.
+fn scan_stage(state: FlowState, on_resolve: EventHandler<String>) -> Element {
+    let mut isbn = state.isbn;
+    let mut error = state.error;
+    let mut stage = state.stage;
+    rsx! {
+        ScanScreen {
+            on_detect: EventHandler::new(move |scanned: String| {
+                isbn.set(scanned.clone());
+                on_resolve.call(scanned);
+            }),
+            on_manual: EventHandler::new(move |_| {
+                error.set(None);
+                stage.set(Stage::Entry);
+            }),
+        }
+    }
+}
+
+/// [`Stage::Entry`]: the manual-ISBN keypad, reached from the scanner.
+fn entry_stage(state: FlowState, on_resolve: EventHandler<String>) -> Element {
+    let mut error = state.error;
+    let mut stage = state.stage;
+    rsx! {
+        EntryScreen {
+            isbn: state.isbn,
+            busy: state.busy,
+            on_resolve,
+            on_scan: EventHandler::new(move |_| {
+                error.set(None);
+                stage.set(Stage::Scan);
+            }),
+        }
+    }
+}
+
+/// [`Stage::CloseMatch`]: the fuzzy (title, author) hit that needs a human
+/// "is this it?" before filing a copy or falling back to the online chooser.
+fn close_match_stage(book: ScanBook, scanned: ExternalBookMeta, state: FlowState) -> Element {
+    let mut stage = state.stage;
+    rsx! {
+        CloseMatchScreen {
+            book: book.clone(),
+            scanned: scanned.clone(),
+            on_yes: EventHandler::new(move |_| {
+                stage.set(Stage::Confirm { book: book.clone(), isbn: scanned.isbn13.clone() });
+            }),
+            on_no: EventHandler::new(move |online: ExternalBookMeta| {
+                stage.set(Stage::Choose { online });
+            }),
+        }
+    }
+}
+
+/// [`Stage::Unresolved`]: neither the library nor any provider knew the ISBN.
+fn unresolved_stage(isbn: String, state: FlowState, on_restart: EventHandler<()>) -> Element {
+    let mut error = state.error;
+    let mut stage = state.stage;
+    rsx! {
+        UnresolvedScreen {
+            isbn,
+            on_search: EventHandler::new(move |_| {
+                error.set(None);
+                stage.set(Stage::Search);
+            }),
+            on_restart,
+        }
+    }
+}
+
+/// [`Stage::Search`]: the unresolved screen's "type the name instead" fallback.
+fn search_stage(
+    state: FlowState,
+    on_pick: EventHandler<ExternalBookMeta>,
+    on_restart: EventHandler<()>,
+) -> Element {
+    rsx! {
+        SearchScreen { state, on_pick, on_restart }
     }
 }
 
