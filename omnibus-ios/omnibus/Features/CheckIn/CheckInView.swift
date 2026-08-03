@@ -83,10 +83,8 @@ struct CheckInView: View {
 
     // MARK: - Scanning
 
-    /// Scrolls because a title search lands up to `SEARCH_LIMIT` (8) candidate
-    /// rows beneath a 300pt camera view, and because the keyboard covers both
-    /// fields the moment either is tapped. The outcome screen already scrolls
-    /// for the same reason.
+    /// Scrolls so `SEARCH_LIMIT` (8) result rows under a 300pt camera view
+    /// aren't clipped, and so the keyboard doesn't cover the fields.
     private var scannerSection: some View {
         ScrollView {
             VStack(spacing: Spacing.lg) {
@@ -338,11 +336,9 @@ struct CheckInView: View {
         }
     }
 
-    /// One field and one results list, shared by the scanner page and this
-    /// fallback — they drive the same `search`, so a second copy would be two
-    /// things to keep in step. Only the placeholder differs: on the scanner page
-    /// the title sits beside an ISBN box and is genuinely optional, here it is
-    /// the only way forward, so an example query coaches better than "optional".
+    /// Shared with the scanner page so there is one `search` path, not two.
+    /// Only the placeholder differs: beside an ISBN box the title is optional,
+    /// on the unresolved fallback it's the only way forward.
     private func titleField(placeholder: String) -> some View {
         HStack {
             TextField(placeholder, text: $searchQuery)
