@@ -5988,12 +5988,19 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .rd-quote-swatches { display: flex; gap: 8px; align-items: center; }
 .rd-quote-swatch { width: 30px; height: 30px; border-radius: 8px; cursor: pointer;
   border: 1px solid var(--line-2); }
+/* Custom-color swatch. The fixed rainbow marks it as the picker rather than
+   a sixth preset, so the native `input[type=color]` — which would otherwise
+   paint its own current-value swatch over the wheel — is held transparent on
+   top of it and keeps only its hit area. */
 .rd-quote-custom { position: relative; width: 30px; height: 30px;
   border-radius: 8px; overflow: hidden; border: 1px solid var(--line-2);
-  cursor: pointer; }
+  cursor: pointer;
+  background: conic-gradient(from .25turn, #f43f5e, #f59e0b, #facc15,
+    #22c55e, #06b6d4, #6366f1, #d946ef, #f43f5e); }
 .rd-quote-custom input { position: absolute; inset: -4px; width: calc(100% + 8px);
-  height: calc(100% + 8px); border: 0; padding: 0; cursor: pointer; }
-.rd-quote-ratios { display: flex; gap: 6px; }
+  height: calc(100% + 8px); border: 0; padding: 0; cursor: pointer;
+  opacity: 0; }
+.rd-quote-ratios, .rd-quote-chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .rd-quote-actions { display: flex; gap: 8px; margin-top: 22px; }
 
 /* ── Reader on phone widths (F6.2 mobile ereader) ──────────────────
