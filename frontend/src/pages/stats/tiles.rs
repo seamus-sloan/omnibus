@@ -87,41 +87,60 @@ pub(super) fn HeadlineTiles(
             StatTile {
                 value: finished,
                 unit: None,
-                label: "Finished",
-                accent: true,
-                hero: true,
-                testid: "stats-tile-finished",
+                meta: StatTileMeta {
+                    label: "Finished",
+                    accent: true,
+                    hero: true,
+                    testid: "stats-tile-finished",
+                },
                 onexpand: move |_| expanded.set(Some(Metric::Finished)),
             }
             StatTile {
                 value: avg,
                 unit: if has_avg { Some(" \u{2605}".to_string()) } else { None },
-                label: "Avg rating",
-                accent: false,
-                hero: true,
-                testid: "stats-tile-avg-rating",
+                meta: StatTileMeta {
+                    label: "Avg rating",
+                    accent: false,
+                    hero: true,
+                    testid: "stats-tile-avg-rating",
+                },
                 onexpand: move |_| expanded.set(Some(Metric::AvgRating)),
             }
             StatTile {
                 value: pages,
                 unit: None,
-                label: "Est. pages",
-                accent: false,
-                hero: false,
-                testid: "stats-tile-pages",
+                meta: StatTileMeta {
+                    label: "Est. pages",
+                    accent: false,
+                    hero: false,
+                    testid: "stats-tile-pages",
+                },
                 onexpand: move |_| expanded.set(Some(Metric::Pages)),
             }
             StatTile {
                 value: listen_value,
                 unit: Some(listen_unit.to_string()),
-                label: "Listening",
-                accent: false,
-                hero: false,
-                testid: "stats-tile-listening",
+                meta: StatTileMeta {
+                    label: "Listening",
+                    accent: false,
+                    hero: false,
+                    testid: "stats-tile-listening",
+                },
                 onexpand: move |_| expanded.set(Some(Metric::Listening)),
             }
         }
     }
+}
+
+/// Micro-label, accent/hero styling, and testid for one metric tile, grouped
+/// to keep [`StatTile`]'s props at the established cap — mirrors
+/// `chip_editor::ChipEditorOptions`' presentational-knobs split.
+#[derive(Clone, PartialEq)]
+struct StatTileMeta {
+    label: &'static str,
+    accent: bool,
+    hero: bool,
+    testid: &'static str,
 }
 
 /// One metric tile: a big serif number (with an optional smaller unit) over
@@ -132,12 +151,15 @@ pub(super) fn HeadlineTiles(
 fn StatTile(
     value: String,
     unit: Option<String>,
-    label: &'static str,
-    accent: bool,
-    hero: bool,
-    testid: &'static str,
+    meta: StatTileMeta,
     onexpand: EventHandler<()>,
 ) -> Element {
+    let StatTileMeta {
+        label,
+        accent,
+        hero,
+        testid,
+    } = meta;
     let mut class = String::from("card st-tile");
     if accent {
         class.push_str(" st-tile-accent");

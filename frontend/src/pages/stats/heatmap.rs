@@ -180,6 +180,7 @@ pub(super) fn HeatmapCard(summary: StatsSummary) -> Element {
                 div { class: "st-heatmap", role: "img", aria_label: "Daily reading activity, trailing year",
                     for cell in cells {
                         div {
+                            key: "{cell.day}",
                             class: if cell.future { "st-hm-cell st-hm-future" } else { "st-hm-cell st-hm-{cell.level}" },
                             title: if !cell.future && cell.secs > 0 { "{format_active_time(cell.secs)} on {cell.day}" } else { "{cell.day}" },
                         }

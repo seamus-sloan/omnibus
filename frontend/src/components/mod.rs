@@ -52,7 +52,7 @@ mod suggestion_dropdown;
 // Single-value sibling of `chip_editor`'s dropdown, for fields that hold one
 // value rather than a list (e.g. the Series field).
 pub mod suggest_field;
-pub use suggest_field::SuggestField;
+pub use suggest_field::{SuggestField, SuggestFieldOptions};
 
 pub mod atrium;
 

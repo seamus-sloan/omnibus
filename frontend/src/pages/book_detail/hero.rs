@@ -11,7 +11,7 @@ use crate::components::atrium::Cover;
 use crate::components::{BookActionMeta, FetchSummaryButton};
 use crate::{data, use_server_url, Route};
 
-use super::export_menu::BdExportMenu;
+use super::export_menu::{BdExportContext, BdExportMenu};
 use super::file_picker::{is_audio_book_file, BdFilePickerMenu, FilePickerKind};
 use super::immersive::BdImmersiveButton;
 use super::physical::{BdBookIdentity, BdWishlistRailSlot};
@@ -340,12 +340,14 @@ fn BdCtaRow(has_ebook: bool, has_audio: bool, has_comic: bool, meta: BookActionM
             // the CTA row stays a single primary action plus this dropdown.
             // Author + title feed the Send-to-Kobo `<Author>/<Title>/` layout.
             BdExportMenu {
-                uuid: uuid.clone(),
-                has_ebook,
-                has_audio,
-                book_author: book_author.clone(),
-                book_title: book_title.clone(),
-                epub_size_bytes,
+                ctx: BdExportContext {
+                    uuid: uuid.clone(),
+                    has_ebook,
+                    has_audio,
+                    book_author: book_author.clone(),
+                    book_title: book_title.clone(),
+                    epub_size_bytes,
+                },
             }
             }
         }
