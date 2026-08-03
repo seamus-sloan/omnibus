@@ -215,6 +215,48 @@ test("edits the selected shelf from the landing header pencil", async ({
   await expect(facets).toContainText("Public");
 });
 
+/**
+ * Write an epub position for `uuid`, then load the landing page — repeating
+ * until that book's hero card is on the rail.
+ *
+ * The rail is `recent_progress`: the five newest positions ordered by
+ * `COALESCE(client_updated_at, updated_at) DESC, book_uuid`. That timestamp
+ * has **second** granularity, so every progress write landing in the same
+ * second ties and is ordered by uuid instead — and the suite is
+ * `fullyParallel` against one server, with a dozen specs opening readers and
+ * players. A book seeded once can therefore be ordered off the end of the
+ * rail by uuid alone, with nothing wrong on either side.
+ *
+ * Re-seeding on each attempt is what converges: a later second breaks the tie
+ * in this book's favour.
+ */
+async function seedProgressAndOpenLanding(
+  page: import("@playwright/test").Page,
+  request: import("@playwright/test").APIRequestContext,
+  uuid: string,
+): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const resp = await request.post("/api/progress", {
+          data: {
+            book_uuid: uuid,
+            format: "epub",
+            epub_cfi: "epubcfi(/6/4!/4/2/2[c01]/2/1:0)",
+          },
+        });
+        expect(resp.status(), "POST /api/progress failed").toBe(200);
+        await gotoReady(page, "/");
+        return page.getByTestId(`hero-card-${uuid}`).count();
+      },
+      {
+        timeout: 30_000,
+        message: `book ${uuid} never reached the continue-reading rail`,
+      },
+    )
+    .toBeGreaterThan(0);
+}
+
 test("shows the continue-reading hero once a book has progress", async ({
   page,
   request,
@@ -224,16 +266,7 @@ test("shows the continue-reading hero once a book has progress", async ({
   // and never asserted by the reader progress-restore specs (which own
   // frankenstein / great-gatsby exclusively).
   const alphaUuid = await fetchBookUuidByTitle(request, "Alpha");
-  const resp = await request.post("/api/progress", {
-    data: {
-      book_uuid: alphaUuid,
-      format: "epub",
-      epub_cfi: "epubcfi(/6/4!/4/2/2[c01]/2/1:0)",
-    },
-  });
-  expect(resp.status(), "POST /api/progress failed").toBe(200);
-
-  await gotoReady(page, "/");
+  await seedProgressAndOpenLanding(page, request, alphaUuid);
 
   await expect(page.getByTestId("continue-hero")).toBeVisible();
   await expect(page.getByTestId(`hero-card-${alphaUuid}`)).toBeVisible();
@@ -254,25 +287,18 @@ test("drops a book from the continue-reading hero once it is finished", async ({
   // spec may read this book. It is also why the test above uses Alpha, whose
   // status row stays absent.
   const uuid = await fetchBookUuidByTitle(request, "The Isle of Functions");
-  const seeded = await request.post("/api/progress", {
-    data: {
-      book_uuid: uuid,
-      format: "epub",
-      epub_cfi: "epubcfi(/6/4!/4/2/2[c01]/2/1:0)",
-    },
-  });
-  expect(seeded.status(), "POST /api/progress failed").toBe(200);
 
-  // Explicitly `reading` rather than relying on the absent-row default: this
-  // test's own last act is to mark the book finished, and that state outlives
-  // the run against the shared dev server. Without the reset a second run
-  // would fail here on the state the first one left.
+  // Explicitly `reading` rather than relying on the absent-row default, and
+  // set *before* the rail is polled: this test's own last act is to mark the
+  // book finished, and that state outlives the run against the shared dev
+  // server. Without the reset a second run would fail on the state the first
+  // one left — and the filter under test would keep it off the rail forever.
   const reading = await request.put("/api/read-status", {
     data: { book_uuid: uuid, status: "reading" },
   });
   expect(reading.status(), "PUT /api/read-status failed").toBe(200);
 
-  await gotoReady(page, "/");
+  await seedProgressAndOpenLanding(page, request, uuid);
   await expect(page.getByTestId(`hero-card-${uuid}`)).toBeVisible();
 
   const finished = await request.put("/api/read-status", {
