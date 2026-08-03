@@ -123,10 +123,9 @@ wrong.
 > (yellow) regardless of the colour sent, while highlights created directly
 > on the device use the full `Color` range normally. This means the firmware
 > is not applying Omnibus's `highlightColor` value to inbound annotations as
-> sent — either it expects a different shape on this field (an integer 0–3
-> rather than a name, most plausible given a non-numeric string would coerce
-> to `0` under permissive JSON parsing) or it ignores colour on inbound
-> annotations entirely.
+> sent — it may expect a different shape on this field (e.g. an integer 0–3
+> rather than a name) or it may ignore colour on inbound annotations
+> entirely; which one is unconfirmed.
 >
 > This repo carries no captured device PATCH and no vendored reference
 > implementation for the Reading Services protocol to confirm which is
