@@ -74,6 +74,45 @@ struct CheckInFlowTests {
         #expect(!CheckInFlow.showsNoteField(for: .unresolved))
     }
 
+    @Test func resolveShouldClearSearchOnlyWhenLeavingTheScanStage() {
+        // A resolve always fires from `.scan` — the ISBN field's stage — so
+        // landing on any outcome (including `.unresolved`, whose fallback
+        // reuses the scan page's title-search state) must clear the stale
+        // query/results left over from it.
+        #expect(CheckInFlow.resolveShouldClearSearch(from: .scan))
+        #expect(!CheckInFlow.resolveShouldClearSearch(from: .outcome(.unresolved)))
+        #expect(
+            !CheckInFlow.resolveShouldClearSearch(
+                from: .outcome(.inLibraryUnowned(book: scanBook()))
+            )
+        )
+    }
+
+    @Test func searchResponseShouldApplyOnlyWhenStageAndQueryAreUnchanged() {
+        // A title search is a separate in-flight request — if a resolve lands
+        // (stage moves on) or the field is retyped (query moves on) before it
+        // returns, the late response must be dropped rather than repopulating
+        // search state a resolve just cleared.
+        #expect(
+            CheckInFlow.searchResponseShouldApply(
+                startedStage: .scan, currentStage: .scan,
+                startedQuery: "babel", currentQuery: "babel"
+            )
+        )
+        #expect(
+            !CheckInFlow.searchResponseShouldApply(
+                startedStage: .scan, currentStage: .outcome(.unresolved),
+                startedQuery: "babel", currentQuery: "babel"
+            )
+        )
+        #expect(
+            !CheckInFlow.searchResponseShouldApply(
+                startedStage: .scan, currentStage: .scan,
+                startedQuery: "babel", currentQuery: "bee sting"
+            )
+        )
+    }
+
     @Test func detailUUIDCoversAlreadyOwnedAndOnWishlistOnly() {
         #expect(CheckInFlow.detailUUID(for: .alreadyOwned(book: scanBook())) == "b-1")
         #expect(CheckInFlow.detailUUID(for: .onWishlist(book: scanBook())) == "b-1")
