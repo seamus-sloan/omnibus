@@ -66,53 +66,69 @@ impl JournalComposerState {
     }
 }
 
-/// Collapsed prompt → expanded markdown composer with a Write/Preview toggle, an
-/// optional reading-progress slider, and a spoiler-syntax hint. The open
-/// composer's markup is composed from [`BdJournalComposerTabs`],
-/// [`BdJournalHighlightsPopover`], [`BdJournalEditorBody`], and
-/// [`BdJournalComposerFoot`].
-#[component]
-pub(super) fn BdJournalComposer(uuid: String, server_url: String, reload: Signal<u32>) -> Element {
-    let mut open = use_signal(|| false);
-    let body = use_signal(String::new);
-    let show_preview = use_signal(|| false);
-    let preview_html = use_signal(String::new);
-    let track_progress = use_signal(|| false);
-    let progress = use_signal(|| 50i64);
-    let saving = use_signal(|| false);
-    let error = use_signal(|| None::<String>);
-    // Owned here (not inside `BdJournalHighlightsPopover`) because the
-    // popover's markup is conditionally skipped while `show_preview` is true —
-    // if the popover owned this state itself, toggling to Preview and back
-    // would unmount/remount it and drop the loaded-once cache, forcing a
-    // needless highlights refetch.
-    let highlights = use_signal(Vec::<Highlight>::new);
-    let highlights_open = use_signal(|| false);
-    let highlights_loaded = use_signal(|| false);
-    let draft_id = use_signal(|| None::<i64>);
-    let mut autosave_task = use_signal(|| None::<Task>);
-    let autosaved_secs = use_signal(|| None::<u64>);
-    let autosaved_ticker = use_signal(|| None::<Task>);
+/// Non-[`JournalComposerState`] signals used directly by the composer's
+/// child components (`preview_html` for `BdJournalComposerTabs` /
+/// `BdJournalEditorBody`, the three `highlights_*` for
+/// `BdJournalHighlightsPopover`). Kept out of `JournalComposerState` since
+/// those components' own concern (preview text, the highlights cache) isn't
+/// part of the save/reset surface the footer drives.
+///
+/// The `highlights_*` fields are owned here rather than inside
+/// `BdJournalHighlightsPopover` because the popover's markup is
+/// conditionally skipped while `show_preview` is true — if the popover owned
+/// this state itself, toggling to Preview and back would unmount/remount it
+/// and drop the loaded-once cache, forcing a needless highlights refetch.
+#[derive(Clone, Copy)]
+struct ComposerAuxSignals {
+    preview_html: Signal<String>,
+    highlights: Signal<Vec<Highlight>>,
+    highlights_open: Signal<bool>,
+    highlights_loaded: Signal<bool>,
+}
 
+/// Declare and bundle every composer signal. A hook (calls `use_signal`
+/// unconditionally each render), split out of [`BdJournalComposer`] to keep
+/// its body under the line cap — safe to call unconditionally since it runs
+/// in the same position on every render.
+fn use_composer_signals() -> (JournalComposerState, ComposerAuxSignals) {
     let state = JournalComposerState {
-        open,
-        body,
-        track_progress,
-        progress,
-        saving,
-        error,
-        show_preview,
-        draft_id,
-        autosave_task,
-        autosaved_secs,
-        autosaved_ticker,
+        open: use_signal(|| false),
+        body: use_signal(String::new),
+        track_progress: use_signal(|| false),
+        progress: use_signal(|| 50i64),
+        saving: use_signal(|| false),
+        error: use_signal(|| None::<String>),
+        show_preview: use_signal(|| false),
+        draft_id: use_signal(|| None::<i64>),
+        autosave_task: use_signal(|| None::<Task>),
+        autosaved_secs: use_signal(|| None::<u64>),
+        autosaved_ticker: use_signal(|| None::<Task>),
     };
+    let aux = ComposerAuxSignals {
+        preview_html: use_signal(String::new),
+        highlights: use_signal(Vec::<Highlight>::new),
+        highlights_open: use_signal(|| false),
+        highlights_loaded: use_signal(|| false),
+    };
+    (state, aux)
+}
 
-    // Debounced autosave: each body change cancels the pending task and arms a
-    // fresh one (search-palette pattern), so at most one save is queued and a
-    // typing burst produces a single write once the user pauses.
-    let autosave_url = server_url.clone();
-    let autosave_uuid = uuid.clone();
+/// Debounced autosave: each body change cancels the pending task and arms a
+/// fresh one (search-palette pattern), so at most one save is queued and a
+/// typing burst produces a single write once the user pauses. A hook (calls
+/// `use_effect`), split out of [`BdJournalComposer`] to keep its body under
+/// the line cap — safe to call unconditionally since it runs in the same
+/// position on every render.
+fn use_composer_autosave(state: JournalComposerState, server_url: &str, uuid: &str) {
+    let JournalComposerState {
+        body,
+        open,
+        saving,
+        mut autosave_task,
+        ..
+    } = state;
+    let autosave_url = server_url.to_string();
+    let autosave_uuid = uuid.to_string();
     use_effect(move || {
         let text = body();
         if !open() || saving() || text.trim().is_empty() {
@@ -129,6 +145,28 @@ pub(super) fn BdJournalComposer(uuid: String, server_url: String, reload: Signal
         });
         autosave_task.set(Some(task));
     });
+}
+
+/// Collapsed prompt → expanded markdown composer with a Write/Preview toggle, an
+/// optional reading-progress slider, and a spoiler-syntax hint. The open
+/// composer's markup is composed from [`BdJournalComposerTabs`],
+/// [`BdJournalHighlightsPopover`], [`BdJournalEditorBody`], and
+/// [`BdJournalComposerFoot`].
+#[component]
+pub(super) fn BdJournalComposer(uuid: String, server_url: String, reload: Signal<u32>) -> Element {
+    let (state, aux) = use_composer_signals();
+    let mut open = state.open;
+    let body = state.body;
+    let show_preview = state.show_preview;
+    let error = state.error;
+    let ComposerAuxSignals {
+        preview_html,
+        highlights,
+        highlights_open,
+        highlights_loaded,
+    } = aux;
+
+    use_composer_autosave(state, &server_url, &uuid);
 
     if !open() {
         return rsx! {
@@ -464,36 +502,26 @@ async fn autosave_draft(url: &str, uuid: &str, body_md: String, state: JournalCo
     }
 }
 
-/// Composer footer: reading-progress toggle/slider, the "Auto-saved Ns ago"
-/// indicator, inline error, cancel, save-draft, and publish. Save draft keeps
-/// the entry owner-private; publish surfaces it in the shared feed. Both
-/// reset and close the composer; cancel additionally discards any autosaved
-/// draft.
-#[component]
-fn BdJournalComposerFoot(
-    uuid: String,
-    server_url: String,
-    reload: Signal<u32>,
+/// Build the shared save-as handler for the Save-draft and Publish buttons —
+/// the only difference between them is the status the entry ends up in (an
+/// existing autosaved draft row is reused). Saves the current body as
+/// `status`, then resets/closes/reloads the composer on success.
+fn build_save_as_handler(
+    uuid: &str,
+    server_url: &str,
     state: JournalComposerState,
-) -> Element {
+    mut reload: Signal<u32>,
+) -> impl FnMut(JournalStatus) + Clone {
     let JournalComposerState {
         body,
-        saving,
-        error,
-        autosaved_secs,
+        mut saving,
+        mut error,
         draft_id,
         ..
     } = state;
-    let mut reload = reload;
-    let mut saving = saving;
-    let mut error = error;
-
-    // Save the current body as `status`, then reset/close/reload. Shared by
-    // the Save-draft and Publish buttons — the only difference is the status
-    // the entry ends up in (an existing autosaved draft row is reused).
-    let save_url = server_url.clone();
-    let save_uuid = uuid.clone();
-    let mut save_as = move |status: JournalStatus| {
+    let save_url = server_url.to_string();
+    let save_uuid = uuid.to_string();
+    move |status: JournalStatus| {
         let url = save_url.clone();
         let uuid = save_uuid.clone();
         let mut state = state;
@@ -537,7 +565,52 @@ fn BdJournalComposerFoot(
             }
             saving.set(false);
         });
-    };
+    }
+}
+
+/// Discard any autosaved draft row (best-effort), then reset/close the
+/// composer. Run BEFORE `reset_and_close()` returns — that call unmounts
+/// this scope, and a task spawned after unmount is dropped unpolled.
+fn cancel_and_discard_draft(server_url: &str, mut state: JournalComposerState) {
+    let JournalComposerState {
+        draft_id,
+        mut saving,
+        ..
+    } = state;
+    let url = server_url.to_string();
+    if let Some(t) = state.autosave_task.write().take() {
+        t.cancel();
+    }
+    saving.set(true);
+    spawn(async move {
+        if let Some(id) = draft_id() {
+            let _ = data::delete_journal_entry(&url, id).await;
+        }
+        saving.set(false);
+        state.reset_and_close();
+    });
+}
+
+/// Composer footer: reading-progress toggle/slider, the "Auto-saved Ns ago"
+/// indicator, inline error, cancel, save-draft, and publish. Save draft keeps
+/// the entry owner-private; publish surfaces it in the shared feed. Both
+/// reset and close the composer; cancel additionally discards any autosaved
+/// draft.
+#[component]
+fn BdJournalComposerFoot(
+    uuid: String,
+    server_url: String,
+    reload: Signal<u32>,
+    state: JournalComposerState,
+) -> Element {
+    let JournalComposerState {
+        body,
+        saving,
+        error,
+        autosaved_secs,
+        ..
+    } = state;
+    let mut save_as = build_save_as_handler(&uuid, &server_url, state, reload);
 
     rsx! {
         div { class: "bd-journal-composer-foot",
@@ -560,23 +633,7 @@ fn BdJournalComposerFoot(
                 r#type: "button",
                 class: "btn ghost sm",
                 disabled: saving(),
-                onclick: move |_| {
-                    let url = server_url.clone();
-                    if let Some(t) = state.autosave_task.write().take() {
-                        t.cancel();
-                    }
-                    saving.set(true);
-                    spawn(async move {
-                        // Discard any autosaved draft row (best-effort) BEFORE
-                        // closing — reset_and_close() unmounts this scope, and
-                        // a task spawned after unmount is dropped unpolled.
-                        if let Some(id) = draft_id() {
-                            let _ = data::delete_journal_entry(&url, id).await;
-                        }
-                        saving.set(false);
-                        state.reset_and_close();
-                    });
-                },
+                onclick: move |_| cancel_and_discard_draft(&server_url, state),
                 "Cancel"
             }
             button {

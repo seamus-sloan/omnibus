@@ -38,6 +38,50 @@ struct JournalEntryHeaderView {
     server_url: String,
 }
 
+/// "Publish" button for an owner's draft entry — flips the entry's status to
+/// `Published`. Split out of [`BdJournalEntryHeader`] to keep it under the
+/// line cap.
+#[component]
+fn BdJournalPublishDraftButton(
+    server_url: String,
+    entry_id: i64,
+    body_for_edit: String,
+    entry_progress: Option<u8>,
+    saving: Signal<bool>,
+    error: Signal<Option<String>>,
+    reload: Signal<u32>,
+) -> Element {
+    let mut saving = saving;
+    let mut error = error;
+    let mut reload = reload;
+    rsx! {
+        button {
+            r#type: "button",
+            class: "btn primary sm",
+            "data-testid": "journal-publish-draft",
+            disabled: saving(),
+            onclick: move |_| {
+                let url = server_url.clone();
+                let input = UpdateJournalEntry {
+                    body_md: body_for_edit.clone(),
+                    progress: entry_progress,
+                    status: Some(JournalStatus::Published),
+                };
+                saving.set(true);
+                error.set(None);
+                spawn(async move {
+                    match data::update_journal_entry(&url, entry_id, input).await {
+                        Ok(_) => reload.set(reload() + 1),
+                        Err(e) => error.set(Some(e.to_string())),
+                    }
+                    saving.set(false);
+                });
+            },
+            "Publish"
+        }
+    }
+}
+
 /// Entry card header: author monogram + byline (with a "you" chip for the
 /// owner) + date/progress meta, and — for the owner, while not already
 /// editing — the Edit/Delete action row. Delete removes the entry and
@@ -90,35 +134,14 @@ fn BdJournalEntryHeader(view: JournalEntryHeaderView, edit: JournalEntryEditStat
             if is_owner && !editing() {
                 div { class: "bd-journal-entry-actions",
                     if is_draft {
-                        button {
-                            r#type: "button",
-                            class: "btn primary sm",
-                            "data-testid": "journal-publish-draft",
-                            disabled: saving(),
-                            onclick: {
-                                let url = server_url.clone();
-                                let body_md = body_for_edit.clone();
-                                move |_| {
-                                    let url = url.clone();
-                                    let input = UpdateJournalEntry {
-                                        body_md: body_md.clone(),
-                                        progress: entry_progress,
-                                        status: Some(JournalStatus::Published),
-                                    };
-                                    saving.set(true);
-                                    error.set(None);
-                                    spawn(async move {
-                                        match data::update_journal_entry(&url, entry_id, input)
-                                            .await
-                                        {
-                                            Ok(_) => reload.set(reload() + 1),
-                                            Err(e) => error.set(Some(e.to_string())),
-                                        }
-                                        saving.set(false);
-                                    });
-                                }
-                            },
-                            "Publish"
+                        BdJournalPublishDraftButton {
+                            server_url: server_url.clone(),
+                            entry_id,
+                            body_for_edit: body_for_edit.clone(),
+                            entry_progress,
+                            saving,
+                            error,
+                            reload,
                         }
                     }
                     button {
