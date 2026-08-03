@@ -261,19 +261,21 @@ test("shows the continue-reading hero once a book has progress", async ({
   page,
   request,
 }) => {
-  // Seed an epub position for a fixture book via the REST progress endpoint.
-  // Progress is per-(user, book); Alpha's position is only ever written here
-  // and never asserted by the reader progress-restore specs (which own
-  // frankenstein / great-gatsby exclusively).
-  const alphaUuid = await fetchBookUuidByTitle(request, "Alpha");
-  await seedProgressAndOpenLanding(page, request, alphaUuid);
+  // `standalone-mountain` is reserved for this test and read by no other
+  // spec. It used to use Alpha, which `merge.spec.ts` merges an audiobook
+  // into and then undoes — mutating that book's formats and its
+  // `reading_progress` rows mid-suite. `merge.spec.ts` takes `withLock`, but
+  // that only serializes writers; a reader like this one is unprotected, so
+  // the rail could be asserted against Alpha mid-merge.
+  const uuid = await fetchBookUuidByTitle(request, "Berg der Beweise");
+  await seedProgressAndOpenLanding(page, request, uuid);
 
   await expect(page.getByTestId("continue-hero")).toBeVisible();
-  await expect(page.getByTestId(`hero-card-${alphaUuid}`)).toBeVisible();
+  await expect(page.getByTestId(`hero-card-${uuid}`)).toBeVisible();
   // The epub CTA deep-links into the reader.
-  await expect(page.getByTestId(`hero-resume-${alphaUuid}`)).toHaveAttribute(
+  await expect(page.getByTestId(`hero-resume-${uuid}`)).toHaveAttribute(
     "href",
-    `/read/${alphaUuid}`,
+    `/read/${uuid}`,
   );
 });
 
@@ -281,12 +283,11 @@ test("drops a book from the continue-reading hero once it is finished", async ({
   page,
   request,
 }) => {
-  // `standalone-island` is reserved for this test. Read status is per-(user,
-  // book) server state and the suite is fullyParallel against one server, so
-  // marking it finished is globally visible the moment it lands — no other
-  // spec may read this book. It is also why the test above uses Alpha, whose
-  // status row stays absent.
-  const uuid = await fetchBookUuidByTitle(request, "The Isle of Functions");
+  // `standalone-desert` is reserved for this test and read by no other spec.
+  // Read status is per-(user, book) server state and the suite is
+  // fullyParallel against one server, so marking a book finished is globally
+  // visible the moment it lands — and now also takes it off the rail.
+  const uuid = await fetchBookUuidByTitle(request, "Desert Protocols");
 
   // Explicitly `reading` rather than relying on the absent-row default, and
   // set *before* the rail is polled: this test's own last act is to mark the
