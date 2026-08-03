@@ -405,6 +405,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Omnibus;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Scan a book's barcode to check in a physical copy.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Omnibus connects to your library server on this network.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
@@ -452,6 +453,7 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Omnibus;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Scan a book's barcode to check in a physical copy.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Omnibus connects to your library server on this network.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
