@@ -246,6 +246,16 @@ skip = [
     # list. 0.12.28 is the dioxus-fullstack git-pin copy; 0.13.4 is the
     # workspace-pinned version (Cargo.toml [workspace.dependencies]).
     { name = "reqwest", version = "0.12.28" },
+
+    # --- Dioxus git-pin lag (gloo-net / gloo-timers / gloo-utils) ---
+    # dioxus-fullstack/dioxus-web 0.7.9's git-pinned Dioxus tag carries
+    # gloo-net 0.6.0 (pulling gloo-utils 0.2.0) + gloo-timers 0.3.0, while
+    # omnibus-frontend pins gloo-net 0.7.0 (pulling gloo-utils 0.3.0) +
+    # gloo-timers 0.4.0 directly behind the `web` feature. See
+    # docs/dependency-audit.md for full source chains (issue #1621).
+    { name = "gloo-net", version = "0.6.0" },
+    { name = "gloo-timers", version = "0.3.0" },
+    { name = "gloo-utils", version = "0.2.0" },
 ]
 
 # ---------------------------------------------------------------------------
