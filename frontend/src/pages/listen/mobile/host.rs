@@ -365,6 +365,9 @@ async fn drain_audio_events(
     } = ctx;
     let LoadTarget { uuid, file_id } = target;
     let mut last_saved = 0.0_f64;
+    // One `Reading` write per loaded book: `Play` also fires on every resume
+    // from pause, and a file switch re-runs this drain with a fresh flag.
+    let mut marked_reading = false;
     crate::js_interop::drain_events(eval, move |event: interop::AudioEvent| match event {
         interop::AudioEvent::Time { seconds, paused } => {
             elapsed.set(seconds);
@@ -384,14 +387,35 @@ async fn drain_audio_events(
                 persist_position(&uuid, file_id, &server_url, seconds);
             }
         }
-        interop::AudioEvent::Play => playing.set(true),
+        interop::AudioEvent::Play => {
+            playing.set(true);
+            if !marked_reading {
+                marked_reading = true;
+                mark_read_status(&uuid, &server_url, false);
+            }
+        }
         interop::AudioEvent::Pause { seconds } => {
             playing.set(false);
             elapsed.set(seconds);
             persist_position(&uuid, file_id, &server_url, seconds);
         }
+        interop::AudioEvent::Ended => {
+            playing.set(false);
+            mark_read_status(&uuid, &server_url, true);
+        }
     })
     .await;
+}
+
+/// Spawn the best-effort auto read-status write for the playing book.
+/// `at_end` is false on the first play (`Unread` → `Reading`) and true once
+/// every file has played out (→ `Finished`).
+fn mark_read_status(uuid: &str, server_url: &str, at_end: bool) {
+    let uuid = uuid.to_string();
+    let server_url = server_url.to_string();
+    spawn(async move {
+        crate::read_status_auto::apply_auto_read_status(&server_url, &uuid, at_end).await;
+    });
 }
 
 #[cfg(test)]

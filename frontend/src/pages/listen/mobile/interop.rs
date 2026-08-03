@@ -30,6 +30,9 @@ pub enum AudioEvent {
     Play,
     /// Playback paused (carries the position at pause).
     Pause { seconds: f64 },
+    /// The last part played out with nothing left to advance to — every file
+    /// of the book has been listened through.
+    Ended,
 }
 
 /// Now-playing metadata for the iOS lock screen / Control Center, pushed
@@ -300,7 +303,10 @@ fn surface_js(parts_json: &str, resume_lit: &str, rate_lit: &str, meta_lit: &str
       oa._index += 1;
       el.src = oa._parts[oa._index].url; el.load();
       var p = el.play(); if (p && p.catch) p.catch(function(){{}});
+      return;
     }}
+    // Nothing left to advance to: the book is finished.
+    dioxus.send({{ kind: 'Ended' }});
   }});
 
   // Seed the starting part for the resume position.

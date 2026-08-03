@@ -265,10 +265,11 @@ fn spawn_manifest_init(
     });
 }
 
-/// Wire the five Rust-side closures that JS calls back into:
+/// Wire the six Rust-side closures that JS calls back into:
 /// `__omnibusOnAudioTime`, `__omnibusOnAudioDuration`, `__omnibusOnAudioPlay`,
-/// `__omnibusOnAudioPause`, `__omnibusOnInitTimeout`. Registered before the
-/// JS bootstrap so a fast `loadedmetadata` always finds them.
+/// `__omnibusOnAudioPause`, `__omnibusOnAudioEnded`, `__omnibusOnInitTimeout`.
+/// Registered before the JS bootstrap so a fast `loadedmetadata` always finds
+/// them.
 ///
 /// `file_id` is the file this boot loaded; it rides along on every position
 /// POST. Re-registered on each boot, and a file switch always re-boots (see
@@ -299,8 +300,32 @@ fn register_js_callbacks(
     let on_duration = Closure::<dyn FnMut(f64)>::new(move |d: f64| {
         duration.set(d);
     });
+    // Starting an `Unread` book marks it `Reading`, the audio counterpart of
+    // the readers' mark-on-open. Fired from the first play of this boot only
+    // — `play` also fires on every resume from pause, and a file switch
+    // re-registers these callbacks, so the flag scopes it to one write per
+    // book opened.
+    let uuid_for_start = uuid_cb.clone();
+    let mut marked_reading = false;
     let on_play = Closure::<dyn FnMut(f64)>::new(move |_: f64| {
         playing.set(true);
+        if marked_reading {
+            return;
+        }
+        marked_reading = true;
+        let uuid = uuid_for_start.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            crate::read_status_auto::apply_auto_read_status("", &uuid, false).await;
+        });
+    });
+    // Every file played through — see the `ended` handler in `js.rs`, which
+    // only calls this once there is no next part to advance to.
+    let uuid_for_end = uuid_cb.clone();
+    let on_ended = Closure::<dyn FnMut(f64)>::new(move |_: f64| {
+        let uuid = uuid_for_end.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            crate::read_status_auto::apply_auto_read_status("", &uuid, true).await;
+        });
     });
     let uuid_for_pause = uuid_cb;
     let on_pause = Closure::<dyn FnMut(f64)>::new(move |secs: f64| {
@@ -340,10 +365,22 @@ fn register_js_callbacks(
     );
     let _ = js_sys::Reflect::set(
         &window,
+        &JsValue::from_str("__omnibusOnAudioEnded"),
+        on_ended.as_ref().unchecked_ref(),
+    );
+    let _ = js_sys::Reflect::set(
+        &window,
         &JsValue::from_str("__omnibusOnInitTimeout"),
         on_init_timeout.as_ref().unchecked_ref(),
     );
-    *cb_holder.borrow_mut() = vec![on_time, on_duration, on_play, on_pause, on_init_timeout];
+    *cb_holder.borrow_mut() = vec![
+        on_time,
+        on_duration,
+        on_play,
+        on_pause,
+        on_ended,
+        on_init_timeout,
+    ];
 }
 
 /// Install the `window.OmnibusAudio` control surface immediately so

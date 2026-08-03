@@ -86,15 +86,29 @@ struct ReadStatusAutoTrackerTests {
         #expect(log.writes.isEmpty)
     }
 
-    @Test("an end observed before the fetch lands is applied when it does")
+    @Test("an end observed before the fetch lands settles it with one write")
     func endBeforeFetchStillFinishes() async {
         // The comic restored onto its last page: the opening position is fed
-        // before the status fetch settles.
+        // before the status fetch settles. Reaching the end pulls the status
+        // itself rather than waiting, and the later open must not re-run the
+        // transition it already applied.
         let log = Log()
         let auto = tracker(stored: .reading, log: log)
         await auto.positionChanged(atEnd: true)
-        #expect(log.writes.isEmpty)
+        #expect(log.writes == [.finished])
         await auto.bookOpened()
+        #expect(log.writes == [.finished])
+    }
+
+    @Test("the player finishes a book it never opened through the tracker")
+    func endWithoutOpenStillFinishes() async {
+        // The audio player reaches end-of-book off `AVPlayerItemDidPlayToEnd`,
+        // which can fire on a load whose `play()` — and so whose `bookOpened`
+        // — never ran (a lock-screen resume, an already-loaded book). Losing
+        // the completion there would leave a fully-listened book unfinished.
+        let log = Log()
+        let auto = tracker(stored: .reading, log: log)
+        await auto.positionChanged(atEnd: true)
         #expect(log.writes == [.finished])
     }
 

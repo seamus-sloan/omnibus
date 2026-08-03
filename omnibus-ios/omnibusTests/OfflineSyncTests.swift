@@ -151,6 +151,16 @@ struct OutboxScopeTests {
         #expect(!OutboxScope.isBlocked(CacheKey.shelves, by: kinds))
     }
 
+    @Test("a queued read status holds off the Continue rail it filters")
+    func readStatusBlocksResumeRail() {
+        // `db::progress::recent_progress` drops books marked `unread` or
+        // `finished`, so the rail's contents now depend on this write. A
+        // revalidation against a server that has not seen it would put a
+        // finished book back on the rail.
+        let kinds: Set<String> = [OpKind.readStatus(uuid)]
+        #expect(OutboxScope.isBlocked(CacheKey.recentProgress, by: kinds))
+    }
+
     @Test("annotation kinds hold off their own lists")
     func annotationKindsBlockTheirLists() {
         #expect(OutboxScope.isBlocked(CacheKey.highlights(uuid), by: [OpKind.highlight]))
