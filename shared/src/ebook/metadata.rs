@@ -132,8 +132,12 @@ pub struct EbookMetadata {
 
     /// Page count of the CBZ archive `/api/ebooks/{uuid}/pages/{n}` would
     /// serve, so the comic pager can render a slider and map progress onto
-    /// page indices. Populated only on the detail read, and only for books
-    /// with a CBZ file; `None` everywhere else.
+    /// page indices. Persisted on `books.page_count` at index time (#1593)
+    /// rather than recomputed per read, so it rides straight off the shared
+    /// projection on every read path — list, search, and detail alike.
+    /// `None` for an EPUB-only book, a malformed archive, or a row indexed
+    /// before migration `0063` (until the next scan's backfill catches it
+    /// up).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_count: Option<i64>,
 }

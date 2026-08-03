@@ -14,7 +14,7 @@ mod audiobooks;
 mod backfill;
 
 pub use audiobooks::{reindex_audiobooks, reindex_audiobooks_with_progress};
-pub(crate) use backfill::{backfill_chapters, backfill_word_counts};
+pub(crate) use backfill::{backfill_chapters, backfill_page_counts, backfill_word_counts};
 
 /// Errors returned by the pure-DB indexer reads (`is_stale`). The
 /// transparent `Db` variant honors the `02-error-handling` boundary rule

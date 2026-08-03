@@ -258,7 +258,7 @@ async fn update_book_row(
         "UPDATE books SET
             scan_key = ?, path = ?, title = ?, sort = ?, author_sort = ?, series_sort = ?,
             series_index = ?, pubdate = ?, has_cover = ?, description = ?, accent_color = ?,
-            title_norm = ?, author_norm = ?, word_count = ?,
+            title_norm = ?, author_norm = ?, word_count = ?, page_count = ?,
             last_modified = strftime('%s','now')
          WHERE id = ?",
     )
@@ -276,6 +276,7 @@ async fn update_book_row(
     .bind(normalize_title(&title))
     .bind(m.creators.first().and_then(|c| normalize_author(&c.name)))
     .bind(b.word_count)
+    .bind(m.page_count)
     .bind(book_id)
     .execute(&mut **tx)
     .await?;
@@ -324,8 +325,8 @@ pub(super) async fn insert_book_row(
         "INSERT INTO books
             (uuid, scan_key, library_id, path, title, sort, author_sort, series_sort, series_index,
              pubdate, has_cover, description, accent_color, title_norm, author_norm, word_count,
-             timestamp, last_modified)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+             page_count, timestamp, last_modified)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                  strftime('%s','now'), strftime('%s','now'))
          RETURNING id",
     )
@@ -345,6 +346,7 @@ pub(super) async fn insert_book_row(
     .bind(normalize_title(&title))
     .bind(m.creators.first().and_then(|c| normalize_author(&c.name)))
     .bind(b.word_count)
+    .bind(m.page_count)
     .fetch_one(&mut **tx)
     .await?;
 

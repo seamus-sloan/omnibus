@@ -1795,15 +1795,20 @@ async fn seed_cbz_on_disk(pool: &sqlx::SqlitePool) -> (String, std::path::PathBu
         .unwrap()
         .last_insert_rowid();
     let uuid = "55555555-5555-5555-5555-555555555555".to_string();
-    let book_id =
-        sqlx::query("INSERT INTO books (uuid, library_id, path, title) VALUES (?, ?, ?, 'Alpha')")
-            .bind(&uuid)
-            .bind(lib_id)
-            .bind(tmp.to_str().unwrap())
-            .execute(pool)
-            .await
-            .unwrap()
-            .last_insert_rowid();
+    // `page_count` is stamped here rather than derived at request time
+    // (#1593) — two real pages (p1.jpg, p2.png); the AppleDouble junk entry
+    // never counts, same as the indexer's own count would produce.
+    let book_id = sqlx::query(
+        "INSERT INTO books (uuid, library_id, path, title, page_count) \
+         VALUES (?, ?, ?, 'Alpha', 2)",
+    )
+    .bind(&uuid)
+    .bind(lib_id)
+    .bind(tmp.to_str().unwrap())
+    .execute(pool)
+    .await
+    .unwrap()
+    .last_insert_rowid();
     sqlx::query(
         "INSERT INTO book_files (book_id, format, filename, size_bytes) \
          VALUES (?, 'CBZ', 'alpha', 0)",

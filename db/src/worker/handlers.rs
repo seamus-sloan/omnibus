@@ -112,6 +112,17 @@ impl Worker {
                 )
                 .await,
             ),
+            Task::BackfillPageCounts { library_path } => anyhow_outcome(
+                "page-count backfill",
+                crate::indexer::backfill_page_counts(
+                    &self.pool,
+                    &library_path,
+                    |processed, total| {
+                        self.report_progress(id, processed, Some(total));
+                    },
+                )
+                .await,
+            ),
             Task::RebuildFtsIndex => anyhow_outcome(
                 "FTS rebuild",
                 crate::sync::rebuild_all_fts(&self.pool).await,
@@ -149,10 +160,10 @@ impl Worker {
     }
 
     /// Reindex an ebook library, then (on success) post the follow-up
-    /// word-count backfill task for any pre-0049 rows this library still
-    /// carries. Same resource key as the scan, so it waits for this task to
-    /// fully finish; the post itself is instant. Mirrors the audiobook
-    /// chapter backfill.
+    /// word-count and page-count backfill tasks for any pre-0049 / pre-0063
+    /// rows this library still carries. Both share the scan's resource key,
+    /// so each waits for this task to fully finish; the posts themselves
+    /// are instant. Mirrors the audiobook chapter backfill.
     async fn handle_scan(self: &Arc<Self>, library_path: String, id: TaskId) -> TaskOutcome {
         match crate::indexer::reindex_with_progress(
             &self.pool,
@@ -165,7 +176,10 @@ impl Worker {
         {
             Ok(stats) => {
                 let warning = stats.ghost_warning();
-                self.post(Task::BackfillWordCounts { library_path });
+                self.post(Task::BackfillWordCounts {
+                    library_path: library_path.clone(),
+                });
+                self.post(Task::BackfillPageCounts { library_path });
                 TaskOutcome::Ok(warning)
             }
             Err(e) => sanitized_err("library scan", e),

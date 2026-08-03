@@ -242,3 +242,95 @@ async fn fetch_word_count_candidates(
     .await?;
     Ok(ids)
 }
+
+/// Fill `books.page_count` for CBZ-backed books under `library_path` that
+/// have none yet (NULL `page_count`).
+///
+/// Page counts were added after the initial comic indexer (migration
+/// `0063`, tech-debt #1593), so books indexed before it carry a NULL. The
+/// normal diff-based reindex only re-parses new/changed files, so it never
+/// revisits them; this backfill runs as a separate worker task posted after
+/// each ebook library scan (mirroring [`backfill_word_counts`]) and is a
+/// no-op once every CBZ book has a count. `on_progress(processed, total)` is
+/// called per book for the UI.
+///
+/// Each candidate's archive is listed (central-directory read, not a
+/// decompression) on the blocking pool, and updates commit in batches of
+/// 250 to bound WAL flushes. A book whose archive can't be listed stays
+/// NULL and is retried on the next scan.
+pub(crate) async fn backfill_page_counts(
+    pool: &SqlitePool,
+    library_path: &str,
+    mut on_progress: impl FnMut(u32, u32),
+) -> anyhow::Result<()> {
+    let ids = fetch_page_count_candidates(pool, library_path).await?;
+    if ids.is_empty() {
+        return Ok(());
+    }
+
+    let total = u32::try_from(ids.len()).unwrap_or(u32::MAX);
+    tracing::info!(count = total, "backfilling page counts for existing comics");
+
+    // One batched path lookup up front (chunked internally), same pattern
+    // `backfill_word_counts` uses.
+    let paths = crate::book_file_paths(pool, &ids, "CBZ").await?;
+
+    let mut processed = 0u32;
+    for chunk in ids.chunks(250) {
+        let mut tx = pool.begin().await?;
+        for &id in chunk {
+            processed = processed.saturating_add(1);
+            on_progress(processed, total);
+
+            let Some(path) = paths.get(&id).cloned() else {
+                continue;
+            };
+            let count = tokio::task::spawn_blocking(move || {
+                crate::comic::list_pages(&path)
+                    .ok()
+                    .map(|pages| pages.len() as i64)
+            })
+            .await
+            .unwrap_or_else(|join_err| {
+                tracing::warn!(
+                    book_id = id,
+                    %join_err,
+                    is_panic = join_err.is_panic(),
+                    "page-count task failed; leaving page_count NULL"
+                );
+                None
+            });
+
+            let Some(count) = count else { continue };
+            sqlx::query("UPDATE books SET page_count = ? WHERE id = ?")
+                .bind(count)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+    }
+
+    Ok(())
+}
+
+/// `books.id` for every CBZ-backed book under `library_path` still missing a
+/// `page_count` — the [`backfill_page_counts`] work set. Scoped to the
+/// scanned library so the follow-up task's cost tracks that scan.
+async fn fetch_page_count_candidates(
+    pool: &SqlitePool,
+    library_path: &str,
+) -> anyhow::Result<Vec<i64>> {
+    let ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT DISTINCT b.id \
+         FROM books b \
+         JOIN scan_roots l ON b.library_id = l.id \
+         JOIN book_files bf ON bf.book_id = b.id AND bf.format = 'CBZ' COLLATE NOCASE \
+         WHERE l.path = ? AND b.page_count IS NULL \
+         ORDER BY b.id",
+    )
+    .bind(library_path)
+    .fetch_all(pool)
+    .await?;
+    Ok(ids)
+}
