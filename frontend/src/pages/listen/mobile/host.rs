@@ -237,7 +237,7 @@ async fn load_and_drain(
     let Some(book) = load_book_metadata(&server_url, &uuid, error, loading).await else {
         return;
     };
-    let Some((manifest, file_id)) =
+    let Some((manifest, _file_id)) =
         load_manifest(&server_url, &uuid, selected_file_id, &book, error, loading).await
     else {
         return;

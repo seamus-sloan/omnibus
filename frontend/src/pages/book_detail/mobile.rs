@@ -94,7 +94,7 @@ pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
         server_url,
         description:
             DescriptionSignals {
-                value: mut description,
+                value: description,
                 epoch: description_epoch,
             },
     } = view;
