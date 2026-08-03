@@ -11,7 +11,7 @@ import SwiftUI
 struct ContinueHero: View {
     let points: [ResumePoint]
     /// Runs after the long-press editor saves, so the card can pick up a title
-    /// or cover it is still drawing from the old metadata.
+    /// or cover that it is still drawing from the old metadata.
     var onEdited: () -> Void = {}
     /// Pushes the book's detail screen. A tap resumes the book, so this is the
     /// card's only way through to everything else about it.

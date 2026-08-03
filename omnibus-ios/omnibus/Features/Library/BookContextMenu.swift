@@ -1,8 +1,8 @@
 //  BookContextMenu.swift
-//  Long-press quick actions for a book cell: jump straight into the metadata
-//  editor without the trip through the detail screen. One modifier shared by
-//  every surface that renders a book cell, so a held-down book means the same
-//  thing everywhere.
+//  Long-press quick actions for a book cell: the metadata editor without the
+//  trip through the detail screen, and — for a cell whose tap goes elsewhere —
+//  the way through to that screen. One modifier shared by every surface that
+//  renders a book cell, so a held-down book means the same thing everywhere.
 
 import SwiftUI
 
