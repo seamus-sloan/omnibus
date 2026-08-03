@@ -38,21 +38,17 @@ pub fn ServerConnectPage() -> Element {
     }
 }
 
-/// The mobile Connect screen: brand shell, a server-URL field, and a Connect
-/// button that validates reachability before advancing to `/login`.
+/// Build the connect callback: probes the server, persists it (clearing any
+/// stale token if it's a different origin), and advances to `/login`.
 #[cfg(feature = "mobile")]
-fn server_connect_mobile() -> Element {
-    let nav = use_navigator();
-    let url_signal = use_server_url_signal();
-    // Prefill with the current URL (empty on first run) so the Back button
-    // from Login returns here with the value already in the field. Seed from
-    // a `peek` (not `use_server_url`, which calls `use_context`) — a hook run
-    // inside `use_signal`'s initializer panics with a hook-borrow error.
-    let mut url_input = use_signal(move || url_signal.peek().clone());
-    let mut error = use_signal(|| Option::<String>::None);
-    let mut checking = use_signal(|| false);
-
-    let connect = use_callback(move |_: ()| {
+fn build_connect_handler(
+    nav: dioxus_router::Navigator,
+    mut url_signal: Signal<String>,
+    url_input: Signal<String>,
+    mut error: Signal<Option<String>>,
+    mut checking: Signal<bool>,
+) -> impl FnMut(()) + 'static {
+    move |_: ()| {
         if checking() {
             return;
         }
@@ -62,7 +58,6 @@ fn server_connect_mobile() -> Element {
         };
         error.set(None);
         checking.set(true);
-        let mut url_signal = url_signal;
         spawn(async move {
             let res = crate::data::check_server(&base).await;
             checking.set(false);
@@ -87,62 +82,92 @@ fn server_connect_mobile() -> Element {
                 )),
             }
         });
-    });
+    }
+}
+
+/// The connect form body: error banner, server-URL field, submit button, and
+/// the "learn how to host one" footer link.
+#[cfg(feature = "mobile")]
+fn server_connect_form(
+    mut url_input: Signal<String>,
+    error: Signal<Option<String>>,
+    checking: Signal<bool>,
+    connect: Callback<()>,
+) -> Element {
+    rsx! {
+        form { class: "auth-form-inner",
+            onsubmit: move |e: FormEvent| {
+                e.prevent_default();
+                connect.call(());
+            },
+            "data-testid": "server-connect-form",
+            if let Some(msg) = error() {
+                Banner { kind: BannerKind::Err, title: msg, dismissible: false }
+            }
+            Field {
+                label: "Server URL".to_string(),
+                input_id: "server-url".to_string(),
+                hint: "The address where your Omnibus server is running — a local network address or a domain you host it on.".to_string(),
+                input {
+                    id: "server-url",
+                    name: "server-url",
+                    r#type: "url",
+                    inputmode: "url",
+                    placeholder: "https://omnibus.local:3000",
+                    autocapitalize: "none",
+                    autocorrect: "off",
+                    spellcheck: "false",
+                    value: "{url_input}",
+                    oninput: move |e| url_input.set(e.value()),
+                    onkeydown: move |e: Event<KeyboardData>| {
+                        if e.key() == Key::Enter {
+                            e.prevent_default();
+                            connect.call(());
+                        }
+                    },
+                }
+            }
+            button {
+                class: "btn primary lg auth-submit",
+                r#type: "submit",
+                disabled: checking(),
+                if checking() { "Connecting…" } else { "Connect" }
+            }
+            p { class: "auth-footer",
+                "Don't have a server? "
+                // TODO(#1118): point at dedicated hosting docs once they exist.
+                a {
+                    class: "auth-field-action-link",
+                    href: "https://github.com/seamus-sloan/omnibus",
+                    target: "_blank",
+                    rel: "noreferrer",
+                    "Learn how to host one"
+                }
+            }
+        }
+    }
+}
+
+/// The mobile Connect screen: brand shell, a server-URL field, and a Connect
+/// button that validates reachability before advancing to `/login`.
+#[cfg(feature = "mobile")]
+fn server_connect_mobile() -> Element {
+    let nav = use_navigator();
+    let url_signal = use_server_url_signal();
+    // Prefill with the current URL (empty on first run) so the Back button
+    // from Login returns here with the value already in the field. Seed from
+    // a `peek` (not `use_server_url`, which calls `use_context`) — a hook run
+    // inside `use_signal`'s initializer panics with a hook-borrow error.
+    let url_input = use_signal(move || url_signal.peek().clone());
+    let error = use_signal(|| Option::<String>::None);
+    let checking = use_signal(|| false);
+    let connect = use_callback(build_connect_handler(
+        nav, url_signal, url_input, error, checking,
+    ));
 
     super::auth::m_auth_shell(
         "Connect to your server to get started.",
-        rsx! {
-            form { class: "auth-form-inner",
-                onsubmit: move |e: FormEvent| {
-                    e.prevent_default();
-                    connect.call(());
-                },
-                "data-testid": "server-connect-form",
-                if let Some(msg) = error() {
-                    Banner { kind: BannerKind::Err, title: msg, dismissible: false }
-                }
-                Field {
-                    label: "Server URL".to_string(),
-                    input_id: "server-url".to_string(),
-                    hint: "The address where your Omnibus server is running — a local network address or a domain you host it on.".to_string(),
-                    input {
-                        id: "server-url",
-                        name: "server-url",
-                        r#type: "url",
-                        inputmode: "url",
-                        placeholder: "https://omnibus.local:3000",
-                        autocapitalize: "none",
-                        autocorrect: "off",
-                        spellcheck: "false",
-                        value: "{url_input}",
-                        oninput: move |e| url_input.set(e.value()),
-                        onkeydown: move |e: Event<KeyboardData>| {
-                            if e.key() == Key::Enter {
-                                e.prevent_default();
-                                connect.call(());
-                            }
-                        },
-                    }
-                }
-                button {
-                    class: "btn primary lg auth-submit",
-                    r#type: "submit",
-                    disabled: checking(),
-                    if checking() { "Connecting…" } else { "Connect" }
-                }
-                p { class: "auth-footer",
-                    "Don't have a server? "
-                    // TODO(#1118): point at dedicated hosting docs once they exist.
-                    a {
-                        class: "auth-field-action-link",
-                        href: "https://github.com/seamus-sloan/omnibus",
-                        target: "_blank",
-                        rel: "noreferrer",
-                        "Learn how to host one"
-                    }
-                }
-            }
-        },
+        server_connect_form(url_input, error, checking, connect),
     )
 }
 

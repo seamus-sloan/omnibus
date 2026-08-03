@@ -45,25 +45,17 @@ const SCOPES: [(Scope, &str); 5] = [
     (Scope::Tags, "Tags"),
 ];
 
-/// Mobile live-search screen. Debounces keystrokes (150 ms, cancel-on-keystroke)
-/// and renders grouped results; row taps navigate to detail pages, a tag tap
-/// refines the query inline.
-#[component]
-pub fn MobileSearchPage() -> Element {
-    let server_url = use_server_url();
-    let nav = use_navigator();
-    let mut query = use_signal(String::new);
-    let mut results = use_signal(|| Option::<PaletteResults>::None);
-    let mut loading = use_signal(|| false);
-    let mut errored = use_signal(|| false);
-    let mut scope = use_signal(|| Scope::All);
-    // Handle of the in-flight debounce+fetch task so each new keystroke can
-    // cancel the prior one — only one request is ever in flight (mirrors the
-    // web palette's cancel-on-keystroke debounce).
-    let mut current_task = use_signal(|| Option::<Task>::None);
-
-    // Debounced search: re-runs whenever `query` changes.
-    let search_url = server_url.clone();
+/// Wire up the debounced search effect: re-runs whenever `query` changes,
+/// cancelling the prior in-flight task on each keystroke so only one request
+/// is ever in flight (mirrors the web palette's cancel-on-keystroke debounce).
+fn use_debounced_search(
+    query: Signal<String>,
+    mut results: Signal<Option<PaletteResults>>,
+    mut loading: Signal<bool>,
+    mut errored: Signal<bool>,
+    mut current_task: Signal<Option<Task>>,
+    server_url: String,
+) {
     use_effect(move || {
         let v = query();
         if let Some(prev) = current_task.write().take() {
@@ -80,7 +72,7 @@ pub fn MobileSearchPage() -> Element {
         // results pane shows "Searching…" immediately instead of a blank gap.
         loading.set(true);
         errored.set(false);
-        let url = search_url.clone();
+        let url = server_url.clone();
         let task = spawn(async move {
             debounce_sleep_ms(150).await;
             match data::search_palette(&url, &trimmed).await {
@@ -97,6 +89,30 @@ pub fn MobileSearchPage() -> Element {
         });
         current_task.set(Some(task));
     });
+}
+
+/// Mobile live-search screen. Debounces keystrokes (150 ms, cancel-on-keystroke)
+/// and renders grouped results; row taps navigate to detail pages, a tag tap
+/// refines the query inline.
+#[component]
+pub fn MobileSearchPage() -> Element {
+    let server_url = use_server_url();
+    let nav = use_navigator();
+    let mut query = use_signal(String::new);
+    let results = use_signal(|| Option::<PaletteResults>::None);
+    let loading = use_signal(|| false);
+    let errored = use_signal(|| false);
+    let mut scope = use_signal(|| Scope::All);
+    // Handle of the in-flight debounce+fetch task — see `use_debounced_search`.
+    let current_task = use_signal(|| Option::<Task>::None);
+    use_debounced_search(
+        query,
+        results,
+        loading,
+        errored,
+        current_task,
+        server_url.clone(),
+    );
 
     let res = results.read();
     let sc = scope();

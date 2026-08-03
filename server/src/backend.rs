@@ -344,7 +344,31 @@ fn content_routes() -> Router<AppState> {
 
 /// Metadata overrides, progress sync, author/cover/series/tag discovery routes,
 /// upload-rate-limited endpoints, and the search sub-router.
+///
+/// Each helper below owns one feature area (the grouping the route list used
+/// to carry as inline comments); this function just merges them.
 fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> {
+    Router::new()
+        .merge(metadata_override_routes())
+        .merge(progress_routes())
+        .merge(highlight_routes())
+        .merge(bookmark_routes())
+        .merge(engagement_routes())
+        .merge(check_in_routes())
+        .merge(physical_collection_routes())
+        .merge(shelf_routes())
+        .merge(journal_routes())
+        .merge(upload_router())
+        .merge(book_upload_router())
+        .merge(search_router(search_limiter))
+        .merge(discovery_routes())
+        .merge(suggestion_routes())
+        .merge(summary_routes())
+        .merge(kindle_routes())
+}
+
+/// Metadata override read/write + cover-only revert.
+fn metadata_override_routes() -> Router<AppState> {
     Router::new()
         .route(
             "/api/ebooks/{uuid}/overrides",
@@ -352,19 +376,28 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
         )
         // Cover-only revert. Carries no upload body (unlike the POST in
         // `upload_router`), so it stays outside the upload rate limiter —
-        // same split as the author-photo GET/DELETE vs PUT routes below.
+        // same split as the author-photo GET/DELETE vs PUT routes in
+        // `discovery_routes`.
         .route(
             "/api/ebooks/{uuid}/cover",
             delete(overrides::delete_ebook_cover),
         )
-        // F2.1 progress sync — mobile-facing REST. Web hits the analogous
-        // `/api/rpc/progress*` server functions defined in `omnibus_frontend::rpc`.
+}
+
+/// F2.1 progress sync — mobile-facing REST. Web hits the analogous
+/// `/api/rpc/progress*` server functions defined in `omnibus_frontend::rpc`.
+fn progress_routes() -> Router<AppState> {
+    Router::new()
         .route("/api/progress", post(progress::post_progress))
         .route("/api/progress/sessions", post(progress::post_sessions))
         .route("/api/progress/recent", get(progress::get_recent_progress))
         .route("/api/progress/{uuid}", get(progress::get_progress))
-        // F2.4b highlight annotations — mobile-facing REST. Web hits the
-        // analogous `/api/rpc/highlights/*` server functions.
+}
+
+/// F2.4b highlight annotations — mobile-facing REST. Web hits the analogous
+/// `/api/rpc/highlights/*` server functions.
+fn highlight_routes() -> Router<AppState> {
+    Router::new()
         .route("/api/highlights", post(highlights::post_highlight))
         .route(
             "/api/highlights/book/{book_uuid}",
@@ -379,9 +412,13 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             patch(highlights::patch_highlight_note),
         )
         .route("/api/highlights/{id}", delete(highlights::delete_highlight))
-        // Bookmarks — mobile-facing REST. Web hits the analogous
-        // `/api/rpc/bookmarks/*` server functions. One model serves both the
-        // audiobook player and the reader (position = seconds or EPUB CFI).
+}
+
+/// Bookmarks — mobile-facing REST. Web hits the analogous
+/// `/api/rpc/bookmarks/*` server functions. One model serves both the
+/// audiobook player and the reader (position = seconds or EPUB CFI).
+fn bookmark_routes() -> Router<AppState> {
+    Router::new()
         .route("/api/bookmarks", post(bookmarks::post_bookmark))
         .route(
             "/api/bookmarks/book/{book_uuid}",
@@ -391,11 +428,14 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             "/api/bookmarks/{id}",
             put(bookmarks::put_bookmark).delete(bookmarks::delete_bookmark),
         )
-        // Reading stats — mobile-facing REST. Web hits the analogous
-        // `/api/rpc/stats` server function.
+}
+
+/// Reading stats, F3.2 star ratings, and F3.4 read/unread state —
+/// mobile-facing REST. Web hits the analogous `/api/rpc/stats`,
+/// `/api/rpc/ratings/*`, and `/api/rpc/read-status/*` server functions.
+fn engagement_routes() -> Router<AppState> {
+    Router::new()
         .route("/api/stats", get(stats::get_stats))
-        // F3.2 star ratings — mobile-facing REST. Web hits the analogous
-        // `/api/rpc/ratings/*` server functions.
         .route("/api/ratings", post(ratings::post_rating))
         .route(
             "/api/ratings/others/{uuid}",
@@ -405,12 +445,14 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             "/api/ratings/{uuid}",
             get(ratings::get_rating).delete(ratings::delete_rating),
         )
-        // F3.4 read/unread state — mobile-facing REST. Web hits the analogous
-        // `/api/rpc/read-status/*` server functions.
         .route("/api/read-status", put(read_status::put_read_status))
         .route("/api/read-status/{uuid}", get(read_status::get_read_status))
-        // Physical Check-In scan flow — mobile-facing REST. Web hits the
-        // analogous `/api/rpc/scan/*` server functions.
+}
+
+/// Physical Check-In scan flow — mobile-facing REST. Web hits the analogous
+/// `/api/rpc/scan/*` server functions.
+fn check_in_routes() -> Router<AppState> {
+    Router::new()
         .route("/api/scan/resolve", post(scan::post_resolve))
         .route("/api/scan/search", post(scan::post_search))
         .route("/api/scan/resolve-meta", post(scan::post_resolve_meta))
@@ -434,9 +476,13 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             "/api/google-books-key",
             get(scan::get_google_books_key).post(scan::post_google_books_key),
         )
-        // F Physical Check-In — book-detail collection + wishlist reads/edits.
-        // The literal `copies` routes are registered before `/{uuid}` so the
-        // param route can't shadow them.
+}
+
+/// F Physical Check-In — book-detail collection + wishlist reads/edits.
+/// The literal `copies` routes are registered before `/{uuid}` so the
+/// param route can't shadow them.
+fn physical_collection_routes() -> Router<AppState> {
+    Router::new()
         .route(
             "/api/physical/copies/{copy_id}",
             patch(physical::patch_copy_note).delete(physical::delete_copy),
@@ -449,16 +495,18 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
                 .delete(physical::delete_wishlist_entry),
         )
         .route("/api/physical/{uuid}", delete(physical::delete_book))
-        // F3.1 shelves — mobile-facing REST. Web hits the analogous
-        // `/api/rpc/shelves*` server functions. `/preview` is registered before
-        // the `{id}` param route so it can't be shadowed.
+}
+
+/// F3.1 shelves — mobile-facing REST. Web hits the analogous
+/// `/api/rpc/shelves*` server functions. `/preview` and `/containing/{uuid}`
+/// are registered before the `{id}` param route so it can't shadow them.
+fn shelf_routes() -> Router<AppState> {
+    Router::new()
         .route(
             "/api/shelves",
             get(shelves::list_shelves).post(shelves::create_shelf),
         )
         .route("/api/shelves/preview", post(shelves::preview_rule))
-        // Also ahead of `{id}`, and for the same reason — `containing` is not
-        // a shelf id.
         .route(
             "/api/shelves/containing/{uuid}",
             get(shelves::shelves_containing),
@@ -475,8 +523,14 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             "/api/shelves/{id}/books/{uuid}",
             delete(shelves::remove_shelf_book),
         )
-        // F3.2 public journal entries — mobile-facing REST. Web hits the
-        // analogous `/api/rpc/journals/*` server functions.
+}
+
+/// F3.2 public journal entries — mobile-facing REST. Web hits the analogous
+/// `/api/rpc/journals/*` server functions. Embedded-image reads are
+/// media-gated like covers/thumbs; the matching upload POST lives in
+/// `upload_router` (rate-limited, image body cap).
+fn journal_routes() -> Router<AppState> {
+    Router::new()
         .route("/api/journals", post(journals::post_journal))
         .route(
             "/api/journals/book/{book_uuid}",
@@ -490,25 +544,24 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             "/api/journals/{id}",
             patch(journals::patch_journal).delete(journals::delete_journal),
         )
-        // Embedded-image reads are media-gated like covers/thumbs; the
-        // matching upload POST lives in `upload_router` (rate-limited, image
-        // body cap).
         .route(
             "/api/journals/images/{name}",
             get(journals::get_journal_image),
         )
-        // GET/DELETE for author photos carry no upload body (DELETE mutates,
-        // but cheaply — it clears photo state, it doesn't ingest one), so
-        // they stay outside the rate-limited `upload_router`. Only the binary
-        // uploads (cover POST, photo PUT, photo-url PUT) carry the per-IP
-        // frequency cap — see `upload_router` (#168).
+}
+
+/// Cover/thumb/author/series/tag discovery routes, including author photo
+/// reads. GET/DELETE for author photos carry no upload body (DELETE mutates,
+/// but cheaply — it clears photo state, it doesn't ingest one), so they stay
+/// outside the rate-limited `upload_router`. Only the binary uploads (cover
+/// POST, photo PUT, photo-url PUT) carry the per-IP frequency cap — see
+/// `upload_router` (#168).
+fn discovery_routes() -> Router<AppState> {
+    Router::new()
         .route(
             "/api/authors/{id}/photo",
             get(author_photos::get_author_photo).delete(author_photos::delete_author_photo),
         )
-        .merge(upload_router())
-        .merge(book_upload_router())
-        .merge(search_router(search_limiter))
         .route("/api/covers/{uuid}", get(covers::get_cover))
         .route("/api/thumbs/{uuid}/{size}", get(covers::get_thumb))
         .route("/api/authors", get(authors::get_authors))
@@ -524,8 +577,12 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
         .route("/api/series", get(series::get_series))
         .route("/api/series/{id}", get(series::get_series_by_id))
         .route("/api/tags", get(tags::get_tags))
-        // F3.3 suggestions — mobile-facing REST. Web hits the analogous
-        // `/api/rpc/ebook-suggestions` + `/api/rpc/hardcover-key` server fns.
+}
+
+/// F3.3 suggestions — mobile-facing REST. Web hits the analogous
+/// `/api/rpc/ebook-suggestions` + `/api/rpc/hardcover-key` server fns.
+fn suggestion_routes() -> Router<AppState> {
+    Router::new()
         .route(
             "/api/ebooks/{uuid}/suggestions",
             get(suggestions::get_suggestions),
@@ -538,16 +595,24 @@ fn data_routes(search_limiter: std::sync::Arc<RateLimiter>) -> Router<AppState> 
             "/api/hardcover-key",
             get(suggestions::get_hardcover_key).post(suggestions::post_hardcover_key),
         )
-        // "Fetch Summary" — mobile-facing REST. Web hits the analogous
-        // `/api/rpc/ebook/summary/*` server fns.
+}
+
+/// "Fetch Summary" — mobile-facing REST. Web hits the analogous
+/// `/api/rpc/ebook/summary/*` server fns.
+fn summary_routes() -> Router<AppState> {
+    Router::new()
         .route(
             "/api/ebooks/{uuid}/summary/fetch",
             post(summary::post_ebook_summary_fetch),
         )
         .route("/api/summary/sources", get(summary::get_summary_sources))
-        // F4.3 Send-to-Kindle — mobile-facing REST. Web hits the analogous
-        // `/api/rpc/kindle/send`, `/api/rpc/account/kindle-email`, and
-        // `/api/rpc/smtp*` server fns.
+}
+
+/// F4.3 Send-to-Kindle — mobile-facing REST. Web hits the analogous
+/// `/api/rpc/kindle/send`, `/api/rpc/account/kindle-email`, and
+/// `/api/rpc/smtp*` server fns.
+fn kindle_routes() -> Router<AppState> {
+    Router::new()
         .route("/api/kindle/send", post(kindle::post_send))
         .route("/api/kindle/send/status", get(kindle::get_send_status))
         .route("/api/account/kindle-email", post(kindle::post_kindle_email))

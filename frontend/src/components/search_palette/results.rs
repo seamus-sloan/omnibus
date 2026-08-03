@@ -13,6 +13,18 @@ use super::model::{facet_query, is_selected, plural, FlatItem};
 use super::PaletteOpen;
 use crate::{use_server_url, Route};
 
+/// Build a row click handler that navigates to `route` and closes the palette.
+fn navigate_and_close(
+    nav: dioxus_router::Navigator,
+    mut open: PaletteOpen,
+    route: Route,
+) -> impl FnMut(MouseEvent) + 'static {
+    move |_| {
+        nav.push(route.clone());
+        open.0.set(false);
+    }
+}
+
 /// Scrollable grouped result list rendered inside the palette panel.
 ///
 /// Owns the per-group heading + row layout. Each click callback closes the
@@ -25,7 +37,6 @@ pub(super) fn SpResultsList(
     has_navigated: Signal<bool>,
     open: PaletteOpen,
 ) -> Element {
-    let mut open = open;
     let nav = use_navigator();
     let res = results.read();
     let items = flat_items.read();
@@ -43,13 +54,7 @@ pub(super) fn SpResultsList(
                             key: "{book.id}",
                             book: book.clone(),
                             selected: has_nav && is_selected(&items, sel, &FlatItem::Book { uuid: book.uuid.clone(), title: book.title.clone() }),
-                            on_click: {
-                                let uuid = book.uuid.clone();
-                                move |_| {
-                                    nav.push(Route::BookDetail { uuid: uuid.clone() });
-                                    open.0.set(false);
-                                }
-                            },
+                            on_click: navigate_and_close(nav, open, Route::BookDetail { uuid: book.uuid.clone() }),
                         }
                     }
                 }
@@ -62,13 +67,7 @@ pub(super) fn SpResultsList(
                             key: "{author.id}",
                             author: author.clone(),
                             selected: has_nav && is_selected(&items, sel, &FlatItem::Author { id: author.id, name: author.name.clone() }),
-                            on_click: {
-                                let id = author.id;
-                                move |_| {
-                                    nav.push(Route::AuthorDetail { id });
-                                    open.0.set(false);
-                                }
-                            },
+                            on_click: navigate_and_close(nav, open, Route::AuthorDetail { id: author.id }),
                         }
                     }
                 }
@@ -81,13 +80,7 @@ pub(super) fn SpResultsList(
                             key: "{s.id}",
                             series: s.clone(),
                             selected: has_nav && is_selected(&items, sel, &FlatItem::Series { id: s.id, name: s.name.clone() }),
-                            on_click: {
-                                let id = s.id;
-                                move |_| {
-                                    nav.push(Route::SeriesDetail { id });
-                                    open.0.set(false);
-                                }
-                            },
+                            on_click: navigate_and_close(nav, open, Route::SeriesDetail { id: s.id }),
                         }
                     }
                 }
@@ -100,15 +93,7 @@ pub(super) fn SpResultsList(
                             key: "{tag.id}",
                             tag: tag.clone(),
                             selected: has_nav && is_selected(&items, sel, &FlatItem::Tag { id: tag.id, name: tag.name.clone() }),
-                            on_click: {
-                                let name = tag.name.clone();
-                                move |_| {
-                                    nav.push(Route::Search {
-                                        query: facet_query("tag", &name),
-                                    });
-                                    open.0.set(false);
-                                }
-                            },
+                            on_click: navigate_and_close(nav, open, Route::Search { query: facet_query("tag", &tag.name) }),
                         }
                     }
                 }

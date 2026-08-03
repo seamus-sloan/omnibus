@@ -357,6 +357,58 @@ pub(super) struct EditableCellProps {
     pub error: Option<String>,
 }
 
+/// Build the input's Enter/Escape keydown handler: Enter saves (if the
+/// draft changed) and exits edit mode; Escape restores `initial` and exits
+/// without saving. Both stop propagation so the row-level navigate/edit
+/// keydown handlers don't also fire.
+fn build_cell_keydown_handler(
+    mut draft: Signal<String>,
+    mut editing: Signal<Option<EditField>>,
+    initial: String,
+    on_save: EventHandler<String>,
+) -> impl FnMut(Event<KeyboardData>) + 'static {
+    move |e: Event<KeyboardData>| match e.key() {
+        Key::Enter => {
+            e.prevent_default();
+            // Stop the Enter event from bubbling to the row-level
+            // keydown that navigates to the book detail page.
+            e.stop_propagation();
+            let current = draft();
+            if current.trim() != initial.trim() {
+                on_save.call(current);
+            }
+            editing.set(None);
+        }
+        Key::Escape => {
+            e.prevent_default();
+            e.stop_propagation();
+            draft.set(initial.clone());
+            editing.set(None);
+        }
+        _ => {}
+    }
+}
+
+/// Build the input's blur handler: saves only when the draft actually
+/// changed from `initial`. Clicking into a cell and back out without typing
+/// must not POST an override equal to the scanned value (which would leak
+/// `metadata_overrides` rows that match the underlying scan, defeating the
+/// F5.1 merge semantics).
+fn build_cell_blur_handler(
+    draft: Signal<String>,
+    mut editing: Signal<Option<EditField>>,
+    initial: String,
+    on_save: EventHandler<String>,
+) -> impl FnMut(Event<FocusData>) + 'static {
+    move |_| {
+        let current = draft();
+        if current.trim() != initial.trim() {
+            on_save.call(current);
+        }
+        editing.set(None);
+    }
+}
+
 /// Inline-editable text cell used by `EbookRow`. Renders a span of text by
 /// default; in admin mode, a click swaps to a text input that commits via the
 /// `on_save` prop on Enter or blur and cancels on Escape. The input's `onclick`
@@ -394,10 +446,9 @@ pub(super) fn EditableCell(props: EditableCellProps) -> Element {
     // the save-on-blur round-trip when nothing actually changed.
     let initial = edit_value.unwrap_or_else(|| display_value.clone());
     let initial_for_click = initial.clone();
-    let initial_for_cancel = initial.clone();
-    let initial_for_enter = initial.clone();
-    let initial_for_blur = initial.clone();
     let testid_input = format!("{cell_testid}-input");
+    let onkeydown = build_cell_keydown_handler(draft, editing, initial.clone(), on_save);
+    let onblur = build_cell_blur_handler(draft, editing, initial, on_save);
 
     rsx! {
         td {
@@ -422,43 +473,8 @@ pub(super) fn EditableCell(props: EditableCellProps) -> Element {
                     placeholder: "{placeholder}",
                     onclick: move |e| { e.stop_propagation(); },
                     oninput: move |e| { draft.set(e.value()); },
-                    onkeydown: move |e: Event<KeyboardData>| {
-                        match e.key() {
-                            Key::Enter => {
-                                e.prevent_default();
-                                // Stop the Enter event from bubbling to
-                                // the row-level keydown that navigates
-                                // to the book detail page.
-                                e.stop_propagation();
-                                let current = draft();
-                                if current.trim() != initial_for_enter.trim() {
-                                    on_save.call(current);
-                                }
-                                editing.set(None);
-                            }
-                            Key::Escape => {
-                                e.prevent_default();
-                                e.stop_propagation();
-                                draft.set(initial_for_cancel.clone());
-                                editing.set(None);
-                            }
-                            _ => {}
-                        }
-                    },
-                    onblur: move |_| {
-                        // Save on blur only when the draft actually
-                        // changed. Clicking into a cell and clicking
-                        // back out without typing must not POST an
-                        // override equal to the scanned value (which
-                        // would leak `metadata_overrides` rows that
-                        // match the underlying scan, defeating the
-                        // F5.1 merge semantics).
-                        let current = draft();
-                        if current.trim() != initial_for_blur.trim() {
-                            on_save.call(current);
-                        }
-                        editing.set(None);
-                    },
+                    onkeydown,
+                    onblur,
                 }
             } else {
                 div { class: "ebook-title-cell", "{display_value}" }

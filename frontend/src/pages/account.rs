@@ -140,82 +140,185 @@ pub fn AccountPage(#[props(default)] embedded: bool) -> Element {
     }
 }
 
+/// Signals backing the Kindle email form — grouped so the hydration effect
+/// and the save/clear handler builders don't each take five signal params.
+#[cfg(not(feature = "mobile"))]
+#[derive(Clone, Copy)]
+struct KindleEmailSignals {
+    email_input: Signal<String>,
+    saved_email: Signal<Option<String>>,
+    msg: Signal<Option<String>>,
+    msg_is_error: Signal<bool>,
+    in_flight: Signal<bool>,
+}
+
+/// Hydrates the saved Kindle email after mount. `current_user` is a no-op on
+/// SSR/mobile, so the first paint matches the empty-signal SSR markup.
+#[cfg(not(feature = "mobile"))]
+fn use_kindle_email_hydration(mut signals: KindleEmailSignals) {
+    use_effect(move || {
+        spawn(async move {
+            if let Ok(Some(user)) = data::current_user().await {
+                if let Some(email) = user.kindle_email.clone() {
+                    signals.email_input.set(email.clone());
+                    signals.saved_email.set(Some(email));
+                }
+            }
+        });
+    });
+}
+
+/// Submit handler for the Kindle email save form: validates non-empty
+/// locally, then round-trips through `data::set_kindle_email`.
+#[cfg(not(feature = "mobile"))]
+fn kindle_save_handler(
+    server_url: String,
+    mut signals: KindleEmailSignals,
+) -> impl FnMut(Event<FormData>) + 'static {
+    move |evt: Event<FormData>| {
+        evt.prevent_default();
+        let value = (signals.email_input)().trim().to_string();
+        if value.is_empty() {
+            signals
+                .msg
+                .set(Some("Enter a Kindle email to save.".to_string()));
+            signals.msg_is_error.set(true);
+            return;
+        }
+        let url = server_url.clone();
+        signals.in_flight.set(true);
+        spawn(async move {
+            match data::set_kindle_email(&url, Some(value.clone())).await {
+                Ok(()) => {
+                    signals.saved_email.set(Some(value));
+                    signals.msg.set(Some("Kindle email saved.".to_string()));
+                    signals.msg_is_error.set(false);
+                }
+                Err(_) => {
+                    signals.msg.set(Some(
+                        "Failed to save Kindle email — check the address.".to_string(),
+                    ));
+                    signals.msg_is_error.set(true);
+                }
+            }
+            signals.in_flight.set(false);
+        });
+    }
+}
+
+/// Click handler for the Kindle email clear button.
+#[cfg(not(feature = "mobile"))]
+fn kindle_clear_handler(
+    server_url: String,
+    mut signals: KindleEmailSignals,
+) -> impl FnMut(Event<MouseData>) + 'static {
+    move |_| {
+        let url = server_url.clone();
+        signals.in_flight.set(true);
+        spawn(async move {
+            match data::set_kindle_email(&url, None).await {
+                Ok(()) => {
+                    signals.email_input.set(String::new());
+                    signals.saved_email.set(None);
+                    signals.msg.set(Some("Kindle email cleared.".to_string()));
+                    signals.msg_is_error.set(false);
+                }
+                Err(_) => {
+                    signals
+                        .msg
+                        .set(Some("Failed to clear Kindle email.".to_string()));
+                    signals.msg_is_error.set(true);
+                }
+            }
+            signals.in_flight.set(false);
+        });
+    }
+}
+
+/// The Kindle email form: input, save/clear actions, and the approved-sender
+/// hint. Split out of `kindle_account_body` so the signal wiring above and
+/// this markup each stay readable on their own.
+#[cfg(not(feature = "mobile"))]
+fn kindle_email_form(
+    email_input: Signal<String>,
+    in_flight: Signal<bool>,
+    connected: bool,
+    on_save: impl FnMut(Event<FormData>) + 'static,
+    on_clear: impl FnMut(Event<MouseData>) + 'static,
+) -> Element {
+    let mut email_input = email_input;
+    rsx! {
+        form {
+            id: "kindle-email-form",
+            class: "settings-form",
+            onsubmit: on_save,
+            div { class: "settings-field",
+                label { r#for: "kindle-email", "Kindle Email" }
+                input {
+                    r#type: "email",
+                    id: "kindle-email",
+                    name: "kindle_email",
+                    "data-testid": "kindle-email-input",
+                    autocomplete: "off",
+                    autocapitalize: "none",
+                    autocorrect: "off",
+                    spellcheck: "false",
+                    placeholder: "you@kindle.com",
+                    value: "{email_input}",
+                    oninput: move |e| email_input.set(e.value()),
+                }
+            }
+            p { class: "subtitle",
+                "Add "
+                b { "your library's sender address" }
+                " to your Amazon "
+                a {
+                    href: "https://www.amazon.com/sendtokindle/email",
+                    target: "_blank",
+                    rel: "noopener",
+                    "approved sender list"
+                }
+                " or Amazon will silently drop the delivery."
+            }
+            div { class: "settings-actions",
+                button {
+                    r#type: "submit",
+                    class: "btn",
+                    disabled: in_flight(),
+                    "data-testid": "kindle-email-save",
+                    "Save"
+                }
+                button {
+                    r#type: "button",
+                    class: "btn ghost",
+                    disabled: in_flight() || !connected,
+                    "data-testid": "kindle-email-clear",
+                    onclick: on_clear,
+                    "Clear"
+                }
+            }
+        }
+    }
+}
+
 /// Web/SSR page body — the Send-to-Kindle destination form. Hydrates the
 /// saved address from `/api/auth/me`; saving/clearing round-trips through
 /// `data::set_kindle_email`.
 #[cfg(not(feature = "mobile"))]
 fn kindle_account_body(embedded: bool) -> Element {
     let server_url = use_server_url();
-    let mut email_input = use_signal(String::new);
-    let mut saved_email = use_signal(|| None::<String>);
-    let mut msg = use_signal(|| None::<String>);
-    let mut msg_is_error = use_signal(|| false);
-    let mut in_flight = use_signal(|| false);
-
-    // Hydrate the saved Kindle email after mount. `current_user` is a no-op on
-    // SSR/mobile, so the first paint matches the empty-signal SSR markup.
-    use_effect(move || {
-        spawn(async move {
-            if let Ok(Some(user)) = data::current_user().await {
-                if let Some(email) = user.kindle_email.clone() {
-                    email_input.set(email.clone());
-                    saved_email.set(Some(email));
-                }
-            }
-        });
-    });
-
-    let save_url = server_url.clone();
-    let on_save = move |evt: Event<FormData>| {
-        evt.prevent_default();
-        let value = email_input().trim().to_string();
-        if value.is_empty() {
-            msg.set(Some("Enter a Kindle email to save.".to_string()));
-            msg_is_error.set(true);
-            return;
-        }
-        let url = save_url.clone();
-        in_flight.set(true);
-        spawn(async move {
-            match data::set_kindle_email(&url, Some(value.clone())).await {
-                Ok(()) => {
-                    saved_email.set(Some(value));
-                    msg.set(Some("Kindle email saved.".to_string()));
-                    msg_is_error.set(false);
-                }
-                Err(_) => {
-                    msg.set(Some(
-                        "Failed to save Kindle email — check the address.".to_string(),
-                    ));
-                    msg_is_error.set(true);
-                }
-            }
-            in_flight.set(false);
-        });
+    let signals = KindleEmailSignals {
+        email_input: use_signal(String::new),
+        saved_email: use_signal(|| None::<String>),
+        msg: use_signal(|| None::<String>),
+        msg_is_error: use_signal(|| false),
+        in_flight: use_signal(|| false),
     };
+    use_kindle_email_hydration(signals);
 
-    let clear_url = server_url;
-    let on_clear = move |_| {
-        let url = clear_url.clone();
-        in_flight.set(true);
-        spawn(async move {
-            match data::set_kindle_email(&url, None).await {
-                Ok(()) => {
-                    email_input.set(String::new());
-                    saved_email.set(None);
-                    msg.set(Some("Kindle email cleared.".to_string()));
-                    msg_is_error.set(false);
-                }
-                Err(_) => {
-                    msg.set(Some("Failed to clear Kindle email.".to_string()));
-                    msg_is_error.set(true);
-                }
-            }
-            in_flight.set(false);
-        });
-    };
-
-    let connected = saved_email().is_some();
+    let on_save = kindle_save_handler(server_url.clone(), signals);
+    let on_clear = kindle_clear_handler(server_url, signals);
+    let connected = (signals.saved_email)().is_some();
 
     rsx! {
         section { class: "card", "data-testid": "account-kindle-card",
@@ -226,56 +329,7 @@ fn kindle_account_body(embedded: bool) -> Element {
             }
             p { class: "subtitle", "Configure your Send-to-Kindle delivery address." }
 
-            form {
-                id: "kindle-email-form",
-                class: "settings-form",
-                onsubmit: on_save,
-                div { class: "settings-field",
-                    label { r#for: "kindle-email", "Kindle Email" }
-                    input {
-                        r#type: "email",
-                        id: "kindle-email",
-                        name: "kindle_email",
-                        "data-testid": "kindle-email-input",
-                        autocomplete: "off",
-                        autocapitalize: "none",
-                        autocorrect: "off",
-                        spellcheck: "false",
-                        placeholder: "you@kindle.com",
-                        value: "{email_input}",
-                        oninput: move |e| email_input.set(e.value()),
-                    }
-                }
-                p { class: "subtitle",
-                    "Add "
-                    b { "your library's sender address" }
-                    " to your Amazon "
-                    a {
-                        href: "https://www.amazon.com/sendtokindle/email",
-                        target: "_blank",
-                        rel: "noopener",
-                        "approved sender list"
-                    }
-                    " or Amazon will silently drop the delivery."
-                }
-                div { class: "settings-actions",
-                    button {
-                        r#type: "submit",
-                        class: "btn",
-                        disabled: in_flight(),
-                        "data-testid": "kindle-email-save",
-                        "Save"
-                    }
-                    button {
-                        r#type: "button",
-                        class: "btn ghost",
-                        disabled: in_flight() || !connected,
-                        "data-testid": "kindle-email-clear",
-                        onclick: on_clear,
-                        "Clear"
-                    }
-                }
-            }
+            {kindle_email_form(signals.email_input, signals.in_flight, connected, on_save, on_clear)}
 
             p {
                 class: if connected { "settings-status success" } else { "settings-status" },
@@ -283,11 +337,11 @@ fn kindle_account_body(embedded: bool) -> Element {
                 if connected { "A Kindle email is configured." } else { "No Kindle email configured yet." }
             }
 
-            if let Some(m) = msg() {
+            if let Some(m) = (signals.msg)() {
                 p {
                     role: "status",
                     "data-testid": "kindle-email-status",
-                    class: if msg_is_error() { "settings-status error" } else { "settings-status success" },
+                    class: if (signals.msg_is_error)() { "settings-status error" } else { "settings-status success" },
                     "{m}"
                 }
             }

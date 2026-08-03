@@ -134,30 +134,120 @@ pub(super) fn ReaderTopBar(
     }
 }
 
+/// Center title block: book title, optional inline chapter separator, and
+/// the phone-only sub-line.
+fn reader_title_block(book_title: &str, chapter_title: &str, title_sub: &str) -> Element {
+    rsx! {
+        div {
+            class: "rd-title-center",
+            span { class: "rd-title-book", "{book_title}" }
+            if !chapter_title.is_empty() {
+                span { class: "rd-title-sep", "\u{b7}" }
+                span { class: "rd-title-ch", "{chapter_title}" }
+            }
+            // Phone sub-line ("Ch. 14 · 68%") — the breakpoint stacks the
+            // title block and swaps the inline chapter for this.
+            if !title_sub.is_empty() {
+                span { class: "rd-title-sub", "{title_sub}" }
+            }
+        }
+    }
+}
+
+/// Tool row: contents, search, Aa, highlights, bookmarks, and the
+/// phone-only combined annotations button.
+fn reader_tool_row(state: &ReaderChromeState, handlers: &ReaderChromeHandlers) -> Element {
+    rsx! {
+        div {
+            style: "display:flex; align-items:center; gap:2px;",
+            button {
+                class: if state.toc_active { "rd-tool on" } else { "rd-tool" },
+                r#type: "button",
+                "data-testid": "reader-toc",
+                "aria-label": "Contents",
+                onclick: handlers.on_toggle_toc,
+                svg {
+                    width: "19", height: "19", view_box: "0 0 24 24",
+                    fill: "none", stroke: "currentColor",
+                    stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
+                    path { d: "M4 6h16M4 12h16M4 18h11" }
+                }
+            }
+            button {
+                class: if state.search_active { "rd-tool on" } else { "rd-tool" },
+                r#type: "button",
+                "data-testid": "reader-search",
+                "aria-label": "Search in book",
+                onclick: handlers.on_toggle_search,
+                svg {
+                    width: "19", height: "19", view_box: "0 0 24 24",
+                    fill: "none", stroke: "currentColor",
+                    stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
+                    circle { cx: "11", cy: "11", r: "6.2" }
+                    path { d: "M20 20l-4.2-4.2" }
+                }
+            }
+            button {
+                class: if state.show_aa { "rd-tool rd-aa on" } else { "rd-tool rd-aa" },
+                r#type: "button",
+                "data-testid": "reader-aa",
+                "aria-label": "Display settings",
+                onclick: handlers.on_toggle_aa,
+                "Aa"
+            }
+            button {
+                class: if state.highlights_active { "rd-tool rd-desktop-only on" } else { "rd-tool rd-desktop-only" },
+                r#type: "button",
+                "data-testid": "reader-highlights",
+                "aria-label": "Highlights and notes",
+                onclick: handlers.on_toggle_highlights,
+                svg {
+                    width: "19", height: "19", view_box: "0 0 24 24",
+                    fill: "none", stroke: "currentColor",
+                    stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
+                    path { d: "M4 19.5l1.6-4 8.2-8.2 3 3-8.2 8.2-4.6 0z" }
+                    path { d: "M13.2 6.1l2.7-2.7a1.3 1.3 0 0 1 1.9 0l1.8 1.8a1.3 1.3 0 0 1 0 1.9l-2.7 2.7" }
+                }
+                if state.highlight_count > 0 {
+                    span { class: "rd-badge", "{state.highlight_count}" }
+                }
+            }
+            button {
+                class: if state.bookmarks_active { "rd-tool rd-desktop-only on" } else { "rd-tool rd-desktop-only" },
+                r#type: "button",
+                "data-testid": "reader-bookmark",
+                "aria-label": "Bookmarks",
+                onclick: handlers.on_toggle_bookmarks,
+                svg {
+                    width: "19", height: "19", view_box: "0 0 24 24",
+                    fill: "none", stroke: "currentColor",
+                    stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
+                    path { d: "M7 4h10v16l-5-3.6L7 20V4z" }
+                }
+            }
+            // Phone-only combined tool: highlights + notes + bookmarks in
+            // one sheet, replacing the two desktop buttons above.
+            button {
+                class: if state.annotations_active { "rd-tool rd-phone-only on" } else { "rd-tool rd-phone-only" },
+                r#type: "button",
+                "data-testid": "reader-annotations",
+                "aria-label": "Annotations",
+                onclick: handlers.on_toggle_annotations,
+                svg {
+                    width: "19", height: "19", view_box: "0 0 24 24",
+                    fill: "none", stroke: "currentColor",
+                    stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
+                    path { d: "M12 20h9" }
+                    path { d: "M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" }
+                }
+            }
+        }
+    }
+}
+
 /// Top navigation bar: back button, title + chapter display, Aa + bookmark tools.
 #[component]
 fn ReaderTopChrome(state: ReaderChromeState, handlers: ReaderChromeHandlers) -> Element {
-    let ReaderChromeState {
-        book_title,
-        chapter_title,
-        title_sub,
-        show_aa,
-        toc_active,
-        search_active,
-        highlights_active,
-        bookmarks_active,
-        annotations_active,
-        highlight_count,
-    } = state;
-    let ReaderChromeHandlers {
-        on_back,
-        on_toggle_aa,
-        on_toggle_toc,
-        on_toggle_search,
-        on_toggle_highlights,
-        on_toggle_bookmarks,
-        on_toggle_annotations,
-    } = handlers;
     rsx! {
         div {
             class: "rd-top",
@@ -166,7 +256,7 @@ fn ReaderTopChrome(state: ReaderChromeState, handlers: ReaderChromeHandlers) -> 
                 r#type: "button",
                 "data-testid": "reader-back",
                 "aria-label": "Back to book",
-                onclick: on_back,
+                onclick: handlers.on_back,
                 svg {
                     width: "19", height: "19", view_box: "0 0 24 24",
                     fill: "none", stroke: "currentColor",
@@ -174,103 +264,8 @@ fn ReaderTopChrome(state: ReaderChromeState, handlers: ReaderChromeHandlers) -> 
                     path { d: "M15 5l-7 7 7 7" }
                 }
             }
-            div {
-                class: "rd-title-center",
-                span { class: "rd-title-book", "{book_title}" }
-                if !chapter_title.is_empty() {
-                    span { class: "rd-title-sep", "\u{b7}" }
-                    span { class: "rd-title-ch", "{chapter_title}" }
-                }
-                // Phone sub-line ("Ch. 14 · 68%") — the breakpoint stacks the
-                // title block and swaps the inline chapter for this.
-                if !title_sub.is_empty() {
-                    span { class: "rd-title-sub", "{title_sub}" }
-                }
-            }
-            div {
-                style: "display:flex; align-items:center; gap:2px;",
-                button {
-                    class: if toc_active { "rd-tool on" } else { "rd-tool" },
-                    r#type: "button",
-                    "data-testid": "reader-toc",
-                    "aria-label": "Contents",
-                    onclick: on_toggle_toc,
-                    svg {
-                        width: "19", height: "19", view_box: "0 0 24 24",
-                        fill: "none", stroke: "currentColor",
-                        stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
-                        path { d: "M4 6h16M4 12h16M4 18h11" }
-                    }
-                }
-                button {
-                    class: if search_active { "rd-tool on" } else { "rd-tool" },
-                    r#type: "button",
-                    "data-testid": "reader-search",
-                    "aria-label": "Search in book",
-                    onclick: on_toggle_search,
-                    svg {
-                        width: "19", height: "19", view_box: "0 0 24 24",
-                        fill: "none", stroke: "currentColor",
-                        stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
-                        circle { cx: "11", cy: "11", r: "6.2" }
-                        path { d: "M20 20l-4.2-4.2" }
-                    }
-                }
-                button {
-                    class: if show_aa { "rd-tool rd-aa on" } else { "rd-tool rd-aa" },
-                    r#type: "button",
-                    "data-testid": "reader-aa",
-                    "aria-label": "Display settings",
-                    onclick: on_toggle_aa,
-                    "Aa"
-                }
-                button {
-                    class: if highlights_active { "rd-tool rd-desktop-only on" } else { "rd-tool rd-desktop-only" },
-                    r#type: "button",
-                    "data-testid": "reader-highlights",
-                    "aria-label": "Highlights and notes",
-                    onclick: on_toggle_highlights,
-                    svg {
-                        width: "19", height: "19", view_box: "0 0 24 24",
-                        fill: "none", stroke: "currentColor",
-                        stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
-                        path { d: "M4 19.5l1.6-4 8.2-8.2 3 3-8.2 8.2-4.6 0z" }
-                        path { d: "M13.2 6.1l2.7-2.7a1.3 1.3 0 0 1 1.9 0l1.8 1.8a1.3 1.3 0 0 1 0 1.9l-2.7 2.7" }
-                    }
-                    if highlight_count > 0 {
-                        span { class: "rd-badge", "{highlight_count}" }
-                    }
-                }
-                button {
-                    class: if bookmarks_active { "rd-tool rd-desktop-only on" } else { "rd-tool rd-desktop-only" },
-                    r#type: "button",
-                    "data-testid": "reader-bookmark",
-                    "aria-label": "Bookmarks",
-                    onclick: on_toggle_bookmarks,
-                    svg {
-                        width: "19", height: "19", view_box: "0 0 24 24",
-                        fill: "none", stroke: "currentColor",
-                        stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
-                        path { d: "M7 4h10v16l-5-3.6L7 20V4z" }
-                    }
-                }
-                // Phone-only combined tool: highlights + notes + bookmarks in
-                // one sheet, replacing the two desktop buttons above.
-                button {
-                    class: if annotations_active { "rd-tool rd-phone-only on" } else { "rd-tool rd-phone-only" },
-                    r#type: "button",
-                    "data-testid": "reader-annotations",
-                    "aria-label": "Annotations",
-                    onclick: on_toggle_annotations,
-                    svg {
-                        width: "19", height: "19", view_box: "0 0 24 24",
-                        fill: "none", stroke: "currentColor",
-                        stroke_width: "1.7", stroke_linecap: "round", stroke_linejoin: "round",
-                        path { d: "M12 20h9" }
-                        path { d: "M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" }
-                    }
-                }
-            }
+            {reader_title_block(&state.book_title, &state.chapter_title, &state.title_sub)}
+            {reader_tool_row(&state, &handlers)}
         }
     }
 }
