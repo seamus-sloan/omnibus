@@ -112,3 +112,26 @@ A web highlight only converts when the book's KEPUB copy and its source EPUB
 still carry the same text — a conversion that can't be proven correct is
 skipped (the highlight simply stays web-only) rather than placed somewhere
 wrong.
+
+> [!NOTE]
+> **Known limitation: highlight colour pushed to a Kobo may not render**
+>
+> Omnibus sends each annotation's colour as `highlightColor` — a lowercase
+> colour name (`yellow`/`green`/`blue`/`pink`/`purple`) — in the Reading
+> Services annotation payload. On at least one real device, every annotation
+> pushed from Omnibus was observed stored on-device with `Bookmark.Color = 0`
+> (yellow) regardless of the colour sent, while highlights created directly
+> on the device use the full `Color` range normally. This means the firmware
+> is not applying Omnibus's `highlightColor` value to inbound annotations as
+> sent — it may expect a different shape on this field (e.g. an integer 0–3
+> rather than a name) or it may ignore colour on inbound annotations
+> entirely; which one is unconfirmed.
+>
+> This repo carries no captured device PATCH and no vendored reference
+> implementation for the Reading Services protocol to confirm which is
+> true, so the wire format has **not** been changed speculatively — see
+> [#1629](https://github.com/seamus-sloan/omnibus/issues/1629). Highlight
+> and note **text**, placement, and deletes all sync correctly; only the
+> rendered *colour* of a device-side highlight is affected. Fixing this
+> for real needs a `.kobo/KoboReader.sqlite` capture (or a packet capture)
+> from a device that just received a coloured highlight over wireless sync.
