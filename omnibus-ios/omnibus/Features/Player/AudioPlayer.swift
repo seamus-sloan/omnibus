@@ -408,7 +408,12 @@ final class AudioPlayer {
         // may cost a round trip and playback has already begun.
         if !markedReading {
             markedReading = true
-            Task { await autoStatus?.bookOpened() }
+            // Resolved now, not inside the task. Reading `self.autoStatus`
+            // when the task eventually runs would pick up whatever `load`
+            // has installed by then, marking a book the listener switched to
+            // — and never played — as started.
+            let tracker = autoStatus
+            Task { await tracker?.bookOpened() }
         }
     }
 
@@ -590,6 +595,12 @@ final class AudioPlayer {
             }
         }
 
+        // Bound to this load, like the observer itself: reading
+        // `self.autoStatus` from inside the task would resolve it after a
+        // teardown or a book switch had already replaced it, and mark a book
+        // nobody listened to `finished` — which now also drops it off the
+        // Continue rail.
+        let tracker = autoStatus
         endObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime, object: player.currentItem, queue: .main
         ) { [weak self] _ in
@@ -602,7 +613,7 @@ final class AudioPlayer {
                 // audiobook is the strongest completion signal we get, and it
                 // goes through the same tracker as the readers rather than
                 // writing `finished` blind.
-                await self?.autoStatus?.positionChanged(atEnd: true)
+                await tracker?.positionChanged(atEnd: true)
             }
         }
 
