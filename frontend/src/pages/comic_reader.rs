@@ -82,8 +82,78 @@ fn apply_bootstrap_outcome(
     }
 }
 
+/// Resolve a comic's metadata and saved position for the bootstrap effect:
+/// `get_ebook`, then (when found) `get_progress` to resolve the starting
+/// page via [`start_page`]. `None` on a missing book or a fetch failure —
+/// the caller ([`apply_bootstrap_outcome`]) turns that into the error state.
+async fn fetch_bootstrap(server_url: &str, uuid: &str) -> Option<(EbookMetadata, usize)> {
+    let book = match data::get_ebook(server_url, uuid).await {
+        Ok(Some(book)) => book,
+        Ok(None) | Err(_) => return None,
+    };
+    let count = book.page_count.unwrap_or(0).max(0) as usize;
+    let saved = data::get_progress(server_url, uuid, ProgressFormat::Epub)
+        .await
+        .ok()
+        .flatten();
+    let start = saved
+        .map(|r| start_page(r.epub_cfi.as_deref(), r.progress_percent, count))
+        .unwrap_or(0);
+    Some((book, start))
+}
+
+/// Build the progress-save payload for landing on `page` of `count` pages —
+/// shared by `goto`'s persist call so the field list can't drift from
+/// [`comic_percent`]/`comic_page_anchor`.
+fn progress_update_for_page(uuid: &str, page: usize, count: usize) -> ProgressUpdate {
+    ProgressUpdate {
+        book_uuid: uuid.to_string(),
+        format: ProgressFormat::Epub,
+        epub_cfi: Some(comic_page_anchor(page)),
+        audio_position_seconds: None,
+        progress_percent: Some(comic_percent(page, count)),
+        kobo_location: None,
+        book_file_id: None,
+        client_updated_at: None,
+    }
+}
+
+/// Pre-derived, ready-to-render chrome values for one paint — kept in one
+/// struct (the `RowDisplay` pattern in `pages/landing/table/row.rs`) so
+/// `ComicReadPage`'s body reads declaratively instead of deriving several
+/// locals inline.
+struct PagerDisplay {
+    title: String,
+    author: String,
+    count: usize,
+    pct: i64,
+}
+
+impl PagerDisplay {
+    fn from_state(meta: Option<&EbookMetadata>, current: usize) -> Self {
+        let count = meta.and_then(|m| m.page_count).unwrap_or(0).max(0) as usize;
+        Self {
+            title: meta.map(|m| m.display_title()).unwrap_or_default(),
+            author: meta
+                .and_then(|m| m.creators.first().map(|c| c.name.clone()))
+                .unwrap_or_default(),
+            count,
+            pct: if count == 0 {
+                0
+            } else {
+                comic_percent(current, count)
+            },
+        }
+    }
+}
+
 /// The full-page comic pager: top bar (back, title, fit modes), the image
 /// stage with edge page-turn buttons, and a footer slider + page label.
+/// Over the line cap by design: three hooks (session tracking, auto
+/// read-status, the bootstrap effect) must run unconditionally before a
+/// large declarative rsx! tree mirroring the pager's layout — splitting
+/// further would only thread the same signals through another component
+/// boundary, the same shape as `BdCtaRow` in `pages/book_detail/hero.rs`.
 #[component]
 pub fn ComicReadPage(uuid: String) -> Element {
     let server_url = use_server_url();
@@ -136,31 +206,11 @@ pub fn ComicReadPage(uuid: String) -> Element {
             error.set(false);
             let server_url = server_url.clone();
             spawn(async move {
-                let outcome = match data::get_ebook(&server_url, &uuid).await {
-                    Ok(Some(book)) => {
-                        let count = book.page_count.unwrap_or(0).max(0) as usize;
-                        let saved = data::get_progress(&server_url, &uuid, ProgressFormat::Epub)
-                            .await
-                            .ok()
-                            .flatten();
-                        let start = saved
-                            .map(|r| start_page(r.epub_cfi.as_deref(), r.progress_percent, count))
-                            .unwrap_or(0);
-                        Some((book, start))
-                    }
-                    Ok(None) | Err(_) => None,
-                };
+                let outcome = fetch_bootstrap(&server_url, &uuid).await;
                 apply_bootstrap_outcome(outcome, my_load, load_seq, meta, error, page);
             });
         }));
     }
-
-    let count = meta
-        .read()
-        .as_ref()
-        .and_then(|m| m.page_count)
-        .unwrap_or(0)
-        .max(0) as usize;
 
     // Shared page-turn entry point: clamp, render, persist. Every control
     // (buttons, slider, arrow keys) funnels through here so a position is
@@ -183,16 +233,7 @@ pub fn ComicReadPage(uuid: String) -> Element {
                 return;
             }
             page.set(clamped);
-            let update = ProgressUpdate {
-                book_uuid: uuid.clone(),
-                format: ProgressFormat::Epub,
-                epub_cfi: Some(comic_page_anchor(clamped)),
-                audio_position_seconds: None,
-                progress_percent: Some(comic_percent(clamped, count)),
-                kobo_location: None,
-                book_file_id: None,
-                client_updated_at: None,
-            };
+            let update = progress_update_for_page(&uuid, clamped, count);
             let server_url = server_url.clone();
             spawn(async move {
                 // Best-effort, like the EPUB reader's relocate save: a failed
@@ -214,26 +255,23 @@ pub fn ComicReadPage(uuid: String) -> Element {
     };
 
     let current = *page.read();
-    let loaded = meta.read().is_some();
-    let title = meta
-        .read()
-        .as_ref()
-        .map(|m| m.display_title())
-        .unwrap_or_default();
-    let author = meta
-        .read()
-        .as_ref()
-        .and_then(|m| m.creators.first().map(|c| c.name.clone()))
-        .unwrap_or_default();
+    let (loaded, display) = {
+        let snapshot = meta.read();
+        (
+            snapshot.is_some(),
+            PagerDisplay::from_state(snapshot.as_ref(), current),
+        )
+    };
+    let PagerDisplay {
+        title,
+        author,
+        count,
+        pct,
+    } = display;
     let page_src = {
         let server_url = server_url.clone();
         let uuid = uuid.clone();
         move |n: usize| media_url(&server_url, &format!("/api/ebooks/{uuid}/pages/{n}"))
-    };
-    let pct = if count == 0 {
-        0
-    } else {
-        comic_percent(current, count)
     };
 
     rsx! {
