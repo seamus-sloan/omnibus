@@ -74,6 +74,20 @@ struct CheckInFlowTests {
         #expect(!CheckInFlow.showsNoteField(for: .unresolved))
     }
 
+    @Test func resolveShouldClearSearchOnlyWhenLeavingTheScanStage() {
+        // A resolve always fires from `.scan` — the ISBN field's stage — so
+        // landing on any outcome (including `.unresolved`, whose fallback
+        // reuses the scan page's title-search state) must clear the stale
+        // query/results left over from it.
+        #expect(CheckInFlow.resolveShouldClearSearch(from: .scan))
+        #expect(!CheckInFlow.resolveShouldClearSearch(from: .outcome(.unresolved)))
+        #expect(
+            !CheckInFlow.resolveShouldClearSearch(
+                from: .outcome(.inLibraryUnowned(book: scanBook()))
+            )
+        )
+    }
+
     @Test func detailUUIDCoversAlreadyOwnedAndOnWishlistOnly() {
         #expect(CheckInFlow.detailUUID(for: .alreadyOwned(book: scanBook())) == "b-1")
         #expect(CheckInFlow.detailUUID(for: .onWishlist(book: scanBook())) == "b-1")

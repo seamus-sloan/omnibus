@@ -537,7 +537,13 @@ struct CheckInView: View {
             let result: ScanOutcome = try await APIClient.shared.post(
                 "/api/scan/resolve", body: ScanResolveRequest(isbn: isbn)
             )
-            withAnimation(Motion.settle) { stage = .outcome(result) }
+            withAnimation(Motion.settle) {
+                if CheckInFlow.resolveShouldClearSearch(from: stage) {
+                    searchQuery = ""
+                    searchResults = nil
+                }
+                stage = .outcome(result)
+            }
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }

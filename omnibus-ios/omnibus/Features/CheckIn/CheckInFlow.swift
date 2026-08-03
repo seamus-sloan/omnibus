@@ -86,6 +86,15 @@ enum CheckInFlow {
         return false
     }
 
+    /// A resolve fires from the scan stage's ISBN field, whose fallback
+    /// screen — `.outcome(.unresolved)` — reuses the *same* title-search
+    /// query/results state. Leaving `.scan` for any outcome must clear it,
+    /// or the fallback opens showing a search from the book just resolved.
+    static func resolveShouldClearSearch(from stage: CheckInStage) -> Bool {
+        if case .scan = stage { return true }
+        return false
+    }
+
     /// Outcomes whose card links straight to the book's detail page.
     static func detailUUID(for outcome: ScanOutcome) -> String? {
         switch outcome {
