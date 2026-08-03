@@ -395,7 +395,7 @@ pub(super) fn BdRailSection(
                 div { class: "divider" }
                 div { class: "label bd-rail-head", "Activity · last 22 days" }
                 div { class: "bd-activity-bar", aria_hidden: "true",
-                    for _ in 0..22u32 { i { class: "bd-activity-tick" } }
+                    for tick_idx in 0..22u32 { i { key: "{tick_idx}", class: "bd-activity-tick" } }
                 }
                 div { class: "bd-activity-axis mono",
                     span { "3wk ago" }

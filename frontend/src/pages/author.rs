@@ -310,7 +310,7 @@ fn author_body(series_groups: SeriesGroups, standalone: Vec<EbookMetadata>) -> E
     rsx! {
         div { class: "disc-body",
             for (series_name, series_id, books) in series_groups.into_iter() {
-                div { class: "disc-section",
+                div { key: "{series_id}-{series_name}", class: "disc-section",
                     div { class: "disc-section-head",
                         span { class: "label", "Series" }
                         if series_id > 0 {

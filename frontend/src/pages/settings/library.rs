@@ -69,12 +69,14 @@ pub fn LibraryLocationSection() -> Element {
                 div { class: "settings-actions",
                     button { r#type: "submit", class: "btn", "Save" }
                     MaintenanceActions {
-                        status,
-                        status_is_error,
-                        refetch_in_flight,
-                        backfill_in_flight,
-                        scan_in_flight,
-                        library_refresh,
+                        io: MaintenanceIo {
+                            status,
+                            status_is_error,
+                            refetch_in_flight,
+                            backfill_in_flight,
+                            scan_in_flight,
+                            library_refresh,
+                        },
                     }
                 }
             }
@@ -355,17 +357,30 @@ fn backfill_chapters_handler(
     }
 }
 
+/// Shared status line plus each maintenance job's own in-flight flag.
+/// Grouped so [`MaintenanceActions`] stays under the prop cap.
+#[derive(Copy, Clone, PartialEq)]
+struct MaintenanceIo {
+    status: Signal<Option<String>>,
+    status_is_error: Signal<bool>,
+    refetch_in_flight: Signal<bool>,
+    backfill_in_flight: Signal<bool>,
+    scan_in_flight: Signal<bool>,
+    library_refresh: Signal<u32>,
+}
+
 /// Ghost buttons for one-off maintenance jobs (library rescan, author photo
 /// refetch, chapter backfill).
 #[component]
-fn MaintenanceActions(
-    status: Signal<Option<String>>,
-    status_is_error: Signal<bool>,
-    mut refetch_in_flight: Signal<bool>,
-    mut backfill_in_flight: Signal<bool>,
-    scan_in_flight: Signal<bool>,
-    library_refresh: Signal<u32>,
-) -> Element {
+fn MaintenanceActions(io: MaintenanceIo) -> Element {
+    let MaintenanceIo {
+        status,
+        status_is_error,
+        refetch_in_flight,
+        backfill_in_flight,
+        scan_in_flight,
+        library_refresh,
+    } = io;
     let server_url = use_server_url();
     let on_scan = scan_library_handler(
         server_url.clone(),

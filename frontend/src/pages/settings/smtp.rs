@@ -49,11 +49,15 @@ pub fn SmtpConfigField() -> Element {
                 configured,
                 in_flight: io.in_flight,
                 status: st,
-                msg: io.msg,
-                msg_is_error: io.msg_is_error,
-                on_save: EventHandler::new(on_save),
-                on_test: EventHandler::new(on_test),
-                on_clear: EventHandler::new(on_clear),
+                message: SmtpStatusMessage {
+                    msg: io.msg,
+                    msg_is_error: io.msg_is_error,
+                },
+                actions: SmtpActionHandlers {
+                    on_save: EventHandler::new(on_save),
+                    on_test: EventHandler::new(on_test),
+                    on_clear: EventHandler::new(on_clear),
+                },
             }
         }
     }
@@ -320,6 +324,23 @@ fn SmtpConnectionFields(fields: SmtpFields, configured: bool) -> Element {
     }
 }
 
+/// Save/test status-line signals. Grouped so [`SmtpTestActions`] stays under
+/// the prop cap.
+#[derive(Copy, Clone, PartialEq)]
+struct SmtpStatusMessage {
+    msg: Signal<Option<String>>,
+    msg_is_error: Signal<bool>,
+}
+
+/// Save / send-test / clear handlers. Grouped so [`SmtpTestActions`] stays
+/// under the prop cap.
+#[derive(Copy, Clone, PartialEq)]
+struct SmtpActionHandlers {
+    on_save: EventHandler<MouseEvent>,
+    on_test: EventHandler<MouseEvent>,
+    on_clear: EventHandler<MouseEvent>,
+}
+
 /// Save / send-test / clear buttons, the configured-state line, and the
 /// save/test status message.
 #[component]
@@ -327,12 +348,15 @@ fn SmtpTestActions(
     configured: bool,
     in_flight: Signal<bool>,
     status: Option<SmtpConfigStatus>,
-    msg: Signal<Option<String>>,
-    msg_is_error: Signal<bool>,
-    on_save: EventHandler<MouseEvent>,
-    on_test: EventHandler<MouseEvent>,
-    on_clear: EventHandler<MouseEvent>,
+    message: SmtpStatusMessage,
+    actions: SmtpActionHandlers,
 ) -> Element {
+    let SmtpStatusMessage { msg, msg_is_error } = message;
+    let SmtpActionHandlers {
+        on_save,
+        on_test,
+        on_clear,
+    } = actions;
     rsx! {
         div { class: "settings-actions",
             button {
