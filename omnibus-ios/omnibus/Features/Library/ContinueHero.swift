@@ -10,6 +10,12 @@ import SwiftUI
 
 struct ContinueHero: View {
     let points: [ResumePoint]
+    /// Runs after the long-press editor saves, so the card can pick up a title
+    /// or cover that it is still drawing from the old metadata.
+    var onEdited: () -> Void = {}
+    /// Pushes the book's detail screen. A tap resumes the book, so this is the
+    /// card's only way through to everything else about it.
+    var onOpenDetail: (Book) -> Void = { _ in }
 
     @Environment(\.palette) private var palette
     @State private var selected: ResumePoint.ID?
@@ -26,7 +32,7 @@ struct ContinueHero: View {
             ScrollView(.horizontal) {
                 HStack(spacing: 0) {
                     ForEach(points) { point in
-                        HeroCard(point: point)
+                        HeroCard(point: point, onEdited: onEdited, onOpenDetail: onOpenDetail)
                             // Padding inside the page, so every page is exactly
                             // the carousel's width and the paging stops land on
                             // a card rather than drifting by the inset.
@@ -81,6 +87,8 @@ struct ContinueHero: View {
 
 private struct HeroCard: View {
     let point: ResumePoint
+    let onEdited: () -> Void
+    let onOpenDetail: (Book) -> Void
 
     @Environment(\.palette) private var palette
 
@@ -215,6 +223,9 @@ private struct HeroCard: View {
             .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
         }
         .buttonStyle(BookPressStyle())
+        // The same held-down menu as a grid cell, plus the way through to the
+        // detail screen the tap spends on resuming the book.
+        .bookContextMenu(book, onEdited: onEdited, onOpenDetail: { onOpenDetail(book) })
     }
 
     /// A lit alcove rather than a filled rectangle: the wash graded top-to-

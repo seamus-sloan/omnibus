@@ -18,4 +18,10 @@ struct SymbolNameTests {
         // the barcode scanner, a plus for the upload.
         #expect(UIImage(systemName: LibraryView.addGlyph) != nil)
     }
+
+    @Test("the book long-press menu's glyphs resolve")
+    func bookMenuGlyphsResolve() {
+        #expect(UIImage(systemName: BookMenuGlyph.detail) != nil)
+        #expect(UIImage(systemName: BookMenuGlyph.edit) != nil)
+    }
 }
