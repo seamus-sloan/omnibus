@@ -256,61 +256,67 @@ struct ConditionHandlers {
     on_unit: EventHandler<FormEvent>,
 }
 
-/// Builds the field/op/value(s)/unit change handlers for one condition row.
-/// Each clones the row's current draft, applies its one field, and reports
-/// the result through the shared `on_change`.
+/// Apply `f` to a clone of the row's current draft and report the result
+/// through `on_change`. The one generic helper every per-input change
+/// handler in [`build_condition_handlers`] funnels through, in place of five
+/// near-identical clone-mutate-report closures.
+fn apply_draft_change(
+    draft: &RuleDraft,
+    on_change: EventHandler<RuleDraft>,
+    f: impl FnOnce(&mut RuleDraft),
+) {
+    let mut d = draft.clone();
+    f(&mut d);
+    on_change.call(d);
+}
+
+/// Builds the field/op/value(s)/unit change handlers for one condition row,
+/// each a thin [`apply_draft_change`] call supplying only the field it
+/// changes.
 fn build_condition_handlers(
     draft: RuleDraft,
     on_change: EventHandler<RuleDraft>,
 ) -> ConditionHandlers {
     // On a field change, snap the op to the first one the new field accepts.
-    let d_field = draft.clone();
+    let d = draft.clone();
     let on_field = EventHandler::new(move |e: FormEvent| {
         if let Some(f) = RuleField::from_str(&e.value()) {
-            let mut d = d_field.clone();
-            d.field = f;
-            if !f.accepts(d.op) {
-                d.op = OPS
-                    .iter()
-                    .map(|(o, _)| *o)
-                    .find(|o| f.accepts(*o))
-                    .unwrap_or(RuleOp::Is);
-            }
-            // `Status` uses a fixed dropdown; seed a valid default so the row is
-            // complete without the user having to open the select.
-            if f == RuleField::Status
-                && omnibus_shared::ReadStatus::from_str(d.value.trim()).is_none()
-            {
-                d.value = STATUS_VALUES[0].0.to_string();
-            }
-            on_change.call(d);
+            apply_draft_change(&d, on_change, |d| {
+                d.field = f;
+                if !f.accepts(d.op) {
+                    d.op = OPS
+                        .iter()
+                        .map(|(o, _)| *o)
+                        .find(|o| f.accepts(*o))
+                        .unwrap_or(RuleOp::Is);
+                }
+                // `Status` uses a fixed dropdown; seed a valid default so the
+                // row is complete without the user having to open the select.
+                if f == RuleField::Status
+                    && omnibus_shared::ReadStatus::from_str(d.value.trim()).is_none()
+                {
+                    d.value = STATUS_VALUES[0].0.to_string();
+                }
+            });
         }
     });
-    let d_op = draft.clone();
+    let d = draft.clone();
     let on_op = EventHandler::new(move |e: FormEvent| {
         if let Some(o) = RuleOp::from_str(&e.value()) {
-            let mut d = d_op.clone();
-            d.op = o;
-            on_change.call(d);
+            apply_draft_change(&d, on_change, |d| d.op = o);
         }
     });
-    let d_val = draft.clone();
+    let d = draft.clone();
     let on_val = EventHandler::new(move |e: FormEvent| {
-        let mut d = d_val.clone();
-        d.value = e.value();
-        on_change.call(d);
+        apply_draft_change(&d, on_change, |d| d.value = e.value());
     });
-    let d_val2 = draft.clone();
+    let d = draft.clone();
     let on_val2 = EventHandler::new(move |e: FormEvent| {
-        let mut d = d_val2.clone();
-        d.value2 = e.value();
-        on_change.call(d);
+        apply_draft_change(&d, on_change, |d| d.value2 = e.value());
     });
-    let d_unit = draft.clone();
+    let d = draft;
     let on_unit = EventHandler::new(move |e: FormEvent| {
-        let mut d = d_unit.clone();
-        d.unit = e.value();
-        on_change.call(d);
+        apply_draft_change(&d, on_change, |d| d.unit = e.value());
     });
 
     ConditionHandlers {

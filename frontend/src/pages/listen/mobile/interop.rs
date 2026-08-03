@@ -176,9 +176,12 @@ fn fire(js: &str) {
     let _ = dioxus::document::eval(js);
 }
 
-/// Build the `window.OmnibusMobileAudio` install script. Only the four
-/// interpolation points (`parts_json`, `resume_lit`, `rate_lit`, `meta_lit`)
-/// use `format!`; the rest is literal JS.
+/// Build the `window.OmnibusMobileAudio` install script. Composes five
+/// pure-JS sub-segments ([`mount_element_js`], [`transport_js`],
+/// [`media_session_js`], [`listeners_js`], [`seed_resume_js`]) around the
+/// four interpolation points (`parts_json`, `resume_lit`, `rate_lit`,
+/// `meta_lit`) — the same composition idiom the desktop bootstrap's
+/// `control_surface_js` uses for `dom_reset_js`/`listeners_js`/etc.
 fn surface_js(parts_json: &str, resume_lit: &str, rate_lit: &str, meta_lit: &str) -> String {
     format!(
         r#"
@@ -193,139 +196,185 @@ fn surface_js(parts_json: &str, resume_lit: &str, rate_lit: &str, meta_lit: &str
   var acc = 0;
   for (var i = 0; i < parts.length; i++) {{ offsets.push(acc); acc += (parts[i].duration || 0); }}
 
-  // Drop any prior element before reinstalling: reusing it would stack a fresh
+{mount}
+
+{transport}
+
+{media_session}
+
+{listeners}
+
+{seed}
+}})();
+"#,
+        mount = mount_element_js(),
+        transport = transport_js(),
+        media_session = media_session_js(),
+        listeners = listeners_js(),
+        seed = seed_resume_js(),
+    )
+}
+
+/// Create (or replace) the `<audio>` element, apply the initial rate, and
+/// wire the `loadedmetadata` rate re-apply plus the `absTime()` helper.
+/// Pure JS with no Rust interpolation (`rate` is already in scope from the
+/// enclosing IIFE), so it lives as a raw `&'static str`.
+fn mount_element_js() -> &'static str {
+    r#"  // Drop any prior element before reinstalling: reusing it would stack a fresh
   // set of timeupdate/play/pause/ended listeners (and orphan the old Eval
   // channel's dioxus.send closures) on every SPA re-entry / book switch.
   var old = document.getElementById('m-omnibus-audio');
-  if (old) {{ try {{ old.pause(); }} catch(_e) {{}} old.remove(); }}
+  if (old) { try { old.pause(); } catch(_e) {} old.remove(); }
   var el = document.createElement('audio');
   el.id = 'm-omnibus-audio';
   el.preload = 'auto';
   el.style.display = 'none';
   document.body.appendChild(el);
-  try {{ el.playbackRate = rate; }} catch(_e) {{}}
+  try { el.playbackRate = rate; } catch(_e) {}
 
   // WKWebView resets `playbackRate` to 1.0 every time a new resource
   // loads, so the rate set above (and every `setRate`) is wiped by the
   // seed / cross-part / auto-advance `el.load()` calls below — the book
   // plays at 1.0 while the UI shows the saved speed. Re-apply the tracked
   // rate on every `loadedmetadata` to keep the element in sync.
-  el.addEventListener('loadedmetadata', function(){{
+  el.addEventListener('loadedmetadata', function(){
     var oa = window.OmnibusMobileAudio;
-    if (oa) {{ try {{ el.playbackRate = oa._rate; }} catch(_e) {{}} }}
-  }});
+    if (oa) { try { el.playbackRate = oa._rate; } catch(_e) {} }
+  });
 
-  function absTime() {{
+  function absTime() {
     var oa = window.OmnibusMobileAudio;
     if (!oa) return el.currentTime || 0;
     return (oa._offsets[oa._index] || 0) + (el.currentTime || 0);
-  }}
+  }"#
+}
 
-  window.OmnibusMobileAudio = {{
+/// The `window.OmnibusMobileAudio` transport object: state plus
+/// play/pause/toggle/setRate/seek/skip. Pure JS with no Rust interpolation
+/// (`parts`, `offsets`, `rate`, `el`, `absTime` are already in scope), so
+/// it lives as a raw `&'static str`.
+fn transport_js() -> &'static str {
+    r#"  window.OmnibusMobileAudio = {
     _parts: parts,
     _offsets: offsets,
     _index: 0,
     // Tracked separately because WKWebView drops `el.playbackRate` to 1.0
     // on every resource load; the `loadedmetadata` listener re-applies it.
     _rate: rate,
-    play: function(){{ var p = el.play(); if (p && p.catch) p.catch(function(){{}}); }},
-    pause: function(){{ el.pause(); }},
-    toggle: function(){{ if (el.paused) {{ this.play(); }} else {{ this.pause(); }} }},
-    setRate: function(r){{ this._rate = r; try {{ el.playbackRate = r; }} catch(_e) {{}} }},
-    seek: function(absSeconds){{
+    play: function(){ var p = el.play(); if (p && p.catch) p.catch(function(){}); },
+    pause: function(){ el.pause(); },
+    toggle: function(){ if (el.paused) { this.play(); } else { this.pause(); } },
+    setRate: function(r){ this._rate = r; try { el.playbackRate = r; } catch(_e) {} },
+    seek: function(absSeconds){
       var s = Math.max(0, absSeconds || 0);
       var i = 0;
       while (i < this._offsets.length - 1 && s >= this._offsets[i + 1]) i++;
       var local = s - this._offsets[i];
-      if (i !== this._index) {{
+      if (i !== this._index) {
         var wasPlaying = !el.paused;
         this._index = i;
-        var onMeta = function(){{
+        var onMeta = function(){
           el.removeEventListener('loadedmetadata', onMeta);
-          try {{ el.currentTime = local; }} catch(_e) {{}}
-          if (wasPlaying) {{ var p = el.play(); if (p && p.catch) p.catch(function(){{}}); }}
-        }};
+          try { el.currentTime = local; } catch(_e) {}
+          if (wasPlaying) { var p = el.play(); if (p && p.catch) p.catch(function(){}); }
+        };
         el.addEventListener('loadedmetadata', onMeta);
         el.src = this._parts[i].url; el.load();
-      }} else {{
-        try {{ el.currentTime = local; }} catch(_e) {{}}
-      }}
-    }},
-    skip: function(d){{ this.seek(absTime() + d); }},
-  }};
+      } else {
+        try { el.currentTime = local; } catch(_e) {}
+      }
+    },
+    skip: function(d){ this.seek(absTime() + d); },
+  };"#
+}
 
-  // iOS lock-screen / Control Center now-playing via the Media Session API.
-  // WKWebView mirrors this into MPNowPlayingInfoCenter, so it's what shows the
-  // book cover + "Omnibus" instead of blank branding. Guarded — older WebViews
-  // lack the API.
-  var hasMediaSession = ('mediaSession' in navigator);
-  function updatePositionState() {{
-    if (!hasMediaSession || !navigator.mediaSession.setPositionState) return;
-    if (!(acc > 0) || !isFinite(acc)) return;
-    try {{
-      navigator.mediaSession.setPositionState({{
-        duration: acc,
-        playbackRate: el.playbackRate || 1,
-        position: Math.max(0, Math.min(absTime(), acc)),
-      }});
-    }} catch(_e) {{}}
-  }}
-  if (hasMediaSession) {{
-    try {{
-      var art = (meta && meta.artwork)
-        ? [{{ src: meta.artwork, sizes: '512x512', type: 'image/webp' }}]
-        : [];
-      navigator.mediaSession.metadata = new MediaMetadata({{
-        title: (meta && meta.title) || '',
-        artist: (meta && meta.artist) || '',
-        album: (meta && meta.album) || 'Omnibus',
-        artwork: art,
-      }});
-    }} catch(_e) {{}}
-    var oa = window.OmnibusMobileAudio;
-    var setH = function(a, fn){{ try {{ navigator.mediaSession.setActionHandler(a, fn); }} catch(_e) {{}} }};
-    // WebKit's native handlers keep working while backgrounded JS is suspended.
-    setH('play', null);
-    setH('pause', null);
-    setH('seekbackward', function(d){{ oa.skip(-((d && d.seekOffset) || 30)); }});
-    setH('seekforward', function(d){{ oa.skip((d && d.seekOffset) || 30); }});
-    setH('seekto', function(d){{ if (d && d.seekTime != null) oa.seek(d.seekTime); }});
-  }}
-
-  el.addEventListener('timeupdate', function(){{ dioxus.send({{ kind: 'Time', seconds: absTime(), paused: el.paused }}); updatePositionState(); }});
-  el.addEventListener('play',  function(){{ dioxus.send({{ kind: 'Play' }}); if (hasMediaSession) navigator.mediaSession.playbackState = 'playing'; updatePositionState(); }});
-  el.addEventListener('pause', function(){{ dioxus.send({{ kind: 'Pause', seconds: absTime() }}); if (hasMediaSession) navigator.mediaSession.playbackState = 'paused'; }});
+/// The four audio-element event listeners (timeupdate/play/pause/ended)
+/// that push [`AudioEvent`]s back to Rust and reconcile Media Session
+/// state. Pure JS with no Rust interpolation (`el`, `absTime`,
+/// `hasMediaSession`, `updatePositionState` come from
+/// [`mount_element_js`]/[`media_session_js`]), so it lives as a raw
+/// `&'static str`.
+fn listeners_js() -> &'static str {
+    r#"  el.addEventListener('timeupdate', function(){ dioxus.send({ kind: 'Time', seconds: absTime(), paused: el.paused }); updatePositionState(); });
+  el.addEventListener('play',  function(){ dioxus.send({ kind: 'Play' }); if (hasMediaSession) navigator.mediaSession.playbackState = 'playing'; updatePositionState(); });
+  el.addEventListener('pause', function(){ dioxus.send({ kind: 'Pause', seconds: absTime() }); if (hasMediaSession) navigator.mediaSession.playbackState = 'paused'; });
   // Cross-part auto-advance: chain to the next part on natural end.
-  el.addEventListener('ended', function(){{
+  el.addEventListener('ended', function(){
     var oa = window.OmnibusMobileAudio;
     if (!oa) return;
-    if (oa._index + 1 < oa._parts.length) {{
+    if (oa._index + 1 < oa._parts.length) {
       oa._index += 1;
       el.src = oa._parts[oa._index].url; el.load();
-      var p = el.play(); if (p && p.catch) p.catch(function(){{}});
+      var p = el.play(); if (p && p.catch) p.catch(function(){});
       return;
-    }}
+    }
     // Nothing left to advance to: the book is finished.
-    dioxus.send({{ kind: 'Ended' }});
-  }});
+    dioxus.send({ kind: 'Ended' });
+  });"#
+}
 
-  // Seed the starting part for the resume position.
-  (function(){{
+/// Seed the starting part and in-part offset for the resume position. Pure
+/// JS with no Rust interpolation (`resume`, `offsets`, `parts`, `el` are
+/// already in scope), so it lives as a raw `&'static str`.
+fn seed_resume_js() -> &'static str {
+    r#"  // Seed the starting part for the resume position.
+  (function(){
     var s = Math.max(0, resume);
     var idx = 0;
     while (idx < offsets.length - 1 && s >= offsets[idx + 1]) idx++;
     window.OmnibusMobileAudio._index = idx;
     var local = s - offsets[idx];
-    var onMeta = function(){{
+    var onMeta = function(){
       el.removeEventListener('loadedmetadata', onMeta);
-      try {{ el.currentTime = local; }} catch(_e) {{}}
-    }};
+      try { el.currentTime = local; } catch(_e) {}
+    };
     el.addEventListener('loadedmetadata', onMeta);
-    if (parts[idx]) {{ el.src = parts[idx].url; el.load(); }}
-  }})();
-}})();
-"#
-    )
+    if (parts[idx]) { el.src = parts[idx].url; el.load(); }
+  })();"#
+}
+
+/// iOS lock-screen / Control Center now-playing via the Media Session API:
+/// seeds the `MediaMetadata`, wires `setPositionState`, and installs the
+/// seek/skip action handlers. WKWebView mirrors this into
+/// `MPNowPlayingInfoCenter`. Guarded — older WebViews lack the API. Pure JS
+/// with no Rust interpolation (`meta`, `acc`, `el`, `absTime` are already in
+/// scope from the enclosing IIFE), so it lives as a raw `&'static str`
+/// (literal braces, no escaping) — the same idiom the desktop bootstrap's
+/// `dom_reset_js`/`listeners_js` use.
+fn media_session_js() -> &'static str {
+    r#"  var hasMediaSession = ('mediaSession' in navigator);
+  function updatePositionState() {
+    if (!hasMediaSession || !navigator.mediaSession.setPositionState) return;
+    if (!(acc > 0) || !isFinite(acc)) return;
+    try {
+      navigator.mediaSession.setPositionState({
+        duration: acc,
+        playbackRate: el.playbackRate || 1,
+        position: Math.max(0, Math.min(absTime(), acc)),
+      });
+    } catch(_e) {}
+  }
+  if (hasMediaSession) {
+    try {
+      var art = (meta && meta.artwork)
+        ? [{ src: meta.artwork, sizes: '512x512', type: 'image/webp' }]
+        : [];
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: (meta && meta.title) || '',
+        artist: (meta && meta.artist) || '',
+        album: (meta && meta.album) || 'Omnibus',
+        artwork: art,
+      });
+    } catch(_e) {}
+    var oa = window.OmnibusMobileAudio;
+    var setH = function(a, fn){ try { navigator.mediaSession.setActionHandler(a, fn); } catch(_e) {} };
+    // WebKit's native handlers keep working while backgrounded JS is suspended.
+    setH('play', null);
+    setH('pause', null);
+    setH('seekbackward', function(d){ oa.skip(-((d && d.seekOffset) || 30)); });
+    setH('seekforward', function(d){ oa.skip((d && d.seekOffset) || 30); });
+    setH('seekto', function(d){ if (d && d.seekTime != null) oa.seek(d.seekTime); });
+  }"#
 }
 
 #[cfg(test)]

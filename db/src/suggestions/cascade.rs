@@ -102,15 +102,8 @@ pub async fn resolve_with(
     );
 
     // Build cache rows, fetching cover bytes best-effort (a cover miss must not
-    // drop the suggestion — `Cover` falls back to a typographic plate). Covers
-    // fetch with bounded concurrency (at most `COVER_FETCH_CONCURRENCY` in
-    // flight at once, chunk by chunk), preserving `survivors`' order (the
-    // list's already-ranked order becomes the persisted `rank` in
-    // `insert_suggestion_rows`).
-    let mut covers: Vec<Option<(String, Vec<u8>)>> = Vec::with_capacity(survivors.len());
-    for chunk in survivors.chunks(COVER_FETCH_CONCURRENCY) {
-        covers.extend(join_all(chunk.iter().map(|c| fetch_cover(c, image_config))).await);
-    }
+    // drop the suggestion — `Cover` falls back to a typographic plate).
+    let covers = fetch_covers_bounded(&survivors, image_config).await;
 
     let mut rows: Vec<NewSuggestion> = Vec::with_capacity(survivors.len());
     for (c, cover) in survivors.into_iter().zip(covers) {
@@ -140,6 +133,21 @@ pub async fn resolve_with(
     };
     replace_suggestions(pool, book_uuid, &rows, state).await?;
     Ok(())
+}
+
+/// Fetch cover bytes for every survivor with bounded concurrency (at most
+/// `COVER_FETCH_CONCURRENCY` in flight at once, chunk by chunk), preserving
+/// `survivors`' order — the list's already-ranked order becomes the
+/// persisted `rank` in `insert_suggestion_rows`.
+async fn fetch_covers_bounded(
+    survivors: &[Candidate],
+    image_config: &RemoteImageConfig,
+) -> Vec<Option<(String, Vec<u8>)>> {
+    let mut covers: Vec<Option<(String, Vec<u8>)>> = Vec::with_capacity(survivors.len());
+    for chunk in survivors.chunks(COVER_FETCH_CONCURRENCY) {
+        covers.extend(join_all(chunk.iter().map(|c| fetch_cover(c, image_config))).await);
+    }
+    covers
 }
 
 /// Best-effort remote cover fetch for one candidate. `None` for a candidate

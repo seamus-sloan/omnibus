@@ -157,6 +157,54 @@ fn reset_playback(ctx: MobilePlayback) {
     sleep.set(SleepState::Off);
 }
 
+/// Fetch the book's metadata for `uuid`, surfacing "not found" or transport
+/// errors on the `error`/`loading` signals. `None` means the caller should
+/// return without proceeding — the failure is already reported.
+async fn load_book_metadata(
+    server_url: &str,
+    uuid: &str,
+    mut error: Signal<Option<String>>,
+    mut loading: Signal<bool>,
+) -> Option<omnibus_shared::EbookMetadata> {
+    match data::get_ebook(server_url, uuid).await {
+        Ok(Some(b)) => Some(b),
+        Ok(None) => {
+            error.set(Some("Audiobook not found.".into()));
+            loading.set(false);
+            None
+        }
+        Err(e) => {
+            error.set(Some(e.to_string()));
+            loading.set(false);
+            None
+        }
+    }
+}
+
+/// Resolve the target file (picker choice, else the first audio file) and
+/// fetch its manifest, surfacing transport errors on `error`/`loading`.
+/// Returns `None` on failure — the failure is already reported.
+async fn load_manifest(
+    server_url: &str,
+    uuid: &str,
+    selected_file_id: Option<i64>,
+    book: &omnibus_shared::EbookMetadata,
+    mut error: Signal<Option<String>>,
+    mut loading: Signal<bool>,
+) -> Option<(AudiobookManifest, Option<i64>)> {
+    // Honor the picker's explicit choice; otherwise default to the first audio
+    // file (a bare `/listen/:uuid` with no `?file_id=`).
+    let file_id = selected_file_id.or_else(|| first_audio_file_id(&book.book_files));
+    match data::get_manifest(server_url, uuid, file_id).await {
+        Ok(m) => Some((m, file_id)),
+        Err(e) => {
+            error.set(Some(e.to_string()));
+            loading.set(false);
+            None
+        }
+    }
+}
+
 /// Fetch metadata + manifest for `uuid`, seed the context, install the audio
 /// control surface for direct-play books (or flag HLS as unsupported), then
 /// drain its events until superseded.
@@ -186,29 +234,13 @@ async fn load_and_drain(
     sleep.set(SleepState::Off);
     rate.set(1.0);
 
-    let book = match data::get_ebook(&server_url, &uuid).await {
-        Ok(Some(b)) => b,
-        Ok(None) => {
-            error.set(Some("Audiobook not found.".into()));
-            loading.set(false);
-            return;
-        }
-        Err(e) => {
-            error.set(Some(e.to_string()));
-            loading.set(false);
-            return;
-        }
+    let Some(book) = load_book_metadata(&server_url, &uuid, error, loading).await else {
+        return;
     };
-    // Honor the picker's explicit choice; otherwise default to the first audio
-    // file (a bare `/listen/:uuid` with no `?file_id=`).
-    let file_id = selected_file_id.or_else(|| first_audio_file_id(&book.book_files));
-    let manifest = match data::get_manifest(&server_url, &uuid, file_id).await {
-        Ok(m) => m,
-        Err(e) => {
-            error.set(Some(e.to_string()));
-            loading.set(false);
-            return;
-        }
+    let Some((manifest, _file_id)) =
+        load_manifest(&server_url, &uuid, selected_file_id, &book, error, loading).await
+    else {
+        return;
     };
 
     match manifest {

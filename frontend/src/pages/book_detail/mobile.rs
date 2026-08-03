@@ -41,6 +41,43 @@ pub(super) struct MobileBookView {
     pub description: DescriptionSignals,
 }
 
+/// Build the Fetch Summary callback: on success, saves the fetched text as a
+/// description override and — provided the user hasn't navigated to a
+/// different book in the meantime — updates the `description` signal in
+/// place, mirroring web's `BdTitleCol`.
+///
+/// `description` arrives pre-seeded from `b.description` (reset by
+/// `BookDetailPage`'s fetch effect on every book load). Snapshots this
+/// book's epoch up front: if the user navigates away before the save below
+/// resolves, `BookDetailPage` bumps `description_epoch` for the new book,
+/// and the mismatch tells us to drop this result instead of overwriting the
+/// new book's summary — mirrors `poll_suggestions_until_resolved`'s
+/// `is_current` guard.
+fn build_on_fetched_handler(
+    server_url: &str,
+    uuid: &str,
+    mut description: Signal<String>,
+    description_epoch: Signal<u64>,
+) -> impl FnMut(String) {
+    let server_url = server_url.to_string();
+    let uuid = uuid.to_string();
+    let expected_epoch = description_epoch();
+    move |text: String| {
+        let url = server_url.clone();
+        let uuid = uuid.clone();
+        spawn(async move {
+            let overrides = MetadataOverrides {
+                description: Some(text.clone()),
+                ..Default::default()
+            };
+            let saved = data::save_overrides(&url, &uuid, &overrides).await.is_ok();
+            if saved && description_epoch() == expected_epoch {
+                description.set(text);
+            }
+        });
+    }
+}
+
 /// Render the fully-loaded book detail for the mobile shell. A plain fn with
 /// no hooks of its own: `description` used to be a local `use_signal` here,
 /// but this fn is reached only past [`super::BookDetailPage`]'s
@@ -57,7 +94,7 @@ pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
         server_url,
         description:
             DescriptionSignals {
-                value: mut description,
+                value: description,
                 epoch: description_epoch,
             },
     } = view;
@@ -75,199 +112,26 @@ pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
     } = derive_loaded_view(&b);
 
     let uuid = b.unique_identifier.clone().unwrap_or_default();
-
-    // `description` arrives pre-seeded from `b.description` (reset by
-    // `BookDetailPage`'s fetch effect on every book load); a fetch-and-save
-    // here refreshes it in place, mirroring web's `BdTitleCol`.
-    let on_fetched = {
-        let server_url = server_url.clone();
-        let uuid = uuid.clone();
-        // Snapshot this book's epoch: if the user navigates to a different
-        // book before the save below resolves, `BookDetailPage` bumps
-        // `description_epoch` for the new book, and the mismatch tells us to
-        // drop this result instead of overwriting the new book's summary —
-        // mirrors `poll_suggestions_until_resolved`'s `is_current` guard.
-        let expected_epoch = description_epoch();
-        move |text: String| {
-            let url = server_url.clone();
-            let uuid = uuid.clone();
-            spawn(async move {
-                let overrides = MetadataOverrides {
-                    description: Some(text.clone()),
-                    ..Default::default()
-                };
-                let saved = data::save_overrides(&url, &uuid, &overrides).await.is_ok();
-                if saved && description_epoch() == expected_epoch {
-                    description.set(text);
-                }
-            });
-        }
-    };
-
-    let year = b
-        .published
-        .as_deref()
-        .and_then(|p| p.get(0..4))
-        .unwrap_or("")
-        .to_string();
-    let meta_line = match (authors_line.is_empty(), year.is_empty()) {
-        (false, false) => format!("{authors_line} · {year}"),
-        (false, true) => authors_line.clone(),
-        (true, false) => year.clone(),
-        (true, true) => String::new(),
-    };
+    let on_fetched = build_on_fetched_handler(&server_url, &uuid, description, description_epoch);
     let (cover_src, cover_srcset) = thumb_srcs(&b, &uuid, &server_url);
-    let epub_files: Vec<BookFileInfo> = b
-        .book_files
-        .iter()
-        .filter(|f| f.format.eq_ignore_ascii_case("EPUB"))
-        .cloned()
-        .collect();
-    let audio_files: Vec<BookFileInfo> = b
-        .book_files
-        .iter()
-        .filter(|f| is_audio_book_file(f))
-        .cloned()
-        .collect();
+    let (meta_line, epub_files, audio_files) = split_meta_and_files(&b, &authors_line);
 
     rsx! {
         div { class: "m-bd", style: "{accent_style}", "data-testid": "mobile-book-detail",
-            // Hero — accent glow, top actions, centered cover.
-            div { class: "m-bd-hero",
-                div { class: "m-bd-hero-bar",
-                    // History-aware back; Landing is only the deep-link fallback.
-                    button {
-                        r#type: "button",
-                        class: "m-icon-btn",
-                        "aria-label": "Back",
-                        "data-testid": "mobile-bd-back",
-                        onclick: move |_| {
-                            let nav = dioxus_router::navigator();
-                            if nav.can_go_back() {
-                                nav.go_back();
-                            } else {
-                                nav.replace(Route::Landing {});
-                            }
-                        },
-                        "\u{2190}"
-                    }
-                    Link {
-                        to: Route::MetadataEdit { uuid: uuid.clone() },
-                        class: "m-icon-btn",
-                        "aria-label": "Edit metadata",
-                        "\u{22EF}"
-                    }
-                }
-                div { class: "m-bd-cover",
-                    Cover {
-                        book: b.clone(),
-                        src_override: cover_src,
-                        srcset: cover_srcset,
-                        sizes: Some("150px".to_string()),
-                    }
-                }
-            }
-
-            div { class: "m-bd-titlecol",
-                h2 { class: "m-bd-title", span { class: "m-em", "{title}" } }
-                if !meta_line.is_empty() {
-                    div { class: "m-bd-meta", "{meta_line}" }
-                }
-                if !b.formats.is_empty() {
-                    div { class: "m-bd-badges",
-                        for f in b.formats.iter() {
-                            BdFormatBadge { key: "{f}", fmt: f.clone() }
-                        }
-                    }
-                }
-            }
-
-            // Multi-file actions open a picker; single-file actions navigate directly.
-            div { class: "m-bd-cta",
-                if has_ebook {
-                    BdFilePickerMenu {
-                        uuid: uuid.clone(),
-                        kind: FilePickerKind::Read,
-                        files: epub_files.clone(),
-                        label: "Read",
-                        button_class: "btn primary lg",
-                        single_testid: "start-reading",
-                    }
-                } else if has_comic {
-                    Link {
-                        to: crate::Route::ComicRead { uuid: uuid.clone() },
-                        class: "btn primary lg",
-                        "data-testid": "start-reading-comic",
-                        "Read"
-                    }
-                }
-                if has_audio {
-                    BdFilePickerMenu {
-                        uuid: uuid.clone(),
-                        kind: FilePickerKind::Listen,
-                        files: audio_files.clone(),
-                        label: "Listen",
-                        button_class: "btn lg",
-                        single_testid: "start-listening",
-                    }
-                }
-                // Immersive Read is a dual-format-only action, so gate it on both.
-                if has_ebook && has_audio {
-                    BdImmersiveButton { uuid: uuid.clone() }
-                }
-            }
-
-            // About — always rendered: a sparse/missing summary (fewer than 10
-            // words) still needs the section to host the Fetch Summary button.
-            section { class: "m-section",
-                div { class: "label", "About" }
-                if !description().is_empty() {
-                    div { class: "m-bd-desc", dangerous_inner_html: "{description()}" }
-                }
-                if !b.subjects.is_empty() {
-                    div { class: "m-bd-tags",
-                        for tag in b.subjects.iter() {
-                            span { key: "{tag}", class: "chip", "{tag}" }
-                        }
-                    }
-                }
-                if summary_is_sparse(&description()) {
-                    FetchSummaryButton { uuid: uuid.clone(), on_fetched }
-                }
-            }
-
-            // Reading status
-            section { class: "m-section",
-                div { class: "label", "Reading status" }
-                BdReadStatusControl { uuid: uuid.clone() }
-            }
-
-            // Rating
-            section { class: "m-section",
-                div { class: "label", "Your rating" }
-                BdRatingWidget { uuid: uuid.clone() }
-            }
-
-            // Book info
-            section { class: "m-section",
-                div { class: "label", "Book info" }
-                table { class: "bd-meta-table mono m-bd-info",
-                    tbody {
-                        if let Some(p) = b.publisher.clone() { BdMetaRow { k: "Publisher".to_string(), v: p } }
-                        if let Some(d) = b.published.clone() { BdMetaRow { k: "Published".to_string(), v: d } }
-                        if let Some(l) = b.language.clone() { BdMetaRow { k: "Language".to_string(), v: l } }
-                        if let Some(a) = b.added_at.clone() { BdMetaRow { k: "Added".to_string(), v: a } }
-                        if let Some(s) = series.clone() { BdMetaRow { k: "Series".to_string(), v: s } }
-                        for (i, ident) in b.identifiers.iter().enumerate() {
-                            BdMetaRow {
-                                key: "{i}",
-                                k: ident.scheme.clone().unwrap_or_else(|| "ID".into()),
-                                v: ident.value.clone(),
-                            }
-                        }
-                    }
-                }
-            }
+            {hero_section(&b, &uuid, cover_src, cover_srcset)}
+            {title_and_cta_section(
+                &uuid,
+                &title,
+                &meta_line,
+                &b.formats,
+                has_ebook,
+                has_comic,
+                has_audio,
+                &epub_files,
+                &audio_files,
+            )}
+            {about_section(&uuid, description, &b.subjects, on_fetched)}
+            {info_sections(&uuid, &b, &series)}
 
             // Offline downloads (Kindle-style local copies).
             super::offline::BdOfflineSection {
@@ -294,6 +158,215 @@ pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
 
             div { class: "m-bd-footer",
                 Link { to: Route::Landing {}, class: "btn", "Back to library" }
+            }
+        }
+    }
+}
+
+/// Derive the "authors · year" meta-line caption and split `book_files` into
+/// the EPUB and audio lists the CTA row's file pickers need.
+fn split_meta_and_files(
+    b: &EbookMetadata,
+    authors_line: &str,
+) -> (String, Vec<BookFileInfo>, Vec<BookFileInfo>) {
+    let year = b
+        .published
+        .as_deref()
+        .and_then(|p| p.get(0..4))
+        .unwrap_or("")
+        .to_string();
+    let meta_line = match (authors_line.is_empty(), year.is_empty()) {
+        (false, false) => format!("{authors_line} · {year}"),
+        (false, true) => authors_line.to_string(),
+        (true, false) => year,
+        (true, true) => String::new(),
+    };
+    let epub_files = b
+        .book_files
+        .iter()
+        .filter(|f| f.format.eq_ignore_ascii_case("EPUB"))
+        .cloned()
+        .collect();
+    let audio_files = b
+        .book_files
+        .iter()
+        .filter(|f| is_audio_book_file(f))
+        .cloned()
+        .collect();
+    (meta_line, epub_files, audio_files)
+}
+
+/// Hero — accent glow, top actions (history-aware back + edit-metadata
+/// link), centered cover.
+fn hero_section(
+    b: &EbookMetadata,
+    uuid: &str,
+    cover_src: Option<String>,
+    cover_srcset: Option<String>,
+) -> Element {
+    rsx! {
+        div { class: "m-bd-hero",
+            div { class: "m-bd-hero-bar",
+                // History-aware back; Landing is only the deep-link fallback.
+                button {
+                    r#type: "button",
+                    class: "m-icon-btn",
+                    "aria-label": "Back",
+                    "data-testid": "mobile-bd-back",
+                    onclick: move |_| {
+                        let nav = dioxus_router::navigator();
+                        if nav.can_go_back() {
+                            nav.go_back();
+                        } else {
+                            nav.replace(Route::Landing {});
+                        }
+                    },
+                    "\u{2190}"
+                }
+                Link {
+                    to: Route::MetadataEdit { uuid: uuid.to_string() },
+                    class: "m-icon-btn",
+                    "aria-label": "Edit metadata",
+                    "\u{22EF}"
+                }
+            }
+            div { class: "m-bd-cover",
+                Cover {
+                    book: b.clone(),
+                    src_override: cover_src,
+                    srcset: cover_srcset,
+                    sizes: Some("150px".to_string()),
+                }
+            }
+        }
+    }
+}
+
+/// Title column (title / meta line / format badges) plus the multi-file
+/// action row — a picker for a multi-file format, a direct link otherwise.
+#[allow(clippy::too_many_arguments)]
+fn title_and_cta_section(
+    uuid: &str,
+    title: &str,
+    meta_line: &str,
+    formats: &[String],
+    has_ebook: bool,
+    has_comic: bool,
+    has_audio: bool,
+    epub_files: &[BookFileInfo],
+    audio_files: &[BookFileInfo],
+) -> Element {
+    rsx! {
+        div { class: "m-bd-titlecol",
+            h2 { class: "m-bd-title", span { class: "m-em", "{title}" } }
+            if !meta_line.is_empty() {
+                div { class: "m-bd-meta", "{meta_line}" }
+            }
+            if !formats.is_empty() {
+                div { class: "m-bd-badges",
+                    for f in formats.iter() {
+                        BdFormatBadge { key: "{f}", fmt: f.clone() }
+                    }
+                }
+            }
+        }
+
+        // Multi-file actions open a picker; single-file actions navigate directly.
+        div { class: "m-bd-cta",
+            if has_ebook {
+                BdFilePickerMenu {
+                    uuid: uuid.to_string(),
+                    kind: FilePickerKind::Read,
+                    files: epub_files.to_vec(),
+                    label: "Read",
+                    button_class: "btn primary lg",
+                    single_testid: "start-reading",
+                }
+            } else if has_comic {
+                Link {
+                    to: crate::Route::ComicRead { uuid: uuid.to_string() },
+                    class: "btn primary lg",
+                    "data-testid": "start-reading-comic",
+                    "Read"
+                }
+            }
+            if has_audio {
+                BdFilePickerMenu {
+                    uuid: uuid.to_string(),
+                    kind: FilePickerKind::Listen,
+                    files: audio_files.to_vec(),
+                    label: "Listen",
+                    button_class: "btn lg",
+                    single_testid: "start-listening",
+                }
+            }
+            // Immersive Read is a dual-format-only action, so gate it on both.
+            if has_ebook && has_audio {
+                BdImmersiveButton { uuid: uuid.to_string() }
+            }
+        }
+    }
+}
+
+/// About — always rendered: a sparse/missing summary (fewer than 10 words)
+/// still needs the section to host the Fetch Summary button.
+fn about_section(
+    uuid: &str,
+    description: Signal<String>,
+    subjects: &[String],
+    on_fetched: impl FnMut(String) + 'static,
+) -> Element {
+    rsx! {
+        section { class: "m-section",
+            div { class: "label", "About" }
+            if !description().is_empty() {
+                div { class: "m-bd-desc", dangerous_inner_html: "{description()}" }
+            }
+            if !subjects.is_empty() {
+                div { class: "m-bd-tags",
+                    for tag in subjects.iter() {
+                        span { key: "{tag}", class: "chip", "{tag}" }
+                    }
+                }
+            }
+            if summary_is_sparse(&description()) {
+                FetchSummaryButton { uuid: uuid.to_string(), on_fetched }
+            }
+        }
+    }
+}
+
+/// Reading status, rating, and the book-info table — three small `m-section`
+/// blocks grouped into one helper since none is independently reusable.
+fn info_sections(uuid: &str, b: &EbookMetadata, series: &Option<String>) -> Element {
+    rsx! {
+        section { class: "m-section",
+            div { class: "label", "Reading status" }
+            BdReadStatusControl { uuid: uuid.to_string() }
+        }
+
+        section { class: "m-section",
+            div { class: "label", "Your rating" }
+            BdRatingWidget { uuid: uuid.to_string() }
+        }
+
+        section { class: "m-section",
+            div { class: "label", "Book info" }
+            table { class: "bd-meta-table mono m-bd-info",
+                tbody {
+                    if let Some(p) = b.publisher.clone() { BdMetaRow { k: "Publisher".to_string(), v: p } }
+                    if let Some(d) = b.published.clone() { BdMetaRow { k: "Published".to_string(), v: d } }
+                    if let Some(l) = b.language.clone() { BdMetaRow { k: "Language".to_string(), v: l } }
+                    if let Some(a) = b.added_at.clone() { BdMetaRow { k: "Added".to_string(), v: a } }
+                    if let Some(s) = series.clone() { BdMetaRow { k: "Series".to_string(), v: s } }
+                    for (i, ident) in b.identifiers.iter().enumerate() {
+                        BdMetaRow {
+                            key: "{i}",
+                            k: ident.scheme.clone().unwrap_or_else(|| "ID".into()),
+                            v: ident.value.clone(),
+                        }
+                    }
+                }
             }
         }
     }
