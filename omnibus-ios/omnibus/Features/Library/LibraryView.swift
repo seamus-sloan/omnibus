@@ -320,7 +320,14 @@ struct LibraryView: View {
                 }
 
                 if !model.resume.isEmpty {
-                    ContinueHero(points: Array(model.resume.prefix(5)))
+                    ContinueHero(
+                        points: Array(model.resume.prefix(5)),
+                        // Only the rail is redrawn: an edit from here can't
+                        // change which books are in progress, and a full reload
+                        // would truncate the grid back to its first page.
+                        onEdited: { Task { await model.refreshResume() } },
+                        onOpenDetail: { path.append(Destination.book(uuid: $0.uuid)) }
+                    )
                 }
 
                 if !railShelves.isEmpty {

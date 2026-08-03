@@ -6,23 +6,40 @@
 
 import SwiftUI
 
+/// The glyphs the shared menu draws, named so a test can prove they resolve:
+/// `Image(systemName:)` neither warns nor fails on a name that doesn't exist,
+/// so a bad one ships as a menu row with a hole where its icon should be.
+enum BookMenuGlyph {
+    static let detail = "info.circle"
+    static let edit = "pencil"
+}
+
 extension View {
     /// Attach the shared long-press menu to a book cell. `onEdited` runs after
     /// the editor saves or reverts (not on a cancel), so the surface can
-    /// refresh the rows behind the sheet. `extras` appends surface-specific
-    /// items — e.g. the shelf grid's "Remove from shelf".
+    /// refresh the rows behind the sheet. `onOpenDetail` adds a "View book
+    /// details" item, for cells whose *tap* goes somewhere else — on a cell
+    /// that already pushes the detail screen it would only restate the tap.
+    /// `extras` appends surface-specific items — e.g. the shelf grid's
+    /// "Remove from shelf".
     func bookContextMenu<Extras: View>(
         _ book: Book,
         onEdited: (() -> Void)? = nil,
+        onOpenDetail: (() -> Void)? = nil,
         @ViewBuilder extras: @escaping () -> Extras = { EmptyView() }
     ) -> some View {
-        modifier(BookContextMenuModifier(book: book, onEdited: onEdited, extras: extras))
+        modifier(
+            BookContextMenuModifier(
+                book: book, onEdited: onEdited, onOpenDetail: onOpenDetail, extras: extras
+            )
+        )
     }
 }
 
 private struct BookContextMenuModifier<Extras: View>: ViewModifier {
     let book: Book
     var onEdited: (() -> Void)?
+    var onOpenDetail: (() -> Void)?
     @ViewBuilder var extras: () -> Extras
 
     @Environment(AppState.self) private var app
@@ -31,11 +48,21 @@ private struct BookContextMenuModifier<Extras: View>: ViewModifier {
     func body(content: Content) -> some View {
         content
             .contextMenu {
+                // First where it appears at all: on a card whose tap opens the
+                // reader, reaching the detail screen is the whole reason the
+                // menu is worth holding the card down for.
+                if let onOpenDetail {
+                    Button {
+                        onOpenDetail()
+                    } label: {
+                        Label("View book details", systemImage: BookMenuGlyph.detail)
+                    }
+                }
                 if app.user?.canEdit == true {
                     Button {
                         showEditor = true
                     } label: {
-                        Label("Edit metadata", systemImage: "pencil")
+                        Label("Edit metadata", systemImage: BookMenuGlyph.edit)
                     }
                 }
                 extras()
