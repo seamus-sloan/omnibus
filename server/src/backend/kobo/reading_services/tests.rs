@@ -1019,6 +1019,24 @@ mod dto_tests {
         }
     }
 
+    // Pins the current outbound `highlightColor` wire shape — a lowercase
+    // color-name string under the camelCase key `highlightColor` — for
+    // every palette entry. #1629: a real device stores every pushed
+    // annotation as `Bookmark.Color = 0` regardless of the color Omnibus
+    // sends, but no vendored reference implementation or captured device
+    // PATCH exists in this repo to confirm whether the firmware instead
+    // wants an integer enum on this field, so this locks down today's
+    // documented (and possibly firmware-incompatible, see docs/kobo.md)
+    // behavior rather than leaving it unpinned.
+    #[test]
+    fn color_to_kobo_emits_the_documented_lowercase_name_for_every_palette_color() {
+        assert_eq!(color_to_kobo(HighlightColor::Amber), "yellow");
+        assert_eq!(color_to_kobo(HighlightColor::Green), "green");
+        assert_eq!(color_to_kobo(HighlightColor::Blue), "blue");
+        assert_eq!(color_to_kobo(HighlightColor::Rose), "pink");
+        assert_eq!(color_to_kobo(HighlightColor::Violet), "purple");
+    }
+
     #[test]
     fn parse_content_id_strips_the_chapter_suffix() {
         assert_eq!(parse_content_id("uuid-1!!OEBPS/ch1.xhtml"), "uuid-1");
