@@ -331,8 +331,8 @@ fn render_trend(metric: Metric, bars: &[TrendBar]) -> Element {
             "data-testid": "stats-drill-trend",
             role: "img",
             aria_label: "{metric.title()} trend",
-            for bar in bars {
-                div { class: "st-drill-trend-col", title: "{bar.label}",
+            for (i, bar) in bars.iter().enumerate() {
+                div { key: "{i}-{bar.label}", class: "st-drill-trend-col", title: "{bar.label}",
                     div { class: "st-drill-trend-track",
                         div { class: "st-drill-trend-bar", style: "height: {bar.height_pct}%;" }
                     }

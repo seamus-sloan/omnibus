@@ -9,6 +9,23 @@ use dioxus::prelude::*;
 use super::chip_editor::SuggestionItem;
 use super::suggestion_dropdown::{compute_suggestions, DropdownSelectionState, SuggestionDropdown};
 
+/// Presentational knobs for [`SuggestField`] — CSS class, placeholder, and
+/// testid prefix — split out of [`SuggestFieldProps`] so the component's
+/// props stay at the established cap, mirroring how
+/// [`super::chip_editor::ChipEditorOptions`] splits the same kind of knobs
+/// out of `ChipEditorProps` for its sibling component.
+#[derive(Clone, PartialEq, Default)]
+pub struct SuggestFieldOptions {
+    /// CSS class for the `<input>`.
+    pub class: String,
+    /// Placeholder shown when the value is empty.
+    pub placeholder: String,
+    /// Per-instance testid prefix, same convention as
+    /// [`super::chip_editor::ChipEditorOptions::testid_prefix`]: the input
+    /// gets `<prefix>-input`, the dropdown `<prefix>-suggestions`.
+    pub testid_prefix: String,
+}
+
 /// Props for the [`SuggestField`] component.
 #[derive(Props, Clone, PartialEq)]
 pub struct SuggestFieldProps {
@@ -23,16 +40,9 @@ pub struct SuggestFieldProps {
     pub suggestions: ReadSignal<Vec<SuggestionItem>>,
     /// The `<input>`'s `id`, so a sibling `<label for=...>` associates with it.
     pub id: String,
-    /// CSS class for the `<input>`.
+    /// Presentational knobs (class, placeholder, testid prefix).
     #[props(default)]
-    pub class: String,
-    /// Placeholder shown when the value is empty.
-    #[props(default)]
-    pub placeholder: String,
-    /// Per-instance testid prefix, same convention as
-    /// [`super::chip_editor::ChipEditorOptions::testid_prefix`]: the input
-    /// gets `<prefix>-input`, the dropdown `<prefix>-suggestions`.
-    pub testid_prefix: String,
+    pub options: SuggestFieldOptions,
 }
 
 /// Single-value counterpart to [`super::chip_editor::ChipEditor`] — picking a
@@ -55,15 +65,15 @@ pub fn SuggestField(props: SuggestFieldProps) -> Element {
         compute_suggestions(&suggestions, &[value()], &query_lc, open(), false)
     };
     let total = filtered.len();
-    let testid_prefix = props.testid_prefix.clone();
+    let testid_prefix = props.options.testid_prefix.clone();
 
     rsx! {
         div { class: "chip-editor-input-wrap",
             input {
                 id: props.id.clone(),
-                class: "{props.class}",
+                class: "{props.options.class}",
                 "data-testid": "{testid_prefix}-input",
-                placeholder: "{props.placeholder}",
+                placeholder: "{props.options.placeholder}",
                 value: "{value}",
                 onfocus: move |_| open.set(true),
                 onblur: move |_| {

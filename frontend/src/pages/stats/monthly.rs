@@ -89,8 +89,9 @@ pub(super) fn MonthlyChart(summary: StatsSummary) -> Element {
                 class: "st-monthly-bars",
                 role: "img",
                 aria_label: "Books finished per month, trailing 12 months",
-                for bar in &bars {
+                for (i, bar) in bars.iter().enumerate() {
                     div {
+                        key: "{i}",
                         class: if bar.current { "st-mo-col st-mo-current" } else { "st-mo-col" },
                         "data-testid": "stats-monthly-bar",
                         title: "{bar.books} finished",

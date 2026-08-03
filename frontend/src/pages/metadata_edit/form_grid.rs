@@ -8,7 +8,7 @@ use omnibus_shared::EbookMetadata;
 use super::fields::{label_to_id, MeArea, MeField, MeLabel};
 use super::hardcover_fetch::HardcoverFetchPanel;
 use crate::components::chip_editor::{ChipEditor, ChipEditorOptions, SuggestionItem};
-use crate::components::{FetchSummaryButton, SuggestField};
+use crate::components::{FetchSummaryButton, SuggestField, SuggestFieldOptions};
 
 /// Per-field editable signals threaded through the form rows from `MetadataEditForm`.
 #[derive(Clone, Copy, PartialEq)]
@@ -252,11 +252,13 @@ fn SeriesSection(
                 MeLabel { text: "Series", edited: series_edited, target: field_id.clone() }
                 SuggestField {
                     id: field_id,
-                    class: input_class,
                     value: series,
                     suggestions: series_suggestions,
-                    placeholder: "not part of a series",
-                    testid_prefix: "me-series",
+                    options: SuggestFieldOptions {
+                        class: input_class.to_string(),
+                        placeholder: "not part of a series".to_string(),
+                        testid_prefix: "me-series".to_string(),
+                    },
                 }
             }
             MeField {

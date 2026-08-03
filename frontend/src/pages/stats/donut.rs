@@ -103,7 +103,7 @@ pub(super) fn GenreDonut(summary: StatsSummary) -> Element {
                 }
                 ul { class: "st-donut-legend",
                     for (i, ((name, _), pct)) in folded.iter().zip(percents.iter()).enumerate() {
-                        li { class: "st-donut-row",
+                        li { key: "{name}", class: "st-donut-row",
                             span {
                                 class: "st-donut-swatch",
                                 style: "background: {SLICE_VARS[i.min(SLICE_VARS.len() - 1)]};",

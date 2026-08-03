@@ -13,14 +13,7 @@ use crate::focus_after_paint::focus_after_paint;
 /// whichever formats the book has, the interactive Send-to-Kindle button,
 /// and the Send-to-Kobo KEPUB download.
 #[component]
-pub(super) fn BdExportMenu(
-    uuid: String,
-    has_ebook: bool,
-    has_audio: bool,
-    #[props(default)] book_author: String,
-    #[props(default)] book_title: String,
-    #[props(default)] epub_size_bytes: Option<i64>,
-) -> Element {
+pub(super) fn BdExportMenu(ctx: BdExportContext) -> Element {
     let mut open = use_signal(|| false);
     rsx! {
         div { class: "bd-export",
@@ -43,17 +36,7 @@ pub(super) fn BdExportMenu(
                     "data-testid": "hero-export-scrim",
                     onclick: move |_| open.set(false),
                 }
-                BdExportPanel {
-                    ctx: BdExportContext {
-                        uuid,
-                        has_ebook,
-                        has_audio,
-                        book_author,
-                        book_title,
-                        epub_size_bytes,
-                    },
-                    open,
-                }
+                BdExportPanel { ctx, open }
             }
         }
     }
@@ -61,15 +44,15 @@ pub(super) fn BdExportMenu(
 
 /// The uuid, available formats, author/title (for Send-to-Kindle/Kobo
 /// filenames), and EPUB size gating the oversize-email fallback. Grouped so
-/// [`BdExportPanel`] stays under the prop cap.
+/// [`BdExportMenu`] and [`BdExportPanel`] both stay under the prop cap.
 #[derive(Clone, PartialEq)]
-struct BdExportContext {
-    uuid: String,
-    has_ebook: bool,
-    has_audio: bool,
-    book_author: String,
-    book_title: String,
-    epub_size_bytes: Option<i64>,
+pub(super) struct BdExportContext {
+    pub uuid: String,
+    pub has_ebook: bool,
+    pub has_audio: bool,
+    pub book_author: String,
+    pub book_title: String,
+    pub epub_size_bytes: Option<i64>,
 }
 
 /// The open dropdown body. Split out so `onmounted` can focus it (so ESC
