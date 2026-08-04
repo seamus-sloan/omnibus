@@ -2,7 +2,6 @@
 //! highlight popover rendered over a live selection.
 
 use dioxus::prelude::*;
-
 use omnibus_shared::HighlightColor;
 
 /// Selection event data from epub.js glue (deserialized from JSON).

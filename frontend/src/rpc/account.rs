@@ -4,7 +4,6 @@
 
 use dioxus::fullstack::post;
 use dioxus::prelude::*;
-
 #[cfg(feature = "server")]
 use omnibus_db::{self as db, auth::AuthError};
 

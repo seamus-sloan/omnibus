@@ -6,9 +6,8 @@
 
 use std::sync::Arc;
 
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-
 use omnibus_shared::ProgressState;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::types::{lock_unpoison, Task, TaskId, TaskOutcome, Worker};
 

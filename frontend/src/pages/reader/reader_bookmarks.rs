@@ -3,7 +3,6 @@
 //! navigates the rendition back to its CFI.
 
 use dioxus::prelude::*;
-
 use omnibus_shared::Bookmark;
 #[cfg(any(feature = "web", feature = "mobile"))]
 use omnibus_shared::CreateBookmark;

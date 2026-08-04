@@ -2,11 +2,10 @@
 //! provider-injectable orchestrator (against `wiremock`) and the
 //! key-configured/not-configured outer wrapper.
 
+use omnibus_shared::metadata_fetch::HardcoverFetchResult;
 use serde_json::json;
 use wiremock::matchers::{body_string_contains, method};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-
-use omnibus_shared::metadata_fetch::HardcoverFetchResult;
 
 use super::{fetch_hardcover_metadata, fetch_hardcover_metadata_with};
 use crate::pool::init_db;

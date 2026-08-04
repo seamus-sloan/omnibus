@@ -4,7 +4,6 @@
 //! `BookReadPage` so the parent reads as plain Rust signal/state wiring.
 
 use dioxus::prelude::*;
-
 use omnibus_shared::Highlight;
 
 use super::prefs::ReaderPrefs;

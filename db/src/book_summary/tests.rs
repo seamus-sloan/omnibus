@@ -1,11 +1,10 @@
 //! Tests for the on-demand summary fetch: the OpenLibrary work-lookup client
 //! (against `wiremock`) and the provider-injectable orchestrator.
 
+use omnibus_shared::summary::SummarySource;
 use serde_json::json;
 use wiremock::matchers::{body_string_contains, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-
-use omnibus_shared::summary::SummarySource;
 
 use super::googlebooks::{self, GoogleBooksSummaryConfig};
 use super::openlibrary::{self, OpenLibrarySummaryConfig};

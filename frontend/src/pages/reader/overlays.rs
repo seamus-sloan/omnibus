@@ -5,7 +5,6 @@
 //! web + mobile (SSR no-ops).
 
 use dioxus::prelude::*;
-
 use omnibus_shared::{Highlight, HighlightColor};
 
 use super::annotations_sheet::AnnotationsSheet;

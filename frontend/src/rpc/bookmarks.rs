@@ -3,10 +3,9 @@
 
 use dioxus::fullstack::post;
 use dioxus::prelude::*;
-use omnibus_shared::{Bookmark, CreateBookmark, UpdateBookmark};
-
 #[cfg(feature = "server")]
 use omnibus_db as db;
+use omnibus_shared::{Bookmark, CreateBookmark, UpdateBookmark};
 
 #[cfg(feature = "server")]
 use super::{AuthUser, PoolExt};

@@ -4,10 +4,9 @@
 
 use dioxus::fullstack::post;
 use dioxus::prelude::*;
-use omnibus_shared::physical::{PhysicalCopy, WishlistEntry};
-
 #[cfg(feature = "server")]
 use omnibus_db as db;
+use omnibus_shared::physical::{PhysicalCopy, WishlistEntry};
 // Only the server-side body names the source; the client half never sees it.
 #[cfg(feature = "server")]
 use omnibus_shared::physical::WishlistSource;

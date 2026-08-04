@@ -2,11 +2,16 @@
 //! stays a candidate (AC2), and the write composition (add physical-only,
 //! wishlist by uuid / by meta).
 
-use sqlx::SqlitePool;
+use std::time::Duration;
 
 use omnibus_shared::metadata_lookup::MetadataProvider;
 use omnibus_shared::physical::WishlistSource;
 use omnibus_shared::scan::ScanOutcome;
+use omnibus_shared::{Contributor, MetadataOverrides};
+use serde_json::json;
+use sqlx::SqlitePool;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::*;
 use crate::metadata_lookup::{MetadataLookupConfig, MetadataLookupError, ProviderKeys};
@@ -14,11 +19,6 @@ use crate::normalize::{normalize_author, normalize_title};
 use crate::physical::{
     add_physical_copy, add_wishlist_entry, list_physical_copies, list_wishlist, PhysicalError,
 };
-use omnibus_shared::{Contributor, MetadataOverrides};
-use serde_json::json;
-use std::time::Duration;
-use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const ISBN: &str = "9780134685991";
 

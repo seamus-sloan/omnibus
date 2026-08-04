@@ -21,10 +21,9 @@ use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
 use base64::Engine;
+use omnibus_shared::http_range::{self as range, RangeOutcome};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::ReaderStream;
-
-use omnibus_shared::http_range::{self as range, RangeOutcome};
 
 mod revalidate;
 

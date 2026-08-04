@@ -3,7 +3,6 @@
 //! and reconciles the in-memory highlights list through `on_saved`.
 
 use dioxus::prelude::*;
-
 use omnibus_shared::Highlight;
 
 #[component]

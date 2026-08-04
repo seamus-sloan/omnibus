@@ -2,11 +2,10 @@
 //! enrichment lookup (series, first-publish year) that fills the fields no
 //! other provider carries. Ladder-level ordering lives in the parent module.
 
+use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider};
 use serde_json::json;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-
-use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider};
 
 use super::super::providers::openlibrary;
 use super::super::*;

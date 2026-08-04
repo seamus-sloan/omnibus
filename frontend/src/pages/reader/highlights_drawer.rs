@@ -4,7 +4,6 @@
 //! copy, and delete actions.
 
 use dioxus::prelude::*;
-
 use omnibus_shared::{Highlight, HighlightColor};
 
 #[cfg(test)]

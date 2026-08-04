@@ -2,9 +2,8 @@
 //! individually deletable), wishlist (per-user, idempotent), check-in
 //! fulfillment across all users, and fileless book creation.
 
-use sqlx::SqlitePool;
-
 use omnibus_shared::physical::WishlistSource;
+use sqlx::SqlitePool;
 
 use super::*;
 use crate::covers::cover_path_for;

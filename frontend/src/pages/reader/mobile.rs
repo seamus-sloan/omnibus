@@ -8,7 +8,6 @@
 
 use dioxus::core::Task;
 use dioxus::prelude::*;
-
 use omnibus_shared::{Highlight, ProgressFormat, ProgressUpdate};
 
 use crate::data;
