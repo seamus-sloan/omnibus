@@ -16,7 +16,6 @@ use axum::{
 };
 
 use super::AppState;
-use crate::http_errors::internal;
 
 mod analytics;
 mod auth;
