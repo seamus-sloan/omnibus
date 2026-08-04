@@ -5,11 +5,12 @@
 //! starts matching `kobo_location IS NOT NULL`.
 
 use std::collections::HashSet;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use sqlx::SqlitePool;
 
 use crate::kobo_position::annotation_locations;
+use crate::worker::{Task, Worker};
 
 /// Process-wide guard for [`spawn_kobo_downsync`]: the key of every
 /// `(user_id, book_uuid)` pair with a materialization task currently
@@ -51,8 +52,17 @@ pub struct DownsyncStats {
 /// rows created before one existed so the served id is stable.
 /// Deliberately never touches `updated_at`: the wire fingerprint covers
 /// membership, so the device re-pulls without a fabricated edit time.
+///
+/// `worker` is what makes a cold KEPUB cache recoverable: a KoboSpan anchor
+/// can only be derived against the converted file, so without it every
+/// candidate row stays unresolved *forever* — nothing else on this path
+/// rebuilds the cache, and an unmaterialized row never moves the wire
+/// fingerprint, so `checkforchanges` never invites the GET that would retry.
+/// Pass `None` only when a conversion must not be requested: from the
+/// worker's own post-conversion hook, or from a test.
 pub async fn downsync_book_annotations(
     pool: &SqlitePool,
+    worker: Option<&Arc<Worker>>,
     user_id: i64,
     book_uuid: &str,
 ) -> anyhow::Result<DownsyncStats> {
@@ -78,6 +88,13 @@ pub async fn downsync_book_annotations(
     };
     let kepub = crate::kepub_path(book_id);
     if !tokio::fs::try_exists(&kepub).await.unwrap_or(false) {
+        // Idempotent and serialized per book by the worker; do NOT await —
+        // callers are a write path or a boot pass, and the conversion's own
+        // completion re-runs this via `downsync_book_id_annotations`.
+        // Mirrors `derive_span_for_cfi` on the reading-state path.
+        if let Some(worker) = worker {
+            worker.post(Task::KepubConvert { book_id });
+        }
         return Ok(stats);
     }
     let Some(source) = crate::book_file_path(pool, book_id, "EPUB").await? else {
@@ -117,7 +134,16 @@ pub async fn downsync_book_annotations(
 /// when they were written, and the backlog conversion for highlights made
 /// before down-sync existed. Cheap once caught up: the worklist query
 /// returns nothing.
-pub async fn downsync_all_kobo_annotations(pool: &SqlitePool) -> anyhow::Result<DownsyncStats> {
+///
+/// Passing `worker` here is what clears a backlog stranded by a cold cache:
+/// the worklist is bounded by "books the user highlighted on the web that
+/// haven't reached a device", so the conversions it requests are few, deduped
+/// per book by the worker's `kepub:{book_id}` resource key, and skipped
+/// outright for any book whose cache is already warm.
+pub async fn downsync_all_kobo_annotations(
+    pool: &SqlitePool,
+    worker: Option<&Arc<Worker>>,
+) -> anyhow::Result<DownsyncStats> {
     let pairs: Vec<(i64, String)> = sqlx::query_as(
         "SELECT DISTINCT user_id, book_uuid FROM annotations
          WHERE epub_cfi_range IS NOT NULL AND kobo_location IS NULL",
@@ -126,7 +152,7 @@ pub async fn downsync_all_kobo_annotations(pool: &SqlitePool) -> anyhow::Result<
     .await?;
     let mut stats = DownsyncStats::default();
     for (user_id, book_uuid) in pairs {
-        match downsync_book_annotations(pool, user_id, &book_uuid).await {
+        match downsync_book_annotations(pool, worker, user_id, &book_uuid).await {
             Ok(s) => {
                 stats.derived += s.derived;
                 stats.unresolved += s.unresolved;
@@ -135,6 +161,42 @@ pub async fn downsync_all_kobo_annotations(pool: &SqlitePool) -> anyhow::Result<
                 tracing::warn!(user_id, book_uuid, error = %e, "annotation downsync failed for book");
             }
         }
+    }
+    Ok(stats)
+}
+
+/// Materialize every user's pending rows for one book id — the hook the
+/// worker runs after a successful KEPUB conversion, so the conversion a cold
+/// cache asked for actually lands the highlights it was asked for instead of
+/// waiting on the next write or the next boot. Also covers a cache warmed for
+/// an unrelated reason (a device download, a Send-to-Kobo export).
+///
+/// Requests no conversion of its own: the cache is fresh by construction here,
+/// and a failed derivation must not re-enter the task that called it.
+pub async fn downsync_book_id_annotations(
+    pool: &SqlitePool,
+    book_id: i64,
+) -> anyhow::Result<DownsyncStats> {
+    let Some(book_uuid): Option<String> = sqlx::query_scalar("SELECT uuid FROM books WHERE id = ?")
+        .bind(book_id)
+        .fetch_optional(pool)
+        .await?
+    else {
+        return Ok(DownsyncStats::default());
+    };
+    let user_ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT DISTINCT user_id FROM annotations
+         WHERE book_uuid = ? AND epub_cfi_range IS NOT NULL AND kobo_location IS NULL",
+    )
+    .bind(&book_uuid)
+    .fetch_all(pool)
+    .await?;
+
+    let mut stats = DownsyncStats::default();
+    for user_id in user_ids {
+        let s = downsync_book_annotations(pool, None, user_id, &book_uuid).await?;
+        stats.derived += s.derived;
+        stats.unresolved += s.unresolved;
     }
     Ok(stats)
 }
@@ -152,7 +214,12 @@ pub async fn downsync_all_kobo_annotations(pool: &SqlitePool) -> anyhow::Result<
 /// the in-flight task has already read its worklist stays unresolved until
 /// the *next* highlight write or the boot-time [`downsync_all_kobo_annotations`]
 /// pass, rather than being covered by the task it skipped spawning behind.
-pub fn spawn_kobo_downsync(pool: SqlitePool, user_id: i64, book_uuid: String) {
+pub fn spawn_kobo_downsync(
+    pool: SqlitePool,
+    worker: Option<Arc<Worker>>,
+    user_id: i64,
+    book_uuid: String,
+) {
     let key = (user_id, book_uuid.clone());
     {
         let mut inflight = inflight_downsyncs()
@@ -164,7 +231,8 @@ pub fn spawn_kobo_downsync(pool: SqlitePool, user_id: i64, book_uuid: String) {
     }
     tokio::spawn(async move {
         let _guard = InflightGuard { key };
-        if let Err(e) = downsync_book_annotations(&pool, user_id, &book_uuid).await {
+        if let Err(e) = downsync_book_annotations(&pool, worker.as_ref(), user_id, &book_uuid).await
+        {
             tracing::warn!(user_id, book_uuid, error = %e, "annotation downsync failed");
         }
     });

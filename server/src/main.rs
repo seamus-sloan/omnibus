@@ -53,7 +53,7 @@ mod server {
         spawn_session_pruner(pool.clone());
         spawn_periodic_scan(pool.clone(), worker.clone());
         spawn_annotation_cfi_backfill(pool.clone());
-        spawn_annotation_downsync(pool.clone());
+        spawn_annotation_downsync(pool.clone(), worker.clone());
 
         let router = build_router(state, pool, worker);
         Ok(apply_security_headers(router))
@@ -191,9 +191,14 @@ mod server {
     /// when they were written, and the backlog pass for highlights that
     /// predate down-sync. Mirrors `spawn_annotation_cfi_backfill`: cheap
     /// once caught up.
-    fn spawn_annotation_downsync(pool: SqlitePool) {
+    ///
+    /// Takes the worker so a backlog stranded by a cold KEPUB cache can
+    /// request the conversions that unstick it; each one re-runs this book's
+    /// pass on completion.
+    fn spawn_annotation_downsync(pool: SqlitePool, worker: Arc<Worker>) {
         tokio::spawn(async move {
-            match omnibus_db::annotations::downsync_all_kobo_annotations(&pool).await {
+            match omnibus_db::annotations::downsync_all_kobo_annotations(&pool, Some(&worker)).await
+            {
                 Ok(stats) if stats.derived > 0 || stats.unresolved > 0 => {
                     tracing::info!(
                         derived = stats.derived,

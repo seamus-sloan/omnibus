@@ -1,7 +1,8 @@
 //! Unit tests for the Web→Kobo annotation materialization: the happy
 //! derivation path against real on-disk source/kepub fixtures (including
 //! client-id minting), the degrade-to-unresolved paths (missing kepub
-//! cache, underivable CFI), and the whole-backlog boot pass.
+//! cache, underivable CFI), the conversion request that makes a cold cache
+//! recoverable, and the whole-backlog boot pass.
 
 use omnibus_shared::{CreateHighlight, EbookMetadata, HighlightColor};
 use sqlx::SqlitePool;
@@ -13,6 +14,7 @@ use crate::annotations::{
 use crate::init_db;
 use crate::kobo_position::parse_annotation_location;
 use crate::test_support::{build_test_epub, build_test_kepub, make_test_dir, EnvVarGuard};
+use crate::worker::{Worker, WorkerConfig};
 
 const SOURCE_C1: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml">
@@ -121,7 +123,9 @@ async fn downsync_book_annotations_derives_locations_and_mints_client_ids() {
             .unwrap();
     assert_eq!(before.0, None);
 
-    let stats = downsync_book_annotations(&pool, user, &uuid).await.unwrap();
+    let stats = downsync_book_annotations(&pool, None, user, &uuid)
+        .await
+        .unwrap();
 
     assert_eq!(
         stats,
@@ -158,7 +162,9 @@ async fn downsync_book_annotations_keeps_an_existing_client_id() {
         .await
         .unwrap();
 
-    downsync_book_annotations(&pool, user, &uuid).await.unwrap();
+    downsync_book_annotations(&pool, None, user, &uuid)
+        .await
+        .unwrap();
 
     let served = served_kobo_annotations(&pool, user, &uuid).await.unwrap();
     assert_eq!(served[0].client_id, "web-1");
@@ -175,7 +181,9 @@ async fn downsync_book_annotations_leaves_rows_unresolved_without_a_kepub_cache(
         .await
         .unwrap();
 
-    let stats = downsync_book_annotations(&pool, user, &uuid).await.unwrap();
+    let stats = downsync_book_annotations(&pool, None, user, &uuid)
+        .await
+        .unwrap();
 
     assert_eq!(
         stats,
@@ -191,6 +199,76 @@ async fn downsync_book_annotations_leaves_rows_unresolved_without_a_kepub_cache(
 }
 
 #[tokio::test]
+async fn downsync_book_annotations_requests_a_kepub_conversion_when_the_cache_is_cold() {
+    let (pool, user, book_id, uuid, dir) = fixture("coldcache").await;
+    let kepub_dir = dir.join("kepub-empty");
+    std::fs::create_dir_all(&kepub_dir).unwrap();
+    let _guard = EnvVarGuard::set("OMNIBUS_KEPUB_DIR", Some(kepub_dir.to_str().unwrap()));
+    create_highlight(&pool, user, &web_highlight(&uuid, WEB_CFI, None))
+        .await
+        .unwrap();
+    let worker = Worker::new(pool.clone(), WorkerConfig::default());
+
+    let stats = downsync_book_annotations(&pool, Some(&worker), user, &uuid)
+        .await
+        .unwrap();
+
+    // Still nothing derivable this pass — but without the request the row
+    // would stay unresolved forever, since nothing else on this path warms
+    // the cache and an unmaterialized row never moves the wire fingerprint.
+    assert_eq!(stats.derived, 0);
+    let snapshot = worker.progress_snapshot();
+    assert!(
+        snapshot
+            .active
+            .iter()
+            .chain(&snapshot.recent_complete)
+            .any(|t| t.resource_key.as_deref() == Some(&format!("kepub:{book_id}"))),
+        "expected a KepubConvert request for book {book_id}, got {snapshot:?}"
+    );
+}
+
+#[tokio::test]
+async fn downsync_book_id_annotations_materializes_every_users_rows_for_one_book() {
+    let (pool, alice, book_id, uuid, dir) = fixture("byid").await;
+    let _guard = kepub_cache(&dir, book_id);
+    let bob = seed_user(&pool, "bob").await;
+    for user in [alice, bob] {
+        create_highlight(&pool, user, &web_highlight(&uuid, WEB_CFI, None))
+            .await
+            .unwrap();
+    }
+
+    let stats = downsync_book_id_annotations(&pool, book_id).await.unwrap();
+
+    assert_eq!(
+        stats,
+        DownsyncStats {
+            derived: 2,
+            unresolved: 0
+        }
+    );
+    for user in [alice, bob] {
+        assert_eq!(
+            served_kobo_annotations(&pool, user, &uuid)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+}
+
+#[tokio::test]
+async fn downsync_book_id_annotations_noops_for_an_unknown_book_id() {
+    let (pool, _user, _book_id, _uuid, _dir) = fixture("byid_missing").await;
+
+    let stats = downsync_book_id_annotations(&pool, 9_999).await.unwrap();
+
+    assert_eq!(stats, DownsyncStats::default());
+}
+
+#[tokio::test]
 async fn downsync_book_annotations_counts_underivable_cfis_as_unresolved() {
     let (pool, user, book_id, uuid, dir) = fixture("badcfi").await;
     let _guard = kepub_cache(&dir, book_id);
@@ -203,7 +281,9 @@ async fn downsync_book_annotations_counts_underivable_cfis_as_unresolved() {
     .await
     .unwrap();
 
-    let stats = downsync_book_annotations(&pool, user, &uuid).await.unwrap();
+    let stats = downsync_book_annotations(&pool, None, user, &uuid)
+        .await
+        .unwrap();
 
     assert_eq!(
         stats,
@@ -236,7 +316,9 @@ async fn downsync_book_annotations_noops_when_nothing_is_pending() {
     .await
     .unwrap();
 
-    let stats = downsync_book_annotations(&pool, user, &uuid).await.unwrap();
+    let stats = downsync_book_annotations(&pool, None, user, &uuid)
+        .await
+        .unwrap();
 
     assert_eq!(stats, DownsyncStats::default());
 }
@@ -252,7 +334,7 @@ async fn downsync_all_kobo_annotations_converts_every_users_pending_rows() {
             .unwrap();
     }
 
-    let stats = downsync_all_kobo_annotations(&pool).await.unwrap();
+    let stats = downsync_all_kobo_annotations(&pool, None).await.unwrap();
 
     assert_eq!(
         stats,
@@ -272,7 +354,7 @@ async fn downsync_all_kobo_annotations_converts_every_users_pending_rows() {
     }
     // Caught up: a second pass finds nothing pending.
     assert_eq!(
-        downsync_all_kobo_annotations(&pool).await.unwrap(),
+        downsync_all_kobo_annotations(&pool, None).await.unwrap(),
         DownsyncStats::default()
     );
 }
@@ -335,7 +417,7 @@ async fn downsync_all_kobo_annotations_continues_past_a_failing_book_and_reports
         .await
         .unwrap();
 
-    let stats = downsync_all_kobo_annotations(&pool).await.unwrap();
+    let stats = downsync_all_kobo_annotations(&pool, None).await.unwrap();
 
     // Only the good book's row is counted — the failing book's error was
     // caught and logged, not folded into the pass's stats.
@@ -369,5 +451,7 @@ async fn downsync_all_kobo_annotations_continues_past_a_failing_book_and_reports
 async fn downsync_book_annotations_propagates_db_error_when_pool_is_closed() {
     let (pool, user, _book_id, uuid, _dir) = fixture("dberr").await;
     pool.close().await;
-    assert!(downsync_book_annotations(&pool, user, &uuid).await.is_err());
+    assert!(downsync_book_annotations(&pool, None, user, &uuid)
+        .await
+        .is_err());
 }

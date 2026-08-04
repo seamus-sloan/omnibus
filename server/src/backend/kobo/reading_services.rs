@@ -134,8 +134,13 @@ async fn resolve_adopted_served(
     // AC5 guard below protects only against the *empty*-but-valid answer,
     // and gating converted rows on adoption would leave a web-only book
     // permanently unserved to a device that never uploads anything.
-    if let Err(e) =
-        db::annotations::downsync_book_annotations(state.pool(), auth.user_id, &canonical).await
+    if let Err(e) = db::annotations::downsync_book_annotations(
+        state.pool(),
+        Some(state.worker()),
+        auth.user_id,
+        &canonical,
+    )
+    .await
     {
         tracing::warn!(error = %e, "reading-services annotation downsync failed");
     }

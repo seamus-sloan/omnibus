@@ -8,12 +8,12 @@ use omnibus_shared::{CreateHighlight, Highlight, HighlightColor, UpdateHighlight
 use omnibus_db as db;
 
 #[cfg(feature = "server")]
-use super::{internal_rpc_error, AuthUser, PoolExt};
+use super::{internal_rpc_error, AuthUser, PoolExt, WorkerExt};
 
 /// Create a highlight on a book. Mobile uses the analogous REST route in
 /// `server::backend::highlights`; the rest of this family of RPCs follows
 /// the same web-vs-mobile split.
-#[post("/api/rpc/highlights/create", pool: PoolExt, user: AuthUser)]
+#[post("/api/rpc/highlights/create", pool: PoolExt, worker: WorkerExt, user: AuthUser)]
 pub async fn rpc_create_highlight(input: CreateHighlight) -> Result<Highlight> {
     if let Err(msg) = input.validate() {
         return Err(ServerFnError::new(msg).into());
@@ -21,8 +21,15 @@ pub async fn rpc_create_highlight(input: CreateHighlight) -> Result<Highlight> {
     match db::annotations::create_highlight(&pool.0, user.id, &input).await {
         Ok(h) => {
             // Kobo down-sync: convert the fresh row in the background so it
-            // reaches the device on its next sync.
-            db::annotations::spawn_kobo_downsync(pool.0.clone(), user.id, h.book_uuid.clone());
+            // reaches the device on its next sync. The worker handle lets a
+            // cold KEPUB cache request its own conversion instead of leaving
+            // the row permanently unresolved.
+            db::annotations::spawn_kobo_downsync(
+                pool.0.clone(),
+                Some(worker.0.clone()),
+                user.id,
+                h.book_uuid.clone(),
+            );
             Ok(h)
         }
         Err(db::annotations::HighlightError::BookNotFound) => {
