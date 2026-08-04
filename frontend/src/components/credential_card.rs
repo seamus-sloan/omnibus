@@ -1,10 +1,9 @@
 //! Shared "credential card" status primitives: the connected/configured dot
-//! line and the save/clear/test result message. Reused by the Hardcover and
-//! Google Books secret-key cards, the SMTP relay card, and the account
-//! Kindle-email card, which otherwise each hand-roll the same two blocks
-//! under slightly different wording. Plain functions (not `#[component]`s) —
-//! neither needs hooks, so callers can invoke them mid-render without
-//! perturbing their own hook order.
+//! line and the save/clear/test result message. Reused by the Hardcover,
+//! Google Books, SMTP, and account Kindle-email cards, which otherwise each
+//! hand-roll the same two blocks. Plain functions (not `#[component]`s) —
+//! callers can invoke them mid-render without perturbing their own hook
+//! order.
 
 use dioxus::prelude::*;
 
