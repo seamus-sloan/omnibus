@@ -193,7 +193,9 @@ struct CheckInView: View {
                     Text("You've already checked in a physical copy of this book.")
                         .font(.ui(14))
                         .foregroundStyle(palette.ink2Color)
-                    detailsLink(uuid: book.uuid, style: .filled)
+                    if let uuid = CheckInFlow.detailUUID(for: outcome) {
+                        detailsLink(uuid: uuid, style: .filled)
+                    }
 
                 case let .onWishlist(book):
                     resultCard(
@@ -205,7 +207,9 @@ struct CheckInView: View {
                         .font(.ui(14))
                         .foregroundStyle(palette.ink2Color)
                     checkInButton(book: book, isbn: book.isbn, label: "Check in this copy")
-                    detailsLink(uuid: book.uuid, style: .quiet)
+                    if let uuid = CheckInFlow.detailUUID(for: outcome) {
+                        detailsLink(uuid: uuid, style: .quiet)
+                    }
 
                 case let .inLibraryUnowned(book):
                     resultCard(
@@ -213,7 +217,9 @@ struct CheckInView: View {
                         cover: .library(uuid: book.uuid),
                         badge: "In your library", tint: palette.accentColor
                     )
-                    noteField
+                    if CheckInFlow.showsNoteField(for: outcome) {
+                        noteField
+                    }
                     checkInButton(book: book, isbn: book.isbn, label: "Check in this copy")
 
                 case let .closeMatch(book, scanned):
