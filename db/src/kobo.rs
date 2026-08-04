@@ -254,6 +254,12 @@ pub struct KoboBookState {
     /// clock — is the optimistic token for
     /// `progress::attach_derived_kobo_location`.
     pub progress_updated_at: i64,
+    /// The read-status row's own event time, 0 when the book has no status
+    /// row. Kept separate from [`Self::progress_updated_at`] because the
+    /// device arbitrates `StatusInfo` and `CurrentBookmark` independently,
+    /// each against its own clock — the MAXed value would claim the status
+    /// moved every time only the position did.
+    pub status_updated_at: i64,
 }
 
 /// Per-user reading state for `uuids`, keyed by book uuid.
@@ -294,6 +300,7 @@ pub async fn reading_state_for(
                     rp.epub_cfi AS epub_cfi,
                     COALESCE(rp.client_updated_at, rp.updated_at, 0)
                         AS progress_updated_at,
+                    COALESCE(rs.updated_at, 0) AS status_updated_at,
                     MAX(
                         COALESCE(rs.updated_at, 0),
                         COALESCE(rp.client_updated_at, rp.updated_at, 0)
@@ -328,6 +335,7 @@ pub async fn reading_state_for(
                     epub_cfi: row.try_get::<Option<String>, _>("epub_cfi")?,
                     state_updated_at: row.try_get::<i64, _>("state_updated_at")?,
                     progress_updated_at: row.try_get::<i64, _>("progress_updated_at")?,
+                    status_updated_at: row.try_get::<i64, _>("status_updated_at")?,
                 },
             );
         }
