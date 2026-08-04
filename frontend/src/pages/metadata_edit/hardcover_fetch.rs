@@ -327,18 +327,9 @@ fn HcfRow(
     }
 }
 
-// Regression coverage for the hook-order invariant `HardcoverFetchPanel`
-// must hold across its `available: false -> true` transition (rule
-// `07-hydration.md`'s "declare every hook unconditionally, in the same
-// order" — here triggered by a runtime signal flip rather than a
-// `#[cfg(feature = "web")]` gate). The real panel resolves `available`
-// through a live server function, which needs a running Axum request
-// context this unit test doesn't have, so the harness below reproduces the
-// exact hook shape the fixed component uses — a gate signal read first, two
-// more `use_signal`s declared unconditionally, then the early-return gate —
-// and drives it through a real `VirtualDom` across the transition. A live
-// `ui-validate` pass against the real panel is still recommended before
-// merge.
+// Hook-order regression for the fixed shape (rule 07-hydration.md). A
+// structural mirror, not the real component: `available` needs a live
+// Axum request context a unit test doesn't have.
 #[cfg(all(test, feature = "server"))]
 mod tests {
     use std::cell::RefCell;
