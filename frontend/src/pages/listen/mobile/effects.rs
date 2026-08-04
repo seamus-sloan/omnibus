@@ -1,7 +1,6 @@
 //! Route-driven effects for [`super::MobilePlayer`]: retargeting the
 //! app-wide playback context to the current route's book, and refreshing
-//! the title marquee measurement. Split out of `mobile.rs` (#1672) so the
-//! component body stays under the line/function-length caps.
+//! the title marquee measurement.
 
 use dioxus::prelude::*;
 use dioxus_router::Navigator;

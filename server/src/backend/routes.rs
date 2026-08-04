@@ -1,7 +1,7 @@
 //! Route-group builder functions merged into the top-level `/api/*` router
-//! by [`super::rest_router_with_search_limiter`]. Split out of `backend.rs`
-//! (#1672) — each function owns one feature area; the grouping used to be
-//! carried as inline comments in a single flat route list.
+//! by [`super::rest_router_with_search_limiter`]. Each function owns one
+//! feature area; the grouping used to be carried as inline comments in a
+//! single flat route list.
 
 use std::sync::Arc;
 

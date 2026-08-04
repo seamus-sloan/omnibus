@@ -1,7 +1,7 @@
 //! Process-start metadata surfaced by `GET /api/_health`: a build
 //! fingerprint, the workspace root the server was launched from, and the
 //! running release version. Each is captured once (via `OnceLock`) and
-//! stable for the process lifetime. Split out of `backend.rs` (#1672).
+//! stable for the process lifetime.
 
 /// Process-start build id. Captured once and preserved for the lifetime of
 /// the process — so any HMR cycle that restarts the server (the only way
