@@ -1,0 +1,367 @@
+//! Kobo library sync: `v1/library/sync` (the streamed per-device delta) and
+//! the two per-book reads it shares logic with, `v1/library/{uuid}/metadata`
+//! and the `state` GET half. Both read routes share [`enrich_states_with_derived_spans`]
+//! so a CFI-only web position reaches the device as an exact KoboSpan.
+
+use std::collections::HashMap;
+
+use axum::{
+    body::{Body, Bytes},
+    extract::{Path, State},
+    http::{header, HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+    Json,
+};
+use futures_util::stream;
+use omnibus_db::{self as db, worker::Task};
+
+use super::{dto, extractor::KoboAuthUser, origin_from_headers, reject_oversized_uuid, AppState};
+use crate::http_errors::internal;
+
+/// Changes per `library/sync` response; more remain → `x-kobo-sync: continue`, bounding the response but never the sync (unlike Calibre-Web's `SYNC_ITEM_LIMIT`).
+const SYNC_PAGE_SIZE: usize = 100;
+
+/// Per-sync cap on CFI→span derivations. Each one walks a whole book's
+/// spine for the percent, so a page full of web-written positions must not
+/// stall the sync; the clock-neutral write-back shrinks the candidate set
+/// monotonically, so the remainder heals across subsequent syncs.
+const SPAN_DERIVATIONS_PER_SYNC: usize = 8;
+
+/// `GET library/sync` — the per-device delta, streamed as a JSON array via
+/// [`Body::from_stream`] with no item cap (unlike Calibre-Web's
+/// `SYNC_ITEM_LIMIT=100`). First sync emits the whole opted-in set as
+/// `NewEntitlement`s; later syncs emit only `ChangedProductMetadata` +
+/// `ChangedReadingState` for modified books and `ChangedEntitlement
+/// {IsRemoved:true}` for books that left the opted-in set (#922).
+///
+/// The device's snapshot advances in the stream's final poll — the same one
+/// that emits the closing `]`, so commit and completion are a single step the
+/// transport can't split. A connection dropped mid-body never reaches that
+/// poll, and the device replays the same delta on the next sync instead of
+/// silently losing books.
+///
+/// Responses are paged at [`SYNC_PAGE_SIZE`] changes: only the first page is
+/// emitted (and committed), and `x-kobo-sync: continue` tells the device to
+/// re-hit the route for the rest. Pagination needs no extra cursor — a
+/// committed page is in the snapshot, so the next request's delta *is* the
+/// remainder.
+pub async fn library_sync(
+    auth: KoboAuthUser,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let delta = match db::kobo::sync_delta(state.pool(), auth.user_id, auth.device_id).await {
+        Ok(d) => d,
+        Err(e) => return internal("kobo sync_delta", e),
+    };
+    let base = origin_from_headers(&headers);
+    let pool = state.pool().clone();
+    let device_id = auth.device_id;
+
+    let mut changes = delta.changes;
+    let has_more = changes.len() > SYNC_PAGE_SIZE;
+    changes.truncate(SYNC_PAGE_SIZE);
+
+    // Load the per-user reading state for this page only — the emit needs real
+    // status/position per book, and a removal has no state to report.
+    let page_uuids: Vec<String> = changes
+        .iter()
+        .filter_map(|c| match c {
+            db::kobo::SyncChange::New(b)
+            | db::kobo::SyncChange::Changed(b)
+            | db::kobo::SyncChange::StateChanged(b) => Some(b.uuid.clone()),
+            db::kobo::SyncChange::Removed { .. } => None,
+        })
+        .collect();
+    let mut states =
+        match db::kobo::reading_state_for(state.pool(), auth.user_id, &page_uuids).await {
+            Ok(s) => s,
+            Err(e) => return internal("kobo reading_state_for", e),
+        };
+    enrich_states_with_derived_spans(&state, auth.user_id, &changes, &mut states).await;
+    let states = states;
+    let delta = db::kobo::SyncDelta { changes };
+
+    // Serialize each item lazily as the device drains the body — no second
+    // buffer of the whole payload.
+    let stream = stream::unfold(
+        (delta.changes, base, auth.token, states, SyncPhase::Open),
+        move |(changes, base, token, states, phase)| {
+            let pool = pool.clone();
+            async move {
+                let chunk: Bytes = match phase {
+                    SyncPhase::Open => {
+                        let next = if changes.is_empty() {
+                            SyncPhase::Close
+                        } else {
+                            SyncPhase::Item {
+                                change: 0,
+                                emitted: 0,
+                            }
+                        };
+                        return Some((
+                            ok(Bytes::from_static(b"[")),
+                            (changes, base, token, states, next),
+                        ));
+                    }
+                    SyncPhase::Item { change, emitted } => {
+                        let uuid = match &changes[change] {
+                            db::kobo::SyncChange::New(b)
+                            | db::kobo::SyncChange::Changed(b)
+                            | db::kobo::SyncChange::StateChanged(b) => Some(b.uuid.as_str()),
+                            db::kobo::SyncChange::Removed { .. } => None,
+                        };
+                        let book_state = uuid.and_then(|u| states.get(u));
+                        let items = dto::sync_items(&base, &token, &changes[change], book_state);
+                        let mut piece = Vec::new();
+                        for item in &items {
+                            // These DTOs are owned Strings/primitives, so this
+                            // never fails in practice — but if it ever does,
+                            // abort the body rather than emit malformed JSON:
+                            // the stream jumps to End, `record_synced` never
+                            // runs, and the device retries the same delta.
+                            let json = match serde_json::to_vec(item) {
+                                Ok(j) => j,
+                                Err(e) => {
+                                    return Some((
+                                        Err(std::io::Error::other(e)),
+                                        (changes, base, token, states, SyncPhase::End),
+                                    ));
+                                }
+                            };
+                            if emitted > 0 || !piece.is_empty() {
+                                piece.push(b',');
+                            }
+                            piece.extend_from_slice(&json);
+                        }
+                        let next = if change + 1 < changes.len() {
+                            SyncPhase::Item {
+                                change: change + 1,
+                                emitted: emitted + items.len(),
+                            }
+                        } else {
+                            SyncPhase::Close
+                        };
+                        return Some((
+                            ok(Bytes::from(piece)),
+                            (changes, base, token, states, next),
+                        ));
+                    }
+                    SyncPhase::Close => {
+                        // Body is complete: commit the snapshot. A failure here
+                        // is deliberately non-fatal to the response (the bytes
+                        // are already on the wire) — the device just replays
+                        // the same delta next sync, which is safe.
+                        if let Err(e) = db::kobo::record_synced(&pool, device_id, &changes).await {
+                            tracing::warn!(device_id, error = %e, "kobo snapshot advance failed");
+                        }
+                        Bytes::from_static(b"]")
+                    }
+                    SyncPhase::End => return None,
+                };
+                Some((ok(chunk), (changes, base, token, states, SyncPhase::End)))
+            }
+        },
+    );
+
+    let mut res = (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "application/json"),
+            // Opaque; the device echoes it back but the real cursor is the
+            // per-device snapshot (`kobo_books_sync`), never this value.
+            (
+                header::HeaderName::from_static("x-kobo-synctoken"),
+                "omnibus",
+            ),
+        ],
+        Body::from_stream(stream),
+    )
+        .into_response();
+    if has_more {
+        res.headers_mut().insert(
+            header::HeaderName::from_static("x-kobo-sync"),
+            header::HeaderValue::from_static("continue"),
+        );
+    }
+    res
+}
+
+/// For page books whose freshest position is a web CFI (`kobo_location`
+/// NULL, `epub_cfi` present), derive a KoboSpan + percent so the device
+/// gets an exact position, and persist the derived halves clock-neutrally
+/// so later syncs skip the work. Every failure leaves the state untouched —
+/// the device then sees whatever percent exists, exactly as before.
+async fn enrich_states_with_derived_spans(
+    state: &AppState,
+    user_id: i64,
+    changes: &[db::kobo::SyncChange],
+    states: &mut HashMap<String, db::kobo::KoboBookState>,
+) {
+    let mut budget = SPAN_DERIVATIONS_PER_SYNC;
+    for change in changes {
+        if budget == 0 {
+            break;
+        }
+        let book = match change {
+            db::kobo::SyncChange::New(b)
+            | db::kobo::SyncChange::Changed(b)
+            | db::kobo::SyncChange::StateChanged(b) => b,
+            db::kobo::SyncChange::Removed { .. } => continue,
+        };
+        let Some(s) = states.get(&book.uuid) else {
+            continue;
+        };
+        let Some(cfi) = (s.kobo_location.is_none())
+            .then(|| s.epub_cfi.clone())
+            .flatten()
+        else {
+            continue;
+        };
+        budget -= 1;
+        let Some(derived) = derive_span_for_cfi(state, book.id, &book.uuid, &cfi).await else {
+            continue;
+        };
+        if let (Some(loc), Some(s)) = (&derived.location_json, states.get_mut(&book.uuid)) {
+            let attach = db::progress::attach_derived_kobo_location(
+                state.pool(),
+                user_id,
+                &book.uuid,
+                loc,
+                derived.percent,
+                s.progress_updated_at,
+            )
+            .await;
+            if let Err(e) = attach {
+                tracing::warn!(uuid = %book.uuid, error = %e, "derived span write-back failed");
+            }
+            s.kobo_location = Some(loc.clone());
+            s.percent = s.percent.or(derived.percent);
+        } else if let Some(s) = states.get_mut(&book.uuid) {
+            // Kepub half unavailable: a truthful percent still beats an
+            // empty bookmark. Not persisted — the row keeps meaning "no
+            // span known" so a later sync retries the full derivation.
+            s.percent = s.percent.or(derived.percent);
+        }
+    }
+}
+
+/// Best-effort CFI→KoboSpan derivation for sync-out. The kepub cache is
+/// used even when stale (content is identical across metadata rebuilds;
+/// the snippet check guards real divergence); when it is absent entirely,
+/// a conversion is queued fire-and-forget so a later sync can succeed, and
+/// the percent half still derives from the source EPUB alone.
+async fn derive_span_for_cfi(
+    state: &AppState,
+    book_id: i64,
+    uuid: &str,
+    cfi: &str,
+) -> Option<db::kobo_position::DerivedSpan> {
+    let source = db::book_file_path(state.pool(), book_id, "EPUB")
+        .await
+        .ok()??;
+    let kepub = db::kepub_path(book_id);
+    let kepub = if tokio::fs::try_exists(&kepub).await.unwrap_or(false) {
+        Some(kepub)
+    } else {
+        // Idempotent and serialized per book by the worker; do NOT await —
+        // the sync response must not stall on a conversion.
+        state.worker().post(Task::KepubConvert { book_id });
+        None
+    };
+    let cfi = cfi.to_owned();
+    let result = tokio::task::spawn_blocking(move || {
+        db::kobo_position::cfi_to_span(kepub.as_deref(), &source, &cfi)
+    })
+    .await;
+    match result {
+        Ok(Ok(derived)) => Some(derived),
+        Ok(Err(e)) => {
+            tracing::warn!(%uuid, error = %e, "kobo cfi→span derivation failed");
+            None
+        }
+        Err(e) => {
+            tracing::warn!(%uuid, error = %e, "kobo cfi→span task panicked");
+            None
+        }
+    }
+}
+
+/// Streaming position for [`library_sync`]'s JSON-array body. `emitted`
+/// counts items already written, since one change can fan out into two items.
+enum SyncPhase {
+    Open,
+    Item { change: usize, emitted: usize },
+    Close,
+    End,
+}
+
+/// Wrap a chunk as the infallible `Result` item `Body::from_stream` expects.
+fn ok(bytes: Bytes) -> Result<Bytes, std::io::Error> {
+    Ok(bytes)
+}
+
+/// `GET library/<uuid>/metadata` — the single-book metadata array Kobo fetches
+/// before downloading.
+pub async fn library_metadata(
+    auth: KoboAuthUser,
+    State(state): State<AppState>,
+    Path((_token, uuid)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Response {
+    if let Some(rejected) = reject_oversized_uuid(&uuid) {
+        return rejected;
+    }
+    match db::kobo::book_for_sync(state.pool(), &uuid).await {
+        Ok(Some(book)) => {
+            let base = origin_from_headers(&headers);
+            Json(vec![dto::book_metadata(&base, &auth.token, &book)]).into_response()
+        }
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => internal("kobo book_for_sync", e),
+    }
+}
+
+/// `GET library/<uuid>/state` — the device's pull of the server-side reading
+/// state for one book, the request the firmware adopts a position from: a
+/// one-element array of the same `ReadingState` shape the PUT consumes and
+/// `library/sync` emits (prosa-kobo contract).
+///
+/// Deliberately shares `library/sync`'s span enrichment, side effects
+/// included: a CFI-only position goes out as an exact KoboSpan, the derived
+/// halves are persisted so later syncs skip the work, and a missing kepub
+/// cache queues a fire-and-forget conversion — all idempotent, mirroring
+/// what the same book would get on its next `library/sync`.
+pub async fn get_state(
+    auth: KoboAuthUser,
+    State(state): State<AppState>,
+    Path((_token, uuid)): Path<(String, String)>,
+) -> Response {
+    if let Some(rejected) = reject_oversized_uuid(&uuid) {
+        return rejected;
+    }
+    let book = match db::kobo::book_for_sync(state.pool(), &uuid).await {
+        Ok(Some(b)) => b,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return internal("kobo book_for_sync", e),
+    };
+    let mut states = match db::kobo::reading_state_for(
+        state.pool(),
+        auth.user_id,
+        std::slice::from_ref(&book.uuid),
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => return internal("kobo reading_state_for", e),
+    };
+    let ts = dto::rfc3339(book.last_modified_epoch);
+    let changes = [db::kobo::SyncChange::StateChanged(book.clone())];
+    enrich_states_with_derived_spans(&state, auth.user_id, &changes, &mut states).await;
+    Json(vec![dto::reading_state(
+        &book.uuid,
+        &ts,
+        states.get(&book.uuid),
+    )])
+    .into_response()
+}

@@ -104,22 +104,7 @@ pub fn SendToKoboButton(
             },
             if in_flight() { "Sending\u{2026}" } else { "Send to Kobo" }
         }
-        if let Some((is_error, message)) = result() {
-            div { class: "kobo-toast card", role: "status",
-                span {
-                    "data-testid": "kobo-send-status",
-                    class: if is_error { "kobo-toast-msg error" } else { "kobo-toast-msg success" },
-                    "{message}"
-                }
-                button {
-                    class: "btn ghost sm",
-                    "data-testid": "kobo-toast-dismiss",
-                    aria_label: "Dismiss",
-                    onclick: move |_| result.set(None),
-                    "\u{00d7}"
-                }
-            }
-        }
+        {super::send_result_toast("kobo", result)}
     }
 }
 

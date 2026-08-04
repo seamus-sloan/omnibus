@@ -9,6 +9,7 @@ use dioxus::prelude::*;
 use dioxus_router::use_navigator;
 use omnibus_shared::{PaletteBookHit, PaletteResults};
 
+use crate::format::plural;
 use crate::{data, use_server_url, Route};
 
 /// Which result groups the scope chips let through. Purely client-side —
@@ -369,15 +370,6 @@ fn book_cover(book: &PaletteBookHit, server_url: &str) -> Element {
 /// First character of `s`, uppercased, for avatar/fallback glyphs.
 fn initial(s: &str) -> String {
     s.chars().next().unwrap_or('?').to_uppercase().to_string()
-}
-
-/// Pluralize a book count: `""` for exactly one, `"s"` otherwise.
-fn plural(n: u32) -> &'static str {
-    if n == 1 {
-        ""
-    } else {
-        "s"
-    }
 }
 
 /// Build a `tag:`-scoped FTS query from a tag name so tapping a tag refines to

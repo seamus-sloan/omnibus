@@ -168,3 +168,62 @@ fn registration_toggle_handler_moves_the_checkbox_but_not_the_subtitle() {
     }
     VirtualDom::new(AssertSplit).rebuild_in_place();
 }
+
+#[cfg(feature = "server")]
+#[test]
+fn apply_registration_load_records_the_error_and_leaves_the_checkbox_unresolved_on_err() {
+    #[component]
+    fn AssertErr() -> Element {
+        let confirmed = Signal::new(None::<bool>);
+        let shown = Signal::new(None::<bool>);
+        let error = Signal::new(None::<String>);
+
+        apply_registration_load(Err("network error".into()), confirmed, shown, error);
+
+        // The Err branch must not brick the control silently: the message
+        // lands in `error`, but `confirmed` staying `None` is what the
+        // checkbox's `disabled` guard reads — this is the state a
+        // permanently-disabled checkbox would otherwise be stuck in.
+        assert_eq!(error(), Some("network error".to_string()));
+        assert_eq!(
+            confirmed(),
+            None,
+            "an errored load must not resolve the value"
+        );
+        assert_eq!(shown(), None);
+
+        rsx! {}
+    }
+    VirtualDom::new(AssertErr).rebuild_in_place();
+}
+
+#[cfg(feature = "server")]
+#[test]
+fn apply_registration_load_re_enables_the_checkbox_when_a_retry_succeeds() {
+    #[component]
+    fn AssertRetrySucceeds() -> Element {
+        let confirmed = Signal::new(None::<bool>);
+        let shown = Signal::new(None::<bool>);
+        let error = Signal::new(None::<String>);
+
+        // First, the initial load fails — same call the mount effect makes.
+        apply_registration_load(Err("network error".into()), confirmed, shown, error);
+        assert!(confirmed().is_none(), "precondition: checkbox is disabled");
+
+        // The Retry affordance re-runs the identical fetch/apply path; a
+        // successful retry must resolve `confirmed` (which lifts the
+        // checkbox's `disabled` guard) and clear the stale error.
+        apply_registration_load(Ok(true), confirmed, shown, error);
+
+        assert_eq!(
+            confirmed(),
+            Some(true),
+            "a successful retry must re-enable the checkbox"
+        );
+        assert_eq!(shown(), Some(true));
+        assert_eq!(error(), None, "a successful retry must clear the old error");
+
+        rsx! {}
+    }
+    VirtualDom::new(AssertRetrySucceeds).rebuild_in_place();
+}

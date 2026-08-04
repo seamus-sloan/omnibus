@@ -12,7 +12,7 @@ use crate::components::atrium::Cover;
 use crate::components::author_photo_edit::AuthorPhotoEditOverlay;
 #[cfg(not(feature = "mobile"))]
 use crate::components::{confirm_modal_body, ConfirmModal, ConfirmModalAction, ConfirmModalTone};
-use crate::components::{PageError, PageLoading, PageNotFound};
+use crate::components::{disc_back_link, PageError, PageLoading, PageNotFound};
 use crate::{data, use_server_url, Route};
 
 /// Renders the author discovery page.
@@ -204,16 +204,7 @@ fn author_hero(
     } = text;
     rsx! {
         div { class: "disc-hero", style: "background: {bg_style}",
-            // Mobile-only (CSS-gated via `.screen`) back affordance to the
-            // authors index. Same markup on every target so the web
-            // SSR/WASM trees stay identical (rule 07).
-            Link {
-                to: Route::AuthorsIndex {},
-                class: "m-icon-btn disc-back",
-                "aria-label": "Back to authors",
-                "data-testid": "author-back",
-                "\u{2190}"
-            }
+            {disc_back_link(Route::AuthorsIndex {}, "Back to authors", "author-back")}
             div { class: "disc-hero-grid",
                 {author_avatar(a, server_url, author, initial)}
                 div { class: "disc-hero-info",

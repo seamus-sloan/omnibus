@@ -850,6 +850,24 @@ async fn api_post_registration_rejects_non_admin() {
 }
 
 #[tokio::test]
+async fn api_post_registration_returns_401_when_anonymous() {
+    let (app, _, _) = fixture().await;
+    let body = serde_json::json!({ "enabled": true });
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/settings/registration")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn api_post_registration_returns_500_on_db_failure() {
     let (app, _state, pool) = fixture().await;
     let admin = auth_test_support::create_admin(&pool, "admin").await;

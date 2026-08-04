@@ -6,7 +6,10 @@ use dioxus::prelude::*;
 use dioxus_router::Link;
 use omnibus_shared::{AuthorSummary, IndexSort};
 
-use super::index_shell::{index_page_early_return, use_index_page_shell, IndexPageState};
+use super::index_shell::{
+    index_card_stats, index_page_early_return, use_index_page_shell, IndexFilterInput,
+    IndexPageState, IndexSortToggle,
+};
 use crate::{data, index_prefs, use_server_url, Route};
 
 /// Library-wide totals rendered in the header's subtitle. Grouped so the
@@ -279,8 +282,19 @@ fn AuthorsIndexHeader(
                 }
             }
             div { class: "idx-toolbar",
-                FilterInput { filter, on_filter }
-                SortSelector { sort, on_sort }
+                IndexFilterInput {
+                    filter,
+                    placeholder: "Filter authors by name\u{2026}",
+                    aria_label: "Filter authors by name",
+                    testid: "authors-filter",
+                    on_filter,
+                }
+                IndexSortToggle {
+                    sort,
+                    name_label: "Last name A\u{2013}Z",
+                    testid_prefix: "authors",
+                    on_sort,
+                }
             }
             if show_letters {
                 LetterNav {
@@ -289,47 +303,6 @@ fn AuthorsIndexHeader(
                     letter_count,
                     filtered_count,
                 }
-            }
-        }
-    }
-}
-
-/// Search input that filters the author list by display name as the admin types.
-#[component]
-fn FilterInput(filter: String, on_filter: EventHandler<String>) -> Element {
-    rsx! {
-        div { class: "idx-search",
-            input {
-                r#type: "search",
-                placeholder: "Filter authors by name\u{2026}",
-                aria_label: "Filter authors by name",
-                value: "{filter}",
-                "data-testid": "authors-filter",
-                oninput: move |e| on_filter.call(e.value()),
-            }
-        }
-    }
-}
-
-/// Two-button toolbar that picks between surname A–Z and most-books sort axes.
-#[component]
-fn SortSelector(sort: IndexSort, on_sort: EventHandler<IndexSort>) -> Element {
-    rsx! {
-        div { class: "idx-sort",
-            span { class: "label", "Sort" }
-            button {
-                class: "idx-btn",
-                "aria-pressed": if sort == IndexSort::Name { "true" } else { "false" },
-                "data-testid": "authors-sort-name",
-                onclick: move |_| on_sort.call(IndexSort::Name),
-                "Last name A\u{2013}Z"
-            }
-            button {
-                class: "idx-btn",
-                "aria-pressed": if sort == IndexSort::BookCount { "true" } else { "false" },
-                "data-testid": "authors-sort-count",
-                onclick: move |_| on_sort.call(IndexSort::BookCount),
-                "Most books"
             }
         }
     }
@@ -426,12 +399,7 @@ fn render_author_card(a: &AuthorSummary, server_url: &str) -> Element {
                     }
                     span { class: "idx-card-name-last", "{last}" }
                 }
-                div { class: "idx-card-stats",
-                    div { class: "idx-stat",
-                        div { class: "mono idx-stat-label", "Books" }
-                        div { class: "idx-stat-value", "{count}" }
-                    }
-                }
+                {index_card_stats(count)}
             }
         }
     }

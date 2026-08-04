@@ -115,3 +115,72 @@ pub(crate) fn index_page_early_return(
     }
     None
 }
+
+/// The "Books" stat block inside an index card — identical between the
+/// series and author card kinds.
+pub(crate) fn index_card_stats(count: usize) -> Element {
+    rsx! {
+        div { class: "idx-card-stats",
+            div { class: "idx-stat",
+                div { class: "mono idx-stat-label", "Books" }
+                div { class: "idx-stat-value", "{count}" }
+            }
+        }
+    }
+}
+
+/// Search input for an index page's toolbar, shared by the series and
+/// authors index headers. `placeholder`/`aria_label` are the input's hint
+/// text; `testid` and `on_filter` are per-page.
+#[component]
+pub(crate) fn IndexFilterInput(
+    filter: String,
+    placeholder: String,
+    aria_label: String,
+    testid: String,
+    on_filter: EventHandler<String>,
+) -> Element {
+    rsx! {
+        div { class: "idx-search",
+            input {
+                r#type: "search",
+                placeholder: "{placeholder}",
+                aria_label: "{aria_label}",
+                value: "{filter}",
+                "data-testid": "{testid}",
+                oninput: move |e| on_filter.call(e.value()),
+            }
+        }
+    }
+}
+
+/// Name / most-books two-button sort toggle shared by the series and
+/// authors index toolbars. `name_label` differs per page ("A\u{2013}Z" vs
+/// "Last name A\u{2013}Z"); testids derive from `testid_prefix`.
+#[component]
+pub(crate) fn IndexSortToggle(
+    sort: IndexSort,
+    name_label: String,
+    testid_prefix: String,
+    on_sort: EventHandler<IndexSort>,
+) -> Element {
+    rsx! {
+        div { class: "idx-sort",
+            span { class: "label", "Sort" }
+            button {
+                class: "idx-btn",
+                "aria-pressed": if sort == IndexSort::Name { "true" } else { "false" },
+                "data-testid": "{testid_prefix}-sort-name",
+                onclick: move |_| on_sort.call(IndexSort::Name),
+                "{name_label}"
+            }
+            button {
+                class: "idx-btn",
+                "aria-pressed": if sort == IndexSort::BookCount { "true" } else { "false" },
+                "data-testid": "{testid_prefix}-sort-count",
+                onclick: move |_| on_sort.call(IndexSort::BookCount),
+                "Most books"
+            }
+        }
+    }
+}

@@ -5,7 +5,7 @@ use dioxus::prelude::*;
 use dioxus_router::Link;
 use omnibus_shared::TagWeight;
 
-use crate::components::{PageError, PageLoading};
+use crate::components::{disc_back_link, PageError, PageLoading};
 use crate::{data, use_server_url, Route};
 
 /// Renders the tag cloud page.
@@ -52,14 +52,7 @@ pub fn TagCloudPage() -> Element {
         div { class: "disc-page",
             // Header
             div { class: "disc-tag-header",
-                // Mobile-only (CSS-gated) back to search; rendered on all targets for SSR/WASM parity (rule 07).
-                Link {
-                    to: Route::MobileSearch {},
-                    class: "m-icon-btn disc-back",
-                    "aria-label": "Back to search",
-                    "data-testid": "tags-back",
-                    "\u{2190}"
-                }
+                {disc_back_link(Route::MobileSearch {}, "Back to search", "tags-back")}
                 span { class: "label", "Library lens" }
                 h1 { class: "disc-hero-title",
                     "By "

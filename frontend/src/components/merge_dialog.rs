@@ -9,6 +9,7 @@ use dioxus::prelude::*;
 use omnibus_shared::{EbookMetadata, MergeBooksResult};
 
 use crate::components::atrium::Cover;
+use crate::components::glyphs::search_glyph;
 use crate::components::ConfirmModal;
 use crate::platform_sleep::async_sleep_ms;
 use crate::{data, use_server_url};
@@ -246,20 +247,7 @@ fn render_search_pane(
         }
         {render_target_rail(target.clone(), &target_title)}
         div { class: "mg-search",
-            svg {
-                class: "mg-search-icon",
-                width: "18",
-                height: "18",
-                view_box: "0 0 24 24",
-                fill: "none",
-                stroke: "currentColor",
-                stroke_width: "2",
-                stroke_linecap: "round",
-                stroke_linejoin: "round",
-                "aria-hidden": "true",
-                circle { cx: "11", cy: "11", r: "8" }
-                line { x1: "21", y1: "21", x2: "16.65", y2: "16.65" }
-            }
+            {search_glyph(18, "mg-search-icon", true)}
             input {
                 id: "bd-merge-search",
                 class: "mg-search-input",

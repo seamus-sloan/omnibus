@@ -11,6 +11,7 @@ use omnibus_shared::{Bookmark, ChapterInfo};
 
 use super::bookmarks::{bookmark_position_seconds, chapter_label_at, BookmarksController};
 use super::helpers::format_hms;
+use super::panel_shell::ListenDrawerShell;
 
 #[component]
 pub(super) fn BookmarksDrawer(
@@ -27,52 +28,41 @@ pub(super) fn BookmarksDrawer(
     let count = marks.len();
 
     rsx! {
-        div {
-            class: "lp-scrim",
-            onclick: move |_| on_close.call(()),
-        }
-
-        div { class: "lp-drawer", "data-testid": "bookmarks-drawer",
-            div { class: "lp-drawer-head",
+        ListenDrawerShell {
+            testid: "bookmarks-drawer",
+            on_close,
+            head: rsx! {
                 div {
                     div { class: "lp-panel-kicker", "Bookmarks \u{00b7} {count}" }
                     div { class: "lp-panel-title", "Your marks" }
                 }
-                div { class: "lp-drawer-head-actions",
-                    button {
-                        class: "btn sm",
-                        r#type: "button",
-                        "data-testid": "bookmark-add",
-                        onclick: move |_| on_add.call(()),
-                        "+ Bookmark"
-                    }
-                    button {
-                        class: "btn ghost sm",
-                        r#type: "button",
-                        onclick: move |_| on_close.call(()),
-                        "Close \u{2193}"
+            },
+            actions: rsx! {
+                button {
+                    class: "btn sm",
+                    r#type: "button",
+                    "data-testid": "bookmark-add",
+                    onclick: move |_| on_add.call(()),
+                    "+ Bookmark"
+                }
+            },
+            if marks.is_empty() {
+                div { class: "lp-drawer-empty",
+                    p { class: "lp-drawer-empty-title", "No bookmarks yet" }
+                    p { class: "lp-drawer-empty-detail",
+                        "Tap the Bookmark button while listening to save "
+                        "your place. Add a note to any mark below."
                     }
                 }
-            }
-            div { class: "lp-drawer-body",
-                if marks.is_empty() {
-                    div { class: "lp-drawer-empty",
-                        p { class: "lp-drawer-empty-title", "No bookmarks yet" }
-                        p { class: "lp-drawer-empty-detail",
-                            "Tap the Bookmark button while listening to save "
-                            "your place. Add a note to any mark below."
-                        }
-                    }
-                } else {
-                    for mark in marks.iter() {
-                        BookmarkRow {
-                            key: "{mark.id}",
-                            bookmark: mark.clone(),
-                            chapters: chapters.clone(),
-                            is_fresh: fresh == Some(mark.id),
-                            on_seek,
-                            controller,
-                        }
+            } else {
+                for mark in marks.iter() {
+                    BookmarkRow {
+                        key: "{mark.id}",
+                        bookmark: mark.clone(),
+                        chapters: chapters.clone(),
+                        is_fresh: fresh == Some(mark.id),
+                        on_seek,
+                        controller,
                     }
                 }
             }

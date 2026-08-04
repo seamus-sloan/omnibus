@@ -10,6 +10,7 @@ use dioxus::prelude::*;
 use omnibus_shared::ChapterInfo;
 
 use super::helpers::format_hms;
+use super::panel_shell::ListenDrawerShell;
 
 /// One chapter row: ordinal/checkmark/play glyph, title, and
 /// duration-or-remaining label. `i` is the chapter's index in the list.
@@ -90,36 +91,25 @@ pub(super) fn ChaptersDrawer(
     on_close: EventHandler<()>,
 ) -> Element {
     rsx! {
-        div {
-            class: "lp-scrim",
-            onclick: move |_| on_close.call(()),
-        }
-
-        div { class: "lp-drawer", "data-testid": "chapters-drawer",
-            div { class: "lp-drawer-head",
+        ListenDrawerShell {
+            testid: "chapters-drawer",
+            on_close,
+            head: rsx! {
                 div {
                     div { class: "lp-panel-kicker", "Chapters" }
                     div { class: "lp-panel-title", "Contents" }
                 }
-                button {
-                    class: "btn ghost sm",
-                    r#type: "button",
-                    onclick: move |_| on_close.call(()),
-                    "Close \u{2193}"
+            },
+            if chapters.is_empty() {
+                div { class: "lp-drawer-empty",
+                    p { class: "lp-drawer-empty-title", "No chapters" }
+                    p { class: "lp-drawer-empty-detail",
+                        "This audiobook has no embedded chapter markers."
+                    }
                 }
-            }
-            div { class: "lp-drawer-body",
-                if chapters.is_empty() {
-                    div { class: "lp-drawer-empty",
-                        p { class: "lp-drawer-empty-title", "No chapters" }
-                        p { class: "lp-drawer-empty-detail",
-                            "This audiobook has no embedded chapter markers."
-                        }
-                    }
-                } else {
-                    for (i, ch) in chapters.iter().enumerate() {
-                        {chapter_row(i, ch, current_chapter_index, elapsed, on_seek)}
-                    }
+            } else {
+                for (i, ch) in chapters.iter().enumerate() {
+                    {chapter_row(i, ch, current_chapter_index, elapsed, on_seek)}
                 }
             }
         }

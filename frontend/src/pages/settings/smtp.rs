@@ -8,6 +8,7 @@ use dioxus::prelude::*;
 
 use omnibus_shared::{SmtpConfigStatus, SmtpConfigUpdate, SmtpSecurity};
 
+use crate::components::credential_card::{credential_status_line, credential_status_message};
 use crate::{data, use_server_url};
 
 /// Admin field to configure the server-wide SMTP relay used by
@@ -357,6 +358,10 @@ fn SmtpTestActions(
         on_test,
         on_clear,
     } = actions;
+    let detail = status
+        .as_ref()
+        .map(|s| format!("Configured \u{00b7} {}", s.source))
+        .unwrap_or_default();
     rsx! {
         div { class: "settings-actions",
             button {
@@ -386,24 +391,7 @@ fn SmtpTestActions(
                 }
             }
         }
-        div { class: "api-key-status mono", "data-testid": "smtp-status",
-            if configured {
-                span { class: "api-key-dot connected" }
-                if let Some(s) = status.as_ref() {
-                    "Configured \u{00b7} {s.source}"
-                }
-            } else {
-                span { class: "api-key-dot" }
-                "Not configured"
-            }
-        }
-        if let Some(m) = msg() {
-            p {
-                role: "status",
-                "data-testid": "smtp-config-status",
-                class: if msg_is_error() { "settings-status error" } else { "settings-status success" },
-                "{m}"
-            }
-        }
+        {credential_status_line("smtp-status", configured, &detail, "Not configured")}
+        {credential_status_message("smtp-config-status", msg().as_deref(), msg_is_error())}
     }
 }
