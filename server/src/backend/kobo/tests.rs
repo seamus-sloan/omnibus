@@ -1059,6 +1059,49 @@ async fn download_returns_404_for_unknown_uuid() {
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }
 
+/// #1647: the book row (and its `book_files` entry) resolves fine — only the
+/// actual bytes are missing, so `serve_download` 404s from `conditional::open`
+/// failing rather than from the earlier uuid/id lookups. That later 404 must
+/// close the same gap the id-lookup 404 above closes: a device that never
+/// got a file must not be recorded as holding it, or the next
+/// `checkforchanges` cycle silently acks annotations away from a device that
+/// has nothing to show them in.
+#[tokio::test]
+async fn download_does_not_record_download_state_when_the_file_open_fails() {
+    // Force kepubify absent so this deterministically takes the plain-EPUB
+    // fallback and reaches `serve_download` with a `book_file_path` pointing
+    // at bytes that were never written to disk.
+    let _kepubify_absent =
+        db::test_support::EnvVarGuard::set("OMNIBUS_KEPUBIFY_PATH", Some("/no/such/kepubify"));
+    let (app, pool, token, _uid) = fixture().await;
+    let device_id = db::kobo_devices::resolve_device_by_token(&pool, &token)
+        .await
+        .unwrap()
+        .unwrap()
+        .device_id;
+    let uuid = seed_synced_ebook(&pool, "phantom.epub", "Phantom", "Nobody").await;
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/download/{uuid}")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    let recorded: Option<i64> = sqlx::query_scalar(
+        "SELECT downloaded_at FROM kobo_annotations_sync WHERE device_id = ? AND book_uuid = ?",
+    )
+    .bind(device_id)
+    .bind(&uuid)
+    .fetch_optional(&pool)
+    .await
+    .unwrap()
+    .flatten();
+    assert!(
+        recorded.is_none(),
+        "a 404'd download must not mark the device as holding the book"
+    );
+}
+
 /// #1391: kepubify is absent in the test environment, so `download` takes its
 /// plain-EPUB fallback arm — which must still route through
 /// `rewritten_or_source` (mirrors `api_get_ebook_download_bakes_metadata_override_into_epub`
