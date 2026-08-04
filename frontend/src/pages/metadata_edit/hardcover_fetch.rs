@@ -34,6 +34,8 @@ enum FetchState {
 pub(super) fn HardcoverFetchPanel(uuid: String, fields: FormFields) -> Element {
     let server_url = use_server_url();
     let mut available = use_signal(|| false);
+    let mut state = use_signal(|| FetchState::Idle);
+    let mut busy = use_signal(|| false);
 
     let url = server_url.clone();
     use_effect(move || {
@@ -49,8 +51,6 @@ pub(super) fn HardcoverFetchPanel(uuid: String, fields: FormFields) -> Element {
         return rsx! {};
     }
 
-    let mut state = use_signal(|| FetchState::Idle);
-    let mut busy = use_signal(|| false);
     let on_fetch = move |_| {
         if busy() {
             return;
@@ -324,5 +324,96 @@ fn HcfRow(
                 }
             }
         }
+    }
+}
+
+// Hook-order regression for the fixed shape (rule 07-hydration.md). A
+// structural mirror, not the real component: `available` needs a live
+// Axum request context a unit test doesn't have.
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use super::*;
+
+    /// Carries the harness's gate signal handle out to the test once the
+    /// root component has mounted, so the test can flip it from outside the
+    /// component tree (mirroring the real panel's async effect resolving
+    /// after first paint).
+    #[derive(Clone)]
+    struct Capture(Rc<RefCell<Option<Signal<bool>>>>);
+
+    impl PartialEq for Capture {
+        fn eq(&self, other: &Self) -> bool {
+            Rc::ptr_eq(&self.0, &other.0)
+        }
+    }
+
+    fn gate_root(capture: Capture) -> Element {
+        let available = use_signal(|| false);
+        use_hook(|| {
+            *capture.0.borrow_mut() = Some(available);
+        });
+        rsx! {
+            GateHarness { available }
+        }
+    }
+
+    /// Mirrors `HardcoverFetchPanel`'s fixed shape: the gate signal, then
+    /// two more `use_signal`s declared unconditionally, then the
+    /// early-return gate. Before the fix, `state`/`busy` were declared
+    /// *after* the gate, so a render while ungated called one fewer hook
+    /// than a render post-transition.
+    #[component]
+    fn GateHarness(available: Signal<bool>) -> Element {
+        let state = use_signal(|| 0u32);
+        let busy = use_signal(|| false);
+
+        if !available() {
+            return rsx! {
+                div { "data-testid": "gated" }
+            };
+        }
+
+        rsx! {
+            div { "data-testid": "revealed", "{state()}-{busy()}" }
+        }
+    }
+
+    /// The core regression: flipping the gate signal after mount must not
+    /// panic (Dioxus panics on a hook-count mismatch between renders of one
+    /// scope) and must reveal the post-gate markup once it does.
+    #[test]
+    fn gate_harness_survives_the_available_transition_without_a_hook_order_panic() {
+        let captured = Capture(Rc::new(RefCell::new(None)));
+        let mut dom = VirtualDom::new_with_props(gate_root, captured.clone());
+        dom.rebuild_in_place();
+
+        let before = dioxus::ssr::render(&dom);
+        assert!(
+            before.contains("gated"),
+            "gated before availability resolves: {before}"
+        );
+        assert!(!before.contains("revealed"));
+
+        let mut available = captured
+            .0
+            .borrow_mut()
+            .take()
+            .expect("gate_root captures its signal on first mount");
+        available.set(true);
+
+        // Applying the pending rerender is the operation that would panic
+        // on a hook-count mismatch; it must not, now that `state`/`busy`
+        // are declared unconditionally ahead of the gate.
+        dom.render_immediate_to_vec();
+
+        let after = dioxus::ssr::render(&dom);
+        assert!(
+            after.contains("revealed"),
+            "revealed after the transition: {after}"
+        );
+        assert!(!after.contains("gated"));
     }
 }
