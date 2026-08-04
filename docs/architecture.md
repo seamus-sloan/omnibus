@@ -255,7 +255,12 @@ Offline/            — Cache (read-through policies), OfflineStore (SQLite
                       compares that snapshot against a later metadata refresh
                       to drive "Update available" — three-valued, so "can't
                       tell" never reads as "not stale"), SyncEngine (the
-                      mutation outbox — see rule 08), Connectivity
+                      mutation outbox — see rule 08), Connectivity,
+                      PositionPushThrottle (shared by the reader, the comic
+                      pager, and the audio player: every relocate writes the
+                      replica and the outbox unconditionally, this throttle
+                      decides only whether it is *also* worth a network round
+                      trip right now)
 Reader/             — SwiftUI reader chrome, the host-drawn selection layer,
                       the passage menu, the typography sheet and the quote-card
                       composer, and ReadStatusAuto (the readers' automatic

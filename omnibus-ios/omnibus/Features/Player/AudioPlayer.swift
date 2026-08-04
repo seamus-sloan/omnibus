@@ -74,7 +74,11 @@ final class AudioPlayer {
     private var sleepTask: Task<Void, Never>?
     private var sessionStart: Date?
     private var listenedSeconds: Double = 0
-    private var lastPersist = Date.distantPast
+    /// Governs whether a tick is also pushed over the network, on top of the
+    /// unconditional local write every one of them gets (#1666). No echoed
+    /// restore position to suppress here — ticks begin only once real
+    /// playback has resumed — so it opts out of `suppressFirst`.
+    private var pushThrottle = PositionPushThrottle(interval: 5, suppressFirst: false)
 
     /// Whether the opening position has been settled against the server.
     ///
@@ -622,24 +626,25 @@ final class AudioPlayer {
 
     // MARK: - Persistence
 
-    /// Record where the listener is. `force` marks a moment worth a round trip
-    /// of its own — a pause, a backgrounding, a close; the steady ticks queue
-    /// and go out with the next push.
+    /// Record where the listener is. The write into the replica and the
+    /// outbox happens on every tick, unconditionally — cheap even at twice a
+    /// second, since `SyncEngine.record` coalesces on kind (#1666). `force`
+    /// decides only whether this tick is also worth a round trip of its own —
+    /// a pause, a backgrounding, a close — as opposed to the steady ticks,
+    /// which still queue immediately but push at most once every five
+    /// seconds.
     private func persistPosition(force: Bool) async {
         // Nothing may be written before the opening position has been settled
         // against the server: every write carries a fresh clock and would beat
         // the very position the reconcile is fetching.
         guard let book, position > 0, positionSettled else { return }
-        // Throttled: the observer fires twice a second, the server needs it
-        // every few.
-        guard force || Date().timeIntervalSince(lastPersist) > 5 else { return }
-        lastPersist = Date()
+        let push = pushThrottle.shouldPush(force: force)
         await UserDataService.saveProgress(
             ProgressUpdate(
                 bookUUID: book.uuid, format: .audio, epubCFI: nil,
                 audioPositionSeconds: position, bookFileID: fileID
             ),
-            push: force
+            push: push
         )
     }
 

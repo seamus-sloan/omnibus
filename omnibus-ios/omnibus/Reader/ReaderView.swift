@@ -77,7 +77,9 @@ struct ReaderView: View {
     /// time: a wall-clock span counted a book left open overnight as eight
     /// hours read.
     @State private var sessionStart: Date?
-    @State private var lastSave = Date.distantPast
+    /// Governs whether a relocate is also pushed over the network, on top of
+    /// the unconditional local write every one of them gets (#1666).
+    @State private var pushThrottle = PositionPushThrottle(interval: 4)
     /// Auto read-status for the open book — unread marks reading on open, the
     /// book's end marks finished. Created in `prepare`, driven by relocates.
     @State private var autoStatus: ReadStatusAuto?
@@ -722,17 +724,17 @@ struct ReaderView: View {
         }
     }
 
-    /// Record where the reader is. `force` marks the moments that are worth a
-    /// round trip of their own — a close, a backgrounding — as opposed to the
-    /// steady trickle of page turns, which queue and go out with the next
-    /// push. The position is durable either way; only its latency differs.
+    /// Record where the reader is. The write into the replica and the outbox
+    /// happens on every relocate, unconditionally — that is what makes the
+    /// position survive a force-quit (#1666). `force` decides only whether
+    /// this relocate is also worth a round trip of its own — a close, a
+    /// backgrounding — as opposed to the steady trickle of page turns, which
+    /// still queue immediately but push at most once every four seconds.
     private func persist(force: Bool) async {
         guard let cfi = controller.location?.cfi else { return }
-        guard force || Date().timeIntervalSince(lastSave) > 4 else { return }
-        lastSave = Date()
         await UserDataService.saveProgress(
             ProgressUpdate(bookUUID: book.uuid, format: .epub, epubCFI: cfi, audioPositionSeconds: nil),
-            push: force
+            push: pushThrottle.shouldPush(force: force)
         )
         await checkpointSessionIfStale()
     }

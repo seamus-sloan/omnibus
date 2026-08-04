@@ -33,7 +33,9 @@ struct ComicReaderView: View {
     /// When the current stretch of reading began, or `nil` while the app is
     /// in the background — same reading-time clock as the EPUB reader.
     @State private var sessionStart: Date?
-    @State private var lastSave = Date.distantPast
+    /// Governs whether a page turn is also pushed over the network, on top of
+    /// the unconditional local write every one of them gets (#1666).
+    @State private var pushThrottle = PositionPushThrottle(interval: 4)
     @State private var showPlayer = false
     /// Auto read-status for the open comic — unread marks reading on open,
     /// the last page marks finished. Created in `prepare`, driven by turns.
@@ -338,14 +340,14 @@ struct ComicReaderView: View {
         )
     }
 
-    /// Record where the reader is. `force` marks the moments worth a round
-    /// trip of their own — a close, a backgrounding — while page turns queue
-    /// and go out with the next push, exactly like the EPUB reader's CFI
-    /// trickle.
+    /// Record where the reader is. The write into the replica and the outbox
+    /// happens on every page turn, unconditionally — that is what makes the
+    /// position survive a force-quit (#1666). `force` decides only whether
+    /// this turn is also worth a round trip of its own — a close, a
+    /// backgrounding — as opposed to the steady trickle of page turns, which
+    /// still queue immediately but push at most once every four seconds.
     private func persist(force: Bool) async {
         guard let pages, pages.count > 0 else { return }
-        guard force || Date().timeIntervalSince(lastSave) > 4 else { return }
-        lastSave = Date()
         let clamped = min(max(page, 0), pages.count - 1)
         await UserDataService.saveProgress(
             ProgressUpdate(
@@ -355,7 +357,7 @@ struct ComicReaderView: View {
                 audioPositionSeconds: nil,
                 progressPercent: ComicPosition.percent(page: clamped, count: pages.count)
             ),
-            push: force
+            push: pushThrottle.shouldPush(force: force)
         )
         await checkpointSessionIfStale()
     }
