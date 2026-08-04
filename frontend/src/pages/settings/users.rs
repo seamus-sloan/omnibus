@@ -190,6 +190,27 @@ fn registration_toggle_handler(
     }
 }
 
+/// Applies the outcome of a self-registration status fetch to the toggle's
+/// signals. Free function (rather than inlined in the effect) so both the
+/// initial load and a retry drive the exact same match, and so a test can
+/// exercise the `Err` branch without spawning an async task — mirrors
+/// [`registration_toggle_handler`].
+fn apply_registration_load(
+    result: Result<bool, String>,
+    mut confirmed: Signal<Option<bool>>,
+    mut shown: Signal<Option<bool>>,
+    mut error: Signal<Option<String>>,
+) {
+    match result {
+        Ok(open) => {
+            confirmed.set(Some(open));
+            shown.set(Some(open));
+            error.set(None);
+        }
+        Err(e) => error.set(Some(e)),
+    }
+}
+
 /// Self-registration switch. Renders above the users table because it governs
 /// who may join without an admin creating the account first.
 ///
@@ -203,23 +224,25 @@ fn registration_toggle_handler(
 /// flips the DOM checkbox *natively*: if the rendered value never moved,
 /// Dioxus would diff it as unchanged, emit no patch, and a rejected save would
 /// leave the box sitting in a state the server refused.
+///
+/// A failed initial load must not brick the control forever: `reload` is
+/// read by the effect (so it fires once on mount) and bumped by the "Retry"
+/// affordance shown while `error` is set and `confirmed` never arrived —
+/// clicking it re-runs the same fetch rather than leaving the checkbox
+/// `disabled` until a full page reload.
 #[component]
 fn RegistrationToggle() -> Element {
-    let mut confirmed = use_signal(|| Option::<bool>::None);
-    let mut shown = use_signal(|| Option::<bool>::None);
-    let mut error = use_signal(|| None::<String>);
+    let confirmed = use_signal(|| Option::<bool>::None);
+    let shown = use_signal(|| Option::<bool>::None);
+    let error = use_signal(|| None::<String>);
     let saving = use_signal(|| false);
+    let mut reload = use_signal(|| 0u32);
 
     use_effect(move || {
+        let _ = reload();
         spawn(async move {
-            match data::registration_status().await {
-                Ok(open) => {
-                    confirmed.set(Some(open));
-                    shown.set(Some(open));
-                    error.set(None);
-                }
-                Err(e) => error.set(Some(e)),
-            }
+            let result = data::registration_status().await;
+            apply_registration_load(result, confirmed, shown, error);
         });
     });
 
@@ -227,6 +250,7 @@ fn RegistrationToggle() -> Element {
 
     let is_on = shown() == Some(true);
     let status = registration_status_line(confirmed());
+    let can_retry = error().is_some() && confirmed().is_none();
 
     rsx! {
         section { class: "card", "data-testid": "registration-card",
@@ -252,6 +276,15 @@ fn RegistrationToggle() -> Element {
                     class: "settings-status error",
                     "data-testid": "registration-error",
                     "{err}"
+                }
+            }
+            if can_retry {
+                button {
+                    r#type: "button",
+                    class: "btn ghost sm",
+                    "data-testid": "registration-retry",
+                    onclick: move |_| reload.with_mut(|n| *n += 1),
+                    "Retry"
                 }
             }
         }
