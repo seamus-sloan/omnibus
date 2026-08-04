@@ -3,8 +3,8 @@ import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { expectNavVisible, gotoReady } from "../utils/nav";
 
-// The title-search fallback rides on provider RPCs, so every network edge is
-// mocked: resolve (to reach the unresolved screen deterministically), search
+// The title search rides on provider RPCs, so every network edge is mocked:
+// resolve (to reach the unresolved screen deterministically), search
 // (candidate list), and resolve-meta (the pick). Real provider behavior is
 // covered by the `omnibus_db` wiremock suites.
 
@@ -69,6 +69,14 @@ async function reachSearch(page: Page): Promise<void> {
 
   await expect(page.getByTestId("check-in-unresolved")).toBeVisible();
   await page.getByTestId("check-in-search-instead").click();
+  await expect(page.getByTestId("check-in-search")).toBeVisible();
+}
+
+/// The other way onto the same screen: straight off the scanner, with no ISBN
+/// attempted at all.
+async function reachSearchFromScanner(page: Page): Promise<void> {
+  await gotoReady(page, "/check-in");
+  await page.getByTestId("check-in-search-by-title").click();
   await expect(page.getByTestId("check-in-search")).toBeVisible();
 }
 
@@ -147,6 +155,48 @@ test.describe("check-in title search", () => {
     );
     await expect(page.getByTestId("check-in-own-it")).toBeVisible();
     await expect(page.getByTestId("check-in-wishlist")).toBeVisible();
+  });
+
+  test("searches and picks from the up-front entry point", async ({ page }) => {
+    await reachSearchFromScanner(page);
+    await mockJsonPost(page, "**/api/rpc/scan/search", {
+      results: [candidate()],
+    });
+
+    // Nothing was looked up on the way here, so the screen must arrive clean.
+    await expect(page.getByTestId("check-in-error")).toHaveCount(0);
+    await expect(page.getByTestId("check-in-search-empty")).toHaveCount(0);
+
+    await page.getByLabel("Title").fill("name of the wind");
+    await expectMutation(
+      page,
+      {
+        method: "POST",
+        url: "/api/rpc/scan/search",
+        expectedBody: { req: { query: "name of the wind" } },
+        expectedStatus: 200,
+      },
+      async () => page.getByTestId("check-in-search-submit").click(),
+    );
+
+    const rows = page.getByTestId("check-in-search-result");
+    await expect(rows).toHaveCount(1);
+
+    await mockJsonPost(page, /\/api\/rpc\/scan\/resolve-meta$/, {
+      kind: "not_in_library",
+      online: candidate(),
+    });
+    await expectMutation(
+      page,
+      {
+        method: "POST",
+        url: /\/api\/rpc\/scan\/resolve-meta$/,
+        expectedStatus: 200,
+      },
+      async () => rows.nth(0).click(),
+    );
+
+    await expect(page.getByTestId("check-in-choose")).toBeVisible();
   });
 
   test("shows the empty-state line when nothing matches", async ({ page }) => {

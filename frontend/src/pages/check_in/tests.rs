@@ -1,6 +1,7 @@
 //! Tests for the check-in flow's pure helpers: ISBN cleaning and check-digit
-//! rejection, keypad entry, wizard stage selection per lookup outcome, and
-//! the byline/notes formatting used by the confirm screens.
+//! rejection, keypad entry, wizard stage selection per lookup outcome, the
+//! byline/notes formatting used by the confirm screens, and the shared
+//! jump-to-title-search handler.
 
 use super::entry::apply_key;
 use super::screens::{byline, meta_details};
@@ -210,6 +211,35 @@ fn meta_details_is_none_when_the_provider_carried_nothing() {
     meta.publisher = Some("   ".into());
     meta.pages = Some(0);
     assert_eq!(meta_details(&meta), None);
+}
+
+// `Signal::new` needs a live Dioxus runtime, so the handler runs inside a
+// throwaway component driven by a bare `VirtualDom` rebuild — the same idiom
+// `contexts/tests.rs` uses to exercise signal-mutating APIs from a `#[test]`.
+#[test]
+fn go_to_search_opens_the_search_stage_and_clears_a_stale_error() {
+    #[component]
+    fn AssertGoToSearch() -> Element {
+        let state = FlowState {
+            stage: Signal::new(Stage::Entry),
+            isbn: Signal::new("978044101359".to_string()),
+            note: Signal::new(String::new()),
+            busy: Signal::new(false),
+            error: Signal::new(Some("Could not look that up".to_string())),
+        };
+        go_to_search(state).call(());
+
+        assert!(matches!((state.stage)(), Stage::Search));
+        // A failed lookup's message must not follow the reader onto a screen
+        // that no longer describes it.
+        assert_eq!((state.error)(), None);
+        // The typed ISBN survives, so "Scan a barcode instead" is the only
+        // thing that discards it.
+        assert_eq!((state.isbn)(), "978044101359");
+
+        rsx! {}
+    }
+    VirtualDom::new(AssertGoToSearch).rebuild_in_place();
 }
 
 #[test]

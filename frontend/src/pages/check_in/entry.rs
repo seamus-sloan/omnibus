@@ -18,13 +18,15 @@ const KEYS: [&str; 12] = [
 ];
 
 /// Manual ISBN entry. Submits through `on_resolve` once the check digit
-/// validates; `on_scan` hands the flow back to the camera.
+/// validates; `on_scan` returns to the camera, `on_search` opens the title
+/// search.
 #[component]
 pub(super) fn EntryScreen(
     isbn: Signal<String>,
     busy: Signal<bool>,
     on_resolve: EventHandler<String>,
     on_scan: EventHandler<()>,
+    on_search: EventHandler<()>,
 ) -> Element {
     let mut isbn = isbn;
     let cleaned = clean_isbn(&isbn());
@@ -76,6 +78,14 @@ pub(super) fn EntryScreen(
                         "data-testid": "check-in-scan-instead",
                         onclick: move |_| on_scan.call(()),
                         "Scan a barcode instead"
+                    }
+                    button {
+                        r#type: "button",
+                        class: "btn ghost",
+                        disabled: busy(),
+                        "data-testid": "check-in-search-by-title",
+                        onclick: move |_| on_search.call(()),
+                        "Search by title"
                     }
                 }
             }

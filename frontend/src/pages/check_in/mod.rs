@@ -134,7 +134,8 @@ pub(crate) enum Stage {
     Choose { online: ExternalBookMeta },
     /// Neither the library nor any provider knew the ISBN.
     Unresolved { isbn: String },
-    /// Title search — the unresolved screen's "type the name instead" fallback.
+    /// Title search — reachable from the scanner and the keypad as well as the
+    /// unresolved screen.
     Search,
     /// 4 — the copy is checked in.
     CheckedIn { uuid: String, title: String },
@@ -356,6 +357,7 @@ fn scan_stage(state: FlowState, on_resolve: EventHandler<String>) -> Element {
                 error.set(None);
                 stage.set(Stage::Entry);
             }),
+            on_search: go_to_search(state),
         }
     }
 }
@@ -373,8 +375,23 @@ fn entry_stage(state: FlowState, on_resolve: EventHandler<String>) -> Element {
                 error.set(None);
                 stage.set(Stage::Scan);
             }),
+            on_search: go_to_search(state),
         }
     }
+}
+
+/// Open [`Stage::Search`], clearing any error so a failed lookup's message
+/// can't follow the reader onto a screen it no longer describes.
+pub(crate) fn go_to_search(state: FlowState) -> EventHandler<()> {
+    let FlowState {
+        mut stage,
+        mut error,
+        ..
+    } = state;
+    EventHandler::new(move |_| {
+        error.set(None);
+        stage.set(Stage::Search);
+    })
 }
 
 /// [`Stage::CloseMatch`]: the fuzzy (title, author) hit that needs a human
@@ -397,17 +414,8 @@ fn close_match_stage(book: ScanBook, scanned: ExternalBookMeta, state: FlowState
 
 /// [`Stage::Unresolved`]: neither the library nor any provider knew the ISBN.
 fn unresolved_stage(isbn: String, state: FlowState, on_restart: EventHandler<()>) -> Element {
-    let mut error = state.error;
-    let mut stage = state.stage;
     rsx! {
-        UnresolvedScreen {
-            isbn,
-            on_search: EventHandler::new(move |_| {
-                error.set(None);
-                stage.set(Stage::Search);
-            }),
-            on_restart,
-        }
+        UnresolvedScreen { isbn, on_search: go_to_search(state), on_restart }
     }
 }
 

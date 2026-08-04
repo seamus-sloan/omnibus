@@ -39,6 +39,7 @@ test.describe("check-in scanner", () => {
     // SSR renders the same tree the client hydrates.
     await expect(page.getByTestId("barcode-scanner")).toBeVisible();
     await expect(page.getByTestId("barcode-scanner-manual")).toBeVisible();
+    await expect(page.getByTestId("check-in-search-by-title")).toBeVisible();
   });
 
   test("a camera the browser won't grant lands on manual entry", async ({
@@ -101,6 +102,25 @@ test.describe("check-in scanner", () => {
 
     await page.getByTestId("check-in-scan-instead").click();
     await expect(page.getByTestId("check-in-scan")).toBeVisible();
+  });
+
+  // The title search is a first-class entry point, not a consolation prize for
+  // a failed lookup: plenty of copies carry a barcode no ISBN index knows, so
+  // reaching it must not cost a doomed round trip first.
+  test("opens the title search from the scanner", async ({ page }) => {
+    await gotoReady(page, "/check-in");
+
+    await page.getByTestId("check-in-search-by-title").click();
+    await expect(page.getByTestId("check-in-search")).toBeVisible();
+  });
+
+  test("opens the title search from manual entry", async ({ page }) => {
+    await gotoReady(page, "/check-in");
+    await page.getByTestId("barcode-scanner-manual").click();
+    await expect(page.getByTestId("check-in-entry")).toBeVisible();
+
+    await page.getByTestId("check-in-search-by-title").click();
+    await expect(page.getByTestId("check-in-search")).toBeVisible();
   });
 
   test("the cancel button exits the flow back to the library", async ({
