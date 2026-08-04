@@ -230,6 +230,13 @@ fn apply_registration_load(
 /// affordance shown while `error` is set and `confirmed` never arrived —
 /// clicking it re-runs the same fetch rather than leaving the checkbox
 /// `disabled` until a full page reload.
+///
+/// `reload` doubles as a generation counter: each spawned fetch snapshots
+/// the value it was started with and, on completion, only applies its
+/// result if `reload` still reads the same value. Without that guard a
+/// slow first load and a fast retry can land out of order — the retry's
+/// success would be immediately clobbered by the original request's later
+/// (stale) failure.
 #[component]
 fn RegistrationToggle() -> Element {
     let confirmed = use_signal(|| Option::<bool>::None);
@@ -239,10 +246,16 @@ fn RegistrationToggle() -> Element {
     let mut reload = use_signal(|| 0u32);
 
     use_effect(move || {
-        let _ = reload();
+        let generation = reload();
         spawn(async move {
             let result = data::registration_status().await;
-            apply_registration_load(result, confirmed, shown, error);
+            // A newer load (another mount-effect run, or a Retry click) has
+            // since started — this one is superseded, so its result (which
+            // may be a stale failure) must not overwrite what that newer
+            // load already applied or is about to apply.
+            if reload() == generation {
+                apply_registration_load(result, confirmed, shown, error);
+            }
         });
     });
 
