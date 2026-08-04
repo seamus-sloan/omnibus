@@ -577,6 +577,17 @@ async fn put_state(
             }
         }
         if let Some(bookmark) = &entry.current_bookmark {
+            // Capture data for the one open question about this field: whether
+            // the content-source percent really is per-chapter (as
+            // `persist_bookmark` assumes) or just echoes the whole-book one.
+            // Nothing in this repo has ever recorded a real device's answer,
+            // and sync-out can't emit the field until it is known.
+            tracing::info!(
+                %uuid,
+                whole_book = ?bookmark.progress_percent,
+                content_source = ?bookmark.content_source_progress_percent,
+                "kobo bookmark percents received"
+            );
             // Device event time, most-specific first: the bookmark's own
             // stamp, then the entry-level ones. Absent/unparseable → None,
             // which `persist_bookmark` treats as server-now (pre-existing
@@ -599,8 +610,16 @@ async fn put_state(
         }
         // Acknowledged, deliberately unwritten — cumulative totals would
         // double-count against the LeaveContent sessions (see `dto::Statistics`).
-        if entry.statistics.is_some() {
-            tracing::debug!(%uuid, "kobo statistics received");
+        // Logged with values because sync-out omits the block entirely today,
+        // and the only safe way to start sending one is to echo what a device
+        // reported rather than invent zeroes; that needs a real payload first.
+        if let Some(stats) = &entry.statistics {
+            tracing::info!(
+                %uuid,
+                spent_reading_minutes = ?stats.spent_reading_minutes,
+                remaining_time_minutes = ?stats.remaining_time_minutes,
+                "kobo statistics received"
+            );
         }
     }
     if let Err(e) = tx.commit().await {
