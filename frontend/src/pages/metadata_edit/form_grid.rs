@@ -60,6 +60,147 @@ pub(super) fn FormGrid(
     }
 }
 
+/// Title, sort/filename (read-only), publisher, published, language, and
+/// ISBN-13 rows. The identity/publication half of [`FieldGrid`].
+fn field_grid_identity_rows(orig: Signal<EbookMetadata>, fields: FormFields) -> Element {
+    let mut title = fields.title;
+    let mut publisher = fields.publisher;
+    let mut published = fields.published;
+    let mut language = fields.language;
+    let mut isbn13 = fields.isbn13;
+    let sort_by = fields.sort_by;
+    let filename = fields.filename;
+
+    rsx! {
+        // Title — spans 2 cols, big serif
+        MeField {
+            label: "Title",
+            value: title,
+            on_change: move |v: String| title.set(v),
+            w: 2,
+            big: true,
+            serif: true,
+            edited: title() != orig().title.clone().unwrap_or_default(),
+        }
+
+        // File-as / sort name (mono, read-only for now)
+        MeField {
+            label: "Sort by",
+            value: sort_by,
+            on_change: move |_: String| {},
+            mono: true,
+            locked: true,
+            hint: "from file-as",
+        }
+
+        // Filename (mono, read-only)
+        MeField {
+            label: "Filename",
+            value: filename,
+            on_change: move |_: String| {},
+            mono: true,
+            locked: true,
+        }
+
+        // Publisher
+        MeField {
+            label: "Publisher",
+            value: publisher,
+            on_change: move |v: String| publisher.set(v),
+            w: 2,
+            edited: publisher() != orig().publisher.clone().unwrap_or_default(),
+        }
+
+        // Published date
+        MeField {
+            label: "Published",
+            value: published,
+            on_change: move |v: String| published.set(v),
+            mono: true,
+            edited: published() != orig().published.clone().unwrap_or_default(),
+        }
+
+        // Language
+        MeField {
+            label: "Language",
+            value: language,
+            on_change: move |v: String| language.set(v),
+            edited: language() != orig().language.clone().unwrap_or_default(),
+        }
+
+        // ISBN-13 — exactly 13 digits, enforced server-side on save
+        // (`MetadataOverrides::validate`); an empty value clears it.
+        MeField {
+            label: "ISBN-13",
+            value: isbn13,
+            on_change: move |v: String| isbn13.set(v),
+            mono: true,
+            edited: isbn13() != orig().isbn13.clone().unwrap_or_default(),
+            hint: "13 digits",
+            placeholder: "e.g. 9780134685991",
+        }
+    }
+}
+
+/// Author chip row, description textarea, and the "Fetch Summary" button.
+/// The author/description half of [`FieldGrid`].
+fn field_grid_authors_and_description(
+    orig: Signal<EbookMetadata>,
+    fields: FormFields,
+    author_suggestions: Signal<Vec<SuggestionItem>>,
+    uuid: String,
+) -> Element {
+    let authors = fields.authors;
+    let mut description = fields.description;
+
+    rsx! {
+        // Authors — chip row spanning 4 cols
+        div { class: "me-field-full",
+            MeLabel {
+                text: "Author(s)",
+                edited: {
+                    let orig_authors: Vec<String> = orig().creators.iter().map(|c| c.name.clone()).collect();
+                    authors() != orig_authors
+                },
+                hint: "primary author first",
+            }
+            div { class: "me-chip-row",
+                ChipEditor {
+                    values: authors,
+                    on_change: move |_| {},
+                    suggestions: author_suggestions,
+                    options: ChipEditorOptions {
+                        placeholder: "+ add author\u{2026}".to_string(),
+                        show_avatar: true,
+                        aria_remove_prefix: "Remove".to_string(),
+                        testid_prefix: "me-authors".to_string(),
+                        ..ChipEditorOptions::default()
+                    },
+                }
+            }
+        }
+
+        // Description — textarea spanning 2 cols.
+        MeArea {
+            label: "Description",
+            value: description,
+            on_change: move |v: String| description.set(v),
+            rows: 5,
+            edited: description() != orig().description.clone().unwrap_or_default(),
+            hint: "plain text or HTML",
+        }
+
+        // Always-present "Fetch Summary" button that fills the description
+        // above from Hardcover/OpenLibrary; the user still saves.
+        div { class: "me-field-full",
+            FetchSummaryButton {
+                uuid,
+                on_fetched: move |text: String| description.set(text),
+            }
+        }
+    }
+}
+
 /// Main field grid: title, sort/filename, publisher, published, language,
 /// the author chip row, and the description textarea.
 #[component]
@@ -69,132 +210,10 @@ fn FieldGrid(
     suggestions: FormSuggestions,
     uuid: String,
 ) -> Element {
-    let mut title = fields.title;
-    let mut description = fields.description;
-    let mut publisher = fields.publisher;
-    let mut published = fields.published;
-    let mut language = fields.language;
-    let mut isbn13 = fields.isbn13;
-    let authors = fields.authors;
-    let sort_by = fields.sort_by;
-    let filename = fields.filename;
-    let author_suggestions = suggestions.authors;
-
     rsx! {
         div { class: "me-field-grid",
-
-            // Title — spans 2 cols, big serif
-            MeField {
-                label: "Title",
-                value: title,
-                on_change: move |v: String| title.set(v),
-                w: 2,
-                big: true,
-                serif: true,
-                edited: title() != orig().title.clone().unwrap_or_default(),
-            }
-
-            // File-as / sort name (mono, read-only for now)
-            MeField {
-                label: "Sort by",
-                value: sort_by,
-                on_change: move |_: String| {},
-                mono: true,
-                locked: true,
-                hint: "from file-as",
-            }
-
-            // Filename (mono, read-only)
-            MeField {
-                label: "Filename",
-                value: filename,
-                on_change: move |_: String| {},
-                mono: true,
-                locked: true,
-            }
-
-            // Publisher
-            MeField {
-                label: "Publisher",
-                value: publisher,
-                on_change: move |v: String| publisher.set(v),
-                w: 2,
-                edited: publisher() != orig().publisher.clone().unwrap_or_default(),
-            }
-
-            // Published date
-            MeField {
-                label: "Published",
-                value: published,
-                on_change: move |v: String| published.set(v),
-                mono: true,
-                edited: published() != orig().published.clone().unwrap_or_default(),
-            }
-
-            // Language
-            MeField {
-                label: "Language",
-                value: language,
-                on_change: move |v: String| language.set(v),
-                edited: language() != orig().language.clone().unwrap_or_default(),
-            }
-
-            // ISBN-13 — exactly 13 digits, enforced server-side on save
-            // (`MetadataOverrides::validate`); an empty value clears it.
-            MeField {
-                label: "ISBN-13",
-                value: isbn13,
-                on_change: move |v: String| isbn13.set(v),
-                mono: true,
-                edited: isbn13() != orig().isbn13.clone().unwrap_or_default(),
-                hint: "13 digits",
-                placeholder: "e.g. 9780134685991",
-            }
-
-            // Authors — chip row spanning 4 cols
-            div { class: "me-field-full",
-                MeLabel {
-                    text: "Author(s)",
-                    edited: {
-                        let orig_authors: Vec<String> = orig().creators.iter().map(|c| c.name.clone()).collect();
-                        authors() != orig_authors
-                    },
-                    hint: "primary author first",
-                }
-                div { class: "me-chip-row",
-                    ChipEditor {
-                        values: authors,
-                        on_change: move |_| {},
-                        suggestions: author_suggestions,
-                        options: ChipEditorOptions {
-                            placeholder: "+ add author\u{2026}".to_string(),
-                            show_avatar: true,
-                            aria_remove_prefix: "Remove".to_string(),
-                            testid_prefix: "me-authors".to_string(),
-                            ..ChipEditorOptions::default()
-                        },
-                    }
-                }
-            }
-
-            // Description — textarea spanning 2 cols.
-            MeArea {
-                label: "Description",
-                value: description,
-                on_change: move |v: String| description.set(v),
-                rows: 5,
-                edited: description() != orig().description.clone().unwrap_or_default(),
-                hint: "plain text or HTML",
-            }
-
-            // Always-present "Fetch Summary" button that fills the description
-            // above from Hardcover/OpenLibrary; the user still saves.
-            div { class: "me-field-full",
-                FetchSummaryButton {
-                    uuid,
-                    on_fetched: move |text: String| description.set(text),
-                }
-            }
+            {field_grid_identity_rows(orig, fields)}
+            {field_grid_authors_and_description(orig, fields, suggestions.authors, uuid)}
         }
     }
 }

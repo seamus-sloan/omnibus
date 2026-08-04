@@ -168,6 +168,113 @@ pub(super) fn HighlightsDrawer(
     }
 }
 
+/// Build the delete handler: removes the persisted highlight, then its
+/// painted annotation (if any) and the row from `highlights`.
+fn build_delete_handler(
+    server_url: String,
+    mut highlights: Signal<Vec<Highlight>>,
+    id: i64,
+    cfi: Option<String>,
+) -> impl FnMut(MouseEvent) + 'static {
+    move |_| {
+        let cfi = cfi.clone();
+        let server_url = server_url.clone();
+        spawn(async move {
+            if crate::data::delete_highlight(&server_url, id).await.is_ok() {
+                // Anchorless (Kobo-origin) rows have no painted swatch to
+                // remove from the rendition.
+                if let Some(cfi) = &cfi {
+                    #[cfg(any(feature = "web", feature = "mobile"))]
+                    super::reader_call_json("removeAnnotation", cfi);
+                    let _ = cfi;
+                }
+                highlights.write().retain(|h| h.id != id);
+            }
+        });
+    }
+}
+
+/// Recolor swatch strip: one dot per palette color, highlighting the current
+/// one and dispatching [`spawn_recolor`] on click.
+fn hl_swatch_strip(
+    cur_color: HighlightColor,
+    recolor_cfi: Option<String>,
+    server_url: String,
+    highlights: Signal<Vec<Highlight>>,
+    id: i64,
+) -> Element {
+    rsx! {
+        div { class: "rd-hl-swatches", "data-testid": "reader-highlight-swatches",
+            for (swatch_color, swatch_name) in PALETTE {
+                button {
+                    key: "{swatch_name}",
+                    class: if swatch_color == cur_color { "rd-hl-swatch on" } else { "rd-hl-swatch" },
+                    r#type: "button",
+                    "data-color": "{swatch_name}",
+                    "data-testid": "reader-highlight-recolor-{swatch_name}",
+                    "aria-label": "Recolor {swatch_name}",
+                    "aria-pressed": if swatch_color == cur_color { "true" } else { "false" },
+                    onclick: {
+                        let recolor_cfi = recolor_cfi.clone();
+                        let server_url = server_url.clone();
+                        move |_| spawn_recolor(server_url.clone(), highlights, id, recolor_cfi.clone(), swatch_color, cur_color)
+                    },
+                }
+            }
+        }
+    }
+}
+
+/// Note/quote/copy/delete action row.
+fn hl_actions_row(
+    highlight: &Highlight,
+    note_label: &str,
+    has_text: bool,
+    copy_src: String,
+    on_quote: EventHandler<Highlight>,
+    on_edit_note: EventHandler<Highlight>,
+    on_delete: impl FnMut(MouseEvent) + 'static,
+) -> Element {
+    rsx! {
+        div { class: "rd-hl-actions",
+            button {
+                class: "rd-act sm",
+                r#type: "button",
+                "data-testid": "highlight-note",
+                onclick: {
+                    let h = highlight.clone();
+                    move |_| on_edit_note.call(h.clone())
+                },
+                "{note_label}"
+            }
+            button {
+                class: "rd-act sm",
+                r#type: "button",
+                "data-testid": "highlight-quote",
+                onclick: {
+                    let h = highlight.clone();
+                    move |_| on_quote.call(h.clone())
+                },
+                "Quote"
+            }
+            button {
+                class: "rd-act sm",
+                r#type: "button",
+                disabled: !has_text,
+                onclick: move |_| copy_text(&copy_src),
+                "Copy"
+            }
+            button {
+                class: "rd-act sm",
+                r#type: "button",
+                "data-testid": "highlight-delete",
+                onclick: on_delete,
+                "Delete"
+            }
+        }
+    }
+}
+
 #[component]
 pub(super) fn HighlightRow(
     highlight: Highlight,
@@ -195,31 +302,10 @@ pub(super) fn HighlightRow(
         "Add note"
     };
     let id = highlight.id;
-
-    let on_delete = {
-        let server_url = server_url.clone();
-        move |_| {
-            let mut highlights = highlights;
-            let cfi = cfi.clone();
-            let server_url = server_url.clone();
-            spawn(async move {
-                if crate::data::delete_highlight(&server_url, id).await.is_ok() {
-                    // Anchorless (Kobo-origin) rows have no painted swatch to
-                    // remove from the rendition.
-                    if let Some(cfi) = &cfi {
-                        #[cfg(any(feature = "web", feature = "mobile"))]
-                        super::reader_call_json("removeAnnotation", cfi);
-                        let _ = cfi;
-                    }
-                    highlights.write().retain(|h| h.id != id);
-                }
-            });
-        }
-    };
+    let on_delete = build_delete_handler(server_url.clone(), highlights, id, cfi);
 
     let cur_color = highlight.color;
     let recolor_cfi = highlight.epub_cfi_range.clone();
-
     let nav_cfi = highlight.epub_cfi_range.clone();
 
     rsx! {
@@ -240,60 +326,8 @@ pub(super) fn HighlightRow(
             if let Some(n) = note {
                 div { class: "rd-hl-note", "{n}" }
             }
-            div { class: "rd-hl-swatches", "data-testid": "reader-highlight-swatches",
-                for (swatch_color, swatch_name) in PALETTE {
-                    button {
-                        key: "{swatch_name}",
-                        class: if swatch_color == cur_color { "rd-hl-swatch on" } else { "rd-hl-swatch" },
-                        r#type: "button",
-                        "data-color": "{swatch_name}",
-                        "data-testid": "reader-highlight-recolor-{swatch_name}",
-                        "aria-label": "Recolor {swatch_name}",
-                        "aria-pressed": if swatch_color == cur_color { "true" } else { "false" },
-                        onclick: {
-                            let recolor_cfi = recolor_cfi.clone();
-                            let server_url = server_url.clone();
-                            move |_| spawn_recolor(server_url.clone(), highlights, id, recolor_cfi.clone(), swatch_color, cur_color)
-                        },
-                    }
-                }
-            }
-            div { class: "rd-hl-actions",
-                button {
-                    class: "rd-act sm",
-                    r#type: "button",
-                    "data-testid": "highlight-note",
-                    onclick: {
-                        let h = highlight.clone();
-                        move |_| on_edit_note.call(h.clone())
-                    },
-                    "{note_label}"
-                }
-                button {
-                    class: "rd-act sm",
-                    r#type: "button",
-                    "data-testid": "highlight-quote",
-                    onclick: {
-                        let h = highlight.clone();
-                        move |_| on_quote.call(h.clone())
-                    },
-                    "Quote"
-                }
-                button {
-                    class: "rd-act sm",
-                    r#type: "button",
-                    disabled: !has_text,
-                    onclick: move |_| copy_text(&copy_src),
-                    "Copy"
-                }
-                button {
-                    class: "rd-act sm",
-                    r#type: "button",
-                    "data-testid": "highlight-delete",
-                    onclick: on_delete,
-                    "Delete"
-                }
-            }
+            {hl_swatch_strip(cur_color, recolor_cfi, server_url, highlights, id)}
+            {hl_actions_row(&highlight, note_label, has_text, copy_src, on_quote, on_edit_note, on_delete)}
         }
     }
 }

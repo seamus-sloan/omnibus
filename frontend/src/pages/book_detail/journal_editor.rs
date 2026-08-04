@@ -85,6 +85,97 @@ struct ToolbarButton {
     b: &'static str,
 }
 
+/// Formatting buttons shown in [`BdJournalToolbar`], in the order the
+/// design's `InlineJournalEditor` toolbar uses. Module-level (rather than a
+/// local `const` in the component) so the button data doesn't pad the
+/// component's own body.
+const TOOLBAR_BUTTONS: &[ToolbarButton] = &[
+    ToolbarButton {
+        label: "B",
+        title: "Bold",
+        op: "wrap",
+        a: "**",
+        b: "**",
+    },
+    ToolbarButton {
+        label: "I",
+        title: "Italic",
+        op: "wrap",
+        a: "*",
+        b: "*",
+    },
+    ToolbarButton {
+        label: "S",
+        title: "Strikethrough",
+        op: "wrap",
+        a: "~~",
+        b: "~~",
+    },
+    ToolbarButton {
+        label: "H1",
+        title: "Heading 1",
+        op: "prefix",
+        a: "# ",
+        b: "",
+    },
+    ToolbarButton {
+        label: "H2",
+        title: "Heading 2",
+        op: "prefix",
+        a: "## ",
+        b: "",
+    },
+    ToolbarButton {
+        label: "\u{201C}",
+        title: "Quote",
+        op: "prefix",
+        a: "> ",
+        b: "",
+    },
+    ToolbarButton {
+        label: "\u{2022}",
+        title: "Bullet list",
+        op: "prefix",
+        a: "- ",
+        b: "",
+    },
+    ToolbarButton {
+        label: "1.",
+        title: "Numbered list",
+        op: "prefix",
+        a: "1. ",
+        b: "",
+    },
+    ToolbarButton {
+        label: "[ ]",
+        title: "Checklist",
+        op: "prefix",
+        a: "- [ ] ",
+        b: "",
+    },
+    ToolbarButton {
+        label: "{ }",
+        title: "Inline code",
+        op: "wrap",
+        a: "`",
+        b: "`",
+    },
+    ToolbarButton {
+        label: "\u{1F517}",
+        title: "Link",
+        op: "link",
+        a: "text",
+        b: "https://",
+    },
+    ToolbarButton {
+        label: "Spoiler",
+        title: "Spoiler \u{2014} blurred until clicked",
+        op: "wrap",
+        a: "||",
+        b: "||",
+    },
+];
+
 /// The composer formatting toolbar. Each button wraps/prefixes the live
 /// editor's selection with the matching markdown so the persisted body stays
 /// plain markdown. `target_id` is the id of the contenteditable the buttons act
@@ -96,97 +187,9 @@ pub(crate) fn BdJournalToolbar(
     server_url: String,
     error: Signal<Option<String>>,
 ) -> Element {
-    // Order mirrors the design's `InlineJournalEditor` toolbar.
-    const BUTTONS: &[ToolbarButton] = &[
-        ToolbarButton {
-            label: "B",
-            title: "Bold",
-            op: "wrap",
-            a: "**",
-            b: "**",
-        },
-        ToolbarButton {
-            label: "I",
-            title: "Italic",
-            op: "wrap",
-            a: "*",
-            b: "*",
-        },
-        ToolbarButton {
-            label: "S",
-            title: "Strikethrough",
-            op: "wrap",
-            a: "~~",
-            b: "~~",
-        },
-        ToolbarButton {
-            label: "H1",
-            title: "Heading 1",
-            op: "prefix",
-            a: "# ",
-            b: "",
-        },
-        ToolbarButton {
-            label: "H2",
-            title: "Heading 2",
-            op: "prefix",
-            a: "## ",
-            b: "",
-        },
-        ToolbarButton {
-            label: "\u{201C}",
-            title: "Quote",
-            op: "prefix",
-            a: "> ",
-            b: "",
-        },
-        ToolbarButton {
-            label: "\u{2022}",
-            title: "Bullet list",
-            op: "prefix",
-            a: "- ",
-            b: "",
-        },
-        ToolbarButton {
-            label: "1.",
-            title: "Numbered list",
-            op: "prefix",
-            a: "1. ",
-            b: "",
-        },
-        ToolbarButton {
-            label: "[ ]",
-            title: "Checklist",
-            op: "prefix",
-            a: "- [ ] ",
-            b: "",
-        },
-        ToolbarButton {
-            label: "{ }",
-            title: "Inline code",
-            op: "wrap",
-            a: "`",
-            b: "`",
-        },
-        ToolbarButton {
-            label: "\u{1F517}",
-            title: "Link",
-            op: "link",
-            a: "text",
-            b: "https://",
-        },
-        ToolbarButton {
-            label: "Spoiler",
-            title: "Spoiler \u{2014} blurred until clicked",
-            op: "wrap",
-            a: "||",
-            b: "||",
-        },
-    ];
-
     rsx! {
         div { class: "bd-journal-toolbar", "data-testid": "journal-toolbar", role: "toolbar",
-            for btn in BUTTONS.iter() {
+            for btn in TOOLBAR_BUTTONS.iter() {
                 button {
                     key: "{btn.title}",
                     r#type: "button",

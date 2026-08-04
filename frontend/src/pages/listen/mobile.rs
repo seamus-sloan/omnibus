@@ -310,8 +310,121 @@ fn render_unsupported(
     }
 }
 
+/// Derived display state for one player render: effective scrub position,
+/// chapter math, accent style, and formatted labels. Computed once ahead of
+/// the transport handlers and markup so [`render_player`] stays readable —
+/// kept as a distinct step per #852 rather than inlined into the component
+/// body.
+struct PlayerDerived {
+    effective: f64,
+    chapter_no: usize,
+    chapter_count: usize,
+    chapter_title: String,
+    within: f64,
+    chapter_dur: f64,
+    chapter_left: f64,
+    remaining_book: f64,
+    scrub_max: f64,
+    accent_style: String,
+    rate_label: String,
+    sleep_label: String,
+    sleep_armed: bool,
+    has_chapters: bool,
+}
+
+/// Compute [`PlayerDerived`] for one render. While dragging, every readout
+/// previews the drag position (`scrub_target`) and the current chapter is
+/// re-derived from it, so the bar/times track the thumb; at rest `effective`
+/// is the true elapsed. The transport handlers still act on the real
+/// `elapsed`/`chapter_index`, never the preview. Shared with the web player
+/// via `effective_scrub_position` so the two derivations can't diverge.
+fn derive_player_state(
+    view: &PlayerView,
+    elapsed: f64,
+    duration: f64,
+    chapter_index: usize,
+    rate: f64,
+    sleep: SleepState,
+    scrub_target: Option<f64>,
+) -> PlayerDerived {
+    let (effective, disp_index, eff_remaining) = effective_scrub_position(
+        &view.chapters,
+        elapsed,
+        duration,
+        chapter_index,
+        (duration - elapsed).max(0.0),
+        scrub_target,
+        chapter_index_for_elapsed,
+    );
+    let current = view.chapters.get(disp_index);
+    let chapter_start = current.map(|c| c.start_seconds).unwrap_or(0.0);
+    let chapter_dur = current.map(|c| c.duration_seconds).unwrap_or(0.0);
+    let within = (effective - chapter_start).max(0.0);
+    let chapter_left = remaining_at_rate(
+        view::remaining_in_chapter(&view.chapters, disp_index, effective),
+        rate,
+    );
+
+    PlayerDerived {
+        effective,
+        chapter_no: disp_index + 1,
+        chapter_count: view.chapters.len(),
+        chapter_title: current.map(|c| c.title.clone()).unwrap_or_default(),
+        within,
+        chapter_dur,
+        chapter_left,
+        remaining_book: remaining_at_rate(eff_remaining, rate),
+        scrub_max: if duration > 0.0 { duration } else { 1.0 },
+        accent_style: view
+            .accent
+            .as_deref()
+            .map(|a| format!("--accent: {a};"))
+            .unwrap_or_default(),
+        rate_label: format!("{rate:.2}\u{00d7}"),
+        sleep_label: sleep_pill_label(sleep, elapsed),
+        sleep_armed: sleep != SleepState::Off,
+        has_chapters: !view.chapters.is_empty(),
+    }
+}
+
+/// Build the prev/next/bookmark chapter-nav handlers, sharing one `Rc` clone
+/// of the chapter list across all three — `render_player` reruns on every
+/// position tick, so per-closure deep clones of the chapters vec add up
+/// (issue #1143).
+fn build_chapter_nav_handlers(
+    chapters: std::rc::Rc<Vec<omnibus_shared::ChapterInfo>>,
+    elapsed: f64,
+    chapter_index: usize,
+    bookmarks: MobileBookmarks,
+    mut sheet: Signal<OpenSheet>,
+) -> (
+    impl FnMut(MouseEvent) + 'static,
+    impl FnMut(MouseEvent) + 'static,
+    impl FnMut(MouseEvent) + 'static,
+) {
+    let prev_chapters = chapters.clone();
+    let on_prev = move |_: MouseEvent| {
+        if let Some(t) = view::chapter_prev_seek(&prev_chapters, elapsed, chapter_index) {
+            interop::seek(t);
+        }
+    };
+    let next_chapters = chapters.clone();
+    let on_next = move |_: MouseEvent| {
+        if chapter_index + 1 < next_chapters.len() {
+            interop::seek(next_chapters[chapter_index + 1].start_seconds);
+        }
+    };
+    let on_bookmark = move |_: MouseEvent| {
+        bookmarks.create(elapsed, &chapters);
+        sheet.set(OpenSheet::Bookmarks);
+    };
+    (on_prev, on_next, on_bookmark)
+}
+
 /// Render the full player surface: cover hero, now-playing block, chapter
 /// scrubber, transport row, secondary controls, toast, and the bottom sheets.
+/// The derived-state prelude lives in [`derive_player_state`]; each markup
+/// section below has its own `render_player_*` helper.
 fn render_player(p: PlayerProps) -> Element {
     let PlayerProps {
         uuid,
@@ -322,7 +435,7 @@ fn render_player(p: PlayerProps) -> Element {
         rate,
         sleep,
         chapter_index,
-        mut sheet,
+        sheet,
         scrub,
         bookmarks,
         ctx,
@@ -330,44 +443,15 @@ fn render_player(p: PlayerProps) -> Element {
     } = p;
 
     let server_url = use_server_url();
-    // While dragging, every readout previews the drag position and the current
-    // chapter is re-derived from it, so the bar/times track the thumb; at rest
-    // `effective` is the true elapsed. The transport handlers below still act
-    // on the real `elapsed` / `chapter_index`, never the preview. Shared with
-    // the web player via `effective_scrub_position` so the two derivations
-    // can't silently diverge.
-    let (effective, disp_index, eff_remaining) = effective_scrub_position(
-        &view.chapters,
+    let derived = derive_player_state(
+        &view,
         elapsed,
         duration,
         chapter_index,
-        (duration - elapsed).max(0.0),
-        scrub(),
-        chapter_index_for_elapsed,
-    );
-    let current = view.chapters.get(disp_index);
-    let chapter_no = disp_index + 1;
-    let chapter_count = view.chapters.len();
-    let chapter_title = current.map(|c| c.title.clone()).unwrap_or_default();
-    let chapter_start = current.map(|c| c.start_seconds).unwrap_or(0.0);
-    let chapter_dur = current.map(|c| c.duration_seconds).unwrap_or(0.0);
-    let within = (effective - chapter_start).max(0.0);
-    let chapter_left = remaining_at_rate(
-        view::remaining_in_chapter(&view.chapters, disp_index, effective),
         rate,
+        sleep,
+        scrub(),
     );
-    let remaining_book = remaining_at_rate(eff_remaining, rate);
-    let scrub_max = if duration > 0.0 { duration } else { 1.0 };
-
-    let accent_style = view
-        .accent
-        .as_deref()
-        .map(|a| format!("--accent: {a};"))
-        .unwrap_or_default();
-    let rate_label = format!("{rate:.2}\u{00d7}");
-    let sleep_label = sleep_pill_label(sleep, elapsed);
-    let sleep_armed = sleep != SleepState::Off;
-    let has_chapters = !view.chapters.is_empty();
     let toast = (bookmarks.toast)();
 
     // Transport handlers — all route through the JS control surface. Dragging
@@ -392,37 +476,13 @@ fn render_player(p: PlayerProps) -> Element {
         scrub.set(None);
     };
     // Let audio events drive `ctx.playing`; an optimistic flip can desync the icon.
-    let on_toggle = move |_| interop::toggle();
-    let on_back = move |_| interop::skip(-30.0);
-    let on_fwd = move |_| interop::skip(30.0);
+    let on_toggle = move |_: MouseEvent| interop::toggle();
+    let on_back = move |_: MouseEvent| interop::skip(-30.0);
+    let on_fwd = move |_: MouseEvent| interop::skip(30.0);
 
-    // One shared chapters allocation for the handlers and the sheet layer —
-    // `render_player` reruns on every position tick, so per-closure deep
-    // clones of the chapters vec add up (issue #1143).
     let chapters = std::rc::Rc::new(view.chapters.clone());
-    let on_prev = {
-        let chapters = chapters.clone();
-        move |_: MouseEvent| {
-            if let Some(t) = view::chapter_prev_seek(&chapters, elapsed, chapter_index) {
-                interop::seek(t);
-            }
-        }
-    };
-    let on_next = {
-        let chapters = chapters.clone();
-        move |_: MouseEvent| {
-            if chapter_index + 1 < chapters.len() {
-                interop::seek(chapters[chapter_index + 1].start_seconds);
-            }
-        }
-    };
-    let on_bookmark = {
-        let chapters = chapters.clone();
-        move |_: MouseEvent| {
-            bookmarks.create(elapsed, &chapters);
-            sheet.set(OpenSheet::Bookmarks);
-        }
-    };
+    let (on_prev, on_next, on_bookmark) =
+        build_chapter_nav_handlers(chapters.clone(), elapsed, chapter_index, bookmarks, sheet);
 
     let sheet_props = SheetProps {
         uuid: uuid.clone(),
@@ -439,127 +499,170 @@ fn render_player(p: PlayerProps) -> Element {
     };
 
     rsx! {
-        div { class: "m-player", style: "{accent_style}", "data-testid": "mobile-player",
+        div { class: "m-player", style: "{derived.accent_style}", "data-testid": "mobile-player",
             div { class: "m-player-glow" }
-
-            // Top bar
-            div { class: "m-player-bar",
-                button { r#type: "button", class: "m-icon-btn", "aria-label": "Back", onclick: move |e| on_nav_back.call(e), "\u{2190}" }
-            }
-
-            // Cover hero
-            div { class: "m-player-cover",
-                Cover {
-                    book: view.book.clone(),
-                    src_override: cover_src(&view.book, &uuid, &server_url),
-                    sizes: Some("220px".to_string()),
-                }
-            }
-
-            // Now playing
-            div { class: "m-player-now",
-                div { class: "label m-player-eyebrow",
-                    "Now playing \u{00b7} Chapter {chapter_no} of {chapter_count}"
-                }
-                {player_title(&view.title)}
-                div { class: "m-player-by", "by {view.author}" }
-                if has_chapters {
-                    div { class: "m-player-chline", "Ch. {chapter_no} \u{00b7} {chapter_title}" }
-                }
-            }
-
-            // Chapter scrubber
-            div { class: "m-player-scrub",
-                input {
-                    class: "m-player-range",
-                    r#type: "range",
-                    "aria-label": "Seek",
-                    "data-testid": "mobile-player-seek",
-                    min: "0",
-                    max: "{scrub_max}",
-                    step: "1",
-                    value: "{effective}",
-                    oninput: on_seek_input,
-                    onchange: on_seek_commit,
-                }
-                div { class: "m-player-times mono",
-                    span { "{format_hms(effective)}" }
-                    if has_chapters {
-                        span { class: "m-player-chtime",
-                            "{format_ms(within)} / {format_ms(chapter_dur)} \u{00b7} {format_ms(chapter_left)} left"
-                        }
-                    }
-                    span { "-{format_hms(remaining_book)}" }
-                }
-            }
-
-            // Transport row — five primary controls. Keeping it to five (vs
-            // folding in favorite/speed) is what keeps the 72px play button
-            // circular on a phone; speed lives in the secondary row below.
-            div { class: "m-player-transport",
-                button {
-                    class: "m-tp-ch", r#type: "button", disabled: !has_chapters,
-                    "aria-label": "Previous chapter", onclick: on_prev, "\u{25C1}|"
-                }
-                button { class: "m-tp-skip", r#type: "button", "data-testid": "mobile-skip-back", "aria-label": "Back 30 seconds", onclick: on_back, "-30" }
-                button {
-                    class: "m-tp-play", r#type: "button", "data-testid": "mobile-toggle",
-                    "aria-label": if playing { "Pause" } else { "Play" }, onclick: on_toggle,
-                    if playing {
-                        span { class: "m-tp-pause", span {} span {} }
-                    } else {
-                        span { class: "m-tp-tri" }
-                    }
-                }
-                button { class: "m-tp-skip", r#type: "button", "data-testid": "mobile-skip-forward", "aria-label": "Forward 30 seconds", onclick: on_fwd, "+30" }
-                button {
-                    class: "m-tp-ch", r#type: "button", disabled: !has_chapters,
-                    "aria-label": "Next chapter", onclick: on_next, "|\u{25B7}"
-                }
-            }
-
-            // Secondary controls — each pill opens its bottom sheet.
-            div { class: "m-player-secondary",
-                button {
-                    class: if sheet() == OpenSheet::Speed { "m-pill on" } else { "m-pill" },
-                    r#type: "button", "data-testid": "mobile-rate", "aria-label": "Playback speed",
-                    onclick: move |_| sheet.set(OpenSheet::Speed),
-                    "{rate_label}"
-                }
-                button {
-                    class: if sheet() == OpenSheet::Sleep || sleep_armed { "m-pill on" } else { "m-pill" },
-                    r#type: "button", "data-testid": "mobile-sleep",
-                    onclick: move |_| sheet.set(OpenSheet::Sleep),
-                    "{sleep_label}"
-                }
-                button {
-                    class: "m-pill", r#type: "button", "data-testid": "mobile-bookmark",
-                    onclick: on_bookmark,
-                    "Bookmark"
-                }
-                button {
-                    class: if sheet() == OpenSheet::Chapters { "m-pill on" } else { "m-pill" },
-                    r#type: "button", "data-testid": "mobile-chapters-toggle",
-                    onclick: move |_| sheet.set(OpenSheet::Chapters),
-                    "Chapters"
-                }
-            }
-
-            // "Bookmark saved" confirmation toast.
-            if let Some(label) = toast {
-                div { class: "m-toast", role: "status",
-                    span { class: "m-toast-flag", "\u{2691}" }
-                    span { class: "m-toast-text", "Bookmark saved" }
-                    span { class: "mono m-toast-meta", "{label}" }
-                }
-            }
-            if let Some(message) = (p.ctx.rate_error)() {
-                div { class: "m-toast", role: "alert",
-                    span { class: "m-toast-text", "{message}" }
-                }
-            }
-
+            {render_player_header(&view, &uuid, &server_url, on_nav_back, &derived)}
+            {render_player_scrubber(&derived, on_seek_input, on_seek_commit)}
+            {render_player_transport(playing, derived.has_chapters, on_prev, on_back, on_toggle, on_fwd, on_next)}
+            {render_player_secondary(sheet, &derived, on_bookmark)}
+            {render_player_toast(toast, (ctx.rate_error)())}
             {render_sheets(&sheet_props)}
+        }
+    }
+}
+
+/// Top bar, cover hero, and now-playing block.
+fn render_player_header(
+    view: &PlayerView,
+    uuid: &str,
+    server_url: &str,
+    on_nav_back: EventHandler<MouseEvent>,
+    derived: &PlayerDerived,
+) -> Element {
+    rsx! {
+        div { class: "m-player-bar",
+            button { r#type: "button", class: "m-icon-btn", "aria-label": "Back", onclick: move |e| on_nav_back.call(e), "\u{2190}" }
+        }
+        div { class: "m-player-cover",
+            Cover {
+                book: view.book.clone(),
+                src_override: cover_src(&view.book, uuid, server_url),
+                sizes: Some("220px".to_string()),
+            }
+        }
+        div { class: "m-player-now",
+            div { class: "label m-player-eyebrow",
+                "Now playing \u{00b7} Chapter {derived.chapter_no} of {derived.chapter_count}"
+            }
+            {player_title(&view.title)}
+            div { class: "m-player-by", "by {view.author}" }
+            if derived.has_chapters {
+                div { class: "m-player-chline", "Ch. {derived.chapter_no} \u{00b7} {derived.chapter_title}" }
+            }
+        }
+    }
+}
+
+/// Chapter scrubber: range input plus the elapsed/chapter/remaining readout.
+fn render_player_scrubber(
+    derived: &PlayerDerived,
+    on_seek_input: impl FnMut(Event<FormData>) + 'static,
+    on_seek_commit: impl FnMut(Event<FormData>) + 'static,
+) -> Element {
+    rsx! {
+        div { class: "m-player-scrub",
+            input {
+                class: "m-player-range",
+                r#type: "range",
+                "aria-label": "Seek",
+                "data-testid": "mobile-player-seek",
+                min: "0",
+                max: "{derived.scrub_max}",
+                step: "1",
+                value: "{derived.effective}",
+                oninput: on_seek_input,
+                onchange: on_seek_commit,
+            }
+            div { class: "m-player-times mono",
+                span { "{format_hms(derived.effective)}" }
+                if derived.has_chapters {
+                    span { class: "m-player-chtime",
+                        "{format_ms(derived.within)} / {format_ms(derived.chapter_dur)} \u{00b7} {format_ms(derived.chapter_left)} left"
+                    }
+                }
+                span { "-{format_hms(derived.remaining_book)}" }
+            }
+        }
+    }
+}
+
+/// Primary transport row — five controls. Keeping it to five (vs folding in
+/// favorite/speed) is what keeps the 72px play button circular on a phone;
+/// speed lives in the secondary row below.
+fn render_player_transport(
+    playing: bool,
+    has_chapters: bool,
+    on_prev: impl FnMut(MouseEvent) + 'static,
+    on_back: impl FnMut(MouseEvent) + 'static,
+    on_toggle: impl FnMut(MouseEvent) + 'static,
+    on_fwd: impl FnMut(MouseEvent) + 'static,
+    on_next: impl FnMut(MouseEvent) + 'static,
+) -> Element {
+    rsx! {
+        div { class: "m-player-transport",
+            button {
+                class: "m-tp-ch", r#type: "button", disabled: !has_chapters,
+                "aria-label": "Previous chapter", onclick: on_prev, "\u{25C1}|"
+            }
+            button { class: "m-tp-skip", r#type: "button", "data-testid": "mobile-skip-back", "aria-label": "Back 30 seconds", onclick: on_back, "-30" }
+            button {
+                class: "m-tp-play", r#type: "button", "data-testid": "mobile-toggle",
+                "aria-label": if playing { "Pause" } else { "Play" }, onclick: on_toggle,
+                if playing {
+                    span { class: "m-tp-pause", span {} span {} }
+                } else {
+                    span { class: "m-tp-tri" }
+                }
+            }
+            button { class: "m-tp-skip", r#type: "button", "data-testid": "mobile-skip-forward", "aria-label": "Forward 30 seconds", onclick: on_fwd, "+30" }
+            button {
+                class: "m-tp-ch", r#type: "button", disabled: !has_chapters,
+                "aria-label": "Next chapter", onclick: on_next, "|\u{25B7}"
+            }
+        }
+    }
+}
+
+/// Secondary pill row — speed/sleep/bookmark/chapters. Speed, sleep, and
+/// chapters each open their bottom sheet; bookmark fires immediately.
+fn render_player_secondary(
+    mut sheet: Signal<OpenSheet>,
+    derived: &PlayerDerived,
+    on_bookmark: impl FnMut(MouseEvent) + 'static,
+) -> Element {
+    rsx! {
+        div { class: "m-player-secondary",
+            button {
+                class: if sheet() == OpenSheet::Speed { "m-pill on" } else { "m-pill" },
+                r#type: "button", "data-testid": "mobile-rate", "aria-label": "Playback speed",
+                onclick: move |_| sheet.set(OpenSheet::Speed),
+                "{derived.rate_label}"
+            }
+            button {
+                class: if sheet() == OpenSheet::Sleep || derived.sleep_armed { "m-pill on" } else { "m-pill" },
+                r#type: "button", "data-testid": "mobile-sleep",
+                onclick: move |_| sheet.set(OpenSheet::Sleep),
+                "{derived.sleep_label}"
+            }
+            button {
+                class: "m-pill", r#type: "button", "data-testid": "mobile-bookmark",
+                onclick: on_bookmark,
+                "Bookmark"
+            }
+            button {
+                class: if sheet() == OpenSheet::Chapters { "m-pill on" } else { "m-pill" },
+                r#type: "button", "data-testid": "mobile-chapters-toggle",
+                onclick: move |_| sheet.set(OpenSheet::Chapters),
+                "Chapters"
+            }
+        }
+    }
+}
+
+/// "Bookmark saved" confirmation toast, plus a playback-rate error toast.
+fn render_player_toast(toast: Option<String>, rate_error: Option<String>) -> Element {
+    rsx! {
+        if let Some(label) = toast {
+            div { class: "m-toast", role: "status",
+                span { class: "m-toast-flag", "\u{2691}" }
+                span { class: "m-toast-text", "Bookmark saved" }
+                span { class: "mono m-toast-meta", "{label}" }
+            }
+        }
+        if let Some(message) = rate_error {
+            div { class: "m-toast", role: "alert",
+                span { class: "m-toast-text", "{message}" }
+            }
         }
     }
 }

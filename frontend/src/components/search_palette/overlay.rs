@@ -16,55 +16,24 @@ use crate::focus_after_paint::focus_after_paint;
 use crate::platform_sleep::async_sleep_ms;
 use crate::{data, use_server_url};
 
-/// Floating overlay: dark scrim + centered panel with input, results, footer.
-#[component]
-pub(super) fn SpOverlay(open: PaletteOpen) -> Element {
-    let mut open = open;
-    let server_url = use_server_url();
-    let mut query = use_signal(String::new);
-    let mut results = use_signal(|| Option::<PaletteResults>::None);
-    let mut selected = use_signal(|| 0_usize);
-    let mut loading = use_signal(|| false);
-    // Set on a failed search, distinct from "no matches" (mirrors
-    // `search_mobile.rs`'s `errored` signal for the same underlying call).
-    let mut errored = use_signal(|| false);
-    // Tracks whether the user has driven selection with arrow keys this
-    // session. When false, pressing Enter navigates to the full-page
-    // search results instead of drilling into `selected`.
-    let mut has_navigated = use_signal(|| false);
-    // #126: handle of the in-flight debounce+RPC task so the next keystroke
-    // can `.cancel()` it before spawning a new one (instead of leaving N
-    // sleeping spawns to race past the debounce and burn pool connections).
-    let mut current_task = use_signal(|| Option::<Task>::None);
-    let nav = use_navigator();
-
-    // Build a flat list of selectable items for keyboard navigation.
-    let flat_items = use_memo(move || build_flat_items(&results.read()));
-
-    // Close the palette.
-    let mut close = move || {
-        open.0.set(false);
-    };
-
-    let on_keydown = make_keydown_handler(KeyboardContext {
-        open,
-        selected,
-        has_navigated,
-        flat_items,
-        query,
-        nav,
-    });
-
-    // Debounced search. Uses gloo_timers on web, tokio::time on server.
-    // Each keystroke cancels the prior task (debounce sleep + RPC) before
-    // spawning a new one — only one task is in flight at a time, so stale
-    // requests don't race past the debounce or hit SQLite.
-    let url = server_url.clone();
-    let mut spawn_search = move |v: String| {
+/// Build the debounced search dispatcher. Each keystroke cancels the prior
+/// in-flight task (debounce sleep + RPC) before spawning a new one — only
+/// one task is in flight at a time, so stale requests don't race past the
+/// debounce or hit SQLite (#126). Uses gloo_timers on web, tokio::time on
+/// server.
+fn build_search_dispatcher(
+    server_url: String,
+    mut results: Signal<Option<PaletteResults>>,
+    mut selected: Signal<usize>,
+    mut loading: Signal<bool>,
+    mut errored: Signal<bool>,
+    mut current_task: Signal<Option<Task>>,
+) -> impl FnMut(String) + 'static {
+    move |v: String| {
         if let Some(prev) = current_task.write().take() {
             prev.cancel();
         }
-        let url = url.clone();
+        let url = server_url.clone();
         let task = spawn(async move {
             async_sleep_ms(150).await;
             let trimmed = v.trim().to_string();
@@ -91,22 +60,88 @@ pub(super) fn SpOverlay(open: PaletteOpen) -> Element {
             loading.set(false);
         });
         current_task.set(Some(task));
-    };
+    }
+}
 
-    let res = results.read();
-    // Only project `selected` into row class names once the user has driven
-    // selection with arrow keys. Otherwise the first row would render with
-    // the "selected" highlight on every fresh query (since `selected`
-    // resets to 0 after each search response), and pressing ArrowDown
-    // would visually jump to index 1 instead of 0.
-    let is_loading = loading();
-    let is_errored = errored();
-
+/// `(total, duration_ms, has_results)` for the meta line, or `(0, 0, false)`
+/// before the first response lands.
+fn sp_result_summary(res: &Option<PaletteResults>) -> (usize, u64, bool) {
     let total = res
         .as_ref()
         .map(omnibus_shared::PaletteResults::total_count)
         .unwrap_or(0);
     let duration = res.as_ref().map(|r| r.duration_ms).unwrap_or(0);
+    (total, duration, res.is_some())
+}
+
+/// Meta line ("N results · Xms") and the fetch-error notice. Distinct from
+/// "no matches": `is_errored` means the request itself failed.
+fn sp_meta_and_error(has_results: bool, total: usize, duration: u64, is_errored: bool) -> Element {
+    rsx! {
+        if has_results {
+            div { class: "sp-meta", "data-testid": "sp-result-count",
+                "{total} result{plural(total)} · {duration}ms"
+            }
+        }
+        if is_errored {
+            p { role: "alert", class: "error", "data-testid": "sp-error",
+                "Couldn\u{2019}t run that search. Check your connection and try again."
+            }
+        }
+    }
+}
+
+/// Floating overlay: dark scrim + centered panel with input, results, footer.
+#[component]
+pub(super) fn SpOverlay(open: PaletteOpen) -> Element {
+    let mut open = open;
+    let server_url = use_server_url();
+    let mut query = use_signal(String::new);
+    let results = use_signal(|| Option::<PaletteResults>::None);
+    let mut selected = use_signal(|| 0_usize);
+    let loading = use_signal(|| false);
+    // Set on a failed search, distinct from "no matches" (mirrors
+    // `search_mobile.rs`'s `errored` signal for the same underlying call).
+    let errored = use_signal(|| false);
+    // Tracks whether the user has driven selection with arrow keys this
+    // session. When false, pressing Enter navigates to the full-page
+    // search results instead of drilling into `selected`.
+    let mut has_navigated = use_signal(|| false);
+    // #126: handle of the in-flight debounce+RPC task — see
+    // `build_search_dispatcher`.
+    let current_task = use_signal(|| Option::<Task>::None);
+    let nav = use_navigator();
+
+    // Build a flat list of selectable items for keyboard navigation.
+    let flat_items = use_memo(move || build_flat_items(&results.read()));
+
+    // Close the palette.
+    let mut close = move || {
+        open.0.set(false);
+    };
+
+    let on_keydown = make_keydown_handler(KeyboardContext {
+        open,
+        selected,
+        has_navigated,
+        flat_items,
+        query,
+        nav,
+    });
+
+    let mut spawn_search = build_search_dispatcher(
+        server_url.clone(),
+        results,
+        selected,
+        loading,
+        errored,
+        current_task,
+    );
+
+    let res = results.read();
+    let is_loading = loading();
+    let is_errored = errored();
+    let (total, duration, has_results) = sp_result_summary(&res);
 
     rsx! {
         div {
@@ -137,21 +172,12 @@ pub(super) fn SpOverlay(open: PaletteOpen) -> Element {
                     },
                 }
 
-                // Meta line
-                if res.is_some() {
-                    div { class: "sp-meta", "data-testid": "sp-result-count",
-                        "{total} result{plural(total)} · {duration}ms"
-                    }
-                }
+                {sp_meta_and_error(has_results, total, duration, is_errored)}
 
-                // Distinct from "no matches": a fetch failure, not an empty
-                // result set.
-                if is_errored {
-                    p { role: "alert", class: "error", "data-testid": "sp-error",
-                        "Couldn\u{2019}t run that search. Check your connection and try again."
-                    }
-                }
-
+                // `has_navigated` gates whether `selected` is projected into
+                // row class names: until the user drives arrow-key selection,
+                // the first row would otherwise render "selected" on every
+                // fresh query (it resets to 0 after each response).
                 SpResultsList {
                     results,
                     flat_items,
