@@ -131,9 +131,7 @@ impl Worker {
                 "suggestions lookup",
                 crate::suggestions::resolve(&self.pool, &book_uuid).await,
             ),
-            Task::KepubConvert { book_id } => {
-                kepub_outcome(crate::kepub::convert_book(&self.pool, book_id).await)
-            }
+            Task::KepubConvert { book_id } => self.handle_kepub_convert(book_id).await,
             Task::SendToKindle {
                 book_id,
                 book_file_id,
@@ -157,6 +155,27 @@ impl Worker {
                 ..
             } => handle_test_task(latency_ms, on_run, on_done).await,
         }
+    }
+
+    /// `Task::KepubConvert` plus the Web→Kobo annotation materialization it
+    /// unblocks. A KoboSpan anchor is derivable only against the converted
+    /// KEPUB, so a highlight written while the cache was cold is left
+    /// unresolved by `downsync_book_annotations` — which requests exactly this
+    /// task on its way out. Running the pass here is what makes that request
+    /// pay off: without it the row waits for the next highlight write or the
+    /// next boot, because an unmaterialized row never moves the wire
+    /// fingerprint that `checkforchanges` uses to invite a re-pull.
+    /// Non-fatal — the conversion itself is the task's contract.
+    async fn handle_kepub_convert(self: &Arc<Self>, book_id: i64) -> TaskOutcome {
+        let outcome = kepub_outcome(crate::kepub::convert_book(&self.pool, book_id).await);
+        if matches!(outcome, TaskOutcome::Ok(_)) {
+            if let Err(e) =
+                crate::annotations::downsync_book_id_annotations(&self.pool, book_id).await
+            {
+                tracing::warn!(book_id, error = %e, "post-conversion annotation downsync failed");
+            }
+        }
+        outcome
     }
 
     /// Reindex an ebook library, then (on success) post the follow-up

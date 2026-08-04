@@ -78,10 +78,11 @@ pub async fn download(
 /// its watermark — and give any web-origin annotation still waiting on a
 /// KEPUB cache one more chance to downsync. Only called once the caller has
 /// confirmed the response actually delivered (or already held) the file;
-/// `downsync_book_annotations` itself still no-ops when the KEPUB cache (or
-/// the source EPUB) isn't on disk, which is routine in the plain-EPUB
-/// fallback path — this call still records the device's download in that
-/// case, just with nothing new to derive. Awaited by the caller, so it adds
+/// `downsync_book_annotations` itself still derives nothing when the KEPUB
+/// cache (or the source EPUB) isn't on disk, which is routine in the
+/// plain-EPUB fallback path — this call still records the device's download
+/// in that case, and the worker handle leaves a conversion queued so the
+/// derivation lands later instead of never. Awaited by the caller, so it adds
 /// latency to the response; kept best-effort and non-fatal regardless, since
 /// annotation bookkeeping must never turn into an error the device retries.
 async fn record_download_state(
@@ -93,7 +94,13 @@ async fn record_download_state(
         return Ok(());
     };
     db::kobo::annotations::mark_downloaded(state.pool(), auth.device_id, &canonical).await?;
-    db::annotations::downsync_book_annotations(state.pool(), auth.user_id, &canonical).await?;
+    db::annotations::downsync_book_annotations(
+        state.pool(),
+        Some(state.worker()),
+        auth.user_id,
+        &canonical,
+    )
+    .await?;
     Ok(())
 }
 

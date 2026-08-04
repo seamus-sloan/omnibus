@@ -108,8 +108,20 @@ Omnibus automatically and appear in the web reader. Highlights created **in
 the web reader** are converted into device-placeable anchors and delivered to
 the Kobo on its next sync — recolors, note edits, and deletes follow.
 
-A web highlight only converts when the book's KEPUB copy and its source EPUB
-still carry the same text — a conversion that can't be proven correct is
+A web highlight is anchored against the book's converted KEPUB copy, so that
+copy has to exist before the highlight can be placed. It is built on demand
+and cached; when it is missing, Omnibus queues the conversion itself and
+materializes the pending highlights as soon as it lands. Nothing is lost in
+the meantime — the highlight stays web-only until the anchor can be derived.
+
+Two things can stop that: `kepubify` not being installed (see [If the
+download is a plain `.epub`](#if-the-download-is-a-plain-epub)), and the
+book's source file being unreachable when the conversion runs — a library on
+a network share that isn't mounted, for example. Both retry on the next
+highlight you make on that book, and on every server restart.
+
+Even with the KEPUB in hand, a highlight only converts when it and the source
+EPUB still carry the same text — a conversion that can't be proven correct is
 skipped (the highlight simply stays web-only) rather than placed somewhere
 wrong.
 
