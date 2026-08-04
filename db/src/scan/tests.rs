@@ -13,12 +13,13 @@ use sqlx::SqlitePool;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::*;
 use crate::metadata_lookup::{MetadataLookupConfig, MetadataLookupError, ProviderKeys};
 use crate::normalize::{normalize_author, normalize_title};
 use crate::physical::{
     add_physical_copy, add_wishlist_entry, list_physical_copies, list_wishlist, PhysicalError,
 };
+
+use super::*;
 
 const ISBN: &str = "9780134685991";
 

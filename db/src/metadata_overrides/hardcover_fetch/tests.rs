@@ -7,10 +7,11 @@ use serde_json::json;
 use wiremock::matchers::{body_string_contains, method};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::{fetch_hardcover_metadata, fetch_hardcover_metadata_with};
 use crate::pool::init_db;
 use crate::suggestions::hardcover::{fetch_book_details, HardcoverConfig};
 use crate::test_support::{seed_synced_ebook, EnvVarGuard};
+
+use super::{fetch_hardcover_metadata, fetch_hardcover_metadata_with};
 
 fn config_for(server: &MockServer) -> HardcoverConfig {
     HardcoverConfig {
