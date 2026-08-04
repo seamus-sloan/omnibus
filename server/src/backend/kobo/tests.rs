@@ -1140,6 +1140,67 @@ async fn download_bakes_a_metadata_override_into_the_plain_epub_fallback() {
     std::fs::remove_dir_all(&tmp).ok();
 }
 
+/// #1647 (AC2): a web-origin highlight created before the device ever
+/// downloaded the book sits un-downsynced (`kobo_location` still `NULL` —
+/// nothing had a kepub cache to derive against). Downloading the book must
+/// materialize it and make the pair checkforchanges-reportable in the same
+/// request, with no remove-and-re-download dance.
+#[tokio::test]
+async fn download_records_holding_the_book_and_materializes_a_pending_web_highlight() {
+    let (app, pool, token, uid) = fixture().await;
+    let (uuid, _guard, _lib) = seed_book_with_kepub_cache(&pool, "ac2", true).await;
+    let device_id = db::kobo_devices::resolve_device_by_token(&pool, &token)
+        .await
+        .unwrap()
+        .unwrap()
+        .device_id;
+
+    db::annotations::create_highlight(
+        &pool,
+        uid,
+        &omnibus_shared::CreateHighlight {
+            book_uuid: uuid.clone(),
+            epub_cfi_range: "epubcfi(/6/2!/4/4,/1:0,/1:29)".into(),
+            color: omnibus_shared::HighlightColor::Green,
+            text: Some("Second paragraph target text.".into()),
+            client_id: Some("web-ac2".into()),
+        },
+    )
+    .await
+    .unwrap();
+
+    // Nothing to serve yet — the highlight has no `kobo_location`, and this
+    // device hasn't downloaded the book.
+    assert!(db::annotations::served_kobo_annotations(&pool, uid, &uuid)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(
+        db::kobo::annotations::changed_book_uuids(&pool, uid, device_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/download/{uuid}")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let served = db::annotations::served_kobo_annotations(&pool, uid, &uuid)
+        .await
+        .unwrap();
+    assert_eq!(served.len(), 1, "download materialized the pending row");
+    assert_eq!(
+        db::kobo::annotations::changed_book_uuids(&pool, uid, device_id)
+            .await
+            .unwrap(),
+        vec![uuid],
+        "the download-state row makes the pair reportable without a PATCH"
+    );
+}
+
 #[tokio::test]
 async fn library_tags_returns_an_empty_collection() {
     let (app, _pool, token, _uid) = fixture().await;

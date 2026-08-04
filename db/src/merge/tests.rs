@@ -895,6 +895,14 @@ async fn merge_retargets_kobo_annotation_sync_state_preferring_the_targets_row()
     let source_only = crate::kobo_devices::create_device(&pool, user, "Tracks source")
         .await
         .unwrap();
+    // ack_served (#1647) only sticks for a book the device is on record as
+    // holding — seed that first so these rows exist to retarget.
+    crate::kobo::annotations::mark_downloaded(&pool, both.id, &target)
+        .await
+        .unwrap();
+    crate::kobo::annotations::mark_downloaded(&pool, both.id, &source)
+        .await
+        .unwrap();
     crate::kobo::annotations::ack_served(&pool, both.id, &target, "fp-target")
         .await
         .unwrap();

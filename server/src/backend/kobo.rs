@@ -502,7 +502,7 @@ async fn get_state(
 /// cached), falling back to plain EPUB when kepubify is absent, conversion
 /// fails, or it exceeds [`KEPUB_CONVERT_BUDGET`]. Streamed with range support.
 async fn download(
-    _auth: KoboAuthUser,
+    auth: KoboAuthUser,
     State(state): State<AppState>,
     Path((_token, uuid)): Path<(String, String)>,
     req: Request,
@@ -515,6 +515,9 @@ async fn download(
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(e) => return internal("kobo resolve_book_id_by_uuid", e),
     };
+    if let Err(e) = record_download_state(&state, &auth, &uuid).await {
+        tracing::warn!(error = %e, "kobo download-state record failed");
+    }
     let path = if kepub_ready(&state, id).await {
         db::kepub_path(id)
     } else {
@@ -529,6 +532,25 @@ async fn download(
         super::ebooks::rewritten_or_source(&state, id, source).await
     };
     serve_download(req, &path, "application/epub+zip").await
+}
+
+/// Record that `auth`'s device now holds this book (#1647) — the gate
+/// `ack_served` checks before letting a later `GET .../annotations` advance
+/// its watermark — and materialize any web-origin annotations still waiting
+/// on this book's kepub cache, which this download just guaranteed exists.
+/// Best-effort and non-fatal: annotation bookkeeping must never block the
+/// KEPUB response the device is actually waiting on.
+async fn record_download_state(
+    state: &AppState,
+    auth: &KoboAuthUser,
+    uuid: &str,
+) -> anyhow::Result<()> {
+    let Some(canonical) = db::resolve_canonical_book_uuid(state.pool(), uuid).await? else {
+        return Ok(());
+    };
+    db::kobo::annotations::mark_downloaded(state.pool(), auth.device_id, &canonical).await?;
+    db::annotations::downsync_book_annotations(state.pool(), auth.user_id, &canonical).await?;
+    Ok(())
 }
 
 /// `PUT library/<uuid>/state` — persist the device's reading state.
