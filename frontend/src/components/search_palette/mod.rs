@@ -11,6 +11,7 @@ mod model;
 mod overlay;
 mod results;
 
+use crate::components::glyphs::search_glyph;
 use overlay::SpOverlay;
 
 /// Whether the search palette overlay is open. Registered at the App level
@@ -81,20 +82,7 @@ fn SpTriggerButton(open: PaletteOpen) -> Element {
             "data-testid": "search-trigger",
             r#type: "button",
             onclick: move |_| open.0.set(true),
-            // Search icon (SVG magnifying glass)
-            svg {
-                class: "sp-trigger-icon",
-                width: "15",
-                height: "15",
-                view_box: "0 0 24 24",
-                fill: "none",
-                stroke: "currentColor",
-                stroke_width: "2",
-                stroke_linecap: "round",
-                stroke_linejoin: "round",
-                circle { cx: "11", cy: "11", r: "8" }
-                line { x1: "21", y1: "21", x2: "16.65", y2: "16.65" }
-            }
+            {search_glyph(15, "sp-trigger-icon", false)}
             span { "Search" }
             kbd { class: "sp-trigger-kbd", "⌘K" }
         }

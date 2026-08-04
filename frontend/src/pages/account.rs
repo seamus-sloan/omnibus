@@ -17,6 +17,8 @@ mod kobo;
 #[cfg(not(feature = "mobile"))]
 use crate::components::auth::{score_password, PasswordRequirements, StrengthMeter};
 #[cfg(not(feature = "mobile"))]
+use crate::components::credential_card::credential_status_message;
+#[cfg(not(feature = "mobile"))]
 use crate::{data, use_server_url};
 
 #[cfg(feature = "mobile")]
@@ -337,14 +339,7 @@ fn kindle_account_body(embedded: bool) -> Element {
                 if connected { "A Kindle email is configured." } else { "No Kindle email configured yet." }
             }
 
-            if let Some(m) = (signals.msg)() {
-                p {
-                    role: "status",
-                    "data-testid": "kindle-email-status",
-                    class: if (signals.msg_is_error)() { "settings-status error" } else { "settings-status success" },
-                    "{m}"
-                }
-            }
+            {credential_status_message("kindle-email-status", (signals.msg)().as_deref(), (signals.msg_is_error)())}
         }
 
         ChangePasswordCard {}
@@ -457,14 +452,7 @@ fn ChangePasswordCard() -> Element {
                 }
             }
 
-            if let Some(m) = msg() {
-                p {
-                    role: "status",
-                    "data-testid": "change-password-status",
-                    class: if msg_is_error() { "settings-status error" } else { "settings-status success" },
-                    "{m}"
-                }
-            }
+            {credential_status_message("change-password-status", msg().as_deref(), msg_is_error())}
         }
     }
 }

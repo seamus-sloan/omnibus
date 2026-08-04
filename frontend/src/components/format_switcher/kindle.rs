@@ -114,22 +114,7 @@ pub fn SendToKindleButton(
             },
             if in_flight() { "Sending\u{2026}" } else { "Send to Kindle" }
         }
-        if let Some((is_error, message)) = result() {
-            div { class: "kindle-toast card", role: "status",
-                span {
-                    "data-testid": "kindle-send-status",
-                    class: if is_error { "kindle-toast-msg error" } else { "kindle-toast-msg success" },
-                    "{message}"
-                }
-                button {
-                    class: "btn ghost sm",
-                    "data-testid": "kindle-toast-dismiss",
-                    aria_label: "Dismiss",
-                    onclick: move |_| result.set(None),
-                    "\u{00d7}"
-                }
-            }
-        }
+        {super::send_result_toast("kindle", result)}
     }
 }
 

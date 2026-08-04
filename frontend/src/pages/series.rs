@@ -6,7 +6,7 @@ use dioxus_router::Link;
 use omnibus_shared::{EbookMetadata, SeriesDetail};
 
 use crate::components::atrium::Cover;
-use crate::components::{PageError, PageLoading, PageNotFound};
+use crate::components::{disc_back_link, PageError, PageLoading, PageNotFound};
 use crate::{data, use_server_url, Route};
 
 /// Renders the series discovery page.
@@ -89,16 +89,7 @@ fn series_header(s: &SeriesDetail) -> Element {
     };
     rsx! {
         div { class: "disc-series-header",
-            // Mobile-only (CSS-gated via `.screen`) back affordance to the
-            // series index. Same markup on every target so the web
-            // SSR/WASM trees stay identical (rule 07).
-            Link {
-                to: Route::SeriesIndex {},
-                class: "m-icon-btn disc-back",
-                "aria-label": "Back to series",
-                "data-testid": "series-back",
-                "\u{2190}"
-            }
+            {disc_back_link(Route::SeriesIndex {}, "Back to series", "series-back")}
             div { class: "disc-series-head-row",
                 div {
                     span { class: "label", "Series · {s.book_count} in library" }

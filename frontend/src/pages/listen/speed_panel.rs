@@ -14,6 +14,7 @@ use omnibus_shared::{
 };
 
 use super::helpers::{apply_rate, RATE_STEP as STEP};
+use super::panel_shell::ListenPanelShell;
 
 const PRESETS: &[f64] = &[0.5, 0.8, 1.0, 1.1, 1.2, 1.5, 1.8, 2.0];
 
@@ -27,12 +28,9 @@ pub(super) fn SpeedPanel(
     on_close: EventHandler<()>,
 ) -> Element {
     rsx! {
-        div {
-            class: "lp-scrim",
-            onclick: move |_| on_close.call(()),
-        }
-
-        div { class: "lp-panel lp-speed-panel",
+        ListenPanelShell {
+            extra_class: "lp-speed-panel",
+            on_close,
             SpeedPanelBody { rate, rate_error, user_id, uuid }
         }
     }

@@ -33,6 +33,8 @@ mod mobile;
 #[cfg(not(feature = "mobile"))]
 mod overlays;
 #[cfg(not(feature = "mobile"))]
+mod panel_shell;
+#[cfg(not(feature = "mobile"))]
 mod ready_player;
 #[cfg(not(feature = "mobile"))]
 mod sleep;

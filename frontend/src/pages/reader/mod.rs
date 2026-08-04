@@ -11,6 +11,7 @@ mod annotations_sheet;
 mod bootstrap;
 mod chrome;
 mod chrome_handlers;
+mod drawer_shell;
 mod highlights;
 mod highlights_drawer;
 #[cfg(feature = "web")]

@@ -4,6 +4,8 @@
 
 use dioxus::prelude::*;
 
+use super::drawer_shell::ReaderDrawerShell;
+
 /// One flattened table-of-contents entry from the glue. `level` is the
 /// nesting depth (0 = top) used to indent nested chapters.
 #[derive(Clone, Default, PartialEq, serde::Deserialize)]
@@ -26,22 +28,15 @@ pub(super) fn TocDrawer(
     on_close: EventHandler<()>,
 ) -> Element {
     rsx! {
-        div { class: "rd-scrim", onclick: move |_| on_close.call(()) }
-        div { class: "rd-drawer", "data-testid": "reader-toc-drawer",
-            div { class: "rd-grabber" }
-            div { class: "rd-drawer-head",
+        ReaderDrawerShell {
+            testid: "reader-toc-drawer",
+            on_close,
+            head: rsx! {
                 h4 { class: "rd-drawer-title", "Contents" }
                 if !progress_label.is_empty() {
                     span { class: "rd-drawer-sub", "{progress_label}" }
                 }
-                button {
-                    class: "rd-x",
-                    r#type: "button",
-                    "aria-label": "Close",
-                    onclick: move |_| on_close.call(()),
-                    "\u{00d7}"
-                }
-            }
+            },
             div { class: "rd-drawer-body",
                 if entries.is_empty() {
                     div { class: "rd-drawer-empty", "No table of contents." }

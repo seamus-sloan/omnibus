@@ -1,6 +1,8 @@
 //! Small display formatters shared across surfaces that render `book_files`
-//! — the hero's file picker and the admin delete dialog. Pure functions, no
-//! Dioxus, so they unit-test without a renderer.
+//! — the hero's file picker and the admin delete dialog — plus [`plural`], a
+//! trivial pluralizer reused by the desktop and mobile search result
+//! summaries. Pure functions, no Dioxus, so they unit-test without a
+//! renderer.
 
 use omnibus_shared::BookFileInfo;
 
@@ -34,6 +36,15 @@ pub fn file_label(file: &BookFileInfo) -> String {
         .map(str::to_string)
         .unwrap_or_else(|| format!("Part {}", file.ordinal + 1));
     format!("{} \u{b7} {label}", file.format.to_uppercase())
+}
+
+/// Pluralizing suffix for a count: `""` for exactly one, `"s"` otherwise.
+pub fn plural(n: u32) -> &'static str {
+    if n == 1 {
+        ""
+    } else {
+        "s"
+    }
 }
 
 #[cfg(test)]
@@ -79,5 +90,12 @@ mod tests {
     fn file_label_falls_back_to_a_one_based_part_number() {
         assert_eq!(file_label(&file("mp3", 1, None)), "MP3 · Part 2");
         assert_eq!(file_label(&file("mp3", 1, Some("  "))), "MP3 · Part 2");
+    }
+
+    #[test]
+    fn plural_matches_count() {
+        assert_eq!(plural(0), "s");
+        assert_eq!(plural(1), "");
+        assert_eq!(plural(2), "s");
     }
 }

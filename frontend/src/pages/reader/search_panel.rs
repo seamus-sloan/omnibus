@@ -4,6 +4,8 @@
 
 use dioxus::prelude::*;
 
+use super::drawer_shell::ReaderDrawerShell;
+
 /// One search match from the glue.
 #[derive(Clone, Default, PartialEq, serde::Deserialize)]
 pub(crate) struct SearchResult {
@@ -26,21 +28,15 @@ pub(super) fn SearchPanel(
     let has_query = !query.read().trim().is_empty();
 
     rsx! {
-        div { class: "rd-scrim", onclick: move |_| on_close.call(()) }
-        // `rd-search-drawer` lets the phone breakpoint take this one drawer
-        // full-screen while the rest stay bottom sheets.
-        div { class: "rd-drawer rd-search-drawer", "data-testid": "reader-search-drawer",
-            div { class: "rd-grabber" }
-            div { class: "rd-drawer-head",
+        ReaderDrawerShell {
+            testid: "reader-search-drawer",
+            // Lets the phone breakpoint take this one drawer full-screen
+            // while the rest stay bottom sheets.
+            extra_class: "rd-search-drawer",
+            on_close,
+            head: rsx! {
                 h4 { class: "rd-drawer-title", "Search" }
-                button {
-                    class: "rd-x",
-                    r#type: "button",
-                    "aria-label": "Close",
-                    onclick: move |_| on_close.call(()),
-                    "\u{00d7}"
-                }
-            }
+            },
             div { class: "rd-search-box",
                 input {
                     class: "rd-search-input",

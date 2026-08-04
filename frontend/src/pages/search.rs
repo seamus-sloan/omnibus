@@ -10,6 +10,7 @@ use omnibus_shared::{
     PaletteAuthorHit, PaletteBookHit, PaletteResults, PaletteSeriesHit, PaletteTagHit,
 };
 
+use crate::format::plural;
 use crate::{data, use_server_url, Route};
 
 /// Renders the full-page search results for the given query.
@@ -542,25 +543,10 @@ fn summary_line(r: &PaletteResults) -> String {
     parts.join(" \u{00b7} ")
 }
 
-fn plural(n: u32) -> &'static str {
-    if n == 1 {
-        ""
-    } else {
-        "s"
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use omnibus_shared::{PaletteAuthorHit, PaletteBookHit, PaletteResults};
-
-    #[test]
-    fn plural_matches_count() {
-        assert_eq!(plural(0), "s");
-        assert_eq!(plural(1), "");
-        assert_eq!(plural(2), "s");
-    }
 
     #[test]
     fn total_count_sums_per_category_totals_not_capped_lengths() {

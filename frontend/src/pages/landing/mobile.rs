@@ -9,6 +9,7 @@ use dioxus_router::Link;
 use omnibus_shared::{EbookMetadata, ProgressFormat, ResumePoint, ViewPrefs};
 
 use crate::components::atrium::Cover;
+use crate::components::cover_tile::thumb_srcs;
 use crate::Route;
 
 use super::mobile_filter_sheet::{dir_arrow, sort_pill_label, MobileSortFilterSheet};
@@ -175,6 +176,7 @@ fn render_mobile_grid(
     has_more: bool,
     books: Vec<EbookMetadata>,
     server_url: String,
+    cover_bust: Signal<std::collections::HashMap<String, u32>>,
     on_load_more: EventHandler<()>,
 ) -> Element {
     if is_loading && books.is_empty() {
@@ -185,7 +187,7 @@ fn render_mobile_grid(
     rsx! {
         div { class: "m-cover-grid", "data-testid": "mobile-lib-grid", role: "list",
             for book in books.into_iter() {
-                {cover_cell(book, &server_url)}
+                {cover_cell(book, &server_url, cover_bust)}
             }
         }
         if has_more {
@@ -222,6 +224,7 @@ pub(super) fn MobileLanding(props: MobileLandingProps) -> Element {
 
     let mut sheet_open = use_signal(|| false);
     let resume = use_resume_point(server_url.clone());
+    let cover_bust = crate::contexts::use_cover_cache_bust().0;
 
     let pill_label = sort_pill_label(prefs.sort_key);
     let pill_arrow = dir_arrow(prefs.sort_dir);
@@ -246,7 +249,7 @@ pub(super) fn MobileLanding(props: MobileLandingProps) -> Element {
             {render_mobile_title_row(book_count, pill_label, pill_arrow, filter_count, sheet_open)}
 
             if let Some(point) = resume() {
-                {resume_card(&point, &server_url)}
+                {resume_card(&point, &server_url, cover_bust)}
             }
 
             Link {
@@ -261,7 +264,7 @@ pub(super) fn MobileLanding(props: MobileLandingProps) -> Element {
                 span { class: "m-shelves-entry-chevron", {chevron()} }
             }
 
-            {render_mobile_grid(is_loading, is_loading_more, has_more, books, server_url.clone(), on_load_more)}
+            {render_mobile_grid(is_loading, is_loading_more, has_more, books, server_url.clone(), cover_bust, on_load_more)}
 
             if sheet_open() {
                 MobileSortFilterSheet {
@@ -278,7 +281,11 @@ pub(super) fn MobileLanding(props: MobileLandingProps) -> Element {
 /// The "Pick up where you left off" card: cover, title/author, progress
 /// meta line and bar, and a play affordance. Tapping resumes in the right
 /// surface for the row's format (player for audio, reader for epub).
-fn resume_card(point: &ResumePoint, server_url: &str) -> Element {
+fn resume_card(
+    point: &ResumePoint,
+    server_url: &str,
+    cover_bust: Signal<std::collections::HashMap<String, u32>>,
+) -> Element {
     let uuid = point.record.book_uuid.clone();
     let book = point.book.clone();
     let title = book.title.as_deref().unwrap_or(&book.filename).to_string();
@@ -290,7 +297,8 @@ fn resume_card(point: &ResumePoint, server_url: &str) -> Element {
     let is_audio = point.record.format == ProgressFormat::Audio;
     let to = crate::routes::resume_route(point);
     let (meta, pct) = resume_meta(point);
-    let (src, _srcset) = thumb_srcs(&book, &uuid, server_url);
+    let bust = crate::contexts::cover_bust_for(cover_bust, &uuid);
+    let (src, _srcset) = thumb_srcs(&book, &uuid, server_url, bust);
 
     rsx! {
         div {
@@ -334,7 +342,11 @@ fn resume_card(point: &ResumePoint, server_url: &str) -> Element {
 /// One cover cell: cover art + title + author, linking to the detail page.
 /// A plain fn (rendered per book) — no hooks, so it can't perturb the parent's
 /// hook order. Shared with the mobile shelf-detail grid.
-pub(crate) fn cover_cell(book: EbookMetadata, server_url: &str) -> Element {
+pub(crate) fn cover_cell(
+    book: EbookMetadata,
+    server_url: &str,
+    cover_bust: Signal<std::collections::HashMap<String, u32>>,
+) -> Element {
     let uuid = book.unique_identifier.clone().unwrap_or_default();
     let title = book.title.as_deref().unwrap_or(&book.filename).to_string();
     let author = book
@@ -342,7 +354,8 @@ pub(crate) fn cover_cell(book: EbookMetadata, server_url: &str) -> Element {
         .first()
         .map(|c| c.name.clone())
         .unwrap_or_default();
-    let (src, srcset) = thumb_srcs(&book, &uuid, server_url);
+    let bust = crate::contexts::cover_bust_for(cover_bust, &uuid);
+    let (src, srcset) = thumb_srcs(&book, &uuid, server_url, bust);
 
     rsx! {
         Link {
@@ -406,26 +419,6 @@ pub(crate) fn DownloadedBadge(uuid: String) -> Element {
                 path { d: "M20 6L9 17l-5-5" }
             }
         }
-    }
-}
-
-/// Responsive thumbnail `src`/`srcset` for a book (mirrors the web grid).
-fn thumb_srcs(
-    book: &EbookMetadata,
-    uuid: &str,
-    server_url: &str,
-) -> (Option<String>, Option<String>) {
-    if book.cover_url.is_some() {
-        // `thumb_url` appends the mobile `?token=` an `<img>` fetch needs (see `contexts::media_url`).
-        let sm = crate::thumb_url(server_url, uuid, "sm");
-        let md = crate::thumb_url(server_url, uuid, "md");
-        let lg = crate::thumb_url(server_url, uuid, "lg");
-        (
-            Some(md.clone()),
-            Some(format!("{sm} 160w, {md} 320w, {lg} 640w")),
-        )
-    } else {
-        (None, None)
     }
 }
 
