@@ -87,4 +87,19 @@ struct PositionPushThrottleTests {
         var throttle = PositionPushThrottle(interval: 5, suppressFirst: false)
         #expect(throttle.shouldPush(force: false, now: epoch) == true)
     }
+
+    @Test("a forced call before any relocate still clears the suppression")
+    func forcedFirstCallDoesNotLeaveSuppressionArmed() {
+        // A background/close can race ahead of the restore echo — the reader
+        // opens and is immediately backgrounded before epub.js ever posts a
+        // relocate. That forced call must still count as "the first decision
+        // has been made": a later, unrelated non-forced relocate is governed
+        // by the interval alone, not left suppressed forever because the
+        // echo it was meant to catch never actually arrived through here.
+        var throttle = PositionPushThrottle(interval: 4)
+        #expect(throttle.shouldPush(force: true, now: epoch) == true)
+        // Long past the window, so this is unambiguously a normal push, not
+        // a suppressed one — pinning the regression this test guards.
+        #expect(throttle.shouldPush(force: false, now: epoch.addingTimeInterval(10)) == true)
+    }
 }

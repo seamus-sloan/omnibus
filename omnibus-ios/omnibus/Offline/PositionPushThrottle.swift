@@ -35,9 +35,17 @@ struct PositionPushThrottle {
     }
 
     /// Whether the caller should also push over the network right now.
+    ///
+    /// The first decision always clears `suppressNext`, whether or not it was
+    /// forced — a forced call (a background/close racing ahead of any
+    /// relocate) still means the echo has been "seen" and must not go on
+    /// suppressing a later, unrelated non-forced relocate. Only a first
+    /// decision that was itself non-forced takes the early-suppress return;
+    /// a forced first call falls through to the normal push logic below.
     mutating func shouldPush(force: Bool, now: Date = Date()) -> Bool {
-        if suppressNext, !force {
-            suppressNext = false
+        let wasSuppressed = suppressNext
+        suppressNext = false
+        if wasSuppressed, !force {
             return false
         }
         guard force || now.timeIntervalSince(lastPush) > interval else { return false }
