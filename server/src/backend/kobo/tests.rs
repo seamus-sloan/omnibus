@@ -1402,6 +1402,169 @@ async fn get_state_derives_a_kobospan_from_a_web_cfi_when_the_kepub_is_cached() 
     assert_eq!(bookmark["Location"]["Type"], "KoboSpan");
 }
 
+/// Pin a book's read-status and progress clocks to known, distinct instants.
+/// `set_read_status` / `upsert_progress` stamp server-now, which no assertion
+/// on an exact wire timestamp can name.
+async fn pin_state_clocks(
+    pool: &SqlitePool,
+    user_id: i64,
+    uuid: &str,
+    status_at: i64,
+    progress_at: i64,
+) {
+    db::read_status::set_read_status(
+        pool,
+        user_id,
+        &omnibus_shared::SetReadStatus {
+            book_uuid: uuid.to_owned(),
+            status: ReadStatus::Reading,
+        },
+    )
+    .await
+    .unwrap();
+    sqlx::query("UPDATE book_read_status SET updated_at = ? WHERE user_id = ? AND book_uuid = ?")
+        .bind(status_at)
+        .bind(user_id)
+        .bind(uuid)
+        .execute(pool)
+        .await
+        .unwrap();
+    db::progress::upsert_progress(
+        pool,
+        user_id,
+        &omnibus_shared::ProgressUpdate {
+            book_uuid: uuid.to_owned(),
+            format: omnibus_shared::ProgressFormat::Epub,
+            epub_cfi: Some("epubcfi(/6/2!/4/4/1:0)".into()),
+            audio_position_seconds: None,
+            progress_percent: Some(58),
+            // Already-enriched row: a present anchor keeps the sync-out span
+            // derivation (and its clock-neutral write-back) out of the way.
+            kobo_location: Some(
+                r#"{"Source":"c1.xhtml","Type":"KoboSpan","Value":"kobo.2.1"}"#.into(),
+            ),
+            book_file_id: None,
+            client_updated_at: Some(progress_at),
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn get_state_stamps_the_bookmark_clock_so_the_device_can_adopt_a_web_position() {
+    // The regression this exists for: the device arbitrates the served
+    // bookmark against its own by `CurrentBookmark.LastModified`, so an
+    // unstamped one always loses and a web-side position never lands.
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    pin_state_clocks(&pool, uid, &uuid, 1_700_000_000, 1_700_001_000).await;
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/library/{uuid}/state")))
+        .await
+        .unwrap();
+    let states = body_json(res).await;
+    let state = &states.as_array().expect("array of one state")[0];
+
+    // 1_700_001_000 → the progress row's own event time, not server-now.
+    assert_eq!(
+        state["CurrentBookmark"]["LastModified"],
+        "2023-11-14T22:30:00Z"
+    );
+}
+
+#[tokio::test]
+async fn get_state_stamps_the_status_clock_independently_of_the_bookmark_clock() {
+    // Each sub-object is reconciled against its own device-side clock, so
+    // the MAXed envelope value must not stand in for either: reporting it as
+    // the status clock would claim the status moved every time only the
+    // position did.
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    pin_state_clocks(&pool, uid, &uuid, 1_700_000_000, 1_700_001_000).await;
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/library/{uuid}/state")))
+        .await
+        .unwrap();
+    let states = body_json(res).await;
+    let state = &states.as_array().expect("array of one state")[0];
+
+    assert_eq!(state["StatusInfo"]["LastModified"], "2023-11-14T22:13:20Z");
+    assert_eq!(
+        state["CurrentBookmark"]["LastModified"],
+        "2023-11-14T22:30:00Z"
+    );
+    // The envelope carries the newer of the two, and PriorityTimestamp
+    // mirrors it.
+    assert_eq!(state["LastModified"], "2023-11-14T22:30:00Z");
+    assert_eq!(state["PriorityTimestamp"], "2023-11-14T22:30:00Z");
+}
+
+#[tokio::test]
+async fn get_state_leaves_an_untouched_books_clocks_unstamped() {
+    // A book with no state must not carry an invented bookmark time: an
+    // empty bookmark has to lose arbitration, not win it at the epoch.
+    let (app, pool, token, _uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/library/{uuid}/state")))
+        .await
+        .unwrap();
+    let states = body_json(res).await;
+    let state = &states.as_array().expect("array of one state")[0];
+
+    assert!(state["StatusInfo"]["LastModified"].is_null());
+    assert!(state["CurrentBookmark"]["LastModified"].is_null());
+    assert_eq!(state["StatusInfo"]["Status"], "ReadyToRead");
+}
+
+#[tokio::test]
+async fn library_sync_stamps_the_reading_state_clocks_on_a_new_entitlement() {
+    // Same payload, second delivery path — the device adopts position from
+    // either, so both must carry the arbitration clocks.
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    opt_in(&pool, uid, std::slice::from_ref(&uuid)).await;
+    pin_state_clocks(&pool, uid, &uuid, 1_700_000_000, 1_700_001_000).await;
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
+        .await
+        .unwrap();
+    let json = body_json(res).await;
+    let rs = &json.as_array().unwrap()[0]["NewEntitlement"]["ReadingState"];
+
+    assert_eq!(
+        rs["CurrentBookmark"]["LastModified"],
+        "2023-11-14T22:30:00Z"
+    );
+    assert_eq!(rs["StatusInfo"]["LastModified"], "2023-11-14T22:13:20Z");
+    assert_eq!(rs["PriorityTimestamp"], "2023-11-14T22:30:00Z");
+}
+
+#[tokio::test]
+async fn put_state_still_accepts_a_status_info_without_a_last_modified() {
+    // `StatusInfo` is shared between the sync-out response and the inbound
+    // PUT; the field added for the former must stay optional for the latter,
+    // which real firmware does not always send.
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+    let body = serde_json::json!({
+        "ReadingStates": [{ "StatusInfo": { "Status": "Finished" } }]
+    });
+
+    let res = app.oneshot(state_put(&token, &uuid, body)).await.unwrap();
+
+    assert_eq!(res.status(), StatusCode::OK);
+    let stored = db::read_status::get_read_status(&pool, uid, &uuid)
+        .await
+        .unwrap();
+    assert_eq!(stored.map(|s| s.status), Some(ReadStatus::Finished));
+}
+
 #[tokio::test]
 async fn get_state_returns_404_for_an_unknown_book() {
     let (app, _pool, token, _uid) = fixture().await;

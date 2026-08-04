@@ -156,6 +156,9 @@ pub struct ReadingState {
     pub entitlement_id: String,
     pub created: String,
     pub last_modified: String,
+    /// Mirrors [`Self::last_modified`] — calibre-web's implementation notes
+    /// the two are always equal on a real store response.
+    pub priority_timestamp: String,
     pub status_info: StatusInfo,
     pub current_bookmark: CurrentBookmark,
 }
@@ -165,6 +168,11 @@ pub struct ReadingState {
 pub struct StatusInfo {
     /// `ReadyToRead` | `Reading` | `Finished`.
     pub status: String,
+    /// When the status last moved. `Option` for the inbound PUT (firmware
+    /// need not send it); always stamped on sync-out, where the device
+    /// arbitrates it against its own status clock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_modified: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -180,8 +188,11 @@ pub struct CurrentBookmark {
     /// same sentence (#925).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<serde_json::Value>,
-    /// Device-stamped bookmark time. Parsed for freshness arbitration on
-    /// the state PUT; never serialized on sync-out (wire shape unchanged).
+    /// The bookmark's own event time — the field the device arbitrates
+    /// against its local bookmark, keeping whichever is newer. Stamped on
+    /// **both** directions: parsed for freshness on the state PUT, and
+    /// emitted on sync-out, without which a server position can never win
+    /// and the device silently keeps its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_modified: Option<String>,
 }
@@ -219,20 +230,29 @@ pub fn new_entitlement(
 /// The device-facing reading state for one book: real status and position when
 /// the user has any, an untouched book's defaults otherwise.
 ///
-/// `last_modified` is the **state's own** event time (`state_updated_at`),
-/// not the book's file mtime — the device compares it against its local
-/// state to decide whether to adopt the server's position, so a stale or
-/// unrelated timestamp would break that arbitration. `book_ts` is only the
-/// fallback for a book with no state at all.
+/// The device reconciles `StatusInfo` and `CurrentBookmark` **independently**,
+/// each against the matching clock it already holds, so every one of the three
+/// timestamps here is load-bearing: the envelope's own `state_updated_at`, the
+/// status row's clock, and the progress row's clock. An unstamped sub-object
+/// loses that comparison to whatever the device has and is silently dropped —
+/// which is exactly how a web-side position failed to reach a Kobo. `book_ts`
+/// is only the fallback for a book with no state at all.
+///
+/// A zero clock means "no such row" and stays unstamped rather than becoming
+/// `1970-01-01`: an empty bookmark must lose arbitration, not win it with a
+/// timestamp we invented.
 pub fn reading_state(uuid: &str, book_ts: &str, state: Option<&KoboBookState>) -> ReadingState {
+    let last_modified = state
+        .map(|s| rfc3339(s.state_updated_at))
+        .unwrap_or_else(|| book_ts.to_owned());
     ReadingState {
         entitlement_id: uuid.to_owned(),
         created: book_ts.to_owned(),
-        last_modified: state
-            .map(|s| rfc3339(s.state_updated_at))
-            .unwrap_or_else(|| book_ts.to_owned()),
+        priority_timestamp: last_modified.clone(),
+        last_modified,
         status_info: StatusInfo {
             status: kobo_status(state).to_owned(),
+            last_modified: state.and_then(|s| stamp(s.status_updated_at)),
         },
         current_bookmark: state
             .map(|s| CurrentBookmark {
@@ -244,10 +264,16 @@ pub fn reading_state(uuid: &str, book_ts: &str, state: Option<&KoboBookState>) -
                     .kobo_location
                     .as_deref()
                     .and_then(|raw| serde_json::from_str(raw).ok()),
-                last_modified: None,
+                last_modified: stamp(s.progress_updated_at),
             })
             .unwrap_or_default(),
     }
+}
+
+/// Format a sub-object clock, treating the `0` sentinel (no such row) as
+/// unstamped rather than as the Unix epoch.
+fn stamp(epoch: i64) -> Option<String> {
+    (epoch > 0).then(|| rfc3339(epoch))
 }
 
 /// Map the internal read status onto the device's vocabulary. `Unread` is
@@ -328,9 +354,13 @@ fn removed_entitlement(book_uuid: &str) -> SyncItem {
         reading_state: ReadingState {
             entitlement_id: uuid,
             created: ts.clone(),
+            priority_timestamp: ts.clone(),
             last_modified: ts,
             status_info: StatusInfo {
                 status: "ReadyToRead".to_owned(),
+                // The archive carries no state to arbitrate — `IsRemoved`
+                // is the whole message.
+                last_modified: None,
             },
             current_bookmark: CurrentBookmark::default(),
         },

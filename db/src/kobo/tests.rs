@@ -449,6 +449,97 @@ async fn reading_state_for_returns_status_and_position_per_book() {
 }
 
 #[tokio::test]
+async fn reading_state_for_reports_the_status_and_progress_clocks_separately() {
+    // Kobo sync-out stamps `StatusInfo` and `CurrentBookmark` from their own
+    // rows, so each clock has to survive the join un-MAXed — the envelope's
+    // `state_updated_at` is the only value allowed to merge them.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = make_user(&pool, "reader").await;
+    let uuid = seed_synced_ebook(&pool, "both.epub", "Both", "A").await;
+
+    crate::read_status::set_read_status(
+        &pool,
+        user,
+        &omnibus_shared::SetReadStatus {
+            book_uuid: uuid.clone(),
+            status: ReadStatus::Reading,
+        },
+    )
+    .await
+    .unwrap();
+    sqlx::query("UPDATE book_read_status SET updated_at = ? WHERE user_id = ? AND book_uuid = ?")
+        .bind(1_700_000_000_i64)
+        .bind(user)
+        .bind(&uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+    crate::progress::upsert_progress(
+        &pool,
+        user,
+        &omnibus_shared::ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: omnibus_shared::ProgressFormat::Epub,
+            epub_cfi: None,
+            audio_position_seconds: None,
+            progress_percent: Some(58),
+            kobo_location: Some("{\"Value\":\"kobo.2.1\"}".into()),
+            client_updated_at: Some(1_700_001_000),
+            book_file_id: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let states = reading_state_for(&pool, user, std::slice::from_ref(&uuid))
+        .await
+        .unwrap();
+
+    let s = states.get(&uuid).expect("book present");
+    assert_eq!(s.status_updated_at, 1_700_000_000);
+    assert_eq!(s.progress_updated_at, 1_700_001_000);
+    assert_eq!(
+        s.state_updated_at, 1_700_001_000,
+        "envelope takes the newer"
+    );
+}
+
+#[tokio::test]
+async fn reading_state_for_reports_a_zero_status_clock_for_a_position_only_book() {
+    // 0 is the "no such row" sentinel the wire layer maps to *unstamped*;
+    // a position-only book must not report a status clock it hasn't got.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = make_user(&pool, "reader").await;
+    let uuid = seed_synced_ebook(&pool, "pos.epub", "Positioned", "A").await;
+
+    crate::progress::upsert_progress(
+        &pool,
+        user,
+        &omnibus_shared::ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: omnibus_shared::ProgressFormat::Epub,
+            epub_cfi: None,
+            audio_position_seconds: None,
+            progress_percent: Some(12),
+            kobo_location: Some("{\"Value\":\"kobo.1.1\"}".into()),
+            client_updated_at: Some(1_700_001_000),
+            book_file_id: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let states = reading_state_for(&pool, user, std::slice::from_ref(&uuid))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        states.get(&uuid).expect("book present").status_updated_at,
+        0
+    );
+}
+
+#[tokio::test]
 async fn reading_state_for_is_scoped_to_the_requesting_user() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let alice = make_user(&pool, "alice").await;
