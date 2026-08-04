@@ -1,7 +1,8 @@
 //! Per-(device, book) annotation sync state for the Kobo Reading Services
-//! channel (`kobo_annotations_sync`): first-PATCH adoption, the
-//! acked-fingerprint watermark behind `checkforchanges`, and the content
-//! fingerprint itself. Annotation rows live device-agnostic in `annotations`.
+//! channel (`kobo_annotations_sync`): first-PATCH adoption, whether the
+//! device has actually fetched the book's file, the acked-fingerprint
+//! watermark behind `checkforchanges`, and the content fingerprint itself.
+//! Annotation rows live device-agnostic in `annotations`.
 
 use sha2::{Digest, Sha256};
 use sqlx::{Row, SqlitePool};
@@ -56,10 +57,40 @@ pub async fn mark_adopted(
     Ok(())
 }
 
-/// Record the fingerprint of the annotation set this device fully downloaded.
-/// Call only once the response body has actually drained — an unacked change
-/// keeps the book in `checkforchanges`, which is the protocol's only
-/// redelivery mechanism.
+/// Record that this device has fetched the book's file over the wireless
+/// `download` route (#1647). This is the fact [`ack_served`] gates on —
+/// serving annotation bytes is not, by itself, proof a device adopted them —
+/// and it also makes a downloaded-but-not-yet-adopted book a
+/// [`changed_book_uuids`] candidate on its own, without waiting for a PATCH.
+/// Idempotent; a repeat download just refreshes the timestamp.
+pub async fn mark_downloaded(
+    pool: &SqlitePool,
+    device_id: i64,
+    book_uuid: &str,
+) -> Result<(), KoboAnnotationSyncError> {
+    sqlx::query(
+        "INSERT INTO kobo_annotations_sync (device_id, book_uuid, downloaded_at)
+         VALUES (?, ?, strftime('%s','now'))
+         ON CONFLICT(device_id, book_uuid) DO UPDATE SET
+             downloaded_at = excluded.downloaded_at,
+             updated_at    = strftime('%s','now')",
+    )
+    .bind(device_id)
+    .bind(book_uuid)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Record the fingerprint of the annotation set this device fully downloaded
+/// — but only for a book this device is on record as holding
+/// ([`mark_downloaded`], #1647). A GET served for a book the device never
+/// fetched is a no-op here rather than an ack: without this gate, delivery of
+/// the response body was treated as proof of adoption, and a device that
+/// never actually saved the file still watermarked past it, stranding the
+/// annotations with no redelivery path. Call only once the response body has
+/// actually drained — an unacked change keeps the book in `checkforchanges`,
+/// which is the protocol's only redelivery mechanism.
 pub async fn ack_served(
     pool: &SqlitePool,
     device_id: i64,
@@ -67,15 +98,13 @@ pub async fn ack_served(
     fingerprint: &str,
 ) -> Result<(), KoboAnnotationSyncError> {
     sqlx::query(
-        "INSERT INTO kobo_annotations_sync (device_id, book_uuid, acked_fingerprint)
-         VALUES (?, ?, ?)
-         ON CONFLICT(device_id, book_uuid) DO UPDATE SET
-             acked_fingerprint = excluded.acked_fingerprint,
-             updated_at        = strftime('%s','now')",
+        "UPDATE kobo_annotations_sync
+            SET acked_fingerprint = ?, updated_at = strftime('%s','now')
+          WHERE device_id = ? AND book_uuid = ? AND downloaded_at IS NOT NULL",
     )
+    .bind(fingerprint)
     .bind(device_id)
     .bind(book_uuid)
-    .bind(fingerprint)
     .execute(pool)
     .await?;
     Ok(())

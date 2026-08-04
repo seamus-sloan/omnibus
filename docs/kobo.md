@@ -114,6 +114,17 @@ skipped (the highlight simply stays web-only) rather than placed somewhere
 wrong.
 
 > [!NOTE]
+> **Annotations only materialise on a book the device actually holds**
+>
+> Highlights for a book are only useful once the device has that book's file —
+> so Omnibus only lets a wireless GET for a book's annotations count as
+> delivered once the device has downloaded it (over this same wireless
+> channel). Downloading a book always triggers an unconditional fetch of its
+> annotations, independent of the periodic sync check — so opening (or
+> re-opening) **Reading → Sync now** on the device after downloading a book is
+> the reliable way to pull down highlights that were waiting for it.
+
+> [!NOTE]
 > **Known limitation: highlight colour pushed to a Kobo may not render**
 >
 > Omnibus sends each annotation's colour as `highlightColor` — a lowercase
