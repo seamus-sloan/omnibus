@@ -18,8 +18,8 @@ const KEYS: [&str; 12] = [
 ];
 
 /// Manual ISBN entry. Submits through `on_resolve` once the check digit
-/// validates; `on_scan` hands the flow back to the camera, and `on_search` to
-/// the title search for a copy whose ISBN is unknown or unindexed.
+/// validates; `on_scan` returns to the camera, `on_search` opens the title
+/// search.
 #[component]
 pub(super) fn EntryScreen(
     isbn: Signal<String>,

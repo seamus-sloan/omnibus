@@ -380,11 +380,8 @@ fn entry_stage(state: FlowState, on_resolve: EventHandler<String>) -> Element {
     }
 }
 
-/// Open [`Stage::Search`]. Offered from the scanner and the keypad, not only
-/// from a failed lookup: either input alone is enough to identify a book, and
-/// plenty of copies — old paperbacks, book-club editions — carry a barcode no
-/// ISBN index knows. Clearing the error first keeps a previous lookup's
-/// message off a screen it no longer describes.
+/// Open [`Stage::Search`], clearing any error so a failed lookup's message
+/// can't follow the reader onto a screen it no longer describes.
 pub(crate) fn go_to_search(state: FlowState) -> EventHandler<()> {
     let FlowState {
         mut stage,

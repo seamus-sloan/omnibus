@@ -9,10 +9,9 @@ use dioxus::prelude::*;
 use crate::components::BarcodeScanner;
 use crate::{data, use_server_url};
 
-/// Live camera scan. `on_detect` carries a confirmed EAN-13; `on_manual` is
-/// the always-available keypad escape hatch, which the scanner also promotes
-/// to the primary action when the camera is unavailable. `on_search` opens the
-/// title search, offered here rather than only after a failed ISBN.
+/// Live camera scan. `on_detect` carries a confirmed EAN-13, `on_manual` opens
+/// the keypad (promoted to the primary action when the camera is unavailable),
+/// and `on_search` the title search.
 #[component]
 pub(super) fn ScanScreen(
     on_detect: EventHandler<String>,
