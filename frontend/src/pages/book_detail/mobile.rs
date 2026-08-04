@@ -124,9 +124,11 @@ pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
                 &title,
                 &meta_line,
                 &b.formats,
-                has_ebook,
-                has_comic,
-                has_audio,
+                FormatAvailability {
+                    has_ebook,
+                    has_comic,
+                    has_audio,
+                },
                 &epub_files,
                 &audio_files,
             )}
@@ -242,20 +244,32 @@ fn hero_section(
     }
 }
 
+/// Which formats a book has, bundled so [`title_and_cta_section`] doesn't
+/// thread three adjacent same-typed `bool`s with no compiler-enforced
+/// ordering — see the `derive_loaded_view` fields this is built from.
+#[derive(Copy, Clone)]
+struct FormatAvailability {
+    has_ebook: bool,
+    has_comic: bool,
+    has_audio: bool,
+}
+
 /// Title column (title / meta line / format badges) plus the multi-file
 /// action row — a picker for a multi-file format, a direct link otherwise.
-#[allow(clippy::too_many_arguments)]
 fn title_and_cta_section(
     uuid: &str,
     title: &str,
     meta_line: &str,
     formats: &[String],
-    has_ebook: bool,
-    has_comic: bool,
-    has_audio: bool,
+    availability: FormatAvailability,
     epub_files: &[BookFileInfo],
     audio_files: &[BookFileInfo],
 ) -> Element {
+    let FormatAvailability {
+        has_ebook,
+        has_comic,
+        has_audio,
+    } = availability;
     rsx! {
         div { class: "m-bd-titlecol",
             h2 { class: "m-bd-title", span { class: "m-em", "{title}" } }
