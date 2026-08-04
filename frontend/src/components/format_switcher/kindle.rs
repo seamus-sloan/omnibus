@@ -3,7 +3,6 @@
 //! terminal state to the in-place toast.
 
 use dioxus::prelude::*;
-
 #[cfg(not(feature = "mobile"))]
 use omnibus_shared::KindleSendStatus;
 

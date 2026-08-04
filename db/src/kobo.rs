@@ -3,10 +3,9 @@
 //! flagged `sync_to_kobo` — never the whole library. [`delta`] turns that set
 //! into the per-device add/change/remove diff the protocol expects.
 
+use omnibus_shared::ReadStatus;
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
-
-use omnibus_shared::ReadStatus;
 
 use crate::resolve_canonical_book_uuid;
 

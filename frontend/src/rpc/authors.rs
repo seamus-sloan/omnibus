@@ -3,17 +3,14 @@
 
 use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
-use omnibus_shared::{AuthorDetail, AuthorPhotoScanResult, AuthorSummary};
-
 #[cfg(feature = "server")]
 use omnibus_db as db;
-
+use omnibus_shared::{AuthorDetail, AuthorPhotoScanResult, AuthorSummary};
 // Only `validate_author_photo_url` (server-gated) and its tests reference this
 // cap, so keep the import `server`-gated too — otherwise it's an unused import
 // in the `mobile`/`web` client builds.
 #[cfg(feature = "server")]
 use omnibus_shared::AUTHOR_PHOTO_URL_MAX_LEN;
-
 // Magic-byte image-format sniff lives in `omnibus-shared` (single source of
 // truth shared with `server::backend`). Only the server-side bodies call it.
 #[cfg(feature = "server")]

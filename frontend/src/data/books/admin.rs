@@ -2,10 +2,9 @@
 //! scan/backfill fetchers — the admin/settings surface of the books domain.
 //! Same mobile-REST vs web/SSR `#[cfg]` split as the sibling modules.
 
-use omnibus_shared::{LibraryContents, Settings, WorkerStatus};
-
 #[cfg(not(feature = "mobile"))]
 use omnibus_shared::MetadataSource;
+use omnibus_shared::{LibraryContents, Settings, WorkerStatus};
 
 #[cfg(not(feature = "mobile"))]
 use crate::data::note_server_fn_err;

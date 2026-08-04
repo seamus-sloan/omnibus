@@ -2,10 +2,9 @@
 
 use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
-use omnibus_shared::{SeriesDetail, SeriesSummary};
-
 #[cfg(feature = "server")]
 use omnibus_db as db;
+use omnibus_shared::{SeriesDetail, SeriesSummary};
 
 #[cfg(feature = "server")]
 use super::{internal_rpc_error, AuthUser, PoolExt};

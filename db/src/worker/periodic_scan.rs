@@ -5,9 +5,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use sqlx::SqlitePool;
-
 use omnibus_shared::settings::SCAN_INTERVAL_MIN_HOURS;
+use sqlx::SqlitePool;
 
 use super::types::{Task, Worker};
 

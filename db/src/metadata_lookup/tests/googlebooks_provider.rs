@@ -2,11 +2,10 @@
 //! retry budget, and the bare-text fallback for a field search that answers
 //! empty. Ladder-level ordering lives in the parent module.
 
+use omnibus_shared::metadata_lookup::MetadataProvider;
 use serde_json::json;
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-
-use omnibus_shared::metadata_lookup::MetadataProvider;
 
 use super::super::providers::{googlebooks, publication_year};
 use super::super::*;

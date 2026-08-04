@@ -5,7 +5,6 @@
 //! the phone breakpoint surfaces the button that opens it.
 
 use dioxus::prelude::*;
-
 #[cfg(any(feature = "web", feature = "mobile"))]
 use omnibus_shared::CreateBookmark;
 use omnibus_shared::{Bookmark, Highlight, HighlightColor};

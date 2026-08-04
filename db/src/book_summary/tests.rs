@@ -1,19 +1,19 @@
 //! Tests for the on-demand summary fetch: the OpenLibrary work-lookup client
 //! (against `wiremock`) and the provider-injectable orchestrator.
 
+use omnibus_shared::summary::SummarySource;
 use serde_json::json;
 use wiremock::matchers::{body_string_contains, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use omnibus_shared::summary::SummarySource;
-
-use super::googlebooks::{self, GoogleBooksSummaryConfig};
-use super::openlibrary::{self, OpenLibrarySummaryConfig};
-use super::{fetch_summary, fetch_summary_with, summary_source_plan};
 use crate::pool::init_db;
 use crate::settings::{set_google_books_api_key, set_hardcover_api_key};
 use crate::suggestions::hardcover::HardcoverConfig;
 use crate::test_support::{seed_synced_ebook, EnvVarGuard};
+
+use super::googlebooks::{self, GoogleBooksSummaryConfig};
+use super::openlibrary::{self, OpenLibrarySummaryConfig};
+use super::{fetch_summary, fetch_summary_with, summary_source_plan};
 
 fn ol_config(server: &MockServer) -> OpenLibrarySummaryConfig {
     OpenLibrarySummaryConfig {

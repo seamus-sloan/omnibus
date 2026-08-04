@@ -5,7 +5,6 @@
 //! the client; a blank password on Save preserves the stored secret.
 
 use dioxus::prelude::*;
-
 use omnibus_shared::{SmtpConfigStatus, SmtpConfigUpdate, SmtpSecurity};
 
 use crate::components::credential_card::{credential_status_line, credential_status_message};

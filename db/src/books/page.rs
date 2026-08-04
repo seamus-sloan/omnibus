@@ -15,9 +15,8 @@
 //! backfilled — but only over the page, not the whole library.
 
 use base64::engine::{general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use sqlx::{Row, SqlitePool};
-
 use omnibus_shared::{EbookMetadata, SortDir, SortKey, ViewFilters};
+use sqlx::{Row, SqlitePool};
 
 use super::projection::{
     backfill_creator_ids, merge_overrides_into_books, row_to_ebook, BOOK_COLUMNS,

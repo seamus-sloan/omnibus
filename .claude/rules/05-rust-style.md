@@ -108,10 +108,18 @@ See [03-unit-testing.md](03-unit-testing.md) for the underlying rule.
 
 ## Mechanics
 
-- **Imports**: three blocks separated by blank lines — `std`, then
-  external crates, then `crate::` — each block alphabetical.
-  Convention-only (we don't depend on nightly rustfmt). Don't add a
-  `rustfmt.toml` group setting that requires nightly.
+- **Imports**: blocks separated by blank lines — `std`, then external
+  crates, then `crate::`, then (when present) `super::` — each block
+  alphabetical. External crates merge into one block regardless of
+  `#[cfg]` gating: a gated and an ungated `use` from the same crate (or
+  two different crates) still belong in the same block, attribute kept
+  attached to its own `use` line. `crate::` and `super::` are a split
+  4th block by house convention (an audit under #1455 found 30+ files
+  independently doing this) rather than merged into one "local" block —
+  keep that split when adding imports to an existing file, and use it
+  for new files that import from both. Convention-only (we don't depend
+  on nightly rustfmt). Don't add a `rustfmt.toml` group setting that
+  requires nightly.
 - **`unwrap()` / `expect()`** are banned in production paths (see
   [02-error-handling.md](02-error-handling.md)). Test code can use
   freely.

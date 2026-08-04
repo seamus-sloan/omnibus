@@ -2,13 +2,13 @@
 //! individually deletable), wishlist (per-user, idempotent), check-in
 //! fulfillment across all users, and fileless book creation.
 
+use omnibus_shared::physical::WishlistSource;
 use sqlx::SqlitePool;
 
-use omnibus_shared::physical::WishlistSource;
-
-use super::*;
 use crate::covers::cover_path_for;
 use crate::test_support::{seed_minimal_books, CoversTempDir};
+
+use super::*;
 
 async fn pool() -> SqlitePool {
     crate::pool::init_db("sqlite::memory:").await.unwrap()

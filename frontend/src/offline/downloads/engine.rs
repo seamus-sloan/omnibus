@@ -4,9 +4,8 @@
 //! is fully usable offline. Runs on the loopback media runtime so
 //! downloads survive route changes and component unmounts.
 
-use omnibus_shared::{AudiobookManifest, EbookMetadata, ManifestPart};
-
 use anyhow::Context;
+use omnibus_shared::{AudiobookManifest, EbookMetadata, ManifestPart};
 
 use crate::data;
 use crate::offline::{cache, media};

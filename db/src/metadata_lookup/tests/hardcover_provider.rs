@@ -3,11 +3,10 @@
 //! as before, and one that has can't have a Hardcover outage turn a clean miss
 //! into a user-facing outage.
 
+use omnibus_shared::metadata_lookup::MetadataProvider;
 use serde_json::json;
 use wiremock::matchers::method;
 use wiremock::{Mock, MockServer, ResponseTemplate};
-
-use omnibus_shared::metadata_lookup::MetadataProvider;
 
 use super::super::*;
 use super::{
