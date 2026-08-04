@@ -160,17 +160,9 @@ async fn ebooks_page(
 /// `/books/:uuid` URLs survive reindexes.
 #[post("/api/rpc/ebook", pool: PoolExt, _user: AuthUser)]
 pub async fn rpc_get_ebook(uuid: String) -> Result<Option<EbookMetadata>> {
-    let mut book = db::get_book_by_uuid(&pool.0, &uuid)
+    let book = db::get_book_by_uuid(&pool.0, &uuid)
         .await
         .map_err(|e| internal_rpc_error("get ebook", e))?;
-    // Same enrichment the REST detail read does: the comic pager's slider
-    // and progress mapping need the CBZ page count, and the formats check
-    // keeps non-comic reads free of the extra file query.
-    if let Some(b) = book.as_mut() {
-        if b.formats.iter().any(|f| f.eq_ignore_ascii_case("cbz")) {
-            b.page_count = db::comic::page_count_for_book(&pool.0, b.id).await;
-        }
-    }
     Ok(book)
 }
 

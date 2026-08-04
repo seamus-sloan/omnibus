@@ -86,6 +86,13 @@ pub enum Task {
     /// scan on the same library); does not consume the scan semaphore
     /// (light per-file IO, mirrors [`Task::BackfillChapters`]).
     BackfillWordCounts { library_path: String },
+    /// Backfill `books.page_count` for CBZ books indexed before the
+    /// page-count column existed (migration `0063`, #1593). Posted by the
+    /// [`Task::Scan`] handler on success so it always runs after the ebook
+    /// scan completes. Keyed on `library_path` (mutual exclusion with the
+    /// scan on the same library); does not consume the scan semaphore
+    /// (light per-file IO, mirrors [`Task::BackfillWordCounts`]).
+    BackfillPageCounts { library_path: String },
     /// Rebuild the entire `books_fts` search index from `books` via
     /// `crate::sync::rebuild_all_fts`. Admin-triggered repair for any drift
     /// left by a failed post-commit FTS refresh. Keyed on a fixed resource
@@ -140,6 +147,7 @@ impl Task {
             Task::RefetchAuthorPhotos => Some("refetch-author-photos".into()),
             Task::BackfillChapters { library_path } => Some(format!("audiobooks:{library_path}")),
             Task::BackfillWordCounts { library_path } => Some(library_path.clone()),
+            Task::BackfillPageCounts { library_path } => Some(library_path.clone()),
             Task::RebuildFtsIndex => Some("rebuild-fts".into()),
             Task::ResolveSuggestions { book_uuid } => Some(format!("suggestions:{book_uuid}")),
             Task::KepubConvert { book_id } => Some(format!("kepub:{book_id}")),
@@ -159,6 +167,7 @@ impl Task {
             Task::RefetchAuthorPhotos => false,
             Task::BackfillChapters { .. } => false,
             Task::BackfillWordCounts { .. } => false,
+            Task::BackfillPageCounts { .. } => false,
             Task::RebuildFtsIndex => false,
             Task::ResolveSuggestions { .. } => false,
             Task::KepubConvert { .. } => false,
@@ -191,6 +200,8 @@ impl Task {
             // Reuse Scan kind — a scan-follow-up with no dedicated progress
             // widget, mirroring HLS/FTS/KEPUB below.
             Task::BackfillWordCounts { .. } => TaskKind::Scan,
+            // Same reuse as BackfillWordCounts, its sibling scan-follow-up.
+            Task::BackfillPageCounts { .. } => TaskKind::Scan,
             // Reuse Scan kind for UI display until a dedicated HLS progress
             // widget is added.
             Task::HlsTranscode { .. } => TaskKind::Scan,

@@ -1,7 +1,8 @@
 //! Unit tests for the CBZ comic-archive parser: page listing + natural
 //! sort, `ComicInfo.xml` mapping, filename fallback, the malformed-archive
-//! failure modes (not a zip, zero pages), and `page_count_for_book`'s
-//! three outcomes (real archive, no CBZ file, unreadable archive).
+//! failure modes (not a zip, zero pages), `extract_comic`'s persisted
+//! `page_count`, and `page_count_for_book`'s three outcomes (real archive,
+//! no CBZ file, unreadable archive).
 
 use sqlx::SqlitePool;
 
@@ -60,6 +61,10 @@ fn extract_comic_maps_comic_info_fields_and_first_page_cover() {
     assert_eq!(book.metadata.series_index.as_deref(), Some("3"));
     assert_eq!(book.metadata.creators.len(), 1);
     assert_eq!(book.metadata.creators[0].name, "Kentaro Miura");
+    // Persisted straight onto `books.page_count` (#1593), counted from the
+    // archive's own page list — `ComicInfo.xml`'s `<PageCount>` tag (present
+    // in this fixture) isn't a field the parser reads at all.
+    assert_eq!(book.metadata.page_count, Some(2));
     // Cover = first page in natural order (p001), not zip entry order.
     let (mime, bytes) = book.cover.expect("first page becomes the cover");
     assert_eq!(mime, "image/png");
@@ -95,6 +100,7 @@ fn extract_comic_falls_back_to_filename_stem_without_comic_info() {
     );
     assert!(book.metadata.creators.is_empty());
     assert_eq!(book.metadata.series, None);
+    assert_eq!(book.metadata.page_count, Some(1));
 
     let _ = std::fs::remove_dir_all(&dir);
 }

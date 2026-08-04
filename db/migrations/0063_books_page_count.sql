@@ -1,0 +1,18 @@
+-- Tech-debt #1593 — persist a per-book CBZ page count so the comic detail
+-- read stops reparsing the archive's central directory on every request
+-- (the old `attach_comic_page_count`, #1579). Mirrors the `word_count`
+-- pattern from migration 0049 exactly:
+--
+--   page_count  the archive's image-page count (`db::comic::list_pages`
+--               length). Computed once when a CBZ file is indexed
+--               (new / changed) and rewritten on re-parse. NULL means
+--               "not applicable or not yet computed" — an EPUB-only book,
+--               a malformed archive, or a row indexed before this
+--               migration. `Task::BackfillPageCounts` fills pre-existing
+--               CBZ rows off the async runtime, posted after each ebook
+--               library scan the same way `Task::BackfillWordCounts` fills
+--               word counts.
+--
+-- Additive, nullable, forward-only (rule 06). No in-SQL backfill is
+-- possible (the value can only come from opening the archive).
+ALTER TABLE books ADD COLUMN page_count INTEGER;

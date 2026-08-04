@@ -32,16 +32,33 @@ pub fn is_comic_path(path: &Path) -> bool {
 /// first entry is the cover page.
 pub fn list_pages(path: &Path) -> anyhow::Result<Vec<String>> {
     let file = File::open(path)?;
+    let (_, pages) = list_pages_from_file(file)?;
+    Ok(pages)
+}
+
+/// [`list_pages`], but from a handle the caller already has open, handing
+/// it back alongside the names so a later call can read a specific entry
+/// from that same handle rather than reopening the path.
+pub fn list_pages_from_file(file: File) -> anyhow::Result<(File, Vec<String>)> {
     let archive = zip::ZipArchive::new(file)?;
-    Ok(page_names(&archive))
+    let pages = page_names(&archive);
+    Ok((archive.into_inner(), pages))
 }
 
 /// Best-effort CBZ page count for `book_id`: the length of the archive's
 /// page list. `None` when the book has no CBZ file, the archive is
-/// unreadable, or the blocking read fails — detail reads must not fail
-/// because one file is broken, so failures log and read as "no count".
-/// Shared by the REST detail handler and the web RPC so the two payloads
-/// can't disagree.
+/// unreadable, or the blocking read fails — failures log and read as "no
+/// count" rather than propagating.
+///
+/// `books.page_count` is populated once at index time
+/// ([`indexed_book_from`]) and served straight off that column (#1593), so
+/// this single-book lookup is no longer on the request path; it remains a
+/// small, independently-testable building block a future ad-hoc "recount
+/// this one book" tool can reach for without duplicating the archive-open
+/// dance. The bulk equivalent used by
+/// [`crate::indexer::backfill_page_counts`] (the one-time catch-up for CBZ
+/// rows indexed before migration `0063`) inlines the same steps to share
+/// one batched path lookup across every candidate.
 pub async fn page_count_for_book(pool: &sqlx::SqlitePool, book_id: i64) -> Option<i64> {
     let path = match crate::books::book_file_path(pool, book_id, "CBZ").await {
         Ok(Some(p)) => p,
@@ -84,12 +101,27 @@ const MAX_PAGE_BYTES: u64 = 64 * 1024;
 /// entry is unreadable or the page exceeds the cap. One entry is
 /// decompressed per call — the archive is never extracted whole.
 pub fn read_page(path: &Path, index: usize) -> anyhow::Result<Option<(&'static str, Vec<u8>)>> {
-    let file = File::open(path)?;
-    let mut archive = zip::ZipArchive::new(file)?;
-    let pages = page_names(&archive);
+    let pages = list_pages(path)?;
     let Some(name) = pages.get(index) else {
         return Ok(None);
     };
+    read_page_named(path, name).map(Some)
+}
+
+/// Decompress one already-resolved entry (as named by [`list_pages`]),
+/// skipping the central-directory listing [`read_page`] would otherwise
+/// redo.
+pub fn read_page_named(path: &Path, name: &str) -> anyhow::Result<(&'static str, Vec<u8>)> {
+    let file = File::open(path)?;
+    read_page_from_file(file, name)
+}
+
+/// [`read_page_named`], but from a handle the caller already has open (as
+/// [`list_pages_from_file`] returns it) — the page-serving route's shape,
+/// so the validator, the page list, and the decompressed bytes all come
+/// from one opened inode rather than three separate opens of the path.
+pub fn read_page_from_file(file: File, name: &str) -> anyhow::Result<(&'static str, Vec<u8>)> {
+    let mut archive = zip::ZipArchive::new(file)?;
     let entry = archive.by_name(name)?;
     // Sized by the actual read, not the header's declared size — an
     // attacker-controlled length field must not drive the allocation. One
@@ -100,7 +132,7 @@ pub fn read_page(path: &Path, index: usize) -> anyhow::Result<Option<(&'static s
     if read as u64 > MAX_PAGE_BYTES {
         anyhow::bail!("page {name} exceeds {MAX_PAGE_BYTES} byte cap");
     }
-    Ok(Some((mime_for_page(name), bytes)))
+    Ok((mime_for_page(name), bytes))
 }
 
 /// Extract the [`IndexedBook`] for a single CBZ file. Mirrors the EPUB
@@ -125,10 +157,13 @@ pub fn extract_comic(path: &Path, filename: String, opts: &ScanOptions) -> Index
 }
 
 /// Everything a single pass over the archive yields: the first page's
-/// bytes + mime (the cover candidate) and the parsed `ComicInfo.xml`
-/// fields when the entry exists.
+/// bytes + mime (the cover candidate), the page count (#1593 — computed
+/// once here so `books.page_count` never needs a second archive pass to
+/// answer a detail read), and the parsed `ComicInfo.xml` fields when the
+/// entry exists.
 struct ParsedComic {
     first_page: Option<(String, Vec<u8>)>,
+    page_count: usize,
     info: ComicInfo,
 }
 
@@ -142,13 +177,18 @@ fn read_comic(path: &Path) -> anyhow::Result<ParsedComic> {
     if pages.is_empty() {
         anyhow::bail!("no image pages in archive");
     }
+    let page_count = pages.len();
     let first_page = read_entry(&mut archive, &pages[0])
         .map(|bytes| (mime_for_page(&pages[0]).to_string(), bytes));
     let info = comic_info_entry(&archive)
         .and_then(|name| read_entry(&mut archive, &name))
         .map(|bytes| parse_comic_info(&bytes))
         .unwrap_or_default();
-    Ok(ParsedComic { first_page, info })
+    Ok(ParsedComic {
+        first_page,
+        page_count,
+        info,
+    })
 }
 
 /// Project a [`ParsedComic`] into the writer's [`IndexedBook`] shape.
@@ -179,6 +219,7 @@ fn indexed_book_from(
             series: comic.info.series,
             series_index: comic.info.number,
             accent,
+            page_count: Some(comic.page_count as i64),
             ..Default::default()
         },
         cover,

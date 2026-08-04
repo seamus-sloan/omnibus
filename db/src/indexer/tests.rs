@@ -11,8 +11,8 @@ use crate::ebook::StatEntry;
 use crate::pool::init_db;
 use crate::sync::{replace_books, sync_audiobooks, sync_books, AudiobookSyncPlan, SyncPlan};
 use crate::test_support::{
-    count_rows, indexed, indexed_audiobook, indexed_with_stat, make_test_dir, uuid_by_scan_key,
-    CoversTempDir,
+    build_stored_zip, count_rows, indexed, indexed_audiobook, indexed_with_stat, make_test_dir,
+    uuid_by_scan_key, CoversTempDir,
 };
 
 /// Seed a `scan_roots` row for `path` with an explicit `last_indexed`
@@ -1147,6 +1147,131 @@ async fn backfill_word_counts_is_idempotent_once_filled() {
     // and `on_progress` never fires.
     let mut calls = 0u32;
     backfill_word_counts(&pool, dir.to_str().unwrap(), |_, _| calls += 1)
+        .await
+        .unwrap();
+    assert_eq!(calls, 0);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---------- page-count backfill (migration 0063) ----------
+
+/// Seed a CBZ book backed by a real (stored, uncompressed) archive on disk,
+/// with a NULL `page_count` (the pre-0063 state), so `backfill_page_counts`
+/// has a live file to open and a candidate row to fill.
+async fn seed_cbz_missing_page_count(
+    pool: &SqlitePool,
+    dir: &std::path::Path,
+    uuid: &str,
+    pages: usize,
+) -> i64 {
+    let lib_str = dir.to_str().unwrap();
+    sqlx::query(
+        "INSERT INTO scan_roots (path, display_name) VALUES (?, ?) ON CONFLICT(path) DO NOTHING",
+    )
+    .bind(lib_str)
+    .bind(lib_str)
+    .execute(pool)
+    .await
+    .unwrap();
+    let lib_id: i64 = sqlx::query_scalar("SELECT id FROM scan_roots WHERE path = ?")
+        .bind(lib_str)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let book_id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, scan_key, library_id, path, title) \
+         VALUES (?, ?, ?, '', ?) RETURNING id",
+    )
+    .bind(uuid)
+    .bind(format!("{uuid}.cbz"))
+    .bind(lib_id)
+    .bind(uuid)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let entries: Vec<(String, Vec<u8>)> = (0..pages)
+        .map(|i| (format!("p{i}.jpg"), b"x".to_vec()))
+        .collect();
+    let entry_refs: Vec<(&str, &[u8])> = entries
+        .iter()
+        .map(|(n, d)| (n.as_str(), d.as_slice()))
+        .collect();
+    let bytes = build_stored_zip(&entry_refs);
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) VALUES (?, 'CBZ', ?, ?)",
+    )
+    .bind(book_id)
+    .bind(uuid)
+    .bind(bytes.len() as i64)
+    .execute(pool)
+    .await
+    .unwrap();
+    std::fs::write(dir.join(format!("{uuid}.cbz")), &bytes).unwrap();
+    book_id
+}
+
+async fn page_count_of(pool: &SqlitePool, book_id: i64) -> Option<i64> {
+    sqlx::query_scalar("SELECT page_count FROM books WHERE id = ?")
+        .bind(book_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn backfill_page_counts_fills_null_rows_from_the_cbz_archive() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let dir = make_test_dir("pc-backfill");
+    let a = seed_cbz_missing_page_count(&pool, &dir, "uuid-a", 3).await;
+    let b = seed_cbz_missing_page_count(&pool, &dir, "uuid-b", 7).await;
+
+    let mut progress: Vec<(u32, u32)> = Vec::new();
+    backfill_page_counts(&pool, dir.to_str().unwrap(), |p, t| progress.push((p, t)))
+        .await
+        .unwrap();
+
+    assert_eq!(page_count_of(&pool, a).await, Some(3));
+    assert_eq!(page_count_of(&pool, b).await, Some(7));
+    assert_eq!(progress, vec![(1, 2), (2, 2)]);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn backfill_page_counts_is_idempotent_once_filled() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let dir = make_test_dir("pc-backfill-idempotent");
+    seed_cbz_missing_page_count(&pool, &dir, "uuid-a", 3).await;
+
+    backfill_page_counts(&pool, dir.to_str().unwrap(), |_, _| {})
+        .await
+        .unwrap();
+
+    // Second pass: every book now has a count, so there are no candidates
+    // and `on_progress` never fires.
+    let mut calls = 0u32;
+    backfill_page_counts(&pool, dir.to_str().unwrap(), |_, _| calls += 1)
+        .await
+        .unwrap();
+    assert_eq!(calls, 0);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn backfill_page_counts_is_a_noop_when_no_candidates_exist() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let dir = make_test_dir("pc-backfill-empty");
+    sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, ?)")
+        .bind(dir.to_str().unwrap())
+        .bind(dir.to_str().unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let mut calls = 0u32;
+    backfill_page_counts(&pool, dir.to_str().unwrap(), |_, _| calls += 1)
         .await
         .unwrap();
     assert_eq!(calls, 0);

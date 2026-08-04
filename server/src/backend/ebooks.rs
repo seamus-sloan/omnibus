@@ -187,25 +187,10 @@ pub(super) async fn get_ebook_by_uuid(
     Path(uuid): Path<String>,
 ) -> Response {
     match db::get_book_by_uuid(&state.pool, &uuid).await {
-        Ok(Some(mut book)) => {
-            attach_comic_page_count(&state, &mut book).await;
-            Json(book).into_response()
-        }
+        Ok(Some(book)) => Json(book).into_response(),
         Ok(None) => axum::http::StatusCode::NOT_FOUND.into_response(),
         Err(error) => internal("read book", error),
     }
-}
-
-/// Fill `page_count` on a detail payload when the book carries a CBZ, by
-/// listing the archive's pages — the count the pager's slider and progress
-/// mapping key on. Best-effort via `db::comic::page_count_for_book`, which
-/// logs and leaves `None` on a missing or malformed archive; the formats
-/// check keeps non-comic detail reads free of the extra file query.
-async fn attach_comic_page_count(state: &AppState, book: &mut omnibus_shared::EbookMetadata) {
-    if !book.formats.iter().any(|f| f.eq_ignore_ascii_case("cbz")) {
-        return;
-    }
-    book.page_count = db::comic::page_count_for_book(&state.pool, book.id).await;
 }
 
 /// Resolve the on-disk EPUB path for `uuid`, honouring an optional
@@ -336,11 +321,14 @@ async fn read_ebook_file(
 /// neither a cookie nor a bearer header, so the session token rides
 /// `?token=`.
 ///
-/// The single entry is decompressed into memory, so the validator is a
-/// content hash — the covers/thumbs shape, with the 304 carrying the same
-/// `Cache-Control`/`Vary` as a 200. 404 covers an unknown uuid, a book
-/// without a CBZ file, and an out-of-range index; an unreadable archive
-/// surfaces as a 500.
+/// The validator is derived from the CBZ file's own stat (via
+/// [`conditional::open`], same inode/mtime/size shape the byte-serving
+/// routes use) combined with the page index, rather than a hash of the
+/// decompressed page. Listing and (on a cache miss) decompressing both
+/// reuse that same opened handle, so a replace racing this request can't
+/// splice a validator from one file onto bytes from another. 404 covers an
+/// unknown uuid, a book without a CBZ file, and an out-of-range index; an
+/// unreadable archive surfaces as a 500.
 pub(super) async fn get_ebook_page(
     _user: MediaAuthUser,
     State(state): State<AppState>,
@@ -357,21 +345,39 @@ pub(super) async fn get_ebook_page(
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(e) => return internal("book_file_path", e),
     };
-    let read = tokio::task::spawn_blocking(move || db::comic::read_page(&path, page)).await;
+
+    let open = match conditional::open(&path).await {
+        Ok(o) => o,
+        Err(e) => return internal("open cbz for page validator", e),
+    };
+    let etag = format!("\"{}-p{page}\"", open.validator.etag.trim_matches('"'));
+    let file = open.into_std().await;
+
+    let listed = tokio::task::spawn_blocking(move || db::comic::list_pages_from_file(file)).await;
+    let (file, pages) = match listed {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => return internal("list comic pages", e),
+        Err(e) => return internal("list comic pages", e),
+    };
+    let Some(name) = pages.get(page).cloned() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    if headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| conditional::if_none_match_hits(v, &etag))
+    {
+        return conditional::not_modified(&etag, MEDIA_CACHE_CONTROL, MEDIA_VARY);
+    }
+
+    let read =
+        tokio::task::spawn_blocking(move || db::comic::read_page_from_file(file, &name)).await;
     let (mime, bytes) = match read {
-        Ok(Ok(Some(entry))) => entry,
-        Ok(Ok(None)) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(Ok(entry)) => entry,
         Ok(Err(e)) => return internal("read comic page", e),
         Err(e) => return internal("read comic page", e),
     };
-    let etag = conditional::content_etag(&bytes);
-    let inm_hit = headers
-        .get(header::IF_NONE_MATCH)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| conditional::if_none_match_hits(v, &etag));
-    if inm_hit {
-        return conditional::not_modified(&etag, MEDIA_CACHE_CONTROL, MEDIA_VARY);
-    }
     (
         [
             (header::CONTENT_TYPE, mime),

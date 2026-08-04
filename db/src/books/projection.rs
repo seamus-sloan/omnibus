@@ -91,7 +91,11 @@ pub(crate) const BOOK_COLUMNS: &str = r"
               ORDER BY format))                   AS formats_json,
 
     EXISTS (SELECT 1 FROM physical_copies pc
-             WHERE pc.book_uuid = b.uuid)          AS has_physical
+             WHERE pc.book_uuid = b.uuid)          AS has_physical,
+
+    -- CBZ page count, persisted at index time (migration 0063, #1593)
+    -- instead of reparsing the archive on every detail read.
+    b.page_count                                   AS page_count
 ";
 
 #[derive(serde::Deserialize)]
@@ -260,8 +264,9 @@ pub(crate) fn row_to_ebook(r: &sqlx::sqlite::SqliteRow) -> Result<EbookMetadata,
         // Populated by `get_book` from the resolved EPUB; list/projection rows
         // don't carry it (no per-book export menu in list contexts).
         epub_size_bytes: None,
-        // Detail-read enrichment (the CBZ page count); never projected here.
-        page_count: None,
+        // The CBZ page count, straight off `books.page_count` (#1593) —
+        // `NULL` for an EPUB, an unparsed archive, or a pre-migration row.
+        page_count: r.get("page_count"),
     })
 }
 
