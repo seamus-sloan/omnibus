@@ -11,6 +11,7 @@
 //  scheme so epub.js sees one same-origin space and needs no cookie.
 
 import SwiftUI
+import UIKit
 import WebKit
 
 /// Cross-view channel for "open the reader at this position", used by the
@@ -224,13 +225,30 @@ final class ReaderController: NSObject {
         }
     }
 
+    /// True from the moment WebKit kills the content process until the page
+    /// that replaces it reports in. The reader shows its opening overlay for
+    /// the duration rather than a blank stage.
+    private(set) var isRestoring = false
+
     fileprivate var webView: WKWebView?
     private var book: Book?
-    private var startCFI: String?
-    private var pendingHighlights: [Highlight] = []
+    /// Where the next boot of the stage opens: the position the book was
+    /// opened at, then wherever the reader has actually got to.
+    ///
+    /// A boot is not a one-time event. WebKit jettisons the web content
+    /// process of an app that has been in the background a while, and the page
+    /// that replaces it re-runs `OmnibusReader.init` from scratch — so this
+    /// tracks the live position rather than the opening one. Booting from the
+    /// opening position put a returning reader back where they started the
+    /// session, and the relocate that followed then saved it as their progress.
+    private(set) var resumeCFI: String?
+    /// Every highlight the reader knows about, drawn or not. Kept rather than
+    /// consumed on first paint, for the same reason: a reboot starts from a
+    /// blank page, and it has to be painted from something.
+    private var knownHighlights: [Highlight] = []
     /// What is currently drawn on the page, so a set arriving after first paint
     /// can be applied as a diff instead of a redraw.
-    private var drawnHighlights: [Highlight] = []
+    private(set) var drawnHighlights: [Highlight] = []
 
     override init() {
         settings = ReaderSettings.load()
@@ -239,8 +257,9 @@ final class ReaderController: NSObject {
 
     func configure(book: Book, startCFI: String?, highlights: [Highlight]) {
         self.book = book
-        self.startCFI = startCFI
-        pendingHighlights = highlights
+        resumeCFI = startCFI?.nilIfBlank
+        knownHighlights = highlights
+        drawnHighlights = []
     }
 
     // MARK: - Commands
@@ -283,14 +302,29 @@ final class ReaderController: NSObject {
         run("OmnibusReader.removeAnnotation(\(cfiRange.jsQuoted))")
     }
 
+    /// Take `items` as the set now on the page, without touching the page.
+    ///
+    /// For the changes the reader paints itself — a create, a recolour, a
+    /// note, a delete — which reach the page as single `addAnnotation` /
+    /// `removeAnnotation` calls carrying no row. Recording them is what keeps
+    /// a reboot's paint whole: repainting instead would double-draw a mark
+    /// that is already there, since the glue's `add` does not dedupe.
+    func noteHighlights(_ items: [Highlight]) {
+        knownHighlights = items
+        // Only the page can have marks on it. Recording a set as drawn while
+        // the stage is down — the seconds before the first paint, or between a
+        // jettison and its reboot — is what would leave the next paint with a
+        // diff that finds nothing to do.
+        guard isReady else { return }
+        drawnHighlights = items.filter { $0.epubCFIRange != nil }
+    }
+
     /// Reconcile the drawn annotations against `items`, touching only what
     /// changed. Used when the server's set lands after the page is already up;
-    /// before the reader is ready it just replaces the queue.
+    /// before the reader is ready it just records them for the next paint.
     func applyHighlights(_ items: [Highlight]) {
-        guard isReady else {
-            pendingHighlights = items
-            return
-        }
+        knownHighlights = items
+        guard isReady else { return }
         // Kobo-origin rows have no CFI and are never drawn; only anchored
         // rows participate in the reconcile.
         let anchored = items.filter { $0.epubCFIRange != nil }
@@ -352,6 +386,48 @@ final class ReaderController: NSObject {
         webView = nil
     }
 
+    // MARK: - Restoring a jettisoned page
+
+    /// WebKit killed the web content process.
+    ///
+    /// Routine for an app that has been in the background a while — the longer
+    /// it is away, the likelier it is — and the page does not survive it. What
+    /// WebKit does next is not ours to rely on: left alone the stage is blank,
+    /// and the reload it sometimes performs on becoming visible re-runs the
+    /// boot anyway. So the recovery is deliberate, and it starts from
+    /// `resumeCFI`.
+    func webContentProcessDidTerminate() {
+        isRestoring = true
+        isReady = false
+        // The page is gone, so nothing is drawn on it. Leaving the old set
+        // standing would make the reboot's paint a no-op diff and the book
+        // would come back without its highlights.
+        drawnHighlights = []
+        selection = nil
+        tappedAnnotation = nil
+        // Reloading a web view that is not on screen is what got it killed:
+        // the foreground pass below is the one that lands.
+        if UIApplication.shared.applicationState == .active { reloadStage() }
+    }
+
+    /// Bring the stage back if it was lost while the app was away. Called on
+    /// every foreground, because the termination callback usually arrives
+    /// when there is no foreground to reload into.
+    func restoreIfNeeded() {
+        guard isRestoring else { return }
+        reloadStage()
+    }
+
+    /// Load the reader host page again from scratch.
+    ///
+    /// A full load rather than `reload()`: after a content-process kill the web
+    /// view may have no current item to reload, and a no-op there would leave
+    /// the reader on a blank stage for good.
+    private func reloadStage() {
+        guard let webView, let url = URL(string: ReaderWebView.hostPageURL) else { return }
+        webView.load(URLRequest(url: url))
+    }
+
     private func applySettings(changedFrom old: ReaderSettings) {
         guard isReady else { return }
         if settings.fontSize != old.fontSize {
@@ -379,7 +455,18 @@ final class ReaderController: NSObject {
     }
 
     fileprivate func bootReader() {
-        guard let book else { return }
+        guard let script = bootScript() else { return }
+        run(script)
+    }
+
+    /// The `OmnibusReader.init` call that boots the stage as it stands.
+    ///
+    /// Its own method because a boot is not a one-time event — see
+    /// `webContentProcessDidTerminate` — and the position it carries is the
+    /// difference between a reader coming back to their page and coming back
+    /// to the one they opened at.
+    func bootScript() -> String? {
+        guard let book else { return nil }
         var options: [String: Any] = [
             "theme": settings.theme,
             "fontSize": settings.fontSize,
@@ -392,20 +479,21 @@ final class ReaderController: NSObject {
             "allowScriptedContent": true,
             "locationsKey": book.uuid,
         ]
-        if let startCFI { options["cfi"] = startCFI }
+        if let cfi = resumeCFI { options["cfi"] = cfi }
 
         let json = (try? JSONSerialization.data(withJSONObject: options))
             .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
         let fileURL = "omnibus-reader://book/\(book.uuid).epub"
-        run("OmnibusReader.init('stage', \(fileURL.jsQuoted), \(json))")
+        return "OmnibusReader.init('stage', \(fileURL.jsQuoted), \(json))"
     }
 
-    fileprivate func handle(message: [String: Any]) {
+    func handle(message: [String: Any]) {
         guard let type = message["type"] as? String else { return }
         let payload = message["payload"] as? String
 
         switch type {
         case "hostReady":
+            isRestoring = false
             bootReader()
 
         case "status":
@@ -413,16 +501,10 @@ final class ReaderController: NSObject {
             case "ready":
                 isReady = true
                 failed = false
-                for highlight in pendingHighlights {
-                    guard let cfiRange = highlight.epubCFIRange else { continue }
-                    addAnnotation(
-                        cfiRange: cfiRange,
-                        color: highlight.color,
-                        hasNote: highlight.note?.nilIfBlank != nil
-                    )
-                }
-                drawnHighlights = pendingHighlights.filter { $0.epubCFIRange != nil }
-                pendingHighlights = []
+                // A page that has just booted has nothing on it, so this is a
+                // paint rather than a diff — `drawnHighlights` is already
+                // empty on a first boot and cleared on a reboot.
+                applyHighlights(knownHighlights)
             case "error":
                 failed = true
             default:
@@ -434,6 +516,9 @@ final class ReaderController: NSObject {
                   let decoded = try? JSONDecoder().decode(RelocateData.self, from: data)
             else { return }
             location = decoded
+            // Where a reboot would resume. A relocate without a CFI carries no
+            // position to keep, so it leaves the last one standing.
+            if let cfi = decoded.cfi?.nilIfBlank { resumeCFI = cfi }
 
         case "toc":
             guard let payload, let data = payload.data(using: .utf8),
@@ -509,6 +594,7 @@ struct ReaderWebView: UIViewRepresentable {
         configuration.suppressesIncrementalRendering = false
 
         let webView = AnnotatingWebView(frame: .zero, configuration: configuration)
+        webView.navigationDelegate = context.coordinator
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.isScrollEnabled = false
@@ -520,7 +606,7 @@ struct ReaderWebView: UIViewRepresentable {
 
         controller.webView = webView
 
-        guard let url = URL(string: "\(Self.scheme)://app/reader.html") else { return webView }
+        guard let url = URL(string: Self.hostPageURL) else { return webView }
         webView.load(URLRequest(url: url))
         return webView
     }
@@ -533,11 +619,17 @@ struct ReaderWebView: UIViewRepresentable {
 
     static let scheme = "omnibus-reader"
 
+    /// The page that hosts the glue. Named because the controller loads it too,
+    /// to bring the stage back after WebKit kills the content process.
+    static let hostPageURL = "\(scheme)://app/reader.html"
+
     /// Serves the bundled reader assets and the book bytes. Using a custom
     /// scheme (rather than `file://` plus a private preference) keeps
     /// everything on public API and gives epub.js one same-origin space.
     @MainActor
-    final class Coordinator: NSObject, WKScriptMessageHandler, WKURLSchemeHandler {
+    final class Coordinator: NSObject, WKScriptMessageHandler, WKURLSchemeHandler,
+        WKNavigationDelegate
+    {
         private let controller: ReaderController
         private let bookUUID: String
         private var tasks: [ObjectIdentifier: Task<Void, Never>] = [:]
@@ -552,6 +644,14 @@ struct ReaderWebView: UIViewRepresentable {
         ) {
             guard let body = message.body as? [String: Any] else { return }
             self.controller.handle(message: body)
+        }
+
+        /// The only reason this view has a navigation delegate: without it a
+        /// jettisoned content process is silent, and the reader is left on a
+        /// blank stage — or on whatever page WebKit's own reload decided to
+        /// boot at.
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            controller.webContentProcessDidTerminate()
         }
 
         func webView(_ webView: WKWebView, start urlSchemeTask: any WKURLSchemeTask) {

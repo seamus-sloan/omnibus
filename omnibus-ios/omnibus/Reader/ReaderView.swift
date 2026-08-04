@@ -184,6 +184,13 @@ struct ReaderView: View {
         .onChange(of: controller.location?.atEnd) { _, atEnd in
             Task { await autoStatus?.positionChanged(atEnd: atEnd ?? false) }
         }
+        // The reader paints its own creates, recolours and deletes one mark at
+        // a time, so the controller would otherwise never learn about them —
+        // and a page rebuilt after WebKit killed the last one would come back
+        // holding only the set the book opened with.
+        .onChange(of: highlights) { _, items in
+            controller.noteHighlights(items)
+        }
         // A handle drag ends when the finger lifts — unless the selection goes
         // out from under it first, which a re-pagination does (the glue drops
         // the selection on `relocated`, and a rotation or the audio dock
@@ -673,6 +680,10 @@ struct ReaderView: View {
             await persist(force: true)
             await checkpointSession()
         } resume: {
+            // The page may not have survived the trip: WebKit kills the web
+            // content process of a backgrounded app, and this is the first
+            // moment there is a foreground to load it back into.
+            controller.restoreIfNeeded()
             // Only when the flush actually stopped the clock. A `.inactive`
             // blip — Control Centre, a notification banner, the app switcher
             // glimpsed — comes back through here without ever having

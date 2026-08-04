@@ -292,6 +292,18 @@ generation compatibly. Assets and book bytes are served over a custom
 cookie. Everything around it — chrome, gestures, sheets, persistence — is
 native.
 
+**The reader boots more than once per open.** WebKit jettisons the web content
+process of an app that has been in the background a while, and the page does
+not survive it. `ReaderController` treats that as routine: it tracks the live
+position in `resumeCFI` and the live annotation set in `knownHighlights`, so
+the boot that follows a jettison resumes where the reader *is* rather than
+where the book was opened — which, as a session-opening position replayed
+through the relocate that follows, used to be saved over the real progress.
+`webViewWebContentProcessDidTerminate` is the only reason the view has a
+navigation delegate; the reload it arms waits for the foreground
+(`LifecycleSync`'s per-book `resume` hook), because reloading a web view that
+is not on screen is what got it killed.
+
 **Comics skip the WebView entirely.** A CBZ is images, so `Comic/` pages them
 natively (pinch zoom, paged `TabView`) against the server's per-page endpoint,
 or against the downloaded archive via **ZIPFoundation** — the app's only Swift
