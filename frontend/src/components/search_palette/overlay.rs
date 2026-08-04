@@ -12,6 +12,7 @@ use super::keyboard::{make_keydown_handler, KeyboardContext};
 use super::model::{build_flat_items, plural};
 use super::results::SpResultsList;
 use super::PaletteOpen;
+use crate::components::glyphs::search_glyph;
 use crate::focus_after_paint::focus_after_paint;
 use crate::platform_sleep::async_sleep_ms;
 use crate::{data, use_server_url};
@@ -199,19 +200,7 @@ pub(super) fn SpOverlay(open: PaletteOpen) -> Element {
 fn SpInputRow(query: Signal<String>, is_loading: bool, on_input: EventHandler<String>) -> Element {
     rsx! {
         div { class: "sp-input-wrap",
-            svg {
-                class: "sp-input-icon",
-                width: "18",
-                height: "18",
-                view_box: "0 0 24 24",
-                fill: "none",
-                stroke: "currentColor",
-                stroke_width: "2",
-                stroke_linecap: "round",
-                stroke_linejoin: "round",
-                circle { cx: "11", cy: "11", r: "8" }
-                line { x1: "21", y1: "21", x2: "16.65", y2: "16.65" }
-            }
+            {search_glyph(18, "sp-input-icon", false)}
             input {
                 class: "sp-input",
                 "data-testid": "sp-input",

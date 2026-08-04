@@ -27,6 +27,33 @@ pub use kindle::SendToKindleButton;
 #[cfg(not(feature = "mobile"))]
 pub use kobo::SendToKoboButton;
 
+/// The bottom-center send-result toast shared by
+/// [`kindle::SendToKindleButton`] and [`kobo::SendToKoboButton`]: a status
+/// message styled success/error plus a dismiss button. `prefix` ("kindle" /
+/// "kobo") keys both the CSS class family and the testids.
+#[cfg(not(feature = "mobile"))]
+fn send_result_toast(prefix: &str, mut result: Signal<Option<(bool, String)>>) -> Element {
+    let Some((is_error, message)) = result() else {
+        return rsx! {};
+    };
+    rsx! {
+        div { class: "{prefix}-toast card", role: "status",
+            span {
+                "data-testid": "{prefix}-send-status",
+                class: if is_error { "{prefix}-toast-msg error" } else { "{prefix}-toast-msg success" },
+                "{message}"
+            }
+            button {
+                class: "btn ghost sm",
+                "data-testid": "{prefix}-toast-dismiss",
+                aria_label: "Dismiss",
+                onclick: move |_| result.set(None),
+                "\u{00d7}"
+            }
+        }
+    }
+}
+
 /// Book-level metadata shared by the format/CTA action rows: identity for
 /// links, author + title for the Send-to-Kobo `<Author>/<Title>/` layout,
 /// the single-file EPUB size for the Send-to-Kindle email cap, and the

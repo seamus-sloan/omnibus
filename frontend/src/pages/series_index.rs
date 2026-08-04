@@ -8,7 +8,10 @@ use dioxus::prelude::*;
 use dioxus_router::Link;
 use omnibus_shared::{IndexSort, SeriesSummary};
 
-use super::index_shell::{index_page_early_return, use_index_page_shell, IndexPageState};
+use super::index_shell::{
+    index_card_stats, index_page_early_return, use_index_page_shell, IndexFilterInput,
+    IndexPageState, IndexSortToggle,
+};
 use crate::{data, index_prefs, use_server_url, Route};
 
 /// Series index page — browse all series in the library.
@@ -177,32 +180,18 @@ fn SeriesIndexHeader(
                 }
             }
             div { class: "idx-toolbar",
-                div { class: "idx-search",
-                    input {
-                        r#type: "search",
-                        placeholder: "Filter series by name or author\u{2026}",
-                        aria_label: "Filter series",
-                        value: "{filter}",
-                        "data-testid": "series-filter",
-                        oninput: move |e| on_filter.call(e.value()),
-                    }
+                IndexFilterInput {
+                    filter,
+                    placeholder: "Filter series by name or author\u{2026}",
+                    aria_label: "Filter series",
+                    testid: "series-filter",
+                    on_filter,
                 }
-                div { class: "idx-sort",
-                    span { class: "label", "Sort" }
-                    button {
-                        class: "idx-btn",
-                        "aria-pressed": if sort == IndexSort::Name { "true" } else { "false" },
-                        "data-testid": "series-sort-name",
-                        onclick: move |_| on_sort.call(IndexSort::Name),
-                        "A\u{2013}Z"
-                    }
-                    button {
-                        class: "idx-btn",
-                        "aria-pressed": if sort == IndexSort::BookCount { "true" } else { "false" },
-                        "data-testid": "series-sort-count",
-                        onclick: move |_| on_sort.call(IndexSort::BookCount),
-                        "Most books"
-                    }
+                IndexSortToggle {
+                    sort,
+                    name_label: "A\u{2013}Z",
+                    testid_prefix: "series",
+                    on_sort,
                 }
             }
         }
@@ -241,12 +230,7 @@ fn render_series_card(s: &SeriesSummary) -> Element {
                 if !author.is_empty() {
                     div { class: "mono idx-series-author", "{author}" }
                 }
-                div { class: "idx-card-stats",
-                    div { class: "idx-stat",
-                        div { class: "mono idx-stat-label", "Books" }
-                        div { class: "idx-stat-value", "{count}" }
-                    }
-                }
+                {index_card_stats(count)}
             }
         }
     }

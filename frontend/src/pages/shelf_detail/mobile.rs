@@ -53,6 +53,7 @@ pub(super) fn MobileShelfDetail(props: MobileShelfDetailProps) -> Element {
         .accent
         .clone()
         .unwrap_or_else(|| "var(--accent)".into());
+    let cover_bust = crate::contexts::use_cover_cache_bust().0;
 
     rsx! {
         div {
@@ -87,7 +88,7 @@ pub(super) fn MobileShelfDetail(props: MobileShelfDetailProps) -> Element {
 
             div { class: "m-cover-grid m-shelf-grid", "data-testid": "shelf-grid", role: "list",
                 for book in books.iter().cloned() {
-                    {mobile_cover_cell(book, &server_url)}
+                    {mobile_cover_cell(book, &server_url, cover_bust)}
                 }
             }
             if !is_smart {

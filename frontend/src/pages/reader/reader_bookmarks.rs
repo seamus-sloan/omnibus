@@ -8,6 +8,8 @@ use omnibus_shared::Bookmark;
 #[cfg(any(feature = "web", feature = "mobile"))]
 use omnibus_shared::CreateBookmark;
 
+use super::drawer_shell::ReaderDrawerShell;
+
 #[component]
 pub(super) fn ReaderBookmarksDrawer(
     uuid: String,
@@ -64,32 +66,25 @@ pub(super) fn ReaderBookmarksDrawer(
     let marks = list.read().clone();
 
     rsx! {
-        div { class: "rd-scrim", onclick: move |_| on_close.call(()) }
-        div { class: "rd-drawer", "data-testid": "reader-bookmarks-drawer",
-            div { class: "rd-grabber" }
-            div { class: "rd-drawer-head",
+        ReaderDrawerShell {
+            testid: "reader-bookmarks-drawer",
+            on_close,
+            head: rsx! {
                 h4 { class: "rd-drawer-title",
                     "Bookmarks "
                     span { class: "rd-drawer-count", "{marks.len()}" }
                 }
-                div { class: "rd-drawer-head-actions",
-                    button {
-                        class: "btn sm",
-                        r#type: "button",
-                        "data-testid": "reader-bookmark-add",
-                        disabled: !can_add,
-                        onclick: add,
-                        "+ Bookmark"
-                    }
-                    button {
-                        class: "rd-x",
-                        r#type: "button",
-                        "aria-label": "Close",
-                        onclick: move |_| on_close.call(()),
-                        "\u{00d7}"
-                    }
+            },
+            actions: rsx! {
+                button {
+                    class: "btn sm",
+                    r#type: "button",
+                    "data-testid": "reader-bookmark-add",
+                    disabled: !can_add,
+                    onclick: add,
+                    "+ Bookmark"
                 }
-            }
+            },
             div { class: "rd-drawer-body",
                 if marks.is_empty() {
                     div { class: "rd-drawer-empty",

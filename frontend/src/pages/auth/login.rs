@@ -200,8 +200,8 @@ struct MobileLoginFormProps {
 fn MobileLoginForm(props: MobileLoginFormProps) -> Element {
     let MobileLoginFormProps {
         host,
-        mut username,
-        mut password,
+        username,
+        password,
         error,
         submitting,
         registration_open,
@@ -234,38 +234,11 @@ fn MobileLoginForm(props: MobileLoginFormProps) -> Element {
             if let Some(msg) = error() {
                 Banner { kind: BannerKind::Err, title: msg, dismissible: false }
             }
-            Field { label: "Email or username".to_string(), input_id: "login-username".to_string(),
-                input {
-                    id: "login-username",
-                    name: "username",
-                    r#type: "text",
-                    autocomplete: "username",
-                    autocapitalize: "none",
-                    autocorrect: "off",
-                    spellcheck: "false",
-                    value: "{username}",
-                    oninput: move |e| username.set(e.value()),
-                    onkeydown: on_keydown,
-                }
-            }
-            Field {
-                label: "Password".to_string(),
-                input_id: "login-password".to_string(),
-                action: rsx! {
-                    Link { to: Route::Login {}, class: "auth-field-action-link", "Forgot?" }
-                },
-                input {
-                    id: "login-password",
-                    name: "password",
-                    r#type: "password",
-                    autocomplete: "current-password",
-                    autocapitalize: "none",
-                    autocorrect: "off",
-                    spellcheck: "false",
-                    value: "{password}",
-                    oninput: move |e| password.set(e.value()),
-                    onkeydown: on_keydown,
-                }
+            LoginCredentialFields {
+                username,
+                password,
+                username_label: "Email or username".to_string(),
+                on_keydown,
             }
             button {
                 class: "btn primary lg auth-submit",
@@ -332,7 +305,12 @@ fn LoginForm(props: LoginFormProps) -> Element {
                     dismissible: false,
                 }
             }
-            LoginCredentialFields { username, password, on_keydown }
+            LoginCredentialFields {
+                username,
+                password,
+                username_label: "Username".to_string(),
+                on_keydown,
+            }
             label { class: "auth-checkbox",
                 input {
                     r#type: "checkbox",
@@ -361,17 +339,20 @@ fn LoginForm(props: LoginFormProps) -> Element {
     }
 }
 
-/// Username + password inputs, split out of `LoginForm` so it reads as a
-/// plain composition (the two fields always change together and share
-/// `on_keydown`'s Enter-to-submit wiring).
+/// Username + password inputs, shared by the web [`LoginForm`] and
+/// [`MobileLoginForm`] (the two fields always change together and share
+/// `on_keydown`'s Enter-to-submit wiring). `username_label` is the one thing
+/// that differs between targets — "Username" on web, "Email or username" on
+/// mobile.
 #[component]
 fn LoginCredentialFields(
     mut username: Signal<String>,
     mut password: Signal<String>,
+    username_label: String,
     on_keydown: EventHandler<Event<KeyboardData>>,
 ) -> Element {
     rsx! {
-        Field { label: "Username".to_string(), input_id: "login-username".to_string(),
+        Field { label: username_label, input_id: "login-username".to_string(),
             input {
                 id: "login-username",
                 name: "username",

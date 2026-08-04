@@ -8,6 +8,7 @@ use dioxus::prelude::*;
 
 use omnibus_shared::{GoogleBooksKeyStatus, HardcoverKeyStatus};
 
+use crate::components::credential_card::{credential_status_line, credential_status_message};
 use crate::data::DataError;
 use crate::{data, use_server_url};
 
@@ -214,6 +215,16 @@ pub fn SecretKeyField(kind: SecretKeyKind) -> Element {
         .and_then(|s| s.masked.clone())
         .unwrap_or_else(|| kind.placeholder_default().to_string());
     let testid = kind.testid();
+    let detail = st
+        .as_ref()
+        .map(|s| {
+            format!(
+                "Connected \u{00b7} {} \u{00b7} {}",
+                s.source,
+                s.masked.clone().unwrap_or_default()
+            )
+        })
+        .unwrap_or_default();
 
     rsx! {
         section { class: "card", "data-testid": "{testid}-key-card",
@@ -256,25 +267,8 @@ pub fn SecretKeyField(kind: SecretKeyKind) -> Element {
                     }
                 }
             }
-            div { class: "api-key-status mono", "data-testid": "{testid}-status",
-                if configured {
-                    span { class: "api-key-dot connected" }
-                    if let Some(s) = st.as_ref() {
-                        "Connected \u{00b7} {s.source} \u{00b7} {s.masked.clone().unwrap_or_default()}"
-                    }
-                } else {
-                    span { class: "api-key-dot" }
-                    "Not connected"
-                }
-            }
-            if let Some(m) = msg() {
-                p {
-                    role: "status",
-                    "data-testid": "{testid}-key-status",
-                    class: if msg_is_error() { "settings-status error" } else { "settings-status success" },
-                    "{m}"
-                }
-            }
+            {credential_status_line(&format!("{testid}-status"), configured, &detail, "Not connected")}
+            {credential_status_message(&format!("{testid}-key-status"), msg().as_deref(), msg_is_error())}
         }
     }
 }

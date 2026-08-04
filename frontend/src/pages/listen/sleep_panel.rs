@@ -10,6 +10,7 @@
 
 use dioxus::prelude::*;
 
+use super::panel_shell::ListenPanelShell;
 use super::sleep::{format_countdown, SleepChoice, PRESETS};
 
 /// Reactive sleep-timer values + mutators shared by [`SleepPanel`] and
@@ -30,12 +31,10 @@ pub(super) struct SleepPanelState {
 #[component]
 pub(super) fn SleepPanel(state: SleepPanelState, on_close: EventHandler<()>) -> Element {
     rsx! {
-        div {
-            class: "lp-scrim",
-            onclick: move |_| on_close.call(()),
-        }
-
-        div { class: "lp-panel lp-sleep-panel", "data-testid": "sleep-panel",
+        ListenPanelShell {
+            extra_class: "lp-sleep-panel",
+            testid: "sleep-panel",
+            on_close,
             SleepPanelBody { state }
         }
     }

@@ -7,6 +7,8 @@ use dioxus::prelude::*;
 
 use omnibus_shared::{Highlight, HighlightColor};
 
+use super::drawer_shell::ReaderDrawerShell;
+
 #[cfg(test)]
 mod tests;
 
@@ -115,22 +117,15 @@ pub(super) fn HighlightsDrawer(
         .collect();
 
     rsx! {
-        div { class: "rd-scrim", onclick: move |_| on_close.call(()) }
-        div { class: "rd-drawer", "data-testid": "reader-highlights-drawer",
-            div { class: "rd-grabber" }
-            div { class: "rd-drawer-head",
+        ReaderDrawerShell {
+            testid: "reader-highlights-drawer",
+            on_close,
+            head: rsx! {
                 h4 { class: "rd-drawer-title",
                     "Highlights & notes "
                     span { class: "rd-drawer-count", "{all.len()}" }
                 }
-                button {
-                    class: "rd-x",
-                    r#type: "button",
-                    "aria-label": "Close",
-                    onclick: move |_| on_close.call(()),
-                    "\u{00d7}"
-                }
-            }
+            },
             div { class: "rd-filter-row",
                 button {
                     class: if active.is_none() { "rd-chip on" } else { "rd-chip" },
