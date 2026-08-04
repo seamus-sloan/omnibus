@@ -328,6 +328,18 @@ selection engine above, and the web copy has since moved its pagination onto
 `location.start.displayed` and still uses WebKit's own selection. Changing one
 does not change the other — check both when touching reader behaviour.
 
+**The page is booted more than once per book.** iOS reclaims the web-content
+process of an app that has been in the background a while, and `reader.html` is
+loaded again when the reader comes back — announcing `hostReady` a second time
+and taking the stage's whole state with it. So nothing a boot reads may be a
+snapshot of the open: `ReaderController.restoreCFI` tracks every relocate rather
+than holding the CFI `configure` was given (booting the fresh page at the opening
+position undid the session's reading, and the relocate that followed persisted
+and pushed the revert), and the marks the outgoing page had painted go back on
+the pending queue. `webViewWebContentProcessDidTerminate` makes the recovery
+explicit, deferring the reload past a backgrounding rather than feeding a fresh
+process to the same reclaim.
+
 **The models are hand-mirrored, so they drift silently.** `Models/` restates the
 `shared/` wire DTOs in Swift with no generator and no compiler tying the two
 together, so a field added or renamed on the Rust side surfaces as a runtime 422

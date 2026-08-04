@@ -681,6 +681,9 @@ struct ReaderView: View {
             // backgrounded, and restarting the clock there would throw away the
             // reading time before the interruption.
             if sessionStart == nil { sessionStart = Date() }
+            // A page whose process was reclaimed while the app was away is
+            // reloaded here, where it can be held on to (#1656).
+            controller.reloadIfNeeded()
         }
         LifecycleSync.shared.didOpenBook()
         await reconcileWithServer(remote: remote)

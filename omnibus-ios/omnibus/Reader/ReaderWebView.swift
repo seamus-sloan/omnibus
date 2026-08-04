@@ -226,11 +226,26 @@ final class ReaderController: NSObject {
 
     fileprivate var webView: WKWebView?
     private var book: Book?
-    private var startCFI: String?
-    private var pendingHighlights: [Highlight] = []
+    /// Where a boot of the page picks up — the position the book opened at,
+    /// then every position the reader reaches.
+    ///
+    /// Kept current because the page is booted more than once: iOS reclaims the
+    /// web-content process of an app that has been in the background a while,
+    /// and the reader comes back to a reloaded `reader.html`. Booting that fresh
+    /// page from the *opening* position threw away everything read since — and
+    /// the relocate that followed the restore persisted the revert and pushed it
+    /// to every other device (#1656).
+    private(set) var restoreCFI: String?
+    /// The marks the next `ready` has to paint. Refilled from what the outgoing
+    /// page was holding whenever the page is replaced.
+    private(set) var pendingHighlights: [Highlight] = []
     /// What is currently drawn on the page, so a set arriving after first paint
     /// can be applied as a diff instead of a redraw.
     private var drawnHighlights: [Highlight] = []
+    /// A reload owed to a web-content process that went away while the app was
+    /// in the background, where reloading would only feed another one to the
+    /// same reclaim. Settled by `reloadIfNeeded` on the way back.
+    private var awaitingReload = false
 
     override init() {
         settings = ReaderSettings.load()
@@ -239,7 +254,7 @@ final class ReaderController: NSObject {
 
     func configure(book: Book, startCFI: String?, highlights: [Highlight]) {
         self.book = book
-        self.startCFI = startCFI
+        restoreCFI = startCFI
         pendingHighlights = highlights
     }
 
@@ -352,6 +367,46 @@ final class ReaderController: NSObject {
         webView = nil
     }
 
+    // MARK: - Page lifetime
+
+    /// WebKit tore down the process the page was living in.
+    ///
+    /// The routine end of a long backgrounding rather than a crash of ours — iOS
+    /// reclaims the memory of a web-content process whose app is away — and what
+    /// it leaves behind is a blank view. Recover deliberately rather than
+    /// relying on WebKit's own reload-when-visible, but not while the app is
+    /// still in the background: a process launched there is only fed to the same
+    /// reclaim, and the book's bytes are re-read to no purpose.
+    func webContentProcessDidTerminate() {
+        prepareForReboot()
+        awaitingReload = true
+        reloadIfNeeded()
+    }
+
+    /// Reload a page WebKit took away, if one is owed. Called on the way back to
+    /// the foreground, and a no-op when nothing is owed.
+    func reloadIfNeeded() {
+        guard awaitingReload, UIApplication.shared.applicationState != .background,
+              let webView, let url = ReaderWebView.entryURL
+        else { return }
+        awaitingReload = false
+        // `reload()` is unreliable after a terminated process — the URL it would
+        // reload can already be gone. Loading the entry point again is the same
+        // navigation and doesn't depend on what survived.
+        webView.load(URLRequest(url: url))
+    }
+
+    /// Hand what an outgoing page was holding to the one replacing it: the marks
+    /// it had painted go back on the queue, and the reader is not ready again
+    /// until the new page says so — so the loading overlay covers the reboot
+    /// instead of a blank stage standing in for the book.
+    private func prepareForReboot() {
+        guard isReady else { return }
+        isReady = false
+        pendingHighlights = drawnHighlights
+        drawnHighlights = []
+    }
+
     private func applySettings(changedFrom old: ReaderSettings) {
         guard isReady else { return }
         if settings.fontSize != old.fontSize {
@@ -379,7 +434,15 @@ final class ReaderController: NSObject {
     }
 
     fileprivate func bootReader() {
-        guard let book else { return }
+        guard let script = bootScript() else { return }
+        run(script)
+    }
+
+    /// The `OmnibusReader.init` call that boots the page, at `restoreCFI` and in
+    /// the settings in force now — both read at boot time, so a reboot lands
+    /// where the reader actually is rather than where the book was opened.
+    func bootScript() -> String? {
+        guard let book else { return nil }
         var options: [String: Any] = [
             "theme": settings.theme,
             "fontSize": settings.fontSize,
@@ -392,20 +455,27 @@ final class ReaderController: NSObject {
             "allowScriptedContent": true,
             "locationsKey": book.uuid,
         ]
-        if let startCFI { options["cfi"] = startCFI }
+        if let restoreCFI { options["cfi"] = restoreCFI }
 
         let json = (try? JSONSerialization.data(withJSONObject: options))
             .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
         let fileURL = "omnibus-reader://book/\(book.uuid).epub"
-        run("OmnibusReader.init('stage', \(fileURL.jsQuoted), \(json))")
+        return "OmnibusReader.init('stage', \(fileURL.jsQuoted), \(json))"
     }
 
-    fileprivate func handle(message: [String: Any]) {
+    /// Route one message from the glue — the single entry point for everything
+    /// the page reports.
+    func handle(message: [String: Any]) {
         guard let type = message["type"] as? String else { return }
         let payload = message["payload"] as? String
 
         switch type {
         case "hostReady":
+            // Announced on every load of `reader.html`, so a second one is the
+            // page having been replaced under us — whether we asked for the
+            // reload or WebKit did it on its own when the view came back.
+            prepareForReboot()
+            awaitingReload = false
             bootReader()
 
         case "status":
@@ -434,6 +504,10 @@ final class ReaderController: NSObject {
                   let decoded = try? JSONDecoder().decode(RelocateData.self, from: data)
             else { return }
             location = decoded
+            // Where a reboot of the page picks up. Relocates are muted until a
+            // restore has settled, so this only ever moves to a position the
+            // reader was actually shown.
+            if let cfi = decoded.cfi?.nilIfBlank { restoreCFI = cfi }
 
         case "toc":
             guard let payload, let data = payload.data(using: .utf8),
@@ -509,6 +583,7 @@ struct ReaderWebView: UIViewRepresentable {
         configuration.suppressesIncrementalRendering = false
 
         let webView = AnnotatingWebView(frame: .zero, configuration: configuration)
+        webView.navigationDelegate = context.coordinator
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.isScrollEnabled = false
@@ -520,7 +595,7 @@ struct ReaderWebView: UIViewRepresentable {
 
         controller.webView = webView
 
-        guard let url = URL(string: "\(Self.scheme)://app/reader.html") else { return webView }
+        guard let url = Self.entryURL else { return webView }
         webView.load(URLRequest(url: url))
         return webView
     }
@@ -533,11 +608,17 @@ struct ReaderWebView: UIViewRepresentable {
 
     static let scheme = "omnibus-reader"
 
+    /// The page the web view loads, and loads again to recover from a
+    /// web-content process WebKit reclaimed.
+    static let entryURL = URL(string: "\(scheme)://app/reader.html")
+
     /// Serves the bundled reader assets and the book bytes. Using a custom
     /// scheme (rather than `file://` plus a private preference) keeps
     /// everything on public API and gives epub.js one same-origin space.
     @MainActor
-    final class Coordinator: NSObject, WKScriptMessageHandler, WKURLSchemeHandler {
+    final class Coordinator: NSObject, WKScriptMessageHandler, WKURLSchemeHandler,
+        WKNavigationDelegate
+    {
         private let controller: ReaderController
         private let bookUUID: String
         private var tasks: [ObjectIdentifier: Task<Void, Never>] = [:]
@@ -552,6 +633,12 @@ struct ReaderWebView: UIViewRepresentable {
         ) {
             guard let body = message.body as? [String: Any] else { return }
             self.controller.handle(message: body)
+        }
+
+        /// The page's process went away — see
+        /// `ReaderController.webContentProcessDidTerminate`.
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            controller.webContentProcessDidTerminate()
         }
 
         func webView(_ webView: WKWebView, start urlSchemeTask: any WKURLSchemeTask) {
