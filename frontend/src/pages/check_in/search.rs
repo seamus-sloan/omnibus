@@ -1,7 +1,9 @@
-//! Title search — the fallback offered when an ISBN resolves to nothing. A
-//! query input over a provider-candidate list; picking a candidate hands it
-//! back to the flow, which resolves it against the library without a second
-//! provider round trip. Visible text is the E2E selector contract (rule 04).
+//! Title search — the way in for a copy whose ISBN is unknown, unreadable, or
+//! in no provider's index. A query input over a provider-candidate list;
+//! picking a candidate hands it back to the flow, which resolves it against
+//! the library without a second provider round trip. Reachable from the
+//! scanner and the keypad as well as the unresolved screen. Visible text is
+//! the E2E selector contract (rule 04).
 
 use dioxus::prelude::*;
 use omnibus_shared::{ExternalBookMeta, ScanSearchRequest};
