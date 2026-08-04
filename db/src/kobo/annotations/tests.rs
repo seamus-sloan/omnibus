@@ -94,7 +94,9 @@ async fn changed_book_uuids_reports_a_book_whose_fingerprint_moved_past_the_ack(
         vec![uuid.clone()]
     );
 
-    // Ack the current set -> quiet.
+    // Ack the current set -> quiet, but only once the device is on record as
+    // holding the book (#1647) — the ack gate mark_downloaded satisfies.
+    mark_downloaded(&pool, device, &uuid).await.unwrap();
     let served = served_kobo_annotations(&pool, user, &uuid).await.unwrap();
     ack_served(&pool, device, &uuid, &fingerprint(&served))
         .await
@@ -181,6 +183,7 @@ async fn changed_book_uuids_reports_a_book_after_a_web_side_delete() {
     .await
     .unwrap();
     mark_adopted(&pool, device, &uuid).await.unwrap();
+    mark_downloaded(&pool, device, &uuid).await.unwrap();
     let served = served_kobo_annotations(&pool, user, &uuid).await.unwrap();
     ack_served(&pool, device, &uuid, &fingerprint(&served))
         .await
@@ -235,6 +238,7 @@ async fn changed_book_uuids_computes_the_correct_set_across_multiple_candidate_b
         .await
         .unwrap();
         mark_adopted(&pool, device, uuid).await.unwrap();
+        mark_downloaded(&pool, device, uuid).await.unwrap();
     }
 
     let quiet_served = served_kobo_annotations(&pool, user, &quiet).await.unwrap();
@@ -376,6 +380,82 @@ async fn ack_served_propagates_db_error_when_pool_is_closed() {
     pool.close().await;
     assert!(matches!(
         ack_served(&pool, device, &uuid, "fp").await,
+        Err(KoboAnnotationSyncError::Sqlx(_))
+    ));
+}
+
+/// #1647: a GET drained for a book this device never fetched over `download`
+/// must not stick — `ack_served` becomes a no-op, so the pair stays
+/// reportable until the device actually holds the file.
+#[tokio::test]
+async fn ack_served_is_a_no_op_for_a_book_the_device_has_not_downloaded() {
+    let (pool, user, device, uuid) = fixture().await;
+
+    ingest_kobo_annotations(
+        &pool,
+        user,
+        &uuid,
+        &[upload("kobo-a", HighlightColor::Amber, None)],
+        &[],
+    )
+    .await
+    .unwrap();
+    mark_adopted(&pool, device, &uuid).await.unwrap();
+    let served = served_kobo_annotations(&pool, user, &uuid).await.unwrap();
+    ack_served(&pool, device, &uuid, &fingerprint(&served))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        changed_book_uuids(&pool, user, device).await.unwrap(),
+        vec![uuid.clone()],
+        "the ack never took hold, so the book stays reportable"
+    );
+    let acked: Option<String> = sqlx::query_scalar(
+        "SELECT acked_fingerprint FROM kobo_annotations_sync WHERE device_id = ? AND book_uuid = ?",
+    )
+    .bind(device)
+    .bind(&uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(acked.is_none());
+}
+
+#[tokio::test]
+async fn mark_downloaded_records_the_pair_and_is_idempotent() {
+    let (pool, _user, device, uuid) = fixture().await;
+
+    let downloaded_at: Option<i64> = sqlx::query_scalar(
+        "SELECT downloaded_at FROM kobo_annotations_sync WHERE device_id = ? AND book_uuid = ?",
+    )
+    .bind(device)
+    .bind(&uuid)
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert!(downloaded_at.is_none(), "no row until the first download");
+
+    mark_downloaded(&pool, device, &uuid).await.unwrap();
+    mark_downloaded(&pool, device, &uuid).await.unwrap();
+
+    let downloaded_at: Option<i64> = sqlx::query_scalar(
+        "SELECT downloaded_at FROM kobo_annotations_sync WHERE device_id = ? AND book_uuid = ?",
+    )
+    .bind(device)
+    .bind(&uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(downloaded_at.is_some());
+}
+
+#[tokio::test]
+async fn mark_downloaded_propagates_db_error_when_pool_is_closed() {
+    let (pool, _user, device, uuid) = fixture().await;
+    pool.close().await;
+    assert!(matches!(
+        mark_downloaded(&pool, device, &uuid).await,
         Err(KoboAnnotationSyncError::Sqlx(_))
     ));
 }

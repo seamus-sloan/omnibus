@@ -31,7 +31,7 @@ pub async fn library_tags(_auth: KoboAuthUser) -> Response {
 /// cached), falling back to plain EPUB when kepubify is absent, conversion
 /// fails, or it exceeds [`KEPUB_CONVERT_BUDGET`]. Streamed with range support.
 pub async fn download(
-    _auth: KoboAuthUser,
+    auth: KoboAuthUser,
     State(state): State<AppState>,
     Path((_token, uuid)): Path<(String, String)>,
     req: Request,
@@ -57,7 +57,44 @@ pub async fn download(
         };
         crate::backend::ebooks::rewritten_or_source(&state, id, source).await
     };
-    serve_download(req, &path, "application/epub+zip").await
+    let response = serve_download(req, &path, "application/epub+zip").await;
+    // Only bookkeep on an answer that means the device actually has (or
+    // already had, per a conditional 304) the bytes — #1647's bug was
+    // exactly this call running unconditionally, so a 404 (bad path, file
+    // open failure) or 412/416 still marked the device as holding a book it
+    // never received. Checked *after* `serve_download` returns, against its
+    // real status, rather than inferred from path resolution succeeding —
+    // path resolution success does not guarantee `conditional::open` does.
+    if response.status().is_success() || response.status() == StatusCode::NOT_MODIFIED {
+        if let Err(e) = record_download_state(&state, &auth, &uuid).await {
+            tracing::warn!(error = %e, "kobo download-state record failed");
+        }
+    }
+    response
+}
+
+/// Record that `auth`'s device now holds this book (#1647) — the gate
+/// `ack_served` checks before letting a later `GET .../annotations` advance
+/// its watermark — and give any web-origin annotation still waiting on a
+/// KEPUB cache one more chance to downsync. Only called once the caller has
+/// confirmed the response actually delivered (or already held) the file;
+/// `downsync_book_annotations` itself still no-ops when the KEPUB cache (or
+/// the source EPUB) isn't on disk, which is routine in the plain-EPUB
+/// fallback path — this call still records the device's download in that
+/// case, just with nothing new to derive. Awaited by the caller, so it adds
+/// latency to the response; kept best-effort and non-fatal regardless, since
+/// annotation bookkeeping must never turn into an error the device retries.
+async fn record_download_state(
+    state: &AppState,
+    auth: &KoboAuthUser,
+    uuid: &str,
+) -> anyhow::Result<()> {
+    let Some(canonical) = db::resolve_canonical_book_uuid(state.pool(), uuid).await? else {
+        return Ok(());
+    };
+    db::kobo::annotations::mark_downloaded(state.pool(), auth.device_id, &canonical).await?;
+    db::annotations::downsync_book_annotations(state.pool(), auth.user_id, &canonical).await?;
+    Ok(())
 }
 
 /// `GET books/<uuid>/thumbnail/.../image.jpg` — serve the book cover. The

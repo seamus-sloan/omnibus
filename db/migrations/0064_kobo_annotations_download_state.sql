@@ -1,0 +1,11 @@
+-- #1647: per-(device, book) "does the device actually hold this file" signal,
+-- so `ack_served` can refuse to advance the watermark for a book the device
+-- never fetched. Without it, delivery of annotation bytes was treated as
+-- proof of adoption: a device that GETs the annotations for a book it hasn't
+-- downloaded yet (checkforchanges doesn't know the difference) still acks,
+-- and the annotations are then permanently un-offered.
+--
+-- Reuses `kobo_annotations_sync` (0060) rather than a new table: the row
+-- already keys on (device_id, book_uuid), and "downloaded" is one more fact
+-- about that pair, not a fact about a different pair.
+ALTER TABLE kobo_annotations_sync ADD COLUMN downloaded_at INTEGER;

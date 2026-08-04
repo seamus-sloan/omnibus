@@ -83,7 +83,17 @@ fn upload_body(id: &str, color: &str, note: Option<&str>) -> Value {
 }
 
 /// PATCH one annotation and drain the GET so the pair is adopted and acked.
-async fn upload_and_ack(app: &Router, uuid: &str, id: &str, color: &str, note: Option<&str>) {
+/// Marks `device` as having downloaded `uuid` first (#1647's ack gate) — a
+/// device PATCHing highlights for a book realistically already holds it.
+async fn upload_and_ack(
+    app: &Router,
+    pool: &SqlitePool,
+    device: i64,
+    uuid: &str,
+    id: &str,
+    color: &str,
+    note: Option<&str>,
+) {
     let res = app
         .clone()
         .oneshot(request(
@@ -95,6 +105,9 @@ async fn upload_and_ack(app: &Router, uuid: &str, id: &str, color: &str, note: O
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    db::kobo::annotations::mark_downloaded(pool, device, uuid)
+        .await
+        .unwrap();
     let res = app
         .clone()
         .oneshot(request("GET", &annotations_uri(uuid), Some(HW_ID), None))
@@ -280,10 +293,10 @@ async fn patch_replay_of_the_same_body_creates_no_duplicate_rows() {
 
 #[tokio::test]
 async fn patch_tolerates_garbage_and_variant_delete_shapes_without_500() {
-    let (app, pool, user, _device) = fixture().await;
+    let (app, pool, user, device) = fixture().await;
     let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
-    upload_and_ack(&app, &uuid, "kobo-keep", "green", None).await;
-    upload_and_ack(&app, &uuid, "kobo-drop", "yellow", None).await;
+    upload_and_ack(&app, &pool, device, &uuid, "kobo-keep", "green", None).await;
+    upload_and_ack(&app, &pool, device, &uuid, "kobo-drop", "yellow", None).await;
 
     // A mixed bag: a delete as an {id} object, an entry with a deleted flag,
     // an idless entry (skipped), and a non-object entry (skipped).
@@ -505,7 +518,7 @@ fn annotations_by_id(body: &Value) -> std::collections::BTreeMap<String, Value> 
 
 #[tokio::test]
 async fn get_serves_a_mixed_set_of_device_and_converted_web_annotations() {
-    let (app, pool, user, _device) = fixture().await;
+    let (app, pool, user, device) = fixture().await;
     let (uuid, _dir, _guard) = disk_book(&pool, "mixed").await;
 
     // The real device flow: PATCH the backlog (adopting the pair), a web
@@ -522,6 +535,9 @@ async fn get_serves_a_mixed_set_of_device_and_converted_web_annotations() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    db::kobo::annotations::mark_downloaded(&pool, device, &uuid)
+        .await
+        .unwrap();
     create_web_highlight(&pool, user, &uuid, WEB_CFI).await;
 
     assert_eq!(check_for_changes(&app).await, vec![uuid.clone()]);
@@ -549,9 +565,9 @@ async fn get_serves_a_mixed_set_of_device_and_converted_web_annotations() {
 
 #[tokio::test]
 async fn web_edit_of_a_converted_row_reports_and_flows_down_on_the_next_get() {
-    let (app, pool, user, _device) = fixture().await;
+    let (app, pool, user, device) = fixture().await;
     let (uuid, _dir, _guard) = disk_book(&pool, "edit").await;
-    upload_and_ack(&app, &uuid, "kobo-native-1", "yellow", None).await;
+    upload_and_ack(&app, &pool, device, &uuid, "kobo-native-1", "yellow", None).await;
     let web_id = create_web_highlight(&pool, user, &uuid, WEB_CFI).await;
     // Drain the mixed set so the device is fully caught up.
     let res = app
@@ -585,10 +601,10 @@ async fn web_edit_of_a_converted_row_reports_and_flows_down_on_the_next_get() {
 
 #[tokio::test]
 async fn an_underivable_web_cfi_degrades_to_not_served_never_an_error() {
-    let (app, pool, user, _device) = fixture().await;
+    let (app, pool, user, device) = fixture().await;
     let (uuid, _dir, _guard) = disk_book(&pool, "degrade").await;
 
-    upload_and_ack(&app, &uuid, "kobo-native-1", "yellow", None).await;
+    upload_and_ack(&app, &pool, device, &uuid, "kobo-native-1", "yellow", None).await;
     // A point CFI can never derive a range: the row must simply stay off
     // the wire — 200 with the device's own set, no 500, no null location.
     create_web_highlight(&pool, user, &uuid, "epubcfi(/6/2!/4/2/1:0)").await;
@@ -613,7 +629,7 @@ async fn an_underivable_web_cfi_degrades_to_not_served_never_an_error() {
 
 #[tokio::test]
 async fn checkforchanges_reports_an_ingested_book_and_goes_quiet_after_the_get_drains() {
-    let (app, pool, _user, _device) = fixture().await;
+    let (app, pool, _user, device) = fixture().await;
     let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
 
     // Nothing anywhere: quiet.
@@ -632,8 +648,70 @@ async fn checkforchanges_reports_an_ingested_book_and_goes_quiet_after_the_get_d
         .unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
     assert_eq!(check_for_changes(&app).await, vec![uuid.clone()]);
+    db::kobo::annotations::mark_downloaded(&pool, device, &uuid)
+        .await
+        .unwrap();
 
     // Drain the GET → acked → quiet.
+    let res = app
+        .clone()
+        .oneshot(request("GET", &annotations_uri(&uuid), Some(HW_ID), None))
+        .await
+        .unwrap();
+    let _ = body_json(res).await;
+    assert!(check_for_changes(&app).await.is_empty());
+}
+
+/// #1647 (AC1/AC3): a GET for a book this device never downloaded still
+/// serves the set — a factory-reset or second device must be able to fetch
+/// existing annotations — but draining it must not stick as an ack. Without
+/// the download-state gate, `checkforchanges` would go quiet here even
+/// though the device discarded the annotations for lack of the book file.
+#[tokio::test]
+async fn get_serves_but_does_not_ack_a_book_the_device_has_not_downloaded() {
+    let (app, pool, _user, device) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
+
+    let res = app
+        .clone()
+        .oneshot(request(
+            "PATCH",
+            &annotations_uri(&uuid),
+            Some(HW_ID),
+            Some(&upload_body("kobo-ann-1", "yellow", None)),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(check_for_changes(&app).await, vec![uuid.clone()]);
+
+    // No `mark_downloaded` here — the device is adopted (it PATCHed) but has
+    // never fetched the book file over `download`.
+    let res = app
+        .clone()
+        .oneshot(request("GET", &annotations_uri(&uuid), Some(HW_ID), None))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = body_json(res).await;
+    assert_eq!(body["annotations"].as_array().unwrap().len(), 1);
+
+    // The GET served bytes, but the ack never stuck: still reportable.
+    assert_eq!(check_for_changes(&app).await, vec![uuid.clone()]);
+    let acked: Option<String> = sqlx::query_scalar(
+        "SELECT acked_fingerprint FROM kobo_annotations_sync WHERE device_id = ? AND book_uuid = ?",
+    )
+    .bind(device)
+    .bind(&uuid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(acked.is_none());
+
+    // Only once the device actually downloads the book does the ack stick.
+    db::kobo::annotations::mark_downloaded(&pool, device, &uuid)
+        .await
+        .unwrap();
     let res = app
         .clone()
         .oneshot(request("GET", &annotations_uri(&uuid), Some(HW_ID), None))
@@ -693,10 +771,10 @@ async fn patch_with_skipped_entries_does_not_adopt_the_pair() {
 
 #[tokio::test]
 async fn web_side_delete_flows_down_as_a_change_report_and_omission() {
-    let (app, pool, user, _device) = fixture().await;
+    let (app, pool, user, device) = fixture().await;
     let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
-    upload_and_ack(&app, &uuid, "kobo-ann-1", "yellow", None).await;
-    upload_and_ack(&app, &uuid, "kobo-ann-2", "blue", None).await;
+    upload_and_ack(&app, &pool, device, &uuid, "kobo-ann-1", "yellow", None).await;
+    upload_and_ack(&app, &pool, device, &uuid, "kobo-ann-2", "blue", None).await;
     assert!(check_for_changes(&app).await.is_empty());
 
     // AC4: delete one in the web UI → checkforchanges resurfaces the book →
@@ -729,9 +807,9 @@ async fn web_side_delete_flows_down_as_a_change_report_and_omission() {
 
 #[tokio::test]
 async fn web_side_recolor_and_note_flow_down_on_the_next_get() {
-    let (app, pool, user, _device) = fixture().await;
+    let (app, pool, user, device) = fixture().await;
     let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
-    upload_and_ack(&app, &uuid, "kobo-ann-1", "yellow", None).await;
+    upload_and_ack(&app, &pool, device, &uuid, "kobo-ann-1", "yellow", None).await;
 
     let id = db::annotations::highlight_id_for_client_id(&pool, user, "kobo-ann-1")
         .await
@@ -763,9 +841,9 @@ async fn web_side_recolor_and_note_flow_down_on_the_next_get() {
 
 #[tokio::test]
 async fn a_device_of_another_user_never_sees_the_annotations() {
-    let (app, pool, _user, _device) = fixture().await;
+    let (app, pool, _user, device) = fixture().await;
     let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
-    upload_and_ack(&app, &uuid, "kobo-ann-1", "yellow", None).await;
+    upload_and_ack(&app, &pool, device, &uuid, "kobo-ann-1", "yellow", None).await;
 
     let other = auth_test_support::create_user(&pool, "other-reader").await;
     let other_device = db::kobo_devices::create_device(&pool, other.id, "Other Kobo")
@@ -802,9 +880,9 @@ async fn a_device_of_another_user_never_sees_the_annotations() {
 
 #[tokio::test]
 async fn a_second_device_of_the_same_user_is_offered_the_existing_set() {
-    let (app, pool, user, _device) = fixture().await;
+    let (app, pool, user, device) = fixture().await;
     let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
-    upload_and_ack(&app, &uuid, "kobo-ann-1", "yellow", None).await;
+    upload_and_ack(&app, &pool, device, &uuid, "kobo-ann-1", "yellow", None).await;
 
     let second = db::kobo_devices::create_device(&pool, user, "Second Kobo")
         .await
@@ -842,9 +920,9 @@ async fn a_second_device_of_the_same_user_is_offered_the_existing_set() {
 
 #[tokio::test]
 async fn content_id_with_a_kepub_chapter_suffix_resolves_to_the_book() {
-    let (app, pool, _user, _device) = fixture().await;
+    let (app, pool, _user, device) = fixture().await;
     let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Herbert").await;
-    upload_and_ack(&app, &uuid, "kobo-ann-1", "yellow", None).await;
+    upload_and_ack(&app, &pool, device, &uuid, "kobo-ann-1", "yellow", None).await;
 
     // The device sends the chapter-scoped id URL-encoded — it is one path
     // segment; axum decodes it after matching.
