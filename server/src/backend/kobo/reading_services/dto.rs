@@ -215,13 +215,19 @@ pub fn color_from_kobo(raw: Option<&str>) -> HighlightColor {
     if let Some(color) = color_from_kobo_hex(raw) {
         return color;
     }
-    match raw.to_ascii_lowercase().as_str() {
-        "yellow" | "amber" => HighlightColor::Amber,
-        "green" => HighlightColor::Green,
-        "blue" | "cyan" | "teal" => HighlightColor::Blue,
-        "pink" | "red" | "magenta" | "rose" => HighlightColor::Rose,
-        "purple" | "violet" => HighlightColor::Violet,
-        _ => HighlightColor::Amber,
+    let matches = |name: &str| raw.eq_ignore_ascii_case(name);
+    if matches("yellow") || matches("amber") {
+        HighlightColor::Amber
+    } else if matches("green") {
+        HighlightColor::Green
+    } else if matches("blue") || matches("cyan") || matches("teal") {
+        HighlightColor::Blue
+    } else if matches("pink") || matches("red") || matches("magenta") || matches("rose") {
+        HighlightColor::Rose
+    } else if matches("purple") || matches("violet") {
+        HighlightColor::Violet
+    } else {
+        HighlightColor::Amber
     }
 }
 
@@ -234,12 +240,16 @@ pub fn color_from_kobo(raw: Option<&str>) -> HighlightColor {
 /// caveat. Firmware has no fifth swatch for violet, so it snaps to pink —
 /// the nearest of the four by RGB distance, same as rose.
 fn color_from_kobo_hex(raw: &str) -> Option<HighlightColor> {
-    match raw.to_ascii_uppercase().as_str() {
-        "#F6F3B3" => Some(HighlightColor::Amber),
-        "#C6E09E" => Some(HighlightColor::Green),
-        "#B2E1E8" => Some(HighlightColor::Blue),
-        "#E8AFCF" => Some(HighlightColor::Rose),
-        _ => None,
+    if raw.eq_ignore_ascii_case("#F6F3B3") {
+        Some(HighlightColor::Amber)
+    } else if raw.eq_ignore_ascii_case("#C6E09E") {
+        Some(HighlightColor::Green)
+    } else if raw.eq_ignore_ascii_case("#B2E1E8") {
+        Some(HighlightColor::Blue)
+    } else if raw.eq_ignore_ascii_case("#E8AFCF") {
+        Some(HighlightColor::Rose)
+    } else {
+        None
     }
 }
 

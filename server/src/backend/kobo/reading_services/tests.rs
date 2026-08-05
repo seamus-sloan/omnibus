@@ -834,8 +834,7 @@ async fn web_side_recolor_and_note_flow_down_on_the_next_get() {
         .unwrap();
     let body = body_json(res).await;
     let a = &body["annotations"][0];
-    // Violet has no fifth Kobo swatch, so it renders as the same hex as
-    // rose on-device (see color_to_kobo's doc comment).
+    // Violet has no fifth Kobo swatch, so it renders as rose's hex (see color_to_kobo's doc comment).
     assert_eq!(a["highlightColor"], "#E8AFCF");
     assert_eq!(a["noteText"], "from the web");
     assert_eq!(a["type"], "note", "a note-bearing row serves as a note");
@@ -1086,10 +1085,7 @@ mod dto_tests {
         assert_eq!(color_from_kobo(Some("PINK")), HighlightColor::Rose);
     }
 
-    // #1629: the wire value is a firmware hex swatch, not a CSS name — see
-    // color_from_kobo_hex's doc comment for the source. Case-insensitive
-    // because we cannot confirm from a real device which case a genuine
-    // firmware PATCH would send.
+    // #1629: wire value is a firmware hex swatch (see color_from_kobo_hex's doc comment); case-insensitive since the real device casing is unconfirmed.
     #[test]
     fn color_from_kobo_recognizes_every_kobo_firmware_hex_swatch_case_insensitively() {
         assert_eq!(color_from_kobo(Some("#F6F3B3")), HighlightColor::Amber);
