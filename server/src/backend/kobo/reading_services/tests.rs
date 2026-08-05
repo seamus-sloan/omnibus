@@ -251,7 +251,7 @@ async fn patch_then_get_round_trips_a_device_highlight_with_a_weak_etag() {
     let a = &annotations[0];
     assert_eq!(a["id"], "kobo-ann-1");
     assert_eq!(a["type"], "note");
-    assert_eq!(a["highlightColor"], "yellow");
+    assert_eq!(a["highlightColor"], "#F6F3B3");
     assert_eq!(a["highlightedText"], "the highlighted passage");
     assert_eq!(a["noteText"], "margin note");
     assert!(a["context"].is_null());
@@ -557,7 +557,7 @@ async fn get_serves_a_mixed_set_of_device_and_converted_web_annotations() {
     assert_eq!(web["location"]["span"]["chapterFilename"], "c1.xhtml");
     assert_eq!(web["location"]["span"]["startPath"], "span#kobo\\.1\\.2");
     assert_eq!(web["location"]["span"]["endChar"], 24);
-    assert_eq!(web["highlightColor"], "green");
+    assert_eq!(web["highlightColor"], "#C6E09E");
 
     // The drained GET acked the mixed fingerprint: the book goes quiet.
     assert!(check_for_changes(&app).await.is_empty());
@@ -596,7 +596,7 @@ async fn web_edit_of_a_converted_row_reports_and_flows_down_on_the_next_get() {
         .unwrap();
     let body = body_json(res).await;
     let by_id = annotations_by_id(&body);
-    assert_eq!(by_id["web-1"]["highlightColor"], "pink");
+    assert_eq!(by_id["web-1"]["highlightColor"], "#E8AFCF");
 }
 
 #[tokio::test]
@@ -834,7 +834,9 @@ async fn web_side_recolor_and_note_flow_down_on_the_next_get() {
         .unwrap();
     let body = body_json(res).await;
     let a = &body["annotations"][0];
-    assert_eq!(a["highlightColor"], "purple");
+    // Violet has no fifth Kobo swatch, so it renders as the same hex as
+    // rose on-device (see color_to_kobo's doc comment).
+    assert_eq!(a["highlightColor"], "#E8AFCF");
     assert_eq!(a["noteText"], "from the web");
     assert_eq!(a["type"], "note", "a note-bearing row serves as a note");
 }
@@ -1077,34 +1079,60 @@ mod dto_tests {
     }
 
     #[test]
-    fn color_from_kobo_defaults_unknown_hex_and_missing_to_amber() {
+    fn color_from_kobo_defaults_unrecognized_hex_and_missing_to_amber() {
         assert_eq!(color_from_kobo(Some("#FFDD00")), HighlightColor::Amber);
         assert_eq!(color_from_kobo(Some("chartreuse")), HighlightColor::Amber);
         assert_eq!(color_from_kobo(None), HighlightColor::Amber);
         assert_eq!(color_from_kobo(Some("PINK")), HighlightColor::Rose);
     }
 
+    // #1629: the wire value is a firmware hex swatch, not a CSS name — see
+    // color_from_kobo_hex's doc comment for the source. Case-insensitive
+    // because we cannot confirm from a real device which case a genuine
+    // firmware PATCH would send.
     #[test]
-    fn color_round_trip_is_stable_for_every_palette_color() {
+    fn color_from_kobo_recognizes_every_kobo_firmware_hex_swatch_case_insensitively() {
+        assert_eq!(color_from_kobo(Some("#F6F3B3")), HighlightColor::Amber);
+        assert_eq!(color_from_kobo(Some("#c6e09e")), HighlightColor::Green);
+        assert_eq!(color_from_kobo(Some("#B2E1E8")), HighlightColor::Blue);
+        assert_eq!(color_from_kobo(Some("#e8afcf")), HighlightColor::Rose);
+    }
+
+    #[test]
+    fn color_round_trip_is_stable_for_every_color_with_a_firmware_swatch() {
+        // Amber, green, and blue have a swatch of their own. Rose's swatch
+        // (pink) is also violet's nearest-neighbour target, so it round
+        // trips but does not distinguish the two — see the next test.
         for color in [
             HighlightColor::Amber,
             HighlightColor::Green,
             HighlightColor::Blue,
             HighlightColor::Rose,
-            HighlightColor::Violet,
         ] {
             assert_eq!(color_from_kobo(Some(color_to_kobo(color))), color);
         }
     }
 
+    #[test]
+    fn color_round_trip_collapses_violet_into_rose_for_lack_of_a_fifth_kobo_swatch() {
+        assert_eq!(
+            color_to_kobo(HighlightColor::Violet),
+            color_to_kobo(HighlightColor::Rose)
+        );
+        assert_eq!(
+            color_from_kobo(Some(color_to_kobo(HighlightColor::Violet))),
+            HighlightColor::Rose
+        );
+    }
+
     // Pins color_to_kobo's value mapping so a future change to it is deliberate.
     #[test]
-    fn color_to_kobo_emits_the_documented_lowercase_name_for_every_palette_color() {
-        assert_eq!(color_to_kobo(HighlightColor::Amber), "yellow");
-        assert_eq!(color_to_kobo(HighlightColor::Green), "green");
-        assert_eq!(color_to_kobo(HighlightColor::Blue), "blue");
-        assert_eq!(color_to_kobo(HighlightColor::Rose), "pink");
-        assert_eq!(color_to_kobo(HighlightColor::Violet), "purple");
+    fn color_to_kobo_emits_the_documented_firmware_hex_swatch_for_every_palette_color() {
+        assert_eq!(color_to_kobo(HighlightColor::Amber), "#F6F3B3");
+        assert_eq!(color_to_kobo(HighlightColor::Green), "#C6E09E");
+        assert_eq!(color_to_kobo(HighlightColor::Blue), "#B2E1E8");
+        assert_eq!(color_to_kobo(HighlightColor::Rose), "#E8AFCF");
+        assert_eq!(color_to_kobo(HighlightColor::Violet), "#E8AFCF");
     }
 
     #[test]
