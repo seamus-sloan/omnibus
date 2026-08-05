@@ -72,6 +72,11 @@ ignore = [
     { id = "RUSTSEC-2026-0097", reason = "rand 0.7.3 unsoundness — aliased mutable reference when a custom `log` logger calls rand::rng()/thread_rng() and ThreadRng reseeds mid-log; build-dependency only via phf_generator 0.8 (ammonia/html5ever codegen under wry), never links into any runtime binary and that logger-reseed path is not exercised in a build script" },
 ]
 
+# NB: RUSTSEC-2026-0221 (event-listener unsoundness, reachable via sqlx-core)
+# is NOT ignored here — it was fixed for real by bumping event-listener
+# 5.4.1 -> 5.4.2 (`cargo update -p event-listener`; patched in >= 5.4.2),
+# same pattern as the memmap2 fix noted above. See Cargo.lock and issue #1681.
+
 # ---------------------------------------------------------------------------
 # Licenses
 # ---------------------------------------------------------------------------
@@ -248,14 +253,16 @@ skip = [
     { name = "reqwest", version = "0.12.28" },
 
     # --- Dioxus git-pin lag (gloo-net / gloo-timers / gloo-utils) ---
-    # dioxus-fullstack/dioxus-web 0.7.9's git-pinned Dioxus tag carries
-    # gloo-net 0.6.0 (pulling gloo-utils 0.2.0) + gloo-timers 0.3.0, while
-    # omnibus-frontend pins gloo-net 0.7.0 (pulling gloo-utils 0.3.0) +
-    # gloo-timers 0.4.0 directly behind the `web` feature. See
-    # docs/dependency-audit.md for full source chains (issue #1621).
-    { name = "gloo-net", version = "0.6.0" },
-    { name = "gloo-timers", version = "0.3.0" },
-    { name = "gloo-utils", version = "0.2.0" },
+    # The split described in docs/dependency-audit.md (issue #1621) is real,
+    # but CI's `cargo deny check` invocation (rust.yml, no `--features`) never
+    # enables omnibus-frontend's `web` feature, so omnibus-frontend's own
+    # gloo-net 0.7.0 / gloo-timers 0.4.0 / gloo-utils 0.3.0 pins never enter
+    # that resolve — only the dioxus-fullstack git-pin copies (0.6.0 / 0.3.0 /
+    # 0.2.0) do, as a single version each. Explicit skips here therefore trip
+    # `unnecessary-skip`/`unmatched-skip` (verified via `cargo deny check
+    # advisories sources bans licenses`, the exact CI command; issue #1681) —
+    # deliberately omitted, not forgotten. Re-add if a `--features web` (or
+    # `--all-features`) invocation is ever added to CI.
 ]
 
 # ---------------------------------------------------------------------------
