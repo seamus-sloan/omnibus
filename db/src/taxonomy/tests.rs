@@ -1,9 +1,8 @@
 //! Unit tests for the `taxonomy` helpers. One `resolve_or_insert_simple!`
-//! macro generates the three resolvers, so all three contracts (insert,
-//! idempotency, case-insensitivity) are covered on `series` and spot-checked
-//! on `publishers` / `languages` to catch a bad expansion.
-//! `delete_orphan_taxonomy` gets its own drop/keep pair;
-//! `delete_orphan_tags` adds the override-aware keep/drop cases.
+//! macro generates the three resolvers, spot-checked across `series`,
+//! `publishers`, `languages`. `delete_orphan_taxonomy`, `delete_orphan_tags`,
+//! and `delete_orphan_genres` each get drop/keep/override-aware/case-fold
+//! tests, plus a purge-path regression test for genres.
 
 use omnibus_shared::MetadataOverrides;
 
@@ -298,4 +297,176 @@ async fn delete_orphan_tags_ignores_override_rows_whose_book_no_longer_exists() 
         .await
         .unwrap();
     assert_eq!(n, 0, "a dead book's override must not protect a tag row");
+}
+
+#[tokio::test]
+async fn delete_orphan_genres_keeps_a_genre_named_only_by_a_live_books_override() {
+    let _covers = CoversTempDir::new("orphan_genres_override_keep");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    replace_books(
+        &pool,
+        "/lib",
+        vec![indexed("a.epub", Some("A"), &["X"], &[], None, None)],
+    )
+    .await
+    .unwrap();
+    let books = list_books(&pool, "/lib").await.unwrap();
+    let uuid = books[0].unique_identifier.clone().unwrap();
+    upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &MetadataOverrides {
+            genres: Some(vec!["Keeper".into()]),
+            ..Default::default()
+        },
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    let mut tx = pool.begin().await.unwrap();
+    delete_orphan_genres(&mut tx).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let kept: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM genres WHERE name = 'Keeper'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(kept, 1, "an override membership must protect the genre row");
+}
+
+#[tokio::test]
+async fn delete_orphan_genres_matches_override_genres_case_insensitively() {
+    let _covers = CoversTempDir::new("orphan_genres_case_fold");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    // A linkless canonical-cased row, protected only by a lower-cased
+    // override genre on a live book — the NOCASE genres unique means the
+    // override materializes no second row, so the sweep's membership match
+    // must fold case or the row is wrongly reaped.
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("INSERT INTO genres (name) VALUES ('Fiction')")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    replace_books(
+        &pool,
+        "/lib",
+        vec![indexed("a.epub", Some("A"), &["X"], &[], None, None)],
+    )
+    .await
+    .unwrap();
+    let books = list_books(&pool, "/lib").await.unwrap();
+    let uuid = books[0].unique_identifier.clone().unwrap();
+    upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &MetadataOverrides {
+            genres: Some(vec!["fiction".into()]),
+            ..Default::default()
+        },
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    let mut tx = pool.begin().await.unwrap();
+    delete_orphan_genres(&mut tx).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let kept: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM genres WHERE name = 'Fiction'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        kept, 1,
+        "a case-variant override membership must protect the row"
+    );
+}
+
+#[tokio::test]
+async fn delete_orphan_genres_ignores_override_rows_whose_book_no_longer_exists() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    // An override row keyed to a uuid with no live `books` row — e.g. left
+    // behind by an out-of-band delete — must not keep its genres alive. The
+    // membership check joins to `books`, mirroring `get_genre_cloud`.
+    sqlx::query(
+        r#"INSERT INTO metadata_overrides (book_uuid, overrides)
+           VALUES ('no-such-book', '{"genres":["Ghosted"]}')"#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("INSERT INTO genres (name) VALUES ('Ghosted')")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    delete_orphan_genres(&mut tx).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM genres WHERE name = 'Ghosted'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 0, "a dead book's override must not protect a genre row");
+}
+
+#[tokio::test]
+async fn delete_orphan_taxonomy_reaps_a_genre_orphaned_by_purging_its_book() {
+    // Regression for #1705: `delete_orphan_taxonomy` deletes
+    // `metadata_overrides` rows directly via `purge_book`'s
+    // `UUID_KEYED_TABLES` sweep, bypassing the override-editing write paths
+    // that otherwise reap genres. It must still call `delete_orphan_genres`
+    // itself, or a genre uniquely named by the purged book is stranded.
+    let _covers = CoversTempDir::new("orphan_genres_purge_regression");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    replace_books(
+        &pool,
+        "/lib",
+        vec![indexed("a.epub", Some("A"), &["X"], &[], None, None)],
+    )
+    .await
+    .unwrap();
+    let books = list_books(&pool, "/lib").await.unwrap();
+    let book_id = books[0].id;
+    let uuid = books[0].unique_identifier.clone().unwrap();
+    upsert_metadata_overrides(
+        &pool,
+        &uuid,
+        &MetadataOverrides {
+            genres: Some(vec!["Orphaned".into()]),
+            ..Default::default()
+        },
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    let mut tx = pool.begin().await.unwrap();
+    crate::deletion::purge::purge_book(&mut tx, book_id, &uuid)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM genres WHERE name = 'Orphaned'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 0, "purging the last book must reap its unique genre");
 }
