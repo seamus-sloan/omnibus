@@ -472,6 +472,3 @@ fn UmVersion() -> Element {
         }
     }
 }
-
-// `initials_for` moved to `components::user_avatar` when the monogram sites
-// were unified; its tests moved with it.

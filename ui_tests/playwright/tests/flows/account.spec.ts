@@ -332,14 +332,23 @@ test("shows an error when the avatar upload fails", async ({ page }) => {
     return route.continue();
   });
 
-  await page.getByTestId("avatar-file-input").setInputFiles({
-    name: "avatar.png",
-    mimeType: "image/png",
-    buffer: Buffer.from(
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
-      "base64",
-    ),
-  });
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/account/avatar",
+      expectedStatus: 400,
+    },
+    async () =>
+      page.getByTestId("avatar-file-input").setInputFiles({
+        name: "avatar.png",
+        mimeType: "image/png",
+        buffer: Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+          "base64",
+        ),
+      }),
+  );
 
   await expect(page.getByTestId("avatar-status")).toBeVisible();
   await expect(page.getByTestId("avatar-status")).toHaveClass(/error/);

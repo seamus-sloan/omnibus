@@ -1,9 +1,7 @@
 //! Profile card at the top of Settings → Account: display name + avatar.
-//!
 //! Both writes are account configuration, so they go straight to the server
-//! and surface failures inline — never queued (rule 08). Signals start empty so
-//! SSR and the first WASM paint agree (rule 07); the hydration effect fills
-//! them from the resolved user.
+//! and surface failures inline (rule 08). Signals start empty so SSR and the
+//! first WASM paint agree (rule 07).
 
 use dioxus::prelude::*;
 

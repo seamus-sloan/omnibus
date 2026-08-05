@@ -1,10 +1,6 @@
-//! The one place a user is drawn as a circle: their uploaded avatar, or a
-//! monogram when they have none.
-//!
-//! Every monogram site (user menu trigger and panel, journal bylines, ratings
-//! rows, the mobile "You" tab) mounts this so the photo/letter decision and the
-//! broken-image fallback are written once. Callers pass the CSS class their
-//! site already used, so this changes what is inside the circle, not its shape.
+//! The one place a user is drawn as a circle: their uploaded avatar, else a
+//! monogram. Mounted by every site that used to hand-roll one — user menu,
+//! journal bylines, ratings rows, the mobile "You" tab, the profile card.
 
 use dioxus::prelude::*;
 
@@ -31,7 +27,7 @@ pub fn initials_for(name: &str) -> String {
 /// A user's avatar image, or their monogram when they haven't set one.
 ///
 /// `class` is the caller's existing site class (`um-initials`,
-/// `bd-journal-avatar`, …); the image variant adds `<class>--photo` so each
+/// `bd-journal-avatar`, …); the photo inside it gets `<class>-photo` so each
 /// site can size its own circle. `bust` comes from
 /// [`crate::contexts::AvatarCacheBust`] — the URL is keyed only by user id, so
 /// a replaced avatar produces the same URL and needs the counter to reload.
@@ -68,7 +64,7 @@ pub fn UserAvatar(
     rsx! {
         span {
             class: "{class}",
-            "aria-hidden": if is_monogram { "true" },
+            "aria-hidden": if is_monogram { Some("true") } else { None },
             if let Some(url) = shown {
                 img {
                     class: "{photo_class}",

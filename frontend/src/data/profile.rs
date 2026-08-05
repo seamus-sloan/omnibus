@@ -1,12 +1,8 @@
-//! Per-user profile writes: the display name and the avatar image.
-//!
-//! The name goes through the RPC server function like the other Account
-//! writes; the avatar can't (a server function JSON-serializes its arguments),
-//! so it POSTs multipart straight to `/api/account/avatar` — the same split the
-//! author-photo upload makes.
-//!
-//! Neither is ever queued offline: a profile is account configuration, so a
-//! failure must surface immediately rather than replay later (rule 08).
+//! Per-user profile writes. The display name goes through the RPC server
+//! function like the other Account writes; the avatar POSTs multipart directly
+//! (a server function JSON-serializes its arguments), the same split the
+//! author-photo upload makes. Neither is ever queued — a profile is account
+//! configuration, so a failure surfaces immediately (rule 08).
 
 use super::DataError;
 
