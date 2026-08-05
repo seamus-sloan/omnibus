@@ -1,9 +1,8 @@
 //! Tests for the rpc-side `AuthUser`/`AdminUser` extractors — the sole
 //! 401/403 gate for every `/api/rpc/*` server function reachable from the
-//! web UI. Deliberately duplicated from `server::auth::extractor` (see
-//! `server_auth`'s module doc for why), so this mirrors
-//! `server/src/auth/extractor/tests.rs`'s test names/shapes rather than
-//! reusing it directly.
+//! web UI. Mirrors `server/src/auth/extractor/tests.rs`'s test names/shapes
+//! rather than reusing it directly (see `server_auth`'s module doc for why
+//! it's a deliberate duplicate).
 use dioxus::fullstack::axum::extract::FromRequestParts;
 use dioxus::fullstack::axum::http::request::Parts;
 use dioxus::fullstack::axum::http::{header, HeaderName, Request, StatusCode};
