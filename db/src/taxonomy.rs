@@ -43,15 +43,18 @@ resolve_or_insert_simple!(resolve_or_insert_publisher, "publishers", "name");
 resolve_or_insert_simple!(resolve_or_insert_language, "languages", "code");
 
 /// Delete taxonomy rows (`authors`, `series`, `publishers`, `languages`)
-/// no longer referenced by any book, then reap orphaned tags via
-/// [`delete_orphan_tags`]. Run wherever the last link to a taxonomy row can
-/// disappear — the missing-files GC purge, the merge source delete, and the
-/// indexer's Changed bucket, which wipes a book's link rows before
-/// re-inserting them from the re-parsed file — so an author or series left
-/// with zero books doesn't linger. `author_photos` cascades on the author
-/// delete; the link tables have no taxonomy-side cascade, so a row is only
-/// deletable once its last link is gone, which is exactly the set this
-/// targets. Table/column names are compile-time literals, not caller input.
+/// no longer referenced by any book, then reap orphaned tags and genres via
+/// [`delete_orphan_tags`] and [`delete_orphan_genres`]. Run wherever the last
+/// link to a taxonomy row can disappear — the missing-files GC purge, the
+/// merge source delete, and the indexer's Changed bucket, which wipes a
+/// book's link rows before re-inserting them from the re-parsed file — so an
+/// author or series left with zero books doesn't linger, and a book whose
+/// `metadata_overrides` row is deleted directly (rather than through the
+/// override-editing write paths) doesn't strand a genre it uniquely named.
+/// `author_photos` cascades on the author delete; the link tables have no
+/// taxonomy-side cascade, so a row is only deletable once its last link is
+/// gone, which is exactly the set this targets. Table/column names are
+/// compile-time literals, not caller input.
 pub(crate) async fn delete_orphan_taxonomy(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
 ) -> Result<(), sqlx::Error> {
@@ -67,7 +70,8 @@ pub(crate) async fn delete_orphan_taxonomy(
         );
         sqlx::query(&sql).execute(&mut **tx).await?;
     }
-    delete_orphan_tags(tx).await
+    delete_orphan_tags(tx).await?;
+    delete_orphan_genres(tx).await
 }
 
 /// Delete `tags` rows with no book left to justify them: no canonical
@@ -108,8 +112,9 @@ pub(crate) async fn delete_orphan_tags(
 /// canonical link table (migration `0066`), so this is the whole visibility
 /// rule rather than the second half of one — the single clause here is the
 /// `metadata_overrides` arm of [`delete_orphan_tags`], with `$.genres` for
-/// `$.subjects`. Called from the override write paths, which are the only
-/// way a `genres` row is ever created or orphaned.
+/// `$.subjects`. Called from the override write paths (the only way a
+/// `genres` row is ever created) and from [`delete_orphan_taxonomy`], which
+/// covers the paths that delete a book's `metadata_overrides` row directly.
 pub(crate) async fn delete_orphan_genres(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
 ) -> Result<(), sqlx::Error> {
