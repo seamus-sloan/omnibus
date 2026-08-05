@@ -370,12 +370,12 @@ struct UserSummary: Codable, Hashable, Sendable {
     var canDownload: Bool
     var kindleEmail: String?
     /// Presentation name other users see. `nil` falls back to `username`,
-    /// which stays the login identity. Optional so a `CacheKey.me` blob
-    /// written before this field existed still decodes.
+    /// which stays the login identity.
     var displayName: String?
-    /// Whether this user has uploaded an avatar. Optional for the same
-    /// pre-upgrade-cache reason; treat a missing value as "no".
-    var hasAvatar: Bool?
+    /// Whether this user has uploaded an avatar. Non-optional: the lenient
+    /// `decode(Bool.Type,forKey:)` above defaults a missing key to `false`, so
+    /// a pre-upgrade `CacheKey.me` blob still decodes with the right meaning.
+    var hasAvatar: Bool = false
 
     /// The name to show for this user — never render `username` on its own.
     var display: String { displayName ?? username }

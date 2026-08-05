@@ -62,7 +62,7 @@ struct ProfileEditSheet: View {
     }
 
     private var showsAvatar: Bool {
-        draft.pickedImage != nil || (user.hasAvatar == true && !removedAvatar)
+        draft.pickedImage != nil || (user.hasAvatar && !removedAvatar)
     }
 
     var body: some View {
@@ -167,8 +167,15 @@ struct ProfileEditSheet: View {
             error = "That image couldn't be read."
             return
         }
+        // Re-encoding can fail on a pathological image. Say so and keep the
+        // previous selection — silently dropping it leaves Save disabled with
+        // no explanation for a photo the user just picked.
+        guard let encoded = Self.encodeAvatar(image) else {
+            error = "That image couldn't be prepared for upload."
+            return
+        }
         error = nil
-        draft.pickedImage = Self.encodeAvatar(image)
+        draft.pickedImage = encoded
         removedAvatar = false
     }
 

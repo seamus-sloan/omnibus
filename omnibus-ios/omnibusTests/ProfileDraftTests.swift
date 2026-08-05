@@ -82,7 +82,7 @@ import Testing
         UserSummary(
             id: 1, username: "cool-guy-7", isAdmin: false, canUpload: true,
             canEdit: true, canDownload: true, kindleEmail: nil,
-            displayName: displayName, hasAvatar: nil
+            displayName: displayName, hasAvatar: false
         )
     }
 
@@ -95,15 +95,16 @@ import Testing
     }
 
     @Test func decodesAPayloadWithoutTheProfileFields() throws {
-        // A `CacheKey.me` blob written before this release has neither key;
-        // it must still decode rather than signing the reader out.
+        // A `CacheKey.me` blob written before this release has neither key; it
+        // must still decode rather than signing the reader out. `has_avatar`
+        // rides the lenient Bool decoder, so absent means `false`.
         let json = """
             {"id":1,"username":"alice","is_admin":false,"can_upload":true,
              "can_edit":true,"can_download":true}
             """
         let decoded = try JSONDecoder().decode(UserSummary.self, from: Data(json.utf8))
         #expect(decoded.displayName == nil)
-        #expect(decoded.hasAvatar == nil)
+        #expect(decoded.hasAvatar == false)
         #expect(decoded.display == "alice")
     }
 }

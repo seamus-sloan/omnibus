@@ -89,7 +89,7 @@ struct AccountView: View {
             UserAvatar(
                 id: app.user?.id ?? 0,
                 name: app.user?.display ?? "?",
-                hasAvatar: app.user?.hasAvatar == true
+                hasAvatar: app.user?.hasAvatar ?? false
             )
 
             VStack(alignment: .leading, spacing: 3) {
