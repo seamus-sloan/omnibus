@@ -260,11 +260,9 @@ pub struct KoboBookState {
     /// moved every time only the position did.
     pub status_updated_at: i64,
     /// The device's last-reported `Statistics`, echoed back untouched
-    /// (#1653). `None` when no device has ever reported one for this book,
-    /// in which case sync-out omits the block rather than inventing zeroes.
-    /// Deliberately absent from [`Self::state_updated_at`]: a stats-only
-    /// change is not a reason to re-push a book the device already agrees
-    /// with, and the block is stamped with its own clock regardless.
+    /// (#1653). Absent from [`Self::state_updated_at`] on purpose: a
+    /// stats-only change is no reason to re-push a book the device agrees
+    /// with, and the block carries its own clock regardless.
     pub statistics: Option<crate::progress::KoboStatistics>,
 }
 
@@ -344,8 +342,8 @@ pub async fn reading_state_for(
                 uuid,
                 KoboBookState {
                     status,
-                    // A row of NULLs is "no device ever reported" — collapse it
-                    // so sync-out omits the block instead of emitting empties.
+                    // A row of NULLs is "no device ever reported": collapse it
+                    // so sync-out omits the block rather than emitting empties.
                     statistics: (!statistics.is_empty()).then_some(statistics),
                     percent: row.try_get::<Option<i64>, _>("progress_percent")?,
                     kobo_location: row.try_get::<Option<String>, _>("kobo_location")?,

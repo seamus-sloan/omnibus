@@ -227,35 +227,19 @@ pub struct KoboStatistics {
 }
 
 impl KoboStatistics {
-    /// Whether this carries anything worth storing or emitting. A block with
-    /// neither counter is not a fact about reading time, so it is dropped
-    /// rather than stored as a row of NULLs.
+    /// Whether both counters are absent — nothing worth storing or echoing.
     pub fn is_empty(&self) -> bool {
         self.spent_reading_minutes.is_none() && self.remaining_time_minutes.is_none()
     }
 }
 
-/// Mirror a device's `Statistics` block onto its epub position row (#1653).
-/// Returns whether a row was updated.
+/// Mirror a device's `Statistics` block onto its epub position row (#1653);
+/// returns whether a row was updated.
 ///
-/// **UPDATE, not upsert.** Statistics annotate a position; they are not one.
-/// The row CHECK requires an epub row to carry a CFI or a percent, so a
-/// stats-only row cannot exist — and shouldn't: a position-less row would
-/// surface on the Continue-reading rail at 0%. A block for a book with no
-/// position is dropped, which is what happened to every block before this.
-///
-/// **Nothing reads these but the Kobo echo path.** They are cumulative
-/// per-book totals, while `reading_sessions` holds discrete sessions that
-/// already arrive per-session via the `LeaveContent` analytics event; feeding
-/// these into `crate::stats` would double-count that reading time.
-///
-/// The write is rejected unless it is provably at least as new as what is
-/// stored — an unstamped block can only take an empty slot. Two Kobos on one
-/// account each keep their own totals, and the older one's report can't
-/// overwrite the newer one's and then be echoed back as truth. The stamp is
-/// clamped forward to server-now like [`upsert_progress_tx`]'s: a device a
-/// year fast would otherwise lock itself out of every later update, and the
-/// future stamp would win arbitration on the device forever.
+/// UPDATE, not upsert: statistics annotate a position, they don't create one.
+/// Rejected unless provably at least as new as what is stored, so a second
+/// Kobo can't overwrite newer totals and have them echoed back as truth. The
+/// stamp clamps forward to server-now like [`upsert_progress_tx`]'s.
 pub async fn set_kobo_statistics_tx(
     tx: &mut Transaction<'_, Sqlite>,
     user_id: i64,
@@ -265,10 +249,8 @@ pub async fn set_kobo_statistics_tx(
     let book_uuid = resolve_canonical_book_uuid_exec(&mut **tx, book_uuid)
         .await?
         .ok_or(ProgressError::BookNotFound)?;
-    // A NULL stamp stays NULL rather than becoming now: sync-out then omits
-    // `LastModified`, the device's newest-wins arbitration drops the block,
-    // and its own totals survive. Inventing a clock is the failure this
-    // whole feature is shaped to avoid.
+    // A NULL stamp stays NULL rather than becoming now: an invented clock
+    // would win the device's arbitration and overwrite its own totals.
     let result = sqlx::query(
         "UPDATE reading_progress
             SET kobo_spent_reading_minutes = ?,

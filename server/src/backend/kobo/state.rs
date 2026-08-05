@@ -104,9 +104,8 @@ pub async fn put_state(
             }
         }
         if let Some(stats) = &entry.statistics {
-            // Kept from #1652's capture pass: the shape here comes from the
-            // reference implementations, not from hardware, so a real payload
-            // is still worth having in the log.
+            // Kept from #1652's capture pass — the shape came from the
+            // reference impls, not from hardware.
             tracing::info!(
                 %uuid,
                 spent_reading_minutes = ?stats.spent_reading_minutes,
@@ -203,15 +202,12 @@ async fn persist_bookmark(
     Ok(())
 }
 
-/// Mirror a device's `Statistics` block onto its epub position row (#1653),
-/// so sync-out can hand the same numbers back with the device's own clock.
+/// Mirror a device's `Statistics` block so sync-out can hand the same numbers
+/// back with the device's own clock (#1653).
 ///
-/// A negative counter is *dropped*, not clamped, for the same reason an
-/// out-of-range percent is: these values are only ever echoed, so a number we
-/// don't understand has no safe interpretation to clamp toward — and the row
-/// CHECK would abort the whole batch's transaction rather than this one entry.
-/// A block left with no usable counter is a no-op; so is one for a book with
-/// no position row, which `set_kobo_statistics_tx` will not create.
+/// A negative counter is dropped, not clamped, like an out-of-range percent:
+/// echoed-only values have nothing safe to clamp toward, and the row CHECK
+/// would abort the whole batch rather than this one entry.
 async fn persist_statistics(
     tx: &mut Transaction<'_, Sqlite>,
     user_id: i64,

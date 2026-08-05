@@ -161,9 +161,8 @@ pub struct ReadingState {
     pub priority_timestamp: String,
     pub status_info: StatusInfo,
     pub current_bookmark: CurrentBookmark,
-    /// The device's own last-reported totals, echoed back. Omitted entirely
-    /// for a book no device has reported on — an absent block is today's
-    /// behaviour and strictly safer than a zeroed one.
+    /// The device's own last-reported totals, echoed back. Omitted for a book
+    /// no device has reported on — safer than emitting a zeroed block.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub statistics: Option<Statistics>,
 }
@@ -273,10 +272,8 @@ pub fn reading_state(uuid: &str, book_ts: &str, state: Option<&KoboBookState>) -
                 last_modified: stamp(s.progress_updated_at),
             })
             .unwrap_or_default(),
-        // Echoed from what the device last reported, with the device's own
-        // clock. `stamp` maps the 0/absent sentinel to `None`, so a stored
-        // block we hold no clock for goes out unstamped and loses arbitration
-        // rather than overwriting the device's totals with our mirror.
+        // The device's own clock, never `now`. Unstamped when we hold none,
+        // which loses arbitration rather than overwriting its totals.
         statistics: state
             .and_then(|s| s.statistics.as_ref())
             .map(|st| Statistics {
@@ -415,16 +412,12 @@ pub fn book_metadata(base: &str, token: &str, book: &KoboBookRow) -> BookMetadat
     }
 }
 
-/// Cumulative per-book stats. Mirrored on the `state` PUT and handed straight
-/// back on sync-out (#1653) — **echoed, never invented**. The device applies
-/// the same newest-timestamp-wins arbitration to this block as to every other
-/// sub-object (#1652), so a zeroed block stamped `now` would be the server
-/// asserting "your reading totals are zero" and the device would adopt it.
+/// Cumulative per-book stats, echoed and never invented (#1653): the device
+/// arbitrates this block newest-wins like every other sub-object (#1652), so
+/// zeroes stamped `now` would overwrite its real totals.
 ///
-/// These feed nothing else. They are running totals, while `reading_sessions`
-/// stores discrete sessions — the per-session truth already arrives via the
-/// `LeaveContent` analytics event, so deriving stats from a cumulative counter
-/// would double-count the same reading time.
+/// Feeds nothing else — these are running totals, while `reading_sessions`
+/// already holds the same reading time as discrete `LeaveContent` rows.
 #[derive(Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "PascalCase")]
 pub struct Statistics {
@@ -433,9 +426,7 @@ pub struct Statistics {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remaining_time_minutes: Option<i64>,
     /// The block's own event time — the device's, always. Omitted when we
-    /// hold no clock for it, which makes the device drop the block and keep
-    /// its own totals; that is the safe direction, and inventing a stamp is
-    /// the failure this field exists to prevent.
+    /// hold none, which makes the device drop the block and keep its totals.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_modified: Option<String>,
 }

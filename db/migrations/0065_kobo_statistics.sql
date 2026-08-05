@@ -1,20 +1,13 @@
 -- Store the `Statistics` block a Kobo sends on `PUT library/{uuid}/state`
--- (#1653) so sync-out can echo it back. The device arbitrates the block by
--- timestamp like every other sub-object (#1652), so it must be echoed with
--- the DEVICE's clock: emitting zeroed counters stamped `now` would make the
--- server assert "your reading totals are zero" and the device would adopt it.
--- Hence a third column for the device's own `Statistics.LastModified` — the
--- values are useless without the clock that makes them safe to send.
+-- (#1653) so sync-out can echo it back. The device arbitrates the block
+-- newest-wins (#1652), so the third column — its own `LastModified` — is what
+-- makes the counters safe to send: zeroes stamped `now` would win and wipe
+-- the device's real totals. Not fed into `db::stats`; cumulative totals would
+-- double-count the discrete `reading_sessions` rows `LeaveContent` writes.
 --
--- `reading_progress` is the natural home: per (user, book, format), and Kobo
--- only ever writes `epub`. These are NOT fed into `db::stats` — cumulative
--- totals would double-count against the discrete `reading_sessions` rows the
--- `LeaveContent` analytics event already writes.
---
--- SQLite can't add a column to an existing CHECK, and the audio arm below
--- names every column it excludes so a caller bypassing the API validators
--- still can't persist a cross-format row. Keeping that guarantee means the
--- 0058 dance: CREATE _new, INSERT SELECT, DROP, RENAME, recreate every index.
+-- SQLite can't extend an existing CHECK, and the audio arm below names every
+-- column it excludes. Keeping that guarantee means the 0058 dance: CREATE
+-- _new, INSERT SELECT, DROP, RENAME, recreate every index.
 
 CREATE TABLE reading_progress_new (
     id                       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,23 +27,20 @@ CREATE TABLE reading_progress_new (
     progress_percent         INTEGER CHECK (progress_percent IS NULL
                                             OR progress_percent BETWEEN 0 AND 100),
     -- The device's `CurrentBookmark.Location` object, stored verbatim as JSON.
-    -- Deliberately opaque on the echo path: it rides back to the same device
-    -- unchanged. `db::kobo_position` does parse it, but only to DERIVE the
-    -- `epub_cfi` beside it — the blob itself is never rewritten from that.
+    -- Opaque on the echo path: it rides back to the same device unchanged.
+    -- `db::kobo_position` parses it only to DERIVE the `epub_cfi` beside it;
+    -- the blob itself is never rewritten from that.
     kobo_location            TEXT,
-    -- The device's own `Statistics` counters, echoed back untouched. Negative
-    -- values are rejected rather than clamped: the counters are only ever
-    -- handed straight back, so a value we don't understand has no safe
-    -- interpretation to clamp toward.
+    -- The device's own `Statistics` counters, echoed back untouched. Negatives
+    -- are rejected, not clamped — echoed-only values have nothing safe to
+    -- clamp toward.
     kobo_spent_reading_minutes   INTEGER CHECK (kobo_spent_reading_minutes IS NULL
                                                 OR kobo_spent_reading_minutes >= 0),
     kobo_remaining_time_minutes  INTEGER CHECK (kobo_remaining_time_minutes IS NULL
                                                 OR kobo_remaining_time_minutes >= 0),
-    -- The device's `Statistics.LastModified`, NOT server receipt time. Emitting
-    -- a fresh stamp would win the device's newest-wins arbitration and overwrite
-    -- its real totals with ours. NULL when the device sent counters but no
-    -- parseable clock: sync-out then omits the stamp, which loses arbitration
-    -- and leaves the device's own totals alone — the safe direction.
+    -- The device's `Statistics.LastModified`, never server receipt time. NULL
+    -- when it sent counters but no parseable clock: sync-out omits the stamp,
+    -- which loses arbitration and leaves the device's totals alone.
     kobo_statistics_updated_at   INTEGER,
     -- Both arms name every column they exclude, so a caller that bypasses the
     -- API validators still can't persist a cross-format row.
