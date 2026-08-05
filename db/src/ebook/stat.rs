@@ -166,7 +166,8 @@ fn unreadable_subdir_entry(base: &Path, current: &Path, err: &std::io::Error) ->
 /// [`crate::ebook::EBOOK_FORMATS`] — `.epub` / `.cbz`). Other files and
 /// entries whose `file_type()` can't be read are skipped. `saw_any_file` is
 /// set for every regular file regardless of extension (the "root isn't
-/// empty" signal, see the caller).
+/// empty" signal, see the caller). Subdirectories matching
+/// [`crate::helpers::is_skipped_scan_dir`] are not descended into.
 fn push_dir_entry(
     base: &Path,
     entry: &std::fs::DirEntry,
@@ -179,6 +180,10 @@ fn push_dir_entry(
     };
     let entry_path = entry.path();
     if file_type.is_dir() {
+        // Skipped at discovery, so an unreadable one never sets `incomplete`.
+        if crate::helpers::is_skipped_scan_dir(&entry.file_name().to_string_lossy()) {
+            return;
+        }
         stack.push(entry_path);
         return;
     }

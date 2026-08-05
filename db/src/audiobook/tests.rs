@@ -56,6 +56,55 @@ fn stat_recurses_into_subdirectories() {
 }
 
 #[test]
+fn stat_does_not_descend_into_hidden_or_eadir_directories() {
+    let dir = make_test_dir("skip_dirs");
+    fs::write(dir.join("real.m4b"), b"x").unwrap();
+    let eadir = dir.join("@eaDir");
+    fs::create_dir_all(&eadir).unwrap();
+    fs::write(eadir.join("thumb.m4b"), b"x").unwrap();
+    let staging = dir.join(".shelfarr-staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::write(staging.join("half-copied.m4b"), b"x").unwrap();
+
+    let out = stat_audiobook_library(Some(dir.to_str().unwrap()), dir.to_str().unwrap());
+    fs::remove_dir_all(&dir).unwrap();
+
+    let names: Vec<&str> = out.entries.iter().map(|e| e.filename.as_str()).collect();
+    assert_eq!(names, vec!["real.m4b"], "got {names:?}");
+    assert!(!out.incomplete);
+}
+
+// Audiobook mirror of the ebook regression (see `ebook::stat::tests`).
+#[cfg(unix)]
+#[test]
+fn stat_stays_complete_when_an_unreadable_subdirectory_is_hidden() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = make_test_dir("skip_locked_hidden");
+    fs::write(dir.join("real.m4b"), b"x").unwrap();
+    let staging = dir.join(".shelfarr-staging");
+    fs::create_dir_all(&staging).unwrap();
+    fs::set_permissions(&staging, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read_dir(&staging).is_ok() {
+        // Running as root (CI container) — perms don't bite; skip.
+        fs::set_permissions(&staging, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        return;
+    }
+
+    let out = stat_audiobook_library(Some(dir.to_str().unwrap()), dir.to_str().unwrap());
+
+    fs::set_permissions(&staging, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::remove_dir_all(&dir).unwrap();
+
+    assert!(
+        !out.incomplete,
+        "an unreadable *hidden* dir must not flag the enumeration incomplete",
+    );
+    assert_eq!(out.entries.len(), 1);
+}
+
+#[test]
 fn parse_unreadable_file_surfaces_as_error_metadata_row() {
     // Phase B's per-file failure shape: an audiobook that fails to parse
     // becomes an IndexedBook with `metadata.error = Some(...)`, never a
