@@ -245,7 +245,7 @@ final class ReaderController: NSObject {
     /// A reload owed to a web-content process that went away while the app was
     /// in the background, where reloading would only feed another one to the
     /// same reclaim. Settled by `reloadIfNeeded` on the way back.
-    private var awaitingReload = false
+    private(set) var awaitingReload = false
 
     override init() {
         settings = ReaderSettings.load()
@@ -377,19 +377,23 @@ final class ReaderController: NSObject {
     /// relying on WebKit's own reload-when-visible, but not while the app is
     /// still in the background: a process launched there is only fed to the same
     /// reclaim, and the book's bytes are re-read to no purpose.
-    func webContentProcessDidTerminate() {
+    func webContentProcessDidTerminate(
+        state: UIApplication.State = UIApplication.shared.applicationState
+    ) {
         prepareForReboot()
         awaitingReload = true
-        reloadIfNeeded()
+        reloadIfNeeded(state: state)
     }
 
     /// Reload a page WebKit took away, if one is owed. Called on the way back to
     /// the foreground, and a no-op when nothing is owed.
-    func reloadIfNeeded() {
-        guard awaitingReload, UIApplication.shared.applicationState != .background,
-              let webView, let url = ReaderWebView.entryURL
-        else { return }
+    ///
+    /// `state` is a parameter so the deferral can be exercised from a test,
+    /// which can't foreground or background its host app.
+    func reloadIfNeeded(state: UIApplication.State = UIApplication.shared.applicationState) {
+        guard awaitingReload, state != .background else { return }
         awaitingReload = false
+        guard let webView, let url = ReaderWebView.entryURL else { return }
         // `reload()` is unreliable after a terminated process — the URL it would
         // reload can already be gone. Loading the entry point again is the same
         // navigation and doesn't depend on what survived.

@@ -1,5 +1,5 @@
 //  ReaderRebootTests.swift
-//  What the reader hands a page that replaces the one it was reading.
+//  What the reader hands to the page that replaces the one it was reading.
 //
 //  The epub.js stage is booted more than once per book: iOS reclaims the
 //  web-content process of an app that has been in the background a while, and
@@ -10,6 +10,7 @@
 
 import Foundation
 import Testing
+import UIKit
 
 @testable import omnibus
 
@@ -147,10 +148,50 @@ struct ReaderRebootTests {
         let controller = openReader(at: openedAt, holding: [mark("epubcfi(/6/14!/4/2/4,/1:0,/1:9)")])
         try relocate(controller, to: readTo)
 
-        controller.webContentProcessDidTerminate()
+        controller.webContentProcessDidTerminate(state: .active)
 
         #expect(!controller.isReady)
         #expect(controller.pendingHighlights.count == 1)
         #expect(try bootOptions(controller)["cfi"] as? String == readTo)
+    }
+
+    /// Reloading in the background only feeds a fresh process to the same
+    /// reclaim — and re-reads the whole book to do it.
+    @Test("a process lost while the app is away leaves the reload owed until it returns")
+    func reloadIsDeferredPastTheBackground() {
+        let controller = openReader(at: openedAt)
+
+        controller.webContentProcessDidTerminate(state: .background)
+        #expect(controller.awaitingReload)
+
+        // Still away: a background refresh pass must not spend it either.
+        controller.reloadIfNeeded(state: .background)
+        #expect(controller.awaitingReload)
+
+        controller.reloadIfNeeded(state: .active)
+        #expect(!controller.awaitingReload)
+    }
+
+    /// The callback can land either side of the reader's own resume hook, so
+    /// both have to be able to take the reload — and only one of them may.
+    @Test("a process lost as the app returns is reloaded without waiting for the resume hook")
+    func reloadIsTakenWhenTheAppIsAlreadyBack() {
+        let controller = openReader(at: openedAt)
+
+        controller.webContentProcessDidTerminate(state: .inactive)
+
+        #expect(!controller.awaitingReload)
+    }
+
+    @Test("a page WebKit reloaded on its own leaves nothing owed")
+    func webKitsOwnReloadClearsTheDebt() {
+        let controller = openReader(at: openedAt)
+        controller.webContentProcessDidTerminate(state: .background)
+
+        controller.handle(message: ["type": "hostReady"])
+
+        // Otherwise the resume hook loads the page a second time, throwing away
+        // the one that just came back and re-reading the book to do it.
+        #expect(!controller.awaitingReload)
     }
 }
