@@ -1,18 +1,21 @@
 //! Account screen (`/account`).
 //!
-//! Web/SSR renders the Send-to-Kindle destination form; the native
-//! shell renders the mobile "You" tab (identity, now-reading, quick links,
-//! account rows, theme, server/app version). Signals start empty so SSR and
-//! the first WASM paint agree (rule 07); the load effects fill them after
-//! mount.
+//! Web/SSR renders the self-service account cards (password today); the
+//! Kindle delivery address and Kobo devices live in their own Settings
+//! sections, built from [`KindleEmailCard`] and [`kobo::KoboDevicesCard`].
+//! The native shell renders the mobile "You" tab (identity, now-reading,
+//! quick links, account rows, theme, server/app version). Signals start
+//! empty so SSR and the first WASM paint agree (rule 07); the load effects
+//! fill them after mount.
 
 use dioxus::prelude::*;
 
 #[cfg(feature = "mobile")]
 mod downloads;
-// Web-only Kobo wireless-sync device card, rendered under the Account section.
+// Web-only Kobo wireless-sync device card, rendered as its own Settings
+// section.
 #[cfg(not(feature = "mobile"))]
-mod kobo;
+pub(crate) mod kobo;
 
 #[cfg(not(feature = "mobile"))]
 use crate::components::auth::{score_password, PasswordRequirements, StrengthMeter};
@@ -122,23 +125,17 @@ impl ThemeKind {
 
 // ── Page ───────────────────────────────────────────────────────────
 
-/// The Account screen. Web/SSR renders the Send-to-Kindle destination form;
-/// the native shell renders the mobile "You" tab.
-///
-/// `embedded` is set when the web body is rendered as the Account section of
-/// `/settings`: the sidebar already owns the page `h1`, so the card heading
-/// drops to `h2` to avoid a second top-level heading (the standalone
-/// `/account` route keeps its `h1`).
+/// The Account screen. Web/SSR renders the self-service account cards; the
+/// native shell renders the mobile "You" tab.
 #[component]
-pub fn AccountPage(#[props(default)] embedded: bool) -> Element {
+pub fn AccountPage() -> Element {
     #[cfg(feature = "mobile")]
     {
-        let _ = embedded;
         account_body()
     }
     #[cfg(not(feature = "mobile"))]
     {
-        kindle_account_body(embedded)
+        account_web_body()
     }
 }
 
@@ -303,11 +300,21 @@ fn kindle_email_form(
     }
 }
 
-/// Web/SSR page body — the Send-to-Kindle destination form. Hydrates the
+/// Web/SSR Account section body — the self-service cards that aren't tied to
+/// a delivery device. Kindle and Kobo have their own Settings sections.
+#[cfg(not(feature = "mobile"))]
+fn account_web_body() -> Element {
+    rsx! {
+        ChangePasswordCard {}
+    }
+}
+
+/// The Send-to-Kindle destination card (Settings → Kindle). Hydrates the
 /// saved address from `/api/auth/me`; saving/clearing round-trips through
 /// `data::set_kindle_email`.
 #[cfg(not(feature = "mobile"))]
-fn kindle_account_body(embedded: bool) -> Element {
+#[component]
+pub(crate) fn KindleEmailCard() -> Element {
     let server_url = use_server_url();
     let signals = KindleEmailSignals {
         email_input: use_signal(String::new),
@@ -324,11 +331,7 @@ fn kindle_account_body(embedded: bool) -> Element {
 
     rsx! {
         section { class: "card", "data-testid": "account-kindle-card",
-            if embedded {
-                h2 { "Account" }
-            } else {
-                h1 { "Account" }
-            }
+            h2 { "Kindle" }
             p { class: "subtitle", "Configure your Send-to-Kindle delivery address." }
 
             {kindle_email_form(signals.email_input, signals.in_flight, connected, on_save, on_clear)}
@@ -341,10 +344,6 @@ fn kindle_account_body(embedded: bool) -> Element {
 
             {credential_status_message("kindle-email-status", (signals.msg)().as_deref(), (signals.msg_is_error)())}
         }
-
-        ChangePasswordCard {}
-
-        kobo::KoboDevicesCard {}
     }
 }
 

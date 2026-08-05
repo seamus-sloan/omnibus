@@ -1,4 +1,4 @@
-//! Kobo wireless-sync device card (web Account section).
+//! Kobo wireless-sync device card (web Settings → Kobo section).
 //!
 //! Lists the caller's registered Kobos with their re-displayable `api_endpoint`
 //! URL (AC2), per-device Regenerate/Remove, and an "Add a Kobo" form. Signals

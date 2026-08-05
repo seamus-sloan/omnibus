@@ -2,10 +2,11 @@
 //! sections.
 //!
 //! Web/server render a left sidebar (Account / Library / Administration) whose
-//! active section is driven by the `?section=` query param; non-admins see only
-//! Account, admins additionally see Library Location, Metadata Lookup, Email
-//! delivery, and Logs. The mobile shell has no sidebar — it renders the library
-//! form plus the admin key/SMTP cards flat, unchanged.
+//! active section is driven by the `?section=` query param; non-admins see the
+//! per-user sections (Account, Kindle, Kobo), admins additionally see Library
+//! Location, Metadata Lookup, Email delivery, Users, and Logs. The mobile shell
+//! has no sidebar — it renders the library form plus the admin key/SMTP cards
+//! flat, unchanged.
 
 mod library;
 // Only compiled on web/server: its body calls the web-only
@@ -70,12 +71,15 @@ pub fn SettingsPage(section: Option<String>) -> Element {
     }
 }
 
-/// A configuration section reachable from the sidebar. `Account` is visible to
-/// everyone; every other section is admin-only.
+/// A configuration section reachable from the sidebar. `Account`, `Kindle`,
+/// and `Kobo` are per-user and visible to everyone; every other section
+/// configures the server and is admin-only.
 #[cfg(not(feature = "mobile"))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SettingsSection {
     Account,
+    Kindle,
+    Kobo,
     Library,
     Metadata,
     Email,
@@ -89,6 +93,8 @@ impl SettingsSection {
     fn slug(self) -> &'static str {
         match self {
             SettingsSection::Account => "account",
+            SettingsSection::Kindle => "kindle",
+            SettingsSection::Kobo => "kobo",
             SettingsSection::Library => "library",
             SettingsSection::Metadata => "metadata",
             SettingsSection::Email => "email",
@@ -99,7 +105,10 @@ impl SettingsSection {
 
     /// Whether the section is hidden from non-admins.
     fn requires_admin(self) -> bool {
-        !matches!(self, SettingsSection::Account)
+        !matches!(
+            self,
+            SettingsSection::Account | SettingsSection::Kindle | SettingsSection::Kobo
+        )
     }
 }
 
@@ -108,6 +117,8 @@ impl SettingsSection {
 #[cfg(not(feature = "mobile"))]
 fn parse_section(raw: Option<&str>, is_admin: bool) -> SettingsSection {
     let requested = match raw {
+        Some("kindle") => SettingsSection::Kindle,
+        Some("kobo") => SettingsSection::Kobo,
         Some("library") => SettingsSection::Library,
         Some("metadata") => SettingsSection::Metadata,
         Some("email") => SettingsSection::Email,
@@ -127,7 +138,9 @@ fn parse_section(raw: Option<&str>, is_admin: bool) -> SettingsSection {
 #[cfg(not(feature = "mobile"))]
 fn section_content(active: SettingsSection) -> Element {
     match active {
-        SettingsSection::Account => rsx! { super::AccountPage { embedded: true } },
+        SettingsSection::Account => rsx! { super::AccountPage {} },
+        SettingsSection::Kindle => rsx! { super::account::KindleEmailCard {} },
+        SettingsSection::Kobo => rsx! { super::account::kobo::KoboDevicesCard {} },
         SettingsSection::Library => rsx! { LibraryLocationSection {} },
         SettingsSection::Metadata => rsx! {
             metadata_precedence::MetadataPrecedenceField {}
@@ -159,6 +172,8 @@ fn SettingsSidebar(active: SettingsSection, is_admin: bool) -> Element {
 
             SettingsNavGroup { label: "Account",
                 SettingsNavItem { section: SettingsSection::Account, active, label: "Account", icon: "◉" }
+                SettingsNavItem { section: SettingsSection::Kindle, active, label: "Kindle", icon: "▤" }
+                SettingsNavItem { section: SettingsSection::Kobo, active, label: "Kobo", icon: "▦" }
             }
 
             if is_admin {
@@ -249,6 +264,26 @@ mod tests {
         assert!(matches!(
             parse_section(Some("logs"), true),
             SettingsSection::Logs
+        ));
+    }
+
+    #[test]
+    fn parse_section_maps_per_user_slugs_for_non_admin() {
+        assert!(matches!(
+            parse_section(Some("kindle"), false),
+            SettingsSection::Kindle
+        ));
+        assert!(matches!(
+            parse_section(Some("kobo"), false),
+            SettingsSection::Kobo
+        ));
+        assert!(matches!(
+            parse_section(Some("kindle"), true),
+            SettingsSection::Kindle
+        ));
+        assert!(matches!(
+            parse_section(Some("kobo"), true),
+            SettingsSection::Kobo
         ));
     }
 
