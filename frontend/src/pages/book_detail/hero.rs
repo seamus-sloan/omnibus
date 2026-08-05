@@ -96,6 +96,13 @@ pub(super) fn BdHeroSection(
                             }
                         }
                     }
+                    if !b.genres.is_empty() {
+                        ul { class: "bd-tag-list bd-genre-list", "data-testid": "bd-genre-list",
+                            for genre in b.genres.iter() {
+                                li { key: "{genre}", class: "chip chip-genre", "{genre}" }
+                            }
+                        }
+                    }
                     if !b.subjects.is_empty() {
                         ul { class: "bd-tag-list",
                             for tag in b.subjects.iter() {

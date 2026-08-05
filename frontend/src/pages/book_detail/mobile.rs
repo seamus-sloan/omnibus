@@ -132,7 +132,7 @@ pub(super) fn render_loaded_mobile(view: MobileBookView) -> Element {
                 &epub_files,
                 &audio_files,
             )}
-            {about_section(&uuid, description, &b.subjects, on_fetched)}
+            {about_section(&uuid, description, &b.subjects, &b.genres, on_fetched)}
             {info_sections(&uuid, &b, &series)}
 
             // Offline downloads (Kindle-style local copies).
@@ -328,6 +328,7 @@ fn about_section(
     uuid: &str,
     description: Signal<String>,
     subjects: &[String],
+    genres: &[String],
     on_fetched: impl FnMut(String) + 'static,
 ) -> Element {
     rsx! {
@@ -335,6 +336,13 @@ fn about_section(
             div { class: "label", "About" }
             if !description().is_empty() {
                 div { class: "m-bd-desc", dangerous_inner_html: "{description()}" }
+            }
+            if !genres.is_empty() {
+                div { class: "m-bd-tags", "data-testid": "m-bd-genres",
+                    for genre in genres.iter() {
+                        span { key: "{genre}", class: "chip chip-genre", "{genre}" }
+                    }
+                }
             }
             if !subjects.is_empty() {
                 div { class: "m-bd-tags",

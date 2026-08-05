@@ -371,6 +371,16 @@ const FIXTURES: EpubInput[] = [
     language: "en",
     withCover: true,
   },
+  {
+    filename: "standalone-tundra.epub",
+    id: "urn:omnibus-test:standalone-tundra",
+    title: "Tundra Signals",
+    authors: ["Mary Jackson"],
+    publisher: "Omnibus Test Press",
+    published: "1958-09-12",
+    language: "en",
+    withCover: true,
+  },
 
   // --- Dual-format book: this EPUB shares a normalized (title, author) with
   // the "Immersive Voyage" audiobook in `make_audiobook.ts`, so the indexer

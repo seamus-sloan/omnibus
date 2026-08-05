@@ -406,6 +406,21 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     language: "en",
     hasCover: true,
   },
+  // Reserved for genres.spec.ts. Genres live only in `metadata_overrides`,
+  // so every genre assertion is a write against shared server state that
+  // outlives the test — and it also flips `has_override` on the book. No
+  // other spec may read or write this one.
+  {
+    slug: "standalone-tundra",
+    filename: "standalone-tundra.epub",
+    title: "Tundra Signals",
+    authors: ["Mary Jackson"],
+    publisher: "Omnibus Test Press",
+    published: "1958-09-12",
+    tags: [],
+    language: "en",
+    hasCover: true,
+  },
 
   // Dual-format book: shares a normalized (title, author) with the
   // "Immersive Voyage" audiobook (`fixtures/audiobooks.ts`), so the indexer

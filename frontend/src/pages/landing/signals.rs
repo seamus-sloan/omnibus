@@ -88,11 +88,12 @@ pub(super) fn setup_landing_signals(server_url: &str, query: Signal<String>) -> 
     // — otherwise it would splice an old result stream onto the new list.
     let fetch_epoch = use_signal(|| 0u64);
     let is_admin = crate::use_is_admin();
-    // Suggestion pools for the inline Authors and Tags chip editors, each
-    // carrying the dropdown book-count.
+    // Suggestion pools for the inline Authors, Tags, and Genres chip
+    // editors, each carrying the dropdown book-count.
     let pools = SuggestionPools {
         authors: use_signal(Vec::<SuggestionItem>::new),
         tags: use_signal(Vec::<SuggestionItem>::new),
+        genres: use_signal(Vec::<SuggestionItem>::new),
     };
     // Shelf-gallery lens. `selection` seeds to All on every target (SSR
     // parity, rule 07); the persisted choice reconciles post-mount in

@@ -16,11 +16,13 @@ use super::PAGE_SIZE;
 /// How many resume points the continue-reading hero carousel shows.
 pub(super) const HERO_POINTS: i64 = 5;
 
-/// Stable per-page handle on the chip-editor suggestion pool signals (authors, tags).
+/// Stable per-page handle on the chip-editor suggestion pool signals
+/// (authors, tags, genres).
 #[derive(Copy, Clone)]
 pub(super) struct SuggestionPools {
     pub(super) authors: Signal<Vec<SuggestionItem>>,
     pub(super) tags: Signal<Vec<SuggestionItem>>,
+    pub(super) genres: Signal<Vec<SuggestionItem>>,
 }
 
 /// Bundle of fetch-target signals + epoch counter passed into [`spawn_page_fetch_effect`].
@@ -40,7 +42,7 @@ pub(super) struct FetchSignals {
     pub(super) generation: Signal<u64>,
 }
 
-/// Refetch the admin-only author/tag suggestion pools whenever `is_admin` changes.
+/// Refetch the admin-only author/tag/genre suggestion pools whenever `is_admin` changes.
 pub(super) fn spawn_suggestion_pools_effect(
     server_url: String,
     is_admin: ReadSignal<bool>,
@@ -49,6 +51,7 @@ pub(super) fn spawn_suggestion_pools_effect(
     let SuggestionPools {
         mut authors,
         mut tags,
+        mut genres,
     } = pools;
     use_effect(move || {
         if !is_admin() {
@@ -69,6 +72,13 @@ pub(super) fn spawn_suggestion_pools_effect(
                     .map(|t: TagWeight| SuggestionItem::new(t.name, t.count))
                     .collect();
                 tags.set(collect_suggestions(items));
+            }
+            if let Ok(list) = data::get_genre_cloud(&url).await {
+                let items: Vec<SuggestionItem> = list
+                    .into_iter()
+                    .map(|g| SuggestionItem::new(g.name, g.count))
+                    .collect();
+                genres.set(collect_suggestions(items));
             }
         });
     });

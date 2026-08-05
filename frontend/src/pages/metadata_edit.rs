@@ -135,6 +135,7 @@ struct EditedFields<'a> {
     isbn13: &'a str,
     authors: &'a [String],
     tags: &'a [String],
+    genres: &'a [String],
 }
 
 /// Build a [`MetadataOverrides`] from the current edit form values.
@@ -172,6 +173,12 @@ fn build_overrides(orig: &EbookMetadata, edited: EditedFields<'_>) -> MetadataOv
         None
     };
 
+    let genres = if edited.genres != orig.genres.as_slice() {
+        Some(edited.genres.to_vec())
+    } else {
+        None
+    };
+
     MetadataOverrides {
         title: opt(edited.title, orig.title.as_deref()),
         description: opt(edited.description, orig.description.as_deref()),
@@ -183,7 +190,7 @@ fn build_overrides(orig: &EbookMetadata, edited: EditedFields<'_>) -> MetadataOv
         isbn13: opt(edited.isbn13, orig.isbn13.as_deref()),
         creators,
         subjects,
-        genres: None,
+        genres,
     }
 }
 

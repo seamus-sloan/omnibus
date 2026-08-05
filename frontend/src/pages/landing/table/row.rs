@@ -10,9 +10,9 @@ use omnibus_shared::EbookMetadata;
 
 use super::super::sorting::{contributor_names, row_ident};
 use super::cells::{
-    build_save_authors, build_save_field, build_save_tags, CellEditCtx, ChipCell, ChipCellDisplay,
-    EbookRowCoverCell, EbookRowFormatsCell, RowContext, RowScalarCell, RowScalarCellDisplay,
-    RowSeriesCell, RowTitleCell,
+    build_save_authors, build_save_field, build_save_genres, build_save_tags, CellEditCtx,
+    ChipCell, ChipCellDisplay, EbookRowCoverCell, EbookRowFormatsCell, RowContext, RowScalarCell,
+    RowScalarCellDisplay, RowSeriesCell, RowTitleCell,
 };
 use super::{BookTableContext, EditField};
 use crate::Route;
@@ -25,6 +25,7 @@ pub(super) fn EbookRow(book: EbookMetadata, ctx: BookTableContext) -> Element {
         is_admin,
         author_suggestions,
         tag_suggestions,
+        genre_suggestions,
         selected,
     } = ctx;
 
@@ -34,10 +35,12 @@ pub(super) fn EbookRow(book: EbookMetadata, ctx: BookTableContext) -> Element {
         editing,
         authors_draft,
         tags_draft,
+        genres_draft,
     } = use_row_state(book);
     let save_field = build_save_field(uuid.clone(), server_url.clone(), book_state);
     let save_authors = build_save_authors(uuid.clone(), server_url.clone(), book_state);
     let save_tags = build_save_tags(uuid.clone(), server_url.clone(), book_state);
+    let save_genres = build_save_genres(uuid.clone(), server_url.clone(), book_state);
     let cover_bust =
         crate::contexts::cover_bust_for(crate::contexts::use_cover_cache_bust().0, &uuid);
     let display = derive_row_display(&book_state.read(), &server_url, &uuid, cover_bust);
@@ -47,11 +50,14 @@ pub(super) fn EbookRow(book: EbookMetadata, ctx: BookTableContext) -> Element {
         editing,
         authors_draft,
         tags_draft,
+        genres_draft,
         author_suggestions,
         tag_suggestions,
+        genre_suggestions,
         save_field: EventHandler::new(save_field),
         save_authors: EventHandler::new(save_authors),
         save_tags: EventHandler::new(save_tags),
+        save_genres: EventHandler::new(save_genres),
         selected,
     };
 
@@ -61,18 +67,19 @@ pub(super) fn EbookRow(book: EbookMetadata, ctx: BookTableContext) -> Element {
 }
 
 /// Per-row reactive state — optimistic book copy, current editing cell, and
-/// the authors/tags chip-editor drafts. The optimistic copy lets a successful
+/// the authors/tags/genres chip-editor drafts. The optimistic copy lets a successful
 /// inline save update the row immediately without a full library refetch;
 /// the `book` prop is resynced into it on upstream changes only when no
 /// cell is mid-edit (so a save round-trip doesn't clobber an open input).
-/// `authors_draft` / `tags_draft` mirror `book_state.creators` / `.subjects`
-/// so each chip editor sees canonical values after a save without dropping
-/// in-progress chip edits.
+/// `authors_draft` / `tags_draft` / `genres_draft` mirror
+/// `book_state.creators` / `.subjects` / `.genres` so each chip editor sees
+/// canonical values after a save without dropping in-progress chip edits.
 struct RowState {
     book_state: Signal<EbookMetadata>,
     editing: Signal<Option<EditField>>,
     authors_draft: Signal<Vec<String>>,
     tags_draft: Signal<Vec<String>>,
+    genres_draft: Signal<Vec<String>>,
 }
 
 /// Seed and wire [`RowState`] for one row — see its doc for the semantics.
@@ -120,11 +127,21 @@ fn use_row_state(book: EbookMetadata) -> RowState {
         }
     });
 
+    let initial_genres = book_state.read().genres.clone();
+    let mut genres_draft: Signal<Vec<String>> = use_signal(|| initial_genres);
+    use_effect(move || {
+        let canonical = book_state.read().genres.clone();
+        if *genres_draft.peek() != canonical {
+            genres_draft.set(canonical);
+        }
+    });
+
     RowState {
         book_state,
         editing,
         authors_draft,
         tags_draft,
+        genres_draft,
     }
 }
 
@@ -145,6 +162,7 @@ struct RowDisplay {
     updated: String,
     added: String,
     tags_text: String,
+    genres_text: String,
     published: String,
     language: String,
 }
@@ -189,6 +207,7 @@ fn derive_row_display(
         updated: book.modified.as_deref().unwrap_or("").to_string(),
         added: book.added_at.as_deref().unwrap_or("").to_string(),
         tags_text: book.subjects.join(", "),
+        genres_text: book.genres.join(", "),
         published: book.published.clone().unwrap_or_default(),
         language: book.language.clone().unwrap_or_default(),
         book: book.clone(),
@@ -263,11 +282,14 @@ fn EbookRowCells(display: RowDisplay, ctx: RowContext) -> Element {
         editing,
         authors_draft,
         tags_draft,
+        genres_draft,
         author_suggestions,
         tag_suggestions,
+        genre_suggestions,
         save_field,
         save_authors,
         save_tags,
+        save_genres,
         mut selected,
     } = ctx;
     // Cloned per scalar cell so each wrapper owns its own copy of the shared
@@ -290,6 +312,7 @@ fn EbookRowCells(display: RowDisplay, ctx: RowContext) -> Element {
         updated,
         added,
         tags_text,
+        genres_text,
         published,
         language,
     } = display;
@@ -337,6 +360,14 @@ fn EbookRowCells(display: RowDisplay, ctx: RowContext) -> Element {
             draft: tags_draft,
             suggestions: tag_suggestions,
             on_change: move |tags: Vec<String>| save_tags.call(tags),
+        }
+        ChipCell {
+            display: ChipCellDisplay::genres(genres_text),
+            is_admin,
+            editing,
+            draft: genres_draft,
+            suggestions: genre_suggestions,
+            on_change: move |genres: Vec<String>| save_genres.call(genres),
         }
         RowScalarCell {
             display: RowScalarCellDisplay {

@@ -1,6 +1,6 @@
 //! Per-cell components for the landing table's inline-editable rows.
 //!
-//! Each helper wraps an [`EditableCell`] (or, for authors/tags, hosts a
+//! Each helper wraps an [`EditableCell`] (or, for authors/tags/genres, hosts a
 //! [`ChipEditor`] directly via [`ChipCell`]) and is composed by
 //! `EbookRowCells` in [`super::row`]. `build_save_*` produce the row's
 //! per-field save callbacks.
@@ -33,11 +33,14 @@ pub(super) struct RowContext {
     pub editing: Signal<Option<EditField>>,
     pub authors_draft: Signal<Vec<String>>,
     pub tags_draft: Signal<Vec<String>>,
+    pub genres_draft: Signal<Vec<String>>,
     pub author_suggestions: ReadSignal<Vec<SuggestionItem>>,
     pub tag_suggestions: ReadSignal<Vec<SuggestionItem>>,
+    pub genre_suggestions: ReadSignal<Vec<SuggestionItem>>,
     pub save_field: EventHandler<(EditField, String)>,
     pub save_authors: EventHandler<Vec<String>>,
     pub save_tags: EventHandler<Vec<String>>,
+    pub save_genres: EventHandler<Vec<String>>,
     /// Bulk-edit selection shared with the whole table (see
     /// [`super::BookTableContext::selected`]).
     pub selected: Signal<std::collections::BTreeSet<String>>,
@@ -65,10 +68,10 @@ pub(super) fn field_override(field: EditField, value: &str) -> MetadataOverrides
         EditField::Series => overrides.series = value,
         EditField::Published => overrides.published = value,
         EditField::Language => overrides.language = value,
-        // Authors / Tags edits go through `build_save_authors` /
-        // `build_save_tags` so they can set the `creators` / `subjects`
-        // list overrides instead of a scalar.
-        EditField::Authors | EditField::Tags => {}
+        // Authors / Tags / Genres edits go through their own
+        // `build_save_*` so they can set the `creators` / `subjects` /
+        // `genres` list overrides instead of a scalar.
+        EditField::Authors | EditField::Tags | EditField::Genres => {}
     }
     overrides
 }
@@ -84,7 +87,10 @@ pub(super) fn build_save_field(
 ) -> impl FnMut((EditField, String)) + 'static {
     move |args: (EditField, String)| {
         let (field, value) = args;
-        if matches!(field, EditField::Authors | EditField::Tags) {
+        if matches!(
+            field,
+            EditField::Authors | EditField::Tags | EditField::Genres
+        ) {
             return;
         }
         let uuid = uuid.clone();
@@ -149,6 +155,31 @@ pub(super) fn build_save_tags(
         spawn(async move {
             let overrides = MetadataOverrides {
                 subjects: Some(new_tags),
+                ..Default::default()
+            };
+            if overrides.validate().is_err() {
+                return;
+            }
+            if let Ok(Some(merged)) = data::save_overrides(&url, &uuid, &overrides).await {
+                book_state.set(merged);
+            }
+        });
+    }
+}
+
+/// Build the genres-cell save callback. Mirrors [`build_save_tags`] but
+/// posts a `genres` override.
+pub(super) fn build_save_genres(
+    uuid: String,
+    server_url: String,
+    mut book_state: Signal<EbookMetadata>,
+) -> impl FnMut(Vec<String>) + 'static {
+    move |new_genres: Vec<String>| {
+        let uuid = uuid.clone();
+        let url = server_url.clone();
+        spawn(async move {
+            let overrides = MetadataOverrides {
+                genres: Some(new_genres),
                 ..Default::default()
             };
             if overrides.validate().is_err() {
@@ -518,6 +549,25 @@ impl ChipCellDisplay {
         }
     }
 
+    /// Genres-cell config — comma-joined genres, `ebook-cell-genres` testids.
+    pub(super) fn genres(display_text: String) -> Self {
+        Self {
+            field: EditField::Genres,
+            col_class: "ebook-col-genres".to_string(),
+            cell_testid: "ebook-cell-genres".to_string(),
+            display_text,
+            options: ChipEditorOptions {
+                placeholder: "+ add genre\u{2026}".to_string(),
+                show_avatar: false,
+                aria_remove_prefix: "Remove genre".to_string(),
+                testid_prefix: "ebook-cell-genres".to_string(),
+                autofocus: true,
+                dropdown_header: "ADD GENRE".to_string(),
+                ..ChipEditorOptions::default()
+            },
+        }
+    }
+
     /// Tags-cell config — comma-joined tags, `ebook-cell-tags` testids.
     pub(super) fn tags(display_text: String) -> Self {
         Self {
@@ -557,7 +607,7 @@ pub(super) struct ChipCellProps {
     pub on_change: EventHandler<Vec<String>>,
 }
 
-/// Inline-editable multi-value cell (Authors, Tags). Unlike [`EditableCell`]
+/// Inline-editable multi-value cell (Authors, Tags, Genres). Unlike [`EditableCell`]
 /// (which hosts a single-line text input), this cell renders the full
 /// [`ChipEditor`] *inside* the `<td>` when the row's editing signal matches
 /// its field. The cell grows vertically to fit the chips + input + dropdown,

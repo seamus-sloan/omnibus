@@ -560,6 +560,10 @@ html, body { overscroll-behavior: none; }
 @media (hover: hover) { .chip:hover { color: var(--ink-0); border-color: var(--accent); } }
 .chip.on    { color: var(--ink-0); border-color: var(--accent); }
 .chip .count { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+/* Genre chips sit directly above the tag chips on the book detail hero, so
+   they carry the accent border at rest to distinguish the two lists without
+   a second label row. */
+.chip-genre { border-color: color-mix(in srgb, var(--accent) 45%, var(--line-2)); }
 
 /* ── Cards ──────────────────────────────────────────────────────── */
 .card {
@@ -5242,6 +5246,10 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   vertical-align: middle;
   min-width: 120px;
 }
+.ebook-col-genres {
+  vertical-align: middle;
+  min-width: 120px;
+}
 .ebook-edit-row td.ebook-edit-cell {
   background: var(--bg-1);
   padding: 10px 12px;
@@ -5270,6 +5278,12 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 @media (max-width: 900px) {
   .ebook-table .ebook-col-published { display: none; }
+}
+/* Genres drop one step before tags: the column is newer and, on a library
+   nobody has genred yet, entirely empty — so it is the cheapest thing to
+   give up first as the viewport narrows. */
+@media (max-width: 800px) {
+  .ebook-table .ebook-col-genres { display: none; }
 }
 @media (max-width: 720px) {
   .ebook-table .ebook-col-tags { display: none; }

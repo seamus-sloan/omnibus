@@ -1,6 +1,7 @@
 //! Power-user table view for the landing page.
 //!
-//! Dense `<table>` with inline-editable title / series / authors / tags for
+//! Dense `<table>` with inline-editable title / series / authors / tags /
+//! genres for
 //! admins, used by [`super::LandingPage`] when the view-mode toggle is set to
 //! table.
 //! Row plumbing in [`row`]; per-cell rendering in [`cells`].
@@ -25,13 +26,15 @@ use crate::components::chip_editor::SuggestionItem;
 /// `Series` edits the series *name* only — the series index ("#N") stays
 /// in the full metadata edit page on `/books/:uuid/edit` to avoid adding a
 /// separate Series Index column to the power-user table. Title + Series +
-/// Authors + Tags covers the stated cleanup pain (stripping series-prefix
-/// cruft from titles, renaming author/series variants, curating tags).
+/// Authors + Tags + Genres covers the stated cleanup pain (stripping
+/// series-prefix cruft from titles, renaming author/series variants,
+/// curating tags, assigning genres).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum EditField {
     Title,
     Series,
     Tags,
+    Genres,
     Published,
     Language,
     Authors,
@@ -44,6 +47,7 @@ pub(super) struct BookTableContext {
     pub(super) is_admin: bool,
     pub(super) author_suggestions: ReadSignal<Vec<SuggestionItem>>,
     pub(super) tag_suggestions: ReadSignal<Vec<SuggestionItem>>,
+    pub(super) genre_suggestions: ReadSignal<Vec<SuggestionItem>>,
     /// Bulk-edit selection: the uuids of the checked rows. Owned by the
     /// landing page so the floating action bar can read it too.
     pub(super) selected: Signal<BTreeSet<String>>,
@@ -119,6 +123,7 @@ pub(super) fn BookTable(
                             on_sort: on_sort,
                         }
                         th { class: "ebook-col-tags", "Tags" }
+                        th { class: "ebook-col-genres", "Genres" }
                         th { class: "ebook-col-published", "Published" }
                         th { class: "ebook-col-formats", "Formats" }
                         SortableHeader {

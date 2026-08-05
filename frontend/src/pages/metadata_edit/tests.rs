@@ -39,6 +39,7 @@ fn edited<'a>(
         isbn13: "",
         authors,
         tags,
+        genres: &[],
     }
 }
 
@@ -152,4 +153,62 @@ fn build_overrides_unchanged_lists_stay_none() {
     );
     assert!(ov.creators.is_none());
     assert!(ov.subjects.is_none());
+}
+
+#[test]
+fn build_overrides_sets_genres_when_the_list_changed() {
+    let orig = book_with(Some("Dune"), &["Frank Herbert"], &["scifi"]);
+    let authors = vec!["Frank Herbert".to_string()];
+    let tags = vec!["scifi".to_string()];
+    let genres = vec!["Science Fiction".to_string()];
+
+    let ov = build_overrides(
+        &orig,
+        EditedFields {
+            genres: &genres,
+            ..edited("Dune", "", &authors, &tags)
+        },
+    );
+    assert_eq!(ov.genres, Some(genres));
+    // Editing genres must not also write a subjects override — that would
+    // pin the scanned tag list against a later rescan.
+    assert!(ov.subjects.is_none());
+    assert!(ov.title.is_none());
+}
+
+#[test]
+fn build_overrides_leaves_genres_none_when_the_list_is_unchanged() {
+    let mut orig = book_with(Some("Dune"), &["Frank Herbert"], &["scifi"]);
+    orig.genres = vec!["Science Fiction".to_string()];
+    let authors = vec!["Frank Herbert".to_string()];
+    let tags = vec!["scifi".to_string()];
+    let genres = orig.genres.clone();
+
+    let ov = build_overrides(
+        &orig,
+        EditedFields {
+            genres: &genres,
+            ..edited("Dune", "", &authors, &tags)
+        },
+    );
+    assert!(ov.genres.is_none());
+}
+
+#[test]
+fn build_overrides_clears_genres_with_an_empty_list() {
+    // A book that had genres and now has none must send `Some([])`, not
+    // `None` — `None` reads as "untouched" to the server-side merge, so a
+    // `None`-based clear would silently no-op.
+    let mut orig = book_with(Some("Dune"), &["Frank Herbert"], &[]);
+    orig.genres = vec!["Science Fiction".to_string()];
+    let authors = vec!["Frank Herbert".to_string()];
+
+    let ov = build_overrides(
+        &orig,
+        EditedFields {
+            genres: &[],
+            ..edited("Dune", "", &authors, &[])
+        },
+    );
+    assert_eq!(ov.genres, Some(Vec::new()));
 }

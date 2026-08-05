@@ -42,6 +42,14 @@ fn matches_filters(book: &EbookMetadata, filters: &ViewFilters) -> bool {
     {
         return false;
     }
+    if !filters.genres.is_empty()
+        && !filters
+            .genres
+            .iter()
+            .any(|g| book.genres.iter().any(|bg| bg == g))
+    {
+        return false;
+    }
     true
 }
 

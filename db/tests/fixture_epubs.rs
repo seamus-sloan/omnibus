@@ -381,6 +381,17 @@ const EXPECTED: &[Expected] = &[
         series_index: None,
         has_cover: true,
     },
+    Expected {
+        filename: "standalone-tundra.epub",
+        title: "Tundra Signals",
+        authors: &["Mary Jackson"],
+        publisher: Some("Omnibus Test Press"),
+        published: Some("1958-09-12"),
+        language: "en",
+        series: None,
+        series_index: None,
+        has_cover: true,
+    },
     // The two CBZ fixtures from `tools/make_cbz.ts` — metadata comes from
     // `ComicInfo.xml` via the comic parser, which carries no publisher,
     // date, or language. The empty-string language mirrors the Playwright
