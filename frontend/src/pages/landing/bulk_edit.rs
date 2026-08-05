@@ -38,15 +38,19 @@ pub(super) fn BulkEditBar(
     }
 }
 
-/// The two suggestion pools the modal's chip editors read, grouped to keep [`BulkEditModal`] under the 5-prop guideline.
+/// The library-wide suggestion pools the modal's chip editors read, grouped
+/// to keep [`BulkEditModal`] under the 5-prop guideline. The remove-side
+/// pools are derived from the selection inside the modal, not passed in.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) struct BulkEditSuggestions {
     pub author_suggestions: ReadSignal<Vec<SuggestionItem>>,
     pub tag_suggestions: ReadSignal<Vec<SuggestionItem>>,
+    pub genre_suggestions: ReadSignal<Vec<SuggestionItem>>,
 }
 
 /// The bulk-edit modal. Blank scalar fields leave every book unchanged;
-/// authors replace each book's full list; tags are add/remove deltas.
+/// authors replace each book's full list; tags and genres are add/remove
+/// deltas.
 /// On success fires `on_saved` with the server's merged metadata for every
 /// edited book so the caller can patch its lists without a refetch.
 #[component]
@@ -65,16 +69,26 @@ pub(super) fn BulkEditModal(
         language: use_signal(String::new),
         add_tags: use_signal(Vec::<String>::new),
         remove_tags: use_signal(Vec::<String>::new),
+        add_genres: use_signal(Vec::<String>::new),
+        remove_genres: use_signal(Vec::<String>::new),
     };
     let busy = use_signal(|| false);
     let error = use_signal(|| None::<String>);
 
-    // Remove-tag candidates: the union of the selected books' current tags,
-    // with per-tag counts — removing a tag no book carries is meaningless.
-    // Annotated because a bare `.into()` in the rsx props is ambiguous
-    // between the dioxus_core and dioxus_stores `SuperInto` impls.
+    // Remove-side candidates: the union of the selected books' current
+    // tags/genres, with per-value counts — removing one no book carries is
+    // meaningless. Annotated because a bare `.into()` in the rsx props is
+    // ambiguous between the dioxus_core and dioxus_stores `SuperInto` impls.
+    let books_for_genres = selected_books.clone();
     let removable = use_memo(move || removable_tags(&selected_books));
-    let removable_pool: ReadSignal<Vec<SuggestionItem>> = removable.into();
+    let removable_genre = use_memo(move || removable_genres(&books_for_genres));
+    let pools = BulkEditPools {
+        authors: suggestions.author_suggestions,
+        tags: suggestions.tag_suggestions,
+        genres: suggestions.genre_suggestions,
+        removable_tags: removable.into(),
+        removable_genres: removable_genre.into(),
+    };
 
     let nothing_to_apply = fields.current_edit().is_empty();
     let count = uuids.len();
@@ -90,12 +104,7 @@ pub(super) fn BulkEditModal(
             on_dismiss: move |_| on_close.call(()),
             h3 { class: "bulk-edit-title", "Edit {count} {noun}" }
             p { class: "bulk-edit-hint", "Blank fields are left unchanged on every book." }
-            BulkEditFields {
-                fields,
-                author_suggestions: suggestions.author_suggestions,
-                tag_suggestions: suggestions.tag_suggestions,
-                removable_pool,
-            }
+            BulkEditFields { fields, pools }
             if let Some(msg) = error() {
                 p { class: "bulk-edit-error", role: "alert", "data-testid": "bulk-edit-error", "{msg}" }
             }
@@ -159,7 +168,7 @@ fn build_bulk_edit_submit(
     })
 }
 
-/// The modal's six field signals, grouped so [`BulkEditModal`] and
+/// The modal's field signals, grouped so [`BulkEditModal`] and
 /// [`BulkEditFields`] share one handle bundle (all `Signal`s are `Copy`).
 #[derive(Clone, Copy, PartialEq)]
 struct BulkEditFieldSignals {
@@ -169,30 +178,42 @@ struct BulkEditFieldSignals {
     language: Signal<String>,
     add_tags: Signal<Vec<String>>,
     remove_tags: Signal<Vec<String>>,
+    add_genres: Signal<Vec<String>>,
+    remove_genres: Signal<Vec<String>>,
 }
 
 impl BulkEditFieldSignals {
     /// Snapshot the current field state as the wire payload.
     fn current_edit(&self) -> BulkMetadataEdit {
-        build_edit(
-            &self.authors.read(),
-            &self.series.read(),
-            &self.publisher.read(),
-            &self.language.read(),
-            &self.add_tags.read(),
-            &self.remove_tags.read(),
-        )
+        build_edit(BulkEditValues {
+            authors: &self.authors.read(),
+            series: &self.series.read(),
+            publisher: &self.publisher.read(),
+            language: &self.language.read(),
+            add_tags: &self.add_tags.read(),
+            remove_tags: &self.remove_tags.read(),
+            add_genres: &self.add_genres.read(),
+            remove_genres: &self.remove_genres.read(),
+        })
     }
 }
 
-/// The six labeled field rows inside the bulk-edit modal body.
+/// The four suggestion pools the modal's chip editors read. Grouped so
+/// [`BulkEditFields`] stays under the prop cap; `removable_tags` /
+/// `removable_genres` are the *selection-scoped* pools (only values some
+/// selected book actually carries), the other two are library-wide.
+#[derive(Clone, Copy, PartialEq)]
+struct BulkEditPools {
+    authors: ReadSignal<Vec<SuggestionItem>>,
+    tags: ReadSignal<Vec<SuggestionItem>>,
+    genres: ReadSignal<Vec<SuggestionItem>>,
+    removable_tags: ReadSignal<Vec<SuggestionItem>>,
+    removable_genres: ReadSignal<Vec<SuggestionItem>>,
+}
+
+/// The labeled field rows inside the bulk-edit modal body.
 #[component]
-fn BulkEditFields(
-    fields: BulkEditFieldSignals,
-    author_suggestions: ReadSignal<Vec<SuggestionItem>>,
-    tag_suggestions: ReadSignal<Vec<SuggestionItem>>,
-    removable_pool: ReadSignal<Vec<SuggestionItem>>,
-) -> Element {
+fn BulkEditFields(fields: BulkEditFieldSignals, pools: BulkEditPools) -> Element {
     rsx! {
         div { class: "bulk-edit-fields",
             div { class: "bulk-edit-field",
@@ -200,7 +221,7 @@ fn BulkEditFields(
                 ChipEditor {
                     values: fields.authors,
                     on_change: move |_: Vec<String>| {},
-                    suggestions: author_suggestions,
+                    suggestions: pools.authors,
                     options: ChipEditorOptions {
                         placeholder: "Replace authors\u{2026}".to_string(),
                         show_avatar: true,
@@ -233,7 +254,7 @@ fn BulkEditFields(
                 ChipEditor {
                     values: fields.add_tags,
                     on_change: move |_: Vec<String>| {},
-                    suggestions: tag_suggestions,
+                    suggestions: pools.tags,
                     options: ChipEditorOptions {
                         placeholder: "Add a tag to every book\u{2026}".to_string(),
                         input_class: "me-tag-input".to_string(),
@@ -249,13 +270,45 @@ fn BulkEditFields(
                 ChipEditor {
                     values: fields.remove_tags,
                     on_change: move |_: Vec<String>| {},
-                    suggestions: removable_pool,
+                    suggestions: pools.removable_tags,
                     options: ChipEditorOptions {
                         placeholder: "Remove a tag where present\u{2026}".to_string(),
                         input_class: "me-tag-input".to_string(),
                         aria_remove_prefix: "Remove tag".to_string(),
                         testid_prefix: "bulk-remove-tags".to_string(),
                         dropdown_header: "REMOVE TAG".to_string(),
+                        ..Default::default()
+                    },
+                }
+            }
+            div { class: "bulk-edit-field",
+                span { class: "bulk-edit-label", "Add genres" }
+                ChipEditor {
+                    values: fields.add_genres,
+                    on_change: move |_: Vec<String>| {},
+                    suggestions: pools.genres,
+                    options: ChipEditorOptions {
+                        placeholder: "Add a genre to every book\u{2026}".to_string(),
+                        input_class: "me-tag-input".to_string(),
+                        aria_remove_prefix: "Remove genre".to_string(),
+                        testid_prefix: "bulk-add-genres".to_string(),
+                        dropdown_header: "ADD GENRE".to_string(),
+                        ..Default::default()
+                    },
+                }
+            }
+            div { class: "bulk-edit-field",
+                span { class: "bulk-edit-label", "Remove genres" }
+                ChipEditor {
+                    values: fields.remove_genres,
+                    on_change: move |_: Vec<String>| {},
+                    suggestions: pools.removable_genres,
+                    options: ChipEditorOptions {
+                        placeholder: "Remove a genre where present\u{2026}".to_string(),
+                        input_class: "me-tag-input".to_string(),
+                        aria_remove_prefix: "Remove genre".to_string(),
+                        testid_prefix: "bulk-remove-genres".to_string(),
+                        dropdown_header: "REMOVE GENRE".to_string(),
                         ..Default::default()
                     },
                 }
@@ -290,41 +343,59 @@ fn BulkTextField(
     }
 }
 
+/// The modal's field values at submit time, borrowed from the signals.
+/// A struct rather than eight positional args so a caller can't transpose
+/// two same-typed lists silently.
+struct BulkEditValues<'a> {
+    authors: &'a [String],
+    series: &'a str,
+    publisher: &'a str,
+    language: &'a str,
+    add_tags: &'a [String],
+    remove_tags: &'a [String],
+    add_genres: &'a [String],
+    remove_genres: &'a [String],
+}
+
 /// Assemble the wire payload from the modal's field state. Trimmed-empty
 /// scalars and an empty authors chip list map to `None` (= unchanged) —
 /// bulk edit has no clear affordance in v1.
-fn build_edit(
-    authors: &[String],
-    series: &str,
-    publisher: &str,
-    language: &str,
-    add_tags: &[String],
-    remove_tags: &[String],
-) -> BulkMetadataEdit {
-    let scalar = |v: &str| {
-        let trimmed = v.trim();
+fn build_edit(v: BulkEditValues<'_>) -> BulkMetadataEdit {
+    let scalar = |value: &str| {
+        let trimmed = value.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_string())
     };
     BulkMetadataEdit {
-        authors: (!authors.is_empty()).then(|| authors.to_vec()),
-        series: scalar(series),
-        publisher: scalar(publisher),
-        language: scalar(language),
-        add_tags: add_tags.to_vec(),
-        remove_tags: remove_tags.to_vec(),
-        add_genres: Vec::new(),
-        remove_genres: Vec::new(),
+        authors: (!v.authors.is_empty()).then(|| v.authors.to_vec()),
+        series: scalar(v.series),
+        publisher: scalar(v.publisher),
+        language: scalar(v.language),
+        add_tags: v.add_tags.to_vec(),
+        remove_tags: v.remove_tags.to_vec(),
+        add_genres: v.add_genres.to_vec(),
+        remove_genres: v.remove_genres.to_vec(),
     }
+}
+
+/// Union of the selected books' current genres with per-genre occurrence
+/// counts — the suggestion pool for "Remove genres". Same shape as
+/// [`removable_tags`], over a different list.
+fn removable_genres(books: &[EbookMetadata]) -> Vec<SuggestionItem> {
+    rank_by_frequency(books.iter().flat_map(|b| b.genres.iter()))
 }
 
 /// Union of the selected books' current tags with per-tag occurrence counts,
 /// sorted by frequency then name — the suggestion pool for "Remove tags".
 fn removable_tags(books: &[EbookMetadata]) -> Vec<SuggestionItem> {
+    rank_by_frequency(books.iter().flat_map(|b| b.subjects.iter()))
+}
+
+/// Count occurrences of each distinct value and rank them by frequency
+/// descending, then name ascending.
+fn rank_by_frequency<'a>(values: impl Iterator<Item = &'a String>) -> Vec<SuggestionItem> {
     let mut counts = std::collections::BTreeMap::<&str, usize>::new();
-    for book in books {
-        for tag in &book.subjects {
-            *counts.entry(tag.as_str()).or_default() += 1;
-        }
+    for value in values {
+        *counts.entry(value.as_str()).or_default() += 1;
     }
     let mut items: Vec<SuggestionItem> = counts
         .into_iter()
@@ -342,28 +413,89 @@ mod tests {
         names.iter().map(|s| s.to_string()).collect()
     }
 
+    /// A [`BulkEditValues`] with everything blank — tests override just the
+    /// fields they exercise.
+    fn empty_values<'a>() -> BulkEditValues<'a> {
+        BulkEditValues {
+            authors: &[],
+            series: "",
+            publisher: "",
+            language: "",
+            add_tags: &[],
+            remove_tags: &[],
+            add_genres: &[],
+            remove_genres: &[],
+        }
+    }
+
     #[test]
     fn build_edit_maps_blank_scalars_and_empty_authors_to_unchanged() {
-        let edit = build_edit(&[], "  ", "", "\t", &[], &[]);
+        let edit = build_edit(BulkEditValues {
+            series: "  ",
+            language: "\t",
+            ..empty_values()
+        });
         assert!(edit.is_empty());
     }
 
     #[test]
     fn build_edit_trims_scalars_and_carries_chip_lists() {
-        let edit = build_edit(
-            &strings(&["Ada Lovelace"]),
-            " Earthsea ",
-            "Harcourt",
-            "en",
-            &strings(&["fantasy"]),
-            &strings(&["scifi"]),
-        );
+        let authors = strings(&["Ada Lovelace"]);
+        let add_tags = strings(&["fantasy"]);
+        let remove_tags = strings(&["scifi"]);
+        let add_genres = strings(&["Fantasy"]);
+        let remove_genres = strings(&["Sci-Fi"]);
+        let edit = build_edit(BulkEditValues {
+            authors: &authors,
+            series: " Earthsea ",
+            publisher: "Harcourt",
+            language: "en",
+            add_tags: &add_tags,
+            remove_tags: &remove_tags,
+            add_genres: &add_genres,
+            remove_genres: &remove_genres,
+        });
         assert_eq!(edit.authors, Some(strings(&["Ada Lovelace"])));
         assert_eq!(edit.series.as_deref(), Some("Earthsea"));
         assert_eq!(edit.publisher.as_deref(), Some("Harcourt"));
         assert_eq!(edit.language.as_deref(), Some("en"));
         assert_eq!(edit.add_tags, strings(&["fantasy"]));
         assert_eq!(edit.remove_tags, strings(&["scifi"]));
+        assert_eq!(edit.add_genres, strings(&["Fantasy"]));
+        assert_eq!(edit.remove_genres, strings(&["Sci-Fi"]));
+    }
+
+    #[test]
+    fn build_edit_treats_a_genre_only_edit_as_something_to_apply() {
+        let add_genres = strings(&["Horror"]);
+        let edit = build_edit(BulkEditValues {
+            add_genres: &add_genres,
+            ..empty_values()
+        });
+        assert!(!edit.is_empty(), "Apply must not stay disabled");
+        assert!(edit.add_tags.is_empty(), "genres do not leak into tags");
+    }
+
+    #[test]
+    fn removable_genres_counts_across_books_and_ignores_tags() {
+        let a = EbookMetadata {
+            subjects: strings(&["scifi"]),
+            genres: strings(&["Horror", "Mystery"]),
+            ..Default::default()
+        };
+        let b = EbookMetadata {
+            genres: strings(&["Horror"]),
+            ..Default::default()
+        };
+        let named: Vec<(String, usize)> = removable_genres(&[a, b])
+            .into_iter()
+            .map(|i| (i.name, i.count))
+            .collect();
+        assert_eq!(
+            named,
+            vec![("Horror".to_string(), 2), ("Mystery".to_string(), 1)],
+            "tags must not appear in the removable-genre pool"
+        );
     }
 
     #[test]

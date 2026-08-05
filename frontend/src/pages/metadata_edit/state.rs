@@ -29,7 +29,7 @@ pub(super) struct EditFormState {
     pub(super) accent_style: String,
 }
 
-/// Sets up all per-field signals, the author/tag suggestion fetch, dirty
+/// Sets up all per-field signals, the suggestion-pool fetches, dirty
 /// tracking, and the save/revert handlers backing `MetadataEditForm`.
 pub(super) fn use_metadata_edit_form_state(
     book: &EbookMetadata,
@@ -98,6 +98,10 @@ fn use_field_signals(book: &EbookMetadata) -> FormFields {
     // Tags (subjects) as a signal of Vec<String>.
     let tags = use_signal(|| book.subjects.clone());
 
+    // Genres — user-assigned only, so this seeds from whatever the
+    // override layer supplied (empty for a book nobody has genred).
+    let genres = use_signal(|| book.genres.clone());
+
     // Read-only field signals — hoisted here so `use_signal` isn't called
     // inside the `rsx!` body on every render.
     let sort_by = use_signal(|| {
@@ -119,6 +123,7 @@ fn use_field_signals(book: &EbookMetadata) -> FormFields {
         isbn13,
         authors,
         tags,
+        genres,
         sort_by,
         filename,
     }
@@ -142,12 +147,13 @@ fn header_strings(book: &EbookMetadata) -> (String, String, Option<i64>, String)
     (title, primary_author, primary_author_id, accent_style)
 }
 
-/// Fetches the author/tag/series suggestion pools once on mount for the
+/// Fetches the author/tag/genre/series suggestion pools once on mount for the
 /// `ChipEditor`/`SuggestField` dropdowns; signals stay empty until the
 /// fetches resolve.
 fn use_suggestion_pools(server_url: &str) -> FormSuggestions {
     let mut author_suggestions: Signal<Vec<SuggestionItem>> = use_signal(Vec::new);
     let mut tag_suggestions: Signal<Vec<SuggestionItem>> = use_signal(Vec::new);
+    let mut genre_suggestions: Signal<Vec<SuggestionItem>> = use_signal(Vec::new);
     let mut series_suggestions: Signal<Vec<SuggestionItem>> = use_signal(Vec::new);
 
     let url = server_url.to_string();
@@ -168,6 +174,13 @@ fn use_suggestion_pools(server_url: &str) -> FormSuggestions {
                     .collect();
                 tag_suggestions.set(collect_suggestions(items));
             }
+            if let Ok(genres) = data::get_genre_cloud(&url).await {
+                let items: Vec<SuggestionItem> = genres
+                    .into_iter()
+                    .map(|g| SuggestionItem::new(g.name, g.count))
+                    .collect();
+                genre_suggestions.set(collect_suggestions(items));
+            }
             if let Ok(series) = data::list_series(&url).await {
                 let items: Vec<SuggestionItem> = series
                     .into_iter()
@@ -181,6 +194,7 @@ fn use_suggestion_pools(server_url: &str) -> FormSuggestions {
     FormSuggestions {
         authors: author_suggestions,
         tags: tag_suggestions,
+        genres: genre_suggestions,
         series: series_suggestions,
     }
 }
@@ -199,6 +213,7 @@ fn use_dirty_fields(orig: Signal<EbookMetadata>, fields: FormFields) -> Memo<Vec
         isbn13,
         authors,
         tags,
+        genres,
         sort_by: _,
         filename: _,
     } = fields;
@@ -235,6 +250,9 @@ fn use_dirty_fields(orig: Signal<EbookMetadata>, fields: FormFields) -> Memo<Vec
         }
         if tags() != o.subjects {
             dirty.push("Tags");
+        }
+        if genres() != o.genres {
+            dirty.push("Genres");
         }
         dirty
     })
@@ -291,6 +309,7 @@ fn build_on_save(
         isbn13,
         authors,
         tags,
+        genres,
         sort_by: _,
         filename: _,
     } = fields;
@@ -315,6 +334,7 @@ fn build_on_save(
                     isbn13: &isbn13(),
                     authors: &authors(),
                     tags: &tags(),
+                    genres: &genres(),
                 },
             );
 

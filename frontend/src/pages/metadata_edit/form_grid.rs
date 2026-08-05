@@ -23,21 +23,23 @@ pub(super) struct FormFields {
     pub isbn13: Signal<String>,
     pub authors: Signal<Vec<String>>,
     pub tags: Signal<Vec<String>>,
+    pub genres: Signal<Vec<String>>,
     pub sort_by: Signal<String>,
     pub filename: Signal<String>,
 }
 
-/// Suggestion pools backing the author + tag chip-editor dropdowns and the
-/// series autocomplete field.
+/// Suggestion pools backing the author + tag + genre chip-editor dropdowns
+/// and the series autocomplete field.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) struct FormSuggestions {
     pub authors: Signal<Vec<SuggestionItem>>,
     pub tags: Signal<Vec<SuggestionItem>>,
+    pub genres: Signal<Vec<SuggestionItem>>,
     pub series: Signal<Vec<SuggestionItem>>,
 }
 
-/// Composed form grid plus the tags + series sections that live in the
-/// same left-column container on the page.
+/// Composed form grid plus the tags, genres, and series sections that live
+/// in the same left-column container on the page.
 #[component]
 pub(super) fn FormGrid(
     orig: Signal<EbookMetadata>,
@@ -50,6 +52,7 @@ pub(super) fn FormGrid(
             HardcoverFetchPanel { uuid: uuid.clone(), fields }
             FieldGrid { orig, fields, suggestions, uuid }
             TagsSection { tags: fields.tags, tag_suggestions: suggestions.tags }
+            GenresSection { genres: fields.genres, genre_suggestions: suggestions.genres }
             SeriesSection {
                 orig,
                 series: fields.series,
@@ -237,6 +240,38 @@ fn TagsSection(tags: Signal<Vec<String>>, tag_suggestions: Signal<Vec<Suggestion
                     input_class: "me-tag-input".to_string(),
                     aria_remove_prefix: "Remove tag".to_string(),
                     testid_prefix: "me-tags".to_string(),
+                    ..ChipEditorOptions::default()
+                },
+            }
+        }
+    }
+}
+
+/// Divider + genre chip editor. Structurally the twin of [`TagsSection`] —
+/// genres are a second free-text multi-value vocabulary — but a distinct
+/// list: tags are whatever the EPUB's `<dc:subject>` entries happened to be,
+/// genres are what the reader decided the book *is*.
+#[component]
+fn GenresSection(
+    genres: Signal<Vec<String>>,
+    genre_suggestions: Signal<Vec<SuggestionItem>>,
+) -> Element {
+    rsx! {
+        div { class: "divider" }
+        div { class: "me-tags-header",
+            div { class: "label", "Genres" }
+        }
+        div { class: "me-tag-chips", "data-testid": "me-genres-section",
+            ChipEditor {
+                values: genres,
+                on_change: move |_| {},
+                suggestions: genre_suggestions,
+                options: ChipEditorOptions {
+                    placeholder: "+ add genre\u{2026}".to_string(),
+                    show_avatar: false,
+                    input_class: "me-tag-input".to_string(),
+                    aria_remove_prefix: "Remove genre".to_string(),
+                    testid_prefix: "me-genres".to_string(),
                     ..ChipEditorOptions::default()
                 },
             }

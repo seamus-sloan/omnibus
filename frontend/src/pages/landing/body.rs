@@ -109,6 +109,7 @@ pub(super) fn web_landing_body(
     // between the dioxus_core and dioxus_stores `SuperInto` impls.
     let author_pool: ReadSignal<Vec<SuggestionItem>> = sigs.pools.authors.into();
     let tag_pool: ReadSignal<Vec<SuggestionItem>> = sigs.pools.tags.into();
+    let genre_pool: ReadSignal<Vec<SuggestionItem>> = sigs.pools.genres.into();
     // All Books mosaic: first four cover-bearing books of the (always-warm)
     // browse page. Before it lands, the tile falls back to its accent plate.
     let all_cover_uuids: Vec<String> = sigs
@@ -171,6 +172,7 @@ pub(super) fn web_landing_body(
                         is_admin: (sigs.is_admin)(),
                         author_suggestions: sigs.pools.authors.into(),
                         tag_suggestions: sigs.pools.tags.into(),
+                        genre_suggestions: sigs.pools.genres.into(),
                         selected: bulk_selected,
                     },
                     handlers: LandingContentHandlers {
@@ -196,6 +198,7 @@ pub(super) fn web_landing_body(
                     suggestions: bulk_edit::BulkEditSuggestions {
                         author_suggestions: author_pool,
                         tag_suggestions: tag_pool,
+                        genre_suggestions: genre_pool,
                     },
                     on_close: move |_| bulk_modal_open.set(false),
                     on_saved: move |updated: Vec<EbookMetadata>| {
