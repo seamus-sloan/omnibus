@@ -254,7 +254,11 @@ final class ReaderController: NSObject {
 
     func configure(book: Book, startCFI: String?, highlights: [Highlight]) {
         self.book = book
-        restoreCFI = startCFI
+        // A progress row can hold a blank position, and only the remote read
+        // normalizes one away. "No position" has to reach the glue as an absent
+        // `cfi` rather than an empty one — today `opts.cfi || null` absorbs it,
+        // but that is JS falsiness standing in for a decision this side owes.
+        restoreCFI = startCFI?.nilIfBlank
         pendingHighlights = highlights
     }
 

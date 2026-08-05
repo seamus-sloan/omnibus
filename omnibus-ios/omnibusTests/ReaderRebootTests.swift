@@ -108,6 +108,16 @@ struct ReaderRebootTests {
         #expect(try bootOptions(controller)["cfi"] as? String == readTo)
     }
 
+    /// A progress row can hold a blank position — `localProgress` hands it
+    /// straight over, unlike the remote read, which normalizes it away.
+    @Test("a book opened on a blank saved position boots with no cfi at all")
+    func blankSavedPositionIsNoPosition() throws {
+        let controller = openReader(at: "")
+
+        #expect(controller.restoreCFI == nil)
+        #expect(try bootOptions(controller)["cfi"] == nil)
+    }
+
     @Test("a blank cfi in a relocate leaves the restore point standing")
     func blankRelocateDoesNotClearTheRestorePoint() throws {
         let controller = openReader(at: openedAt)
