@@ -2,41 +2,30 @@ import type { Page } from "@playwright/test";
 import { expect, test } from "../fixtures/test";
 import { expectNavVisible, gotoReady } from "../utils/nav";
 
-// The scanner's Google Books disclaimer keys off the non-admin-gated
-// configured flag (`POST /api/rpc/scan/google-books-configured`). Mock it so
-// the note's two states don't ride on ambient server config (another
-// worker's settings save could otherwise flip it mid-run).
-async function mockGoogleBooksKey(
-  page: Page,
-  configured: boolean,
-): Promise<void> {
-  await page.route("**/api/rpc/scan/google-books-configured", (route) =>
-    route.request().method() === "POST"
-      ? route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify(configured),
-        })
-      : route.continue(),
-  );
-}
-
 // Headless Chromium refuses `getUserMedia` without a fake device, so every run
 // here lands on the permission-denied branch — which is exactly the fallback
 // contract worth pinning (a scanner nobody can grant the camera to must still
 // reach manual entry). The happy-path decode needs a real camera and is
 // covered by the decoder's own unit tests plus device QA.
+
+// The camera is never the web flow's front door — it sits one explicit button
+// away from the lookup screen, which `check_in_lookup.spec.ts` covers.
+async function reachScanner(page: Page): Promise<void> {
+  await gotoReady(page, "/check-in");
+  await page.getByTestId("check-in-scan-instead").click();
+  await expect(page.getByTestId("check-in-scan")).toBeVisible();
+}
+
 test.describe("check-in scanner", () => {
   test("renders the scan layout", async ({ page }) => {
-    await gotoReady(page, "/check-in");
+    await reachScanner(page);
     await expectNavVisible(page);
 
-    await expect(page.getByTestId("check-in-scan")).toBeVisible();
     await expect(
       page.getByRole("heading", { name: "Scan a barcode" }),
     ).toBeVisible();
-    // The viewfinder and its escape hatch are both part of the first paint —
-    // SSR renders the same tree the client hydrates.
+    // The viewfinder and its escape hatch mount together, so a reader who
+    // opened the camera always has the keypad within reach.
     await expect(page.getByTestId("barcode-scanner")).toBeVisible();
     await expect(page.getByTestId("barcode-scanner-manual")).toBeVisible();
   });
@@ -44,7 +33,7 @@ test.describe("check-in scanner", () => {
   test("a camera the browser won't grant lands on manual entry", async ({
     page,
   }) => {
-    await gotoReady(page, "/check-in");
+    await reachScanner(page);
 
     // The glue reports the refusal, and the status line names the fallback.
     await expect(page.getByTestId("barcode-scanner-status")).toContainText(
@@ -64,7 +53,7 @@ test.describe("check-in scanner", () => {
   test("the keypad gates Find book on a valid check digit", async ({
     page,
   }) => {
-    await gotoReady(page, "/check-in");
+    await reachScanner(page);
     await page.getByTestId("barcode-scanner-manual").click();
 
     const submit = page.getByTestId("check-in-submit");
@@ -95,58 +84,11 @@ test.describe("check-in scanner", () => {
   });
 
   test("returns to the scanner from manual entry", async ({ page }) => {
-    await gotoReady(page, "/check-in");
+    await reachScanner(page);
     await page.getByTestId("barcode-scanner-manual").click();
     await expect(page.getByTestId("check-in-entry")).toBeVisible();
 
     await page.getByTestId("check-in-scan-instead").click();
     await expect(page.getByTestId("check-in-scan")).toBeVisible();
-  });
-
-  test("the cancel button exits the flow back to the library", async ({
-    page,
-  }) => {
-    await gotoReady(page, "/check-in");
-    await expect(page.getByTestId("check-in")).toBeVisible();
-
-    await page.getByTestId("check-in-close").click();
-
-    await expect(page).toHaveURL(/\/$/);
-    await expect(
-      page.getByRole("heading", { level: 1, name: "Your Library" }),
-    ).toBeVisible();
-    await expect(page.getByTestId("check-in")).toHaveCount(0);
-  });
-
-  test("shows the Open Library fallback note when no Google Books key is set", async ({
-    page,
-  }) => {
-    const responded = page.waitForResponse((r) =>
-      r.url().includes("/api/rpc/scan/google-books-configured"),
-    );
-    await mockGoogleBooksKey(page, false);
-    await gotoReady(page, "/check-in");
-    await responded;
-
-    await expect(page.getByTestId("check-in-google-books-note")).toContainText(
-      "Without a Google Books API key",
-    );
-    await expect(page.getByTestId("check-in-google-books-note")).toContainText(
-      "Set up your Google Books API key in Settings",
-    );
-  });
-
-  test("hides the fallback note when a Google Books key is configured", async ({
-    page,
-  }) => {
-    const responded = page.waitForResponse((r) =>
-      r.url().includes("/api/rpc/scan/google-books-configured"),
-    );
-    await mockGoogleBooksKey(page, true);
-    await gotoReady(page, "/check-in");
-    await responded;
-
-    await expect(page.getByTestId("check-in-scan")).toBeVisible();
-    await expect(page.getByTestId("check-in-google-books-note")).toHaveCount(0);
   });
 });

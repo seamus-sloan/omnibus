@@ -1,7 +1,9 @@
-//! Title search — the fallback offered when an ISBN resolves to nothing. A
-//! query input over a provider-candidate list; picking a candidate hands it
-//! back to the flow, which resolves it against the library without a second
-//! provider round trip. Visible text is the E2E selector contract (rule 04).
+//! Title search — the check-in flow's second way in, mounted on the lookup
+//! screen beside ISBN entry so an edition no ISBN index carries is never a
+//! dead end. A query input over a provider-candidate list; picking a candidate
+//! hands it back to the flow, which resolves it against the library without a
+//! second provider round trip. Visible text is the E2E selector contract
+//! (rule 04).
 
 use dioxus::prelude::*;
 use omnibus_shared::{ExternalBookMeta, ScanSearchRequest};
@@ -11,14 +13,10 @@ use super::{friendly_error, FlowState};
 use crate::{data, use_server_url};
 
 /// Title search over the metadata providers. The search read is owned here
-/// (like `ScanScreen`'s configured-key fetch); the pick goes back out through
-/// `on_pick` so the flow owns the stage transition.
+/// (like `ProviderNote`'s configured-key fetch); the pick goes back out
+/// through `on_pick` so the flow owns the stage transition.
 #[component]
-pub(super) fn SearchScreen(
-    state: FlowState,
-    on_pick: EventHandler<ExternalBookMeta>,
-    on_restart: EventHandler<()>,
-) -> Element {
+pub(super) fn TitleSearch(state: FlowState, on_pick: EventHandler<ExternalBookMeta>) -> Element {
     let server_url = use_server_url();
     let busy = state.busy;
     let mut error = state.error;
@@ -50,11 +48,7 @@ pub(super) fn SearchScreen(
     };
 
     rsx! {
-        div { class: "check-in-screen", "data-testid": "check-in-search",
-            h1 { "Search by title" }
-            p { class: "subtitle",
-                "Type the book's name and we'll look it up online."
-            }
+        div { class: "check-in-search", "data-testid": "check-in-search",
             form {
                 class: "settings-form",
                 "data-testid": "check-in-search-form",
@@ -82,14 +76,6 @@ pub(super) fn SearchScreen(
                         disabled: busy() || searching() || query().trim().is_empty(),
                         "data-testid": "check-in-search-submit",
                         if searching() { "Searching\u{2026}" } else { "Search" }
-                    }
-                    button {
-                        r#type: "button",
-                        class: "btn ghost",
-                        disabled: busy() || searching(),
-                        "data-testid": "check-in-search-restart",
-                        onclick: move |_| on_restart.call(()),
-                        "Scan a barcode instead"
                     }
                 }
             }

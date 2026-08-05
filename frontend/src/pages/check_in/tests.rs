@@ -1,6 +1,7 @@
 //! Tests for the check-in flow's pure helpers: ISBN cleaning and check-digit
-//! rejection, keypad entry, wizard stage selection per lookup outcome, and
-//! the byline/notes formatting used by the confirm screens.
+//! rejection, keypad entry, front-door and failure-fallback stage choice,
+//! wizard stage selection per lookup outcome, and the byline/notes formatting
+//! used by the confirm screens.
 
 use super::entry::apply_key;
 use super::screens::{byline, meta_details};
@@ -91,6 +92,31 @@ fn apply_key_appends_up_to_thirteen_slots_and_backspaces() {
     assert_eq!(apply_key("", "\u{232b}"), "");
     // The 14th press is dropped rather than silently truncating the entry.
     assert_eq!(apply_key("9780441013593", "7"), "9780441013593");
+}
+
+/// Web and SSR open on the fields, so raising check-in never starts a camera.
+#[cfg(not(feature = "mobile"))]
+#[test]
+fn front_door_opens_on_the_lookup_fields_rather_than_the_camera() {
+    assert!(matches!(front_door(), Stage::Lookup));
+}
+
+/// The mobile shell keeps the camera as its front door.
+#[cfg(feature = "mobile")]
+#[test]
+fn front_door_opens_on_the_camera_for_the_mobile_shell() {
+    assert!(matches!(front_door(), Stage::Scan));
+}
+
+#[test]
+fn manual_fallback_keeps_a_rejected_lookup_on_the_screen_it_was_typed_on() {
+    assert!(matches!(manual_fallback(&Stage::Lookup), Stage::Lookup));
+}
+
+#[test]
+fn manual_fallback_sends_a_bad_camera_decode_to_the_keypad() {
+    assert!(matches!(manual_fallback(&Stage::Scan), Stage::Entry));
+    assert!(matches!(manual_fallback(&Stage::Entry), Stage::Entry));
 }
 
 #[test]
