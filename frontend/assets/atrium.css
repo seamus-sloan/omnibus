@@ -4898,10 +4898,16 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   border-color: var(--accent);
 }
 /* Drop the platform search chrome so a search field matches the plain text
-   inputs it sits beside — the lookup screen stacks one of each. */
-.settings-field input[type="search"] { appearance: none; }
+   inputs it sits beside — the lookup screen stacks one of each. Safari still
+   needs the prefixed property, and on the two pseudo-elements it's the only
+   form that applies at all. */
+.settings-field input[type="search"] {
+  -webkit-appearance: none;
+  appearance: none;
+}
 .settings-field input[type="search"]::-webkit-search-decoration,
 .settings-field input[type="search"]::-webkit-search-cancel-button {
+  -webkit-appearance: none;
   appearance: none;
 }
 
