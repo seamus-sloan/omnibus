@@ -9010,3 +9010,53 @@ html {
 .cr-page-label { white-space: nowrap; }
 .cr-ribbon { position: absolute; left: 0; top: -1px; height: 2px; width: 100%; }
 .cr-ribbon i { display: block; height: 100%; background: var(--accent, var(--ink)); }
+
+/* ── User avatars ───────────────────────────────────────────────── */
+/* `UserAvatar` keeps one stable span per site and puts the photo *inside*
+   it, so the image just fills the circle the site already defined. */
+.um-initials-photo,
+.bd-journal-avatar-photo,
+.bd-other-rating-avatar-photo,
+.m-account-initials-photo,
+.profile-initials-photo {
+  width: 100%; height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Every site's monogram span fills the circle its parent draws, so a photo
+   inside it has a box to fill. The two book-detail spans draw their own
+   circle already and only need to clip. */
+.um-initials,
+.m-account-initials,
+.profile-initials {
+  display: grid; place-items: center;
+  width: 100%; height: 100%;
+}
+.m-account-initials,
+.profile-initials { font-weight: 700; }
+.bd-journal-avatar,
+.bd-other-rating-avatar { overflow: hidden; }
+
+/* ── Settings → Account profile card ────────────────────────────── */
+.profile-identity {
+  display: flex; align-items: center; gap: 16px;
+  margin-bottom: 18px;
+}
+.profile-avatar {
+  flex: 0 0 72px; width: 72px; height: 72px;
+  border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--accent-soft, var(--bg-2));
+  color: var(--accent);
+  border: 1px solid var(--line-2);
+  font-size: 24px;
+  overflow: hidden;
+}
+.profile-avatar-actions {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
+}
+.profile-avatar-buttons { display: flex; align-items: center; gap: 8px; }
+.profile-avatar-actions .subtitle { margin: 0; }
+.profile-avatar-input { display: none; }

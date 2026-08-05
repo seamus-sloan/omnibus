@@ -139,6 +139,10 @@ pub mod glyphs;
 #[cfg(not(feature = "mobile"))]
 mod user_menu;
 
+// The one place a user is drawn as a circle — avatar, else monogram. Compiled
+// on every target: the mobile "You" tab mounts it too.
+pub mod user_avatar;
+
 // Auth-page primitives — used by the login / register / first-run /
 // recovery screens on every target. Stays platform-agnostic so the same
 // markup ships under web SSR, web WASM, and mobile native.

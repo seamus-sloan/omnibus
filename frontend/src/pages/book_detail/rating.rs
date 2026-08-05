@@ -8,6 +8,7 @@
 use dioxus::prelude::*;
 use omnibus_shared::{AttributedRating, RatingRecord, RatingUpdate};
 
+use crate::components::user_avatar::UserAvatar;
 use crate::time::now_unix;
 use crate::{data, use_server_url};
 
@@ -246,21 +247,16 @@ fn apply_rating(state: RatingState, uuid: String, server_url: String, target: Op
 
 #[component]
 fn BdOtherRatingRow(rating: AttributedRating) -> Element {
-    let initial = rating
-        .username
-        .chars()
-        .next()
-        .map(|c| c.to_uppercase().to_string())
-        .unwrap_or_else(|| "?".to_string());
     let age = rated_ago(now_unix(), rating.updated_at);
     rsx! {
         div {
             class: "bd-other-rating-row",
             "data-testid": "other-rating-row",
-            span {
+            UserAvatar {
+                user_id: rating.user_id,
+                name: rating.username.clone(),
+                has_avatar: rating.has_avatar,
                 class: "bd-other-rating-avatar",
-                aria_hidden: "true",
-                "{initial}"
             }
             div {
                 class: "bd-other-rating-content",
