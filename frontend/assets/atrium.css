@@ -4875,6 +4875,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .settings-field input[type="password"],
 .settings-field input[type="email"],
 .settings-field input[type="number"],
+.settings-field input[type="search"],
 .settings-field select,
 .settings-input {
   background: var(--bg-1);
@@ -4890,10 +4891,24 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .settings-field input[type="password"]:focus,
 .settings-field input[type="email"]:focus,
 .settings-field input[type="number"]:focus,
+.settings-field input[type="search"]:focus,
 .settings-field select:focus,
 .settings-input:focus {
   outline: none;
   border-color: var(--accent);
+}
+/* Drop the platform search chrome so a search field matches the plain text
+   inputs it sits beside — the lookup screen stacks one of each. Safari still
+   needs the prefixed property, and on the two pseudo-elements it's the only
+   form that applies at all. */
+.settings-field input[type="search"] {
+  -webkit-appearance: none;
+  appearance: none;
+}
+.settings-field input[type="search"]::-webkit-search-decoration,
+.settings-field input[type="search"]::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
 }
 
 .settings-status { font-size: 0.875rem; margin-top: 0.5rem; min-height: 1.2em; }
@@ -8560,6 +8575,34 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 /* Stacked full-width choices on 3c, where the actions are the screen. */
 .check-in-actions { display: flex; flex-direction: column; gap: 10px; }
 .check-in-actions .btn { width: 100%; justify-content: center; }
+
+/* ── Lookup front door ────────────────────────────────────────────────
+   ISBN entry and title search stacked on one screen, so both ways in are
+   visible without a mode switch. The rule between them carries the "or". */
+.check-in-or {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.check-in-or::before,
+.check-in-or::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+/* Nested inside the lookup screen's own flex column, so the search block
+   supplies its own gap rather than inheriting the screen's. */
+.check-in-search { display: flex; flex-direction: column; gap: 14px; }
+/* The screen already spaces its children; the shared form margin would
+   double it up on both stacked forms. */
+.check-in-lookup .settings-form,
+.check-in-search .settings-form { margin-top: 0; gap: 0.85rem; }
 
 /* ── Book card ────────────────────────────────────────────────────── */
 .check-in-book {
