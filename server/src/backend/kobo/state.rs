@@ -113,12 +113,14 @@ pub async fn put_state(
                 last_modified = ?stats.last_modified,
                 "kobo statistics received"
             );
-            // Same clock ladder as the bookmark, most-specific first.
+            // No entry-level fallback, unlike the bookmark: an entry clock is
+            // still a device clock, but it would date counters the device did
+            // not date itself, and this stamp decides whether the device
+            // overwrites its own totals with our echo. Unstamped is safe —
+            // sync-out omits it and the device keeps what it has.
             let event_ts = stats
                 .last_modified
                 .as_deref()
-                .or(entry.last_modified.as_deref())
-                .or(entry.priority_timestamp.as_deref())
                 .and_then(dto::parse_kobo_timestamp);
             match persist_statistics(&mut tx, auth.user_id, &uuid, stats, event_ts).await {
                 Ok(()) => {}

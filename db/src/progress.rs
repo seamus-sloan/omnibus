@@ -237,9 +237,10 @@ impl KoboStatistics {
 /// returns whether a row was updated.
 ///
 /// UPDATE, not upsert: statistics annotate a position, they don't create one.
-/// Rejected unless provably at least as new as what is stored, so a second
-/// Kobo can't overwrite newer totals and have them echoed back as truth. The
-/// stamp clamps forward to server-now like [`upsert_progress_tx`]'s.
+/// A stamped write wins over an older or unstamped stored block (an unstamped
+/// one can't be echoed anyway); an unstamped write only takes an empty slot.
+/// So a second Kobo can't overwrite newer totals and have them echoed back as
+/// truth. The stamp clamps forward to server-now like [`upsert_progress_tx`]'s.
 pub async fn set_kobo_statistics_tx(
     tx: &mut Transaction<'_, Sqlite>,
     user_id: i64,
