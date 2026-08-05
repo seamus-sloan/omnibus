@@ -58,4 +58,5 @@ this list.
 - **Adding a new crate:** check `cargo tree -d` after `cargo update`; any new duplicate must be classified here before the PR lands.
 - **Bumping Dioxus:** re-run this audit. The websocket and const-serialize clusters will be the first to collapse.
 - **Promoting `getrandom`:** when `argon2`/`password-hash` ship a version that supports `getrandom@0.3`, consolidate the 0.2 + 0.3 entries. Until then the three-way split is intentional.
+- **Bumping `sqlx`:** pinned at 0.8.6 (upstream has published 0.9.0); revisit as a coordinated bump when the `rusqlite`/`sqlx` `libsqlite3-sys` coupling from issue #1529 needs to move together, same trigger shape as the `getrandom` note above.
 - **`deny.toml` skip entries:** every blocked/accepted duplicate has a matching `skip` entry in the `[bans]` section of `deny.toml` so `cargo deny check bans` does not regress on already-triaged duplicates.
