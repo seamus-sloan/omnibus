@@ -410,8 +410,10 @@ async fn ranked(
 /// seconds) so a multi-genre book counts once per genre but never twice per
 /// genre.
 ///
-/// Reads the user-assigned genres, which live only in `metadata_overrides`
-/// (migration `0063`). This deliberately does *not* fall back to a book's
+/// Reads the user-assigned genres, which live only in the
+/// `metadata_overrides` JSON blob (the table itself predates them, from
+/// `0007`; `0066_genres.sql` adds the vocabulary table this joins for the
+/// canonical spelling). This deliberately does *not* fall back to a book's
 /// tags: the donut is labelled "What you read", and a `<dc:subject>` list is
 /// whatever the publisher's OPF happened to carry, not a genre. A library
 /// with no genres assigned yet renders an empty donut, which is the honest
