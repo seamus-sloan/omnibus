@@ -75,8 +75,7 @@ ignore = [
 # NB: RUSTSEC-2026-0221 (event-listener unsoundness, reachable via sqlx-core)
 # is NOT ignored here — it was fixed for real by bumping event-listener
 # 5.4.1 -> 5.4.2 (`cargo update -p event-listener`; patched in >= 5.4.2),
-# same pattern as the memmap2 fix noted above. See Cargo.lock and
-# docs/dependency-audit.md.
+# same pattern as the memmap2 fix noted above. See Cargo.lock and issue #1681.
 
 # ---------------------------------------------------------------------------
 # Licenses
