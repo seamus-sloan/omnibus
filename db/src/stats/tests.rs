@@ -98,6 +98,24 @@ async fn link_tag(pool: &SqlitePool, book: i64, name: &str) {
         .unwrap();
 }
 
+/// Assign genres to a book. Genres have no link table (migration `0066`) —
+/// they exist only as a `metadata_overrides` entry — so this goes through
+/// the real write path, which also materializes the `genres` rows the
+/// donut's join needs.
+async fn set_genres(pool: &SqlitePool, uuid: &str, names: &[&str], user: i64) {
+    crate::merge_metadata_overrides(
+        pool,
+        uuid,
+        &omnibus_shared::MetadataOverrides {
+            genres: Some(names.iter().map(|n| (*n).to_string()).collect()),
+            ..Default::default()
+        },
+        user,
+    )
+    .await
+    .unwrap();
+}
+
 async fn rate_book(pool: &SqlitePool, user: i64, uuid: &str, half_stars: i64, updated_at: i64) {
     sqlx::query(
         "INSERT INTO user_ratings (user_id, book_uuid, half_stars, updated_at)
@@ -380,20 +398,16 @@ async fn cache_serves_within_ttl_and_refreshes_after_expiry() {
 }
 
 #[tokio::test]
-async fn genre_share_counts_distinct_books_per_tag_not_seconds() {
+async fn genre_share_counts_distinct_books_per_genre_not_seconds() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_minimal_books(&pool, 3).await;
     let user = seed_user(&pool, "alice").await;
-    let b1 = book_id(&pool, "uuid-1").await;
-    let b2 = book_id(&pool, "uuid-2").await;
-    let b3 = book_id(&pool, "uuid-3").await;
 
-    // sci-fi spans two active books; classic one (but with FAR more seconds —
-    // count-ranking must ignore that); horror tags only an inactive book.
-    link_tag(&pool, b1, "sci-fi").await;
-    link_tag(&pool, b2, "sci-fi").await;
-    link_tag(&pool, b1, "classic").await;
-    link_tag(&pool, b3, "horror").await;
+    // Sci-Fi spans two active books; Classic one (but with FAR more seconds —
+    // count-ranking must ignore that); Horror is on an inactive book only.
+    set_genres(&pool, "uuid-1", &["Sci-Fi", "Classic"], user).await;
+    set_genres(&pool, "uuid-2", &["Sci-Fi"], user).await;
+    set_genres(&pool, "uuid-3", &["Horror"], user).await;
 
     reading_session(&pool, user, "uuid-1", T0, 90_000).await;
     reading_session(&pool, user, "uuid-1", T0 + DAY, 90_000).await;
@@ -401,10 +415,10 @@ async fn genre_share_counts_distinct_books_per_tag_not_seconds() {
 
     let s = compute(&pool, user, StatsRange::AllTime).await.unwrap();
 
-    assert_eq!(s.genre_share.len(), 2, "inactive book's tag is excluded");
-    assert_eq!(s.genre_share[0].name, "sci-fi");
+    assert_eq!(s.genre_share.len(), 2, "inactive book's genre is excluded");
+    assert_eq!(s.genre_share[0].name, "Sci-Fi");
     assert_eq!(s.genre_share[0].books, 2);
-    assert_eq!(s.genre_share[1].name, "classic");
+    assert_eq!(s.genre_share[1].name, "Classic");
     assert_eq!(s.genre_share[1].books, 1);
     // Two distinct active books, sessions on both tables.
     assert_eq!(s.books_active, 2);
@@ -413,12 +427,52 @@ async fn genre_share_counts_distinct_books_per_tag_not_seconds() {
 }
 
 #[tokio::test]
-async fn genre_share_is_scoped_to_the_window() {
+async fn genre_share_ignores_tags_so_the_donut_only_reports_assigned_genres() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_minimal_books(&pool, 1).await;
     let user = seed_user(&pool, "alice").await;
     let b1 = book_id(&pool, "uuid-1").await;
+
+    // A heavily-tagged book with no genres contributes nothing: "What you
+    // read" reports genres, and a `<dc:subject>` list is not one.
     link_tag(&pool, b1, "sci-fi").await;
+    link_tag(&pool, b1, "classic").await;
+    reading_session(&pool, user, "uuid-1", T0, 600).await;
+
+    assert!(genre_share(&pool, user, T0 - DAY).await.unwrap().is_empty());
+
+    // Assigning a genre to the same book makes it appear.
+    set_genres(&pool, "uuid-1", &["Space Opera"], user).await;
+    let share = genre_share(&pool, user, T0 - DAY).await.unwrap();
+    assert_eq!(share.len(), 1);
+    assert_eq!(share[0].name, "Space Opera");
+}
+
+#[tokio::test]
+async fn genre_share_folds_case_variants_into_one_slice() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 2).await;
+    let user = seed_user(&pool, "alice").await;
+
+    // `genres.name` is NOCASE-unique, so the second spelling deduplicates
+    // into the row the first coined — one slice of two books, not two of one.
+    set_genres(&pool, "uuid-1", &["Sci-Fi"], user).await;
+    set_genres(&pool, "uuid-2", &["sci-fi"], user).await;
+    reading_session(&pool, user, "uuid-1", T0, 600).await;
+    reading_session(&pool, user, "uuid-2", T0, 600).await;
+
+    let share = genre_share(&pool, user, T0 - DAY).await.unwrap();
+    assert_eq!(share.len(), 1, "case variants fold together");
+    assert_eq!(share[0].name, "Sci-Fi", "first spelling coined the row");
+    assert_eq!(share[0].books, 2);
+}
+
+#[tokio::test]
+async fn genre_share_is_scoped_to_the_window() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    let user = seed_user(&pool, "alice").await;
+    set_genres(&pool, "uuid-1", &["Sci-Fi"], user).await;
 
     // Only pre-window activity → no genre share inside the window.
     reading_session(&pool, user, "uuid-1", T0, 600).await;

@@ -405,24 +405,38 @@ async fn ranked(
         .collect())
 }
 
-/// Genre share by distinct book count: for each tag, how many distinct books
-/// carrying it had session activity in the window. Count-based (not
-/// seconds) so a multi-tag book counts once per tag but never twice per tag.
+/// Genre share by distinct book count: for each genre, how many distinct
+/// books carrying it had session activity in the window. Count-based (not
+/// seconds) so a multi-genre book counts once per genre but never twice per
+/// genre.
+///
+/// Reads the user-assigned genres, which live only in `metadata_overrides`
+/// (migration `0063`). This deliberately does *not* fall back to a book's
+/// tags: the donut is labelled "What you read", and a `<dc:subject>` list is
+/// whatever the publisher's OPF happened to carry, not a genre. A library
+/// with no genres assigned yet renders an empty donut, which is the honest
+/// answer.
 async fn genre_share(
     pool: &SqlitePool,
     user_id: i64,
     start: i64,
 ) -> Result<Vec<GenreShare>, StatsError> {
     // Collapse the per-session union to distinct active books *before* the
-    // tag join, so the intermediate is bounded by book count, not session
+    // genre join, so the intermediate is bounded by book count, not session
     // count — keeps the join small on a 10k-event library.
+    //
+    // Joining `genres` rather than grouping `je.value` folds case variants
+    // into the one canonical row, exactly as `get_genre_cloud` does — a
+    // donut that split "sci-fi" from "Sci-Fi" would double-count a slice.
     let sql = format!(
-        "SELECT t.name AS name, COUNT(DISTINCT b.uuid) AS books
+        "SELECT g.name AS name, COUNT(DISTINCT b.uuid) AS books
              FROM (SELECT DISTINCT book_uuid FROM ({SESSION_BOOK_SECS})) x
              JOIN books b ON b.uuid = x.book_uuid
-             JOIN books_tags_link btl ON btl.book = b.id
-             JOIN tags t ON t.id = btl.tag
-         GROUP BY t.id ORDER BY books DESC, t.name ASC LIMIT ?"
+             JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+             JOIN json_each(mo.overrides, '$.genres') je
+             JOIN genres g ON g.name = je.value COLLATE NOCASE
+            WHERE json_type(mo.overrides, '$.genres') IS NOT NULL
+         GROUP BY g.id ORDER BY books DESC, g.name ASC LIMIT ?"
     );
     let rows = sqlx::query(&sql)
         .bind(user_id)

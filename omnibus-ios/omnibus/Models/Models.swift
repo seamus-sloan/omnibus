@@ -77,6 +77,11 @@ struct Book: Codable, Hashable, Sendable, Identifiable {
     var language: String?
     var creators: [Contributor] = []
     var subjects: [String] = []
+    /// User-assigned genres. Distinct from `subjects`, which come from the
+    /// EPUB's `<dc:subject>` entries — nothing the server parses carries a
+    /// genre, so this list is populated only by an explicit edit. Omitted
+    /// from the wire when empty, hence the default.
+    var genres: [String] = []
     var identifiers: [Identifier] = []
     var isbn13: String?
     var series: String?
@@ -100,7 +105,7 @@ struct Book: Codable, Hashable, Sendable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case id, filename, title, description, publisher, published, modified
-        case language, creators, subjects, identifiers, isbn13, series, formats
+        case language, creators, subjects, genres, identifiers, isbn13, series, formats
         case accent, error
         case seriesIndex = "series_index"
         case seriesId = "series_id"

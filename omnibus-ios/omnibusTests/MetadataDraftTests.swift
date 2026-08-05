@@ -12,6 +12,7 @@ private func gatsby() -> Book {
     book.title = "The Great Gatsby"
     book.creators = [Contributor(name: "F. Scott Fitzgerald")]
     book.subjects = ["Classics", "Novel"]
+    book.genres = ["Literary Fiction"]
     book.series = "—"
     book.publisher = "Scribner"
     book.language = "en"
@@ -42,6 +43,34 @@ struct MetadataDraftTests {
         #expect(payload.publisher == nil)
         #expect(payload.language == nil)
         #expect(payload.description == nil)
+    }
+
+    @Test func draftFromBookCarriesGenresSeparatelyFromTags() {
+        let draft = MetadataDraft(book: gatsby())
+        #expect(draft.genres == ["Literary Fiction"])
+        #expect(draft.tags == ["Classics", "Novel"])
+    }
+
+    @Test func payloadSendsGenresOnlyWhenTheListChanged() {
+        let loaded = MetadataDraft(book: gatsby())
+        var draft = loaded
+        draft.genres = ["Literary Fiction", "Tragedy"]
+
+        let payload = draft.payload(since: loaded)
+        #expect(payload.genres == ["Literary Fiction", "Tragedy"])
+        // Editing genres must not drag the tag list along with it — they are
+        // two independent wholesale-replace overrides.
+        #expect(payload.subjects == nil)
+    }
+
+    @Test func payloadOmitsGenresWhenOnlyTagsChanged() {
+        let loaded = MetadataDraft(book: gatsby())
+        var draft = loaded
+        draft.tags = ["Classics"]
+
+        let payload = draft.payload(since: loaded)
+        #expect(payload.genres == nil)
+        #expect(payload.subjects == ["Classics"])
     }
 
     @Test func payloadOmitsTagsWhenTheListIsUntouched() {
