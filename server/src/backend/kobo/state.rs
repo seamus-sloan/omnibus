@@ -1,6 +1,7 @@
 //! Kobo reading-state write path: `PUT v1/library/{uuid}/state`. Splits a
 //! device's batch into read-status writes (`book_read_status`) and bookmark
-//! writes (`reading_progress`), sharing one transaction across the batch.
+//! plus statistics writes (`reading_progress`), sharing one transaction
+//! across the batch.
 
 use axum::{
     extract::{Path, State},
@@ -27,7 +28,9 @@ fn reject_oversized_state_request(body: &dto::StateRequest) -> Option<Response> 
 /// `StatusInfo` routes into `book_read_status`; the `CurrentBookmark`
 /// position lands in `reading_progress` as percent + verbatim `KoboSpan`
 /// plus a server-derived `epub_cfi` when the cached KEPUB allows it
-/// (#925), stamped with the device's own event time when it sends one.
+/// (#925), stamped with the device's own event time when it sends one. A
+/// `Statistics` block is mirrored onto the same row so sync-out can echo it
+/// back unchanged (#1653) — it is never aggregated into `db::stats`.
 ///
 /// The whole batch's read-status and bookmark writes share one transaction
 /// (begun before the loop, committed after it), so a mid-batch DB failure
@@ -100,18 +103,34 @@ pub async fn put_state(
                 }
             }
         }
-        // Acknowledged, deliberately unwritten — cumulative totals would
-        // double-count against the LeaveContent sessions (see `dto::Statistics`).
-        // Logged with values because sync-out omits the block entirely today,
-        // and the only safe way to start sending one is to echo what a device
-        // reported rather than invent zeroes; that needs a real payload first.
         if let Some(stats) = &entry.statistics {
+            // Kept from #1652's capture pass — the shape came from the
+            // reference impls, not from hardware.
             tracing::info!(
                 %uuid,
                 spent_reading_minutes = ?stats.spent_reading_minutes,
                 remaining_time_minutes = ?stats.remaining_time_minutes,
+                last_modified = ?stats.last_modified,
                 "kobo statistics received"
             );
+            // No entry-level fallback, unlike the bookmark: an entry clock is
+            // still a device clock, but it would date counters the device did
+            // not date itself, and this stamp decides whether the device
+            // overwrites its own totals with our echo. Unstamped is safe —
+            // sync-out omits it and the device keeps what it has.
+            let event_ts = stats
+                .last_modified
+                .as_deref()
+                .and_then(dto::parse_kobo_timestamp);
+            match persist_statistics(&mut tx, auth.user_id, &uuid, stats, event_ts).await {
+                Ok(()) => {}
+                Err(db::progress::ProgressError::BookNotFound) => {
+                    tracing::warn!(%uuid, "kobo statistics PUT for unknown book");
+                }
+                Err(db::progress::ProgressError::Sqlx(e)) => {
+                    return internal("kobo set_kobo_statistics", e);
+                }
+            }
         }
     }
     if let Err(e) = tx.commit().await {
@@ -182,6 +201,36 @@ async fn persist_bookmark(
         return Ok(());
     }
     db::progress::upsert_progress_tx(tx, user_id, &update).await?;
+    Ok(())
+}
+
+/// Mirror a device's `Statistics` block so sync-out can hand the same numbers
+/// back with the device's own clock (#1653).
+///
+/// A negative counter is dropped, not clamped, like an out-of-range percent:
+/// echoed-only values have nothing safe to clamp toward, and the row CHECK
+/// would abort the whole batch rather than this one entry.
+async fn persist_statistics(
+    tx: &mut Transaction<'_, Sqlite>,
+    user_id: i64,
+    uuid: &str,
+    stats: &dto::Statistics,
+    event_ts: Option<i64>,
+) -> Result<(), db::progress::ProgressError> {
+    let update = db::progress::KoboStatistics {
+        spent_reading_minutes: stats.spent_reading_minutes.filter(|m| *m >= 0),
+        remaining_time_minutes: stats.remaining_time_minutes.filter(|m| *m >= 0),
+        updated_at: event_ts,
+    };
+    if update.is_empty() {
+        tracing::debug!(%uuid, "kobo statistics carried no usable counter");
+        return Ok(());
+    }
+    if !db::progress::set_kobo_statistics_tx(tx, user_id, uuid, &update).await? {
+        // Either the book has no epub position row yet (statistics annotate a
+        // position, they don't create one) or a newer block is already stored.
+        tracing::debug!(%uuid, "kobo statistics not stored");
+    }
     Ok(())
 }
 
