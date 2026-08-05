@@ -1,11 +1,8 @@
 //! Unit tests for the `taxonomy` helpers. One `resolve_or_insert_simple!`
-//! macro generates the three resolvers, so all three contracts (insert,
-//! idempotency, case-insensitivity) are covered on `series` and spot-checked
-//! on `publishers` / `languages` to catch a bad expansion.
-//! `delete_orphan_taxonomy` gets its own drop/keep pair;
-//! `delete_orphan_tags` and `delete_orphan_genres` add the override-aware
-//! keep/drop cases, plus a regression test for the purge path that reaches
-//! `delete_orphan_genres` only through `delete_orphan_taxonomy`.
+//! macro generates the three resolvers, spot-checked across `series`,
+//! `publishers`, `languages`. `delete_orphan_taxonomy`, `delete_orphan_tags`,
+//! and `delete_orphan_genres` each get drop/keep/override-aware/case-fold
+//! tests, plus a purge-path regression test for genres.
 
 use omnibus_shared::MetadataOverrides;
 
