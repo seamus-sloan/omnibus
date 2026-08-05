@@ -228,6 +228,10 @@ pub(super) async fn maybe_adopt_cover(
         .bind(book_id)
         .execute(&mut **tx)
         .await?;
+    // allow: callers hold `cover` borrowed from a `&[IndexedBook]` slice, and
+    // adoption is only known after the `has_cover` query above — cloning here
+    // (only on adoption) beats cloning unconditionally at every call site;
+    // matches the sibling `push_cover` in `db/src/sync.rs`.
     Ok(Some((target_uuid, mime.clone(), bytes.clone())))
 }
 

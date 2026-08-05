@@ -677,6 +677,22 @@ async fn analytics_unknown_event_types_are_acknowledged_and_dropped() {
 }
 
 #[tokio::test]
+async fn analytics_event_rejects_a_batch_exceeding_max_analytics_events() {
+    let (app, _pool, token, _uid) = fixture().await;
+    let events: Vec<Value> = (0..=analytics::MAX_ANALYTICS_EVENTS)
+        .map(|_| serde_json::json!({ "Id": "e", "EventType": "OpenContent" }))
+        .collect();
+    let body = serde_json::json!({ "Events": events });
+
+    let res = app
+        .oneshot(post_json(format!("/kobo/{token}/v1/analytics/event"), body))
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn analytics_gettests_answers_the_initialization_pointer() {
     // The #926 resources map points `get_tests_request` at this route; a 404
     // there would be the server advertising a URL it doesn't serve.
