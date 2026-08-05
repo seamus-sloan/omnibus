@@ -193,3 +193,46 @@ async fn author_facets_truncates_at_facet_limit_and_stays_ordered_when_distinct_
         "truncation must keep the lexicographically-first FACET_LIMIT authors"
     );
 }
+
+#[tokio::test]
+async fn library_facets_genres_are_empty_until_a_book_is_given_some() {
+    let (pool, _guard) = seed_discovery_fixture().await;
+
+    // The fixture books carry tags but no genres — nothing scans a genre.
+    let facets = library_facets(&pool, &["/lib"]).await.unwrap();
+    assert!(facets.genres.is_empty());
+
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let books = crate::books::list_books(&pool, "/lib").await.unwrap();
+    for (book, genres) in
+        books
+            .iter()
+            .zip([vec!["Horror", "Mystery"], vec!["Horror"], vec!["Adventure"]])
+    {
+        crate::metadata_overrides::merge_metadata_overrides(
+            &pool,
+            &book.unique_identifier.clone().unwrap(),
+            &omnibus_shared::MetadataOverrides {
+                genres: Some(genres.iter().map(|g| (*g).to_string()).collect()),
+                ..Default::default()
+            },
+            user_id,
+        )
+        .await
+        .unwrap();
+    }
+
+    let facets = library_facets(&pool, &["/lib"]).await.unwrap();
+    assert_eq!(
+        pairs(&facets.genres),
+        vec![
+            ("Horror".into(), 2),
+            ("Adventure".into(), 1),
+            ("Mystery".into(), 1),
+        ],
+        "count desc, then value asc — same ordering as every other facet"
+    );
+}

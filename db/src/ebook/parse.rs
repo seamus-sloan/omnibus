@@ -101,6 +101,9 @@ fn extract_metadata(path: &Path, filename: String, opts: &ScanOptions) -> Indexe
 
             creators,
             subjects: all(&doc, "subject"),
+            // The OPF has no genre element — genres are user-assigned only
+            // and layered on at read time by `apply_overrides`.
+            genres: Vec::new(),
             identifiers,
             // Derived at read time from `book_identifiers` (`row_to_ebook`
             // -> `derive_isbn13`), not at parse time — this struct is

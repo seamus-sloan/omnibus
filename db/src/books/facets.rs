@@ -1,5 +1,5 @@
 //! Full-library facet-count aggregate. [`library_facets`] tallies the
-//! sidebar facets (authors / series / formats / tags) across the *entire*
+//! sidebar facets (authors / series / formats / tags / genres) across the *entire*
 //! configured library in one grouped query each, so the landing sidebar stays
 //! correct even though the list itself is keyset-paginated and the client only
 //! holds one page. Counts are deliberately over the unfiltered library —
@@ -34,6 +34,7 @@ pub async fn library_facets(
         series: series_facets(pool, &ph, library_paths).await?,
         formats: format_facets(pool, &ph, library_paths).await?,
         tags: tag_facets(pool, &ph, library_paths).await?,
+        genres: genre_facets(pool, &ph, library_paths).await?,
     })
 }
 
@@ -144,6 +145,39 @@ async fn tag_facets(
                      AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id))
                  OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid))
              GROUP BY t.name
+             ORDER BY count DESC, value ASC
+             LIMIT ?
+            "
+        ),
+        library_paths,
+    )
+    .await
+}
+
+/// Genre facet counts. Genres live only in `metadata_overrides` JSON
+/// (migration `0066`), so this reads `json_each` over `$.genres` rather than
+/// joining a link table. `DISTINCT b.id` guards a duplicate entry inside one
+/// book's array; the visible-library predicate matches the other facets.
+async fn genre_facets(
+    pool: &SqlitePool,
+    ph: &str,
+    library_paths: &[&str],
+) -> Result<Vec<FacetCount>, sqlx::Error> {
+    facet_query(
+        pool,
+        &format!(
+            r"
+            SELECT je.value AS value, COUNT(DISTINCT b.id) AS count
+              FROM books b
+              JOIN scan_roots l ON l.id = b.library_id
+              JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+              JOIN json_each(mo.overrides, '$.genres') je
+             WHERE json_type(mo.overrides, '$.genres') IS NOT NULL
+               AND je.value <> ''
+               AND ((l.path IN ({ph})
+                     AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id))
+                 OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid))
+             GROUP BY je.value
              ORDER BY count DESC, value ASC
              LIMIT ?
             "

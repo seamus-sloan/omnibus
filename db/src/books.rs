@@ -62,9 +62,9 @@ impl From<crate::metadata_overrides::MetadataOverridesError> for BooksError {
             // Bulk-write-only variants that can't arise on the read path;
             // folded with their message preserved rather than panicking.
             other @ (crate::metadata_overrides::MetadataOverridesError::BookNotFound(_)
-            | crate::metadata_overrides::MetadataOverridesError::TooManyTags { .. }) => {
-                BooksError::Db(sqlx::Error::Protocol(other.to_string()))
-            }
+            | crate::metadata_overrides::MetadataOverridesError::TooManyValues {
+                ..
+            }) => BooksError::Db(sqlx::Error::Protocol(other.to_string())),
         }
     }
 }

@@ -1,11 +1,11 @@
-//! Discovery reads that back cross-cutting search surfaces: the tag cloud and
-//! the command-palette grouped search.
+//! Discovery reads that back cross-cutting search surfaces: the tag and
+//! genre clouds and the command-palette grouped search.
 
 use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
 #[cfg(feature = "server")]
 use omnibus_db as db;
-use omnibus_shared::{PaletteResults, TagWeight};
+use omnibus_shared::{GenreWeight, PaletteResults, TagWeight};
 
 #[cfg(feature = "server")]
 use super::{internal_rpc_error, AuthUser, PoolExt};
@@ -16,6 +16,14 @@ pub async fn rpc_get_tag_cloud() -> Result<Vec<TagWeight>> {
     Ok(db::get_tag_cloud(&pool.0)
         .await
         .map_err(|e| internal_rpc_error("get tag cloud", e))?)
+}
+
+/// Return all genres with book counts for the genre chip-editor pool.
+#[get("/api/rpc/genres", pool: PoolExt, _user: AuthUser)]
+pub async fn rpc_get_genre_cloud() -> Result<Vec<GenreWeight>> {
+    Ok(db::get_genre_cloud(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("get genre cloud", e))?)
 }
 
 /// Search palette — grouped results (books, authors, series, tags) for the

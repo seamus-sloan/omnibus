@@ -13,7 +13,7 @@ use crate::normalize::{normalize_author, normalize_title};
 use crate::sync::upsert_fts;
 
 use super::fts::rebuild_fts_for_book;
-use super::links::{materialize_series_link, materialize_tag_rows};
+use super::links::{materialize_genre_rows, materialize_series_link, materialize_tag_rows};
 
 /// Errors returned by the metadata overrides data layer.
 #[derive(Debug, thiserror::Error)]
@@ -29,9 +29,15 @@ pub enum MetadataOverridesError {
     /// call rolls back rather than applying to a subset.
     #[error("book not found: {0}")]
     BookNotFound(String),
-    /// A bulk tag delta would push one book past the per-book tag cap.
-    #[error("tag list for {uuid} would exceed {max} tags")]
-    TooManyTags { uuid: String, max: usize },
+    /// A bulk add/remove delta would push one book past a per-book list
+    /// cap. `field` names the list ("tag", "genre") — one variant rather
+    /// than one per list, since no caller branches on which it was.
+    #[error("{field} list for {uuid} would exceed {max} entries")]
+    TooManyValues {
+        uuid: String,
+        field: &'static str,
+        max: usize,
+    },
 }
 
 impl From<crate::books::BooksError> for MetadataOverridesError {
@@ -247,10 +253,12 @@ pub async fn upsert_metadata_overrides(
     .await?;
     materialize_series_link(&mut tx, book_uuid, overrides).await?;
     materialize_tag_rows(&mut tx, overrides).await?;
+    materialize_genre_rows(&mut tx, overrides).await?;
     touch_book_last_modified(&mut tx, book_uuid).await?;
     // A subjects replacement may have dropped a tag's last membership — reap
     // orphans in the same tx so no surface ever serves a bookless tag.
     crate::taxonomy::delete_orphan_tags(&mut tx).await?;
+    crate::taxonomy::delete_orphan_genres(&mut tx).await?;
     tx.commit().await?;
 
     if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
@@ -285,6 +293,7 @@ pub async fn merge_metadata_overrides(
     // The merged subjects may have dropped a tag's last membership (m2m
     // fields replace wholesale when `Some`) — reap orphans before commit.
     crate::taxonomy::delete_orphan_tags(&mut tx).await?;
+    crate::taxonomy::delete_orphan_genres(&mut tx).await?;
     tx.commit().await?;
 
     if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
@@ -330,6 +339,7 @@ async fn merge_one_in_tx(
     .await?;
     materialize_series_link(tx, book_uuid, &merged).await?;
     materialize_tag_rows(tx, &merged).await?;
+    materialize_genre_rows(tx, &merged).await?;
     touch_book_last_modified(tx, book_uuid).await?;
     Ok(())
 }
@@ -346,6 +356,10 @@ async fn merge_one_in_tx(
 /// pre-tx fetch cannot serve a stale base). Both the pre-tx effective-subjects
 /// fetch and the in-tx override-row read are batched via chunked `IN (...)`
 /// queries (mirroring [`load_overrides_bulk`]) rather than looped per uuid.
+///
+/// Genre deltas need no such pre-tx fetch: genres exist only in the override
+/// row (migration `0066`), so the in-tx read *is* the complete base.
+///
 /// FTS rebuilds run best-effort per book after commit, matching
 /// [`merge_metadata_overrides`].
 pub async fn bulk_merge_metadata_overrides(
@@ -354,13 +368,19 @@ pub async fn bulk_merge_metadata_overrides(
     edit: &BulkMetadataEdit,
     user_id: i64,
 ) -> Result<(), MetadataOverridesError> {
+    let has_tag_deltas = !edit.add_tags.is_empty() || !edit.remove_tags.is_empty();
+    let has_genre_deltas = !edit.add_genres.is_empty() || !edit.remove_genres.is_empty();
+
+    // Unconditional, even for an edit with no tag deltas: this is also the
+    // call that proves every uuid resolves to a live book, which is what
+    // makes an unknown uuid fail the whole batch before the transaction
+    // opens rather than half-applying it.
     let effective_subjects = effective_subjects_bulk(pool, uuids).await?;
 
-    let has_tag_deltas = !edit.add_tags.is_empty() || !edit.remove_tags.is_empty();
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     // Pre-loaded once for the whole batch, chunked, instead of a
     // `SELECT … WHERE book_uuid = ?` per uuid inside the loop below.
-    let override_rows = if has_tag_deltas {
+    let override_rows = if has_tag_deltas || has_genre_deltas {
         load_overrides_bulk_tx(&mut tx, uuids).await?
     } else {
         HashMap::new()
@@ -377,25 +397,49 @@ pub async fn bulk_merge_metadata_overrides(
                 .or(effective_subjects.get(uuid).map(Vec::as_slice))
                 .unwrap_or_default();
             let subjects = edit.apply_tags(base);
-            if subjects.len() > MetadataOverrides::MAX_SUBJECTS {
-                return Err(MetadataOverridesError::TooManyTags {
-                    uuid: uuid.clone(),
-                    max: MetadataOverrides::MAX_SUBJECTS,
-                });
-            }
+            check_list_cap(uuid, "tag", subjects.len(), MetadataOverrides::MAX_SUBJECTS)?;
             incoming.subjects = Some(subjects);
+        }
+        if has_genre_deltas {
+            let base = override_rows
+                .get(uuid)
+                .and_then(|ov| ov.genres.as_deref())
+                .unwrap_or_default();
+            let genres = edit.apply_genres(base);
+            check_list_cap(uuid, "genre", genres.len(), MetadataOverrides::MAX_GENRES)?;
+            incoming.genres = Some(genres);
         }
         merge_one_in_tx(&mut tx, uuid, &incoming, user_id).await?;
     }
     // One sweep for the whole batch, not per book: a `remove_tags` delta can
     // drop a tag's last membership anywhere in the set.
     crate::taxonomy::delete_orphan_tags(&mut tx).await?;
+    crate::taxonomy::delete_orphan_genres(&mut tx).await?;
     tx.commit().await?;
 
     for uuid in uuids {
         if let Err(e) = rebuild_fts_for_book(pool, uuid).await {
             tracing::warn!(book_uuid = %uuid, error = %e, "books_fts rebuild after bulk override merge failed");
         }
+    }
+    Ok(())
+}
+
+/// Reject a post-delta list that would push one book past its per-book cap.
+/// The whole bulk call rolls back — a partial apply would leave the batch
+/// half-edited with no way for the caller to tell which half.
+fn check_list_cap(
+    uuid: &str,
+    field: &'static str,
+    len: usize,
+    max: usize,
+) -> Result<(), MetadataOverridesError> {
+    if len > max {
+        return Err(MetadataOverridesError::TooManyValues {
+            uuid: uuid.to_string(),
+            field,
+            max,
+        });
     }
     Ok(())
 }
@@ -531,6 +575,7 @@ pub async fn delete_metadata_overrides(
     // Reverting to scanned drops every override membership this row held —
     // tags that existed only through it are now orphans.
     crate::taxonomy::delete_orphan_tags(&mut tx).await?;
+    crate::taxonomy::delete_orphan_genres(&mut tx).await?;
     tx.commit().await?;
 
     // The override state is now fully cleared, so any cached rewritten
@@ -659,7 +704,9 @@ pub(crate) async fn load_overrides_bulk(
 /// metadata-source order) ranks `OmnibusOverrides` above
 /// `EmbeddedTags` — the two sources with a real data provider today (see
 /// [`overrides_outrank_embedded`]). Scalar fields are replaced when `Some`;
-/// m2m fields (`creators`, `subjects`) replace entirely when present.
+/// m2m fields (`creators`, `subjects`, `genres`) replace entirely when
+/// present. `genres` has no scanned counterpart — this is the only place a
+/// book's genres are ever populated.
 pub(crate) fn apply_overrides(
     book: &mut EbookMetadata,
     uuid: &str,
@@ -702,6 +749,9 @@ pub(crate) fn apply_overrides(
     }
     if let Some(ref s) = ov.subjects {
         book.subjects = s.clone();
+    }
+    if let Some(ref g) = ov.genres {
+        book.genres = g.clone();
     }
     book.has_cover_override = has_cover_override;
     if has_cover_override {

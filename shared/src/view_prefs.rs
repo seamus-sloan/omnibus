@@ -93,6 +93,8 @@ pub struct ViewFilters {
     pub formats: Vec<String>,
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub genres: Vec<String>,
 }
 
 impl ViewFilters {
@@ -102,6 +104,7 @@ impl ViewFilters {
             && self.series.is_empty()
             && self.formats.is_empty()
             && self.tags.is_empty()
+            && self.genres.is_empty()
     }
 }
 

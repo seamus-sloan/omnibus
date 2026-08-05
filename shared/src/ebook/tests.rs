@@ -60,6 +60,7 @@ fn validate_accepts_well_formed_override() {
         isbn13: Some("9780134685991".into()),
         creators: Some(vec![contributor("Ada Lovelace")]),
         subjects: Some(vec!["fiction".into(), "history".into()]),
+        genres: Some(vec!["Historical Fiction".into()]),
     };
     assert_eq!(ov.validate(), Ok(()));
 }
@@ -509,6 +510,8 @@ fn bulk_metadata_edit_validate_accepts_well_formed_edit() {
         language: Some("en".into()),
         add_tags: tags(&["fantasy"]),
         remove_tags: tags(&["scifi"]),
+        add_genres: tags(&["Fantasy"]),
+        remove_genres: tags(&["Sci-Fi"]),
     };
     assert!(edit.validate().is_ok());
 }
@@ -606,6 +609,101 @@ fn bulk_metadata_edit_validate_caps_each_tag_list_separately_not_combined() {
         .collect();
     let edit = BulkMetadataEdit {
         add_tags: oversized,
+        ..Default::default()
+    };
+    assert!(edit.validate().is_err());
+}
+
+#[test]
+fn validate_rejects_too_many_genres() {
+    let ov = MetadataOverrides {
+        genres: Some(vec!["genre".to_string(); MetadataOverrides::MAX_GENRES + 1]),
+        ..Default::default()
+    };
+    let err = ov.validate().expect_err("over-cap genre list rejected");
+    assert!(err.contains("too many genres"), "unexpected message: {err}");
+}
+
+#[test]
+fn validate_rejects_overlong_genre_and_accepts_one_at_the_cap() {
+    let ov = MetadataOverrides {
+        genres: Some(vec!["x".repeat(MetadataOverrides::GENRE_MAX_LEN + 1)]),
+        ..Default::default()
+    };
+    let err = ov.validate().expect_err("over-length genre rejected");
+    assert!(err.contains("genre exceeds"), "unexpected message: {err}");
+
+    let ov = MetadataOverrides {
+        genres: Some(vec!["x".repeat(MetadataOverrides::GENRE_MAX_LEN)]),
+        ..Default::default()
+    };
+    assert!(ov.validate().is_ok());
+}
+
+#[test]
+fn merge_incoming_genres_replace_base_genres_wholesale() {
+    let base = MetadataOverrides {
+        genres: Some(tags(&["Horror", "Mystery"])),
+        ..Default::default()
+    };
+    let incoming = MetadataOverrides {
+        genres: Some(tags(&["Sci-Fi"])),
+        ..Default::default()
+    };
+    assert_eq!(base.merge(&incoming).genres, Some(tags(&["Sci-Fi"])));
+}
+
+#[test]
+fn merge_preserves_base_genres_when_incoming_leaves_them_untouched() {
+    let base = MetadataOverrides {
+        genres: Some(tags(&["Horror"])),
+        ..Default::default()
+    };
+    let incoming = MetadataOverrides {
+        title: Some("New Title".into()),
+        ..Default::default()
+    };
+    let merged = base.merge(&incoming);
+    assert_eq!(merged.genres, Some(tags(&["Horror"])));
+    assert_eq!(merged.title, Some("New Title".into()));
+}
+
+#[test]
+fn bulk_metadata_edit_apply_genres_adds_missing_removes_matching_and_never_duplicates() {
+    let edit = BulkMetadataEdit {
+        add_genres: tags(&["Fantasy", "Mystery"]),
+        remove_genres: tags(&["Horror"]),
+        ..Default::default()
+    };
+    let result = edit.apply_genres(&tags(&["Horror", "Mystery", "Romance"]));
+    assert_eq!(result, tags(&["Mystery", "Romance", "Fantasy"]));
+}
+
+#[test]
+fn bulk_metadata_edit_is_empty_is_false_when_only_genre_deltas_are_set() {
+    let edit = BulkMetadataEdit {
+        add_genres: tags(&["Fantasy"]),
+        ..Default::default()
+    };
+    assert!(!edit.is_empty());
+    assert!(BulkMetadataEdit::default().is_empty());
+}
+
+#[test]
+fn bulk_metadata_edit_validate_caps_each_genre_list_separately_not_combined() {
+    let forty: Vec<String> = (0..40).map(|i| format!("genre{i}")).collect();
+    let edit = BulkMetadataEdit {
+        add_genres: forty.clone(),
+        remove_genres: forty,
+        ..Default::default()
+    };
+    assert!(edit.validate().is_ok());
+
+    let oversized: Vec<String> = (0..MetadataOverrides::MAX_GENRES + 1)
+        .map(|i| format!("genre{i}"))
+        .collect();
+    let edit = BulkMetadataEdit {
+        add_genres: oversized,
         ..Default::default()
     };
     assert!(edit.validate().is_err());

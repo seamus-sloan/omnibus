@@ -1023,3 +1023,125 @@ async fn get_tag_cloud_propagates_db_error_when_pool_is_closed() {
     let err = get_tag_cloud(&pool).await.unwrap_err();
     assert!(matches!(err, DiscoveryError::Db(_)));
 }
+
+// --- genre cloud --------------------------------------------------------
+
+/// Seed `count` books under `/lib` and return their uuids in filename order.
+async fn seed_books_for_genres(pool: &sqlx::SqlitePool, count: usize) -> Vec<String> {
+    let books: Vec<_> = (0..count)
+        .map(|i| {
+            let name = format!("{}.epub", (b'a' + u8::try_from(i).unwrap()) as char);
+            indexed(&name, Some(&format!("Book {i}")), &["X"], &[], None, None)
+        })
+        .collect();
+    replace_books(pool, "/lib", books).await.unwrap();
+    let mut listed = list_books(pool, "/lib").await.unwrap();
+    listed.sort_by(|a, b| a.filename.cmp(&b.filename));
+    listed
+        .into_iter()
+        .map(|b| b.unique_identifier.unwrap())
+        .collect()
+}
+
+async fn set_genres(pool: &sqlx::SqlitePool, uuid: &str, genres: &[&str], user_id: i64) {
+    let ov = MetadataOverrides {
+        genres: Some(genres.iter().map(|g| (*g).to_string()).collect()),
+        ..Default::default()
+    };
+    upsert_metadata_overrides(pool, uuid, &ov, false, user_id)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn get_genre_cloud_returns_counts_ordered_by_count_then_name() {
+    let _guard = CoversTempDir::new("genre_cloud_order");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let uuids = seed_books_for_genres(&pool, 3).await;
+
+    set_genres(&pool, &uuids[0], &["Horror", "Mystery"], user_id).await;
+    set_genres(&pool, &uuids[1], &["Horror"], user_id).await;
+    set_genres(&pool, &uuids[2], &["Adventure"], user_id).await;
+
+    let genres = get_genre_cloud(&pool).await.unwrap();
+    let pairs: Vec<(&str, usize)> = genres.iter().map(|g| (g.name.as_str(), g.count)).collect();
+    assert_eq!(
+        pairs,
+        vec![("Horror", 2), ("Adventure", 1), ("Mystery", 1)],
+        "count desc, then name asc"
+    );
+}
+
+#[tokio::test]
+async fn get_genre_cloud_returns_empty_vec_when_no_book_has_genres() {
+    let _guard = CoversTempDir::new("genre_cloud_empty");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    // Tags on every book, genres on none — the two vocabularies are separate.
+    replace_books(
+        &pool,
+        "/lib",
+        vec![indexed(
+            "a.epub",
+            Some("A"),
+            &["X"],
+            &["fiction"],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+
+    assert!(get_genre_cloud(&pool).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn get_genre_cloud_drops_a_genre_once_its_last_book_stops_naming_it() {
+    let _guard = CoversTempDir::new("genre_cloud_drop");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let uuids = seed_books_for_genres(&pool, 1).await;
+
+    set_genres(&pool, &uuids[0], &["Western"], user_id).await;
+    assert_eq!(get_genre_cloud(&pool).await.unwrap().len(), 1);
+
+    // Replacing the list orphans "Western"; the write path reaps its row.
+    set_genres(&pool, &uuids[0], &["Noir"], user_id).await;
+    let genres = get_genre_cloud(&pool).await.unwrap();
+    assert_eq!(genres.len(), 1);
+    assert_eq!(genres[0].name, "Noir");
+}
+
+#[tokio::test]
+async fn get_genre_cloud_folds_case_variants_into_the_canonical_row() {
+    let _guard = CoversTempDir::new("genre_cloud_case");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let uuids = seed_books_for_genres(&pool, 2).await;
+
+    set_genres(&pool, &uuids[0], &["Sci-Fi"], user_id).await;
+    set_genres(&pool, &uuids[1], &["sci-fi"], user_id).await;
+
+    let genres = get_genre_cloud(&pool).await.unwrap();
+    assert_eq!(genres.len(), 1, "NOCASE-unique `genres` row, one entry");
+    assert_eq!(genres[0].name, "Sci-Fi", "first spelling coined the row");
+    assert_eq!(genres[0].count, 2);
+}
+
+#[tokio::test]
+async fn get_genre_cloud_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = get_genre_cloud(&pool).await.unwrap_err();
+    assert!(matches!(err, DiscoveryError::Db(_)));
+}
