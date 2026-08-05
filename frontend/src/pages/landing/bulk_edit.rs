@@ -2,6 +2,8 @@
 //! while rows are checked, and the modal that applies one
 //! `BulkMetadataEdit` to every selected book via `rpc_bulk_save_overrides`.
 
+use std::rc::Rc;
+
 use dioxus::prelude::*;
 use omnibus_shared::{BulkMetadataEdit, EbookMetadata};
 
@@ -79,9 +81,15 @@ pub(super) fn BulkEditModal(
     // tags/genres, with per-value counts — removing one no book carries is
     // meaningless. Annotated because a bare `.into()` in the rsx props is
     // ambiguous between the dioxus_core and dioxus_stores `SuperInto` impls.
-    let books_for_genres = selected_books.clone();
-    let removable = use_memo(move || removable_tags(&selected_books));
-    let removable_genre = use_memo(move || removable_genres(&books_for_genres));
+    //
+    // Shared through an `Rc` because both memos need the same book list and
+    // the component body re-runs on every render: cloning the `Vec` for the
+    // second memo would copy every selected book's metadata each time, and
+    // "select all" makes that list as long as the page.
+    let books = Rc::new(selected_books);
+    let books_for_tags = Rc::clone(&books);
+    let removable = use_memo(move || removable_tags(&books_for_tags));
+    let removable_genre = use_memo(move || removable_genres(&books));
     let pools = BulkEditPools {
         authors: suggestions.author_suggestions,
         tags: suggestions.tag_suggestions,
