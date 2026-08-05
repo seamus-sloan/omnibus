@@ -228,14 +228,10 @@ pub(super) async fn maybe_adopt_cover(
         .bind(book_id)
         .execute(&mut **tx)
         .await?;
-    // allow: `cover` can't be taken by value without cloning at every call
-    // site — both callers hold `b: &IndexedBook` borrowed from a `&[IndexedBook]`
-    // slice iterated once per sync (`sync_new`/`sync_changed`), and whether
-    // adoption happens is only known after the `has_cover` query above runs.
-    // Cloning unconditionally up front (to satisfy an owned parameter) would
-    // clone on every attach instead of only the ones that actually adopt, so
-    // the reference + conditional clone here is the cheaper shape; matches
-    // the sibling `push_cover` in `db/src/sync.rs`, which clones the same way.
+    // allow: callers hold `cover` borrowed from a `&[IndexedBook]` slice, and
+    // adoption is only known after the `has_cover` query above — cloning here
+    // (only on adoption) beats cloning unconditionally at every call site;
+    // matches the sibling `push_cover` in `db/src/sync.rs`.
     Ok(Some((target_uuid, mime.clone(), bytes.clone())))
 }
 

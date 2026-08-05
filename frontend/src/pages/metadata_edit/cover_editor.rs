@@ -233,3 +233,21 @@ fn cover_controls(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bust_query_appends_with_question_mark_when_url_has_no_query_string() {
+        assert_eq!(bust_query("/covers/abc.jpg", 3), "/covers/abc.jpg?v=3");
+    }
+
+    #[test]
+    fn bust_query_appends_with_ampersand_when_url_already_has_a_query_string() {
+        assert_eq!(
+            bust_query("/covers/abc.jpg?token=xyz", 3),
+            "/covers/abc.jpg?token=xyz&v=3"
+        );
+    }
+}

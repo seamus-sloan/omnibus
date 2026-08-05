@@ -73,9 +73,11 @@ pub struct Attributes {
     pub volumeid: String,
 }
 
-/// Ingest a batch. Always answers `{"Result": "Success"}` — analytics is
-/// best-effort by contract, and a 4xx/5xx here makes the device re-queue and
-/// hammer the route. Per-event failures are logged and skipped.
+/// Ingest a batch. Answers `{"Result": "Success"}` for any batch within
+/// `MAX_ANALYTICS_EVENTS` — analytics is best-effort by contract, and a 4xx/5xx
+/// here makes the device re-queue and hammer the route, so per-event failures
+/// are logged and skipped rather than surfaced. An oversized batch is the one
+/// exception, rejected with 400 before any DB work.
 pub async fn analytics_event(
     auth: KoboAuthUser,
     State(state): State<AppState>,
