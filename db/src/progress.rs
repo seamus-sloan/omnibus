@@ -214,6 +214,90 @@ pub async fn attach_derived_kobo_location(
     Ok(result.rows_affected() > 0)
 }
 
+/// The device's own `Statistics` counters, mirrored so sync-out can hand
+/// them back. Never derived, never aggregated — see
+/// [`set_kobo_statistics_tx`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KoboStatistics {
+    pub spent_reading_minutes: Option<i64>,
+    pub remaining_time_minutes: Option<i64>,
+    /// The device's `Statistics.LastModified`, clamped forward to server-now.
+    /// `None` when the device sent counters but no parseable clock.
+    pub updated_at: Option<i64>,
+}
+
+impl KoboStatistics {
+    /// Whether this carries anything worth storing or emitting. A block with
+    /// neither counter is not a fact about reading time, so it is dropped
+    /// rather than stored as a row of NULLs.
+    pub fn is_empty(&self) -> bool {
+        self.spent_reading_minutes.is_none() && self.remaining_time_minutes.is_none()
+    }
+}
+
+/// Mirror a device's `Statistics` block onto its epub position row (#1653).
+/// Returns whether a row was updated.
+///
+/// **UPDATE, not upsert.** Statistics annotate a position; they are not one.
+/// The row CHECK requires an epub row to carry a CFI or a percent, so a
+/// stats-only row cannot exist — and shouldn't: a position-less row would
+/// surface on the Continue-reading rail at 0%. A block for a book with no
+/// position is dropped, which is what happened to every block before this.
+///
+/// **Nothing reads these but the Kobo echo path.** They are cumulative
+/// per-book totals, while `reading_sessions` holds discrete sessions that
+/// already arrive per-session via the `LeaveContent` analytics event; feeding
+/// these into `crate::stats` would double-count that reading time.
+///
+/// The write is rejected unless it is provably at least as new as what is
+/// stored — an unstamped block can only take an empty slot. Two Kobos on one
+/// account each keep their own totals, and the older one's report can't
+/// overwrite the newer one's and then be echoed back as truth. The stamp is
+/// clamped forward to server-now like [`upsert_progress_tx`]'s: a device a
+/// year fast would otherwise lock itself out of every later update, and the
+/// future stamp would win arbitration on the device forever.
+pub async fn set_kobo_statistics_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    user_id: i64,
+    book_uuid: &str,
+    stats: &KoboStatistics,
+) -> Result<bool, ProgressError> {
+    let book_uuid = resolve_canonical_book_uuid_exec(&mut **tx, book_uuid)
+        .await?
+        .ok_or(ProgressError::BookNotFound)?;
+    // A NULL stamp stays NULL rather than becoming now: sync-out then omits
+    // `LastModified`, the device's newest-wins arbitration drops the block,
+    // and its own totals survive. Inventing a clock is the failure this
+    // whole feature is shaped to avoid.
+    let result = sqlx::query(
+        "UPDATE reading_progress
+            SET kobo_spent_reading_minutes = ?,
+                kobo_remaining_time_minutes = ?,
+                kobo_statistics_updated_at = CASE
+                    WHEN ? IS NULL THEN NULL
+                    ELSE MIN(?, CAST(strftime('%s','now') AS INTEGER))
+                END
+          WHERE user_id = ? AND book_uuid = ? AND format = 'epub'
+            AND (
+                (kobo_spent_reading_minutes IS NULL
+                 AND kobo_remaining_time_minutes IS NULL
+                 AND kobo_statistics_updated_at IS NULL)
+             OR (? IS NOT NULL AND ? >= COALESCE(kobo_statistics_updated_at, 0))
+            )",
+    )
+    .bind(stats.spent_reading_minutes)
+    .bind(stats.remaining_time_minutes)
+    .bind(stats.updated_at)
+    .bind(stats.updated_at)
+    .bind(user_id)
+    .bind(&book_uuid)
+    .bind(stats.updated_at)
+    .bind(stats.updated_at)
+    .execute(&mut **tx)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
 /// Fetch the current position row for `(user, book_uuid, format)`. Returns
 /// `Ok(None)` for an unknown book uuid or for a book with no row for that
 /// format yet.

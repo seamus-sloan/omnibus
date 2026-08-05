@@ -259,6 +259,13 @@ pub struct KoboBookState {
     /// each against its own clock — the MAXed value would claim the status
     /// moved every time only the position did.
     pub status_updated_at: i64,
+    /// The device's last-reported `Statistics`, echoed back untouched
+    /// (#1653). `None` when no device has ever reported one for this book,
+    /// in which case sync-out omits the block rather than inventing zeroes.
+    /// Deliberately absent from [`Self::state_updated_at`]: a stats-only
+    /// change is not a reason to re-push a book the device already agrees
+    /// with, and the block is stamped with its own clock regardless.
+    pub statistics: Option<crate::progress::KoboStatistics>,
 }
 
 /// Per-user reading state for `uuids`, keyed by book uuid.
@@ -297,6 +304,9 @@ pub async fn reading_state_for(
                     rp.progress_percent AS progress_percent,
                     rp.kobo_location AS kobo_location,
                     rp.epub_cfi AS epub_cfi,
+                    rp.kobo_spent_reading_minutes AS kobo_spent_reading_minutes,
+                    rp.kobo_remaining_time_minutes AS kobo_remaining_time_minutes,
+                    rp.kobo_statistics_updated_at AS kobo_statistics_updated_at,
                     COALESCE(rp.client_updated_at, rp.updated_at, 0)
                         AS progress_updated_at,
                     COALESCE(rs.updated_at, 0) AS status_updated_at,
@@ -325,10 +335,18 @@ pub async fn reading_state_for(
                 .try_get::<Option<String>, _>("status")?
                 .map(|s| ReadStatus::from_db(&s))
                 .unwrap_or_default();
+            let statistics = crate::progress::KoboStatistics {
+                spent_reading_minutes: row.try_get("kobo_spent_reading_minutes")?,
+                remaining_time_minutes: row.try_get("kobo_remaining_time_minutes")?,
+                updated_at: row.try_get("kobo_statistics_updated_at")?,
+            };
             out.insert(
                 uuid,
                 KoboBookState {
                     status,
+                    // A row of NULLs is "no device ever reported" — collapse it
+                    // so sync-out omits the block instead of emitting empties.
+                    statistics: (!statistics.is_empty()).then_some(statistics),
                     percent: row.try_get::<Option<i64>, _>("progress_percent")?,
                     kobo_location: row.try_get::<Option<String>, _>("kobo_location")?,
                     epub_cfi: row.try_get::<Option<String>, _>("epub_cfi")?,

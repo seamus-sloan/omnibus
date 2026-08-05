@@ -161,6 +161,11 @@ pub struct ReadingState {
     pub priority_timestamp: String,
     pub status_info: StatusInfo,
     pub current_bookmark: CurrentBookmark,
+    /// The device's own last-reported totals, echoed back. Omitted entirely
+    /// for a book no device has reported on — an absent block is today's
+    /// behaviour and strictly safer than a zeroed one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub statistics: Option<Statistics>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -240,7 +245,8 @@ pub fn new_entitlement(
 ///
 /// A zero clock means "no such row" and stays unstamped rather than becoming
 /// `1970-01-01`: an empty bookmark must lose arbitration, not win it with a
-/// timestamp we invented.
+/// timestamp we invented. `Statistics` follows the same rule and is omitted
+/// outright for a book no device has reported totals for.
 pub fn reading_state(uuid: &str, book_ts: &str, state: Option<&KoboBookState>) -> ReadingState {
     let last_modified = state
         .map(|s| rfc3339(s.state_updated_at))
@@ -267,6 +273,17 @@ pub fn reading_state(uuid: &str, book_ts: &str, state: Option<&KoboBookState>) -
                 last_modified: stamp(s.progress_updated_at),
             })
             .unwrap_or_default(),
+        // Echoed from what the device last reported, with the device's own
+        // clock. `stamp` maps the 0/absent sentinel to `None`, so a stored
+        // block we hold no clock for goes out unstamped and loses arbitration
+        // rather than overwriting the device's totals with our mirror.
+        statistics: state
+            .and_then(|s| s.statistics.as_ref())
+            .map(|st| Statistics {
+                spent_reading_minutes: st.spent_reading_minutes,
+                remaining_time_minutes: st.remaining_time_minutes,
+                last_modified: st.updated_at.and_then(stamp),
+            }),
     }
 }
 
@@ -363,6 +380,7 @@ fn removed_entitlement(book_uuid: &str) -> SyncItem {
                 last_modified: None,
             },
             current_bookmark: CurrentBookmark::default(),
+            statistics: None,
         },
     })
 }
@@ -397,11 +415,16 @@ pub fn book_metadata(base: &str, token: &str, book: &KoboBookRow) -> BookMetadat
     }
 }
 
-/// Cumulative per-book stats on the `state` PUT. Parsed so the payload
-/// round-trips cleanly, but **deliberately not written anywhere**: these are
-/// running totals, while `reading_sessions` stores discrete sessions — the
-/// per-session truth already arrives via the `LeaveContent` analytics event,
-/// and deriving sessions from a cumulative counter would double-count.
+/// Cumulative per-book stats. Mirrored on the `state` PUT and handed straight
+/// back on sync-out (#1653) — **echoed, never invented**. The device applies
+/// the same newest-timestamp-wins arbitration to this block as to every other
+/// sub-object (#1652), so a zeroed block stamped `now` would be the server
+/// asserting "your reading totals are zero" and the device would adopt it.
+///
+/// These feed nothing else. They are running totals, while `reading_sessions`
+/// stores discrete sessions — the per-session truth already arrives via the
+/// `LeaveContent` analytics event, so deriving stats from a cumulative counter
+/// would double-count the same reading time.
 #[derive(Debug, Serialize, Deserialize, Default)]
 #[serde(rename_all = "PascalCase")]
 pub struct Statistics {
@@ -409,12 +432,18 @@ pub struct Statistics {
     pub spent_reading_minutes: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remaining_time_minutes: Option<i64>,
+    /// The block's own event time — the device's, always. Omitted when we
+    /// hold no clock for it, which makes the device drop the block and keep
+    /// its own totals; that is the safe direction, and inventing a stamp is
+    /// the failure this field exists to prevent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_modified: Option<String>,
 }
 
 /// The `PUT library/<uuid>/state` request body. Kobo batches one or more
 /// reading states; `StatusInfo` and `CurrentBookmark` persist (the latter
-/// with a derived CFI when possible), `Statistics` is acknowledged (see
-/// its doc).
+/// with a derived CFI when possible), and `Statistics` is mirrored onto the
+/// position row so sync-out can echo it back (see its doc).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct StateRequest {
