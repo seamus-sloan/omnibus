@@ -604,7 +604,13 @@ pub(crate) async fn queue_create_journal(input: &CreateJournalEntry) -> Option<J
         id: temp,
         book_uuid: input.book_uuid.clone(),
         author_id: me.as_ref().map(|u| u.id).unwrap_or_default(),
-        author_name: me.map(|u| u.username).unwrap_or_default(),
+        // Mirror the server's attribution (display name, else username) so the
+        // optimistic card doesn't relabel itself once the entry syncs.
+        author_name: me
+            .as_ref()
+            .map(|u| u.display().to_string())
+            .unwrap_or_default(),
+        author_has_avatar: me.as_ref().is_some_and(|u| u.has_avatar),
         body_md: input.body_md.clone(),
         body_html: fallback_html(&input.body_md),
         progress: input.progress,

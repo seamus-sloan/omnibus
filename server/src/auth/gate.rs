@@ -44,6 +44,9 @@ fn is_media_read_path(path: &str) -> bool {
         // Embedded journal images render into `<img src>` in the mobile
         // WebView's journal feed — same fetch constraints as covers/thumbs.
         || path.starts_with("/api/journals/images/")
+        // User avatars render into `<img src>` wherever a monogram would go
+        // (user menu, journal bylines, ratings rows) — same constraints again.
+        || (path.starts_with("/api/users/") && path.ends_with("/avatar"))
 }
 
 /// Reject `/api/*` requests without a live session with `401 Unauthorized`, after exempting `/api/auth/*` and `/api/_health`.

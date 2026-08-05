@@ -12,8 +12,8 @@ use axum::{
 
 use super::{
     audiobooks, author_photos, authors, bookmarks, covers, ebooks, genres, highlights, journals,
-    kindle, overrides, physical, progress, ratings, read_status, scan, search, series, settings,
-    shelves, stats, suggestions, summary, tags, uploads, users, AppState,
+    kindle, overrides, physical, profile, progress, ratings, read_status, scan, search, series,
+    settings, shelves, stats, suggestions, summary, tags, uploads, users, AppState,
 };
 use crate::rate_limit::{rate_limit_by_ip, RateLimiter};
 
@@ -362,6 +362,9 @@ fn kindle_routes() -> Router<AppState> {
         .route("/api/kindle/send", post(kindle::post_send))
         .route("/api/kindle/send/status", get(kindle::get_send_status))
         .route("/api/account/kindle-email", post(kindle::post_kindle_email))
+        .route("/api/account/profile", post(profile::post_profile))
+        .route("/api/account/avatar", delete(profile::delete_avatar))
+        .route("/api/users/{user_id}/avatar", get(profile::get_user_avatar))
         .route("/api/smtp", get(kindle::get_smtp).post(kindle::post_smtp))
         .route("/api/smtp/clear", post(kindle::post_smtp_clear))
         .route("/api/smtp/test", post(kindle::post_smtp_test))
@@ -414,6 +417,7 @@ fn upload_router() -> Router<AppState> {
             post(overrides::post_ebook_cover),
         )
         .route("/api/journals/images", post(journals::post_journal_image))
+        .route("/api/account/avatar", post(profile::post_avatar))
         .route(
             "/api/authors/{id}/photo",
             put(author_photos::put_author_photo),

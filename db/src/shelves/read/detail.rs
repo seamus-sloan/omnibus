@@ -61,7 +61,7 @@ pub async fn manual_shelves_containing(
 /// Full shelf detail (including its rules), or `None` if the id is unknown.
 pub async fn get_shelf(pool: &SqlitePool, id: i64) -> Result<Option<Shelf>, ShelfError> {
     let Some(r) = sqlx::query(
-        "SELECT s.id, s.owner_user_id, u.username AS owner_username,
+        "SELECT s.id, s.owner_user_id, COALESCE(u.display_name, u.username) AS owner_username,
                 s.kind, s.name, s.description, s.visibility, s.accent, s.match_mode,
                 s.sync_to_kobo
            FROM shelves s

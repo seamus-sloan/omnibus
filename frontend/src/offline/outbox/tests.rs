@@ -208,6 +208,8 @@ async fn queue_create_shelf_uses_cached_identity_for_owner_fields() {
             can_edit: true,
             can_download: true,
             kindle_email: None,
+            display_name: None,
+            has_avatar: false,
         },
     );
     let req = omnibus_shared::CreateShelfRequest {
@@ -617,6 +619,8 @@ async fn queue_create_journal_synthesizes_temp_record_and_caches_it() {
             can_edit: true,
             can_download: true,
             kindle_email: None,
+            display_name: None,
+            has_avatar: false,
         },
     );
 
@@ -686,6 +690,7 @@ async fn journal_remapped_replaces_the_temp_record_with_the_server_copy() {
         book_uuid: "outbox-book-8".into(),
         author_id: 8,
         author_name: "marcus".into(),
+        author_has_avatar: false,
         body_md: "draft".into(),
         body_html: "<p>draft</p>".into(),
         progress: None,
@@ -728,6 +733,8 @@ async fn kindle_email_changed_patches_the_cached_account_summary() {
             can_edit: true,
             can_download: true,
             kindle_email: None,
+            display_name: None,
+            has_avatar: false,
         },
     );
 

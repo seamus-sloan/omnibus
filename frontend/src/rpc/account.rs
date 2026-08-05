@@ -1,6 +1,7 @@
-//! Per-user account server functions: the Send-to-Kindle destination address
-//! and the self-service change-password flow, both editable from the Account
-//! section of `/settings`.
+//! Per-user account server functions: the display name, the Send-to-Kindle
+//! destination address, and the self-service change-password flow, all
+//! editable from `/settings`. The avatar upload is REST-only — multipart
+//! doesn't fit a server function, so it follows the author-photo precedent.
 
 use dioxus::fullstack::post;
 use dioxus::prelude::*;
@@ -18,6 +19,18 @@ pub async fn rpc_set_kindle_email(email: Option<String>) -> Result<()> {
         Ok(()) => Ok(()),
         Err(AuthError::Validation(msg)) => Err(ServerFnError::new(msg).into()),
         Err(e) => Err(internal_rpc_error("set kindle email", e).into()),
+    }
+}
+
+/// Set (or clear, with `None`/blank) the authenticated user's display name.
+/// The db layer renames their Wishlist shelf in the same transaction, so the
+/// shelf label can't drift from the name it was derived from.
+#[post("/api/rpc/account/profile", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_set_display_name(display_name: Option<String>) -> Result<()> {
+    match db::auth::set_display_name(&pool.0, user.id, display_name.as_deref()).await {
+        Ok(()) => Ok(()),
+        Err(AuthError::Validation(msg)) => Err(ServerFnError::new(msg).into()),
+        Err(e) => Err(internal_rpc_error("set display name", e).into()),
     }
 }
 

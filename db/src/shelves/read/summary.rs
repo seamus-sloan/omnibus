@@ -55,7 +55,7 @@ async fn fetch_visible_shelf_rows(
     is_admin: bool,
 ) -> Result<(Vec<VisibleShelfRow>, ShelfIdGroups), ShelfError> {
     let rows = sqlx::query(
-        "SELECT s.id, s.owner_user_id, u.username AS owner_username,
+        "SELECT s.id, s.owner_user_id, COALESCE(u.display_name, u.username) AS owner_username,
                 s.kind, s.name, s.visibility, s.accent, s.match_mode
            FROM shelves s
            JOIN users u ON u.id = s.owner_user_id

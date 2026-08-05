@@ -37,6 +37,7 @@ mod kobo;
 mod overrides;
 mod physical;
 mod process_meta;
+mod profile;
 mod progress;
 mod ratings;
 mod read_status;

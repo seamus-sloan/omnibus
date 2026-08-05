@@ -19,6 +19,23 @@ pub struct UserSummary {
     /// configured one. Non-secret — the user set it themselves.
     #[serde(default)]
     pub kindle_email: Option<String>,
+    /// Presentation name other users see, or `None` to fall back to
+    /// [`Self::username`] — which stays the login and admin identity.
+    #[serde(default)]
+    pub display_name: Option<String>,
+    /// Whether this user has uploaded an avatar. Clients render
+    /// `GET /api/users/{id}/avatar` when set and a monogram otherwise.
+    #[serde(default)]
+    pub has_avatar: bool,
+}
+
+impl UserSummary {
+    /// The name to show for this user: their display name when set, else the
+    /// username. Every user-facing surface should render this, never
+    /// [`Self::username`] on its own.
+    pub fn display(&self) -> &str {
+        self.display_name.as_deref().unwrap_or(&self.username)
+    }
 }
 
 /// The four permission booleans that define what a user can do. `is_admin`
@@ -47,6 +64,9 @@ pub struct AdminUserRow {
     pub can_download: bool,
     #[serde(default)]
     pub kindle_email: Option<String>,
+    /// Presentation name, or `None` when the user hasn't set one.
+    #[serde(default)]
+    pub display_name: Option<String>,
     /// Account creation time (Unix seconds).
     pub created_at: i64,
     /// `true` when the account is currently locked out by repeated failed

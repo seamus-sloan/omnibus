@@ -7,8 +7,13 @@ use sqlx::{Executor, Sqlite, SqlitePool};
 
 use super::ShelfError;
 
-/// Appended to the owner's username for the Wishlist shelf name (`alice` →
-/// `alice's Wishlist`); migration `0054` renamed the rows seeded before it.
+/// Appended to the owner's display name — or username, when they haven't set
+/// one — for the Wishlist shelf name (`alice` → `alice's Wishlist`); migration
+/// `0054` renamed the rows seeded before it.
+///
+/// The composed name is denormalized into `shelves.name`, so
+/// `db::auth::set_display_name` re-derives it whenever the display name
+/// changes. Both must keep using the same expression.
 pub(crate) const WISHLIST_NAME_SUFFIX: &str = "'s Wishlist";
 
 /// Ensure one user has a Wishlist shelf. Idempotent *and* race-safe: the
@@ -24,7 +29,7 @@ where
 {
     sqlx::query(
         "INSERT OR IGNORE INTO shelves (owner_user_id, kind, name, visibility)
-         SELECT u.id, 'wishlist', u.username || ?2, 'public'
+         SELECT u.id, 'wishlist', COALESCE(u.display_name, u.username) || ?2, 'public'
            FROM users u
           WHERE u.id = ?1
             AND NOT EXISTS (
@@ -44,7 +49,7 @@ where
 pub async fn provision_wishlist_shelves(pool: &SqlitePool) -> Result<(), ShelfError> {
     sqlx::query(
         "INSERT OR IGNORE INTO shelves (owner_user_id, kind, name, visibility)
-         SELECT id, 'wishlist', username || ?1, 'public' FROM users
+         SELECT id, 'wishlist', COALESCE(display_name, username) || ?1, 'public' FROM users
           WHERE NOT EXISTS (
               SELECT 1 FROM shelves s WHERE s.owner_user_id = users.id AND s.kind = 'wishlist'
           )",

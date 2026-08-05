@@ -82,6 +82,8 @@ pub async fn create_user(pool: &SqlitePool, username: &str, password: &str) -> A
         can_edit: can_edit != 0,
         can_download: can_download != 0,
         kindle_email: None,
+        display_name: None,
+        has_avatar: false,
     })
 }
 
@@ -125,12 +127,19 @@ async fn check_registration_preconditions(
     Ok(is_first)
 }
 
+/// The projection [`row_to_user`] expects, over a `users` table aliased `u`.
+/// `has_avatar` is derived rather than stored so it cannot drift from the
+/// `user_avatars` rows it describes.
+pub(crate) const USER_COLUMNS: &str =
+    "u.id, u.username, u.is_admin, u.can_upload, u.can_edit, u.can_download,
+     u.kindle_email, u.display_name,
+     EXISTS(SELECT 1 FROM user_avatars a WHERE a.user_id = u.id) AS has_avatar";
+
 /// Look up a user record by username (case-insensitive); returns `None` if no match.
 pub async fn get_user_by_username(pool: &SqlitePool, username: &str) -> AuthResult<Option<User>> {
-    let row = sqlx::query(
-        "SELECT id, username, is_admin, can_upload, can_edit, can_download, kindle_email
-         FROM users WHERE username = ? COLLATE NOCASE",
-    )
+    let row = sqlx::query(&format!(
+        "SELECT {USER_COLUMNS} FROM users u WHERE u.username = ? COLLATE NOCASE"
+    ))
     .bind(username)
     .fetch_optional(pool)
     .await?;
@@ -139,10 +148,9 @@ pub async fn get_user_by_username(pool: &SqlitePool, username: &str) -> AuthResu
 
 /// Look up a user record by primary key; returns `None` if no match.
 pub async fn get_user_by_id(pool: &SqlitePool, id: i64) -> AuthResult<Option<User>> {
-    let row = sqlx::query(
-        "SELECT id, username, is_admin, can_upload, can_edit, can_download, kindle_email
-         FROM users WHERE id = ?",
-    )
+    let row = sqlx::query(&format!(
+        "SELECT {USER_COLUMNS} FROM users u WHERE u.id = ?"
+    ))
     .bind(id)
     .fetch_optional(pool)
     .await?;
@@ -171,6 +179,61 @@ pub async fn set_kindle_email(
         .bind(user_id)
         .execute(pool)
         .await?;
+    Ok(())
+}
+
+/// Longest accepted display name. Generous enough for a real name, short
+/// enough that it can't blow out a shelf title or a journal byline.
+pub const DISPLAY_NAME_MAX_LEN: usize = 64;
+
+/// Set (or clear, when `None`/blank) a user's display name, and rename their
+/// Wishlist shelf to match in the same transaction.
+///
+/// The rename is not incidental: `shelves.name` denormalizes
+/// `COALESCE(display_name, username) || "'s Wishlist"` at provisioning time, so
+/// leaving it alone would strand the old label forever. Doing both writes under
+/// one transaction keeps the stored name and the name it was derived from from
+/// ever disagreeing. No unique-index risk — `idx_shelves_owner_name` excludes
+/// `kind = 'wishlist'`.
+///
+/// Errors with [`AuthError::Validation`] for a name that is too long or carries
+/// control characters (which would break the shelf title and byline rendering).
+pub async fn set_display_name(
+    pool: &SqlitePool,
+    user_id: i64,
+    name: Option<&str>,
+) -> AuthResult<()> {
+    let normalized = match name.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(n) if n.chars().count() > DISPLAY_NAME_MAX_LEN => {
+            return Err(AuthError::Validation(format!(
+                "display name must be {DISPLAY_NAME_MAX_LEN} characters or fewer"
+            )));
+        }
+        Some(n) if n.chars().any(char::is_control) => {
+            return Err(AuthError::Validation(
+                "display name cannot contain control characters".to_string(),
+            ));
+        }
+        Some(n) => Some(n.to_string()),
+        None => None,
+    };
+
+    let mut tx = pool.begin().await?;
+    sqlx::query("UPDATE users SET display_name = ? WHERE id = ?")
+        .bind(&normalized)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "UPDATE shelves
+            SET name = (SELECT COALESCE(u.display_name, u.username) FROM users u WHERE u.id = ?1) || ?2
+          WHERE owner_user_id = ?1 AND kind = 'wishlist'",
+    )
+    .bind(user_id)
+    .bind(crate::shelves::provision::WISHLIST_NAME_SUFFIX)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -298,6 +361,7 @@ fn row_to_admin_user(row: &sqlx::sqlite::SqliteRow, now: i64) -> AdminUserRow {
         can_edit: row.get::<i64, _>("can_edit") != 0,
         can_download: row.get::<i64, _>("can_download") != 0,
         kindle_email: row.get("kindle_email"),
+        display_name: row.get("display_name"),
         created_at: row.get("created_at"),
         locked: locked_until.is_some_and(|until| until > now),
     }
@@ -309,7 +373,7 @@ fn row_to_admin_user(row: &sqlx::sqlite::SqliteRow, now: i64) -> AdminUserRow {
 pub async fn list_users(pool: &SqlitePool) -> AuthResult<Vec<AdminUserRow>> {
     let rows = sqlx::query(
         "SELECT id, username, is_admin, can_upload, can_edit, can_download,
-                kindle_email, created_at, locked_until
+                kindle_email, display_name, created_at, locked_until
          FROM users ORDER BY created_at ASC, id ASC",
     )
     .fetch_all(pool)
@@ -376,6 +440,7 @@ pub async fn admin_create_user(
         can_edit: perms.can_edit,
         can_download: perms.can_download,
         kindle_email: None,
+        display_name: None,
         created_at: now_unix(),
         locked: false,
     })
