@@ -27,6 +27,7 @@ mod bookmarks;
 mod conditional;
 mod covers;
 mod ebooks;
+mod genres;
 mod health;
 mod highlights;
 mod image_upload;

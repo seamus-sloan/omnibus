@@ -45,6 +45,8 @@ pub struct FacetCounts {
     pub series: Vec<FacetCount>,
     pub formats: Vec<FacetCount>,
     pub tags: Vec<FacetCount>,
+    #[serde(default)]
+    pub genres: Vec<FacetCount>,
 }
 
 /// Response payload for the F5b keyset-paginated **web** landing read
@@ -114,6 +116,15 @@ pub struct SeriesDetail {
 /// Single tag with its book count, for the tag cloud.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TagWeight {
+    pub name: String,
+    pub count: usize,
+}
+
+/// One genre with the number of books carrying it. Structurally a
+/// [`TagWeight`], kept a distinct type so `/api/genres` and `/api/tags`
+/// don't share a wire name for two different vocabularies.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GenreWeight {
     pub name: String,
     pub count: usize,
 }

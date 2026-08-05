@@ -104,5 +104,30 @@ pub(crate) async fn delete_orphan_tags(
     Ok(())
 }
 
+/// Delete `genres` rows no live book's override still names. Genres have no
+/// canonical link table (migration `0066`), so this is the whole visibility
+/// rule rather than the second half of one — the single clause here is the
+/// `metadata_overrides` arm of [`delete_orphan_tags`], with `$.genres` for
+/// `$.subjects`. Called from the override write paths, which are the only
+/// way a `genres` row is ever created or orphaned.
+pub(crate) async fn delete_orphan_genres(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "DELETE FROM genres
+          WHERE NOT EXISTS (
+            SELECT 1
+              FROM books b
+              JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
+              JOIN json_each(mo.overrides, '$.genres') je
+             WHERE json_type(mo.overrides, '$.genres') IS NOT NULL
+               AND je.value = genres.name COLLATE NOCASE
+          )",
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests;

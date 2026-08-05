@@ -76,7 +76,7 @@ async fn bulk_save_overrides(
             // Caller-actionable failures keep their own message; everything
             // else is an internal error that must not leak details.
             db::MetadataOverridesError::BookNotFound(_)
-            | db::MetadataOverridesError::TooManyTags { .. } => ServerFnError::new(e.to_string()),
+            | db::MetadataOverridesError::TooManyValues { .. } => ServerFnError::new(e.to_string()),
             other => internal_rpc_error("bulk save overrides", other),
         })?;
     let mut updated = Vec::with_capacity(uuids.len());

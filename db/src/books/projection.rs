@@ -246,6 +246,9 @@ pub(crate) fn row_to_ebook(r: &sqlx::sqlite::SqliteRow) -> Result<EbookMetadata,
         language: r.get("language_code"),
         creators,
         subjects,
+        // No scanned baseline and no link table (migration `0066`) — a
+        // book's genres arrive only via `apply_overrides`.
+        genres: Vec::new(),
         identifiers,
         isbn13,
         series: series_name,

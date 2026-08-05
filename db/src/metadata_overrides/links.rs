@@ -1,9 +1,9 @@
 //! Materialize the side tables an override touches so downstream reads
 //! still resolve. The series-name override gets a canonical row + link; the
-//! subjects (tags) override gets a `tags` row only — its memberships stay
-//! override-JSON-side so revert-to-scanned keeps working (see
-//! [`materialize_tag_rows`]). The author override path replaces its m2m
-//! list at read time via `apply_overrides` and doesn't need a helper here.
+//! subjects (tags) and genres overrides get a vocabulary row only — their
+//! memberships stay override-JSON-side (see [`materialize_tag_rows`]). The
+//! author override path replaces its m2m list at read time via
+//! `apply_overrides` and doesn't need a helper here.
 
 use omnibus_shared::MetadataOverrides;
 use sqlx::SqliteConnection;
@@ -63,6 +63,33 @@ pub(super) async fn materialize_tag_rows(
     for tag in subjects.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
         sqlx::query("INSERT OR IGNORE INTO tags (name) VALUES (?)")
             .bind(tag)
+            .execute(&mut *conn)
+            .await?;
+    }
+    Ok(())
+}
+
+/// When an override sets a genres list, ensure a `genres` row exists for
+/// every entry, so `get_genre_cloud` — which feeds the `/api/genres` read
+/// and the chip-editor autocomplete pool — can surface a genre the moment a
+/// user coins it.
+///
+/// Rows-only, like [`materialize_tag_rows`], but for a different reason:
+/// tags keep memberships override-side to preserve revert-to-scanned, while
+/// genres have no scanned baseline at all (migration `0066`), so the
+/// override JSON is simply their only storage. The orphan sweep
+/// (`delete_orphan_genres`) reaps a row the moment no live book's override
+/// still names it.
+pub(super) async fn materialize_genre_rows(
+    conn: &mut SqliteConnection,
+    overrides: &MetadataOverrides,
+) -> Result<(), sqlx::Error> {
+    let Some(genres) = overrides.genres.as_ref() else {
+        return Ok(());
+    };
+    for genre in genres.iter().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        sqlx::query("INSERT OR IGNORE INTO genres (name) VALUES (?)")
+            .bind(genre)
             .execute(&mut *conn)
             .await?;
     }

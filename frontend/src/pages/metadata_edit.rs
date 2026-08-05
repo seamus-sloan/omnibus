@@ -183,6 +183,7 @@ fn build_overrides(orig: &EbookMetadata, edited: EditedFields<'_>) -> MetadataOv
         isbn13: opt(edited.isbn13, orig.isbn13.as_deref()),
         creators,
         subjects,
+        genres: None,
     }
 }
 

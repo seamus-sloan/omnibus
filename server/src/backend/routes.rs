@@ -11,9 +11,9 @@ use axum::{
 };
 
 use super::{
-    audiobooks, author_photos, authors, bookmarks, covers, ebooks, highlights, journals, kindle,
-    overrides, physical, progress, ratings, read_status, scan, search, series, settings, shelves,
-    stats, suggestions, summary, tags, uploads, users, AppState,
+    audiobooks, author_photos, authors, bookmarks, covers, ebooks, genres, highlights, journals,
+    kindle, overrides, physical, progress, ratings, read_status, scan, search, series, settings,
+    shelves, stats, suggestions, summary, tags, uploads, users, AppState,
 };
 use crate::rate_limit::{rate_limit_by_ip, RateLimiter};
 
@@ -322,6 +322,7 @@ fn discovery_routes() -> Router<AppState> {
         .route("/api/series", get(series::get_series))
         .route("/api/series/{id}", get(series::get_series_by_id))
         .route("/api/tags", get(tags::get_tags))
+        .route("/api/genres", get(genres::get_genres))
 }
 
 /// F3.3 suggestions — mobile-facing REST. Web hits the analogous

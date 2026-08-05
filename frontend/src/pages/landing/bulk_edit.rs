@@ -312,6 +312,8 @@ fn build_edit(
         language: scalar(language),
         add_tags: add_tags.to_vec(),
         remove_tags: remove_tags.to_vec(),
+        add_genres: Vec::new(),
+        remove_genres: Vec::new(),
     }
 }
 

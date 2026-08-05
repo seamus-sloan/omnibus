@@ -57,6 +57,13 @@ pub struct EbookMetadata {
     pub subjects: Vec<String>,
     pub identifiers: Vec<Identifier>,
 
+    /// User-assigned genres. Unlike `subjects` (which the EPUB OPF supplies
+    /// via `<dc:subject>`), no file format Omnibus reads carries a genre, so
+    /// this list is sourced entirely from `metadata_overrides` — there is no
+    /// scanned baseline to revert to and no canonical link table behind it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub genres: Vec<String>,
+
     /// Primary ISBN-13: derived from whichever `identifiers` entry (in
     /// DB-projection order, not original OPF scan order) has a scheme
     /// mentioning "isbn" and a value that normalizes to 13 ASCII digits, or

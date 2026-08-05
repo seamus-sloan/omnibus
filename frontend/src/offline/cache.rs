@@ -115,6 +115,10 @@ pub mod keys {
     pub fn tags() -> String {
         "tags".into()
     }
+    /// `GET /api/genres`.
+    pub fn genres() -> String {
+        "genres".into()
+    }
     /// `GET /api/stats?range=`.
     pub fn stats(range: &str) -> String {
         format!("stats:{range}")
