@@ -836,7 +836,7 @@ async fn drain_remaps_temp_journal_id_after_create() {
             book_uuid: "journal-book-1".into(),
             author_id: 1,
             author_name: "elena".into(),
-                        author_has_avatar: false,
+            author_has_avatar: false,
             body_md: "draft".into(),
             body_html: "<p>draft</p>".into(),
             progress: Some(10),
