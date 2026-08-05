@@ -7,6 +7,9 @@
 #[cfg(feature = "server")]
 use dioxus::prelude::ServerFnError;
 
+#[cfg(all(test, feature = "server"))]
+mod tests;
+
 mod account;
 mod authors;
 mod bookmarks;
