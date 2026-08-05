@@ -96,8 +96,8 @@ pub async fn sync_delta(
 /// comfortably under SQLite's 999 bound-parameter cap.
 const UPSERT_CHUNK_SIZE: usize = 300;
 
-/// Uuids per chunk for the `IN (...)` update/delete statements: 1 bind for
-/// `device_id` plus one per uuid, well under the cap.
+/// UUIDs per chunk for the `IN (...)` update/delete statements: 1 bind for
+/// `device_id` plus one per UUID, well under the cap.
 const UUID_CHUNK_SIZE: usize = 900;
 
 /// Advance the device's snapshot to match `changes` — upserting the adds and
