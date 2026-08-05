@@ -47,13 +47,14 @@ fn BdJournalPublishDraftButton(
     entry_id: i64,
     body_for_edit: String,
     entry_progress: Option<u8>,
-    saving: Signal<bool>,
-    error: Signal<Option<String>>,
-    reload: Signal<u32>,
+    edit: JournalEntryEditState,
 ) -> Element {
-    let mut saving = saving;
-    let mut error = error;
-    let mut reload = reload;
+    let JournalEntryEditState {
+        mut saving,
+        mut error,
+        mut reload,
+        ..
+    } = edit;
     rsx! {
         button {
             r#type: "button",
@@ -139,9 +140,7 @@ fn BdJournalEntryHeader(view: JournalEntryHeaderView, edit: JournalEntryEditStat
                             entry_id,
                             body_for_edit: body_for_edit.clone(),
                             entry_progress,
-                            saving,
-                            error,
-                            reload,
+                            edit,
                         }
                     }
                     button {
