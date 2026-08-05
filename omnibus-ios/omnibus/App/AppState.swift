@@ -107,6 +107,14 @@ final class AppState {
     /// rejection sends the user back to the login screen — an unreachable
     /// server leaves a cached identity signed in, which is the whole point of
     /// holding one.
+    /// Re-read the identity after a profile write, so the You tab's name and
+    /// avatar repaint from the server's answer rather than a local guess. A
+    /// failure leaves the current user in place — the write already succeeded,
+    /// and blanking the header would be a worse lie than a stale name.
+    func refreshUser() async {
+        if let fresh = try? await AuthService.me() { user = fresh }
+    }
+
     private func confirmIdentity() async {
         do {
             user = try await AuthService.me()

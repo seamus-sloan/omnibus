@@ -369,6 +369,16 @@ struct UserSummary: Codable, Hashable, Sendable {
     var canEdit: Bool
     var canDownload: Bool
     var kindleEmail: String?
+    /// Presentation name other users see. `nil` falls back to `username`,
+    /// which stays the login identity. Optional so a `CacheKey.me` blob
+    /// written before this field existed still decodes.
+    var displayName: String?
+    /// Whether this user has uploaded an avatar. Optional for the same
+    /// pre-upgrade-cache reason; treat a missing value as "no".
+    var hasAvatar: Bool?
+
+    /// The name to show for this user — never render `username` on its own.
+    var display: String { displayName ?? username }
 
     enum CodingKeys: String, CodingKey {
         case id, username
@@ -377,6 +387,8 @@ struct UserSummary: Codable, Hashable, Sendable {
         case canEdit = "can_edit"
         case canDownload = "can_download"
         case kindleEmail = "kindle_email"
+        case displayName = "display_name"
+        case hasAvatar = "has_avatar"
     }
 }
 

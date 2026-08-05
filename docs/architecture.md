@@ -247,10 +247,17 @@ Design/             — Theme (Atrium tokens), OKLCH↔sRGB conversion for
                       server-provided accents, Motion (shared curves), and
                       Components/ (BookCover, RemoteImage, Plate, SearchField,
                       OmnibusTabBar, Masthead, BrandMark — the stoat, a copy of
-                      the web's omnibus-stoat.png — FlowLayout, TopEdgeScrim)
+                      the web's omnibus-stoat.png — FlowLayout, TopEdgeScrim,
+                      UserAvatar — a user's picture or monogram, the native twin
+                      of the web's `components/user_avatar.rs`)
 Features/           — one directory per surface: Account, AddBooks, Auth,
                       BookDetail, CheckIn, Discovery, Library, Player, Search,
-                      Settings, Shelves, Stats
+                      Settings, Shelves, Stats. Account's identity card opens
+                      `ProfileEditSheet` (display name + picture): a profile is
+                      account configuration, so it writes straight through
+                      `AuthService` and never queues (rule 08), Save is disabled
+                      while offline, and `ProfileDraft` holds the testable
+                      "what does Save actually send" rules
 Models/             — Codable mirrors of the `shared/` wire DTOs
 Networking/         — APIClient, keychain-backed TokenStore
 Offline/            — Cache (read-through policies), OfflineStore (SQLite

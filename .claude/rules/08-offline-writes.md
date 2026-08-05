@@ -22,11 +22,13 @@ Three tiers, and only the last one is queueable:
   queued. Other actors — a second admin, the indexer, the filesystem — move
   underneath a deferred write, and last-write-wins on a config row means a
   phone that was offline for a week silently repoints the library.
-- **Account configuration** — the per-user settings that aren't content, today
-  just `kindle_email`. Never queued. It is per-user, but it is still
-  configuration: set rarely and deliberately, essentially always with a
-  connection, and it addresses where a *server-side action* delivers. A stale
-  replay redirects a delivery.
+- **Account configuration** — the per-user settings that aren't content:
+  `kindle_email`, and the profile (display name + avatar). Never queued. It is
+  per-user, but it is still configuration: set rarely and deliberately,
+  essentially always with a connection. A stale `kindle_email` replay redirects
+  a delivery; a stale profile replay restores a name the reader has since
+  changed, and the display name is *denormalized* into the wishlist shelf name
+  server-side, so a late replay renames a row too.
 - **Content state** — where you are in a book, what you marked in it, what you
   wrote about it, how you rated it, which shelves hold it. Queueable, subject
   to the remaining tests.
@@ -104,6 +106,7 @@ Not queued, by test:
 |---|---|
 | `POST /api/settings`, API keys, SMTP | 1 — instance configuration |
 | `POST /api/account/kindle-email` | 1 — account configuration |
+| `POST /api/account/profile`, avatar upload/delete | 1 — account configuration |
 | Metadata overrides | 1 — library-wide, every user sees it |
 | Book uploads | 1 — library-wide (and a GB-scale body has no business in `ops`) |
 | Reindex, scan, FTS rebuild | 2 — commands |

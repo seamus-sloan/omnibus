@@ -105,4 +105,46 @@ enum AuthService {
         let _: Empty = try await APIClient.shared.post("/api/account/kindle-email", body: Body(email: email))
         await OfflineStore.shared.cacheDelete(CacheKey.me)
     }
+
+    // MARK: - Profile
+    //
+    // A profile is account configuration, so these never go through
+    // `SyncEngine` — a deferred replay would apply a name the reader has since
+    // changed. They throw on failure and the caller surfaces it (rule 08).
+
+    /// Set (or clear, with `nil`) the caller's display name.
+    static func setDisplayName(_ name: String?) async throws {
+        struct Body: Encodable { let display_name: String? }
+        let _: Empty = try await APIClient.shared.post(
+            "/api/account/profile", body: Body(display_name: name)
+        )
+        await OfflineStore.shared.cacheDelete(CacheKey.me)
+    }
+
+    /// Upload the caller's avatar, replacing any existing one.
+    static func uploadAvatar(_ data: Data, userID: Int64) async throws {
+        let _: Empty = try await APIClient.shared.upload(
+            "/api/account/avatar",
+            fileData: data,
+            fileName: "avatar.jpg",
+            fieldName: "avatar",
+            mimeType: "image/jpeg"
+        )
+        await Self.refreshAvatarCaches(userID: userID)
+    }
+
+    /// Remove the caller's avatar, reverting them to a monogram.
+    static func deleteAvatar(userID: Int64) async throws {
+        let _: Empty = try await APIClient.shared.delete("/api/account/avatar")
+        await Self.refreshAvatarCaches(userID: userID)
+    }
+
+    /// Drop the stale copies an avatar write invalidates: the identity blob
+    /// carrying `has_avatar`, and the cached image itself — whose URL doesn't
+    /// change when the bytes do, so without this the old picture stays on
+    /// screen until the revalidation window elapses.
+    private static func refreshAvatarCaches(userID: Int64) async {
+        await OfflineStore.shared.cacheDelete(CacheKey.me)
+        await ImageCache.shared.invalidate(UserAvatar.path(for: userID))
+    }
 }

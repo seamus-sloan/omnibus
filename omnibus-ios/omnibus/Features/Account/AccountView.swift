@@ -16,6 +16,7 @@ struct AccountView: View {
     @State private var showSignOutConfirm = false
     @State private var showAddBooks = false
     @State private var showRejected = false
+    @State private var showProfileEdit = false
     @State private var kindleEmail = ""
     @State private var kindleSaved = false
     @State private var kindleError: String?
@@ -53,6 +54,11 @@ struct AccountView: View {
             .withDestinations()
             .sheet(isPresented: $showAddBooks) { AddBooksSheet() }
             .sheet(isPresented: $showRejected) { RejectedWritesSheet() }
+            .sheet(isPresented: $showProfileEdit) {
+                if let user = app.user {
+                    ProfileEditSheet(user: user) { await app.refreshUser() }
+                }
+            }
             .confirmationDialog(
                 "Sign out of Omnibus?", isPresented: $showSignOutConfirm, titleVisibility: .visible
             ) {
@@ -77,30 +83,17 @@ struct AccountView: View {
     // MARK: - Identity
 
     /// The account, given the weight a name deserves rather than a 44pt row.
+    /// Tapping it opens the profile editor (display name + picture).
     private var identityCard: some View {
         HStack(spacing: Spacing.lg) {
-            Circle()
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            palette.accentColor.opacity(0.85),
-                            palette.accentSoftColor,
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .frame(width: 58, height: 58)
-                .overlay {
-                    Text((app.user?.username.prefix(1) ?? "?").uppercased())
-                        .font(.display(26, weight: .semibold))
-                        .foregroundStyle(palette.accentInk.color)
-                }
-                .overlay(Circle().strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
-                .shadow(color: palette.accentColor.opacity(0.25), radius: 12, y: 4)
+            UserAvatar(
+                id: app.user?.id ?? 0,
+                name: app.user?.display ?? "?",
+                hasAvatar: app.user?.hasAvatar == true
+            )
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(app.user?.username ?? "Signed in")
+                Text(app.user?.display ?? "Signed in")
                     .font(.display(24))
                     .foregroundStyle(palette.ink0Color)
                     .lineLimit(1)
@@ -115,6 +108,13 @@ struct AccountView: View {
             Spacer(minLength: 0)
         }
         .screenPadding()
+        // The whole row is the target, not just the avatar — the name is as
+        // obvious a thing to tap as the picture.
+        .contentShape(Rectangle())
+        .onTapGesture { if app.user != nil { showProfileEdit = true } }
+        .accessibilityIdentifier("identity-card")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Edit your profile")
     }
 
     private var roleLine: String {
