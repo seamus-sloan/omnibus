@@ -268,7 +268,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_section_maps_per_user_slugs_for_non_admin() {
+    fn parse_section_maps_per_user_slugs_for_everyone() {
         assert!(matches!(
             parse_section(Some("kindle"), false),
             SettingsSection::Kindle
