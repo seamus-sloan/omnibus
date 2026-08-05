@@ -3,8 +3,8 @@ import { expectNavVisible, gotoReady } from "../utils/nav";
 
 // The check-in flow is presented as a centered overlay over a blurred page.
 // The top-nav trigger renders at desktop width, so this runs at the default
-// (desktop) viewport. The full-page `/check-in` deep-link fallback and the
-// scanner fallback behaviour are covered by `check_in_scan.spec.ts`.
+// (desktop) viewport. The full-page `/check-in` deep-link fallback is covered
+// by `check_in_lookup.spec.ts`, the camera by `check_in_scan.spec.ts`.
 test.describe("check-in overlay", () => {
   test("the top-nav Check in button opens the overlay without navigating", async ({
     page,
@@ -18,9 +18,12 @@ test.describe("check-in overlay", () => {
     // Floats in place over the current page — no route change.
     await expect(page.getByTestId("check-in-overlay-scrim")).toBeVisible();
     await expect(page.getByTestId("check-in")).toBeVisible();
+    // Opens on the fields, not the camera — raising the overlay from the top
+    // nav must never start a webcam.
     await expect(
-      page.getByRole("heading", { name: "Scan a barcode" }),
+      page.getByRole("heading", { name: "Check in a book" }),
     ).toBeVisible();
+    await expect(page.getByTestId("barcode-scanner")).toHaveCount(0);
     await expect(page).toHaveURL(/\/$/);
 
     // The overlay shows exactly one close affordance: its own dismiss button.

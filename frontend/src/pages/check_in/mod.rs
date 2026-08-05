@@ -1,10 +1,12 @@
 //! Check-in flow (`/check-in`) — resolve an ISBN and land it on the right
-//! branch of the physical-ownership decision tree. The camera scanner is the
-//! front door and manual entry its always-available fallback; both feed the
-//! same [`Stage`] machine. Every screen is plain rsx with no target gating, so
-//! SSR and the first WASM paint agree (rule 07).
+//! branch of the physical-ownership decision tree. The lookup screen (ISBN
+//! and title search together) is the front door, with the camera scanner
+//! behind an explicit button; the mobile shell inverts that. All of them feed
+//! the same [`Stage`] machine. Every screen is plain rsx with no target
+//! gating, so SSR and the first WASM paint agree (rule 07).
 
 mod entry;
+mod lookup;
 mod scan;
 mod screens;
 mod search;
@@ -21,11 +23,11 @@ use omnibus_shared::{
 use crate::focus_after_paint::focus_after_paint;
 use crate::{data, use_server_url, Route};
 use entry::EntryScreen;
+use lookup::LookupScreen;
 use scan::ScanScreen;
 use screens::{
     ChooseScreen, CloseMatchScreen, ConfirmScreen, ResolvingScreen, SuccessScreen, UnresolvedScreen,
 };
-use search::SearchScreen;
 
 /// Whether the check-in overlay is open. Provided at [`crate::App`] scope so
 /// every entry point (top nav, add-books sheet, account row) can raise it and
@@ -116,9 +118,13 @@ fn CheckInModal() -> Element {
 /// decision tree, plus the three transient states (scan, entry, resolving).
 #[derive(Clone, PartialEq)]
 pub(crate) enum Stage {
-    /// Camera scanner — the flow's start and its "scan another" target.
+    /// ISBN entry and title search on one screen — the front door off the
+    /// mobile shell, and what every "search by title" action opens.
+    Lookup,
+    /// Camera scanner — the mobile shell's front door, and the lookup screen's
+    /// "Scan a barcode" target everywhere else.
     Scan,
-    /// Manual ISBN entry, reached from the scanner (asked for, or forced by a
+    /// Manual ISBN keypad, reached from the scanner (asked for, or forced by a
     /// camera the device won't give us).
     Entry,
     /// Resolve request in flight.
@@ -134,13 +140,38 @@ pub(crate) enum Stage {
     Choose { online: ExternalBookMeta },
     /// Neither the library nor any provider knew the ISBN.
     Unresolved { isbn: String },
-    /// Title search — reachable from the scanner and the keypad as well as the
-    /// unresolved screen.
-    Search,
     /// 4 — the copy is checked in.
     CheckedIn { uuid: String, title: String },
     /// The book went on the caller's physical wishlist instead.
     Wishlisted { title: String },
+}
+
+/// The stage the flow opens on, and the one every "start over" returns to.
+///
+/// The mobile shell leads with the camera — that's the whole point of a phone
+/// in front of a bookshelf. Everywhere else leads with the fields, so opening
+/// check-in never starts a camera nobody asked for. Gating the *value* rather
+/// than any rsx keeps SSR and the first WASM paint identical (rule 07); the
+/// mobile build renders client-side only and has no SSR markup to hydrate.
+#[cfg(feature = "mobile")]
+pub(crate) fn front_door() -> Stage {
+    Stage::Scan
+}
+
+/// Web and SSR front door — see the `mobile` twin above.
+#[cfg(not(feature = "mobile"))]
+pub(crate) fn front_door() -> Stage {
+    Stage::Lookup
+}
+
+/// Where a rejected or failed lookup drops the reader: back onto the screen
+/// they typed on, so the digits are still in front of them to correct. A
+/// camera decode has no such screen, so it lands on the keypad instead.
+pub(crate) fn manual_fallback(origin: &Stage) -> Stage {
+    match origin {
+        Stage::Lookup => Stage::Lookup,
+        _ => Stage::Entry,
+    }
 }
 
 /// Map a resolved outcome onto the screen it opens.
@@ -234,7 +265,7 @@ pub fn CheckInPage() -> Element {
     let server_url = use_server_url();
     let nav = use_navigator();
     let state = FlowState {
-        stage: use_signal(|| Stage::Scan),
+        stage: use_signal(front_door),
         isbn: use_signal(String::new),
         note: use_signal(String::new),
         busy: use_signal(|| false),
@@ -300,10 +331,11 @@ fn CheckInStage(state: FlowState, handlers: CheckInHandlers) -> Element {
         note.set(String::new());
         isbn.set(String::new());
         busy.set(false);
-        stage.set(Stage::Scan);
+        stage.set(front_door());
     });
 
     match (state.stage)() {
+        Stage::Lookup => lookup_stage(state, handlers.on_resolve, handlers.on_pick),
         Stage::Scan => scan_stage(state, handlers.on_resolve),
         Stage::Entry => entry_stage(state, handlers.on_resolve),
         Stage::Resolving => rsx! { ResolvingScreen {} },
@@ -321,7 +353,6 @@ fn CheckInStage(state: FlowState, handlers: CheckInHandlers) -> Element {
             }
         },
         Stage::Unresolved { isbn } => unresolved_stage(isbn, state, on_restart),
-        Stage::Search => search_stage(state, handlers.on_pick, on_restart),
         Stage::CheckedIn { uuid, title } => rsx! {
             SuccessScreen {
                 title,
@@ -338,6 +369,28 @@ fn CheckInStage(state: FlowState, handlers: CheckInHandlers) -> Element {
                 on_restart,
             }
         },
+    }
+}
+
+/// [`Stage::Lookup`]: the fields-first front door — ISBN entry and title
+/// search together, with the camera behind an explicit button.
+fn lookup_stage(
+    state: FlowState,
+    on_resolve: EventHandler<String>,
+    on_pick: EventHandler<ExternalBookMeta>,
+) -> Element {
+    let mut error = state.error;
+    let mut stage = state.stage;
+    rsx! {
+        LookupScreen {
+            state,
+            on_resolve,
+            on_pick,
+            on_scan: EventHandler::new(move |_| {
+                error.set(None);
+                stage.set(Stage::Scan);
+            }),
+        }
     }
 }
 
@@ -380,8 +433,14 @@ fn entry_stage(state: FlowState, on_resolve: EventHandler<String>) -> Element {
     }
 }
 
-/// Open [`Stage::Search`], clearing any error so a failed lookup's message
-/// can't follow the reader onto a screen it no longer describes.
+/// Open [`Stage::Lookup`], where the title-search field lives, clearing any
+/// error so a failed lookup's message can't follow the reader onto a screen it
+/// no longer describes.
+///
+/// Shared by the scanner, the keypad, and the unresolved screen. On web the
+/// lookup screen is already the front door, so this matters most on the mobile
+/// shell — the camera starts there, and this is its one-tap route to a title
+/// search.
 pub(crate) fn go_to_search(state: FlowState) -> EventHandler<()> {
     let FlowState {
         mut stage,
@@ -390,7 +449,7 @@ pub(crate) fn go_to_search(state: FlowState) -> EventHandler<()> {
     } = state;
     EventHandler::new(move |_| {
         error.set(None);
-        stage.set(Stage::Search);
+        stage.set(Stage::Lookup);
     })
 }
 
@@ -419,17 +478,6 @@ fn unresolved_stage(isbn: String, state: FlowState, on_restart: EventHandler<()>
     }
 }
 
-/// [`Stage::Search`]: the unresolved screen's "type the name instead" fallback.
-fn search_stage(
-    state: FlowState,
-    on_pick: EventHandler<ExternalBookMeta>,
-    on_restart: EventHandler<()>,
-) -> Element {
-    rsx! {
-        SearchScreen { state, on_pick, on_restart }
-    }
-}
-
 /// Build the resolve handler: validate the typed ISBN, run the ladder, then
 /// either navigate (already owned) or open the matching screen.
 fn make_on_resolve(
@@ -444,12 +492,15 @@ fn make_on_resolve(
         ..
     } = state;
     move |raw: String| {
+        // Captured before the stage moves to `Resolving`, so the async error
+        // path below still knows which screen the reader came from.
+        let fallback = manual_fallback(&stage());
         let isbn = clean_isbn(&raw);
         if let Some(msg) = isbn_rejection(&isbn) {
             error.set(Some(msg));
             // A bad decode must not strand the reader on a blank screen: drop
-            // back to the keypad with the digits in place to correct.
-            stage.set(Stage::Entry);
+            // back to a typing screen with the digits in place to correct.
+            stage.set(fallback);
             return;
         }
         let server_url = server_url.clone();
@@ -472,7 +523,7 @@ fn make_on_resolve(
                         "Could not look that up: {}",
                         friendly_error(&e.to_string())
                     )));
-                    stage.set(Stage::Entry);
+                    stage.set(fallback);
                 }
             }
             busy.set(false);

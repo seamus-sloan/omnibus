@@ -1,14 +1,12 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
-import { expectNavVisible, gotoReady } from "../utils/nav";
+import { gotoReady } from "../utils/nav";
 
 // The title search rides on provider RPCs, so every network edge is mocked:
-// resolve (to reach the unresolved screen deterministically), search
-// (candidate list), and resolve-meta (the pick). Real provider behavior is
-// covered by the `omnibus_db` wiremock suites.
-
-const ISBN = "9780441013593";
+// search (candidate list) and resolve-meta (the pick). Real provider behavior
+// is covered by the `omnibus_db` wiremock suites. The search form lives on the
+// lookup front door — its layout is asserted in `check_in_lookup.spec.ts`.
 
 function candidate(
   over: Record<string, unknown> = {},
@@ -45,56 +43,24 @@ async function mockJsonPost(
   );
 }
 
-/// Drive the flow onto the search screen: a mocked unresolved ISBN, then the
-/// unresolved screen's "Search by title instead".
+/// The search form is on the flow's front door, so reaching it is just
+/// opening check-in — no ISBN has to fail first.
 async function reachSearch(page: Page): Promise<void> {
-  await mockJsonPost(page, /\/api\/rpc\/scan\/resolve$/, {
-    kind: "unresolved",
-  });
   await gotoReady(page, "/check-in");
-  await page.getByTestId("barcode-scanner-manual").click();
-  await page.getByTestId("check-in-isbn").fill(ISBN);
-
-  // Dioxus keys a server-fn body by parameter name, so `req` wraps the struct.
-  await expectMutation(
-    page,
-    {
-      method: "POST",
-      url: /\/api\/rpc\/scan\/resolve$/,
-      expectedBody: { req: { isbn: ISBN } },
-      expectedStatus: 200,
-    },
-    async () => page.getByTestId("check-in-submit").click(),
-  );
-
-  await expect(page.getByTestId("check-in-unresolved")).toBeVisible();
-  await page.getByTestId("check-in-search-instead").click();
   await expect(page.getByTestId("check-in-search")).toBeVisible();
 }
 
-/// The other way onto the same screen: straight off the scanner, with no ISBN
-/// attempted at all.
+/// The other route onto the same form: off the scanner's "Search by title",
+/// which is how the mobile shell — where the camera is the front door — gets
+/// here without attempting an ISBN at all.
 async function reachSearchFromScanner(page: Page): Promise<void> {
   await gotoReady(page, "/check-in");
+  await page.getByTestId("check-in-scan-instead").click();
   await page.getByTestId("check-in-search-by-title").click();
   await expect(page.getByTestId("check-in-search")).toBeVisible();
 }
 
 test.describe("check-in title search", () => {
-  test("renders the search screen layout", async ({ page }) => {
-    await reachSearch(page);
-    await expectNavVisible(page);
-
-    await expect(
-      page.getByRole("heading", { name: "Search by title" }),
-    ).toBeVisible();
-    await expect(page.getByLabel("Title")).toBeVisible();
-    // Nothing typed yet: no search can fire, and no stale empty-state shows.
-    await expect(page.getByTestId("check-in-search-submit")).toBeDisabled();
-    await expect(page.getByTestId("check-in-search-empty")).toHaveCount(0);
-    await expect(page.getByTestId("check-in-search-restart")).toBeVisible();
-  });
-
   test("searches by title and picks a candidate into the chooser", async ({
     page,
   }) => {
@@ -157,7 +123,9 @@ test.describe("check-in title search", () => {
     await expect(page.getByTestId("check-in-wishlist")).toBeVisible();
   });
 
-  test("searches and picks from the up-front entry point", async ({ page }) => {
+  test("searches and picks after arriving from the scanner", async ({
+    page,
+  }) => {
     await reachSearchFromScanner(page);
     await mockJsonPost(page, "**/api/rpc/scan/search", {
       results: [candidate()],
@@ -239,9 +207,25 @@ test.describe("check-in title search", () => {
     await expect(page.getByTestId("check-in-search")).toBeVisible();
   });
 
-  test("scan a barcode instead returns to the scanner", async ({ page }) => {
+  test("results survive alongside the ISBN field on the same screen", async ({
+    page,
+  }) => {
     await reachSearch(page);
-    await page.getByTestId("check-in-search-restart").click();
-    await expect(page.getByTestId("check-in-scan")).toBeVisible();
+    await mockJsonPost(page, "**/api/rpc/scan/search", {
+      results: [candidate()],
+    });
+
+    await page.getByLabel("Title").fill("name of the wind");
+    await expectMutation(
+      page,
+      { method: "POST", url: "/api/rpc/scan/search", expectedStatus: 200 },
+      async () => page.getByTestId("check-in-search-submit").click(),
+    );
+
+    // Searching by title never costs the reader the ISBN field — both ways in
+    // stay on screen together.
+    await expect(page.getByTestId("check-in-search-result")).toHaveCount(1);
+    await expect(page.getByTestId("check-in-isbn")).toBeVisible();
+    await expect(page.getByTestId("check-in-scan-instead")).toBeVisible();
   });
 });
