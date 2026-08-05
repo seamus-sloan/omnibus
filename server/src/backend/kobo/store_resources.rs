@@ -7,8 +7,10 @@ use std::sync::LazyLock;
 use serde_json::{Map, Value};
 
 /// The upstream map, kept as a JSON asset so it diffs as data rather than as
-/// Rust. Parsed once — a malformed asset is a build-time authoring error, not
-/// a runtime condition, so the panic message names the file.
+/// Rust. `LazyLock` defers the parse to the first live request that calls
+/// [`resources_for`] — a malformed asset is still an authoring error, but the
+/// panic fires inside that request, not at build time, so the message names
+/// the file to make the cause obvious wherever it surfaces.
 static RESOURCES: LazyLock<Map<String, Value>> = LazyLock::new(|| {
     let raw = include_str!("store_resources.json");
     match serde_json::from_str::<Value>(raw) {

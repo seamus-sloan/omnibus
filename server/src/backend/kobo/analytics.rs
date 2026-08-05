@@ -3,13 +3,31 @@
 //! session) and `RateBook` (a star rating). Everything else is acknowledged
 //! and dropped.
 
-use axum::{extract::State, response::IntoResponse, response::Response, Json};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    Json,
+};
 use omnibus_db as db;
 use omnibus_shared::{ProgressFormat, RatingUpdate, SessionReport};
 use serde::Deserialize;
 
 use super::extractor::KoboAuthUser;
 use super::AppState;
+
+/// Maximum number of `events` entries accepted per analytics-batch POST,
+/// mirroring [`super::dto::StateRequest::MAX_READING_STATES`] and
+/// [`omnibus_shared::SESSION_BATCH_CAP`] — a real device batches a handful of
+/// events per sync, so this is generous headroom, not a realistic ceiling.
+pub(super) const MAX_ANALYTICS_EVENTS: usize = 256;
+
+/// Cap an analytics batch at [`MAX_ANALYTICS_EVENTS`] entries before any DB
+/// work, mirroring [`super::reject_oversized_uuid`]. `Some(response)` is the
+/// rejection.
+fn reject_oversized_analytics_batch(body: &AnalyticsBody) -> Option<Response> {
+    (body.events.len() > MAX_ANALYTICS_EVENTS).then(|| StatusCode::BAD_REQUEST.into_response())
+}
 
 /// The analytics batch body. Unknown fields (`PlatformId`, `SerialNumber`, …)
 /// are ignored by serde.
@@ -63,6 +81,9 @@ pub async fn analytics_event(
     State(state): State<AppState>,
     Json(body): Json<AnalyticsBody>,
 ) -> Response {
+    if let Some(rejected) = reject_oversized_analytics_batch(&body) {
+        return rejected;
+    }
     for event in &body.events {
         let outcome = match event.event_type.as_str() {
             "LeaveContent" => ingest_session(&state, auth.user_id, event).await,

@@ -125,7 +125,7 @@ fn cover_preview(book: &EbookMetadata, server_url: &str, state: CoverState) -> E
         ..book.clone()
     };
     let src_override = (bust > 0)
-        .then(|| cover_url.map(|path| bust_query(media_url(server_url, &path), bust)))
+        .then(|| cover_url.map(|path| bust_query(&media_url(server_url, &path), bust)))
         .flatten();
 
     rsx! {
@@ -138,7 +138,7 @@ fn cover_preview(book: &EbookMetadata, server_url: &str, state: CoverState) -> E
 /// Append a cache-busting `v=` query param to `url`, using `&` when `url`
 /// already carries a query string (mobile's [`media_url`] appends
 /// `?token=…`).
-fn bust_query(url: String, bust: u32) -> String {
+fn bust_query(url: &str, bust: u32) -> String {
     let sep = if url.contains('?') { '&' } else { '?' };
     format!("{url}{sep}v={bust}")
 }
