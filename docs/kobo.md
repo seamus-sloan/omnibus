@@ -137,24 +137,54 @@ wrong.
 > the reliable way to pull down highlights that were waiting for it.
 
 > [!NOTE]
-> **Known limitation: highlight colour pushed to a Kobo may not render**
+> **Highlight colour on-wire shape: changed to a firmware hex swatch, still
+> unconfirmed against a real device**
 >
-> Omnibus sends each annotation's colour as `highlightColor` — a lowercase
-> colour name (`yellow`/`green`/`blue`/`pink`/`purple`) — in the Reading
-> Services annotation payload. On at least one real device, every annotation
-> pushed from Omnibus was observed stored on-device with `Bookmark.Color = 0`
-> (yellow) regardless of the colour sent, while highlights created directly
-> on the device use the full `Color` range normally. This means the firmware
-> is not applying Omnibus's `highlightColor` value to inbound annotations as
-> sent — it may expect a different shape on this field (e.g. an integer 0–3
-> rather than a name) or it may ignore colour on inbound annotations
-> entirely; which one is unconfirmed.
+> Omnibus used to send each annotation's colour as `highlightColor` — a
+> lowercase CSS-style colour name (`yellow`/`green`/`blue`/`pink`/`purple`)
+> — in the Reading Services annotation payload. On at least one real device,
+> every annotation pushed from Omnibus was observed stored on-device with
+> `Bookmark.Color = 0` (yellow) regardless of the colour sent, while
+> highlights created directly on the device use the full `Color` range
+> normally (the original report, with the device's `KoboReader.sqlite` data:
+> [#1629](https://github.com/seamus-sloan/omnibus/issues/1629)).
 >
-> This repo carries no captured device PATCH and no vendored reference
-> implementation for the Reading Services protocol to confirm which is
-> true, so the wire format has **not** been changed speculatively — see
-> [#1629](https://github.com/seamus-sloan/omnibus/issues/1629). Highlight
-> and note **text**, placement, and deletes all sync correctly; only the
-> rendered *colour* of a device-side highlight is affected. Fixing this
-> for real needs a `.kobo/KoboReader.sqlite` capture (or a packet capture)
-> from a device that just received a coloured highlight over wireless sync.
+> This repo still carries no captured device PATCH for the Reading Services
+> protocol, but a follow-up investigation found a genuine shape difference
+> against [bookorbit](https://github.com/bookorbit/bookorbit) — an
+> actively-developed, open-source Kobo sync project whose own Reading
+> Services client (`kobo-annotation-payload.ts` /
+> `annotation-style-map.ts`) sends `highlightColor` as one of **four fixed
+> hex swatches**, explicitly commented "Kobo firmware's four fixed highlight
+> colors":
+>
+> | Named colour | Hex swatch |
+> |---|---|
+> | yellow | `#F6F3B3` |
+> | green | `#C6E09E` |
+> | blue | `#B2E1E8` |
+> | pink | `#E8AFCF` |
+>
+> A CSS-style name being silently ignored in favour of the palette default
+> would exactly reproduce the observed symptom — every pushed annotation
+> landing at index 0 (yellow) — so Omnibus's outbound `highlightColor` now
+> sends these hex values (`color_to_kobo` /
+> `color_from_kobo` in
+> [reading_services/dto.rs](../server/src/backend/kobo/reading_services/dto.rs)).
+> The inbound parser accepts **both** the hex swatches and the old CSS names,
+> so an already-adopted device or an unverified firmware revision that still
+> sends a name keeps working.
+>
+> **This is still unverified against real hardware** — bookorbit's own
+> source carries no comment or test citing a device capture for this exact
+> field either, so this fix is corroborated by a comparable open-source
+> implementation, not proven. If highlights pushed from Omnibus still land
+> as yellow after this change, the firmware likely ignores `highlightColor`
+> on inbound annotations entirely rather than wanting a different shape, and
+> that would be the next thing to rule out. Kobo's classic highlight menu
+> has no fifth swatch for Omnibus's violet, so on-device it renders
+> identically to rose (pink) — a real palette limit, not a bug. Highlight
+> and note **text**, placement, and deletes were never affected — only
+> colour. Confirming (or refuting) this needs a `.kobo/KoboReader.sqlite`
+> capture (or a packet capture) from a device that just received a coloured
+> highlight over wireless sync, per AC2 of #1629.

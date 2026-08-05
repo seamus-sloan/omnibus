@@ -200,27 +200,68 @@ fn parse_delete(entry: &Value) -> Option<String> {
         .then(|| id.to_owned())
 }
 
-/// Map a device color name onto the closed Omnibus palette. Unknown names,
-/// hex values, and a missing field all land on amber — the palette default.
+/// Map a device color onto the closed Omnibus palette. Tries a Kobo
+/// firmware hex swatch first (what [`color_to_kobo`] now emits and, per the
+/// cross-referenced reference client, what a real device sends — see
+/// `docs/kobo.md`), then falls back to the CSS-style names this endpoint
+/// accepted before that finding (#1629) — kept so an already-synced device
+/// echoing an older-shaped value, or one from an unverified firmware
+/// revision, still parses. Unknown names, unrecognized hex, and a missing
+/// field all land on amber — the palette default.
 pub fn color_from_kobo(raw: Option<&str>) -> HighlightColor {
-    match raw.map(str::to_ascii_lowercase).as_deref() {
-        Some("yellow") | Some("amber") => HighlightColor::Amber,
-        Some("green") => HighlightColor::Green,
-        Some("blue") | Some("cyan") | Some("teal") => HighlightColor::Blue,
-        Some("pink") | Some("red") | Some("magenta") | Some("rose") => HighlightColor::Rose,
-        Some("purple") | Some("violet") => HighlightColor::Violet,
-        _ => HighlightColor::Amber,
+    let Some(raw) = raw else {
+        return HighlightColor::Amber;
+    };
+    if let Some(color) = color_from_kobo_hex(raw) {
+        return color;
+    }
+    let matches = |name: &str| raw.eq_ignore_ascii_case(name);
+    if matches("yellow") || matches("amber") {
+        HighlightColor::Amber
+    } else if matches("green") {
+        HighlightColor::Green
+    } else if matches("blue") || matches("cyan") || matches("teal") {
+        HighlightColor::Blue
+    } else if matches("pink") || matches("red") || matches("magenta") || matches("rose") {
+        HighlightColor::Rose
+    } else if matches("purple") || matches("violet") {
+        HighlightColor::Violet
+    } else {
+        HighlightColor::Amber
     }
 }
 
-/// The reverse map, onto the names Kobo firmware renders.
+/// The four fixed hex swatches Kobo firmware's own highlight menu renders —
+/// not CSS-style names. Cross-referenced against the equivalent field in
+/// bookorbit's Reading Services client (the one open-source Kobo sync
+/// project this investigation found modelling the wire value as a hex
+/// swatch rather than a name), since this repo has no captured device PATCH
+/// to confirm it directly; see the `docs/kobo.md` note on #1629 for the
+/// caveat. Firmware has no fifth swatch for violet, so it snaps to pink —
+/// the nearest of the four by RGB distance, same as rose.
+fn color_from_kobo_hex(raw: &str) -> Option<HighlightColor> {
+    if raw.eq_ignore_ascii_case("#F6F3B3") {
+        Some(HighlightColor::Amber)
+    } else if raw.eq_ignore_ascii_case("#C6E09E") {
+        Some(HighlightColor::Green)
+    } else if raw.eq_ignore_ascii_case("#B2E1E8") {
+        Some(HighlightColor::Blue)
+    } else if raw.eq_ignore_ascii_case("#E8AFCF") {
+        Some(HighlightColor::Rose)
+    } else {
+        None
+    }
+}
+
+/// The reverse map, onto the hex swatch Kobo firmware renders. See
+/// [`color_from_kobo_hex`] for the source and the violet caveat: it has no
+/// firmware swatch of its own and renders identically to rose on-device.
 pub fn color_to_kobo(color: HighlightColor) -> &'static str {
     match color {
-        HighlightColor::Amber => "yellow",
-        HighlightColor::Green => "green",
-        HighlightColor::Blue => "blue",
-        HighlightColor::Rose => "pink",
-        HighlightColor::Violet => "purple",
+        HighlightColor::Amber => "#F6F3B3",
+        HighlightColor::Green => "#C6E09E",
+        HighlightColor::Blue => "#B2E1E8",
+        HighlightColor::Rose | HighlightColor::Violet => "#E8AFCF",
     }
 }
 
