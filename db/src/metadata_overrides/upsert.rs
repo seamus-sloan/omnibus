@@ -32,7 +32,7 @@ pub enum MetadataOverridesError {
     /// A bulk add/remove delta would push one book past a per-book list
     /// cap. `field` names the list ("tag", "genre") — one variant rather
     /// than one per list, since no caller branches on which it was.
-    #[error("{field} list for {uuid} would exceed {max} entries")]
+    #[error("{field} list for {uuid} would exceed {max} {field}s")]
     TooManyValues {
         uuid: String,
         field: &'static str,

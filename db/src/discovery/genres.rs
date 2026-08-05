@@ -34,12 +34,11 @@ pub async fn get_genre_cloud(pool: &SqlitePool) -> Result<Vec<GenreWeight>, Disc
     // (`["Horror","Horror"]` counts once), matching the tag cloud's `UNION`.
     let rows = sqlx::query(
         r#"SELECT g.name AS name, COUNT(DISTINCT b.id) AS cnt
-             FROM genres g
-             JOIN books b
+             FROM books b
              JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
              JOIN json_each(mo.overrides, '$.genres') je
+             JOIN genres g ON g.name = je.value COLLATE NOCASE
             WHERE json_type(mo.overrides, '$.genres') IS NOT NULL
-              AND je.value = g.name COLLATE NOCASE
             GROUP BY g.id, g.name
             ORDER BY cnt DESC, g.name ASC
             LIMIT ?"#,

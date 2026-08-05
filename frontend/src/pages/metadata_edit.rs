@@ -183,8 +183,6 @@ fn build_overrides(orig: &EbookMetadata, edited: EditedFields<'_>) -> MetadataOv
         isbn13: opt(edited.isbn13, orig.isbn13.as_deref()),
         creators,
         subjects,
-        // The edit form's Genres section lands with the UI layer; until
-        // then this path never sets one.
         genres: None,
     }
 }

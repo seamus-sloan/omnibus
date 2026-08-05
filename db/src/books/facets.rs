@@ -156,8 +156,15 @@ async fn tag_facets(
 
 /// Genre facet counts. Genres live only in `metadata_overrides` JSON
 /// (migration `0066`), so this reads `json_each` over `$.genres` rather than
-/// joining a link table. `DISTINCT b.id` guards a duplicate entry inside one
-/// book's array; the visible-library predicate matches the other facets.
+/// joining a link table.
+///
+/// The join to `genres` is what makes the facet value canonical: that table
+/// is `NOCASE`-unique, so a book overridden with "sci-fi" and another with
+/// "Sci-Fi" report one facet rather than two that each filter to half the
+/// shelf. `get_genre_cloud` folds the same way, and the two must agree —
+/// the cloud is what the filter chips are picked from. `DISTINCT b.id`
+/// guards a duplicate entry inside one book's array; the visible-library
+/// predicate matches the other facets.
 async fn genre_facets(
     pool: &SqlitePool,
     ph: &str,
@@ -167,17 +174,18 @@ async fn genre_facets(
         pool,
         &format!(
             r"
-            SELECT je.value AS value, COUNT(DISTINCT b.id) AS count
+            SELECT g.name AS value, COUNT(DISTINCT b.id) AS count
               FROM books b
               JOIN scan_roots l ON l.id = b.library_id
               JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
               JOIN json_each(mo.overrides, '$.genres') je
+              JOIN genres g ON g.name = je.value COLLATE NOCASE
              WHERE json_type(mo.overrides, '$.genres') IS NOT NULL
-               AND je.value <> ''
+               AND g.name <> ''
                AND ((l.path IN ({ph})
                      AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id))
                  OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid))
-             GROUP BY je.value
+             GROUP BY g.id, g.name
              ORDER BY count DESC, value ASC
              LIMIT ?
             "
