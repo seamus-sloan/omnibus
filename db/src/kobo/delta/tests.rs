@@ -353,6 +353,102 @@ async fn recording_a_state_change_preserves_last_modified_seen() {
     assert_eq!(seen_after, seen_before, "metadata watermark must not move");
 }
 
+/// A synthetic row for the batching tests below. `kobo_books_sync` has no FK
+/// to `books`, so these never need a real indexed book behind them.
+fn synthetic_book(n: usize, last_modified_epoch: i64) -> KoboBookRow {
+    KoboBookRow {
+        id: n as i64,
+        uuid: format!("synthetic-{n:05}"),
+        title: format!("Book {n}"),
+        author: "Author".into(),
+        last_modified_epoch,
+        epub_size_bytes: 0,
+    }
+}
+
+#[tokio::test]
+async fn record_synced_applies_every_group_across_multiple_chunks() {
+    // Large enough in every bucket (upsert, state-changed, removed) to force
+    // more than one chunk each, so a bug in the per-chunk boundary — a
+    // dropped row, a double-bound param, an off-by-one in the WHERE IN list —
+    // would show up as a wrong count or a wrong value here.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = make_user(&pool, "reader").await;
+    let device = make_device(&pool, user, "Clara").await;
+
+    // Seed 1950 pre-existing rows: 50 will be updated (`Changed`), 950 will
+    // have their reading-state watermark bumped, 950 will be removed.
+    let seed: Vec<SyncChange> = (0..1950)
+        .map(|n| SyncChange::New(synthetic_book(n, 1)))
+        .collect();
+    record_synced(&pool, device, &seed).await.unwrap();
+
+    let mut batch = Vec::new();
+    batch.extend((0..350).map(|n| SyncChange::New(synthetic_book(2000 + n, 1))));
+    batch.extend((0..50).map(|n| SyncChange::Changed(synthetic_book(n, 42))));
+    batch.extend((50..1000).map(|n| SyncChange::StateChanged(synthetic_book(n, 1))));
+    batch.extend((1000..1950).map(|n| SyncChange::Removed {
+        book_uuid: format!("synthetic-{n:05}"),
+    }));
+    assert_eq!(
+        batch.len(),
+        2300,
+        "sanity: every bucket crosses its chunk size"
+    );
+
+    record_synced(&pool, device, &batch).await.unwrap();
+
+    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM kobo_books_sync WHERE device_id = ?")
+        .bind(device)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(total, 1950 + 350 - 950, "new rows land, removed rows drop");
+
+    let changed_seen: i64 = sqlx::query_scalar(
+        "SELECT last_modified_seen FROM kobo_books_sync WHERE device_id = ? AND book_uuid = ?",
+    )
+    .bind(device)
+    .bind("synthetic-00000")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(changed_seen, 42, "a Changed row's watermark must advance");
+
+    let state_changed_seen: i64 = sqlx::query_scalar(
+        "SELECT last_modified_seen FROM kobo_books_sync WHERE device_id = ? AND book_uuid = ?",
+    )
+    .bind(device)
+    .bind("synthetic-00500")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        state_changed_seen, 1,
+        "a StateChanged row's metadata watermark must not move"
+    );
+
+    let last_new: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM kobo_books_sync WHERE device_id = ? AND book_uuid = ?",
+    )
+    .bind(device)
+    .bind("synthetic-02349")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(last_new, 1, "the last chunk of new rows must land");
+
+    let removed_gone: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM kobo_books_sync WHERE device_id = ? AND book_uuid = ?",
+    )
+    .bind(device)
+    .bind("synthetic-01949")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(removed_gone, 0, "the last chunk of removals must apply");
+}
+
 #[tokio::test]
 async fn sync_delta_prefers_a_metadata_change_over_a_state_change() {
     // When both moved, the device needs the full `Changed` pair — a bare

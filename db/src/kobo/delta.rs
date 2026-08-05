@@ -2,7 +2,7 @@
 //! device already holds (`kobo_books_sync`) and classify each into an add,
 //! a change, or a removal.
 
-use sqlx::{Row, SqlitePool};
+use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 
 use super::{sync_books, KoboBookRow, KoboError};
 
@@ -92,8 +92,21 @@ pub async fn sync_delta(
     Ok(SyncDelta { changes })
 }
 
+/// Rows per chunk for the upsert statement: 3 binds/row keeps each statement
+/// comfortably under SQLite's 999 bound-parameter cap.
+const UPSERT_CHUNK_SIZE: usize = 300;
+
+/// Uuids per chunk for the `IN (...)` update/delete statements: 1 bind for
+/// `device_id` plus one per uuid, well under the cap.
+const UUID_CHUNK_SIZE: usize = 900;
+
 /// Advance the device's snapshot to match `changes` — upserting the adds and
 /// changes at the `last_modified` they were sent at, and dropping the removals.
+///
+/// Groups `changes` by operation kind and issues one chunked multi-row
+/// statement per group, instead of one round-trip per book — a large opted-in
+/// library would otherwise hold SQLite's single writer lock for the whole
+/// device sync.
 ///
 /// Call this only after the response body is committed to; see [`sync_delta`].
 pub async fn record_synced(
@@ -104,46 +117,102 @@ pub async fn record_synced(
     if changes.is_empty() {
         return Ok(());
     }
-    let mut tx = pool.begin().await?;
+    let mut upserts: Vec<&KoboBookRow> = Vec::new();
+    let mut state_changed: Vec<&str> = Vec::new();
+    let mut removed: Vec<&str> = Vec::new();
     for change in changes {
         match change {
-            SyncChange::New(book) | SyncChange::Changed(book) => {
-                sqlx::query(
-                    "INSERT INTO kobo_books_sync
-                        (device_id, book_uuid, last_modified_seen, synced_at)
-                     VALUES (?, ?, ?, strftime('%s','now'))
-                     ON CONFLICT(device_id, book_uuid) DO UPDATE SET
-                        last_modified_seen = excluded.last_modified_seen,
-                        synced_at          = excluded.synced_at",
-                )
-                .bind(device_id)
-                .bind(&book.uuid)
-                .bind(book.last_modified_epoch)
-                .execute(&mut *tx)
-                .await?;
-            }
-            // State-only: bump the watermark, never `last_modified_seen` —
-            // overwriting it here would mark unsent metadata as delivered.
-            SyncChange::StateChanged(book) => {
-                sqlx::query(
-                    "UPDATE kobo_books_sync SET synced_at = strftime('%s','now')
-                      WHERE device_id = ? AND book_uuid = ?",
-                )
-                .bind(device_id)
-                .bind(&book.uuid)
-                .execute(&mut *tx)
-                .await?;
-            }
-            SyncChange::Removed { book_uuid } => {
-                sqlx::query("DELETE FROM kobo_books_sync WHERE device_id = ? AND book_uuid = ?")
-                    .bind(device_id)
-                    .bind(book_uuid)
-                    .execute(&mut *tx)
-                    .await?;
-            }
+            SyncChange::New(book) | SyncChange::Changed(book) => upserts.push(book),
+            SyncChange::StateChanged(book) => state_changed.push(book.uuid.as_str()),
+            SyncChange::Removed { book_uuid } => removed.push(book_uuid.as_str()),
         }
     }
+
+    let mut tx = pool.begin().await?;
+    upsert_synced(&mut tx, device_id, &upserts).await?;
+    // State-only: bump the watermark, never `last_modified_seen` — overwriting
+    // it here would mark unsent metadata as delivered.
+    touch_state_changed(&mut tx, device_id, &state_changed).await?;
+    delete_removed(&mut tx, device_id, &removed).await?;
     tx.commit().await?;
+    Ok(())
+}
+
+/// Upsert one `kobo_books_sync` row per new/changed book, chunked to stay
+/// under SQLite's bound-parameter limit.
+async fn upsert_synced(
+    tx: &mut Transaction<'_, Sqlite>,
+    device_id: i64,
+    books: &[&KoboBookRow],
+) -> Result<(), KoboError> {
+    for chunk in books.chunks(UPSERT_CHUNK_SIZE) {
+        let rows = std::iter::repeat_n("(?, ?, ?, strftime('%s','now'))", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "INSERT INTO kobo_books_sync
+                (device_id, book_uuid, last_modified_seen, synced_at)
+             VALUES {rows}
+             ON CONFLICT(device_id, book_uuid) DO UPDATE SET
+                last_modified_seen = excluded.last_modified_seen,
+                synced_at          = excluded.synced_at"
+        );
+        let mut q = sqlx::query(&sql);
+        for book in chunk {
+            q = q
+                .bind(device_id)
+                .bind(&book.uuid)
+                .bind(book.last_modified_epoch);
+        }
+        q.execute(&mut **tx).await?;
+    }
+    Ok(())
+}
+
+/// Bump `synced_at` for every book whose reading state moved but whose
+/// metadata didn't, chunked to stay under SQLite's bound-parameter limit.
+async fn touch_state_changed(
+    tx: &mut Transaction<'_, Sqlite>,
+    device_id: i64,
+    uuids: &[&str],
+) -> Result<(), KoboError> {
+    for chunk in uuids.chunks(UUID_CHUNK_SIZE) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "UPDATE kobo_books_sync SET synced_at = strftime('%s','now')
+              WHERE device_id = ? AND book_uuid IN ({placeholders})"
+        );
+        let mut q = sqlx::query(&sql).bind(device_id);
+        for uuid in chunk {
+            q = q.bind(*uuid);
+        }
+        q.execute(&mut **tx).await?;
+    }
+    Ok(())
+}
+
+/// Drop every `kobo_books_sync` row for a book no longer opted in, chunked to
+/// stay under SQLite's bound-parameter limit.
+async fn delete_removed(
+    tx: &mut Transaction<'_, Sqlite>,
+    device_id: i64,
+    uuids: &[&str],
+) -> Result<(), KoboError> {
+    for chunk in uuids.chunks(UUID_CHUNK_SIZE) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "DELETE FROM kobo_books_sync WHERE device_id = ? AND book_uuid IN ({placeholders})"
+        );
+        let mut q = sqlx::query(&sql).bind(device_id);
+        for uuid in chunk {
+            q = q.bind(*uuid);
+        }
+        q.execute(&mut **tx).await?;
+    }
     Ok(())
 }
 
