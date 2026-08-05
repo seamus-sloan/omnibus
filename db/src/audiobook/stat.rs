@@ -98,7 +98,8 @@ pub fn stat_audiobook_library(
 /// Depth-first walk of the tree rooted at `dir`, stat-ing every accepted
 /// file. Returns `(entries, incomplete, saw_any_file)`; a root `read_dir`
 /// failure is the only case that aborts the walk (`Err`) — a subdir
-/// failure instead flags `incomplete` and continues.
+/// failure instead flags `incomplete` and continues. Subdirectories matching
+/// [`crate::helpers::is_skipped_scan_dir`] are not descended into.
 fn walk_audiobook_tree(
     dir: &Path,
 ) -> Result<(Vec<AudiobookStatEntry>, bool, bool), std::io::Error> {
@@ -139,6 +140,10 @@ fn walk_audiobook_tree(
             };
             let entry_path = entry.path();
             if file_type.is_dir() {
+                // Skipped at discovery, so an unreadable one never sets `incomplete`.
+                if crate::helpers::is_skipped_scan_dir(&entry.file_name().to_string_lossy()) {
+                    continue;
+                }
                 stack.push(entry_path);
                 continue;
             }

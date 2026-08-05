@@ -67,6 +67,13 @@ pub(crate) fn scan_key_for(relative_path: &str) -> String {
     relative_path.to_string()
 }
 
+/// Dot-directories and Synology's `@eaDir` — never library content, and
+/// routinely unreadable, which would flag the walk `incomplete` and suppress
+/// the removal pass on every scan (issue #819).
+pub(crate) fn is_skipped_scan_dir(name: &str) -> bool {
+    name.starts_with('.') || name.eq_ignore_ascii_case("@eaDir")
+}
+
 /// Split `dir/sub/name.epub` into (`dir/sub`, `name`, `EPUB`). If no dir,
 /// the path portion is empty. Extension is uppercased per Calibre convention.
 pub(crate) fn split_filename(filename: &str) -> (String, String, String) {

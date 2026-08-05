@@ -267,3 +267,24 @@ fn format_series_index_passes_through_non_finite_values_verbatim() {
     assert_eq!(format_series_index(f64::INFINITY), "inf");
     assert_eq!(format_series_index(f64::NEG_INFINITY), "-inf");
 }
+
+#[test]
+fn is_skipped_scan_dir_skips_dot_directories_and_eadir() {
+    assert!(is_skipped_scan_dir(".shelfarr-staging"));
+    assert!(is_skipped_scan_dir(".git"));
+    assert!(is_skipped_scan_dir("."));
+    assert!(is_skipped_scan_dir(".."));
+    assert!(is_skipped_scan_dir("@eaDir"));
+    // Synology has shipped both casings over the years.
+    assert!(is_skipped_scan_dir("@eadir"));
+}
+
+#[test]
+fn is_skipped_scan_dir_keeps_ordinary_author_directories() {
+    assert!(!is_skipped_scan_dir("Becky Jenkinson"));
+    assert!(!is_skipped_scan_dir("Pierce Brown"));
+    // A leading `@` alone is not the Synology marker — an author or
+    // publisher directory may legitimately start with one.
+    assert!(!is_skipped_scan_dir("@midnight Press"));
+    assert!(!is_skipped_scan_dir("eaDir"));
+}

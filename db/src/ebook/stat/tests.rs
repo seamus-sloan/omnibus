@@ -189,3 +189,60 @@ fn stat_flags_incomplete_when_a_subdirectory_is_unreadable() {
         "an unreadable subdir must flag the enumeration incomplete"
     );
 }
+
+// A stager's `0700` dir inside the library root flagged `incomplete` on
+// every scan, suppressing the #819 removal pass forever.
+#[cfg(unix)]
+#[test]
+fn stat_stays_complete_when_an_unreadable_subdirectory_is_hidden() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = make_test_dir("stat_hidden_locked");
+    std::fs::write(dir.join("good.epub"), b"not a zip").unwrap();
+    let staging = dir.join(".shelfarr-staging");
+    std::fs::create_dir_all(&staging).unwrap();
+    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read_dir(&staging).is_ok() {
+        // Running as root (CI container) — perms don't bite; skip.
+        std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        return;
+    }
+
+    let out = stat_ebook_library(Some(dir.to_str().unwrap()), dir.to_str().unwrap());
+
+    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    assert!(out.error.is_none());
+    assert!(
+        !out.incomplete,
+        "an unreadable *hidden* dir must not flag the enumeration incomplete",
+    );
+    assert!(
+        out.entries.iter().any(|e| e.filename == "good.epub"),
+        "the readable part of the tree still indexes",
+    );
+}
+
+#[test]
+fn stat_does_not_descend_into_hidden_or_eadir_directories() {
+    let dir = make_test_dir("stat_skip_dirs");
+    std::fs::write(dir.join("real.epub"), b"not a zip").unwrap();
+
+    // A mid-copy epub indexed out of staging becomes a ghost row the moment
+    // the stager moves it into place.
+    let eadir = dir.join("@eaDir");
+    std::fs::create_dir_all(&eadir).unwrap();
+    std::fs::write(eadir.join("thumb.epub"), b"not a zip").unwrap();
+    let staging = dir.join(".shelfarr-staging");
+    std::fs::create_dir_all(&staging).unwrap();
+    std::fs::write(staging.join("half-copied.epub"), b"not a zip").unwrap();
+
+    let out = stat_ebook_library(Some(dir.to_str().unwrap()), dir.to_str().unwrap());
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    let names: Vec<&str> = out.entries.iter().map(|e| e.filename.as_str()).collect();
+    assert_eq!(names, vec!["real.epub"], "got {names:?}");
+    assert!(!out.incomplete);
+}
