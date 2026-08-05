@@ -34,6 +34,8 @@ struct MetadataEditView: View {
     @State private var pendingAuthor = ""
     /// Same, for the tags field.
     @State private var pendingTag = ""
+    /// Same, for the genres field.
+    @State private var pendingGenre = ""
 
     private var pendingAuthorName: String {
         pendingAuthor.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -104,6 +106,20 @@ struct MetadataEditView: View {
                             values: $draft.tags,
                             entry: $pendingTag,
                             isEdited: draft.tags != loaded.tags,
+                            deduplicates: true,
+                            isFirst: true
+                        )
+                    }
+                }
+
+                group("Genres") {
+                    Plate {
+                        ChipListField(
+                            label: "Genres",
+                            placeholder: "Add a genre",
+                            values: $draft.genres,
+                            entry: $pendingGenre,
+                            isEdited: draft.genres != loaded.genres,
                             deduplicates: true,
                             isFirst: true
                         )
@@ -257,6 +273,12 @@ struct MetadataEditView: View {
             draft.tags.append(chip)
         }
         pendingTag = ""
+        if let chip = ChipEntry.committed(
+            from: pendingGenre, existing: draft.genres, deduplicating: true
+        ) {
+            draft.genres.append(chip)
+        }
+        pendingGenre = ""
 
         do {
             let _: Empty = try await APIClient.shared.post(

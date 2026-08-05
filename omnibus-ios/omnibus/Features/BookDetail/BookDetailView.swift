@@ -219,6 +219,7 @@ struct BookDetailView: View {
                         if let description = book.description?.nilIfBlank {
                             aboutSection(description)
                         }
+                        if !book.genres.isEmpty { genresSection(book) }
                         if !book.subjects.isEmpty { tagsSection(book) }
                         ratingSection(book)
                         statusSection(book)
@@ -579,6 +580,21 @@ struct BookDetailView: View {
     }
 
     // MARK: - Sections
+
+    /// Genres, above Tags. Plain chips rather than `NavigationLink`s: there
+    /// is no genre destination in `Destination` — genres have no browse page
+    /// on any client yet, only the stats donut and the editors.
+    private func genresSection(_ book: Book) -> some View {
+        VStack(alignment: .leading, spacing: Spacing.md) {
+            SectionLabel("Genres")
+            FlowLayout(spacing: 6) {
+                ForEach(book.genres, id: \.self) { genre in
+                    Chip(label: genre)
+                }
+            }
+        }
+        .accessibilityIdentifier("book-detail-genres")
+    }
 
     private func tagsSection(_ book: Book) -> some View {
         VStack(alignment: .leading, spacing: Spacing.md) {

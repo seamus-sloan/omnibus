@@ -20,6 +20,10 @@ struct MetadataDraft: Equatable {
     var authors: [String] = []
     /// Tags (the server's `subjects`), as the same chip list authors use.
     var tags: [String] = []
+    /// Genres, as a second chip list. Separate from `tags`: nothing the
+    /// server parses carries a genre, so this list exists only because
+    /// someone assigned it.
+    var genres: [String] = []
     var series = ""
     var seriesIndex = ""
     var publisher = ""
@@ -36,6 +40,7 @@ struct MetadataDraft: Equatable {
         title = book.title ?? ""
         authors = book.creators.map(\.name)
         tags = book.subjects
+        genres = book.genres
         series = book.series ?? ""
         seriesIndex = book.seriesIndex ?? ""
         publisher = book.publisher ?? ""
@@ -60,6 +65,7 @@ struct MetadataDraft: Equatable {
             creators: authors == loaded.authors
                 ? nil : authors.map(MetadataOverridesPayload.Creator.init),
             subjects: tags == loaded.tags ? nil : tags,
+            genres: genres == loaded.genres ? nil : genres,
             series: changed(\.series),
             series_index: changed(\.seriesIndex),
             publisher: changed(\.publisher),
@@ -86,6 +92,9 @@ struct MetadataOverridesPayload: Encodable, Equatable {
     /// Replaces the whole tag list when present — the server's `subjects`
     /// override is a wholesale replace, never an append.
     var subjects: [String]?
+    /// Replaces the whole genre list when present, same wholesale semantics
+    /// as `subjects`.
+    var genres: [String]?
     var series: String?
     var series_index: String?
     var publisher: String?

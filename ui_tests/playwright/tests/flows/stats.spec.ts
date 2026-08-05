@@ -21,6 +21,12 @@ import { fixturesDir, seedLibrary } from "../utils/seed";
 // per worker and the concurrent writes 500 on SQLite's write lock.
 test.describe.configure({ mode: "serial" });
 
+/**
+ * Genre assigned to this spec's donut feeder. Deliberately unusual so a
+ * future fixture can't collide with it and change the slice count.
+ */
+const DONUT_GENRE = "Stats Spec Gothic";
+
 /** Late-2023 anchor: inside Lifetime, outside the week/month/year windows. */
 const OLD_SESSION_AT = 1_700_000_000;
 
@@ -36,9 +42,15 @@ test.beforeAll(async ({ request }) => {
   await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
   const uuid = await fetchBookUuidByTitle(request, FIXTURE_BOOKS[0]!.title);
 
-  // Dracula is a tagged public-domain fixture — its session feeds the genre
-  // donut, which shares by book count over *tagged* active books.
-  const taggedUuid = await fetchBookUuidByTitle(request, "Dracula");
+  // The genre donut shares by book count over active books that have a
+  // *genre*. Nothing scans one, so it has to be assigned here. Dracula is
+  // this spec's designated donut feeder; only its `genres` key is written,
+  // so the "Vampires" tag search.spec.ts reads stays untouched.
+  const genredUuid = await fetchBookUuidByTitle(request, "Dracula");
+  const genreResp = await request.post(`/api/ebooks/${genredUuid}/overrides`, {
+    data: { genres: [DONUT_GENRE] },
+  });
+  expect(genreResp.status(), "seeding the donut genre failed").toBe(200);
 
   const now = Math.floor(Date.now() / 1000);
   const session = (
@@ -58,7 +70,7 @@ test.beforeAll(async ({ request }) => {
       session(uuid, now - 60, 600, "epub"),
       session(uuid, OLD_SESSION_AT, 900, "epub"),
       session(uuid, now - 120, 900, "audio"),
-      session(taggedUuid, now - 300, 300, "epub"),
+      session(genredUuid, now - 300, 300, "epub"),
     ],
   });
   expect(resp.status(), "seeding stats sessions failed").toBe(200);
@@ -239,10 +251,11 @@ test("the heatmap and genre donut render from seeded activity", async ({
   await expect(heatmap).toContainText("Longest streak");
   expect(await heatmap.locator('[title*=" on "]').count()).toBeGreaterThan(0);
 
-  // Donut: the fixture book carries tags, so the legend lists at least one
-  // genre with a percentage; the center shows the active-book count.
+  // Donut: the seeded genre appears in the legend with a percentage; the
+  // center shows the active-book count.
   const donut = page.getByTestId("stats-genre-donut");
   await expect(donut).toBeVisible();
+  await expect(donut).toContainText(DONUT_GENRE);
   await expect(donut).toContainText("%");
   await expect(donut).toContainText("books");
 
