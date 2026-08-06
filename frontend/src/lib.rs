@@ -502,6 +502,8 @@ pub fn App() -> Element {
     use_context_provider(|| PageTitle(page_title));
     // Cover cache-bust registry — see `contexts::CoverCacheBust`.
     use_context_provider(|| CoverCacheBust(Signal::new(std::collections::HashMap::new())));
+    // Avatar cache-bust counter — see `contexts::AvatarCacheBust`.
+    use_context_provider(|| AvatarCacheBust(Signal::new(0u32)));
     // Check-in overlay open/closed. Provided above both `ScreenLayout`
     // variants so every entry point can raise the centered modal and the
     // root-mounted `CheckInOverlay` can read it. Starts closed for SSR/WASM

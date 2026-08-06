@@ -9,18 +9,9 @@ use omnibus_shared::{ProgressFormat, ResumePoint, UserSummary};
 
 use crate::components::atrium::{persist_theme, Cover, Theme};
 use crate::components::glyphs::{book_glyph, play_glyph};
+use crate::components::user_avatar::UserAvatar;
 use crate::focus_after_paint::focus_after_paint;
 use crate::{use_current_user, Route};
-
-/// Derive 1–2 character avatar initials from a username. Empty input falls
-/// back to "?".
-pub(crate) fn initials_for(username: &str) -> String {
-    let trimmed = username.trim();
-    if trimmed.is_empty() {
-        return "?".into();
-    }
-    trimmed.chars().take(2).collect::<String>().to_uppercase()
-}
 
 /// Renders the user menu component (web and server targets).
 ///
@@ -66,13 +57,9 @@ pub fn UserMenu() -> Element {
             }
         }
     } else {
-        let initials = user
-            .as_ref()
-            .map(|u| initials_for(&u.username))
-            .unwrap_or_default();
         rsx! {
             div { class: "um-root",
-                UserMenuTrigger { initials, open }
+                UserMenuTrigger { user: user.clone(), open }
                 if open() {
                     if let Some(user) = user {
                         div {
@@ -96,8 +83,9 @@ pub fn UserMenu() -> Element {
 
 #[cfg(any(feature = "web", feature = "server"))]
 #[component]
-fn UserMenuTrigger(initials: String, open: Signal<bool>) -> Element {
+fn UserMenuTrigger(user: Option<UserSummary>, open: Signal<bool>) -> Element {
     let mut open = open;
+    let bust = crate::use_avatar_cache_bust().0;
     rsx! {
         button {
             class: "um-trigger",
@@ -110,7 +98,20 @@ fn UserMenuTrigger(initials: String, open: Signal<bool>) -> Element {
                 let next = !open();
                 open.set(next);
             },
-            span { class: "um-initials", "{initials}" }
+            // Before the boot effect resolves the user (SSR and the first
+            // WASM paint alike) this is an empty monogram, so both renders
+            // agree and hydration adopts cleanly (rule 07).
+            if let Some(u) = user {
+                UserAvatar {
+                    user_id: u.id,
+                    name: u.display().to_string(),
+                    has_avatar: u.has_avatar,
+                    class: "um-initials",
+                    bust: bust(),
+                }
+            } else {
+                span { class: "um-initials" }
+            }
         }
     }
 }
@@ -152,7 +153,7 @@ fn UserMenuPanel(user: UserSummary, open: Signal<bool>) -> Element {
                 focus_after_paint(&evt);
             },
 
-            UmHeader { user }
+            UmHeader { user, open }
             UmNowReading {}
 
             div { class: "um-stat-grid",
@@ -190,31 +191,40 @@ fn build_on_signout(mut open: Signal<bool>, nav: dioxus_router::Navigator) -> Ev
     })
 }
 
-/// Avatar + username/handle/role identity block, plus the (stubbed)
-/// "Edit" affordance.
+/// Avatar + display-name/handle/role identity block, plus the "Edit" link
+/// into the Account settings section.
+///
+/// The handle stays the *username*: it is the stable login identity, and a
+/// display name can change or collide.
 #[cfg(any(feature = "web", feature = "server"))]
 #[component]
-fn UmHeader(user: UserSummary) -> Element {
+fn UmHeader(user: UserSummary, open: Signal<bool>) -> Element {
+    let mut open = open;
     let role = if user.is_admin { "Owner" } else { "Member" };
     let handle = format!("{}@local", user.username);
+    let bust = crate::use_avatar_cache_bust().0;
     rsx! {
         div { class: "um-header",
             div { class: "um-avatar um-avatar-lg",
-                span { class: "um-initials", "{initials_for(&user.username)}" }
+                UserAvatar {
+                    user_id: user.id,
+                    name: user.display().to_string(),
+                    has_avatar: user.has_avatar,
+                    class: "um-initials",
+                    bust: bust(),
+                }
             }
             div { class: "um-identity",
-                div { class: "um-name", "{user.username}" }
+                div { class: "um-name", "{user.display()}" }
                 div { class: "um-handle",
                     "{handle} · "
                     span { class: "um-role", "{role}" }
                 }
             }
-            a {
+            Link {
                 class: "um-edit",
-                href: "#",
-                "aria-disabled": "true",
-                tabindex: "-1",
-                onclick: move |evt| evt.prevent_default(),
+                to: Route::Settings { section: Some("account".to_string()) },
+                onclick: move |_| open.set(false),
                 "Edit"
             }
         }
@@ -460,27 +470,5 @@ fn UmVersion() -> Element {
         div { class: "um-version", "data-testid": "user-menu-version",
             "{crate::version::app_version()}"
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn initials_uppercases_first_two_chars() {
-        assert_eq!(initials_for("seamus"), "SE");
-        assert_eq!(initials_for("ek"), "EK");
-    }
-
-    #[test]
-    fn initials_handles_short_input() {
-        assert_eq!(initials_for("a"), "A");
-    }
-
-    #[test]
-    fn initials_fallback_for_empty() {
-        assert_eq!(initials_for(""), "?");
-        assert_eq!(initials_for("   "), "?");
     }
 }

@@ -251,3 +251,13 @@ test("Sign out clears the session and routes to /login", async ({ page }) => {
 
   await expect(page).toHaveURL(/\/login$/);
 });
+
+test("the Edit link opens the Account settings section", async ({ page }) => {
+  await gotoReady(page, "/");
+  await page.getByTestId("user-menu-trigger").click();
+
+  await page.getByRole("link", { name: "Edit" }).click();
+
+  await expect(page).toHaveURL(/\/settings\?section=account$/);
+  await expect(page.getByTestId("account-profile-card")).toBeVisible();
+});

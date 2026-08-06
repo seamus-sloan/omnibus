@@ -155,6 +155,19 @@ pub fn append_cache_bust(url: String, bust: u32) -> String {
     format!("{url}{sep}v={bust}")
 }
 
+/// Bump counter for the caller's own avatar. `/api/users/{id}/avatar` is keyed
+/// only by user id, so replacing the image produces the *same* URL and the
+/// browser keeps serving the old bytes. One counter is enough — a user can
+/// only change their own avatar, and everyone else's is fetched fresh on the
+/// next page view. Owned by [`App`] so it survives route changes.
+#[derive(Copy, Clone)]
+pub struct AvatarCacheBust(pub Signal<u32>);
+
+/// Convenience accessor for the avatar cache-bust context.
+pub fn use_avatar_cache_bust() -> AvatarCacheBust {
+    use_context::<AvatarCacheBust>()
+}
+
 /// App-wide cached `/api/auth/me` result. Owned by [`App`] via
 /// `use_context_provider` so every component that needs to gate on
 /// `is_admin` (top nav avatar, landing inline edits, author Delete) reads

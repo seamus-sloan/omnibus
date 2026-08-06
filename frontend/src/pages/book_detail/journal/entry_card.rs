@@ -5,6 +5,7 @@
 use dioxus::prelude::*;
 use omnibus_shared::{JournalEntry, JournalStatus, UpdateJournalEntry, UserSummary};
 
+use crate::components::user_avatar::UserAvatar;
 use crate::data;
 use crate::pages::book_detail::dates::fmt_long_date;
 use crate::pages::book_detail::journal_editor::*;
@@ -28,7 +29,8 @@ struct JournalEntryEditState {
 #[derive(Clone, PartialEq)]
 struct JournalEntryHeaderView {
     author_name: String,
-    initial: String,
+    author_id: i64,
+    author_has_avatar: bool,
     is_owner: bool,
     is_draft: bool,
     meta_line: String,
@@ -91,7 +93,8 @@ fn BdJournalPublishDraftButton(
 fn BdJournalEntryHeader(view: JournalEntryHeaderView, edit: JournalEntryEditState) -> Element {
     let JournalEntryHeaderView {
         author_name,
-        initial,
+        author_id,
+        author_has_avatar,
         is_owner,
         is_draft,
         meta_line,
@@ -115,7 +118,12 @@ fn BdJournalEntryHeader(view: JournalEntryHeaderView, edit: JournalEntryEditStat
 
     rsx! {
         div { class: "bd-journal-entry-head",
-            span { class: "bd-journal-avatar", aria_hidden: "true", "{initial}" }
+            UserAvatar {
+                user_id: author_id,
+                name: author_name.clone(),
+                has_avatar: author_has_avatar,
+                class: "bd-journal-avatar",
+            }
             div { class: "bd-journal-entry-meta",
                 div { class: "bd-journal-entry-byline",
                     span { class: "bd-journal-author", "{author_name}" }
@@ -203,12 +211,6 @@ pub(super) fn BdJournalEntryCard(
         .as_ref()
         .map(|u| u.id == entry.author_id)
         .unwrap_or(false);
-    let initial = entry
-        .author_name
-        .chars()
-        .next()
-        .map(|c| c.to_uppercase().to_string())
-        .unwrap_or_default();
     let date = fmt_long_date(entry.created_at);
     let meta_line = match entry.progress {
         Some(p) => format!("{date} \u{00b7} at {p}%"),
@@ -228,7 +230,8 @@ pub(super) fn BdJournalEntryCard(
             BdJournalEntryHeader {
                 view: JournalEntryHeaderView {
                     author_name: entry.author_name.clone(),
-                    initial,
+                    author_id: entry.author_id,
+                    author_has_avatar: entry.author_has_avatar,
                     is_owner,
                     is_draft: entry.status == JournalStatus::Draft,
                     meta_line,

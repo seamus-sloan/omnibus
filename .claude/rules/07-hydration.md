@@ -28,6 +28,13 @@ paint must match.
 - **Hook-order divergence** — conditionally declaring hooks (or a
   different count) on one target. Declare every hook unconditionally, in
   the same order, on every target.
+- **Swapping element *types* in a conditional** — `if x { img {…} } else {
+  span {…} }` makes the diff replace the node rather than update it, and
+  handlers registered on siblings rendered alongside it stop firing. The
+  symptom is a button that clicks but does nothing, with no console error.
+  Keep one stable outer element and swap its *children* instead —
+  `components/user_avatar.rs` is the worked example (a journal card's
+  Delete died the moment its author had a profile picture).
 
 ## Confirming a mismatch
 

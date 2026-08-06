@@ -20,6 +20,8 @@ const currentPassword = (page: Page) =>
   page.getByTestId("current-password-input");
 const newPassword = (page: Page) => page.getByTestId("new-password-input");
 const changeStatus = (page: Page) => page.getByTestId("change-password-status");
+const displayNameInput = (page: Page) => page.getByTestId("display-name-input");
+const profileStatus = (page: Page) => page.getByTestId("profile-status");
 
 test("renders the account section layout", async ({ page }) => {
   await gotoReady(page, ACCOUNT);
@@ -28,6 +30,10 @@ test("renders the account section layout", async ({ page }) => {
     "aria-current",
     "page",
   );
+  // Profile card sits at the top of the section.
+  await expect(page.getByTestId("account-profile-card")).toBeVisible();
+  await expect(displayNameInput(page)).toBeVisible();
+  await expect(page.getByTestId("display-name-save")).toBeVisible();
   await expect(
     page.getByRole("heading", { level: 2, name: "Password" }),
   ).toBeVisible();
@@ -234,4 +240,116 @@ test("rejects an invalid new password", async ({ page }) => {
   );
 
   await expect(changeStatus(page)).toHaveClass(/error/);
+});
+
+// Display name (profile card). The seeded admin is shared across the parallel
+// suite and the display name is globally visible — it relabels the wishlist
+// shelf and every journal/rating byline — so the success test resets it in a
+// `finally`, and the failure test mocks the response rather than writing.
+
+test("saves the display name and shows a success status", async ({ page }) => {
+  await gotoReady(page, ACCOUNT);
+
+  try {
+    await displayNameInput(page).fill("Seamus");
+
+    await expectMutation(
+      page,
+      {
+        method: "POST",
+        url: "/api/rpc/account/profile",
+        expectedBody: { display_name: "Seamus" },
+        expectedStatus: 200,
+      },
+      async () => page.getByTestId("display-name-save").click(),
+    );
+
+    await expect(profileStatus(page)).toHaveText("Profile saved.");
+    await expect(profileStatus(page)).toHaveClass(/success/);
+
+    // The card re-reads `/api/auth/me` after the save, so the user menu shows
+    // the new name without a reload.
+    await page.getByTestId("user-menu-trigger").click();
+    await expect(page.getByTestId("user-menu-panel")).toContainText("Seamus");
+  } finally {
+    await page.keyboard.press("Escape");
+    await displayNameInput(page).fill("");
+    await expectMutation(
+      page,
+      {
+        method: "POST",
+        url: "/api/rpc/account/profile",
+        expectedBody: { display_name: null },
+        expectedStatus: 200,
+      },
+      async () => page.getByTestId("display-name-save").click(),
+    );
+  }
+});
+
+test("shows an error status when saving the display name fails", async ({
+  page,
+}) => {
+  await gotoReady(page, ACCOUNT);
+
+  await displayNameInput(page).fill("Seamus");
+
+  await page.route("**/api/rpc/account/profile", (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ message: "forced failure" }),
+      });
+    }
+    return route.continue();
+  });
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/account/profile",
+      expectedStatus: 500,
+    },
+    async () => page.getByTestId("display-name-save").click(),
+  );
+
+  await expect(profileStatus(page)).toHaveClass(/error/);
+});
+
+test("shows an error when the avatar upload fails", async ({ page }) => {
+  await gotoReady(page, ACCOUNT);
+
+  await page.route("**/api/account/avatar", (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({
+        status: 400,
+        contentType: "text/plain",
+        body: "unsupported image type",
+      });
+    }
+    return route.continue();
+  });
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/account/avatar",
+      expectedStatus: 400,
+    },
+    async () =>
+      page.getByTestId("avatar-file-input").setInputFiles({
+        name: "avatar.png",
+        mimeType: "image/png",
+        buffer: Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+          "base64",
+        ),
+      }),
+  );
+
+  await expect(page.getByTestId("avatar-status")).toBeVisible();
+  await expect(page.getByTestId("avatar-status")).toHaveClass(/error/);
 });

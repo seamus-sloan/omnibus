@@ -22,6 +22,7 @@ mod kobo;
 #[cfg(not(feature = "mobile"))]
 mod logs;
 mod physical;
+mod profile;
 mod progress;
 mod ratings;
 mod read_status;
@@ -59,6 +60,7 @@ pub use kobo::*;
 #[cfg(not(feature = "mobile"))]
 pub use logs::*;
 pub use physical::*;
+pub use profile::*;
 pub use progress::*;
 pub use ratings::*;
 pub use read_status::*;

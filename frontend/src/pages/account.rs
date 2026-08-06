@@ -16,6 +16,9 @@ mod downloads;
 // section.
 #[cfg(not(feature = "mobile"))]
 pub(crate) mod kobo;
+// Display name + avatar, at the top of the Account section.
+#[cfg(not(feature = "mobile"))]
+mod profile;
 
 #[cfg(not(feature = "mobile"))]
 use crate::components::auth::{score_password, PasswordRequirements, StrengthMeter};
@@ -32,32 +35,13 @@ use omnibus_shared::{EbookMetadata, UserSummary};
 #[cfg(feature = "mobile")]
 use crate::components::atrium::{Cover, Theme};
 #[cfg(feature = "mobile")]
+use crate::components::user_avatar::UserAvatar;
+#[cfg(feature = "mobile")]
 use crate::pages::CheckInOpen;
 #[cfg(feature = "mobile")]
 use crate::{data, thumb_url, use_server_url, Route};
 
 // ── Pure helpers (unit-tested) ─────────────────────────────────────
-
-/// Two-letter uppercase initials for the avatar chip, derived from a
-/// username. Splits on separators (space, `.`, `_`, `-`); a single-token
-/// name uses its first two letters. Falls back to `"?"` when empty.
-#[cfg(any(feature = "mobile", test))]
-pub fn initials_for(username: &str) -> String {
-    let tokens: Vec<&str> = username
-        .split(|c: char| c.is_whitespace() || matches!(c, '.' | '_' | '-'))
-        .filter(|t| !t.is_empty())
-        .collect();
-    let picked: String = match tokens.as_slice() {
-        [] => return "?".to_string(),
-        [single] => single.chars().take(2).collect(),
-        [first, second, ..] => first
-            .chars()
-            .take(1)
-            .chain(second.chars().take(1))
-            .collect(),
-    };
-    picked.to_uppercase()
-}
 
 /// Role label shown after the username in the identity subline. Admins are
 /// "Owner" (matching the design mockup); everyone else is "Reader".
@@ -305,6 +289,7 @@ fn kindle_email_form(
 #[cfg(not(feature = "mobile"))]
 fn account_web_body() -> Element {
     rsx! {
+        profile::ProfileCard {}
         ChangePasswordCard {}
     }
 }
@@ -526,21 +511,29 @@ fn account_body() -> Element {
 #[cfg(feature = "mobile")]
 #[component]
 fn AccountIdentity(user: Option<UserSummary>) -> Element {
-    let (name, initials, subline) = match &user {
+    // The subline keeps the *username*: it's the stable login identity, and
+    // the name above it may now be a display name.
+    let (name, subline) = match &user {
         Some(u) => (
-            u.username.clone(),
-            initials_for(&u.username),
+            u.display().to_string(),
             identity_subline(&u.username, u.is_admin),
         ),
-        None => (
-            "\u{2014}".to_string(),
-            "\u{2026}".to_string(),
-            String::new(),
-        ),
+        None => ("\u{2014}".to_string(), String::new()),
     };
     rsx! {
         div { class: "m-account-identity",
-            div { class: "m-account-avatar", "aria-hidden": "true", "{initials}" }
+            div { class: "m-account-avatar",
+                if let Some(u) = user.as_ref() {
+                    UserAvatar {
+                        user_id: u.id,
+                        name: u.display().to_string(),
+                        has_avatar: u.has_avatar,
+                        class: "m-account-initials",
+                    }
+                } else {
+                    span { class: "m-account-initials", "aria-hidden": "true", "\u{2026}" }
+                }
+            }
             div { class: "m-account-idcol",
                 div { class: "m-account-name", "{name}" }
                 if !subline.is_empty() {
@@ -733,26 +726,6 @@ fn VersionBlock(server_version: Option<String>) -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn initials_uses_first_letters_of_two_tokens() {
-        assert_eq!(initials_for("elena koval"), "EK");
-        assert_eq!(initials_for("ada.lovelace"), "AL");
-        assert_eq!(initials_for("grace_hopper"), "GH");
-    }
-
-    #[test]
-    fn initials_takes_two_letters_of_single_token() {
-        assert_eq!(initials_for("seamus"), "SE");
-        assert_eq!(initials_for("a"), "A");
-    }
-
-    #[test]
-    fn initials_falls_back_for_empty_or_separator_only() {
-        assert_eq!(initials_for(""), "?");
-        assert_eq!(initials_for("   "), "?");
-        assert_eq!(initials_for("..._"), "?");
-    }
 
     #[test]
     fn role_label_maps_admin_to_owner() {
