@@ -115,3 +115,38 @@ pub async fn rpc_delete_fileless_book(uuid: String) -> Result<()> {
         .await
         .map_err(|e| map_physical_error("delete fileless book", e))?)
 }
+
+// `server`-gated: exercises the `is_admin || can_edit` gate directly, no DB
+// needed. CI runs this via `cargo test -p omnibus-frontend --features server`.
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::{require_edit, AuthUser};
+
+    fn auth_user(is_admin: bool, can_edit: bool) -> AuthUser {
+        AuthUser {
+            id: 1,
+            is_admin,
+            can_edit,
+            session_id: 0,
+        }
+    }
+
+    #[test]
+    fn require_edit_allows_an_admin_without_the_can_edit_flag() {
+        let user = auth_user(true, false);
+        assert!(require_edit(&user).is_ok());
+    }
+
+    #[test]
+    fn require_edit_allows_a_non_admin_with_can_edit() {
+        let user = auth_user(false, true);
+        assert!(require_edit(&user).is_ok());
+    }
+
+    #[test]
+    fn require_edit_denies_a_non_admin_without_can_edit() {
+        let user = auth_user(false, false);
+        let err = require_edit(&user).unwrap_err();
+        assert!(err.to_string().contains("edit permission required"));
+    }
+}

@@ -171,3 +171,54 @@ pub async fn rpc_wishlist_add(req: WishlistAddRequest) -> Result<BookRef> {
     .map_err(map_scan_err)?;
     Ok(BookRef { book_uuid })
 }
+
+// `server`-gated: exercises the five-way error mapping directly, no DB
+// needed. CI runs this via `cargo test -p omnibus-frontend --features server`.
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::{db, map_scan_err};
+
+    #[test]
+    fn map_scan_err_surfaces_the_isbn_validation_message() {
+        let e = db::ScanError::Isbn(omnibus_shared::IsbnError::InvalidLength(3));
+        let err = map_scan_err(e);
+        assert!(err.to_string().contains("ISBN must be 10 or 13 digits"));
+    }
+
+    #[test]
+    fn map_scan_err_maps_physical_book_not_found_to_a_book_not_found_message() {
+        let e = db::ScanError::Physical(db::PhysicalError::BookNotFound);
+        let err = map_scan_err(e);
+        assert!(err.to_string().contains("book not found"));
+    }
+
+    #[test]
+    fn map_scan_err_surfaces_the_missing_wishlist_target_message() {
+        let e = db::ScanError::MissingWishlistTarget;
+        let err = map_scan_err(e);
+        assert!(err
+            .to_string()
+            .contains("wishlist add requires a book_uuid or meta"));
+    }
+
+    #[test]
+    fn map_scan_err_surfaces_the_provider_outage_message_and_logs_a_warning() {
+        // `.into()` targets `anyhow::Error` via `MetadataLookupError::Provider`'s
+        // field type without this crate needing a direct `anyhow` dependency.
+        let io_err = std::io::Error::other("provider timed out");
+        let e = db::ScanError::Lookup(db::MetadataLookupError::Provider(io_err.into()));
+        let err = map_scan_err(e);
+        // The caller-facing sentence is deliberately generic, not the raw
+        // provider error — see `MetadataLookupError::Provider`'s doc comment.
+        // The `tracing::warn!` side effect on this branch has no return
+        // value to assert on; the message mapping is what a client observes.
+        assert!(err.to_string().contains("try again later"));
+    }
+
+    #[test]
+    fn map_scan_err_genericizes_an_opaque_db_failure() {
+        let e = db::ScanError::Sqlx(sqlx::Error::RowNotFound);
+        let err = map_scan_err(e);
+        assert!(err.to_string().contains("internal server error"));
+    }
+}
