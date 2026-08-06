@@ -294,3 +294,47 @@ pub async fn rpc_backfill_chapters() -> Result<()> {
         .post(omnibus_db::worker::Task::BackfillChapters { library_path });
     Ok(())
 }
+
+// `server`-gated: exercises the string-to-config-key resolution directly, no
+// DB needed. CI runs this via `cargo test -p omnibus-frontend --features
+// server`.
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::precedence_library_path;
+    use omnibus_shared::Settings;
+
+    fn settings() -> Settings {
+        Settings {
+            ebook_library_path: Some("/lib/ebooks".into()),
+            audiobook_library_path: Some("/lib/audiobooks".into()),
+            scan_interval_hours: None,
+        }
+    }
+
+    #[test]
+    fn precedence_library_path_resolves_ebook() {
+        let path = precedence_library_path(&settings(), "ebook").unwrap();
+        assert_eq!(path.as_deref(), Some("/lib/ebooks"));
+    }
+
+    #[test]
+    fn precedence_library_path_resolves_audiobook() {
+        let path = precedence_library_path(&settings(), "audiobook").unwrap();
+        assert_eq!(path.as_deref(), Some("/lib/audiobooks"));
+    }
+
+    #[test]
+    fn precedence_library_path_returns_none_for_an_unconfigured_path() {
+        let unconfigured = Settings::default();
+        let path = precedence_library_path(&unconfigured, "ebook").unwrap();
+        assert_eq!(path, None);
+    }
+
+    #[test]
+    fn precedence_library_path_rejects_an_unrecognized_key() {
+        let err = precedence_library_path(&settings(), "comics").unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("library must be \"ebook\" or \"audiobook\""));
+    }
+}
