@@ -216,6 +216,13 @@ skip = [
     { name = "foldhash", version = "0.1.5" },
     { name = "foldhash", version = "0.2.0" },
 
+    # --- hashlink (rusqlite vs sqlx split) ---
+    # 0.9.1 from rusqlite 0.32.1 (omnibus-frontend's mobile-offline SQLite
+    # store); 0.10.0 from sqlx-core 0.8.6. Downstream instance of the
+    # rusqlite/sqlx libsqlite3-sys coupling from issue #1529.
+    { name = "hashlink", version = "0.9.1" },
+    { name = "hashlink", version = "0.10.0" },
+
     # --- convert_case (proc-macro only) ---
     # 0.4 from derive_more 0.99.20 (transitive via Dioxus desktop/mobile);
     # 0.8 from Dioxus proc-macro crates; 0.10 from derive_more (dioxus-fullstack).
