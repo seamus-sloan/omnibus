@@ -23,6 +23,8 @@ fn user(id: i64, username: &str) -> UserSummary {
         can_edit: true,
         can_download: true,
         kindle_email: None,
+        display_name: None,
+        has_avatar: false,
     }
 }
 

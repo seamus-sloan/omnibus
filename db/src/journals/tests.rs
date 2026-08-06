@@ -650,3 +650,41 @@ async fn journal_id_for_client_id_propagates_db_error_when_pool_is_closed() {
         .unwrap_err();
     assert!(matches!(err, JournalError::Sqlx(_)));
 }
+
+#[tokio::test]
+async fn journal_entries_attribute_to_the_display_name_when_one_is_set() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "cool-guy-7").await;
+    let uuid = seed(&pool, "/lib", "Book A").await;
+    crate::auth::set_display_name(&pool, user, Some("Seamus"))
+        .await
+        .unwrap();
+
+    let saved = create_journal_entry(&pool, user, &create(&uuid, "loved it", None))
+        .await
+        .unwrap();
+
+    assert_eq!(saved.author_name, "Seamus");
+    assert!(!saved.author_has_avatar);
+    let listed = list_journal_entries(&pool, user, &uuid).await.unwrap();
+    assert_eq!(listed[0].author_name, "Seamus");
+}
+
+#[tokio::test]
+async fn journal_entries_report_the_authors_avatar_presence() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let uuid = seed(&pool, "/lib", "Book A").await;
+    crate::auth::upsert_user_avatar(&pool, user, "image/png", b"bytes")
+        .await
+        .unwrap();
+
+    let entries = {
+        create_journal_entry(&pool, user, &create(&uuid, "loved it", None))
+            .await
+            .unwrap();
+        list_journal_entries(&pool, user, &uuid).await.unwrap()
+    };
+
+    assert!(entries[0].author_has_avatar);
+}

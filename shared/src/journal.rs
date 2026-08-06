@@ -70,7 +70,11 @@ pub struct JournalEntry {
     pub id: i64,
     pub book_uuid: String,
     pub author_id: i64,
+    /// The author's display name, falling back to their username.
     pub author_name: String,
+    /// Whether the author has an avatar to render in place of their monogram.
+    #[serde(default)]
+    pub author_has_avatar: bool,
     pub body_md: String,
     pub body_html: String,
     pub progress: Option<u8>,

@@ -4,6 +4,7 @@
 //! validation, first-user-admin creation, per-account lockout, and
 //! SHA-256-hashed session tokens with absolute + idle expiry.
 
+mod avatars;
 mod device;
 mod login;
 mod password;
@@ -12,6 +13,7 @@ mod session_key;
 mod token;
 mod users;
 
+pub use avatars::{delete_user_avatar, get_user_avatar, upsert_user_avatar, UserAvatar};
 pub use device::{
     list_devices_for_user, register_device, validate_client_version, validate_device_name,
     LIST_DEVICES_LIMIT, MAX_CLIENT_VERSION_CHARS, MAX_DEVICES_PER_USER, MAX_DEVICE_NAME_CHARS,
@@ -30,8 +32,8 @@ pub use token::{
 pub use users::{
     admin_create_user, admin_set_password, change_password, create_user, delete_user,
     get_kindle_email, get_user_by_id, get_user_by_username, list_users, promote_to_admin,
-    registration_enabled, set_kindle_email, set_registration_enabled, unlock_user,
-    update_user_permissions,
+    registration_enabled, set_display_name, set_kindle_email, set_registration_enabled,
+    unlock_user, update_user_permissions, DISPLAY_NAME_MAX_LEN,
 };
 
 use sqlx::Row;
@@ -89,6 +91,12 @@ pub struct User {
     pub can_download: bool,
     /// Send-to-Kindle destination, or `None` when unconfigured.
     pub kindle_email: Option<String>,
+    /// Presentation name shown to other users, or `None` to fall back to
+    /// `username`. `username` stays the login and admin identity.
+    pub display_name: Option<String>,
+    /// Whether a `user_avatars` row exists — the avatar bytes themselves are
+    /// only ever read by the serving handler.
+    pub has_avatar: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,6 +152,8 @@ pub(crate) fn row_to_user(row: &sqlx::sqlite::SqliteRow) -> User {
         can_edit: row.get::<i64, _>("can_edit") != 0,
         can_download: row.get::<i64, _>("can_download") != 0,
         kindle_email: row.get("kindle_email"),
+        display_name: row.get("display_name"),
+        has_avatar: row.get::<i64, _>("has_avatar") != 0,
     }
 }
 

@@ -45,6 +45,8 @@ async fn insert_user(pool: &SqlitePool, username: &str, is_admin: bool) -> User 
         can_edit: is_admin,
         can_download: true,
         kindle_email: None,
+        display_name: None,
+        has_avatar: false,
     }
 }
 

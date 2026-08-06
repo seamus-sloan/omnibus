@@ -21,9 +21,12 @@ pub mod markdown;
 mod tests;
 
 /// Columns + author join shared by every entry read. `user_id` surfaces as
-/// `author_id`; `users.username` as `author_name`.
+/// `author_id`; the author's display name (falling back to their username) as
+/// `author_name`.
 const SELECT_ENTRY: &str = "SELECT je.id, je.book_uuid, je.user_id AS author_id,
-        u.username AS author_name, je.body_md, je.progress, je.status,
+        COALESCE(u.display_name, u.username) AS author_name,
+        EXISTS(SELECT 1 FROM user_avatars a WHERE a.user_id = u.id) AS author_has_avatar,
+        je.body_md, je.progress, je.status,
         je.client_id, je.created_at, je.updated_at
    FROM journal_entries je
    JOIN users u ON u.id = je.user_id";
@@ -301,6 +304,7 @@ fn row_to_entry(row: &sqlx::sqlite::SqliteRow) -> Result<JournalEntry, JournalEr
         book_uuid: row.try_get("book_uuid")?,
         author_id: row.try_get("author_id")?,
         author_name: row.try_get("author_name")?,
+        author_has_avatar: row.try_get::<i64, _>("author_has_avatar")? != 0,
         body_md,
         body_html,
         progress: progress.and_then(|p| u8::try_from(p).ok()),

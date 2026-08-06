@@ -1597,3 +1597,44 @@ async fn list_visible_shelves_returns_empty_cover_uuids_for_empty_shelf() {
     let summary = shelves.iter().find(|s| s.id == shelf.id).unwrap();
     assert!(summary.cover_uuids.is_empty());
 }
+
+#[tokio::test]
+async fn wishlist_shelf_is_named_after_the_display_name_when_one_is_set() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = make_user(&pool, "cool-guy-7", false).await;
+    crate::auth::set_display_name(&pool, user, Some("Seamus"))
+        .await
+        .unwrap();
+
+    // A shelf provisioned *after* the name is set composes from it directly,
+    // rather than relying on `set_display_name`'s rename.
+    crate::shelves::provision_wishlist_shelves(&pool)
+        .await
+        .unwrap();
+
+    let shelf = get_shelf(&pool, wishlist_shelf_id(&pool, user).await)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(shelf.name, "Seamus's Wishlist");
+}
+
+#[tokio::test]
+async fn shelf_owner_attribution_uses_the_display_name_when_one_is_set() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let owner = make_user(&pool, "cool-guy-7", false).await;
+    let id = create_shelf(&pool, owner, &manual_req("Favourites", vec![]))
+        .await
+        .unwrap()
+        .id;
+
+    crate::auth::set_display_name(&pool, owner, Some("Seamus"))
+        .await
+        .unwrap();
+
+    let shelf = get_shelf(&pool, id).await.unwrap().unwrap();
+    assert_eq!(shelf.owner_username, "Seamus");
+    let listed = list_visible_shelves(&pool, owner, false).await.unwrap();
+    let row = listed.iter().find(|s| s.id == id).unwrap();
+    assert_eq!(row.owner_username, "Seamus");
+}

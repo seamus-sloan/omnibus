@@ -8,7 +8,7 @@
 
 use crate::books::BooksError;
 
-mod provision;
+pub(crate) mod provision;
 mod read;
 mod rules;
 mod write;

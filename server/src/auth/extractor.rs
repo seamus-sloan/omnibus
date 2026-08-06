@@ -26,6 +26,8 @@ pub struct AuthUser {
     pub can_edit: bool,
     pub can_download: bool,
     pub kindle_email: Option<String>,
+    pub display_name: Option<String>,
+    pub has_avatar: bool,
     pub session_id: i64,
     pub session_kind: SessionKind,
 }
@@ -41,6 +43,8 @@ impl AuthUser {
             can_edit: self.can_edit,
             can_download: self.can_download,
             kindle_email: self.kindle_email.clone(),
+            display_name: self.display_name.clone(),
+            has_avatar: self.has_avatar,
         }
     }
 }
@@ -125,6 +129,8 @@ fn build_auth_user(user: auth_db::User, session: auth_db::Session) -> AuthUser {
         can_edit: user.can_edit,
         can_download: user.can_download,
         kindle_email: user.kindle_email,
+        display_name: user.display_name,
+        has_avatar: user.has_avatar,
         session_id: session.id,
         session_kind: session.kind,
     }

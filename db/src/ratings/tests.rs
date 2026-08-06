@@ -357,3 +357,24 @@ async fn list_other_ratings_caps_response_at_hard_limit() {
         "list_other_ratings must not return more than LIST_OTHER_RATINGS_LIMIT rows",
     );
 }
+
+#[tokio::test]
+async fn list_other_ratings_attributes_to_the_display_name_and_reports_avatars() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    let alice = seed_user(&pool, "alice").await;
+    let bob = seed_user(&pool, "cool-guy-7").await;
+    crate::auth::set_display_name(&pool, bob, Some("Bob B."))
+        .await
+        .unwrap();
+    crate::auth::upsert_user_avatar(&pool, bob, "image/png", b"bytes")
+        .await
+        .unwrap();
+    set_rating(&pool, bob, &update(&uuid, 4.5)).await.unwrap();
+
+    let ratings = list_other_ratings(&pool, alice, &uuid).await.unwrap();
+
+    assert_eq!(ratings.len(), 1);
+    assert_eq!(ratings[0].username, "Bob B.");
+    assert!(ratings[0].has_avatar);
+}

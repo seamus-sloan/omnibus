@@ -118,7 +118,9 @@ pub async fn list_other_ratings(
         return Ok(vec![]);
     };
     let rows = sqlx::query(
-        "SELECT ur.user_id, u.username, ur.half_stars, ur.updated_at
+        "SELECT ur.user_id, COALESCE(u.display_name, u.username) AS username,
+                EXISTS(SELECT 1 FROM user_avatars a WHERE a.user_id = u.id) AS has_avatar,
+                ur.half_stars, ur.updated_at
            FROM user_ratings ur
            JOIN users u ON u.id = ur.user_id
           WHERE ur.book_uuid = ? AND ur.user_id != ?
@@ -136,6 +138,7 @@ pub async fn list_other_ratings(
             Ok(AttributedRating {
                 user_id: row.try_get("user_id")?,
                 username: row.try_get("username")?,
+                has_avatar: row.try_get::<i64, _>("has_avatar")? != 0,
                 stars: stars_from_half_stars(row.try_get("half_stars")?),
                 updated_at: row.try_get("updated_at")?,
             })

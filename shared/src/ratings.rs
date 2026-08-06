@@ -66,7 +66,11 @@ pub struct RatingRecord {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AttributedRating {
     pub user_id: i64,
+    /// The rater's display name, falling back to their username.
     pub username: String,
+    /// Whether the rater has an avatar to render in place of their monogram.
+    #[serde(default)]
+    pub has_avatar: bool,
     /// Star rating in `0.5..=5.0`, in half-star steps.
     pub stars: f32,
     pub updated_at: i64,
