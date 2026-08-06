@@ -153,6 +153,18 @@ actor ImageCache {
         return decoded
     }
 
+    /// Drop one key's cached bytes and its validator.
+    ///
+    /// Needed because `revalidate` only checks back every `revalidateAfter`
+    /// seconds: after *this* device replaces its own avatar, the new picture
+    /// would otherwise not appear for up to five minutes. Other devices still
+    /// wait for the normal window, same as covers.
+    func invalidate(_ key: String) {
+        memory.removeObject(forKey: key as NSString)
+        try? FileManager.default.removeItem(at: diskURL(for: key))
+        try? FileManager.default.removeItem(at: etagURL(for: key))
+    }
+
     func clearDisk() {
         try? FileManager.default.removeItem(at: directory)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
