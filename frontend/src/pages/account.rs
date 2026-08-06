@@ -332,6 +332,56 @@ pub(crate) fn KindleEmailCard() -> Element {
     }
 }
 
+/// Signals owned by [`ChangePasswordCard`].
+#[cfg(not(feature = "mobile"))]
+#[derive(Clone, Copy)]
+struct ChangePasswordSignals {
+    current: Signal<String>,
+    new_password: Signal<String>,
+    msg: Signal<Option<String>>,
+    msg_is_error: Signal<bool>,
+    in_flight: Signal<bool>,
+}
+
+/// Submit handler for the change-password form: validates both fields are
+/// non-empty locally, then round-trips through `data::change_password`.
+/// Mirrors `kindle_save_handler`'s shape above.
+#[cfg(not(feature = "mobile"))]
+fn change_password_submit_handler(
+    server_url: String,
+    mut signals: ChangePasswordSignals,
+) -> impl FnMut(Event<FormData>) + 'static {
+    move |evt: Event<FormData>| {
+        evt.prevent_default();
+        let cur = (signals.current)();
+        let next = (signals.new_password)();
+        if cur.is_empty() || next.is_empty() {
+            signals
+                .msg
+                .set(Some("Enter your current and new password.".to_string()));
+            signals.msg_is_error.set(true);
+            return;
+        }
+        let url = server_url.clone();
+        signals.in_flight.set(true);
+        spawn(async move {
+            match data::change_password(&url, cur, next).await {
+                Ok(()) => {
+                    signals.current.set(String::new());
+                    signals.new_password.set(String::new());
+                    signals.msg.set(Some("Password changed.".to_string()));
+                    signals.msg_is_error.set(false);
+                }
+                Err(e) => {
+                    signals.msg.set(Some(e.to_string()));
+                    signals.msg_is_error.set(true);
+                }
+            }
+            signals.in_flight.set(false);
+        });
+    }
+}
+
 /// Self-service change-password card (web Account section). Requires the
 /// current password to authorize, validates the new one against the same
 /// policy as registration (strength meter + requirements are advisory; the
@@ -341,42 +391,23 @@ pub(crate) fn KindleEmailCard() -> Element {
 #[component]
 fn ChangePasswordCard() -> Element {
     let server_url = use_server_url();
-    let mut current = use_signal(String::new);
-    let mut new_password = use_signal(String::new);
-    let mut msg = use_signal(|| None::<String>);
-    let mut msg_is_error = use_signal(|| false);
-    let mut in_flight = use_signal(|| false);
+    let signals = ChangePasswordSignals {
+        current: use_signal(String::new),
+        new_password: use_signal(String::new),
+        msg: use_signal(|| None::<String>),
+        msg_is_error: use_signal(|| false),
+        in_flight: use_signal(|| false),
+    };
+    let mut current = signals.current;
+    let mut new_password = signals.new_password;
+    let mut msg = signals.msg;
+    let msg_is_error = signals.msg_is_error;
+    let in_flight = signals.in_flight;
 
     let pw = new_password();
     let (score, score_label, rules) = score_password(&pw);
 
-    let on_submit = move |evt: Event<FormData>| {
-        evt.prevent_default();
-        let cur = current();
-        let next = new_password();
-        if cur.is_empty() || next.is_empty() {
-            msg.set(Some("Enter your current and new password.".to_string()));
-            msg_is_error.set(true);
-            return;
-        }
-        let url = server_url.clone();
-        in_flight.set(true);
-        spawn(async move {
-            match data::change_password(&url, cur, next).await {
-                Ok(()) => {
-                    current.set(String::new());
-                    new_password.set(String::new());
-                    msg.set(Some("Password changed.".to_string()));
-                    msg_is_error.set(false);
-                }
-                Err(e) => {
-                    msg.set(Some(e.to_string()));
-                    msg_is_error.set(true);
-                }
-            }
-            in_flight.set(false);
-        });
-    };
+    let on_submit = change_password_submit_handler(server_url, signals);
 
     rsx! {
         section { class: "card", "data-testid": "account-password-card",

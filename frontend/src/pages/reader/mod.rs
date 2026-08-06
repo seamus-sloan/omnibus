@@ -277,28 +277,9 @@ fn use_reader_signals(uuid: &str, theme: Signal<Theme>) -> ReaderSignals {
         crate::contexts::use_server_url(),
     );
 
-    // Auto read-status: opening an `Unread` book marks it `Reading`; the
-    // first relocate whose range reaches the book's end marks it `Finished`
-    // (never a downgrade). Effect-only, like the session tracker above.
-    let at_end = use_memo(move || loc.read().at_end);
-    crate::read_status_auto::use_auto_read_status(
-        uuid.to_string(),
-        crate::contexts::use_server_url(),
-        at_end,
-    );
-
-    // A same-component book swap (SPA nav between `/read/:uuid` routes)
-    // keeps the previous book's relocate snapshot until the new book's
-    // first relocate — reset it so a stale `at_end` can't mark the next
-    // book finished before that relocate arrives.
-    {
-        let mut loc = loc;
-        let uuid_dep = uuid.to_string();
-        use_effect(use_reactive!(|uuid_dep| {
-            let _ = &uuid_dep;
-            loc.set(RelocateData::default());
-        }));
-    }
+    // Auto read-status, plus the stale-relocate reset on a same-component
+    // book swap. Effect-only, like the session tracker above.
+    use_auto_read_status_for_reader(uuid, loc);
 
     #[cfg(feature = "web")]
     install_reader_web_interop(
@@ -358,6 +339,31 @@ fn use_reader_signals(uuid: &str, theme: Signal<Theme>) -> ReaderSignals {
         book_meta,
         chrome_hidden,
     }
+}
+
+/// Auto read-status wiring for the reader: opening an `Unread` book marks it
+/// `Reading`; the first relocate whose range reaches the book's end marks it
+/// `Finished` (never a downgrade). Also resets `loc` on a same-component book
+/// swap (SPA nav between `/read/:uuid` routes) — otherwise a stale `at_end`
+/// from the previous book could mark the next one finished before its first
+/// relocate arrives. Split out of [`use_reader_signals`] as its own hook
+/// (call-order-stable, so it's still safe to invoke unconditionally from the
+/// component body) — mirrors `use_retarget_playback`/
+/// `use_marquee_title_refresh` in `pages/listen/mobile/effects.rs`.
+fn use_auto_read_status_for_reader(uuid: &str, loc: Signal<RelocateData>) {
+    let at_end = use_memo(move || loc.read().at_end);
+    crate::read_status_auto::use_auto_read_status(
+        uuid.to_string(),
+        crate::contexts::use_server_url(),
+        at_end,
+    );
+
+    let mut loc = loc;
+    let uuid_dep = uuid.to_string();
+    use_effect(use_reactive!(|uuid_dep| {
+        let _ = &uuid_dep;
+        loc.set(RelocateData::default());
+    }));
 }
 
 /// Display strings/values the reader chrome renders, derived from `loc` and `book_meta`.
