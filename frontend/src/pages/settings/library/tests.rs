@@ -151,3 +151,29 @@ fn scan_library_handler_flips_in_flight_immediately_on_click() {
     }
     VirtualDom::new(AssertScanInFlight).rebuild_in_place();
 }
+
+#[test]
+fn rewrite_all_epubs_handler_flips_in_flight_immediately_on_click() {
+    #[component]
+    fn AssertRewriteInFlight() -> Element {
+        let status = Signal::new(None::<String>);
+        let status_is_error = Signal::new(false);
+        let rewrite_in_flight = Signal::new(false);
+
+        let mut handler = rewrite_all_epubs_handler(
+            "http://127.0.0.1:0".to_string(),
+            status,
+            status_is_error,
+            rewrite_in_flight,
+        );
+        assert!(!rewrite_in_flight());
+        handler(blank_mouse_event());
+
+        // The in-flight flag flips synchronously, before the request itself
+        // ever resolves — that's what disables the button on click.
+        assert!(rewrite_in_flight());
+
+        rsx! {}
+    }
+    VirtualDom::new(AssertRewriteInFlight).rebuild_in_place();
+}

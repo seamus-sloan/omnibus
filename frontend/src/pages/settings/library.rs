@@ -26,6 +26,7 @@ pub fn LibraryLocationSection() -> Element {
     let refetch_in_flight = use_signal(|| false);
     let backfill_in_flight = use_signal(|| false);
     let scan_in_flight = use_signal(|| false);
+    let rewrite_in_flight = use_signal(|| false);
     // Bumped after a successful save to re-trigger the library-refresh effect.
     let library_refresh = use_signal(|| 0u32);
 
@@ -75,6 +76,7 @@ pub fn LibraryLocationSection() -> Element {
                             refetch_in_flight,
                             backfill_in_flight,
                             scan_in_flight,
+                            rewrite_in_flight,
                             library_refresh,
                         },
                     }
@@ -357,6 +359,41 @@ fn backfill_chapters_handler(
     }
 }
 
+/// Returns the "Bake Overrides Into EPUBs" button's `onclick` handler
+/// (#959), mirroring [`scan_library_handler`]'s immediate-disable-then-report
+/// shape. The run itself never fails wholesale — a per-book failure lands in
+/// the returned summary's `errors` — so the status line reports the summary
+/// counts and only turns to an error style when `errors` is non-empty.
+fn rewrite_all_epubs_handler(
+    url: String,
+    mut status: Signal<Option<String>>,
+    mut status_is_error: Signal<bool>,
+    mut rewrite_in_flight: Signal<bool>,
+) -> impl FnMut(MouseEvent) {
+    move |_evt: MouseEvent| {
+        let url = url.clone();
+        rewrite_in_flight.set(true);
+        spawn(async move {
+            match data::rewrite_all_epubs(&url).await {
+                Ok(summary) => {
+                    status.set(Some(format!(
+                        "Rewrote {} EPUB(s); skipped {}; {} error(s).",
+                        summary.rewritten,
+                        summary.skipped,
+                        summary.errors.len()
+                    )));
+                    status_is_error.set(!summary.errors.is_empty());
+                }
+                Err(e) => {
+                    status.set(Some(format!("Failed to rewrite EPUBs: {e}")));
+                    status_is_error.set(true);
+                }
+            }
+            rewrite_in_flight.set(false);
+        });
+    }
+}
+
 /// Shared status line plus each maintenance job's own in-flight flag.
 /// Grouped so [`MaintenanceActions`] stays under the prop cap.
 #[derive(Copy, Clone, PartialEq)]
@@ -366,6 +403,7 @@ struct MaintenanceIo {
     refetch_in_flight: Signal<bool>,
     backfill_in_flight: Signal<bool>,
     scan_in_flight: Signal<bool>,
+    rewrite_in_flight: Signal<bool>,
     library_refresh: Signal<u32>,
 }
 
@@ -379,6 +417,7 @@ fn MaintenanceActions(io: MaintenanceIo) -> Element {
         refetch_in_flight,
         backfill_in_flight,
         scan_in_flight,
+        rewrite_in_flight,
         library_refresh,
     } = io;
     let server_url = use_server_url();
@@ -395,8 +434,14 @@ fn MaintenanceActions(io: MaintenanceIo) -> Element {
         status_is_error,
         refetch_in_flight,
     );
-    let on_backfill =
-        backfill_chapters_handler(server_url, status, status_is_error, backfill_in_flight);
+    let on_backfill = backfill_chapters_handler(
+        server_url.clone(),
+        status,
+        status_is_error,
+        backfill_in_flight,
+    );
+    let on_rewrite =
+        rewrite_all_epubs_handler(server_url, status, status_is_error, rewrite_in_flight);
 
     rsx! {
         button {
@@ -422,6 +467,14 @@ fn MaintenanceActions(io: MaintenanceIo) -> Element {
             "data-testid": "backfill-chapters",
             onclick: on_backfill,
             "Extract Audiobook Chapters"
+        }
+        button {
+            r#type: "button",
+            class: "btn ghost",
+            disabled: rewrite_in_flight(),
+            "data-testid": "rewrite-all-epubs",
+            onclick: on_rewrite,
+            "Bake Overrides Into EPUBs"
         }
     }
 }

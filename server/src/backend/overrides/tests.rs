@@ -712,3 +712,74 @@ async fn api_delete_cover_returns_500_when_clear_fails() {
         .expect("request should succeed");
     assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
+
+// -------------------------------------------------------------------
+// POST /api/admin/rewrite-all-epubs (#959) — the fleet-wide bulk admin
+// action. Count-accuracy over a mixed seed (override/no-override/no-EPUB)
+// is covered at the db layer (`epub_rewrite::tests`); these just prove the
+// route is wired up and admin-gated.
+// -------------------------------------------------------------------
+
+#[tokio::test]
+async fn post_rewrite_all_epubs_returns_401_when_anonymous() {
+    let (app, _state, _pool) = fixture().await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/rewrite-all-epubs")
+                .method("POST")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn post_rewrite_all_epubs_returns_403_when_not_admin() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "reader").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/rewrite-all-epubs")
+                .method("POST")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn post_rewrite_all_epubs_returns_200_with_a_zero_summary_when_no_overrides_exist() {
+    let (app, _state, pool) = fixture().await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+    // A book exists but carries no active override — the run must succeed
+    // with nothing to rewrite rather than touching it.
+    seed_book(&pool, "/lib", "Untouched").await;
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/rewrite-all-epubs")
+                .method("POST")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let summary: omnibus_shared::BulkRewriteSummary = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(summary.rewritten, 0);
+    assert_eq!(summary.skipped, 0);
+    assert!(summary.errors.is_empty());
+}

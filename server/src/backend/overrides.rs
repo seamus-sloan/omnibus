@@ -15,7 +15,7 @@ use omnibus_shared::MetadataOverrides;
 
 use super::image_upload::extract_validated_image;
 use super::{internal, AppState};
-use crate::auth::AuthUser;
+use crate::auth::{AdminUser, AuthUser};
 
 /// Save metadata overrides for a book. Requires `can_edit` or admin.
 pub(super) async fn post_ebook_overrides(
@@ -234,6 +234,22 @@ async fn persist_cover(
         return Err(internal("upsert_metadata_overrides", e));
     }
     Ok(())
+}
+
+/// Admin-only: bake every book's active metadata/cover overrides into its
+/// EPUB container in one pass (#959) — the fleet-wide sibling of the
+/// per-book export bake `get_ebook_download` already performs on demand.
+/// Skips books without an active override or without an EPUB; a per-book
+/// failure is collected in the returned summary rather than aborting the
+/// run. Mobile-facing REST; the web counterpart is `rpc_rewrite_all_epubs`.
+pub(super) async fn post_rewrite_all_epubs(
+    _admin: AdminUser,
+    State(state): State<AppState>,
+) -> Response {
+    match db::rewrite_all_epubs_with_overrides(&state.pool).await {
+        Ok(summary) => Json(summary).into_response(),
+        Err(e) => internal("rewrite_all_epubs", e),
+    }
 }
 
 /// Best-effort delete of the on-disk override cover after a DB failure in

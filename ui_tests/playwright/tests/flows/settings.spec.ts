@@ -81,6 +81,7 @@ test("renders the Library Location section controls", async ({ page }) => {
   await expect(scanIntervalInput(page)).toBeVisible();
   await expect(saveButton(page)).toBeVisible();
   await expect(page.getByTestId("scan-library")).toBeVisible();
+  await expect(page.getByTestId("rewrite-all-epubs")).toBeVisible();
   await expect(settingsStatus(page)).toBeAttached();
   await expect(page.getByTestId("ebook-library-summary")).toBeAttached();
   await expect(page.getByTestId("audiobook-library-summary")).toBeAttached();
@@ -333,6 +334,68 @@ test("shows an error status when a manual library scan fails", async ({
   await expect(settingsStatus(page)).toContainText(
     "Failed to start library scan",
   );
+  await expect(settingsStatus(page)).toHaveClass(/error/);
+});
+
+test("bakes overrides into every EPUB and reports the run summary", async ({
+  page,
+}) => {
+  await gotoReady(page, SETTINGS_LIBRARY);
+
+  await page.route("**/api/rpc/admin/rewrite-all-epubs", (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ rewritten: 2, skipped: 1, errors: [] }),
+      });
+    }
+    return route.continue();
+  });
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/admin/rewrite-all-epubs",
+      expectedStatus: 200,
+    },
+    async () => page.getByTestId("rewrite-all-epubs").click(),
+  );
+
+  await expect(settingsStatus(page)).toHaveText(
+    "Rewrote 2 EPUB(s); skipped 1; 0 error(s).",
+  );
+  await expect(settingsStatus(page)).not.toHaveClass(/error/);
+});
+
+test("shows an error status when the bulk EPUB rewrite fails", async ({
+  page,
+}) => {
+  await gotoReady(page, SETTINGS_LIBRARY);
+
+  await page.route("**/api/rpc/admin/rewrite-all-epubs", (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({
+        status: 500,
+        contentType: "text/plain",
+        body: "forced failure",
+      });
+    }
+    return route.continue();
+  });
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/admin/rewrite-all-epubs",
+      expectedStatus: 500,
+    },
+    async () => page.getByTestId("rewrite-all-epubs").click(),
+  );
+
+  await expect(settingsStatus(page)).toContainText("Failed to rewrite EPUBs");
   await expect(settingsStatus(page)).toHaveClass(/error/);
 });
 

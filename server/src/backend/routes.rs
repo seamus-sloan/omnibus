@@ -127,6 +127,11 @@ fn metadata_override_routes() -> Router<AppState> {
             "/api/ebooks/{uuid}/cover",
             delete(overrides::delete_ebook_cover),
         )
+        // Mirrors the /api/reindex-style admin triggers.
+        .route(
+            "/api/admin/rewrite-all-epubs",
+            post(overrides::post_rewrite_all_epubs),
+        )
 }
 
 /// F2.1 progress sync — mobile-facing REST. Web hits the analogous

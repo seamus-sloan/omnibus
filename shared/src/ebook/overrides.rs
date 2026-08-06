@@ -335,3 +335,18 @@ fn apply_delta(current: &[String], remove: &[String], add: &[String]) -> Vec<Str
     }
     result
 }
+
+/// Summary of a fleet-wide EPUB override bake: each book counts exactly once, into `rewritten`, `skipped`, or `errors`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BulkRewriteSummary {
+    pub rewritten: usize,
+    pub skipped: usize,
+    pub errors: Vec<BulkRewriteError>,
+}
+
+/// One per-book failure from a fleet-wide EPUB rewrite pass.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BulkRewriteError {
+    pub book_uuid: String,
+    pub message: String,
+}

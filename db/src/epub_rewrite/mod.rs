@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
-use omnibus_shared::EbookMetadata;
+use omnibus_shared::{BulkRewriteError, BulkRewriteSummary, EbookMetadata};
 use sqlx::SqlitePool;
 
 use archive::rewrite_archive;
@@ -277,6 +277,51 @@ fn rewrite_blocking(src: &Path, dst: &Path, book: &EbookMetadata) -> anyhow::Res
         |raw| transform_opf(raw, book),
         cover_arg,
     )
+}
+
+/// Rewrites every book's export-EPUB cache to bake in its active override, the fleet-wide sibling of the per-book [`rewritten_epub_path`] bake; a per-book failure is recorded rather than aborting the run.
+pub async fn rewrite_all_epubs_with_overrides(
+    pool: &SqlitePool,
+) -> Result<BulkRewriteSummary, EpubRewriteError> {
+    // An existing `metadata_overrides` row IS "has an active override" — the
+    // write paths that clear overrides entirely (`delete_metadata_overrides`,
+    // `clear_cover_override`) delete the row rather than leaving an empty one.
+    let uuids: Vec<String> = sqlx::query_scalar("SELECT book_uuid FROM metadata_overrides")
+        .fetch_all(pool)
+        .await
+        .map_err(crate::books::BooksError::Db)?;
+
+    let mut summary = BulkRewriteSummary::default();
+    for uuid in uuids {
+        let book_id = match crate::books::resolve_book_id_by_uuid(pool, &uuid).await? {
+            Some(id) => id,
+            // Ghosted: the override row outlived its book (source file
+            // removed by a scan, or the book deleted concurrently).
+            None => {
+                summary.skipped += 1;
+                continue;
+            }
+        };
+        let source = match crate::books::book_file_path(pool, book_id, "EPUB").await? {
+            Some(path) => path,
+            // No EPUB to bake into — an audiobook-only or comic-only book.
+            None => {
+                summary.skipped += 1;
+                continue;
+            }
+        };
+        match rewritten_epub_path(pool, book_id, &source).await {
+            Ok(Some(_)) => summary.rewritten += 1,
+            // The override cleared between the listing query above and this
+            // call (a concurrent delete) — no longer this pass's problem.
+            Ok(None) => summary.skipped += 1,
+            Err(e) => summary.errors.push(BulkRewriteError {
+                book_uuid: uuid,
+                message: e.to_string(),
+            }),
+        }
+    }
+    Ok(summary)
 }
 
 /// A zip entry name from an in-archive path: `to_string_lossy` with backslashes
