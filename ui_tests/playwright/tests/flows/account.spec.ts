@@ -4,13 +4,16 @@ import { expectMutation } from "../utils/api";
 import { TEST_PASSWORD } from "../utils/auth";
 import { expectNavVisible, gotoReady } from "../utils/nav";
 
-// F4.3 — the Send-to-Kindle destination address lives in the Account section
-// of the unified Settings sidebar (#1324, #1345); the legacy standalone
-// `/account` page now redirects there (mirroring `/logs`) so there is a
-// single, consistently-chromed Account surface regardless of entry point.
+// The unified Settings sidebar (#1324, #1345) splits the per-user surfaces
+// into their own sections: Account holds the password card, Kindle the
+// Send-to-Kindle destination address (F4.3), Kobo the wireless-sync devices
+// (#927/#1439). The legacy standalone `/account` page redirects into Account
+// (mirroring `/logs`) so there is one consistently-chromed entry point.
 // The seeded session (global setup) is an authed admin, which is a superset
-// of the plain-user surface this page needs.
+// of the plain-user surface these sections need.
 const ACCOUNT = "/settings?section=account";
+const KINDLE = "/settings?section=kindle";
+const KOBO = "/settings?section=kobo";
 
 const emailInput = (page: Page) => page.getByTestId("kindle-email-input");
 const currentPassword = (page: Page) =>
@@ -21,15 +24,10 @@ const changeStatus = (page: Page) => page.getByTestId("change-password-status");
 test("renders the account section layout", async ({ page }) => {
   await gotoReady(page, ACCOUNT);
 
-  await expect(
-    page.getByRole("heading", { level: 2, name: "Account" }),
-  ).toBeVisible();
-  await expect(page.getByTestId("account-kindle-card")).toBeVisible();
-  await expect(emailInput(page)).toBeVisible();
-  await expect(page.getByTestId("kindle-email-save")).toBeVisible();
-  await expect(page.getByTestId("kindle-email-connected")).toBeAttached();
-
-  // The change-password card sits below the Kindle card in the same section.
+  await expect(page.getByTestId("settings-nav-account")).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
   await expect(
     page.getByRole("heading", { level: 2, name: "Password" }),
   ).toBeVisible();
@@ -38,7 +36,38 @@ test("renders the account section layout", async ({ page }) => {
   await expect(newPassword(page)).toBeVisible();
   await expect(page.getByTestId("change-password-submit")).toBeVisible();
 
-  // Kobo wireless sync card (#927/#1439).
+  // Kindle and Kobo have their own sections now — not this one.
+  await expect(page.getByTestId("account-kindle-card")).toHaveCount(0);
+  await expect(page.getByTestId("kobo-devices-card")).toHaveCount(0);
+
+  await expectNavVisible(page);
+});
+
+test("renders the Kindle section layout", async ({ page }) => {
+  await gotoReady(page, KINDLE);
+
+  await expect(page.getByTestId("settings-nav-kindle")).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await expect(
+    page.getByRole("heading", { level: 2, name: "Kindle" }),
+  ).toBeVisible();
+  await expect(page.getByTestId("account-kindle-card")).toBeVisible();
+  await expect(emailInput(page)).toBeVisible();
+  await expect(page.getByTestId("kindle-email-save")).toBeVisible();
+  await expect(page.getByTestId("kindle-email-connected")).toBeAttached();
+
+  await expectNavVisible(page);
+});
+
+test("renders the Kobo section layout", async ({ page }) => {
+  await gotoReady(page, KOBO);
+
+  await expect(page.getByTestId("settings-nav-kobo")).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
   await expect(page.getByTestId("kobo-devices-card")).toBeVisible();
 
   await expectNavVisible(page);
@@ -50,14 +79,11 @@ test("the legacy /account route redirects into the Account section", async ({
   await gotoReady(page, "/account");
 
   await expect(page).toHaveURL(/\/settings\??$/);
-  await expect(
-    page.getByRole("heading", { level: 2, name: "Account" }),
-  ).toBeVisible();
-  await expect(page.getByTestId("account-kindle-card")).toBeVisible();
+  await expect(page.getByTestId("account-password-card")).toBeVisible();
 });
 
 test("saves the Kindle email and shows a success status", async ({ page }) => {
-  await gotoReady(page, ACCOUNT);
+  await gotoReady(page, KINDLE);
 
   const address = "reader@kindle.com";
   await emailInput(page).fill(address);
@@ -82,7 +108,7 @@ test("saves the Kindle email and shows a success status", async ({ page }) => {
 test("shows an error status when saving the Kindle email fails", async ({
   page,
 }) => {
-  await gotoReady(page, ACCOUNT);
+  await gotoReady(page, KINDLE);
 
   await emailInput(page).fill("reader@kindle.com");
 

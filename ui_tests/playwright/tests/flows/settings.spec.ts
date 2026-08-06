@@ -58,8 +58,10 @@ test("renders the settings sidebar with every admin section", async ({
   await expect(
     page.getByRole("heading", { level: 1, name: "Settings" }),
   ).toBeVisible();
-  // The seeded admin sees the Account item plus every server-config section.
+  // The seeded admin sees the per-user items plus every server-config section.
   await expect(page.getByTestId("settings-nav-account")).toBeVisible();
+  await expect(page.getByTestId("settings-nav-kindle")).toBeVisible();
+  await expect(page.getByTestId("settings-nav-kobo")).toBeVisible();
   await expect(page.getByTestId("settings-nav-library")).toBeVisible();
   await expect(page.getByTestId("settings-nav-metadata")).toBeVisible();
   await expect(page.getByTestId("settings-nav-email")).toBeVisible();
@@ -99,6 +101,16 @@ test("navigates between sections from the sidebar and updates the URL", async ({
   await page.getByTestId("settings-nav-email").click();
   await expect(page).toHaveURL(/\/settings\?section=email$/);
   await expect(page.getByTestId("smtp-card")).toBeVisible();
+
+  // Kindle — the per-user Send-to-Kindle destination address.
+  await page.getByTestId("settings-nav-kindle").click();
+  await expect(page).toHaveURL(/\/settings\?section=kindle$/);
+  await expect(page.getByTestId("account-kindle-card")).toBeVisible();
+
+  // Kobo — the per-user wireless-sync device list.
+  await page.getByTestId("settings-nav-kobo").click();
+  await expect(page).toHaveURL(/\/settings\?section=kobo$/);
+  await expect(page.getByTestId("kobo-devices-card")).toBeVisible();
 });
 
 test("saves the SMTP config and shows a configured status", async ({
