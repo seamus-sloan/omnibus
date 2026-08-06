@@ -455,3 +455,10 @@ async fn downsync_book_annotations_propagates_db_error_when_pool_is_closed() {
         .await
         .is_err());
 }
+
+#[tokio::test]
+async fn downsync_book_id_annotations_propagates_db_error_when_pool_is_closed() {
+    let (pool, _user, book_id, _uuid, _dir) = fixture("byid_dberr").await;
+    pool.close().await;
+    assert!(downsync_book_id_annotations(&pool, book_id).await.is_err());
+}
