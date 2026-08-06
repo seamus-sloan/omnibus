@@ -4,10 +4,10 @@ use dioxus::fullstack::post;
 use dioxus::prelude::*;
 #[cfg(feature = "server")]
 use omnibus_db as db;
-use omnibus_shared::{BulkMetadataEdit, EbookMetadata, MetadataOverrides};
+use omnibus_shared::{BulkMetadataEdit, BulkRewriteSummary, EbookMetadata, MetadataOverrides};
 
 #[cfg(feature = "server")]
-use super::{internal_rpc_error, AuthUser, PoolExt};
+use super::{internal_rpc_error, AdminUser, AuthUser, PoolExt};
 
 /// Save metadata overrides for a book. Requires `can_edit` or admin.
 /// Returns the merged `EbookMetadata` so the client can update its state
@@ -156,6 +156,19 @@ pub async fn rpc_delete_ebook_cover(uuid: String) -> Result<Option<EbookMetadata
     Ok(db::get_book_by_uuid(&pool.0, &uuid)
         .await
         .map_err(|e| internal_rpc_error("get ebook", e))?)
+}
+
+/// Admin-only: bake every book's active metadata/cover overrides into its
+/// EPUB container in one pass (#959) — the fleet-wide sibling of the
+/// per-book export bake performed at download time. Skips books without an
+/// active override or without an EPUB; a per-book failure is collected in
+/// the returned summary rather than aborting the run. Mobile uses the
+/// analogous REST `POST /api/admin/rewrite-all-epubs`.
+#[post("/api/rpc/admin/rewrite-all-epubs", pool: PoolExt, _admin: AdminUser)]
+pub async fn rpc_rewrite_all_epubs() -> Result<BulkRewriteSummary> {
+    Ok(db::rewrite_all_epubs_with_overrides(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("rewrite all epubs", e))?)
 }
 
 // `server`-gated: exercises the extracted server-side body against an

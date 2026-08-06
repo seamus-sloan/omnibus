@@ -723,3 +723,199 @@ fn evict_if_over_cap_is_a_noop_when_the_export_dir_does_not_exist() {
 
     super::evict_if_over_cap(0).unwrap();
 }
+
+// --- rewrite_all_epubs_with_overrides (bulk admin action, #959) --------
+
+/// Insert a `scan_roots` row pointing at `lib_dir` plus a `books` +
+/// `book_files` (EPUB) row for `uuid`, so `book_file_path` resolves to
+/// `lib_dir/<filename_stem>.epub` — real enough for `rewrite_blocking` to
+/// open when the caller has also copied a fixture there (or left it
+/// missing, to exercise the per-book failure branch).
+async fn seed_epub_row(
+    pool: &sqlx::SqlitePool,
+    lib_dir: &std::path::Path,
+    uuid: &str,
+    title: &str,
+    filename_stem: &str,
+) -> i64 {
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
+        .bind(lib_dir.to_string_lossy().to_string())
+        .execute(pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    let book_id =
+        sqlx::query("INSERT INTO books (uuid, library_id, path, title) VALUES (?, ?, '', ?)")
+            .bind(uuid)
+            .bind(lib_id)
+            .bind(title)
+            .execute(pool)
+            .await
+            .unwrap()
+            .last_insert_rowid();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES (?, 'EPUB', ?, 0)",
+    )
+    .bind(book_id)
+    .bind(filename_stem)
+    .execute(pool)
+    .await
+    .unwrap();
+    book_id
+}
+
+/// Insert a `books` row with no `book_files` row at all — an audiobook-only
+/// (or otherwise EPUB-less) book, for the "skipped: no EPUB" branch.
+async fn seed_epubless_book(pool: &sqlx::SqlitePool, uuid: &str, title: &str) -> i64 {
+    let lib_id =
+        sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES ('/audio', 'audio')")
+            .execute(pool)
+            .await
+            .unwrap()
+            .last_insert_rowid();
+    sqlx::query("INSERT INTO books (uuid, library_id, path, title) VALUES (?, ?, '', ?)")
+        .bind(uuid)
+        .bind(lib_id)
+        .bind(title)
+        .execute(pool)
+        .await
+        .unwrap()
+        .last_insert_rowid()
+}
+
+#[tokio::test]
+async fn rewrite_all_epubs_with_overrides_rewrites_only_books_with_active_overrides() {
+    let export = tempfile::tempdir().unwrap();
+    let _env = EnvVarGuard::set_os("OMNIBUS_EXPORT_EPUB_DIR", Some(export.path().as_os_str()));
+
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+
+    // Book A: an EPUB plus an active override → rewritten.
+    let lib_a = tempfile::tempdir().unwrap();
+    copy_fixture_into("alpha.epub", lib_a.path());
+    seed_epub_row(&pool, lib_a.path(), "uuid-a", "Book A", "alpha").await;
+    crate::upsert_metadata_overrides(
+        &pool,
+        "uuid-a",
+        &MetadataOverrides {
+            title: Some("Overridden A".into()),
+            ..Default::default()
+        },
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    // Book B: an EPUB but no override row at all → excluded entirely, never
+    // touched (not counted as rewritten, skipped, or errored).
+    let lib_b = tempfile::tempdir().unwrap();
+    copy_fixture_into("alpha.epub", lib_b.path());
+    seed_epub_row(&pool, lib_b.path(), "uuid-b", "Book B", "alpha").await;
+
+    // Book C: audiobook-only, but with an active override → skipped, since
+    // there's no EPUB to bake it into.
+    seed_epubless_book(&pool, "uuid-c", "Book C").await;
+    crate::upsert_metadata_overrides(
+        &pool,
+        "uuid-c",
+        &MetadataOverrides {
+            title: Some("Overridden C".into()),
+            ..Default::default()
+        },
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    let summary = super::rewrite_all_epubs_with_overrides(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(summary.rewritten, 1, "{summary:?}");
+    assert_eq!(summary.skipped, 1, "{summary:?}");
+    assert!(summary.errors.is_empty(), "{summary:?}");
+}
+
+#[tokio::test]
+async fn rewrite_all_epubs_with_overrides_records_a_per_book_error_without_aborting_the_run() {
+    let export = tempfile::tempdir().unwrap();
+    let _env = EnvVarGuard::set_os("OMNIBUS_EXPORT_EPUB_DIR", Some(export.path().as_os_str()));
+
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+
+    // Book "ok": a real fixture on disk → rewritten successfully.
+    let lib_ok = tempfile::tempdir().unwrap();
+    copy_fixture_into("alpha.epub", lib_ok.path());
+    seed_epub_row(&pool, lib_ok.path(), "uuid-ok", "Book OK", "alpha").await;
+    crate::upsert_metadata_overrides(
+        &pool,
+        "uuid-ok",
+        &MetadataOverrides {
+            title: Some("Fixed".into()),
+            ..Default::default()
+        },
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    // Book "bad": the `book_files` row points at a file that was never
+    // written to disk, so the source is missing when the rewrite opens it.
+    let lib_bad = tempfile::tempdir().unwrap();
+    seed_epub_row(&pool, lib_bad.path(), "uuid-bad", "Book Bad", "missing").await;
+    crate::upsert_metadata_overrides(
+        &pool,
+        "uuid-bad",
+        &MetadataOverrides {
+            title: Some("Never Applied".into()),
+            ..Default::default()
+        },
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    let summary = super::rewrite_all_epubs_with_overrides(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(summary.rewritten, 1, "{summary:?}");
+    assert_eq!(summary.skipped, 0, "{summary:?}");
+    assert_eq!(summary.errors.len(), 1, "{summary:?}");
+    assert_eq!(summary.errors[0].book_uuid, "uuid-bad");
+    assert!(!summary.errors[0].message.is_empty());
+}
+
+#[tokio::test]
+async fn rewrite_all_epubs_with_overrides_returns_a_zero_summary_when_no_overrides_exist() {
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    let summary = super::rewrite_all_epubs_with_overrides(&pool)
+        .await
+        .unwrap();
+    assert_eq!(summary.rewritten, 0);
+    assert_eq!(summary.skipped, 0);
+    assert!(summary.errors.is_empty());
+}
+
+#[tokio::test]
+async fn rewrite_all_epubs_with_overrides_propagates_a_books_error_when_pool_is_closed() {
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = super::rewrite_all_epubs_with_overrides(&pool)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, EpubRewriteError::Books(_)));
+}
