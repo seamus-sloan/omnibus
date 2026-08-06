@@ -89,20 +89,7 @@ pub(super) fn web_landing_body(
     let mut shelves_tick = sigs.shelves_tick;
     let mut bulk_selected = sigs.bulk_selected;
     let mut bulk_modal_open = sigs.bulk_modal_open;
-    let bulk_count = bulk_selected.read().len();
-    let show_bulk_bar = (sigs.is_admin)() && bulk_count > 0;
-    // Snapshot the selection for the modal only while it's open — the
-    // backdrop blocks further checkbox toggles, so this stays stable for
-    // the modal's lifetime.
-    let (bulk_uuids, bulk_books) = if bulk_modal_open() {
-        let set = bulk_selected.read();
-        (
-            set.iter().cloned().collect::<Vec<String>>(),
-            selected_bulk_books(&set, &sigs.books.read(), sigs.shelf_books.read().as_deref()),
-        )
-    } else {
-        (Vec::new(), Vec::new())
-    };
+    let bulk = snapshot_bulk_selection(sigs, (sigs.is_admin)(), bulk_modal_open());
     let mut books_sig = sigs.books;
     let mut shelf_books_sig = sigs.shelf_books;
     // Annotated outside the rsx props — a bare `.into()` there is ambiguous
@@ -110,16 +97,7 @@ pub(super) fn web_landing_body(
     let author_pool: ReadSignal<Vec<SuggestionItem>> = sigs.pools.authors.into();
     let tag_pool: ReadSignal<Vec<SuggestionItem>> = sigs.pools.tags.into();
     let genre_pool: ReadSignal<Vec<SuggestionItem>> = sigs.pools.genres.into();
-    // All Books mosaic: first four cover-bearing books of the (always-warm)
-    // browse page. Before it lands, the tile falls back to its accent plate.
-    let all_cover_uuids: Vec<String> = sigs
-        .books
-        .read()
-        .iter()
-        .filter(|b| b.cover_url.is_some())
-        .filter_map(|b| b.unique_identifier.clone())
-        .take(4)
-        .collect();
+    let all_cover_uuids = derive_all_cover_uuids(sigs);
     rsx! {
         div { class: "landing-col",
             if !view.is_search && !hero_points.is_empty() {
@@ -184,17 +162,17 @@ pub(super) fn web_landing_body(
                 }
             }
 
-            if show_bulk_bar {
+            if bulk.show_bar {
                 bulk_edit::BulkEditBar {
-                    count: bulk_count,
+                    count: bulk.count,
                     on_edit: move |_| bulk_modal_open.set(true),
                     on_clear: move |_| bulk_selected.write().clear(),
                 }
             }
             if bulk_modal_open() {
                 bulk_edit::BulkEditModal {
-                    uuids: bulk_uuids,
-                    selected_books: bulk_books,
+                    uuids: bulk.uuids,
+                    selected_books: bulk.books,
                     suggestions: bulk_edit::BulkEditSuggestions {
                         author_suggestions: author_pool,
                         tag_suggestions: tag_pool,
@@ -224,6 +202,59 @@ pub(super) fn web_landing_body(
             }
         }
     }
+}
+
+/// Derived bulk-selection state for [`web_landing_body`]: whether to show
+/// the bulk-edit bar, plus the uuids/books the modal needs.
+#[cfg(not(feature = "mobile"))]
+struct BulkSelectionSnapshot {
+    count: usize,
+    show_bar: bool,
+    uuids: Vec<String>,
+    books: Vec<EbookMetadata>,
+}
+
+/// Snapshot the current bulk selection for [`web_landing_body`]. `uuids`/
+/// `books` are populated only while the modal is open — the backdrop blocks
+/// further checkbox toggles, so this stays stable for the modal's lifetime.
+#[cfg(not(feature = "mobile"))]
+fn snapshot_bulk_selection(
+    sigs: &LandingSignals,
+    is_admin: bool,
+    modal_open: bool,
+) -> BulkSelectionSnapshot {
+    let bulk_selected = sigs.bulk_selected;
+    let count = bulk_selected.read().len();
+    let show_bar = is_admin && count > 0;
+    let (uuids, books) = if modal_open {
+        let set = bulk_selected.read();
+        (
+            set.iter().cloned().collect::<Vec<String>>(),
+            selected_bulk_books(&set, &sigs.books.read(), sigs.shelf_books.read().as_deref()),
+        )
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    BulkSelectionSnapshot {
+        count,
+        show_bar,
+        uuids,
+        books,
+    }
+}
+
+/// All Books mosaic covers: first four cover-bearing books of the
+/// (always-warm) browse page. Before it lands, the tile falls back to its
+/// accent plate.
+#[cfg(not(feature = "mobile"))]
+fn derive_all_cover_uuids(sigs: &LandingSignals) -> Vec<String> {
+    sigs.books
+        .read()
+        .iter()
+        .filter(|b| b.cover_url.is_some())
+        .filter_map(|b| b.unique_identifier.clone())
+        .take(4)
+        .collect()
 }
 
 /// Collect the selected books' current metadata from the browse list plus

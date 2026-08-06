@@ -83,83 +83,29 @@ pub async fn library_sync(
     let delta = db::kobo::SyncDelta { changes };
 
     // Serialize each item lazily as the device drains the body — no second
-    // buffer of the whole payload.
+    // buffer of the whole payload. Each poll dispatches to the step function
+    // for the current `SyncPhase` (below); the dispatcher itself stays a
+    // one-line match so the phase logic reads as ordinary functions rather
+    // than a nested `move async` closure.
     let stream = stream::unfold(
-        (delta.changes, base, auth.token, states, SyncPhase::Open),
-        move |(changes, base, token, states, phase)| {
+        SyncStreamState {
+            changes: delta.changes,
+            base,
+            token: auth.token,
+            states,
+            phase: SyncPhase::Open,
+        },
+        move |st| {
             let pool = pool.clone();
             async move {
-                let chunk: Bytes = match phase {
-                    SyncPhase::Open => {
-                        let next = if changes.is_empty() {
-                            SyncPhase::Close
-                        } else {
-                            SyncPhase::Item {
-                                change: 0,
-                                emitted: 0,
-                            }
-                        };
-                        return Some((
-                            ok(Bytes::from_static(b"[")),
-                            (changes, base, token, states, next),
-                        ));
-                    }
+                match st.phase {
+                    SyncPhase::Open => Some(sync_stream_open(st)),
                     SyncPhase::Item { change, emitted } => {
-                        let uuid = match &changes[change] {
-                            db::kobo::SyncChange::New(b)
-                            | db::kobo::SyncChange::Changed(b)
-                            | db::kobo::SyncChange::StateChanged(b) => Some(b.uuid.as_str()),
-                            db::kobo::SyncChange::Removed { .. } => None,
-                        };
-                        let book_state = uuid.and_then(|u| states.get(u));
-                        let items = dto::sync_items(&base, &token, &changes[change], book_state);
-                        let mut piece = Vec::new();
-                        for item in &items {
-                            // These DTOs are owned Strings/primitives, so this
-                            // never fails in practice — but if it ever does,
-                            // abort the body rather than emit malformed JSON:
-                            // the stream jumps to End, `record_synced` never
-                            // runs, and the device retries the same delta.
-                            let json = match serde_json::to_vec(item) {
-                                Ok(j) => j,
-                                Err(e) => {
-                                    return Some((
-                                        Err(std::io::Error::other(e)),
-                                        (changes, base, token, states, SyncPhase::End),
-                                    ));
-                                }
-                            };
-                            if emitted > 0 || !piece.is_empty() {
-                                piece.push(b',');
-                            }
-                            piece.extend_from_slice(&json);
-                        }
-                        let next = if change + 1 < changes.len() {
-                            SyncPhase::Item {
-                                change: change + 1,
-                                emitted: emitted + items.len(),
-                            }
-                        } else {
-                            SyncPhase::Close
-                        };
-                        return Some((
-                            ok(Bytes::from(piece)),
-                            (changes, base, token, states, next),
-                        ));
+                        Some(sync_stream_item(st, change, emitted))
                     }
-                    SyncPhase::Close => {
-                        // Body is complete: commit the snapshot. A failure here
-                        // is deliberately non-fatal to the response (the bytes
-                        // are already on the wire) — the device just replays
-                        // the same delta next sync, which is safe.
-                        if let Err(e) = db::kobo::record_synced(&pool, device_id, &changes).await {
-                            tracing::warn!(device_id, error = %e, "kobo snapshot advance failed");
-                        }
-                        Bytes::from_static(b"]")
-                    }
-                    SyncPhase::End => return None,
-                };
-                Some((ok(chunk), (changes, base, token, states, SyncPhase::End)))
+                    SyncPhase::Close => Some(sync_stream_close(&pool, device_id, st).await),
+                    SyncPhase::End => None,
+                }
             }
         },
     );
@@ -296,9 +242,94 @@ enum SyncPhase {
     End,
 }
 
+/// Accumulator threaded through [`library_sync`]'s `stream::unfold` — one
+/// field per piece the state used to carry as an anonymous tuple, named so
+/// each step function below reads without positional guessing.
+struct SyncStreamState {
+    changes: Vec<db::kobo::SyncChange>,
+    base: String,
+    token: String,
+    states: HashMap<String, db::kobo::KoboBookState>,
+    phase: SyncPhase,
+}
+
 /// Wrap a chunk as the infallible `Result` item `Body::from_stream` expects.
 fn ok(bytes: Bytes) -> Result<Bytes, std::io::Error> {
     Ok(bytes)
+}
+
+/// `SyncPhase::Open` step: emit the opening `[` and advance to the first
+/// item, or straight to `Close` for an empty delta.
+fn sync_stream_open(mut st: SyncStreamState) -> (Result<Bytes, std::io::Error>, SyncStreamState) {
+    st.phase = if st.changes.is_empty() {
+        SyncPhase::Close
+    } else {
+        SyncPhase::Item {
+            change: 0,
+            emitted: 0,
+        }
+    };
+    (ok(Bytes::from_static(b"[")), st)
+}
+
+/// `SyncPhase::Item` step: serialize the current change's DTOs (a change can
+/// fan out into two items) and advance to the next change or `Close`. A JSON
+/// serialization failure — never expected, since every DTO is owned
+/// Strings/primitives, but handled rather than unwrapped — aborts the body
+/// via `SyncPhase::End` instead of emitting malformed JSON: `record_synced`
+/// then never runs, and the device retries the same delta next sync.
+fn sync_stream_item(
+    mut st: SyncStreamState,
+    change: usize,
+    emitted: usize,
+) -> (Result<Bytes, std::io::Error>, SyncStreamState) {
+    let uuid = match &st.changes[change] {
+        db::kobo::SyncChange::New(b)
+        | db::kobo::SyncChange::Changed(b)
+        | db::kobo::SyncChange::StateChanged(b) => Some(b.uuid.as_str()),
+        db::kobo::SyncChange::Removed { .. } => None,
+    };
+    let book_state = uuid.and_then(|u| st.states.get(u));
+    let items = dto::sync_items(&st.base, &st.token, &st.changes[change], book_state);
+    let mut piece = Vec::new();
+    for item in &items {
+        let json = match serde_json::to_vec(item) {
+            Ok(j) => j,
+            Err(e) => {
+                st.phase = SyncPhase::End;
+                return (Err(std::io::Error::other(e)), st);
+            }
+        };
+        if emitted > 0 || !piece.is_empty() {
+            piece.push(b',');
+        }
+        piece.extend_from_slice(&json);
+    }
+    st.phase = if change + 1 < st.changes.len() {
+        SyncPhase::Item {
+            change: change + 1,
+            emitted: emitted + items.len(),
+        }
+    } else {
+        SyncPhase::Close
+    };
+    (ok(Bytes::from(piece)), st)
+}
+
+/// `SyncPhase::Close` step: the body is complete, so commit the device's
+/// sync snapshot. A failure here is deliberately non-fatal to the response
+/// (the bytes are already on the wire) — the device just replays the same
+/// delta next sync, which is safe.
+async fn sync_stream_close(
+    pool: &sqlx::SqlitePool,
+    device_id: i64,
+    mut st: SyncStreamState,
+) -> (Result<Bytes, std::io::Error>, SyncStreamState) {
+    if let Err(e) = db::kobo::record_synced(pool, device_id, &st.changes).await {
+        tracing::warn!(device_id, error = %e, "kobo snapshot advance failed");
+    }
+    st.phase = SyncPhase::End;
+    (ok(Bytes::from_static(b"]")), st)
 }
 
 /// `GET library/<uuid>/metadata` — the single-book metadata array Kobo fetches
