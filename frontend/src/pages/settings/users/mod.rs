@@ -2,10 +2,6 @@
 //! Delete modals and inline Unlock. Admin-only; rendered as the `users`
 //! section of `/settings`. SSR and the first WASM paint both start from an
 //! empty list (rule 07); the post-mount effect loads the real rows.
-//!
-//! Split into [`modals`] (the New/Edit/Delete modal components) and
-//! [`registration`] (the self-registration toggle), which share nothing
-//! with the table/row/permission markup that stays here.
 
 use dioxus::prelude::*;
 use dioxus_router::use_navigator;

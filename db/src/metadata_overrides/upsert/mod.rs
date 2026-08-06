@@ -1,11 +1,8 @@
 //! SQL CRUD for the `metadata_overrides` table: the error enum, the
-//! shared row-write/last-modified/cache-invalidation helpers every write
-//! path here uses, single-book upsert, plain get/delete, and the
-//! bulk-read helper `list_books`/`search_books` join against. The merge
-//! write paths live in [`merge`]; the cover-override file I/O and the
-//! overrides→`EbookMetadata` read merge live in [`cover`] — both
-//! re-exported below so callers keep addressing everything as
-//! `upsert::*`.
+//! shared row-write/last-modified/cache-invalidation helpers, single-book
+//! upsert, plain get/delete, and the bulk-read helper `list_books`/
+//! `search_books` join against. Called by `db::metadata_overrides` and,
+//! through it, the settings and books RPC/REST handlers.
 
 use std::collections::HashMap;
 
