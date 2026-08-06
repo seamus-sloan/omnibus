@@ -336,11 +336,7 @@ fn apply_delta(current: &[String], remove: &[String], add: &[String]) -> Vec<Str
     result
 }
 
-/// Summary returned by the fleet-wide "bake overrides into EPUBs" bulk admin
-/// action (`POST /api/admin/rewrite-all-epubs`, #959). One book with an
-/// active override is counted exactly once: into `rewritten` on success, or
-/// into `errors` on failure. Books with no active override, or no EPUB file,
-/// are counted into `skipped` and never appear in `errors`.
+/// Summary of a fleet-wide EPUB override bake: each book counts exactly once, into `rewritten`, `skipped`, or `errors`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BulkRewriteSummary {
     pub rewritten: usize,

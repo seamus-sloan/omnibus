@@ -279,12 +279,7 @@ fn rewrite_blocking(src: &Path, dst: &Path, book: &EbookMetadata) -> anyhow::Res
     )
 }
 
-/// Iterate every book with an active metadata/cover override, rewriting each
-/// one's export-EPUB cache in place — the fleet-wide sibling of the per-book
-/// rewrite [`rewritten_epub_path`] already performs at download time (#959).
-/// Skips a book whose override row outlived its live book (ghosted) or that
-/// has no EPUB file; a per-book rewrite failure is recorded in the returned
-/// summary's `errors` rather than aborting the remaining books.
+/// Rewrites every book's export-EPUB cache to bake in its active override, the fleet-wide sibling of the per-book [`rewritten_epub_path`] bake; a per-book failure is recorded rather than aborting the run.
 pub async fn rewrite_all_epubs_with_overrides(
     pool: &SqlitePool,
 ) -> Result<BulkRewriteSummary, EpubRewriteError> {
