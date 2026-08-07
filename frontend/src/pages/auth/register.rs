@@ -32,56 +32,17 @@ struct RegisterFormState {
 pub fn RegisterPage() -> Element {
     let username = use_signal(String::new);
     let password = use_signal(String::new);
-    let mut error = use_signal(|| Option::<RegisterError>::None);
-    let mut submitting = use_signal(|| false);
+    let error = use_signal(|| Option::<RegisterError>::None);
+    let submitting = use_signal(|| false);
     let terms_ack = use_signal(|| false);
     let nav = use_navigator();
 
     let server_url = use_server_url();
 
-    // `None` until the probe answers — SSR and the first WASM paint both
-    // render the placeholder, so hydration matches (rule 07) and the form
-    // never appears only to be pulled back when registration turns out to be
-    // closed. A *failed* probe resolves to `Some(true)`: the server's 403 is
-    // the real gate, so a flaky read must not lock anyone out of the form.
-    let mut registration_open = use_signal(|| Option::<bool>::None);
-    use_effect({
-        let server_url = server_url.clone();
-        move || {
-            let server_url = server_url.clone();
-            spawn(async move {
-                let probe = fetch_registration_open(&server_url).await;
-                registration_open.set(Some(registration_open_or_default(probe)));
-            });
-        }
-    });
-
-    let submit_now = use_callback(move |_: ()| {
-        if submitting() {
-            return;
-        }
-        let u = username();
-        let p = password();
-        if u.is_empty() || p.is_empty() {
-            error.set(Some(RegisterError::Other(
-                "enter a username and password".into(),
-            )));
-            return;
-        }
-        error.set(None);
-        submitting.set(true);
-        let server_url = server_url.clone();
-        spawn(async move {
-            let res = submit_register(&server_url, u, p).await;
-            submitting.set(false);
-            match res {
-                Ok(()) => {
-                    nav.replace(Route::Landing {});
-                }
-                Err(e) => error.set(Some(classify_register_error(&e))),
-            }
-        });
-    });
+    let registration_open = use_registration_open_probe(server_url.clone());
+    let submit_now = use_callback(build_register_submit_handler(
+        server_url, username, password, error, submitting, nav,
+    ));
 
     // Same target split as `LoginPage`: the body is shared, only the
     // surrounding shell differs.
@@ -120,6 +81,66 @@ pub fn RegisterPage() -> Element {
     let out = m_auth_shell("Make yourself at home.", form);
 
     out
+}
+
+/// Probes whether registration is open. `None` until the probe answers — SSR
+/// and the first WASM paint both render the placeholder, so hydration
+/// matches (rule 07) and the form never appears only to be pulled back when
+/// registration turns out to be closed. A *failed* probe resolves to
+/// `Some(true)`: the server's 403 is the real gate, so a flaky read must not
+/// lock anyone out of the form. Called unconditionally from [`RegisterPage`].
+fn use_registration_open_probe(server_url: String) -> Signal<Option<bool>> {
+    let mut registration_open = use_signal(|| Option::<bool>::None);
+    use_effect({
+        let server_url = server_url.clone();
+        move || {
+            let server_url = server_url.clone();
+            spawn(async move {
+                let probe = fetch_registration_open(&server_url).await;
+                registration_open.set(Some(registration_open_or_default(probe)));
+            });
+        }
+    });
+    registration_open
+}
+
+/// Builds the register submit handler: local validation, then
+/// `submit_register`, routing to the library on success or classifying the
+/// server error into a field bucket on failure.
+fn build_register_submit_handler(
+    server_url: String,
+    username: Signal<String>,
+    password: Signal<String>,
+    mut error: Signal<Option<RegisterError>>,
+    mut submitting: Signal<bool>,
+    nav: dioxus_router::Navigator,
+) -> impl FnMut(()) + 'static {
+    move |_: ()| {
+        if submitting() {
+            return;
+        }
+        let u = username();
+        let p = password();
+        if u.is_empty() || p.is_empty() {
+            error.set(Some(RegisterError::Other(
+                "enter a username and password".into(),
+            )));
+            return;
+        }
+        error.set(None);
+        submitting.set(true);
+        let server_url = server_url.clone();
+        spawn(async move {
+            let res = submit_register(&server_url, u, p).await;
+            submitting.set(false);
+            match res {
+                Ok(()) => {
+                    nav.replace(Route::Landing {});
+                }
+                Err(e) => error.set(Some(classify_register_error(&e))),
+            }
+        });
+    }
 }
 
 /// Placeholder shown while the registration-open probe is in flight. Renders

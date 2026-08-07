@@ -36,14 +36,7 @@ pub fn ShelfDetailPage(id: i64) -> Element {
     let error = use_signal(|| None::<String>);
     crate::use_page_title(move || shelf.read().as_ref().map(|s| s.name.clone()));
     let sort_key = use_signal(|| SortKey::Title);
-    // Only mobile mutates these directly, so only it needs `mut` bindings.
-    #[cfg(feature = "mobile")]
-    let mut show_add = use_signal(|| false);
-    #[cfg(not(feature = "mobile"))]
     let show_add = use_signal(|| false);
-    #[cfg(feature = "mobile")]
-    let mut edit_shelf = use_signal(|| false);
-    #[cfg(not(feature = "mobile"))]
     let edit_shelf = use_signal(|| false);
     // Bumped to force a refetch after a membership edit.
     let reload = use_signal(|| 0u32);
@@ -82,38 +75,69 @@ pub fn ShelfDetailPage(id: i64) -> Element {
         );
     };
 
-    // Web keeps the rail + toolbar layout; mobile renders the home-style
-    // full-screen surface. Both consume the shared fetch pipeline above.
-    // (Mobile is a separate build — rule 07 hydration parity is unaffected.)
-    #[cfg(feature = "mobile")]
-    let body = rsx! {
-        mobile::MobileShelfDetail {
-            shelf: current.clone(),
-            books: books.read().clone(),
-            errored: errored(),
-            server_url: server_url.clone(),
-            on_add: move |_| show_add.set(true),
-            on_edit: move |_| edit_shelf.set(true),
-        }
-    };
-
-    #[cfg(not(feature = "mobile"))]
-    let body = web_shelf_body(
+    let books_snapshot = books.read();
+    let body = shelf_detail_body(
         &current,
-        &books.read(),
+        &books_snapshot,
         errored(),
         &server_url,
-        ShelfBodySignals {
-            sort_key,
-            show_add,
-            edit_shelf,
-            reload,
-        },
+        sort_key,
+        show_add,
+        edit_shelf,
+        reload,
     );
+    drop(books_snapshot);
 
     rsx! {
         {body}
         {shelf_detail_modals(id, current, show_add, edit_shelf, reload)}
+    }
+}
+
+/// Web keeps the rail + toolbar layout; mobile renders the home-style
+/// full-screen surface. Both consume the shared fetch pipeline in
+/// [`use_shelf_effects`]. (Mobile is a separate build — rule 07 hydration
+/// parity is unaffected.)
+#[allow(clippy::too_many_arguments)] // one bundle per pipeline; splitting further hides the wiring
+fn shelf_detail_body(
+    current: &Shelf,
+    books: &[EbookMetadata],
+    errored: bool,
+    server_url: &str,
+    #[cfg_attr(feature = "mobile", allow(unused_variables))] sort_key: Signal<SortKey>,
+    show_add: Signal<bool>,
+    edit_shelf: Signal<bool>,
+    #[cfg_attr(feature = "mobile", allow(unused_variables))] reload: Signal<u32>,
+) -> Element {
+    #[cfg(feature = "mobile")]
+    {
+        let mut show_add = show_add;
+        let mut edit_shelf = edit_shelf;
+        rsx! {
+            mobile::MobileShelfDetail {
+                shelf: current.clone(),
+                books: books.to_vec(),
+                errored,
+                server_url: server_url.to_string(),
+                on_add: move |_| show_add.set(true),
+                on_edit: move |_| edit_shelf.set(true),
+            }
+        }
+    }
+    #[cfg(not(feature = "mobile"))]
+    {
+        web_shelf_body(
+            current,
+            books,
+            errored,
+            server_url,
+            ShelfBodySignals {
+                sort_key,
+                show_add,
+                edit_shelf,
+                reload,
+            },
+        )
     }
 }
 
