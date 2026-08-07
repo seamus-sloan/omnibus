@@ -270,14 +270,25 @@ actor APIClient {
         _ path: String,
         query: [String: String?] = [:]
     ) async throws -> (value: T, nextCursor: String?) {
+        let (value, cursor, _): (T, String?, Int64?) = try await getPagedCounted(path, query: query)
+        return (value, cursor)
+    }
+
+    /// [`getPaged`] plus the `X-Hidden-Count` receipt header the listing
+    /// emits on the first page of a request that sent `exclude_formats`.
+    func getPagedCounted<T: Decodable>(
+        _ path: String,
+        query: [String: String?] = [:]
+    ) async throws -> (value: T, nextCursor: String?, hiddenCount: Int64?) {
         let request = try buildRequest(path: path, method: "GET", query: query, body: Optional<Never>.none)
         do {
             let (data, response) = try await session.data(for: request)
             noteOutcome(reachable: true)
             try validate(response, data: data)
-            let cursor = (response as? HTTPURLResponse)?
-                .value(forHTTPHeaderField: "X-Next-Cursor")?.nilIfBlank
-            return (try decode(data), cursor)
+            let http = response as? HTTPURLResponse
+            let cursor = http?.value(forHTTPHeaderField: "X-Next-Cursor")?.nilIfBlank
+            let hidden = http?.value(forHTTPHeaderField: "X-Hidden-Count").flatMap(Int64.init)
+            return (try decode(data), cursor, hidden)
         } catch let error as APIError {
             throw error
         } catch {

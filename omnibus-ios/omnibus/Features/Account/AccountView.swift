@@ -20,6 +20,9 @@ struct AccountView: View {
     @State private var kindleEmail = ""
     @State private var kindleSaved = false
     @State private var kindleError: String?
+    @State private var hiddenFormats: Set<String> = []
+    @State private var hiddenSaved = false
+    @State private var hiddenError: String?
     private var downloads = DownloadManager.shared
     private var connectivity = Connectivity.shared
 
@@ -41,6 +44,7 @@ struct AccountView: View {
                     library
                     offline
                     sendToKindle
+                    hiddenFormatsSection
                     session
                     colophon
                 }
@@ -72,11 +76,16 @@ struct AccountView: View {
         }
         .task {
             kindleEmail = app.user?.kindleEmail ?? ""
+            hiddenFormats = Set(app.user?.hiddenFormats ?? [])
             await connectivity.refreshPendingCount()
         }
         .onChange(of: kindleEmail) { _, _ in
             kindleSaved = false
             kindleError = nil
+        }
+        .onChange(of: hiddenFormats) { _, _ in
+            hiddenSaved = false
+            hiddenError = nil
         }
     }
 
@@ -286,6 +295,67 @@ struct AccountView: View {
                     .disabled(kindleSaved)
                     .contentTransition(.numericText())
                     .animation(Motion.snap, value: kindleSaved)
+                }
+            }
+        }
+    }
+
+    /// The formats hidden from this reader's library All Books view — the
+    /// tokens the scanners index, plus any saved token the list doesn't know
+    /// (so it can always be un-hidden). Account configuration: saved directly,
+    /// never queued (rule 08), disabled while offline.
+    private var hiddenFormatsSection: some View {
+        let options = KnownLibraryFormats.union(hiddenFormats).sorted()
+        return group("Hidden formats") {
+            VStack(alignment: .leading, spacing: Spacing.md) {
+                FlowLayout(spacing: 6, lineSpacing: 6) {
+                    ForEach(options, id: \.self) { format in
+                        Button {
+                            if hiddenFormats.contains(format) {
+                                hiddenFormats.remove(format)
+                            } else {
+                                hiddenFormats.insert(format)
+                            }
+                        } label: {
+                            Chip(label: format, isOn: hiddenFormats.contains(format))
+                        }
+                        .buttonStyle(PressableStyle())
+                    }
+                }
+
+                HStack(spacing: Spacing.md) {
+                    Text(hiddenError ?? "Hidden formats disappear from your All Books view; a book stays while any of its formats is visible.")
+                        .font(.ui(12))
+                        .foregroundStyle(hiddenError == nil ? palette.ink3Color : palette.badColor)
+
+                    Spacer(minLength: 0)
+
+                    Button(hiddenSaved ? "Saved" : "Save") {
+                        Task {
+                            do {
+                                try await AuthService.setHiddenFormats(hiddenFormats.sorted())
+                                // Repaint the identity so the library tab's
+                                // `onChange(of: app.user?.hiddenFormats)`
+                                // reshapes the grid immediately.
+                                await app.refreshUser()
+                                hiddenError = nil
+                                hiddenSaved = true
+                                Haptics.success()
+                            } catch {
+                                // Same rule-08 posture as the Kindle save
+                                // above: no outbox, so the failure is the
+                                // whole story — surface it, never "Saved".
+                                hiddenError = (error as? APIError)?.errorDescription
+                                    ?? error.localizedDescription
+                                Haptics.warning()
+                            }
+                        }
+                    }
+                    .font(.ui(13.5, weight: .semibold))
+                    .foregroundStyle(hiddenSaved ? palette.okColor : palette.accentColor)
+                    .disabled(hiddenSaved || !connectivity.isOnline)
+                    .contentTransition(.numericText())
+                    .animation(Motion.snap, value: hiddenSaved)
                 }
             }
         }

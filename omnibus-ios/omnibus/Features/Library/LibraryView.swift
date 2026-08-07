@@ -22,6 +22,14 @@ final class LibraryModel {
     var formatFilter: Set<String> = [] {
         didSet { if formatFilter != oldValue { Task { await reload() } } }
     }
+    /// The signed-in user's hidden-formats preference, seeded from
+    /// `app.user` by the view. A change reshapes the grid like any filter.
+    var hiddenFormats: [String] = [] {
+        didSet { if hiddenFormats != oldValue { Task { await reload() } } }
+    }
+    /// First-page "N hidden" receipt for the section heading; `nil` when the
+    /// viewer hides nothing.
+    var hiddenCount: Int64?
 
     /// Header category strip. Format buckets are pushed to the server as a
     /// `formats` filter; `downloaded` is answered from the local library mirror,
@@ -37,6 +45,14 @@ final class LibraryModel {
     /// What the grid renders. Every bucket is now resolved by the read itself,
     /// so this is the loaded page as-is.
     var visibleBooks: [Book] { books }
+
+    /// The category's filter with the viewer's hidden-formats folded in —
+    /// the one filter every page read uses.
+    private var activeFilter: LibraryFilter {
+        var filter = category.filter
+        filter.hiddenFormats = hiddenFormats
+        return filter
+    }
 
     /// Background poll cadence, mirroring the web client's 60 s sync tick.
     static let pollInterval: Duration = .seconds(60)
@@ -64,7 +80,7 @@ final class LibraryModel {
 
         let sort = sort
         let direction = direction
-        let filter = category.filter
+        let filter = activeFilter
 
         await withTaskGroup(of: Void.self) { group in
             group.addTask { @MainActor in
@@ -76,6 +92,7 @@ final class LibraryModel {
                         self.books = read.value.books
                         self.cursor = read.value.nextCursor
                         self.reachedEnd = read.value.nextCursor == nil
+                        self.hiddenCount = read.value.hiddenCount
                         self.error = nil
                         self.isLoading = false
                     }
@@ -169,13 +186,14 @@ final class LibraryModel {
         let token = loadToken
         do {
             for try await read in LibraryService.page(
-                sort: sort, direction: direction, filter: category.filter, cursor: nil
+                sort: sort, direction: direction, filter: activeFilter, cursor: nil
             ) {
                 guard loadToken == token, !hasPaginated else { return }
                 guard read.isFresh else { continue }
                 books = read.value.books
                 cursor = read.value.nextCursor
                 reachedEnd = read.value.nextCursor == nil
+                hiddenCount = read.value.hiddenCount
             }
         } catch {}
     }
@@ -192,7 +210,7 @@ final class LibraryModel {
         do {
             // Pages past the first aren't cached, so this yields exactly once.
             for try await read in LibraryService.page(
-                sort: sort, direction: direction, filter: category.filter, cursor: cursor
+                sort: sort, direction: direction, filter: activeFilter, cursor: cursor
             ) {
                 let page = read.value
                 let existing = Set(books.map(\.id))
@@ -283,7 +301,17 @@ struct LibraryView: View {
             .withDestinations()
         }
         .environment(\.bookZoomNamespace, bookZoom)
-        .task { await model.loadIfNeeded() }
+        .task {
+            // Seed the pref before the first read so page 1 already excludes;
+            // a later identity refresh re-seeds via `onChange` below.
+            model.hiddenFormats = app.user?.hiddenFormats ?? []
+            await model.loadIfNeeded()
+        }
+        // An Account-screen save (or a login as someone else) reshapes the
+        // already-mounted library tab.
+        .onChange(of: app.user?.hiddenFormats) { _, formats in
+            model.hiddenFormats = formats ?? []
+        }
         // Background poll, mirroring the web client's sync tick. Tied to the
         // view's lifetime, so it pauses whenever the library isn't on screen.
         .task {
@@ -384,6 +412,14 @@ struct LibraryView: View {
             Text(model.category == .all ? "All books" : model.category.label)
                 .font(.display(24))
                 .foregroundStyle(palette.ink0Color)
+
+            // The hidden-formats receipt: excluded books must never look
+            // like data loss.
+            if let hidden = model.hiddenCount, hidden > 0 {
+                Text("\(hidden) hidden")
+                    .font(.ui(12))
+                    .foregroundStyle(palette.ink3Color)
+            }
 
             Spacer(minLength: 0)
 

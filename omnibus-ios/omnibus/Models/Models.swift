@@ -376,6 +376,11 @@ struct UserSummary: Codable, Hashable, Sendable {
     /// `decode(Bool.Type,forKey:)` above defaults a missing key to `false`, so
     /// a pre-upgrade `CacheKey.me` blob still decodes with the right meaning.
     var hasAvatar: Bool = false
+    /// Formats this user hides from the library's All Books view, canonical
+    /// lowercase tokens ("cbz"). The lenient `decode([T].Type,forKey:)` above
+    /// defaults a missing key to `[]`, so a pre-upgrade `CacheKey.me` blob
+    /// still decodes.
+    var hiddenFormats: [String] = []
 
     /// The name to show for this user — never render `username` on its own.
     var display: String { displayName ?? username }
@@ -389,6 +394,7 @@ struct UserSummary: Codable, Hashable, Sendable {
         case kindleEmail = "kindle_email"
         case displayName = "display_name"
         case hasAvatar = "has_avatar"
+        case hiddenFormats = "hidden_formats"
     }
 }
 
