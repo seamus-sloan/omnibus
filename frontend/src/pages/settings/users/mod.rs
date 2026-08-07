@@ -133,14 +133,19 @@ fn UsersTable(
             }
             tbody {
                 for u in users {
-                    UserRow {
-                        key: "{u.id}",
-                        user: u.clone(),
-                        is_self: Some(u.id) == current_id,
-                        on_edit,
-                        on_delete,
-                        on_unlocked,
-                        on_error: on_row_error,
+                    {
+                        let id = u.id;
+                        rsx! {
+                            UserRow {
+                                key: "{id}",
+                                user: u,
+                                is_self: Some(id) == current_id,
+                                on_edit,
+                                on_delete,
+                                on_unlocked,
+                                on_error: on_row_error,
+                            }
+                        }
                     }
                 }
             }

@@ -104,10 +104,10 @@ fn shelf_detail_body(
     books: &[EbookMetadata],
     errored: bool,
     server_url: &str,
-    sort_key: Signal<SortKey>,
+    #[cfg_attr(feature = "mobile", allow(unused_variables))] sort_key: Signal<SortKey>,
     show_add: Signal<bool>,
     edit_shelf: Signal<bool>,
-    reload: Signal<u32>,
+    #[cfg_attr(feature = "mobile", allow(unused_variables))] reload: Signal<u32>,
 ) -> Element {
     #[cfg(feature = "mobile")]
     {
