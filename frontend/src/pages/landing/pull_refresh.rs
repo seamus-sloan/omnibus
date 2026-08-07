@@ -145,6 +145,9 @@ const SETTLE_JS: &str = r#"
 /// Install the pull-to-refresh bridge. Reads `prefs` at trigger time so the
 /// forced refetch always targets the currently active sort/filter page key.
 pub(super) fn use_pull_to_refresh(server_url: String, prefs: Signal<ViewPrefs>) {
+    // Read at trigger time (like `prefs`) so the forced refetch lands in the
+    // same SWR key the landing is actively reading — exclusion included.
+    let viewer = crate::use_current_user_summary();
     // Per-mount id so the unmount cleanup only removes its own listener.
     let id = use_hook(|| {
         static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -157,8 +160,19 @@ pub(super) fn use_pull_to_refresh(server_url: String, prefs: Signal<ViewPrefs>) 
             // Loop ends when the channel closes (this screen unmounted).
             while eval.recv::<i32>().await.is_ok() {
                 let p = prefs.peek().clone();
-                data::refresh_ebooks_first_page(&url, p.sort_key, p.sort_dir, p.filters, PAGE_SIZE)
-                    .await;
+                let exclude = viewer
+                    .peek()
+                    .as_ref()
+                    .map(|u| {
+                        let mut h = u.hidden_formats.clone();
+                        h.sort();
+                        h
+                    })
+                    .unwrap_or_default();
+                data::refresh_ebooks_first_page(
+                    &url, p.sort_key, p.sort_dir, p.filters, exclude, PAGE_SIZE,
+                )
+                .await;
                 let _ = dioxus::document::eval(SETTLE_JS);
             }
         }

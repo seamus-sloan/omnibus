@@ -48,6 +48,12 @@ pub(super) struct EbooksQuery {
     /// form, e.g. `?formats=m4b,m4a,mp3`). The mobile Sort & filter sheet's
     /// format chips; the other web sidebar facets stay RPC-only.
     formats: Option<String>,
+    /// Comma-separated formats the caller's user hides from their landing
+    /// view (`?exclude_formats=cbz`). Client-passed by design: the mirror
+    /// syncs send nothing here and stay full-library (rule: exclusion is a
+    /// landing concern, and offline toggling must restore hidden books
+    /// without a resync).
+    exclude_formats: Option<String>,
 }
 
 /// Split the `?formats=` wire value into filter entries, dropping empties.
@@ -85,6 +91,7 @@ pub(super) async fn get_ebooks(
         && q.cursor.is_none()
         && q.limit.is_none()
         && q.formats.is_none()
+        && q.exclude_formats.is_none()
     {
         return respond_full_library(&state, ebook.as_deref(), audiobook.as_deref()).await;
     }
@@ -139,12 +146,19 @@ async fn respond_keyset_page(
         formats: q.formats.as_deref().map(parse_formats).unwrap_or_default(),
         ..ViewFilters::default()
     };
+    let exclude = omnibus_shared::sanitize_exclude_formats(
+        q.exclude_formats
+            .as_deref()
+            .map(parse_formats)
+            .unwrap_or_default(),
+    );
     let page = match db::list_books_page(
         &state.pool,
         &paths,
         q.sort.unwrap_or_default(),
         q.dir.unwrap_or_default(),
         &filters,
+        &exclude,
         cursor.as_ref(),
         q.limit.unwrap_or(DEFAULT_PAGE_LIMIT),
     )
@@ -154,10 +168,21 @@ async fn respond_keyset_page(
         Err(error) => return internal("read books page", error),
     };
     // Filtered total, so the client's "Show N books" reflects the active
-    // chips; identical to the unfiltered count when no filter is set.
-    let total = match db::count_books_page(&state.pool, &paths, &filters).await {
+    // chips (and the exclusion — it counts what pagination will actually
+    // yield); identical to the unfiltered count when neither is set.
+    let total = match db::count_books_page(&state.pool, &paths, &filters, &exclude).await {
         Ok(t) => t,
         Err(error) => return internal("count books", error),
+    };
+    // The receipt: same filters on both sides of the diff, exclusion only.
+    // First page only — later pages inherit the client's cached value.
+    let hidden = if !exclude.is_empty() && cursor.is_none() {
+        match db::count_books_page(&state.pool, &paths, &filters, &[]).await {
+            Ok(all) => Some(all - total),
+            Err(error) => return internal("count books", error),
+        }
+    } else {
+        None
     };
 
     let library = EbookLibrary {
@@ -172,6 +197,11 @@ async fn respond_keyset_page(
     let mut resp = Json(library).into_response();
     if let Ok(v) = axum::http::HeaderValue::from_str(&total.to_string()) {
         resp.headers_mut().insert("X-Total-Count", v);
+    }
+    if let Some(h) = hidden {
+        if let Ok(v) = axum::http::HeaderValue::from_str(&h.to_string()) {
+            resp.headers_mut().insert("X-Hidden-Count", v);
+        }
     }
     if let Some(next) = page.next {
         if let Ok(v) = axum::http::HeaderValue::from_str(&next.encode()) {

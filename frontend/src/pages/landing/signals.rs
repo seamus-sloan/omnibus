@@ -31,6 +31,9 @@ pub(super) struct LandingSignals {
     pub(super) books: Signal<Vec<EbookMetadata>>,
     pub(super) next_cursor: Signal<Option<String>>,
     pub(super) total: Signal<Option<i64>>,
+    /// First-page "N hidden" receipt; `None` when the viewer hides nothing.
+    /// Seeds `None` on every target (SSR parity, rule 07).
+    pub(super) hidden: Signal<Option<i64>>,
     pub(super) lib_path: Signal<Option<String>>,
     pub(super) lib_error: Signal<Option<String>>,
     pub(super) loading: Signal<bool>,
@@ -73,6 +76,7 @@ pub(super) fn setup_landing_signals(server_url: &str, query: Signal<String>) -> 
     let books = use_signal(Vec::<EbookMetadata>::new);
     let next_cursor = use_signal(|| None::<String>);
     let total = use_signal(|| None::<i64>);
+    let hidden = use_signal(|| None::<i64>);
     let lib_path = use_signal(|| None::<String>);
     let lib_error = use_signal(|| None::<String>);
     let loading = use_signal(|| true);
@@ -115,6 +119,7 @@ pub(super) fn setup_landing_signals(server_url: &str, query: Signal<String>) -> 
         books,
         next_cursor,
         total,
+        hidden,
         lib_path,
         lib_error,
         loading,
@@ -153,6 +158,7 @@ pub(super) fn setup_landing_signals(server_url: &str, query: Signal<String>) -> 
         books,
         next_cursor,
         total,
+        hidden,
         lib_path,
         lib_error,
         loading,
@@ -207,9 +213,24 @@ fn wire_landing_effects(
 ) {
     spawn_suggestion_pools_effect(server_url.to_string(), is_admin, pools);
 
+    // The viewer's hidden-formats pref, canonical order. Starts empty until
+    // `/me` resolves (or on SSR), so the very first fetch may run without the
+    // exclusion — the memo change then triggers exactly one refetch.
+    let viewer = crate::use_current_user_summary();
+    let exclude_formats = use_memo(move || {
+        viewer()
+            .map(|u| {
+                let mut h = u.hidden_formats;
+                h.sort();
+                h
+            })
+            .unwrap_or_default()
+    });
+
     // Refetch page 1 whenever the search query or a *data-affecting* pref
-    // (sort axis/dir or filters) changes. The `use_memo` keys the effect on
-    // exactly those fields, so view-mode / sidebar-open toggles don't refetch.
+    // (sort axis/dir or filters) changes — or the viewer's hidden-formats
+    // pref lands/changes. The `use_memo` keys the effect on exactly those
+    // fields, so view-mode / sidebar-open toggles don't refetch.
     let fetch_key = use_memo(move || {
         let p = prefs();
         (
@@ -217,10 +238,17 @@ fn wire_landing_effects(
             p.sort_key,
             p.sort_dir,
             p.filters.clone(),
+            exclude_formats(),
         )
     });
     spawn_page_fetch_effect(server_url.to_string(), fetch_key, fetch_sigs);
-    spawn_load_more_effect(server_url.to_string(), want_more, prefs, fetch_sigs);
+    spawn_load_more_effect(
+        server_url.to_string(),
+        want_more,
+        prefs,
+        exclude_formats,
+        fetch_sigs,
+    );
     #[cfg(feature = "web")]
     spawn_load_more_observer(fetch_sigs.next_cursor);
 

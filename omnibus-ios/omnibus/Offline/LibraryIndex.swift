@@ -13,6 +13,11 @@ import Foundation
 struct LibraryFilter: Equatable, Sendable {
     var formats: [String] = []
     var downloadedOnly = false
+    /// The viewer's hidden-formats preference (`UserSummary.hiddenFormats`).
+    /// A book is excluded only when every format it carries is hidden; a
+    /// formats-less row (physical-only) is never hidden — mirroring the
+    /// server's predicate.
+    var hiddenFormats: [String] = []
 
     static let none = LibraryFilter()
 }
@@ -225,8 +230,10 @@ actor LibraryIndex {
         }
     }
 
-    /// Flatten a `Book` into its indexable columns.
-    private static func row(for book: Book, payload: Data) -> OfflineStore.BookRow {
+    /// Flatten a `Book` into its indexable columns. `internal` so the
+    /// format-dedupe invariant the hidden-formats predicate relies on is
+    /// testable.
+    static func row(for book: Book, payload: Data) -> OfflineStore.BookRow {
         let author = book.creators.map(\.name).joined(separator: ", ")
         // One haystack per book so a match is a single LIKE rather than a scan
         // across five columns. Subjects are in it because a reader looking for
@@ -250,10 +257,23 @@ actor LibraryIndex {
             seriesIndex: Double(book.seriesIndex ?? "") ?? 0,
             addedAt: book.addedAt ?? "",
             modified: book.modified ?? book.addedAt ?? "",
-            formats: book.formats.map { $0.lowercased() }.joined(separator: ","),
+            // Deduped: the hidden-formats predicate strips each hidden token
+            // from the CSV once, so a duplicate would survive the strip and
+            // read as "still visible". A physical copy rides as a pseudo-token
+            // the pref can never name, so an owned book survives the strip
+            // even with every file format hidden — the server's physical arm.
+            formats: Self.formatsColumn(for: book),
             searchText: haystack,
             payload: payload
         )
+    }
+
+    /// The mirror's `formats` CSV: lowercase deduped file formats, plus a
+    /// `physical` pseudo-token for owned books (see `row(for:payload:)`).
+    static func formatsColumn(for book: Book) -> String {
+        var tokens = Set(book.formats.map { $0.lowercased() })
+        if book.hasPhysical { tokens.insert("physical") }
+        return tokens.sorted().joined(separator: ",")
     }
 
     // MARK: - Reads
@@ -278,12 +298,26 @@ actor LibraryIndex {
         let total = await OfflineStore.shared.bookMatchCount(
             whereClause: clause, bindings: bindings
         )
+        // The receipt, computed the server's way: same filter with the
+        // exclusion lifted, diffed. First page only, like the wire header.
+        var hiddenCount: Int64?
+        if offset == 0, !filter.hiddenFormats.isEmpty {
+            var unhidden = filter
+            unhidden.hiddenFormats = []
+            let (allClause, allBindings) = Self.predicate(for: unhidden)
+            let all = await OfflineStore.shared.bookMatchCount(
+                whereClause: allClause, bindings: allBindings
+            )
+            hiddenCount = all - total
+        }
         let books = Self.decode(payloads)
         // A short page is the end of the library; anything else can be paged
         // for. The cursor is an offset because keyset ordering is the server's
         // contract, not this table's.
         let next = books.count < limit ? nil : Self.cursor(offset: offset + limit)
-        return LibraryPageResult(books: books, nextCursor: next, total: total)
+        return LibraryPageResult(
+            books: books, nextCursor: next, total: total, hiddenCount: hiddenCount
+        )
     }
 
     /// One book out of the local mirror.
@@ -340,7 +374,9 @@ actor LibraryIndex {
 
     /// SQL fragment + bindings for a filter. Every produced fragment is built
     /// from a closed set of cases; the only user-controlled values are bound.
-    private static func predicate(for filter: LibraryFilter) -> (String, [String]) {
+    /// `internal` (not private) so the hidden-formats visibility rule is
+    /// testable as a pure function.
+    static func predicate(for filter: LibraryFilter) -> (String, [String]) {
         var clauses: [String] = []
         var bindings: [String] = []
 
@@ -351,6 +387,20 @@ actor LibraryIndex {
             let matches = filter.formats.map { _ in "(',' || formats || ',') LIKE ? ESCAPE '\\'" }
             clauses.append("(\(matches.joined(separator: " OR ")))")
             bindings += filter.formats.map { "%,\(escapeLike($0.lowercased())),%" }
+        }
+
+        if !filter.hiddenFormats.isEmpty {
+            // Visible iff stripping every hidden token from the CSV leaves a
+            // non-empty remainder — i.e. some format is NOT hidden — or the
+            // row has no formats at all (physical-only, never hidden). The
+            // row writer stores lowercase deduped tokens, so one REPLACE per
+            // token strips it completely.
+            var expr = "(',' || formats || ',')"
+            for token in filter.hiddenFormats.sorted() {
+                expr = "REPLACE(\(expr), ?, ',')"
+                bindings.append(",\(token.lowercased()),")
+            }
+            clauses.append("(formats = '' OR TRIM(\(expr), ',') <> '')")
         }
 
         if filter.downloadedOnly {

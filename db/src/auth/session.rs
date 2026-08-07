@@ -95,7 +95,7 @@ async fn fetch_session_row(pool: &SqlitePool, hash: &[u8]) -> AuthResult<sqlx::s
         "SELECT s.id AS s_id, s.user_id, s.device_id, s.kind, s.created_at,
                 s.last_used_at, s.expires_at, s.revoked_at,
                 u.id AS u_id, u.username, u.is_admin, u.can_upload, u.can_edit, u.can_download,
-                u.kindle_email, u.display_name,
+                u.kindle_email, u.display_name, u.hidden_formats,
                 EXISTS(SELECT 1 FROM user_avatars a WHERE a.user_id = u.id) AS has_avatar
          FROM sessions s JOIN users u ON u.id = s.user_id
          WHERE s.token_hash = ?",
@@ -142,6 +142,7 @@ fn build_user_from_row(row: &sqlx::sqlite::SqliteRow) -> User {
         kindle_email: row.get("kindle_email"),
         display_name: row.get("display_name"),
         has_avatar: row.get::<i64, _>("has_avatar") != 0,
+        hidden_formats: crate::auth::parse_hidden_formats(row.get("hidden_formats")),
     }
 }
 

@@ -31,9 +31,9 @@ pub use token::{
 };
 pub use users::{
     admin_create_user, admin_set_password, change_password, create_user, delete_user,
-    get_kindle_email, get_user_by_id, get_user_by_username, list_users, promote_to_admin,
-    registration_enabled, set_display_name, set_kindle_email, set_registration_enabled,
-    unlock_user, update_user_permissions, DISPLAY_NAME_MAX_LEN,
+    get_hidden_formats, get_kindle_email, get_user_by_id, get_user_by_username, list_users,
+    promote_to_admin, registration_enabled, set_display_name, set_hidden_formats, set_kindle_email,
+    set_registration_enabled, unlock_user, update_user_permissions, DISPLAY_NAME_MAX_LEN,
 };
 
 use sqlx::Row;
@@ -97,6 +97,9 @@ pub struct User {
     /// Whether a `user_avatars` row exists — the avatar bytes themselves are
     /// only ever read by the serving handler.
     pub has_avatar: bool,
+    /// Formats this user hides from the landing All Books view, canonical
+    /// (lowercase, deduped, sorted). Empty when nothing is hidden.
+    pub hidden_formats: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,7 +157,21 @@ pub(crate) fn row_to_user(row: &sqlx::sqlite::SqliteRow) -> User {
         kindle_email: row.get("kindle_email"),
         display_name: row.get("display_name"),
         has_avatar: row.get::<i64, _>("has_avatar") != 0,
+        hidden_formats: parse_hidden_formats(row.get("hidden_formats")),
     }
+}
+
+/// Split the stored CSV `hidden_formats` column into its tokens. The write
+/// path canonicalizes, so this only has to split and drop empties.
+pub(crate) fn parse_hidden_formats(raw: Option<String>) -> Vec<String> {
+    raw.map(|s| {
+        s.split(',')
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 pub(crate) fn now_unix() -> i64 {

@@ -41,6 +41,8 @@ test("renders the account section layout", async ({ page }) => {
   await expect(currentPassword(page)).toBeVisible();
   await expect(newPassword(page)).toBeVisible();
   await expect(page.getByTestId("change-password-submit")).toBeVisible();
+  // Hidden-formats card (its behavior is covered by hidden_formats.spec.ts).
+  await expect(page.getByTestId("account-hidden-formats-card")).toBeVisible();
 
   // Kindle and Kobo have their own sections now — not this one.
   await expect(page.getByTestId("account-kindle-card")).toHaveCount(0);

@@ -106,6 +106,15 @@ enum AuthService {
         await OfflineStore.shared.cacheDelete(CacheKey.me)
     }
 
+    /// Replace the caller's hidden-formats list (the formats their library
+    /// All Books view excludes). Account configuration — never queued in the
+    /// outbox; an offline call fails loudly (rule 08).
+    static func setHiddenFormats(_ formats: [String]) async throws {
+        struct Body: Encodable { let formats: [String] }
+        let _: Empty = try await APIClient.shared.post("/api/account/hidden-formats", body: Body(formats: formats))
+        await OfflineStore.shared.cacheDelete(CacheKey.me)
+    }
+
     // MARK: - Profile
     //
     // A profile is account configuration, so these never go through

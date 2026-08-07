@@ -20,6 +20,7 @@ use sqlx::SqlitePool;
 use crate::http_errors::internal;
 use crate::rate_limit::RateLimiter;
 
+mod account;
 mod audiobooks;
 mod author_photos;
 mod authors;

@@ -36,6 +36,9 @@ pub(super) struct FetchSignals {
     pub(super) loading: Signal<bool>,
     pub(super) loading_more: Signal<bool>,
     pub(super) error: Signal<Option<String>>,
+    /// First-page hidden-formats receipt (`LibraryPage::hidden_count`);
+    /// `None` when the viewer hides nothing. Feeds the header's "N hidden".
+    pub(super) hidden: Signal<Option<i64>>,
     pub(super) fetch_epoch: Signal<u64>,
     /// Offline-cache generation (mobile): a bump re-runs the page-1 fetch,
     /// which is then served from the freshly revalidated cache.
@@ -92,6 +95,7 @@ pub(super) fn spawn_page_fetch_effect(
         omnibus_shared::SortKey,
         omnibus_shared::SortDir,
         omnibus_shared::ViewFilters,
+        Vec<String>,
     )>,
     sigs: FetchSignals,
 ) {
@@ -107,7 +111,7 @@ pub(super) fn spawn_page_fetch_effect(
         // Re-run when a background cache revalidation lands changed data;
         // the refetch below is then a fresh cache hit (zero network).
         let _ = generation();
-        let (q, sort_key, sort_dir, filters) = fetch_key();
+        let (q, sort_key, sort_dir, filters, exclude_formats) = fetch_key();
         let epoch = {
             fetch_epoch.with_mut(|e| *e += 1);
             *fetch_epoch.peek()
@@ -125,8 +129,16 @@ pub(super) fn spawn_page_fetch_effect(
             if q.is_empty() {
                 // Browse: server keyset page 1 (server-side sort + filter,
                 // facets + total ride along on the first page).
-                let result =
-                    data::get_ebooks_page(&url, sort_key, sort_dir, filters, None, PAGE_SIZE).await;
+                let result = data::get_ebooks_page(
+                    &url,
+                    sort_key,
+                    sort_dir,
+                    filters,
+                    exclude_formats,
+                    None,
+                    PAGE_SIZE,
+                )
+                .await;
                 if *fetch_epoch.peek() != epoch {
                     return; // a newer fetch superseded us — drop this result
                 }
@@ -158,6 +170,7 @@ fn apply_browse_result(
         mut lib_path,
         mut lib_error,
         mut error,
+        mut hidden,
         ..
     } = sigs;
     match result {
@@ -166,12 +179,16 @@ fn apply_browse_result(
             lib_error.set(None);
             next_cursor.set(page.next_cursor);
             total.set(page.total);
+            // Always a page-1 result here, so the receipt is authoritative:
+            // `None` (no exclusion) clears any previous count.
+            hidden.set(page.hidden_count);
             books.set(page.books);
         }
         Err(e) => {
             error.set(Some(e.to_string()));
             books.set(Vec::new());
             total.set(None);
+            hidden.set(None);
             lib_error.set(None);
         }
     }
@@ -189,6 +206,7 @@ fn apply_search_result(
         mut lib_path,
         mut lib_error,
         mut error,
+        mut hidden,
         ..
     } = sigs;
     match result {
@@ -196,6 +214,8 @@ fn apply_search_result(
             lib_path.set(lib.path);
             lib_error.set(lib.error);
             total.set(lib.total);
+            // Search never excludes (landing-only scope) — no receipt.
+            hidden.set(None);
             books.set(lib.books);
         }
         Err(e) => {
@@ -212,6 +232,7 @@ pub(super) fn spawn_load_more_effect(
     server_url: String,
     want_more: Signal<u32>,
     prefs: Signal<ViewPrefs>,
+    exclude_formats: Memo<Vec<String>>,
     sigs: FetchSignals,
 ) {
     let FetchSignals {
@@ -233,9 +254,16 @@ pub(super) fn spawn_load_more_effect(
         let url = server_url.clone();
         loading_more.set(true);
         spawn(async move {
-            let result =
-                data::get_ebooks_page(&url, p.sort_key, p.sort_dir, p.filters, cursor, PAGE_SIZE)
-                    .await;
+            let result = data::get_ebooks_page(
+                &url,
+                p.sort_key,
+                p.sort_dir,
+                p.filters,
+                exclude_formats.peek().clone(),
+                cursor,
+                PAGE_SIZE,
+            )
+            .await;
             // Drop the append if a page-1 refetch (sort/filter/query change)
             // superseded us mid-flight — otherwise we'd splice an old result
             // stream onto the new list and overwrite its cursor.

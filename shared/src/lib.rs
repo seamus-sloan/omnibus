@@ -69,6 +69,26 @@ pub fn search_query_too_long(q: &str) -> bool {
     q.len() > SEARCH_QUERY_MAX_LEN
 }
 
+/// The scanner-indexed formats, lowercase — the hidden-formats pickers' option list.
+// A UI list only, not a validation gate: `set_hidden_formats` accepts any
+// plausible token, and the pickers additionally render a saved token this
+// list doesn't know so it can always be un-hidden.
+pub const KNOWN_LIBRARY_FORMATS: &[&str] = &["epub", "pdf", "cbz", "m4b", "m4a", "mp3"];
+
+/// Drop implausible `exclude_formats` tokens and cap the list, so a hostile
+/// query string can't inflate SQL bind counts. Mirrors `set_hidden_formats`'
+/// write-side validation (`[a-z0-9]{1,16}`, ≤ 32 tokens) on the read side.
+pub fn sanitize_exclude_formats(mut formats: Vec<String>) -> Vec<String> {
+    formats.retain(|t| {
+        !t.is_empty()
+            && t.len() <= 16
+            && t.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    });
+    formats.truncate(32);
+    formats
+}
+
 pub use audiobook::*;
 pub use auth::*;
 pub use bookmark::*;
@@ -106,5 +126,25 @@ mod tests {
     fn search_query_too_long_rejects_over_cap_and_accepts_at_cap() {
         assert!(!search_query_too_long(&"a".repeat(SEARCH_QUERY_MAX_LEN)));
         assert!(search_query_too_long(&"a".repeat(SEARCH_QUERY_MAX_LEN + 1)));
+    }
+}
+
+#[cfg(test)]
+mod sanitize_tests {
+    use super::sanitize_exclude_formats;
+
+    #[test]
+    fn sanitize_exclude_formats_drops_implausible_tokens_and_caps_the_list() {
+        let noisy = vec![
+            "cbz".to_string(),
+            "NOT LOWER".to_string(),
+            "a-b".to_string(),
+            "x".repeat(17),
+            String::new(),
+        ];
+        assert_eq!(sanitize_exclude_formats(noisy), vec!["cbz".to_string()]);
+
+        let oversized: Vec<String> = (0..40).map(|i| format!("f{i}")).collect();
+        assert_eq!(sanitize_exclude_formats(oversized).len(), 32);
     }
 }

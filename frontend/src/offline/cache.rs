@@ -36,8 +36,10 @@ pub mod keys {
         "library".into()
     }
     /// First page of `GET /api/ebooks` (landing's initial fetch).
-    pub fn ebooks_first(sort: &str, dir: &str, formats: &str) -> String {
-        format!("ebooks_first:{sort}:{dir}:{formats}")
+    pub fn ebooks_first(sort: &str, dir: &str, formats: &str, exclude: &str) -> String {
+        // `exclude` keys the viewer's hidden-formats pref: a pref change must
+        // miss the cached first page or a stale page serves after a toggle.
+        format!("ebooks_first:{sort}:{dir}:{formats}:x={exclude}")
     }
     /// The full-library replica (every row, background-synced).
     pub fn ebooks_all() -> String {

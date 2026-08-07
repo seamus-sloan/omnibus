@@ -47,6 +47,7 @@ async fn insert_user(pool: &SqlitePool, username: &str, is_admin: bool) -> User 
         kindle_email: None,
         display_name: None,
         has_avatar: false,
+        hidden_formats: Vec::new(),
     }
 }
 

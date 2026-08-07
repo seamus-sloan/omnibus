@@ -38,6 +38,10 @@ struct LibraryPageResult: Codable, Sendable {
     var books: [Book]
     var nextCursor: String?
     var total: Int64?
+    /// The "N hidden" receipt: how many books the hidden-formats exclusion
+    /// removed. First page only; `nil` when nothing is hidden. Optional keeps
+    /// pre-upgrade cached pages decoding.
+    var hiddenCount: Int64?
 }
 
 enum LibraryService {
@@ -58,7 +62,8 @@ enum LibraryService {
         cursor: String?
     ) -> AsyncThrowingStream<CacheRead<LibraryPageResult>, Error> {
         let query = pageQuery(
-            sort: sort, direction: direction, formats: filter.formats, cursor: cursor
+            sort: sort, direction: direction, formats: filter.formats,
+            excludeFormats: filter.hiddenFormats, cursor: cursor
         )
         let signature = pageSignature(sort: sort, direction: direction, filter: filter)
 
@@ -116,12 +121,13 @@ enum LibraryService {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let (library, next): (EbookLibrary, String?) =
-                        try await APIClient.shared.getPaged("/api/ebooks", query: query)
+                    let (library, next, hidden): (EbookLibrary, String?, Int64?) =
+                        try await APIClient.shared.getPagedCounted("/api/ebooks", query: query)
                     continuation.yield(
                         CacheRead(
                             value: LibraryPageResult(
-                                books: library.books, nextCursor: next, total: library.total
+                                books: library.books, nextCursor: next,
+                                total: library.total, hiddenCount: hidden
                             ),
                             isFresh: true
                         )
@@ -154,10 +160,11 @@ enum LibraryService {
                 var delivered = false
                 do {
                     let live = Cache.live(CacheKey.libraryPage(signature)) {
-                        let (library, next): (EbookLibrary, String?) =
-                            try await APIClient.shared.getPaged("/api/ebooks", query: query)
+                        let (library, next, hidden): (EbookLibrary, String?, Int64?) =
+                            try await APIClient.shared.getPagedCounted("/api/ebooks", query: query)
                         return LibraryPageResult(
-                            books: library.books, nextCursor: next, total: library.total
+                            books: library.books, nextCursor: next,
+                            total: library.total, hiddenCount: hidden
                         )
                     }
                     for try await read in live {
@@ -184,7 +191,8 @@ enum LibraryService {
     }
 
     private static func pageQuery(
-        sort: SortKey, direction: SortDirection, formats: [String], cursor: String?
+        sort: SortKey, direction: SortDirection, formats: [String],
+        excludeFormats: [String], cursor: String?
     ) -> [String: String?] {
         var query: [String: String?] = [
             "sort": sort.rawValue,
@@ -192,15 +200,21 @@ enum LibraryService {
             "limit": String(pageSize),
         ]
         if !formats.isEmpty { query["formats"] = formats.joined(separator: ",") }
+        if !excludeFormats.isEmpty {
+            query["exclude_formats"] = excludeFormats.sorted().joined(separator: ",")
+        }
         if let cursor { query["cursor"] = cursor }
         return query
     }
 
-    private static func pageSignature(
+    static func pageSignature(
         sort: SortKey, direction: SortDirection, filter: LibraryFilter
     ) -> String {
         let formats = filter.formats.sorted().joined(separator: "-")
-        return "\(sort.rawValue).\(direction.rawValue).\(formats)"
+        // The hidden-formats pref keys the cached first page: a pref change
+        // must miss the cache or a stale page serves right after a toggle.
+        let hidden = filter.hiddenFormats.sorted().joined(separator: "-")
+        return "\(sort.rawValue).\(direction.rawValue).\(formats)|hide:\(hidden)"
     }
 
     /// One book: replica, then the server, then the local mirror.

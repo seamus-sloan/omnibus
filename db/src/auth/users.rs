@@ -84,6 +84,7 @@ pub async fn create_user(pool: &SqlitePool, username: &str, password: &str) -> A
         kindle_email: None,
         display_name: None,
         has_avatar: false,
+        hidden_formats: Vec::new(),
     })
 }
 
@@ -132,7 +133,7 @@ async fn check_registration_preconditions(
 /// `user_avatars` rows it describes.
 pub(crate) const USER_COLUMNS: &str =
     "u.id, u.username, u.is_admin, u.can_upload, u.can_edit, u.can_download,
-     u.kindle_email, u.display_name,
+     u.kindle_email, u.display_name, u.hidden_formats,
      EXISTS(SELECT 1 FROM user_avatars a WHERE a.user_id = u.id) AS has_avatar";
 
 /// Look up a user record by username (case-insensitive); returns `None` if no match.
@@ -245,6 +246,68 @@ pub async fn get_kindle_email(pool: &SqlitePool, user_id: i64) -> AuthResult<Opt
         .await?
         .flatten();
     Ok(v.filter(|s| !s.trim().is_empty()))
+}
+
+/// Most format tokens a user may hide — far above any real library's format
+/// variety, low enough that the column can't become a dumping ground.
+pub const HIDDEN_FORMATS_MAX: usize = 32;
+
+/// Set (or clear, when empty) the formats a user hides from the landing
+/// All Books view. Tokens are canonicalized (trim, lowercase, dedupe, sort)
+/// before storage and the canonical list is returned. Rejects a token that
+/// isn't a plausible file-format name (`[a-z0-9]{1,16}` after lowercasing)
+/// or a list longer than [`HIDDEN_FORMATS_MAX`] with
+/// [`AuthError::Validation`].
+pub async fn set_hidden_formats(
+    pool: &SqlitePool,
+    user_id: i64,
+    formats: &[String],
+) -> AuthResult<Vec<String>> {
+    let mut canonical: Vec<String> = formats
+        .iter()
+        .map(|f| f.trim().to_lowercase())
+        .filter(|f| !f.is_empty())
+        .collect();
+    canonical.sort();
+    canonical.dedup();
+
+    if canonical.len() > HIDDEN_FORMATS_MAX {
+        return Err(AuthError::Validation(format!(
+            "at most {HIDDEN_FORMATS_MAX} hidden formats are supported"
+        )));
+    }
+    if let Some(bad) = canonical.iter().find(|f| {
+        f.len() > 16
+            || !f
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+    }) {
+        return Err(AuthError::Validation(format!(
+            "not a valid format name: {bad:?}"
+        )));
+    }
+
+    let stored = if canonical.is_empty() {
+        None
+    } else {
+        Some(canonical.join(","))
+    };
+    sqlx::query("UPDATE users SET hidden_formats = ? WHERE id = ?")
+        .bind(stored)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(canonical)
+}
+
+/// Read a user's hidden-formats list, canonical order. Empty when unset.
+pub async fn get_hidden_formats(pool: &SqlitePool, user_id: i64) -> AuthResult<Vec<String>> {
+    let v: Option<Option<String>> =
+        sqlx::query_scalar("SELECT hidden_formats FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(crate::auth::parse_hidden_formats(v.flatten()))
 }
 
 /// Change a user's password. Verifies `current` against the stored hash to

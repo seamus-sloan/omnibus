@@ -105,16 +105,21 @@ enum KeyVal {
 /// Return one page of `library_paths` ordered by `sort`/`dir`, filtered by
 /// `filters`, starting strictly after `cursor` (or at the top when `None`).
 ///
+/// `exclude_formats` is the caller's landing-only hidden-formats exclusion
+/// (see [`exclude_formats_predicate`]); pass `&[]` everywhere else.
+///
 /// `limit` is clamped to `[1, MAX_BOOKS_RETURNED]`. Fetches one extra row to
 /// decide whether a further page exists: a full `limit` page yields a
 /// `next` cursor built from the last returned row; a short page yields
 /// `next == None`. Empty `library_paths` returns an empty page.
+#[allow(clippy::too_many_arguments)] // orthogonal query knobs; a params struct would just rename them
 pub async fn list_books_page(
     pool: &SqlitePool,
     library_paths: &[&str],
     sort: SortKey,
     dir: SortDir,
     filters: &ViewFilters,
+    exclude_formats: &[String],
     cursor: Option<&PageCursor>,
     limit: i64,
 ) -> Result<BookPage, super::BooksError> {
@@ -126,7 +131,8 @@ pub async fn list_books_page(
     }
     let limit = limit.clamp(1, MAX_BOOKS_RETURNED);
 
-    let (sql, mut binds) = build_page_sql(sort, dir, library_paths, filters, cursor);
+    let (sql, mut binds) =
+        build_page_sql(sort, dir, library_paths, filters, exclude_formats, cursor);
     // Fetch one beyond the page so a full page can advertise a `next` cursor
     // without a trailing empty round-trip.
     binds.push(SqlVal::Int(limit + 1));
@@ -166,6 +172,7 @@ fn build_page_sql(
     dir: SortDir,
     library_paths: &[&str],
     filters: &ViewFilters,
+    exclude_formats: &[String],
     cursor: Option<&PageCursor>,
 ) -> (String, Vec<SqlVal>) {
     let (primary, secondary) = axis_sort_columns(sort);
@@ -180,6 +187,7 @@ fn build_page_sql(
         binds.push(SqlVal::Text((*p).to_string()));
     }
     let filter_sql = filter_predicates(filters, &mut binds);
+    let exclude_sql = exclude_formats_predicate(exclude_formats, &mut binds);
     let keyset_sql = match cursor {
         Some(c) => format!(
             " AND {}",
@@ -204,7 +212,7 @@ fn build_page_sql(
          WHERE ((l.path IN ({path_ph})
                  AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id))
              OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid))
-           {filter_sql}{keyset_sql}
+           {filter_sql}{exclude_sql}{keyset_sql}
          ORDER BY {order_by}
          LIMIT ?
         "
@@ -353,13 +361,15 @@ fn strict_present(col: &str, asc: bool) -> String {
 }
 
 /// Count the library rows matching `filters` — the filtered-total companion
-/// to [`list_books_page`], sharing its predicates. With empty filters this
-/// matches `count_books_for_paths`: fileless (ghosted) books are excluded
-/// either way.
+/// to [`list_books_page`], sharing its predicates (including the
+/// `exclude_formats` exclusion — pass `&[]` for none). With empty filters and
+/// no exclusion this matches `count_books_for_paths`: fileless (ghosted)
+/// books are excluded either way.
 pub async fn count_books_page(
     pool: &SqlitePool,
     library_paths: &[&str],
     filters: &ViewFilters,
+    exclude_formats: &[String],
 ) -> Result<i64, super::BooksError> {
     if library_paths.is_empty() {
         return Ok(0);
@@ -370,6 +380,7 @@ pub async fn count_books_page(
         .collect();
     let path_ph = placeholders(library_paths.len());
     let filter_sql = filter_predicates(filters, &mut binds);
+    let exclude_sql = exclude_formats_predicate(exclude_formats, &mut binds);
     let sql = format!(
         r"
         SELECT COUNT(*)
@@ -377,7 +388,7 @@ pub async fn count_books_page(
           JOIN scan_roots l ON l.id = b.library_id
          WHERE ((l.path IN ({path_ph})
                  AND EXISTS (SELECT 1 FROM book_files bf WHERE bf.book_id = b.id))
-             OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid)){filter_sql}
+             OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid)){filter_sql}{exclude_sql}
         "
     );
     let mut q = sqlx::query_scalar::<_, i64>(&sql);
@@ -451,6 +462,31 @@ fn exists_in(
         binds.push(SqlVal::Text(v.clone()));
     }
     format!(" AND EXISTS (SELECT 1 FROM {from} WHERE {join} AND {col} IN ({ph}))")
+}
+
+/// The landing hidden-formats exclusion: a book stays visible while it has at
+/// least one file in a non-hidden format, or any physical copy. Hiding is
+/// per-*format*, so a dual-format book survives until every format it carries
+/// is hidden — and physical ownership trumps hiding outright (a book whose
+/// only files are hidden but which has a physical copy remains visible, by
+/// design). Empty `exclude` returns `""`.
+///
+/// `book_files.format` is COLLATE NOCASE (column collation governs `NOT IN`
+/// exactly as it does the include clause's `IN`), so lowercase wire tokens
+/// match the stored uppercase values without folding.
+fn exclude_formats_predicate(exclude: &[String], binds: &mut Vec<SqlVal>) -> String {
+    if exclude.is_empty() {
+        return String::new();
+    }
+    let ph = placeholders(exclude.len());
+    for v in exclude {
+        binds.push(SqlVal::Text(v.clone()));
+    }
+    format!(
+        " AND (EXISTS (SELECT 1 FROM book_files bf \
+                        WHERE bf.book_id = b.id AND bf.format NOT IN ({ph})) \
+            OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid))"
+    )
 }
 
 #[cfg(test)]

@@ -15,6 +15,8 @@ mod downloads;
 // Web-only Kobo wireless-sync device card, rendered as its own Settings
 // section.
 #[cfg(not(feature = "mobile"))]
+pub(crate) mod hidden_formats;
+#[cfg(not(feature = "mobile"))]
 pub(crate) mod kobo;
 // Display name + avatar, at the top of the Account section.
 #[cfg(not(feature = "mobile"))]
@@ -291,6 +293,7 @@ fn account_web_body() -> Element {
     rsx! {
         profile::ProfileCard {}
         ChangePasswordCard {}
+        hidden_formats::HiddenFormatsCard {}
     }
 }
 

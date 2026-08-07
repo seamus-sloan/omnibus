@@ -48,6 +48,7 @@ pub async fn get_ebooks_page(
     sort_key: SortKey,
     sort_dir: SortDir,
     filters: ViewFilters,
+    exclude_formats: Vec<String>,
     cursor: Option<String>,
     limit: i64,
 ) -> Result<LibraryPage, DataError> {
@@ -58,6 +59,7 @@ pub async fn get_ebooks_page(
             sort_key,
             sort_dir,
             &filters,
+            &exclude_formats,
             cursor.as_deref(),
             limit,
         )
@@ -68,9 +70,26 @@ pub async fn get_ebooks_page(
     // the TTL-gated background sync on every online browse.
     crate::offline::replica::ensure_fresh(server_url.to_string());
     if cursor.is_none() {
-        first_page_ebooks(server_url, sort_key, sort_dir, filters, limit).await
+        first_page_ebooks(
+            server_url,
+            sort_key,
+            sort_dir,
+            filters,
+            exclude_formats,
+            limit,
+        )
+        .await
     } else {
-        cursor_page_ebooks(server_url, sort_key, sort_dir, filters, cursor, limit).await
+        cursor_page_ebooks(
+            server_url,
+            sort_key,
+            sort_dir,
+            filters,
+            exclude_formats,
+            cursor,
+            limit,
+        )
+        .await
     }
 }
 
@@ -84,26 +103,36 @@ async fn first_page_ebooks(
     sort_key: SortKey,
     sort_dir: SortDir,
     filters: ViewFilters,
+    exclude_formats: Vec<String>,
     limit: i64,
 ) -> Result<LibraryPage, DataError> {
     let key = crate::offline::cache::keys::ebooks_first(
         sort_key.as_wire(),
         sort_dir.as_wire(),
         &filters.formats.join(","),
+        &exclude_formats.join(","),
     );
     let url = server_url.to_string();
     let f = filters.clone();
+    let excl = exclude_formats.clone();
     let result = crate::offline::cache::read_through(key, async move {
-        get_ebooks_page_online(&url, sort_key, sort_dir, f, None, limit).await
+        get_ebooks_page_online(&url, sort_key, sort_dir, f, excl, None, limit).await
     })
     .await;
     match result {
         // Went offline mid-request with a cold first-page cache — the full
         // replica may still save the paint.
         Err(e) if crate::offline::sync::is_offline_error(&e) => {
-            crate::offline::replica::page_from_cache(sort_key, sort_dir, &filters, None, limit)
-                .await
-                .ok_or(e)
+            crate::offline::replica::page_from_cache(
+                sort_key,
+                sort_dir,
+                &filters,
+                &exclude_formats,
+                None,
+                limit,
+            )
+            .await
+            .ok_or(e)
         }
         r => r,
     }
@@ -116,6 +145,7 @@ async fn cursor_page_ebooks(
     sort_key: SortKey,
     sort_dir: SortDir,
     filters: ViewFilters,
+    exclude_formats: Vec<String>,
     cursor: Option<String>,
     limit: i64,
 ) -> Result<LibraryPage, DataError> {
@@ -124,6 +154,7 @@ async fn cursor_page_ebooks(
         sort_key,
         sort_dir,
         filters.clone(),
+        exclude_formats.clone(),
         cursor.clone(),
         limit,
     )
@@ -139,6 +170,7 @@ async fn cursor_page_ebooks(
                 sort_key,
                 sort_dir,
                 &filters,
+                &exclude_formats,
                 cursor.as_deref(),
                 limit,
             )
@@ -165,16 +197,27 @@ pub async fn refresh_ebooks_first_page(
     sort_key: SortKey,
     sort_dir: SortDir,
     filters: ViewFilters,
+    exclude_formats: Vec<String>,
     limit: i64,
 ) {
     let key = crate::offline::cache::keys::ebooks_first(
         sort_key.as_wire(),
         sort_dir.as_wire(),
         &filters.formats.join(","),
+        &exclude_formats.join(","),
     );
     let url = server_url.to_string();
     crate::offline::cache::refresh(key, async move {
-        get_ebooks_page_online(&url, sort_key, sort_dir, filters, None, limit).await
+        get_ebooks_page_online(
+            &url,
+            sort_key,
+            sort_dir,
+            filters,
+            exclude_formats,
+            None,
+            limit,
+        )
+        .await
     })
     .await;
 }
@@ -185,6 +228,7 @@ pub(crate) async fn get_ebooks_page_online(
     sort_key: SortKey,
     sort_dir: SortDir,
     filters: ViewFilters,
+    exclude_formats: Vec<String>,
     cursor: Option<String>,
     limit: i64,
 ) -> Result<LibraryPage, DataError> {
@@ -198,6 +242,10 @@ pub(crate) async fn get_ebooks_page_online(
         // URL-encoding needed.
         url.push_str("&formats=");
         url.push_str(&filters.formats.join(","));
+    }
+    if !exclude_formats.is_empty() {
+        url.push_str("&exclude_formats=");
+        url.push_str(&exclude_formats.join(","));
     }
     if let Some(c) = &cursor {
         url.push_str("&cursor=");
@@ -219,6 +267,11 @@ pub(crate) async fn get_ebooks_page_online(
         .get("X-Total-Count")
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.parse::<i64>().ok());
+    let hidden_count = response
+        .headers()
+        .get("X-Hidden-Count")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<i64>().ok());
     let lib = response.json::<EbookLibrary>().await?;
     Ok(LibraryPage {
         path: lib.path,
@@ -227,6 +280,8 @@ pub(crate) async fn get_ebooks_page_online(
         // Surface the total only on the first page, matching the web RPC shape.
         total: cursor.is_none().then_some(total).flatten(),
         facets: None,
+        // The server only emits the receipt header on the first page.
+        hidden_count,
     })
 }
 
@@ -411,10 +466,11 @@ pub async fn get_ebooks_page(
     sort_key: SortKey,
     sort_dir: SortDir,
     filters: ViewFilters,
+    exclude_formats: Vec<String>,
     cursor: Option<String>,
     limit: i64,
 ) -> Result<LibraryPage, DataError> {
-    crate::rpc::rpc_get_ebooks_page(sort_key, sort_dir, filters, cursor, limit)
+    crate::rpc::rpc_get_ebooks_page(sort_key, sort_dir, filters, exclude_formats, cursor, limit)
         .await
         .map_err(note_server_fn_err)
 }
