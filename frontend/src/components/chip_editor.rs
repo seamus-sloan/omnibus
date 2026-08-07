@@ -216,40 +216,48 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
             }
             ChipInputArea {
                 input,
-                placeholder: props.options.placeholder.clone(),
-                input_class: props.options.input_class.clone(),
-                testid_prefix: props.options.testid_prefix.clone(),
-                autofocus: props.options.autofocus,
-                dropdown_header: props.options.dropdown_header.clone(),
-                selection,
-                highlight: highlight(),
-                on_focus: move |_| {
-                    focused.set(true);
-                    suppress_open.set(false);
+                appearance: ChipInputAppearance {
+                    placeholder: props.options.placeholder.clone(),
+                    input_class: props.options.input_class.clone(),
+                    testid_prefix: props.options.testid_prefix.clone(),
+                    autofocus: props.options.autofocus,
                 },
-                on_blur: move |evt: Event<FocusData>| {
-                    focused.set(false);
-                    highlight.set(None);
-                    // Mirrors `EditableCell`'s onblur: a genuine click-away
-                    // (or Tab past the whole editor) exits the host's
-                    // wrapping edit mode the same way Escape does — but Tab
-                    // *within* the editor (e.g. onto a chip's Remove
-                    // button) must not, so this only closes when the
-                    // element gaining focus falls outside `root_el`.
-                    // Suggestion-row picks never reach here at all:
-                    // `SuggestionDropdown`'s `onmousedown` calls
-                    // `prevent_default()`, suppressing the browser's
-                    // default focus-shift so the input never blurs during
-                    // a pick.
-                    close_unless_focus_stayed_inside(evt, root_el, on_close);
+                dropdown: ChipDropdownView {
+                    selection,
+                    highlight: highlight(),
+                    dropdown_header: props.options.dropdown_header.clone(),
                 },
-                on_input: move |value: String| {
-                    input.set(value);
-                    highlight.set(None);
-                    suppress_open.set(false);
+                callbacks: ChipInputAreaCallbacks {
+                    input: ChipInputCallbacks {
+                        on_focus: EventHandler::new(move |_| {
+                            focused.set(true);
+                            suppress_open.set(false);
+                        }),
+                        on_blur: EventHandler::new(move |evt: Event<FocusData>| {
+                            focused.set(false);
+                            highlight.set(None);
+                            // Mirrors `EditableCell`'s onblur: a genuine click-away
+                            // (or Tab past the whole editor) exits the host's
+                            // wrapping edit mode the same way Escape does — but Tab
+                            // *within* the editor (e.g. onto a chip's Remove
+                            // button) must not, so this only closes when the
+                            // element gaining focus falls outside `root_el`.
+                            // Suggestion-row picks never reach here at all:
+                            // `SuggestionDropdown`'s `onmousedown` calls
+                            // `prevent_default()`, suppressing the browser's
+                            // default focus-shift so the input never blurs during
+                            // a pick.
+                            close_unless_focus_stayed_inside(evt, root_el, on_close);
+                        }),
+                        on_input: EventHandler::new(move |value: String| {
+                            input.set(value);
+                            highlight.set(None);
+                            suppress_open.set(false);
+                        }),
+                        on_keydown: EventHandler::new(on_keydown),
+                    },
+                    on_pick: EventHandler::new(move |name: String| commit(name)),
                 },
-                on_keydown,
-                on_pick: move |name: String| commit(name),
             }
         }
     }
@@ -314,22 +322,44 @@ fn close_unless_focus_stayed_inside(
     on_close.call(());
 }
 
-/// Props for the [`ChipInputArea`] sub-component.
-#[derive(Props, Clone, PartialEq)]
-struct ChipInputAreaProps {
-    input: Signal<String>,
+/// Presentational knobs shared by [`ChipInput`] and [`ChipInputArea`] —
+/// `testid_prefix` is the raw prefix (not a final id) so each caller can
+/// derive its own suffix (`-input`, `-suggestions`).
+#[derive(Clone, PartialEq)]
+struct ChipInputAppearance {
     placeholder: String,
     input_class: String,
     testid_prefix: String,
     autofocus: bool,
-    dropdown_header: String,
+}
+
+/// Suggestion-dropdown state + config for [`ChipInputArea`], decoupled from
+/// the input's own appearance/callbacks.
+#[derive(Clone, PartialEq)]
+struct ChipDropdownView {
     selection: SelectionView,
     highlight: Option<usize>,
-    on_focus: EventHandler<()>,
-    on_blur: EventHandler<Event<FocusData>>,
-    on_input: EventHandler<String>,
-    on_keydown: EventHandler<Event<KeyboardData>>,
+    dropdown_header: String,
+}
+
+/// [`ChipInputCallbacks`] plus the one extra callback [`ChipInputArea`] needs
+/// for the dropdown's pick action.
+#[derive(Clone, PartialEq)]
+struct ChipInputAreaCallbacks {
+    input: ChipInputCallbacks,
     on_pick: EventHandler<String>,
+}
+
+/// Props for the [`ChipInputArea`] sub-component. Presentational knobs,
+/// dropdown state, and callbacks are each grouped into their own struct so
+/// this stays under the 5-prop soft cap — mirroring how [`ChipEditorProps`]
+/// groups its own presentational knobs into [`ChipEditorOptions`].
+#[derive(Props, Clone, PartialEq)]
+struct ChipInputAreaProps {
+    input: Signal<String>,
+    appearance: ChipInputAppearance,
+    dropdown: ChipDropdownView,
+    callbacks: ChipInputAreaCallbacks,
 }
 
 /// Input field plus its suggestion dropdown.
@@ -337,36 +367,27 @@ struct ChipInputAreaProps {
 fn ChipInputArea(props: ChipInputAreaProps) -> Element {
     let ChipInputAreaProps {
         input,
-        placeholder,
-        input_class,
-        testid_prefix,
-        autofocus,
-        dropdown_header,
+        appearance,
+        dropdown,
+        callbacks,
+    } = props;
+    let ChipDropdownView {
         selection,
         highlight,
-        on_focus,
-        on_blur,
-        on_input,
-        on_keydown,
-        on_pick,
-    } = props;
+        dropdown_header,
+    } = dropdown;
     let SelectionView {
         filtered,
         typed,
         show_create_row,
     } = selection;
+    let testid_prefix = appearance.testid_prefix.clone();
     rsx! {
         div { class: "chip-editor-input-wrap",
             ChipInput {
                 input,
-                placeholder,
-                input_class,
-                testid: format!("{testid_prefix}-input"),
-                autofocus,
-                on_focus,
-                on_blur,
-                on_input,
-                on_keydown,
+                appearance,
+                callbacks: callbacks.input,
             }
             if !filtered.is_empty() || show_create_row {
                 SuggestionDropdown {
@@ -378,7 +399,7 @@ fn ChipInputArea(props: ChipInputAreaProps) -> Element {
                     },
                     dropdown_header,
                     testid: format!("{testid_prefix}-suggestions"),
-                    on_pick,
+                    on_pick: callbacks.on_pick,
                 }
             }
         }
@@ -541,18 +562,22 @@ fn dispatch_keydown(
     }
 }
 
-/// Props for the [`ChipInput`] sub-component.
-#[derive(Props, Clone, PartialEq)]
-struct ChipInputProps {
-    input: Signal<String>,
-    placeholder: String,
-    input_class: String,
-    testid: String,
-    autofocus: bool,
+/// Focus/blur/input/keydown handlers shared by [`ChipInput`] and
+/// [`ChipInputArea`] — every one forwards straight to the parent.
+#[derive(Clone, PartialEq)]
+struct ChipInputCallbacks {
     on_focus: EventHandler<()>,
     on_blur: EventHandler<Event<FocusData>>,
     on_input: EventHandler<String>,
     on_keydown: EventHandler<Event<KeyboardData>>,
+}
+
+/// Props for the [`ChipInput`] sub-component.
+#[derive(Props, Clone, PartialEq)]
+struct ChipInputProps {
+    input: Signal<String>,
+    appearance: ChipInputAppearance,
+    callbacks: ChipInputCallbacks,
 }
 
 /// Inline `<input>` for the chip editor — owns nothing, forwards every event to the parent's handlers.
@@ -560,15 +585,22 @@ struct ChipInputProps {
 fn ChipInput(props: ChipInputProps) -> Element {
     let ChipInputProps {
         input,
+        appearance,
+        callbacks,
+    } = props;
+    let ChipInputAppearance {
         placeholder,
         input_class,
-        testid,
+        testid_prefix,
         autofocus,
+    } = appearance;
+    let testid = format!("{testid_prefix}-input");
+    let ChipInputCallbacks {
         on_focus,
         on_blur,
         on_input,
         on_keydown,
-    } = props;
+    } = callbacks;
     rsx! {
         input {
             class: "{input_class}",

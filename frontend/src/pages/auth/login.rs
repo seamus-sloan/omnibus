@@ -126,6 +126,13 @@ pub fn LoginPage() -> Element {
     #[cfg(feature = "mobile")]
     let _ = keep_signed_in;
 
+    let credentials = Credentials { username, password };
+    let status = LoginStatus {
+        error,
+        submitting,
+        registration_open,
+    };
+
     #[cfg(not(feature = "mobile"))]
     let out = rsx! {
         AuthShell {
@@ -136,12 +143,9 @@ pub fn LoginPage() -> Element {
             },
             lede: Some("Continue to your library.".to_string()),
             LoginForm {
-                username,
-                password,
-                error,
-                submitting,
+                credentials,
+                status,
                 keep_signed_in,
-                registration_open,
                 on_submit,
                 on_keydown,
             }
@@ -156,11 +160,8 @@ pub fn LoginPage() -> Element {
         rsx! {
             MobileLoginForm {
                 host,
-                username,
-                password,
-                error,
-                submitting,
-                registration_open,
+                credentials,
+                status,
                 on_submit,
                 on_keydown,
             }
@@ -178,16 +179,10 @@ pub fn LoginPage() -> Element {
 struct MobileLoginFormProps {
     /// Host the login targets, shown in the connected-to bar.
     host: String,
-    /// Username input value, shared with the parent.
-    username: Signal<String>,
-    /// Password input value, shared with the parent.
-    password: Signal<String>,
-    /// Current submission error, if any.
-    error: Signal<Option<String>>,
-    /// True while a login request is in flight.
-    submitting: Signal<bool>,
-    /// Whether self-registration is open; `None` until the probe answers.
-    registration_open: Signal<Option<bool>>,
+    /// Username + password input values, shared with the parent.
+    credentials: Credentials,
+    /// Error / in-flight / registration-open state, shared with the parent.
+    status: LoginStatus,
     /// Fired on form submission (submit-button click or Enter).
     on_submit: EventHandler<FormEvent>,
     /// Fired on Enter keydown in either input.
@@ -200,14 +195,17 @@ struct MobileLoginFormProps {
 fn MobileLoginForm(props: MobileLoginFormProps) -> Element {
     let MobileLoginFormProps {
         host,
-        username,
-        password,
-        error,
-        submitting,
-        registration_open,
+        credentials,
+        status,
         on_submit,
         on_keydown,
     } = props;
+    let Credentials { username, password } = credentials;
+    let LoginStatus {
+        error,
+        submitting,
+        registration_open,
+    } = status;
     let nav = use_navigator();
     rsx! {
         // Connected-to bar: shows which server this login targets, with a
@@ -259,21 +257,35 @@ fn MobileLoginForm(props: MobileLoginFormProps) -> Element {
     }
 }
 
-/// Props for the [`LoginForm`] component.
+/// Username + password pair shared by [`LoginForm`] and [`MobileLoginForm`],
+/// mirroring how [`LoginCredentialFields`] already treats them as one unit.
+#[derive(Clone, PartialEq)]
+struct Credentials {
+    username: Signal<String>,
+    password: Signal<String>,
+}
+
+/// Submission status shared by [`LoginForm`] and [`MobileLoginForm`] — error,
+/// in-flight state, and whether self-registration is open.
+#[derive(Clone, PartialEq)]
+struct LoginStatus {
+    error: Signal<Option<String>>,
+    submitting: Signal<bool>,
+    /// `None` until the registration-open probe answers.
+    registration_open: Signal<Option<bool>>,
+}
+
+/// Props for the [`LoginForm`] component. Credentials and submission status
+/// are each grouped into their own struct so this stays under the 5-prop
+/// soft cap.
 #[derive(Props, Clone, PartialEq)]
 struct LoginFormProps {
-    /// Username input value, shared with the parent.
-    username: Signal<String>,
-    /// Password input value, shared with the parent.
-    password: Signal<String>,
-    /// Current submission error, if any.
-    error: Signal<Option<String>>,
-    /// True while a login request is in flight.
-    submitting: Signal<bool>,
+    /// Username + password input values, shared with the parent.
+    credentials: Credentials,
+    /// Error / in-flight / registration-open state, shared with the parent.
+    status: LoginStatus,
     /// "Keep me signed in" checkbox state.
     keep_signed_in: Signal<bool>,
-    /// Whether self-registration is open; `None` until the probe answers.
-    registration_open: Signal<Option<bool>>,
     /// Fired on form submission (submit-button click or Enter).
     on_submit: EventHandler<FormEvent>,
     /// Fired on Enter keydown in either input.
@@ -285,15 +297,18 @@ struct LoginFormProps {
 #[component]
 fn LoginForm(props: LoginFormProps) -> Element {
     let LoginFormProps {
-        username,
-        password,
-        error,
-        submitting,
+        credentials,
+        status,
         mut keep_signed_in,
-        registration_open,
         on_submit,
         on_keydown,
     } = props;
+    let Credentials { username, password } = credentials;
+    let LoginStatus {
+        error,
+        submitting,
+        registration_open,
+    } = status;
     rsx! {
         form { class: "auth-form-inner",
             onsubmit: on_submit,
