@@ -177,9 +177,11 @@ pub(crate) fn page_from_replica(
 
 /// Whether `book` survives the hidden-formats exclusion: visible while any
 /// of its formats is not hidden, and always visible when it has no formats
-/// at all (a physical-only row) — mirroring the server predicate.
+/// at all or holds a physical copy — mirroring the server predicate, whose
+/// physical arm keeps an owned book visible even when every file format is
+/// hidden.
 pub(crate) fn visible_under_exclusion(book: &EbookMetadata, hidden: &[String]) -> bool {
-    if hidden.is_empty() || book.formats.is_empty() {
+    if hidden.is_empty() || book.formats.is_empty() || book.has_physical {
         return true;
     }
     book.formats

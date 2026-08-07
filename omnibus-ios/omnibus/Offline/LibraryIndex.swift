@@ -259,11 +259,21 @@ actor LibraryIndex {
             modified: book.modified ?? book.addedAt ?? "",
             // Deduped: the hidden-formats predicate strips each hidden token
             // from the CSV once, so a duplicate would survive the strip and
-            // read as "still visible".
-            formats: Set(book.formats.map { $0.lowercased() }).sorted().joined(separator: ","),
+            // read as "still visible". A physical copy rides as a pseudo-token
+            // the pref can never name, so an owned book survives the strip
+            // even with every file format hidden — the server's physical arm.
+            formats: Self.formatsColumn(for: book),
             searchText: haystack,
             payload: payload
         )
+    }
+
+    /// The mirror's `formats` CSV: lowercase deduped file formats, plus a
+    /// `physical` pseudo-token for owned books (see `row(for:payload:)`).
+    static func formatsColumn(for book: Book) -> String {
+        var tokens = Set(book.formats.map { $0.lowercased() })
+        if book.hasPhysical { tokens.insert("physical") }
+        return tokens.sorted().joined(separator: ",")
     }
 
     // MARK: - Reads

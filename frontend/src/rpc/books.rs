@@ -77,6 +77,9 @@ pub async fn rpc_get_ebooks_page(
     cursor: Option<String>,
     limit: i64,
 ) -> Result<LibraryPage> {
+    // Read-side clamp mirroring the REST twin: the exclusion is caller-
+    // supplied, so cap it before it becomes SQL binds.
+    let exclude_formats = omnibus_shared::sanitize_exclude_formats(exclude_formats);
     Ok(ebooks_page(
         &pool.0,
         sort_key,

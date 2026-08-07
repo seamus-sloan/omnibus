@@ -114,6 +114,22 @@ struct HiddenFormatsRowTests {
         let row = LibraryIndex.row(for: b, payload: Data())
         #expect(row.formats == "cbz,epub")
     }
+
+    @Test func rowForPhysicallyOwnedBookCarriesThePhysicalToken() {
+        var b = book(formats: ["CBZ"])
+        b.hasPhysical = true
+        let row = LibraryIndex.row(for: b, payload: Data())
+        #expect(row.formats == "cbz,physical")
+    }
+}
+
+extension HiddenFormatsPredicateTests {
+    @Test func hiddenPredicateKeepsPhysicallyOwnedBookWithAllFormatsHidden() {
+        // The physical pseudo-token survives the strip, mirroring the
+        // server's physical arm.
+        let visible = visibleRows(formatsCSVs: ["cbz,physical", "cbz"], hiding: ["cbz"])
+        #expect(visible == ["cbz,physical"])
+    }
 }
 
 // MARK: - Wire decode

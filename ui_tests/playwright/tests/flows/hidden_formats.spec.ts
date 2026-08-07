@@ -136,10 +136,24 @@ test("hiding cbz removes comics from the landing for that user only", async ({
     await expect(auroraTiles(page).first()).toBeVisible();
     await expect(receipt(page)).toHaveCount(0);
   } finally {
-    // Always clear the pref — a retry or later run must start unhidden.
-    await context.request
-      .post("/api/rpc/account/hidden-formats", { data: { formats: [] } })
-      .catch(() => {});
+    // Always clear the pref — a retry or later run must start unhidden. Not
+    // a hard assert (that would mask whichever failure got us here), but a
+    // failed cleanup is loud so leaked state never reads as a mystery flake.
+    try {
+      const resp = await context.request.post(
+        "/api/rpc/account/hidden-formats",
+        {
+          data: { formats: [] },
+        },
+      );
+      if (!resp.ok()) {
+        console.warn(
+          `hidden_formats cleanup POST failed (${resp.status()}) — later runs may start with cbz hidden`,
+        );
+      }
+    } catch (e) {
+      console.warn(`hidden_formats cleanup POST threw: ${e}`);
+    }
     await context.close();
   }
 });

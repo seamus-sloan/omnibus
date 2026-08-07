@@ -146,11 +146,12 @@ async fn respond_keyset_page(
         formats: q.formats.as_deref().map(parse_formats).unwrap_or_default(),
         ..ViewFilters::default()
     };
-    let exclude = q
-        .exclude_formats
-        .as_deref()
-        .map(parse_formats)
-        .unwrap_or_default();
+    let exclude = omnibus_shared::sanitize_exclude_formats(
+        q.exclude_formats
+            .as_deref()
+            .map(parse_formats)
+            .unwrap_or_default(),
+    );
     let page = match db::list_books_page(
         &state.pool,
         &paths,

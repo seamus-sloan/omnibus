@@ -435,6 +435,16 @@ fn visible_under_exclusion_keeps_formatless_physical_only_book() {
 }
 
 #[test]
+fn visible_under_exclusion_keeps_physically_owned_book_with_all_formats_hidden() {
+    // The server's physical arm keeps an owned book visible even when every
+    // file format is hidden; the offline rule must agree or a book flickers
+    // out the moment the network drops.
+    let mut owned = book("Owned Comic", "A", &["CBZ"]);
+    owned.has_physical = true;
+    assert!(visible_under_exclusion(&owned, &["cbz".to_string()]));
+}
+
+#[test]
 fn visible_under_exclusion_hides_book_when_every_format_hidden() {
     // Stored formats are uppercase; the pref tokens lowercase.
     let comic = book("Comic", "A", &["CBZ"]);
