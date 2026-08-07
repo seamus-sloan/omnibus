@@ -2,10 +2,12 @@
 //!
 //! Each [`ShelfRule`] becomes an `EXISTS`/comparison fragment over the `books b`
 //! alias; the rule set combines with `OR` (match any) or `AND` (match all).
-//! Text fields (tag/author/series/format) match by **name**, case-insensitively
-//! — equality via `COLLATE NOCASE`, substring/prefix via `LIKE` (`contains` /
-//! `starts with`). Tag rules match the *effective* (override-aware) tag set,
-//! not just `books_tags_link` — see [`tag_condition`]. Owner-scoped fields
+//! Text fields (tag/genre/author/series/format) match by **name**,
+//! case-insensitively — equality via `COLLATE NOCASE`, substring/prefix via
+//! `LIKE` (`contains` / `starts with`). Tag rules match the *effective*
+//! (override-aware) tag set, not just `books_tags_link` — see
+//! [`tag_condition`]; genre rules match the override-only genre list — see
+//! [`genre_condition`]. Owner-scoped fields
 //! (`rating`, `status`) bind the shelf owner's id: `status` matches the
 //! owner's read state in `book_read_status`, treating a missing row as
 //! `unread`.
@@ -69,6 +71,7 @@ fn condition_sql(rule: &ShelfRule, owner_id: i64) -> Result<(String, Vec<Bind>),
         // Text fields resolve against the normalized taxonomy `name` columns
         // (all `COLLATE NOCASE`), so the user types a name, not an id.
         RuleField::Tag => tag_condition(rule),
+        RuleField::Genre => genre_condition(rule),
         RuleField::Author => text_condition(
             rule,
             "SELECT 1 FROM books_authors_link bal JOIN authors a ON a.id = bal.author \
@@ -274,6 +277,47 @@ fn tag_condition(rule: &ShelfRule) -> Result<(String, Vec<Bind>), ShelfError> {
         matched
     };
     Ok((sql, vec![Bind::Text(pattern.clone()), Bind::Text(pattern)]))
+}
+
+/// Build a genre predicate over the book's override-stored genre list.
+///
+/// Genres have no scan source and no link table (migration `0066`) — a
+/// book's genres live solely in `metadata_overrides.overrides -> '$.genres'`.
+/// So unlike [`tag_condition`]'s two membership arms, one `json_each` over
+/// the override array is the whole effective set; a book with no override
+/// (or no `$.genres` key) simply has no genres and never matches a positive
+/// rule.
+fn genre_condition(rule: &ShelfRule) -> Result<(String, Vec<Bind>), ShelfError> {
+    let v = rule.value.trim();
+    let (cmp, pattern, negate) = match rule.op {
+        RuleOp::Is | RuleOp::IsNot => (
+            "je.value = ? COLLATE NOCASE",
+            v.to_string(),
+            rule.op == RuleOp::IsNot,
+        ),
+        RuleOp::Contains => (
+            "je.value LIKE ? ESCAPE '\\'",
+            format!("%{}%", like_escape(v)),
+            false,
+        ),
+        RuleOp::StartsWith => (
+            "je.value LIKE ? ESCAPE '\\'",
+            format!("{}%", like_escape(v)),
+            false,
+        ),
+        _ => return Err(unsupported(rule)),
+    };
+    let exists = format!(
+        "EXISTS (SELECT 1 FROM metadata_overrides mo \
+         JOIN json_each(mo.overrides, '$.genres') je \
+         WHERE mo.book_uuid = b.uuid AND {cmp})"
+    );
+    let sql = if negate {
+        format!("NOT {exists}")
+    } else {
+        exists
+    };
+    Ok((sql, vec![Bind::Text(pattern)]))
 }
 
 /// Escape `LIKE` metacharacters (`\`, `%`, `_`) so user text matches literally.
@@ -606,6 +650,79 @@ mod rule_tests {
             p.binds,
             vec![Bind::Text("Sea%".into()), Bind::Text("Sea%".into())]
         );
+    }
+
+    #[test]
+    fn genre_condition_reads_only_the_override_array() {
+        // Genres have no canonical link table, so the predicate is a single
+        // json_each arm over `$.genres` with one bind.
+        let p = membership_predicate(
+            &[rule(RuleField::Genre, RuleOp::Is, "Fantasy")],
+            MatchMode::Any,
+            1,
+        )
+        .unwrap();
+        assert!(
+            p.sql.contains("json_each(mo.overrides, '$.genres')"),
+            "sql was {}",
+            p.sql
+        );
+        assert!(
+            p.sql.contains("je.value = ? COLLATE NOCASE"),
+            "sql was {}",
+            p.sql
+        );
+        assert!(
+            !p.sql.contains("books_tags_link"),
+            "genre must not touch the tag link table; sql was {}",
+            p.sql
+        );
+        assert_eq!(p.binds, vec![Bind::Text("Fantasy".into())]);
+    }
+
+    #[test]
+    fn genre_contains_and_starts_with_build_like_patterns() {
+        let c = membership_predicate(
+            &[rule(RuleField::Genre, RuleOp::Contains, "50%")],
+            MatchMode::Any,
+            1,
+        )
+        .unwrap();
+        assert!(
+            c.sql.contains("je.value LIKE ? ESCAPE '\\'"),
+            "sql was {}",
+            c.sql
+        );
+        assert_eq!(c.binds, vec![Bind::Text("%50\\%%".into())]);
+
+        let s = membership_predicate(
+            &[rule(RuleField::Genre, RuleOp::StartsWith, "Epic")],
+            MatchMode::Any,
+            1,
+        )
+        .unwrap();
+        assert_eq!(s.binds, vec![Bind::Text("Epic%".into())]);
+    }
+
+    #[test]
+    fn genre_is_not_negates_the_exists() {
+        let p = membership_predicate(
+            &[rule(RuleField::Genre, RuleOp::IsNot, "Horror")],
+            MatchMode::Any,
+            1,
+        )
+        .unwrap();
+        assert!(p.sql.starts_with("(NOT EXISTS"), "sql was {}", p.sql);
+    }
+
+    #[test]
+    fn genre_rejects_numeric_ops() {
+        assert!(membership_predicate(
+            &[rule(RuleField::Genre, RuleOp::Gte, "3")],
+            MatchMode::Any,
+            1
+        )
+        .is_err());
     }
 
     #[test]

@@ -12,6 +12,7 @@ use crate::data;
 /// Field/op/date-unit choices exposed in the smart-rule editor.
 const FIELDS: &[(RuleField, &str)] = &[
     (RuleField::Tag, "Tag"),
+    (RuleField::Genre, "Genre"),
     (RuleField::Author, "Author"),
     (RuleField::Series, "Series"),
     (RuleField::Rating, "Rating"),
@@ -436,6 +437,7 @@ fn condition_value_input(draft: &RuleDraft, handlers: ConditionHandlers) -> Elem
     let (input_type, placeholder) = match draft.field {
         RuleField::Rating => ("number", "4"),
         RuleField::Year => ("number", "2024"),
+        RuleField::Genre => ("text", "genre name"),
         RuleField::Author => ("text", "author name"),
         RuleField::Series => ("text", "series name"),
         _ => ("text", "value"),

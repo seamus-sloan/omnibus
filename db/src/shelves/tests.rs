@@ -130,6 +130,65 @@ async fn smart_shelf_tag_rule_matches_override_added_subjects() {
 }
 
 #[tokio::test]
+async fn smart_shelf_genre_rule_matches_override_genres_only() {
+    let (pool, _covers) = seed_discovery_fixture().await;
+    let owner = make_user(&pool, "owner", false).await;
+
+    // Genres are override-only (migration 0066): assign one to a single
+    // book, then a genre rule must match exactly that book — never a book
+    // whose *tags* carry the same word.
+    let uuid = uuid_by_title(&pool, "Other Story").await;
+    let overrides = omnibus_shared::MetadataOverrides {
+        genres: Some(vec!["Space Opera".into()]),
+        ..Default::default()
+    };
+    crate::upsert_metadata_overrides(&pool, &uuid, &overrides, false, owner)
+        .await
+        .unwrap();
+
+    // Case-insensitive equality and prefix both resolve the override array.
+    let eq = ShelfRule {
+        field: RuleField::Genre,
+        op: RuleOp::Is,
+        value: "space opera".into(),
+    };
+    let shelf = create_shelf(&pool, owner, &smart_req("Opera", MatchMode::Any, vec![eq]))
+        .await
+        .unwrap();
+    assert_eq!(shelf.book_count, 1);
+
+    let prefix = ShelfRule {
+        field: RuleField::Genre,
+        op: RuleOp::StartsWith,
+        value: "Space".into(),
+    };
+    let shelf = create_shelf(
+        &pool,
+        owner,
+        &smart_req("Opera Prefix", MatchMode::Any, vec![prefix]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(shelf.book_count, 1);
+
+    // "fiction" exists as a *tag* on two books but as a genre on none — the
+    // genre field must not fall back to the tag taxonomy.
+    let tag_word = ShelfRule {
+        field: RuleField::Genre,
+        op: RuleOp::Is,
+        value: "fiction".into(),
+    };
+    let shelf = create_shelf(
+        &pool,
+        owner,
+        &smart_req("Not Tags", MatchMode::Any, vec![tag_word]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(shelf.book_count, 0);
+}
+
+#[tokio::test]
 async fn smart_shelf_tag_rule_skips_scanned_tags_replaced_by_override() {
     let (pool, _covers) = seed_discovery_fixture().await;
     let owner = make_user(&pool, "owner", false).await;

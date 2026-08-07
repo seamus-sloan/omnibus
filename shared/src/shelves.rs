@@ -72,6 +72,10 @@ pub enum MatchMode {
 #[serde(rename_all = "snake_case")]
 pub enum RuleField {
     Tag,
+    /// User-assigned genres. Override-only — nothing scanned carries a
+    /// genre, so the rule engine matches `metadata_overrides` `$.genres`
+    /// exclusively (see `db::shelves` `genre_condition`).
+    Genre,
     Author,
     Series,
     Rating,
@@ -135,6 +139,7 @@ wire_enum!(MatchMode, MatchMode::Any => "any", MatchMode::All => "all");
 wire_enum!(
     RuleField,
     RuleField::Tag => "tag",
+    RuleField::Genre => "genre",
     RuleField::Author => "author",
     RuleField::Series => "series",
     RuleField::Rating => "rating",
@@ -164,7 +169,7 @@ impl RuleField {
         use RuleField::*;
         use RuleOp::*;
         let ok: &[RuleOp] = match self {
-            Tag | Author | Series => &[Is, IsNot, Contains, StartsWith],
+            Tag | Genre | Author | Series => &[Is, IsNot, Contains, StartsWith],
             Rating => &[Is, Gte],
             Status => &[Is],
             Format => &[Includes, Contains, StartsWith],
@@ -186,7 +191,7 @@ impl RuleField {
 }
 
 /// One smart-shelf condition. `value` interpretation is per-field:
-/// tag/author/series/format → name (case-insensitive); year/rating → int;
+/// tag/genre/author/series/format → name (case-insensitive); year/rating → int;
 /// date fields → ISO date, `START..END`, or `30d`/`3m`/`1y`. (`status` is
 /// reserved but not yet supported — the rule engine rejects it.) Migration
 /// `0034`'s comment predates the author/series id→name switch and is frozen once
