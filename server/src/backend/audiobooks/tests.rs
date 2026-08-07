@@ -1269,3 +1269,123 @@ async fn api_get_audiobook_download_serves_the_whole_new_body_when_if_range_went
     let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
     assert_eq!(body.as_ref(), PART_BYTES);
 }
+
+const SEGMENT_BYTES: &[u8] = b"a-stand-in-mpegts-segment-long-enough-to-slice-in-half";
+
+/// Seed one direct-play audiobook and pre-write its first HLS segment
+/// straight into the cache dir (bypassing the transcoder), so
+/// `get_audiobook_segment` takes the fast "already on disk" path. Points
+/// `OMNIBUS_DATA_DIR` at a fresh scratch dir via [`DataDirGuard`], which
+/// holds the shared env lock so this can't race the status-handler tests'
+/// own `OMNIBUS_DATA_DIR` swap. Returns `(app, token, uuid, segment_path,
+/// data_dir)`; `data_dir` must stay alive for the caller's lifetime.
+async fn segment_validator_fixture() -> (
+    axum::Router,
+    String,
+    String,
+    std::path::PathBuf,
+    DataDirGuard,
+) {
+    use std::io::Write;
+
+    let data_dir = DataDirGuard::new("audiobook_segment");
+
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "bob").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let uuid =
+        seed_audiobook_with_parts(&pool, "/audiobooks", "MP3", &[(0, "ch01.mp3", 60.0)]).await;
+    let resolved = hls::resolve_audiobook(&pool, &uuid).await.unwrap().unwrap();
+
+    let seg_dir = hls::segment_dir(resolved.book_id, hls::AUDIO64);
+    std::fs::create_dir_all(&seg_dir).unwrap();
+    let seg_path = seg_dir.join("seg-0000.ts");
+    std::fs::File::create(&seg_path)
+        .unwrap()
+        .write_all(SEGMENT_BYTES)
+        .unwrap();
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    (app, token, uuid, seg_path, data_dir)
+}
+
+#[tokio::test]
+async fn api_get_audiobook_segment_serves_an_etag_and_revalidates_with_304() {
+    let (app, token, uuid, _path, _dir) = segment_validator_fixture().await;
+    let uri = format!("/api/audiobooks/{uuid}/segments/seg-0000.ts");
+
+    let first = app
+        .clone()
+        .oneshot(audio_get(&uri, &token, &[]))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(
+        first
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some(MPEGTS_CONTENT_TYPE)
+    );
+    let etag = audio_etag(&first);
+    assert!(!etag.is_empty(), "a 200 must publish a validator");
+    let body = to_bytes(first.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(body.as_ref(), SEGMENT_BYTES);
+
+    let revalidated = app
+        .oneshot(audio_get(
+            &uri,
+            &token,
+            &[(axum::http::header::IF_NONE_MATCH, &etag)],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(revalidated.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(audio_etag(&revalidated), etag);
+}
+
+#[tokio::test]
+async fn api_get_audiobook_segment_resumes_when_if_range_still_matches() {
+    let (app, token, uuid, _path, _dir) = segment_validator_fixture().await;
+    let uri = format!("/api/audiobooks/{uuid}/segments/seg-0000.ts");
+    let etag = audio_etag(
+        &app.clone()
+            .oneshot(audio_get(&uri, &token, &[]))
+            .await
+            .unwrap(),
+    );
+
+    let res = app
+        .oneshot(audio_get(
+            &uri,
+            &token,
+            &[
+                (axum::http::header::IF_RANGE, &etag),
+                (axum::http::header::RANGE, "bytes=8-"),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::PARTIAL_CONTENT);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(body.as_ref(), &SEGMENT_BYTES[8..]);
+}
+
+#[tokio::test]
+async fn api_get_audiobook_segment_serves_the_whole_new_body_when_if_range_went_stale() {
+    let (app, token, uuid, _path, _dir) = segment_validator_fixture().await;
+    let res = app
+        .oneshot(audio_get(
+            &format!("/api/audiobooks/{uuid}/segments/seg-0000.ts"),
+            &token,
+            &[
+                (axum::http::header::IF_RANGE, "\"the-previous-segment\""),
+                (axum::http::header::RANGE, "bytes=8-"),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(body.as_ref(), SEGMENT_BYTES);
+}
