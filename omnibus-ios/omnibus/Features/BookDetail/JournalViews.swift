@@ -89,6 +89,13 @@ struct JournalCard: View {
 
     private var meta: some View {
         HStack(spacing: 7) {
+            UserAvatar(
+                id: entry.authorId,
+                name: entry.authorName,
+                hasAvatar: entry.authorHasAvatar,
+                size: 20
+            )
+
             Text(entry.authorName.uppercased())
                 .font(.monoUI(9.5, weight: .medium))
                 .tracking(0.7)

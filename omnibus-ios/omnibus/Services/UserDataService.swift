@@ -428,7 +428,10 @@ enum UserDataService {
             id: AnnotationID.pending(),
             bookUUID: payload.bookUUID,
             authorId: author?.id ?? 0,
-            authorName: author?.username ?? "You",
+            // Display name + avatar match what the server's re-read will say,
+            // so the optimistic card doesn't flicker to a different identity.
+            authorName: author?.display ?? "You",
+            authorHasAvatar: author?.hasAvatar ?? false,
             bodyMd: payload.bodyMd,
             // The server renders the markdown; until it has, show the source.
             // A local renderer here would only disagree with the real one.

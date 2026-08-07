@@ -839,6 +839,10 @@ struct RatingRecord: Codable, Sendable {
 struct AttributedRating: Codable, Sendable, Identifiable {
     var userId: Int64
     var username: String
+    /// Whether the rater has an avatar. Non-optional: the lenient
+    /// `decode(Bool.Type,forKey:)` above defaults a missing key to `false`,
+    /// so a pre-upgrade `CacheKey.ratingsOthers` blob still decodes.
+    var hasAvatar: Bool = false
     var stars: Double
     var updatedAt: Int64
 
@@ -847,6 +851,7 @@ struct AttributedRating: Codable, Sendable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case username, stars
         case userId = "user_id"
+        case hasAvatar = "has_avatar"
         case updatedAt = "updated_at"
     }
 }
@@ -898,6 +903,10 @@ struct JournalEntry: Codable, Hashable, Sendable, Identifiable {
     var bookUUID: String
     var authorId: Int64
     var authorName: String
+    /// Whether the author has an avatar. Non-optional: the lenient
+    /// `decode(Bool.Type,forKey:)` above defaults a missing key to `false`,
+    /// so a pre-upgrade `CacheKey.journals` blob still decodes.
+    var authorHasAvatar: Bool = false
     var bodyMd: String
     var bodyHtml: String
     var progress: Int?
@@ -913,6 +922,7 @@ struct JournalEntry: Codable, Hashable, Sendable, Identifiable {
         case bookUUID = "book_uuid"
         case authorId = "author_id"
         case authorName = "author_name"
+        case authorHasAvatar = "author_has_avatar"
         case bodyMd = "body_md"
         case bodyHtml = "body_html"
         case clientID = "client_id"
