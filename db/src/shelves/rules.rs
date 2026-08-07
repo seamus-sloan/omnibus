@@ -1,16 +1,8 @@
-//! Smart-rule → SQL predicate translation.
-//!
-//! Each [`ShelfRule`] becomes an `EXISTS`/comparison fragment over the `books b`
-//! alias; the rule set combines with `OR` (match any) or `AND` (match all).
-//! Text fields (tag/genre/author/series/format) match by **name**,
-//! case-insensitively — equality via `COLLATE NOCASE`, substring/prefix via
-//! `LIKE` (`contains` / `starts with`). Tag rules match the *effective*
-//! (override-aware) tag set, not just `books_tags_link` — see
-//! [`tag_condition`]; genre rules match the override-only genre list — see
-//! [`genre_condition`]. Owner-scoped fields
-//! (`rating`, `status`) bind the shelf owner's id: `status` matches the
-//! owner's read state in `book_read_status`, treating a missing row as
-//! `unread`.
+//! Smart-rule → SQL predicate translation: each [`ShelfRule`] becomes an
+//! `EXISTS`/comparison fragment over the `books b` alias, and the rule set
+//! joins with `OR` (match any) or `AND` (match all). Per-field semantics —
+//! override-aware tags, override-only genres, name matching, owner-scoped
+//! rating/status, date windows — are documented on each condition helper.
 
 use omnibus_shared::{MatchMode, ReadStatus, RuleField, RuleOp, ShelfRule};
 

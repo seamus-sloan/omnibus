@@ -72,9 +72,7 @@ pub enum MatchMode {
 #[serde(rename_all = "snake_case")]
 pub enum RuleField {
     Tag,
-    /// User-assigned genres. Override-only — nothing scanned carries a
-    /// genre, so the rule engine matches `metadata_overrides` `$.genres`
-    /// exclusively (see `db::shelves` `genre_condition`).
+    /// User-assigned genres (override-only — no scan source).
     Genre,
     Author,
     Series,
