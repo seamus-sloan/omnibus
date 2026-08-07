@@ -96,6 +96,7 @@ pub use bookmark::*;
 pub use deletion::*;
 pub use discovery::*;
 pub use ebook::*;
+pub use error_ring::*;
 pub use highlight::*;
 pub use image_format::detect_image_format;
 pub use isbn::*;

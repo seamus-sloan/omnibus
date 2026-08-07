@@ -1,11 +1,8 @@
 //! Tracing subscriber setup: a compact human-readable stderr layer, a
 //! non-blocking daily-rolling JSON file sink, and the in-memory error ring
-//! buffer layer, all gated by one `RUST_LOG` env-filter. Called by `main`
-//! before `dioxus::serve`; the JSON file is the durable log source for the
-//! admin log viewer, which reads it back through `omnibus_db::logs` (the
-//! single owner of the log-directory resolution). The ring buffer
-//! ([`error_ring_layer`]) is a separate, fast, in-memory companion — see
-//! `omnibus_db::error_ring`.
+//! buffer layer ([`error_ring_layer`]), all gated by one `RUST_LOG`
+//! env-filter. Called by `main` before `dioxus::serve`; the JSON file is the
+//! durable log source read back through `omnibus_db::logs`.
 
 mod error_ring_layer;
 

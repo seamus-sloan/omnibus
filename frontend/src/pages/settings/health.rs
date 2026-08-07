@@ -1,11 +1,8 @@
 //! Server Health settings section — the "Last errors" panel over the
-//! in-memory error ring buffer (issue #954).
-//!
-//! Web/SSR-only, mirroring `LogsPage`'s split: the real authorization
-//! boundary is the `AdminUser` extractor on `rpc_get_last_errors`, and the
-//! in-page `use_is_admin` gate just keeps the chrome off a non-admin
-//! screen. Deliberately minimal — just the one section this issue needs,
-//! not the full five-section admin health page (that's a separate issue).
+//! in-memory error ring buffer. Web/SSR-only, mirroring `LogsPage`'s split:
+//! the real authorization boundary is the `AdminUser` extractor on
+//! `rpc_get_last_errors`, and the in-page `use_is_admin` gate just keeps the
+//! chrome off a non-admin screen.
 #![cfg(not(feature = "mobile"))]
 
 use dioxus::prelude::*;
