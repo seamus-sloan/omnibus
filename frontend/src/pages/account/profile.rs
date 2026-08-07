@@ -47,8 +47,8 @@ fn use_profile_seed_hydration(
 }
 
 /// Re-reads `/api/auth/me` into the app-wide `CurrentUser` context, so the
-/// user menu, journal bylines and the mobile "You" tab all repaint without a
-/// reload rather than each guessing at the new value.
+/// user menu and journal bylines repaint without a reload rather than each
+/// guessing at the new value.
 fn refresh_current_user(mut current_user: Signal<Option<Option<UserSummary>>>) {
     spawn(async move {
         if let Ok(u) = data::current_user().await {
