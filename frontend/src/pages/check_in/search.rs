@@ -19,14 +19,37 @@ use crate::{data, use_server_url};
 pub(super) fn TitleSearch(state: FlowState, on_pick: EventHandler<ExternalBookMeta>) -> Element {
     let server_url = use_server_url();
     let busy = state.busy;
-    let mut error = state.error;
-    let mut query = use_signal(String::new);
-    let mut searching = use_signal(|| false);
+    let error = state.error;
+    let query = use_signal(String::new);
+    let searching = use_signal(|| false);
     // `None` until the first search lands, so the empty-state line can't show
     // before anyone has searched.
-    let mut results = use_signal(|| None::<Vec<ExternalBookMeta>>);
+    let results = use_signal(|| None::<Vec<ExternalBookMeta>>);
+    let run_search = build_title_search_handler(server_url, query, error, searching, results);
 
-    let mut run_search = move |_| {
+    rsx! {
+        div { class: "check-in-search", "data-testid": "check-in-search",
+            TitleSearchForm {
+                query,
+                busy,
+                searching,
+                on_submit: EventHandler::new(run_search),
+            }
+            TitleSearchResults { results: results(), busy, on_pick }
+        }
+    }
+}
+
+/// Builds the title-search submit handler: runs `data::scan_search` for the
+/// trimmed query and populates `results` (or `error` on failure).
+fn build_title_search_handler(
+    server_url: String,
+    query: Signal<String>,
+    mut error: Signal<Option<String>>,
+    mut searching: Signal<bool>,
+    mut results: Signal<Option<Vec<ExternalBookMeta>>>,
+) -> impl FnMut(()) + 'static {
+    move |_: ()| {
         let trimmed = query().trim().to_string();
         if trimmed.is_empty() || searching() {
             return;
@@ -45,58 +68,74 @@ pub(super) fn TitleSearch(state: FlowState, on_pick: EventHandler<ExternalBookMe
             }
             searching.set(false);
         });
-    };
+    }
+}
 
+/// The query input + submit button.
+#[component]
+fn TitleSearchForm(
+    mut query: Signal<String>,
+    busy: Signal<bool>,
+    searching: Signal<bool>,
+    on_submit: EventHandler<()>,
+) -> Element {
     rsx! {
-        div { class: "check-in-search", "data-testid": "check-in-search",
-            form {
-                class: "settings-form",
-                "data-testid": "check-in-search-form",
-                onsubmit: move |evt| {
-                    evt.prevent_default();
-                    run_search(());
-                },
-                div { class: "settings-field",
-                    label { r#for: "check-in-search-query", "Title" }
-                    input {
-                        id: "check-in-search-query",
-                        "data-testid": "check-in-search-query",
-                        r#type: "search",
-                        autocomplete: "off",
-                        placeholder: "The Name of the Wind",
-                        value: "{query}",
-                        disabled: busy() || searching(),
-                        oninput: move |e| query.set(e.value()),
-                    }
-                }
-                div { class: "settings-actions",
-                    button {
-                        r#type: "submit",
-                        class: "btn primary",
-                        disabled: busy() || searching() || query().trim().is_empty(),
-                        "data-testid": "check-in-search-submit",
-                        if searching() { "Searching\u{2026}" } else { "Search" }
-                    }
+        form {
+            class: "settings-form",
+            "data-testid": "check-in-search-form",
+            onsubmit: move |evt| {
+                evt.prevent_default();
+                on_submit.call(());
+            },
+            div { class: "settings-field",
+                label { r#for: "check-in-search-query", "Title" }
+                input {
+                    id: "check-in-search-query",
+                    "data-testid": "check-in-search-query",
+                    r#type: "search",
+                    autocomplete: "off",
+                    placeholder: "The Name of the Wind",
+                    value: "{query}",
+                    disabled: busy() || searching(),
+                    oninput: move |e| query.set(e.value()),
                 }
             }
-            match results() {
-                Some(list) if list.is_empty() => rsx! {
-                    p { class: "check-in-why", "data-testid": "check-in-search-empty",
-                        "No books match that title. Check the spelling, or try just the main title."
-                    }
-                },
-                Some(list) => rsx! {
-                    ul { class: "check-in-search-results", "data-testid": "check-in-search-results",
-                        for meta in list {
-                            li { key: "{meta.isbn13}",
-                                SearchResult { meta, busy, on_pick }
-                            }
-                        }
-                    }
-                },
-                None => rsx! {},
+            div { class: "settings-actions",
+                button {
+                    r#type: "submit",
+                    class: "btn primary",
+                    disabled: busy() || searching() || query().trim().is_empty(),
+                    "data-testid": "check-in-search-submit",
+                    if searching() { "Searching\u{2026}" } else { "Search" }
+                }
             }
         }
+    }
+}
+
+/// Empty-state note, the candidate list, or nothing before a first search.
+#[component]
+fn TitleSearchResults(
+    results: Option<Vec<ExternalBookMeta>>,
+    busy: Signal<bool>,
+    on_pick: EventHandler<ExternalBookMeta>,
+) -> Element {
+    match results {
+        Some(list) if list.is_empty() => rsx! {
+            p { class: "check-in-why", "data-testid": "check-in-search-empty",
+                "No books match that title. Check the spelling, or try just the main title."
+            }
+        },
+        Some(list) => rsx! {
+            ul { class: "check-in-search-results", "data-testid": "check-in-search-results",
+                for meta in list {
+                    li { key: "{meta.isbn13}",
+                        SearchResult { meta, busy, on_pick }
+                    }
+                }
+            }
+        },
+        None => rsx! {},
     }
 }
 

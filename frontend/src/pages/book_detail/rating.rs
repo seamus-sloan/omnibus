@@ -31,14 +31,13 @@ pub(super) fn BdRatingWidget(uuid: String) -> Element {
     // `current` is the persisted rating; `hover` previews a pending pick. Both
     // seed to `None` so SSR and first-hydration paint render an unrated card —
     // the effect below reconciles on the client only.
-    let mut current = use_signal(|| None::<RatingRecord>);
+    let current = use_signal(|| None::<RatingRecord>);
     let mut hover = use_signal(|| None::<f32>);
-    let mut failed = use_signal(|| false);
+    let failed = use_signal(|| false);
     // Monotonic write counter: a save only applies its result if it's still the
     // latest, so an out-of-order (slow) response can't clobber a newer click.
-    let mut op_seq = use_signal(|| 0u64);
-    let mut load_seq = use_signal(|| 0u64);
-    let mut other_ratings = use_signal(Vec::<AttributedRating>::new);
+    let op_seq = use_signal(|| 0u64);
+    let other_ratings = use_signal(Vec::<AttributedRating>::new);
     let state = RatingState {
         current,
         hover,
@@ -47,50 +46,13 @@ pub(super) fn BdRatingWidget(uuid: String) -> Element {
         other_ratings,
     };
 
-    let load_url = server_url.clone();
-    use_effect(use_reactive!(|uuid| {
-        if uuid.is_empty() {
-            return;
-        }
-        let my_load = *load_seq.peek() + 1;
-        let next_op = *op_seq.peek() + 1;
-        load_seq.set(my_load);
-        op_seq.set(next_op);
-        current.set(None);
-        other_ratings.set(Vec::new());
-        failed.set(false);
-        let load_url = load_url.clone();
-        let uuid = uuid.clone();
-        spawn(async move {
-            if let Ok(rec) = data::get_rating(&load_url, &uuid).await {
-                if *load_seq.peek() == my_load {
-                    current.set(rec);
-                }
-            }
-            if let Ok(ratings) = data::list_other_ratings(&load_url, &uuid).await {
-                if *load_seq.peek() == my_load {
-                    other_ratings.set(ratings);
-                }
-            }
-        });
-    }));
+    use_rating_hydration(uuid.clone(), server_url.clone(), state);
 
     // The fill the user sees: a hover preview wins over the saved value.
     let shown = hover()
         .or_else(|| current().map(|r| r.stars))
         .unwrap_or(0.0);
-
-    let meta_text = if failed() {
-        "Couldn't save rating — try again".to_string()
-    } else if let Some(rec) = current() {
-        format!(
-            "{} \u{00b7} {} of 5",
-            rated_ago(now_unix(), rec.updated_at),
-            fmt_stars(rec.stars)
-        )
-    } else {
-        "Not rated yet".to_string()
-    };
+    let meta_text = rating_meta_text(failed(), current());
 
     rsx! {
         div {
@@ -100,35 +62,13 @@ pub(super) fn BdRatingWidget(uuid: String) -> Element {
             "data-testid": "rating-stars",
             onmouseleave: move |_| hover.set(None),
             for i in 1..=5u8 {
-                {
-                    let slot = i as f32;
-                    let fill = if shown >= slot {
-                        100
-                    } else if shown >= slot - 0.5 {
-                        50
-                    } else {
-                        0
-                    };
-                    rsx! {
-                        span { key: "{i}", class: "bd-star-slot",
-                            span { class: "bd-star-bg", "\u{2605}" }
-                            span { class: "bd-star-fg", style: "width: {fill}%", "\u{2605}" }
-                            BdStarHalf {
-                                value: slot - 0.5,
-                                side: "left",
-                                uuid: uuid.clone(),
-                                server_url: server_url.clone(),
-                                state,
-                            }
-                            BdStarHalf {
-                                value: slot,
-                                side: "right",
-                                uuid: uuid.clone(),
-                                server_url: server_url.clone(),
-                                state,
-                            }
-                        }
-                    }
+                BdStarSlot {
+                    key: "{i}",
+                    slot: i as f32,
+                    shown,
+                    uuid: uuid.clone(),
+                    server_url: server_url.clone(),
+                    state,
                 }
             }
         }
@@ -139,15 +79,112 @@ pub(super) fn BdRatingWidget(uuid: String) -> Element {
             "{meta_text}"
         }
         if !other_ratings().is_empty() {
-            div {
-                class: "bd-other-ratings",
-                "data-testid": "other-ratings",
-                aria_label: "Other ratings",
-                for rating in other_ratings() {
-                    BdOtherRatingRow {
-                        key: "{rating.user_id}",
-                        rating,
-                    }
+            BdOtherRatingsList { ratings: other_ratings() }
+        }
+    }
+}
+
+/// Loads the persisted rating and other-users' ratings for `uuid` on mount and
+/// whenever `uuid` changes, guarding stale (out-of-order) responses with a
+/// load-sequence counter. Called unconditionally from [`BdRatingWidget`].
+fn use_rating_hydration(uuid: String, load_url: String, mut state: RatingState) {
+    let mut load_seq = use_signal(|| 0u64);
+    use_effect(use_reactive!(|uuid| {
+        if uuid.is_empty() {
+            return;
+        }
+        let my_load = *load_seq.peek() + 1;
+        let next_op = *state.op_seq.peek() + 1;
+        load_seq.set(my_load);
+        state.op_seq.set(next_op);
+        state.current.set(None);
+        state.other_ratings.set(Vec::new());
+        state.failed.set(false);
+        let load_url = load_url.clone();
+        let uuid = uuid.clone();
+        let mut state = state;
+        spawn(async move {
+            if let Ok(rec) = data::get_rating(&load_url, &uuid).await {
+                if *load_seq.peek() == my_load {
+                    state.current.set(rec);
+                }
+            }
+            if let Ok(ratings) = data::list_other_ratings(&load_url, &uuid).await {
+                if *load_seq.peek() == my_load {
+                    state.other_ratings.set(ratings);
+                }
+            }
+        });
+    }));
+}
+
+/// The status line under the star row: an error takes priority, then the
+/// saved rating's age and value, else the unrated placeholder.
+fn rating_meta_text(failed: bool, current: Option<RatingRecord>) -> String {
+    if failed {
+        "Couldn't save rating — try again".to_string()
+    } else if let Some(rec) = current {
+        format!(
+            "{} \u{00b7} {} of 5",
+            rated_ago(now_unix(), rec.updated_at),
+            fmt_stars(rec.stars)
+        )
+    } else {
+        "Not rated yet".to_string()
+    }
+}
+
+/// One star's slot in the row: background glyph, fill overlay sized to the
+/// shown value, and its two half-star click targets.
+#[component]
+fn BdStarSlot(
+    slot: f32,
+    shown: f32,
+    uuid: String,
+    server_url: String,
+    state: RatingState,
+) -> Element {
+    let fill = if shown >= slot {
+        100
+    } else if shown >= slot - 0.5 {
+        50
+    } else {
+        0
+    };
+    rsx! {
+        span { class: "bd-star-slot",
+            span { class: "bd-star-bg", "\u{2605}" }
+            span { class: "bd-star-fg", style: "width: {fill}%", "\u{2605}" }
+            BdStarHalf {
+                value: slot - 0.5,
+                side: "left",
+                uuid: uuid.clone(),
+                server_url: server_url.clone(),
+                state,
+            }
+            BdStarHalf {
+                value: slot,
+                side: "right",
+                uuid: uuid.clone(),
+                server_url: server_url.clone(),
+                state,
+            }
+        }
+    }
+}
+
+/// The "other readers' ratings" list shown under the interactive widget.
+#[component]
+fn BdOtherRatingsList(ratings: Vec<AttributedRating>) -> Element {
+    rsx! {
+        div {
+            class: "bd-other-ratings",
+            "data-testid": "other-ratings",
+            aria_label: "Other ratings",
+            for rating in ratings {
+                BdOtherRatingRow {
+                    key: "{rating.user_id}",
+                    rating,
                 }
             }
         }

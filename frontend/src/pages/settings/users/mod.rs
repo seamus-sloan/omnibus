@@ -27,8 +27,8 @@ enum Modal {
 /// The Users section: header + table, with a reload counter the mutations bump.
 #[component]
 pub fn UsersSection() -> Element {
-    let mut users = use_signal(Vec::<AdminUserRow>::new);
-    let mut load_error = use_signal(|| None::<String>);
+    let users = use_signal(Vec::<AdminUserRow>::new);
+    let load_error = use_signal(|| None::<String>);
     // Errors from inline row actions (currently Unlock) — surfaced in the
     // section banner rather than swallowed.
     let mut action_error = use_signal(|| None::<String>);
@@ -37,7 +37,44 @@ pub fn UsersSection() -> Element {
     let current = crate::use_current_user_summary();
     let nav = use_navigator();
 
-    // Reload whenever the counter bumps (initial mount + after each mutation).
+    use_users_load(reload, users, load_error);
+
+    let current_id = current().map(|u| u.id);
+
+    rsx! {
+        RegistrationToggle {}
+
+        section { class: "card", "data-testid": "users-card",
+            UsersHeader { on_new: move |_| modal.set(Modal::New) }
+
+            if let Some(err) = load_error() {
+                p { role: "alert", class: "settings-status error", "data-testid": "users-load-error", "{err}" }
+            }
+            if let Some(err) = action_error() {
+                p { role: "alert", class: "settings-status error", "data-testid": "users-action-error", "{err}" }
+            }
+
+            UsersTable {
+                users: users(),
+                current_id,
+                on_edit: move |row| modal.set(Modal::Edit(row)),
+                on_delete: move |row| modal.set(Modal::Delete(row)),
+                on_unlocked: move |_| { action_error.set(None); reload.with_mut(|n| *n += 1); },
+                on_row_error: move |msg| action_error.set(Some(msg)),
+            }
+        }
+
+        {users_modals(modal(), current_id, modal, reload, nav)}
+    }
+}
+
+/// Loads the user list whenever `reload` bumps (initial mount + after each
+/// mutation). Called unconditionally from [`UsersSection`].
+fn use_users_load(
+    reload: Signal<u32>,
+    mut users: Signal<Vec<AdminUserRow>>,
+    mut load_error: Signal<Option<String>>,
+) {
     use_effect(move || {
         let _ = reload();
         spawn(async move {
@@ -50,93 +87,109 @@ pub fn UsersSection() -> Element {
             }
         });
     });
+}
 
-    let current_id = current().map(|u| u.id);
-
+/// The section title, subtitle, and "New user" button.
+#[component]
+fn UsersHeader(on_new: EventHandler<MouseEvent>) -> Element {
     rsx! {
-        RegistrationToggle {}
+        div { class: "users-head",
+            div {
+                h2 { "Users" }
+                p { class: "subtitle", "Create, edit, and remove accounts." }
+            }
+            button {
+                r#type: "button",
+                class: "btn",
+                "data-testid": "users-new",
+                onclick: on_new,
+                "New user"
+            }
+        }
+    }
+}
 
-        section { class: "card", "data-testid": "users-card",
-            div { class: "users-head",
-                div {
-                    h2 { "Users" }
-                    p { class: "subtitle", "Create, edit, and remove accounts." }
-                }
-                button {
-                    r#type: "button",
-                    class: "btn",
-                    "data-testid": "users-new",
-                    onclick: move |_| modal.set(Modal::New),
-                    "New user"
+/// The accounts table: header row plus one [`UserRow`] per user.
+#[component]
+fn UsersTable(
+    users: Vec<AdminUserRow>,
+    current_id: Option<i64>,
+    on_edit: EventHandler<AdminUserRow>,
+    on_delete: EventHandler<AdminUserRow>,
+    on_unlocked: EventHandler<()>,
+    on_row_error: EventHandler<String>,
+) -> Element {
+    rsx! {
+        table { class: "users-table", "data-testid": "users-table",
+            thead {
+                tr {
+                    th { "User" }
+                    th { "Permissions" }
+                    th { "Kindle" }
+                    th { "Created" }
+                    th { "Status" }
+                    th { class: "users-col-actions", "Actions" }
                 }
             }
-
-            if let Some(err) = load_error() {
-                p { role: "alert", class: "settings-status error", "data-testid": "users-load-error", "{err}" }
-            }
-            if let Some(err) = action_error() {
-                p { role: "alert", class: "settings-status error", "data-testid": "users-action-error", "{err}" }
-            }
-
-            table { class: "users-table", "data-testid": "users-table",
-                thead {
-                    tr {
-                        th { "User" }
-                        th { "Permissions" }
-                        th { "Kindle" }
-                        th { "Created" }
-                        th { "Status" }
-                        th { class: "users-col-actions", "Actions" }
-                    }
-                }
-                tbody {
-                    for u in users() {
-                        UserRow {
-                            key: "{u.id}",
-                            user: u.clone(),
-                            is_self: Some(u.id) == current_id,
-                            on_edit: move |row| modal.set(Modal::Edit(row)),
-                            on_delete: move |row| modal.set(Modal::Delete(row)),
-                            on_unlocked: move |_| { action_error.set(None); reload.with_mut(|n| *n += 1); },
-                            on_error: move |msg| action_error.set(Some(msg)),
-                        }
+            tbody {
+                for u in users {
+                    UserRow {
+                        key: "{u.id}",
+                        user: u.clone(),
+                        is_self: Some(u.id) == current_id,
+                        on_edit,
+                        on_delete,
+                        on_unlocked,
+                        on_error: on_row_error,
                     }
                 }
             }
         }
+    }
+}
 
-        match modal() {
-            Modal::None => rsx! {},
-            Modal::New => rsx! {
-                NewUserModal {
-                    on_close: move |_| modal.set(Modal::None),
-                    on_created: move |_| { modal.set(Modal::None); reload.with_mut(|n| *n += 1); },
-                }
-            },
-            Modal::Edit(row) => rsx! {
-                EditUserModal {
+/// The New / Edit / Delete modal currently open over the table, if any. Not a
+/// `#[component]` — `Navigator` doesn't implement `PartialEq`, which the
+/// `#[component]` macro requires of every prop — so it's called directly via
+/// `{users_modals(...)}` like the file's other plain-fn helpers.
+fn users_modals(
+    modal: Modal,
+    current_id: Option<i64>,
+    mut on_modal: Signal<Modal>,
+    mut reload: Signal<u32>,
+    nav: dioxus_router::Navigator,
+) -> Element {
+    match modal {
+        Modal::None => rsx! {},
+        Modal::New => rsx! {
+            NewUserModal {
+                on_close: move |_| on_modal.set(Modal::None),
+                on_created: move |_| { on_modal.set(Modal::None); reload.with_mut(|n| *n += 1); },
+            }
+        },
+        Modal::Edit(row) => rsx! {
+            EditUserModal {
+                user: row,
+                on_close: move |_| on_modal.set(Modal::None),
+                on_saved: move |_| { on_modal.set(Modal::None); reload.with_mut(|n| *n += 1); },
+            }
+        },
+        Modal::Delete(row) => {
+            let is_self = current_id == Some(row.id);
+            rsx! {
+                DeleteUserModal {
                     user: row,
-                    on_close: move |_| modal.set(Modal::None),
-                    on_saved: move |_| { modal.set(Modal::None); reload.with_mut(|n| *n += 1); },
-                }
-            },
-            Modal::Delete(row) => {
-                let is_self = current_id == Some(row.id);
-                rsx! {
-                    DeleteUserModal {
-                        user: row,
-                        is_self,
-                        on_close: move |_| modal.set(Modal::None),
-                        on_deleted: move |_| {
-                            modal.set(Modal::None);
-                            // Self-delete invalidates the session; reloading would just 401.
-                            if is_self {
-                                nav.replace(Route::Login {});
-                            } else {
-                                reload.with_mut(|n| *n += 1);
-                            }
-                        },
-                    }
+                    is_self,
+                    on_close: move |_| on_modal.set(Modal::None),
+                    on_deleted: move |_| {
+                        on_modal.set(Modal::None);
+                        // Self-delete invalidates the session; reloading would just 401.
+                        if is_self {
+                            nav.replace(Route::Login {});
+                        } else {
+                            reload.with_mut(|n| *n += 1);
+                        }
+                    },
                 }
             }
         }

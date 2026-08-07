@@ -103,18 +103,7 @@ fn BdJournalEntryHeader(view: JournalEntryHeaderView, edit: JournalEntryEditStat
         entry_progress,
         server_url,
     } = view;
-    let JournalEntryEditState {
-        editing,
-        edit_body,
-        saving,
-        error,
-        reload,
-    } = edit;
-    let mut editing = editing;
-    let mut edit_body = edit_body;
-    let mut saving = saving;
-    let mut error = error;
-    let mut reload = reload;
+    let editing = edit.editing;
 
     rsx! {
         div { class: "bd-journal-entry-head",
@@ -124,64 +113,107 @@ fn BdJournalEntryHeader(view: JournalEntryHeaderView, edit: JournalEntryEditStat
                 has_avatar: author_has_avatar,
                 class: "bd-journal-avatar",
             }
-            div { class: "bd-journal-entry-meta",
-                div { class: "bd-journal-entry-byline",
-                    span { class: "bd-journal-author", "{author_name}" }
-                    if is_owner {
-                        span { class: "chip bd-journal-you", "you" }
-                    }
-                    if is_draft {
-                        span {
-                            class: "chip bd-journal-draft",
-                            "data-testid": "journal-draft-chip",
-                            "Draft"
-                        }
-                    }
-                }
-                div { class: "mono bd-journal-entry-date", "{meta_line}" }
-            }
+            BdJournalEntryByline { author_name, is_owner, is_draft, meta_line }
             if is_owner && !editing() {
-                div { class: "bd-journal-entry-actions",
-                    if is_draft {
-                        BdJournalPublishDraftButton {
-                            server_url: server_url.clone(),
-                            entry_id,
-                            body_for_edit: body_for_edit.clone(),
-                            entry_progress,
-                            edit,
-                        }
-                    }
-                    button {
-                        r#type: "button",
-                        class: "btn ghost sm",
-                        "data-testid": "journal-edit",
-                        onclick: move |_| {
-                            edit_body.set(body_for_edit.clone());
-                            error.set(None);
-                            editing.set(true);
-                        },
-                        "Edit"
-                    }
-                    button {
-                        r#type: "button",
-                        class: "btn ghost sm bd-journal-delete",
-                        "data-testid": "journal-delete",
-                        disabled: saving(),
-                        onclick: move |_| {
-                            let url = server_url.clone();
-                            saving.set(true);
-                            error.set(None);
-                            spawn(async move {
-                                match data::delete_journal_entry(&url, entry_id).await {
-                                    Ok(()) => reload.set(reload() + 1),
-                                    Err(e) => error.set(Some(e.to_string())),
-                                }
-                                saving.set(false);
-                            });
-                        },
-                        "Delete"
+                BdJournalEntryActions {
+                    server_url,
+                    entry_id,
+                    body_for_edit,
+                    entry_progress,
+                    is_draft,
+                    edit,
+                }
+            }
+        }
+    }
+}
+
+/// Author name, "you" / "Draft" chips, and the date/progress meta line.
+#[component]
+fn BdJournalEntryByline(
+    author_name: String,
+    is_owner: bool,
+    is_draft: bool,
+    meta_line: String,
+) -> Element {
+    rsx! {
+        div { class: "bd-journal-entry-meta",
+            div { class: "bd-journal-entry-byline",
+                span { class: "bd-journal-author", "{author_name}" }
+                if is_owner {
+                    span { class: "chip bd-journal-you", "you" }
+                }
+                if is_draft {
+                    span {
+                        class: "chip bd-journal-draft",
+                        "data-testid": "journal-draft-chip",
+                        "Draft"
                     }
                 }
+            }
+            div { class: "mono bd-journal-entry-date", "{meta_line}" }
+        }
+    }
+}
+
+/// Owner-only action row: optional Publish (drafts only), Edit, and Delete.
+#[component]
+fn BdJournalEntryActions(
+    server_url: String,
+    entry_id: i64,
+    body_for_edit: String,
+    entry_progress: Option<u8>,
+    is_draft: bool,
+    edit: JournalEntryEditState,
+) -> Element {
+    let JournalEntryEditState {
+        mut editing,
+        mut edit_body,
+        mut saving,
+        mut error,
+        mut reload,
+    } = edit;
+
+    rsx! {
+        div { class: "bd-journal-entry-actions",
+            if is_draft {
+                BdJournalPublishDraftButton {
+                    server_url: server_url.clone(),
+                    entry_id,
+                    body_for_edit: body_for_edit.clone(),
+                    entry_progress,
+                    edit,
+                }
+            }
+            button {
+                r#type: "button",
+                class: "btn ghost sm",
+                "data-testid": "journal-edit",
+                onclick: move |_| {
+                    edit_body.set(body_for_edit.clone());
+                    error.set(None);
+                    editing.set(true);
+                },
+                "Edit"
+            }
+            button {
+                r#type: "button",
+                class: "btn ghost sm bd-journal-delete",
+                "data-testid": "journal-delete",
+                disabled: saving(),
+                onclick: move |_| {
+                    let url = server_url.clone();
+                    saving.set(true);
+                    error.set(None);
+                    spawn(async move {
+                        match data::delete_journal_entry(&url, entry_id).await {
+                            Ok(()) => reload.set(reload() + 1),
+                            Err(e) => error.set(Some(e.to_string())),
+                        }
+                        saving.set(false);
+                    });
+                },
+                "Delete"
             }
         }
     }

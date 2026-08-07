@@ -15,6 +15,7 @@ mod volume;
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
+use omnibus_shared::{ChapterInfo, EbookMetadata};
 
 use super::chapter_nav::chapter_index_for_elapsed;
 use super::stage::chapter_sub_text;
@@ -38,7 +39,7 @@ pub fn MiniDock() -> Element {
     // drives the speed panel's per-book save; `open_panel` starts closed on
     // SSR and first WASM paint, so neither can cause a hydration mismatch.
     let current_user = use_current_user_summary();
-    let mut open_panel = use_signal(|| None::<DockPanel>);
+    let open_panel = use_signal(|| None::<DockPanel>);
 
     // Stable host wrapper so hydration node-counting stays consistent; only
     // the inner bar is conditional on both a loaded book and a resolved uuid.
@@ -48,14 +49,53 @@ pub fn MiniDock() -> Element {
         return rsx! { div { class: "mini-dock-host" } };
     };
 
-    let elapsed = (playback.elapsed)();
-    let duration = (playback.duration)();
-    let playing = (playback.playing)();
-    let rate = (playback.rate)();
-    let volume = (playback.volume)();
-    let chapters = (playback.chapters)();
-    let user_id = current_user().map(|user| user.id);
+    let view = DockBarView {
+        elapsed: (playback.elapsed)(),
+        duration: (playback.duration)(),
+        playing: (playback.playing)(),
+        rate: (playback.rate)(),
+        volume: (playback.volume)(),
+        chapters: (playback.chapters)(),
+        user_id: current_user().map(|user| user.id),
+    };
 
+    rsx! {
+        MiniDockBar { book, uuid, view, open_panel }
+    }
+}
+
+/// Playback snapshot + viewer id [`MiniDockBar`] needs. `PlaybackState`
+/// itself has no `PartialEq`, so it can't cross a `#[component]` prop
+/// boundary — this bundles the primitive reads taken from it instead.
+#[derive(Clone, PartialEq)]
+struct DockBarView {
+    elapsed: f64,
+    duration: f64,
+    playing: bool,
+    rate: f64,
+    volume: f64,
+    chapters: Vec<ChapterInfo>,
+    user_id: Option<i64>,
+}
+
+/// The active dock bar: progress rail, cover/title/meta, transport, and the
+/// volume/speed/sleep/actions cluster.
+#[component]
+fn MiniDockBar(
+    book: EbookMetadata,
+    uuid: String,
+    view: DockBarView,
+    mut open_panel: Signal<Option<DockPanel>>,
+) -> Element {
+    let DockBarView {
+        elapsed,
+        duration,
+        playing,
+        rate,
+        volume,
+        chapters,
+        user_id,
+    } = view;
     let idx = chapter_index_for_elapsed(&chapters, elapsed);
     let chapter_sub = chapter_sub_text(&chapters, idx);
     let sub = dock_sub_text(chapter_sub, elapsed, duration, rate);
