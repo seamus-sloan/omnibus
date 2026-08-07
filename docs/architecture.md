@@ -221,12 +221,13 @@ tests/
 main.rs             — dioxus::launch, ServerUrl context, hydrates bearer token from disk, calls `omnibus_frontend::offline::init()` (offline store + download registry + loopback media server + position hydration) before launch, wraps omnibus_frontend::App
 ```
 
-Mobile auth: bearer-token login flow lives in `frontend/src/data.rs` under
-`feature = "mobile"`. `data::mobile_login` / `mobile_register` POST to
+Mobile auth: bearer-token login flow lives in `frontend/src/data/auth.rs`
+under `feature = "mobile"`. `data::mobile_login` / `mobile_register` POST to
 `/api/auth/{login,register}` with `client_kind: ios|android|bearer` so the
-server returns a bearer token in the JSON body. `data::token_store` keeps
-the token in a process-local `OnceLock<RwLock<...>>` and persists it (in
-every build) to `<data_dir>/token` with `0o600` perms, where `data_dir`
+server returns a bearer token in the JSON body. `data::token_store`
+(`frontend/src/data/stores.rs`) keeps the token in a process-local
+`OnceLock<RwLock<...>>` and persists it (in every build) to
+`<data_dir>/token` with `0o600` perms, where `data_dir`
 (`data::app_dirs`) resolves to `Library/Application Support/omnibus` on iOS,
 `$HOME/.omnibus` on desktop/dev, and `Context.getFilesDir()` on Android
 (resolved via JNI through the ambient `ndk_context::android_context()` that
