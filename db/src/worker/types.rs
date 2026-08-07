@@ -119,6 +119,14 @@ pub enum Task {
         book_file_id: Option<i64>,
         recipient_email: String,
     },
+    /// Bake every book's active metadata/cover override into its EPUB
+    /// container in one pass (#959, #1718), dispatched off the request
+    /// thread so the admin's "Bake Overrides Into EPUBs" action returns as
+    /// soon as the run is queued instead of awaiting it inline. Keyed on a
+    /// fixed resource so concurrent clicks serialize; does not consume the
+    /// scan semaphore (its DB work is a handful of bulk-fetched queries, not
+    /// per-book round trips).
+    RewriteAllEpubs,
     /// Test-only synthetic task: sleeps `latency_ms` and invokes the
     /// optional `on_run` / `on_done` hooks, with `resource` and
     /// `route_through_scan_sem` letting a test exercise the keyed mutex and
@@ -152,6 +160,7 @@ impl Task {
             Task::ResolveSuggestions { book_uuid } => Some(format!("suggestions:{book_uuid}")),
             Task::KepubConvert { book_id } => Some(format!("kepub:{book_id}")),
             Task::SendToKindle { .. } => Some("smtp".into()),
+            Task::RewriteAllEpubs => Some("rewrite-all-epubs".into()),
             #[cfg(test)]
             Task::Test { resource, .. } => resource.clone(),
         }
@@ -172,6 +181,7 @@ impl Task {
             Task::ResolveSuggestions { .. } => false,
             Task::KepubConvert { .. } => false,
             Task::SendToKindle { .. } => false,
+            Task::RewriteAllEpubs => false,
             #[cfg(test)]
             Task::Test {
                 route_through_scan_sem,
@@ -215,6 +225,9 @@ impl Task {
             // Reuse Scan kind for UI display — a send is a rare, short job with
             // no dedicated progress widget (mirrors HLS/FTS).
             Task::SendToKindle { .. } => TaskKind::Scan,
+            // Reuse Scan kind for UI display — a rare admin job with no
+            // dedicated progress widget, mirroring RebuildFtsIndex/KepubConvert.
+            Task::RewriteAllEpubs => TaskKind::Scan,
             #[cfg(test)]
             Task::Test { .. } => TaskKind::Scan,
         }

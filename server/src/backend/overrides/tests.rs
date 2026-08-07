@@ -714,10 +714,13 @@ async fn api_delete_cover_returns_500_when_clear_fails() {
 }
 
 // -------------------------------------------------------------------
-// POST /api/admin/rewrite-all-epubs (#959) — the fleet-wide bulk admin
-// action. Count-accuracy over a mixed seed (override/no-override/no-EPUB)
-// is covered at the db layer (`epub_rewrite::tests`); these just prove the
-// route is wired up and admin-gated.
+// POST /api/admin/rewrite-all-epubs (#959, #1718) — the fleet-wide bulk
+// admin action. Dispatches `Task::RewriteAllEpubs` to the shared worker and
+// returns as soon as it's queued (#1718) rather than awaiting the whole
+// pass inline, so these just prove the route is wired up, admin-gated, and
+// returns immediately with no body. Count-accuracy over a mixed seed
+// (override/no-override/no-EPUB) and the batched DB resolution are covered
+// at the db layer (`epub_rewrite::tests`).
 // -------------------------------------------------------------------
 
 #[tokio::test]
@@ -756,12 +759,13 @@ async fn post_rewrite_all_epubs_returns_403_when_not_admin() {
 }
 
 #[tokio::test]
-async fn post_rewrite_all_epubs_returns_200_with_a_zero_summary_when_no_overrides_exist() {
+async fn post_rewrite_all_epubs_returns_200_with_an_empty_body_once_queued() {
     let (app, _state, pool) = fixture().await;
     let admin = auth_test_support::create_admin(&pool, "admin").await;
     let token = auth_test_support::bearer_token(&pool, admin.id).await;
-    // A book exists but carries no active override — the run must succeed
-    // with nothing to rewrite rather than touching it.
+    // A book exists but carries no active override — queuing the task must
+    // still succeed immediately; the worker itself decides there's nothing
+    // to rewrite once it runs.
     seed_book(&pool, "/lib", "Untouched").await;
 
     let res = app
@@ -778,8 +782,8 @@ async fn post_rewrite_all_epubs_returns_200_with_a_zero_summary_when_no_override
     assert_eq!(res.status(), StatusCode::OK);
 
     let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
-    let summary: omnibus_shared::BulkRewriteSummary = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(summary.rewritten, 0);
-    assert_eq!(summary.skipped, 0);
-    assert!(summary.errors.is_empty());
+    assert!(
+        bytes.is_empty(),
+        "the fire-and-forget response carries no body, got {bytes:?}"
+    );
 }

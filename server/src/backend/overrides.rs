@@ -10,7 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use omnibus_db::{self as db};
+use omnibus_db::{self as db, worker::Task};
 use omnibus_shared::MetadataOverrides;
 
 use super::image_upload::extract_validated_image;
@@ -236,20 +236,19 @@ async fn persist_cover(
     Ok(())
 }
 
-/// Admin-only: bake every book's active metadata/cover overrides into its
-/// EPUB container in one pass (#959) — the fleet-wide sibling of the
+/// Admin-only: queue a fleet-wide bake of every book's active metadata/cover
+/// overrides into its EPUB container (#959, #1718) — the bulk sibling of the
 /// per-book export bake `get_ebook_download` already performs on demand.
-/// Skips books without an active override or without an EPUB; a per-book
-/// failure is collected in the returned summary rather than aborting the
-/// run. Mobile-facing REST; the web counterpart is `rpc_rewrite_all_epubs`.
+/// Dispatches `Task::RewriteAllEpubs` to the shared worker and returns as
+/// soon as it's queued, mirroring `post_scan_library`, instead of awaiting
+/// the whole pass inline on the request. 200 once queued. Mobile-facing
+/// REST; the web counterpart is `rpc_rewrite_all_epubs`.
 pub(super) async fn post_rewrite_all_epubs(
     _admin: AdminUser,
     State(state): State<AppState>,
 ) -> Response {
-    match db::rewrite_all_epubs_with_overrides(&state.pool).await {
-        Ok(summary) => Json(summary).into_response(),
-        Err(e) => internal("rewrite_all_epubs", e),
-    }
+    state.worker().post(Task::RewriteAllEpubs);
+    axum::http::StatusCode::OK.into_response()
 }
 
 /// Best-effort delete of the on-disk override cover after a DB failure in

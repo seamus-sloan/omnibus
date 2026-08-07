@@ -4,6 +4,7 @@
 //! `books.has_cover` tracks whether a file should exist; a missing file on
 //! disk is treated as "no cover" (404), not an error.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use sqlx::SqlitePool;
@@ -273,6 +274,34 @@ pub async fn get_last_modified_epoch(
     .bind(book_id)
     .fetch_optional(pool)
     .await?)
+}
+
+/// Bulk counterpart to [`get_last_modified_epoch`]: resolve `books.last_modified`
+/// for every id in `ids` in a handful of chunked `IN (...)` queries instead of
+/// one round trip per book. Same NULL-falls-back-to-now behavior; ids with no
+/// matching row are simply absent from the returned map.
+pub(crate) async fn last_modified_bulk(
+    pool: &SqlitePool,
+    ids: &[i64],
+) -> Result<HashMap<i64, i64>, CoversError> {
+    let mut map = HashMap::with_capacity(ids.len());
+    for chunk in ids.chunks(499) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT id, CAST(COALESCE(last_modified, strftime('%s','now')) AS INTEGER) \
+             FROM books WHERE id IN ({placeholders})"
+        );
+        let mut q = sqlx::query_as::<_, (i64, i64)>(&sql);
+        for id in chunk {
+            q = q.bind(id);
+        }
+        for (id, last_modified) in q.fetch_all(pool).await? {
+            map.insert(id, last_modified);
+        }
+    }
+    Ok(map)
 }
 
 #[cfg(test)]
