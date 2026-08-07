@@ -61,6 +61,7 @@ pub fn rule_text(rule: &ShelfRule) -> String {
 fn field_label(field: RuleField) -> &'static str {
     match field {
         RuleField::Tag => "Tag",
+        RuleField::Genre => "Genre",
         RuleField::Author => "Author",
         RuleField::Series => "Series",
         RuleField::Rating => "Rating",

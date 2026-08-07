@@ -8,6 +8,7 @@ use super::*;
 fn wire_tokens_round_trip_for_every_enum() {
     for f in [
         RuleField::Tag,
+        RuleField::Genre,
         RuleField::Author,
         RuleField::Series,
         RuleField::Rating,
@@ -43,6 +44,10 @@ fn wire_tokens_round_trip_for_every_enum() {
 fn accepts_gates_ops_per_field() {
     assert!(RuleField::Tag.accepts(RuleOp::IsNot));
     assert!(!RuleField::Tag.accepts(RuleOp::Gte));
+    // Genre is a name-based text field like tag: same text ops, no numeric ones.
+    assert!(RuleField::Genre.accepts(RuleOp::IsNot));
+    assert!(RuleField::Genre.accepts(RuleOp::StartsWith));
+    assert!(!RuleField::Genre.accepts(RuleOp::Gte));
     assert!(RuleField::Format.accepts(RuleOp::Includes));
     // Author/series are name-based text fields: they take the same text ops as
     // tag (is / is not / contains / starts with) but not the numeric ones.

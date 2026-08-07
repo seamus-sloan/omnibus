@@ -982,13 +982,14 @@ enum MatchMode: String, Codable, Sendable {
 }
 
 enum RuleField: String, Codable, CaseIterable, Sendable {
-    case tag, author, series, rating, status, format, year
+    case tag, genre, author, series, rating, status, format, year
     case dateAdded = "date_added"
     case dateUpdated = "date_updated"
 
     var label: String {
         switch self {
         case .tag: "Tag"
+        case .genre: "Genre"
         case .author: "Author"
         case .series: "Series"
         case .rating: "Rating"
@@ -1004,7 +1005,7 @@ enum RuleField: String, Codable, CaseIterable, Sendable {
     /// the server will accept.
     var acceptedOps: [RuleOp] {
         switch self {
-        case .tag, .author, .series: [.is, .isNot, .contains, .startsWith]
+        case .tag, .genre, .author, .series: [.is, .isNot, .contains, .startsWith]
         case .rating: [.is, .gte]
         case .status: [.is]
         case .format: [.includes, .contains, .startsWith]
