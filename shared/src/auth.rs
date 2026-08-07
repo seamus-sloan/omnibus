@@ -27,6 +27,11 @@ pub struct UserSummary {
     /// `GET /api/users/{id}/avatar` when set and a monogram otherwise.
     #[serde(default)]
     pub has_avatar: bool,
+    /// Formats this user hides from the landing All Books view — canonical
+    /// lowercase tokens (`"cbz"`). Clients pass it back as the listing
+    /// request's `exclude_formats`; empty means nothing hidden.
+    #[serde(default)]
+    pub hidden_formats: Vec<String>,
 }
 
 impl UserSummary {
@@ -137,4 +142,21 @@ pub struct LoginResponse {
     pub user: UserSummary,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Payloads from a pre-0068 server lack `hidden_formats`; the serde
+    // default must keep them decoding (old cached `/me` bodies included).
+    #[test]
+    fn user_summary_deserializes_payload_missing_hidden_formats() {
+        let v: UserSummary = serde_json::from_str(
+            r#"{"id":1,"username":"alice","is_admin":false,
+                "can_upload":false,"can_edit":false,"can_download":true}"#,
+        )
+        .unwrap();
+        assert!(v.hidden_formats.is_empty());
+    }
 }

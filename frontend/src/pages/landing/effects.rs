@@ -125,8 +125,16 @@ pub(super) fn spawn_page_fetch_effect(
             if q.is_empty() {
                 // Browse: server keyset page 1 (server-side sort + filter,
                 // facets + total ride along on the first page).
-                let result =
-                    data::get_ebooks_page(&url, sort_key, sort_dir, filters, None, PAGE_SIZE).await;
+                let result = data::get_ebooks_page(
+                    &url,
+                    sort_key,
+                    sort_dir,
+                    filters,
+                    Vec::new(),
+                    None,
+                    PAGE_SIZE,
+                )
+                .await;
                 if *fetch_epoch.peek() != epoch {
                     return; // a newer fetch superseded us — drop this result
                 }
@@ -233,9 +241,16 @@ pub(super) fn spawn_load_more_effect(
         let url = server_url.clone();
         loading_more.set(true);
         spawn(async move {
-            let result =
-                data::get_ebooks_page(&url, p.sort_key, p.sort_dir, p.filters, cursor, PAGE_SIZE)
-                    .await;
+            let result = data::get_ebooks_page(
+                &url,
+                p.sort_key,
+                p.sort_dir,
+                p.filters,
+                Vec::new(),
+                cursor,
+                PAGE_SIZE,
+            )
+            .await;
             // Drop the append if a page-1 refetch (sort/filter/query change)
             // superseded us mid-flight — otherwise we'd splice an old result
             // stream onto the new list and overwrite its cursor.

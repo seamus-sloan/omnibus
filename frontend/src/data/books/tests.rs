@@ -51,6 +51,7 @@ async fn get_ebooks_page_serves_replica_when_known_offline() {
         SortKey::Title,
         SortDir::Asc,
         ViewFilters::default(),
+        Vec::new(),
         None,
         10,
     )
@@ -64,7 +65,7 @@ async fn get_ebooks_page_serves_replica_when_known_offline() {
 async fn get_ebooks_page_serves_cached_first_page_without_network() {
     store::init_global_for_tests();
     let _guard = test_state_lock().lock().unwrap();
-    let key = cache::keys::ebooks_first(SortKey::Title.as_wire(), SortDir::Asc.as_wire(), "");
+    let key = cache::keys::ebooks_first(SortKey::Title.as_wire(), SortDir::Asc.as_wire(), "", "");
     cache::put_json(
         &key,
         &LibraryPage {
@@ -73,6 +74,7 @@ async fn get_ebooks_page_serves_cached_first_page_without_network() {
             next_cursor: None,
             total: Some(1),
             facets: None,
+            hidden_count: None,
         },
     );
 
@@ -83,6 +85,7 @@ async fn get_ebooks_page_serves_cached_first_page_without_network() {
         SortKey::Title,
         SortDir::Asc,
         ViewFilters::default(),
+        Vec::new(),
         None,
         10,
     )
@@ -104,6 +107,7 @@ async fn get_ebooks_page_falls_back_to_replica_when_the_first_fetch_dies() {
             SortKey::Author.as_wire(),
             SortDir::Desc.as_wire(),
             "",
+            "",
         ));
 
     let page = get_ebooks_page(
@@ -111,6 +115,7 @@ async fn get_ebooks_page_falls_back_to_replica_when_the_first_fetch_dies() {
         SortKey::Author,
         SortDir::Desc,
         ViewFilters::default(),
+        Vec::new(),
         None,
         10,
     )

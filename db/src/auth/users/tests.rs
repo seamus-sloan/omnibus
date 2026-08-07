@@ -189,6 +189,75 @@ async fn set_kindle_email_rejects_malformed_address() {
 }
 
 #[tokio::test]
+async fn set_hidden_formats_normalizes_lowercases_dedupes_and_sorts() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    assert!(u.hidden_formats.is_empty());
+
+    let stored = set_hidden_formats(
+        &p,
+        u.id,
+        &["CBZ".into(), " m4b ".into(), "cbz".into(), "".into()],
+    )
+    .await
+    .unwrap();
+    assert_eq!(stored, vec!["cbz".to_string(), "m4b".to_string()]);
+    assert_eq!(get_hidden_formats(&p, u.id).await.unwrap(), stored);
+}
+
+#[tokio::test]
+async fn set_hidden_formats_rejects_malformed_token_with_validation_error() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let err = set_hidden_formats(&p, u.id, &["not a format!".into()])
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AuthError::Validation(_)));
+    // The failed write must not have landed.
+    assert!(get_hidden_formats(&p, u.id).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn set_hidden_formats_rejects_oversized_list_with_validation_error() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let too_many: Vec<String> = (0..=HIDDEN_FORMATS_MAX).map(|i| format!("f{i}")).collect();
+    let err = set_hidden_formats(&p, u.id, &too_many).await.unwrap_err();
+    assert!(matches!(err, AuthError::Validation(_)));
+}
+
+#[tokio::test]
+async fn set_hidden_formats_with_empty_list_clears_the_column() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    set_hidden_formats(&p, u.id, &["cbz".into()]).await.unwrap();
+
+    set_hidden_formats(&p, u.id, &[]).await.unwrap();
+    assert!(get_hidden_formats(&p, u.id).await.unwrap().is_empty());
+    let raw: Option<Option<String>> =
+        sqlx::query_scalar("SELECT hidden_formats FROM users WHERE id = ?")
+            .bind(u.id)
+            .fetch_optional(&p)
+            .await
+            .unwrap();
+    assert_eq!(raw, Some(None), "clearing stores NULL, not an empty string");
+}
+
+#[tokio::test]
+async fn get_user_by_id_carries_parsed_hidden_formats() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    set_hidden_formats(&p, u.id, &["cbz".into(), "pdf".into()])
+        .await
+        .unwrap();
+    let reloaded = get_user_by_id(&p, u.id).await.unwrap().unwrap();
+    assert_eq!(
+        reloaded.hidden_formats,
+        vec!["cbz".to_string(), "pdf".to_string()]
+    );
+}
+
+#[tokio::test]
 async fn change_password_updates_hash_and_stamp_and_new_password_logs_in() {
     use crate::auth::verify_login;
 

@@ -25,6 +25,7 @@ fn user(id: i64, username: &str) -> UserSummary {
         kindle_email: None,
         display_name: None,
         has_avatar: false,
+        hidden_formats: Vec::new(),
     }
 }
 

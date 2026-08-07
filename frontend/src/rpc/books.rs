@@ -62,11 +62,18 @@ pub async fn rpc_get_ebooks() -> Result<EbookLibrary> {
 /// (`cursor == None`) also returns the full-library `total` (header count) and
 /// the sidebar `facets`; later pages omit both so an infinite scroll doesn't
 /// re-pay the aggregate cost — the client caches them.
+///
+/// `exclude_formats` is the caller's hidden-formats preference (from
+/// `UserSummary::hidden_formats`) — client-passed so only the landing surface
+/// applies it, and the first page's `total`/`hidden_count` report the visible
+/// library size and the receipt.
 #[post("/api/rpc/ebooks/page", pool: PoolExt, _user: AuthUser)]
+#[allow(clippy::too_many_arguments)] // the macro adds pool/user to the six query knobs
 pub async fn rpc_get_ebooks_page(
     sort_key: SortKey,
     sort_dir: SortDir,
     filters: ViewFilters,
+    exclude_formats: Vec<String>,
     cursor: Option<String>,
     limit: i64,
 ) -> Result<LibraryPage> {
@@ -75,6 +82,7 @@ pub async fn rpc_get_ebooks_page(
         sort_key,
         sort_dir,
         &filters,
+        &exclude_formats,
         cursor.as_deref(),
         limit,
     )
@@ -90,6 +98,7 @@ async fn ebooks_page(
     sort_key: SortKey,
     sort_dir: SortDir,
     filters: &ViewFilters,
+    exclude_formats: &[String],
     cursor: Option<&str>,
     limit: i64,
 ) -> Result<LibraryPage, ServerFnError> {
@@ -121,27 +130,41 @@ async fn ebooks_page(
         sort_key,
         sort_dir,
         filters,
+        exclude_formats,
         decoded.as_ref(),
         limit,
     )
     .await
     .map_err(|e| internal_rpc_error("list books page", e))?;
 
-    let (total, facets) = if decoded.is_none() {
-        (
-            Some(
-                db::count_books_for_paths(pool, &paths)
+    let (total, facets, hidden_count) = if decoded.is_none() {
+        // The header count is library-wide (facet filters don't shrink it),
+        // so the receipt beside it shares that basis: both diff counts use
+        // default filters and differ only in the exclusion. With no
+        // exclusion this stays the single `count_books_for_paths` query.
+        let all = db::count_books_for_paths(pool, &paths)
+            .await
+            .map_err(|e| internal_rpc_error("count books", e))?;
+        let (total, hidden) = if exclude_formats.is_empty() {
+            (all, None)
+        } else {
+            let visible =
+                db::count_books_page(pool, &paths, &ViewFilters::default(), exclude_formats)
                     .await
-                    .map_err(|e| internal_rpc_error("count books", e))?,
-            ),
+                    .map_err(|e| internal_rpc_error("count visible books", e))?;
+            (visible, Some(all - visible))
+        };
+        (
+            Some(total),
             Some(
                 db::library_facets(pool, &paths)
                     .await
                     .map_err(|e| internal_rpc_error("library facets", e))?,
             ),
+            hidden,
         )
     } else {
-        (None, None)
+        (None, None, None)
     };
 
     Ok(LibraryPage {
@@ -150,6 +173,7 @@ async fn ebooks_page(
         next_cursor: page.next.map(|c| c.encode()),
         total,
         facets,
+        hidden_count,
     })
 }
 
@@ -426,6 +450,7 @@ mod tests {
             SortKey::Title,
             SortDir::Asc,
             &ViewFilters::default(),
+            &[],
             None,
             1,
         )
@@ -450,6 +475,7 @@ mod tests {
             SortKey::Title,
             SortDir::Asc,
             &ViewFilters::default(),
+            &[],
             None,
             1,
         )
@@ -462,6 +488,7 @@ mod tests {
             SortKey::Title,
             SortDir::Asc,
             &ViewFilters::default(),
+            &[],
             Some(&cursor),
             1,
         )
@@ -483,6 +510,7 @@ mod tests {
             SortKey::Title,
             SortDir::Asc,
             &ViewFilters::default(),
+            &[],
             Some("not-a-server-issued-cursor"),
             10,
         )
@@ -535,5 +563,75 @@ mod tests {
         let result = merge_candidates(&pool, &oversized).await;
 
         assert!(result.is_err(), "oversized query must be rejected");
+    }
+
+    #[tokio::test]
+    async fn ebooks_page_with_exclusion_omits_hidden_books_and_reports_hidden_count() {
+        let pool = configured_pool(None).await;
+        seed_synced_ebook(&pool, "comic.cbz", "Comic", "Ann Author").await;
+        seed_synced_ebook(&pool, "novel.epub", "Novel", "Bob Author").await;
+
+        let page = ebooks_page(
+            &pool,
+            SortKey::Title,
+            SortDir::Asc,
+            &ViewFilters::default(),
+            &["cbz".to_string()],
+            None,
+            50,
+        )
+        .await
+        .unwrap();
+
+        let titles: Vec<_> = page
+            .books
+            .iter()
+            .filter_map(|b| b.title.as_deref())
+            .collect();
+        assert_eq!(titles, vec!["Novel"]);
+        assert_eq!(page.hidden_count, Some(1));
+    }
+
+    #[tokio::test]
+    async fn ebooks_page_with_exclusion_reports_visible_total() {
+        let pool = configured_pool(None).await;
+        seed_synced_ebook(&pool, "comic.cbz", "Comic", "Ann Author").await;
+        seed_synced_ebook(&pool, "novel.epub", "Novel", "Bob Author").await;
+
+        let page = ebooks_page(
+            &pool,
+            SortKey::Title,
+            SortDir::Asc,
+            &ViewFilters::default(),
+            &["cbz".to_string()],
+            None,
+            50,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(page.total, Some(1), "total is the visible library size");
+    }
+
+    #[tokio::test]
+    async fn ebooks_page_without_exclusion_keeps_current_total_and_no_hidden_count() {
+        let pool = configured_pool(None).await;
+        seed_synced_ebook(&pool, "comic.cbz", "Comic", "Ann Author").await;
+        seed_synced_ebook(&pool, "novel.epub", "Novel", "Bob Author").await;
+
+        let page = ebooks_page(
+            &pool,
+            SortKey::Title,
+            SortDir::Asc,
+            &ViewFilters::default(),
+            &[],
+            None,
+            50,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(page.total, Some(2));
+        assert_eq!(page.hidden_count, None);
     }
 }

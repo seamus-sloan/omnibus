@@ -40,7 +40,7 @@ fn fixture() -> Vec<EbookMetadata> {
 
 #[test]
 fn page_from_replica_sorts_by_title_and_slices_by_cursor() {
-    let first = page_from_replica(fixture(), SortKey::Title, SortDir::Asc, &[], None, 2);
+    let first = page_from_replica(fixture(), SortKey::Title, SortDir::Asc, &[], &[], None, 2);
     assert_eq!(titles(&first), vec!["Atonement", "Beloved"]);
     assert_eq!(first.total, Some(4));
     assert_eq!(first.next_cursor.as_deref(), Some("off:2"));
@@ -49,6 +49,7 @@ fn page_from_replica_sorts_by_title_and_slices_by_cursor() {
         fixture(),
         SortKey::Title,
         SortDir::Asc,
+        &[],
         &[],
         Some("off:2"),
         2,
@@ -61,7 +62,7 @@ fn page_from_replica_sorts_by_title_and_slices_by_cursor() {
 
 #[test]
 fn page_from_replica_flips_direction() {
-    let page = page_from_replica(fixture(), SortKey::Title, SortDir::Desc, &[], None, 10);
+    let page = page_from_replica(fixture(), SortKey::Title, SortDir::Desc, &[], &[], None, 10);
     assert_eq!(
         titles(&page),
         vec!["Dune", "Cider House", "Beloved", "Atonement"]
@@ -72,7 +73,7 @@ fn page_from_replica_flips_direction() {
 fn page_from_replica_sorts_by_author_with_title_tiebreak() {
     let mut books = fixture();
     books.push(book("A Widow for One Year", "Irving", &["EPUB"]));
-    let page = page_from_replica(books, SortKey::Author, SortDir::Asc, &[], None, 10);
+    let page = page_from_replica(books, SortKey::Author, SortDir::Asc, &[], &[], None, 10);
     assert_eq!(
         titles(&page),
         vec![
@@ -92,6 +93,7 @@ fn page_from_replica_filters_by_format_any_match() {
         SortKey::Title,
         SortDir::Asc,
         &["m4b".to_string()],
+        &[],
         None,
         10,
     );
@@ -108,6 +110,7 @@ fn page_from_replica_ends_stream_on_foreign_cursor() {
         SortKey::Title,
         SortDir::Asc,
         &[],
+        &[],
         Some("eyJvbmxpbmUiOiJjdXJzb3IifQ"),
         10,
     );
@@ -121,6 +124,7 @@ fn page_from_replica_returns_empty_page_past_the_end() {
         fixture(),
         SortKey::Title,
         SortDir::Asc,
+        &[],
         &[],
         Some("off:99"),
         10,
@@ -410,4 +414,61 @@ fn search_replica_matches_title_author_and_filename_case_insensitively() {
 
     assert!(search_replica(&books, "   ").is_empty());
     assert!(search_replica(&books, "zzz-no-hit").is_empty());
+}
+
+// ── Hidden-formats exclusion over the replica ───────────────────────────
+
+#[test]
+fn visible_under_exclusion_keeps_dual_format_book_with_one_visible_format() {
+    let dual = book("Dual", "A", &["CBZ", "EPUB"]);
+    assert!(visible_under_exclusion(&dual, &["cbz".to_string()]));
+    assert!(!visible_under_exclusion(
+        &dual,
+        &["cbz".to_string(), "epub".to_string()]
+    ));
+}
+
+#[test]
+fn visible_under_exclusion_keeps_formatless_physical_only_book() {
+    let phys = book("Shelf Copy", "A", &[]);
+    assert!(visible_under_exclusion(&phys, &["cbz".to_string()]));
+}
+
+#[test]
+fn visible_under_exclusion_hides_book_when_every_format_hidden() {
+    // Stored formats are uppercase; the pref tokens lowercase.
+    let comic = book("Comic", "A", &["CBZ"]);
+    assert!(!visible_under_exclusion(&comic, &["cbz".to_string()]));
+    assert!(visible_under_exclusion(&comic, &[]));
+}
+
+#[test]
+fn page_from_replica_exclusion_hides_books_and_reports_first_page_receipt() {
+    let mut books = fixture(); // four EPUB books
+    books.push(book("Comic", "A", &["CBZ"]));
+
+    let page = page_from_replica(
+        books.clone(),
+        SortKey::Title,
+        SortDir::Asc,
+        &[],
+        &["cbz".to_string()],
+        None,
+        10,
+    );
+    assert_eq!(page.total, Some(4));
+    assert_eq!(page.hidden_count, Some(1));
+    assert!(titles(&page).iter().all(|t| t != "Comic"));
+
+    // Later pages carry neither total nor receipt.
+    let later = page_from_replica(
+        books,
+        SortKey::Title,
+        SortDir::Asc,
+        &[],
+        &["cbz".to_string()],
+        Some("off:2"),
+        2,
+    );
+    assert_eq!(later.hidden_count, None);
 }

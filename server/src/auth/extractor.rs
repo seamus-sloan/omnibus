@@ -28,6 +28,7 @@ pub struct AuthUser {
     pub kindle_email: Option<String>,
     pub display_name: Option<String>,
     pub has_avatar: bool,
+    pub hidden_formats: Vec<String>,
     pub session_id: i64,
     pub session_kind: SessionKind,
 }
@@ -45,6 +46,7 @@ impl AuthUser {
             kindle_email: self.kindle_email.clone(),
             display_name: self.display_name.clone(),
             has_avatar: self.has_avatar,
+            hidden_formats: self.hidden_formats.clone(),
         }
     }
 }
@@ -131,6 +133,7 @@ fn build_auth_user(user: auth_db::User, session: auth_db::Session) -> AuthUser {
         kindle_email: user.kindle_email,
         display_name: user.display_name,
         has_avatar: user.has_avatar,
+        hidden_formats: user.hidden_formats,
         session_id: session.id,
         session_kind: session.kind,
     }

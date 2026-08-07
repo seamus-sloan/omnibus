@@ -513,3 +513,30 @@ async fn registration_status_returns_500_when_the_settings_read_fails() {
     // advertise signup on a server that cannot tell whether it is allowed.
     assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
+
+#[tokio::test]
+async fn me_reports_saved_hidden_formats() {
+    let (app, pool) = app().await;
+    let user = crate::auth::test_support::create_user(&pool, "reader").await;
+    let token = crate::auth::test_support::bearer_token(&pool, user.id).await;
+    db::auth::set_hidden_formats(&pool, user.id, &["cbz".into()])
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/auth/me")
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let me: omnibus_shared::UserSummary = serde_json::from_slice(&body).unwrap();
+    assert_eq!(me.hidden_formats, vec!["cbz".to_string()]);
+}

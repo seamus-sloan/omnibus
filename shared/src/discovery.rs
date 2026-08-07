@@ -73,6 +73,12 @@ pub struct LibraryPage {
     pub total: Option<i64>,
     #[serde(default)]
     pub facets: Option<FacetCounts>,
+    /// How many books the caller's `exclude_formats` hid — the landing
+    /// receipt. `Some` only on the first page of a request that sent a
+    /// non-empty exclusion; both counts behind it share the same filters and
+    /// differ only in the exclusion.
+    #[serde(default)]
+    pub hidden_count: Option<i64>,
 }
 
 /// Author detail payload for `GET /api/authors/:id` and `rpc_get_author`.
@@ -259,4 +265,17 @@ pub struct PaletteTagHit {
     pub name: String,
     /// Number of books with this tag in the active library.
     pub book_count: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A pre-0068 server's page body lacks `hidden_count`; the serde default
+    // must keep it decoding.
+    #[test]
+    fn library_page_deserializes_payload_missing_hidden_count() {
+        let v: LibraryPage = serde_json::from_str(r#"{"path":null,"books":[]}"#).unwrap();
+        assert_eq!(v.hidden_count, None);
+    }
 }

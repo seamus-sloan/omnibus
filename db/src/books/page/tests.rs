@@ -61,6 +61,57 @@ async fn insert_book(
     id
 }
 
+/// Like [`insert_book`], but with an explicit set of `book_files` formats
+/// (stored-case, e.g. `"CBZ"`). An empty slice inserts no file rows — pair it
+/// with [`insert_physical_copy`] or the fileless gate hides the book.
+async fn insert_book_with_formats(
+    pool: &SqlitePool,
+    lib_id: i64,
+    title: &str,
+    formats: &[&str],
+) -> i64 {
+    let key = uniq();
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, scan_key, library_id, path, title)
+         VALUES (?, ?, ?, '/p', ?) RETURNING id",
+    )
+    .bind(&key)
+    .bind(&key)
+    .bind(lib_id)
+    .bind(title)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    for (i, fmt) in formats.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch, ordinal)
+             VALUES (?, ?, ?, 1, 1, ?)",
+        )
+        .bind(id)
+        .bind(fmt)
+        .bind(format!("{title}.{}", fmt.to_lowercase()))
+        .bind(i as i64)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    id
+}
+
+/// Attach a physical copy to a book so the physical OR-arm keeps it visible.
+async fn insert_physical_copy(pool: &SqlitePool, book_id: i64) {
+    let uuid: String = sqlx::query_scalar("SELECT uuid FROM books WHERE id = ?")
+        .bind(book_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO physical_copies (book_uuid) VALUES (?)")
+        .bind(uuid)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
 fn ids(page: &BookPage) -> Vec<i64> {
     page.books.iter().map(|b| b.id).collect()
 }
@@ -82,9 +133,18 @@ async fn list_books_page_returns_first_then_next_page_via_cursor_with_no_overlap
     seed_minimal_books(&pool, 7).await; // sorts 'Title 0000000001'..'..7'
     let f = ViewFilters::default();
 
-    let p1 = list_books_page(&pool, &["/lib"], SortKey::Title, SortDir::Asc, &f, None, 3)
-        .await
-        .unwrap();
+    let p1 = list_books_page(
+        &pool,
+        &["/lib"],
+        SortKey::Title,
+        SortDir::Asc,
+        &f,
+        &[],
+        None,
+        3,
+    )
+    .await
+    .unwrap();
     assert_eq!(p1.books.len(), 3, "page 1 is exactly the page size");
     assert!(p1.next.is_some(), "more rows remain after page 1");
 
@@ -94,6 +154,7 @@ async fn list_books_page_returns_first_then_next_page_via_cursor_with_no_overlap
         SortKey::Title,
         SortDir::Asc,
         &f,
+        &[],
         p1.next.as_ref(),
         3,
     )
@@ -108,6 +169,7 @@ async fn list_books_page_returns_first_then_next_page_via_cursor_with_no_overlap
         SortKey::Title,
         SortDir::Asc,
         &f,
+        &[],
         p2.next.as_ref(),
         3,
     )
@@ -147,6 +209,7 @@ async fn list_books_page_handles_null_sort_rows_at_first_page_boundary() {
             SortKey::Title,
             SortDir::Asc,
             &f,
+            &[],
             cursor.as_ref(),
             2,
         )
@@ -193,6 +256,7 @@ async fn newest_added_orders_by_epoch_and_paginates_via_cursor() {
         SortKey::NewestAdded,
         SortDir::Desc,
         &f,
+        &[],
         None,
         50,
     )
@@ -210,6 +274,7 @@ async fn newest_added_orders_by_epoch_and_paginates_via_cursor() {
             SortKey::NewestAdded,
             SortDir::Desc,
             &f,
+            &[],
             cursor.as_ref(),
             1,
         )
@@ -243,6 +308,7 @@ async fn list_books_page_breaks_sort_ties_by_id_deterministically() {
             SortKey::Title,
             SortDir::Asc,
             &f,
+            &[],
             cursor.as_ref(),
             2,
         )
@@ -283,6 +349,7 @@ async fn list_books_page_respects_library_path_filter() {
             SortKey::Title,
             SortDir::Asc,
             &f,
+            &[],
             cursor.as_ref(),
             2,
         )
@@ -308,9 +375,18 @@ async fn list_books_page_returns_empty_at_end_of_stream() {
     let f = ViewFilters::default();
 
     // A full read under a generous limit ends with no cursor.
-    let all = list_books_page(&pool, &["/lib"], SortKey::Title, SortDir::Asc, &f, None, 50)
-        .await
-        .unwrap();
+    let all = list_books_page(
+        &pool,
+        &["/lib"],
+        SortKey::Title,
+        SortDir::Asc,
+        &f,
+        &[],
+        None,
+        50,
+    )
+    .await
+    .unwrap();
     assert_eq!(all.books.len(), 2);
     assert!(all.next.is_none());
 
@@ -326,6 +402,7 @@ async fn list_books_page_returns_empty_at_end_of_stream() {
         SortKey::Title,
         SortDir::Asc,
         &f,
+        &[],
         Some(&past),
         50,
     )
@@ -350,6 +427,7 @@ async fn list_books_page_paginates_descending_without_overlap() {
             SortKey::Title,
             SortDir::Desc,
             &f,
+            &[],
             cursor.as_ref(),
             2,
         )
@@ -378,6 +456,7 @@ async fn list_books_page_sorts_series_axis_by_name_then_index() {
         SortKey::Series,
         SortDir::Asc,
         &f,
+        &[],
         None,
         50,
     )
@@ -410,6 +489,7 @@ async fn list_books_page_paginates_series_axis_with_cursor_no_overlap() {
             SortKey::Series,
             SortDir::Asc,
             &f,
+            &[],
             cursor.as_ref(),
             1,
         )
@@ -444,9 +524,18 @@ async fn list_books_page_applies_author_filter_server_side() {
         authors: vec!["Ada Lovelace".into()],
         ..Default::default()
     };
-    let page = list_books_page(&pool, &["/lib"], SortKey::Title, SortDir::Asc, &f, None, 50)
-        .await
-        .unwrap();
+    let page = list_books_page(
+        &pool,
+        &["/lib"],
+        SortKey::Title,
+        SortDir::Asc,
+        &f,
+        &[],
+        None,
+        50,
+    )
+    .await
+    .unwrap();
     assert_eq!(page.books.len(), 3, "Ada wrote three of the four fixtures");
     assert!(page
         .books
@@ -467,6 +556,7 @@ async fn list_books_page_applies_format_filter_case_insensitively() {
         SortKey::Title,
         SortDir::Asc,
         &epub,
+        &[],
         None,
         50,
     )
@@ -484,6 +574,7 @@ async fn list_books_page_applies_format_filter_case_insensitively() {
         SortKey::Title,
         SortDir::Asc,
         &m4b,
+        &[],
         None,
         50,
     )
@@ -496,7 +587,7 @@ async fn list_books_page_applies_format_filter_case_insensitively() {
 async fn list_books_page_returns_empty_for_no_paths() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let f = ViewFilters::default();
-    let page = list_books_page(&pool, &[], SortKey::Title, SortDir::Asc, &f, None, 50)
+    let page = list_books_page(&pool, &[], SortKey::Title, SortDir::Asc, &f, &[], None, 50)
         .await
         .unwrap();
     assert!(page.books.is_empty());
@@ -594,9 +685,18 @@ async fn list_books_page_shows_physical_only_book_but_hides_wishlist_only() {
     let wish = seed_fileless(&pool, "Wishlist Only Title", vec![]).await;
 
     let f = ViewFilters::default();
-    let page = list_books_page(&pool, &["/lib"], SortKey::Title, SortDir::Asc, &f, None, 50)
-        .await
-        .unwrap();
+    let page = list_books_page(
+        &pool,
+        &["/lib"],
+        SortKey::Title,
+        SortDir::Asc,
+        &f,
+        &[],
+        None,
+        50,
+    )
+    .await
+    .unwrap();
     let uuids: Vec<&str> = page
         .books
         .iter()
@@ -631,7 +731,7 @@ async fn count_books_page_counts_physical_only_book_but_not_wishlist_only() {
     seed_fileless(&pool, "Wishlist Only Title", vec![]).await;
 
     // 1 normal book + 1 physical-only book; the wishlist-only book is excluded.
-    let count = count_books_page(&pool, &["/lib"], &ViewFilters::default())
+    let count = count_books_page(&pool, &["/lib"], &ViewFilters::default(), &[])
         .await
         .unwrap();
     assert_eq!(
@@ -643,7 +743,7 @@ async fn count_books_page_counts_physical_only_book_but_not_wishlist_only() {
 #[tokio::test]
 async fn count_books_page_matches_unfiltered_count_and_applies_format_filter() {
     let (pool, _guard) = seed_discovery_fixture().await; // all EPUB
-    let all = count_books_page(&pool, &["/lib"], &ViewFilters::default())
+    let all = count_books_page(&pool, &["/lib"], &ViewFilters::default(), &[])
         .await
         .unwrap();
     assert_eq!(all, 4, "empty filters count the whole library");
@@ -652,19 +752,218 @@ async fn count_books_page_matches_unfiltered_count_and_applies_format_filter() {
         formats: vec!["epub".into()],
         ..Default::default()
     };
-    assert_eq!(count_books_page(&pool, &["/lib"], &epub).await.unwrap(), 4);
+    assert_eq!(
+        count_books_page(&pool, &["/lib"], &epub, &[])
+            .await
+            .unwrap(),
+        4
+    );
 
     let m4b = ViewFilters {
         formats: vec!["m4b".into()],
         ..Default::default()
     };
-    assert_eq!(count_books_page(&pool, &["/lib"], &m4b).await.unwrap(), 0);
+    assert_eq!(
+        count_books_page(&pool, &["/lib"], &m4b, &[]).await.unwrap(),
+        0
+    );
 
     // No library paths → zero without touching the db.
     assert_eq!(
-        count_books_page(&pool, &[], &ViewFilters::default())
+        count_books_page(&pool, &[], &ViewFilters::default(), &[])
             .await
             .unwrap(),
         0
     );
+}
+
+// ---------------------------------------------------------------------------
+// Hidden-formats exclusion (the landing-only `exclude_formats` predicate).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn list_books_page_excludes_books_whose_every_format_is_hidden() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib = insert_lib(&pool, "/lib").await;
+    insert_book_with_formats(&pool, lib, "Berserk Vol 1", &["CBZ"]).await;
+    insert_book_with_formats(&pool, lib, "Plain Novel", &["EPUB"]).await;
+
+    let f = ViewFilters::default();
+    let hide = vec!["cbz".to_string()];
+    let page = list_books_page(
+        &pool,
+        &["/lib"],
+        SortKey::Title,
+        SortDir::Asc,
+        &f,
+        &hide,
+        None,
+        50,
+    )
+    .await
+    .unwrap();
+    assert_eq!(titles(&page), vec!["Plain Novel"]);
+}
+
+#[tokio::test]
+async fn list_books_page_keeps_dual_format_book_while_any_format_stays_visible() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib = insert_lib(&pool, "/lib").await;
+    insert_book_with_formats(&pool, lib, "Dual", &["CBZ", "EPUB"]).await;
+    insert_book_with_formats(&pool, lib, "Comic Only", &["CBZ"]).await;
+
+    let f = ViewFilters::default();
+    let hide = vec!["cbz".to_string()];
+    let page = list_books_page(
+        &pool,
+        &["/lib"],
+        SortKey::Title,
+        SortDir::Asc,
+        &f,
+        &hide,
+        None,
+        50,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        titles(&page),
+        vec!["Dual"],
+        "epub side keeps the book visible"
+    );
+
+    // Hiding every format the book carries finally hides it.
+    let hide_both = vec!["cbz".to_string(), "epub".to_string()];
+    let page = list_books_page(
+        &pool,
+        &["/lib"],
+        SortKey::Title,
+        SortDir::Asc,
+        &f,
+        &hide_both,
+        None,
+        50,
+    )
+    .await
+    .unwrap();
+    assert!(titles(&page).is_empty());
+}
+
+#[tokio::test]
+async fn list_books_page_never_hides_physical_only_books() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib = insert_lib(&pool, "/lib").await;
+    // Physical-only: no book_files rows at all.
+    let phys = insert_book_with_formats(&pool, lib, "Shelf Copy", &[]).await;
+    insert_physical_copy(&pool, phys).await;
+    // All-hidden files plus a physical copy: physical ownership trumps hiding.
+    let dual = insert_book_with_formats(&pool, lib, "Hidden But Owned", &["CBZ"]).await;
+    insert_physical_copy(&pool, dual).await;
+
+    let f = ViewFilters::default();
+    let hide = vec!["cbz".to_string()];
+    let page = list_books_page(
+        &pool,
+        &["/lib"],
+        SortKey::Title,
+        SortDir::Asc,
+        &f,
+        &hide,
+        None,
+        50,
+    )
+    .await
+    .unwrap();
+    // NULL `sort` rows order by insertion id, so Shelf Copy (inserted first)
+    // leads — the assertion is about visibility, not order.
+    assert_eq!(titles(&page), vec!["Shelf Copy", "Hidden But Owned"]);
+}
+
+#[tokio::test]
+async fn list_books_page_exclusion_matches_stored_uppercase_formats_case_insensitively() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib = insert_lib(&pool, "/lib").await;
+    // Stored uppercase (the scanner's convention); wire tokens are lowercase.
+    insert_book_with_formats(&pool, lib, "Comic", &["CBZ"]).await;
+
+    let f = ViewFilters::default();
+    let hide = vec!["cbz".to_string()];
+    let page = list_books_page(
+        &pool,
+        &["/lib"],
+        SortKey::Title,
+        SortDir::Asc,
+        &f,
+        &hide,
+        None,
+        50,
+    )
+    .await
+    .unwrap();
+    assert!(
+        titles(&page).is_empty(),
+        "lowercase 'cbz' must match stored 'CBZ' via COLLATE NOCASE"
+    );
+}
+
+#[tokio::test]
+async fn list_books_page_exclusion_composes_with_include_format_filter() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib = insert_lib(&pool, "/lib").await;
+    insert_book_with_formats(&pool, lib, "Comic", &["CBZ"]).await;
+    insert_book_with_formats(&pool, lib, "Novel", &["EPUB"]).await;
+    insert_book_with_formats(&pool, lib, "Audio", &["M4B"]).await;
+
+    // Include-filter selects cbz+epub; exclusion hides cbz. The include list
+    // must not resurrect a hidden book ("All" chip semantics).
+    let f = ViewFilters {
+        formats: vec!["cbz".into(), "epub".into()],
+        ..Default::default()
+    };
+    let hide = vec!["cbz".to_string()];
+    let page = list_books_page(
+        &pool,
+        &["/lib"],
+        SortKey::Title,
+        SortDir::Asc,
+        &f,
+        &hide,
+        None,
+        50,
+    )
+    .await
+    .unwrap();
+    assert_eq!(titles(&page), vec!["Novel"]);
+}
+
+#[tokio::test]
+async fn count_books_page_exclusion_matches_list_books_page() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib = insert_lib(&pool, "/lib").await;
+    insert_book_with_formats(&pool, lib, "Comic A", &["CBZ"]).await;
+    insert_book_with_formats(&pool, lib, "Comic B", &["CBZ"]).await;
+    insert_book_with_formats(&pool, lib, "Dual", &["CBZ", "EPUB"]).await;
+    insert_book_with_formats(&pool, lib, "Novel", &["EPUB"]).await;
+
+    let f = ViewFilters::default();
+    let hide = vec!["cbz".to_string()];
+    let page = list_books_page(
+        &pool,
+        &["/lib"],
+        SortKey::Title,
+        SortDir::Asc,
+        &f,
+        &hide,
+        None,
+        50,
+    )
+    .await
+    .unwrap();
+    let count = count_books_page(&pool, &["/lib"], &f, &hide).await.unwrap();
+    assert_eq!(page.books.len() as i64, count);
+    assert_eq!(count, 2, "Dual + Novel");
+
+    // The receipt arithmetic: same filters, exclusion diff only.
+    let all = count_books_page(&pool, &["/lib"], &f, &[]).await.unwrap();
+    assert_eq!(all - count, 2, "two comic-only books hidden");
 }

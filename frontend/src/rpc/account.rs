@@ -22,6 +22,18 @@ pub async fn rpc_set_kindle_email(email: Option<String>) -> Result<()> {
     }
 }
 
+/// Replace the authenticated user's hidden-formats list (the formats their
+/// landing All Books view excludes). An empty list clears it. Rejects an
+/// implausible token or an oversized list with a validation `ServerFnError`.
+#[post("/api/rpc/account/hidden-formats", pool: PoolExt, user: AuthUser)]
+pub async fn rpc_set_hidden_formats(formats: Vec<String>) -> Result<()> {
+    match db::auth::set_hidden_formats(&pool.0, user.id, &formats).await {
+        Ok(_) => Ok(()),
+        Err(AuthError::Validation(msg)) => Err(ServerFnError::new(msg).into()),
+        Err(e) => Err(internal_rpc_error("set hidden formats", e).into()),
+    }
+}
+
 /// Set (or clear, with `None`/blank) the authenticated user's display name.
 /// The db layer renames their Wishlist shelf in the same transaction, so the
 /// shelf label can't drift from the name it was derived from.

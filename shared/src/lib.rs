@@ -69,6 +69,13 @@ pub fn search_query_too_long(q: &str) -> bool {
     q.len() > SEARCH_QUERY_MAX_LEN
 }
 
+/// The formats the scanners index today, lowercase — the option list for the
+/// hidden-formats pickers (web account card, iOS account section). A **UI
+/// list only**, not a validation gate: `set_hidden_formats` accepts any
+/// plausible token, and the pickers additionally render a saved token this
+/// list doesn't know so it can always be un-hidden.
+pub const KNOWN_LIBRARY_FORMATS: &[&str] = &["epub", "pdf", "cbz", "m4b", "m4a", "mp3"];
+
 pub use audiobook::*;
 pub use auth::*;
 pub use bookmark::*;

@@ -47,11 +47,14 @@ async fn sync_replica(server_url: &str) {
     let mut all: Vec<EbookMetadata> = Vec::new();
     let mut cursor: Option<String> = None;
     loop {
+        // Deliberately no exclusion: the mirror holds the FULL library so an
+        // offline pref toggle can restore hidden books without a resync.
         let page = crate::data::get_ebooks_page_online(
             server_url,
             SortKey::Title,
             SortDir::Asc,
             ViewFilters::default(),
+            Vec::new(),
             cursor,
             SYNC_PAGE_LIMIT,
         )
@@ -79,6 +82,7 @@ pub(crate) async fn page_from_cache(
     sort_key: SortKey,
     sort_dir: SortDir,
     filters: &ViewFilters,
+    exclude_formats: &[String],
     cursor: Option<&str>,
     limit: i64,
 ) -> Option<LibraryPage> {
@@ -88,6 +92,7 @@ pub(crate) async fn page_from_cache(
         sort_key,
         sort_dir,
         &filters.formats,
+        exclude_formats,
         cursor,
         limit,
     ))
@@ -116,6 +121,7 @@ pub(crate) fn page_from_replica(
     sort_key: SortKey,
     sort_dir: SortDir,
     formats: &[String],
+    exclude_formats: &[String],
     cursor: Option<&str>,
     limit: i64,
 ) -> LibraryPage {
@@ -131,12 +137,22 @@ pub(crate) fn page_from_replica(
             next_cursor: None,
             total: None,
             facets: None,
+            hidden_count: None,
         };
     };
 
-    let mut filtered: Vec<EbookMetadata> = books
+    // The replica always holds the full library; hiding is applied at read
+    // time so an offline pref toggle restores hidden books instantly. The
+    // receipt is the server's same-filters diff: count under the include
+    // chips alone vs. chips + exclusion.
+    let chip_matched: Vec<EbookMetadata> = books
         .into_iter()
         .filter(|b| matches_formats(b, formats))
+        .collect();
+    let unexcluded_total = chip_matched.len();
+    let mut filtered: Vec<EbookMetadata> = chip_matched
+        .into_iter()
+        .filter(|b| visible_under_exclusion(b, exclude_formats))
         .collect();
     sort_books(&mut filtered, sort_key, sort_dir);
 
@@ -154,7 +170,21 @@ pub(crate) fn page_from_replica(
         next_cursor: (end < total).then(|| format!("off:{end}")),
         total: is_first_page.then_some(total as i64),
         facets: None,
+        hidden_count: (is_first_page && !exclude_formats.is_empty())
+            .then_some((unexcluded_total - total) as i64),
     }
+}
+
+/// Whether `book` survives the hidden-formats exclusion: visible while any
+/// of its formats is not hidden, and always visible when it has no formats
+/// at all (a physical-only row) — mirroring the server predicate.
+pub(crate) fn visible_under_exclusion(book: &EbookMetadata, hidden: &[String]) -> bool {
+    if hidden.is_empty() || book.formats.is_empty() {
+        return true;
+    }
+    book.formats
+        .iter()
+        .any(|f| !hidden.iter().any(|h| h.eq_ignore_ascii_case(f)))
 }
 
 /// Case-insensitive substring search over title / creators / filename.

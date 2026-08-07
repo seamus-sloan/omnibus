@@ -157,8 +157,15 @@ pub(super) fn use_pull_to_refresh(server_url: String, prefs: Signal<ViewPrefs>) 
             // Loop ends when the channel closes (this screen unmounted).
             while eval.recv::<i32>().await.is_ok() {
                 let p = prefs.peek().clone();
-                data::refresh_ebooks_first_page(&url, p.sort_key, p.sort_dir, p.filters, PAGE_SIZE)
-                    .await;
+                data::refresh_ebooks_first_page(
+                    &url,
+                    p.sort_key,
+                    p.sort_dir,
+                    p.filters,
+                    Vec::new(),
+                    PAGE_SIZE,
+                )
+                .await;
                 let _ = dioxus::document::eval(SETTLE_JS);
             }
         }

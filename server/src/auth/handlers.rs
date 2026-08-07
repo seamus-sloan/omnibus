@@ -51,6 +51,7 @@ fn user_summary(u: &auth_db::User) -> UserSummary {
         kindle_email: u.kindle_email.clone(),
         display_name: u.display_name.clone(),
         has_avatar: u.has_avatar,
+        hidden_formats: u.hidden_formats.clone(),
     }
 }
 
