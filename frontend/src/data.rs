@@ -6,6 +6,7 @@
 //! mobile-only `stores` carry the shared error type, HTTP plumbing, and
 //! on-device persistence they build on.
 
+mod account;
 mod auth;
 mod authors;
 mod bookmarks;
@@ -45,6 +46,7 @@ mod transport;
 // auth exports exist under web, mobile, and server-only (the last only
 // re-exports the SSR `current_user` stub so pages can call `data::current_user`
 // unconditionally without diverging hook order between SSR and WASM).
+pub use account::*;
 #[cfg(any(feature = "web", feature = "mobile", feature = "server"))]
 pub use auth::*;
 pub use authors::*;

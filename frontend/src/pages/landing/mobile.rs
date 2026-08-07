@@ -62,6 +62,8 @@ pub(super) struct MobileLandingPaging {
 pub(super) struct MobileLandingProps {
     /// Total book count shown in the "N books" label.
     pub book_count: usize,
+    /// "N hidden" receipt when the viewer's hidden-formats pref applies.
+    pub hidden_count: Option<i64>,
     /// The page of books to render as cover cells.
     pub books: Vec<EbookMetadata>,
     /// Load-more paging state for the cover grid.
@@ -136,6 +138,7 @@ fn render_mobile_header() -> Element {
 /// "All Books" title + the sort/filter pill that opens [`MobileSortFilterSheet`].
 fn render_mobile_title_row(
     book_count: usize,
+    hidden_count: Option<i64>,
     pill_label: &str,
     pill_arrow: &str,
     filter_count: usize,
@@ -146,6 +149,13 @@ fn render_mobile_title_row(
         div { class: "m-lib-title",
             div { class: "m-lib-title-text",
                 span { class: "label", "{book_count} books" }
+                if let Some(n) = hidden_count.filter(|n| *n > 0) {
+                    span {
+                        class: "label m-lib-hidden",
+                        "data-testid": "lib-hidden-count",
+                        "{n} hidden"
+                    }
+                }
                 h2 { class: "m-head-title",
                     "All "
                     span { class: "m-em", "Books" }
@@ -209,6 +219,7 @@ fn render_mobile_grid(
 pub(super) fn MobileLanding(props: MobileLandingProps) -> Element {
     let MobileLandingProps {
         book_count,
+        hidden_count,
         books,
         paging,
         prefs,
@@ -246,7 +257,7 @@ pub(super) fn MobileLanding(props: MobileLandingProps) -> Element {
                 span { class: "m-ptr-arrow", "↓" }
             }
             {render_mobile_header()}
-            {render_mobile_title_row(book_count, pill_label, pill_arrow, filter_count, sheet_open)}
+            {render_mobile_title_row(book_count, hidden_count, pill_label, pill_arrow, filter_count, sheet_open)}
 
             if let Some(point) = resume() {
                 {resume_card(&point, &server_url, cover_bust)}

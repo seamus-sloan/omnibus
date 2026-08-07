@@ -58,6 +58,9 @@ pub(super) struct LandingViewState {
     pub(super) path_subtitle: String,
     pub(super) path_missing: bool,
     pub(super) book_count: usize,
+    /// The "N hidden" receipt beside the browse header count; `None` off the
+    /// browse lens or when the viewer hides nothing.
+    pub(super) hidden_count: Option<i64>,
     pub(super) visible_books: Vec<EbookMetadata>,
     pub(super) visible_is_empty: bool,
     pub(super) books_empty: bool,
@@ -150,6 +153,11 @@ pub(super) fn derive_view_state(sigs: &LandingSignals, query: Signal<String>) ->
         // A shelf pick isn't the surface for the library-path hint.
         path_missing: path_value.is_none() && source != VisibleSource::Shelf,
         book_count,
+        // The exclusion (and so the receipt) applies to All Books only.
+        hidden_count: match source {
+            VisibleSource::Browse => (sigs.hidden)(),
+            _ => None,
+        },
         visible_books,
         visible_is_empty,
         books_empty: match source {

@@ -5338,6 +5338,17 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   font-feature-settings: 'lnum';
 }
 .lib-header-title-wrap { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.lib-header-hidden { color: var(--ink-3); }
+.m-lib-hidden { color: var(--ink-3); margin-left: 8px; }
+
+/* Hidden-formats account card */
+.hidden-formats-list { display: flex; flex-wrap: wrap; gap: 10px 18px; }
+.hidden-format-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
 .lib-header .shelf-facets { margin-top: 8px; }
 .lib-header-hint { color: var(--ink-2); font-size: 13px; }
 

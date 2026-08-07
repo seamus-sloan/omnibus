@@ -19,6 +19,8 @@ use crate::components::ShelfFacets;
 pub(super) struct LandingHeaderView {
     pub path_subtitle: String,
     pub book_count: usize,
+    /// "N hidden" receipt (browse only, viewer has a hidden-formats pref).
+    pub hidden_count: Option<i64>,
     pub path_missing: bool,
     pub page_error: Option<String>,
     pub lib_err: Option<String>,
@@ -43,6 +45,7 @@ pub(super) fn LandingHeader(
     let LandingHeaderView {
         path_subtitle,
         book_count,
+        hidden_count,
         path_missing,
         page_error,
         lib_err,
@@ -74,6 +77,15 @@ pub(super) fn LandingHeader(
                         span { class: "lib-header-count",
                             " · {book_count} "
                             if book_count == 1 { "book" } else { "books" }
+                        }
+                        // The receipt: hidden books must never look like
+                        // data loss, so the exclusion always shows its count.
+                        if let Some(n) = hidden_count.filter(|n| *n > 0) {
+                            span {
+                                class: "lib-header-hidden",
+                                "data-testid": "lib-hidden-count",
+                                " · {n} hidden"
+                            }
                         }
                     }
                     if can_edit {
