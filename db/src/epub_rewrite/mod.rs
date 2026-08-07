@@ -169,10 +169,18 @@ pub async fn rewritten_epub_path(
     let book = crate::books::get_book(pool, book_id)
         .await?
         .ok_or(EpubRewriteError::BookNotFound(book_id))?;
-    let last_modified = crate::get_last_modified_epoch(pool, book_id)
-        .await
-        .map_err(|e| EpubRewriteError::Failed(anyhow::Error::new(e)))?
-        .unwrap_or(0);
+    // Only the override/stale-check path below reads `last_modified` — skip
+    // the query on the common no-override path, matching the pre-batching
+    // behavior (the bulk fleet-wide pass has its own cheap bulk fetch and
+    // always needs it, so this guard is single-book-path only).
+    let last_modified = if book.has_override || book.has_cover_override {
+        crate::get_last_modified_epoch(pool, book_id)
+            .await
+            .map_err(|e| EpubRewriteError::Failed(anyhow::Error::new(e)))?
+            .unwrap_or(0)
+    } else {
+        0
+    };
     rewrite_or_reuse_cache(book_id, source, &book, last_modified).await
 }
 
