@@ -919,3 +919,114 @@ async fn rewrite_all_epubs_with_overrides_propagates_a_books_error_when_pool_is_
         .unwrap_err();
     assert!(matches!(err, EpubRewriteError::Books(_)));
 }
+
+// --- AC1/AC4 (#1718): batched resolution, not one query set per book ---
+
+/// Counts `tracing` events sqlx emits (target `"sqlx::query"`, one per
+/// executed statement) while installed as the default subscriber. Every
+/// other `Subscriber` method is a no-op — this only needs to tally events,
+/// never spans.
+struct QueryCounter(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl tracing::Subscriber for QueryCounter {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        metadata.target() == "sqlx::query"
+    }
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        if event.metadata().target() == "sqlx::query" {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    fn enter(&self, _span: &tracing::span::Id) {}
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+
+#[tokio::test]
+async fn rewrite_all_epubs_with_overrides_issues_a_query_count_independent_of_book_count() {
+    let export = tempfile::tempdir().unwrap();
+    let _env = EnvVarGuard::set_os("OMNIBUS_EXPORT_EPUB_DIR", Some(export.path().as_os_str()));
+
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+
+    // Seed a batch of overridden books whose EPUB source is never written to
+    // disk — this test only cares about DB round trips (AC1), not the
+    // (file-only) bake itself, so a nonexistent source is fine: every book
+    // still resolves through the batched id/path/last-modified lookups
+    // before its blocking rewrite fails. All books share one `scan_roots`
+    // row (inserted once, `seed_epub_row`-style repeated inserts would
+    // collide on its `UNIQUE path`).
+    const BOOK_COUNT: usize = 30;
+    let lib = tempfile::tempdir().unwrap();
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
+        .bind(lib.path().to_string_lossy().to_string())
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    for i in 0..BOOK_COUNT {
+        let uuid = format!("uuid-{i}");
+        let book_id =
+            sqlx::query("INSERT INTO books (uuid, library_id, path, title) VALUES (?, ?, '', ?)")
+                .bind(&uuid)
+                .bind(lib_id)
+                .bind(format!("Book {i}"))
+                .execute(&pool)
+                .await
+                .unwrap()
+                .last_insert_rowid();
+        sqlx::query(
+            "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+             VALUES (?, 'EPUB', ?, 0)",
+        )
+        .bind(book_id)
+        .bind(format!("missing-{i}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+        crate::upsert_metadata_overrides(
+            &pool,
+            &uuid,
+            &MetadataOverrides {
+                title: Some(format!("Overridden {i}")),
+                ..Default::default()
+            },
+            false,
+            user_id,
+        )
+        .await
+        .unwrap();
+    }
+
+    let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let guard = tracing::subscriber::set_default(QueryCounter(count.clone()));
+    let summary = super::rewrite_all_epubs_with_overrides(&pool)
+        .await
+        .unwrap();
+    drop(guard);
+
+    assert_eq!(
+        summary.errors.len(),
+        BOOK_COUNT,
+        "every book's source is missing on disk: {summary:?}"
+    );
+    let queries = count.load(std::sync::atomic::Ordering::SeqCst);
+    // AC1: the batched resolve path issues a small, book-count-independent
+    // number of chunked queries — well under one per book, let alone the old
+    // design's up to 4+ round trips per book PLUS `get_book`'s own several
+    // internal queries (overrides, precedence, creator-id backfill, file
+    // list) for every one of them.
+    assert!(
+        queries < BOOK_COUNT,
+        "expected a query count independent of book count, got {queries} \
+         queries for {BOOK_COUNT} books"
+    );
+}

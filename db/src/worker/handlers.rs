@@ -139,6 +139,7 @@ impl Worker {
             } => kindle_outcome(
                 crate::kindle::send(&self.pool, book_id, book_file_id, &recipient_email).await,
             ),
+            Task::RewriteAllEpubs => self.handle_rewrite_all_epubs().await,
             Task::GenerateThumbs {
                 book_id,
                 last_modified_epoch,
@@ -202,6 +203,28 @@ impl Worker {
                 TaskOutcome::Ok(warning)
             }
             Err(e) => sanitized_err("library scan", e),
+        }
+    }
+
+    /// Bake every book's active override into its EPUB export cache
+    /// (#959, #1718). Per-book failures are recorded in
+    /// [`omnibus_shared::BulkRewriteSummary::errors`] by
+    /// `rewrite_all_epubs_with_overrides` itself and never fail the task —
+    /// only a failure resolving the batch (DB down, etc.) reaches this
+    /// match's `Err` arm. The summary counts have no dedicated progress
+    /// surface yet, so they're logged rather than surfaced to the poller.
+    async fn handle_rewrite_all_epubs(self: &Arc<Self>) -> TaskOutcome {
+        match crate::rewrite_all_epubs_with_overrides(&self.pool).await {
+            Ok(summary) => {
+                tracing::info!(
+                    rewritten = summary.rewritten,
+                    skipped = summary.skipped,
+                    errors = summary.errors.len(),
+                    "epub override bake finished"
+                );
+                TaskOutcome::Ok(None)
+            }
+            Err(e) => sanitized_err("epub override bake", e),
         }
     }
 
