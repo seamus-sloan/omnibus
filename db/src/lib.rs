@@ -19,6 +19,7 @@ pub mod deletion;
 pub mod discovery;
 pub mod ebook;
 pub mod epub_rewrite;
+pub mod error_ring;
 pub mod helpers;
 pub mod hls;
 mod http_client;

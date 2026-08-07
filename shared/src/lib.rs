@@ -10,6 +10,7 @@ pub mod bookmark;
 pub mod deletion;
 pub mod discovery;
 pub mod ebook;
+pub mod error_ring;
 pub mod highlight;
 pub mod http_range;
 pub mod image_format;

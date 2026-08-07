@@ -8,6 +8,10 @@
 //! has no sidebar — it renders the library form plus the admin key/SMTP cards
 //! flat, unchanged.
 
+// Web/server only: the Server Health "Last errors" panel calls the web-only
+// `data::get_last_errors` (no mobile RPC route yet), same shape as `logs`.
+#[cfg(not(feature = "mobile"))]
+mod health;
 mod library;
 // Only compiled on web/server: its body calls the web-only
 // `data::get_metadata_precedence`/`save_metadata_precedence` (no mobile RPC
@@ -23,6 +27,8 @@ mod users;
 
 use dioxus::prelude::*;
 
+#[cfg(not(feature = "mobile"))]
+use health::LastErrorsSection;
 use library::LibraryLocationSection;
 use secret_key_field::{SecretKeyField, SecretKeyKind};
 use smtp::SmtpConfigField;
@@ -85,6 +91,7 @@ enum SettingsSection {
     Email,
     Users,
     Logs,
+    Health,
 }
 
 #[cfg(not(feature = "mobile"))]
@@ -100,6 +107,7 @@ impl SettingsSection {
             SettingsSection::Email => "email",
             SettingsSection::Users => "users",
             SettingsSection::Logs => "logs",
+            SettingsSection::Health => "health",
         }
     }
 
@@ -124,6 +132,7 @@ fn parse_section(raw: Option<&str>, is_admin: bool) -> SettingsSection {
         Some("email") => SettingsSection::Email,
         Some("users") => SettingsSection::Users,
         Some("logs") => SettingsSection::Logs,
+        Some("health") => SettingsSection::Health,
         _ => SettingsSection::Account,
     };
     if requested.requires_admin() && !is_admin {
@@ -150,6 +159,7 @@ fn section_content(active: SettingsSection) -> Element {
         SettingsSection::Email => rsx! { SmtpConfigField {} },
         SettingsSection::Users => rsx! { UsersSection {} },
         SettingsSection::Logs => rsx! { super::LogsPage {} },
+        SettingsSection::Health => rsx! { LastErrorsSection {} },
     }
 }
 
@@ -185,6 +195,7 @@ fn SettingsSidebar(active: SettingsSection, is_admin: bool) -> Element {
                 SettingsNavGroup { label: "Administration",
                     SettingsNavItem { section: SettingsSection::Users, active, label: "Users", icon: "☰" }
                     SettingsNavItem { section: SettingsSection::Logs, active, label: "Logs", icon: "▣" }
+                    SettingsNavItem { section: SettingsSection::Health, active, label: "Server Health", icon: "♥" }
                 }
             } else {
                 p { class: "settings-sidebar-note",
@@ -265,6 +276,10 @@ mod tests {
             parse_section(Some("logs"), true),
             SettingsSection::Logs
         ));
+        assert!(matches!(
+            parse_section(Some("health"), true),
+            SettingsSection::Health
+        ));
     }
 
     #[test]
@@ -295,6 +310,10 @@ mod tests {
         ));
         assert!(matches!(
             parse_section(Some("metadata"), false),
+            SettingsSection::Account
+        ));
+        assert!(matches!(
+            parse_section(Some("health"), false),
             SettingsSection::Account
         ));
     }

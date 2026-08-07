@@ -1,8 +1,15 @@
-//! Tracing subscriber setup: a compact human-readable stderr layer plus a
-//! non-blocking, daily-rolling JSON file sink, both gated by one `RUST_LOG`
-//! env-filter. Called by `main` before `dioxus::serve`; the JSON file is the
-//! durable log source for the admin log viewer, which reads it back through
-//! `omnibus_db::logs` (the single owner of the log-directory resolution).
+//! Tracing subscriber setup: a compact human-readable stderr layer, a
+//! non-blocking daily-rolling JSON file sink, and the in-memory error ring
+//! buffer layer, all gated by one `RUST_LOG` env-filter. Called by `main`
+//! before `dioxus::serve`; the JSON file is the durable log source for the
+//! admin log viewer, which reads it back through `omnibus_db::logs` (the
+//! single owner of the log-directory resolution). The ring buffer
+//! ([`error_ring_layer`]) is a separate, fast, in-memory companion — see
+//! `omnibus_db::error_ring`.
+
+mod error_ring_layer;
+
+use error_ring_layer::ErrorRingLayer;
 
 /// Install the global tracing subscriber. Must run before `dioxus::serve`,
 /// which otherwise installs dioxus-logger's default subscriber with a fixed
@@ -52,11 +59,15 @@ pub fn init_tracing() -> Option<tracing_appender::non_blocking::WorkerGuard> {
     };
 
     // try_init over init: a second subscriber (e.g. in tests) is a no-op, not a
-    // panic. A single env-filter gates both layers.
+    // panic. A single env-filter gates every layer, including the ring buffer
+    // — a DEBUG-only deployment shouldn't have ERROR events silently vanish
+    // from the buffer just because the filter dropped them upstream, but nor
+    // should the buffer see events the operator asked to suppress.
     tracing_subscriber::registry()
         .with(filter)
         .with(fmt::layer().with_writer(std::io::stderr).compact())
         .with(file_layer)
+        .with(ErrorRingLayer)
         .try_init()
         .ok();
 

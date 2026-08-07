@@ -11,6 +11,10 @@ mod auth;
 mod authors;
 mod bookmarks;
 mod books;
+// Admin "last errors" ring buffer read (#954) — web (server-fn) + SSR stubs;
+// not a mobile surface, same shape as `logs`.
+#[cfg(not(feature = "mobile"))]
+mod errors;
 mod genres;
 mod hardcover_fetch;
 mod highlights;
@@ -52,6 +56,8 @@ pub use auth::*;
 pub use authors::*;
 pub use bookmarks::*;
 pub use books::*;
+#[cfg(not(feature = "mobile"))]
+pub use errors::*;
 pub use genres::*;
 pub use hardcover_fetch::*;
 pub use highlights::*;
