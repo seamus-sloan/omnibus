@@ -222,12 +222,14 @@ struct BookDetailView: View {
                         if !book.genres.isEmpty { genresSection(book) }
                         if !book.subjects.isEmpty { tagsSection(book) }
                         ratingSection(book)
+                        // Other readers follow your own rating, like the web
+                        // page, so the two rating surfaces read as one topic.
+                        if !model.otherRatings.isEmpty { otherRatingsSection }
                         statusSection(book)
                         librarySection(book)
                         metadataSection(book)
                         if !model.highlights.isEmpty { highlightsSection(book) }
                         journalSection(book)
-                        if !model.otherRatings.isEmpty { otherRatingsSection }
                     }
                     .screenPadding()
                     .padding(.top, Spacing.xl)
@@ -741,10 +743,21 @@ struct BookDetailView: View {
         DisclosureSection(title: "Other readers") {
             VStack(spacing: Spacing.sm) {
                 ForEach(model.otherRatings) { rating in
-                    HStack {
-                        Text(rating.username)
-                            .font(.ui(13.5))
-                            .foregroundStyle(palette.ink1Color)
+                    HStack(spacing: Spacing.sm) {
+                        UserAvatar(
+                            id: rating.userId,
+                            name: rating.username,
+                            hasAvatar: rating.hasAvatar,
+                            size: 24
+                        )
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(rating.username)
+                                .font(.ui(13.5))
+                                .foregroundStyle(palette.ink1Color)
+                            Text("Rated \(Format.relative(unix: rating.updatedAt))")
+                                .font(.monoUI(9.5))
+                                .foregroundStyle(palette.ink3Color)
+                        }
                         Spacer()
                         StarRating(stars: rating.stars)
                     }

@@ -27,8 +27,17 @@ struct UserAvatar: View {
         .frame(width: size, height: size)
         .clipShape(Circle())
         .overlay(Circle().strokeBorder(.white.opacity(0.14), lineWidth: 0.5))
-        .shadow(color: palette.accentColor.opacity(0.25), radius: 12, y: 4)
+        // The accent glow is identity-card dressing; at list-row sizes it
+        // reads as smudging, so small avatars stay flat like `AuthorAvatar`.
+        .shadow(
+            color: palette.accentColor.opacity(size >= Self.shadowMinSize ? 0.25 : 0),
+            radius: 12,
+            y: 4
+        )
     }
+
+    /// Below this size the accent shadow is suppressed (row avatars stay flat).
+    static let shadowMinSize: CGFloat = 44
 
     /// The cache key / request path for a user's avatar. Shared with the
     /// invalidation call after an upload so the two can't drift.
