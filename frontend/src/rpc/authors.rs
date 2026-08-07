@@ -122,13 +122,9 @@ pub async fn rpc_set_author_photo_url(id: i64, url: String) -> Result<()> {
         return Err(ServerFnError::new("forbidden: admin required").into());
     }
     let trimmed = validate_author_photo_url(&url)?;
-    let author_exists: bool =
-        sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM authors WHERE id = ?)")
-            .bind(id)
-            .fetch_one(&pool.0)
-            .await
-            .map_err(|e| internal_rpc_error("author exists check", e))?
-            != 0;
+    let author_exists = db::author_photos_data::author_exists(&pool.0, id)
+        .await
+        .map_err(|e| internal_rpc_error("author exists check", e))?;
     if !author_exists {
         return Err(ServerFnError::new("author not found").into());
     }
