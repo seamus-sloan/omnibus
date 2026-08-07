@@ -4,7 +4,7 @@
 
 #[cfg(not(feature = "mobile"))]
 use omnibus_shared::MetadataSource;
-use omnibus_shared::{BulkRewriteSummary, LibraryContents, Settings, WorkerStatus};
+use omnibus_shared::{LibraryContents, Settings, WorkerStatus};
 
 #[cfg(not(feature = "mobile"))]
 use crate::data::note_server_fn_err;
@@ -172,23 +172,25 @@ pub async fn backfill_chapters(server_url: &str) -> Result<(), DataError> {
 }
 
 /// Admin: bake every book's active metadata/cover overrides into its EPUB
-/// container in one pass (#959). Returns the run's `{ rewritten, skipped,
-/// errors }` summary.
+/// container in one pass (#959, #1718). Queues the bake on the shared
+/// worker and returns as soon as it's dispatched — progress surfaces via
+/// the existing worker-status poll, not this call's response.
 #[cfg(not(feature = "mobile"))]
-pub async fn rewrite_all_epubs(_server_url: &str) -> Result<BulkRewriteSummary, DataError> {
+pub async fn rewrite_all_epubs(_server_url: &str) -> Result<(), DataError> {
     crate::rpc::rpc_rewrite_all_epubs()
         .await
         .map_err(note_server_fn_err)
 }
 
-/// Mobile stub for `rewrite_all_epubs` — hits the REST mirror directly.
+/// Mobile stub for `rewrite_all_epubs` — hits the REST mirror directly,
+/// which now responds `202 Accepted` with no body once the task is queued.
 #[cfg(feature = "mobile")]
-pub async fn rewrite_all_epubs(server_url: &str) -> Result<BulkRewriteSummary, DataError> {
+pub async fn rewrite_all_epubs(server_url: &str) -> Result<(), DataError> {
     let url = format!("{server_url}/api/admin/rewrite-all-epubs");
     let response = with_bearer(http_client().post(&url)).send().await?;
     let status = note_status(response.status());
     if !status.is_success() {
         return Err(drain_error(response, status).await);
     }
-    Ok(response.json::<BulkRewriteSummary>().await?)
+    Ok(())
 }

@@ -146,6 +146,7 @@ impl Worker {
                 self.handle_generate_thumbs(book_id, last_modified_epoch)
                     .await
             }
+            Task::RewriteOverrideEpubs => self.handle_rewrite_override_epubs().await,
             #[cfg(test)]
             Task::Test {
                 tag: _,
@@ -176,6 +177,36 @@ impl Worker {
             }
         }
         outcome
+    }
+
+    /// Bake every book's active metadata/cover overrides into its EPUB
+    /// export cache (#959, #1718). A per-book failure is absorbed into the
+    /// run's own `BulkRewriteSummary` rather than failing the task — only a
+    /// whole-run DB failure (e.g. the initial overrides listing) reaches
+    /// `TaskOutcome::Err`. The summary itself has no home on the wire
+    /// protocol (this is a fire-and-forget dispatch, not an awaited
+    /// request), so it's logged here rather than discarded silently.
+    async fn handle_rewrite_override_epubs(self: &Arc<Self>) -> TaskOutcome {
+        match crate::epub_rewrite::rewrite_all_epubs_with_overrides(&self.pool).await {
+            Ok(summary) if summary.errors.is_empty() => {
+                tracing::info!(
+                    rewritten = summary.rewritten,
+                    skipped = summary.skipped,
+                    "epub override bake complete"
+                );
+                TaskOutcome::Ok(None)
+            }
+            Ok(summary) => {
+                tracing::warn!(
+                    rewritten = summary.rewritten,
+                    skipped = summary.skipped,
+                    errors = summary.errors.len(),
+                    "epub override bake finished with per-book errors"
+                );
+                TaskOutcome::Ok(None)
+            }
+            Err(e) => sanitized_err("epub override bake", e),
+        }
     }
 
     /// Reindex an ebook library, then (on success) post the follow-up

@@ -755,13 +755,19 @@ async fn post_rewrite_all_epubs_returns_403_when_not_admin() {
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
 }
 
+/// #1718: the run no longer blocks the request — it queues a
+/// `Task::RewriteOverrideEpubs` on the shared worker and returns `202`
+/// immediately, echoing the dispatched `TaskId` in the debug-only header
+/// (mirrors `post_settings_triggers_scan_via_worker`). Awaiting that task id
+/// directly is what proves the dispatch actually happened and ran to
+/// completion, rather than just trusting the HTTP status.
 #[tokio::test]
-async fn post_rewrite_all_epubs_returns_200_with_a_zero_summary_when_no_overrides_exist() {
-    let (app, _state, pool) = fixture().await;
+async fn post_rewrite_all_epubs_returns_202_and_completes_via_the_worker() {
+    let (app, state, pool) = fixture().await;
     let admin = auth_test_support::create_admin(&pool, "admin").await;
     let token = auth_test_support::bearer_token(&pool, admin.id).await;
-    // A book exists but carries no active override — the run must succeed
-    // with nothing to rewrite rather than touching it.
+    // A book exists but carries no active override — the queued run must
+    // finish successfully with nothing to rewrite rather than touching it.
     seed_book(&pool, "/lib", "Untouched").await;
 
     let res = app
@@ -775,11 +781,20 @@ async fn post_rewrite_all_epubs_returns_200_with_a_zero_summary_when_no_override
         )
         .await
         .expect("request should succeed");
-    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
 
-    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
-    let summary: omnibus_shared::BulkRewriteSummary = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(summary.rewritten, 0);
-    assert_eq!(summary.skipped, 0);
-    assert!(summary.errors.is_empty());
+    let task_id: db::worker::TaskId = res
+        .headers()
+        .get("X-Omnibus-Worker-Task-Id")
+        .expect("worker task id header should be set in debug builds")
+        .to_str()
+        .expect("header value should be ASCII")
+        .parse()
+        .expect("header value should be a u64");
+
+    let outcome = state.worker().await_completion(task_id).await;
+    assert!(
+        matches!(outcome, db::worker::TaskOutcome::Ok(_)),
+        "bake task should succeed with nothing to rewrite, got {outcome:?}"
+    );
 }

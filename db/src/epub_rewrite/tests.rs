@@ -919,3 +919,126 @@ async fn rewrite_all_epubs_with_overrides_propagates_a_books_error_when_pool_is_
         .unwrap_err();
     assert!(matches!(err, EpubRewriteError::Books(_)));
 }
+
+// --- batched source / last-modified lookups (#1718) ---------------------
+//
+// `rewrite_all_epubs_with_overrides` used to run four sequential DB
+// round-trips per book (`resolve_book_id_by_uuid`, `book_file_path`,
+// `get_book`, `get_last_modified_epoch`) inside its loop. These tests cover
+// the batched replacements directly — `resolve_epub_sources_bulk` and
+// `resolve_last_modified_bulk` — including the 499-bind chunking boundary,
+// which is the shape a per-book query loop can never violate but a naive
+// single `IN (...)` query would.
+
+#[tokio::test]
+async fn resolve_epub_sources_bulk_resolves_the_lowest_ordinal_epub_per_book() {
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    let lib_dir = tempfile::tempdir().unwrap();
+    let book_id = seed_epub_row(&pool, lib_dir.path(), "uuid-x", "Book X", "alpha").await;
+
+    let sources = super::resolve_epub_sources_bulk(&pool, &[book_id])
+        .await
+        .unwrap();
+
+    assert_eq!(
+        sources.get(&book_id),
+        Some(&lib_dir.path().join("alpha.epub"))
+    );
+}
+
+#[tokio::test]
+async fn resolve_epub_sources_bulk_omits_books_with_no_epub_file() {
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    let book_id = seed_epubless_book(&pool, "uuid-y", "Book Y").await;
+
+    let sources = super::resolve_epub_sources_bulk(&pool, &[book_id])
+        .await
+        .unwrap();
+
+    assert!(!sources.contains_key(&book_id));
+}
+
+#[tokio::test]
+async fn resolve_epub_sources_bulk_resolves_every_id_across_a_499_chunk_boundary() {
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    // One shared `scan_roots` row (its `path` column is `UNIQUE`, so unlike
+    // `seed_epub_row` this doesn't mint a fresh one per book) with 510
+    // `books`/`book_files` rows hung off it — enough to force
+    // `resolve_epub_sources_bulk` across its 499-id chunk boundary.
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES ('/lib', 'lib')")
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    let mut ids = Vec::with_capacity(510);
+    for i in 0..510 {
+        let book_id =
+            sqlx::query("INSERT INTO books (uuid, library_id, path, title) VALUES (?, ?, '', ?)")
+                .bind(format!("uuid-{i}"))
+                .bind(lib_id)
+                .bind(format!("Book {i}"))
+                .execute(&pool)
+                .await
+                .unwrap()
+                .last_insert_rowid();
+        sqlx::query(
+            "INSERT INTO book_files (book_id, format, filename, size_bytes) VALUES (?, 'EPUB', ?, 0)",
+        )
+        .bind(book_id)
+        .bind(format!("book{i}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+        ids.push(book_id);
+    }
+
+    let sources = super::resolve_epub_sources_bulk(&pool, &ids).await.unwrap();
+
+    assert_eq!(
+        sources.len(),
+        510,
+        "every id spanning both 499-id chunks should resolve"
+    );
+    for id in &ids {
+        assert!(sources.contains_key(id), "missing source for book {id}");
+    }
+}
+
+#[tokio::test]
+async fn resolve_last_modified_bulk_resolves_the_stored_epoch_for_every_id() {
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    let lib_dir = tempfile::tempdir().unwrap();
+    let book_id = seed_epub_row(&pool, lib_dir.path(), "uuid-z", "Book Z", "zeta").await;
+    sqlx::query("UPDATE books SET last_modified = 12345 WHERE id = ?")
+        .bind(book_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let map = super::resolve_last_modified_bulk(&pool, &[book_id])
+        .await
+        .unwrap();
+
+    assert_eq!(map.get(&book_id), Some(&12345));
+}
+
+#[tokio::test]
+async fn resolve_last_modified_bulk_falls_back_to_now_for_a_null_column() {
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    let lib_dir = tempfile::tempdir().unwrap();
+    let book_id = seed_epub_row(&pool, lib_dir.path(), "uuid-null", "Book Null", "null").await;
+
+    let map = super::resolve_last_modified_bulk(&pool, &[book_id])
+        .await
+        .unwrap();
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let epoch = *map.get(&book_id).expect("id should resolve");
+    assert!(
+        (now - epoch).abs() < 60,
+        "expected a now-ish fallback, got {epoch}"
+    );
+}

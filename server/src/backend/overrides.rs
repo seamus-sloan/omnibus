@@ -10,7 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use omnibus_db::{self as db};
+use omnibus_db::{self as db, worker::Task};
 use omnibus_shared::MetadataOverrides;
 
 use super::image_upload::extract_validated_image;
@@ -240,16 +240,32 @@ async fn persist_cover(
 /// EPUB container in one pass (#959) — the fleet-wide sibling of the
 /// per-book export bake `get_ebook_download` already performs on demand.
 /// Skips books without an active override or without an EPUB; a per-book
-/// failure is collected in the returned summary rather than aborting the
-/// run. Mobile-facing REST; the web counterpart is `rpc_rewrite_all_epubs`.
+/// failure is logged rather than aborting the run.
+///
+/// Dispatches a `Task::RewriteOverrideEpubs` to the shared worker and
+/// returns `202 Accepted` as soon as it's queued, mirroring `post_settings`'s
+/// `Task::Scan` dispatch — the run itself takes as long as the whole library,
+/// so it must not block this request thread for its duration (#1718). Debug
+/// builds echo the dispatched `TaskId` in `X-Omnibus-Worker-Task-Id` (same as
+/// `post_settings`) so a caller that can reach the worker directly (tests;
+/// a future mobile status poll) can await it. Mobile-facing REST; the web
+/// counterpart `rpc_rewrite_all_epubs` polls the existing
+/// `/api/rpc/worker_status` feed via `WorkerStatusIndicator`.
 pub(super) async fn post_rewrite_all_epubs(
     _admin: AdminUser,
     State(state): State<AppState>,
 ) -> Response {
-    match db::rewrite_all_epubs_with_overrides(&state.pool).await {
-        Ok(summary) => Json(summary).into_response(),
-        Err(e) => internal("rewrite_all_epubs", e),
+    let task_id = state.worker.post(Task::RewriteOverrideEpubs);
+    let mut response = axum::http::StatusCode::ACCEPTED.into_response();
+    #[cfg(debug_assertions)]
+    if let Ok(value) = task_id.to_string().parse::<axum::http::HeaderValue>() {
+        response
+            .headers_mut()
+            .insert("X-Omnibus-Worker-Task-Id", value);
     }
+    #[cfg(not(debug_assertions))]
+    let _ = task_id;
+    response
 }
 
 /// Best-effort delete of the on-disk override cover after a DB failure in

@@ -119,6 +119,13 @@ pub enum Task {
         book_file_id: Option<i64>,
         recipient_email: String,
     },
+    /// Bake every book's active metadata/cover overrides into its EPUB
+    /// export cache in one pass (#959, #1718) — the fleet-wide sibling of
+    /// the per-book on-demand bake `epub_rewrite::rewritten_epub_path`
+    /// performs on a download. Keyed on a fixed resource so concurrent
+    /// clicks serialize; does not consume the scan semaphore (bounded
+    /// per-book CPU work, not a filesystem tree walk).
+    RewriteOverrideEpubs,
     /// Test-only synthetic task: sleeps `latency_ms` and invokes the
     /// optional `on_run` / `on_done` hooks, with `resource` and
     /// `route_through_scan_sem` letting a test exercise the keyed mutex and
@@ -152,6 +159,7 @@ impl Task {
             Task::ResolveSuggestions { book_uuid } => Some(format!("suggestions:{book_uuid}")),
             Task::KepubConvert { book_id } => Some(format!("kepub:{book_id}")),
             Task::SendToKindle { .. } => Some("smtp".into()),
+            Task::RewriteOverrideEpubs => Some("rewrite-override-epubs".into()),
             #[cfg(test)]
             Task::Test { resource, .. } => resource.clone(),
         }
@@ -172,6 +180,7 @@ impl Task {
             Task::ResolveSuggestions { .. } => false,
             Task::KepubConvert { .. } => false,
             Task::SendToKindle { .. } => false,
+            Task::RewriteOverrideEpubs => false,
             #[cfg(test)]
             Task::Test {
                 route_through_scan_sem,
@@ -215,6 +224,10 @@ impl Task {
             // Reuse Scan kind for UI display — a send is a rare, short job with
             // no dedicated progress widget (mirrors HLS/FTS).
             Task::SendToKindle { .. } => TaskKind::Scan,
+            // Reuse Scan kind for the bulk EPUB-override bake's progress
+            // display rather than growing the wire-facing `TaskKind` enum for
+            // a rare admin job (mirrors RebuildFtsIndex/KepubConvert).
+            Task::RewriteOverrideEpubs => TaskKind::Scan,
             #[cfg(test)]
             Task::Test { .. } => TaskKind::Scan,
         }

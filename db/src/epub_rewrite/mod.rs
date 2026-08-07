@@ -14,13 +14,14 @@ mod archive;
 mod cover;
 mod opf;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
 use omnibus_shared::{BulkRewriteError, BulkRewriteSummary, EbookMetadata};
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
 
 use archive::rewrite_archive;
 use cover::encode_cover_for;
@@ -168,7 +169,25 @@ pub async fn rewritten_epub_path(
     let book = crate::books::get_book(pool, book_id)
         .await?
         .ok_or(EpubRewriteError::BookNotFound(book_id))?;
+    let last_modified = crate::get_last_modified_epoch(pool, book_id)
+        .await
+        .map_err(|e| EpubRewriteError::Failed(anyhow::Error::new(e)))?
+        .unwrap_or(0);
+    rewritten_epub_path_for(book_id, source, &book, last_modified).await
+}
 
+/// Core of [`rewritten_epub_path`], taking pre-resolved book metadata and
+/// last-modified epoch instead of querying for them itself. Split out so
+/// [`rewrite_all_epubs_with_overrides`] can batch those lookups across many
+/// books up front (one/two `IN (...)` queries) rather than repeating them
+/// per book inside this function — the fix for the N+1 this used to run
+/// (#1718). Touches no `pool`: every input it needs is already in hand.
+async fn rewritten_epub_path_for(
+    book_id: i64,
+    source: &Path,
+    book: &EbookMetadata,
+    last_modified: i64,
+) -> Result<Option<PathBuf>, EpubRewriteError> {
     // Effective state already reflects the library's metadata-source precedence
     // (an admin who ranks embedded tags above overrides gets no rewrite).
     // Nothing to bake → source.
@@ -188,10 +207,6 @@ pub async fn rewritten_epub_path(
     }
 
     let out = export_epub_path(book_id);
-    let last_modified = crate::get_last_modified_epoch(pool, book_id)
-        .await
-        .map_err(|e| EpubRewriteError::Failed(anyhow::Error::new(e)))?
-        .unwrap_or(0);
     if !is_stale(&out, last_modified).await {
         return Ok(Some(out));
     }
@@ -209,6 +224,7 @@ pub async fn rewritten_epub_path(
 
     let src = source.to_path_buf();
     let tmp_for_task = tmp.clone();
+    let book = book.clone();
     let rewrite = tokio::task::spawn_blocking(move || rewrite_blocking(&src, &tmp_for_task, &book))
         .await
         .map_err(|e| EpubRewriteError::Failed(anyhow::Error::new(e)))?;
@@ -279,7 +295,16 @@ fn rewrite_blocking(src: &Path, dst: &Path, book: &EbookMetadata) -> anyhow::Res
     )
 }
 
-/// Rewrites every book's export-EPUB cache to bake in its active override, the fleet-wide sibling of the per-book [`rewritten_epub_path`] bake; a per-book failure is recorded rather than aborting the run.
+/// Rewrites every book's export-EPUB cache to bake in its active override,
+/// the fleet-wide sibling of the per-book [`rewritten_epub_path`] bake; a
+/// per-book failure is recorded rather than aborting the run.
+///
+/// Every `books.uuid → (id, EPUB source path, last-modified epoch)` lookup
+/// this needs is resolved with a fixed number of batched `IN (...)` queries
+/// up front (chunked at 499 ids, matching `db/src/sync/*`'s convention)
+/// instead of the four sequential round-trips per book this used to run
+/// (#1718) — the only work left inside the per-book loop is the CPU-bound
+/// zip/OPF rewrite itself, which is inherently per-book.
 pub async fn rewrite_all_epubs_with_overrides(
     pool: &SqlitePool,
 ) -> Result<BulkRewriteSummary, EpubRewriteError> {
@@ -292,25 +317,60 @@ pub async fn rewrite_all_epubs_with_overrides(
         .map_err(crate::books::BooksError::Db)?;
 
     let mut summary = BulkRewriteSummary::default();
+    if uuids.is_empty() {
+        return Ok(summary);
+    }
+
+    // Ghosted uuids (override row outlived its book) are simply absent here.
+    let id_by_uuid = crate::books::resolve_book_ids_bulk(pool, &uuids).await?;
+    let mut ids: Vec<i64> = id_by_uuid.values().copied().collect();
+    ids.sort_unstable();
+    ids.dedup();
+
+    let sources = resolve_epub_sources_bulk(pool, &ids)
+        .await
+        .map_err(crate::books::BooksError::Db)?;
+    let last_modified = resolve_last_modified_bulk(pool, &ids)
+        .await
+        .map_err(crate::books::BooksError::Db)?;
+
+    // Only pull full merged metadata for books that actually have an EPUB
+    // to bake into — no point paying for the overrides/creator-id merge on
+    // an audiobook-only book that's about to be skipped anyway.
+    let ids_with_source: Vec<i64> = ids
+        .iter()
+        .copied()
+        .filter(|id| sources.contains_key(id))
+        .collect();
+    let book_by_id: HashMap<i64, EbookMetadata> =
+        crate::books::get_books_by_ids(pool, &ids_with_source)
+            .await?
+            .into_iter()
+            .map(|b| (b.id, b))
+            .collect();
+
     for uuid in uuids {
-        let book_id = match crate::books::resolve_book_id_by_uuid(pool, &uuid).await? {
-            Some(id) => id,
-            // Ghosted: the override row outlived its book (source file
-            // removed by a scan, or the book deleted concurrently).
-            None => {
-                summary.skipped += 1;
-                continue;
-            }
+        // Ghosted: the override row outlived its book (source file removed
+        // by a scan, or the book deleted concurrently).
+        let Some(&book_id) = id_by_uuid.get(&uuid) else {
+            summary.skipped += 1;
+            continue;
         };
-        let source = match crate::books::book_file_path(pool, book_id, "EPUB").await? {
-            Some(path) => path,
-            // No EPUB to bake into — an audiobook-only or comic-only book.
-            None => {
-                summary.skipped += 1;
-                continue;
-            }
+        // No EPUB to bake into — an audiobook-only or comic-only book.
+        let Some(source) = sources.get(&book_id) else {
+            summary.skipped += 1;
+            continue;
         };
-        match rewritten_epub_path(pool, book_id, &source).await {
+        // The book vanished between the bulk id resolve above and this pass
+        // (a concurrent delete) — no longer this pass's problem, the same
+        // race the old per-book `get_book` returning `None` covered.
+        let Some(book) = book_by_id.get(&book_id) else {
+            summary.skipped += 1;
+            continue;
+        };
+        let last_modified_epoch = last_modified.get(&book_id).copied().unwrap_or(0);
+
+        match rewritten_epub_path_for(book_id, source, book, last_modified_epoch).await {
             Ok(Some(_)) => summary.rewritten += 1,
             // The override cleared between the listing query above and this
             // call (a concurrent delete) — no longer this pass's problem.
@@ -322,6 +382,77 @@ pub async fn rewrite_all_epubs_with_overrides(
         }
     }
     Ok(summary)
+}
+
+/// Batched sibling of [`crate::books::book_file_path`] for the fixed
+/// `"EPUB"` format: resolves every id in `ids` to its lowest-`ordinal` EPUB
+/// path (same tie-break as the single-book helper) in one windowed query per
+/// 499-id chunk, instead of one query per book. Ids with no EPUB file
+/// (audiobook-only / comic-only books) are simply absent from the result.
+async fn resolve_epub_sources_bulk(
+    pool: &SqlitePool,
+    ids: &[i64],
+) -> Result<HashMap<i64, PathBuf>, sqlx::Error> {
+    let mut map = HashMap::with_capacity(ids.len());
+    for chunk in ids.chunks(499) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT id, lib, dir, filename, fmt FROM (
+                SELECT b.id AS id,
+                       COALESCE(bf.library_path, l.path) AS lib,
+                       COALESCE(bf.path, b.path) AS dir,
+                       bf.filename AS filename,
+                       bf.format AS fmt,
+                       ROW_NUMBER() OVER (PARTITION BY b.id ORDER BY bf.ordinal) AS rn
+                FROM books b
+                JOIN scan_roots l ON l.id = b.library_id
+                JOIN book_files bf ON bf.book_id = b.id
+                WHERE b.id IN ({placeholders}) AND bf.format = 'EPUB' COLLATE NOCASE
+            ) WHERE rn = 1"
+        );
+        let mut q = sqlx::query(&sql);
+        for id in chunk {
+            q = q.bind(id);
+        }
+        for row in q.fetch_all(pool).await? {
+            let id: i64 = row.try_get("id")?;
+            let lib: String = row.try_get("lib")?;
+            let dir: String = row.try_get("dir")?;
+            let filename: String = row.try_get("filename")?;
+            let fmt: String = row.try_get("fmt")?;
+            let path = Path::new(&lib)
+                .join(&dir)
+                .join(format!("{filename}.{}", fmt.to_lowercase()));
+            map.insert(id, path);
+        }
+    }
+    Ok(map)
+}
+
+/// Batched sibling of [`crate::get_last_modified_epoch`]: resolves every id
+/// in `ids` to its `books.last_modified` epoch (falling back to "now" for a
+/// NULL column, same as the single-book helper) in one query per 499-id
+/// chunk instead of one query per book.
+async fn resolve_last_modified_bulk(
+    pool: &SqlitePool,
+    ids: &[i64],
+) -> Result<HashMap<i64, i64>, sqlx::Error> {
+    let mut map = HashMap::with_capacity(ids.len());
+    for chunk in ids.chunks(499) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT id, CAST(COALESCE(last_modified, strftime('%s','now')) AS INTEGER) AS last_modified \
+             FROM books WHERE id IN ({placeholders})"
+        );
+        let mut q = sqlx::query_as::<_, (i64, i64)>(&sql);
+        for id in chunk {
+            q = q.bind(id);
+        }
+        for (id, epoch) in q.fetch_all(pool).await? {
+            map.insert(id, epoch);
+        }
+    }
+    Ok(map)
 }
 
 /// A zip entry name from an in-archive path: `to_string_lossy` with backslashes

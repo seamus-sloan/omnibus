@@ -361,9 +361,10 @@ fn backfill_chapters_handler(
 
 /// Returns the "Bake Overrides Into EPUBs" button's `onclick` handler
 /// (#959), mirroring [`scan_library_handler`]'s immediate-disable-then-report
-/// shape. The run itself never fails wholesale — a per-book failure lands in
-/// the returned summary's `errors` — so the status line reports the summary
-/// counts and only turns to an error style when `errors` is non-empty.
+/// shape (#1718): the request only queues the bake on the shared worker, so
+/// this reports "queued" rather than a final tally — the run's actual
+/// progress and per-book error count surface via the `WorkerStatusIndicator`
+/// poll this page already mounts, not this call's response.
 fn rewrite_all_epubs_handler(
     url: String,
     mut status: Signal<Option<String>>,
@@ -375,14 +376,9 @@ fn rewrite_all_epubs_handler(
         rewrite_in_flight.set(true);
         spawn(async move {
             match data::rewrite_all_epubs(&url).await {
-                Ok(summary) => {
-                    status.set(Some(format!(
-                        "Rewrote {} EPUB(s); skipped {}; {} error(s).",
-                        summary.rewritten,
-                        summary.skipped,
-                        summary.errors.len()
-                    )));
-                    status_is_error.set(!summary.errors.is_empty());
+                Ok(()) => {
+                    status.set(Some("EPUB override bake queued.".into()));
+                    status_is_error.set(false);
                 }
                 Err(e) => {
                     status.set(Some(format!("Failed to rewrite EPUBs: {e}")));
