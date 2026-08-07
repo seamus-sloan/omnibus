@@ -4,11 +4,264 @@
 //! first WASM paint agree (rule 07).
 
 use dioxus::prelude::*;
+use omnibus_shared::UserSummary;
 
 use crate::components::credential_card::credential_status_message;
 use crate::components::image_upload::use_file_upload;
 use crate::components::user_avatar::UserAvatar;
 use crate::{data, use_server_url};
+
+/// Signals backing the profile card — grouped so the seeding effect and the
+/// three write-handler builders don't each take seven signal params. Mirrors
+/// `KindleEmailSignals` in `account.rs`.
+#[derive(Clone, Copy)]
+struct ProfileSignals {
+    name_input: Signal<String>,
+    msg: Signal<Option<String>>,
+    msg_is_error: Signal<bool>,
+    in_flight: Signal<bool>,
+    uploading: Signal<bool>,
+    upload_error: Signal<Option<String>>,
+    // Seeded once from the resolved user; a later refresh must not clobber
+    // what the user is mid-way through typing.
+    seeded: Signal<bool>,
+}
+
+/// Seeds `name_input` from the resolved `CurrentUser` once. Mirrors
+/// `use_kindle_email_hydration`'s shape in `account.rs`.
+fn use_profile_seed_hydration(
+    current_user: Signal<Option<Option<UserSummary>>>,
+    mut signals: ProfileSignals,
+) {
+    use_effect(move || {
+        if (signals.seeded)() {
+            return;
+        }
+        if let Some(u) = current_user().flatten() {
+            signals
+                .name_input
+                .set(u.display_name.clone().unwrap_or_default());
+            signals.seeded.set(true);
+        }
+    });
+}
+
+/// Re-reads `/api/auth/me` into the app-wide `CurrentUser` context, so the
+/// user menu, journal bylines and the mobile "You" tab all repaint without a
+/// reload rather than each guessing at the new value.
+fn refresh_current_user(mut current_user: Signal<Option<Option<UserSummary>>>) {
+    spawn(async move {
+        if let Ok(u) = data::current_user().await {
+            current_user.set(Some(u));
+        }
+    });
+}
+
+/// Submit handler for the display-name save form. Mirrors
+/// `kindle_save_handler`'s shape in `account.rs`.
+fn profile_save_handler(
+    server_url: String,
+    current_user: Signal<Option<Option<UserSummary>>>,
+    mut signals: ProfileSignals,
+) -> impl FnMut(Event<FormData>) + 'static {
+    move |evt: Event<FormData>| {
+        evt.prevent_default();
+        let trimmed = (signals.name_input)().trim().to_string();
+        let value = (!trimmed.is_empty()).then_some(trimmed);
+        let url = server_url.clone();
+        signals.in_flight.set(true);
+        spawn(async move {
+            match data::set_display_name(&url, value).await {
+                Ok(()) => {
+                    signals.msg.set(Some("Profile saved.".to_string()));
+                    signals.msg_is_error.set(false);
+                    refresh_current_user(current_user);
+                }
+                Err(e) => {
+                    signals.msg.set(Some(e.to_string()));
+                    signals.msg_is_error.set(true);
+                }
+            }
+            signals.in_flight.set(false);
+        });
+    }
+}
+
+/// `onchange` handler for the avatar file picker.
+fn profile_avatar_upload_handler(
+    server_url: String,
+    current_user: Signal<Option<Option<UserSummary>>>,
+    bust: Signal<u32>,
+    signals: ProfileSignals,
+) -> impl FnMut(Event<FormData>) + 'static {
+    use_file_upload(
+        signals.uploading,
+        signals.upload_error,
+        |_| None,
+        move |filename, mime, bytes| {
+            let url = server_url.clone();
+            async move { data::upload_avatar(&url, filename, mime, bytes).await }
+        },
+        move |()| {
+            // `Signal` is `Copy` and shares its state, so a local mutable
+            // copy bumps the same counter from this `Fn` closure.
+            let mut bust = bust;
+            bust += 1;
+            refresh_current_user(current_user);
+        },
+    )
+}
+
+/// Click handler for the avatar remove button.
+fn profile_avatar_remove_handler(
+    server_url: String,
+    current_user: Signal<Option<Option<UserSummary>>>,
+    bust: Signal<u32>,
+    mut signals: ProfileSignals,
+) -> impl FnMut(Event<MouseData>) + 'static {
+    move |_| {
+        let url = server_url.clone();
+        let mut bust = bust;
+        signals.uploading.set(true);
+        spawn(async move {
+            match data::delete_avatar(&url).await {
+                Ok(()) => {
+                    signals.upload_error.set(None);
+                    bust += 1;
+                    refresh_current_user(current_user);
+                }
+                Err(e) => signals
+                    .upload_error
+                    .set(Some(format!("Remove failed: {e}"))),
+            }
+            signals.uploading.set(false);
+        });
+    }
+}
+
+/// Read-only display values for `profile_avatar_section`, grouped so the
+/// function stays under clippy's `too_many_arguments` cap.
+struct ProfileAvatarView<'a> {
+    user_id: i64,
+    display: &'a str,
+    has_avatar: bool,
+    bust: u32,
+    uploading: bool,
+    upload_error: Option<&'a str>,
+}
+
+/// The avatar identity + change/remove controls and their status line. Split
+/// out of `ProfileCard` so the handler wiring above and this markup each
+/// stay readable on their own — mirrors `kindle_email_form`'s split in
+/// `account.rs`.
+fn profile_avatar_section(
+    view: ProfileAvatarView<'_>,
+    on_pick_avatar: impl FnMut(Event<FormData>) + 'static,
+    on_remove_avatar: impl FnMut(Event<MouseData>) + 'static,
+) -> Element {
+    let ProfileAvatarView {
+        user_id,
+        display,
+        has_avatar,
+        bust,
+        uploading,
+        upload_error,
+    } = view;
+    rsx! {
+        div { class: "profile-identity",
+            div { class: "profile-avatar",
+                UserAvatar {
+                    user_id,
+                    name: display.to_string(),
+                    has_avatar,
+                    class: "profile-initials",
+                    bust,
+                }
+            }
+            div { class: "profile-avatar-actions",
+                div { class: "profile-avatar-buttons",
+                    // A `<label>` rather than a button: it forwards the
+                    // click to the hidden file input, which is the only
+                    // element that can open the picker.
+                    label {
+                        class: "btn sm",
+                        r#for: "avatar-file",
+                        "Change picture"
+                    }
+                    input {
+                        r#type: "file",
+                        id: "avatar-file",
+                        class: "profile-avatar-input",
+                        "data-testid": "avatar-file-input",
+                        accept: "image/jpeg,image/png,image/webp,image/gif",
+                        disabled: uploading,
+                        onchange: on_pick_avatar,
+                    }
+                    if has_avatar {
+                        button {
+                            r#type: "button",
+                            class: "btn ghost sm",
+                            "data-testid": "avatar-remove",
+                            disabled: uploading,
+                            onclick: on_remove_avatar,
+                            "Remove"
+                        }
+                    }
+                }
+                p { class: "subtitle", "JPEG, PNG, WebP or GIF, up to 10 MB." }
+            }
+        }
+
+        {credential_status_message("avatar-status", upload_error, true)}
+    }
+}
+
+/// The display-name form: input, save action, and the helper hint. Mirrors
+/// `kindle_email_form`'s split in `account.rs`.
+fn profile_name_form(
+    mut name_input: Signal<String>,
+    mut msg: Signal<Option<String>>,
+    in_flight: bool,
+    display: &str,
+    on_save: impl FnMut(Event<FormData>) + 'static,
+) -> Element {
+    rsx! {
+        form {
+            id: "profile-form",
+            class: "settings-form",
+            onsubmit: on_save,
+            div { class: "settings-field",
+                label { r#for: "display-name", "Display name" }
+                input {
+                    r#type: "text",
+                    id: "display-name",
+                    name: "display_name",
+                    "data-testid": "display-name-input",
+                    autocomplete: "nickname",
+                    maxlength: "64",
+                    placeholder: "{display}",
+                    value: "{name_input}",
+                    oninput: move |e| {
+                        name_input.set(e.value());
+                        msg.set(None);
+                    },
+                }
+            }
+            p { class: "subtitle",
+                "Shown on your journals, ratings and shelves. Leave it empty to use your username."
+            }
+            div { class: "settings-actions",
+                button {
+                    r#type: "submit",
+                    class: "btn",
+                    disabled: in_flight,
+                    "data-testid": "display-name-save",
+                    "Save"
+                }
+            }
+        }
+    }
+}
 
 /// Display name + profile picture for the signed-in user.
 ///
@@ -20,104 +273,24 @@ use crate::{data, use_server_url};
 pub(crate) fn ProfileCard() -> Element {
     let server_url = use_server_url();
     let current_user = crate::use_current_user().0;
-    let mut bust = crate::use_avatar_cache_bust().0;
+    let bust = crate::use_avatar_cache_bust().0;
 
-    let mut name_input = use_signal(String::new);
-    let mut msg = use_signal(|| None::<String>);
-    let mut msg_is_error = use_signal(|| false);
-    let mut in_flight = use_signal(|| false);
-    let mut uploading = use_signal(|| false);
-    let mut upload_error = use_signal(|| None::<String>);
-    // Seeded once from the resolved user; a later refresh must not clobber
-    // what the user is mid-way through typing.
-    let mut seeded = use_signal(|| false);
+    let signals = ProfileSignals {
+        name_input: use_signal(String::new),
+        msg: use_signal(|| None::<String>),
+        msg_is_error: use_signal(|| false),
+        in_flight: use_signal(|| false),
+        uploading: use_signal(|| false),
+        upload_error: use_signal(|| None::<String>),
+        seeded: use_signal(|| false),
+    };
+    use_profile_seed_hydration(current_user, signals);
 
     let user = current_user().flatten();
-
-    use_effect(move || {
-        if seeded() {
-            return;
-        }
-        if let Some(u) = current_user().flatten() {
-            name_input.set(u.display_name.clone().unwrap_or_default());
-            seeded.set(true);
-        }
-    });
-
-    // Re-read `/api/auth/me` so every avatar/name site repaints from one
-    // source rather than each guessing at the new value.
-    let refresh_user = move || {
-        spawn(async move {
-            let mut cu = current_user;
-            if let Ok(u) = data::current_user().await {
-                cu.set(Some(u));
-            }
-        });
-    };
-
-    let on_save = {
-        let server_url = server_url.clone();
-        move |evt: Event<FormData>| {
-            evt.prevent_default();
-            let trimmed = name_input().trim().to_string();
-            let value = (!trimmed.is_empty()).then_some(trimmed);
-            let url = server_url.clone();
-            in_flight.set(true);
-            spawn(async move {
-                match data::set_display_name(&url, value).await {
-                    Ok(()) => {
-                        msg.set(Some("Profile saved.".to_string()));
-                        msg_is_error.set(false);
-                        refresh_user();
-                    }
-                    Err(e) => {
-                        msg.set(Some(e.to_string()));
-                        msg_is_error.set(true);
-                    }
-                }
-                in_flight.set(false);
-            });
-        }
-    };
-
-    let on_pick_avatar = {
-        let server_url = server_url.clone();
-        use_file_upload(
-            uploading,
-            upload_error,
-            |_| None,
-            move |filename, mime, bytes| {
-                let url = server_url.clone();
-                async move { data::upload_avatar(&url, filename, mime, bytes).await }
-            },
-            move |()| {
-                // `Signal` is `Copy` and shares its state, so a local mutable
-                // copy bumps the same counter from this `Fn` closure.
-                let mut bust = bust;
-                bust += 1;
-                refresh_user();
-            },
-        )
-    };
-
-    let on_remove_avatar = {
-        let server_url = server_url.clone();
-        move |_| {
-            let url = server_url.clone();
-            uploading.set(true);
-            spawn(async move {
-                match data::delete_avatar(&url).await {
-                    Ok(()) => {
-                        upload_error.set(None);
-                        bust += 1;
-                        refresh_user();
-                    }
-                    Err(e) => upload_error.set(Some(format!("Remove failed: {e}"))),
-                }
-                uploading.set(false);
-            });
-        }
-    };
+    let on_save = profile_save_handler(server_url.clone(), current_user, signals);
+    let on_pick_avatar =
+        profile_avatar_upload_handler(server_url.clone(), current_user, bust, signals);
+    let on_remove_avatar = profile_avatar_remove_handler(server_url, current_user, bust, signals);
 
     let has_avatar = user.as_ref().is_some_and(|u| u.has_avatar);
     let display = user
@@ -130,88 +303,22 @@ pub(crate) fn ProfileCard() -> Element {
             h2 { "Account" }
             p { class: "subtitle", "How you appear across the library." }
 
-            div { class: "profile-identity",
-                div { class: "profile-avatar",
-                    UserAvatar {
-                        user_id: user.as_ref().map(|u| u.id).unwrap_or_default(),
-                        name: display.clone(),
-                        has_avatar,
-                        class: "profile-initials",
-                        bust: bust(),
-                    }
-                }
-                div { class: "profile-avatar-actions",
-                    div { class: "profile-avatar-buttons",
-                        // A `<label>` rather than a button: it forwards the
-                        // click to the hidden file input, which is the only
-                        // element that can open the picker.
-                        label {
-                            class: "btn sm",
-                            r#for: "avatar-file",
-                            "Change picture"
-                        }
-                        input {
-                            r#type: "file",
-                            id: "avatar-file",
-                            class: "profile-avatar-input",
-                            "data-testid": "avatar-file-input",
-                            accept: "image/jpeg,image/png,image/webp,image/gif",
-                            disabled: uploading(),
-                            onchange: on_pick_avatar,
-                        }
-                        if has_avatar {
-                            button {
-                                r#type: "button",
-                                class: "btn ghost sm",
-                                "data-testid": "avatar-remove",
-                                disabled: uploading(),
-                                onclick: on_remove_avatar,
-                                "Remove"
-                            }
-                        }
-                    }
-                    p { class: "subtitle", "JPEG, PNG, WebP or GIF, up to 10 MB." }
-                }
-            }
+            {profile_avatar_section(
+                ProfileAvatarView {
+                    user_id: user.as_ref().map(|u| u.id).unwrap_or_default(),
+                    display: &display,
+                    has_avatar,
+                    bust: bust(),
+                    uploading: (signals.uploading)(),
+                    upload_error: (signals.upload_error)().as_deref(),
+                },
+                on_pick_avatar,
+                on_remove_avatar,
+            )}
 
-            {credential_status_message("avatar-status", upload_error().as_deref(), true)}
+            {profile_name_form(signals.name_input, signals.msg, (signals.in_flight)(), &display, on_save)}
 
-            form {
-                id: "profile-form",
-                class: "settings-form",
-                onsubmit: on_save,
-                div { class: "settings-field",
-                    label { r#for: "display-name", "Display name" }
-                    input {
-                        r#type: "text",
-                        id: "display-name",
-                        name: "display_name",
-                        "data-testid": "display-name-input",
-                        autocomplete: "nickname",
-                        maxlength: "64",
-                        placeholder: "{display}",
-                        value: "{name_input}",
-                        oninput: move |e| {
-                            name_input.set(e.value());
-                            msg.set(None);
-                        },
-                    }
-                }
-                p { class: "subtitle",
-                    "Shown on your journals, ratings and shelves. Leave it empty to use your username."
-                }
-                div { class: "settings-actions",
-                    button {
-                        r#type: "submit",
-                        class: "btn",
-                        disabled: in_flight(),
-                        "data-testid": "display-name-save",
-                        "Save"
-                    }
-                }
-            }
-
-            {credential_status_message("profile-status", msg().as_deref(), msg_is_error())}
+            {credential_status_message("profile-status", (signals.msg)().as_deref(), (signals.msg_is_error)())}
         }
     }
 }
