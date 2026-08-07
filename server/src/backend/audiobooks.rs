@@ -5,9 +5,7 @@
 //! [`get_audiobook_manifest`] for the direct-vs-HLS routing rule.
 
 use axum::{
-    body::Body,
     extract::{Path, Query, Request, State},
-    http::HeaderValue,
     response::{IntoResponse, Response},
     Json,
 };
@@ -19,17 +17,12 @@ use omnibus_db::{
 };
 use omnibus_shared::{AudiobookManifest, AudiobookPlaybackRateUpdate, ManifestPart};
 use serde::{Deserialize, Serialize};
-use tower::ServiceExt;
-use tower_http::services::ServeFile;
 
 use super::{internal, AppState};
 use crate::auth::{AuthUser, MediaAuthUser};
 
 /// Content-Type for MPEG-TS audio segments served by the HLS fallback.
-/// Defined at module scope so the per-request `HeaderValue` insert is a
-/// cheap clone of a compile-time-validated static instead of a `.parse()`
-/// + `.expect()` on every segment fetch.
-static MPEGTS_CONTENT_TYPE: HeaderValue = HeaderValue::from_static("video/MP2T");
+const MPEGTS_CONTENT_TYPE: &str = "video/MP2T";
 
 /// Query parameters for `GET /api/audiobooks/{uuid}/manifest`.
 #[derive(Deserialize)]
@@ -251,7 +244,7 @@ pub(super) struct DownloadQuery {
 }
 
 /// Serves the audiobook's source file as a browser download
-/// (`Content-Disposition: attachment`), streaming via `ServeFile`.
+/// (`Content-Disposition: attachment`), streaming via [`super::serve_download`].
 ///
 /// Targets the lowest-ordinal part of the resolved `book_files` row
 /// (optionally selected via `?file_id=N`). For a single-file audiobook
@@ -386,17 +379,7 @@ pub(super) async fn get_audiobook_segment(
         }
     }
 
-    let serve = ServeFile::new(&seg_path);
-    let res = match serve.oneshot(req).await {
-        Ok(r) => r,
-        Err(e) => return internal("serve segment", e),
-    };
-    let (mut parts, body) = res.into_parts();
-    parts.headers.insert(
-        axum::http::header::CONTENT_TYPE,
-        MPEGTS_CONTENT_TYPE.clone(),
-    );
-    Response::from_parts(parts, Body::new(body))
+    super::serve_file(req, &seg_path, MPEGTS_CONTENT_TYPE, None).await
 }
 
 /// Terminal-vs-in-flight discriminator for the status JSON. Lets the
