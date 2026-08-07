@@ -288,17 +288,10 @@ mod tests {
         assert!(!html.contains("data-testid=\"profile-status\""));
     }
 
-    /// The effect that seeds `name_input` from `current_user().display_name`
-    /// runs post-mount and only once (guarded by `seeded`) — a bare
-    /// `rebuild_in_place()` never drives an effect to completion (same
-    /// constraint noted on `ShelvesRail`'s mount-fetch render test), so first
-    /// paint must show the field empty even though a resolved user already
-    /// sits in context. That is exactly the invariant the guard depends on:
-    /// seeding is always a deliberate second pass, never folded into the
-    /// initial render, which is what keeps SSR and the first WASM paint in
-    /// agreement (rule 07) and is what stops a later refresh from clobbering
-    /// in-progress typing — the seed only ever happens once, before the
-    /// reader could have typed anything.
+    /// The `seeded` guard means `name_input` stays empty on first paint even
+    /// with a resolved user in context — seeding is a deliberate post-mount
+    /// effect, never folded into the initial render (keeps SSR/first-paint
+    /// in agreement per rule 07).
     #[test]
     fn profile_card_leaves_the_name_input_unseeded_on_first_paint_even_with_a_resolved_user() {
         let html = render_in_vdom(card_with_avatar);
@@ -332,10 +325,9 @@ mod tests {
     }
 
     /// `on_remove_avatar`'s error arm writes `"Remove failed: {e}"` into the
-    /// same `avatar-status` slot rendered here via `credential_status_message`
-    /// — the network round trip that actually reaches this branch is
-    /// Playwright's job (`account.spec.ts` "shows an error when the avatar
-    /// upload fails"); this pins the rendering half of that wiring.
+    /// same `avatar-status` slot rendered here via `credential_status_message`.
+    /// Unlike the upload-failure path, no Playwright spec drives a remove
+    /// failure end-to-end, so this is the only coverage of this branch.
     #[test]
     fn avatar_status_slot_renders_a_remove_failure_with_error_styling() {
         let html = render(credential_status_message(
