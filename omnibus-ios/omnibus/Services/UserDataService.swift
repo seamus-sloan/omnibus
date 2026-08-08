@@ -424,17 +424,31 @@ enum UserDataService {
     static func createJournal(
         _ payload: CreateJournalEntry, author: UserSummary?
     ) async -> JournalEntry? {
-        let optimistic = JournalEntry(
+        let optimistic = optimisticJournalEntry(for: payload, author: author)
+        await mutateLocalJournals(payload.bookUUID) { $0.insert(optimistic, at: 0) }
+        let landed = await SyncEngine.shared.write(
+            kind: OpKind.journal, path: "/api/journals", body: payload, coalesce: false
+        )
+        if landed { await refreshJournals(payload.bookUUID) }
+        return optimistic
+    }
+
+    /// The optimistic record shown the instant a journal entry is created,
+    /// before the outbox has landed the write or the server has rendered the
+    /// markdown. Display name + avatar match what the server's re-read will
+    /// say, so the card doesn't flicker to a different identity; a local
+    /// markdown renderer here would only disagree with the real one, so the
+    /// body stays as the source until the server has rendered it.
+    static func optimisticJournalEntry(
+        for payload: CreateJournalEntry, author: UserSummary?
+    ) -> JournalEntry {
+        JournalEntry(
             id: AnnotationID.pending(),
             bookUUID: payload.bookUUID,
             authorId: author?.id ?? 0,
-            // Display name + avatar match what the server's re-read will say,
-            // so the optimistic card doesn't flicker to a different identity.
             authorName: author?.display ?? "You",
             authorHasAvatar: author?.hasAvatar ?? false,
             bodyMd: payload.bodyMd,
-            // The server renders the markdown; until it has, show the source.
-            // A local renderer here would only disagree with the real one.
             bodyHtml: "",
             progress: payload.progress,
             status: payload.status,
@@ -442,12 +456,6 @@ enum UserDataService {
             createdAt: Int64(Date().timeIntervalSince1970),
             updatedAt: Int64(Date().timeIntervalSince1970)
         )
-        await mutateLocalJournals(payload.bookUUID) { $0.insert(optimistic, at: 0) }
-        let landed = await SyncEngine.shared.write(
-            kind: OpKind.journal, path: "/api/journals", body: payload, coalesce: false
-        )
-        if landed { await refreshJournals(payload.bookUUID) }
-        return optimistic
     }
 
     static func updateJournal(_ entry: JournalEntry, payload: UpdateJournalEntry) async {
