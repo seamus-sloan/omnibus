@@ -77,6 +77,20 @@ import Testing
     }
 }
 
+@Suite struct UserAvatarShadowTests {
+    @Test func glowsAtOrAboveTheRowSizeThreshold() {
+        #expect(UserAvatar.shadowOpacity(for: UserAvatar.shadowMinSize) == 0.25)
+        #expect(UserAvatar.shadowOpacity(for: UserAvatar.shadowMinSize + 20) == 0.25)
+    }
+
+    @Test func staysFlatBelowTheRowSizeThreshold() {
+        // Row-sized avatars (list rows, comment bylines) stay flat like
+        // `AuthorAvatar` — the glow reads as smudging at that size.
+        #expect(UserAvatar.shadowOpacity(for: UserAvatar.shadowMinSize - 1) == 0)
+        #expect(UserAvatar.shadowOpacity(for: 0) == 0)
+    }
+}
+
 @Suite struct UserSummaryDisplayTests {
     private func user(displayName: String?) -> UserSummary {
         UserSummary(

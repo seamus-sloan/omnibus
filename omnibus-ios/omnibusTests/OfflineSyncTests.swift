@@ -431,6 +431,68 @@ struct AudioFileSelectionTests {
     }
 }
 
+// MARK: - Optimistic journal authorship (#1740)
+
+@Suite("Optimistic journal entry")
+struct OptimisticJournalEntryTests {
+    private let payload = CreateJournalEntry(
+        bookUUID: "11111111-2222-3333-4444-555555555555",
+        bodyMd: "Just started chapter three.",
+        progress: 42,
+        clientID: "client-abc"
+    )
+
+    @Test("an author with an avatar is attributed by display name and flagged")
+    func attributesAnAuthorWithAnAvatar() {
+        let author = UserSummary(
+            id: 7, username: "alice", isAdmin: false, canUpload: false,
+            canEdit: false, canDownload: false, kindleEmail: nil,
+            displayName: "Alice A.", hasAvatar: true
+        )
+        let entry = UserDataService.optimisticJournalEntry(for: payload, author: author)
+        #expect(entry.authorId == 7)
+        #expect(entry.authorName == "Alice A.")
+        #expect(entry.authorHasAvatar == true)
+    }
+
+    @Test("an author without an avatar is attributed but not flagged")
+    func attributesAnAuthorWithoutAnAvatar() {
+        // No display name set either, so `display` falls back to the username.
+        let author = UserSummary(
+            id: 9, username: "bob", isAdmin: false, canUpload: false,
+            canEdit: false, canDownload: false, kindleEmail: nil,
+            displayName: nil, hasAvatar: false
+        )
+        let entry = UserDataService.optimisticJournalEntry(for: payload, author: author)
+        #expect(entry.authorId == 9)
+        #expect(entry.authorName == "bob")
+        #expect(entry.authorHasAvatar == false)
+    }
+
+    @Test("a missing author falls back to a pending identity, not a crash")
+    func fallsBackWhenAuthorIsUnknown() {
+        // `Cache.cachedOnly(CacheKey.me)` can miss — a journal typed the
+        // instant the app launches offline has no `me` in the replica yet.
+        let entry = UserDataService.optimisticJournalEntry(for: payload, author: nil)
+        #expect(entry.authorId == 0)
+        #expect(entry.authorName == "You")
+        #expect(entry.authorHasAvatar == false)
+    }
+
+    @Test("the optimistic record carries the payload's body, progress, and client id")
+    func carriesThePayloadThrough() {
+        let entry = UserDataService.optimisticJournalEntry(for: payload, author: nil)
+        #expect(entry.bookUUID == payload.bookUUID)
+        #expect(entry.bodyMd == payload.bodyMd)
+        #expect(entry.progress == payload.progress)
+        #expect(entry.clientID == payload.clientID)
+        // The server renders the markdown; a local renderer would only
+        // disagree with it, so the optimistic record shows no HTML yet.
+        #expect(entry.bodyHtml == "")
+        #expect(AnnotationID.isPending(entry.id))
+    }
+}
+
 // MARK: - Account scoping
 
 @Suite("User-scoped cache wipe")
