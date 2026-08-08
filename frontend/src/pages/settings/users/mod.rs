@@ -12,7 +12,7 @@ use crate::{data, Route};
 mod modals;
 mod registration;
 
-use modals::{DeleteUserModal, EditUserModal, NewUserModal};
+use modals::{DeleteUserModal, EditUserModal, NewUserModal, SessionsModal};
 use registration::RegistrationToggle;
 
 /// Which modal, if any, is open over the Users table.
@@ -22,6 +22,7 @@ enum Modal {
     New,
     Edit(AdminUserRow),
     Delete(AdminUserRow),
+    Sessions(AdminUserRow),
 }
 
 /// The Users section: header + table, with a reload counter the mutations bump.
@@ -59,6 +60,7 @@ pub fn UsersSection() -> Element {
                 current_id,
                 on_edit: move |row| modal.set(Modal::Edit(row)),
                 on_delete: move |row| modal.set(Modal::Delete(row)),
+                on_sessions: move |row| modal.set(Modal::Sessions(row)),
                 on_unlocked: move |_| { action_error.set(None); reload.with_mut(|n| *n += 1); },
                 on_row_error: move |msg| action_error.set(Some(msg)),
             }
@@ -116,6 +118,7 @@ fn UsersTable(
     current_id: Option<i64>,
     on_edit: EventHandler<AdminUserRow>,
     on_delete: EventHandler<AdminUserRow>,
+    on_sessions: EventHandler<AdminUserRow>,
     on_unlocked: EventHandler<()>,
     on_row_error: EventHandler<String>,
 ) -> Element {
@@ -142,6 +145,7 @@ fn UsersTable(
                                 is_self: Some(id) == current_id,
                                 on_edit,
                                 on_delete,
+                                on_sessions,
                                 on_unlocked,
                                 on_error: on_row_error,
                             }
@@ -198,17 +202,21 @@ fn users_modals(
                 }
             }
         }
+        Modal::Sessions(row) => rsx! {
+            SessionsModal { user: row, on_close: move |_| on_modal.set(Modal::None) }
+        },
     }
 }
 
 /// One table row: identity, permission chips, Kindle, created date, lock
-/// status (with inline Unlock), and Edit / Delete actions.
+/// status (with inline Unlock), and Edit / Delete / Sessions actions.
 #[component]
 fn UserRow(
     user: AdminUserRow,
     is_self: bool,
     on_edit: EventHandler<AdminUserRow>,
     on_delete: EventHandler<AdminUserRow>,
+    on_sessions: EventHandler<AdminUserRow>,
     on_unlocked: EventHandler<()>,
     on_error: EventHandler<String>,
 ) -> Element {
@@ -238,6 +246,7 @@ fn UserRow(
 
     let edit_row = user.clone();
     let delete_row = user.clone();
+    let sessions_row = user.clone();
 
     rsx! {
         tr { "data-testid": "user-row-{uid}",
@@ -270,6 +279,13 @@ fn UserRow(
                     "data-testid": "user-edit-{uid}",
                     onclick: move |_| on_edit.call(edit_row.clone()),
                     "Edit"
+                }
+                button {
+                    r#type: "button",
+                    class: "btn ghost sm",
+                    "data-testid": "user-sessions-{uid}",
+                    onclick: move |_| on_sessions.call(sessions_row.clone()),
+                    "Sessions"
                 }
                 button {
                     r#type: "button",

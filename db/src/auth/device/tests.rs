@@ -296,3 +296,44 @@ async fn failed_session_insert_after_register_device_rolls_back_device_row() {
         "device row must not persist when the compound session insert fails, got {list:?}",
     );
 }
+
+#[tokio::test]
+async fn revoke_device_removes_the_row() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let d = register_device(&p, u.id, "Phone", "ios", None)
+        .await
+        .unwrap();
+    revoke_device(&p, d.id).await.unwrap();
+    let list = list_devices_for_user(&p, u.id).await.unwrap();
+    assert!(list.is_empty());
+}
+
+#[tokio::test]
+async fn revoke_device_returns_device_not_found_for_unknown_id() {
+    let p = pool().await;
+    let err = revoke_device(&p, 999_999).await.unwrap_err();
+    assert!(matches!(err, AuthError::DeviceNotFound));
+}
+
+#[tokio::test]
+async fn revoke_device_also_revokes_its_live_sessions() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let d = register_device(&p, u.id, "Phone", "ios", None)
+        .await
+        .unwrap();
+    let ns = create_session(&p, u.id, Some(d.id), SessionKind::Bearer, 3600)
+        .await
+        .unwrap();
+
+    revoke_device(&p, d.id).await.unwrap();
+
+    let err = crate::auth::lookup_session(&p, &ns.raw_token)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, AuthError::SessionNotFound),
+        "revoking a device must also revoke sessions still tied to it"
+    );
+}

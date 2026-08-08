@@ -540,3 +540,159 @@ async fn me_reports_saved_hidden_formats() {
     let me: omnibus_shared::UserSummary = serde_json::from_slice(&body).unwrap();
     assert_eq!(me.hidden_formats, vec!["cbz".to_string()]);
 }
+
+// ── GET/DELETE /api/auth/sessions (self-service, AC2/AC3/AC4) ──────────
+
+fn bearer_req(method: &str, uri: &str, token: &str) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .method(method)
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn get_sessions_returns_401_when_anonymous() {
+    let (app, _pool) = app().await;
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/auth/sessions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn get_sessions_lists_only_the_callers_own_sessions_and_flags_current() {
+    let (app, pool) = app().await;
+    let alice = crate::auth::test_support::create_user(&pool, "alice").await;
+    let bob = crate::auth::test_support::create_user(&pool, "bob").await;
+    let token = crate::auth::test_support::bearer_token(&pool, alice.id).await;
+    // A second live session for alice, plus an unrelated session for bob —
+    // neither should be omitted-or-leaked incorrectly.
+    let other_alice = db::auth::create_session(&pool, alice.id, None, SessionKind::Bearer, 3600)
+        .await
+        .unwrap();
+    let _bob_session = crate::auth::test_support::bearer_token(&pool, bob.id).await;
+
+    let res = app
+        .oneshot(bearer_req("GET", "/api/auth/sessions", &token))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let sessions: Vec<omnibus_shared::SessionView> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(sessions.len(), 2, "must list both of alice's sessions");
+    let current = sessions
+        .iter()
+        .find(|s| s.is_current)
+        .expect("exactly one session must be flagged current");
+    assert_ne!(
+        current.id, other_alice.session.id,
+        "the flagged session must be the one authenticating this request, not the other one"
+    );
+}
+
+#[tokio::test]
+async fn delete_session_revokes_a_non_current_session_and_subsequent_auth_fails() {
+    let (app, pool) = app().await;
+    let alice = crate::auth::test_support::create_user(&pool, "alice").await;
+    let token = crate::auth::test_support::bearer_token(&pool, alice.id).await;
+    let other = db::auth::create_session(&pool, alice.id, None, SessionKind::Bearer, 3600)
+        .await
+        .unwrap();
+
+    let res = app
+        .clone()
+        .oneshot(bearer_req(
+            "DELETE",
+            &format!("/api/auth/sessions/{}", other.session.id),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    // AC3: the revoked session's own credential no longer authenticates.
+    let res = app
+        .oneshot(bearer_req("GET", "/api/auth/me", &other.raw_token))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn delete_session_refuses_to_revoke_the_current_session() {
+    let (app, pool) = app().await;
+    let alice = crate::auth::test_support::create_user(&pool, "alice").await;
+    let token = crate::auth::test_support::bearer_token(&pool, alice.id).await;
+
+    // Resolve the session id the token maps to.
+    let (_user, session) = db::auth::lookup_session(&pool, &token).await.unwrap();
+
+    let res = app
+        .clone()
+        .oneshot(bearer_req(
+            "DELETE",
+            &format!("/api/auth/sessions/{}", session.id),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // Still authenticated afterwards — the request session was never revoked.
+    let res = app
+        .oneshot(bearer_req("GET", "/api/auth/me", &token))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn delete_session_returns_404_for_another_users_session() {
+    let (app, pool) = app().await;
+    let alice = crate::auth::test_support::create_user(&pool, "alice").await;
+    let bob = crate::auth::test_support::create_user(&pool, "bob").await;
+    let alice_token = crate::auth::test_support::bearer_token(&pool, alice.id).await;
+    let bobs_session = db::auth::create_session(&pool, bob.id, None, SessionKind::Bearer, 3600)
+        .await
+        .unwrap();
+
+    let res = app
+        .clone()
+        .oneshot(bearer_req(
+            "DELETE",
+            &format!("/api/auth/sessions/{}", bobs_session.session.id),
+            &alice_token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    // Bob's session must be untouched by alice's attempt.
+    let res = app
+        .oneshot(bearer_req("GET", "/api/auth/me", &bobs_session.raw_token))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn delete_session_returns_404_for_unknown_id() {
+    let (app, pool) = app().await;
+    let alice = crate::auth::test_support::create_user(&pool, "alice").await;
+    let token = crate::auth::test_support::bearer_token(&pool, alice.id).await;
+    let res = app
+        .oneshot(bearer_req("DELETE", "/api/auth/sessions/999999", &token))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}

@@ -15,6 +15,12 @@ const SESSION_TOUCH_THRESHOLD_SECS: i64 = 5 * 60;
 /// (cookie absolute TTL is 30 days; bearer is 90).
 pub(crate) const SESSION_IDLE_TIMEOUT_SECS: i64 = 7 * 24 * 60 * 60;
 
+/// Hard cap on how many sessions `list_sessions_for_user` returns for a
+/// single user. Matches `LIST_DEVICES_LIMIT` — a defensive ceiling so a
+/// pathological session count (e.g. a client stuck re-logging-in) can't
+/// produce an unbounded REST response.
+pub const LIST_SESSIONS_LIMIT: i64 = 500;
+
 /// Create a new session for `user_id`, returning the session record and the raw (unhashed) token.
 ///
 /// Accepts any `sqlx::Executor` so callers can pass either a `&SqlitePool` for
@@ -295,6 +301,94 @@ where
     .execute(executor)
     .await?;
     Ok(r.rows_affected())
+}
+
+/// List every currently-live session for `user_id` (not revoked, not past its
+/// absolute expiry), most-recently-used first, up to [`LIST_SESSIONS_LIMIT`].
+/// Used by both the self-service `GET /api/auth/sessions` and the admin
+/// `GET /api/admin/users/{id}/sessions` — the two differ only in which
+/// `user_id` the caller is authorized to pass in.
+pub async fn list_sessions_for_user(pool: &SqlitePool, user_id: i64) -> AuthResult<Vec<Session>> {
+    let now = now_unix();
+    let rows = sqlx::query(
+        "SELECT id, user_id, device_id, kind, created_at, last_used_at, expires_at
+         FROM sessions
+         WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?
+         ORDER BY last_used_at DESC
+         LIMIT ?",
+    )
+    .bind(user_id)
+    .bind(now)
+    .bind(LIST_SESSIONS_LIMIT)
+    .fetch_all(pool)
+    .await?;
+    rows.iter().map(row_to_session).collect()
+}
+
+/// Build a `Session` from a plain (non-joined) `sessions` row — used by
+/// [`list_sessions_for_user`], whose `SELECT` carries no `u_id`/`s_id`
+/// aliases (those exist only on [`fetch_session_row`]'s joined query, which
+/// [`build_session_from_row`] is shaped for). Returns `SessionNotFound` for
+/// an unrecognised `kind`, same rationale as `build_session_from_row`.
+fn row_to_session(row: &sqlx::sqlite::SqliteRow) -> AuthResult<Session> {
+    let kind_str: String = row.get("kind");
+    let kind = match kind_str.as_str() {
+        "cookie" => SessionKind::Cookie,
+        "bearer" => SessionKind::Bearer,
+        _ => return Err(AuthError::SessionNotFound),
+    };
+    Ok(Session {
+        id: row.get("id"),
+        user_id: row.get("user_id"),
+        device_id: row.get("device_id"),
+        kind,
+        created_at: row.get("created_at"),
+        last_used_at: row.get("last_used_at"),
+        expires_at: row.get("expires_at"),
+    })
+}
+
+/// Revoke a session by id, scoped to `user_id` so a caller can only revoke
+/// their own sessions — the self-service `DELETE /api/auth/sessions/{id}`
+/// (AC2). Returns [`AuthError::SessionNotFound`] when the id is unknown,
+/// already revoked, or owned by a different user, so the handler can map
+/// every one of those to a 404 without distinguishing them on the wire.
+pub async fn revoke_session_for_user(
+    pool: &SqlitePool,
+    user_id: i64,
+    session_id: i64,
+) -> AuthResult<()> {
+    let r = sqlx::query(
+        "UPDATE sessions SET revoked_at = ?
+         WHERE id = ? AND user_id = ? AND revoked_at IS NULL",
+    )
+    .bind(now_unix())
+    .bind(session_id)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+    if r.rows_affected() == 0 {
+        return Err(AuthError::SessionNotFound);
+    }
+    Ok(())
+}
+
+/// Revoke a session by id with no ownership scoping — the admin
+/// `DELETE /api/admin/sessions/{id}` (AC1), which may target any user's
+/// session. Unlike [`revoke_session`] (used by logout, where the session was
+/// already resolved from its own token) this checks `rows_affected` so an
+/// unknown or already-revoked id surfaces as [`AuthError::SessionNotFound`]
+/// rather than a silent no-op.
+pub async fn revoke_session_checked(pool: &SqlitePool, session_id: i64) -> AuthResult<()> {
+    let r = sqlx::query("UPDATE sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
+        .bind(now_unix())
+        .bind(session_id)
+        .execute(pool)
+        .await?;
+    if r.rows_affected() == 0 {
+        return Err(AuthError::SessionNotFound);
+    }
+    Ok(())
 }
 
 /// Hard-delete every session [`lookup_session`] would reject: revoked

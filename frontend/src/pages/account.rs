@@ -21,6 +21,9 @@ pub(crate) mod kobo;
 // Display name + avatar, at the top of the Account section.
 #[cfg(not(feature = "mobile"))]
 mod profile;
+// Self-service "Your sessions" card (F5.4, #910).
+#[cfg(not(feature = "mobile"))]
+mod sessions;
 
 #[cfg(not(feature = "mobile"))]
 use crate::components::auth::{score_password, PasswordRequirements, StrengthMeter};
@@ -293,6 +296,7 @@ fn account_web_body() -> Element {
     rsx! {
         profile::ProfileCard {}
         ChangePasswordCard {}
+        sessions::SessionsCard {}
         hidden_formats::HiddenFormatsCard {}
     }
 }
