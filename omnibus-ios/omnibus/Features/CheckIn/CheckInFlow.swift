@@ -100,11 +100,19 @@ enum CheckInFlow {
     /// its response must only apply if the stage and query it was asked
     /// with are still current, or a late answer reintroduces the same
     /// stale-search bug `resolveShouldClearSearch` guards against.
+    ///
+    /// Both sides are trimmed because only one of them ever was: the request
+    /// carries `nilIfBlank`'s trimmed text while the field holds whatever was
+    /// typed, and iOS appends a trailing space to every accepted QuickType
+    /// suggestion. Comparing those raw discarded the answer to the search the
+    /// reader had just asked for, leaving a spinner and no results.
     static func searchResponseShouldApply(
         startedStage: CheckInStage, currentStage: CheckInStage,
         startedQuery: String, currentQuery: String
     ) -> Bool {
-        startedStage == currentStage && startedQuery == currentQuery
+        startedStage == currentStage
+            && startedQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+            == currentQuery.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Outcomes whose card links straight to the book's detail page.
