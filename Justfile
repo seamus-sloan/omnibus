@@ -1,20 +1,24 @@
 # Launch the dev multiplexer with Zellij. Server tab auto-starts; the
 # android/ios/playwright tabs are preloaded with their
 # commands suspended — press Enter in the pane to start them.
+# The server pane runs scripts/dev-serve-fg.sh, which picks a free port in
+# this worktree's window, so `just serve` in two worktrees never collides.
 serve:
     zellij --layout .zellij/layout.kdl
 
 # Launch the dev multiplexer with process-compose. Server process auto-starts;
 # android/ios/playwright are disabled by default — select
-# one in the TUI and press F7 to start.
+# one in the TUI and press F7 to start. Same per-worktree port resolution
+# as `just serve`.
 serve-pc:
     process-compose up
 
 # Idempotent dev-server ensure-running. Probes /api/_health for THIS
 # workspace's server (identity-checked via repo_root); reuses if healthy,
 # starts a fresh daemonized `dx serve` if missing. Port-walks $PORT..$PORT+9
-# (default $PORT = 3000 in the `default` workspace; per-workspace stride
-# of 10 set in flake.nix). Emits one parseable line on stdout:
+# ($PORT is the worktree's own window base — 3000 for the main checkout,
+# hash-derived in 3010..3900 for any other worktree; see flake.nix).
+# Emits one parseable line on stdout:
 #     OMNIBUS_DEV_READY port=<n> repo_root=<path> build_id=<n> action=<reuse|started> pid=<n>
 # Use `source .claude/runtime/env.sh` afterwards to pick up OMNIBUS_PORT
 # and PLAYWRIGHT_BASE_URL for follow-on commands (Playwright, preview).
