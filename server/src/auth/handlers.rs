@@ -6,16 +6,16 @@
 //! session, token in `Set-Cookie`.
 
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Extension, Json, Router,
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use omnibus_db::auth::{self as auth_db, AuthError, NewSession, SessionKind};
 use omnibus_shared::{
-    LoginRequest, LoginResponse, RegisterRequest, RegistrationStatus, UserSummary,
+    LoginRequest, LoginResponse, RegisterRequest, RegistrationStatus, SessionView, UserSummary,
 };
 
 use super::extractor::{extract_token, AuthUser};
@@ -32,6 +32,8 @@ pub fn auth_router(state: AppState) -> Router {
         .route("/api/auth/login", post(login_handler))
         .route("/api/auth/logout", post(logout_handler))
         .route("/api/auth/me", get(me_handler))
+        .route("/api/auth/sessions", get(get_sessions_handler))
+        .route("/api/auth/sessions/{id}", delete(delete_session_handler))
         .with_state(state)
         // `AuthUser` reads the pool from `Extension<SqlitePool>` so it stays
         // state-agnostic. Keep this layer here so the router is usable
@@ -97,6 +99,9 @@ fn auth_error_to_response(e: AuthError) -> Response {
             (StatusCode::FORBIDDEN, "registration disabled").into_response()
         }
         AuthError::SessionNotFound => (StatusCode::UNAUTHORIZED, "unauthorized").into_response(),
+        // Not reachable from login/register/logout/sessions; the admin
+        // device-revoke surface (`backend::admin_sessions`) owns this.
+        AuthError::DeviceNotFound => (StatusCode::NOT_FOUND, "device not found").into_response(),
         AuthError::Internal(e) => internal("auth error", e),
         AuthError::Crypto(e) => internal("auth crypto error", e),
     }
@@ -307,6 +312,56 @@ async fn logout_handler(
 
 async fn me_handler(user: AuthUser) -> Response {
     Json(user.summary()).into_response()
+}
+
+/// Project a db session row to its wire view, flagging the caller's own
+/// session so the client can grey out (or hide) its revoke control (AC2).
+fn to_session_view(s: auth_db::Session, current_session_id: i64) -> SessionView {
+    SessionView {
+        id: s.id,
+        device_id: s.device_id,
+        kind: s.kind.as_str().to_string(),
+        created_at: s.created_at,
+        last_used_at: s.last_used_at,
+        expires_at: s.expires_at,
+        is_current: s.id == current_session_id,
+    }
+}
+
+/// `GET /api/auth/sessions` — list the caller's own live sessions (AC2).
+async fn get_sessions_handler(user: AuthUser, State(state): State<AppState>) -> Response {
+    match auth_db::list_sessions_for_user(state.pool(), user.id).await {
+        Ok(rows) => Json(
+            rows.into_iter()
+                .map(|s| to_session_view(s, user.session_id))
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Err(e) => internal("list own sessions", e),
+    }
+}
+
+/// `DELETE /api/auth/sessions/{id}` — revoke one of the caller's own
+/// sessions. Refuses to revoke the session the request itself authenticated
+/// with (AC2) with `400`; `404` when the id is unknown, already revoked, or
+/// owned by a different user (the two are indistinguishable on the wire).
+async fn delete_session_handler(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+) -> Response {
+    if session_id == user.session_id {
+        return (
+            StatusCode::BAD_REQUEST,
+            "cannot revoke the currently-active session",
+        )
+            .into_response();
+    }
+    match auth_db::revoke_session_for_user(state.pool(), user.id, session_id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(AuthError::SessionNotFound) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => internal("revoke own session", e),
+    }
 }
 
 #[cfg(test)]

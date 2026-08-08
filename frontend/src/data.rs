@@ -7,6 +7,10 @@
 //! on-device persistence they build on.
 
 mod account;
+// Admin device & session management (F5.4, #910) — web (gloo REST) + SSR
+// stubs; no mobile surface.
+#[cfg(not(feature = "mobile"))]
+mod admin_sessions;
 mod auth;
 mod authors;
 mod bookmarks;
@@ -33,6 +37,10 @@ mod ratings;
 mod read_status;
 mod scan;
 mod series;
+// Self-service session management (F5.4, #910) — web (gloo REST) + SSR
+// stubs; no mobile surface yet.
+#[cfg(not(feature = "mobile"))]
+mod sessions;
 mod shelves;
 mod stats;
 mod suggestions;
@@ -51,6 +59,8 @@ mod transport;
 // re-exports the SSR `current_user` stub so pages can call `data::current_user`
 // unconditionally without diverging hook order between SSR and WASM).
 pub use account::*;
+#[cfg(not(feature = "mobile"))]
+pub use admin_sessions::*;
 #[cfg(any(feature = "web", feature = "mobile", feature = "server"))]
 pub use auth::*;
 pub use authors::*;
@@ -74,6 +84,8 @@ pub use ratings::*;
 pub use read_status::*;
 pub use scan::*;
 pub use series::*;
+#[cfg(not(feature = "mobile"))]
+pub use sessions::*;
 pub use shelves::*;
 pub use stats::*;
 pub use suggestions::*;

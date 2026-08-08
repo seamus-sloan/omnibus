@@ -2,7 +2,7 @@
 
 use sqlx::{Executor, Row, Sqlite, SqlitePool};
 
-use super::{AuthError, AuthResult, Device};
+use super::{now_unix, AuthError, AuthResult, Device};
 
 /// Maximum accepted length of a `LoginRequest.device_name` /
 /// `RegisterRequest.device_name`. The column is `TEXT NOT NULL`, so the
@@ -141,6 +141,33 @@ pub async fn list_devices_for_user(pool: &SqlitePool, user_id: i64) -> AuthResul
             last_seen_at: row.get("last_seen_at"),
         })
         .collect())
+}
+
+/// Revoke a registered device by id — the admin
+/// `DELETE /api/admin/devices/{id}` (AC1). No ownership scoping: an admin
+/// may remove any user's device registration. Also revokes every live
+/// session still carrying `device_id`, so pulling a device also logs it out
+/// rather than leaving an orphaned session an admin thought they'd killed —
+/// this must run *before* the delete, since `sessions.device_id` is
+/// `ON DELETE SET NULL` and would otherwise already be cleared by the time
+/// the session UPDATE ran. Returns [`AuthError::DeviceNotFound`] when the id
+/// is unknown.
+pub async fn revoke_device(pool: &SqlitePool, device_id: i64) -> AuthResult<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("UPDATE sessions SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL")
+        .bind(now_unix())
+        .bind(device_id)
+        .execute(&mut *tx)
+        .await?;
+    let deleted = sqlx::query("DELETE FROM devices WHERE id = ?")
+        .bind(device_id)
+        .execute(&mut *tx)
+        .await?;
+    if deleted.rows_affected() == 0 {
+        return Err(AuthError::DeviceNotFound);
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 #[cfg(test)]
