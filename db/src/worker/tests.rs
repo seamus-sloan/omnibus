@@ -1206,3 +1206,111 @@ async fn metrics_keeps_separate_buckets_per_task_kind() {
         "GenerateThumbs task should record under its own TaskKind"
     );
 }
+
+// ---------- #1752: pre-generate thumbnails during library scan ----------
+
+/// A successful `Task::Scan` posts a follow-up `Task::BackfillThumbs`
+/// (mirroring `Task::BackfillWordCounts` / `Task::BackfillPageCounts`), so by
+/// the time the scan and its follow-ups have drained, every covered book's
+/// three thumbnail sizes already exist on disk without anyone having loaded
+/// a page — AC1, and the precondition for AC2 (the landing grid's first
+/// post-scan load hits the cache instead of `thumb_cache_miss_response`'s
+/// lazy path).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn task_scan_posts_backfill_thumbs_that_pregenerates_all_sizes_for_a_covered_book() {
+    let thumbs_dir = tempfile::tempdir().unwrap();
+    let covers_dir = tempfile::tempdir().unwrap();
+    let _env = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(thumbs_dir.path().as_os_str()))
+        .also_set_os("OMNIBUS_COVERS_DIR", Some(covers_dir.path().as_os_str()));
+
+    let lib = tempfile::tempdir().unwrap();
+    copy_fixture_into("alpha.epub", lib.path());
+    let library_path = lib.path().to_str().unwrap().to_string();
+
+    let w = make_worker_default(pool().await);
+    w.post(Task::Scan {
+        library_path: library_path.clone(),
+    });
+
+    assert!(
+        poll_maps_empty(&w).await,
+        "scan and its follow-up backfills did not drain in time"
+    );
+
+    let book_id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE has_cover = 1")
+        .fetch_one(&w.pool)
+        .await
+        .expect("alpha.epub has an embedded cover, so the scan sets has_cover = 1");
+
+    for size in crate::thumbs::ThumbSize::all() {
+        let path = crate::thumbs::thumb_path_for(book_id, size);
+        assert!(
+            path.exists(),
+            "expected a pre-generated {size} thumbnail at {path:?}"
+        );
+    }
+}
+
+/// [`crate::indexer::backfill_thumbs`] (via `Task::BackfillThumbs`) skips a
+/// book whose three thumbnail sizes are already fresher than its
+/// `last_modified` — the already-caught-up case a re-scan of an unchanged
+/// library hits on every book (AC3). Seeds fresh sentinel thumbnail bytes
+/// that a real encode would never produce, so any re-encoding shows up as a
+/// changed file rather than relying on mtime granularity.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn task_backfill_thumbs_skips_a_book_whose_thumbnails_are_already_fresh() {
+    let thumbs_dir = tempfile::tempdir().unwrap();
+    let covers_dir = tempfile::tempdir().unwrap();
+    let _env = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(thumbs_dir.path().as_os_str()))
+        .also_set_os("OMNIBUS_COVERS_DIR", Some(covers_dir.path().as_os_str()));
+
+    let pool = pool().await;
+    let library_path = "/lib-fresh-thumbs".to_string();
+    let lib_id: i64 = sqlx::query_scalar(
+        "INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib') RETURNING id",
+    )
+    .bind(&library_path)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    // `last_modified` far in the past so any thumbnail written just now is
+    // unambiguously fresher than it, regardless of clock resolution.
+    let book_id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, scan_key, library_id, path, title, sort, has_cover, last_modified) \
+         VALUES ('uuid-fresh', 'fresh.epub', ?, '', 'Fresh', 'Fresh', 1, 1) RETURNING id",
+    )
+    .bind(lib_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    // A real cover file must exist so a would-be re-encode has bytes to work
+    // from — the skip is the assertion under test, not a missing-cover no-op.
+    std::fs::write(
+        crate::covers_dir().join("uuid-fresh.png"),
+        crate::ebook::test_support::solid_color_png(200, 40, 40, 8, 8),
+    )
+    .unwrap();
+
+    // Sentinel bytes no real WebP encode would produce, at each of the three
+    // paths `backfill_thumbs` would touch if it decided to re-encode.
+    let sentinel = b"not-a-real-webp-sentinel".to_vec();
+    for size in crate::thumbs::ThumbSize::all() {
+        std::fs::write(crate::thumbs::thumb_path_for(book_id, size), &sentinel).unwrap();
+    }
+
+    let w = make_worker_default(pool);
+    let id = w.post(Task::BackfillThumbs { library_path });
+    match w.await_completion(id).await {
+        TaskOutcome::Ok(None) => {}
+        other => panic!("expected Ok(None), got {other:?}"),
+    }
+
+    for size in crate::thumbs::ThumbSize::all() {
+        let on_disk = std::fs::read(crate::thumbs::thumb_path_for(book_id, size)).unwrap();
+        assert_eq!(
+            on_disk, sentinel,
+            "already-fresh thumbnail for size {size} was re-encoded"
+        );
+    }
+}

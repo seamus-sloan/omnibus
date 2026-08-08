@@ -93,6 +93,18 @@ pub enum Task {
     /// scan on the same library); does not consume the scan semaphore
     /// (light per-file IO, mirrors [`Task::BackfillWordCounts`]).
     BackfillPageCounts { library_path: String },
+    /// Pre-generate WebP thumbnails (all three sizes) for every covered book
+    /// under `library_path` (#1752). Posted by the [`Task::Scan`] handler on
+    /// success, alongside [`Task::BackfillWordCounts`] /
+    /// [`Task::BackfillPageCounts`], so the landing grid's first post-scan
+    /// load serves cached thumbnails instead of falling through the lazy
+    /// generation path in `server::backend::covers::thumb_cache_miss_response`.
+    /// Keyed on `library_path` (mutual exclusion with the scan on the same
+    /// library, and with the other scan-follow-up backfills); does not
+    /// consume the scan semaphore. Skips any book whose three sizes are
+    /// already fresh, so a re-scan of an unchanged library does no
+    /// re-encoding.
+    BackfillThumbs { library_path: String },
     /// Rebuild the entire `books_fts` search index from `books` via
     /// `crate::sync::rebuild_all_fts`. Admin-triggered repair for any drift
     /// left by a failed post-commit FTS refresh. Keyed on a fixed resource
@@ -156,6 +168,7 @@ impl Task {
             Task::BackfillChapters { library_path } => Some(format!("audiobooks:{library_path}")),
             Task::BackfillWordCounts { library_path } => Some(library_path.clone()),
             Task::BackfillPageCounts { library_path } => Some(library_path.clone()),
+            Task::BackfillThumbs { library_path } => Some(library_path.clone()),
             Task::RebuildFtsIndex => Some("rebuild-fts".into()),
             Task::ResolveSuggestions { book_uuid } => Some(format!("suggestions:{book_uuid}")),
             Task::KepubConvert { book_id } => Some(format!("kepub:{book_id}")),
@@ -177,6 +190,7 @@ impl Task {
             Task::BackfillChapters { .. } => false,
             Task::BackfillWordCounts { .. } => false,
             Task::BackfillPageCounts { .. } => false,
+            Task::BackfillThumbs { .. } => false,
             Task::RebuildFtsIndex => false,
             Task::ResolveSuggestions { .. } => false,
             Task::KepubConvert { .. } => false,
@@ -212,6 +226,11 @@ impl Task {
             Task::BackfillWordCounts { .. } => TaskKind::Scan,
             // Same reuse as BackfillWordCounts, its sibling scan-follow-up.
             Task::BackfillPageCounts { .. } => TaskKind::Scan,
+            // Reuse the per-book GenerateThumbs kind rather than Scan: unlike
+            // its sibling backfills, this one has an existing, sensible
+            // "Generating thumbnail" / "Thumbnail generation" label already
+            // wired in `frontend::components::worker_status` (AC4).
+            Task::BackfillThumbs { .. } => TaskKind::GenerateThumbs,
             // Reuse Scan kind for UI display until a dedicated HLS progress
             // widget is added.
             Task::HlsTranscode { .. } => TaskKind::Scan,
