@@ -176,6 +176,23 @@ async fn authors_letter_index_lists_the_seeded_authors_letter() {
 }
 
 #[tokio::test]
+async fn authors_letter_index_percent_encodes_the_hash_bucket_href() {
+    // A `#` in an href is a URL fragment and never reaches the server, so
+    // the "everything else" bucket must be percent-encoded as `%23`.
+    let (app, pool, token) = fixture().await;
+    seed_synced_ebook(&pool, "123.epub", "One Two Three", "123 Collective").await;
+
+    let res = app
+        .oneshot(get_with_bearer("/opds/authors", &token))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = body_string(res).await;
+    assert!(body.contains(r#"href="/opds/authors/%23""#));
+    assert!(!body.contains(r#"href="/opds/authors/#""#));
+}
+
+#[tokio::test]
 async fn authors_by_letter_lists_the_authors_acquisition_feed_link() {
     let (app, pool, token) = fixture().await;
     seed_synced_ebook(&pool, "dune.epub", "Dune", "Frank Herbert").await;

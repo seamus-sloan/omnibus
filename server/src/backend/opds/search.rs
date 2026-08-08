@@ -45,12 +45,13 @@ pub(super) async fn search(
             Err(e) => return internal("search books", e),
         }
     };
+    let self_href = format!("/opds/search?q={}", urlencoding::encode(&params.q));
     let feed = Feed {
         id: "urn:omnibus:opds:search".to_string(),
         title: format!("Search: {}", params.q),
         updated: now_rfc3339(),
         links: vec![
-            Link::new("self", "/opds/search", ACQUISITION_TYPE),
+            Link::new("self", self_href, ACQUISITION_TYPE),
             Link::new("start", "/opds", NAVIGATION_TYPE),
         ],
         entries: books.iter().map(book_entry).collect(),

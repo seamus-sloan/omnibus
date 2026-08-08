@@ -29,6 +29,18 @@ fn letter_of(author: &AuthorSummary) -> char {
         .unwrap_or('#')
 }
 
+/// URL-path form of a bucket letter. `#` starts a fragment and is never
+/// sent to the server, so the "everything else" bucket must be
+/// percent-encoded (`%23`) in any `href` — the letter itself (used for
+/// display text and ids) stays literal.
+fn letter_path_segment(letter: char) -> String {
+    if letter == '#' {
+        "%23".to_string()
+    } else {
+        letter.to_string()
+    }
+}
+
 /// `GET /opds/authors` — navigation feed of the letters that have at least
 /// one author, each linking to `/opds/authors/{letter}`.
 pub(super) async fn letter_index(_user: AuthUser, State(state): State<AppState>) -> Response {
@@ -47,7 +59,7 @@ pub(super) async fn letter_index(_user: AuthUser, State(state): State<AppState>)
                 &format!("urn:omnibus:opds:authors:{letter}"),
                 &letter.to_string(),
                 &updated,
-                &format!("/opds/authors/{letter}"),
+                &format!("/opds/authors/{}", letter_path_segment(letter)),
                 NAVIGATION_TYPE,
                 &format!("Authors starting with {letter}"),
             )
@@ -110,7 +122,11 @@ pub(super) async fn by_letter(
         title: format!("Authors: {target}"),
         updated,
         links: vec![
-            Link::new("self", format!("/opds/authors/{target}"), NAVIGATION_TYPE),
+            Link::new(
+                "self",
+                format!("/opds/authors/{}", letter_path_segment(target)),
+                NAVIGATION_TYPE,
+            ),
             Link::new("up", "/opds/authors", NAVIGATION_TYPE),
             Link::new("start", "/opds", NAVIGATION_TYPE),
         ],
@@ -127,6 +143,12 @@ pub(super) async fn acquisition_feed(
 ) -> Response {
     match db::get_author(&state.pool, id).await {
         Ok(Some(author)) => {
+            // `db::get_author` returns books across every library, but this
+            // catalog is ebook-scoped (see the module doc); an audiobook-only
+            // or physical-only row has no epub/cbz format and would otherwise
+            // surface as an entry with no acquisition link.
+            let is_ebook_format =
+                |f: &String| f.eq_ignore_ascii_case("epub") || f.eq_ignore_ascii_case("cbz");
             let feed = Feed {
                 id: format!("urn:omnibus:opds:author:{id}"),
                 title: author.name.clone(),
@@ -135,7 +157,12 @@ pub(super) async fn acquisition_feed(
                     Link::new("self", format!("/opds/author/{id}"), ACQUISITION_TYPE),
                     Link::new("start", "/opds", NAVIGATION_TYPE),
                 ],
-                entries: author.books.iter().map(book_entry).collect(),
+                entries: author
+                    .books
+                    .iter()
+                    .filter(|b| b.formats.iter().any(is_ebook_format))
+                    .map(book_entry)
+                    .collect(),
             };
             xml_response(ACQUISITION_TYPE, feed.to_xml())
         }

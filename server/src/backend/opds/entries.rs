@@ -17,12 +17,12 @@ const CBZ_MIME: &str = "application/vnd.comicbook+zip";
 /// summary, and — when the book has a format this catalog knows how to
 /// link to — download, cover, and thumbnail links.
 pub(super) fn book_entry(book: &EbookMetadata) -> Entry {
-    let uuid = book.unique_identifier.clone().unwrap_or_default();
+    let uuid = book.unique_identifier.as_deref().filter(|u| !u.is_empty());
     let mut links = Vec::new();
-    if let Some(link) = download_link(&uuid, book) {
-        links.push(link);
-    }
-    if !uuid.is_empty() {
+    if let Some(uuid) = uuid {
+        if let Some(link) = download_link(uuid, book) {
+            links.push(link);
+        }
         links.push(Link::new(
             "http://opds-spec.org/image",
             format!("/api/covers/{uuid}"),
@@ -34,8 +34,12 @@ pub(super) fn book_entry(book: &EbookMetadata) -> Entry {
             "image/webp",
         ));
     }
+    let id = uuid.map_or_else(
+        || format!("urn:omnibus:opds:book:{}", book.id),
+        |uuid| format!("urn:uuid:{uuid}"),
+    );
     Entry {
-        id: format!("urn:uuid:{uuid}"),
+        id,
         title: book.display_title(),
         updated: entry_updated(book.added_at.as_deref()),
         summary: book.description.clone(),

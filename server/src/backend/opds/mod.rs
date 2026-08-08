@@ -1,23 +1,9 @@
-//! `/opds/*` — an OPDS 1.2 Atom catalog for third-party e-reader clients
-//! (KOReader and similar), gated behind the same live-session auth as the
-//! rest of `/api/*` (every handler here takes [`crate::auth::AuthUser`], so
-//! an unauthenticated request 401s exactly like an `/api/*` one — AC4).
-//! Root navigation (`/opds`), an OpenSearch description (`/opds/osd`) and
-//! search (`/opds/search`), a recently-added feed (`/opds/new`), and a
-//! letter-indexed author browse (`/opds/authors[/{letter}]`,
-//! `/opds/author/{id}`) with per-author acquisition feeds carrying
-//! download and cover links (AC1-AC4). Series and category browses are not
-//! yet implemented — see #930 for the deferred scope.
-//!
-//! Deliberately **ebook-library scoped**: every read here filters to
-//! `settings.ebook_library_path` rather than the combined ebook+audiobook
-//! set `/api/ebooks` uses, so every acquisition entry this catalog emits
-//! carries a working download link (`entries::download_link`'s audiobook
-//! arms exist only for a book that got there via a cross-library merge).
-//!
-//! Mounted outside `rest_router` (own top-level router merged in
-//! `main.rs`, mirroring `kobo_router`) since its routes live at `/opds/*`,
-//! not `/api/*`.
+//! `/opds/*` — an OPDS 1.2 Atom catalog for third-party e-reader clients,
+//! gated behind the same live-session auth as `/api/*` (each handler takes
+//! [`crate::auth::AuthUser`] directly). Deliberately ebook-library scoped —
+//! every read filters to `settings.ebook_library_path` — so every
+//! acquisition entry carries a working download link. Series and category
+//! browses are not yet implemented.
 
 use axum::{
     http::header,
