@@ -1,17 +1,14 @@
 //! Shared scrim + slide-up drawer chrome for the reader's TOC, highlights,
-//! search, and bookmarks panels. Each drawer differs only in its head content
-//! (title, optional count/sub/actions) and body; this owns the scrim, the
+//! search, and bookmarks panels, plus the standalone [`ReaderScrim`] backdrop
+//! other panels reuse. Each drawer differs only in its head content (title,
+//! optional count/sub/actions) and body; this owns the scrim, the
 //! `rd-drawer` shell, the grabber, and the close button all four repeated.
-//! [`ReaderScrim`] is split out separately for panels that want just the
-//! backdrop without the rest of the drawer chrome.
 
 use dioxus::prelude::*;
 
-/// The reader's dim backdrop behind a drawer, panel, or modal; clicking it
-/// fires `onclick` (typically closing whatever is open). Standalone so
+/// The reader's dim backdrop behind a drawer, panel, or modal — standalone so
 /// panels that don't need [`ReaderDrawerShell`]'s title/close-button chrome
-/// (the quote panel, the AA panel, the note composer) aren't forced into
-/// the whole shell just to avoid hand-rolling this one div.
+/// can reuse just the scrim.
 #[component]
 pub(super) fn ReaderScrim(onclick: EventHandler<MouseEvent>) -> Element {
     rsx! {

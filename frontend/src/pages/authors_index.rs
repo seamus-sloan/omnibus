@@ -394,15 +394,7 @@ fn render_author_card(a: &AuthorSummary, server_url: &str) -> Element {
             class: "idx-card idx-card-author",
             style: "--accent: {accent}",
             "data-testid": "author-card",
-            // F1.11: swap the letter glyph for the cached profile photo when
-            // one exists. `media_url` keeps the markup portable — same-origin
-            // relative on web, server base + `?token=` on mobile so the
-            // WebView's `<img>` fetch authenticates. Editing the photo lives
-            // on the author detail page — the index is read-only.
-            //
-            // The outer div is the same element in both states (rule 07): a
-            // `has_photo` flip only ever diffs the child, never replaces the
-            // node — mirrors `UserAvatar` in `components/user_avatar.rs`.
+            // F1.11: one stable div swaps only its child (rule 07 — a `has_photo` flip must never swap element types); `media_url` makes the photo fetch work on both web and mobile.
             div { class: "idx-card-avatar",
                 if a.has_photo {
                     img {
