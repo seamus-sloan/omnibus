@@ -421,8 +421,123 @@ async fn api_get_thumb_returns_304_when_if_none_match_matches_the_cached_webps_e
         second.headers().get(header::CACHE_CONTROL).unwrap(),
         "private, no-cache"
     );
+    assert_eq!(
+        second.headers().get(header::VARY).unwrap(),
+        "Cookie, Authorization"
+    );
     let bytes = to_bytes(second.into_body(), usize::MAX).await.unwrap();
     assert!(bytes.is_empty());
+}
+
+#[tokio::test]
+async fn api_get_thumb_returns_304_without_reading_the_thumb_file_from_disk() {
+    let (app, _, pool) = fixture().await;
+    let (id, uuid) = seed_book_with_uuid(&pool, "/lib", "Thumb Book").await;
+    sqlx::query("UPDATE books SET last_modified = 0 WHERE id = ?")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let _thumbs_guard = ThumbsDirGuard::new("thumb_304_no_read");
+    let thumb_path = db::thumb_path_for(id, db::ThumbSize::Md);
+    std::fs::write(&thumb_path, b"fake-cached-webp-bytes").expect("write thumb fixture");
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let first = app
+        .clone()
+        .oneshot(get_with_bearer(&format!("/api/thumbs/{uuid}/md"), &token))
+        .await
+        .unwrap();
+    let etag = first
+        .headers()
+        .get(header::ETAG)
+        .expect("cache-hit response should carry an ETag")
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    // Swap the file for a directory at the same path: `is_stale_async`'s
+    // metadata stat still sees a fresh mtime (so the cache-hit branch is
+    // still taken), but a `tokio::fs::read` of a directory always errors.
+    // Before #1751 the ETag came from hashing the file's bytes, so a
+    // matching `If-None-Match` still had to read (and thus fail on) this
+    // path, falling through to the miss/regenerate branch instead of
+    // answering 304. Deriving the ETag from `(book_id, size,
+    // last_modified_epoch)` alone means the read is never attempted.
+    std::fs::remove_file(&thumb_path).expect("remove thumb file");
+    std::fs::create_dir(&thumb_path).expect("create directory in place of thumb file");
+
+    let second = app
+        .oneshot(get_with_bearer_and_if_none_match(
+            &format!("/api/thumbs/{uuid}/md"),
+            &token,
+            &etag,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(second.headers().get(header::ETAG).unwrap(), etag.as_str());
+}
+
+#[tokio::test]
+async fn api_get_thumb_serves_fresh_bytes_and_a_new_etag_after_last_modified_epoch_changes() {
+    let (app, _, pool) = fixture().await;
+    let (id, uuid) = seed_book_with_uuid(&pool, "/lib", "Thumb Book").await;
+    sqlx::query("UPDATE books SET last_modified = 0 WHERE id = ?")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let _thumbs_guard = ThumbsDirGuard::new("thumb_etag_changes_on_last_modified");
+    let thumb_bytes = b"fake-cached-webp-bytes";
+    std::fs::write(db::thumb_path_for(id, db::ThumbSize::Md), thumb_bytes)
+        .expect("write thumb fixture");
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+
+    let first = app
+        .clone()
+        .oneshot(get_with_bearer(&format!("/api/thumbs/{uuid}/md"), &token))
+        .await
+        .unwrap();
+    let stale_etag = first
+        .headers()
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    // Simulate a reindex that regenerated this thumb: `last_modified_epoch`
+    // moves forward, but stays well behind the thumb file's real (current)
+    // mtime so it still reads as fresh — the ETag must change on this
+    // alone, even though the on-disk bytes didn't (#1751 AC3).
+    sqlx::query("UPDATE books SET last_modified = 1 WHERE id = ?")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let second = app
+        .oneshot(get_with_bearer_and_if_none_match(
+            &format!("/api/thumbs/{uuid}/md"),
+            &token,
+            &stale_etag,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::OK);
+    let fresh_etag = second
+        .headers()
+        .get(header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(fresh_etag, stale_etag);
+    let bytes = to_bytes(second.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&bytes[..], thumb_bytes.as_slice());
 }
 
 #[tokio::test]

@@ -1,7 +1,8 @@
 //! Unit tests for the `thumbs` module — `thumbs_dir` env-var resolution,
 //! `thumb_path_for` formatting, `is_stale` mtime comparison (incl. the
-//! same-second tie case), `ThumbSize` FromStr roundtrip, `generate_thumbnail`
-//! WebP output, and LRU-on-read `evict_if_over_cap` cap enforcement.
+//! same-second tie case), `ThumbSize` FromStr roundtrip, `thumb_etag`
+//! derivation, `generate_thumbnail` WebP output, and LRU-on-read
+//! `evict_if_over_cap` cap enforcement.
 
 use super::*;
 use crate::test_support::EnvVarGuard;
@@ -77,6 +78,53 @@ fn is_stale_returns_true_when_mtime_is_older() {
         .unwrap()
         .as_secs() as i64;
     assert!(is_stale(2, ThumbSize::Md, mtime + 1));
+}
+
+#[test]
+fn thumb_etag_is_stable_for_identical_inputs() {
+    assert_eq!(
+        thumb_etag(1, ThumbSize::Md, 100),
+        thumb_etag(1, ThumbSize::Md, 100)
+    );
+}
+
+#[test]
+fn thumb_etag_differs_when_book_id_changes() {
+    assert_ne!(
+        thumb_etag(1, ThumbSize::Md, 100),
+        thumb_etag(2, ThumbSize::Md, 100)
+    );
+}
+
+#[test]
+fn thumb_etag_differs_when_size_changes() {
+    assert_ne!(
+        thumb_etag(1, ThumbSize::Sm, 100),
+        thumb_etag(1, ThumbSize::Md, 100)
+    );
+}
+
+#[test]
+fn thumb_etag_differs_when_last_modified_epoch_changes() {
+    // #1751 AC3: a thumb regenerated because its book's
+    // `last_modified_epoch` moved must produce a different ETag.
+    assert_ne!(
+        thumb_etag(1, ThumbSize::Md, 100),
+        thumb_etag(1, ThumbSize::Md, 200)
+    );
+}
+
+#[test]
+fn thumb_etag_differs_when_the_encoder_version_component_changes() {
+    // #1751 AC4: folding a version constant into the hash means a future
+    // encoder/format change (a bumped `THUMB_ENCODER_VERSION`) produces a
+    // different ETag even when `(book_id, size, last_modified_epoch)` is
+    // unchanged. Exercised through the version-parameterized helper since
+    // the real constant is fixed at compile time.
+    assert_ne!(
+        thumb_etag_versioned(1, ThumbSize::Md, 100, 1),
+        thumb_etag_versioned(1, ThumbSize::Md, 100, 2)
+    );
 }
 
 #[test]
