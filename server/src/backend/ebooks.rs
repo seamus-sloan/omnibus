@@ -262,7 +262,7 @@ async fn resolve_epub_path(
 /// Wire mime for a served CBZ archive. The registered comic-book zip type,
 /// which downloaders and shelf apps recognize where a bare
 /// `application/zip` would not say what the bytes are.
-const CBZ_MIME: &str = "application/vnd.comicbook+zip";
+pub(crate) const CBZ_MIME: &str = "application/vnd.comicbook+zip";
 
 /// Resolve the file `/file` streams for `uuid`: the EPUB when the book has
 /// one, else its CBZ archive. The fallback is what lets a comic-only book be

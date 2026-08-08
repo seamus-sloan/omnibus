@@ -1,6 +1,7 @@
-//! Kobo per-book resources: KEPUB download, cover thumbnails, and the
-//! (currently empty) tags collection. `download` and `image` both resolve
-//! the book id from the path uuid before touching the filesystem/DB.
+//! Kobo per-book resources: book download (KEPUB, or the raw CBZ for a
+//! comic-only book), cover thumbnails, and the (currently empty) tags
+//! collection. `download` and `image` both resolve the book id from the
+//! path uuid before touching the filesystem/DB.
 
 use axum::{
     extract::{Path, Request, State},
@@ -29,7 +30,10 @@ pub async fn library_tags(_auth: KoboAuthUser) -> Response {
 
 /// `GET download/<uuid>` — serve the book as KEPUB (converting via the worker,
 /// cached), falling back to plain EPUB when kepubify is absent, conversion
-/// fails, or it exceeds [`KEPUB_CONVERT_BUDGET`]. Streamed with range support.
+/// fails, or it exceeds [`KEPUB_CONVERT_BUDGET`]. A CBZ-only book skips the
+/// conversion entirely and streams the archive as-is — Kobo firmware reads
+/// sideloaded CBZ natively, and the old EPUB-only path 404'd every attempt,
+/// looping the device on retries. Streamed with range support.
 pub async fn download(
     auth: KoboAuthUser,
     State(state): State<AppState>,
@@ -44,20 +48,32 @@ pub async fn download(
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(e) => return internal("kobo resolve_book_id_by_uuid", e),
     };
-    let path = if kepub_ready(&state, id).await {
-        db::kepub_path(id)
-    } else {
-        // Still override-baked — same fallback `get_ebook_kepub` uses — so a
-        // Kobo device without kepubify support (or after a conversion
-        // failure) sees the user's edits rather than the raw scanned file.
-        let source = match db::book_file_path(state.pool(), id, "EPUB").await {
-            Ok(Some(p)) => p,
+    // EPUB presence decides the branch *before* any conversion is attempted,
+    // so a CBZ-only book never enqueues a KepubConvert doomed to fail.
+    let epub_source = match db::book_file_path(state.pool(), id, "EPUB").await {
+        Ok(p) => p,
+        Err(e) => return internal("kobo book_file_path", e),
+    };
+    let (path, content_type) = match epub_source {
+        Some(source) => {
+            let path = if kepub_ready(&state, id).await {
+                db::kepub_path(id)
+            } else {
+                // Still override-baked — same fallback `get_ebook_kepub` uses
+                // — so a Kobo device without kepubify support (or after a
+                // conversion failure) sees the user's edits rather than the
+                // raw scanned file.
+                crate::backend::ebooks::rewritten_or_source(&state, id, source).await
+            };
+            (path, "application/epub+zip")
+        }
+        None => match db::book_file_path(state.pool(), id, "CBZ").await {
+            Ok(Some(path)) => (path, crate::backend::ebooks::CBZ_MIME),
             Ok(None) => return StatusCode::NOT_FOUND.into_response(),
             Err(e) => return internal("kobo book_file_path", e),
-        };
-        crate::backend::ebooks::rewritten_or_source(&state, id, source).await
+        },
     };
-    let response = serve_download(req, &path, "application/epub+zip").await;
+    let response = serve_download(req, &path, content_type).await;
     // Only bookkeep on an answer that means the device actually has (or
     // already had, per a conditional 304) the bytes — #1647's bug was
     // exactly this call running unconditionally, so a 404 (bad path, file

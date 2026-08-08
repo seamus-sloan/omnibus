@@ -367,6 +367,54 @@ async fn book_for_sync_reflects_a_saved_title_override_with_no_creators_override
 }
 
 #[tokio::test]
+async fn book_for_sync_falls_back_to_the_cbz_size_for_a_cbz_only_book() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let uuid = seed_synced_ebook(&pool, "berserk-v04.cbz", "Berserk v04", "Kentaro Miura").await;
+    sqlx::query(
+        "UPDATE book_files SET size_bytes = 777 \
+         WHERE book_id = (SELECT id FROM books WHERE uuid = ?)",
+    )
+    .bind(&uuid)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let row = book_for_sync(&pool, &uuid).await.unwrap().unwrap();
+
+    assert!(!row.has_epub);
+    assert_eq!(
+        row.download_size_bytes, 777,
+        "a CBZ-only book must advertise the archive's size, not 0"
+    );
+}
+
+#[tokio::test]
+async fn book_for_sync_prefers_the_epub_size_when_the_book_has_both_formats() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let uuid = seed_synced_ebook(&pool, "dual.epub", "Dual", "A").await;
+    sqlx::query("UPDATE book_files SET size_bytes = 111 WHERE format = 'EPUB'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes)
+         SELECT id, 'CBZ', 'dual', 222 FROM books WHERE uuid = ?",
+    )
+    .bind(&uuid)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let row = book_for_sync(&pool, &uuid).await.unwrap().unwrap();
+
+    assert!(row.has_epub);
+    assert_eq!(
+        row.download_size_bytes, 111,
+        "the EPUB stays the served (and therefore advertised) file"
+    );
+}
+
+#[tokio::test]
 async fn book_for_sync_returns_none_for_an_unknown_uuid() {
     let pool = init_db("sqlite::memory:").await.unwrap();
 

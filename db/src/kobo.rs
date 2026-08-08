@@ -34,7 +34,17 @@ const SELECT_COLS: &str = "b.id AS id,
                     WHERE bf.book_id = b.id AND bf.format = 'EPUB'
                     ORDER BY bf.ordinal ASC
                     LIMIT 1
-                ), 0) AS epub_size_bytes";
+                ), (
+                    SELECT bf.size_bytes
+                    FROM book_files bf
+                    WHERE bf.book_id = b.id AND bf.format = 'CBZ'
+                    ORDER BY bf.ordinal ASC
+                    LIMIT 1
+                ), 0) AS download_size_bytes,
+                EXISTS(
+                    SELECT 1 FROM book_files bf
+                    WHERE bf.book_id = b.id AND bf.format = 'EPUB'
+                ) AS has_epub";
 
 /// One book shaped for the Kobo sync endpoint: durable uuid, display title, a
 /// best-effort author line, and the last-modified epoch that drives the
@@ -48,11 +58,15 @@ pub struct KoboBookRow {
     pub title: String,
     pub author: String,
     pub last_modified_epoch: i64,
-    /// Size of the lowest-ordinal EPUB file, `0` when the book has none.
-    /// Advertised on the download entitlement — a best-effort figure (the
-    /// served KEPUB differs slightly), consumed only by device-side progress
-    /// UI, never for validation.
-    pub epub_size_bytes: i64,
+    /// Size of the file the download route would serve: the lowest-ordinal
+    /// EPUB, else the lowest-ordinal CBZ for a comic-only book, `0` when the
+    /// book has neither. Advertised on the download entitlement — a
+    /// best-effort figure (the served KEPUB differs slightly), consumed only
+    /// by device-side progress UI, never for validation.
+    pub download_size_bytes: i64,
+    /// Whether the book has any EPUB file — decides the advertised download
+    /// format (`KEPUB` vs `CBZ`), mirroring the branch `download` takes.
+    pub has_epub: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -227,7 +241,8 @@ fn row_to_book(row: &sqlx::sqlite::SqliteRow) -> KoboBookRow {
         title: row.get("title"),
         author: row.get("author"),
         last_modified_epoch: row.get("last_modified_epoch"),
-        epub_size_bytes: row.get("epub_size_bytes"),
+        download_size_bytes: row.get("download_size_bytes"),
+        has_epub: row.get("has_epub"),
     }
 }
 
