@@ -1,7 +1,10 @@
 import type { APIRequestContext, Page } from "@playwright/test";
+import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { gotoReady } from "../utils/nav";
+import { fixturesDir, seedLibrary } from "../utils/seed";
+import { bookTile, selectShelfInGallery } from "../utils/shelves";
 
 // The 3c "not in your library" chooser: own it (creates a fileless book plus
 // its first physical copy) or wishlist it (creates a fileless book tracked
@@ -18,6 +21,13 @@ import { gotoReady } from "../utils/nav";
 const ISBN = "9780441013593";
 const VIEWER_USER = "checkinviewer";
 const VIEWER_PASSWORD = "checkin-viewer-pw-00";
+
+// A fileless book only reaches the landing list when a library path is set
+// (`list_books_page` short-circuits on an empty path set), so this spec has
+// to seed rather than inherit whichever parallel spec happened to seed first.
+test.beforeAll(async ({ request }) => {
+  await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
+});
 
 function candidate(
   over: Record<string, unknown> = {},
@@ -103,23 +113,22 @@ async function logInAsViewer(page: Page): Promise<void> {
   await expect(page).toHaveURL(/\/$/);
 }
 
-/**
- * Wait for the "Open details for {title}" link, on a generous timeout.
- * Confirmed by directly replaying `POST /api/rpc/scan/physical-only` then
- * `POST /api/rpc/ebooks/page` against a live server: the created book is
- * present in the very first response, correctly sorted — so this isn't a
- * data-visibility or sort-order gap. The default 5s `toBeVisible` timeout
- * was too tight for this page's create-then-list round trip under CI's
- * parallel-worker load; let Playwright's own auto-retry do the waiting
- * rather than adding a reload loop on top of it.
- */
-async function waitForBookLinkVisible(
-  page: Page,
-  title: string,
-): Promise<void> {
-  await expect(
-    page.getByRole("link", { name: `Open details for ${title}` }),
-  ).toBeVisible({ timeout: 30_000 });
+/** The caller's own Wishlist shelf, which `provision_wishlist_shelf` guarantees. */
+async function fetchWishlistShelf(
+  request: APIRequestContext,
+): Promise<{ id: number; name: string }> {
+  const resp = await request.get("/api/rpc/shelves");
+  expect(resp.status()).toBe(200);
+  const shelves = (await resp.json()) as {
+    id: number;
+    kind: string;
+    name: string;
+  }[];
+  const wishlist = shelves.find((s) => s.kind === "wishlist");
+  if (!wishlist) {
+    throw new Error("the seeded admin has no Wishlist shelf");
+  }
+  return { id: wishlist.id, name: wishlist.name };
 }
 
 test("adds a not-in-library book to the physical collection, shows it in All Books, then removes it as the last copy", async ({
@@ -157,7 +166,7 @@ test("adds a not-in-library book to the physical collection, shows it in All Boo
     // Real read: F-Physical-Check-In's visibility rule surfaces a fileless
     // book once it holds a physical copy, so it belongs in All Books.
     await gotoReady(page, "/");
-    await waitForBookLinkVisible(page, title);
+    await expect(bookTile(page, title)).toBeVisible();
 
     await gotoReady(page, `/books/${uuid}`);
     await expect(
@@ -215,9 +224,7 @@ test("adds a not-in-library book to the physical collection, shows it in All Boo
   }
 
   await gotoReady(page, "/");
-  await expect(
-    page.getByRole("link", { name: `Open details for ${title}` }),
-  ).toHaveCount(0);
+  await expect(bookTile(page, title)).toHaveCount(0);
 });
 
 test("adds a not-in-library book to the wishlist, shows it on the owner's Wishlist shelf, and a second user can view the public shelf", async ({
@@ -247,27 +254,14 @@ test("adds a not-in-library book to the wishlist, shows it on the owner's Wishli
   );
   await expect(page.getByTestId("check-in-success")).toContainText(title);
 
-  const shelvesResp = await request.get("/api/rpc/shelves");
-  expect(shelvesResp.status()).toBe(200);
-  const shelves = (await shelvesResp.json()) as {
-    id: number;
-    kind: string;
-    owner_username: string;
-  }[];
-  const wishlistShelf = shelves.find((s) => s.kind === "wishlist");
-  if (!wishlistShelf) {
-    throw new Error("the seeded admin has no Wishlist shelf");
-  }
+  const wishlist = await fetchWishlistShelf(request);
 
   try {
-    await gotoReady(page, `/shelves/${wishlistShelf.id}`);
-    await expect(
-      page.getByRole("heading", {
-        level: 1,
-        name: `${wishlistShelf.owner_username}'s Wishlist`,
-      }),
-    ).toBeVisible();
-    await waitForBookLinkVisible(page, title);
+    // The Wishlist is reached the way a user reaches any shelf: its tile in
+    // the landing gallery, which filters the landing list in place.
+    await gotoReady(page, "/");
+    await selectShelfInGallery(page, wishlist.id, wishlist.name);
+    await expect(bookTile(page, title)).toBeVisible();
 
     // Public by design (`provision_wishlist_shelf`) — a second, freshly
     // provisioned, non-admin user can view it too via a cookie-less context,
@@ -279,19 +273,10 @@ test("adds a not-in-library book to the wishlist, shows it on the owner's Wishli
     const viewerPage = await context.newPage();
     try {
       await logInAsViewer(viewerPage);
-      await gotoReady(viewerPage, `/shelves/${wishlistShelf.id}`);
-      await expect(
-        viewerPage.getByRole("heading", {
-          level: 1,
-          name: `${wishlistShelf.owner_username}'s Wishlist`,
-        }),
-      ).toBeVisible();
-      await expect(
-        viewerPage.getByRole("link", { name: `Open details for ${title}` }),
-      ).toBeVisible();
-      await expect(viewerPage.getByTestId("shelf-refetch-error")).toHaveCount(
-        0,
-      );
+      await gotoReady(viewerPage, "/");
+      await selectShelfInGallery(viewerPage, wishlist.id, wishlist.name);
+      await expect(bookTile(viewerPage, title)).toBeVisible();
+      await expect(viewerPage.getByTestId("lib-page-error")).toHaveCount(0);
     } finally {
       await context.close();
     }
@@ -310,10 +295,9 @@ test("adds a not-in-library book to the wishlist, shows it on the owner's Wishli
       .toBe(200);
   }
 
-  await gotoReady(page, `/shelves/${wishlistShelf.id}`);
-  await expect(
-    page.getByRole("link", { name: `Open details for ${title}` }),
-  ).toHaveCount(0);
+  await gotoReady(page, "/");
+  await selectShelfInGallery(page, wishlist.id, wishlist.name);
+  await expect(bookTile(page, title)).toHaveCount(0);
 });
 
 test("surfaces an error when adding a physical-only book fails", async ({

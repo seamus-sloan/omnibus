@@ -1,16 +1,48 @@
+import type { APIRequestContext } from "@playwright/test";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expect, test } from "../fixtures/test";
 import { expectMutation } from "../utils/api";
 import { fetchBookUuidByTitle } from "../utils/ebooks";
 import { expectNavVisible, gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
+import { galleryTile, selectShelfInGallery } from "../utils/shelves";
 
 // Shelves need a real library so the create modal's hand-picked picker and the
-// rail have books to work with. The settings POST kicks off an async reindex,
-// so `seedLibrary` polls until every fixture EPUB is surfaced.
+// gallery have books to work with. The settings POST kicks off an async
+// reindex, so `seedLibrary` polls until every fixture EPUB is surfaced.
+//
+// Every shelf here is opened the way a user opens one: by picking its tile in
+// the landing gallery, which filters the landing book list in place. The
+// `/shelves/:id` page has no entry point in the web UI, so nothing in this
+// file may deep-link it — see `tests/utils/shelves.ts`.
 test.beforeAll(async ({ request }) => {
   await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
 });
+
+/** Create a shelf straight through the API and return its id. */
+async function createShelf(
+  request: APIRequestContext,
+  body: Record<string, unknown>,
+): Promise<number> {
+  const resp = await request.post("/api/rpc/shelves/create", {
+    data: {
+      req: {
+        description: null,
+        visibility: "private",
+        match_mode: null,
+        rules: [],
+        book_uuids: [],
+        ...body,
+      },
+    },
+  });
+  expect(
+    resp.status(),
+    `POST /api/rpc/shelves/create failed for ${body.name}`,
+  ).toBe(200);
+  const shelf = (await resp.json()) as { id: number };
+  return shelf.id;
+}
 
 test("renders the shelf gallery on the library page", async ({ page }) => {
   await gotoReady(page, "/");
@@ -77,96 +109,67 @@ test("surfaces a distinct error when the member-books refetch fails", async ({
 }) => {
   // A genuinely empty manual shelf renders the grid with zero tiles and no
   // error text — force the page-fetch to 500 so this test can tell the two
-  // states apart via the dedicated `shelf-refetch-error` banner.
+  // states apart via the header's `lib-page-error` banner.
   const name = `E2E Refetch Fail ${Date.now()}`;
-  const createResp = await request.post("/api/rpc/shelves/create", {
-    data: {
-      req: {
-        kind: "manual",
-        name,
-        description: null,
-        visibility: "private",
-        match_mode: null,
-        rules: [],
-        book_uuids: [],
-      },
-    },
-  });
-  expect(createResp.status(), "POST /api/rpc/shelves/create failed").toBe(200);
-  const shelf = (await createResp.json()) as { id: number };
+  const shelfId = await createShelf(request, { kind: "manual", name });
 
   await page.route("**/api/rpc/shelves/page", (route) =>
     route.fulfill({ status: 500, body: "boom" }),
   );
 
+  await gotoReady(page, "/");
   await expectMutation(
     page,
     { method: "POST", url: "/api/rpc/shelves/page", expectedStatus: 500 },
-    async () => gotoReady(page, `/shelves/${shelf.id}`),
+    async () => galleryTile(page, shelfId).click(),
   );
 
-  await expect(page.getByTestId("shelf-detail-header")).toContainText(name);
-  await expect(page.getByTestId("shelf-refetch-error")).toBeVisible();
+  await expect(page.getByTestId("lib-section-title")).toContainText(name);
+  await expect(page.getByTestId("lib-page-error")).toBeVisible();
 });
 
-test("switches shelves via the rail without a full reload", async ({
+test("switches shelves via the gallery without leaving the library page", async ({
   page,
   request,
 }) => {
   // Two hand-picked shelves, each holding one distinct fixture book, so the
-  // header and grid content can only match if the rail switch actually
+  // header and grid content can only match if the gallery pick actually
   // re-fetched.
   const alphaUuid = await fetchBookUuidByTitle(request, "Alpha");
   const betaUuid = await fetchBookUuidByTitle(request, "Beta in the Series");
 
   const nameA = `E2E Rail A ${Date.now()}`;
   const nameB = `E2E Rail B ${Date.now()}`;
+  const shelfAId = await createShelf(request, {
+    kind: "manual",
+    name: nameA,
+    book_uuids: [alphaUuid],
+  });
+  const shelfBId = await createShelf(request, {
+    kind: "manual",
+    name: nameB,
+    book_uuids: [betaUuid],
+  });
 
-  const createManualShelf = async (name: string, bookUuid: string) => {
-    const resp = await request.post("/api/rpc/shelves/create", {
-      data: {
-        req: {
-          kind: "manual",
-          name,
-          description: null,
-          visibility: "private",
-          match_mode: null,
-          rules: [],
-          book_uuids: [bookUuid],
-        },
-      },
-    });
-    expect(
-      resp.status(),
-      `POST /api/rpc/shelves/create failed for ${name}`,
-    ).toBe(200);
-    const shelf = (await resp.json()) as { id: number };
-    return shelf.id;
-  };
+  await gotoReady(page, "/");
+  await selectShelfInGallery(page, shelfAId, nameA);
+  await expect(page.getByTestId("lib-grid")).toContainText("Alpha");
 
-  const shelfAId = await createManualShelf(nameA, alphaUuid);
-  const shelfBId = await createManualShelf(nameB, betaUuid);
-
-  await gotoReady(page, `/shelves/${shelfAId}`);
-  await expect(page.getByTestId("shelf-detail-header")).toContainText(nameA);
-  await expect(page.getByTestId("shelf-grid")).toContainText("Alpha");
-
-  await page.getByTestId(`rail-shelf-${shelfBId}`).click();
-
-  await expect(page.getByTestId("shelf-detail-header")).toContainText(nameB);
-  await expect(page.getByTestId("shelf-grid")).toContainText(
+  await selectShelfInGallery(page, shelfBId, nameB);
+  await expect(page.getByTestId("lib-grid")).toContainText(
     "Beta in the Series",
   );
-  await expect(page.getByTestId("shelf-grid")).not.toContainText("Alpha");
+  await expect(page.getByTestId("lib-grid")).not.toContainText("Alpha");
 
   // And back the other way, confirming both directions re-fetch.
-  await page.getByTestId(`rail-shelf-${shelfAId}`).click();
-
-  await expect(page.getByTestId("shelf-detail-header")).toContainText(nameA);
-  await expect(page.getByTestId("shelf-grid")).toContainText("Alpha");
-  await expect(page.getByTestId("shelf-grid")).not.toContainText(
+  await selectShelfInGallery(page, shelfAId, nameA);
+  await expect(page.getByTestId("lib-grid")).toContainText("Alpha");
+  await expect(page.getByTestId("lib-grid")).not.toContainText(
     "Beta in the Series",
   );
+
+  // The gallery filters in place — a pick must never navigate away.
+  expect(new URL(page.url()).pathname).toBe("/");
 });
 
 test("edits an existing smart shelf's rules and the member grid updates", async ({
@@ -178,25 +181,17 @@ test("edits an existing smart shelf's rules and the member grid updates", async 
   // membership change after save can only be explained by the edited rule
   // actually taking effect.
   const name = `E2E Smart Edit ${Date.now()}`;
-  const createResp = await request.post("/api/rpc/shelves/create", {
-    data: {
-      req: {
-        kind: "smart",
-        name,
-        description: null,
-        visibility: "private",
-        match_mode: "any",
-        rules: [{ field: "author", op: "is", value: "Ada Lovelace" }],
-        book_uuids: [],
-      },
-    },
+  const shelfId = await createShelf(request, {
+    kind: "smart",
+    name,
+    match_mode: "any",
+    rules: [{ field: "author", op: "is", value: "Ada Lovelace" }],
   });
-  expect(createResp.status(), "POST /api/rpc/shelves/create failed").toBe(200);
-  const shelf = (await createResp.json()) as { id: number };
 
-  await gotoReady(page, `/shelves/${shelf.id}`);
-  await expect(page.getByTestId("shelf-grid")).toContainText("Alpha");
-  await expect(page.getByTestId("shelf-grid")).not.toContainText(
+  await gotoReady(page, "/");
+  await selectShelfInGallery(page, shelfId, name);
+  await expect(page.getByTestId("lib-grid")).toContainText("Alpha");
+  await expect(page.getByTestId("lib-grid")).not.toContainText(
     "Beta in the Series",
   );
 
@@ -224,7 +219,7 @@ test("edits an existing smart shelf's rules and the member grid updates", async 
       method: "POST",
       url: "/api/rpc/shelves/update",
       expectedBody: {
-        id: shelf.id,
+        id: shelfId,
         req: {
           name,
           description: null,
@@ -242,10 +237,10 @@ test("edits an existing smart shelf's rules and the member grid updates", async 
 
   await expect(modal).not.toBeVisible();
   await expect(facets).toContainText("Author is Grace Hopper");
-  await expect(page.getByTestId("shelf-grid")).toContainText(
+  await expect(page.getByTestId("lib-grid")).toContainText(
     "Beta in the Series",
   );
-  await expect(page.getByTestId("shelf-grid")).not.toContainText("Alpha");
+  await expect(page.getByTestId("lib-grid")).not.toContainText("Alpha");
 });
 
 test("edits a shelf's name, visibility, and Kobo sync from the pencil modal", async ({
@@ -253,23 +248,10 @@ test("edits a shelf's name, visibility, and Kobo sync from the pencil modal", as
   request,
 }) => {
   const name = `E2E Edit Fields ${Date.now()}`;
-  const createResp = await request.post("/api/rpc/shelves/create", {
-    data: {
-      req: {
-        kind: "manual",
-        name,
-        description: null,
-        visibility: "private",
-        match_mode: null,
-        rules: [],
-        book_uuids: [],
-      },
-    },
-  });
-  expect(createResp.status(), "POST /api/rpc/shelves/create failed").toBe(200);
-  const shelf = (await createResp.json()) as { id: number };
+  const shelfId = await createShelf(request, { kind: "manual", name });
 
-  await gotoReady(page, `/shelves/${shelf.id}`);
+  await gotoReady(page, "/");
+  await selectShelfInGallery(page, shelfId, name);
   const facets = page.getByTestId("shelf-facets");
   await expect(facets).toContainText("Hand-picked shelf");
   await expect(facets).toContainText("Private");
@@ -289,13 +271,16 @@ test("edits a shelf's name, visibility, and Kobo sync from the pencil modal", as
   await modal.getByTestId("shelf-vis-public").click();
   await modal.getByTestId("edit-shelf-kobo-on").click();
 
+  // The saved Kobo opt-in is asserted on the wire here rather than in the UI:
+  // the badge that renders it lives on the shelf-detail header, which the web
+  // app never navigates to.
   await expectMutation(
     page,
     {
       method: "POST",
       url: "/api/rpc/shelves/update",
       expectedBody: {
-        id: shelf.id,
+        id: shelfId,
         req: {
           name: renamed,
           description: null,
@@ -311,10 +296,8 @@ test("edits a shelf's name, visibility, and Kobo sync from the pencil modal", as
   );
 
   await expect(modal).not.toBeVisible();
-  await expect(page.getByTestId("shelf-detail-header")).toContainText(renamed);
+  await expect(page.getByTestId("lib-section-title")).toContainText(renamed);
   await expect(facets).toContainText("Public");
-  // The saved opt-in surfaces as the header's Kobo badge after the refetch.
-  await expect(page.getByTestId("shelf-kobo-badge")).toBeVisible();
 });
 
 test("surfaces an error when the shelf edit save fails", async ({
@@ -322,23 +305,10 @@ test("surfaces an error when the shelf edit save fails", async ({
   request,
 }) => {
   const name = `E2E Edit Fail ${Date.now()}`;
-  const createResp = await request.post("/api/rpc/shelves/create", {
-    data: {
-      req: {
-        kind: "manual",
-        name,
-        description: null,
-        visibility: "private",
-        match_mode: null,
-        rules: [],
-        book_uuids: [],
-      },
-    },
-  });
-  expect(createResp.status(), "POST /api/rpc/shelves/create failed").toBe(200);
-  const shelf = (await createResp.json()) as { id: number };
+  const shelfId = await createShelf(request, { kind: "manual", name });
 
-  await gotoReady(page, `/shelves/${shelf.id}`);
+  await gotoReady(page, "/");
+  await selectShelfInGallery(page, shelfId, name);
   await page.route("**/api/rpc/shelves/update", (route) =>
     route.fulfill({ status: 500, body: "boom" }),
   );
@@ -355,160 +325,5 @@ test("surfaces an error when the shelf edit save fails", async ({
 
   await expect(modal.getByTestId("edit-shelf-error")).toBeVisible();
   // The header keeps the saved name — the failed edit must not leak in.
-  await expect(page.getByTestId("shelf-detail-header")).toContainText(name);
-});
-
-test("cancelling the delete confirmation leaves the shelf intact", async ({
-  page,
-  request,
-}) => {
-  const name = `E2E Delete Cancel ${Date.now()}`;
-  const createResp = await request.post("/api/rpc/shelves/create", {
-    data: {
-      req: {
-        kind: "manual",
-        name,
-        description: null,
-        visibility: "private",
-        match_mode: null,
-        rules: [],
-        book_uuids: [],
-      },
-    },
-  });
-  expect(createResp.status(), "POST /api/rpc/shelves/create failed").toBe(200);
-  const shelf = (await createResp.json()) as { id: number };
-
-  await gotoReady(page, `/shelves/${shelf.id}`);
-  await page.getByTestId("shelf-actions").click();
-  await page.getByTestId("shelf-delete").click();
-
-  const modal = page.getByTestId("shelf-delete-modal");
-  await expect(modal).toBeVisible();
-  await expect(modal).toContainText(name);
-
-  await modal.getByTestId("shelf-delete-cancel").click();
-
-  await expect(modal).not.toBeVisible();
-  // Still on the shelf's page and the shelf still exists.
-  await expect(page.getByTestId("shelf-detail-header")).toContainText(name);
-  expect(new URL(page.url()).pathname).toBe(`/shelves/${shelf.id}`);
-});
-
-test("confirming the delete removes the shelf and returns to the library", async ({
-  page,
-  request,
-}) => {
-  const name = `E2E Delete Confirm ${Date.now()}`;
-  const createResp = await request.post("/api/rpc/shelves/create", {
-    data: {
-      req: {
-        kind: "manual",
-        name,
-        description: null,
-        visibility: "private",
-        match_mode: null,
-        rules: [],
-        book_uuids: [],
-      },
-    },
-  });
-  expect(createResp.status(), "POST /api/rpc/shelves/create failed").toBe(200);
-  const shelf = (await createResp.json()) as { id: number };
-
-  await gotoReady(page, `/shelves/${shelf.id}`);
-  await page.getByTestId("shelf-actions").click();
-  await page.getByTestId("shelf-delete").click();
-
-  const modal = page.getByTestId("shelf-delete-modal");
-  await expect(modal).toBeVisible();
-
-  await expectMutation(
-    page,
-    {
-      method: "POST",
-      url: "/api/rpc/shelves/delete",
-      expectedBody: { id: shelf.id },
-      expectedStatus: 200,
-    },
-    async () => modal.getByTestId("shelf-delete-confirm").click(),
-  );
-
-  await expect(page).toHaveURL("/");
-  await expect(page.getByTestId("gallery-all-books")).toBeVisible();
-  // The deleted shelf's tile is gone from the gallery on the next fetch.
-  await expect(page.getByTestId(`gallery-shelf-${shelf.id}`)).toHaveCount(0);
-});
-
-test("surfaces the delete request in flight and keeps the shelf on failure", async ({
-  page,
-  request,
-}) => {
-  const name = `E2E Delete Fail ${Date.now()}`;
-  const createResp = await request.post("/api/rpc/shelves/create", {
-    data: {
-      req: {
-        kind: "manual",
-        name,
-        description: null,
-        visibility: "private",
-        match_mode: null,
-        rules: [],
-        book_uuids: [],
-      },
-    },
-  });
-  expect(createResp.status(), "POST /api/rpc/shelves/create failed").toBe(200);
-  const shelf = (await createResp.json()) as { id: number };
-
-  await gotoReady(page, `/shelves/${shelf.id}`);
-  // Only intercept the delete for *this* shelf, and hold it open briefly so
-  // the busy state below is actually observed in flight rather than racing
-  // straight to the resolved response.
-  await page.route("**/api/rpc/shelves/delete", async (route) => {
-    if (route.request().postDataJSON()?.id !== shelf.id) {
-      await route.continue();
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    await route.fulfill({
-      status: 500,
-      contentType: "application/json",
-      body: "boom",
-    });
-  });
-
-  try {
-    await page.getByTestId("shelf-actions").click();
-    await page.getByTestId("shelf-delete").click();
-
-    const modal = page.getByTestId("shelf-delete-modal");
-    const confirmBtn = modal.getByTestId("shelf-delete-confirm");
-
-    const mutation = expectMutation(
-      page,
-      {
-        method: "POST",
-        url: "/api/rpc/shelves/delete",
-        expectedBody: { id: shelf.id },
-        expectedStatus: 500,
-      },
-      async () => confirmBtn.click(),
-    );
-
-    // While the delayed response is in flight, the confirm button is busy —
-    // disabled and relabeled — and the cancel button is disabled too.
-    await expect(confirmBtn).toBeDisabled();
-    await expect(confirmBtn).toHaveText("Deleting…");
-    await expect(modal.getByTestId("shelf-delete-cancel")).toBeDisabled();
-
-    await mutation;
-
-    // The failed delete leaves the shelf, and the modal, in place.
-    await expect(modal).toBeVisible();
-    await expect(page.getByTestId("shelf-detail-header")).toContainText(name);
-    expect(new URL(page.url()).pathname).toBe(`/shelves/${shelf.id}`);
-  } finally {
-    await page.unroute("**/api/rpc/shelves/delete");
-  }
+  await expect(page.getByTestId("lib-section-title")).toContainText(name);
 });

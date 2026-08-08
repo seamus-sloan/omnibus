@@ -38,6 +38,32 @@ Preference order:
 
 Never use XPath. If you want XPath, the SSR markup probably needs a role, label, or testid added instead.
 
+**A book tile is not a `link`.** The landing grid tile (`landing/grid.rs`) is an
+`<a>` with **no `href`** and an explicit `role="listitem"`, and the shelf member
+tile (`components/cover_tile.rs`) is a router `Link` that also overrides
+`role="listitem"` — so `getByRole("link", { name: "Open details for …" })`
+matches nothing and times out. Use `bookTile()` from `utils/shelves.ts`
+(`getByRole("listitem", …)`) or the per-book `ebook-tile-<ident>` testid.
+
+## Navigation — only routes the UI can actually reach
+
+A spec must arrive at a page the way a user does. `page.goto` is for entry
+points a user has (a bookmark, the nav, a deep link the app itself hands out) —
+not for a route with no affordance pointing at it, which tests a surface no user
+can reach and hides the fact that it is unreachable.
+
+**`/shelves` and `/shelves/:id` are mobile-only.** On web the landing shelf
+gallery filters the book list in place and never navigates; the only `Link`s to
+`Route::ShelfDetail` live in `ShelvesRail`, which is mounted on that page and
+nowhere else. Open a shelf with `selectShelfInGallery()` from
+`utils/shelves.ts`, and assert against the landing surface — `lib-section-title`
+for the name, `shelf-facets` for kind/visibility/rules, `shelf-edit` for the
+pencil, `lib-grid` for members, `lib-page-error` for a failed member fetch.
+Shelf delete, add-books, the member sort control, and the Kobo badge exist
+**only** on `/shelves/:id`, so they have no web E2E coverage — assert those
+contracts on the wire (`expectMutation`) or leave them to the Rust tests until
+the page grows a web entry point.
+
 ## Structure — one file per flow
 
 Under `tests/flows/`, each `*.spec.ts` contains:
