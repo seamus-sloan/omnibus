@@ -1,7 +1,5 @@
-//! Wire types for the "Library Cleanup" dedup-suggestion surface (#961).
-//! Persisted by the `dedup_suggestions` / `cleanup_log` / `entity_aliases`
-//! tables (migration `0069`); the detection and apply/undo logic that reads
-//! and writes them ships in follow-up issues (#962-#966). Free of
+//! Wire types for the library-cleanup dedup-suggestion surface, persisted by
+//! the `dedup_suggestions` / `cleanup_log` / `entity_aliases` tables. Free of
 //! server-only dependencies so it compiles under both the `web` and
 //! `mobile` frontend feature gates.
 
