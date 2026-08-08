@@ -79,9 +79,9 @@ fn get(uri: String) -> Request<Body> {
 /// fresh scan root — so [`download`](super::resources::download) has real
 /// bytes to serve. Mirrors the on-disk setup
 /// `download_bakes_a_metadata_override_into_the_plain_epub_fallback` uses,
-/// minus the override. Returns the minted uuid; the tempdir is intentionally
-/// leaked, like the sibling test, since each run gets a fresh pid-scoped path
-/// and CI wipes `/tmp` between runs.
+/// minus the override (that sibling test cleans up its tempdir via
+/// `remove_dir_all`; this one deliberately doesn't, since each run gets a
+/// fresh pid-scoped path and CI wipes `/tmp` between runs).
 async fn seed_downloadable_book(pool: &SqlitePool, uuid: &str, title: &str, author: &str) {
     let pid = std::process::id();
     let nanos = std::time::SystemTime::now()
