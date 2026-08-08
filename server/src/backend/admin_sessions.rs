@@ -17,8 +17,11 @@ use super::{internal, AppState};
 use crate::auth::AdminUser;
 
 /// Project a db session row to its wire view. `is_current` is always `false`
-/// here — an admin viewing another user's sessions is never looking at the
-/// session their own request authenticated with (see [`SessionView`] docs).
+/// here — this admin listing never *sets* the flag (unlike the self-service
+/// listing in `auth::handlers`), not because the viewed row can never be the
+/// admin's own session: an admin listing their own account can land on the
+/// exact session their request authenticated with, same as any other row.
+/// See [`SessionView`] docs.
 fn to_session_view(s: db::auth::Session) -> SessionView {
     SessionView {
         id: s.id,

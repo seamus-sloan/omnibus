@@ -304,21 +304,29 @@ where
 }
 
 /// List every currently-live session for `user_id` (not revoked, not past its
-/// absolute expiry), most-recently-used first, up to [`LIST_SESSIONS_LIMIT`].
-/// Used by both the self-service `GET /api/auth/sessions` and the admin
-/// `GET /api/admin/users/{id}/sessions` — the two differ only in which
-/// `user_id` the caller is authorized to pass in.
+/// absolute expiry, and not idle-expired), most-recently-used first, up to
+/// [`LIST_SESSIONS_LIMIT`]. Used by both the self-service `GET
+/// /api/auth/sessions` and the admin `GET /api/admin/users/{id}/sessions` —
+/// the two differ only in which `user_id` the caller is authorized to pass in.
+///
+/// The idle-expiry predicate (`last_used_at >= now - SESSION_IDLE_TIMEOUT_SECS`)
+/// mirrors `check_session_validity`'s pass condition (and, equivalently,
+/// `prune_expired_sessions`'s idle DELETE) so a listing can't show a session
+/// that would no longer actually authenticate — without it, an idle-expired
+/// row lingers in admin/self-service listings until the next prune sweep.
 pub async fn list_sessions_for_user(pool: &SqlitePool, user_id: i64) -> AuthResult<Vec<Session>> {
     let now = now_unix();
+    let idle_cutoff = now - SESSION_IDLE_TIMEOUT_SECS;
     let rows = sqlx::query(
         "SELECT id, user_id, device_id, kind, created_at, last_used_at, expires_at
          FROM sessions
-         WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ?
+         WHERE user_id = ? AND revoked_at IS NULL AND expires_at > ? AND last_used_at >= ?
          ORDER BY last_used_at DESC
          LIMIT ?",
     )
     .bind(user_id)
     .bind(now)
+    .bind(idle_cutoff)
     .bind(LIST_SESSIONS_LIMIT)
     .fetch_all(pool)
     .await?;

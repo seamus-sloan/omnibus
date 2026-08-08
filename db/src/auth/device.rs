@@ -2,7 +2,7 @@
 
 use sqlx::{Executor, Row, Sqlite, SqlitePool};
 
-use super::{AuthError, AuthResult, Device};
+use super::{now_unix, AuthError, AuthResult, Device};
 
 /// Maximum accepted length of a `LoginRequest.device_name` /
 /// `RegisterRequest.device_name`. The column is `TEXT NOT NULL`, so the
@@ -154,7 +154,8 @@ pub async fn list_devices_for_user(pool: &SqlitePool, user_id: i64) -> AuthResul
 /// is unknown.
 pub async fn revoke_device(pool: &SqlitePool, device_id: i64) -> AuthResult<()> {
     let mut tx = pool.begin().await?;
-    sqlx::query("UPDATE sessions SET revoked_at = strftime('%s', 'now') WHERE device_id = ? AND revoked_at IS NULL")
+    sqlx::query("UPDATE sessions SET revoked_at = ? WHERE device_id = ? AND revoked_at IS NULL")
+        .bind(now_unix())
         .bind(device_id)
         .execute(&mut *tx)
         .await?;

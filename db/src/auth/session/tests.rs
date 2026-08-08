@@ -464,6 +464,20 @@ async fn list_sessions_for_user_returns_only_live_sessions_for_that_user() {
         .execute(&p)
         .await
         .unwrap();
+    // Idle-expired (still within its absolute expiry, but `last_used_at` is
+    // older than `SESSION_IDLE_TIMEOUT_SECS`) — mirrors `lookup_session`'s
+    // idle rejection, so a listing can't show a session that would no
+    // longer actually authenticate.
+    let idle_expired = create_session(&p, alice.id, None, SessionKind::Cookie, 30 * 24 * 60 * 60)
+        .await
+        .unwrap();
+    let stale = now_unix() - SESSION_IDLE_TIMEOUT_SECS - 1;
+    sqlx::query("UPDATE sessions SET last_used_at = ? WHERE id = ?")
+        .bind(stale)
+        .bind(idle_expired.session.id)
+        .execute(&p)
+        .await
+        .unwrap();
     // Bob's session must never show up in Alice's listing.
     create_session(&p, bob.id, None, SessionKind::Cookie, 3600)
         .await

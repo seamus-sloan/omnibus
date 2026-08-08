@@ -302,6 +302,10 @@ pub(super) fn SessionsModal(user: AdminUserRow, on_close: EventHandler<()>) -> E
 
     use_effect(move || {
         let _ = reload();
+        // Clear any error left over from a previous fetch/revoke *before* this
+        // reload starts, not just on failure — otherwise a stale banner from an
+        // earlier transient failure keeps showing even once this reload succeeds.
+        error.set(None);
         spawn(async move {
             match data::list_user_sessions(uid).await {
                 Ok(rows) => sessions.set(rows),
@@ -319,6 +323,7 @@ pub(super) fn SessionsModal(user: AdminUserRow, on_close: EventHandler<()>) -> E
             return;
         }
         busy_id.set(Some(session_id));
+        error.set(None);
         spawn(async move {
             match data::revoke_user_session(session_id).await {
                 Ok(()) => reload.with_mut(|n| *n += 1),
@@ -332,6 +337,7 @@ pub(super) fn SessionsModal(user: AdminUserRow, on_close: EventHandler<()>) -> E
             return;
         }
         busy_id.set(Some(device_id));
+        error.set(None);
         spawn(async move {
             match data::revoke_user_device(device_id).await {
                 Ok(()) => reload.with_mut(|n| *n += 1),
