@@ -1,0 +1,9 @@
+# Gitignored files carried into a fresh worktree. Read by Claude Code desktop
+# and by `wt step copy-ignored`; a file must be BOTH gitignored and matched
+# here to be copied.
+#
+# Secrets only. Everything else a worktree needs is tracked, regenerated, or
+# already shared: CARGO_TARGET_DIR lives outside the repo, and the databases,
+# covers/, and data/ caches are per-branch state that must NOT be inherited.
+
+.env
