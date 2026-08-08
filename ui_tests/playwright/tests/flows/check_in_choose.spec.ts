@@ -104,31 +104,22 @@ async function logInAsViewer(page: Page): Promise<void> {
 }
 
 /**
- * Poll for the "Open details for {title}" link, reloading between attempts.
- * A book created by `scan/physical-only` or `scan/wishlist` lands via a
- * different write path than the rest of the suite's mutations, and the
- * listing this checks against isn't in the set of mutations that busts the
- * client's read-through cache — so the first render after the create can
- * still serve a stale list. Mirrors the landing hero rail's own
- * reload-until-it-lands precedent (`.claude/rules/04-playwright.md`) rather
- * than asserting once.
+ * Wait for the "Open details for {title}" link, on a generous timeout.
+ * Confirmed by directly replaying `POST /api/rpc/scan/physical-only` then
+ * `POST /api/rpc/ebooks/page` against a live server: the created book is
+ * present in the very first response, correctly sorted — so this isn't a
+ * data-visibility or sort-order gap. The default 5s `toBeVisible` timeout
+ * was too tight for this page's create-then-list round trip under CI's
+ * parallel-worker load; let Playwright's own auto-retry do the waiting
+ * rather than adding a reload loop on top of it.
  */
 async function waitForBookLinkVisible(
   page: Page,
   title: string,
 ): Promise<void> {
-  await expect
-    .poll(
-      async () => {
-        await page.reload();
-        await page.waitForLoadState("networkidle");
-        return page
-          .getByRole("link", { name: `Open details for ${title}` })
-          .isVisible();
-      },
-      { timeout: 15_000 },
-    )
-    .toBe(true);
+  await expect(
+    page.getByRole("link", { name: `Open details for ${title}` }),
+  ).toBeVisible({ timeout: 30_000 });
 }
 
 test("adds a not-in-library book to the physical collection, shows it in All Books, then removes it as the last copy", async ({
