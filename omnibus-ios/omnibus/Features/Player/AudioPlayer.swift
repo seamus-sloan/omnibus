@@ -444,12 +444,21 @@ final class AudioPlayer {
     func seek(to seconds: Double) async {
         guard let player else { return }
         let clamped = max(0, duration > 0 ? min(seconds, duration) : seconds)
+        // Applied before the frame-accurate AVPlayer seek resolves, not after.
+        // `toleranceBefore/After: .zero` can take real wall-clock time to
+        // settle (HLS especially), and every reader of `position` — the
+        // chapter-scoped scrubber's own `chapterOffset` included, everywhere
+        // it isn't shadowed by the drag-local `scrubOffset` — was reading the
+        // pre-seek value for that whole window. The mini bar has no such
+        // shadow, so a skip or chapter jump left its whole-book rail visibly
+        // behind the position the rest of the player already claimed to be
+        // at (#1746).
+        position = clamped
+        updateNowPlaying()
         await player.seek(
             to: CMTime(seconds: clamped, preferredTimescale: 600),
             toleranceBefore: .zero, toleranceAfter: .zero
         )
-        position = clamped
-        updateNowPlaying()
     }
 
     func skip(_ delta: Double) {
