@@ -35,6 +35,7 @@ mod image_upload;
 mod journals;
 mod kindle;
 mod kobo;
+mod opds;
 mod overrides;
 mod physical;
 mod process_meta;
@@ -56,6 +57,7 @@ mod uploads;
 mod users;
 
 pub use kobo::{kobo_router, reading_services_router};
+pub use opds::opds_router;
 #[cfg(test)]
 use process_meta::read_app_version;
 pub use process_meta::{

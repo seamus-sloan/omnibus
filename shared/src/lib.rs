@@ -7,6 +7,7 @@
 pub mod audiobook;
 pub mod auth;
 pub mod bookmark;
+pub mod cleanup;
 pub mod deletion;
 pub mod discovery;
 pub mod ebook;
@@ -92,6 +93,7 @@ pub fn sanitize_exclude_formats(mut formats: Vec<String>) -> Vec<String> {
 pub use audiobook::*;
 pub use auth::*;
 pub use bookmark::*;
+pub use cleanup::*;
 pub use deletion::*;
 pub use discovery::*;
 pub use ebook::*;

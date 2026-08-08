@@ -123,6 +123,13 @@ impl Worker {
                 )
                 .await,
             ),
+            Task::BackfillThumbs { library_path } => anyhow_outcome(
+                "thumbnail backfill",
+                crate::indexer::backfill_thumbs(&self.pool, &library_path, |processed, total| {
+                    self.report_progress(id, processed, Some(total));
+                })
+                .await,
+            ),
             Task::RebuildFtsIndex => anyhow_outcome(
                 "FTS rebuild",
                 crate::sync::rebuild_all_fts(&self.pool).await,
@@ -180,10 +187,10 @@ impl Worker {
     }
 
     /// Reindex an ebook library, then (on success) post the follow-up
-    /// word-count and page-count backfill tasks for any pre-0049 / pre-0063
-    /// rows this library still carries. Both share the scan's resource key,
-    /// so each waits for this task to fully finish; the posts themselves
-    /// are instant. Mirrors the audiobook chapter backfill.
+    /// word-count, page-count, and thumbnail-warm-up (#1752) backfill tasks
+    /// for any rows this library still needs them for. All three share the
+    /// scan's resource key, so each waits for this task to fully finish; the
+    /// posts themselves are instant. Mirrors the audiobook chapter backfill.
     async fn handle_scan(self: &Arc<Self>, library_path: String, id: TaskId) -> TaskOutcome {
         match crate::indexer::reindex_with_progress(
             &self.pool,
@@ -199,7 +206,10 @@ impl Worker {
                 self.post(Task::BackfillWordCounts {
                     library_path: library_path.clone(),
                 });
-                self.post(Task::BackfillPageCounts { library_path });
+                self.post(Task::BackfillPageCounts {
+                    library_path: library_path.clone(),
+                });
+                self.post(Task::BackfillThumbs { library_path });
                 TaskOutcome::Ok(warning.map(TaskSuccessDetail::GhostFiles))
             }
             Err(e) => sanitized_err("library scan", e),

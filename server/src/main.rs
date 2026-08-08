@@ -283,6 +283,12 @@ mod server {
             // at the bare origin — require_auth exempts those paths; each
             // route authenticates via the x-kobo-deviceid header internally.
             .merge(backend::reading_services_router(state.clone()))
+            // OPDS 1.2 Atom catalog (#930) for third-party e-reader clients
+            // (KOReader and similar). Lives at `/opds/*`, not `/api/*`, so
+            // `require_auth` below doesn't gate it structurally — each
+            // handler instead takes `AuthUser` directly, which 401s an
+            // unauthenticated request the same way an `/api/*` route does.
+            .merge(backend::opds_router(state.clone()))
             .merge(
                 auth::auth_router(state.clone()).layer(axum::middleware::from_fn_with_state(
                     (auth_limiter, auth_limiter_prefixes),

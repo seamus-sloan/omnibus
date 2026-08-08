@@ -1008,3 +1008,86 @@ fn purge_legacy_covers_once_handles_missing_dir() {
         "purge must not create the covers dir as a side effect",
     );
 }
+
+#[tokio::test]
+async fn migration_0069_creates_library_cleanup_tables_with_unique_constraints() {
+    // AC1: a fresh in-memory DB applies migration 0069 cleanly and all three
+    // Library Cleanup tables accept a well-formed row.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    sqlx::query(
+        "INSERT INTO dedup_suggestions (kind, action, payload_json) VALUES ('author', 'merge', '{\"a\":1}')",
+    )
+    .execute(&pool)
+    .await
+    .expect("dedup_suggestions should accept a well-formed row");
+
+    sqlx::query(
+        "INSERT INTO cleanup_log (kind, action, snapshot_json) VALUES ('author', 'merge', '{\"before\":1}')",
+    )
+    .execute(&pool)
+    .await
+    .expect("cleanup_log should accept a well-formed row");
+
+    sqlx::query("INSERT INTO entity_aliases (kind, alias_name, canonical_id) VALUES ('author', 'Ursula Le Guin', 1)")
+        .execute(&pool)
+        .await
+        .expect("entity_aliases should accept a well-formed row");
+
+    for (table, expected) in [
+        ("dedup_suggestions", 1),
+        ("cleanup_log", 1),
+        ("entity_aliases", 1),
+    ] {
+        let n = count(&pool, &format!("SELECT COUNT(*) FROM {table}")).await;
+        assert_eq!(n, expected, "{table} should hold exactly one row");
+    }
+}
+
+#[tokio::test]
+async fn migration_0069_dedup_suggestions_rejects_duplicate_kind_action_payload() {
+    // AC2: re-inserting an identical (kind, action, payload_json) row is a
+    // constraint violation, so a re-run detector job can safely no-op via
+    // `INSERT OR IGNORE` rather than duplicating a pending suggestion.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let insert = "INSERT INTO dedup_suggestions (kind, action, payload_json) VALUES ('tag', 'merge', '{\"from\":\"scifi\",\"to\":\"sci-fi\"}')";
+
+    sqlx::query(insert)
+        .execute(&pool)
+        .await
+        .expect("first insert should succeed");
+
+    let err = sqlx::query(insert)
+        .execute(&pool)
+        .await
+        .expect_err("duplicate (kind, action, payload_json) must violate the UNIQUE constraint");
+    assert!(
+        err.to_string().to_lowercase().contains("constraint"),
+        "got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn migration_0069_entity_aliases_rejects_duplicate_kind_alias_name() {
+    // (kind, alias_name) is the primary key: the same alias can't map to two
+    // different canonical ids within the same kind.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let insert =
+        "INSERT INTO entity_aliases (kind, alias_name, canonical_id) VALUES ('series', 'Foundation', ?)";
+
+    sqlx::query(insert)
+        .bind(1)
+        .execute(&pool)
+        .await
+        .expect("first insert should succeed");
+
+    let err = sqlx::query(insert)
+        .bind(2)
+        .execute(&pool)
+        .await
+        .expect_err("duplicate (kind, alias_name) must violate the primary key");
+    assert!(
+        err.to_string().to_lowercase().contains("constraint"),
+        "got: {err}"
+    );
+}
