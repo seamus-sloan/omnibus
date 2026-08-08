@@ -1,5 +1,5 @@
-# Gitignored files carried into a fresh worktree. Read by Claude Code desktop
-# and by `wt step copy-ignored`; a file must be BOTH gitignored and matched
+# Gitignored files carried into a fresh worktree by the tooling that supports
+# it (e.g. `wt step copy-ignored`); a file must be BOTH gitignored and matched
 # here to be copied.
 #
 # Secrets only. Everything else a worktree needs is tracked, regenerated, or
