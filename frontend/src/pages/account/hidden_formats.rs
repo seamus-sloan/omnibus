@@ -109,7 +109,7 @@ fn format_toggle(fmt: &str, checked: bool, mut selected: Signal<BTreeSet<String>
     let fmt = fmt.to_string();
     let toggle_fmt = fmt.clone();
     rsx! {
-        label { class: "hidden-format-row", r#for: "hidden-format-{fmt}",
+        label { key: "{fmt}", class: "hidden-format-row", r#for: "hidden-format-{fmt}",
             input {
                 r#type: "checkbox",
                 id: "hidden-format-{fmt}",
