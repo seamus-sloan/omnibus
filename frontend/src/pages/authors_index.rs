@@ -399,14 +399,20 @@ fn render_author_card(a: &AuthorSummary, server_url: &str) -> Element {
             // relative on web, server base + `?token=` on mobile so the
             // WebView's `<img>` fetch authenticates. Editing the photo lives
             // on the author detail page — the index is read-only.
-            if a.has_photo {
-                img {
-                    class: "idx-card-avatar idx-card-avatar--photo",
-                    src: crate::media_url(server_url, &format!("/api/authors/{id}/photo")),
-                    alt: "{name}",
+            //
+            // The outer div is the same element in both states (rule 07): a
+            // `has_photo` flip only ever diffs the child, never replaces the
+            // node — mirrors `UserAvatar` in `components/user_avatar.rs`.
+            div { class: "idx-card-avatar",
+                if a.has_photo {
+                    img {
+                        class: "idx-card-avatar--photo",
+                        src: crate::media_url(server_url, &format!("/api/authors/{id}/photo")),
+                        alt: "{name}",
+                    }
+                } else {
+                    "{initial}"
                 }
-            } else {
-                div { class: "idx-card-avatar", "{initial}" }
             }
             div { class: "idx-card-body",
                 div { class: "idx-card-title",

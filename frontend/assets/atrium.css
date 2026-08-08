@@ -1937,16 +1937,20 @@ a.idx-letter-on:focus-visible {
   border: 1px solid var(--line-2);
   display: grid;
   place-items: center;
+  overflow: hidden;
   font-family: var(--serif);
   font-size: 36px;
   font-style: italic;
   color: var(--ink-1);
 }
 
-/* F1.11 — When the index card avatar is the cached profile photo
-   (`<img>` instead of letter `<div>`), clip the image to the circle and
-   drop the typographic styling. */
+/* F1.11 — When the index card avatar is the cached profile photo, the `img`
+   nests inside the stable `.idx-card-avatar` circle (rule 07 — a `has_photo`
+   flip diffs the child, not the node) rather than swapping element type.
+   Fill the parent's clipped circle instead of carrying its own size/border. */
 .idx-card-avatar--photo {
+  width: 100%;
+  height: 100%;
   object-fit: cover;
   display: block;
 }
