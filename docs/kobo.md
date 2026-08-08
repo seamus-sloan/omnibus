@@ -67,7 +67,12 @@ to get KEPUB output. See [.env.example](../.env.example).
 
 *Wireless* Kobo sync — where the device talks to Omnibus over Wi-Fi instead of a
 USB cable — is functional but **experimental**: it has not yet passed
-verification against real devices.
+verification against real devices. HTTP-layer contract tests pin the server's
+side of the protocol against a synthetic fixture (see
+`server/src/backend/kobo/tests.rs`), but only a real device can confirm the
+firmware actually accepts what's sent — see
+[docs/kobo-smoke-test.md](kobo-smoke-test.md) for the manual checklist that
+gates advertising this feature as non-experimental.
 
 > [!WARNING]
 > **First sync can erase your Kobo's highlights**
