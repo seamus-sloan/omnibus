@@ -370,10 +370,14 @@ async fn book_for_sync_reflects_a_saved_title_override_with_no_creators_override
 async fn book_for_sync_falls_back_to_the_cbz_size_for_a_cbz_only_book() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let uuid = seed_synced_ebook(&pool, "berserk-v04.cbz", "Berserk v04", "Kentaro Miura").await;
-    sqlx::query("UPDATE book_files SET size_bytes = 777 WHERE format = 'CBZ'")
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE book_files SET size_bytes = 777 \
+         WHERE book_id = (SELECT id FROM books WHERE uuid = ?)",
+    )
+    .bind(&uuid)
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let row = book_for_sync(&pool, &uuid).await.unwrap().unwrap();
 

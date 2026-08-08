@@ -183,10 +183,14 @@ async fn library_sync_emits_new_entitlement_pointing_at_download() {
 async fn library_sync_advertises_the_cbz_format_and_size_for_a_cbz_only_book() {
     let (app, pool, token, uid) = fixture().await;
     let uuid = seed_synced_ebook(&pool, "berserk-v04.cbz", "Berserk v04", "Kentaro Miura").await;
-    sqlx::query("UPDATE book_files SET size_bytes = 777 WHERE format = 'CBZ'")
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE book_files SET size_bytes = 777 \
+         WHERE book_id = (SELECT id FROM books WHERE uuid = ?)",
+    )
+    .bind(&uuid)
+    .execute(&pool)
+    .await
+    .unwrap();
     opt_in(&pool, uid, std::slice::from_ref(&uuid)).await;
 
     let res = app
@@ -1458,11 +1462,8 @@ async fn download_bakes_a_metadata_override_into_the_plain_epub_fallback() {
     std::fs::remove_dir_all(&tmp).ok();
 }
 
-/// #1741: a CBZ-only book must download as the raw archive instead of 404ing
-/// through the EPUB-only path (which looped the device on retries). The
-/// conversion attempt is skipped outright — no EPUB exists to convert — so
-/// this needs no kepubify guard, and the successful response must still run
-/// the #1647 download-state bookkeeping, same as the EPUB path.
+/// #1741: a CBZ-only book downloads as the raw archive (no conversion
+/// attempt, so no kepubify guard) and still runs the #1647 bookkeeping.
 #[tokio::test]
 async fn download_serves_the_cbz_archive_as_is_for_a_cbz_only_book() {
     let (app, pool, token, _uid) = fixture().await;
