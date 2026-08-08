@@ -33,6 +33,16 @@ source scripts/lib/dev-port.sh
 
 mkdir -p "$RUNTIME_DIR"
 
+# How long to wait for a freshly started server to answer /api/_health.
+# User-editable, so validate it here: a non-numeric value ("900s", "15m")
+# would make the arithmetic in wait_for_health a syntax error and kill the
+# script under `set -e`, long before it could explain why.
+BUILD_TIMEOUT_SECS="${OMNIBUS_DEV_BUILD_TIMEOUT_SECS:-900}"
+if ! [[ "$BUILD_TIMEOUT_SECS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "dev-up: OMNIBUS_DEV_BUILD_TIMEOUT_SECS='$BUILD_TIMEOUT_SECS' is not a positive integer; using 900" >&2
+    BUILD_TIMEOUT_SECS=900
+fi
+
 # HMR-tolerant probe. `dx serve` briefly stops serving while it rebuilds
 # the backend binary after a Rust change; /api/_health then returns
 # connection-refused or 5xx for a few seconds before the new build is
@@ -62,7 +72,7 @@ probe_health_with_retry() {
 # is caught by watching the child rather than by waiting the clock out.
 wait_for_health() {
     local port="$1" server_pid="$2"
-    local deadline=$(($(date +%s) + ${OMNIBUS_DEV_BUILD_TIMEOUT_SECS:-900}))
+    local deadline=$(($(date +%s) + BUILD_TIMEOUT_SECS))
     while [ "$(date +%s)" -lt "$deadline" ]; do
         local body
         body="$(probe_health "$port")"
@@ -126,7 +136,7 @@ EOF
         # unhealthy process would block the next dev-up (or get "reused"
         # as if it were healthy if it manages to start serving later).
         if kill -0 "$server_pid" 2>/dev/null; then
-            echo "dev-up: server did not become healthy within ${OMNIBUS_DEV_BUILD_TIMEOUT_SECS:-900}s; killing pid $server_pid" >&2
+            echo "dev-up: server did not become healthy within ${BUILD_TIMEOUT_SECS}s; killing pid $server_pid" >&2
             kill "$server_pid" 2>/dev/null || true
             # Reap dx-wrap's grandchildren too (dx spawns the actual server
             # in a subprocess). pkill -P walks one level; that's enough

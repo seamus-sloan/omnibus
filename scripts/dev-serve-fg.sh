@@ -33,12 +33,43 @@ port="${choice%%:*}"
 # endpoints included) to the whole LAN, so don't run it on public Wi-Fi.
 addr="${OMNIBUS_DEV_ADDR:-0.0.0.0}"
 
-# origin_check compares the browser's Origin against this allowlist, so the
-# port we actually landed on has to be in it. Prepend rather than replace:
-# an operator's LAN origin from .env must survive.
+# Re-point an inherited origin at the port we actually landed on, keeping
+# its scheme and host. Anything without a scheme is passed through rather
+# than mangled.
+rewrite_origin_port() {
+    local origin="${1%/}" to="$2" scheme rest host
+    case "$origin" in
+        *://*) ;;
+        *) printf '%s' "$origin"; return ;;
+    esac
+    scheme="${origin%%://*}"
+    rest="${origin#*://}"
+    rest="${rest%%/*}"
+    case "$rest" in
+        \[*\]*) host="${rest%%\]*}]" ;;  # IPv6 literal — keep the brackets
+        *) host="${rest%%:*}" ;;
+    esac
+    printf '%s://%s:%s' "$scheme" "$host" "$to"
+}
+
+# origin_check compares the browser's Origin against this allowlist, so every
+# entry has to name the port we landed on. Inheriting the value verbatim
+# would leave the shellHook's *base*-port origin allowlisted — and browser
+# cookies aren't port-scoped, so a sibling worktree's page on that origin
+# could then POST into this server. Rewriting each inherited entry onto our
+# port keeps an operator's LAN host from .env while dropping its stale port.
 origins="http://localhost:$port,http://127.0.0.1:$port"
 if [ -n "${OMNIBUS_PUBLIC_ORIGIN:-}" ]; then
-    origins="$OMNIBUS_PUBLIC_ORIGIN,$origins"
+    IFS=',' read -ra inherited <<<"$OMNIBUS_PUBLIC_ORIGIN"
+    for entry in "${inherited[@]}"; do
+        entry="${entry//[[:space:]]/}"
+        [ -n "$entry" ] || continue
+        rewritten="$(rewrite_origin_port "$entry" "$port")"
+        case ",$origins," in
+            *",$rewritten,"*) continue ;;  # already covered
+        esac
+        origins="$origins,$rewritten"
+    done
 fi
 
 export PORT="$port"
