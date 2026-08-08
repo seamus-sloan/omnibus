@@ -550,13 +550,10 @@ struct BookGridCell: View {
         }
     }
 
-    /// Format and offline state ride on the art rather than the caption, which
-    /// keeps the text block to a predictable height.
+    /// Offline state rides on the art rather than the caption, which keeps the
+    /// text block to a predictable height.
     private var badges: some View {
         HStack(spacing: 4) {
-            if book.hasAudiobook {
-                badge("headphones")
-            }
             if downloads.isAnyDownloaded(book.uuid) {
                 badge("arrow.down")
             }

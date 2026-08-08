@@ -52,57 +52,11 @@ pub fn ShelvesIndexPage() -> Element {
     let refetch = move || load(refetch_url.clone());
 
     let count = shelves.read().len();
-    let count_label = if count == 1 {
-        "1 shelf".to_string()
-    } else {
-        format!("{count} shelves")
-    };
 
     rsx! {
         div { class: "m-shelves", "data-testid": "shelves-index",
-            header { class: "m-head",
-                div { class: "m-head-top",
-                    div { class: "m-head-lead",
-                        Link {
-                            to: Route::Landing {},
-                            class: "m-icon-btn m-head-back",
-                            "aria-label": "Back to library",
-                            "\u{2190}"
-                        }
-                        span { class: "label", "{count_label}" }
-                    }
-                    button {
-                        r#type: "button",
-                        class: "btn primary sm",
-                        "data-testid": "new-shelf",
-                        onclick: move |_| show_create.set(true),
-                        "\u{FF0B} New"
-                    }
-                }
-                h2 { class: "m-head-title",
-                    "Your "
-                    span { class: "m-em", "shelves" }
-                }
-            }
-
-            if let Some(msg) = error() {
-                p {
-                    role: "alert",
-                    class: "subtitle",
-                    "data-testid": "shelves-error",
-                    "Couldn't load shelves: {msg}"
-                }
-            } else if loading() && shelves.read().is_empty() {
-                p { class: "subtitle", "Loading\u{2026}" }
-            } else {
-                div { class: "m-shelf-list",
-                    // Always-present "All Books" — the whole library as a shelf.
-                    {all_books_row()}
-                    for s in shelves.read().iter() {
-                        {shelf_row(s)}
-                    }
-                }
-            }
+            ShelvesHeader { count, on_new: move |_| show_create.set(true) }
+            ShelvesBody { shelves: shelves(), loading: loading(), error: error() }
         }
 
         if show_create() {
@@ -112,6 +66,67 @@ pub fn ShelvesIndexPage() -> Element {
                     show_create.set(false);
                     refetch();
                 },
+            }
+        }
+    }
+}
+
+/// Back link, shelf count, "New" action, and page title.
+#[component]
+fn ShelvesHeader(count: usize, on_new: EventHandler<MouseEvent>) -> Element {
+    let count_label = if count == 1 {
+        "1 shelf".to_string()
+    } else {
+        format!("{count} shelves")
+    };
+    rsx! {
+        header { class: "m-head",
+            div { class: "m-head-top",
+                div { class: "m-head-lead",
+                    Link {
+                        to: Route::Landing {},
+                        class: "m-icon-btn m-head-back",
+                        "aria-label": "Back to library",
+                        "\u{2190}"
+                    }
+                    span { class: "label", "{count_label}" }
+                }
+                button {
+                    r#type: "button",
+                    class: "btn primary sm",
+                    "data-testid": "new-shelf",
+                    onclick: on_new,
+                    "\u{FF0B} New"
+                }
+            }
+            h2 { class: "m-head-title",
+                "Your "
+                span { class: "m-em", "shelves" }
+            }
+        }
+    }
+}
+
+/// Error message, loading placeholder, or the shelf list — in priority order.
+#[component]
+fn ShelvesBody(shelves: Vec<ShelfSummary>, loading: bool, error: Option<String>) -> Element {
+    rsx! {
+        if let Some(msg) = error {
+            p {
+                role: "alert",
+                class: "subtitle",
+                "data-testid": "shelves-error",
+                "Couldn't load shelves: {msg}"
+            }
+        } else if loading && shelves.is_empty() {
+            p { class: "subtitle", "Loading\u{2026}" }
+        } else {
+            div { class: "m-shelf-list",
+                // Always-present "All Books" — the whole library as a shelf.
+                {all_books_row()}
+                for s in shelves.iter() {
+                    {shelf_row(s)}
+                }
             }
         }
     }

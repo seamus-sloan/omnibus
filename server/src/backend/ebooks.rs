@@ -112,6 +112,90 @@ async fn respond_full_library(
     }
 }
 
+/// Client-input error for a malformed or under-specified keyset-page
+/// request. Kept lean rather than a full `Response` — clippy's
+/// `result_large_err` — with the caller rendering the actual 400 (mirrors
+/// `parse_thumb_size` in `covers.rs`).
+enum CursorRequestError {
+    RequiresSortAndDir,
+    Malformed,
+}
+
+impl CursorRequestError {
+    fn into_response(self) -> Response {
+        let msg = match self {
+            CursorRequestError::RequiresSortAndDir => "cursor requires sort and dir",
+            CursorRequestError::Malformed => "malformed cursor",
+        };
+        (axum::http::StatusCode::BAD_REQUEST, msg).into_response()
+    }
+}
+
+/// Decode `q.cursor` relative to `q.sort`/`q.dir`. A cursor without an
+/// explicit `sort` **and** `dir`, or a malformed cursor, is a 400 rather than
+/// a silently mis-positioned page or a 500 — returned as `Err` for the caller
+/// to short-circuit on.
+fn decode_page_cursor(q: &EbooksQuery) -> Result<Option<db::PageCursor>, CursorRequestError> {
+    if q.cursor.is_some() && (q.sort.is_none() || q.dir.is_none()) {
+        return Err(CursorRequestError::RequiresSortAndDir);
+    }
+    match q.cursor.as_deref() {
+        Some(c) => db::PageCursor::decode(c)
+            .map(Some)
+            .map_err(|_| CursorRequestError::Malformed),
+        None => Ok(None),
+    }
+}
+
+/// The filtered total for the page's paths/filters/exclusion, plus — first
+/// page only — the hidden-count receipt: the diff between that total and the
+/// same query with the exclusion lifted. Later pages inherit the client's
+/// cached value, so `hidden` stays `None` once `cursor` is set.
+async fn page_totals(
+    state: &AppState,
+    paths: &[&str],
+    filters: &ViewFilters,
+    exclude: &[String],
+    cursor_is_none: bool,
+) -> Result<(i64, Option<i64>), db::BooksError> {
+    let total = db::count_books_page(&state.pool, paths, filters, exclude).await?;
+    let hidden = if !exclude.is_empty() && cursor_is_none {
+        let all = db::count_books_page(&state.pool, paths, filters, &[]).await?;
+        Some(all - total)
+    } else {
+        None
+    };
+    Ok((total, hidden))
+}
+
+/// Assemble the `X-Total-Count` / `X-Hidden-Count` / `X-Next-Cursor` response
+/// headers onto a JSON body. Unlike the full-library path, a keyset page is
+/// *not* truncated to `MAX_BOOKS_RETURNED` overall (the limit is a per-page
+/// clamp), so this emits the true `X-Total-Count` but never `X-Total-Cap` —
+/// the page is complete.
+fn keyset_page_response(
+    library: EbookLibrary,
+    total: i64,
+    hidden: Option<i64>,
+    next: Option<db::PageCursor>,
+) -> Response {
+    let mut resp = Json(library).into_response();
+    if let Ok(v) = axum::http::HeaderValue::from_str(&total.to_string()) {
+        resp.headers_mut().insert("X-Total-Count", v);
+    }
+    if let Some(h) = hidden {
+        if let Ok(v) = axum::http::HeaderValue::from_str(&h.to_string()) {
+            resp.headers_mut().insert("X-Hidden-Count", v);
+        }
+    }
+    if let Some(next) = next {
+        if let Ok(v) = axum::http::HeaderValue::from_str(&next.encode()) {
+            resp.headers_mut().insert("X-Next-Cursor", v);
+        }
+    }
+    resp
+}
+
 /// Keyset-paginated page for an explicit `sort`/`dir`/`cursor`/`limit`. A
 /// cursor is decoded relative to the request's sort axis, so a cursor without
 /// an explicit `sort` **and** `dir`, or a malformed cursor, is a 400 rather
@@ -122,21 +206,9 @@ async fn respond_keyset_page(
     ebook: Option<&str>,
     audiobook: Option<&str>,
 ) -> Response {
-    if q.cursor.is_some() && (q.sort.is_none() || q.dir.is_none()) {
-        return (
-            axum::http::StatusCode::BAD_REQUEST,
-            "cursor requires sort and dir",
-        )
-            .into_response();
-    }
-    let cursor = match q.cursor.as_deref() {
-        Some(c) => match db::PageCursor::decode(c) {
-            Ok(p) => Some(p),
-            Err(_) => {
-                return (axum::http::StatusCode::BAD_REQUEST, "malformed cursor").into_response()
-            }
-        },
-        None => None,
+    let cursor = match decode_page_cursor(q) {
+        Ok(c) => c,
+        Err(e) => return e.into_response(),
     };
     let path = ebook.or(audiobook).map(str::to_string);
     let paths = db::collect_paths(ebook, audiobook);
@@ -170,20 +242,11 @@ async fn respond_keyset_page(
     // Filtered total, so the client's "Show N books" reflects the active
     // chips (and the exclusion — it counts what pagination will actually
     // yield); identical to the unfiltered count when neither is set.
-    let total = match db::count_books_page(&state.pool, &paths, &filters, &exclude).await {
-        Ok(t) => t,
-        Err(error) => return internal("count books", error),
-    };
-    // The receipt: same filters on both sides of the diff, exclusion only.
-    // First page only — later pages inherit the client's cached value.
-    let hidden = if !exclude.is_empty() && cursor.is_none() {
-        match db::count_books_page(&state.pool, &paths, &filters, &[]).await {
-            Ok(all) => Some(all - total),
+    let (total, hidden) =
+        match page_totals(state, &paths, &filters, &exclude, cursor.is_none()).await {
+            Ok(t) => t,
             Err(error) => return internal("count books", error),
-        }
-    } else {
-        None
-    };
+        };
 
     let library = EbookLibrary {
         path,
@@ -191,24 +254,7 @@ async fn respond_keyset_page(
         error: None,
         total: None,
     };
-    // Unlike the full-library path, a keyset page is *not* truncated to
-    // `MAX_BOOKS_RETURNED` overall (the limit is a per-page clamp), so emit the
-    // true `X-Total-Count` but never `X-Total-Cap` — the page is complete.
-    let mut resp = Json(library).into_response();
-    if let Ok(v) = axum::http::HeaderValue::from_str(&total.to_string()) {
-        resp.headers_mut().insert("X-Total-Count", v);
-    }
-    if let Some(h) = hidden {
-        if let Ok(v) = axum::http::HeaderValue::from_str(&h.to_string()) {
-            resp.headers_mut().insert("X-Hidden-Count", v);
-        }
-    }
-    if let Some(next) = page.next {
-        if let Ok(v) = axum::http::HeaderValue::from_str(&next.encode()) {
-            resp.headers_mut().insert("X-Next-Cursor", v);
-        }
-    }
-    resp
+    keyset_page_response(library, total, hidden, page.next)
 }
 
 pub(super) async fn get_ebook_by_uuid(
@@ -262,7 +308,7 @@ async fn resolve_epub_path(
 /// Wire mime for a served CBZ archive. The registered comic-book zip type,
 /// which downloaders and shelf apps recognize where a bare
 /// `application/zip` would not say what the bytes are.
-const CBZ_MIME: &str = "application/vnd.comicbook+zip";
+pub(crate) const CBZ_MIME: &str = "application/vnd.comicbook+zip";
 
 /// Resolve the file `/file` streams for `uuid`: the EPUB when the book has
 /// one, else its CBZ archive. The fallback is what lets a comic-only book be

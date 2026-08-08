@@ -14,6 +14,7 @@ mod archive;
 mod cover;
 mod opf;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -168,7 +169,35 @@ pub async fn rewritten_epub_path(
     let book = crate::books::get_book(pool, book_id)
         .await?
         .ok_or(EpubRewriteError::BookNotFound(book_id))?;
+    // Only the override/stale-check path below reads `last_modified` — skip
+    // the query on the common no-override path, matching the pre-batching
+    // behavior (the bulk fleet-wide pass has its own cheap bulk fetch and
+    // always needs it, so this guard is single-book-path only).
+    let last_modified = if book.has_override || book.has_cover_override {
+        crate::get_last_modified_epoch(pool, book_id)
+            .await
+            .map_err(|e| EpubRewriteError::Failed(anyhow::Error::new(e)))?
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    rewrite_or_reuse_cache(book_id, source, &book, last_modified).await
+}
 
+/// Core of [`rewritten_epub_path`]: given a book's id, its on-disk EPUB
+/// `source`, already-resolved merged `book` metadata, and its
+/// `last_modified` epoch, return the cached rewritten path (rebuilding it
+/// when stale) or `None` when the book has no active override. Takes no
+/// pool — every DB read it would otherwise need is already resolved by the
+/// caller, which is what lets [`rewrite_all_epubs_with_overrides`] bulk-fetch
+/// these three inputs for the whole fleet-wide pass instead of paying a
+/// `get_book` + `get_last_modified_epoch` round trip per book (#1718).
+async fn rewrite_or_reuse_cache(
+    book_id: i64,
+    source: &Path,
+    book: &EbookMetadata,
+    last_modified: i64,
+) -> Result<Option<PathBuf>, EpubRewriteError> {
     // Effective state already reflects the library's metadata-source precedence
     // (an admin who ranks embedded tags above overrides gets no rewrite).
     // Nothing to bake → source.
@@ -188,14 +217,11 @@ pub async fn rewritten_epub_path(
     }
 
     let out = export_epub_path(book_id);
-    let last_modified = crate::get_last_modified_epoch(pool, book_id)
-        .await
-        .map_err(|e| EpubRewriteError::Failed(anyhow::Error::new(e)))?
-        .unwrap_or(0);
     if !is_stale(&out, last_modified).await {
         return Ok(Some(out));
     }
 
+    let book = book.clone();
     let dir = export_epub_dir();
     tokio::fs::create_dir_all(&dir)
         .await
@@ -279,7 +305,18 @@ fn rewrite_blocking(src: &Path, dst: &Path, book: &EbookMetadata) -> anyhow::Res
     )
 }
 
-/// Rewrites every book's export-EPUB cache to bake in its active override, the fleet-wide sibling of the per-book [`rewritten_epub_path`] bake; a per-book failure is recorded rather than aborting the run.
+/// Rewrites every book's export-EPUB cache to bake in its active override, the
+/// fleet-wide sibling of the per-book [`rewritten_epub_path`] bake; a
+/// per-book failure is recorded rather than aborting the run.
+///
+/// `book_uuid → (book_id, source path, last_modified)` is resolved for the
+/// whole batch up front via [`crate::books::resolve_book_ids_bulk`],
+/// [`crate::books::book_file_paths`], and [`crate::covers::last_modified_bulk`]
+/// — each a handful of chunked `IN (...)` queries — plus one bulk
+/// [`crate::books::get_books_by_ids`] for the merged metadata every rewrite
+/// needs. This replaces what used to be up to four sequential DB round trips
+/// *per book* (#1718); the only work left inside the per-book loop is the
+/// filesystem-bound rewrite itself.
 pub async fn rewrite_all_epubs_with_overrides(
     pool: &SqlitePool,
 ) -> Result<BulkRewriteSummary, EpubRewriteError> {
@@ -292,25 +329,46 @@ pub async fn rewrite_all_epubs_with_overrides(
         .map_err(crate::books::BooksError::Db)?;
 
     let mut summary = BulkRewriteSummary::default();
+    if uuids.is_empty() {
+        return Ok(summary);
+    }
+
+    let id_map = crate::books::resolve_book_ids_bulk(pool, &uuids).await?;
+    let mut ids: Vec<i64> = id_map.values().copied().collect();
+    ids.sort_unstable();
+    ids.dedup();
+
+    let source_paths = crate::books::book_file_paths(pool, &ids, "EPUB").await?;
+    let last_modified_map = crate::covers::last_modified_bulk(pool, &ids)
+        .await
+        .map_err(|e| EpubRewriteError::Failed(anyhow::Error::new(e)))?;
+    let books_by_id: HashMap<i64, EbookMetadata> = crate::books::get_books_by_ids(pool, &ids)
+        .await?
+        .into_iter()
+        .map(|b| (b.id, b))
+        .collect();
+
     for uuid in uuids {
-        let book_id = match crate::books::resolve_book_id_by_uuid(pool, &uuid).await? {
-            Some(id) => id,
-            // Ghosted: the override row outlived its book (source file
-            // removed by a scan, or the book deleted concurrently).
-            None => {
-                summary.skipped += 1;
-                continue;
-            }
+        // Ghosted: the override row outlived its book (source file removed
+        // by a scan, or the book deleted concurrently between the listing
+        // query above and this pass).
+        let Some(&book_id) = id_map.get(&uuid) else {
+            summary.skipped += 1;
+            continue;
         };
-        let source = match crate::books::book_file_path(pool, book_id, "EPUB").await? {
-            Some(path) => path,
-            // No EPUB to bake into — an audiobook-only or comic-only book.
-            None => {
-                summary.skipped += 1;
-                continue;
-            }
+        // No EPUB to bake into — an audiobook-only or comic-only book.
+        let Some(source) = source_paths.get(&book_id) else {
+            summary.skipped += 1;
+            continue;
         };
-        match rewritten_epub_path(pool, book_id, &source).await {
+        // The book itself vanished between resolving its id and this bulk
+        // fetch (a concurrent delete) — no longer this pass's problem.
+        let Some(book) = books_by_id.get(&book_id) else {
+            summary.skipped += 1;
+            continue;
+        };
+        let last_modified = last_modified_map.get(&book_id).copied().unwrap_or(0);
+        match rewrite_or_reuse_cache(book_id, source, book, last_modified).await {
             Ok(Some(_)) => summary.rewritten += 1,
             // The override cleared between the listing query above and this
             // call (a concurrent delete) — no longer this pass's problem.

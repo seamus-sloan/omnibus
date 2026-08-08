@@ -61,7 +61,7 @@ Every shell sets:
 
 - `DATABASE_URL=sqlite://omnibus.db?mode=rwc`
 - `CARGO_TARGET_DIR=$HOME/.cache/cargo-target/<worktree-root-name>` — keeps `target/` outside the repo so flake evaluations don't snapshot multi-GB build artifacts into `/nix/store` on every direnv reload. The worktree root is resolved via `git rev-parse --show-toplevel` (so `nix develop` from a subdir picks the same dir), and the basename keeps it per-worktree to avoid races between parallel worktrees.
-- `OMNIBUS_PUBLIC_ORIGIN=http://localhost:$PORT` — comma-separated allowlist consumed by `auth::origin_check`. Required for `dx serve --fullstack`: its HTTP proxy rewrites `Host` to the upstream backend's loopback address without setting `X-Forwarded-Host`, so without an allowlist every cookie-authed POST 403s. Override in production deployments behind a reverse proxy. `just serve` / `just serve-pc` bind dx serve to `--addr 0.0.0.0` so other LAN devices can reach `http://<lan-ip>:3000` — **trusted networks only**, since that exposes the dev server (auth endpoints included) to the whole LAN; to authenticate from a LAN client, override this var to include the LAN origin and set `OMNIBUS_SECURE_COOKIES=0` (see [.env.example](../../.env.example)).
+- `OMNIBUS_PUBLIC_ORIGIN=http://localhost:$PORT` — comma-separated allowlist consumed by `auth::origin_check`. Required for `dx serve --fullstack`: its HTTP proxy rewrites `Host` to the upstream backend's loopback address without setting `X-Forwarded-Host`, so without an allowlist every cookie-authed POST 403s. Override in production deployments behind a reverse proxy. `just serve` / `just serve-pc` bind dx serve to `--addr 0.0.0.0` (override with `OMNIBUS_DEV_ADDR`) so other LAN devices can reach `http://<lan-ip>:$PORT` — **trusted networks only**, since that exposes the dev server (auth endpoints included) to the whole LAN; to authenticate from a LAN client, override this var to include the LAN origin and set `OMNIBUS_SECURE_COOKIES=0` (see [.env.example](../../.env.example)).
 - `RUSTC_WRAPPER=sccache` + `CARGO_INCREMENTAL=0` + `SCCACHE_DIR=$HOME/.cache/sccache` + `SCCACHE_CACHE_SIZE=20G` — **local dev shells only** (nested inside the same `CARGO_TARGET_DIR`-unset guard, so CI — which pins `CARGO_TARGET_DIR=./target` and caches `target/` via `Swatinem/rust-cache` — is excluded automatically). Routes rustc through [sccache](https://github.com/mozilla/sccache) so identical crate builds are shared across every worktree via one cache at `$HOME/.cache/sccache` (build once, reuse everywhere). `SCCACHE_DIR` is pinned explicitly because sccache's default location is platform-specific (`~/.cache/sccache` on Linux, `~/Library/Caches/Mozilla.sccache` on macOS) — pinning keeps the shared cache in one place across worktrees and platforms. Incremental compilation is turned **off** deliberately: its per-crate codegen caches are what balloon each worktree's `target/` to tens of GB, and sccache can't cache incremental units — the two are mutually exclusive, so incremental-off is what makes sccache effective. Export `OMNIBUS_NO_SCCACHE=1` to opt out (restores incremental rebuilds — faster inner loop on the crate you're actively editing, at the cost of the `target/` bloat). Override `SCCACHE_CACHE_SIZE` to resize the shared cache (default 20G).
 
 Shell-specific additions:
@@ -70,7 +70,20 @@ Shell-specific additions:
 - `e2e` only — `PLAYWRIGHT_BROWSERS_PATH` → Nix-provided Chromium (don't run `pnpm exec playwright install`)
 - `mobile` only — `ANDROID_HOME`, `ANDROID_NDK_HOME` (auto-detected from standard Android Studio install paths), plus the Xcode `DEVELOPER_DIR`/`SDKROOT`/`PATH` shim on macOS
 
-Override `PORT` (default `3000`) if you need a different port. Playwright targets `$PLAYWRIGHT_BASE_URL` (set by `scripts/dev-server-up.sh`); it falls back to `http://127.0.0.1:3000` when unset.
+## Per-worktree ports
+
+Every worktree gets its own 10-port window, so two of them can run a dev server at the same time without either one noticing. The shellHook assigns the window base: the **main checkout** (directory name `omnibus`) keeps `PORT=3000`; any other worktree hashes its directory name into one of 90 windows at `3010..3900`. It's derived, so a `wt switch --create` worktree is isolated without being registered anywhere, and stable, so a branch keeps the same URL across sessions.
+
+Both launchers then walk `$PORT..$PORT+9` before binding, and identity-check `/api/_health`'s `repo_root` so they skip a *sibling* worktree's server rather than adopting it:
+
+- `just dev-up` → [`scripts/dev-server-up.sh`](../../scripts/dev-server-up.sh) — daemonized; **reuses** this worktree's server if one is already healthy.
+- `just serve` / `just serve-pc` → [`scripts/dev-serve-fg.sh`](../../scripts/dev-serve-fg.sh) — foreground, so the pane owns the process; walks *past* its own running server rather than reusing (a pane is being asked to run one).
+
+Both publish the chosen port to `.claude/runtime/{port,env.sh}`. A hash collision between two worktrees is therefore not a failure — the second walks to a free port inside the shared window. Shared helpers live in [`scripts/lib/dev-port.sh`](../../scripts/lib/dev-port.sh); a second copy of the walk would let the two front doors hand one port to two worktrees.
+
+Override `PORT` before `nix develop` to pick a different window base. Playwright targets `$PLAYWRIGHT_BASE_URL` (written by both launchers); it falls back to `http://127.0.0.1:3000` when unset — so `source .claude/runtime/env.sh` rather than assuming 3000.
+
+Two related knobs (both in [.env.example](../../.env.example)): `OMNIBUS_DEV_BUILD_TIMEOUT_SECS` (default 900) is how long `dev-up` waits for a new server to answer `/api/_health` — generous because a fresh worktree compiles the whole workspace into an empty `CARGO_TARGET_DIR`, and safe because a compile error is caught when `dx` exits rather than by waiting the clock out. `OMNIBUS_DEV_ADDR` (default `0.0.0.0`) is the bind address for the `serve` panes.
 
 ## `.env` for secret-bearing values
 

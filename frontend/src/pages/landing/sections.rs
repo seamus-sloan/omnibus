@@ -166,6 +166,58 @@ pub(super) fn LandingContent(props: LandingContentProps) -> Element {
         handlers,
         sweep_key,
     } = props;
+    let LandingContentHandlers {
+        on_prefs_change,
+        on_load_more,
+        on_clear_filters,
+    } = handlers;
+    let on_sort = build_sort_handler(prefs.clone(), on_prefs_change);
+
+    rsx! {
+        div { class: "lib-layout lib-layout--collapsed",
+            div { key: "{sweep_key}", class: "lib-main lib-books",
+                LandingBooksArea {
+                    books,
+                    prefs,
+                    ctx,
+                    on_sort: EventHandler::new(on_sort),
+                    on_load_more,
+                    on_clear_filters,
+                }
+            }
+        }
+    }
+}
+
+/// Builds the table/grid sort-column handler: clicking the already-active
+/// column toggles direction, else adopts the new axis's natural direction.
+fn build_sort_handler(
+    prefs: ViewPrefs,
+    on_prefs_change: EventHandler<ViewPrefs>,
+) -> impl FnMut(SortKey) + 'static {
+    move |key: SortKey| {
+        let mut next = prefs.clone();
+        next.sort_dir = if next.sort_key == key {
+            toggle_dir(next.sort_dir)
+        } else {
+            default_dir_for(key)
+        };
+        next.sort_key = key;
+        on_prefs_change.call(next);
+    }
+}
+
+/// The loading / table-or-grid / empty / filtered-empty states for the main
+/// book area, and the load-more pagination sentinel.
+#[component]
+fn LandingBooksArea(
+    books: BooksView,
+    prefs: ViewPrefs,
+    ctx: BookTableContext,
+    on_sort: EventHandler<SortKey>,
+    on_load_more: EventHandler<()>,
+    on_clear_filters: EventHandler<()>,
+) -> Element {
     let BooksView {
         is_loading,
         visible_books,
@@ -176,71 +228,48 @@ pub(super) fn LandingContent(props: LandingContentProps) -> Element {
         has_more,
         is_loading_more,
     } = books;
-    let LandingContentHandlers {
-        on_prefs_change,
-        on_load_more,
-        on_clear_filters,
-    } = handlers;
     let view_mode = prefs.view_mode;
 
-    let on_sort = {
-        let prefs = prefs.clone();
-        move |key: SortKey| {
-            let mut next = prefs.clone();
-            next.sort_dir = if next.sort_key == key {
-                toggle_dir(next.sort_dir)
-            } else {
-                default_dir_for(key)
-            };
-            next.sort_key = key;
-            on_prefs_change.call(next);
-        }
-    };
-
     rsx! {
-        div { class: "lib-layout lib-layout--collapsed",
-            div { key: "{sweep_key}", class: "lib-main lib-books",
-                if is_loading {
-                    p { class: "library-empty", "Loading..." }
-                } else if !visible_is_empty || lib_err.is_some() || page_error.is_some() {
-                    match view_mode {
-                        ViewMode::Table => rsx! {
-                            BookTable {
-                                books: visible_books.clone(),
-                                prefs: prefs.clone(),
-                                on_sort,
-                                ctx: ctx.clone(),
-                            }
-                        },
-                        ViewMode::Grid => rsx! {
-                            BookGrid {
-                                books: visible_books.clone(),
-                                server_url: ctx.server_url.clone(),
-                            }
-                        },
+        if is_loading {
+            p { class: "library-empty", "Loading..." }
+        } else if !visible_is_empty || lib_err.is_some() || page_error.is_some() {
+            match view_mode {
+                ViewMode::Table => rsx! {
+                    BookTable {
+                        books: visible_books.clone(),
+                        prefs: prefs.clone(),
+                        on_sort,
+                        ctx: ctx.clone(),
                     }
-                    // Browse pagination sentinel — the button is the
-                    // deterministic (mobile + Playwright) trigger; on web an
-                    // IntersectionObserver auto-bumps it as it nears the
-                    // viewport. Absent in search mode (no `next_cursor`).
-                    if has_more {
-                        div { class: "lib-load-more-row",
-                            button {
-                                class: "btn lib-load-more",
-                                "data-testid": "lib-load-more",
-                                disabled: is_loading_more,
-                                onclick: move |_| on_load_more.call(()),
-                                if is_loading_more { "Loading…" } else { "Load more" }
-                            }
-                        }
+                },
+                ViewMode::Grid => rsx! {
+                    BookGrid {
+                        books: visible_books.clone(),
+                        server_url: ctx.server_url.clone(),
                     }
-                } else if books_empty {
-                    p { class: "library-empty", "No ebooks found." }
-                } else {
-                    EmptyFiltered {
-                        on_clear: move |_| on_clear_filters.call(()),
+                },
+            }
+            // Browse pagination sentinel — the button is the deterministic
+            // (mobile + Playwright) trigger; on web an IntersectionObserver
+            // auto-bumps it as it nears the viewport. Absent in search mode
+            // (no `next_cursor`).
+            if has_more {
+                div { class: "lib-load-more-row",
+                    button {
+                        class: "btn lib-load-more",
+                        "data-testid": "lib-load-more",
+                        disabled: is_loading_more,
+                        onclick: move |_| on_load_more.call(()),
+                        if is_loading_more { "Loading…" } else { "Load more" }
                     }
                 }
+            }
+        } else if books_empty {
+            p { class: "library-empty", "No ebooks found." }
+        } else {
+            EmptyFiltered {
+                on_clear: move |_| on_clear_filters.call(()),
             }
         }
     }

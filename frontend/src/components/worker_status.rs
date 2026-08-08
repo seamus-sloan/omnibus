@@ -120,10 +120,24 @@ fn terminal_row(
                 },
             }
         },
+        // A fleet-wide EPUB override bake that left per-book failures
+        // (#1739) — mutually exclusive with `ghost_warning`, so this arm
+        // only ever matches a `RewriteAllEpubs` run.
         ProgressState::Done {
-            ghost_warning: None,
+            bake_errors: Some(errors),
             ..
-        } => rsx! {
+        } if !errors.is_empty() => rsx! {
+            BakeErrorsRow {
+                key: "{id}",
+                errors: errors.clone(),
+                on_dismiss: move |_| {
+                    let mut set = dismissed();
+                    set.insert(id);
+                    dismissed.set(set);
+                },
+            }
+        },
+        ProgressState::Done { .. } => rsx! {
             DoneRow {
                 key: "{id}",
                 kind: task.kind,
@@ -231,6 +245,41 @@ fn WarnRow(
     }
 }
 
+/// A fleet-wide EPUB override bake (#959, #1718) that left one or more
+/// books unbaked — distinct from both [`WarnRow`] and the red
+/// [`FailedRow`]: the run itself succeeded (every book was attempted, and
+/// the ones that could be baked were), but the admin who kicked it off from
+/// "Bake Overrides Into EPUBs" needs to know which books still need
+/// attention (#1739). Doesn't route through `kind_label` — `RewriteAllEpubs`
+/// reuses `TaskKind::Scan` for its wire kind (no dedicated progress
+/// widget), so this row names the job directly instead of rendering the
+/// misleading "Library scan" label. `errors` is just the failed
+/// `book_uuid`s — the wire type deliberately drops the per-book error text
+/// (which can carry a server filesystem path); see the doc comment on
+/// `omnibus_shared::ProgressState::Done::bake_errors`.
+#[component]
+fn BakeErrorsRow(errors: Vec<String>, on_dismiss: EventHandler<MouseEvent>) -> Element {
+    let message = bake_errors_message(&errors);
+    rsx! {
+        div {
+            class: "worker-status-row worker-status-warn",
+            "data-testid": "worker-status-bake-errors-row",
+            span { class: "worker-status-icon", aria_hidden: "true", "!" }
+            div { class: "worker-status-body",
+                div { class: "worker-status-label", "EPUB override bake finished with errors" }
+                div { class: "worker-status-message", "{message}" }
+            }
+            button {
+                class: "worker-status-dismiss",
+                r#type: "button",
+                aria_label: "Dismiss",
+                onclick: move |evt| on_dismiss.call(evt),
+                "✕"
+            }
+        }
+    }
+}
+
 #[component]
 fn FailedRow(kind: TaskKind, message: String, on_dismiss: EventHandler<MouseEvent>) -> Element {
     let label = kind_label(kind, /* running */ false);
@@ -292,6 +341,34 @@ fn ghost_warning_message(warning: &GhostFilesWarning) -> String {
     )
 }
 
+/// Maximum number of failed `book_uuid`s named inline in
+/// [`bake_errors_message`] before the rest collapse into an "and N more"
+/// tail — keeps the row readable for a large fleet-wide bake.
+const BAKE_ERRORS_INLINE_CAP: usize = 5;
+
+/// Render a fleet-wide EPUB bake's failed `book_uuid`s into the
+/// [`BakeErrorsRow`] message text (#1739) — factored out of the component
+/// body so the wording (count + the failed book uuids) is unit testable,
+/// mirroring [`ghost_warning_message`].
+fn bake_errors_message(errors: &[String]) -> String {
+    let n = errors.len();
+    let noun = if n == 1 { "book" } else { "books" };
+    let uuids: Vec<&str> = errors
+        .iter()
+        .take(BAKE_ERRORS_INLINE_CAP)
+        .map(String::as_str)
+        .collect();
+    let listed = uuids.join(", ");
+    if n > BAKE_ERRORS_INLINE_CAP {
+        format!(
+            "{n} {noun} failed to bake: {listed}, and {} more.",
+            n - BAKE_ERRORS_INLINE_CAP
+        )
+    } else {
+        format!("{n} {noun} failed to bake: {listed}.")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,5 +403,41 @@ mod tests {
             message.contains("100"),
             "message must name the total: {message}"
         );
+    }
+
+    #[test]
+    fn bake_errors_message_names_the_count_and_every_failed_book_uuid_under_the_cap() {
+        let errors = vec!["uuid-a".to_string(), "uuid-b".to_string()];
+        let message = bake_errors_message(&errors);
+        assert!(
+            message.contains("2 books failed to bake:"),
+            "message must name the count: {message}"
+        );
+        assert!(message.contains("uuid-a"), "{message}");
+        assert!(message.contains("uuid-b"), "{message}");
+        assert!(!message.contains("more"), "{message}");
+    }
+
+    #[test]
+    fn bake_errors_message_collapses_uuids_past_the_inline_cap() {
+        let errors: Vec<String> = (0..BAKE_ERRORS_INLINE_CAP + 3)
+            .map(|i| format!("uuid-{i}"))
+            .collect();
+        let message = bake_errors_message(&errors);
+        assert!(
+            message.contains("and 3 more"),
+            "message must summarize the overflow: {message}"
+        );
+        assert!(
+            !message.contains(&format!("uuid-{}", BAKE_ERRORS_INLINE_CAP)),
+            "message must not name a uuid past the cap: {message}"
+        );
+    }
+
+    #[test]
+    fn bake_errors_message_uses_singular_book_noun_for_one_failure() {
+        let errors = vec!["uuid-solo".to_string()];
+        let message = bake_errors_message(&errors);
+        assert!(message.contains("1 book failed"), "{message}");
     }
 }

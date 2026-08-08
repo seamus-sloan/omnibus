@@ -75,6 +75,269 @@ fn get(uri: String) -> Request<Body> {
         .unwrap()
 }
 
+/// Seed one real book on disk — a copy of the committed EPUB fixture under a
+/// fresh scan root — so [`download`](super::resources::download) has real
+/// bytes to serve. Mirrors the on-disk setup
+/// `download_bakes_a_metadata_override_into_the_plain_epub_fallback` uses,
+/// minus the override (that sibling test cleans up its tempdir via
+/// `remove_dir_all`; this one deliberately doesn't, since each run gets a
+/// fresh pid-scoped path and CI wipes `/tmp` between runs).
+async fn seed_downloadable_book(pool: &SqlitePool, uuid: &str, title: &str, author: &str) {
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let lib_dir = std::env::temp_dir().join(format!("omnibus_kobo_contract_{pid}_{nanos}_{uuid}"));
+    std::fs::create_dir_all(&lib_dir).unwrap();
+    let fixture_epub = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../test_data/epubs/generated/alpha.epub");
+    std::fs::copy(&fixture_epub, lib_dir.join("alpha.epub")).unwrap();
+
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
+        .bind(lib_dir.to_str().unwrap())
+        .execute(pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    sqlx::query(
+        "INSERT INTO books (uuid, library_id, path, title, last_modified) \
+         VALUES (?, ?, ?, ?, 1700000000)",
+    )
+    .bind(uuid)
+    .bind(lib_id)
+    .bind(lib_dir.to_str().unwrap())
+    .bind(title)
+    .execute(pool)
+    .await
+    .unwrap();
+    let book_id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE uuid = ?")
+        .bind(uuid)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES (?, 'EPUB', 'alpha', 0)",
+    )
+    .bind(book_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    let author_id: i64 = sqlx::query_scalar("INSERT INTO authors (name) VALUES (?) RETURNING id")
+        .bind(author)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO books_authors_link (book, author, position) VALUES (?, ?, 0)")
+        .bind(book_id)
+        .bind(author_id)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// #928 contract test: replays the full wireless device sequence at the HTTP
+/// layer — `initialization -> auth/device -> library/sync -> download -> PUT
+/// state -> GET state` — against `kobo_router` over `sqlite::memory:`.
+///
+/// **This is a synthetic golden fixture, not a real-device capture.** No
+/// physical Kobo is available in this sandboxed environment; every payload
+/// shape below (envelope field names, the `Resources` override keys, the
+/// `NewEntitlement`/`StateResponse` field names, the `KoboSpan` location
+/// format) is instead pinned against the DTOs this router already
+/// implements (`kobo::dto`, `kobo::store_resources`, `kobo::state`) — the
+/// same reference shapes `docs/kobo.md` documents as sourced from
+/// Calibre-Web / bookorbit rather than a packet capture. See
+/// `docs/kobo-smoke-test.md` for the manual real-hardware checklist that
+/// gates advertising a device's wireless sync URL to a user.
+///
+/// AC4: every step asserts response **body shape**, not just status code —
+/// a regression that changed a field name or dropped a value (rather than
+/// the status code) fails this test. The final `GET state` closes the loop:
+/// it proves the `PUT` actually persisted the device's status and bookmark,
+/// not merely that the endpoint answered `200`.
+#[tokio::test]
+async fn full_device_sequence_replays_initialization_through_state_put() {
+    let _kepubify_absent =
+        db::test_support::EnvVarGuard::set("OMNIBUS_KEPUBIFY_PATH", Some("/no/such/kepubify"));
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = "62e1c9f0-0000-4000-8000-000000000928";
+    seed_downloadable_book(&pool, uuid, "The Golden Fixture", "Ada Lovelace").await;
+    opt_in(&pool, uid, &[uuid.to_owned()]).await;
+
+    // --- 1. GET v1/initialization -----------------------------------------
+    let res = app
+        .clone()
+        .oneshot(get(format!("/kobo/{token}/v1/initialization")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers().get("x-kobo-apitoken").unwrap(),
+        "e30=",
+        "missing/wrong x-kobo-apitoken makes the device reject the whole map"
+    );
+    let init = body_json(res).await;
+    assert_eq!(
+        init["Resources"]["library_sync"],
+        format!("http://omni.test/kobo/{token}/v1/library/sync")
+    );
+
+    // --- 2. POST v1/auth/device ---------------------------------------------
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/kobo/{token}/v1/auth/device"))
+                .method("POST")
+                .header("host", "omni.test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let auth_envelope = body_json(res).await;
+    assert_eq!(auth_envelope["TokenType"], "Bearer");
+    for field in ["AccessToken", "RefreshToken", "TrackingId", "UserKey"] {
+        assert!(
+            auth_envelope[field].as_str().is_some_and(|s| !s.is_empty()),
+            "{field} should be present and non-empty"
+        );
+    }
+
+    // --- 3. GET v1/library/sync ---------------------------------------------
+    let res = app
+        .clone()
+        .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(
+        res.headers().get("x-kobo-sync").is_none(),
+        "a single-book first sync must not page"
+    );
+    let sync = body_json(res).await;
+    let items = sync.as_array().unwrap();
+    assert_eq!(
+        items.len(),
+        1,
+        "first sync emits exactly one NewEntitlement"
+    );
+    let ent = &items[0]["NewEntitlement"];
+    assert_eq!(ent["BookEntitlement"]["Id"], uuid);
+    assert_eq!(ent["BookEntitlement"]["IsRemoved"], false);
+    assert_eq!(ent["BookMetadata"]["Title"], "The Golden Fixture");
+    assert_eq!(
+        ent["BookMetadata"]["ContributorRoles"][0]["Name"],
+        "Ada Lovelace"
+    );
+    let download_url = ent["BookMetadata"]["DownloadUrls"][0]["Url"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        ent["BookMetadata"]["DownloadUrls"][0]["Format"], "KEPUB",
+        "an EPUB-bearing book advertises the KEPUB conversion"
+    );
+    assert_eq!(
+        download_url,
+        format!("http://omni.test/kobo/{token}/v1/download/{uuid}")
+    );
+    assert_eq!(
+        ent["ReadingState"]["StatusInfo"]["Status"], "ReadyToRead",
+        "an untouched book starts ReadyToRead"
+    );
+
+    // --- 4. GET v1/download/<uuid> ------------------------------------------
+    let res = app
+        .clone()
+        .oneshot(get(download_url.replace("http://omni.test", "")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers().get(axum::http::header::CONTENT_TYPE).unwrap(),
+        "application/epub+zip"
+    );
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    epub::doc::EpubDoc::from_reader(std::io::Cursor::new(bytes.to_vec()))
+        .expect("downloaded bytes are a valid EPUB");
+    let device_id = db::kobo_devices::resolve_device_by_token(&pool, &token)
+        .await
+        .unwrap()
+        .unwrap()
+        .device_id;
+    let downloaded_at: Option<i64> = sqlx::query_scalar(
+        "SELECT downloaded_at FROM kobo_annotations_sync WHERE device_id = ? AND book_uuid = ?",
+    )
+    .bind(device_id)
+    .bind(uuid)
+    .fetch_optional(&pool)
+    .await
+    .unwrap()
+    .flatten();
+    assert!(
+        downloaded_at.is_some(),
+        "a successful download must record the device as holding the book"
+    );
+
+    // --- 5. PUT v1/library/<uuid>/state --------------------------------------
+    let location = serde_json::json!({
+        "Source": "text/part0001.html",
+        "Type": "KoboSpan",
+        "Value": "kobo.3.2",
+    });
+    let put_body = serde_json::json!({
+        "ReadingStates": [{
+            "StatusInfo": { "Status": "Reading" },
+            "CurrentBookmark": {
+                "ProgressPercent": 42,
+                "Location": location,
+                "LastModified": "2026-01-02T03:04:05Z",
+            },
+        }],
+    });
+    let res = app
+        .clone()
+        .oneshot(state_put(&token, uuid, put_body))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let put_response = body_json(res).await;
+    assert_eq!(put_response["RequestResult"], "Success");
+    let update_results = put_response["UpdateResults"].as_array().unwrap();
+    assert_eq!(update_results.len(), 1);
+    assert_eq!(update_results[0]["EntitlementId"], uuid);
+    assert_eq!(update_results[0]["StatusInfoResult"]["Result"], "Success");
+    assert_eq!(
+        update_results[0]["CurrentBookmarkResult"]["Result"],
+        "Success"
+    );
+
+    // --- 6. GET v1/library/<uuid>/state — proves the PUT actually persisted -
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/library/{uuid}/state")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let states = body_json(res).await;
+    let states = states.as_array().unwrap();
+    assert_eq!(states.len(), 1);
+    let state = &states[0];
+    assert_eq!(state["EntitlementId"], uuid);
+    assert_eq!(
+        state["StatusInfo"]["Status"], "Reading",
+        "the status set by the PUT must be echoed back, not the stale default"
+    );
+    assert_eq!(state["CurrentBookmark"]["ProgressPercent"], 42);
+    assert_eq!(
+        state["CurrentBookmark"]["Location"], location,
+        "the KoboSpan location is echoed back verbatim"
+    );
+}
+
 #[tokio::test]
 async fn library_sync_rejects_an_invalid_token() {
     let (app, _pool, _token, _uid) = fixture().await;
@@ -173,6 +436,38 @@ async fn library_sync_emits_new_entitlement_pointing_at_download() {
         url.contains(&uuid),
         "download url should carry the book uuid"
     );
+    assert_eq!(
+        ent["BookMetadata"]["DownloadUrls"][0]["Format"], "KEPUB",
+        "an EPUB-bearing book keeps advertising the KEPUB conversion"
+    );
+}
+
+#[tokio::test]
+async fn library_sync_advertises_the_cbz_format_and_size_for_a_cbz_only_book() {
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "berserk-v04.cbz", "Berserk v04", "Kentaro Miura").await;
+    sqlx::query(
+        "UPDATE book_files SET size_bytes = 777 \
+         WHERE book_id = (SELECT id FROM books WHERE uuid = ?)",
+    )
+    .bind(&uuid)
+    .execute(&pool)
+    .await
+    .unwrap();
+    opt_in(&pool, uid, std::slice::from_ref(&uuid)).await;
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
+        .await
+        .unwrap();
+
+    let json = body_json(res).await;
+    let dl = &json.as_array().unwrap()[0]["NewEntitlement"]["BookMetadata"]["DownloadUrls"][0];
+    assert_eq!(
+        dl["Format"], "CBZ",
+        "a CBZ-only book must not advertise a KEPUB it can never serve"
+    );
+    assert_eq!(dl["Size"], 777, "size falls back to the CBZ file's bytes");
 }
 
 #[tokio::test]
@@ -1425,6 +1720,84 @@ async fn download_bakes_a_metadata_override_into_the_plain_epub_fallback() {
         doc.mdata("title").map(|m| m.value.clone()),
         Some("Stormlight #1".to_string()),
         "kobo download fallback must carry the baked title override"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+/// #1741: a CBZ-only book downloads as the raw archive (no conversion
+/// attempt, so no kepubify guard) and still runs the #1647 bookkeeping.
+#[tokio::test]
+async fn download_serves_the_cbz_archive_as_is_for_a_cbz_only_book() {
+    let (app, pool, token, _uid) = fixture().await;
+    let device_id = db::kobo_devices::resolve_device_by_token(&pool, &token)
+        .await
+        .unwrap()
+        .unwrap()
+        .device_id;
+
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!("omnibus_kobo_dl_cbz_{pid}_{nanos}"));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let archive = db::test_support::build_stored_zip(&[("p1.jpg", b"page-one")]);
+    std::fs::write(tmp.join("aurora.cbz"), &archive).unwrap();
+
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
+        .bind(tmp.to_str().unwrap())
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    let uuid = "66666666-6666-6666-6666-666666666666";
+    sqlx::query(
+        "INSERT INTO books (uuid, library_id, path, title, last_modified) \
+         VALUES (?, ?, ?, 'Aurora', 1)",
+    )
+    .bind(uuid)
+    .bind(lib_id)
+    .bind(tmp.to_str().unwrap())
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES ((SELECT id FROM books WHERE uuid = ?), 'CBZ', 'aurora', 0)",
+    )
+    .bind(uuid)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/download/{uuid}")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("application/vnd.comicbook+zip"),
+    );
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&bytes[..], &archive[..], "the archive streams as-is");
+
+    let recorded: Option<i64> = sqlx::query_scalar(
+        "SELECT downloaded_at FROM kobo_annotations_sync WHERE device_id = ? AND book_uuid = ?",
+    )
+    .bind(device_id)
+    .bind(uuid)
+    .fetch_optional(&pool)
+    .await
+    .unwrap()
+    .flatten();
+    assert!(
+        recorded.is_some(),
+        "a served CBZ must record the device as holding the book (#1647 gate)"
     );
 
     std::fs::remove_dir_all(&tmp).ok();

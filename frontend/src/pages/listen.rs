@@ -93,73 +93,90 @@ pub fn BookListenPage(uuid: String, file_id: Option<i64>) -> Element {
     #[cfg(not(feature = "mobile"))]
     {
         let playback = use_playback();
-
-        // Point the app-wide player at this route's book + selected file. The
-        // App-level driver (install_audio_bootstrap) reacts to both `uuid` and
-        // `file_id` and does the fetch + manifest init; we only retarget. The
-        // uuid write (which clears the prior book) fires only when the book
-        // differs so re-entering an already-playing book is seamless, but the
-        // file_id signal always tracks the route so the picker's `?file_id=`
-        // reboots the *same* book onto the chosen part.
-        let route_uuid = uuid.clone();
-        let route_file_id = file_id;
-        use_effect(use_reactive!(|(route_uuid, route_file_id)| {
-            let mut uuid_sig = playback.uuid;
-            let mut file_sig = playback.file_id;
-            let mut loading_sig = playback.loading;
-            let mut book_sig = playback.book;
-            let mut error_sig = playback.error;
-            // Publish the picker's selection first so the driver reads the right
-            // file when the uuid change kicks off the load (mirrors mobile).
-            file_sig.set(route_file_id);
-            if uuid_sig.peek().as_deref() != Some(route_uuid.as_str()) {
-                // Clear the previous book's app-global metadata before
-                // retargeting so a re-render can't show the old book (or its
-                // error) under the new URL until the App-level driver reloads.
-                // The driver also clears these defensively on the uuid swap.
-                book_sig.set(None);
-                error_sig.set(None);
-                loading_sig.set(true);
-                uuid_sig.set(Some(route_uuid.clone()));
-            }
-        }));
+        use_retarget_playback(playback, uuid.clone(), file_id);
 
         let active = playback.uuid.read().as_deref() == Some(uuid.as_str());
-
         if active {
-            if let Some(msg) = playback.error.read().clone() {
-                return rsx! {
-                    p { role: "alert", class: "subtitle", "{msg}" }
-                    Link { to: Route::Landing {}, class: "btn", "Back to library" }
-                };
-            }
-            if let Some(b) = playback.book.read().clone() {
-                return rsx! {
-                    ReadyPlayer {
-                        book: b,
-                        uuid: uuid.clone(),
-                        signals: PlaybackSignals {
-                            duration: playback.duration,
-                            elapsed: playback.elapsed,
-                            playing: playback.playing,
-                            rate: playback.rate,
-                            rate_error: playback.rate_error,
-                            volume: playback.volume,
-                            hls_ready: playback.hls_ready,
-                        },
-                        playback_failed: playback.playback_failed,
-                        chapters: playback.chapters,
-                    }
-                };
-            }
-            if !*playback.loading.read() {
-                return rsx! {
-                    p { class: "subtitle", "Audiobook not found." }
-                    Link { to: Route::Landing {}, class: "btn", "Back to library" }
-                };
+            if let Some(view) = active_listen_view(playback, &uuid) {
+                return view;
             }
         }
 
         rsx! { p { class: "subtitle", "Loading\u{2026}" } }
     }
+}
+
+/// Points the app-wide player at this route's book + selected file. The
+/// App-level driver (`install_audio_bootstrap`) reacts to both `uuid` and
+/// `file_id` and does the fetch + manifest init; this only retargets. The
+/// uuid write (which clears the prior book) fires only when the book differs
+/// so re-entering an already-playing book is seamless, but the file_id
+/// signal always tracks the route so the picker's `?file_id=` reboots the
+/// *same* book onto the chosen part. Called unconditionally from
+/// [`BookListenPage`] (non-mobile).
+#[cfg(not(feature = "mobile"))]
+fn use_retarget_playback(
+    playback: crate::PlaybackState,
+    route_uuid: String,
+    route_file_id: Option<i64>,
+) {
+    use_effect(use_reactive!(|(route_uuid, route_file_id)| {
+        let mut uuid_sig = playback.uuid;
+        let mut file_sig = playback.file_id;
+        let mut loading_sig = playback.loading;
+        let mut book_sig = playback.book;
+        let mut error_sig = playback.error;
+        // Publish the picker's selection first so the driver reads the right
+        // file when the uuid change kicks off the load (mirrors mobile).
+        file_sig.set(route_file_id);
+        if uuid_sig.peek().as_deref() != Some(route_uuid.as_str()) {
+            // Clear the previous book's app-global metadata before
+            // retargeting so a re-render can't show the old book (or its
+            // error) under the new URL until the App-level driver reloads.
+            // The driver also clears these defensively on the uuid swap.
+            book_sig.set(None);
+            error_sig.set(None);
+            loading_sig.set(true);
+            uuid_sig.set(Some(route_uuid.clone()));
+        }
+    }));
+}
+
+/// The error / ready-player / not-found view for an already-active book,
+/// or `None` while it's still resolving (the caller falls back to a
+/// loading placeholder).
+#[cfg(not(feature = "mobile"))]
+fn active_listen_view(playback: crate::PlaybackState, uuid: &str) -> Option<Element> {
+    if let Some(msg) = playback.error.read().clone() {
+        return Some(rsx! {
+            p { role: "alert", class: "subtitle", "{msg}" }
+            Link { to: Route::Landing {}, class: "btn", "Back to library" }
+        });
+    }
+    if let Some(b) = playback.book.read().clone() {
+        return Some(rsx! {
+            ReadyPlayer {
+                book: b,
+                uuid: uuid.to_string(),
+                signals: PlaybackSignals {
+                    duration: playback.duration,
+                    elapsed: playback.elapsed,
+                    playing: playback.playing,
+                    rate: playback.rate,
+                    rate_error: playback.rate_error,
+                    volume: playback.volume,
+                    hls_ready: playback.hls_ready,
+                },
+                playback_failed: playback.playback_failed,
+                chapters: playback.chapters,
+            }
+        });
+    }
+    if !*playback.loading.read() {
+        return Some(rsx! {
+            p { class: "subtitle", "Audiobook not found." }
+            Link { to: Route::Landing {}, class: "btn", "Back to library" }
+        });
+    }
+    None
 }

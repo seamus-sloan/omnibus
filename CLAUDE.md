@@ -28,6 +28,7 @@ Auto-discoverable skills in [.claude/skills/](.claude/skills/) — Claude Code l
 
 - [add-backend-route](.claude/skills/add-backend-route/SKILL.md) — adding an Axum page or API endpoint end-to-end.
 - [add-playwright-flow](.claude/skills/add-playwright-flow/SKILL.md) — adding a new E2E spec.
+- [create-github-issue](.claude/skills/create-github-issue/SKILL.md) — filing GitHub issues in the omnibus house style: bracketed `[Scope]` title prefixes, a standard body template, consistent labels, and native sub-issue linking.
 - [ui-validate](.claude/skills/ui-validate/SKILL.md) — bring up a port-walking dev server, log in as the seeded admin, drive the browser, poll `/api/_health` for rebuild signal.
 
 ### Browser tools
@@ -58,11 +59,14 @@ Operator-specific conventions (ticket prefixes, standing workspace names) live i
 
 ```bash
 # Multiplexed dev stack (server + native ios + android + playwright panes)
+# The server pane port-walks this worktree's window, so two worktrees can
+# run the stack at once without colliding.
 just serve                                                  # Zellij
 just serve-pc                                               # process-compose
 
-# Idempotent dev-server bring-up — port-walks from $PORT (default 3000)
-# up to PORT+9, reuses an existing omnibus server if found, seeds the
+# Idempotent dev-server bring-up — port-walks from $PORT (this worktree's
+# window base: 3000 for the main checkout, hash-derived in 3010..3900
+# otherwise) up to PORT+9, reuses an existing omnibus server if found, seeds the
 # admin user from $OMNIBUS_DEV_SEED_USER, writes .claude/runtime/{port,env.sh}.
 # Used by the `ui-validate` skill; safe to re-run.
 just dev-up

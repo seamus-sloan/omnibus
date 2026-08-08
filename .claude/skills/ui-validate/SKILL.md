@@ -15,8 +15,8 @@ just dev-up
 
 What this does (`scripts/dev-server-up.sh`):
 
-- Probes `GET /api/_health` starting at `$PORT` (default 3000), walking up to `PORT+9` (the per-workspace window).
-- Reuses an existing omnibus server on a probed port **only when its `repo_root` matches this workspace** — sibling `jj` workspaces' servers are skipped, not silently shared.
+- Probes `GET /api/_health` starting at `$PORT` (this worktree's window base — 3000 for the main checkout, hash-derived otherwise), walking up to `PORT+9`.
+- Reuses an existing omnibus server on a probed port **only when its `repo_root` matches this worktree** — a sibling worktree's server is skipped, not silently shared.
 - Fails fast with a remediation line if every port in range is held by a foreign process.
 - Starts `dx serve --platform web --fullstack --port <chosen>` in the background (daemonized so it survives the agent shell); output goes to `.claude/runtime/server.log`, PID to `.claude/runtime/server.pid`.
 - Requires `OMNIBUS_DEV_SEED_USER` (sourced from `.env`). If unset, prints `"copy .env.example to .env and re-enter nix develop"` and exits 1.
@@ -38,7 +38,7 @@ just dev-up
 source .claude/runtime/env.sh
 ```
 
-Exports `OMNIBUS_PORT` and `PLAYWRIGHT_BASE_URL`. **Never hardcode the port** — your workspace's stable port (3000/3010/3020/3030 by workspace name; see `flake.nix`) might be overridden if a foreign process held it.
+Exports `OMNIBUS_PORT` and `PLAYWRIGHT_BASE_URL`. **Never hardcode the port** — your worktree's window base (3000 for the main checkout, hash-derived in 3010..3900 for any other worktree; see `flake.nix`) is only the *start* of the walk, and the server may have landed further up if a foreign process or a sibling worktree held it.
 
 ## 3. Capture the current build id
 

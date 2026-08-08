@@ -30,7 +30,7 @@ struct UserAvatar: View {
         // The accent glow is identity-card dressing; at list-row sizes it
         // reads as smudging, so small avatars stay flat like `AuthorAvatar`.
         .shadow(
-            color: palette.accentColor.opacity(size >= Self.shadowMinSize ? 0.25 : 0),
+            color: palette.accentColor.opacity(Self.shadowOpacity(for: size)),
             radius: 12,
             y: 4
         )
@@ -38,6 +38,12 @@ struct UserAvatar: View {
 
     /// Below this size the accent shadow is suppressed (row avatars stay flat).
     static let shadowMinSize: CGFloat = 44
+
+    /// The accent-shadow opacity for a given avatar size — full glow at or
+    /// above `shadowMinSize`, none below it.
+    static func shadowOpacity(for size: CGFloat) -> Double {
+        size >= shadowMinSize ? 0.25 : 0
+    }
 
     /// The cache key / request path for a user's avatar. Shared with the
     /// invalidation call after an upload so the two can't drift.

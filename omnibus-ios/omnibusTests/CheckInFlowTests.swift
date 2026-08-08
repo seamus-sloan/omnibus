@@ -113,6 +113,32 @@ struct CheckInFlowTests {
         )
     }
 
+    @Test func searchResponseAppliesWhenOnlySurroundingWhitespaceDiffers() {
+        // The request is sent with the trimmed query while the field keeps the
+        // raw text, and iOS appends a space to every accepted QuickType
+        // suggestion — so this is the *typical* typed search, not an edge case.
+        #expect(
+            CheckInFlow.searchResponseShouldApply(
+                startedStage: .scan, currentStage: .scan,
+                startedQuery: "pride and prejudice", currentQuery: "pride and prejudice "
+            )
+        )
+        #expect(
+            CheckInFlow.searchResponseShouldApply(
+                startedStage: .scan, currentStage: .scan,
+                startedQuery: "babel", currentQuery: "  babel\n"
+            )
+        )
+        // Trimming must not blunt the gate: real retyping still drops the
+        // stale answer, whitespace or not.
+        #expect(
+            !CheckInFlow.searchResponseShouldApply(
+                startedStage: .scan, currentStage: .scan,
+                startedQuery: "babel", currentQuery: "babel two "
+            )
+        )
+    }
+
     @Test func detailUUIDCoversAlreadyOwnedAndOnWishlistOnly() {
         #expect(CheckInFlow.detailUUID(for: .alreadyOwned(book: scanBook())) == "b-1")
         #expect(CheckInFlow.detailUUID(for: .onWishlist(book: scanBook())) == "b-1")

@@ -141,31 +141,7 @@ async fn ebooks_page(
     .map_err(|e| internal_rpc_error("list books page", e))?;
 
     let (total, facets, hidden_count) = if decoded.is_none() {
-        // The header count is library-wide (facet filters don't shrink it),
-        // so the receipt beside it shares that basis: both diff counts use
-        // default filters and differ only in the exclusion. With no
-        // exclusion this stays the single `count_books_for_paths` query.
-        let all = db::count_books_for_paths(pool, &paths)
-            .await
-            .map_err(|e| internal_rpc_error("count books", e))?;
-        let (total, hidden) = if exclude_formats.is_empty() {
-            (all, None)
-        } else {
-            let visible =
-                db::count_books_page(pool, &paths, &ViewFilters::default(), exclude_formats)
-                    .await
-                    .map_err(|e| internal_rpc_error("count visible books", e))?;
-            (visible, Some(all - visible))
-        };
-        (
-            Some(total),
-            Some(
-                db::library_facets(pool, &paths)
-                    .await
-                    .map_err(|e| internal_rpc_error("library facets", e))?,
-            ),
-            hidden,
-        )
+        first_page_aggregates(pool, &paths, exclude_formats).await?
     } else {
         (None, None, None)
     };
@@ -178,6 +154,43 @@ async fn ebooks_page(
         facets,
         hidden_count,
     })
+}
+
+/// `(total, facets, hidden_count)` — the shape `ebooks_page` folds straight
+/// into `LibraryPage`.
+#[cfg(feature = "server")]
+type FirstPageAggregates = (
+    Option<i64>,
+    Option<omnibus_shared::FacetCounts>,
+    Option<i64>,
+);
+
+/// First-page-only aggregates: the library-wide total (and, when an
+/// exclusion is active, the hidden-count receipt beside it) plus the sidebar
+/// facets. Both diff counts use default filters and differ only in the
+/// exclusion, so with no exclusion this stays the single
+/// `count_books_for_paths` query.
+#[cfg(feature = "server")]
+async fn first_page_aggregates(
+    pool: &sqlx::SqlitePool,
+    paths: &[&str],
+    exclude_formats: &[String],
+) -> Result<FirstPageAggregates, ServerFnError> {
+    let all = db::count_books_for_paths(pool, paths)
+        .await
+        .map_err(|e| internal_rpc_error("count books", e))?;
+    let (total, hidden) = if exclude_formats.is_empty() {
+        (all, None)
+    } else {
+        let visible = db::count_books_page(pool, paths, &ViewFilters::default(), exclude_formats)
+            .await
+            .map_err(|e| internal_rpc_error("count visible books", e))?;
+        (visible, Some(all - visible))
+    };
+    let facets = db::library_facets(pool, paths)
+        .await
+        .map_err(|e| internal_rpc_error("library facets", e))?;
+    Ok((Some(total), Some(facets), hidden))
 }
 
 /// POST (not GET) for the same reason as `rpc_search`: Dioxus `#[get]`

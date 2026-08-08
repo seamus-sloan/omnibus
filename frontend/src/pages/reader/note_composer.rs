@@ -5,6 +5,8 @@
 use dioxus::prelude::*;
 use omnibus_shared::Highlight;
 
+use super::drawer_shell::ReaderScrim;
+
 #[component]
 pub(super) fn NoteComposer(
     highlight: Highlight,
@@ -36,7 +38,7 @@ pub(super) fn NoteComposer(
     };
 
     rsx! {
-        div { class: "rd-scrim", onclick: move |_| on_close.call(()) }
+        ReaderScrim { onclick: move |_| on_close.call(()) }
         div { class: "rd-note-composer", "data-testid": "reader-note-composer",
             onclick: move |e: MouseEvent| e.stop_propagation(),
             div { class: "rd-note-quote", "\u{201c}{quote}\u{201d}" }

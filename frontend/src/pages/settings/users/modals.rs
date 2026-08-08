@@ -15,18 +15,90 @@ use super::PermissionToggles;
 /// permissions.
 #[component]
 pub(super) fn NewUserModal(on_close: EventHandler<()>, on_created: EventHandler<()>) -> Element {
-    let mut username = use_signal(String::new);
-    let mut password = use_signal(String::new);
+    let username = use_signal(String::new);
+    let password = use_signal(String::new);
     let perms = use_signal(|| UserPermissions {
         is_admin: false,
         can_upload: false,
         can_edit: false,
         can_download: true,
     });
-    let mut error = use_signal(|| None::<String>);
-    let mut saving = use_signal(|| false);
+    let error = use_signal(|| None::<String>);
+    let saving = use_signal(|| false);
+    let submit =
+        build_new_user_submit_handler(username, password, perms, error, saving, on_created);
 
-    let submit = move |evt: Event<FormData>| {
+    rsx! {
+        ModalShell { title: "New user", testid: "users-new-modal", on_close,
+            form { class: "settings-form", onsubmit: submit,
+                NewUserFields { username, password, error }
+                PermissionToggles { perms }
+                ModalError { error: error() }
+                div { class: "settings-actions",
+                    button {
+                        r#type: "submit",
+                        class: "btn",
+                        "data-testid": "new-user-submit",
+                        disabled: saving(),
+                        "Create user"
+                    }
+                    button { r#type: "button", class: "btn ghost", onclick: move |_| on_close.call(()), "Cancel" }
+                }
+            }
+        }
+    }
+}
+
+/// Username + password inputs with the shared strength meter/checklist.
+#[component]
+fn NewUserFields(
+    mut username: Signal<String>,
+    mut password: Signal<String>,
+    mut error: Signal<Option<String>>,
+) -> Element {
+    let pw = password();
+    let (score, score_label, rules) = score_password(&pw);
+    rsx! {
+        div { class: "settings-field",
+            label { r#for: "new-user-username", "Username" }
+            input {
+                r#type: "text",
+                id: "new-user-username",
+                "data-testid": "new-user-username",
+                autocomplete: "off",
+                autocapitalize: "none",
+                spellcheck: "false",
+                value: "{username}",
+                oninput: move |e| { username.set(e.value()); error.set(None); },
+            }
+        }
+        div { class: "settings-field",
+            label { r#for: "new-user-password", "Password" }
+            input {
+                r#type: "password",
+                id: "new-user-password",
+                "data-testid": "new-user-password",
+                autocomplete: "new-password",
+                value: "{password}",
+                oninput: move |e| { password.set(e.value()); error.set(None); },
+            }
+        }
+        StrengthMeter { score, label: Some(score_label.to_string()) }
+        PasswordRequirements { rules }
+    }
+}
+
+/// Builds the new-user submit handler: local validation, then
+/// `data::create_user`.
+fn build_new_user_submit_handler(
+    username: Signal<String>,
+    password: Signal<String>,
+    perms: Signal<UserPermissions>,
+    mut error: Signal<Option<String>>,
+    mut saving: Signal<bool>,
+    on_created: EventHandler<()>,
+) -> impl FnMut(Event<FormData>) + 'static {
+    move |evt: Event<FormData>| {
         evt.prevent_default();
         if saving() {
             return;
@@ -51,54 +123,6 @@ pub(super) fn NewUserModal(on_close: EventHandler<()>, on_created: EventHandler<
             }
             saving.set(false);
         });
-    };
-
-    let pw = password();
-    let (score, score_label, rules) = score_password(&pw);
-
-    rsx! {
-        ModalShell { title: "New user", testid: "users-new-modal", on_close,
-            form { class: "settings-form", onsubmit: submit,
-                div { class: "settings-field",
-                    label { r#for: "new-user-username", "Username" }
-                    input {
-                        r#type: "text",
-                        id: "new-user-username",
-                        "data-testid": "new-user-username",
-                        autocomplete: "off",
-                        autocapitalize: "none",
-                        spellcheck: "false",
-                        value: "{username}",
-                        oninput: move |e| { username.set(e.value()); error.set(None); },
-                    }
-                }
-                div { class: "settings-field",
-                    label { r#for: "new-user-password", "Password" }
-                    input {
-                        r#type: "password",
-                        id: "new-user-password",
-                        "data-testid": "new-user-password",
-                        autocomplete: "new-password",
-                        value: "{password}",
-                        oninput: move |e| { password.set(e.value()); error.set(None); },
-                    }
-                }
-                StrengthMeter { score, label: Some(score_label.to_string()) }
-                PasswordRequirements { rules }
-                PermissionToggles { perms }
-                ModalError { error: error() }
-                div { class: "settings-actions",
-                    button {
-                        r#type: "submit",
-                        class: "btn",
-                        "data-testid": "new-user-submit",
-                        disabled: saving(),
-                        "Create user"
-                    }
-                    button { r#type: "button", class: "btn ghost", onclick: move |_| on_close.call(()), "Cancel" }
-                }
-            }
-        }
     }
 }
 

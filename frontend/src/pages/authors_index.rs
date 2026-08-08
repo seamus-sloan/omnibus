@@ -91,39 +91,16 @@ pub fn AuthorsIndexPage() -> Element {
     let show_letters = matches!(sort(), IndexSort::Name);
     let groups = use_memo(move || {
         let all = authors.read();
-        let q = filter.read().to_lowercase();
-        let mut filtered = filter_authors(&all, &q);
-        let sort_value = sort();
-        sort_authors(&mut filtered, sort_value);
-        let filtered: Vec<AuthorSummary> = filtered.into_iter().cloned().collect();
-        let letters = group_by_letter(&filtered, matches!(sort_value, IndexSort::Name));
-        AuthorGroups { filtered, letters }
+        compute_author_groups(&all, &filter.read(), sort())
     });
     let groups_ref = groups.read();
     let AuthorGroups { filtered, letters } = &*groups_ref;
-
-    // Alphabet strip: A–Z followed by a single '#' bucket for any
-    // authors whose surname-equivalent doesn't start with an ASCII
-    // letter (digits, punctuation, accented mononyms, …). The '#'
-    // glyph is rendered after Z so the eye lands on the alpha range
-    // first and the long tail of edge cases sits where it expects to.
-    let alphabet: Vec<char> = ('A'..='Z').chain(std::iter::once('#')).collect();
-    let present_letters: std::collections::HashSet<char> =
-        letters.iter().map(|(l, _)| *l).collect();
 
     let counts = AuthorIndexCounts {
         total_authors,
         total_books: total_books(),
     };
-    let filter_state = AuthorIndexFilter {
-        filter: filter(),
-        sort: sort(),
-        show_letters,
-        alphabet: alphabet.clone(),
-        present_letters: present_letters.clone(),
-        letter_count: letters.len(),
-        filtered_count: filtered.len(),
-    };
+    let filter_state = build_filter_state(filter(), sort(), show_letters, letters, filtered.len());
 
     rsx! {
         div { class: "idx-page",
@@ -141,6 +118,45 @@ pub fn AuthorsIndexPage() -> Element {
             {authors_index_body(filtered, letters, show_letters, any_in_library, &server_url_for_cards)}
         }
     }
+}
+
+/// Assembles the alphabet-strip + filter/sort state passed to the header.
+/// The A–Z run (plus a single `#` bucket for any name whose
+/// surname-equivalent doesn't start with an ASCII letter — digits,
+/// punctuation, accented mononyms, … — rendered after Z so the eye lands on
+/// the alpha range first) is built here since it's only needed for this one
+/// struct.
+fn build_filter_state(
+    filter_text: String,
+    sort: IndexSort,
+    show_letters: bool,
+    letters: &[(char, Vec<AuthorSummary>)],
+    filtered_count: usize,
+) -> AuthorIndexFilter {
+    let alphabet: Vec<char> = ('A'..='Z').chain(std::iter::once('#')).collect();
+    let present_letters: std::collections::HashSet<char> =
+        letters.iter().map(|(l, _)| *l).collect();
+    AuthorIndexFilter {
+        filter: filter_text,
+        sort,
+        show_letters,
+        alphabet,
+        present_letters,
+        letter_count: letters.len(),
+        filtered_count,
+    }
+}
+
+/// Filter → sort → group-by-letter pipeline, folded into one step so the
+/// `use_memo` above reruns once per authors/filter/sort change rather than
+/// three times (mirrors `landing.rs`'s `visible = use_memo(...)`).
+fn compute_author_groups(all: &[AuthorSummary], query: &str, sort: IndexSort) -> AuthorGroups {
+    let q = query.to_lowercase();
+    let mut filtered = filter_authors(all, &q);
+    sort_authors(&mut filtered, sort);
+    let filtered: Vec<AuthorSummary> = filtered.into_iter().cloned().collect();
+    let letters = group_by_letter(&filtered, matches!(sort, IndexSort::Name));
+    AuthorGroups { filtered, letters }
 }
 
 /// Client-side name filter (case-insensitive substring match).
@@ -378,19 +394,17 @@ fn render_author_card(a: &AuthorSummary, server_url: &str) -> Element {
             class: "idx-card idx-card-author",
             style: "--accent: {accent}",
             "data-testid": "author-card",
-            // F1.11: swap the letter glyph for the cached profile photo when
-            // one exists. `media_url` keeps the markup portable — same-origin
-            // relative on web, server base + `?token=` on mobile so the
-            // WebView's `<img>` fetch authenticates. Editing the photo lives
-            // on the author detail page — the index is read-only.
-            if a.has_photo {
-                img {
-                    class: "idx-card-avatar idx-card-avatar--photo",
-                    src: crate::media_url(server_url, &format!("/api/authors/{id}/photo")),
-                    alt: "{name}",
+            // F1.11: one stable div swaps only its child (rule 07 — a `has_photo` flip must never swap element types); `media_url` makes the photo fetch work on both web and mobile.
+            div { class: "idx-card-avatar",
+                if a.has_photo {
+                    img {
+                        class: "idx-card-avatar--photo",
+                        src: crate::media_url(server_url, &format!("/api/authors/{id}/photo")),
+                        alt: "{name}",
+                    }
+                } else {
+                    "{initial}"
                 }
-            } else {
-                div { class: "idx-card-avatar", "{initial}" }
             }
             div { class: "idx-card-body",
                 div { class: "idx-card-title",

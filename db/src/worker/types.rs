@@ -93,6 +93,18 @@ pub enum Task {
     /// scan on the same library); does not consume the scan semaphore
     /// (light per-file IO, mirrors [`Task::BackfillWordCounts`]).
     BackfillPageCounts { library_path: String },
+    /// Pre-generate WebP thumbnails (all three sizes) for every covered book
+    /// under `library_path` (#1752). Posted by the [`Task::Scan`] handler on
+    /// success, alongside [`Task::BackfillWordCounts`] /
+    /// [`Task::BackfillPageCounts`], so the landing grid's first post-scan
+    /// load serves cached thumbnails instead of falling through the lazy
+    /// generation path in `server::backend::covers::thumb_cache_miss_response`.
+    /// Keyed on `library_path` (mutual exclusion with the scan on the same
+    /// library, and with the other scan-follow-up backfills); does not
+    /// consume the scan semaphore. Skips any book whose three sizes are
+    /// already fresh, so a re-scan of an unchanged library does no
+    /// re-encoding.
+    BackfillThumbs { library_path: String },
     /// Rebuild the entire `books_fts` search index from `books` via
     /// `crate::sync::rebuild_all_fts`. Admin-triggered repair for any drift
     /// left by a failed post-commit FTS refresh. Keyed on a fixed resource
@@ -119,6 +131,14 @@ pub enum Task {
         book_file_id: Option<i64>,
         recipient_email: String,
     },
+    /// Bake every book's active metadata/cover override into its EPUB
+    /// container in one pass (#959, #1718), dispatched off the request
+    /// thread so the admin's "Bake Overrides Into EPUBs" action returns as
+    /// soon as the run is queued instead of awaiting it inline. Keyed on a
+    /// fixed resource so concurrent clicks serialize; does not consume the
+    /// scan semaphore (its DB work is a handful of bulk-fetched queries, not
+    /// per-book round trips).
+    RewriteAllEpubs,
     /// Test-only synthetic task: sleeps `latency_ms` and invokes the
     /// optional `on_run` / `on_done` hooks, with `resource` and
     /// `route_through_scan_sem` letting a test exercise the keyed mutex and
@@ -148,10 +168,12 @@ impl Task {
             Task::BackfillChapters { library_path } => Some(format!("audiobooks:{library_path}")),
             Task::BackfillWordCounts { library_path } => Some(library_path.clone()),
             Task::BackfillPageCounts { library_path } => Some(library_path.clone()),
+            Task::BackfillThumbs { library_path } => Some(library_path.clone()),
             Task::RebuildFtsIndex => Some("rebuild-fts".into()),
             Task::ResolveSuggestions { book_uuid } => Some(format!("suggestions:{book_uuid}")),
             Task::KepubConvert { book_id } => Some(format!("kepub:{book_id}")),
             Task::SendToKindle { .. } => Some("smtp".into()),
+            Task::RewriteAllEpubs => Some("rewrite-all-epubs".into()),
             #[cfg(test)]
             Task::Test { resource, .. } => resource.clone(),
         }
@@ -168,10 +190,12 @@ impl Task {
             Task::BackfillChapters { .. } => false,
             Task::BackfillWordCounts { .. } => false,
             Task::BackfillPageCounts { .. } => false,
+            Task::BackfillThumbs { .. } => false,
             Task::RebuildFtsIndex => false,
             Task::ResolveSuggestions { .. } => false,
             Task::KepubConvert { .. } => false,
             Task::SendToKindle { .. } => false,
+            Task::RewriteAllEpubs => false,
             #[cfg(test)]
             Task::Test {
                 route_through_scan_sem,
@@ -202,6 +226,11 @@ impl Task {
             Task::BackfillWordCounts { .. } => TaskKind::Scan,
             // Same reuse as BackfillWordCounts, its sibling scan-follow-up.
             Task::BackfillPageCounts { .. } => TaskKind::Scan,
+            // Reuse the per-book GenerateThumbs kind rather than Scan: unlike
+            // its sibling backfills, this one has an existing, sensible
+            // "Generating thumbnail" / "Thumbnail generation" label already
+            // wired in `frontend::components::worker_status` (AC4).
+            Task::BackfillThumbs { .. } => TaskKind::GenerateThumbs,
             // Reuse Scan kind for UI display until a dedicated HLS progress
             // widget is added.
             Task::HlsTranscode { .. } => TaskKind::Scan,
@@ -215,6 +244,9 @@ impl Task {
             // Reuse Scan kind for UI display — a send is a rare, short job with
             // no dedicated progress widget (mirrors HLS/FTS).
             Task::SendToKindle { .. } => TaskKind::Scan,
+            // Reuse Scan kind for UI display — a rare admin job with no
+            // dedicated progress widget, mirroring RebuildFtsIndex/KepubConvert.
+            Task::RewriteAllEpubs => TaskKind::Scan,
             #[cfg(test)]
             Task::Test { .. } => TaskKind::Scan,
         }
@@ -226,14 +258,31 @@ impl Task {
 /// assigned per `Worker`; not stable across restarts and not a DB id.
 pub type TaskId = u64;
 
+/// Extra data a successful task attaches to its [`TaskOutcome::Ok`], beyond
+/// the bare fact that it succeeded. Each task kind produces at most one of
+/// these — they're never combined — and most task kinds produce none at all,
+/// which is why [`TaskOutcome::Ok`] wraps this in an `Option`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TaskSuccessDetail {
+    /// A scan whose ghost count cleared the warn threshold (issue #1057).
+    GhostFiles(omnibus_shared::GhostFilesWarning),
+    /// A fleet-wide EPUB override bake's failed `book_uuid`s (#1718, #1739).
+    /// Only attached when non-empty — a bake where every book succeeded
+    /// reports `None` like any other task. Deliberately just the uuids, not
+    /// the per-book error text (which can carry a server filesystem path) —
+    /// see the doc comment on `omnibus_shared::ProgressState::Done::bake_errors`.
+    BakeErrors(Vec<String>),
+}
+
 /// Terminal result of a task, delivered to awaiters of its [`TaskId`].
 #[derive(Clone, Debug)]
 pub enum TaskOutcome {
-    /// The handler ran to completion successfully. `Some(_)` only for a
-    /// scan whose ghost count cleared the warn threshold (issue #1057);
-    /// every other task kind (and a scan under the threshold) reports
-    /// `None`.
-    Ok(Option<omnibus_shared::GhostFilesWarning>),
+    /// The handler ran to completion successfully. `Some(_)` only for the
+    /// task kinds that attach a [`TaskSuccessDetail`] (a scan whose ghost
+    /// count cleared the warn threshold, or a bake that left per-book
+    /// errors); every other task kind (and those two under their
+    /// respective all-clear condition) reports `None`.
+    Ok(Option<TaskSuccessDetail>),
     /// The handler failed. This string is client-facing (served by
     /// `rpc_worker_status` and the owner-scoped Kindle poll), so
     /// `handlers::execute`'s arms sanitize it before it lands here — never

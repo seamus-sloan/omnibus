@@ -70,115 +70,132 @@ pub(super) struct LandingSignals {
 /// Construct every signal the landing page owns and arm the effects that
 /// fetch data into them. Must run from inside [`super::LandingPage`] — every
 /// call here is a Dioxus hook, so the call order is stable across renders.
+/// The signals themselves are assembled by per-bundle constructor helpers
+/// below rather than inline, since none of this is rsx (AC3).
 pub(super) fn setup_landing_signals(server_url: &str, query: Signal<String>) -> LandingSignals {
-    // Accumulated result rows: one growing browse list, or the capped search
-    // result set. `next_cursor` is `Some` only while more browse pages remain.
-    let books = use_signal(Vec::<EbookMetadata>::new);
-    let next_cursor = use_signal(|| None::<String>);
-    let total = use_signal(|| None::<i64>);
-    let hidden = use_signal(|| None::<i64>);
-    let lib_path = use_signal(|| None::<String>);
-    let lib_error = use_signal(|| None::<String>);
-    let loading = use_signal(|| true);
-    let loading_more = use_signal(|| false);
-    let error = use_signal(|| None::<String>);
-    let prefs = use_signal(ViewPrefs::default);
-    // Bumped by the Load-more button and the web scroll observer; one effect
-    // watches it and appends the next page.
-    let want_more = use_signal(|| 0u32);
-    // Monotonic fetch epoch, bumped on every page-1 refetch. An in-flight
-    // page-1 fetch or load-more append captures the epoch and drops its result
-    // if a newer fetch (sort/dir/filter/query change) superseded it mid-flight
-    // — otherwise it would splice an old result stream onto the new list.
-    let fetch_epoch = use_signal(|| 0u64);
+    let fetch_sigs = use_fetch_signals();
     let is_admin = crate::use_is_admin();
-    // Suggestion pools for the inline Authors, Tags, and Genres chip
-    // editors, each carrying the dropdown book-count.
-    let pools = SuggestionPools {
-        authors: use_signal(Vec::<SuggestionItem>::new),
-        tags: use_signal(Vec::<SuggestionItem>::new),
-        genres: use_signal(Vec::<SuggestionItem>::new),
-    };
-    // Shelf-gallery lens. `selection` seeds to All on every target (SSR
-    // parity, rule 07); the persisted choice reconciles post-mount in
-    // `wire_landing_effects`.
-    let selection = use_signal(ShelfSelection::default);
-    let shelves = use_signal(Vec::<ShelfSummary>::new);
-    let shelves_loaded = use_signal(|| false);
-    let shelves_tick = use_signal(|| 0u32);
-    let shelf_books = use_signal(|| None::<Vec<EbookMetadata>>);
-    let shelf_loading = use_signal(|| false);
-    let shelf_error = use_signal(|| None::<String>);
-    let shelf_epoch = use_signal(|| 0u64);
-    let selected_shelf = use_signal(|| None::<Shelf>);
-    let edit_shelf = use_signal(|| false);
-    let hero_points = use_signal(Vec::<ResumePoint>::new);
-    let bulk_selected = use_signal(BTreeSet::<String>::new);
-    let bulk_modal_open = use_signal(|| false);
-    let fetch_sigs = FetchSignals {
-        books,
-        next_cursor,
-        total,
-        hidden,
-        lib_path,
-        lib_error,
-        loading,
-        loading_more,
-        error,
-        fetch_epoch,
-        generation: crate::use_cache_generation(),
-    };
-    let shelf_sigs = ShelfFetchSignals {
-        shelf_books,
-        shelf_loading,
-        shelf_error,
-        shelf_epoch,
-    };
-    let shelf_wiring = ShelfWiring {
-        selection,
-        shelves,
-        shelves_loaded,
-        shelves_tick,
-        shelf_sigs,
-        selected_shelf,
-        hero_points,
-    };
+    let pools = use_suggestion_pools();
+    let shelf_wiring = use_shelf_wiring();
+    let misc = use_misc_signals();
+
     wire_landing_effects(
         server_url,
         query,
-        prefs,
-        want_more,
+        misc.prefs,
+        misc.want_more,
         is_admin,
         pools,
         fetch_sigs,
         shelf_wiring,
-        bulk_selected,
+        misc.bulk_selected,
     );
+
     LandingSignals {
-        books,
-        next_cursor,
-        total,
-        hidden,
-        lib_path,
-        lib_error,
-        loading,
-        loading_more,
-        error,
-        prefs,
-        want_more,
+        books: fetch_sigs.books,
+        next_cursor: fetch_sigs.next_cursor,
+        total: fetch_sigs.total,
+        hidden: fetch_sigs.hidden,
+        lib_path: fetch_sigs.lib_path,
+        lib_error: fetch_sigs.lib_error,
+        loading: fetch_sigs.loading,
+        loading_more: fetch_sigs.loading_more,
+        error: fetch_sigs.error,
+        prefs: misc.prefs,
+        want_more: misc.want_more,
         is_admin,
         pools,
-        selection,
-        shelves,
-        shelves_tick,
-        shelf_books,
-        shelf_loading,
-        shelf_error,
-        selected_shelf,
-        edit_shelf,
-        hero_points,
-        bulk_selected,
-        bulk_modal_open,
+        selection: shelf_wiring.selection,
+        shelves: shelf_wiring.shelves,
+        shelves_tick: shelf_wiring.shelves_tick,
+        shelf_books: shelf_wiring.shelf_sigs.shelf_books,
+        shelf_loading: shelf_wiring.shelf_sigs.shelf_loading,
+        shelf_error: shelf_wiring.shelf_sigs.shelf_error,
+        selected_shelf: shelf_wiring.selected_shelf,
+        edit_shelf: misc.edit_shelf,
+        hero_points: shelf_wiring.hero_points,
+        bulk_selected: misc.bulk_selected,
+        bulk_modal_open: misc.bulk_modal_open,
+    }
+}
+
+/// Construct the core browse/search fetch signals (accumulated result rows,
+/// paging cursor, loading/error state) and the monotonic fetch epoch that
+/// lets an in-flight fetch detect it's been superseded.
+fn use_fetch_signals() -> FetchSignals {
+    FetchSignals {
+        books: use_signal(Vec::<EbookMetadata>::new),
+        next_cursor: use_signal(|| None::<String>),
+        total: use_signal(|| None::<i64>),
+        // First-page "N hidden" receipt; `None` when the viewer hides nothing.
+        hidden: use_signal(|| None::<i64>),
+        lib_path: use_signal(|| None::<String>),
+        lib_error: use_signal(|| None::<String>),
+        loading: use_signal(|| true),
+        loading_more: use_signal(|| false),
+        error: use_signal(|| None::<String>),
+        fetch_epoch: use_signal(|| 0u64),
+        generation: crate::use_cache_generation(),
+    }
+}
+
+/// Construct the suggestion pools for the inline Authors, Tags, and Genres
+/// chip editors, each carrying the dropdown book-count.
+fn use_suggestion_pools() -> SuggestionPools {
+    SuggestionPools {
+        authors: use_signal(Vec::<SuggestionItem>::new),
+        tags: use_signal(Vec::<SuggestionItem>::new),
+        genres: use_signal(Vec::<SuggestionItem>::new),
+    }
+}
+
+/// Construct the shelf-gallery member-list fetch signals.
+fn use_shelf_fetch_signals() -> ShelfFetchSignals {
+    ShelfFetchSignals {
+        shelf_books: use_signal(|| None::<Vec<EbookMetadata>>),
+        shelf_loading: use_signal(|| false),
+        shelf_error: use_signal(|| None::<String>),
+        shelf_epoch: use_signal(|| 0u64),
+    }
+}
+
+/// Construct the shelf-gallery lens signals. `selection` seeds to All on
+/// every target (SSR parity, rule 07); the persisted choice reconciles
+/// post-mount in [`wire_landing_effects`].
+fn use_shelf_wiring() -> ShelfWiring {
+    ShelfWiring {
+        selection: use_signal(ShelfSelection::default),
+        shelves: use_signal(Vec::<ShelfSummary>::new),
+        shelves_loaded: use_signal(|| false),
+        shelves_tick: use_signal(|| 0u32),
+        shelf_sigs: use_shelf_fetch_signals(),
+        selected_shelf: use_signal(|| None::<Shelf>),
+        hero_points: use_signal(Vec::<ResumePoint>::new),
+    }
+}
+
+/// The landing signals that don't belong to a fetch/shelf bundle: view
+/// prefs, the load-more trigger, and the bulk-edit / edit-shelf UI state.
+struct MiscSignals {
+    prefs: Signal<ViewPrefs>,
+    /// Bumped by the Load-more button and the web scroll observer; one
+    /// effect watches it and appends the next page.
+    want_more: Signal<u32>,
+    /// True while the edit-shelf modal is open.
+    edit_shelf: Signal<bool>,
+    /// Table-view bulk-edit selection: the checked rows' uuids.
+    bulk_selected: Signal<BTreeSet<String>>,
+    /// True while the bulk-edit modal is open.
+    bulk_modal_open: Signal<bool>,
+}
+
+fn use_misc_signals() -> MiscSignals {
+    MiscSignals {
+        prefs: use_signal(ViewPrefs::default),
+        want_more: use_signal(|| 0u32),
+        edit_shelf: use_signal(|| false),
+        bulk_selected: use_signal(BTreeSet::<String>::new),
+        bulk_modal_open: use_signal(|| false),
     }
 }
 

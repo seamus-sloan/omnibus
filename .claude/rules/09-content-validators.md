@@ -190,8 +190,8 @@ drift apart.
 
 ## Out of scope
 
-- Change feeds / tombstones / a sync cursor — see
-  [docs/design/db-review-f13-change-tracking.md](../../docs/design/db-review-f13-change-tracking.md),
-  still deferred. This is per-resource validation, not a cursor.
+- Change feeds / tombstones / a sync cursor — deferred F13 work; no design
+  doc has been written for it yet. This is per-resource validation, not a
+  cursor.
 - What a client may *queue* while offline — see
   [08-offline-writes.md](08-offline-writes.md).

@@ -3,10 +3,10 @@
 # anyone who wants a port-walking, "just give me a server" front door.
 #
 # What it does:
-#   1. Probes 127.0.0.1:<port> starting at $PORT (default 3000), walking up
-#      to PORT+9. Reuses an existing omnibus instance if /api/_health
-#      identifies one; picks the first free port otherwise; exits 1 if every
-#      candidate is held by a foreign process.
+#   1. Probes 127.0.0.1:<port> across this worktree's window ($PORT..PORT+9;
+#      flake.nix gives each worktree its own base). Reuses an existing
+#      omnibus instance only when its repo_root is ours; picks the first
+#      free port otherwise; exits 1 if every candidate is held.
 #   2. Verifies OMNIBUS_DEV_SEED_USER is set (otherwise the server boots
 #      without a known admin login and `ui-validate` will fail at the
 #      `/login` step). Tells the user to copy .env.example -> .env.
@@ -24,28 +24,24 @@
 
 set -euo pipefail
 
-# Workspace root for THIS run. Compared against the `repo_root` field that
-# /api/_health now returns, so we can tell our own server apart from a
-# sibling `jj` workspace's server bound to the same port.
-MY_REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-cd "$MY_REPO_ROOT"
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+# The port walk, health probes, and runtime-file writer are shared with
+# scripts/dev-serve-fg.sh so the two front doors can't hand one port to two
+# worktrees. MY_REPO_ROOT, RUNTIME_DIR, START_PORT and END_PORT come from here.
+# shellcheck source=scripts/lib/dev-port.sh
+source scripts/lib/dev-port.sh
 
-RUNTIME_DIR=".claude/runtime"
 mkdir -p "$RUNTIME_DIR"
 
-START_PORT="${PORT:-3000}"
-# A 10-port window matches flake.nix's per-workspace PORT stride (3000,
-# 3010, 3020, 3030) — so port-walking stays *within* this workspace's
-# window and never wanders into a sibling workspace's range.
-END_PORT=$((START_PORT + 9))
-
-# Tighter timeouts than curl defaults so a misbehaving foreign process
-# can't stall the probe sweep.
-probe_health() {
-    local port="$1"
-    curl --silent --show-error --max-time 2 --connect-timeout 1 \
-        "http://127.0.0.1:${port}/api/_health" 2>/dev/null || true
-}
+# How long to wait for a freshly started server to answer /api/_health.
+# User-editable, so validate it here: a non-numeric value ("900s", "15m")
+# would make the arithmetic in wait_for_health a syntax error and kill the
+# script under `set -e`, long before it could explain why.
+BUILD_TIMEOUT_SECS="${OMNIBUS_DEV_BUILD_TIMEOUT_SECS:-900}"
+if ! [[ "$BUILD_TIMEOUT_SECS" =~ ^[1-9][0-9]*$ ]]; then
+    echo "dev-up: OMNIBUS_DEV_BUILD_TIMEOUT_SECS='$BUILD_TIMEOUT_SECS' is not a positive integer; using 900" >&2
+    BUILD_TIMEOUT_SECS=900
+fi
 
 # HMR-tolerant probe. `dx serve` briefly stops serving while it rebuilds
 # the backend binary after a Rust change; /api/_health then returns
@@ -68,78 +64,26 @@ probe_health_with_retry() {
     return 1
 }
 
-is_port_free() {
-    local port="$1"
-    # `lsof -iTCP -sTCP:LISTEN -P` exits non-zero when nothing's listening.
-    ! lsof -iTCP:"$port" -sTCP:LISTEN -P >/dev/null 2>&1
-}
-
-is_omnibus_response() {
-    # Matches the literal substring the /api/_health handler emits.
-    echo "$1" | grep -q '"app"[[:space:]]*:[[:space:]]*"omnibus"'
-}
-
-# Pull the `repo_root` field from an /api/_health JSON body. Empty if the
-# server is too old to expose it (pre-#TBD) or the response is malformed.
-extract_repo_root() {
-    echo "$1" | sed -nE 's/.*"repo_root"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p'
-}
-
-# Same as is_omnibus_response, but ALSO requires the server's reported
-# `repo_root` to match MY_REPO_ROOT — i.e. "this is omnibus AND it's MY
-# workspace's omnibus". Without this gate, two jj workspaces port-walking
-# from the same base port would silently reuse each other's server.
-is_my_omnibus_response() {
-    is_omnibus_response "$1" || return 1
-    local server_root
-    server_root="$(extract_repo_root "$1")"
-    [ -n "$server_root" ] && [ "$server_root" = "$MY_REPO_ROOT" ]
-}
-
-choose_port() {
-    local port
-    for ((port = START_PORT; port <= END_PORT; port++)); do
-        if is_port_free "$port"; then
-            echo "$port:free"
-            return 0
-        fi
-        local body server_root
-        body="$(probe_health "$port")"
-        if is_my_omnibus_response "$body"; then
-            echo "$port:reuse"
-            return 0
-        fi
-        if is_omnibus_response "$body"; then
-            # Sibling workspace's omnibus server bound to this port. Don't
-            # reuse it (different code, different DB) — walk to the next.
-            server_root="$(extract_repo_root "$body")"
-            echo "dev-up: port $port held by sibling workspace ${server_root:-<unknown>}, skipping" >&2
-        fi
-        # Port held by something that isn't omnibus, or by a sibling — skip.
-    done
-    return 1
-}
-
-write_runtime_files() {
-    local port="$1"
-    echo "$port" >"$RUNTIME_DIR/port"
-    cat >"$RUNTIME_DIR/env.sh" <<EOF
-# Generated by scripts/dev-server-up.sh — source before running Playwright
-# or driving the preview. Re-run dev-up to refresh.
-export OMNIBUS_PORT=$port
-export PLAYWRIGHT_BASE_URL=http://127.0.0.1:$port
-EOF
-}
-
+# The old flat 90s covered a warm rebuild but not a freshly-created
+# worktree, which compiles the whole workspace into an empty
+# CARGO_TARGET_DIR — and per-worktree ports make fresh worktrees routine,
+# so the cold build can't be the case that fails. The budget is generous
+# instead, and the common failure (a compile error, which makes dx exit)
+# is caught by watching the child rather than by waiting the clock out.
 wait_for_health() {
-    local port="$1"
-    local deadline=$(($(date +%s) + 90))
+    local port="$1" server_pid="$2"
+    local deadline=$(($(date +%s) + BUILD_TIMEOUT_SECS))
     while [ "$(date +%s)" -lt "$deadline" ]; do
         local body
         body="$(probe_health "$port")"
         if is_omnibus_response "$body"; then
             echo "$body"
             return 0
+        fi
+        # dx is gone — a compile error or a crash. Fail now; the caller's
+        # remediation line points at the log that says why.
+        if ! kill -0 "$server_pid" 2>/dev/null; then
+            return 1
         fi
         sleep 1
     done
@@ -187,12 +131,12 @@ EOF
     disown "$server_pid" 2>/dev/null || disown 2>/dev/null || true
     echo "$server_pid" >"$RUNTIME_DIR/server.pid"
 
-    if ! wait_for_health "$port" >/dev/null; then
+    if ! wait_for_health "$port" "$server_pid" >/dev/null; then
         # Kill the orphan rather than leaving it bound to $port — a stale,
         # unhealthy process would block the next dev-up (or get "reused"
         # as if it were healthy if it manages to start serving later).
         if kill -0 "$server_pid" 2>/dev/null; then
-            echo "dev-up: server did not become healthy within 90s; killing pid $server_pid" >&2
+            echo "dev-up: server did not become healthy within ${BUILD_TIMEOUT_SECS}s; killing pid $server_pid" >&2
             kill "$server_pid" 2>/dev/null || true
             # Reap dx-wrap's grandchildren too (dx spawns the actual server
             # in a subprocess). pkill -P walks one level; that's enough

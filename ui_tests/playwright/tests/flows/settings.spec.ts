@@ -337,7 +337,7 @@ test("shows an error status when a manual library scan fails", async ({
   await expect(settingsStatus(page)).toHaveClass(/error/);
 });
 
-test("bakes overrides into every EPUB and reports the run summary", async ({
+test("bakes overrides into every EPUB and shows a queued status", async ({
   page,
 }) => {
   await gotoReady(page, SETTINGS_LIBRARY);
@@ -347,7 +347,7 @@ test("bakes overrides into every EPUB and reports the run summary", async ({
       return route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ rewritten: 2, skipped: 1, errors: [] }),
+        body: "null",
       });
     }
     return route.continue();
@@ -363,13 +363,11 @@ test("bakes overrides into every EPUB and reports the run summary", async ({
     async () => page.getByTestId("rewrite-all-epubs").click(),
   );
 
-  await expect(settingsStatus(page)).toHaveText(
-    "Rewrote 2 EPUB(s); skipped 1; 0 error(s).",
-  );
+  await expect(settingsStatus(page)).toHaveText("EPUB override bake queued.");
   await expect(settingsStatus(page)).not.toHaveClass(/error/);
 });
 
-test("shows an error status when the bulk EPUB rewrite fails", async ({
+test("shows an error status when the bulk EPUB rewrite fails to queue", async ({
   page,
 }) => {
   await gotoReady(page, SETTINGS_LIBRARY);
@@ -395,7 +393,9 @@ test("shows an error status when the bulk EPUB rewrite fails", async ({
     async () => page.getByTestId("rewrite-all-epubs").click(),
   );
 
-  await expect(settingsStatus(page)).toContainText("Failed to rewrite EPUBs");
+  await expect(settingsStatus(page)).toContainText(
+    "Failed to start EPUB override bake",
+  );
   await expect(settingsStatus(page)).toHaveClass(/error/);
 });
 
