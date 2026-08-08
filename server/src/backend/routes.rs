@@ -11,9 +11,10 @@ use axum::{
 };
 
 use super::{
-    account, audiobooks, author_photos, authors, bookmarks, covers, ebooks, genres, highlights,
-    journals, kindle, overrides, physical, profile, progress, ratings, read_status, scan, search,
-    series, settings, shelves, stats, suggestions, summary, tags, uploads, users, AppState,
+    account, admin_sessions, audiobooks, author_photos, authors, bookmarks, covers, ebooks, genres,
+    highlights, journals, kindle, overrides, physical, profile, progress, ratings, read_status,
+    scan, search, series, settings, shelves, stats, suggestions, summary, tags, uploads, users,
+    AppState,
 };
 use crate::rate_limit::{rate_limit_by_ip, RateLimiter};
 
@@ -40,6 +41,23 @@ pub(super) fn content_routes() -> Router<AppState> {
         )
         .route("/api/users/{id}/password", post(users::post_password))
         .route("/api/users/{id}/unlock", post(users::post_unlock))
+        // Admin device & session management (F5.4, #910) — all AdminUser-gated.
+        .route(
+            "/api/admin/users/{id}/sessions",
+            get(admin_sessions::get_user_sessions),
+        )
+        .route(
+            "/api/admin/users/{id}/devices",
+            get(admin_sessions::get_user_devices),
+        )
+        .route(
+            "/api/admin/sessions/{id}",
+            delete(admin_sessions::delete_session),
+        )
+        .route(
+            "/api/admin/devices/{id}",
+            delete(admin_sessions::delete_device),
+        )
         .route("/api/library", get(ebooks::get_library))
         .route(
             "/api/downloads/validators",

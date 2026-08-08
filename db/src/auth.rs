@@ -15,14 +15,17 @@ mod users;
 
 pub use avatars::{delete_user_avatar, get_user_avatar, upsert_user_avatar, UserAvatar};
 pub use device::{
-    list_devices_for_user, register_device, validate_client_version, validate_device_name,
-    LIST_DEVICES_LIMIT, MAX_CLIENT_VERSION_CHARS, MAX_DEVICES_PER_USER, MAX_DEVICE_NAME_CHARS,
+    list_devices_for_user, register_device, revoke_device, validate_client_version,
+    validate_device_name, LIST_DEVICES_LIMIT, MAX_CLIENT_VERSION_CHARS, MAX_DEVICES_PER_USER,
+    MAX_DEVICE_NAME_CHARS,
 };
 pub use login::verify_login;
 pub use password::{hash_password, validate_password, validate_username, verify_password};
 pub use session::{
-    create_session, lookup_session, prune_expired_sessions, revoke_all_sessions_for_user,
-    revoke_all_sessions_for_user_except, revoke_session, validate_session, SessionAuthError,
+    create_session, list_sessions_for_user, lookup_session, prune_expired_sessions,
+    revoke_all_sessions_for_user, revoke_all_sessions_for_user_except, revoke_session,
+    revoke_session_checked, revoke_session_for_user, validate_session, SessionAuthError,
+    LIST_SESSIONS_LIMIT,
 };
 pub use session_key::{get_session_key, load_or_create_session_key, put_session_key};
 pub use token::{
@@ -54,6 +57,8 @@ pub enum AuthError {
     LastAdmin,
     #[error("session not found or expired")]
     SessionNotFound,
+    #[error("device not found")]
+    DeviceNotFound,
     #[error("account is temporarily locked")]
     AccountLocked { until_unix: i64 },
     #[error("registration is disabled")]
@@ -120,7 +125,8 @@ pub enum SessionKind {
 }
 
 impl SessionKind {
-    pub(crate) fn as_str(self) -> &'static str {
+    /// Wire/SQL representation: `"cookie"` or `"bearer"`.
+    pub fn as_str(self) -> &'static str {
         match self {
             SessionKind::Cookie => "cookie",
             SessionKind::Bearer => "bearer",

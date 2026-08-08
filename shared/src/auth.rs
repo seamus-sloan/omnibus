@@ -95,6 +95,48 @@ pub struct SetPasswordRequest {
     pub password: String,
 }
 
+/// A session row as shown to its owner or an admin (device & session
+/// management, F5.4). Never exposes the token hash — only enough to
+/// identify and revoke the row. Shared by the self-service
+/// `GET /api/auth/sessions` and the admin `GET /api/admin/users/{id}/sessions`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionView {
+    pub id: i64,
+    #[serde(default)]
+    pub device_id: Option<i64>,
+    /// `"cookie"` or `"bearer"`.
+    pub kind: String,
+    pub created_at: i64,
+    pub last_used_at: i64,
+    pub expires_at: i64,
+    /// `true` when this is the session the request authenticated with. Only
+    /// ever set by the self-service listing (`GET /api/auth/sessions`); the
+    /// admin listing (`GET /api/admin/users/{id}/sessions`) always returns
+    /// `false` here — including when an admin lists their own account, where
+    /// the viewed row *could* be the admin's own request session — because
+    /// that endpoint's builder never checks the requester's own session id
+    /// against the row. Enforcement lives on the write side, not this flag:
+    /// the self-service `DELETE /api/auth/sessions/{id}` refuses (400) to
+    /// revoke the id the request itself authenticated with (AC2), regardless
+    /// of whether a listing ever marked it current.
+    #[serde(default)]
+    pub is_current: bool,
+}
+
+/// A registered device row as shown to its owner or an admin. Shared by the
+/// admin `GET /api/admin/users/{id}/devices` listing (self-service devices
+/// are deferred — see `/api/auth/devices` note in the PR body).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeviceView {
+    pub id: i64,
+    pub name: String,
+    pub client_kind: String,
+    #[serde(default)]
+    pub client_version: Option<String>,
+    pub created_at: i64,
+    pub last_seen_at: i64,
+}
+
 /// Whether self-registration is open; the body of `GET /api/auth/registration`
 /// and `POST /api/settings/registration`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

@@ -439,6 +439,129 @@ async fn prune_removes_expired_revoked_and_idle_keeps_live() {
     assert_eq!(again, 0);
 }
 
+#[tokio::test]
+async fn list_sessions_for_user_returns_only_live_sessions_for_that_user() {
+    let p = pool().await;
+    let alice = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    crate::auth::set_registration_enabled(&p, true)
+        .await
+        .unwrap();
+    let bob = create_user(&p, "bob", "bunker9-longer-pass").await.unwrap();
+
+    let live = create_session(&p, alice.id, None, SessionKind::Cookie, 3600)
+        .await
+        .unwrap();
+    let revoked = create_session(&p, alice.id, None, SessionKind::Bearer, 3600)
+        .await
+        .unwrap();
+    revoke_session(&p, revoked.session.id).await.unwrap();
+    // Expired but not revoked — must also be excluded.
+    let expired = create_session(&p, alice.id, None, SessionKind::Cookie, 3600)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE sessions SET expires_at = 1 WHERE id = ?")
+        .bind(expired.session.id)
+        .execute(&p)
+        .await
+        .unwrap();
+    // Idle-expired (still within its absolute expiry, but `last_used_at` is
+    // older than `SESSION_IDLE_TIMEOUT_SECS`) — mirrors `lookup_session`'s
+    // idle rejection, so a listing can't show a session that would no
+    // longer actually authenticate.
+    let idle_expired = create_session(&p, alice.id, None, SessionKind::Cookie, 30 * 24 * 60 * 60)
+        .await
+        .unwrap();
+    let stale = now_unix() - SESSION_IDLE_TIMEOUT_SECS - 1;
+    sqlx::query("UPDATE sessions SET last_used_at = ? WHERE id = ?")
+        .bind(stale)
+        .bind(idle_expired.session.id)
+        .execute(&p)
+        .await
+        .unwrap();
+    // Bob's session must never show up in Alice's listing.
+    create_session(&p, bob.id, None, SessionKind::Cookie, 3600)
+        .await
+        .unwrap();
+
+    let sessions = list_sessions_for_user(&p, alice.id).await.unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id, live.session.id);
+}
+
+#[tokio::test]
+async fn list_sessions_for_user_caps_response_at_list_sessions_limit() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let over_cap = LIST_SESSIONS_LIMIT + 5;
+    for _ in 0..over_cap {
+        create_session(&p, u.id, None, SessionKind::Cookie, 3600)
+            .await
+            .unwrap();
+    }
+    let sessions = list_sessions_for_user(&p, u.id).await.unwrap();
+    assert_eq!(sessions.len() as i64, LIST_SESSIONS_LIMIT);
+}
+
+#[tokio::test]
+async fn revoke_session_for_user_revokes_only_when_owned_by_that_user() {
+    let p = pool().await;
+    let alice = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    crate::auth::set_registration_enabled(&p, true)
+        .await
+        .unwrap();
+    let bob = create_user(&p, "bob", "bunker9-longer-pass").await.unwrap();
+    let alices = create_session(&p, alice.id, None, SessionKind::Cookie, 3600)
+        .await
+        .unwrap();
+
+    let err = revoke_session_for_user(&p, bob.id, alices.session.id)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AuthError::SessionNotFound));
+    lookup_session(&p, &alices.raw_token)
+        .await
+        .expect("a different user's revoke attempt must not touch the session");
+
+    revoke_session_for_user(&p, alice.id, alices.session.id)
+        .await
+        .unwrap();
+    assert!(matches!(
+        lookup_session(&p, &alices.raw_token).await.unwrap_err(),
+        AuthError::SessionNotFound
+    ));
+}
+
+#[tokio::test]
+async fn revoke_session_for_user_returns_not_found_for_unknown_id() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let err = revoke_session_for_user(&p, u.id, 999_999)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AuthError::SessionNotFound));
+}
+
+#[tokio::test]
+async fn revoke_session_checked_revokes_any_users_session() {
+    let p = pool().await;
+    let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
+    let ns = create_session(&p, u.id, None, SessionKind::Cookie, 3600)
+        .await
+        .unwrap();
+    revoke_session_checked(&p, ns.session.id).await.unwrap();
+    assert!(matches!(
+        lookup_session(&p, &ns.raw_token).await.unwrap_err(),
+        AuthError::SessionNotFound
+    ));
+}
+
+#[tokio::test]
+async fn revoke_session_checked_returns_not_found_for_unknown_id() {
+    let p = pool().await;
+    let err = revoke_session_checked(&p, 999_999).await.unwrap_err();
+    assert!(matches!(err, AuthError::SessionNotFound));
+}
+
 /// The idle DELETE must use `idx_sessions_last_used_at`, not scan.
 /// Guards against regressing to the OR'd form (migration 0012).
 #[tokio::test]

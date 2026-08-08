@@ -3,7 +3,7 @@
 //! share nothing with the table/row markup beyond `PermissionToggles`.
 
 use dioxus::prelude::*;
-use omnibus_shared::{AdminUserRow, CreateUserRequest, UserPermissions};
+use omnibus_shared::{AdminUserRow, CreateUserRequest, DeviceView, SessionView, UserPermissions};
 
 use crate::components::auth::{score_password, PasswordRequirements, StrengthMeter};
 use crate::components::{confirm_modal_body, ConfirmModal, ConfirmModalAction, ConfirmModalTone};
@@ -281,6 +281,158 @@ pub(super) fn DeleteUserModal(
                     },
                 ],
             )}
+        }
+    }
+}
+
+/// Device & session management modal (F5.4, #910): lists a target user's
+/// live sessions and registered devices, each with a Revoke action. Both
+/// lists reload after any revoke so the rendered state always matches the
+/// server. Devices are listed separately from sessions — revoking a device
+/// also revokes any session still tied to it (enforced server-side), so a
+/// device row disappearing can also drop a session row on the next reload.
+#[component]
+pub(super) fn SessionsModal(user: AdminUserRow, on_close: EventHandler<()>) -> Element {
+    let uid = user.id;
+    let mut sessions = use_signal(Vec::<SessionView>::new);
+    let mut devices = use_signal(Vec::<DeviceView>::new);
+    let mut error = use_signal(|| None::<String>);
+    let mut reload = use_signal(|| 0u32);
+    let mut busy_id = use_signal(|| None::<i64>);
+
+    use_effect(move || {
+        let _ = reload();
+        // Clear any error left over from a previous fetch/revoke *before* this
+        // reload starts, not just on failure — otherwise a stale banner from an
+        // earlier transient failure keeps showing even once this reload succeeds.
+        error.set(None);
+        spawn(async move {
+            match data::list_user_sessions(uid).await {
+                Ok(rows) => sessions.set(rows),
+                Err(e) => error.set(Some(e)),
+            }
+            match data::list_user_devices(uid).await {
+                Ok(rows) => devices.set(rows),
+                Err(e) => error.set(Some(e)),
+            }
+        });
+    });
+
+    let revoke_session = use_callback(move |session_id: i64| {
+        if busy_id().is_some() {
+            return;
+        }
+        busy_id.set(Some(session_id));
+        error.set(None);
+        spawn(async move {
+            match data::revoke_user_session(session_id).await {
+                Ok(()) => reload.with_mut(|n| *n += 1),
+                Err(e) => error.set(Some(e)),
+            }
+            busy_id.set(None);
+        });
+    });
+    let revoke_device = use_callback(move |device_id: i64| {
+        if busy_id().is_some() {
+            return;
+        }
+        busy_id.set(Some(device_id));
+        error.set(None);
+        spawn(async move {
+            match data::revoke_user_device(device_id).await {
+                Ok(()) => reload.with_mut(|n| *n += 1),
+                Err(e) => error.set(Some(e)),
+            }
+            busy_id.set(None);
+        });
+    });
+
+    rsx! {
+        ModalShell {
+            title: "Sessions & devices \u{2014} {user.username}",
+            testid: "users-sessions-modal",
+            on_close,
+            ModalError { error: error() }
+            h4 { "Sessions" }
+            {render_session_list(&sessions(), busy_id(), revoke_session)}
+            h4 { "Devices" }
+            {render_device_list(&devices(), busy_id(), revoke_device)}
+            div { class: "settings-actions",
+                button { r#type: "button", class: "btn ghost", onclick: move |_| on_close.call(()), "Close" }
+            }
+        }
+    }
+}
+
+/// The session list, or an empty-state line when the user has none live.
+fn render_session_list(
+    rows: &[SessionView],
+    busy_id: Option<i64>,
+    on_revoke: Callback<i64>,
+) -> Element {
+    if rows.is_empty() {
+        return rsx! {
+            p { class: "settings-status", "data-testid": "user-sessions-empty", "No live sessions." }
+        };
+    }
+    rsx! {
+        ul { class: "users-session-list", "data-testid": "user-sessions-list",
+            for s in rows {
+                {
+                    let id = s.id;
+                    let kind = s.kind.clone();
+                    let last_used = super::fmt_date(s.last_used_at);
+                    rsx! {
+                        li { key: "{id}", class: "users-session-row", "data-testid": "user-session-row",
+                            span { "{kind} \u{00b7} last used {last_used}" }
+                            button {
+                                r#type: "button",
+                                class: "btn ghost danger sm",
+                                "data-testid": "user-session-revoke-{id}",
+                                disabled: busy_id == Some(id),
+                                onclick: move |_| on_revoke.call(id),
+                                "Revoke"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The device list, or an empty-state line when the user has none registered.
+fn render_device_list(
+    rows: &[DeviceView],
+    busy_id: Option<i64>,
+    on_revoke: Callback<i64>,
+) -> Element {
+    if rows.is_empty() {
+        return rsx! {
+            p { class: "settings-status", "data-testid": "user-devices-empty", "No registered devices." }
+        };
+    }
+    rsx! {
+        ul { class: "users-session-list", "data-testid": "user-devices-list",
+            for d in rows {
+                {
+                    let id = d.id;
+                    let last_seen = super::fmt_date(d.last_seen_at);
+                    rsx! {
+                        li { key: "{id}", class: "users-session-row", "data-testid": "user-device-row",
+                            span { "{d.name} \u{00b7} {d.client_kind} \u{00b7} last seen {last_seen}" }
+                            button {
+                                r#type: "button",
+                                class: "btn ghost danger sm",
+                                "data-testid": "user-device-revoke-{id}",
+                                disabled: busy_id == Some(id),
+                                onclick: move |_| on_revoke.call(id),
+                                "Revoke"
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
