@@ -19,7 +19,15 @@ async fn pool() -> SqlitePool {
 /// the shape the extractors read straight off a request, without a full
 /// HTTP round trip through a router.
 fn parts_with(pool: SqlitePool, headers: &[(HeaderName, &str)]) -> Parts {
-    let mut builder = Request::builder().uri("/api/rpc/probe");
+    parts_with_uri("/api/rpc/probe", pool, headers)
+}
+
+/// [`parts_with`], but against a specific route path — for a test that
+/// wants to pin the gate on one named `/api/rpc/*` route rather than the
+/// generic extractor behavior (the extractors themselves never branch on
+/// the URI, but naming the real route keeps the test's intent legible).
+fn parts_with_uri(uri: &str, pool: SqlitePool, headers: &[(HeaderName, &str)]) -> Parts {
+    let mut builder = Request::builder().uri(uri);
     for (name, value) in headers {
         builder = builder.header(name.clone(), *value);
     }
@@ -116,5 +124,34 @@ async fn admin_user_from_request_parts_returns_admin_when_user_is_admin() {
         .await
         .unwrap();
     assert_eq!(admin_user.0.id, user.id);
+    assert!(admin_user.0.is_admin);
+}
+
+// ── #954: `rpc_get_last_errors` (`/api/rpc/errors`) admin gate ──
+
+#[tokio::test]
+async fn admin_user_from_request_parts_rejects_non_admin_for_last_errors_route() {
+    let p = pool().await;
+    // alice is the first user (auto-admin); bob is created second and is
+    // never granted admin.
+    seed_session(&p, "alice", SessionKind::Cookie).await;
+    let token = seed_session(&p, "bob", SessionKind::Bearer).await;
+    let bearer = format!("Bearer {token}");
+    let mut parts = parts_with_uri("/api/rpc/errors", p, &[(header::AUTHORIZATION, &bearer)]);
+    let res = AdminUser::from_request_parts(&mut parts, &())
+        .await
+        .unwrap_err();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn admin_user_from_request_parts_accepts_admin_for_last_errors_route() {
+    let p = pool().await;
+    let token = seed_session(&p, "alice", SessionKind::Bearer).await;
+    let bearer = format!("Bearer {token}");
+    let mut parts = parts_with_uri("/api/rpc/errors", p, &[(header::AUTHORIZATION, &bearer)]);
+    let admin_user = AdminUser::from_request_parts(&mut parts, &())
+        .await
+        .unwrap();
     assert!(admin_user.0.is_admin);
 }

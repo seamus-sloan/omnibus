@@ -703,3 +703,15 @@ pub async fn seed_epub_book_at(pool: &SqlitePool, lib: &Path) -> (i64, String) {
     std::fs::write(lib.join("sub").join("book.epub"), b"epub").unwrap();
     (book_id, "uuid-1".to_string())
 }
+
+// ---------------------------------------------------------------------------
+// Error ring buffer
+// ---------------------------------------------------------------------------
+
+/// Clear the process-wide error ring buffer (`crate::error_ring`). Exposed
+/// here (not just `#[cfg(test)]` inside that module) so the tracing `Layer`
+/// tests in `server/`, which depend on this crate via the `test-support`
+/// feature, can reset shared state between cases.
+pub fn clear_error_ring() {
+    crate::error_ring::clear();
+}
