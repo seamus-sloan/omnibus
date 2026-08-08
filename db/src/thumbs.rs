@@ -123,6 +123,45 @@ pub async fn is_stale_async(book_id: i64, size: ThumbSize, last_modified_epoch: 
     }
 }
 
+/// Bump this whenever [`write_thumbnail`]'s encode path changes (a new WebP
+/// encoder, a different quality setting, a new output format) so a client
+/// holding a validator from the old scheme is forced to re-fetch even though
+/// the book's `last_modified_epoch` never moved. This repo doesn't need to
+/// detect the encoder version dynamically, so a hand-bumped constant is
+/// enough.
+const THUMB_ENCODER_VERSION: u32 = 1;
+
+/// Derive a thumbnail's `ETag` from its freshness key — `(book_id, size,
+/// last_modified_epoch)`, the exact triple [`is_stale`]/[`is_stale_async`]
+/// key freshness on — plus `version`, without touching the filesystem. A
+/// validator that cannot disagree with the freshness check it stands in for.
+///
+/// Deliberately not stat-derived: [`touch_thumb`] bumps the cached file's
+/// mtime on every cache-hit read for the LRU in [`evict_if_over_cap`], so an
+/// mtime-bearing validator would churn on every request and never produce a
+/// 304. Split out from [`thumb_etag`] so a test can vary `version`
+/// independently of [`THUMB_ENCODER_VERSION`].
+fn thumb_etag_versioned(
+    book_id: i64,
+    size: ThumbSize,
+    last_modified_epoch: i64,
+    version: u32,
+) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    book_id.hash(&mut hasher);
+    size.as_str().hash(&mut hasher);
+    last_modified_epoch.hash(&mut hasher);
+    version.hash(&mut hasher);
+    format!("\"{:016x}\"", hasher.finish())
+}
+
+/// Derive a thumbnail's `ETag` without reading it off disk. See
+/// [`thumb_etag_versioned`] for the freshness-key rationale.
+pub fn thumb_etag(book_id: i64, size: ThumbSize, last_modified_epoch: i64) -> String {
+    thumb_etag_versioned(book_id, size, last_modified_epoch, THUMB_ENCODER_VERSION)
+}
+
 /// Resize a pre-decoded cover and write the WebP to disk for one size.
 ///
 /// Atomic on POSIX: the WebP is written to a per-(book,size) temp file in
