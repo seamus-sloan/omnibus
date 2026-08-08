@@ -342,7 +342,7 @@ async fn fetch_page_count_candidates(
 ///
 /// Posted as a separate worker task after each ebook library scan (mirroring
 /// [`backfill_word_counts`]). Cheap when caught up: a book whose three sizes
-/// are already fresh per [`thumbs::is_stale`] is skipped without touching its
+/// are already fresh per [`thumbs::is_stale_async`] is skipped without touching its
 /// cover bytes, so a re-scan of an unchanged library does no re-encoding —
 /// exactly what [`thumbs::ensure_thumbnails_sync`] does for a single book.
 ///
@@ -374,9 +374,13 @@ pub(crate) async fn backfill_thumbs(
         processed = processed.saturating_add(1);
         on_progress(processed, total);
 
-        let all_fresh = thumbs::ThumbSize::all()
-            .into_iter()
-            .all(|size| !thumbs::is_stale(book_id, size, last_modified_epoch));
+        let mut all_fresh = true;
+        for size in thumbs::ThumbSize::all() {
+            if thumbs::is_stale_async(book_id, size, last_modified_epoch).await {
+                all_fresh = false;
+                break;
+            }
+        }
         if all_fresh {
             continue;
         }
