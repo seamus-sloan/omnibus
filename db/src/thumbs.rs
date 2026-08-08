@@ -141,19 +141,27 @@ const THUMB_ENCODER_VERSION: u32 = 1;
 /// mtime-bearing validator would churn on every request and never produce a
 /// 304. Split out from [`thumb_etag`] so a test can vary `version`
 /// independently of [`THUMB_ENCODER_VERSION`].
+///
+/// SHA-256, not `std::hash::Hasher` — the same trap `helpers::stable_uuid`'s
+/// doc comment and `kobo::dto`'s fixed-digest derivation both flag:
+/// `DefaultHasher`'s algorithm is not guaranteed stable across toolchain
+/// versions, so a compiler bump could silently rotate every cached client's
+/// ETag and force a mass re-fetch.
 fn thumb_etag_versioned(
     book_id: i64,
     size: ThumbSize,
     last_modified_epoch: i64,
     version: u32,
 ) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    book_id.hash(&mut hasher);
-    size.as_str().hash(&mut hasher);
-    last_modified_epoch.hash(&mut hasher);
-    version.hash(&mut hasher);
-    format!("\"{:016x}\"", hasher.finish())
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(book_id.to_le_bytes());
+    hasher.update(size.as_str().as_bytes());
+    hasher.update(last_modified_epoch.to_le_bytes());
+    hasher.update(version.to_le_bytes());
+    let digest = hasher.finalize();
+    let hex: String = digest[..8].iter().map(|b| format!("{b:02x}")).collect();
+    format!("\"{hex}\"")
 }
 
 /// Derive a thumbnail's `ETag` without reading it off disk. See
