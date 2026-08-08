@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use sqlx::SqlitePool;
 
-use crate::{audiobook, ebook, sync};
+use crate::{audiobook, covers, ebook, sync, thumbs};
 
 /// Query the first-part filename (ordinal=0) and format for every book
 /// under `library_path` that needs chapter backfill (no `file_chapters`
@@ -333,4 +333,124 @@ async fn fetch_page_count_candidates(
     .fetch_all(pool)
     .await?;
     Ok(ids)
+}
+
+/// Pre-generate all three WebP thumbnail sizes for every book under
+/// `library_path` that has a cover (#1752), so the landing grid's first
+/// post-scan load serves cached thumbnails instead of falling through the
+/// lazy generation path in `server::backend::covers::thumb_cache_miss_response`.
+///
+/// Posted as a separate worker task after each ebook library scan (mirroring
+/// [`backfill_word_counts`]). Cheap when caught up: a book whose three sizes
+/// are already fresh per [`thumbs::is_stale`] is skipped without touching its
+/// cover bytes, so a re-scan of an unchanged library does no re-encoding —
+/// exactly what [`thumbs::ensure_thumbnails_sync`] does for a single book.
+///
+/// Processes one book at a time (decode + encode is CPU-bound and runs on
+/// the blocking pool via `spawn_blocking`) rather than fanning out, so a
+/// full-library warm-up can't starve an interactive `/api/thumbs` request
+/// for CPU. A per-book failure (missing cover, decode error, I/O) is logged
+/// and skipped rather than aborting the batch — the next scan or an
+/// interactive view retries it via the lazy path. `on_progress(processed,
+/// total)` is called per book for the UI, mirroring the sibling backfills.
+pub(crate) async fn backfill_thumbs(
+    pool: &SqlitePool,
+    library_path: &str,
+    mut on_progress: impl FnMut(u32, u32),
+) -> anyhow::Result<()> {
+    let candidates = fetch_thumb_candidates(pool, library_path).await?;
+    if candidates.is_empty() {
+        return Ok(());
+    }
+
+    let total = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
+    tracing::info!(
+        count = total,
+        "pre-generating thumbnails for existing covers"
+    );
+
+    let mut processed = 0u32;
+    for (book_id, last_modified_epoch) in candidates {
+        processed = processed.saturating_add(1);
+        on_progress(processed, total);
+
+        let all_fresh = thumbs::ThumbSize::all()
+            .into_iter()
+            .all(|size| !thumbs::is_stale(book_id, size, last_modified_epoch));
+        if all_fresh {
+            continue;
+        }
+
+        let cover = match covers::get_cover(pool, book_id).await {
+            Ok(Some((_mime, bytes))) => bytes,
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::warn!(
+                    book_id,
+                    error = %e,
+                    "thumbnail backfill: cover fetch failed; skipping"
+                );
+                continue;
+            }
+        };
+
+        match tokio::task::spawn_blocking(move || {
+            thumbs::ensure_thumbnails_sync(book_id, last_modified_epoch, cover)
+        })
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    book_id,
+                    error = %e,
+                    "thumbnail backfill: generation failed; skipping"
+                );
+            }
+            Err(join_err) => {
+                tracing::warn!(
+                    book_id,
+                    %join_err,
+                    is_panic = join_err.is_panic(),
+                    "thumbnail backfill: generation task failed; skipping"
+                );
+            }
+        }
+    }
+
+    let cap = thumbs::cap_bytes();
+    match tokio::task::spawn_blocking(move || thumbs::evict_if_over_cap(cap)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!(error = %e, "thumbnail backfill: eviction failed"),
+        Err(join_err) => tracing::warn!(
+            %join_err,
+            is_panic = join_err.is_panic(),
+            "thumbnail backfill: eviction task failed"
+        ),
+    }
+
+    Ok(())
+}
+
+/// `(books.id, last_modified_epoch)` for every book under `library_path`
+/// that has a cover — the [`backfill_thumbs`] work set. Scoped to the
+/// scanned library so the follow-up task's cost tracks that scan.
+/// Cover-override-only books (`has_cover = 0` with an uploaded override)
+/// aren't included; they're left to the lazy `thumb_cache_miss_response`
+/// path, same as before this backfill existed.
+async fn fetch_thumb_candidates(
+    pool: &SqlitePool,
+    library_path: &str,
+) -> anyhow::Result<Vec<(i64, i64)>> {
+    let rows: Vec<(i64, i64)> = sqlx::query_as(
+        "SELECT b.id, CAST(COALESCE(b.last_modified, strftime('%s','now')) AS INTEGER) \
+         FROM books b \
+         JOIN scan_roots l ON b.library_id = l.id \
+         WHERE l.path = ? AND b.has_cover = 1 \
+         ORDER BY b.id",
+    )
+    .bind(library_path)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
 }
