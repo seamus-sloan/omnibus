@@ -259,20 +259,27 @@
             fi
           fi
 
-          # Per-workspace stable PORT — each known `jj workspace` gets its
-          # own base port so three agents in three workspaces don't compete
-          # for the same port. scripts/dev-server-up.sh port-walks within
-          # $PORT..$PORT+9 as a fallback for foreign-process / sibling
-          # collisions. Override by exporting PORT before `nix develop`.
+          # Per-worktree stable PORT — every worktree gets its own 10-port
+          # window so two of them never start their walk at the same base.
+          # The main checkout keeps 3000; any other worktree hashes its
+          # directory name into one of 90 windows at 3010..3900. Stable, so
+          # a branch keeps the same URL across sessions, and derived, so a
+          # `wt switch --create` worktree is isolated without anyone
+          # registering it anywhere.
+          #
+          # A hash collision is not a failure: both launchers port-walk
+          # $PORT..$PORT+9 and identity-check /api/_health's repo_root, so
+          # the second worktree lands on a free port inside the shared
+          # window instead of stealing the first one's server.
+          # Override by exporting PORT before `nix develop`.
           if [ -z "''${PORT:-}" ]; then
             _ws_name="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")"
-            case "$_ws_name" in
-              omnibus)        export PORT=3000 ;;
-              omnibus-xray)   export PORT=3010 ;;
-              omnibus-yankee) export PORT=3020 ;;
-              omnibus-zulu)   export PORT=3030 ;;
-              *)              export PORT=3000 ;;
-            esac
+            if [ "$_ws_name" = "omnibus" ]; then
+              export PORT=3000
+            else
+              _ws_hash="$(printf '%s' "$_ws_name" | cksum | cut -d' ' -f1)"
+              export PORT=$((3010 + (_ws_hash % 90) * 10))
+            fi
           fi
 
           # `dx serve --fullstack` runs an HTTP proxy on $PORT that

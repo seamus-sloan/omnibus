@@ -59,11 +59,14 @@ Operator-specific conventions (ticket prefixes, standing workspace names) live i
 
 ```bash
 # Multiplexed dev stack (server + native ios + android + playwright panes)
+# The server pane port-walks this worktree's window, so two worktrees can
+# run the stack at once without colliding.
 just serve                                                  # Zellij
 just serve-pc                                               # process-compose
 
-# Idempotent dev-server bring-up — port-walks from $PORT (default 3000)
-# up to PORT+9, reuses an existing omnibus server if found, seeds the
+# Idempotent dev-server bring-up — port-walks from $PORT (this worktree's
+# window base: 3000 for the main checkout, hash-derived in 3010..3900
+# otherwise) up to PORT+9, reuses an existing omnibus server if found, seeds the
 # admin user from $OMNIBUS_DEV_SEED_USER, writes .claude/runtime/{port,env.sh}.
 # Used by the `ui-validate` skill; safe to re-run.
 just dev-up
