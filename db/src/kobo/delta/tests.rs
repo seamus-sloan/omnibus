@@ -362,7 +362,8 @@ fn synthetic_book(n: usize, last_modified_epoch: i64) -> KoboBookRow {
         title: format!("Book {n}"),
         author: "Author".into(),
         last_modified_epoch,
-        epub_size_bytes: 0,
+        download_size_bytes: 0,
+        has_epub: true,
     }
 }
 

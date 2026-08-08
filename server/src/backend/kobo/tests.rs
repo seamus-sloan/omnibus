@@ -173,6 +173,34 @@ async fn library_sync_emits_new_entitlement_pointing_at_download() {
         url.contains(&uuid),
         "download url should carry the book uuid"
     );
+    assert_eq!(
+        ent["BookMetadata"]["DownloadUrls"][0]["Format"], "KEPUB",
+        "an EPUB-bearing book keeps advertising the KEPUB conversion"
+    );
+}
+
+#[tokio::test]
+async fn library_sync_advertises_the_cbz_format_and_size_for_a_cbz_only_book() {
+    let (app, pool, token, uid) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "berserk-v04.cbz", "Berserk v04", "Kentaro Miura").await;
+    sqlx::query("UPDATE book_files SET size_bytes = 777 WHERE format = 'CBZ'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    opt_in(&pool, uid, std::slice::from_ref(&uuid)).await;
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/library/sync")))
+        .await
+        .unwrap();
+
+    let json = body_json(res).await;
+    let dl = &json.as_array().unwrap()[0]["NewEntitlement"]["BookMetadata"]["DownloadUrls"][0];
+    assert_eq!(
+        dl["Format"], "CBZ",
+        "a CBZ-only book must not advertise a KEPUB it can never serve"
+    );
+    assert_eq!(dl["Size"], 777, "size falls back to the CBZ file's bytes");
 }
 
 #[tokio::test]
@@ -1425,6 +1453,87 @@ async fn download_bakes_a_metadata_override_into_the_plain_epub_fallback() {
         doc.mdata("title").map(|m| m.value.clone()),
         Some("Stormlight #1".to_string()),
         "kobo download fallback must carry the baked title override"
+    );
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
+/// #1741: a CBZ-only book must download as the raw archive instead of 404ing
+/// through the EPUB-only path (which looped the device on retries). The
+/// conversion attempt is skipped outright — no EPUB exists to convert — so
+/// this needs no kepubify guard, and the successful response must still run
+/// the #1647 download-state bookkeeping, same as the EPUB path.
+#[tokio::test]
+async fn download_serves_the_cbz_archive_as_is_for_a_cbz_only_book() {
+    let (app, pool, token, _uid) = fixture().await;
+    let device_id = db::kobo_devices::resolve_device_by_token(&pool, &token)
+        .await
+        .unwrap()
+        .unwrap()
+        .device_id;
+
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!("omnibus_kobo_dl_cbz_{pid}_{nanos}"));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let archive = db::test_support::build_stored_zip(&[("p1.jpg", b"page-one")]);
+    std::fs::write(tmp.join("aurora.cbz"), &archive).unwrap();
+
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
+        .bind(tmp.to_str().unwrap())
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    let uuid = "66666666-6666-6666-6666-666666666666";
+    sqlx::query(
+        "INSERT INTO books (uuid, library_id, path, title, last_modified) \
+         VALUES (?, ?, ?, 'Aurora', 1)",
+    )
+    .bind(uuid)
+    .bind(lib_id)
+    .bind(tmp.to_str().unwrap())
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES ((SELECT id FROM books WHERE uuid = ?), 'CBZ', 'aurora', 0)",
+    )
+    .bind(uuid)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let res = app
+        .oneshot(get(format!("/kobo/{token}/v1/download/{uuid}")))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("application/vnd.comicbook+zip"),
+    );
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&bytes[..], &archive[..], "the archive streams as-is");
+
+    let recorded: Option<i64> = sqlx::query_scalar(
+        "SELECT downloaded_at FROM kobo_annotations_sync WHERE device_id = ? AND book_uuid = ?",
+    )
+    .bind(device_id)
+    .bind(uuid)
+    .fetch_optional(&pool)
+    .await
+    .unwrap()
+    .flatten();
+    assert!(
+        recorded.is_some(),
+        "a served CBZ must record the device as holding the book (#1647 gate)"
     );
 
     std::fs::remove_dir_all(&tmp).ok();
