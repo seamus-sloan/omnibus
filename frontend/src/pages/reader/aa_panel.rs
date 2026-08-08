@@ -7,6 +7,7 @@ use dioxus::prelude::*;
 
 use crate::components::atrium::Theme;
 
+use super::drawer_shell::ReaderScrim;
 use super::prefs::ReaderPrefs;
 use super::typography::{LineSpacing, Margins, Spread, Typeface};
 
@@ -15,7 +16,7 @@ use super::typography::{LineSpacing, Margins, Spread, Typeface};
 #[component]
 pub(crate) fn ReaderAaPanel(on_close: EventHandler<MouseEvent>) -> Element {
     rsx! {
-        div { class: "rd-scrim", onclick: on_close }
+        ReaderScrim { onclick: on_close }
         div {
             class: "rd-aa-panel",
             onclick: move |evt: MouseEvent| evt.stop_propagation(),

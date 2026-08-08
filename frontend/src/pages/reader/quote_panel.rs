@@ -7,6 +7,8 @@ use dioxus::prelude::*;
 
 use crate::components::QuoteCardPanel;
 
+use super::drawer_shell::ReaderScrim;
+
 #[component]
 pub(super) fn QuotePanel(
     quote_text: String,
@@ -16,7 +18,7 @@ pub(super) fn QuotePanel(
     on_close: EventHandler<()>,
 ) -> Element {
     rsx! {
-        div { class: "rd-scrim", onclick: move |_| on_close.call(()) }
+        ReaderScrim { onclick: move |_| on_close.call(()) }
         div { class: "rd-drawer rd-quote-drawer", "data-testid": "reader-quote-drawer",
             div { class: "rd-grabber" }
             QuoteCardPanel {
