@@ -47,6 +47,19 @@ pub enum ProgressState {
         /// instead of the ordinary success row.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ghost_warning: Option<GhostFilesWarning>,
+        /// `book_uuid`s that failed a fleet-wide EPUB override bake (#1718,
+        /// #1739) — `Some` only for a `RewriteAllEpubs` run that left at
+        /// least one book unbaked; every other task kind, and a bake with
+        /// zero failures, reports `None`. Mutually exclusive with
+        /// `ghost_warning` (each task kind produces at most one of the two).
+        /// Deliberately just the uuids, not the per-book error text: this
+        /// endpoint is reachable by any authenticated user, not only the
+        /// admin who kicked off the bake, and the underlying error (from
+        /// `db::epub_rewrite`) can carry a server filesystem path. The full
+        /// message is logged server-side instead — see
+        /// `handle_rewrite_all_epubs` in `db/src/worker/handlers.rs`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bake_errors: Option<Vec<String>>,
     },
     Failed {
         message: String,
@@ -103,6 +116,7 @@ mod tests {
         let state = ProgressState::Done {
             processed: 3,
             ghost_warning: None,
+            bake_errors: None,
         };
         let json = serde_json::to_string(&state).unwrap();
         assert!(
@@ -119,9 +133,57 @@ mod tests {
                 removed: 15,
                 total: 100,
             }),
+            bake_errors: None,
         };
         let json = serde_json::to_string(&state).unwrap();
         let round_tripped: ProgressState = serde_json::from_str(&json).unwrap();
         assert_eq!(state, round_tripped);
+    }
+
+    #[test]
+    fn done_without_bake_errors_omits_the_field_from_the_wire() {
+        // Mirrors `done_without_a_ghost_warning_omits_the_field_from_the_wire`
+        // (#1739): the wire type must stay compact for the ordinary
+        // all-succeeded bake case too.
+        let state = ProgressState::Done {
+            processed: 3,
+            ghost_warning: None,
+            bake_errors: None,
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(
+            !json.contains("bake_errors"),
+            "expected no bake_errors key, got {json}"
+        );
+    }
+
+    #[test]
+    fn done_with_bake_errors_round_trips_the_book_uuids() {
+        let state = ProgressState::Done {
+            processed: 2,
+            ghost_warning: None,
+            bake_errors: Some(vec!["uuid-bad".into()]),
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        let round_tripped: ProgressState = serde_json::from_str(&json).unwrap();
+        assert_eq!(state, round_tripped);
+    }
+
+    #[test]
+    fn done_with_bake_errors_never_carries_a_message_key_on_the_wire() {
+        // Regression guard for the PR #1756 review fix: the wire payload
+        // must be uuid-only — no per-book error text, which can carry a
+        // server filesystem path and is reachable by any authenticated user
+        // via `rpc_worker_status`, not only the admin who ran the bake.
+        let state = ProgressState::Done {
+            processed: 1,
+            ghost_warning: None,
+            bake_errors: Some(vec!["uuid-bad".into()]),
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(
+            !json.contains("message"),
+            "bake_errors must not carry a message field: {json}"
+        );
     }
 }

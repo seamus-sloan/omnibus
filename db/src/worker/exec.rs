@@ -9,7 +9,7 @@ use std::sync::Arc;
 use omnibus_shared::ProgressState;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-use super::types::{lock_unpoison, Task, TaskId, TaskOutcome, Worker};
+use super::types::{lock_unpoison, Task, TaskId, TaskOutcome, TaskSuccessDetail, Worker};
 
 impl Worker {
     pub(super) async fn run(self: &Arc<Self>, task: Task, id: TaskId) -> TaskOutcome {
@@ -97,11 +97,12 @@ impl Worker {
     /// success, the last reported `processed` count is pulled out of the
     /// progress map so a Phase-2 in-flight report stays reflected in the final
     /// `Done` (today there is no in-flight reporter, so this is always 0).
-    /// `ghost_warning` (issue #1057) rides straight through from the
-    /// `TaskOutcome` onto the `Done` state.
+    /// The `TaskSuccessDetail` (issue #1057's ghost warning, or #1739's bake
+    /// errors) rides straight through onto the matching `Done` field — a
+    /// task produces at most one of the two, so the other is always `None`.
     fn project_terminal(&self, id: TaskId, outcome: &TaskOutcome) -> ProgressState {
         match outcome {
-            TaskOutcome::Ok(ghost_warning) => {
+            TaskOutcome::Ok(detail) => {
                 let processed = lock_unpoison(&self.progress)
                     .get(&id)
                     .and_then(|e| match e.progress.state {
@@ -109,9 +110,15 @@ impl Worker {
                         _ => None,
                     })
                     .unwrap_or(0);
+                let (ghost_warning, bake_errors) = match detail {
+                    Some(TaskSuccessDetail::GhostFiles(w)) => (Some(w.clone()), None),
+                    Some(TaskSuccessDetail::BakeErrors(errors)) => (None, Some(errors.clone())),
+                    None => (None, None),
+                };
                 ProgressState::Done {
                     processed,
-                    ghost_warning: ghost_warning.clone(),
+                    ghost_warning,
+                    bake_errors,
                 }
             }
             TaskOutcome::Err(msg) => ProgressState::Failed {

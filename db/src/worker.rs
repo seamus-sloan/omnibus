@@ -39,4 +39,4 @@ mod tests;
 
 pub use metrics::WorkerMetrics;
 pub use periodic_scan::{periodic_scan_tick, PERIODIC_SCAN_RECHECK};
-pub use types::{Task, TaskId, TaskOutcome, Worker, WorkerConfig};
+pub use types::{Task, TaskId, TaskOutcome, TaskSuccessDetail, Worker, WorkerConfig};

@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use super::types::{Task, TaskId, TaskOutcome, Worker};
+use super::types::{Task, TaskId, TaskOutcome, TaskSuccessDetail, Worker};
 
 /// Log `e`'s real text server-side and return a [`TaskOutcome::Err`] that
 /// names only `label` — never `e` itself. Used for every failure whose
@@ -200,7 +200,7 @@ impl Worker {
                     library_path: library_path.clone(),
                 });
                 self.post(Task::BackfillPageCounts { library_path });
-                TaskOutcome::Ok(warning)
+                TaskOutcome::Ok(warning.map(TaskSuccessDetail::GhostFiles))
             }
             Err(e) => sanitized_err("library scan", e),
         }
@@ -211,8 +211,13 @@ impl Worker {
     /// [`omnibus_shared::BulkRewriteSummary::errors`] by
     /// `rewrite_all_epubs_with_overrides` itself and never fail the task —
     /// only a failure resolving the batch (DB down, etc.) reaches this
-    /// match's `Err` arm. The summary counts have no dedicated progress
-    /// surface yet, so they're logged rather than surfaced to the poller.
+    /// match's `Err` arm. A non-empty error list rides onto the terminal
+    /// `TaskOutcome` as [`TaskSuccessDetail::BakeErrors`] (#1739) so the
+    /// poller can surface it, in addition to the summary counts always
+    /// being logged. Only the failed `book_uuid`s cross that boundary —
+    /// each per-book `message` (from `db::epub_rewrite`, which can carry a
+    /// server filesystem path) is logged here, server-side only, and never
+    /// reaches `rpc_worker_status`, which any authenticated user can poll.
     async fn handle_rewrite_all_epubs(self: &Arc<Self>) -> TaskOutcome {
         match crate::rewrite_all_epubs_with_overrides(&self.pool).await {
             Ok(summary) => {
@@ -222,7 +227,19 @@ impl Worker {
                     errors = summary.errors.len(),
                     "epub override bake finished"
                 );
-                TaskOutcome::Ok(None)
+                for err in &summary.errors {
+                    tracing::warn!(
+                        book_uuid = %err.book_uuid,
+                        error = %err.message,
+                        "epub override bake failed for book"
+                    );
+                }
+                let detail = (!summary.errors.is_empty()).then(|| {
+                    TaskSuccessDetail::BakeErrors(
+                        summary.errors.into_iter().map(|e| e.book_uuid).collect(),
+                    )
+                });
+                TaskOutcome::Ok(detail)
             }
             Err(e) => sanitized_err("epub override bake", e),
         }
@@ -261,7 +278,7 @@ impl Worker {
             Ok(stats) => {
                 let warning = stats.ghost_warning();
                 self.post(Task::BackfillChapters { library_path });
-                TaskOutcome::Ok(warning)
+                TaskOutcome::Ok(warning.map(TaskSuccessDetail::GhostFiles))
             }
             Err(e) => sanitized_err("audiobook scan", e),
         }
