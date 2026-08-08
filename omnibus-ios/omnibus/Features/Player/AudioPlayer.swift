@@ -88,6 +88,35 @@ final class AudioPlayer {
     /// reconcile was still in the middle of correcting, and win.
     private var positionSettled = false
 
+    /// Count of `seek(to:)` calls currently awaiting AVPlayer, incremented
+    /// before the frame-accurate seek starts and decremented once it
+    /// resolves — a count rather than a flag so two overlapping seeks (a
+    /// second tap landing before the first settles) can't have the first
+    /// one's completion re-arm the observer while the second is still in
+    /// flight.
+    ///
+    /// `seek(to:)` sets `position` optimistically before awaiting AVPlayer,
+    /// but the periodic time observer below fires regardless, on the
+    /// player's *actual* (pre-seek) time — unguarded, it would overwrite the
+    /// optimistic value right back to stale on its very next 0.5s tick,
+    /// which for a seek that takes longer than that to settle (HLS
+    /// especially) reintroduces the exact staleness the optimism was meant
+    /// to close (#1746). The observer checks this count and skips its write
+    /// while it's nonzero.
+    private var pendingSeekCount = 0
+
+    /// Bumped by every `teardown()` — a book switch or `close()`. A
+    /// `seek(to:)` in flight when that happens is abandoned: its `player`
+    /// local still resolves once AVPlayer gets around to it, but by then
+    /// `pendingSeekCount` belongs to whatever book loaded next. Each seek
+    /// captures the generation live when it started and only decrements the
+    /// count if that generation is still current, so an orphaned seek's late
+    /// completion can't under- or over-count the next book's own in-flight
+    /// seeks. `teardown()` separately zeroes the count itself — without that,
+    /// a seek abandoned mid-flight would leave it permanently elevated, since
+    /// this guard is precisely what stops that seek from ever decrementing it.
+    private var loadGeneration = 0
+
     /// Chapter geometry for the book that's open. Rebuilt once per load — every
     /// lookup on it runs off a half-second time observer, so it can't afford to
     /// re-sort per tick.
@@ -455,6 +484,14 @@ final class AudioPlayer {
         // at (#1746).
         position = clamped
         updateNowPlaying()
+        // Guards the observer for the rest of this function, however it
+        // exits. The generation is captured now, not read fresh in the
+        // `defer` — see `loadGeneration`.
+        let generation = loadGeneration
+        pendingSeekCount += 1
+        defer {
+            if generation == loadGeneration { pendingSeekCount -= 1 }
+        }
         await player.seek(
             to: CMTime(seconds: clamped, preferredTimescale: 600),
             toleranceBefore: .zero, toleranceAfter: .zero
@@ -593,6 +630,16 @@ final class AudioPlayer {
         positionSettled = false
         syncOffer = nil
         cancelSleepTimer()
+        // Bumped first so a seek belonging to the book being torn down —
+        // still holding its own `defer`, due to land whenever AVPlayer gets
+        // around to it — finds a mismatched generation and skips its
+        // decrement instead of under-counting whatever book loads next. The
+        // explicit reset is still required alongside it: that guard is
+        // exactly what stops the orphaned seek from ever decrementing this,
+        // so without the reset a seek abandoned mid-flight would leave the
+        // count permanently elevated and the observer permanently skipped.
+        loadGeneration += 1
+        pendingSeekCount = 0
     }
 
     private func observe(player: AVPlayer) {
@@ -601,6 +648,11 @@ final class AudioPlayer {
         ) { [weak self] time in
             Task { @MainActor in
                 guard let self else { return }
+                // Skipped while a `seek(to:)` is still resolving: `time` is
+                // AVPlayer's actual (pre-seek) position until then, and
+                // writing it here would clobber the optimistic target right
+                // back to stale for as long as the seek takes to settle.
+                guard self.pendingSeekCount == 0 else { return }
                 self.position = time.seconds
                 if self.isPlaying { self.listenedSeconds += 0.5 }
                 await self.persistPosition(force: false)
