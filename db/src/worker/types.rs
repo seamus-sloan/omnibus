@@ -239,14 +239,29 @@ impl Task {
 /// assigned per `Worker`; not stable across restarts and not a DB id.
 pub type TaskId = u64;
 
+/// Extra data a successful task attaches to its [`TaskOutcome::Ok`], beyond
+/// the bare fact that it succeeded. Each task kind produces at most one of
+/// these — they're never combined — and most task kinds produce none at all,
+/// which is why [`TaskOutcome::Ok`] wraps this in an `Option`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TaskSuccessDetail {
+    /// A scan whose ghost count cleared the warn threshold (issue #1057).
+    GhostFiles(omnibus_shared::GhostFilesWarning),
+    /// A fleet-wide EPUB override bake's per-book failures (#1718, #1739).
+    /// Only attached when non-empty — a bake where every book succeeded
+    /// reports `None` like any other task.
+    BakeErrors(Vec<omnibus_shared::BulkRewriteError>),
+}
+
 /// Terminal result of a task, delivered to awaiters of its [`TaskId`].
 #[derive(Clone, Debug)]
 pub enum TaskOutcome {
-    /// The handler ran to completion successfully. `Some(_)` only for a
-    /// scan whose ghost count cleared the warn threshold (issue #1057);
-    /// every other task kind (and a scan under the threshold) reports
-    /// `None`.
-    Ok(Option<omnibus_shared::GhostFilesWarning>),
+    /// The handler ran to completion successfully. `Some(_)` only for the
+    /// task kinds that attach a [`TaskSuccessDetail`] (a scan whose ghost
+    /// count cleared the warn threshold, or a bake that left per-book
+    /// errors); every other task kind (and those two under their
+    /// respective all-clear condition) reports `None`.
+    Ok(Option<TaskSuccessDetail>),
     /// The handler failed. This string is client-facing (served by
     /// `rpc_worker_status` and the owner-scoped Kindle poll), so
     /// `handlers::execute`'s arms sanitize it before it lands here — never

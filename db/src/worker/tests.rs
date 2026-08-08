@@ -8,13 +8,14 @@ use std::sync::Arc;
 use std::sync::Mutex as TestMutex;
 use std::time::{Duration, Instant};
 
-use omnibus_shared::{GhostFilesWarning, ProgressState, TaskKind};
+use omnibus_shared::{GhostFilesWarning, MetadataOverrides, ProgressState, TaskKind};
 use sqlx::SqlitePool;
 
+use crate::ebook::test_support::copy_fixture_into;
 use crate::sync::{sync_books, SyncPlan};
-use crate::test_support::{indexed_with_stat, make_test_dir};
+use crate::test_support::{indexed_with_stat, make_test_dir, EnvVarGuard};
 
-use super::types::{Task, TaskOutcome, Worker, WorkerConfig};
+use super::types::{Task, TaskOutcome, TaskSuccessDetail, Worker, WorkerConfig};
 
 async fn pool() -> SqlitePool {
     crate::init_db("sqlite::memory:").await.unwrap()
@@ -874,7 +875,7 @@ async fn task_scan_reports_no_ghost_warning_below_the_warn_threshold() {
     let w = make_worker_default(pool);
     let id = w.post(Task::Scan { library_path });
     match w.await_completion(id).await {
-        TaskOutcome::Ok(warning) => assert_eq!(warning, None),
+        TaskOutcome::Ok(detail) => assert_eq!(detail, None),
         other => panic!("expected Ok, got {other:?}"),
     }
 
@@ -901,19 +902,153 @@ async fn task_scan_reports_ghost_warning_in_the_warn_band_below_abort() {
     let w = make_worker_default(pool);
     let id = w.post(Task::Scan { library_path });
     match w.await_completion(id).await {
-        TaskOutcome::Ok(warning) => {
+        TaskOutcome::Ok(detail) => {
             assert_eq!(
-                warning,
-                Some(GhostFilesWarning {
+                detail,
+                Some(TaskSuccessDetail::GhostFiles(GhostFilesWarning {
                     removed: 15,
                     total: 100,
-                })
+                }))
             );
         }
         other => panic!("expected Ok with a ghost warning, got {other:?}"),
     }
 
     let _ = std::fs::remove_dir_all(&lib);
+}
+
+// ---------- #1739: bulk EPUB-bake per-book errors on Task::RewriteAllEpubs ----------
+
+/// Insert a `books` row backed by a `book_files` EPUB entry, mirroring
+/// `epub_rewrite::tests::seed_epub_row` — the sibling helper that module
+/// uses to drive `rewrite_all_epubs_with_overrides` directly. Duplicated
+/// rather than shared across crate-internal test modules since it's a
+/// handful of inserts with no reuse-worthy behavior of its own.
+async fn seed_epub_row_for_bake(
+    pool: &SqlitePool,
+    lib_dir: &std::path::Path,
+    uuid: &str,
+    title: &str,
+    filename_stem: &str,
+) -> i64 {
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
+        .bind(lib_dir.to_string_lossy().to_string())
+        .execute(pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    let book_id =
+        sqlx::query("INSERT INTO books (uuid, library_id, path, title) VALUES (?, ?, '', ?)")
+            .bind(uuid)
+            .bind(lib_id)
+            .bind(title)
+            .execute(pool)
+            .await
+            .unwrap()
+            .last_insert_rowid();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES (?, 'EPUB', ?, 0)",
+    )
+    .bind(book_id)
+    .bind(filename_stem)
+    .execute(pool)
+    .await
+    .unwrap();
+    book_id
+}
+
+/// A `Task::RewriteAllEpubs` run that leaves one book unbaked (its
+/// `book_files` row points at a source that was never written to disk)
+/// completes as `TaskOutcome::Ok`, and the per-book failure — otherwise
+/// only logged — rides through as `TaskSuccessDetail::BakeErrors` (#1739).
+/// A book with a real fixture on disk bakes successfully alongside it, so
+/// the run doesn't abort on the first failure.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn task_rewrite_all_epubs_reports_bake_errors_via_task_outcome() {
+    let export = tempfile::tempdir().unwrap();
+    let _env = EnvVarGuard::set_os("OMNIBUS_EXPORT_EPUB_DIR", Some(export.path().as_os_str()));
+
+    let pool = pool().await;
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+
+    let lib_ok = tempfile::tempdir().unwrap();
+    copy_fixture_into("alpha.epub", lib_ok.path());
+    seed_epub_row_for_bake(&pool, lib_ok.path(), "uuid-ok", "Book OK", "alpha").await;
+    crate::upsert_metadata_overrides(
+        &pool,
+        "uuid-ok",
+        &MetadataOverrides {
+            title: Some("Fixed".into()),
+            ..Default::default()
+        },
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    let lib_bad = tempfile::tempdir().unwrap();
+    seed_epub_row_for_bake(&pool, lib_bad.path(), "uuid-bad", "Book Bad", "missing").await;
+    crate::upsert_metadata_overrides(
+        &pool,
+        "uuid-bad",
+        &MetadataOverrides {
+            title: Some("Never Applied".into()),
+            ..Default::default()
+        },
+        false,
+        user_id,
+    )
+    .await
+    .unwrap();
+
+    let w = make_worker_default(pool);
+    let id = w.post(Task::RewriteAllEpubs);
+    match w.await_completion(id).await {
+        TaskOutcome::Ok(Some(TaskSuccessDetail::BakeErrors(errors))) => {
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            assert_eq!(errors[0].book_uuid, "uuid-bad");
+            assert!(!errors[0].message.is_empty());
+        }
+        other => panic!("expected Ok with bake errors, got {other:?}"),
+    }
+}
+
+/// A `Task::RewriteAllEpubs` run with nothing to bake (no override rows at
+/// all) reports the ordinary `TaskOutcome::Ok(None)` — the same shape every
+/// other error-free task kind reports.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn task_rewrite_all_epubs_reports_ok_none_when_nothing_fails() {
+    let w = make_worker_default(pool().await);
+    let id = w.post(Task::RewriteAllEpubs);
+    assert!(matches!(
+        w.await_completion(id).await,
+        TaskOutcome::Ok(None)
+    ));
+}
+
+/// A `Task::RewriteAllEpubs` run against a closed pool can't even resolve
+/// the batch — that failure reaches `handle_rewrite_all_epubs`'s `Err` arm
+/// and comes back as a sanitized `TaskOutcome::Err`, never the raw
+/// `sqlx`/`BooksError` text.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn task_rewrite_all_epubs_reports_sanitized_err_when_the_pool_is_closed() {
+    let pool = pool().await;
+    pool.close().await;
+
+    let w = make_worker_default(pool);
+    let id = w.post(Task::RewriteAllEpubs);
+    match w.await_completion(id).await {
+        TaskOutcome::Err(msg) => {
+            assert!(msg.contains("epub override bake"), "{msg}");
+            assert!(!msg.to_lowercase().contains("sqlx"), "{msg}");
+        }
+        other => panic!("expected Err, got {other:?}"),
+    }
 }
 
 // ---------- #953: `Worker::metrics` (queue depth + recent completions) ----------

@@ -6,6 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::ebook::BulkRewriteError;
+
 /// Discriminant for [`TaskProgress`] entries. Mirrors the payload-less
 /// shape of the server-side `Task` enum so the wire protocol stays
 /// decoupled from the runtime `Task` type's lifetimes and handler
@@ -47,6 +49,13 @@ pub enum ProgressState {
         /// instead of the ordinary success row.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ghost_warning: Option<GhostFilesWarning>,
+        /// Per-book failures from a fleet-wide EPUB override bake (#1718,
+        /// #1739) — `Some` only for a `RewriteAllEpubs` run that left at
+        /// least one book unbaked; every other task kind, and a bake with
+        /// zero failures, reports `None`. Mutually exclusive with
+        /// `ghost_warning` (each task kind produces at most one of the two).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bake_errors: Option<Vec<BulkRewriteError>>,
     },
     Failed {
         message: String,
@@ -103,6 +112,7 @@ mod tests {
         let state = ProgressState::Done {
             processed: 3,
             ghost_warning: None,
+            bake_errors: None,
         };
         let json = serde_json::to_string(&state).unwrap();
         assert!(
@@ -119,6 +129,39 @@ mod tests {
                 removed: 15,
                 total: 100,
             }),
+            bake_errors: None,
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        let round_tripped: ProgressState = serde_json::from_str(&json).unwrap();
+        assert_eq!(state, round_tripped);
+    }
+
+    #[test]
+    fn done_without_bake_errors_omits_the_field_from_the_wire() {
+        // Mirrors `done_without_a_ghost_warning_omits_the_field_from_the_wire`
+        // (#1739): the wire type must stay compact for the ordinary
+        // all-succeeded bake case too.
+        let state = ProgressState::Done {
+            processed: 3,
+            ghost_warning: None,
+            bake_errors: None,
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(
+            !json.contains("bake_errors"),
+            "expected no bake_errors key, got {json}"
+        );
+    }
+
+    #[test]
+    fn done_with_bake_errors_round_trips_the_book_uuid_and_message() {
+        let state = ProgressState::Done {
+            processed: 2,
+            ghost_warning: None,
+            bake_errors: Some(vec![BulkRewriteError {
+                book_uuid: "uuid-bad".into(),
+                message: "epub rewrite failed: open source epub".into(),
+            }]),
         };
         let json = serde_json::to_string(&state).unwrap();
         let round_tripped: ProgressState = serde_json::from_str(&json).unwrap();

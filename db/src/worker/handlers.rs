@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use super::types::{Task, TaskId, TaskOutcome, Worker};
+use super::types::{Task, TaskId, TaskOutcome, TaskSuccessDetail, Worker};
 
 /// Log `e`'s real text server-side and return a [`TaskOutcome::Err`] that
 /// names only `label` — never `e` itself. Used for every failure whose
@@ -200,7 +200,7 @@ impl Worker {
                     library_path: library_path.clone(),
                 });
                 self.post(Task::BackfillPageCounts { library_path });
-                TaskOutcome::Ok(warning)
+                TaskOutcome::Ok(warning.map(TaskSuccessDetail::GhostFiles))
             }
             Err(e) => sanitized_err("library scan", e),
         }
@@ -211,8 +211,10 @@ impl Worker {
     /// [`omnibus_shared::BulkRewriteSummary::errors`] by
     /// `rewrite_all_epubs_with_overrides` itself and never fail the task —
     /// only a failure resolving the batch (DB down, etc.) reaches this
-    /// match's `Err` arm. The summary counts have no dedicated progress
-    /// surface yet, so they're logged rather than surfaced to the poller.
+    /// match's `Err` arm. A non-empty error list rides onto the terminal
+    /// `TaskOutcome` as [`TaskSuccessDetail::BakeErrors`] (#1739) so the
+    /// poller can surface it, in addition to the summary counts always
+    /// being logged.
     async fn handle_rewrite_all_epubs(self: &Arc<Self>) -> TaskOutcome {
         match crate::rewrite_all_epubs_with_overrides(&self.pool).await {
             Ok(summary) => {
@@ -222,7 +224,9 @@ impl Worker {
                     errors = summary.errors.len(),
                     "epub override bake finished"
                 );
-                TaskOutcome::Ok(None)
+                let detail = (!summary.errors.is_empty())
+                    .then_some(TaskSuccessDetail::BakeErrors(summary.errors));
+                TaskOutcome::Ok(detail)
             }
             Err(e) => sanitized_err("epub override bake", e),
         }
@@ -261,7 +265,7 @@ impl Worker {
             Ok(stats) => {
                 let warning = stats.ghost_warning();
                 self.post(Task::BackfillChapters { library_path });
-                TaskOutcome::Ok(warning)
+                TaskOutcome::Ok(warning.map(TaskSuccessDetail::GhostFiles))
             }
             Err(e) => sanitized_err("audiobook scan", e),
         }

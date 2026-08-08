@@ -7,7 +7,9 @@
 #![cfg(not(feature = "mobile"))]
 
 use dioxus::prelude::*;
-use omnibus_shared::{GhostFilesWarning, ProgressState, TaskKind, TaskProgress, WorkerStatus};
+use omnibus_shared::{
+    BulkRewriteError, GhostFilesWarning, ProgressState, TaskKind, TaskProgress, WorkerStatus,
+};
 
 use crate::platform_sleep::async_sleep_ms;
 use crate::{data, use_server_url};
@@ -120,10 +122,24 @@ fn terminal_row(
                 },
             }
         },
+        // A fleet-wide EPUB override bake that left per-book failures
+        // (#1739) — mutually exclusive with `ghost_warning`, so this arm
+        // only ever matches a `RewriteAllEpubs` run.
         ProgressState::Done {
-            ghost_warning: None,
+            bake_errors: Some(errors),
             ..
-        } => rsx! {
+        } if !errors.is_empty() => rsx! {
+            BakeErrorsRow {
+                key: "{id}",
+                errors: errors.clone(),
+                on_dismiss: move |_| {
+                    let mut set = dismissed();
+                    set.insert(id);
+                    dismissed.set(set);
+                },
+            }
+        },
+        ProgressState::Done { .. } => rsx! {
             DoneRow {
                 key: "{id}",
                 kind: task.kind,
@@ -231,6 +247,38 @@ fn WarnRow(
     }
 }
 
+/// A fleet-wide EPUB override bake (#959, #1718) that left one or more
+/// books unbaked — distinct from both [`WarnRow`] and the red
+/// [`FailedRow`]: the run itself succeeded (every book was attempted, and
+/// the ones that could be baked were), but the admin who kicked it off from
+/// "Bake Overrides Into EPUBs" needs to know which books still need
+/// attention (#1739). Doesn't route through `kind_label` — `RewriteAllEpubs`
+/// reuses `TaskKind::Scan` for its wire kind (no dedicated progress
+/// widget), so this row names the job directly instead of rendering the
+/// misleading "Library scan" label.
+#[component]
+fn BakeErrorsRow(errors: Vec<BulkRewriteError>, on_dismiss: EventHandler<MouseEvent>) -> Element {
+    let message = bake_errors_message(&errors);
+    rsx! {
+        div {
+            class: "worker-status-row worker-status-warn",
+            "data-testid": "worker-status-bake-errors-row",
+            span { class: "worker-status-icon", aria_hidden: "true", "!" }
+            div { class: "worker-status-body",
+                div { class: "worker-status-label", "EPUB override bake finished with errors" }
+                div { class: "worker-status-message", "{message}" }
+            }
+            button {
+                class: "worker-status-dismiss",
+                r#type: "button",
+                aria_label: "Dismiss",
+                onclick: move |evt| on_dismiss.call(evt),
+                "✕"
+            }
+        }
+    }
+}
+
 #[component]
 fn FailedRow(kind: TaskKind, message: String, on_dismiss: EventHandler<MouseEvent>) -> Element {
     let label = kind_label(kind, /* running */ false);
@@ -292,6 +340,34 @@ fn ghost_warning_message(warning: &GhostFilesWarning) -> String {
     )
 }
 
+/// Maximum number of failed `book_uuid`s named inline in
+/// [`bake_errors_message`] before the rest collapse into an "and N more"
+/// tail — keeps the row readable for a large fleet-wide bake.
+const BAKE_ERRORS_INLINE_CAP: usize = 5;
+
+/// Render a fleet-wide EPUB bake's [`BulkRewriteError`] list into the
+/// [`BakeErrorsRow`] message text (#1739) — factored out of the component
+/// body so the wording (count + the failed book uuids) is unit testable,
+/// mirroring [`ghost_warning_message`].
+fn bake_errors_message(errors: &[BulkRewriteError]) -> String {
+    let n = errors.len();
+    let noun = if n == 1 { "book" } else { "books" };
+    let uuids: Vec<&str> = errors
+        .iter()
+        .take(BAKE_ERRORS_INLINE_CAP)
+        .map(|e| e.book_uuid.as_str())
+        .collect();
+    let listed = uuids.join(", ");
+    if n > BAKE_ERRORS_INLINE_CAP {
+        format!(
+            "{n} {noun} failed to bake: {listed}, and {} more.",
+            n - BAKE_ERRORS_INLINE_CAP
+        )
+    } else {
+        format!("{n} {noun} failed to bake: {listed}.")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,5 +402,56 @@ mod tests {
             message.contains("100"),
             "message must name the total: {message}"
         );
+    }
+
+    #[test]
+    fn bake_errors_message_names_the_count_and_every_failed_book_uuid_under_the_cap() {
+        let errors = vec![
+            BulkRewriteError {
+                book_uuid: "uuid-a".into(),
+                message: "boom".into(),
+            },
+            BulkRewriteError {
+                book_uuid: "uuid-b".into(),
+                message: "boom".into(),
+            },
+        ];
+        let message = bake_errors_message(&errors);
+        assert!(
+            message.contains('2'),
+            "message must name the count: {message}"
+        );
+        assert!(message.contains("uuid-a"), "{message}");
+        assert!(message.contains("uuid-b"), "{message}");
+        assert!(!message.contains("more"), "{message}");
+    }
+
+    #[test]
+    fn bake_errors_message_collapses_uuids_past_the_inline_cap() {
+        let errors: Vec<BulkRewriteError> = (0..BAKE_ERRORS_INLINE_CAP + 3)
+            .map(|i| BulkRewriteError {
+                book_uuid: format!("uuid-{i}"),
+                message: "boom".into(),
+            })
+            .collect();
+        let message = bake_errors_message(&errors);
+        assert!(
+            message.contains("and 3 more"),
+            "message must summarize the overflow: {message}"
+        );
+        assert!(
+            !message.contains(&format!("uuid-{}", BAKE_ERRORS_INLINE_CAP)),
+            "message must not name a uuid past the cap: {message}"
+        );
+    }
+
+    #[test]
+    fn bake_errors_message_uses_singular_book_noun_for_one_failure() {
+        let errors = vec![BulkRewriteError {
+            book_uuid: "uuid-solo".into(),
+            message: "boom".into(),
+        }];
+        let message = bake_errors_message(&errors);
+        assert!(message.contains("1 book failed"), "{message}");
     }
 }
