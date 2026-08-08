@@ -1,0 +1,90 @@
+//! Shared acquisition-entry builder: turn one book's `EbookMetadata` row
+//! into an OPDS `<entry>`. Wires up download / cover / thumbnail links that
+//! point at the existing `/api/ebooks/*` and `/api/covers|thumbs/*` routes
+//! rather than duplicating their resolution logic.
+
+use omnibus_shared::EbookMetadata;
+
+use super::atom::{Entry, Link};
+use super::entry_updated;
+
+/// Wire mime for a served CBZ archive — mirrors `ebooks::CBZ_MIME`, kept as
+/// its own constant since that one is `pub(super)` to the `backend` module,
+/// not reachable from here.
+const CBZ_MIME: &str = "application/vnd.comicbook+zip";
+
+/// Build the acquisition `<entry>` for one book: title, id, authors,
+/// summary, and — when the book has a format this catalog knows how to
+/// link to — download, cover, and thumbnail links.
+pub(super) fn book_entry(book: &EbookMetadata) -> Entry {
+    let uuid = book.unique_identifier.as_deref().filter(|u| !u.is_empty());
+    let mut links = Vec::new();
+    if let Some(uuid) = uuid {
+        if let Some(link) = download_link(uuid, book) {
+            links.push(link);
+        }
+        links.push(Link::new(
+            "http://opds-spec.org/image",
+            format!("/api/covers/{uuid}"),
+            "image/jpeg",
+        ));
+        links.push(Link::new(
+            "http://opds-spec.org/image/thumbnail",
+            format!("/api/thumbs/{uuid}/sm"),
+            "image/webp",
+        ));
+    }
+    let id = uuid.map_or_else(
+        || format!("urn:omnibus:opds:book:{}", book.id),
+        |uuid| format!("urn:uuid:{uuid}"),
+    );
+    Entry {
+        id,
+        title: book.display_title(),
+        updated: entry_updated(book.added_at.as_deref()),
+        summary: book.description.clone(),
+        authors: book.creators.iter().map(|c| c.name.clone()).collect(),
+        links,
+    }
+}
+
+/// The acquisition download link for `book`, chosen by its first matching
+/// known format. Mirrors the fallback order `/api/ebooks/{uuid}/file`
+/// already uses (EPUB, else CBZ — see that handler's doc comment),
+/// extended with the audiobook formats so a dual-format or audiobook-only
+/// entry still links somewhere. `None` when the book carries no format
+/// this catalog can link to (e.g. a physical-only entry with no files).
+fn download_link(uuid: &str, book: &EbookMetadata) -> Option<Link> {
+    let has = |fmt: &str| book.formats.iter().any(|f| f.eq_ignore_ascii_case(fmt));
+    if has("epub") {
+        return Some(Link::new(
+            "http://opds-spec.org/acquisition",
+            format!("/api/ebooks/{uuid}/download"),
+            "application/epub+zip",
+        ));
+    }
+    if has("cbz") {
+        // `/download` is EPUB-only (see `ebooks::get_ebook_download`); a
+        // comic-only book's whole-file read lives at `/file` instead.
+        return Some(Link::new(
+            "http://opds-spec.org/acquisition",
+            format!("/api/ebooks/{uuid}/file"),
+            CBZ_MIME,
+        ));
+    }
+    if has("m4b") || has("m4a") {
+        return Some(Link::new(
+            "http://opds-spec.org/acquisition",
+            format!("/api/audiobooks/{uuid}/download"),
+            "audio/mp4",
+        ));
+    }
+    if has("mp3") {
+        return Some(Link::new(
+            "http://opds-spec.org/acquisition",
+            format!("/api/audiobooks/{uuid}/download"),
+            "audio/mpeg",
+        ));
+    }
+    None
+}

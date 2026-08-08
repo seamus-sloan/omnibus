@@ -60,6 +60,10 @@ tokio-util = { version = "0.7", features = ["io"], optional = true }
 # `backend::uploads` (RAII cleanup on drop). Also a dev-dependency below for
 # the integration tests; listed here so the server lib can use it directly.
 tempfile = { workspace = true, optional = true }
+# Percent-encoding the OPDS search feed's `self` link query — already in the
+# tree via `omnibus-db`, so depending on it directly unifies rather than
+# adding a build.
+urlencoding = { version = "2", optional = true }
 
 omnibus-shared = { path = "../shared" }
 # `features` here are forwarded via our own feature flags below. Leaving it
@@ -110,6 +114,7 @@ server = [
     "dep:tracing-appender",
     "dep:time",
     "dep:futures-util",
+    "dep:urlencoding",
     "dep:sha2",
     "dep:anyhow",
     "dep:tempfile",
