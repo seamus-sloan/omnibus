@@ -103,6 +103,34 @@ async function logInAsViewer(page: Page): Promise<void> {
   await expect(page).toHaveURL(/\/$/);
 }
 
+/**
+ * Poll for the "Open details for {title}" link, reloading between attempts.
+ * A book created by `scan/physical-only` or `scan/wishlist` lands via a
+ * different write path than the rest of the suite's mutations, and the
+ * listing this checks against isn't in the set of mutations that busts the
+ * client's read-through cache — so the first render after the create can
+ * still serve a stale list. Mirrors the landing hero rail's own
+ * reload-until-it-lands precedent (`.claude/rules/04-playwright.md`) rather
+ * than asserting once.
+ */
+async function waitForBookLinkVisible(
+  page: Page,
+  title: string,
+): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        await page.reload();
+        await page.waitForLoadState("networkidle");
+        return page
+          .getByRole("link", { name: `Open details for ${title}` })
+          .isVisible();
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+}
+
 test("adds a not-in-library book to the physical collection, shows it in All Books, then removes it as the last copy", async ({
   page,
   request,
@@ -133,13 +161,12 @@ test("adds a not-in-library book to the physical collection, shows it in All Boo
   );
   await expect(page.getByTestId("check-in-success")).toContainText(title);
 
+  let bookDeleted = false;
   try {
     // Real read: F-Physical-Check-In's visibility rule surfaces a fileless
     // book once it holds a physical copy, so it belongs in All Books.
     await gotoReady(page, "/");
-    await expect(
-      page.getByRole("link", { name: `Open details for ${title}` }),
-    ).toBeVisible();
+    await waitForBookLinkVisible(page, title);
 
     await gotoReady(page, `/books/${uuid}`);
     await expect(
@@ -173,13 +200,27 @@ test("adds a not-in-library book to the physical collection, shows it in All Boo
     const bookResp = await bookReq.response();
     expect(copyResp?.status()).toBe(200);
     expect(bookResp?.status()).toBe(200);
+    // `rpc_delete_fileless_book(uuid)` — the body this call must carry is
+    // known (the book uuid this test created); `rpc_delete_physical_copy`
+    // takes a `copy_id` this test never queried, so that half stays a
+    // status-only assertion.
+    expect(bookReq.postDataJSON()).toEqual({ uuid });
+    bookDeleted = true;
   } finally {
-    // Best-effort: if an assertion above threw before the UI delete ran, the
-    // book must not leak into another spec's library. A redundant call after
-    // a successful UI delete just 404s; `.catch` swallows that.
-    await request
-      .post("/api/rpc/physical/book/delete", { data: { uuid } })
-      .catch(() => {});
+    // Best-effort: only fires if an assertion above threw before the UI
+    // delete completed, so the book doesn't leak into another spec's
+    // library. Skipped when the UI delete already succeeded — a redundant
+    // call against an already-deleted book is a business-logic error whose
+    // exact status this suite has no other test to pin down, and asserting
+    // a guessed code would make cleanup itself a source of flakiness.
+    if (!bookDeleted) {
+      const cleanupResp = await request
+        .post("/api/rpc/physical/book/delete", { data: { uuid } })
+        .catch(() => null);
+      expect
+        .soft(cleanupResp?.status(), "cleanup delete of leaked book")
+        .toBe(200);
+    }
   }
 
   await gotoReady(page, "/");
@@ -235,9 +276,7 @@ test("adds a not-in-library book to the wishlist, shows it on the owner's Wishli
         name: `${wishlistShelf.owner_username}'s Wishlist`,
       }),
     ).toBeVisible();
-    await expect(
-      page.getByRole("link", { name: `Open details for ${title}` }),
-    ).toBeVisible();
+    await waitForBookLinkVisible(page, title);
 
     // Public by design (`provision_wishlist_shelf`) — a second, freshly
     // provisioned, non-admin user can view it too via a cookie-less context,
@@ -266,9 +305,18 @@ test("adds a not-in-library book to the wishlist, shows it on the owner's Wishli
       await context.close();
     }
   } finally {
-    await request
-      .post("/api/rpc/physical/wishlist/remove", { data: { uuid } })
-      .catch(() => {});
+    // `scan/wishlist` creates a new fileless book row, not just a
+    // `wishlist_entries` row — removing only the wishlist entry leaves that
+    // invisible-but-real book behind for later specs. Delete the book
+    // outright instead: `purge_book` already cascades `wishlist_entries`
+    // (and `physical_copies`) along with it, so this one call is complete
+    // cleanup on its own.
+    const cleanupResp = await request
+      .post("/api/rpc/physical/book/delete", { data: { uuid } })
+      .catch(() => null);
+    expect
+      .soft(cleanupResp?.status(), "cleanup delete of leaked wishlist book")
+      .toBe(200);
   }
 
   await gotoReady(page, `/shelves/${wishlistShelf.id}`);
