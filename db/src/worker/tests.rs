@@ -960,10 +960,11 @@ async fn seed_epub_row_for_bake(
 
 /// A `Task::RewriteAllEpubs` run that leaves one book unbaked (its
 /// `book_files` row points at a source that was never written to disk)
-/// completes as `TaskOutcome::Ok`, and the per-book failure — otherwise
-/// only logged — rides through as `TaskSuccessDetail::BakeErrors` (#1739).
-/// A book with a real fixture on disk bakes successfully alongside it, so
-/// the run doesn't abort on the first failure.
+/// completes as `TaskOutcome::Ok`, and the failed `book_uuid` — the error
+/// text itself stays server-side, only logged — rides through as
+/// `TaskSuccessDetail::BakeErrors` (#1739). A book with a real fixture on
+/// disk bakes successfully alongside it, so the run doesn't abort on the
+/// first failure.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn task_rewrite_all_epubs_reports_bake_errors_via_task_outcome() {
     let export = tempfile::tempdir().unwrap();
@@ -1010,9 +1011,7 @@ async fn task_rewrite_all_epubs_reports_bake_errors_via_task_outcome() {
     let id = w.post(Task::RewriteAllEpubs);
     match w.await_completion(id).await {
         TaskOutcome::Ok(Some(TaskSuccessDetail::BakeErrors(errors))) => {
-            assert_eq!(errors.len(), 1, "{errors:?}");
-            assert_eq!(errors[0].book_uuid, "uuid-bad");
-            assert!(!errors[0].message.is_empty());
+            assert_eq!(errors, vec!["uuid-bad".to_string()]);
         }
         other => panic!("expected Ok with bake errors, got {other:?}"),
     }

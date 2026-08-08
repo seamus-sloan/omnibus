@@ -214,7 +214,10 @@ impl Worker {
     /// match's `Err` arm. A non-empty error list rides onto the terminal
     /// `TaskOutcome` as [`TaskSuccessDetail::BakeErrors`] (#1739) so the
     /// poller can surface it, in addition to the summary counts always
-    /// being logged.
+    /// being logged. Only the failed `book_uuid`s cross that boundary —
+    /// each per-book `message` (from `db::epub_rewrite`, which can carry a
+    /// server filesystem path) is logged here, server-side only, and never
+    /// reaches `rpc_worker_status`, which any authenticated user can poll.
     async fn handle_rewrite_all_epubs(self: &Arc<Self>) -> TaskOutcome {
         match crate::rewrite_all_epubs_with_overrides(&self.pool).await {
             Ok(summary) => {
@@ -224,8 +227,18 @@ impl Worker {
                     errors = summary.errors.len(),
                     "epub override bake finished"
                 );
-                let detail = (!summary.errors.is_empty())
-                    .then_some(TaskSuccessDetail::BakeErrors(summary.errors));
+                for err in &summary.errors {
+                    tracing::warn!(
+                        book_uuid = %err.book_uuid,
+                        error = %err.message,
+                        "epub override bake failed for book"
+                    );
+                }
+                let detail = (!summary.errors.is_empty()).then(|| {
+                    TaskSuccessDetail::BakeErrors(
+                        summary.errors.into_iter().map(|e| e.book_uuid).collect(),
+                    )
+                });
                 TaskOutcome::Ok(detail)
             }
             Err(e) => sanitized_err("epub override bake", e),

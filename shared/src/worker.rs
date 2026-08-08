@@ -6,8 +6,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ebook::BulkRewriteError;
-
 /// Discriminant for [`TaskProgress`] entries. Mirrors the payload-less
 /// shape of the server-side `Task` enum so the wire protocol stays
 /// decoupled from the runtime `Task` type's lifetimes and handler
@@ -49,13 +47,19 @@ pub enum ProgressState {
         /// instead of the ordinary success row.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ghost_warning: Option<GhostFilesWarning>,
-        /// Per-book failures from a fleet-wide EPUB override bake (#1718,
+        /// `book_uuid`s that failed a fleet-wide EPUB override bake (#1718,
         /// #1739) — `Some` only for a `RewriteAllEpubs` run that left at
         /// least one book unbaked; every other task kind, and a bake with
         /// zero failures, reports `None`. Mutually exclusive with
         /// `ghost_warning` (each task kind produces at most one of the two).
+        /// Deliberately just the uuids, not the per-book error text: this
+        /// endpoint is reachable by any authenticated user, not only the
+        /// admin who kicked off the bake, and the underlying error (from
+        /// `db::epub_rewrite`) can carry a server filesystem path. The full
+        /// message is logged server-side instead — see
+        /// `handle_rewrite_all_epubs` in `db/src/worker/handlers.rs`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        bake_errors: Option<Vec<BulkRewriteError>>,
+        bake_errors: Option<Vec<String>>,
     },
     Failed {
         message: String,
@@ -154,17 +158,32 @@ mod tests {
     }
 
     #[test]
-    fn done_with_bake_errors_round_trips_the_book_uuid_and_message() {
+    fn done_with_bake_errors_round_trips_the_book_uuids() {
         let state = ProgressState::Done {
             processed: 2,
             ghost_warning: None,
-            bake_errors: Some(vec![BulkRewriteError {
-                book_uuid: "uuid-bad".into(),
-                message: "epub rewrite failed: open source epub".into(),
-            }]),
+            bake_errors: Some(vec!["uuid-bad".into()]),
         };
         let json = serde_json::to_string(&state).unwrap();
         let round_tripped: ProgressState = serde_json::from_str(&json).unwrap();
         assert_eq!(state, round_tripped);
+    }
+
+    #[test]
+    fn done_with_bake_errors_never_carries_a_message_key_on_the_wire() {
+        // Regression guard for the PR #1756 review fix: the wire payload
+        // must be uuid-only — no per-book error text, which can carry a
+        // server filesystem path and is reachable by any authenticated user
+        // via `rpc_worker_status`, not only the admin who ran the bake.
+        let state = ProgressState::Done {
+            processed: 1,
+            ghost_warning: None,
+            bake_errors: Some(vec!["uuid-bad".into()]),
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(
+            !json.contains("message"),
+            "bake_errors must not carry a message field: {json}"
+        );
     }
 }

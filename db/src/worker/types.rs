@@ -247,10 +247,12 @@ pub type TaskId = u64;
 pub enum TaskSuccessDetail {
     /// A scan whose ghost count cleared the warn threshold (issue #1057).
     GhostFiles(omnibus_shared::GhostFilesWarning),
-    /// A fleet-wide EPUB override bake's per-book failures (#1718, #1739).
+    /// A fleet-wide EPUB override bake's failed `book_uuid`s (#1718, #1739).
     /// Only attached when non-empty — a bake where every book succeeded
-    /// reports `None` like any other task.
-    BakeErrors(Vec<omnibus_shared::BulkRewriteError>),
+    /// reports `None` like any other task. Deliberately just the uuids, not
+    /// the per-book error text (which can carry a server filesystem path) —
+    /// see the doc comment on `omnibus_shared::ProgressState::Done::bake_errors`.
+    BakeErrors(Vec<String>),
 }
 
 /// Terminal result of a task, delivered to awaiters of its [`TaskId`].

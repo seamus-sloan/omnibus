@@ -7,9 +7,7 @@
 #![cfg(not(feature = "mobile"))]
 
 use dioxus::prelude::*;
-use omnibus_shared::{
-    BulkRewriteError, GhostFilesWarning, ProgressState, TaskKind, TaskProgress, WorkerStatus,
-};
+use omnibus_shared::{GhostFilesWarning, ProgressState, TaskKind, TaskProgress, WorkerStatus};
 
 use crate::platform_sleep::async_sleep_ms;
 use crate::{data, use_server_url};
@@ -255,9 +253,12 @@ fn WarnRow(
 /// attention (#1739). Doesn't route through `kind_label` — `RewriteAllEpubs`
 /// reuses `TaskKind::Scan` for its wire kind (no dedicated progress
 /// widget), so this row names the job directly instead of rendering the
-/// misleading "Library scan" label.
+/// misleading "Library scan" label. `errors` is just the failed
+/// `book_uuid`s — the wire type deliberately drops the per-book error text
+/// (which can carry a server filesystem path); see the doc comment on
+/// `omnibus_shared::ProgressState::Done::bake_errors`.
 #[component]
-fn BakeErrorsRow(errors: Vec<BulkRewriteError>, on_dismiss: EventHandler<MouseEvent>) -> Element {
+fn BakeErrorsRow(errors: Vec<String>, on_dismiss: EventHandler<MouseEvent>) -> Element {
     let message = bake_errors_message(&errors);
     rsx! {
         div {
@@ -345,17 +346,17 @@ fn ghost_warning_message(warning: &GhostFilesWarning) -> String {
 /// tail — keeps the row readable for a large fleet-wide bake.
 const BAKE_ERRORS_INLINE_CAP: usize = 5;
 
-/// Render a fleet-wide EPUB bake's [`BulkRewriteError`] list into the
+/// Render a fleet-wide EPUB bake's failed `book_uuid`s into the
 /// [`BakeErrorsRow`] message text (#1739) — factored out of the component
 /// body so the wording (count + the failed book uuids) is unit testable,
 /// mirroring [`ghost_warning_message`].
-fn bake_errors_message(errors: &[BulkRewriteError]) -> String {
+fn bake_errors_message(errors: &[String]) -> String {
     let n = errors.len();
     let noun = if n == 1 { "book" } else { "books" };
     let uuids: Vec<&str> = errors
         .iter()
         .take(BAKE_ERRORS_INLINE_CAP)
-        .map(|e| e.book_uuid.as_str())
+        .map(String::as_str)
         .collect();
     let listed = uuids.join(", ");
     if n > BAKE_ERRORS_INLINE_CAP {
@@ -406,19 +407,10 @@ mod tests {
 
     #[test]
     fn bake_errors_message_names_the_count_and_every_failed_book_uuid_under_the_cap() {
-        let errors = vec![
-            BulkRewriteError {
-                book_uuid: "uuid-a".into(),
-                message: "boom".into(),
-            },
-            BulkRewriteError {
-                book_uuid: "uuid-b".into(),
-                message: "boom".into(),
-            },
-        ];
+        let errors = vec!["uuid-a".to_string(), "uuid-b".to_string()];
         let message = bake_errors_message(&errors);
         assert!(
-            message.contains('2'),
+            message.contains("2 books failed to bake:"),
             "message must name the count: {message}"
         );
         assert!(message.contains("uuid-a"), "{message}");
@@ -428,11 +420,8 @@ mod tests {
 
     #[test]
     fn bake_errors_message_collapses_uuids_past_the_inline_cap() {
-        let errors: Vec<BulkRewriteError> = (0..BAKE_ERRORS_INLINE_CAP + 3)
-            .map(|i| BulkRewriteError {
-                book_uuid: format!("uuid-{i}"),
-                message: "boom".into(),
-            })
+        let errors: Vec<String> = (0..BAKE_ERRORS_INLINE_CAP + 3)
+            .map(|i| format!("uuid-{i}"))
             .collect();
         let message = bake_errors_message(&errors);
         assert!(
@@ -447,10 +436,7 @@ mod tests {
 
     #[test]
     fn bake_errors_message_uses_singular_book_noun_for_one_failure() {
-        let errors = vec![BulkRewriteError {
-            book_uuid: "uuid-solo".into(),
-            message: "boom".into(),
-        }];
+        let errors = vec!["uuid-solo".to_string()];
         let message = bake_errors_message(&errors);
         assert!(message.contains("1 book failed"), "{message}");
     }
