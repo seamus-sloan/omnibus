@@ -1,7 +1,8 @@
 //! Tests for pool init and migrations: `init_db` error surfacing on a bad
 //! URL or a tampered applied-migration checksum, and per-migration
 //! correctness checks (schema cleanup, timestamp coercion, orphan
-//! row handling) run against a fresh `sqlite::memory:` database.
+//! row handling, derived-key reset) run against a fresh `sqlite::memory:`
+//! database.
 
 use super::*;
 
@@ -473,6 +474,167 @@ async fn migrator_is_idempotent_on_rerun() {
 
     drop(pool2);
     let _ = std::fs::remove_file(&tmp);
+}
+
+/// Migration 0070 plus the boot backfill re-derive the keys the `&`
+/// expansion invalidated. Simulates an upgrade over an existing database:
+/// rows written by the old folder (which dropped `&`) and a
+/// `_sqlx_migrations` table that has not yet seen 0070, then a second
+/// `init_db` over the same file.
+///
+/// Covers all four shapes the two arms have to get right: a `&` title with a
+/// link, a `&` title *without* one (the blocklisted-first-creator gap, where
+/// the stored author key is the only copy and must survive), a `&` in the
+/// position-0 author's name, and a row with no `&` at all.
+#[tokio::test]
+async fn migration_0070_recomputes_stale_ampersand_norms_on_upgrade() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("omnibus.db");
+    let url = format!("sqlite://{}?mode=rwc", db_path.display());
+    let pool = init_db(&url).await.expect("initial init_db should succeed");
+
+    sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES ('/lib', 'lib')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Every `*_norm` seeded here is what the pre-change folder wrote: the
+    // ampersand collapsed to a space like any other punctuation. The two
+    // `sentinel` keys are deliberately wrong, so any recompute shows up.
+    let ampersand_title = "A Tale of Mirth & Magic";
+    seed_pre_ampersand_book(
+        &pool,
+        "u1",
+        ampersand_title,
+        "a tale of mirth magic",
+        "ada quill",
+        Some("Ada Quill"),
+    )
+    .await;
+    seed_pre_ampersand_book(
+        &pool,
+        "u2",
+        "Dracula",
+        "sentinel",
+        "sentinel",
+        Some("Ada Quill"),
+    )
+    .await;
+    seed_pre_ampersand_book(
+        &pool,
+        "u3",
+        ampersand_title,
+        "a tale of mirth magic",
+        "blocklisted quill",
+        None,
+    )
+    .await;
+    seed_pre_ampersand_book(
+        &pool,
+        "u4",
+        "Duet",
+        "duet",
+        "vale quill",
+        Some("Vale & Quill"),
+    )
+    .await;
+    sqlx::query(
+        "INSERT INTO metadata_overrides (book_uuid, overrides, title_norm, author_norm)
+         VALUES ('u1', '{\"title\":\"A Tale of Mirth & Magic\"}', 'a tale of mirth magic', NULL)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Hand the database back its pre-0070 migration state and re-open it.
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 70")
+        .execute(&pool)
+        .await
+        .unwrap();
+    drop(pool);
+    let pool = init_db(&url).await.expect("upgrade init_db should succeed");
+
+    assert_eq!(
+        norms(&pool, "u1").await,
+        ("a tale of mirth and magic".into(), Some("ada quill".into())),
+        "a `&` title heals; its derivable author key is unchanged"
+    );
+    assert_eq!(
+        norms(&pool, "u2").await,
+        ("sentinel".into(), Some("sentinel".into())),
+        "a row with no `&` on either side is not reset at all"
+    );
+    assert_eq!(
+        norms(&pool, "u3").await,
+        (
+            "a tale of mirth and magic".into(),
+            Some("blocklisted quill".into())
+        ),
+        "a `&` title must not cost a book its non-derivable author key"
+    );
+    assert_eq!(
+        norms(&pool, "u4").await,
+        ("duet".into(), Some("vale and quill".into())),
+        "a `&` in the position-0 author's name heals the author key"
+    );
+    // The override keys need no migration — their boot pass recomputes every
+    // row from the `overrides` JSON and rewrites the ones that disagree.
+    let override_norm: String =
+        sqlx::query_scalar("SELECT title_norm FROM metadata_overrides WHERE book_uuid = 'u1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(override_norm, "a tale of mirth and magic");
+}
+
+/// Seed a book carrying hand-written `_norm` keys, standing in for a row the
+/// pre-`&`-expansion folder wrote. `link_author` is the position-0 author link
+/// the boot backfill re-derives `author_norm` from; `None` reproduces the
+/// blocklisted-first-creator gap, where the link is absent and the stored key
+/// is the only copy of it.
+async fn seed_pre_ampersand_book(
+    pool: &SqlitePool,
+    uuid: &str,
+    title: &str,
+    title_norm: &str,
+    author_norm: &str,
+    link_author: Option<&str>,
+) {
+    let book_id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, library_id, path, title, title_norm, author_norm)
+         VALUES (?1, (SELECT id FROM scan_roots WHERE path = '/lib'), '', ?2, ?3, ?4)
+         RETURNING id",
+    )
+    .bind(uuid)
+    .bind(title)
+    .bind(title_norm)
+    .bind(author_norm)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let Some(name) = link_author else { return };
+    sqlx::query("INSERT OR IGNORE INTO authors (name) VALUES (?1)")
+        .bind(name)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO books_authors_link (book, author, position)
+         VALUES (?1, (SELECT id FROM authors WHERE name = ?2), 0)",
+    )
+    .bind(book_id)
+    .bind(name)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// The stored `(title_norm, author_norm)` pair for one book.
+async fn norms(pool: &SqlitePool, uuid: &str) -> (String, Option<String>) {
+    sqlx::query_as("SELECT title_norm, author_norm FROM books WHERE uuid = ?1")
+        .bind(uuid)
+        .fetch_one(pool)
+        .await
+        .unwrap()
 }
 
 struct GhostedRepairFixture {
