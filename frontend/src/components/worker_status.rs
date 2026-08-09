@@ -184,12 +184,10 @@ fn ActiveRow(task: TaskProgress) -> Element {
     } else {
         None
     };
-    // The verbose activity panel (#1802): phase, current item, and scan
-    // tallies, each rendered only when the task reported it. Data-driven
-    // conditionals — never cfg gates — so SSR and hydration match (rule 07).
+    // Data-driven conditionals, never cfg gates — SSR and hydration must match.
     let detail = task.detail.as_ref();
-    let phase = detail.and_then(|d| d.phase.clone());
-    let current_item = detail.and_then(|d| d.current_item.clone());
+    let phase = detail.and_then(|d| d.phase.as_deref());
+    let current_item = detail.and_then(|d| d.current_item.as_deref());
     let tallies_text = detail
         .and_then(|d| d.tallies.as_ref())
         .map(active_tallies_line);
