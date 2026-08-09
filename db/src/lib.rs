@@ -15,6 +15,7 @@ pub mod bookmarks;
 pub mod books;
 pub mod browse;
 pub mod comic;
+pub mod convert;
 pub mod covers;
 pub mod deletion;
 pub mod discovery;

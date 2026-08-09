@@ -10,16 +10,21 @@ use std::collections::HashMap;
 use std::path::Path;
 
 pub use omnibus_shared::{
-    is_plausible_email, GoogleBooksKeyStatus, HardcoverKeyStatus, Settings, SmtpConfigStatus,
-    SmtpConfigUpdate, SmtpSecurity, EMAIL_MAX_LEN, GOOGLE_BOOKS_API_KEY_MAX_LEN,
+    is_plausible_email, EbookConvertStatus, GoogleBooksKeyStatus, HardcoverKeyStatus, Settings,
+    SmtpConfigStatus, SmtpConfigUpdate, SmtpSecurity, EMAIL_MAX_LEN, GOOGLE_BOOKS_API_KEY_MAX_LEN,
     HARDCOVER_API_KEY_MAX_LEN, SMTP_FIELD_MAX_LEN, SMTP_PASSWORD_MAX_LEN,
 };
 use omnibus_shared::{is_valid_metadata_precedence, MetadataSource, DEFAULT_METADATA_PRECEDENCE};
 use sqlx::{SqlitePool, Transaction};
 
+mod ebook_convert;
 mod keys;
 mod secret_key;
 
+pub use ebook_convert::{
+    ebook_convert_status, effective_ebook_convert_path, get_ebook_convert_path,
+    seed_ebook_convert_path_from_env, set_ebook_convert_path,
+};
 pub use keys::{
     effective_google_books_api_key, effective_hardcover_api_key, get_google_books_api_key,
     get_hardcover_api_key, google_books_key_status, hardcover_key_status, provider_keys,

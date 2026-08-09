@@ -1,11 +1,11 @@
-//! Settings, worker-status, on-disk library, Hardcover-key, and audiobook
-//! chapter-backfill server functions.
+//! Settings, worker-status, on-disk library, Hardcover-key, ebook-convert, and
+//! audiobook chapter-backfill server functions.
 
 use dioxus::fullstack::{get, post};
 use dioxus::prelude::*;
 use omnibus_shared::{
-    HardcoverKeyStatus, LibraryContents, MetadataSource, Settings, SmtpConfigStatus,
-    SmtpConfigUpdate, WorkerStatus,
+    EbookConvertStatus, HardcoverKeyStatus, LibraryContents, MetadataSource, Settings,
+    SmtpConfigStatus, SmtpConfigUpdate, WorkerStatus,
 };
 
 #[cfg(feature = "server")]
@@ -190,6 +190,30 @@ pub async fn rpc_set_hardcover_key(key: Option<String>) -> Result<HardcoverKeySt
             .map_err(|e| internal_rpc_error("get hardcover key status", e))?),
         Err(db::SettingsError::Validation(msg)) => Err(ServerFnError::new(msg).into()),
         Err(e) => Err(internal_rpc_error("set hardcover key", e).into()),
+    }
+}
+
+/// Admin-only: the resolved `ebook-convert` command, its source, and whether
+/// it is runnable. Calibre is optional — an unavailable binary is a reportable
+/// state, not an error.
+#[get("/api/rpc/ebook-convert", pool: PoolExt, _admin: AdminUser)]
+pub async fn rpc_get_ebook_convert() -> Result<EbookConvertStatus> {
+    Ok(db::ebook_convert_status(&pool.0)
+        .await
+        .map_err(|e| internal_rpc_error("get ebook-convert status", e))?)
+}
+
+/// Admin-only: save (or clear, with `None`/blank) the `ebook_convert_path`
+/// override, returning the newly resolved status. Clearing falls back to
+/// `OMNIBUS_EBOOK_CONVERT_PATH`, then `ebook-convert` on `$PATH`.
+#[post("/api/rpc/ebook-convert", pool: PoolExt, _admin: AdminUser)]
+pub async fn rpc_set_ebook_convert(path: Option<String>) -> Result<EbookConvertStatus> {
+    match db::set_ebook_convert_path(&pool.0, path.as_deref()).await {
+        Ok(()) => Ok(db::ebook_convert_status(&pool.0)
+            .await
+            .map_err(|e| internal_rpc_error("get ebook-convert status", e))?),
+        Err(db::SettingsError::Validation(msg)) => Err(ServerFnError::new(msg).into()),
+        Err(e) => Err(internal_rpc_error("set ebook-convert path", e).into()),
     }
 }
 

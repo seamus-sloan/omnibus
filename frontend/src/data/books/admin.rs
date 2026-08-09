@@ -3,7 +3,7 @@
 //! Same mobile-REST vs web/SSR `#[cfg]` split as the sibling modules.
 
 #[cfg(not(feature = "mobile"))]
-use omnibus_shared::MetadataSource;
+use omnibus_shared::{EbookConvertStatus, MetadataSource};
 use omnibus_shared::{LibraryContents, Settings, WorkerStatus};
 
 #[cfg(not(feature = "mobile"))]
@@ -108,6 +108,28 @@ pub async fn save_metadata_precedence(
     precedence: Vec<MetadataSource>,
 ) -> Result<Vec<MetadataSource>, DataError> {
     crate::rpc::rpc_set_metadata_precedence(library.to_string(), precedence)
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Web/SSR: fetch the resolved `ebook-convert` status — proxies to
+/// `rpc_get_ebook_convert`. Web-only (the admin conversion card is not a
+/// mobile surface, so there's no REST counterpart).
+#[cfg(not(feature = "mobile"))]
+pub async fn get_ebook_convert(_server_url: &str) -> Result<EbookConvertStatus, DataError> {
+    crate::rpc::rpc_get_ebook_convert()
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Web/SSR: save (`Some`) or clear (`None`) the `ebook_convert_path` override
+/// — proxies to `rpc_set_ebook_convert`. Returns the newly resolved status.
+#[cfg(not(feature = "mobile"))]
+pub async fn save_ebook_convert(
+    _server_url: &str,
+    path: Option<String>,
+) -> Result<EbookConvertStatus, DataError> {
+    crate::rpc::rpc_set_ebook_convert(path)
         .await
         .map_err(note_server_fn_err)
 }

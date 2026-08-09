@@ -77,8 +77,9 @@ mod server {
 
     /// Log a WARN if `OMNIBUS_TRUST_FORWARDED_FOR` is enabled — required only
     /// behind a trusted reverse proxy, dangerous otherwise — and a one-time
-    /// WARN if kepubify is missing (Kobo downloads then fall back to plain
-    /// EPUB).
+    /// WARN each if kepubify is missing (Kobo downloads then fall back to
+    /// plain EPUB) or Calibre's `ebook-convert` is missing (format conversion
+    /// stays disabled). Both are optional, so neither blocks the boot.
     fn log_startup_warnings() {
         if rate_limit::trust_forwarded_for() {
             tracing::warn!(
@@ -87,6 +88,7 @@ mod server {
             );
         }
         omnibus_db::kepub::warn_if_unavailable();
+        omnibus_db::convert::warn_if_unavailable();
     }
 
     /// Open the SQLite pool, run migrations, seed env-driven settings, then
@@ -106,6 +108,9 @@ mod server {
         // Seed the F4.3 SMTP config from SMTP_* only when no host is saved
         // (settings wins; env is the out-of-the-box fallback).
         omnibus_db::seed_smtp_from_env(&pool).await?;
+        // Seed the Calibre ebook-convert path from OMNIBUS_EBOOK_CONVERT_PATH
+        // only when none is saved (settings wins; env is the fallback).
+        omnibus_db::seed_ebook_convert_path_from_env(&pool).await?;
 
         // Recovery hook: promote the named user to admin if
         // OMNIBUS_INITIAL_ADMIN is set. No-op otherwise. Logs on
