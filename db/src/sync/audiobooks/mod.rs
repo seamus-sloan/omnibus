@@ -66,25 +66,26 @@ pub async fn sync_audiobooks(
     library_path: &str,
     plan: AudiobookSyncPlan,
 ) -> anyhow::Result<()> {
-    sync_audiobooks_with_progress(pool, library_path, plan, |_, _| {}).await
+    sync_audiobooks_with_progress(pool, library_path, plan, |_, _, _| {}).await
 }
 
-/// [`sync_audiobooks`] variant that calls `on_progress(processed, total)`
-/// after each per-book write. `total` counts the buckets that loop per
-/// book — Changed + New. Removed and Backfill are batched and not
-/// reported as per-book ticks.
+/// [`sync_audiobooks`] variant that calls `on_progress(processed, total,
+/// current)` after each per-book write (`current` is the group's
+/// library-relative scan key; `None` on the initial pre-write tick).
+/// `total` counts the buckets that loop per book — Changed + New. Removed
+/// and Backfill are batched and not reported as per-book ticks.
 pub async fn sync_audiobooks_with_progress(
     pool: &SqlitePool,
     library_path: &str,
     plan: AudiobookSyncPlan,
-    mut on_progress: impl FnMut(u32, u32),
+    mut on_progress: impl FnMut(u32, u32, Option<&str>),
 ) -> anyhow::Result<()> {
     let total: u32 = (plan.changed_books.len() + plan.new_books.len())
         .try_into()
         .unwrap_or(u32::MAX);
     // Emit (0, total) before any per-book work so the UI flips from
     // indeterminate spinner to determinate bar on the first poll.
-    on_progress(0, total);
+    on_progress(0, total, None);
     let mut processed: u32 = 0;
 
     let mut tx = pool.begin().await?;
@@ -100,9 +101,9 @@ pub async fn sync_audiobooks_with_progress(
         library_id,
         library_path,
         &plan.changed_books,
-        || {
+        |scan_key| {
             processed = processed.saturating_add(1);
-            on_progress(processed, total);
+            on_progress(processed, total, Some(scan_key));
         },
     )
     .await?;
@@ -112,9 +113,9 @@ pub async fn sync_audiobooks_with_progress(
         library_path,
         &plan.new_books,
         &plan.removed_uuids,
-        || {
+        |scan_key| {
             processed = processed.saturating_add(1);
-            on_progress(processed, total);
+            on_progress(processed, total, Some(scan_key));
         },
     )
     .await?;

@@ -323,7 +323,7 @@ async fn sync_new_inserts_a_new_book_and_its_link_rows() {
 
     let new_books = vec![book_with_all_links("fresh.epub", "Fresh")];
     let mut tx = pool.begin().await.unwrap();
-    let covers = sync_new(&mut tx, library_id, "/lib", &new_books, &[], || {})
+    let covers = sync_new(&mut tx, library_id, "/lib", &new_books, &[], |_| {})
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -399,7 +399,7 @@ async fn sync_changed_updates_an_existing_book_row_in_place() {
         None,
     )];
     let mut tx = pool.begin().await.unwrap();
-    sync_changed(&mut tx, library_id, "/lib", &changed, || {})
+    sync_changed(&mut tx, library_id, "/lib", &changed, |_| {})
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -442,7 +442,7 @@ async fn sync_changed_is_a_noop_for_empty_batch() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let library_id = seed_scan_root(&pool).await;
     let mut tx = pool.begin().await.unwrap();
-    let covers = sync_changed(&mut tx, library_id, "/lib", &[], || {})
+    let covers = sync_changed(&mut tx, library_id, "/lib", &[], |_| {})
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -520,7 +520,7 @@ async fn word_count_persists_on_insert_and_refreshes_on_change() {
     let mut changed = indexed("wc.epub", Some("Counted"), &[], &[], None, None);
     changed.word_count = Some(2500);
     let mut tx = pool.begin().await.unwrap();
-    sync_changed(&mut tx, library_id, "/lib", &[changed], || {})
+    sync_changed(&mut tx, library_id, "/lib", &[changed], |_| {})
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -561,7 +561,7 @@ async fn page_count_persists_on_insert_and_refreshes_on_change() {
     let mut changed = indexed("pc.cbz", Some("Paged"), &[], &[], None, None);
     changed.metadata.page_count = Some(20);
     let mut tx = pool.begin().await.unwrap();
-    sync_changed(&mut tx, library_id, "/lib", &[changed], || {})
+    sync_changed(&mut tx, library_id, "/lib", &[changed], |_| {})
         .await
         .unwrap();
     tx.commit().await.unwrap();

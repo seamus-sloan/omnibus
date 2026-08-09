@@ -1307,6 +1307,97 @@ async fn reindex_returns_stats_with_the_removed_count_and_file_backed_total() {
     let _ = std::fs::remove_dir_all(&lib);
 }
 
+/// `root_display_name` keeps the directory basename through trailing
+/// separators (`Path::file_name` ignores them — see its std doc example
+/// `/usr/bin/` → `bin`); only the degenerate roots `/` and a `..`-ending
+/// path yield no name, and `display_item` then degrades to the bare
+/// relative path rather than emitting a leading slash.
+#[test]
+fn root_display_name_survives_trailing_separators_and_degrades_for_rootless_paths() {
+    assert_eq!(root_display_name("/mnt/media/books"), "books");
+    assert_eq!(root_display_name("/mnt/media/books/"), "books");
+    assert_eq!(root_display_name("/"), "");
+    assert_eq!(
+        display_item(&root_display_name("/mnt/media/books/"), "Author/Title.epub"),
+        "books/Author/Title.epub"
+    );
+    assert_eq!(
+        display_item(&root_display_name("/"), "Author/Title.epub"),
+        "Author/Title.epub"
+    );
+}
+
+/// The verbose progress stream (issue #1802): a walking-phase event opens
+/// the scan, parse and sync events carry the diff's tallies plus the
+/// current item, and every reported path is the library directory name
+/// plus the relative path — never the absolute server path.
+#[tokio::test]
+async fn reindex_with_progress_reports_phases_tallies_and_relative_current_items() {
+    let _covers = CoversTempDir::new("reindex-verbose");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib = make_test_dir("reindex-verbose-lib");
+    let lib_path = lib.to_string_lossy().into_owned();
+    let root_name = lib.file_name().unwrap().to_string_lossy().into_owned();
+
+    seed_ebook_at(&pool, &lib_path, "a.epub", "Dracula").await;
+    seed_ebook_at(&pool, &lib_path, "b.epub", "Frankenstein").await;
+    // A file on disk with no DB row — the New bucket the parse + sync
+    // phases will report on.
+    std::fs::write(lib.join("fresh.epub"), b"stub").unwrap();
+
+    let updates: std::sync::Arc<std::sync::Mutex<Vec<ScanUpdate>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let updates_cb = updates.clone();
+    reindex_with_progress(&pool, &lib_path, move |u| {
+        updates_cb.lock().unwrap().push(u);
+    })
+    .await
+    .unwrap();
+
+    let updates = updates.lock().unwrap();
+    assert_eq!(
+        updates.first().and_then(|u| u.detail.phase.as_deref()),
+        Some(PHASE_WALKING),
+        "the walking phase must open the stream"
+    );
+
+    let parse_event = updates
+        .iter()
+        .find(|u| u.detail.phase.as_deref() == Some(PHASE_PARSING))
+        .expect("a parse-phase event for the New file");
+    let item = parse_event.detail.current_item.as_deref().unwrap();
+    assert_eq!(item, format!("{root_name}/fresh.epub"));
+    let tallies = parse_event
+        .detail
+        .tallies
+        .expect("parse events carry tallies");
+    assert_eq!(tallies.found, 3);
+    assert_eq!(tallies.new, 1);
+    assert_eq!(tallies.unchanged, 2);
+
+    let sync_event = updates
+        .iter()
+        .find(|u| {
+            u.detail.phase.as_deref() == Some(PHASE_SYNCING) && u.detail.current_item.is_some()
+        })
+        .expect("a sync-phase event naming the written book");
+    assert_eq!(
+        sync_event.detail.current_item.as_deref().unwrap(),
+        format!("{root_name}/fresh.epub")
+    );
+
+    for u in updates.iter() {
+        if let Some(item) = u.detail.current_item.as_deref() {
+            assert!(
+                !item.contains(&lib_path),
+                "current_item leaked the absolute library path: {item}"
+            );
+        }
+    }
+
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
 // ---------- #819: incomplete-enumeration data-loss guard ----------
 
 /// Read a book's `is_missing_files` flag by its `scan_key` (the relative

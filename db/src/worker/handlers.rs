@@ -192,13 +192,12 @@ impl Worker {
     /// scan's resource key, so each waits for this task to fully finish; the
     /// posts themselves are instant. Mirrors the audiobook chapter backfill.
     async fn handle_scan(self: &Arc<Self>, library_path: String, id: TaskId) -> TaskOutcome {
-        match crate::indexer::reindex_with_progress(
-            &self.pool,
-            &library_path,
-            |processed, total| {
-                self.report_progress(id, processed, Some(total));
-            },
-        )
+        // Owned clone: the verbose callback rides into the indexer's
+        // blocking parse phase, which needs `Send + 'static`.
+        let worker = self.clone();
+        match crate::indexer::reindex_with_progress(&self.pool, &library_path, move |u| {
+            worker.report_progress_update(id, u.processed, u.total, u.detail);
+        })
         .await
         {
             Ok(stats) => {
@@ -276,13 +275,12 @@ impl Worker {
         library_path: String,
         id: TaskId,
     ) -> TaskOutcome {
-        match crate::indexer::reindex_audiobooks_with_progress(
-            &self.pool,
-            &library_path,
-            |processed, total| {
-                self.report_progress(id, processed, Some(total));
-            },
-        )
+        let worker = self.clone();
+        match crate::indexer::reindex_audiobooks_with_progress(&self.pool, &library_path, {
+            move |u| {
+                worker.report_progress_update(id, u.processed, u.total, u.detail);
+            }
+        })
         .await
         {
             Ok(stats) => {

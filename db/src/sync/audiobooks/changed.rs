@@ -23,7 +23,7 @@ pub(super) async fn sync_audiobooks_changed(
     library_id: i64,
     library_path: &str,
     changed_books: &[crate::audiobook::IndexedAudiobook],
-    mut on_book_written: impl FnMut(),
+    mut on_book_written: impl FnMut(&str),
 ) -> Result<Vec<(String, String, Vec<u8>)>, SyncError> {
     let mut changed_covers: Vec<(String, String, Vec<u8>)> = Vec::new();
     if changed_books.is_empty() {
@@ -64,16 +64,16 @@ pub(super) async fn sync_audiobooks_changed(
                 // under the same (book, format) are untouched.
                 attach_audiobook_file(tx, target_id, &format, library_path, b, &mut changed_covers)
                     .await?;
-                on_book_written();
+                on_book_written(&b.scan_key);
                 continue;
             }
             insert_new_audiobook(tx, library_id, b, &mut changed_covers).await?;
-            on_book_written();
+            on_book_written(&b.scan_key);
             continue;
         };
 
         rewrite_audiobook_in_place(tx, book_id, &uuid, b, &mut changed_covers).await?;
-        on_book_written();
+        on_book_written(&b.scan_key);
     }
     Ok(changed_covers)
 }
