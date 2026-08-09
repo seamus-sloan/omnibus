@@ -178,20 +178,29 @@ pub fn thumb_etag(book_id: i64, size: ThumbSize, last_modified_epoch: i64) -> St
     thumb_etag_versioned(book_id, size, last_modified_epoch, THUMB_ENCODER_VERSION)
 }
 
+/// True when any pixel in a packed RGBA buffer is less than fully opaque.
+/// Short-circuits on the first one it finds.
+fn has_transparent_pixel(rgba: &[u8]) -> bool {
+    rgba.chunks_exact(4).any(|px| px[3] != u8::MAX)
+}
+
 /// Encode an already-resized cover as lossy WebP at [`THUMB_QUALITY`].
 ///
-/// Alpha is carried only when a pixel actually uses it: an RGBA encode of an
-/// opaque cover spends bytes on a constant alpha plane for nothing.
+/// Takes the RGBA path only when a pixel actually uses alpha.
 /// `color().has_alpha()` alone is a question about the pixel *format*, and
 /// plenty of covers decode as RGBA while being fully opaque, so the channel
-/// itself is scanned — short-circuiting on the first transparent pixel, and
-/// only for formats that could carry one.
+/// itself is scanned — and only for formats that could carry one.
+///
+/// This does not change the encoded bytes: libwebp detects a constant alpha
+/// plane and drops it, so an opaque RGBA cover already came out as plain
+/// `VP8 `. What it saves is the work — a needless RGBA conversion here, and
+/// libwebp's own opacity scan behind it.
 fn encode_lossy_webp(resized: &image::DynamicImage, w: u32, h: u32) -> Result<Vec<u8>, ThumbError> {
     let transparent = resized
         .color()
         .has_alpha()
         .then(|| resized.to_rgba8())
-        .filter(|rgba| rgba.as_raw().chunks_exact(4).any(|px| px[3] != u8::MAX));
+        .filter(|rgba| has_transparent_pixel(rgba.as_raw()));
 
     let encoded = match &transparent {
         Some(rgba) => {

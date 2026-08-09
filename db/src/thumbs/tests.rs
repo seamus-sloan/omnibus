@@ -309,13 +309,32 @@ fn generate_thumbnail_preserves_alpha_for_a_cover_with_transparency() {
 }
 
 #[test]
-fn generate_thumbnail_drops_the_alpha_plane_for_an_rgba_cover_whose_pixels_are_all_opaque() {
+fn has_transparent_pixel_is_false_when_every_pixel_is_fully_opaque() {
+    // The decision `encode_lossy_webp` branches on. Asserted directly because
+    // the encoded bytes cannot distinguish the two paths — libwebp drops a
+    // constant alpha plane itself — so an end-to-end assertion would pass
+    // whether or not the RGBA path was correctly skipped.
+    let opaque: Vec<u8> = (0..64u8).flat_map(|i| [i, i, i, 255]).collect();
+    assert!(!has_transparent_pixel(&opaque));
+}
+
+#[test]
+fn has_transparent_pixel_is_true_when_a_single_pixel_is_not_fully_opaque() {
+    let mut buf: Vec<u8> = (0..64u8).flat_map(|i| [i, i, i, 255]).collect();
+    // Last pixel's alpha only — the scan must not stop early on opaque runs.
+    let last_alpha = buf.len() - 1;
+    buf[last_alpha] = 254;
+    assert!(has_transparent_pixel(&buf));
+}
+
+#[test]
+fn generate_thumbnail_writes_a_plain_lossy_chunk_for_an_rgba_cover_that_is_fully_opaque() {
     use image::{ImageBuffer, Rgba};
 
     // The pixel format carries an alpha channel but every pixel sets it to
-    // 255, which is the common shape for a cover that merely happened to be
-    // saved as RGBA. Testing the format alone would encode a constant alpha
-    // plane and inflate the thumb for nothing.
+    // 255 — the common shape for a cover that merely happened to be saved as
+    // RGBA. This pins the observable contract (no ALPH chunk); the branch that
+    // avoids the wasted RGBA conversion is pinned by the two tests above.
     let img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_fn(200, 300, |x, y| {
         Rgba([(x % 256) as u8, (y % 256) as u8, 40, 255])
     });
