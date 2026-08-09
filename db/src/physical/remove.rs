@@ -57,7 +57,7 @@ pub async fn delete_fileless_book(pool: &SqlitePool, book_uuid: &str) -> Result<
     })
     .await
     {
-        tracing::error!("delete_fileless_book: cover cleanup spawn_blocking failed: {join_err}");
+        tracing::error!(error = %join_err, "delete_fileless_book: cover cleanup spawn_blocking failed");
     }
     Ok(())
 }

@@ -136,7 +136,7 @@ pub async fn sync_audiobooks_with_progress(
     })
     .await
     {
-        tracing::error!("sync_audiobooks: cover reconcile spawn_blocking failed: {join_err}");
+        tracing::error!(error = %join_err, "sync_audiobooks: cover reconcile spawn_blocking failed");
     }
 
     Ok(())

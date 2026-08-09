@@ -1,10 +1,8 @@
-//! Tracing `Layer` feeding the in-memory error ring buffer.
-//!
-//! Installed alongside the stderr/JSON-file layers in
-//! [`crate::logging::init_tracing`]. Captures every `ERROR`-level event in
-//! the process with no explicit call site required at each error (AC3),
-//! extracting the message plus any book/file identifier field so the admin
-//! "Last errors" section can link the offending item.
+//! Tracing `Layer` feeding the in-memory error ring buffer, installed
+//! alongside the stderr/JSON-file layers in [`crate::logging::init_tracing`].
+//! Captures each `ERROR` event's message (served verbatim over HTTP to
+//! admins) plus any book/file identifier; call sites must pass secrets via
+//! a named field (`error = %e`), never interpolated into the message.
 
 use omnibus_db::error_ring::{self, CapturedError};
 use tracing::field::{Field, Visit};

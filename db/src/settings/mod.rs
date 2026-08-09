@@ -155,7 +155,7 @@ pub async fn set_settings(pool: &SqlitePool, settings: &Settings) -> Result<(), 
         tokio::task::spawn_blocking(move || crate::covers::delete_cover_files_for(&orphan_uuids))
             .await
     {
-        tracing::error!("set_settings: cover cleanup spawn_blocking failed: {join_err}");
+        tracing::error!(error = %join_err, "set_settings: cover cleanup spawn_blocking failed");
     }
     Ok(())
 }

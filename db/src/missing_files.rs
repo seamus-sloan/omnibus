@@ -152,7 +152,7 @@ async fn cleanup_victim_covers(uuids: Vec<String>) {
     })
     .await
     {
-        tracing::error!("gc_books_missing_files: cover cleanup spawn_blocking failed: {join_err}");
+        tracing::error!(error = %join_err, "gc_books_missing_files: cover cleanup spawn_blocking failed");
     }
 }
 
