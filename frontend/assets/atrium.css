@@ -2724,6 +2724,21 @@ a.idx-letter-on:focus-visible {
   font-size: 0.8125rem;
   color: var(--ink-2);
 }
+.worker-status-phase {
+  font-size: 0.8125rem;
+  color: var(--ink-1);
+}
+.worker-status-item {
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.worker-status-tallies {
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
 .worker-status-dismiss {
   background: transparent;
   border: none;
