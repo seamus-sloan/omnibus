@@ -132,8 +132,11 @@ pub(crate) enum Stage {
     /// 3a — confirm checking in a copy of a book we already hold.
     Confirm { book: ScanBook, isbn: String },
     /// 2b — a fuzzy (title, author) hit that needs a human "is this it?".
+    /// More than one library row can carry the same effective norm (an EPUB
+    /// and the audiobook nothing attached to it), so this is a list to pick
+    /// from, not a single suggestion.
     CloseMatch {
-        book: ScanBook,
+        books: Vec<ScanBook>,
         scanned: ExternalBookMeta,
     },
     /// 3c — resolved online but not in the library: own it, or wishlist it.
@@ -186,7 +189,17 @@ pub(crate) fn stage_for(outcome: ScanOutcome, isbn: &str) -> Option<Stage> {
             book,
             isbn: isbn.to_string(),
         }),
-        ScanOutcome::CloseMatch { book, scanned } => Some(Stage::CloseMatch { book, scanned }),
+        // Head + tail on the wire (older clients only know `book`); the picker
+        // wants one list, so flatten it here.
+        ScanOutcome::CloseMatch {
+            book,
+            others,
+            scanned,
+        } => {
+            let mut books = vec![book];
+            books.extend(others);
+            Some(Stage::CloseMatch { books, scanned })
+        }
         ScanOutcome::NotInLibrary { online } => Some(Stage::Choose { online }),
         ScanOutcome::Unresolved => Some(Stage::Unresolved {
             isbn: isbn.to_string(),
@@ -342,7 +355,7 @@ fn CheckInStage(state: FlowState, handlers: CheckInHandlers) -> Element {
         Stage::Confirm { book, isbn } => rsx! {
             ConfirmScreen { book, isbn, state, on_check_in: handlers.on_check_in, on_cancel: on_restart }
         },
-        Stage::CloseMatch { book, scanned } => close_match_stage(book, scanned, state),
+        Stage::CloseMatch { books, scanned } => close_match_stage(books, scanned, state),
         Stage::Choose { online } => rsx! {
             ChooseScreen {
                 online,
@@ -453,16 +466,17 @@ pub(crate) fn go_to_search(state: FlowState) -> EventHandler<()> {
     })
 }
 
-/// [`Stage::CloseMatch`]: the fuzzy (title, author) hit that needs a human
+/// [`Stage::CloseMatch`]: the fuzzy (title, author) hits that need a human
 /// "is this it?" before filing a copy or falling back to the online chooser.
-fn close_match_stage(book: ScanBook, scanned: ExternalBookMeta, state: FlowState) -> Element {
+fn close_match_stage(books: Vec<ScanBook>, scanned: ExternalBookMeta, state: FlowState) -> Element {
     let mut stage = state.stage;
+    let isbn = scanned.isbn13.clone();
     rsx! {
         CloseMatchScreen {
-            book: book.clone(),
-            scanned: scanned.clone(),
-            on_yes: EventHandler::new(move |_| {
-                stage.set(Stage::Confirm { book: book.clone(), isbn: scanned.isbn13.clone() });
+            books,
+            scanned,
+            on_yes: EventHandler::new(move |book: ScanBook| {
+                stage.set(Stage::Confirm { book, isbn: isbn.clone() });
             }),
             on_no: EventHandler::new(move |online: ExternalBookMeta| {
                 stage.set(Stage::Choose { online });

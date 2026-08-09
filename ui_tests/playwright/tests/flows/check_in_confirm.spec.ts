@@ -195,18 +195,66 @@ test.describe("check-in confirm and close-match", () => {
 
     await expect(page.getByTestId("check-in-close-match")).toBeVisible();
     await expect(
+      page.getByRole("heading", { level: 1, name: "Is this the book?" }),
+    ).toBeVisible();
+    await expect(
       page.getByText(`Scanned ISBN ${scanned.isbn13}`),
     ).toBeVisible();
     await expect(
       page.getByText("Library edition ISBN 9780000000000"),
     ).toBeVisible();
 
-    await page.getByTestId("check-in-close-match-yes").click();
+    await page.getByTestId("check-in-close-match-pick").click();
 
     await expect(page.getByTestId("check-in-confirm")).toBeVisible();
     await expect(
       page.getByText(`Scanned ISBN ${scanned.isbn13}`),
     ).toBeVisible();
+  });
+
+  // A book's EPUB and its unattached audiobook are two rows carrying the same
+  // effective (title, author): the ladder offers both rather than declining
+  // into a duplicate physical-only book (#1791).
+  test("picks between two library rows that both matched the scan", async ({
+    page,
+  }) => {
+    const scanned = candidate();
+    await mockJsonPost(page, /\/api\/rpc\/scan\/resolve$/, {
+      kind: "close_match",
+      book: scanBook("epub-uuid", { isbn: "9780000000000" }),
+      others: [
+        scanBook("audiobook-uuid", {
+          title: `${TARGET.title} (Unabridged)`,
+          isbn: null,
+        }),
+      ],
+      scanned,
+    });
+    await gotoReady(page, "/check-in");
+    await page.getByTestId("check-in-isbn").fill(ISBN);
+    await expectMutation(
+      page,
+      {
+        method: "POST",
+        url: /\/api\/rpc\/scan\/resolve$/,
+        expectedStatus: 200,
+      },
+      async () => page.getByTestId("check-in-submit").click(),
+    );
+
+    await expect(
+      page.getByRole("heading", { level: 1, name: "Which one is this?" }),
+    ).toBeVisible();
+    await expect(page.getByTestId("check-in-close-match-pick")).toHaveCount(2);
+    await expect(page.getByTestId("check-in-book")).toHaveCount(2);
+
+    // The second candidate is the one only a picker can reach.
+    await page.getByTestId("check-in-close-match-pick").nth(1).click();
+
+    await expect(page.getByTestId("check-in-confirm")).toBeVisible();
+    await expect(page.getByTestId("check-in-book")).toContainText(
+      `${TARGET.title} (Unabridged)`,
+    );
   });
 
   test("declines a close match and falls through to the online chooser", async ({

@@ -69,7 +69,9 @@ struct CheckInFlowTests {
         #expect(CheckInFlow.showsNoteField(for: .inLibraryUnowned(book: scanBook())))
         #expect(!CheckInFlow.showsNoteField(for: .alreadyOwned(book: scanBook())))
         #expect(!CheckInFlow.showsNoteField(for: .onWishlist(book: scanBook())))
-        #expect(!CheckInFlow.showsNoteField(for: .closeMatch(book: scanBook(), scanned: externalMeta())))
+        #expect(
+            !CheckInFlow.showsNoteField(for: .closeMatch(books: [scanBook()], scanned: externalMeta()))
+        )
         #expect(!CheckInFlow.showsNoteField(for: .notInLibrary(online: externalMeta())))
         #expect(!CheckInFlow.showsNoteField(for: .unresolved))
     }
