@@ -367,7 +367,15 @@ pub async fn rewrite_all_epubs_with_progress(
             let current = id_map
                 .get(&uuid)
                 .and_then(|book_id| books_by_id.get(book_id))
-                .map(|b| b.title.as_deref().unwrap_or(&b.filename));
+                // An empty title (possible in both the DB column and an
+                // override) must fall through to the filename like a
+                // missing one, or the UI names the book "".
+                .map(|b| {
+                    b.title
+                        .as_deref()
+                        .filter(|t| !t.is_empty())
+                        .unwrap_or(&b.filename)
+                });
             on_progress(processed, total, current);
         }
         // Ghosted: the override row outlived its book (source file removed
