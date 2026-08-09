@@ -19,8 +19,9 @@ use crate::backend::AppState;
 /// The bucket an author's sort key falls into: an uppercase ASCII letter,
 /// or `#` for anything that doesn't start with one (numerals, symbols,
 /// non-Latin scripts) — the same "everything else" bucket most library
-/// apps use for a letter-indexed browse.
-fn letter_of(author: &AuthorSummary) -> char {
+/// apps use for a letter-indexed browse. `pub(super)` so `opds::json_authors`
+/// buckets authors identically for the JSON catalog's letter index.
+pub(super) fn letter_of(author: &AuthorSummary) -> char {
     let key = author.sort.as_deref().unwrap_or(&author.name);
     key.chars()
         .next()
@@ -32,8 +33,9 @@ fn letter_of(author: &AuthorSummary) -> char {
 /// URL-path form of a bucket letter. `#` starts a fragment and is never
 /// sent to the server, so the "everything else" bucket must be
 /// percent-encoded (`%23`) in any `href` — the letter itself (used for
-/// display text and ids) stays literal.
-fn letter_path_segment(letter: char) -> String {
+/// display text and ids) stays literal. `pub(super)` — shared with
+/// `opds::json_authors`.
+pub(super) fn letter_path_segment(letter: char) -> String {
     if letter == '#' {
         "%23".to_string()
     } else {
@@ -173,8 +175,10 @@ pub(super) async fn acquisition_feed(
 
 /// Load every author across the configured ebook library (see the `opds`
 /// module doc for why the browse is ebook-scoped), or `Err` with the
-/// ready-to-return failure response.
-async fn load_authors(state: &AppState) -> Result<Vec<AuthorSummary>, Response> {
+/// ready-to-return failure response. `pub(super)` — reused by
+/// `opds::json_authors` so the Atom and JSON letter indexes read the exact
+/// same author set.
+pub(super) async fn load_authors(state: &AppState) -> Result<Vec<AuthorSummary>, Response> {
     let settings = db::get_settings(&state.pool)
         .await
         .map_err(|e| internal("read settings", e))?;
