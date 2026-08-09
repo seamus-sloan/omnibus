@@ -202,16 +202,6 @@ pub async fn delete_author_photos_bulk(
     Ok(())
 }
 
-/// Delete an author by id and prevent reindex from re-creating the row.
-///
-/// One transaction: look up the name (for the blocklist insert) and
-/// affected book ids (for the post-commit FTS refresh), drop the link
-/// rows, drop the `authors` row, then `INSERT OR IGNORE` the name into
-/// `ignored_authors` so the next `indexer::reindex` does not silently
-/// re-create the row via `resolve_or_insert_author`.
-///
-/// Returns the number of books that were un-linked (used by the admin
-/// confirmation modal to show "this affects N books"). Returns `Ok(0)`
 /// The author's display name, or `None` for an unknown id. Used by worker
 /// tasks to name the author they are working on in the progress feed.
 pub async fn author_name(
@@ -224,6 +214,16 @@ pub async fn author_name(
         .await?)
 }
 
+/// Delete an author by id and prevent reindex from re-creating the row.
+///
+/// One transaction: look up the name (for the blocklist insert) and
+/// affected book ids (for the post-commit FTS refresh), drop the link
+/// rows, drop the `authors` row, then `INSERT OR IGNORE` the name into
+/// `ignored_authors` so the next `indexer::reindex` does not silently
+/// re-create the row via `resolve_or_insert_author`.
+///
+/// Returns the number of books that were un-linked (used by the admin
+/// confirmation modal to show "this affects N books"). Returns `Ok(0)`
 /// without touching the blocklist if `author_id` does not exist — a
 /// stale tab firing a second Delete must not leak a stale row into
 /// `ignored_authors`.
