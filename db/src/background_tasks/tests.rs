@@ -139,3 +139,22 @@ async fn recent_tasks_propagates_db_error_when_pool_is_closed() {
     let err = recent_tasks(&pool, 10).await.unwrap_err();
     assert!(matches!(err, BackgroundTaskError::Sqlx(_)));
 }
+
+#[tokio::test]
+async fn row_to_record_falls_back_to_running_for_an_unrecognized_status() {
+    // The table's CHECK constraint keeps a bad status out of a real row, so
+    // this simulates schema drift (a newer version's status value read by an
+    // older build) with a literal SELECT rather than an INSERT — row_to_record
+    // must degrade gracefully, not panic or fail the whole dashboard read.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let row = sqlx::query(
+        "SELECT 1 AS id, 'scan' AS task_kind, 'bogus' AS status, \
+         0 AS started_at, NULL AS finished_at, NULL AS error",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let record = row_to_record(&row);
+    assert_eq!(record.status, BackgroundTaskStatus::Running);
+}

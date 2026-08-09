@@ -78,14 +78,25 @@ pub async fn recent_tasks(
 
 /// Map one `background_tasks` row to its wire record. The `status` column is
 /// constrained by the migration's `CHECK` to the three values
-/// [`BackgroundTaskStatus::from_str`] parses, so a row already in the table
-/// can never fail to parse — a fresh insert bypassing that constraint would
-/// have failed at the DB layer already, not here.
+/// [`BackgroundTaskStatus::from_str`] parses, so a row written through this
+/// module can never fail to parse. A mismatch here means something else
+/// wrote the row — a future version with a status value this build doesn't
+/// know, or manual DB surgery — so it's logged rather than silently
+/// swallowed, while still falling back to `Running` so the dashboard read
+/// never hard-fails on one corrupted row.
 fn row_to_record(row: &sqlx::sqlite::SqliteRow) -> BackgroundTaskRecord {
+    let id: i64 = row.get("id");
     let status_raw: String = row.get("status");
-    let status = status_raw.parse().unwrap_or(BackgroundTaskStatus::Running);
+    let status = status_raw.parse().unwrap_or_else(|_| {
+        tracing::warn!(
+            id,
+            status = %status_raw,
+            "background_tasks: row has an unrecognized status, defaulting to Running"
+        );
+        BackgroundTaskStatus::Running
+    });
     BackgroundTaskRecord {
-        id: row.get("id"),
+        id,
         task_kind: row.get("task_kind"),
         status,
         started_at: row.get("started_at"),

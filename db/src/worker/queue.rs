@@ -192,6 +192,8 @@ impl Worker {
                     tracing::warn!(
                         error = %e,
                         task_id = id,
+                        task_kind = persistence_kind,
+                        db_row_id = row_id,
                         "worker: failed to persist task completion"
                     );
                 }
