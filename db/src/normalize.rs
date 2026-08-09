@@ -102,7 +102,8 @@ pub async fn backfill_norm_columns(pool: &SqlitePool) -> Result<(), NormalizeErr
     // `title_norm` lands as '' (not NULL) when nothing survives normalization,
     // so the `IS NULL` guard above stays idempotent. Empty strings never
     // match: the attach lookup only binds non-empty keys. `author_norm` stays
-    // genuinely nullable (no fallback).
+    // genuinely nullable, and a `None` here means *not derivable* — see the
+    // COALESCE below.
     let updates: Vec<(i64, String, Option<String>)> = rows
         .into_iter()
         .map(|(id, title, author)| {
@@ -119,8 +120,18 @@ pub async fn backfill_norm_columns(pool: &SqlitePool) -> Result<(), NormalizeErr
         let values = std::iter::repeat_n("(?, ?, ?)", chunk.len())
             .collect::<Vec<_>>()
             .join(", ");
+        // COALESCE, not a bare write: a NULL recomputed `author_norm` means
+        // the key could not be *derived* — no position-0 link (the first
+        // creator is on the `ignored_authors` blocklist, which leaves a
+        // positional gap the sync writer doesn't) or a name that normalizes
+        // to nothing. Overwriting a real stored key with that turns "I can't
+        // tell" into "there is none", which is exactly what a migration that
+        // hands this pass a `&`-titled row must not cause. Rows that legitimately
+        // have no author already hold NULL, so preserving is a no-op for them.
         let sql = format!(
-            "UPDATE books SET title_norm = v.column2, author_norm = v.column3
+            "UPDATE books
+                SET title_norm  = v.column2,
+                    author_norm = COALESCE(v.column3, books.author_norm)
                FROM (VALUES {values}) AS v
               WHERE books.id = v.column1"
         );

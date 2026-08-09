@@ -194,6 +194,38 @@ async fn backfill_norm_columns_propagates_db_error_when_pool_is_closed() {
 }
 
 #[tokio::test]
+async fn backfill_norm_columns_preserves_author_norm_when_position_0_link_is_absent() {
+    // `insert_author_links` skips a first creator on the `ignored_authors`
+    // blocklist and leaves a positional gap rather than renumbering, while the
+    // sync writer stores `author_norm` from `creators.first()` regardless. The
+    // recompute therefore comes back non-derivable for such a book, and must
+    // not overwrite the stored key with NULL — that key is the only copy.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES ('/lib', 'lib')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let book_id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, library_id, path, title, author_norm) \
+         VALUES ('u1', 1, '', 'Drácula!', 'blocklisted quill') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    backfill_norm_columns(&pool).await.unwrap();
+
+    let (title_norm, author_norm): (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT title_norm, author_norm FROM books WHERE id = ?")
+            .bind(book_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(title_norm.as_deref(), Some("dracula"));
+    assert_eq!(author_norm.as_deref(), Some("blocklisted quill"));
+}
+
+#[tokio::test]
 async fn backfill_norm_columns_fills_only_null_rows_and_is_idempotent() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES ('/lib', 'lib')")
