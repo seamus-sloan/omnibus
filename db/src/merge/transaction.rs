@@ -412,52 +412,8 @@ async fn move_progress_and_history(
         .fetch_one(&mut **tx)
         .await?;
 
-    // Losing source rows first (target is newer or equal) …
-    sqlx::query(
-        "DELETE FROM reading_progress WHERE book_uuid = ?2 AND EXISTS (
-            SELECT 1 FROM reading_progress t
-             WHERE t.book_uuid = ?1 AND t.user_id = reading_progress.user_id
-               AND t.format = reading_progress.format
-               AND t.updated_at >= reading_progress.updated_at)",
-    )
-    .bind(&target_uuid)
-    .bind(&source_uuid)
-    .execute(&mut **tx)
-    .await?;
-    // … then losing target rows (a strictly newer source row survived).
-    sqlx::query(
-        "DELETE FROM reading_progress WHERE book_uuid = ?1 AND EXISTS (
-            SELECT 1 FROM reading_progress s
-             WHERE s.book_uuid = ?2 AND s.user_id = reading_progress.user_id
-               AND s.format = reading_progress.format)",
-    )
-    .bind(&target_uuid)
-    .bind(&source_uuid)
-    .execute(&mut **tx)
-    .await?;
-    sqlx::query(
-        "DELETE FROM audiobook_playback_preferences
-          WHERE book_uuid = ?2 AND EXISTS (
-            SELECT 1 FROM audiobook_playback_preferences t
-             WHERE t.book_uuid = ?1
-               AND t.user_id = audiobook_playback_preferences.user_id
-               AND t.updated_at >= audiobook_playback_preferences.updated_at)",
-    )
-    .bind(&target_uuid)
-    .bind(&source_uuid)
-    .execute(&mut **tx)
-    .await?;
-    sqlx::query(
-        "DELETE FROM audiobook_playback_preferences
-          WHERE book_uuid = ?1 AND EXISTS (
-            SELECT 1 FROM audiobook_playback_preferences s
-             WHERE s.book_uuid = ?2
-               AND s.user_id = audiobook_playback_preferences.user_id)",
-    )
-    .bind(&target_uuid)
-    .bind(&source_uuid)
-    .execute(&mut **tx)
-    .await?;
+    dedupe_reading_progress(tx, &source_uuid, &target_uuid).await?;
+    dedupe_playback_preferences(tx, &source_uuid, &target_uuid).await?;
     // Per-device annotation sync state keys on (device_id, book_uuid); where a
     // device tracks BOTH uuids, keep the target's row (the retarget below
     // would collide) — the watermark is regenerable, and a moved fingerprint
@@ -489,6 +445,75 @@ async fn move_progress_and_history(
             .execute(&mut **tx)
             .await?;
     }
+    Ok(())
+}
+
+/// Latest-wins dedupe of `reading_progress` rows that collide on
+/// `(user_id, format)` once the source's uuid retargets onto the target's —
+/// see [`move_progress_and_history`]'s doc for why the coarse `format`
+/// column makes this necessary.
+async fn dedupe_reading_progress(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    source_uuid: &str,
+    target_uuid: &str,
+) -> Result<(), sqlx::Error> {
+    // Losing source rows first (target is newer or equal) …
+    sqlx::query(
+        "DELETE FROM reading_progress WHERE book_uuid = ?2 AND EXISTS (
+            SELECT 1 FROM reading_progress t
+             WHERE t.book_uuid = ?1 AND t.user_id = reading_progress.user_id
+               AND t.format = reading_progress.format
+               AND t.updated_at >= reading_progress.updated_at)",
+    )
+    .bind(target_uuid)
+    .bind(source_uuid)
+    .execute(&mut **tx)
+    .await?;
+    // … then losing target rows (a strictly newer source row survived).
+    sqlx::query(
+        "DELETE FROM reading_progress WHERE book_uuid = ?1 AND EXISTS (
+            SELECT 1 FROM reading_progress s
+             WHERE s.book_uuid = ?2 AND s.user_id = reading_progress.user_id
+               AND s.format = reading_progress.format)",
+    )
+    .bind(target_uuid)
+    .bind(source_uuid)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Latest-wins dedupe of `audiobook_playback_preferences` rows that collide
+/// on `user_id` once the source's uuid retargets onto the target's. Same
+/// two-pass shape as [`dedupe_reading_progress`].
+async fn dedupe_playback_preferences(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    source_uuid: &str,
+    target_uuid: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "DELETE FROM audiobook_playback_preferences
+          WHERE book_uuid = ?2 AND EXISTS (
+            SELECT 1 FROM audiobook_playback_preferences t
+             WHERE t.book_uuid = ?1
+               AND t.user_id = audiobook_playback_preferences.user_id
+               AND t.updated_at >= audiobook_playback_preferences.updated_at)",
+    )
+    .bind(target_uuid)
+    .bind(source_uuid)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query(
+        "DELETE FROM audiobook_playback_preferences
+          WHERE book_uuid = ?1 AND EXISTS (
+            SELECT 1 FROM audiobook_playback_preferences s
+             WHERE s.book_uuid = ?2
+               AND s.user_id = audiobook_playback_preferences.user_id)",
+    )
+    .bind(target_uuid)
+    .bind(source_uuid)
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 

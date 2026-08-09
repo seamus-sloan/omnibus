@@ -54,89 +54,137 @@ pub async fn put_state(
         Err(e) => return internal("kobo put_state begin", e),
     };
     for entry in &body.reading_states {
-        if let Some(info) = &entry.status_info {
-            let update = SetReadStatus {
-                book_uuid: uuid.clone(),
-                status: map_status(&info.status),
-            };
-            match db::read_status::set_read_status_tx(&mut tx, auth.user_id, &update).await {
-                Ok(_) => {}
-                // A state push for a book the server never indexed is not fatal
-                // to the sync — log and keep the success envelope.
-                Err(db::read_status::ReadStatusError::BookNotFound) => {
-                    tracing::warn!(%uuid, "kobo state PUT for unknown book");
-                }
-                Err(db::read_status::ReadStatusError::Sqlx(e)) => {
-                    return internal("kobo set_read_status", e);
-                }
-            }
-        }
-        if let Some(bookmark) = &entry.current_bookmark {
-            // Capture data for the one open question about this field: whether
-            // the content-source percent really is per-chapter (as
-            // `persist_bookmark` assumes) or just echoes the whole-book one.
-            // Nothing in this repo has ever recorded a real device's answer,
-            // and sync-out can't emit the field until it is known.
-            tracing::info!(
-                %uuid,
-                whole_book = ?bookmark.progress_percent,
-                content_source = ?bookmark.content_source_progress_percent,
-                "kobo bookmark percents received"
-            );
-            // Device event time, most-specific first: the bookmark's own
-            // stamp, then the entry-level ones. Absent/unparseable → None,
-            // which `persist_bookmark` treats as server-now (pre-existing
-            // behaviour for firmware that sends no clock).
-            let event_ts = bookmark
-                .last_modified
-                .as_deref()
-                .or(entry.last_modified.as_deref())
-                .or(entry.priority_timestamp.as_deref())
-                .and_then(dto::parse_kobo_timestamp);
-            match persist_bookmark(&state, &mut tx, auth.user_id, &uuid, bookmark, event_ts).await {
-                Ok(()) => {}
-                Err(db::progress::ProgressError::BookNotFound) => {
-                    tracing::warn!(%uuid, "kobo position PUT for unknown book");
-                }
-                Err(db::progress::ProgressError::Sqlx(e)) => {
-                    return internal("kobo upsert_progress", e);
-                }
-            }
-        }
-        if let Some(stats) = &entry.statistics {
-            // Kept from #1652's capture pass — the shape came from the
-            // reference impls, not from hardware.
-            tracing::info!(
-                %uuid,
-                spent_reading_minutes = ?stats.spent_reading_minutes,
-                remaining_time_minutes = ?stats.remaining_time_minutes,
-                last_modified = ?stats.last_modified,
-                "kobo statistics received"
-            );
-            // No entry-level fallback, unlike the bookmark: an entry clock is
-            // still a device clock, but it would date counters the device did
-            // not date itself, and this stamp decides whether the device
-            // overwrites its own totals with our echo. Unstamped is safe —
-            // sync-out omits it and the device keeps what it has.
-            let event_ts = stats
-                .last_modified
-                .as_deref()
-                .and_then(dto::parse_kobo_timestamp);
-            match persist_statistics(&mut tx, auth.user_id, &uuid, stats, event_ts).await {
-                Ok(()) => {}
-                Err(db::progress::ProgressError::BookNotFound) => {
-                    tracing::warn!(%uuid, "kobo statistics PUT for unknown book");
-                }
-                Err(db::progress::ProgressError::Sqlx(e)) => {
-                    return internal("kobo set_kobo_statistics", e);
-                }
-            }
+        if let Err(rejected) =
+            apply_reading_state_entry(&state, &mut tx, auth.user_id, &uuid, entry).await
+        {
+            return rejected;
         }
     }
     if let Err(e) = tx.commit().await {
         return internal("kobo put_state commit", e);
     }
     Json(dto::StateResponse::success(uuid)).into_response()
+}
+
+/// Apply one `reading_states` entry's status/bookmark/statistics writes
+/// within the batch transaction. `Err` carries the response [`put_state`]
+/// should return immediately (a DB failure); a per-entry `BookNotFound` is
+/// logged and treated as `Ok` so the rest of the batch still applies.
+async fn apply_reading_state_entry(
+    state: &AppState,
+    tx: &mut Transaction<'_, Sqlite>,
+    user_id: i64,
+    uuid: &str,
+    entry: &dto::StateEntry,
+) -> Result<(), Response> {
+    if let Some(info) = &entry.status_info {
+        apply_status_info(tx, user_id, uuid, info).await?;
+    }
+    if let Some(bookmark) = &entry.current_bookmark {
+        apply_current_bookmark(state, tx, user_id, uuid, entry, bookmark).await?;
+    }
+    if let Some(stats) = &entry.statistics {
+        apply_statistics(tx, user_id, uuid, stats).await?;
+    }
+    Ok(())
+}
+
+/// Apply a `StatusInfo` block's read-status write.
+async fn apply_status_info(
+    tx: &mut Transaction<'_, Sqlite>,
+    user_id: i64,
+    uuid: &str,
+    info: &dto::StatusInfo,
+) -> Result<(), Response> {
+    let update = SetReadStatus {
+        book_uuid: uuid.to_owned(),
+        status: map_status(&info.status),
+    };
+    match db::read_status::set_read_status_tx(tx, user_id, &update).await {
+        Ok(_) => Ok(()),
+        // A state push for a book the server never indexed is not fatal
+        // to the sync — log and keep the success envelope.
+        Err(db::read_status::ReadStatusError::BookNotFound) => {
+            tracing::warn!(%uuid, "kobo state PUT for unknown book");
+            Ok(())
+        }
+        Err(db::read_status::ReadStatusError::Sqlx(e)) => Err(internal("kobo set_read_status", e)),
+    }
+}
+
+/// Log and persist a `CurrentBookmark` block.
+async fn apply_current_bookmark(
+    state: &AppState,
+    tx: &mut Transaction<'_, Sqlite>,
+    user_id: i64,
+    uuid: &str,
+    entry: &dto::StateEntry,
+    bookmark: &dto::CurrentBookmark,
+) -> Result<(), Response> {
+    // Capture data for the one open question about this field: whether
+    // the content-source percent really is per-chapter (as
+    // `persist_bookmark` assumes) or just echoes the whole-book one.
+    // Nothing in this repo has ever recorded a real device's answer,
+    // and sync-out can't emit the field until it is known.
+    tracing::info!(
+        %uuid,
+        whole_book = ?bookmark.progress_percent,
+        content_source = ?bookmark.content_source_progress_percent,
+        "kobo bookmark percents received"
+    );
+    // Device event time, most-specific first: the bookmark's own
+    // stamp, then the entry-level ones. Absent/unparseable → None,
+    // which `persist_bookmark` treats as server-now (pre-existing
+    // behaviour for firmware that sends no clock).
+    let event_ts = bookmark
+        .last_modified
+        .as_deref()
+        .or(entry.last_modified.as_deref())
+        .or(entry.priority_timestamp.as_deref())
+        .and_then(dto::parse_kobo_timestamp);
+    match persist_bookmark(state, tx, user_id, uuid, bookmark, event_ts).await {
+        Ok(()) => Ok(()),
+        Err(db::progress::ProgressError::BookNotFound) => {
+            tracing::warn!(%uuid, "kobo position PUT for unknown book");
+            Ok(())
+        }
+        Err(db::progress::ProgressError::Sqlx(e)) => Err(internal("kobo upsert_progress", e)),
+    }
+}
+
+/// Log and persist a `Statistics` block.
+async fn apply_statistics(
+    tx: &mut Transaction<'_, Sqlite>,
+    user_id: i64,
+    uuid: &str,
+    stats: &dto::Statistics,
+) -> Result<(), Response> {
+    // Kept from #1652's capture pass — the shape came from the
+    // reference impls, not from hardware.
+    tracing::info!(
+        %uuid,
+        spent_reading_minutes = ?stats.spent_reading_minutes,
+        remaining_time_minutes = ?stats.remaining_time_minutes,
+        last_modified = ?stats.last_modified,
+        "kobo statistics received"
+    );
+    // No entry-level fallback, unlike the bookmark: an entry clock is
+    // still a device clock, but it would date counters the device did
+    // not date itself, and this stamp decides whether the device
+    // overwrites its own totals with our echo. Unstamped is safe —
+    // sync-out omits it and the device keeps what it has.
+    let event_ts = stats
+        .last_modified
+        .as_deref()
+        .and_then(dto::parse_kobo_timestamp);
+    match persist_statistics(tx, user_id, uuid, stats, event_ts).await {
+        Ok(()) => Ok(()),
+        Err(db::progress::ProgressError::BookNotFound) => {
+            tracing::warn!(%uuid, "kobo statistics PUT for unknown book");
+            Ok(())
+        }
+        Err(db::progress::ProgressError::Sqlx(e)) => Err(internal("kobo set_kobo_statistics", e)),
+    }
 }
 
 /// Persist a device's `CurrentBookmark` as an epub position (#925).

@@ -23,6 +23,7 @@ pub mod logs;
 pub mod merge;
 pub mod metadata_fetch;
 pub mod metadata_lookup;
+pub mod opds;
 pub mod physical;
 pub mod progress;
 pub mod ratings;

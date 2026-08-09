@@ -407,49 +407,89 @@ fn render_quote_actions(
     }
 }
 
-/// Quote-card editor panel: head + preview + controls. Shell-agnostic — the
-/// reader wraps it in its right-hand drawer, book detail in a centered modal.
-#[component]
-pub fn QuoteCardPanel(
-    quote_text: String,
-    author: String,
-    subtitle: String,
-    accent: String,
-    on_close: EventHandler<()>,
-) -> Element {
-    let bg = use_signal(|| accent.clone());
-    let ink = use_signal(|| "#f5f0e8".to_string());
-    let ratio = use_signal(|| "1:1".to_string());
-    let custom = use_signal(|| "#6b4f8a".to_string());
-    let font = use_signal(|| FONTS[0].key.to_string());
-    let size = use_signal(|| SIZES[1].key.to_string());
-    let bold = use_signal(|| false);
-    // The card's designed default is an italic serif pull-quote.
-    let italic = use_signal(|| true);
+/// Local reactive state for one [`QuoteCardPanel`] instance — background,
+/// typeface/size/style, and aspect-ratio signals, grouped so the component
+/// starts from one hook call instead of eight signal declarations.
+#[derive(Clone, Copy)]
+struct QuoteCardState {
+    bg: Signal<String>,
+    ink: Signal<String>,
+    ratio: Signal<String>,
+    custom: Signal<String>,
+    font: Signal<String>,
+    size: Signal<String>,
+    bold: Signal<bool>,
+    italic: Signal<bool>,
+}
 
-    let cur_bg = bg();
-    let cur_ink = ink();
-    let cur_ratio = ratio();
+fn use_quote_card_state(accent: &str) -> QuoteCardState {
+    QuoteCardState {
+        bg: use_signal(|| accent.to_string()),
+        ink: use_signal(|| "#f5f0e8".to_string()),
+        ratio: use_signal(|| "1:1".to_string()),
+        custom: use_signal(|| "#6b4f8a".to_string()),
+        font: use_signal(|| FONTS[0].key.to_string()),
+        size: use_signal(|| SIZES[1].key.to_string()),
+        bold: use_signal(|| false),
+        // The card's designed default is an italic serif pull-quote.
+        italic: use_signal(|| true),
+    }
+}
+
+/// Derive the preview's inline `(card_style, body_style, cur_ratio)` from
+/// the current state signals.
+fn compute_quote_styles(state: &QuoteCardState) -> (String, String, String) {
+    let cur_bg = (state.bg)();
+    let cur_ink = (state.ink)();
+    let cur_ratio = (state.ratio)();
     let card_style = format!(
         "aspect-ratio:{}; background:{cur_bg}; color:{cur_ink}; font-family:{};",
         cur_ratio.replace(':', "/"),
-        font_css(&font())
+        font_css(&(state.font)())
     );
     let body_style = format!(
         "font-size:{}; font-weight:{}; font-style:{};",
-        size_css(&size()),
-        if bold() { "700" } else { "400" },
-        if italic() { "italic" } else { "normal" },
+        size_css(&(state.size)()),
+        if (state.bold)() { "700" } else { "400" },
+        if (state.italic)() { "italic" } else { "normal" },
     );
+    (card_style, body_style, cur_ratio)
+}
 
-    // One canvas payload for all three actions (download / share / copy);
-    // `Clone` so each button handler owns a copy. Only the interactive
-    // targets build it — `serde_json` isn't compiled in on SSR.
+/// Build the three export-action handlers (download/share/copy), each
+/// wrapping the same canvas payload built from the quote text and the
+/// current style signals. `Clone` on `build_payload` lets each button
+/// handler own a copy. Only the interactive targets build it — `serde_json`
+/// isn't compiled in on SSR — so `quote_text`/`author`/`subtitle` go unused
+/// there, hence the `cfg_attr` below (same pattern as
+/// `pages::reader::highlights_drawer`).
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(unused_variables))]
+#[allow(clippy::type_complexity)]
+fn build_export_handlers(
+    quote_text: &str,
+    author: &str,
+    subtitle: &str,
+    state: &QuoteCardState,
+) -> (
+    impl FnMut(Event<MouseData>) + 'static,
+    impl FnMut(Event<MouseData>) + 'static,
+    impl FnMut(Event<MouseData>) + 'static,
+) {
+    let QuoteCardState {
+        bg,
+        ink,
+        ratio,
+        font,
+        size,
+        bold,
+        italic,
+        ..
+    } = *state;
     #[cfg(any(feature = "web", feature = "mobile"))]
     let build_payload = {
-        let text = quote_text.clone();
-        let author = author.clone();
-        let subtitle = subtitle.clone();
+        let text = quote_text.to_string();
+        let author = author.to_string();
+        let subtitle = subtitle.to_string();
         move || {
             serde_json::json!({
                 "text": text,
@@ -494,6 +534,33 @@ pub fn QuoteCardPanel(
             quote_card_call("copyQuoteCardImage", &build_payload());
         }
     };
+    (download, share, copy_image)
+}
+
+/// Quote-card editor panel: head + preview + controls. Shell-agnostic — the
+/// reader wraps it in its right-hand drawer, book detail in a centered modal.
+#[component]
+pub fn QuoteCardPanel(
+    quote_text: String,
+    author: String,
+    subtitle: String,
+    accent: String,
+    on_close: EventHandler<()>,
+) -> Element {
+    let state = use_quote_card_state(&accent);
+    let QuoteCardState {
+        bg,
+        ink,
+        ratio,
+        custom,
+        font,
+        size,
+        bold,
+        italic,
+    } = state;
+    let (card_style, body_style, cur_ratio) = compute_quote_styles(&state);
+    let (download, share, copy_image) =
+        build_export_handlers(&quote_text, &author, &subtitle, &state);
 
     rsx! {
         {render_quote_header(on_close)}

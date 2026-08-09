@@ -1,5 +1,7 @@
-//! `GET /opds/search` — OPDS acquisition feed of FTS matches (AC3), reached
-//! via the `Url` template in `/opds/osd`.
+//! `GET /opds/v2/search?q=` — OPDS 2.0 JSON feed of FTS matches (AC1/AC2),
+//! reached via the templated `search` link on `/opds/v2`. Reuses
+//! `search::SearchQuery` so both catalogs' search endpoints accept the
+//! exact same `?q=` shape.
 
 use axum::{
     extract::{Query, State},
@@ -7,22 +9,14 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use omnibus_db as db;
+use omnibus_shared::opds::{Feed, FeedMetadata, Link, MEDIA_TYPE};
 use omnibus_shared::search_query_too_long;
-use serde::Deserialize;
 
-use super::atom::{Feed, Link, ACQUISITION_TYPE, NAVIGATION_TYPE};
-use super::entries::book_entry;
-use super::{internal, now_rfc3339, xml_response};
+use super::json_entries::book_publication;
+use super::search::SearchQuery;
+use super::{internal, json_response};
 use crate::auth::AuthUser;
 use crate::backend::AppState;
-
-#[derive(Deserialize)]
-pub(super) struct SearchQuery {
-    // `pub(super)` — `opds::json_search` reuses this exact query shape so
-    // the two catalogs' search endpoints accept an identical `?q=`.
-    #[serde(default)]
-    pub(super) q: String,
-}
 
 pub(super) async fn search(
     _user: AuthUser,
@@ -47,16 +41,21 @@ pub(super) async fn search(
             Err(e) => return internal("search books", e),
         }
     };
-    let self_href = format!("/opds/search?q={}", urlencoding::encode(&params.q));
+    let self_href = format!("/opds/v2/search?q={}", urlencoding::encode(&params.q));
     let feed = Feed {
-        id: "urn:omnibus:opds:search".to_string(),
-        title: format!("Search: {}", params.q),
-        updated: now_rfc3339(),
+        metadata: FeedMetadata {
+            title: format!("Search: {}", params.q),
+            number_of_items: Some(books.len() as i64),
+            ..Default::default()
+        },
         links: vec![
-            Link::new("self", self_href, ACQUISITION_TYPE),
-            Link::new("start", "/opds", NAVIGATION_TYPE),
+            Link::new(self_href).with_rel("self").with_type(MEDIA_TYPE),
+            Link::new("/opds/v2")
+                .with_rel("start")
+                .with_type(MEDIA_TYPE),
         ],
-        entries: books.iter().map(book_entry).collect(),
+        navigation: Vec::new(),
+        publications: books.iter().map(book_publication).collect(),
     };
-    xml_response(ACQUISITION_TYPE, feed.to_xml())
+    json_response(&feed)
 }
