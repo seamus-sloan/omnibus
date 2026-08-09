@@ -45,6 +45,17 @@ async fn author_photo_letter_marker_returns_none() {
     assert_eq!(src, AuthorPhotoSource::Letter);
 }
 #[tokio::test]
+async fn author_name_returns_name_and_none_for_unknown_id() {
+    let (pool, _guard) = seed_discovery_fixture().await;
+    let ada_id = author_id_by_name(&pool, "Ada Lovelace").await;
+    assert_eq!(
+        author_name(&pool, ada_id).await.unwrap().as_deref(),
+        Some("Ada Lovelace")
+    );
+    assert_eq!(author_name(&pool, 999_999).await.unwrap(), None);
+}
+
+#[tokio::test]
 async fn author_photo_status_none_when_unset() {
     let (pool, _guard) = seed_discovery_fixture().await;
     let ada_id = author_id_by_name(&pool, "Ada Lovelace").await;

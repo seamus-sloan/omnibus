@@ -836,13 +836,33 @@ async fn rewrite_all_epubs_with_overrides_rewrites_only_books_with_active_overri
     .await
     .unwrap();
 
-    let summary = super::rewrite_all_epubs_with_overrides(&pool)
-        .await
-        .unwrap();
+    let progress = std::sync::Mutex::new(Vec::new());
+    let summary = super::rewrite_all_epubs_with_progress(&pool, |processed, total, current| {
+        progress
+            .lock()
+            .unwrap()
+            .push((processed, total, current.map(str::to_string)));
+    })
+    .await
+    .unwrap();
 
     assert_eq!(summary.rewritten, 1, "{summary:?}");
     assert_eq!(summary.skipped, 1, "{summary:?}");
     assert!(summary.errors.is_empty(), "{summary:?}");
+
+    // One progress call per override row (A and C — B has no override), each
+    // naming the book being baked (#1802). The metadata fetch merges
+    // overrides, so A reports its overridden title. Order follows the
+    // override listing, so only membership is asserted.
+    let calls = progress.into_inner().unwrap();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert!(calls.iter().all(|(_, total, _)| *total == 2), "{calls:?}");
+    let names: Vec<Option<String>> = calls.into_iter().map(|(_, _, n)| n).collect();
+    assert!(
+        names.contains(&Some("Overridden A".to_string()))
+            && names.contains(&Some("Overridden C".to_string())),
+        "{names:?}"
+    );
 }
 
 #[tokio::test]

@@ -633,7 +633,7 @@ async fn refetch_all_skips_manual_and_reports_progress() {
     .unwrap();
 
     let progress = std::sync::Mutex::new(Vec::new());
-    refetch_all(&pool, |processed, total| {
+    refetch_all(&pool, |processed, total, _| {
         progress.lock().unwrap().push((processed, total));
     })
     .await
@@ -687,11 +687,24 @@ async fn refetch_all_processes_every_author_across_multiple_concurrency_chunks()
     }
 
     let progress = std::sync::Mutex::new(Vec::new());
-    refetch_all(&pool, |processed, total| {
+    let names = std::sync::Mutex::new(Vec::new());
+    refetch_all(&pool, |processed, total, name| {
         progress.lock().unwrap().push((processed, total));
+        names.lock().unwrap().push(name.map(str::to_string));
     })
     .await
     .unwrap();
+
+    // Every refetched author reports its name as the current item (#1802);
+    // completion order under concurrency is arbitrary, so only membership
+    // is asserted.
+    let names = names.into_inner().unwrap();
+    assert!(
+        names.iter().all(|n| n
+            .as_deref()
+            .is_some_and(|n| n.starts_with("Chunk Test Author"))),
+        "every progress call must carry the completed author name: {names:?}"
+    );
 
     let mut calls = progress.into_inner().unwrap();
     assert_eq!(

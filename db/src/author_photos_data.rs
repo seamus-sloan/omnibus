@@ -202,6 +202,18 @@ pub async fn delete_author_photos_bulk(
     Ok(())
 }
 
+/// The author's display name, or `None` for an unknown id. Used by worker
+/// tasks to name the author they are working on in the progress feed.
+pub async fn author_name(
+    pool: &SqlitePool,
+    author_id: i64,
+) -> Result<Option<String>, AuthorPhotosDataError> {
+    Ok(sqlx::query_scalar("SELECT name FROM authors WHERE id = ?")
+        .bind(author_id)
+        .fetch_optional(pool)
+        .await?)
+}
+
 /// Delete an author by id and prevent reindex from re-creating the row.
 ///
 /// One transaction: look up the name (for the blocklist insert) and
