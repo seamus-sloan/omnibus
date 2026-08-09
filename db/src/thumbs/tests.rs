@@ -308,6 +308,33 @@ fn generate_thumbnail_preserves_alpha_for_a_cover_with_transparency() {
     );
 }
 
+#[test]
+fn generate_thumbnail_drops_the_alpha_plane_for_an_rgba_cover_whose_pixels_are_all_opaque() {
+    use image::{ImageBuffer, Rgba};
+
+    // The pixel format carries an alpha channel but every pixel sets it to
+    // 255, which is the common shape for a cover that merely happened to be
+    // saved as RGBA. Testing the format alone would encode a constant alpha
+    // plane and inflate the thumb for nothing.
+    let img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_fn(200, 300, |x, y| {
+        Rgba([(x % 256) as u8, (y % 256) as u8, 40, 255])
+    });
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(tmp.path().as_os_str()));
+    generate_thumbnail(25, ThumbSize::Sm, &png).unwrap();
+
+    let out = std::fs::read(tmp.path().join("25_sm.webp")).unwrap();
+    assert_eq!(
+        &webp_fourcc(&out),
+        b"VP8 ",
+        "a fully-opaque RGBA cover must encode without an alpha plane"
+    );
+}
+
 // ---------- one-time re-encode invalidation ----------
 
 #[test]

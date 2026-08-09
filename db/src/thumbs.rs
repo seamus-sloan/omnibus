@@ -180,15 +180,27 @@ pub fn thumb_etag(book_id: i64, size: ThumbSize, last_modified_epoch: i64) -> St
 
 /// Encode an already-resized cover as lossy WebP at [`THUMB_QUALITY`].
 ///
-/// Alpha is carried only when the source has it: an RGBA encode of an opaque
-/// cover spends bytes on a constant alpha plane for nothing.
+/// Alpha is carried only when a pixel actually uses it: an RGBA encode of an
+/// opaque cover spends bytes on a constant alpha plane for nothing.
+/// `color().has_alpha()` alone is a question about the pixel *format*, and
+/// plenty of covers decode as RGBA while being fully opaque, so the channel
+/// itself is scanned — short-circuiting on the first transparent pixel, and
+/// only for formats that could carry one.
 fn encode_lossy_webp(resized: &image::DynamicImage, w: u32, h: u32) -> Result<Vec<u8>, ThumbError> {
-    let encoded = if resized.color().has_alpha() {
-        let rgba = resized.to_rgba8();
-        webp::Encoder::from_rgba(rgba.as_raw(), w, h).encode_simple(false, THUMB_QUALITY)
-    } else {
-        let rgb = resized.to_rgb8();
-        webp::Encoder::from_rgb(rgb.as_raw(), w, h).encode_simple(false, THUMB_QUALITY)
+    let transparent = resized
+        .color()
+        .has_alpha()
+        .then(|| resized.to_rgba8())
+        .filter(|rgba| rgba.as_raw().chunks_exact(4).any(|px| px[3] != u8::MAX));
+
+    let encoded = match &transparent {
+        Some(rgba) => {
+            webp::Encoder::from_rgba(rgba.as_raw(), w, h).encode_simple(false, THUMB_QUALITY)
+        }
+        None => {
+            let rgb = resized.to_rgb8();
+            webp::Encoder::from_rgb(rgb.as_raw(), w, h).encode_simple(false, THUMB_QUALITY)
+        }
     };
     // `encode_simple` is the Result-returning half of the pair; `encode`
     // unwraps internally, which would panic the worker's encode loop.
