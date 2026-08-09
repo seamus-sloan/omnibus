@@ -5,7 +5,7 @@ use omnibus_db as db;
 use omnibus_shared::{SortDir, SortKey, ViewFilters};
 
 use super::atom::{Feed, Link, ACQUISITION_TYPE, NAVIGATION_TYPE};
-use super::entries::book_entry;
+use super::entries::{book_entry, retain_ereader_books};
 use super::{internal, now_rfc3339, xml_response};
 use crate::auth::OpdsAuthUser;
 use crate::backend::AppState;
@@ -24,7 +24,7 @@ pub(super) async fn new_arrivals(_user: OpdsAuthUser, State(state): State<AppSta
     };
     // OPDS scope is the ebook library only — see the `opds` module doc.
     let paths = db::collect_paths(settings.ebook_library_path.as_deref(), None);
-    let books = if paths.is_empty() {
+    let mut books = if paths.is_empty() {
         Vec::new()
     } else {
         match db::list_books_page(
@@ -43,6 +43,7 @@ pub(super) async fn new_arrivals(_user: OpdsAuthUser, State(state): State<AppSta
             Err(e) => return internal("list recently added books", e),
         }
     };
+    retain_ereader_books(&mut books);
     let feed = Feed {
         id: "urn:omnibus:opds:new".to_string(),
         title: "Recently Added".to_string(),

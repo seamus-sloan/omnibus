@@ -15,6 +15,23 @@ use super::entry_updated;
 /// the same acquisition link without duplicating the mime string.
 pub(super) const CBZ_MIME: &str = "application/vnd.comicbook+zip";
 
+/// Whether a `book_files` format string is one this catalog offers as a
+/// download — EPUB/CBZ, what the `/opds/ebooks/{uuid}/{file,download}`
+/// delegates serve. The **single** predicate for both catalogs; the author
+/// and series feeds used to carry local copies of it.
+pub(super) fn is_ereader_format(format: &str) -> bool {
+    format.eq_ignore_ascii_case("epub") || format.eq_ignore_ascii_case("cbz")
+}
+
+/// Drop every book without an e-reader-servable file. The shared list
+/// queries surface physical-only books on purpose for the web UI (#1181),
+/// but in a catalog for e-readers a row with no usable acquisition link is
+/// dead weight (#1811). Every feed builder calls this right after its
+/// fetch, so both catalogs filter identically.
+pub(super) fn retain_ereader_books(books: &mut Vec<EbookMetadata>) {
+    books.retain(|b| b.formats.iter().any(|f| is_ereader_format(f)));
+}
+
 /// Build the acquisition `<entry>` for one book: title, id, authors,
 /// summary, and — when the book has a format this catalog knows how to
 /// link to — download, cover, and thumbnail links.

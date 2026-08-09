@@ -11,7 +11,7 @@ use omnibus_shared::search_query_too_long;
 use serde::Deserialize;
 
 use super::atom::{Feed, Link, ACQUISITION_TYPE, NAVIGATION_TYPE};
-use super::entries::book_entry;
+use super::entries::{book_entry, retain_ereader_books};
 use super::{internal, now_rfc3339, xml_response};
 use crate::auth::OpdsAuthUser;
 use crate::backend::AppState;
@@ -39,7 +39,7 @@ pub(super) async fn search(
     // OPDS scope is the ebook library only (see `opds` module doc) — an
     // audiobook-only match would carry no working acquisition link.
     let paths = db::collect_paths(settings.ebook_library_path.as_deref(), None);
-    let books = if paths.is_empty() || params.q.trim().is_empty() {
+    let mut books = if paths.is_empty() || params.q.trim().is_empty() {
         Vec::new()
     } else {
         match db::search_books_for_paths(&state.pool, &paths, &params.q).await {
@@ -47,6 +47,7 @@ pub(super) async fn search(
             Err(e) => return internal("search books", e),
         }
     };
+    retain_ereader_books(&mut books);
     let self_href = format!("/opds/search?q={}", urlencoding::encode(&params.q));
     let feed = Feed {
         id: "urn:omnibus:opds:search".to_string(),

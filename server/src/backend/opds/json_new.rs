@@ -8,6 +8,7 @@ use omnibus_db as db;
 use omnibus_shared::opds::{Feed, FeedMetadata, Link, MEDIA_TYPE};
 use omnibus_shared::{SortDir, SortKey, ViewFilters};
 
+use super::entries::retain_ereader_books;
 use super::json_entries::book_publication;
 use super::new::NEW_LIMIT;
 use super::{internal, json_response};
@@ -21,7 +22,7 @@ pub(super) async fn new_arrivals(_user: OpdsAuthUser, State(state): State<AppSta
     };
     // OPDS scope is the ebook library only — see the `opds` module doc.
     let paths = db::collect_paths(settings.ebook_library_path.as_deref(), None);
-    let books = if paths.is_empty() {
+    let mut books = if paths.is_empty() {
         Vec::new()
     } else {
         match db::list_books_page(
@@ -40,6 +41,7 @@ pub(super) async fn new_arrivals(_user: OpdsAuthUser, State(state): State<AppSta
             Err(e) => return internal("list recently added books", e),
         }
     };
+    retain_ereader_books(&mut books);
     let feed = Feed {
         metadata: FeedMetadata {
             title: "Recently Added".to_string(),
