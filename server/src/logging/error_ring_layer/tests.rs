@@ -96,10 +96,7 @@ fn captured_entry_has_no_book_or_file_reference_when_event_carries_none() {
 
 #[test]
 fn named_error_field_does_not_leak_secret_shaped_value_into_captured_message() {
-    // House convention (#1777): a `tracing::error!` call must pass an error
-    // value via the named `error = %e` field, never interpolate it into the
-    // message literal, because `message` alone is what this layer captures
-    // and it is what `GET /api/rpc/errors` serves to admins over HTTP.
+    // `error = %e` keeps the value out of `message`, the field served to admins over HTTP.
     let secret = "sk_live_totally_secret_api_key_12345";
     with_layer(|| {
         let err = anyhow::anyhow!("{secret}");
