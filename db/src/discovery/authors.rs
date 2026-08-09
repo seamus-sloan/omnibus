@@ -1,7 +1,8 @@
-//! Author-detail read: a single author plus their books across every
-//! library. Membership and ordering layer overrides on top of the
-//! canonical `books_authors_link` so the form-edited creator list drives
-//! both the shelf contents and the per-card creator names.
+//! Author-detail read: a single author plus their books, across every
+//! library or narrowed to a set of scan roots. Membership and ordering
+//! layer overrides on top of the canonical `books_authors_link` so the
+//! form-edited creator list drives both the shelf contents and the
+//! per-card creator names.
 
 use omnibus_shared::{AuthorDetail, EbookMetadata};
 use sqlx::{Row, SqlitePool};
@@ -28,6 +29,29 @@ pub async fn get_author(
     pool: &SqlitePool,
     author_id: i64,
 ) -> Result<Option<AuthorDetail>, DiscoveryError> {
+    load_author(pool, author_id, None).await
+}
+
+/// [`get_author`] narrowed to books whose scan root is one of
+/// `library_paths` — the read a library-path-scoped surface (the OPDS
+/// catalog) needs so it can't list a book indexed under another root.
+/// Both `books` and `book_count` reflect the narrowed set, and an empty
+/// `library_paths` yields an existing author with no books.
+pub async fn get_author_for_paths(
+    pool: &SqlitePool,
+    author_id: i64,
+    library_paths: &[&str],
+) -> Result<Option<AuthorDetail>, DiscoveryError> {
+    load_author(pool, author_id, Some(library_paths)).await
+}
+
+/// Shared body of [`get_author`] / [`get_author_for_paths`]: `None`
+/// `library_paths` reads every library, `Some` narrows to those scan roots.
+async fn load_author(
+    pool: &SqlitePool,
+    author_id: i64,
+    library_paths: Option<&[&str]>,
+) -> Result<Option<AuthorDetail>, DiscoveryError> {
     // TODO: scope by `user_id` once per-user ACLs land (single-tenant today).
     let author_row = sqlx::query("SELECT id, name, sort FROM authors WHERE id = ?")
         .bind(author_id)
@@ -38,8 +62,9 @@ pub async fn get_author(
     };
     let author_name: String = a.get("name");
 
-    let mut books = fetch_author_books(pool, author_id, &author_name).await?;
-    let book_count = count_effective_author_members(pool, author_id, &author_name).await?;
+    let mut books = fetch_author_books(pool, author_id, &author_name, library_paths).await?;
+    let book_count =
+        count_effective_author_members(pool, author_id, &author_name, library_paths).await?;
     merge_overrides_into_author_books(pool, &mut books).await?;
     backfill_creator_ids(pool, &mut books).await?;
     let has_photo = author_has_usable_photo(pool, author_id).await?;
@@ -114,7 +139,40 @@ const EFFECTIVE_AUTHOR_CTE: &str = r#"WITH effective AS (
                 )
            )"#;
 
-/// Run the `effective`-CTE + `BOOK_COLUMNS` SELECT and hydrate each row
+/// [`EFFECTIVE_AUTHOR_CTE`] plus a `scoped` CTE narrowing its membership to
+/// books whose scan root is one of `library_paths`. `None` passes every row
+/// through; `Some(&[])` matches nothing, which is what a surface with no
+/// configured library should list. Path binds occupy `?3` onwards, so the
+/// caller's next free parameter is [`limit_param`].
+fn scoped_author_cte(library_paths: Option<&[&str]>) -> String {
+    let filter = match library_paths {
+        None => "1".to_string(),
+        Some([]) => "0".to_string(),
+        Some(paths) => {
+            let binds = (3..3 + paths.len())
+                .map(|i| format!("?{i}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("l.path IN ({binds})")
+        }
+    };
+    format!(
+        r"{EFFECTIVE_AUTHOR_CTE}, scoped AS (
+             SELECT e.book_id, e.series_index
+               FROM effective e
+               JOIN books b ON b.id = e.book_id
+               LEFT JOIN scan_roots l ON l.id = b.library_id
+              WHERE {filter}
+           )"
+    )
+}
+
+/// Parameter index left free by [`scoped_author_cte`]'s path binds.
+fn limit_param(library_paths: Option<&[&str]>) -> usize {
+    3 + library_paths.unwrap_or_default().len()
+}
+
+/// Run the `scoped`-CTE + `BOOK_COLUMNS` SELECT and hydrate each row
 /// into [`EbookMetadata`]. `series_index` ordering follows the same
 /// override-aware NULLIF rule used in `get_series`. The returned vec is
 /// capped at [`MAX_DISCOVERY_BOOKS`].
@@ -122,21 +180,23 @@ async fn fetch_author_books(
     pool: &SqlitePool,
     author_id: i64,
     author_name: &str,
+    library_paths: Option<&[&str]>,
 ) -> Result<Vec<EbookMetadata>, DiscoveryError> {
+    let cte = scoped_author_cte(library_paths);
+    let limit = limit_param(library_paths);
     let sql = format!(
-        r"{EFFECTIVE_AUTHOR_CTE}
+        r"{cte}
            SELECT {BOOK_COLUMNS}
            FROM books b
-           JOIN effective e ON e.book_id = b.id
+           JOIN scoped e ON e.book_id = b.id
            ORDER BY e.series_index NULLS LAST, b.sort, b.id
-           LIMIT ?3"
+           LIMIT ?{limit}"
     );
-    let rows = sqlx::query(&sql)
-        .bind(author_name)
-        .bind(author_id)
-        .bind(MAX_DISCOVERY_BOOKS)
-        .fetch_all(pool)
-        .await?;
+    let mut q = sqlx::query(&sql).bind(author_name).bind(author_id);
+    for path in library_paths.unwrap_or_default() {
+        q = q.bind(*path);
+    }
+    let rows = q.bind(MAX_DISCOVERY_BOOKS).fetch_all(pool).await?;
 
     let mut books = Vec::with_capacity(rows.len());
     for r in &rows {
@@ -152,16 +212,18 @@ async fn count_effective_author_members(
     pool: &SqlitePool,
     author_id: i64,
     author_name: &str,
+    library_paths: Option<&[&str]>,
 ) -> Result<i64, sqlx::Error> {
+    let cte = scoped_author_cte(library_paths);
     let sql = format!(
-        r"{EFFECTIVE_AUTHOR_CTE}
-           SELECT COUNT(*) FROM effective"
+        r"{cte}
+           SELECT COUNT(*) FROM scoped"
     );
-    sqlx::query_scalar(&sql)
-        .bind(author_name)
-        .bind(author_id)
-        .fetch_one(pool)
-        .await
+    let mut q = sqlx::query_scalar(&sql).bind(author_name).bind(author_id);
+    for path in library_paths.unwrap_or_default() {
+        q = q.bind(*path);
+    }
+    q.fetch_one(pool).await
 }
 
 /// Bulk-apply overrides into each book so card titles / descriptions /

@@ -38,6 +38,35 @@ async fn body_string(res: axum::response::Response) -> String {
     String::from_utf8(bytes.to_vec()).unwrap()
 }
 
+/// Index one ebook under an arbitrary scan root, so a test can give an
+/// author books in a second library. `seed_synced_ebook` is hard-wired to
+/// `/ebooks` (the fixture's configured ebook library) and can't.
+async fn seed_ebook_in_library(
+    pool: &SqlitePool,
+    library_path: &str,
+    filename: &str,
+    title: &str,
+    author: &str,
+) {
+    db::sync_books(
+        pool,
+        library_path,
+        db::SyncPlan {
+            new_books: vec![db::test_support::indexed(
+                filename,
+                Some(title),
+                &[author],
+                &[],
+                None,
+                None,
+            )],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+}
+
 async fn author_id_by_name(pool: &SqlitePool, name: &str) -> i64 {
     sqlx::query_scalar::<_, i64>("SELECT id FROM authors WHERE name = ?")
         .bind(name)
@@ -246,6 +275,37 @@ async fn author_acquisition_feed_includes_download_and_cover_links() {
     assert!(body.contains("/download\" type=\"application/epub+zip\""));
     assert!(body.contains(r#"rel="http://opds-spec.org/image""#));
     assert!(body.contains(r#"rel="http://opds-spec.org/image/thumbnail""#));
+}
+
+#[tokio::test]
+async fn author_acquisition_feed_omits_a_book_indexed_outside_the_ebook_library() {
+    // The catalog is ebook-library scoped (see the `opds` module doc), so an
+    // epub the author also has under another scan root must not appear —
+    // format alone doesn't make it in-scope.
+    let (app, pool, token) = fixture().await;
+    seed_synced_ebook(&pool, "dune.epub", "Dune", "Frank Herbert").await;
+    seed_ebook_in_library(
+        &pool,
+        "/elsewhere",
+        "other.epub",
+        "Elsewhere",
+        "Frank Herbert",
+    )
+    .await;
+    let author_id = author_id_by_name(&pool, "Frank Herbert").await;
+
+    let res = app
+        .oneshot(get_with_bearer(
+            &format!("/opds/author/{author_id}"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = body_string(res).await;
+    assert!(body.contains("<title>Dune</title>"));
+    assert!(!body.contains("<title>Elsewhere</title>"));
+    assert_eq!(body.matches("<entry>").count(), 1);
 }
 
 #[tokio::test]
@@ -465,6 +525,36 @@ async fn v2_author_acquisition_feed_includes_download_and_cover_links() {
     assert!(images
         .iter()
         .any(|l| l["rel"] == "http://opds-spec.org/image/thumbnail"));
+}
+
+#[tokio::test]
+async fn v2_author_acquisition_feed_omits_a_book_indexed_outside_the_ebook_library() {
+    // Same ebook-library scoping as the Atom feed — the two catalogs read
+    // the same author set.
+    let (app, pool, token) = fixture().await;
+    seed_synced_ebook(&pool, "dune.epub", "Dune", "Frank Herbert").await;
+    seed_ebook_in_library(
+        &pool,
+        "/elsewhere",
+        "other.epub",
+        "Elsewhere",
+        "Frank Herbert",
+    )
+    .await;
+    let author_id = author_id_by_name(&pool, "Frank Herbert").await;
+
+    let res = app
+        .oneshot(get_with_bearer(
+            &format!("/opds/v2/author/{author_id}"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let json = body_json(res).await;
+    let pubs = json["publications"].as_array().unwrap();
+    assert_eq!(pubs.len(), 1);
+    assert_eq!(pubs[0]["metadata"]["title"], "Dune");
 }
 
 #[tokio::test]
