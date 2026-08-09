@@ -78,27 +78,37 @@ pub(super) fn ConfirmScreen(
     }
 }
 
-/// 2b — a fuzzy (title, author) hit. Never auto-resolved: the reader confirms
-/// it, seeing both ISBNs, or falls through to the 3c chooser.
+/// 2b — the fuzzy (title, author) hits. Never auto-resolved: the reader picks
+/// the book they're holding, seeing both ISBNs, or falls through to the 3c
+/// chooser.
+///
+/// Always a picker, because more than one row can carry the same effective
+/// norm — an EPUB and the audiobook nothing ever attached to it are one work
+/// in two rows, and declining that pair would offer to create a third.
 #[component]
 pub(super) fn CloseMatchScreen(
-    book: ScanBook,
+    books: Vec<ScanBook>,
     scanned: ExternalBookMeta,
-    on_yes: EventHandler<()>,
+    on_yes: EventHandler<ScanBook>,
     on_no: EventHandler<ExternalBookMeta>,
 ) -> Element {
-    let library_isbn = book.isbn.clone();
+    let many = books.len() > 1;
+    let copy = CloseMatchCopy::for_count(many);
     let fallthrough = scanned.clone();
     rsx! {
         div { class: "check-in-screen", "data-testid": "check-in-close-match",
-            h1 { "Is this the book?" }
-            p { class: "subtitle",
-                "The ISBN you entered isn't on any book in your library, but the title and author match this one."
-            }
-            LibraryBookCard { book }
+            h1 { "{copy.heading}" }
+            p { class: "subtitle", "{copy.subtitle}" }
             p { class: "check-in-isbn-line", "Scanned ISBN {scanned.isbn13}" }
-            if let Some(isbn) = library_isbn {
-                p { class: "check-in-isbn-line", "Library edition ISBN {isbn}" }
+            ul { class: "check-in-match-list", "data-testid": "check-in-close-match-list",
+                for book in books {
+                    CloseMatchOption {
+                        key: "{book.uuid}",
+                        book,
+                        pick_label: copy.pick.to_string(),
+                        on_pick: on_yes,
+                    }
+                }
             }
             p { class: "check-in-why",
                 "Print and digital editions carry different ISBNs, so we ask before checking a copy in against the wrong book."
@@ -106,18 +116,68 @@ pub(super) fn CloseMatchScreen(
             div { class: "settings-actions",
                 button {
                     r#type: "button",
-                    class: "btn primary",
-                    "data-testid": "check-in-close-match-yes",
-                    onclick: move |_| on_yes.call(()),
-                    "Yes, that's it"
-                }
-                button {
-                    r#type: "button",
                     class: "btn ghost",
                     "data-testid": "check-in-close-match-no",
                     onclick: move |_| on_no.call(fallthrough.clone()),
-                    "No, different book"
+                    "{copy.decline}"
                 }
+            }
+        }
+    }
+}
+
+/// The close-match screen's four strings, which all swap together on whether
+/// the ladder offered one candidate or several.
+pub(super) struct CloseMatchCopy {
+    pub(super) heading: &'static str,
+    pub(super) subtitle: &'static str,
+    pub(super) pick: &'static str,
+    pub(super) decline: &'static str,
+}
+
+impl CloseMatchCopy {
+    /// `many` is `books.len() > 1`.
+    pub(super) fn for_count(many: bool) -> Self {
+        if many {
+            Self {
+                heading: "Which one is this?",
+                subtitle: "The ISBN you entered isn't on any book in your library, but the title and author match these.",
+                pick: "This one",
+                decline: "None of these",
+            }
+        } else {
+            Self {
+                heading: "Is this the book?",
+                subtitle: "The ISBN you entered isn't on any book in your library, but the title and author match this one.",
+                pick: "Yes, that's it",
+                decline: "No, different book",
+            }
+        }
+    }
+}
+
+/// One row of the close-match picker: the library card, that edition's ISBN
+/// when it has one, and the button that checks the scanned copy in against it.
+#[component]
+fn CloseMatchOption(
+    book: ScanBook,
+    pick_label: String,
+    on_pick: EventHandler<ScanBook>,
+) -> Element {
+    let library_isbn = book.isbn.clone();
+    let picked = book.clone();
+    rsx! {
+        li { class: "check-in-match-option",
+            LibraryBookCard { book }
+            if let Some(isbn) = library_isbn {
+                p { class: "check-in-isbn-line", "Library edition ISBN {isbn}" }
+            }
+            button {
+                r#type: "button",
+                class: "btn primary",
+                "data-testid": "check-in-close-match-pick",
+                onclick: move |_| on_pick.call(picked.clone()),
+                "{pick_label}"
             }
         }
     }

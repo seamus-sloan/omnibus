@@ -8684,6 +8684,18 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 }
 .check-in-book-detail { font-size: 12.5px; color: var(--ink-3); }
 
+/* ── Close-match picker ───────────────────────────────────────────── */
+.check-in-match-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.check-in-match-option { display: flex; flex-direction: column; gap: 8px; }
+.check-in-match-option .btn { width: 100%; justify-content: center; }
+
 /* ── Title-search results ─────────────────────────────────────────── */
 .check-in-search-results {
   list-style: none;

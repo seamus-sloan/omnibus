@@ -4,7 +4,7 @@
 //! by the confirm screens, and the shared jump-to-title-search handler.
 
 use super::entry::apply_key;
-use super::screens::{byline, meta_details};
+use super::screens::{byline, meta_details, CloseMatchCopy};
 use super::*;
 use omnibus_shared::MetadataProvider;
 
@@ -145,12 +145,50 @@ fn stage_for_in_library_unowned_opens_the_check_in_confirm() {
 fn stage_for_close_match_opens_the_confirm_prompt_not_a_write() {
     let outcome = ScanOutcome::CloseMatch {
         book: scan_book(),
+        others: Vec::new(),
         scanned: external(),
     };
-    assert!(matches!(
-        stage_for(outcome, "9780441013593"),
-        Some(Stage::CloseMatch { .. })
-    ));
+    let Some(Stage::CloseMatch { books, .. }) = stage_for(outcome, "9780441013593") else {
+        panic!("expected the close-match stage");
+    };
+    assert_eq!(books.len(), 1);
+}
+
+#[test]
+fn stage_for_close_match_flattens_the_wire_head_and_tail_into_one_picker() {
+    // Two rows for one work (an EPUB and its unattached audiobook) arrive as
+    // `book` + `others`; the screen renders them as a single ordered list.
+    let second = ScanBook {
+        uuid: "audiobook-uuid".into(),
+        ..scan_book()
+    };
+    let outcome = ScanOutcome::CloseMatch {
+        book: scan_book(),
+        others: vec![second],
+        scanned: external(),
+    };
+    let Some(Stage::CloseMatch { books, .. }) = stage_for(outcome, "9780441013593") else {
+        panic!("expected the close-match stage");
+    };
+    assert_eq!(
+        books.iter().map(|b| b.uuid.as_str()).collect::<Vec<_>>(),
+        vec!["book-uuid", "audiobook-uuid"]
+    );
+}
+
+#[test]
+fn close_match_copy_asks_which_one_only_when_several_books_are_offered() {
+    let one = CloseMatchCopy::for_count(false);
+    assert_eq!(one.heading, "Is this the book?");
+    assert_eq!(one.pick, "Yes, that's it");
+    assert_eq!(one.decline, "No, different book");
+
+    let many = CloseMatchCopy::for_count(true);
+    assert_eq!(many.heading, "Which one is this?");
+    assert_eq!(many.pick, "This one");
+    assert_eq!(many.decline, "None of these");
+    // A picker that says "match this one" reads as a single suggestion.
+    assert!(many.subtitle.ends_with("match these."), "{}", many.subtitle);
 }
 
 #[test]
