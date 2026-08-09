@@ -407,4 +407,4 @@ async fn is_stale(path: &Path, last_modified_epoch: i64) -> bool {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

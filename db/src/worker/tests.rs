@@ -12,6 +12,7 @@ use omnibus_shared::{GhostFilesWarning, MetadataOverrides, ProgressState, TaskKi
 use sqlx::SqlitePool;
 
 use crate::ebook::test_support::copy_fixture_into;
+use crate::epub_rewrite::tests::seed_epub_row;
 use crate::sync::{sync_books, SyncPlan};
 use crate::test_support::{indexed_with_stat, make_test_dir, EnvVarGuard};
 
@@ -919,45 +920,6 @@ async fn task_scan_reports_ghost_warning_in_the_warn_band_below_abort() {
 
 // ---------- #1739: bulk EPUB-bake per-book errors on Task::RewriteAllEpubs ----------
 
-/// Insert a `books` row backed by a `book_files` EPUB entry, mirroring
-/// `epub_rewrite::tests::seed_epub_row` — the sibling helper that module
-/// uses to drive `rewrite_all_epubs_with_overrides` directly. Duplicated
-/// rather than shared across crate-internal test modules since it's a
-/// handful of inserts with no reuse-worthy behavior of its own.
-async fn seed_epub_row_for_bake(
-    pool: &SqlitePool,
-    lib_dir: &std::path::Path,
-    uuid: &str,
-    title: &str,
-    filename_stem: &str,
-) -> i64 {
-    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
-        .bind(lib_dir.to_string_lossy().to_string())
-        .execute(pool)
-        .await
-        .unwrap()
-        .last_insert_rowid();
-    let book_id =
-        sqlx::query("INSERT INTO books (uuid, library_id, path, title) VALUES (?, ?, '', ?)")
-            .bind(uuid)
-            .bind(lib_id)
-            .bind(title)
-            .execute(pool)
-            .await
-            .unwrap()
-            .last_insert_rowid();
-    sqlx::query(
-        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
-         VALUES (?, 'EPUB', ?, 0)",
-    )
-    .bind(book_id)
-    .bind(filename_stem)
-    .execute(pool)
-    .await
-    .unwrap();
-    book_id
-}
-
 /// A `Task::RewriteAllEpubs` run that leaves one book unbaked (its
 /// `book_files` row points at a source that was never written to disk)
 /// completes as `TaskOutcome::Ok`, and the failed `book_uuid` — the error
@@ -978,7 +940,7 @@ async fn task_rewrite_all_epubs_reports_bake_errors_via_task_outcome() {
 
     let lib_ok = tempfile::tempdir().unwrap();
     copy_fixture_into("alpha.epub", lib_ok.path());
-    seed_epub_row_for_bake(&pool, lib_ok.path(), "uuid-ok", "Book OK", "alpha").await;
+    seed_epub_row(&pool, lib_ok.path(), "uuid-ok", "Book OK", "alpha").await;
     crate::upsert_metadata_overrides(
         &pool,
         "uuid-ok",
@@ -993,7 +955,7 @@ async fn task_rewrite_all_epubs_reports_bake_errors_via_task_outcome() {
     .unwrap();
 
     let lib_bad = tempfile::tempdir().unwrap();
-    seed_epub_row_for_bake(&pool, lib_bad.path(), "uuid-bad", "Book Bad", "missing").await;
+    seed_epub_row(&pool, lib_bad.path(), "uuid-bad", "Book Bad", "missing").await;
     crate::upsert_metadata_overrides(
         &pool,
         "uuid-bad",
