@@ -1,20 +1,19 @@
 //! Letter-indexed author browse (AC2), the OPDS 2.0 JSON counterpart to
 //! `/opds/authors*`: `/opds/v2/authors`, `/opds/v2/authors/{letter}`, and
-//! `/opds/v2/author/{id}`. Reuses `authors::{load_authors, letter_of,
-//! letter_path_segment}` so both catalogs bucket the same author under the
-//! same letter and read the same author set.
+//! `/opds/v2/author/{id}`. Reuses `authors::{load_author, load_authors,
+//! letter_of, letter_path_segment}` so both catalogs bucket the same author
+//! under the same letter and read the same author set.
 
 use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use omnibus_db as db;
 use omnibus_shared::opds::{Feed, FeedMetadata, Link, MEDIA_TYPE};
 
-use super::authors::{letter_of, letter_path_segment, load_authors};
+use super::authors::{letter_of, letter_path_segment, load_author, load_authors};
 use super::json_entries::book_publication;
-use super::{internal, json_nav_link, json_response};
+use super::{json_nav_link, json_response};
 use crate::auth::AuthUser;
 use crate::backend::AppState;
 
@@ -113,39 +112,28 @@ pub(super) async fn acquisition_feed(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Response {
-    match db::get_author(&state.pool, id).await {
-        Ok(Some(author)) => {
-            // Ebook-scoped like the Atom equivalent — see that handler's
-            // doc comment for why an audiobook/physical-only book is
-            // filtered out here.
-            let is_ebook_format =
-                |f: &String| f.eq_ignore_ascii_case("epub") || f.eq_ignore_ascii_case("cbz");
-            let publications: Vec<_> = author
-                .books
-                .iter()
-                .filter(|b| b.formats.iter().any(is_ebook_format))
-                .map(book_publication)
-                .collect();
-            let feed = Feed {
-                metadata: FeedMetadata {
-                    title: author.name.clone(),
-                    number_of_items: Some(publications.len() as i64),
-                    ..Default::default()
-                },
-                links: vec![
-                    Link::new(format!("/opds/v2/author/{id}"))
-                        .with_rel("self")
-                        .with_type(MEDIA_TYPE),
-                    Link::new("/opds/v2")
-                        .with_rel("start")
-                        .with_type(MEDIA_TYPE),
-                ],
-                navigation: Vec::new(),
-                publications,
-            };
-            json_response(&feed)
-        }
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => internal("read author", e),
-    }
+    let author = match load_author(&state, id).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(resp) => return resp,
+    };
+    let publications: Vec<_> = author.books.iter().map(book_publication).collect();
+    let feed = Feed {
+        metadata: FeedMetadata {
+            title: author.name.clone(),
+            number_of_items: Some(publications.len() as i64),
+            ..Default::default()
+        },
+        links: vec![
+            Link::new(format!("/opds/v2/author/{id}"))
+                .with_rel("self")
+                .with_type(MEDIA_TYPE),
+            Link::new("/opds/v2")
+                .with_rel("start")
+                .with_type(MEDIA_TYPE),
+        ],
+        navigation: Vec::new(),
+        publications,
+    };
+    json_response(&feed)
 }
