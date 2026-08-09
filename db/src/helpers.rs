@@ -31,6 +31,27 @@ pub(crate) fn library_paths_json(library_paths: &[&str]) -> String {
     .to_string()
 }
 
+/// SQL fragment for "search may surface this book": it sits under one of the
+/// configured scan roots, or it holds at least one physical copy.
+///
+/// The physical arm is the only way in for a physical-only book — those live
+/// under the synthetic `physical://local` root, which is never a configured
+/// path. A fileless book with *no* copy (a wishlist entry) matches neither arm
+/// and stays hidden. Every search path shares this one definition rather than
+/// spelling it out: the palette arms and `books::search` had already drifted
+/// apart once (#1788), leaving physical books that `/api/search` returned
+/// invisible to the palette.
+///
+/// `book` / `root` name the `books` / `scan_roots` aliases in the enclosing
+/// query and `paths_param` the placeholder bound to [`library_paths_json`];
+/// all three differ per call site.
+pub(crate) fn visible_book_sql(book: &str, root: &str, paths_param: &str) -> String {
+    format!(
+        "({root}.path IN (SELECT value FROM json_each({paths_param})) \
+          OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = {book}.uuid))"
+    )
+}
+
 /// Deterministic UUIDv5 derived from `(library_path, filename)` so reindexing
 /// the same file produces the same uuid. Keeps `/api/covers/{uuid}` URLs
 /// stable across reindex cycles even as the primary `books.id` renumbers.
