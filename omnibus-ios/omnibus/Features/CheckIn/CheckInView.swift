@@ -222,50 +222,8 @@ struct CheckInView: View {
                     }
                     checkInButton(book: book, isbn: book.isbn, label: "Check in this copy")
 
-                case let .closeMatch(book, scanned):
-                    resultCard(
-                        title: book.title, authors: book.authors,
-                        cover: .library(uuid: book.uuid),
-                        badge: "Possible match", tint: palette.warnColor
-                    )
-                    HStack(alignment: .top, spacing: Spacing.md) {
-                        if let cover = scanned.coverURL, CheckInFlow.isExternalURL(cover) {
-                            ExternalImage(url: cover) { Color.clear }
-                                .aspectRatio(2.0 / 3.0, contentMode: .fit)
-                                .frame(width: 40)
-                                .clipShape(RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
-                        }
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("You scanned")
-                                .font(.ui(12, weight: .medium))
-                                .foregroundStyle(palette.ink3Color)
-                            Text(scanned.title)
-                                .font(.ui(14, weight: .medium))
-                                .foregroundStyle(palette.ink0Color)
-                            Text(scanned.authorDisplay)
-                                .font(.ui(12.5))
-                                .foregroundStyle(palette.ink2Color)
-                            ForEach(CheckInFlow.detailLines(for: scanned), id: \.self) { line in
-                                Text(line)
-                                    .font(.ui(11.5))
-                                    .foregroundStyle(palette.ink3Color)
-                            }
-                        }
-                    }
-                    .padding(Spacing.md)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                            .fill(palette.bg1Color)
-                    )
-                    checkInButton(book: book, isbn: scanned.isbn13, label: "Yes, same book — check in")
-                    Button("No, add as a new physical book") {
-                        Task { await addPhysicalOnly(scanned) }
-                    }
-                    .buttonStyle(QuietButtonStyle())
-                    .frame(maxWidth: .infinity)
-                    .disabled(isWriting)
-                    .opacity(isWriting ? 0.55 : 1)
+                case let .closeMatch(books, scanned):
+                    closeMatchSection(books: books, scanned: scanned)
 
                 case let .notInLibrary(online):
                     resultCard(
@@ -326,6 +284,78 @@ struct CheckInView: View {
         TextField("Edition note (optional)", text: $note, axis: .vertical)
             .textFieldStyle(OmnibusFieldStyle())
             .lineLimit(1...3)
+    }
+
+    // MARK: - Close match
+
+    /// The fuzzy (title, author) hits, as a picker. Several library rows can
+    /// carry the same effective title — an EPUB and the audiobook nothing
+    /// attached to it — so the reader chooses which one they're holding rather
+    /// than being pushed into creating a third row for the same work.
+    @ViewBuilder
+    private func closeMatchSection(books: [ScanBook], scanned: ExternalBookMeta) -> some View {
+        let many = books.count > 1
+        scannedCard(scanned)
+        if many {
+            Text("Which of these are you holding?")
+                .font(.ui(14, weight: .medium))
+                .foregroundStyle(palette.ink1Color)
+        }
+        ForEach(books, id: \.uuid) { book in
+            VStack(alignment: .leading, spacing: Spacing.md) {
+                resultCard(
+                    title: book.title, authors: book.authors,
+                    cover: .library(uuid: book.uuid),
+                    badge: "Possible match", tint: palette.warnColor
+                )
+                checkInButton(
+                    book: book, isbn: scanned.isbn13,
+                    label: many ? "This one — check in" : "Yes, same book — check in"
+                )
+            }
+        }
+        Button("No, add as a new physical book") {
+            Task { await addPhysicalOnly(scanned) }
+        }
+        .buttonStyle(QuietButtonStyle())
+        .frame(maxWidth: .infinity)
+        .disabled(isWriting)
+        .opacity(isWriting ? 0.55 : 1)
+    }
+
+    /// What the scan itself resolved to, shown once above the candidates so the
+    /// reader can compare them against it.
+    private func scannedCard(_ scanned: ExternalBookMeta) -> some View {
+        HStack(alignment: .top, spacing: Spacing.md) {
+            if let cover = scanned.coverURL, CheckInFlow.isExternalURL(cover) {
+                ExternalImage(url: cover) { Color.clear }
+                    .aspectRatio(2.0 / 3.0, contentMode: .fit)
+                    .frame(width: 40)
+                    .clipShape(RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text("You scanned")
+                    .font(.ui(12, weight: .medium))
+                    .foregroundStyle(palette.ink3Color)
+                Text(scanned.title)
+                    .font(.ui(14, weight: .medium))
+                    .foregroundStyle(palette.ink0Color)
+                Text(scanned.authorDisplay)
+                    .font(.ui(12.5))
+                    .foregroundStyle(palette.ink2Color)
+                ForEach(CheckInFlow.detailLines(for: scanned), id: \.self) { line in
+                    Text(line)
+                        .font(.ui(11.5))
+                        .foregroundStyle(palette.ink3Color)
+                }
+            }
+        }
+        .padding(Spacing.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                .fill(palette.bg1Color)
+        )
     }
 
     // MARK: - Title search (unresolved fallback)

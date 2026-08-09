@@ -721,7 +721,7 @@ async fn gc_missing_files_best_effort(pool: &SqlitePool) {
     {
         Ok(purged) if purged > 0 => tracing::info!(purged, "reindex: GC'd books missing files"),
         Ok(_) => {}
-        Err(e) => tracing::error!("reindex: missing-files GC failed: {e}"),
+        Err(e) => tracing::error!(error = %e, "reindex: missing-files GC failed"),
     }
 }
 

@@ -317,6 +317,14 @@ async fn revoke_device_returns_device_not_found_for_unknown_id() {
 }
 
 #[tokio::test]
+async fn revoke_device_returns_internal_when_pool_closed() {
+    let p = pool().await;
+    p.close().await;
+    let err = revoke_device(&p, 1).await.unwrap_err();
+    assert!(matches!(err, AuthError::Internal(_)));
+}
+
+#[tokio::test]
 async fn revoke_device_also_revokes_its_live_sessions() {
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();

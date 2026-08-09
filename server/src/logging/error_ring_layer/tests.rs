@@ -93,3 +93,21 @@ fn captured_entry_has_no_book_or_file_reference_when_event_carries_none() {
     assert_eq!(snap[0].book_uuid, None);
     assert_eq!(snap[0].file, None);
 }
+
+#[test]
+fn named_error_field_does_not_leak_secret_shaped_value_into_captured_message() {
+    // `error = %e` keeps the value out of `message`, the field served to admins over HTTP.
+    let secret = "sk_live_totally_secret_api_key_12345";
+    with_layer(|| {
+        let err = anyhow::anyhow!("{secret}");
+        tracing::error!(error = %err, "operation failed");
+    });
+
+    let snap = error_ring::snapshot();
+    assert_eq!(snap.len(), 1);
+    assert_eq!(snap[0].message, "operation failed");
+    assert!(
+        !snap[0].message.contains(secret),
+        "captured message must not contain the secret carried on the `error` field"
+    );
+}

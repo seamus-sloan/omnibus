@@ -25,7 +25,7 @@ pub(super) struct BookCleanup {
 /// the same reason the individual steps are.
 pub(super) async fn cleanup(job: Cleanup) {
     if let Err(join_err) = tokio::task::spawn_blocking(move || cleanup_blocking(job)).await {
-        tracing::error!("delete_book_files: fs cleanup spawn_blocking failed: {join_err}");
+        tracing::error!(error = %join_err, "delete_book_files: fs cleanup spawn_blocking failed");
     }
 }
 

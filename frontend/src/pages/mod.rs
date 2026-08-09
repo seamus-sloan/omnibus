@@ -6,6 +6,8 @@
 
 mod account;
 mod add_books;
+#[cfg(not(feature = "mobile"))]
+mod admin_health;
 mod auth;
 mod author;
 mod authors_index;
@@ -33,6 +35,8 @@ mod tag_cloud;
 
 pub use account::AccountPage;
 pub use add_books::AddBooksPage;
+#[cfg(not(feature = "mobile"))]
+pub use admin_health::AdminHealthPage;
 pub use auth::{LoginPage, RegisterPage};
 pub use author::AuthorPage;
 pub use authors_index::AuthorsIndexPage;

@@ -83,8 +83,8 @@ pub async fn ebook_convert_status(pool: &SqlitePool) -> Result<EbookConvertStatu
     let probe = path.clone();
     let available = match tokio::task::spawn_blocking(move || convert::is_runnable(&probe)).await {
         Ok(ok) => ok,
-        Err(join_err) => {
-            tracing::error!("ebook_convert_status: probe spawn_blocking failed: {join_err}");
+        Err(e) => {
+            tracing::error!(error = %e, "ebook_convert_status: probe task join failed");
             false
         }
     };

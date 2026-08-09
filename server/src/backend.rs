@@ -21,6 +21,7 @@ use crate::http_errors::internal;
 use crate::rate_limit::RateLimiter;
 
 mod account;
+mod admin_health;
 mod admin_sessions;
 mod audiobooks;
 mod author_photos;

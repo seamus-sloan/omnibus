@@ -247,7 +247,7 @@ async fn cleanup_orphaned_images(pool: &SqlitePool, candidates: HashSet<String>)
     })
     .await
     {
-        tracing::error!("cleanup_orphaned_images: spawn_blocking failed: {join_err}");
+        tracing::error!(error = %join_err, "cleanup_orphaned_images: spawn_blocking failed");
     }
 }
 

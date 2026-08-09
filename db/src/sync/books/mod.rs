@@ -214,7 +214,7 @@ pub async fn sync_books_with_progress(
     })
     .await
     {
-        tracing::error!("sync_books: cover reconcile spawn_blocking failed: {join_err}");
+        tracing::error!(error = %join_err, "sync_books: cover reconcile spawn_blocking failed");
     }
 
     Ok(())

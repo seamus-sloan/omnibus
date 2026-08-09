@@ -123,6 +123,8 @@ fn UserMenuPanel(user: UserSummary, open: Signal<bool>) -> Element {
     let nav = use_navigator();
     let theme = use_context::<Signal<Theme>>();
     let on_signout = build_on_signout(open, nav);
+    // Captured before `UmHeader { user, .. }` moves `user` below.
+    let is_admin = user.is_admin;
 
     let on_keydown = move |evt: Event<KeyboardData>| {
         if evt.key() == Key::Escape {
@@ -163,7 +165,7 @@ fn UserMenuPanel(user: UserSummary, open: Signal<bool>) -> Element {
                 UmStat { label: "Goals", detail: "12 / 24 books" }
             }
 
-            UmAccountRows { open }
+            UmAccountRows { open, is_admin }
             UmSessionRows { on_signout }
 
             UmThemeSeg { theme }
@@ -338,10 +340,12 @@ fn um_now_reading_row(point: ResumePoint) -> Element {
 
 /// Account-scoped linear rows. Everything an account needs now lives under
 /// Settings (Account, server config, and Logs are all sections there), so this
-/// is a single Settings row that closes the menu on click.
+/// is a single Settings row that closes the menu on click. Admins also get a
+/// "Server health" row to `/admin/health` (#952) — hidden for everyone else,
+/// mirroring how the Settings sidebar hides its own admin-only sections.
 #[cfg(any(feature = "web", feature = "server"))]
 #[component]
-fn UmAccountRows(open: Signal<bool>) -> Element {
+fn UmAccountRows(open: Signal<bool>, is_admin: bool) -> Element {
     let mut open = open;
     rsx! {
         div { class: "um-rows",
@@ -351,6 +355,16 @@ fn UmAccountRows(open: Signal<bool>) -> Element {
                 onclick: move |_| open.set(false),
                 span { class: "um-row-icon", "⚙" }
                 span { class: "um-row-label", "Settings" }
+            }
+            if is_admin {
+                Link {
+                    to: Route::AdminHealth {},
+                    class: "um-row",
+                    "data-testid": "user-menu-admin-health",
+                    onclick: move |_| open.set(false),
+                    span { class: "um-row-icon", "⚕" }
+                    span { class: "um-row-label", "Server health" }
+                }
             }
         }
     }

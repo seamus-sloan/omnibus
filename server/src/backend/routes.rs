@@ -11,10 +11,10 @@ use axum::{
 };
 
 use super::{
-    account, admin_sessions, audiobooks, author_photos, authors, bookmarks, covers, ebooks, genres,
-    highlights, journals, kindle, overrides, physical, profile, progress, ratings, read_status,
-    scan, search, series, settings, shelves, stats, suggestions, summary, tags, uploads, users,
-    AppState,
+    account, admin_health, admin_sessions, audiobooks, author_photos, authors, bookmarks, covers,
+    ebooks, genres, highlights, journals, kindle, overrides, physical, profile, progress, ratings,
+    read_status, scan, search, series, settings, shelves, stats, suggestions, summary, tags,
+    uploads, users, AppState,
 };
 use crate::rate_limit::{rate_limit_by_ip, RateLimiter};
 
@@ -58,6 +58,10 @@ pub(super) fn content_routes() -> Router<AppState> {
             "/api/admin/devices/{id}",
             delete(admin_sessions::delete_device),
         )
+        // Admin server-health report (F5, #952) — index status, worker
+        // queue, FTS health, storage, and last errors in one request. Web
+        // instead hits the analogous `rpc_get_admin_health` server fn.
+        .route("/api/admin/health", get(admin_health::get_admin_health))
         .route("/api/library", get(ebooks::get_library))
         .route(
             "/api/downloads/validators",

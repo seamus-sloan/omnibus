@@ -489,6 +489,14 @@ async fn list_sessions_for_user_returns_only_live_sessions_for_that_user() {
 }
 
 #[tokio::test]
+async fn list_sessions_for_user_returns_internal_when_pool_closed() {
+    let p = pool().await;
+    p.close().await;
+    let err = list_sessions_for_user(&p, 1).await.unwrap_err();
+    assert!(matches!(err, AuthError::Internal(_)));
+}
+
+#[tokio::test]
 async fn list_sessions_for_user_caps_response_at_list_sessions_limit() {
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
@@ -542,6 +550,14 @@ async fn revoke_session_for_user_returns_not_found_for_unknown_id() {
 }
 
 #[tokio::test]
+async fn revoke_session_for_user_returns_internal_when_pool_closed() {
+    let p = pool().await;
+    p.close().await;
+    let err = revoke_session_for_user(&p, 1, 1).await.unwrap_err();
+    assert!(matches!(err, AuthError::Internal(_)));
+}
+
+#[tokio::test]
 async fn revoke_session_checked_revokes_any_users_session() {
     let p = pool().await;
     let u = create_user(&p, "alice", "hunter2-real-long").await.unwrap();
@@ -560,6 +576,14 @@ async fn revoke_session_checked_returns_not_found_for_unknown_id() {
     let p = pool().await;
     let err = revoke_session_checked(&p, 999_999).await.unwrap_err();
     assert!(matches!(err, AuthError::SessionNotFound));
+}
+
+#[tokio::test]
+async fn revoke_session_checked_returns_internal_when_pool_closed() {
+    let p = pool().await;
+    p.close().await;
+    let err = revoke_session_checked(&p, 1).await.unwrap_err();
+    assert!(matches!(err, AuthError::Internal(_)));
 }
 
 /// The idle DELETE must use `idx_sessions_last_used_at`, not scan.
