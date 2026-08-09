@@ -276,6 +276,26 @@ pub fn touch_thumb(book_id: i64, size: ThumbSize) {
     }
 }
 
+/// Total bytes currently held by the thumbnail cache — every regular
+/// `.webp` file directly under `thumbs_dir()`. Read-only counterpart to
+/// [`evict_if_over_cap`]'s usage computation, for the admin health page's
+/// storage section. Missing directory or an unreadable entry reads as
+/// empty/skipped rather than an error — this is a display figure, not an
+/// eviction decision.
+pub fn used_bytes() -> u64 {
+    let dir = thumbs_dir();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".webp"))
+        .filter_map(|entry| entry.metadata().ok())
+        .filter(|meta| meta.is_file())
+        .map(|meta| meta.len())
+        .sum()
+}
+
 /// Walk `thumbs_dir()` and delete files in oldest-mtime-first order until the
 /// total cache size is under `cap_bytes`. [`touch_thumb`] bumps mtime on
 /// every cache-hit read, so this is LRU in effect, not pure FIFO-by-creation.
