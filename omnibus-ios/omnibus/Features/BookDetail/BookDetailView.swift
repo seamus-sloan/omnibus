@@ -494,7 +494,7 @@ struct BookDetailView: View {
             }
             .buttonStyle(FilledButtonStyle(prominent: false))
 
-            Text("Searches Amazon for this title.")
+            Text("Opens an Amazon search for this book.")
                 .font(.ui(12.5))
                 .foregroundStyle(palette.ink3Color)
         }

@@ -25,7 +25,9 @@ import Testing
     }
 
     @Test func treatsAWhitespaceOnlyISBNAsAbsent() {
-        let url = StoreLink.searchURL(isbn: "   ", title: "1984", author: "George Orwell")
+        // Newline included deliberately: web trims with Rust `trim()`, which
+        // strips newlines too, and the two surfaces must build the same query.
+        let url = StoreLink.searchURL(isbn: " \n ", title: "1984", author: "George Orwell")
         #expect(url?.absoluteString == "https://www.amazon.com/s?k=1984%20George%20Orwell")
     }
 

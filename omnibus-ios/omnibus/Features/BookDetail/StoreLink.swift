@@ -8,9 +8,9 @@ import Foundation
 enum StoreLink {
     /// Amazon search URL for the book.
     static func searchURL(isbn: String?, title: String, author: String) -> URL? {
-        let key = isbn?.trimmingCharacters(in: .whitespaces) ?? ""
+        let key = isbn?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let query = key.isEmpty
-            ? "\(title) \(author)".trimmingCharacters(in: .whitespaces)
+            ? "\(title) \(author)".trimmingCharacters(in: .whitespacesAndNewlines)
             : key
 
         var components = URLComponents(string: "https://www.amazon.com/s")
