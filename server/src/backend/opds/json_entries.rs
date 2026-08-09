@@ -30,12 +30,12 @@ pub(super) fn book_publication(book: &EbookMetadata) -> Publication {
             );
         }
         images.push(
-            Link::new(format!("/api/covers/{uuid}"))
+            Link::new(format!("/opds/covers/{uuid}"))
                 .with_rel("http://opds-spec.org/image")
                 .with_type("image/jpeg"),
         );
         images.push(
-            Link::new(format!("/api/thumbs/{uuid}/sm"))
+            Link::new(format!("/opds/thumbs/{uuid}/sm"))
                 .with_rel("http://opds-spec.org/image/thumbnail")
                 .with_type("image/webp"),
         );

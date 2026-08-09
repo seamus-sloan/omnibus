@@ -13,7 +13,7 @@ use omnibus_shared::{AuthorDetail, AuthorSummary};
 use super::atom::{Feed, Link, ACQUISITION_TYPE, NAVIGATION_TYPE};
 use super::entries::book_entry;
 use super::{internal, nav_entry, now_rfc3339, xml_response};
-use crate::auth::AuthUser;
+use crate::auth::OpdsAuthUser;
 use crate::backend::AppState;
 
 /// The bucket an author's sort key falls into: an uppercase ASCII letter,
@@ -45,7 +45,7 @@ pub(super) fn letter_path_segment(letter: char) -> String {
 
 /// `GET /opds/authors` — navigation feed of the letters that have at least
 /// one author, each linking to `/opds/authors/{letter}`.
-pub(super) async fn letter_index(_user: AuthUser, State(state): State<AppState>) -> Response {
+pub(super) async fn letter_index(_user: OpdsAuthUser, State(state): State<AppState>) -> Response {
     let authors = match load_authors(&state).await {
         Ok(a) => a,
         Err(resp) => return resp,
@@ -85,7 +85,7 @@ pub(super) async fn letter_index(_user: AuthUser, State(state): State<AppState>)
 /// acquisition feed. An empty or non-alphabetic `letter` 400s rather than
 /// silently matching the `#` bucket, so a malformed link is visible.
 pub(super) async fn by_letter(
-    _user: AuthUser,
+    _user: OpdsAuthUser,
     State(state): State<AppState>,
     Path(letter): Path<String>,
 ) -> Response {
@@ -139,7 +139,7 @@ pub(super) async fn by_letter(
 
 /// `GET /opds/author/{id}` — acquisition feed of one author's books.
 pub(super) async fn acquisition_feed(
-    _user: AuthUser,
+    _user: OpdsAuthUser,
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Response {

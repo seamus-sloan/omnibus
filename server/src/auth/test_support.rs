@@ -61,6 +61,36 @@ pub async fn create_admin(pool: &SqlitePool, username: &str) -> User {
     insert_user(pool, username, true).await
 }
 
+/// Create a non-admin user whose password actually verifies, for flows that
+/// authenticate with raw credentials rather than a minted session (OPDS
+/// HTTP Basic). The default [`create_user`] sentinel hash deliberately
+/// fails `verify_password`, so it can't back these tests.
+pub async fn create_user_with_password(pool: &SqlitePool, username: &str, password: &str) -> User {
+    let phc = db::auth::hash_password(password).expect("hash password");
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO users (username, password_hash, is_admin, can_upload, can_edit, can_download)
+         VALUES (?, ?, 0, 0, 0, 1)
+         RETURNING id",
+    )
+    .bind(username)
+    .bind(&phc)
+    .fetch_one(pool)
+    .await
+    .expect("insert user");
+    User {
+        id,
+        username: username.to_string(),
+        is_admin: false,
+        can_upload: false,
+        can_edit: false,
+        can_download: true,
+        kindle_email: None,
+        display_name: None,
+        has_avatar: false,
+        hidden_formats: Vec::new(),
+    }
+}
+
 /// Issue a bearer session for `user_id`. Returns the raw token (no `Bearer `
 /// prefix) — call sites format it as `format!("Bearer {token}")`.
 pub async fn bearer_token(pool: &SqlitePool, user_id: i64) -> String {

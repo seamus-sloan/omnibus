@@ -11,10 +11,10 @@ use omnibus_shared::{SortDir, SortKey, ViewFilters};
 use super::json_entries::book_publication;
 use super::new::NEW_LIMIT;
 use super::{internal, json_response};
-use crate::auth::AuthUser;
+use crate::auth::OpdsAuthUser;
 use crate::backend::AppState;
 
-pub(super) async fn new_arrivals(_user: AuthUser, State(state): State<AppState>) -> Response {
+pub(super) async fn new_arrivals(_user: OpdsAuthUser, State(state): State<AppState>) -> Response {
     let settings = match db::get_settings(&state.pool).await {
         Ok(s) => s,
         Err(e) => return internal("read settings", e),

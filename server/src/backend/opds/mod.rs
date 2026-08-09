@@ -1,6 +1,10 @@
 //! `/opds/*` — an OPDS 1.2 Atom catalog for third-party e-reader clients,
-//! gated behind the same live-session auth as `/api/*` (each handler takes
-//! [`crate::auth::AuthUser`] directly). Deliberately ebook-library scoped —
+//! gated behind the same live sessions as `/api/*` plus an HTTP Basic
+//! fallback (each handler takes [`crate::auth::OpdsAuthUser`] directly),
+//! since Basic is the only scheme OPDS clients like KOReader can send.
+//! For the same reason the download/cover links a feed hands out point at
+//! the [`delegate`] routes on this router — the `/api/*` originals sit
+//! behind cookie/bearer-only auth. Deliberately ebook-library scoped —
 //! every read filters to `settings.ebook_library_path` — so every
 //! acquisition entry carries a working download link. The Atom catalog's
 //! series and category browses are not implemented; the `/opds/v2/*` JSON
@@ -32,6 +36,7 @@ use super::AppState;
 
 mod atom;
 mod authors;
+mod delegate;
 mod entries;
 mod json_authors;
 mod json_entries;
@@ -45,9 +50,10 @@ mod search;
 #[cfg(test)]
 mod tests;
 
-/// Build the `/opds/*` router. `Extension(pool)` is layered here so the
+/// Build the `/opds/*` router. `Extension(pool)` (and the Basic-auth
+/// state behind [`crate::auth::OpdsAuthUser`]) are layered here so the
 /// router is self-contained for integration tests, mirroring `kobo_router`
-/// in `super::kobo`; the live server layers the same one at the top
+/// in `super::kobo`; the live server layers the same pool at the top
 /// (harmless overlap, mirroring `rest_router`).
 pub fn opds_router(state: AppState) -> Router {
     let pool = state.pool().clone();
@@ -67,8 +73,20 @@ pub fn opds_router(state: AppState) -> Router {
         .route("/opds/v2/author/{id}", get(json_authors::acquisition_feed))
         .route("/opds/v2/series", get(json_series::index))
         .route("/opds/v2/series/{id}", get(json_series::acquisition_feed))
+        .route("/opds/covers/{uuid}", get(delegate::cover))
+        .route("/opds/thumbs/{uuid}/{size}", get(delegate::thumb))
+        .route("/opds/ebooks/{uuid}/file", get(delegate::ebook_file))
+        .route(
+            "/opds/ebooks/{uuid}/download",
+            get(delegate::ebook_download),
+        )
+        .route(
+            "/opds/audiobooks/{uuid}/download",
+            get(delegate::audiobook_download),
+        )
         .with_state(state)
         .layer(Extension(pool))
+        .layer(Extension(crate::auth::BasicAuthState::new_shared()))
 }
 
 /// Wrap an already-serialized XML document as a `200` response with the

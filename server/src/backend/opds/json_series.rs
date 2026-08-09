@@ -15,12 +15,12 @@ use omnibus_shared::opds::{Feed, FeedMetadata, Link, MEDIA_TYPE};
 
 use super::json_entries::book_publication;
 use super::{internal, json_nav_link, json_response};
-use crate::auth::AuthUser;
+use crate::auth::OpdsAuthUser;
 use crate::backend::AppState;
 
 /// `GET /opds/v2/series` — navigation feed of every series with at least
 /// one visible book, each linking to `/opds/v2/series/{id}`.
-pub(super) async fn index(_user: AuthUser, State(state): State<AppState>) -> Response {
+pub(super) async fn index(_user: OpdsAuthUser, State(state): State<AppState>) -> Response {
     let settings = match db::get_settings(&state.pool).await {
         Ok(s) => s,
         Err(e) => return internal("read settings", e),
@@ -61,7 +61,7 @@ pub(super) async fn index(_user: AuthUser, State(state): State<AppState>) -> Res
 /// `GET /opds/v2/series/{id}` — publication feed of one series' books, in
 /// series-index order (`db::get_series`'s ordering).
 pub(super) async fn acquisition_feed(
-    _user: AuthUser,
+    _user: OpdsAuthUser,
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Response {

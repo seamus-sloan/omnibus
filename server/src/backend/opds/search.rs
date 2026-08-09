@@ -13,7 +13,7 @@ use serde::Deserialize;
 use super::atom::{Feed, Link, ACQUISITION_TYPE, NAVIGATION_TYPE};
 use super::entries::book_entry;
 use super::{internal, now_rfc3339, xml_response};
-use crate::auth::AuthUser;
+use crate::auth::OpdsAuthUser;
 use crate::backend::AppState;
 
 #[derive(Deserialize)]
@@ -25,7 +25,7 @@ pub(super) struct SearchQuery {
 }
 
 pub(super) async fn search(
-    _user: AuthUser,
+    _user: OpdsAuthUser,
     State(state): State<AppState>,
     Query(params): Query<SearchQuery>,
 ) -> Response {

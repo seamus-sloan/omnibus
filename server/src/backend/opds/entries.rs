@@ -1,6 +1,7 @@
 //! Shared acquisition-entry builder: turn one book's `EbookMetadata` row
 //! into an OPDS `<entry>`. Wires up download / cover / thumbnail links that
-//! point at the existing `/api/ebooks/*` and `/api/covers|thumbs/*` routes
+//! point at this router's Basic-auth'd [`super::delegate`] routes (which
+//! call the `/api/ebooks/*` and `/api/covers|thumbs/*` handler bodies)
 //! rather than duplicating their resolution logic.
 
 use omnibus_shared::EbookMetadata;
@@ -26,12 +27,12 @@ pub(super) fn book_entry(book: &EbookMetadata) -> Entry {
         }
         links.push(Link::new(
             "http://opds-spec.org/image",
-            format!("/api/covers/{uuid}"),
+            format!("/opds/covers/{uuid}"),
             "image/jpeg",
         ));
         links.push(Link::new(
             "http://opds-spec.org/image/thumbnail",
-            format!("/api/thumbs/{uuid}/sm"),
+            format!("/opds/thumbs/{uuid}/sm"),
             "image/webp",
         ));
     }
@@ -63,20 +64,20 @@ pub(super) fn download_link(uuid: &str, book: &EbookMetadata) -> Option<(String,
     let has = |fmt: &str| book.formats.iter().any(|f| f.eq_ignore_ascii_case(fmt));
     if has("epub") {
         return Some((
-            format!("/api/ebooks/{uuid}/download"),
+            format!("/opds/ebooks/{uuid}/download"),
             "application/epub+zip",
         ));
     }
     if has("cbz") {
         // `/download` is EPUB-only (see `ebooks::get_ebook_download`); a
         // comic-only book's whole-file read lives at `/file` instead.
-        return Some((format!("/api/ebooks/{uuid}/file"), CBZ_MIME));
+        return Some((format!("/opds/ebooks/{uuid}/file"), CBZ_MIME));
     }
     if has("m4b") || has("m4a") {
-        return Some((format!("/api/audiobooks/{uuid}/download"), "audio/mp4"));
+        return Some((format!("/opds/audiobooks/{uuid}/download"), "audio/mp4"));
     }
     if has("mp3") {
-        return Some((format!("/api/audiobooks/{uuid}/download"), "audio/mpeg"));
+        return Some((format!("/opds/audiobooks/{uuid}/download"), "audio/mpeg"));
     }
     None
 }

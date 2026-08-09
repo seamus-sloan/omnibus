@@ -6,7 +6,7 @@
 
 use axum::{
     extract::{ConnectInfo, Request, State},
-    http::StatusCode,
+    http::{self, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
 };
@@ -117,8 +117,14 @@ impl Default for RateLimiter {
 /// source yields an IP, falls back to `0.0.0.0` so the limiter still applies
 /// process-wide.
 fn resolve_ip(req: &Request) -> IpAddr {
-    let direct = req
-        .extensions()
+    client_ip(req.extensions(), req.headers())
+}
+
+/// Same resolution as [`resolve_ip`], but over the pieces a
+/// `FromRequestParts` extractor holds — used by the OPDS Basic-auth
+/// extractor, which meters credential verification per IP.
+pub(crate) fn client_ip(extensions: &http::Extensions, headers: &http::HeaderMap) -> IpAddr {
+    let direct = extensions
         .get::<ConnectInfo<SocketAddr>>()
         .map(|ConnectInfo(a)| a.ip());
     direct
@@ -126,7 +132,7 @@ fn resolve_ip(req: &Request) -> IpAddr {
             if !trust_forwarded_for() {
                 return None;
             }
-            req.headers()
+            headers
                 .get("x-forwarded-for")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|s| s.split(',').next())

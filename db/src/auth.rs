@@ -29,8 +29,8 @@ pub use session::{
 };
 pub use session_key::{get_session_key, load_or_create_session_key, put_session_key};
 pub use token::{
-    generate_token, hash_token, is_session_cookie_name, parse_session_token, SESSION_COOKIE_NAME,
-    SESSION_COOKIE_NAME_HOST_PREFIXED,
+    generate_token, hash_token, is_session_cookie_name, parse_basic_credentials,
+    parse_session_token, SESSION_COOKIE_NAME, SESSION_COOKIE_NAME_HOST_PREFIXED,
 };
 pub use users::{
     admin_create_user, admin_set_password, change_password, create_user, delete_user,
@@ -122,14 +122,19 @@ pub struct Session {
 pub enum SessionKind {
     Cookie,
     Bearer,
+    /// Per-request HTTP Basic credentials (OPDS clients). Never persisted:
+    /// no `sessions` row is minted for it, so this value never round-trips
+    /// through SQL — it only labels the in-memory principal.
+    Basic,
 }
 
 impl SessionKind {
-    /// Wire/SQL representation: `"cookie"` or `"bearer"`.
+    /// Wire/SQL representation: `"cookie"`, `"bearer"`, or `"basic"`.
     pub fn as_str(self) -> &'static str {
         match self {
             SessionKind::Cookie => "cookie",
             SessionKind::Bearer => "bearer",
+            SessionKind::Basic => "basic",
         }
     }
 }

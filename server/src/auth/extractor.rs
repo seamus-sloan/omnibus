@@ -85,7 +85,7 @@ pub(super) fn query_token(query: Option<&str>) -> Option<String> {
 /// Resolve a live session from a request's cookie / bearer header. When
 /// `allow_query_token` is set and no `Authorization` header is present, a
 /// `?token=` query parameter is accepted as a bearer fallback.
-async fn resolve_auth_user(
+pub(super) async fn resolve_auth_user(
     parts: &mut Parts,
     allow_query_token: bool,
 ) -> Result<AuthUser, Response> {
