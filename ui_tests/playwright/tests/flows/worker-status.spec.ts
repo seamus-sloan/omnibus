@@ -11,6 +11,15 @@ import type { Page, Route } from "@playwright/test";
 import { expect, test } from "../fixtures/test";
 import { gotoReady } from "../utils/nav";
 
+type ScanTallies = {
+  found: number;
+  new: number;
+  changed: number;
+  removed: number;
+  moved: number;
+  unchanged: number;
+};
+
 type WorkerStatus = {
   active: Array<{
     task_id: number;
@@ -20,6 +29,11 @@ type WorkerStatus = {
       | { state: "done"; processed: number }
       | { state: "failed"; message: string };
     resource_key?: string | null;
+    detail?: {
+      phase?: string;
+      current_item?: string;
+      tallies?: ScanTallies;
+    };
     started_at_ms: number;
     last_update_ms: number;
   }>;
@@ -100,6 +114,80 @@ test("worker-status indicator shows processed/total when total is known", async 
 
   await expect(indicator(page)).toContainText("Scanning library");
   await expect(indicator(page)).toContainText("(3 / 10)");
+});
+
+test("worker-status indicator renders the verbose activity panel for a scan", async ({
+  page,
+}) => {
+  await mockWorkerStatus(page, {
+    active: [
+      {
+        task_id: 7,
+        kind: "scan",
+        state: { state: "running", processed: 3, total: 10 },
+        detail: {
+          phase: "Reading file metadata",
+          current_item: "books/Bram Stoker/Dracula.epub",
+          tallies: {
+            found: 340,
+            new: 3,
+            changed: 1,
+            removed: 2,
+            moved: 0,
+            unchanged: 334,
+          },
+        },
+        started_at_ms: now(),
+        last_update_ms: now(),
+      },
+    ],
+    recent_complete: [],
+  });
+  await gotoReady(page, "/settings?section=library");
+
+  await expect(indicator(page)).toContainText("Scanning library");
+  await expect(page.getByTestId("worker-status-phase")).toHaveText(
+    "Reading file metadata",
+  );
+  await expect(page.getByTestId("worker-status-item")).toHaveText(
+    "books/Bram Stoker/Dracula.epub",
+  );
+  await expect(page.getByTestId("worker-status-tallies")).toHaveText(
+    "Found 340 — 3 new · 1 changed · 2 removed",
+  );
+});
+
+test("worker-status done row summarizes the scan's tallies", async ({
+  page,
+}) => {
+  await mockWorkerStatus(page, {
+    active: [],
+    recent_complete: [
+      {
+        task_id: 8,
+        kind: "scan",
+        state: { state: "done", processed: 4 },
+        detail: {
+          tallies: {
+            found: 12,
+            new: 3,
+            changed: 1,
+            removed: 0,
+            moved: 0,
+            unchanged: 8,
+          },
+        },
+        started_at_ms: now() - 2_000,
+        last_update_ms: now(),
+      },
+    ],
+  });
+  await gotoReady(page, "/settings?section=library");
+
+  await expect(indicator(page)).toContainText("Library scan");
+  await expect(page.getByTestId("worker-status-summary")).toHaveText(
+    "3 new · 1 changed",
+  );
 });
 
 test("worker-status indicator transitions from active to done and lets the user dismiss", async ({

@@ -7,7 +7,9 @@
 #![cfg(not(feature = "mobile"))]
 
 use dioxus::prelude::*;
-use omnibus_shared::{GhostFilesWarning, ProgressState, TaskKind, TaskProgress, WorkerStatus};
+use omnibus_shared::{
+    GhostFilesWarning, ProgressState, ScanTallies, TaskKind, TaskProgress, WorkerStatus,
+};
 
 use crate::platform_sleep::async_sleep_ms;
 use crate::{data, use_server_url};
@@ -141,6 +143,7 @@ fn terminal_row(
             DoneRow {
                 key: "{id}",
                 kind: task.kind,
+                tallies: task.detail.as_ref().and_then(|d| d.tallies),
                 on_dismiss: move |_| {
                     let mut set = dismissed();
                     set.insert(id);
@@ -181,13 +184,45 @@ fn ActiveRow(task: TaskProgress) -> Element {
     } else {
         None
     };
+    // The verbose activity panel (#1802): phase, current item, and scan
+    // tallies, each rendered only when the task reported it. Data-driven
+    // conditionals — never cfg gates — so SSR and hydration match (rule 07).
+    let detail = task.detail.as_ref();
+    let phase = detail.and_then(|d| d.phase.clone());
+    let current_item = detail.and_then(|d| d.current_item.clone());
+    let tallies_text = detail
+        .and_then(|d| d.tallies.as_ref())
+        .map(active_tallies_line);
     rsx! {
         div { class: "worker-status-row worker-status-active",
             span { class: "worker-status-spinner", aria_hidden: "true" }
-            span { class: "worker-status-label",
-                "{label}"
-                if let Some(suffix) = count_suffix {
-                    "{suffix}"
+            div { class: "worker-status-body",
+                div { class: "worker-status-label",
+                    "{label}"
+                    if let Some(suffix) = count_suffix {
+                        "{suffix}"
+                    }
+                }
+                if let Some(phase) = phase {
+                    div {
+                        class: "worker-status-phase",
+                        "data-testid": "worker-status-phase",
+                        "{phase}"
+                    }
+                }
+                if let Some(item) = current_item {
+                    div {
+                        class: "worker-status-item",
+                        "data-testid": "worker-status-item",
+                        "{item}"
+                    }
+                }
+                if let Some(tallies) = tallies_text {
+                    div {
+                        class: "worker-status-tallies",
+                        "data-testid": "worker-status-tallies",
+                        "{tallies}"
+                    }
                 }
             }
         }
@@ -195,12 +230,26 @@ fn ActiveRow(task: TaskProgress) -> Element {
 }
 
 #[component]
-fn DoneRow(kind: TaskKind, on_dismiss: EventHandler<MouseEvent>) -> Element {
+fn DoneRow(
+    kind: TaskKind,
+    tallies: Option<ScanTallies>,
+    on_dismiss: EventHandler<MouseEvent>,
+) -> Element {
     let label = kind_label(kind, /* running */ false);
+    let summary = tallies.as_ref().map(tallies_changes);
     rsx! {
         div { class: "worker-status-row worker-status-done",
             span { class: "worker-status-icon", aria_hidden: "true", "✓" }
-            span { class: "worker-status-label", "{label}" }
+            div { class: "worker-status-body",
+                div { class: "worker-status-label", "{label}" }
+                if let Some(summary) = summary {
+                    div {
+                        class: "worker-status-message",
+                        "data-testid": "worker-status-summary",
+                        "{summary}"
+                    }
+                }
+            }
             button {
                 class: "worker-status-dismiss",
                 r#type: "button",
@@ -331,6 +380,34 @@ pub(crate) fn kind_label(kind: TaskKind, running: bool) -> &'static str {
     }
 }
 
+/// Render the change buckets of a [`ScanTallies`] for the UI — zero
+/// buckets omitted, and an all-quiet scan reads "no changes" instead of
+/// an empty string. Factored out so the exact wording is unit testable.
+fn tallies_changes(tallies: &ScanTallies) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for (count, noun) in [
+        (tallies.new, "new"),
+        (tallies.changed, "changed"),
+        (tallies.removed, "removed"),
+        (tallies.moved, "moved"),
+    ] {
+        if count > 0 {
+            parts.push(format!("{count} {noun}"));
+        }
+    }
+    if parts.is_empty() {
+        "no changes".to_string()
+    } else {
+        parts.join(" · ")
+    }
+}
+
+/// The active panel's tally line: the walk's file count plus
+/// [`tallies_changes`].
+fn active_tallies_line(tallies: &ScanTallies) -> String {
+    format!("Found {} — {}", tallies.found, tallies_changes(tallies))
+}
+
 /// Render a [`GhostFilesWarning`] into the [`WarnRow`] message text —
 /// factored out of the component body so the exact wording is unit
 /// testable per AC1 ("names the count and total").
@@ -387,6 +464,34 @@ mod tests {
             assert!(!kind_label(kind, true).is_empty());
             assert!(!kind_label(kind, false).is_empty());
         }
+    }
+
+    #[test]
+    fn tallies_changes_omits_zero_buckets_and_joins_the_rest() {
+        let tallies = ScanTallies {
+            found: 340,
+            new: 3,
+            changed: 0,
+            removed: 2,
+            moved: 0,
+            unchanged: 335,
+        };
+        assert_eq!(tallies_changes(&tallies), "3 new · 2 removed");
+        assert_eq!(
+            active_tallies_line(&tallies),
+            "Found 340 — 3 new · 2 removed"
+        );
+    }
+
+    #[test]
+    fn tallies_changes_reads_no_changes_when_every_bucket_is_zero() {
+        let tallies = ScanTallies {
+            found: 12,
+            unchanged: 12,
+            ..Default::default()
+        };
+        assert_eq!(tallies_changes(&tallies), "no changes");
+        assert_eq!(active_tallies_line(&tallies), "Found 12 — no changes");
     }
 
     #[test]
