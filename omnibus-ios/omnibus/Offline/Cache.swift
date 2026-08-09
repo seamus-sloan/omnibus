@@ -46,6 +46,7 @@ enum CacheKey {
     static func playbackRate(_ uuid: String) -> String { "audio_rate:\(uuid)" }
     static func suggestions(_ uuid: String) -> String { "suggestions:\(uuid)" }
     static func shelvesContaining(_ uuid: String) -> String { "shelves_with:\(uuid)" }
+    static func wishlistEntry(_ uuid: String) -> String { "wishlist:\(uuid)" }
 }
 
 /// Which replica keys a queued write would make the server's answer wrong for.
