@@ -238,50 +238,14 @@ struct CheckInView: View {
                     }
                     checkInButton(book: book, isbn: book.isbn, label: "Check in this copy")
 
-                case let .closeMatch(book, scanned):
-                    resultCard(
-                        title: book.title, authors: book.authors,
-                        cover: .library(uuid: book.uuid),
-                        badge: "Possible match", tint: palette.warnColor
-                    )
-                    HStack(alignment: .top, spacing: Spacing.md) {
-                        if let cover = scanned.coverURL, CheckInFlow.isExternalURL(cover) {
-                            ExternalImage(url: cover) { Color.clear }
-                                .aspectRatio(2.0 / 3.0, contentMode: .fit)
-                                .frame(width: 40)
-                                .clipShape(RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
-                        }
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("You scanned")
-                                .font(.ui(12, weight: .medium))
-                                .foregroundStyle(palette.ink3Color)
-                            Text(scanned.title)
-                                .font(.ui(14, weight: .medium))
-                                .foregroundStyle(palette.ink0Color)
-                            Text(scanned.authorDisplay)
-                                .font(.ui(12.5))
-                                .foregroundStyle(palette.ink2Color)
-                            ForEach(CheckInFlow.detailLines(for: scanned), id: \.self) { line in
-                                Text(line)
-                                    .font(.ui(11.5))
-                                    .foregroundStyle(palette.ink3Color)
-                            }
-                        }
-                    }
-                    .padding(Spacing.md)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
-                            .fill(palette.bg1Color)
-                    )
-                    checkInButton(book: book, isbn: scanned.isbn13, label: "Yes, same book — check in")
-                    Button("No, add as a new physical book") {
-                        Task { await addPhysicalOnly(scanned) }
-                    }
-                    .buttonStyle(QuietButtonStyle())
-                    .frame(maxWidth: .infinity)
-                    .disabled(isWriting)
-                    .opacity(isWriting ? 0.55 : 1)
+                case let .closeMatch(books, scanned):
+                    closeMatchSection(books: books, scanned: scanned)
+                    // Ahead of "add as a new physical book" deliberately: a
+                    // reader who owns the book but sees none of these
+                    // candidates is exactly who would otherwise mint the
+                    // duplicate this escape hatch exists to prevent.
+                    linkExistingButton(for: outcome)
+                    addAsNewButton(scanned)
 
                 case let .notInLibrary(online):
                     resultCard(
@@ -296,6 +260,7 @@ struct CheckInView: View {
                     .buttonStyle(FilledButtonStyle())
                     .disabled(isWriting)
                     .opacity(isWriting ? 0.55 : 1)
+                    linkExistingButton(for: outcome)
                     Button("Add to wishlist") {
                         Task { await addWishlist(online) }
                     }
@@ -311,25 +276,7 @@ struct CheckInView: View {
                         message: "Neither your library nor the online providers recognised that ISBN."
                     )
                     searchSection
-                }
-
-                // The escape hatch for a copy the ladder couldn't place: rather
-                // than mint a duplicate the reader has to notice and merge
-                // later, let them name the book they already own.
-                if CheckInFlow.offersLinkExisting(for: outcome) {
-                    Button("I already have this book") {
-                        error = nil
-                        withAnimation(Motion.settle) {
-                            stage = .linkExisting(
-                                isbn: CheckInFlow.linkISBN(for: outcome, typed: manualISBN),
-                                returnTo: outcome
-                            )
-                        }
-                    }
-                    .buttonStyle(QuietButtonStyle())
-                    .frame(maxWidth: .infinity)
-                    .disabled(isWriting)
-                    .opacity(isWriting ? 0.55 : 1)
+                    linkExistingButton(for: outcome)
                 }
 
                 // Without this the outcome screen's writes failed in silence —
@@ -361,6 +308,107 @@ struct CheckInView: View {
         TextField("Edition note (optional)", text: $note, axis: .vertical)
             .textFieldStyle(OmnibusFieldStyle())
             .lineLimit(1...3)
+    }
+
+    // MARK: - Close match
+
+    /// The fuzzy (title, author) hits, as a picker. Several library rows can
+    /// carry the same effective title — an EPUB and the audiobook nothing
+    /// attached to it — so the reader chooses which one they're holding rather
+    /// than being pushed into creating a third row for the same work.
+    @ViewBuilder
+    private func closeMatchSection(books: [ScanBook], scanned: ExternalBookMeta) -> some View {
+        let many = books.count > 1
+        scannedCard(scanned)
+        if many {
+            Text("Which of these are you holding?")
+                .font(.ui(14, weight: .medium))
+                .foregroundStyle(palette.ink1Color)
+        }
+        ForEach(books, id: \.uuid) { book in
+            VStack(alignment: .leading, spacing: Spacing.md) {
+                resultCard(
+                    title: book.title, authors: book.authors,
+                    cover: .library(uuid: book.uuid),
+                    badge: "Possible match", tint: palette.warnColor
+                )
+                checkInButton(
+                    book: book, isbn: scanned.isbn13,
+                    label: many ? "This one — check in" : "Yes, same book — check in"
+                )
+            }
+        }
+    }
+
+    /// The close-match decline. Kept out of `closeMatchSection` so the
+    /// link-to-an-existing-book escape hatch can sit between the candidates and
+    /// it, rather than below the option that creates the duplicate.
+    private func addAsNewButton(_ scanned: ExternalBookMeta) -> some View {
+        Button("No, add as a new physical book") {
+            Task { await addPhysicalOnly(scanned) }
+        }
+        .buttonStyle(QuietButtonStyle())
+        .frame(maxWidth: .infinity)
+        .disabled(isWriting)
+        .opacity(isWriting ? 0.55 : 1)
+    }
+
+    /// The escape hatch for a copy the ladder couldn't place: rather than mint
+    /// a duplicate the reader has to notice and merge later, let them name the
+    /// book they already own. Placed per outcome, since where it belongs in the
+    /// order of answers differs by screen.
+    @ViewBuilder
+    private func linkExistingButton(for outcome: ScanOutcome) -> some View {
+        if CheckInFlow.offersLinkExisting(for: outcome) {
+            Button("I already have this book") {
+                error = nil
+                withAnimation(Motion.settle) {
+                    stage = .linkExisting(
+                        isbn: CheckInFlow.linkISBN(for: outcome, typed: manualISBN),
+                        returnTo: outcome
+                    )
+                }
+            }
+            .buttonStyle(QuietButtonStyle())
+            .frame(maxWidth: .infinity)
+            .disabled(isWriting)
+            .opacity(isWriting ? 0.55 : 1)
+        }
+    }
+
+    /// What the scan itself resolved to, shown once above the candidates so the
+    /// reader can compare them against it.
+    private func scannedCard(_ scanned: ExternalBookMeta) -> some View {
+        HStack(alignment: .top, spacing: Spacing.md) {
+            if let cover = scanned.coverURL, CheckInFlow.isExternalURL(cover) {
+                ExternalImage(url: cover) { Color.clear }
+                    .aspectRatio(2.0 / 3.0, contentMode: .fit)
+                    .frame(width: 40)
+                    .clipShape(RoundedRectangle(cornerRadius: Radius.sm, style: .continuous))
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text("You scanned")
+                    .font(.ui(12, weight: .medium))
+                    .foregroundStyle(palette.ink3Color)
+                Text(scanned.title)
+                    .font(.ui(14, weight: .medium))
+                    .foregroundStyle(palette.ink0Color)
+                Text(scanned.authorDisplay)
+                    .font(.ui(12.5))
+                    .foregroundStyle(palette.ink2Color)
+                ForEach(CheckInFlow.detailLines(for: scanned), id: \.self) { line in
+                    Text(line)
+                        .font(.ui(11.5))
+                        .foregroundStyle(palette.ink3Color)
+                }
+            }
+        }
+        .padding(Spacing.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: Radius.md, style: .continuous)
+                .fill(palette.bg1Color)
+        )
     }
 
     // MARK: - Title search (unresolved fallback)

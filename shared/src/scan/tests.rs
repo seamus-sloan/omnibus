@@ -257,3 +257,61 @@ fn resolve_meta_request_validate_rejects_an_invalid_meta() {
     let err = req.validate().expect_err("invalid meta must be rejected");
     assert!(err.contains("title"), "got: {err}");
 }
+
+// ── ScanOutcome wire shape ─────────────────────────────────────────
+
+fn scan_book(uuid: &str) -> ScanBook {
+    ScanBook {
+        uuid: uuid.into(),
+        title: "Pride and Prejudice".into(),
+        authors: vec!["Jane Austen".into()],
+        cover_url: None,
+        has_physical: false,
+        isbn: None,
+    }
+}
+
+#[test]
+fn close_match_omits_an_empty_candidate_tail_from_the_wire() {
+    // The single-candidate shape must stay byte-identical to the one that
+    // shipped, or an older iOS build fails to decode a match it can act on.
+    let json = serde_json::to_value(ScanOutcome::CloseMatch {
+        book: scan_book("u1"),
+        others: Vec::new(),
+        scanned: valid_meta(),
+    })
+    .expect("outcome serializes");
+    assert!(json.get("others").is_none(), "got: {json}");
+    assert_eq!(json["kind"], "close_match");
+}
+
+#[test]
+fn close_match_decodes_a_payload_that_carries_no_candidate_tail() {
+    // The mirror of the above: a server that predates the picker sends no
+    // `others` key at all.
+    let json = serde_json::json!({
+        "kind": "close_match",
+        "book": serde_json::to_value(scan_book("u1")).unwrap(),
+        "scanned": serde_json::to_value(valid_meta()).unwrap(),
+    });
+    let outcome: ScanOutcome = serde_json::from_value(json).expect("outcome decodes");
+    let ScanOutcome::CloseMatch { book, others, .. } = outcome else {
+        panic!("expected CloseMatch");
+    };
+    assert_eq!(book.uuid, "u1");
+    assert!(others.is_empty());
+}
+
+#[test]
+fn close_match_round_trips_every_candidate_it_was_given() {
+    let outcome = ScanOutcome::CloseMatch {
+        book: scan_book("epub"),
+        others: vec![scan_book("audiobook")],
+        scanned: valid_meta(),
+    };
+    let json = serde_json::to_string(&outcome).expect("outcome serializes");
+    assert_eq!(
+        serde_json::from_str::<ScanOutcome>(&json).expect("outcome decodes"),
+        outcome
+    );
+}

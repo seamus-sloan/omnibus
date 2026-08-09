@@ -19,6 +19,7 @@ use crate::physical::{
     add_physical_copy, add_wishlist_entry, list_physical_copies, list_wishlist, PhysicalError,
 };
 
+use super::resolve::MAX_CLOSE_MATCH_CANDIDATES;
 use super::*;
 
 const ISBN: &str = "9780134685991";
@@ -406,8 +407,15 @@ async fn resolve_close_match_via_online_then_norm() {
         .await
         .unwrap();
     match outcome {
-        ScanOutcome::CloseMatch { book, scanned } => {
+        ScanOutcome::CloseMatch {
+            book,
+            others,
+            scanned,
+        } => {
             assert_eq!(book.uuid, "u1");
+            // A lone candidate leaves the tail empty, so the wire shape is the
+            // one older clients already decode.
+            assert!(others.is_empty());
             assert_eq!(scanned.source, MetadataProvider::OpenLibrary);
             assert_eq!(scanned.isbn13, ISBN);
         }
@@ -569,10 +577,23 @@ async fn resolve_norm_prefers_exact_over_ambiguous_tolerant_matches() {
     );
 }
 
+/// Every uuid a `CloseMatch` offers, head and tail flattened the way both
+/// clients' pickers read it. Panics on any other outcome.
+fn close_match_uuids(outcome: &ScanOutcome) -> Vec<&str> {
+    match outcome {
+        ScanOutcome::CloseMatch { book, others, .. } => std::iter::once(book)
+            .chain(others)
+            .map(|b| b.uuid.as_str())
+            .collect(),
+        other => panic!("expected CloseMatch, got {other:?}"),
+    }
+}
+
 #[tokio::test]
-async fn resolve_not_in_library_when_two_books_share_the_norm() {
-    // Two library books normalize to the same (title, author): ambiguous, so the
-    // guard declines rather than guessing.
+async fn resolve_close_match_offers_both_books_that_share_the_norm() {
+    // Two library rows normalizing to the same (title, author) are one work in
+    // two rows, not an ambiguous match: the confirm screen offers both rather
+    // than declining into a duplicate physical-only book.
     let pool = pool().await;
     seed_book(&pool, "u1", "Effective Java", "Joshua Bloch", None).await;
     seed_book(&pool, "u2", "Effective Java", "Joshua Bloch", None).await;
@@ -582,44 +603,94 @@ async fn resolve_not_in_library_when_two_books_share_the_norm() {
     let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
         .await
         .unwrap();
-    assert!(matches!(outcome, ScanOutcome::NotInLibrary { .. }));
+    assert_eq!(close_match_uuids(&outcome), vec!["u1", "u2"]);
 }
 
 #[tokio::test]
-async fn resolve_not_in_library_when_a_no_override_and_an_overridden_book_share_the_norm() {
-    // The ambiguity guard must see across both arms of the two-step lookup
-    // (#1343): one candidate comes from the no-override fast path, the other
-    // only matches via its override, so the total count — not either arm in
-    // isolation — must still land on ambiguous.
+async fn resolve_close_match_offers_a_no_override_and_an_overridden_book_together() {
+    // The live repro (#1791): an EPUB matching on `books.title_norm` and an
+    // audiobook matching only through a user-edited override norm. The two
+    // arms of the two-step lookup (#1343) must union into one candidate list
+    // rather than counting each other out.
     let pool = pool().await;
-    seed_book(&pool, "u1", "Effective Java", "Joshua Bloch", None).await;
+    seed_book(&pool, "u1", "The Sword of Kaigen", "M L Wang", None).await;
     seed_book(
         &pool,
         "u2",
-        "Garbled OPF Title",
-        "Wrong Scanned Author",
+        "The Sword of Kaigen: A Theonite War Story",
+        "M L Wang",
         None,
     )
     .await;
     let user = seed_user(&pool, "editor").await;
-    override_title_author(
+    override_title_author(&pool, "u2", user, Some("The Sword of Kaigen"), None).await;
+    let server = MockServer::start().await;
+    mount_ol_hit(&server, "The Sword of Kaigen", "M L Wang").await;
+
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
+        .await
+        .unwrap();
+    assert_eq!(close_match_uuids(&outcome), vec!["u1", "u2"]);
+}
+
+#[tokio::test]
+async fn resolve_close_match_offers_two_different_works_rather_than_picking_one() {
+    // Genuinely ambiguous: two distinct books whose titles both extend the
+    // scanned one, so only the tolerant pass matches and neither is the
+    // obvious answer. Still a confirmation screen — never auto-resolved.
+    let pool = pool().await;
+    seed_book(
         &pool,
-        "u2",
-        user,
-        Some("Effective Java"),
-        Some("Joshua Bloch"),
+        "guide",
+        "The Name of the Wind Companion Guide",
+        "Patrick Rothfuss",
+        None,
     )
     .await;
+    seed_book(
+        &pool,
+        "illustrated",
+        "The Name of the Wind Illustrated Edition",
+        "Patrick Rothfuss",
+        None,
+    )
+    .await;
+    let server = MockServer::start().await;
+    mount_ol_hit(&server, "The Name of the Wind", "Patrick Rothfuss").await;
+
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
+        .await
+        .unwrap();
+    assert_eq!(close_match_uuids(&outcome), vec!["guide", "illustrated"]);
+}
+
+#[tokio::test]
+async fn resolve_close_match_caps_the_candidate_list() {
+    // A pathological match must not ship the whole shelf to a picker.
+    let pool = pool().await;
+    for i in 0..MAX_CLOSE_MATCH_CANDIDATES + 3 {
+        seed_book(
+            &pool,
+            &format!("u{i}"),
+            "Effective Java",
+            "Joshua Bloch",
+            None,
+        )
+        .await;
+    }
     let server = MockServer::start().await;
     mount_ol_hit(&server, "Effective Java", "Joshua Bloch").await;
 
     let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
         .await
         .unwrap();
-    assert!(matches!(outcome, ScanOutcome::NotInLibrary { .. }));
+    assert_eq!(
+        close_match_uuids(&outcome).len(),
+        MAX_CLOSE_MATCH_CANDIDATES
+    );
 }
 
-/// #1343: the no-override arm of `query_norm_candidate` compares
+/// #1343: the no-override arm of `query_norm_candidates` compares
 /// `books.title_norm`/`books.author_norm` directly (no `metadata_overrides`
 /// join), so it must be servable by `idx_books_norm` — a `SEARCH`, not a
 /// `SCAN books` — for the common case where the exact-ISBN rung misses and no
@@ -809,8 +880,13 @@ async fn resolve_meta_close_match_via_norm_without_a_provider_round_trip() {
     .await
     .unwrap();
     match outcome {
-        ScanOutcome::CloseMatch { book, scanned } => {
+        ScanOutcome::CloseMatch {
+            book,
+            others,
+            scanned,
+        } => {
             assert_eq!(book.uuid, "u1");
+            assert!(others.is_empty());
             assert_eq!(scanned.isbn13, ISBN);
         }
         other => panic!("expected CloseMatch, got {other:?}"),

@@ -16,6 +16,15 @@ use crate::physical::{
     FilelessCover, PhysicalError,
 };
 
+/// How many library rows one close match may offer the reader to choose from.
+///
+/// Two rows for a single work — an EPUB and the audiobook the indexer never
+/// attached to it — is the case the picker exists for, and a handful covers
+/// every realistic variant of it. A predicate that sprays past this is a
+/// pathological match, not a choice anyone can make, so the list is capped
+/// rather than shipped whole.
+pub(super) const MAX_CLOSE_MATCH_CANDIDATES: usize = 5;
+
 /// Errors from the scan flow.
 #[derive(Debug, thiserror::Error)]
 pub enum ScanError {
@@ -41,8 +50,8 @@ pub enum ScanError {
 /// 2. Exact `book_identifiers` ISBN hit → `AlreadyOwned` / `OnWishlist` /
 ///    `InLibraryUnowned`.
 /// 3. Otherwise online lookup; a normalized (title, author) hit is a
-///    `CloseMatch` (never auto-resolved), else `NotInLibrary`; a provider miss
-///    is `Unresolved`.
+///    `CloseMatch` carrying every row that matched (never auto-resolved), else
+///    `NotInLibrary`; a provider miss is `Unresolved`.
 ///
 /// `user_id` scopes the wishlist check: a book the caller already wishlists (no
 /// physical copy yet) resolves to `OnWishlist` so the flow opens its detail page
@@ -63,8 +72,9 @@ pub async fn resolve_scan(
 
     match search_provider_by_isbn(config, &isbn13).await? {
         Some(meta) => match find_book_by_norm(pool, &meta).await? {
-            Some(book) => Ok(ScanOutcome::CloseMatch {
+            Some((book, others)) => Ok(ScanOutcome::CloseMatch {
                 book,
+                others,
                 scanned: meta,
             }),
             None => Ok(ScanOutcome::NotInLibrary { online: meta }),
@@ -107,8 +117,9 @@ pub async fn resolve_meta(
     }
 
     match find_book_by_norm(pool, &meta).await? {
-        Some(book) => Ok(ScanOutcome::CloseMatch {
+        Some((book, others)) => Ok(ScanOutcome::CloseMatch {
             book,
+            others,
             scanned: meta,
         }),
         None => Ok(ScanOutcome::NotInLibrary { online: meta }),
@@ -272,9 +283,16 @@ async fn find_book_by_isbn(
     Ok(row.map(|r| row_to_scan_book(r, None)))
 }
 
-/// Fuzzy rung: a single library book whose normalized (title, author) matches
-/// the resolved metadata. `None` unless exactly one candidate matches — an
-/// ambiguous or absent match is not a close match.
+/// Fuzzy rung: the library books whose normalized (title, author) matches the
+/// resolved metadata, as `(first, rest)` so a hit is non-empty by construction.
+/// `None` when nothing matched.
+///
+/// Several rows matching is **not** ambiguity to decline: an EPUB and the
+/// audiobook nothing ever attached to it are one work in two rows, and the
+/// scan flow is supervised — `CloseMatch` is a confirmation screen, never
+/// auto-applied, so a wrong suggestion costs a tap. (The unattended path,
+/// `normalize`/`sync::attach`, keeps its strict guard for the opposite reason:
+/// there, a false positive silently corrupts a book.)
 ///
 /// Matches on the **effective** norm — `COALESCE(mo.title_norm, b.title_norm)`
 /// — so a user's title/author edit (which lives only in `metadata_overrides`, a
@@ -284,7 +302,7 @@ async fn find_book_by_isbn(
 /// rung — is the only bridge between a scanned physical copy and an existing
 /// ebook.
 ///
-/// Two passes, each keeping the exactly-one-candidate guard:
+/// Two passes:
 /// 1. **Exact** effective-norm equality on both title and author.
 /// 2. **Subtitle-tolerant** fallback (only when the exact pass found nothing):
 ///    author still exact, but one effective title may be a word-boundary prefix
@@ -293,7 +311,7 @@ async fn find_book_by_isbn(
 async fn find_book_by_norm(
     pool: &SqlitePool,
     meta: &ExternalBookMeta,
-) -> Result<Option<ScanBook>, sqlx::Error> {
+) -> Result<Option<(ScanBook, Vec<ScanBook>)>, sqlx::Error> {
     let (Some(title_norm), Some(author_norm)) = (
         normalize_title(&meta.title),
         meta.authors.first().and_then(|a| normalize_author(a)),
@@ -301,16 +319,18 @@ async fn find_book_by_norm(
         return Ok(None);
     };
 
-    if let Some(book) = query_norm_candidate(pool, &title_norm, &author_norm, false).await? {
-        return Ok(Some(book));
+    let mut candidates = query_norm_candidates(pool, &title_norm, &author_norm, false).await?;
+    if candidates.is_empty() {
+        candidates = query_norm_candidates(pool, &title_norm, &author_norm, true).await?;
     }
-    query_norm_candidate(pool, &title_norm, &author_norm, true).await
+    let mut candidates = candidates.into_iter();
+    Ok(candidates.next().map(|first| (first, candidates.collect())))
 }
 
-/// Run one pass of the norm rung, returning the sole matching book or `None`
-/// when zero or more than one candidate matches. `tolerant` widens the title
-/// predicate from exact equality to word-boundary prefix in either direction;
-/// author stays an exact effective-norm match in both modes.
+/// Run one pass of the norm rung, returning every matching book up to
+/// [`MAX_CLOSE_MATCH_CANDIDATES`]. `tolerant` widens the title predicate from
+/// exact equality to word-boundary prefix in either direction; author stays an
+/// exact effective-norm match in both modes.
 ///
 /// Two-step lookup (#1343): every book falls into exactly one of two disjoint
 /// arms, so their `UNION ALL` is exact.
@@ -322,12 +342,12 @@ async fn find_book_by_norm(
 /// 2. **Has an override row** — rare. `metadata_overrides` is small, so
 ///    joining it and comparing the `COALESCE`d effective norm costs a small
 ///    table's worth of work rather than a full `books` scan.
-async fn query_norm_candidate(
+async fn query_norm_candidates(
     pool: &SqlitePool,
     title_norm: &str,
     author_norm: &str,
     tolerant: bool,
-) -> Result<Option<ScanBook>, sqlx::Error> {
+) -> Result<Vec<ScanBook>, sqlx::Error> {
     // Norm strings are `[a-z0-9 ]` only (see `normalize`), so `?1` carries no
     // LIKE wildcards and the ` %` suffix asserts a word boundary — a prefix
     // match can't span mid-word. The predicates are static strings, not user
@@ -368,22 +388,20 @@ async fn query_norm_candidate(
            FROM books b
            JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
           WHERE {title_pred_effective} AND COALESCE(mo.author_norm, b.author_norm) = ?2
-          ORDER BY uuid LIMIT 2"
+          ORDER BY uuid LIMIT {MAX_CLOSE_MATCH_CANDIDATES}"
     );
     let rows = sqlx::query(&sql)
         .bind(title_norm)
         .bind(author_norm)
         .fetch_all(pool)
         .await?;
-    // Exactly one candidate is a close match; zero or many is not.
-    Ok(if rows.len() == 1 {
-        rows.into_iter().next().map(|r| {
+    Ok(rows
+        .into_iter()
+        .map(|r| {
             let isbn = r.get::<Option<String>, _>("isbn").filter(|s| !s.is_empty());
             row_to_scan_book(r, isbn)
         })
-    } else {
-        None
-    })
+        .collect())
 }
 
 fn row_to_scan_book(r: sqlx::sqlite::SqliteRow, isbn: Option<String>) -> ScanBook {

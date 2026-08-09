@@ -9,7 +9,7 @@
 use dioxus::prelude::*;
 use omnibus_shared::{PaletteBookHit, ScanBook};
 
-use super::screens::LibraryBookCard;
+use super::screens::LibraryPickOption;
 use super::{friendly_error, FlowState};
 use crate::{data, use_server_url};
 
@@ -79,7 +79,7 @@ pub(super) fn LinkExistingScreen(
                 searching,
                 on_submit: EventHandler::new(run_search),
             }
-            LibrarySearchResults { results: results(), busy, on_pick }
+            LibrarySearchResults { results: results(), on_pick }
             div { class: "settings-actions",
                 button {
                     r#type: "button",
@@ -171,7 +171,6 @@ fn LibrarySearchForm(
 #[component]
 fn LibrarySearchResults(
     results: Option<(Vec<PaletteBookHit>, u32)>,
-    busy: Signal<bool>,
     on_pick: EventHandler<ScanBook>,
 ) -> Element {
     match results {
@@ -183,10 +182,14 @@ fn LibrarySearchResults(
         Some((list, total)) => {
             let note = truncation_note(list.len(), total);
             rsx! {
-                ul { class: "check-in-search-results", "data-testid": "check-in-link-results",
+                ul { class: "check-in-match-list", "data-testid": "check-in-link-results",
                     for hit in list {
-                        li { key: "{hit.uuid}",
-                            LibraryResult { hit, busy, on_pick }
+                        LibraryPickOption {
+                            key: "{hit.uuid}",
+                            book: scan_book_from_hit(&hit),
+                            pick_label: "This one".to_string(),
+                            pick_testid: "check-in-link-pick".to_string(),
+                            on_pick,
                         }
                     }
                 }
@@ -196,26 +199,5 @@ fn LibrarySearchResults(
             }
         }
         None => rsx! {},
-    }
-}
-
-/// One pickable library book — the shared library card inside a button.
-#[component]
-fn LibraryResult(
-    hit: PaletteBookHit,
-    busy: Signal<bool>,
-    on_pick: EventHandler<ScanBook>,
-) -> Element {
-    let book = scan_book_from_hit(&hit);
-    let picked = book.clone();
-    rsx! {
-        button {
-            r#type: "button",
-            class: "check-in-search-result",
-            "data-testid": "check-in-link-result",
-            disabled: busy(),
-            onclick: move |_| on_pick.call(picked.clone()),
-            LibraryBookCard { book }
-        }
     }
 }

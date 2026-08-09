@@ -159,10 +159,13 @@ test("links a scanned copy to a library book without creating a second book", as
   await reachChoose(page);
   await searchLibrary(page, TARGET_QUERY);
 
-  const result = page.getByTestId("check-in-link-result");
-  await expect(result).toHaveCount(1);
-  await expect(result).toContainText(TARGET.title);
-  await result.click();
+  // The picker reuses the close-match screen's row component, so a hit is a
+  // library card plus its own pick button.
+  const results = page.getByTestId("check-in-link-results");
+  await expect(results).toContainText(TARGET.title);
+  const pick = page.getByTestId("check-in-link-pick");
+  await expect(pick).toHaveCount(1);
+  await pick.click();
 
   // The pick lands on the ordinary in-library confirm, so the copy is filed
   // through the one existing write path — note field included.
@@ -217,7 +220,7 @@ test("surfaces an error when the link check-in fails, keeping the confirm", asyn
 }) => {
   await reachChoose(page);
   await searchLibrary(page, TARGET_QUERY);
-  await page.getByTestId("check-in-link-result").first().click();
+  await page.getByTestId("check-in-link-pick").first().click();
   await expect(page.getByTestId("check-in-confirm")).toBeVisible();
 
   await page.route("**/api/rpc/scan/check-in", (route) =>
