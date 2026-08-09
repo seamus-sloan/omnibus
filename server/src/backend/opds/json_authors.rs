@@ -14,12 +14,12 @@ use omnibus_shared::opds::{Feed, FeedMetadata, Link, MEDIA_TYPE};
 use super::authors::{letter_of, letter_path_segment, load_author, load_authors};
 use super::json_entries::book_publication;
 use super::{json_nav_link, json_response};
-use crate::auth::AuthUser;
+use crate::auth::OpdsAuthUser;
 use crate::backend::AppState;
 
 /// `GET /opds/v2/authors` — navigation feed of the letters that have at
 /// least one author, each linking to `/opds/v2/authors/{letter}`.
-pub(super) async fn letter_index(_user: AuthUser, State(state): State<AppState>) -> Response {
+pub(super) async fn letter_index(_user: OpdsAuthUser, State(state): State<AppState>) -> Response {
     let authors = match load_authors(&state).await {
         Ok(a) => a,
         Err(resp) => return resp,
@@ -60,7 +60,7 @@ pub(super) async fn letter_index(_user: AuthUser, State(state): State<AppState>)
 /// publication feed. Same validation as the Atom equivalent: an empty or
 /// non-alphabetic `letter` 400s rather than silently matching `#`.
 pub(super) async fn by_letter(
-    _user: AuthUser,
+    _user: OpdsAuthUser,
     State(state): State<AppState>,
     Path(letter): Path<String>,
 ) -> Response {
@@ -108,7 +108,7 @@ pub(super) async fn by_letter(
 
 /// `GET /opds/v2/author/{id}` — publication feed of one author's books.
 pub(super) async fn acquisition_feed(
-    _user: AuthUser,
+    _user: OpdsAuthUser,
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Response {

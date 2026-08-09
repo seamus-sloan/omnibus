@@ -5,12 +5,12 @@ use axum::response::Response;
 
 use super::atom::{Feed, Link, ACQUISITION_TYPE, NAVIGATION_TYPE, OPENSEARCH_TYPE};
 use super::{nav_entry, now_rfc3339, xml_response};
-use crate::auth::AuthUser;
+use crate::auth::OpdsAuthUser;
 
 /// `GET /opds` — the root navigation feed. Links to search (`rel="search"`)
 /// and entries into recently-added and the author browse (AC1). Static: no
 /// DB read, since it only advertises the other endpoints' existence.
-pub(super) async fn root(_user: AuthUser) -> Response {
+pub(super) async fn root(_user: OpdsAuthUser) -> Response {
     let updated = now_rfc3339();
     let feed = Feed {
         id: "urn:omnibus:opds:root".to_string(),
@@ -60,6 +60,6 @@ const OSD_XML: &str = concat!(
 
 /// `GET /opds/osd` — the OpenSearch description document `rel="search"` on
 /// the root feed points at (AC3).
-pub(super) async fn osd(_user: AuthUser) -> Response {
+pub(super) async fn osd(_user: OpdsAuthUser) -> Response {
     xml_response(OPENSEARCH_TYPE, OSD_XML.to_string())
 }

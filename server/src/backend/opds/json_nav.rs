@@ -8,13 +8,13 @@ use axum::response::Response;
 use omnibus_shared::opds::{Feed, FeedMetadata, Link, MEDIA_TYPE};
 
 use super::{json_nav_link, json_response};
-use crate::auth::AuthUser;
+use crate::auth::OpdsAuthUser;
 
 /// `GET /opds/v2` — the root navigation feed. Links to search
 /// (`rel="search"`, templated) and navigation entries into recently-added,
 /// the author browse, and the series browse (AC1). Static: no DB read,
 /// since it only advertises the other endpoints' existence.
-pub(super) async fn root(_user: AuthUser) -> Response {
+pub(super) async fn root(_user: OpdsAuthUser) -> Response {
     let feed = Feed {
         metadata: FeedMetadata {
             title: "Omnibus".to_string(),

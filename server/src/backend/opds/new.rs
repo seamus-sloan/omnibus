@@ -7,7 +7,7 @@ use omnibus_shared::{SortDir, SortKey, ViewFilters};
 use super::atom::{Feed, Link, ACQUISITION_TYPE, NAVIGATION_TYPE};
 use super::entries::book_entry;
 use super::{internal, now_rfc3339, xml_response};
-use crate::auth::AuthUser;
+use crate::auth::OpdsAuthUser;
 use crate::backend::AppState;
 
 /// Row cap for the recently-added feed — generous for a client's first
@@ -17,7 +17,7 @@ use crate::backend::AppState;
 /// "recently added" feeds can't drift apart in size.
 pub(super) const NEW_LIMIT: i64 = 50;
 
-pub(super) async fn new_arrivals(_user: AuthUser, State(state): State<AppState>) -> Response {
+pub(super) async fn new_arrivals(_user: OpdsAuthUser, State(state): State<AppState>) -> Response {
     let settings = match db::get_settings(&state.pool).await {
         Ok(s) => s,
         Err(e) => return internal("read settings", e),

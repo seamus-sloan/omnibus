@@ -4,6 +4,7 @@
 //! the initial-admin recovery hook ([`boot`]), and the `/api/*` gate
 //! middleware ([`gate`]). Mounted by [`crate::main`].
 
+pub mod basic;
 pub mod boot;
 pub mod csrf;
 pub mod extractor;
@@ -14,6 +15,7 @@ pub mod strategy;
 #[cfg(test)]
 pub mod test_support;
 
+pub use basic::{BasicAuthState, OpdsAuthUser};
 pub use csrf::origin_check;
 pub use extractor::{AdminUser, AuthUser, MediaAuthUser};
 pub use gate::require_auth;

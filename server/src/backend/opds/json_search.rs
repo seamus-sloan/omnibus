@@ -15,11 +15,11 @@ use omnibus_shared::search_query_too_long;
 use super::json_entries::book_publication;
 use super::search::SearchQuery;
 use super::{internal, json_response};
-use crate::auth::AuthUser;
+use crate::auth::OpdsAuthUser;
 use crate::backend::AppState;
 
 pub(super) async fn search(
-    _user: AuthUser,
+    _user: OpdsAuthUser,
     State(state): State<AppState>,
     Query(params): Query<SearchQuery>,
 ) -> Response {

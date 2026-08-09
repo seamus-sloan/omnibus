@@ -4466,6 +4466,7 @@ dependencies = [
  "axum",
  "axum-extra 0.12.6",
  "axum-prometheus",
+ "base64",
  "dioxus",
  "epub",
  "futures-util",
