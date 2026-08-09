@@ -1,7 +1,8 @@
 //! Tests for pool init and migrations: `init_db` error surfacing on a bad
 //! URL or a tampered applied-migration checksum, and per-migration
 //! correctness checks (schema cleanup, timestamp coercion, orphan
-//! row handling) run against a fresh `sqlite::memory:` database.
+//! row handling, derived-key reset) run against a fresh `sqlite::memory:`
+//! database.
 
 use super::*;
 
@@ -473,6 +474,99 @@ async fn migrator_is_idempotent_on_rerun() {
 
     drop(pool2);
     let _ = std::fs::remove_file(&tmp);
+}
+
+/// Migration 0070 plus the boot backfill re-derive the keys the `&`
+/// expansion invalidated. Simulates an upgrade over an existing database:
+/// rows written by the old folder (which dropped `&`) and a
+/// `_sqlx_migrations` table that has not yet seen 0070, then a second
+/// `init_db` over the same file. Also pins the reset's narrowness — a row
+/// with no ampersand keeps the key it already had.
+#[tokio::test]
+async fn migration_0070_recomputes_stale_ampersand_norms_on_upgrade() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("omnibus.db");
+    let url = format!("sqlite://{}?mode=rwc", db_path.display());
+    let pool = init_db(&url).await.expect("initial init_db should succeed");
+
+    sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES ('/lib', 'lib')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    // `a tale of mirth magic` is what the pre-change folder wrote: the
+    // ampersand collapsed to a space like any other punctuation. `u2` carries
+    // an obviously-wrong key so any recompute of it would show up.
+    seed_pre_ampersand_book(
+        &pool,
+        "u1",
+        "A Tale of Mirth & Magic",
+        "a tale of mirth magic",
+    )
+    .await;
+    seed_pre_ampersand_book(&pool, "u2", "Dracula", "sentinel").await;
+    sqlx::query(
+        "INSERT INTO metadata_overrides (book_uuid, overrides, title_norm, author_norm)
+         VALUES ('u1', '{\"title\":\"A Tale of Mirth & Magic\"}', 'a tale of mirth magic', NULL)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Hand the database back its pre-0070 migration state and re-open it.
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 70")
+        .execute(&pool)
+        .await
+        .unwrap();
+    drop(pool);
+    let pool = init_db(&url).await.expect("upgrade init_db should succeed");
+
+    let healed: String = sqlx::query_scalar("SELECT title_norm FROM books WHERE uuid = 'u1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(healed, "a tale of mirth and magic");
+    let untouched: String = sqlx::query_scalar("SELECT title_norm FROM books WHERE uuid = 'u2'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(untouched, "sentinel", "rows with no `&` are not reset");
+    // The override keys need no migration — their boot pass recomputes every
+    // row from the `overrides` JSON and rewrites the ones that disagree.
+    let override_norm: String =
+        sqlx::query_scalar("SELECT title_norm FROM metadata_overrides WHERE book_uuid = 'u1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(override_norm, "a tale of mirth and magic");
+}
+
+/// Seed a book carrying a hand-written `title_norm`, standing in for a row the
+/// pre-`&`-expansion folder wrote. The author link is what the boot backfill
+/// re-derives `author_norm` from, so it has to exist.
+async fn seed_pre_ampersand_book(pool: &SqlitePool, uuid: &str, title: &str, title_norm: &str) {
+    let book_id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, library_id, path, title, title_norm, author_norm)
+         VALUES (?1, (SELECT id FROM scan_roots WHERE path = '/lib'), '', ?2, ?3, 'ada quill')
+         RETURNING id",
+    )
+    .bind(uuid)
+    .bind(title)
+    .bind(title_norm)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT OR IGNORE INTO authors (name) VALUES ('Ada Quill')")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO books_authors_link (book, author, position)
+         VALUES (?1, (SELECT id FROM authors WHERE name = 'Ada Quill'), 0)",
+    )
+    .bind(book_id)
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 struct GhostedRepairFixture {

@@ -1,7 +1,7 @@
 //! Tests for title/author normalization: casefolding, punctuation
-//! collapsing, diacritic folding, last/first-name swapping, idempotence
-//! and panic-safety over varied Unicode input, and the `_norm` column
-//! boot backfill's error propagation.
+//! collapsing, `&` expansion, diacritic folding, last/first-name swapping,
+//! idempotence and panic-safety over varied Unicode input, and the `_norm`
+//! column boot backfill's error propagation.
 
 use super::*;
 use crate::pool::init_db;
@@ -18,6 +18,51 @@ fn normalize_title_casefolds_and_collapses_punctuation() {
         normalize_title("Dune:  Messiah"),
         Some("dune messiah".into())
     );
+}
+
+#[test]
+fn normalize_title_expands_ampersand_to_and() {
+    assert_eq!(
+        normalize_title("A Tale of Mirth & Magic"),
+        Some("a tale of mirth and magic".into())
+    );
+    assert_eq!(
+        normalize_title("A Tale of Mirth & Magic"),
+        normalize_title("A Tale of Mirth and Magic"),
+        "the two spellings must converge on one key"
+    );
+}
+
+#[test]
+fn normalize_expands_ampersand_glued_to_its_neighbours() {
+    // The decision behind #1789: `&` is only ever the word "and", so it
+    // expands in every position rather than only between spaces. "R&B"
+    // therefore keys as `r and b`. That costs nothing — two writers of "R&B"
+    // still agree — and it makes "R and B" agree with them too.
+    assert_eq!(
+        normalize_title("R&B Classics"),
+        Some("r and b classics".into())
+    );
+    assert_eq!(
+        normalize_title("R&B Classics"),
+        normalize_title("R and B Classics")
+    );
+    assert_eq!(
+        normalize_author("Wilkie & Sons"),
+        Some("wilkie and sons".into())
+    );
+    // Leading/trailing ampersands keep the folder's no-edge-space invariant.
+    assert_eq!(normalize_title("& Sons"), Some("and sons".into()));
+    assert_eq!(normalize_title("Sons &"), Some("sons and".into()));
+}
+
+#[test]
+fn normalize_title_leaves_plus_collapsed_to_a_space() {
+    // `+` gets no expansion: it is a literal part of a token far more often
+    // than a conjunction, so expanding it would key "C++ Primer" as
+    // `c and and primer`. It stays a separator, identically on both sides.
+    assert_eq!(normalize_title("C++ Primer"), Some("c primer".into()));
+    assert_eq!(normalize_title("Milk + Honey"), Some("milk honey".into()));
 }
 
 #[test]
@@ -85,6 +130,13 @@ fn tricky_inputs() -> Vec<String> {
         "  ,  ",                             // comma with only blanks around it
         ",leading comma",
         "trailing comma,",
+        "A Tale of Mirth & Magic", // ampersand expansion
+        "R&B",                     // ampersand glued to both neighbours
+        "&",                       // ampersand alone
+        "& leading",
+        "trailing &",
+        "&&&",
+        "C++ Primer", // plus left as a separator
     ]
     .iter()
     .map(ToString::to_string)

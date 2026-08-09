@@ -13,7 +13,7 @@ works in production.
 
 1. **Name it `NNNN_short_description.sql`.** Take the next zero-padded
    number after the highest existing file (latest is
-   `0067_user_profile.sql`). The number is the version
+   `0070_norm_ampersand_reset.sql`). The number is the version
    `_sqlx_migrations` records; renumbering or renaming an applied file
    breaks the applied-version bookkeeping.
 2. **Never edit an applied migration.** Once a file has run anywhere
@@ -28,6 +28,13 @@ works in production.
    `normalize::backfill_norm_columns` (added with migration `0016` to
    fill `title_norm`/`author_norm`) is the model — idempotent, and a
    no-op once caught up.
+5. **Changing how a derived column is computed makes every stored value
+   stale.** A boot backfill guarded on `IS NULL` will not heal them, so
+   the migration nulls the affected rows and hands them back to that
+   backfill — `0070_norm_ampersand_reset.sql` is the model. Reset only
+   the rows whose value actually changes; a blanket reset re-derives
+   rows the change never touched, from whatever source the backfill
+   happens to use.
 
 ## Book-identity tables
 

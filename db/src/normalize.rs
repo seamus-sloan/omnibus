@@ -13,7 +13,8 @@ pub enum NormalizeError {
 }
 
 /// Normalize a title into its match key: diacritics folded, lowercased,
-/// punctuation collapsed to single spaces. `None` when nothing survives.
+/// `&` expanded to `and`, punctuation collapsed to single spaces. `None`
+/// when nothing survives.
 ///
 /// Deliberately exact — no article stripping, no substring or fuzzy
 /// matching — so *Dune* never matches *Dune Messiah*. A missed match
@@ -34,11 +35,33 @@ pub fn normalize_author(s: &str) -> Option<String> {
     normalize(s)
 }
 
+/// Fold `s` to `[a-z0-9 ]`, expanding `&` and collapsing everything else
+/// to single spaces.
+///
+/// `&` is expanded rather than dropped so the two spellings of the same
+/// conjunction converge on one key — without it `"Mirth & Magic"` keys as
+/// `mirth magic` and a provider's `"Mirth and Magic"` as
+/// `mirth and magic`, and neither the Check-In norm rung nor cross-format
+/// auto-attach can bridge a difference that sits mid-string. It expands in
+/// every position, glued neighbours included (`R&B` → `r and b`), because
+/// `&` is only ever the word "and".
+///
+/// `+` deliberately gets no such treatment: it is far more often a literal
+/// part of a token (`C++`, `Disney+`, `A+`) than a conjunction, so
+/// expanding it would key `"C++ Primer"` as `c and and primer`.
 fn normalize(s: &str) -> Option<String> {
     let folded = deunicode::deunicode(s).to_lowercase();
     let mut out = String::with_capacity(folded.len());
     let mut pending_space = false;
     for c in folded.chars() {
+        if c == '&' {
+            if !out.is_empty() {
+                out.push(' ');
+            }
+            out.push_str("and");
+            pending_space = true;
+            continue;
+        }
         if c.is_ascii_alphanumeric() {
             if pending_space && !out.is_empty() {
                 out.push(' ');
@@ -55,8 +78,13 @@ fn normalize(s: &str) -> Option<String> {
 /// One-time backfill of `books.(title_norm, author_norm)` for rows
 /// indexed before migration 0016. Idempotent — only touches rows where
 /// `title_norm IS NULL` — and cheap once caught up, so it runs on every
-/// boot from `init_db`. Normalizes **scanned** metadata only
-/// (`metadata_overrides` is a read layer and deliberately ignored).
+/// boot from `init_db`. Normalizes **scanned** metadata only; the
+/// override-derived keys have their own boot pass
+/// (`metadata_overrides::backfill_override_norm_columns`).
+///
+/// The `IS NULL` guard is also how a *changed* folder re-derives stored
+/// keys: a migration nulls the rows whose key the change invalidated and
+/// this pass recomputes them (migration 0070 did that for `&`).
 pub async fn backfill_norm_columns(pool: &SqlitePool) -> Result<(), NormalizeError> {
     let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(
         "SELECT b.id, b.title, a.name

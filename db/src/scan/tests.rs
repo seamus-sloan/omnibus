@@ -442,6 +442,26 @@ async fn resolve_close_match_tolerates_series_subtitle_on_scanned_title() {
 }
 
 #[tokio::test]
+async fn resolve_close_match_bridges_ampersand_against_spelled_out_and() {
+    // The difference sits mid-string, so neither norm pass could bridge it
+    // while `&` was dropped: the exact pass fails on equality and the
+    // tolerant pass only widens to a word-boundary *prefix*. Check-In fell
+    // through to NotInLibrary and minted a duplicate physical-only book.
+    let pool = pool().await;
+    seed_book(&pool, "u1", "A Tale of Mirth & Magic", "Ada Quill", None).await;
+    let server = MockServer::start().await;
+    mount_ol_hit(&server, "A Tale of Mirth and Magic", "Ada Quill").await;
+
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
+        .await
+        .unwrap();
+    assert!(
+        matches!(outcome, ScanOutcome::CloseMatch { book, .. } if book.uuid == "u1"),
+        "\"&\" and \"and\" spellings must resolve to the same library book"
+    );
+}
+
+#[tokio::test]
 async fn resolve_norm_prefers_exact_over_ambiguous_tolerant_matches() {
     // Two same-author books: one is an exact title match, the other only a
     // tolerant (subtitle) superset. The exact pass isolates the single exact
