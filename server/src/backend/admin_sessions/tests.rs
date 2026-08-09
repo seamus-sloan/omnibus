@@ -5,14 +5,40 @@
 
 use axum::{
     body::{to_bytes, Body},
+    extract::{Path, State},
     http::{header::AUTHORIZATION, Request, StatusCode},
 };
 use omnibus_db::auth::SessionKind;
 use omnibus_shared::{DeviceView, SessionView};
 use tower::ServiceExt;
 
+use super::*;
 use crate::auth::test_support as auth_test_support;
+use crate::auth::{AdminUser, AuthUser};
 use crate::backend::test_support::*;
+
+/// A minimal admin `AuthUser` for driving the handlers directly (bypassing
+/// the `AdminUser` extractor). Needed because each handler's own
+/// DB-failure branch shares its target table (`sessions`/`devices`) with
+/// the extractor's own session lookup, so closing the pool before a
+/// routed request would fail extraction rather than the handler body
+/// under test.
+fn fake_admin(id: i64) -> AuthUser {
+    AuthUser {
+        id,
+        username: "admin".to_string(),
+        is_admin: true,
+        can_upload: true,
+        can_edit: true,
+        can_download: true,
+        kindle_email: None,
+        display_name: None,
+        has_avatar: false,
+        hidden_formats: Vec::new(),
+        session_id: 1,
+        session_kind: SessionKind::Bearer,
+    }
+}
 
 fn req(method: &str, uri: &str, token: &str) -> Request<Body> {
     Request::builder()
@@ -262,4 +288,44 @@ async fn admin_revoke_device_returns_404_for_unknown_id() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+// ── DB-failure paths (500) ─────────────────────────────────────────
+//
+// Each handler is invoked directly (rather than through `oneshot`) with a
+// hand-built `AdminUser` and a pool closed only after the point at which
+// the `AdminUser` extractor would have already run — closing the pool
+// before a routed request would fail extraction itself (same `sessions`
+// table), not the handler body these tests target.
+
+#[tokio::test]
+async fn get_user_sessions_returns_500_when_pool_closed() {
+    let (_app, state, pool) = fixture().await;
+    pool.close().await;
+    let res = get_user_sessions(AdminUser(fake_admin(1)), State(state), Path(1)).await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn get_user_devices_returns_500_when_pool_closed() {
+    let (_app, state, pool) = fixture().await;
+    pool.close().await;
+    let res = get_user_devices(AdminUser(fake_admin(1)), State(state), Path(1)).await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn delete_session_returns_500_when_pool_closed() {
+    let (_app, state, pool) = fixture().await;
+    pool.close().await;
+    let res = delete_session(AdminUser(fake_admin(1)), State(state), Path(1)).await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn delete_device_returns_500_when_pool_closed() {
+    let (_app, state, pool) = fixture().await;
+    pool.close().await;
+    let res = delete_device(AdminUser(fake_admin(1)), State(state), Path(1)).await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
