@@ -163,7 +163,7 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
     let ChipEditorState {
         mut input,
         mut highlight,
-        mut focused,
+        focused,
         mut suppress_open,
         mut root_el,
     } = use_chip_editor_state(props.options.autofocus);
@@ -195,6 +195,16 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
             &on_close,
         );
     };
+    let callbacks = build_input_area_callbacks(
+        input,
+        highlight,
+        focused,
+        suppress_open,
+        root_el,
+        on_close,
+        on_keydown,
+        commit,
+    );
 
     rsx! {
         // `display: contents` (atrium.css) keeps this wrapper invisible to
@@ -227,39 +237,57 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
                     highlight: highlight(),
                     dropdown_header: props.options.dropdown_header.clone(),
                 },
-                callbacks: ChipInputAreaCallbacks {
-                    input: ChipInputCallbacks {
-                        on_focus: EventHandler::new(move |_| {
-                            focused.set(true);
-                            suppress_open.set(false);
-                        }),
-                        on_blur: EventHandler::new(move |evt: Event<FocusData>| {
-                            focused.set(false);
-                            highlight.set(None);
-                            // Mirrors `EditableCell`'s onblur: a genuine click-away
-                            // (or Tab past the whole editor) exits the host's
-                            // wrapping edit mode the same way Escape does — but Tab
-                            // *within* the editor (e.g. onto a chip's Remove
-                            // button) must not, so this only closes when the
-                            // element gaining focus falls outside `root_el`.
-                            // Suggestion-row picks never reach here at all:
-                            // `SuggestionDropdown`'s `onmousedown` calls
-                            // `prevent_default()`, suppressing the browser's
-                            // default focus-shift so the input never blurs during
-                            // a pick.
-                            close_unless_focus_stayed_inside(evt, root_el, on_close);
-                        }),
-                        on_input: EventHandler::new(move |value: String| {
-                            input.set(value);
-                            highlight.set(None);
-                            suppress_open.set(false);
-                        }),
-                        on_keydown: EventHandler::new(on_keydown),
-                    },
-                    on_pick: EventHandler::new(move |name: String| commit(name)),
-                },
+                callbacks,
             }
         }
+    }
+}
+
+/// Assemble the input area's focus/blur/input/keydown/pick callbacks from
+/// the editor's local signals and the already-built `on_keydown`/`commit`
+/// closures. Split out of [`ChipEditor`] purely to keep that component's
+/// body under the file's line-count guidance — no behavioral change.
+#[allow(clippy::too_many_arguments)]
+fn build_input_area_callbacks(
+    mut input: Signal<String>,
+    mut highlight: Signal<Option<usize>>,
+    mut focused: Signal<bool>,
+    mut suppress_open: Signal<bool>,
+    root_el: Signal<Option<ChipEditorRoot>>,
+    on_close: EventHandler<()>,
+    on_keydown: impl FnMut(Event<KeyboardData>) + 'static,
+    mut commit: impl FnMut(String) + 'static,
+) -> ChipInputAreaCallbacks {
+    ChipInputAreaCallbacks {
+        input: ChipInputCallbacks {
+            on_focus: EventHandler::new(move |_| {
+                focused.set(true);
+                suppress_open.set(false);
+            }),
+            on_blur: EventHandler::new(move |evt: Event<FocusData>| {
+                focused.set(false);
+                highlight.set(None);
+                // Mirrors `EditableCell`'s onblur: a genuine click-away
+                // (or Tab past the whole editor) exits the host's
+                // wrapping edit mode the same way Escape does — but Tab
+                // *within* the editor (e.g. onto a chip's Remove
+                // button) must not, so this only closes when the
+                // element gaining focus falls outside `root_el`.
+                // Suggestion-row picks never reach here at all:
+                // `SuggestionDropdown`'s `onmousedown` calls
+                // `prevent_default()`, suppressing the browser's
+                // default focus-shift so the input never blurs during
+                // a pick.
+                close_unless_focus_stayed_inside(evt, root_el, on_close);
+            }),
+            on_input: EventHandler::new(move |value: String| {
+                input.set(value);
+                highlight.set(None);
+                suppress_open.set(false);
+            }),
+            on_keydown: EventHandler::new(on_keydown),
+        },
+        on_pick: EventHandler::new(move |name: String| commit(name)),
     }
 }
 

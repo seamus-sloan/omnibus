@@ -89,8 +89,72 @@ async fn run_inner(
     format: DlFormat,
     file_id: Option<i64>,
 ) -> anyhow::Result<()> {
-    // The raw `_online` variant: starting a download while offline must
-    // fail loudly, never silently plan from a stale cached book.
+    let (book, title) = load_book(server_url, uuid).await?;
+
+    // Snapshot the wire validator of the `book_files` row this download
+    // targets. A later metadata refresh compares against it to learn the
+    // library file was replaced — see `downloads::is_stale`.
+    let source_etag = super::target_file(&book, format, file_id).and_then(|f| f.etag.clone());
+
+    let (plan, total_estimate) = plan_for_format(server_url, uuid, file_id, &book, format).await?;
+    if plan.is_empty() {
+        return Err(DownloadError::NothingToDownload.into());
+    }
+
+    let dir = media::downloads_root()
+        .map(|r| r.join(uuid))
+        .ok_or(DownloadError::StorageUnavailable)?;
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .context("Offline storage unavailable")?;
+
+    let mut files = prepare_files(&dir, uuid, format, source_etag, plan).await;
+
+    let downloaded: i64 = files.iter().filter_map(|f| f.bytes).sum();
+    publish(
+        uuid,
+        format,
+        &title,
+        file_id,
+        &files,
+        downloaded,
+        total_estimate,
+    );
+
+    run_downloads(
+        server_url,
+        uuid,
+        format,
+        &dir,
+        file_id,
+        &title,
+        &mut files,
+        downloaded,
+        total_estimate,
+    )
+    .await?;
+
+    warm_related(server_url, uuid, &book, format).await;
+
+    let bytes: i64 = files.iter().filter_map(|f| f.bytes).sum();
+    super::upsert(DownloadEntry {
+        book_uuid: uuid.to_string(),
+        format,
+        title,
+        file_id,
+        status: DownloadStatus::Complete { bytes },
+        files,
+        updated_at: crate::offline::store::now_secs(),
+        stale: false,
+    });
+    Ok(())
+}
+
+/// Fetch the book's live metadata, cache it, and derive its display title.
+///
+/// Uses the raw `_online` variant: starting a download while offline must
+/// fail loudly, never silently plan from a stale cached book.
+async fn load_book(server_url: &str, uuid: &str) -> anyhow::Result<(EbookMetadata, String)> {
     let book = data::get_ebook_online(server_url, uuid)
         .await
         .map_err(|e| friendly(&e))?
@@ -101,14 +165,20 @@ async fn run_inner(
         .clone()
         .filter(|t| !t.trim().is_empty())
         .unwrap_or_else(|| book.filename.clone());
+    Ok((book, title))
+}
 
-    // Snapshot the wire validator of the `book_files` row this download
-    // targets. A later metadata refresh compares against it to learn the
-    // library file was replaced — see `downloads::is_stale`.
-    let source_etag = super::target_file(&book, format, file_id).and_then(|f| f.etag.clone());
-
-    let (plan, total_estimate) = match format {
-        DlFormat::Epub => (plan_epub(uuid, file_id), epub_size_estimate(&book)),
+/// Build the file plan and size estimate for `format`, fetching (and
+/// caching) the audiobook manifest first when needed.
+async fn plan_for_format(
+    server_url: &str,
+    uuid: &str,
+    file_id: Option<i64>,
+    book: &EbookMetadata,
+    format: DlFormat,
+) -> anyhow::Result<(Vec<PlannedFile>, Option<i64>)> {
+    Ok(match format {
+        DlFormat::Epub => (plan_epub(uuid, file_id), epub_size_estimate(book)),
         DlFormat::Audio => {
             let fid = file_id.or_else(|| super::default_audio_file_id(&book.book_files));
             let manifest = data::get_manifest_online(server_url, uuid, fid)
@@ -124,23 +194,22 @@ async fn run_inner(
             };
             // The offline player reads the manifest from this cache row.
             cache::put_json(&cache::keys::manifest(uuid, fid), &manifest);
-            (plan_audio_parts(&parts), audio_size_estimate(&book))
+            (plan_audio_parts(&parts), audio_size_estimate(book))
         }
-    };
-    if plan.is_empty() {
-        return Err(DownloadError::NothingToDownload.into());
-    }
+    })
+}
 
-    let dir = media::downloads_root()
-        .map(|r| r.join(uuid))
-        .ok_or(DownloadError::StorageUnavailable)?;
-    tokio::fs::create_dir_all(&dir)
-        .await
-        .context("Offline storage unavailable")?;
-
-    // Merge prior completion state (resume of a partly-finished download).
-    // Stat asynchronously — this future shares the loopback runtime with the
-    // media server, so blocking std::fs calls here would stall playback.
+/// Merge prior completion state (resume of a partly-finished download) onto
+/// a fresh plan. Stat asynchronously — this future shares the loopback
+/// runtime with the media server, so blocking std::fs calls here would
+/// stall playback.
+async fn prepare_files(
+    dir: &std::path::Path,
+    uuid: &str,
+    format: DlFormat,
+    source_etag: Option<String>,
+    plan: Vec<PlannedFile>,
+) -> Vec<PlannedFile> {
     let prior = super::get_entry(uuid, format)
         .map(|e| e.files)
         .unwrap_or_default();
@@ -155,7 +224,7 @@ async fn run_inner(
                 // the rest from the new — and stamp every part with the
                 // current validator, so nothing downstream would ever
                 // report it. Start this file over instead.
-                discard_partial(&dir, &f.rel).await;
+                discard_partial(dir, &f.rel).await;
             } else {
                 // Carry the prior attempt's response validator forward so
                 // the resume below can offer it as `If-Range`.
@@ -172,18 +241,24 @@ async fn run_inner(
         }
         files.push(f);
     }
+    files
+}
 
-    let mut downloaded: i64 = files.iter().filter_map(|f| f.bytes).sum();
-    publish(
-        uuid,
-        format,
-        &title,
-        file_id,
-        &files,
-        downloaded,
-        total_estimate,
-    );
-
+/// Download every not-yet-`done` planned file in order, publishing progress
+/// (and per-file completion) along the way. Returns the total bytes
+/// downloaded across all files once the loop completes.
+#[allow(clippy::too_many_arguments)]
+async fn run_downloads(
+    server_url: &str,
+    uuid: &str,
+    format: DlFormat,
+    dir: &std::path::Path,
+    file_id: Option<i64>,
+    title: &str,
+    files: &mut [PlannedFile],
+    mut downloaded: i64,
+    total_estimate: Option<i64>,
+) -> anyhow::Result<i64> {
     for idx in 0..files.len() {
         if files[idx].done {
             continue;
@@ -195,7 +270,7 @@ async fn run_inner(
         let planned = files[idx].clone();
         let result = download_file(
             server_url,
-            &dir,
+            dir,
             &planned,
             &mut |etag: Option<String>| {
                 observed_etag.clone_from(&etag);
@@ -227,28 +302,14 @@ async fn run_inner(
         publish(
             uuid,
             format,
-            &title,
+            title,
             file_id,
-            &files,
+            files,
             downloaded,
             total_estimate,
         );
     }
-
-    warm_related(server_url, uuid, &book, format).await;
-
-    let bytes: i64 = files.iter().filter_map(|f| f.bytes).sum();
-    super::upsert(DownloadEntry {
-        book_uuid: uuid.to_string(),
-        format,
-        title,
-        file_id,
-        status: DownloadStatus::Complete { bytes },
-        files,
-        updated_at: crate::offline::store::now_secs(),
-        stale: false,
-    });
-    Ok(())
+    Ok(downloaded)
 }
 
 /// Whether bytes already on disk can be shown to have come from the file
@@ -325,8 +386,6 @@ async fn download_file(
     on_etag: &mut (dyn FnMut(Option<String>) + Send),
     on_delta: &mut (dyn FnMut(i64) + Send),
 ) -> anyhow::Result<Fetched> {
-    use tokio::io::AsyncWriteExt;
-
     let part_path = dir.join(format!("{}.part", file.rel));
     let final_path = dir.join(&file.rel);
     let resumed = tokio::fs::metadata(&part_path)
@@ -334,9 +393,57 @@ async fn download_file(
         .map(|m| m.len())
         .unwrap_or(0);
 
+    let mut resp = send_ranged_request(server_url, file, resumed).await?;
+
+    // 206 → append after the existing bytes; 200 → the server refused the
+    // Range because the file moved (or none was sent), start over.
+    let appending = resp.status() == reqwest::StatusCode::PARTIAL_CONTENT && resumed > 0;
+    on_etag(
+        resp.headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string),
+    );
+    let expected_total = resp
+        .content_length()
+        .map(|cl| if appending { resumed + cl } else { cl });
+
+    let written =
+        write_body_to_part(&mut resp, &part_path, file, appending, resumed, on_delta).await?;
+    if let Some(expected) = expected_total {
+        if written != expected as i64 {
+            return Err(DownloadError::Interrupted.into());
+        }
+    }
+    tokio::fs::rename(&part_path, &final_path)
+        .await
+        .context("Could not finalize the download")?;
+
+    // A byte count proves the transfer ran to length; it does not prove the
+    // bytes cohere. Check the container closes before this file is offered
+    // to a reader — the one guard that also covers a replacement no
+    // stat-derived validator can see (rule 09's known residual).
+    if verify::verify(&final_path).await == Verdict::Damaged {
+        tracing::warn!(rel = %file.rel, url = %file.url_path, "offline download: assembled file failed container verification");
+        // Remove it rather than leave a corrupt book on disk that a retry
+        // would try to resume from.
+        let _ = tokio::fs::remove_file(&final_path).await;
+        return Err(DownloadError::Damaged.into());
+    }
+
+    Ok(Fetched { bytes: written })
+}
+
+/// Send the (possibly resumed) request for one planned file, mapping
+/// transport failures and non-success statuses to a [`DownloadError`].
+/// Streaming client: no whole-request timeout, so a large book can't be
+/// killed mid-transfer by the default client's 30s cap.
+async fn send_ranged_request(
+    server_url: &str,
+    file: &PlannedFile,
+    resumed: u64,
+) -> anyhow::Result<reqwest::Response> {
     let url = format!("{server_url}{}", file.url_path);
-    // Streaming client: no whole-request timeout, so a large book can't be
-    // killed mid-transfer by the default client's 30s cap.
     let mut req = data::with_bearer(data::streaming_client().get(&url));
     if resumed > 0 {
         req = req.header(reqwest::header::RANGE, format!("bytes={resumed}-"));
@@ -350,7 +457,7 @@ async fn download_file(
             }
         }
     }
-    let mut resp = req.send().await.map_err(|e| {
+    let resp = req.send().await.map_err(|e| {
         tracing::warn!(error = %e, url = %file.url_path, "offline download: request failed");
         DownloadError::ConnectionLost
     })?;
@@ -363,25 +470,28 @@ async fn download_file(
         tracing::warn!(status = status.as_u16(), url = %file.url_path, "offline download: server returned a non-success status");
         return Err(DownloadError::ServerError.into());
     }
+    Ok(resp)
+}
 
-    // 206 → append after the existing bytes; 200 → the server refused the
-    // Range because the file moved (or none was sent), start over.
-    let appending = status == reqwest::StatusCode::PARTIAL_CONTENT && resumed > 0;
-    on_etag(
-        resp.headers()
-            .get(reqwest::header::ETAG)
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_string),
-    );
-    let expected_total = resp
-        .content_length()
-        .map(|cl| if appending { resumed + cl } else { cl });
+/// Stream `resp`'s body into `{rel}.part`, correcting the progress counter
+/// for the `appending`/restart transition first, then return the file's
+/// final size on disk.
+async fn write_body_to_part(
+    resp: &mut reqwest::Response,
+    part_path: &std::path::Path,
+    file: &PlannedFile,
+    appending: bool,
+    resumed: u64,
+    on_delta: &mut (dyn FnMut(i64) + Send),
+) -> anyhow::Result<i64> {
+    use tokio::io::AsyncWriteExt;
+
     let mut out = tokio::fs::OpenOptions::new()
         .create(true)
         .append(appending)
         .write(true)
         .truncate(!appending)
-        .open(&part_path)
+        .open(part_path)
         .await
         .context("Could not save the download to this device")?;
     if appending {
@@ -413,32 +523,10 @@ async fn download_file(
         .context("Could not save the download to this device")?;
     drop(out);
 
-    let written = tokio::fs::metadata(&part_path)
+    tokio::fs::metadata(part_path)
         .await
         .map(|m| m.len() as i64)
-        .context("Could not verify the downloaded file")?;
-    if let Some(expected) = expected_total {
-        if written != expected as i64 {
-            return Err(DownloadError::Interrupted.into());
-        }
-    }
-    tokio::fs::rename(&part_path, &final_path)
-        .await
-        .context("Could not finalize the download")?;
-
-    // A byte count proves the transfer ran to length; it does not prove the
-    // bytes cohere. Check the container closes before this file is offered
-    // to a reader — the one guard that also covers a replacement no
-    // stat-derived validator can see (rule 09's known residual).
-    if verify::verify(&final_path).await == Verdict::Damaged {
-        tracing::warn!(rel = %file.rel, url = %file.url_path, "offline download: assembled file failed container verification");
-        // Remove it rather than leave a corrupt book on disk that a retry
-        // would try to resume from.
-        let _ = tokio::fs::remove_file(&final_path).await;
-        return Err(DownloadError::Damaged.into());
-    }
-
-    Ok(Fetched { bytes: written })
+        .context("Could not verify the downloaded file")
 }
 
 /// Warm every cache a downloaded book needs offline: artwork (lock screen,

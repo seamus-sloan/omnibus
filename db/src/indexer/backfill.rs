@@ -373,53 +373,7 @@ pub(crate) async fn backfill_thumbs(
     for (book_id, last_modified_epoch) in candidates {
         processed = processed.saturating_add(1);
         on_progress(processed, total);
-
-        let mut all_fresh = true;
-        for size in thumbs::ThumbSize::all() {
-            if thumbs::is_stale_async(book_id, size, last_modified_epoch).await {
-                all_fresh = false;
-                break;
-            }
-        }
-        if all_fresh {
-            continue;
-        }
-
-        let cover = match covers::get_cover(pool, book_id).await {
-            Ok(Some((_mime, bytes))) => bytes,
-            Ok(None) => continue,
-            Err(e) => {
-                tracing::warn!(
-                    book_id,
-                    error = %e,
-                    "thumbnail backfill: cover fetch failed; skipping"
-                );
-                continue;
-            }
-        };
-
-        match tokio::task::spawn_blocking(move || {
-            thumbs::ensure_thumbnails_sync(book_id, last_modified_epoch, cover)
-        })
-        .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                tracing::warn!(
-                    book_id,
-                    error = %e,
-                    "thumbnail backfill: generation failed; skipping"
-                );
-            }
-            Err(join_err) => {
-                tracing::warn!(
-                    book_id,
-                    %join_err,
-                    is_panic = join_err.is_panic(),
-                    "thumbnail backfill: generation task failed; skipping"
-                );
-            }
-        }
+        regenerate_thumbs_if_stale(pool, book_id, last_modified_epoch).await;
     }
 
     let cap = thumbs::cap_bytes();
@@ -434,6 +388,58 @@ pub(crate) async fn backfill_thumbs(
     }
 
     Ok(())
+}
+
+/// Regenerate one book's three thumbnail sizes if any is stale per
+/// [`thumbs::is_stale_async`], skipping (and logging) a missing cover,
+/// fetch failure, or generation failure rather than aborting the batch.
+async fn regenerate_thumbs_if_stale(pool: &SqlitePool, book_id: i64, last_modified_epoch: i64) {
+    let mut all_fresh = true;
+    for size in thumbs::ThumbSize::all() {
+        if thumbs::is_stale_async(book_id, size, last_modified_epoch).await {
+            all_fresh = false;
+            break;
+        }
+    }
+    if all_fresh {
+        return;
+    }
+
+    let cover = match covers::get_cover(pool, book_id).await {
+        Ok(Some((_mime, bytes))) => bytes,
+        Ok(None) => return,
+        Err(e) => {
+            tracing::warn!(
+                book_id,
+                error = %e,
+                "thumbnail backfill: cover fetch failed; skipping"
+            );
+            return;
+        }
+    };
+
+    match tokio::task::spawn_blocking(move || {
+        thumbs::ensure_thumbnails_sync(book_id, last_modified_epoch, cover)
+    })
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            tracing::warn!(
+                book_id,
+                error = %e,
+                "thumbnail backfill: generation failed; skipping"
+            );
+        }
+        Err(join_err) => {
+            tracing::warn!(
+                book_id,
+                %join_err,
+                is_panic = join_err.is_panic(),
+                "thumbnail backfill: generation task failed; skipping"
+            );
+        }
+    }
 }
 
 /// `(books.id, last_modified_epoch)` for every book under `library_path`
