@@ -200,9 +200,14 @@ fn scheme_sentinel_name() -> String {
 /// Best-effort throughout, like the covers-dir purge in `pool`: a missing
 /// directory, an unreadable entry, or a failed unlink is logged and skipped
 /// rather than surfaced. The thumbnail directory is a cache, so the worst
-/// outcome of a failure is a stale file, never a broken boot. A failure to
-/// write the sentinel leaves it absent, which just retries the sweep next
-/// boot.
+/// outcome of a failure is a stale file, never a broken boot.
+///
+/// **The sentinel lands only on a clean sweep.** Writing it after a partial
+/// one would mark the directory current while a previous-scheme file is still
+/// sitting in it, and `is_stale` would go on serving that file until its
+/// book's `last_modified_epoch` happened to move — the exact
+/// serve-it-forever case this function exists to prevent. Leaving the
+/// sentinel absent costs a re-sweep of an already-empty directory next boot.
 ///
 /// Must be called inside `tokio::task::spawn_blocking`.
 pub fn purge_stale_scheme_thumbs_once() -> usize {
@@ -217,6 +222,7 @@ pub fn purge_stale_scheme_thumbs_once() -> usize {
     // boot finds an unmarked directory and throws away the cache the first
     // one just built.
     let mut removed = 0usize;
+    let mut left_behind = 0usize;
     if dir.exists() {
         match std::fs::read_dir(&dir) {
             Ok(entries) => {
@@ -230,11 +236,14 @@ pub fn purge_stale_scheme_thumbs_once() -> usize {
                     }
                     match std::fs::remove_file(&path) {
                         Ok(()) => removed += 1,
-                        Err(err) => tracing::warn!(
-                            path = %path.display(),
-                            error = %err,
-                            "thumbs: failed to remove previous-scheme thumbnail",
-                        ),
+                        Err(err) => {
+                            left_behind += 1;
+                            tracing::warn!(
+                                path = %path.display(),
+                                error = %err,
+                                "thumbs: failed to remove previous-scheme thumbnail",
+                            );
+                        }
                     }
                 }
             }
@@ -256,7 +265,14 @@ pub fn purge_stale_scheme_thumbs_once() -> usize {
         return 0;
     }
 
-    if let Err(err) = std::fs::write(&sentinel, b"\n") {
+    if left_behind > 0 {
+        tracing::warn!(
+            thumbs_dir = %dir.display(),
+            removed,
+            left_behind,
+            "thumbs: previous-scheme purge incomplete; leaving the scheme unmarked so it retries on next boot",
+        );
+    } else if let Err(err) = std::fs::write(&sentinel, b"\n") {
         tracing::warn!(
             sentinel = %sentinel.display(),
             error = %err,

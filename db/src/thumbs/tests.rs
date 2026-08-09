@@ -302,6 +302,39 @@ fn purge_stale_scheme_thumbs_once_removes_thumbs_from_a_previous_encoder() {
     assert!(tmp.path().join(scheme_sentinel_name()).exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn purge_stale_scheme_thumbs_once_leaves_the_scheme_unmarked_when_a_removal_fails() {
+    // Marking the directory current while a previous-scheme file is still in
+    // it is the serve-it-forever case the sweep exists to prevent: `is_stale`
+    // would go on serving that file until its book's `last_modified_epoch`
+    // happened to move.
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("thumbs");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join("1_sm.webp"), vec![0u8; 100]).unwrap();
+    // A read-only directory fails the unlink while still allowing the walk.
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(dir.as_os_str()));
+    let removed = purge_stale_scheme_thumbs_once();
+    let stuck = dir.join("1_sm.webp").exists();
+    let marked = dir.join(scheme_sentinel_name()).exists();
+
+    // Restore before asserting so a failure still leaves a removable tempdir.
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    // Running as root ignores the mode bits, so the unlink succeeds and there
+    // is no incomplete sweep to assert on.
+    if !stuck {
+        return;
+    }
+    assert_eq!(removed, 0);
+    assert!(!marked, "an incomplete sweep must not mark the scheme");
+}
+
 #[test]
 fn purge_stale_scheme_thumbs_once_leaves_thumbs_alone_when_the_sentinel_is_present() {
     // The sweep runs on every boot, so a second one must not keep wiping the
