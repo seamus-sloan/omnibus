@@ -105,6 +105,62 @@ pub struct WorkerStatus {
     pub recent_complete: Vec<TaskProgress>,
 }
 
+/// Lifecycle status of a persisted [`BackgroundTaskRecord`] (issue #941).
+/// `Running` covers a task that started but has no terminal write yet —
+/// including one an ungraceful shutdown left stuck, which is itself a
+/// useful signal on the admin dashboard rather than something to hide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundTaskStatus {
+    Running,
+    Success,
+    Failed,
+}
+
+impl BackgroundTaskStatus {
+    /// The DB `status` column's TEXT representation — also the CHECK
+    /// constraint's allowed set (migration `0070`).
+    pub fn as_db_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Success => "success",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+impl std::str::FromStr for BackgroundTaskStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "running" => Ok(Self::Running),
+            "success" => Ok(Self::Success),
+            "failed" => Ok(Self::Failed),
+            other => Err(format!("unknown background task status: {other}")),
+        }
+    }
+}
+
+/// One durable row of `background_tasks` history (issue #941): a worker task
+/// run's kind, lifecycle status, and timing. Read-only from the wire's
+/// perspective — the admin dashboard only ever fetches these, never writes
+/// them (the worker is the sole writer, via `omnibus_db::background_tasks`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BackgroundTaskRecord {
+    pub id: i64,
+    pub task_kind: String,
+    pub status: BackgroundTaskStatus,
+    /// Unix-seconds.
+    pub started_at: i64,
+    /// Unix-seconds; `None` while `status` is `Running`.
+    pub finished_at: Option<i64>,
+    /// Set only when `status` is `Failed`. Client-facing — the worker's
+    /// `handlers::sanitized_err` convention already keeps raw internals out
+    /// of every `TaskOutcome::Err`, and this carries that same sanitized text.
+    pub error: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

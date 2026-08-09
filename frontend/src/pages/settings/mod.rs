@@ -8,6 +8,11 @@
 //! has no sidebar — it renders the library form plus the admin key/SMTP cards
 //! flat, unchanged.
 
+// Web/server only: the Background Tasks dashboard calls the web-only
+// `data::get_background_tasks` (no mobile RPC route yet), same shape as
+// `health`'s "Last errors" panel.
+#[cfg(not(feature = "mobile"))]
+mod background_tasks;
 // Web/server only: the Server Health "Last errors" panel calls the web-only
 // `data::get_last_errors` (no mobile RPC route yet), same shape as `logs`.
 #[cfg(not(feature = "mobile"))]
@@ -27,6 +32,8 @@ mod users;
 
 use dioxus::prelude::*;
 
+#[cfg(not(feature = "mobile"))]
+use background_tasks::BackgroundTasksSection;
 #[cfg(not(feature = "mobile"))]
 use health::LastErrorsSection;
 use library::LibraryLocationSection;
@@ -92,6 +99,7 @@ enum SettingsSection {
     Users,
     Logs,
     Health,
+    BackgroundTasks,
 }
 
 #[cfg(not(feature = "mobile"))]
@@ -108,6 +116,7 @@ impl SettingsSection {
             SettingsSection::Users => "users",
             SettingsSection::Logs => "logs",
             SettingsSection::Health => "health",
+            SettingsSection::BackgroundTasks => "background-tasks",
         }
     }
 
@@ -133,6 +142,7 @@ fn parse_section(raw: Option<&str>, is_admin: bool) -> SettingsSection {
         Some("users") => SettingsSection::Users,
         Some("logs") => SettingsSection::Logs,
         Some("health") => SettingsSection::Health,
+        Some("background-tasks") => SettingsSection::BackgroundTasks,
         _ => SettingsSection::Account,
     };
     if requested.requires_admin() && !is_admin {
@@ -160,6 +170,7 @@ fn section_content(active: SettingsSection) -> Element {
         SettingsSection::Users => rsx! { UsersSection {} },
         SettingsSection::Logs => rsx! { super::LogsPage {} },
         SettingsSection::Health => rsx! { LastErrorsSection {} },
+        SettingsSection::BackgroundTasks => rsx! { BackgroundTasksSection {} },
     }
 }
 
@@ -196,6 +207,7 @@ fn SettingsSidebar(active: SettingsSection, is_admin: bool) -> Element {
                     SettingsNavItem { section: SettingsSection::Users, active, label: "Users", icon: "☰" }
                     SettingsNavItem { section: SettingsSection::Logs, active, label: "Logs", icon: "▣" }
                     SettingsNavItem { section: SettingsSection::Health, active, label: "Server Health", icon: "♥" }
+                    SettingsNavItem { section: SettingsSection::BackgroundTasks, active, label: "Background Tasks", icon: "⏱" }
                 }
             } else {
                 p { class: "settings-sidebar-note",
@@ -280,6 +292,10 @@ mod tests {
             parse_section(Some("health"), true),
             SettingsSection::Health
         ));
+        assert!(matches!(
+            parse_section(Some("background-tasks"), true),
+            SettingsSection::BackgroundTasks
+        ));
     }
 
     #[test]
@@ -314,6 +330,10 @@ mod tests {
         ));
         assert!(matches!(
             parse_section(Some("health"), false),
+            SettingsSection::Account
+        ));
+        assert!(matches!(
+            parse_section(Some("background-tasks"), false),
             SettingsSection::Account
         ));
     }

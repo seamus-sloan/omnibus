@@ -12,6 +12,7 @@ mod tests;
 
 mod account;
 mod authors;
+mod background_tasks;
 mod bookmarks;
 mod books;
 mod errors;
@@ -36,6 +37,7 @@ mod summary;
 
 pub use account::*;
 pub use authors::*;
+pub use background_tasks::*;
 pub use bookmarks::*;
 pub use books::*;
 pub use errors::*;

@@ -1314,3 +1314,105 @@ async fn task_backfill_thumbs_skips_a_book_whose_thumbnails_are_already_fresh() 
         );
     }
 }
+
+// ── #941: `background_tasks` persistence ──
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn post_persists_a_background_tasks_row_on_success() {
+    let pool = pool().await;
+    let w = make_worker_default(pool.clone());
+    let id = w.post(Task::Test {
+        tag: "persist-ok",
+        latency_ms: 0,
+        resource: None,
+        route_through_scan_sem: false,
+        on_run: None,
+        on_done: None,
+    });
+    match w.await_completion(id).await {
+        TaskOutcome::Ok(_) => {}
+        other => panic!("expected Ok, got {other:?}"),
+    }
+
+    let rows = crate::background_tasks::recent_tasks(&pool, 10)
+        .await
+        .unwrap();
+    let row = rows
+        .iter()
+        .find(|r| r.task_kind == "test")
+        .expect("expected a persisted row for the test task");
+    assert_eq!(
+        row.status,
+        omnibus_shared::BackgroundTaskStatus::Success,
+        "successful task must persist as Success"
+    );
+    assert!(row.finished_at.is_some(), "finished_at must be recorded");
+    assert!(
+        row.error.is_none(),
+        "a successful run must not carry an error"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn post_persists_a_failed_background_tasks_row_with_the_error_message() {
+    let pool = pool().await;
+    let w = make_worker_default(pool.clone());
+    // No book with this id exists in the fresh in-memory DB, so the handler
+    // takes its real (non-panic) failure path.
+    let id = w.post(Task::GenerateThumbs {
+        book_id: 999_999,
+        last_modified_epoch: 0,
+    });
+    let outcome = w.await_completion(id).await;
+    let TaskOutcome::Err(expected_msg) = outcome else {
+        panic!("expected Err, got {outcome:?}");
+    };
+
+    let rows = crate::background_tasks::recent_tasks(&pool, 10)
+        .await
+        .unwrap();
+    let row = rows
+        .iter()
+        .find(|r| r.task_kind == "generate_thumbs")
+        .expect("expected a persisted row for the thumbnail task");
+    assert_eq!(row.status, omnibus_shared::BackgroundTaskStatus::Failed);
+    assert!(row.finished_at.is_some());
+    assert_eq!(row.error.as_deref(), Some(expected_msg.as_str()));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn post_persists_a_running_row_immediately_after_posting() {
+    // AC1's "insert on start" half, observed before the task has had a
+    // chance to reach a terminal state: latency keeps the task in flight
+    // long enough to read the row while it's still `running`.
+    let pool = pool().await;
+    let w = make_worker_default(pool.clone());
+    let id = w.post(Task::Test {
+        tag: "persist-running",
+        latency_ms: 200,
+        resource: None,
+        route_through_scan_sem: false,
+        on_run: None,
+        on_done: None,
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let rows = crate::background_tasks::recent_tasks(&pool, 10)
+            .await
+            .unwrap();
+        if rows.iter().any(|r| r.task_kind == "test") {
+            let row = rows.iter().find(|r| r.task_kind == "test").unwrap();
+            assert_eq!(row.status, omnibus_shared::BackgroundTaskStatus::Running);
+            assert!(row.finished_at.is_none());
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!("background_tasks row never appeared for the in-flight task");
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    // Drain the task so it doesn't outlive the test.
+    let _ = w.await_completion(id).await;
+}

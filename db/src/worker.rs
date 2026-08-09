@@ -14,7 +14,8 @@
 //! * [`types`] — `Task` / `TaskOutcome` / `WorkerConfig` / `Worker` struct
 //!   and shared helpers (`lock_unpoison`, `wall_clock_ms`).
 //! * [`queue`] — `Worker::post` / `await_completion` + RAII map-cleanup
-//!   guards.
+//!   guards. `post` also writes the durable `background_tasks` history row
+//!   (issue #941) via `crate::background_tasks`.
 //! * [`exec`] — `Worker::run` dispatch loop: resource lock + scan
 //!   semaphore + terminal-state projection.
 //! * [`handlers`] — `Worker::execute` per-task-kind handlers.

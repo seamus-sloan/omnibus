@@ -13,6 +13,10 @@ mod account;
 mod admin_sessions;
 mod auth;
 mod authors;
+// Admin background-task history read (#941) — web (server-fn) + SSR stubs;
+// not a mobile surface, same shape as `errors`.
+#[cfg(not(feature = "mobile"))]
+mod background_tasks;
 mod bookmarks;
 mod books;
 // Admin "last errors" ring buffer read (#954) — web (server-fn) + SSR stubs;
@@ -64,6 +68,8 @@ pub use admin_sessions::*;
 #[cfg(any(feature = "web", feature = "mobile", feature = "server"))]
 pub use auth::*;
 pub use authors::*;
+#[cfg(not(feature = "mobile"))]
+pub use background_tasks::*;
 pub use bookmarks::*;
 pub use books::*;
 #[cfg(not(feature = "mobile"))]
