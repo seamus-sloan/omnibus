@@ -1,15 +1,8 @@
-//! Admin server-health page (`/admin/health`, #952) — the first admin
-//! route in the app. Five read-only sections over one
-//! [`AdminHealthReport`] fetch: index status, worker queue, FTS index
-//! health, storage utilization, and last errors.
-//!
-//! Web/SSR-only, mirroring the Settings "Server Health" section's split:
-//! the real authorization boundary is the `AdminUser` extractor on
-//! `rpc_get_admin_health`; the in-page `use_is_admin` gate just keeps the
-//! chrome off a non-admin screen (AC2/AC4). No polling — the report is
-//! fetched once on mount in a post-mount `use_effect`, never in the render
-//! body, so SSR and the first WASM paint stay identical (rule 07). Live
-//! updates are issue #955's scope, not this one's.
+//! Admin server-health page — the first admin route in the app. Five
+//! read-only sections over one [`AdminHealthReport`] fetch, refreshed once
+//! on mount in a post-mount `use_effect` (never the render body, for
+//! hydration parity). Web/SSR-only; the real authorization boundary is the
+//! `AdminUser` extractor on `rpc_get_admin_health`.
 #![cfg(not(feature = "mobile"))]
 
 use dioxus::prelude::*;

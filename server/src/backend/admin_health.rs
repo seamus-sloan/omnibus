@@ -1,11 +1,8 @@
-//! `GET /api/admin/health` handler (#952) — the first admin route in the
-//! app. Aggregates index status, worker queue depth, FTS index health,
-//! storage utilization, and the in-memory error ring into one
-//! [`omnibus_shared::admin_health::AdminHealthReport`]. `AdminUser`-gated
-//! (403 non-admin, 401 unauthenticated); web instead reaches the same
-//! report via `rpc_get_admin_health` (`omnibus_frontend::rpc`), both of
-//! which call `db::admin_health::build_report` — this handler exists so the
-//! same data is reachable over the mobile-facing REST surface.
+//! `GET /api/admin/health` handler — the first admin route in the app.
+//! Aggregates index status, worker queue, FTS health, storage, and the
+//! in-memory error ring into one `AdminHealthReport`. `AdminUser`-gated;
+//! the mobile-facing REST twin of `rpc_get_admin_health`, both calling
+//! `db::admin_health::build_report` so the two surfaces can't drift.
 
 use axum::{
     extract::State,

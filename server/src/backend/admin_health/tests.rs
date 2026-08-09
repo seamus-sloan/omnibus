@@ -1,5 +1,5 @@
-//! Integration tests for `GET /api/admin/health` (#952): `AdminUser` gating
-//! (401 anonymous / 403 non-admin) and a 200 admin response carrying every
+//! Integration tests for `GET /api/admin/health`: `AdminUser` gating (401
+//! anonymous / 403 non-admin) and a 200 admin response carrying every
 //! section of the report.
 
 use axum::{body::to_bytes, http::StatusCode};

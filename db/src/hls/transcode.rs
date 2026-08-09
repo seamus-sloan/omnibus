@@ -427,7 +427,7 @@ pub fn evict_if_over_cap(cap_bytes: u64) -> anyhow::Result<()> {
 /// Total bytes currently held by the HLS transcode cache — every regular
 /// file under `hls_dir()`, recursively. Read-only counterpart to
 /// [`evict_if_over_cap`]'s usage computation, for the admin health page's
-/// storage section (#952). Missing directory reads as empty rather than an
+/// storage section. Missing directory reads as empty rather than an
 /// error: no transcode has run yet.
 pub fn used_bytes() -> u64 {
     let dir = hls_dir();

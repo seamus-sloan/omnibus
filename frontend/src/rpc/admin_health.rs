@@ -1,13 +1,8 @@
-//! Admin server-health report server function (`/api/rpc/admin-health`,
-//! #952).
-//!
-//! Web-only surface: composes index status, worker queue depth, FTS index
-//! health, storage utilization, and the in-memory error ring into one
-//! [`AdminHealthReport`] via `db::admin_health::build_report`. Admin-gated
-//! by the `AdminUser` extractor, so a non-admin session is rejected before
-//! any of it is read. `POST` (not `GET`) because the body needs
-//! `WorkerExt` — see `rpc_worker_status`'s doc comment in `settings.rs` for
-//! why a `WorkerExt`-carrying `#[get]` route silently 404s.
+//! Admin server-health report server function. Web-only, admin-gated by
+//! the `AdminUser` extractor; composes the same `AdminHealthReport` the
+//! REST twin serves. `POST` (not `GET`) because the body needs
+//! `WorkerExt` — see `rpc_worker_status`'s doc comment in `settings.rs`
+//! for why a `WorkerExt`-carrying `#[get]` route silently 404s.
 use dioxus::fullstack::post;
 use dioxus::prelude::*;
 #[cfg(feature = "server")]

@@ -1,8 +1,7 @@
-//! Wire types for the admin server-health page (`/admin/health`, #952):
-//! index status, worker queue depth, FTS index health, and storage
-//! utilization. The fifth section (last errors) reuses
-//! [`crate::error_ring::CapturedError`] directly rather than a redundant
-//! wrapper.
+//! Wire types for the admin server-health page: index status, worker queue
+//! depth, FTS index health, and storage utilization. The fifth section
+//! (last errors) reuses [`crate::error_ring::CapturedError`] directly
+//! rather than a redundant wrapper.
 
 use serde::{Deserialize, Serialize};
 

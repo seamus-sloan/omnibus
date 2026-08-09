@@ -1,9 +1,8 @@
-//! Admin server-health report data access (#952).
-//!
-//! Web/SSR-only: `/admin/health` is not a mobile surface, so there is no
-//! `reqwest`/REST counterpart — the whole module is gated off the mobile
-//! build and calls the `rpc_get_admin_health` server function directly,
-//! same shape as `errors`/`logs`.
+//! Admin server-health report data access. Web/SSR-only: `/admin/health`
+//! is not a mobile surface, so there is no `reqwest`/REST counterpart —
+//! the whole module is gated off the mobile build and calls the
+//! `rpc_get_admin_health` server function directly, same shape as
+//! `errors`/`logs`.
 #![cfg(not(feature = "mobile"))]
 
 use omnibus_shared::admin_health::AdminHealthReport;

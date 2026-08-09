@@ -276,11 +276,11 @@ pub fn touch_thumb(book_id: i64, size: ThumbSize) {
     }
 }
 
-/// Total bytes currently held by the thumbnail cache — every `.webp` file
-/// directly under `thumbs_dir()`. Read-only counterpart to
+/// Total bytes currently held by the thumbnail cache — every regular
+/// `.webp` file directly under `thumbs_dir()`. Read-only counterpart to
 /// [`evict_if_over_cap`]'s usage computation, for the admin health page's
-/// storage section (#952). Missing directory or an unreadable entry reads
-/// as empty/skipped rather than an error — this is a display figure, not an
+/// storage section. Missing directory or an unreadable entry reads as
+/// empty/skipped rather than an error — this is a display figure, not an
 /// eviction decision.
 pub fn used_bytes() -> u64 {
     let dir = thumbs_dir();
@@ -291,6 +291,7 @@ pub fn used_bytes() -> u64 {
         .flatten()
         .filter(|entry| entry.file_name().to_string_lossy().ends_with(".webp"))
         .filter_map(|entry| entry.metadata().ok())
+        .filter(|meta| meta.is_file())
         .map(|meta| meta.len())
         .sum()
 }

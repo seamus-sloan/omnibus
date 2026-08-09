@@ -1,8 +1,8 @@
-//! Data layer for the admin server-health page (`/admin/health`, #952):
-//! index status, worker queue depth, FTS index health, and storage
-//! utilization. Composed into one [`AdminHealthReport`] by [`build_report`],
-//! which also folds in the existing error-ring snapshot (the fifth section)
-//! so a single call backs the whole page.
+//! Data layer for the admin server-health page: index status, worker queue
+//! depth, FTS index health, and storage utilization. Composed into one
+//! [`AdminHealthReport`] by [`build_report`], which also folds in the
+//! existing error-ring snapshot (the fifth section) so a single call backs
+//! the whole page.
 
 use omnibus_shared::admin_health::{
     AdminHealthReport, FtsHealth, IndexStatus, StorageStats, WorkerQueueEntry,
