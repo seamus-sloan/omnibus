@@ -69,7 +69,10 @@ fn save_outcome_message_flags_a_saved_but_unrunnable_path_as_an_error() {
 }
 
 // ---------- render (SSR / first paint) ----------
+// `test_support`'s SSR renderer only exists on the `server` feature, but this
+// module also compiles for the wasm32 `web` build.
 
+#[cfg(feature = "server")]
 #[test]
 fn card_renders_the_unresolved_state_before_the_status_loads() {
     // SSR and the first WASM paint must emit the same unresolved card or
@@ -91,6 +94,7 @@ fn card_renders_the_unresolved_state_before_the_status_loads() {
     );
 }
 
+#[cfg(feature = "server")]
 #[test]
 fn card_hides_use_auto_detection_until_an_override_is_saved() {
     // The button only has something to clear when `source == "settings"`, and
