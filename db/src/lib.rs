@@ -107,7 +107,9 @@ pub use physical::{
     remove_wishlist_entry, update_physical_copy_note, FilelessBook, FilelessCover, PhysicalError,
 };
 pub use pool::*;
-pub use scan::{add_physical_only, resolve_meta, resolve_scan, wishlist_add, ScanError};
+pub use scan::{
+    add_physical_only, check_in_copy, resolve_meta, resolve_scan, wishlist_add, ScanError,
+};
 pub use settings::*;
 pub use shelves::{
     add_books, can_edit, can_view, create_shelf, delete_shelf, get_shelf, list_visible_shelves,

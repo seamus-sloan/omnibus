@@ -11,6 +11,10 @@ import Foundation
 enum CheckInStage: Equatable {
     case scan
     case outcome(ScanOutcome)
+    /// Picking the library book a scanned copy belongs to, when no rung of the
+    /// matching ladder could reach it. Carries the ISBN the copy is filed
+    /// under and the outcome screen Back returns to.
+    case linkExisting(isbn: String?, returnTo: ScanOutcome)
     case success(CheckInSuccess)
 }
 
@@ -113,6 +117,67 @@ enum CheckInFlow {
         startedStage == currentStage
             && startedQuery.trimmingCharacters(in: .whitespacesAndNewlines)
             == currentQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Outcomes that offer "I already have this book".
+    ///
+    /// Every leaf where the ladder failed to land on a library book the reader
+    /// may nonetheless own: a print barcode the ebook doesn't publish, a
+    /// provider record whose title shares nothing with the shelf copy (release
+    /// placeholders are the usual culprit), or an ISBN no provider knows. The
+    /// two screens that *did* find the book don't need it.
+    static func offersLinkExisting(for outcome: ScanOutcome) -> Bool {
+        switch outcome {
+        case .closeMatch, .notInLibrary, .unresolved:
+            return true
+        case .alreadyOwned, .onWishlist, .inLibraryUnowned:
+            return false
+        }
+    }
+
+    /// The ISBN a hand-linked copy is filed under — always the one in the
+    /// reader's hand, never one the picked library book happens to publish.
+    /// The unresolved screen has no record to read it from, so it falls back
+    /// to whatever was scanned or typed.
+    static func linkISBN(for outcome: ScanOutcome, typed: String) -> String? {
+        switch outcome {
+        case let .notInLibrary(online):
+            return online.isbn13.nilIfBlank
+        case let .closeMatch(_, scanned):
+            return scanned.isbn13.nilIfBlank
+        case .unresolved:
+            return typed.nilIfBlank
+        case .alreadyOwned, .onWishlist, .inLibraryUnowned:
+            return nil
+        }
+    }
+
+    /// The library book a picker row stands for, carrying the scanned ISBN so
+    /// the in-library confirm files the copy under it.
+    ///
+    /// `hasPhysical` stays `false`: the search projection carries no copy
+    /// count, and nothing on this path reads it — the confirm screen shows the
+    /// cover, title, and byline only, and the write resolves ownership
+    /// server-side.
+    static func linkTarget(from hit: PaletteBookHit, isbn: String?) -> ScanBook {
+        ScanBook(
+            uuid: hit.uuid,
+            title: hit.title,
+            authors: hit.authorDisplay
+                .components(separatedBy: ", ")
+                .compactMap { $0.nilIfBlank },
+            coverURL: hit.coverURL,
+            hasPhysical: false,
+            isbn: isbn
+        )
+    }
+
+    /// The line under a truncated picker list. The palette caps each category
+    /// at five hits, so a broad query hides matches; say so rather than let the
+    /// reader conclude their book isn't there. `nil` when nothing is hidden.
+    static func linkTruncationNote(shown: Int, total: UInt32) -> String? {
+        guard Int(total) > shown else { return nil }
+        return "Showing \(shown) of \(total) matches — add the author or more of the title."
     }
 
     /// Outcomes whose card links straight to the book's detail page.
