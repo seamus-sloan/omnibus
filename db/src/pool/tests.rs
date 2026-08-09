@@ -5,7 +5,7 @@
 
 use super::*;
 
-use crate::test_support::count_rows as count;
+use crate::test_support::{count_rows as count, CoversTempDir};
 
 #[tokio::test]
 async fn init_db_returns_db_error_when_url_is_invalid() {
@@ -947,66 +947,119 @@ async fn boot_repair_spares_a_same_scan_key_book_in_another_library() {
 
 #[test]
 fn purge_legacy_covers_once_sweeps_then_no_ops() {
-    // Standalone temp dir so we don't depend on CoversTempDir's env var
-    // (purge_legacy_covers_once takes the dir as a parameter, and we
-    // want to assert the function in isolation from init_db).
-    let pid = std::process::id();
-    let seq = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!("omnibus_purge_test_{pid}_{seq}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    // `CoversTempDir` pins `OMNIBUS_COVERS_DIR` at a unique temp path under
+    // the shared env lock and removes it on drop; the purge takes the dir as
+    // a parameter, so this asserts the function in isolation from `init_db`.
+    let covers = CoversTempDir::new("purge_sweep");
+    std::fs::create_dir_all(&covers.path).unwrap();
 
     // Seed three "legacy" cover files.
     for name in ["aaaa.jpg", "bbbb.png", "cccc.webp"] {
-        std::fs::write(dir.join(name), b"x").unwrap();
+        std::fs::write(covers.path.join(name), b"x").unwrap();
     }
 
-    purge_legacy_covers_once(&dir);
+    purge_legacy_covers_once(&covers.path);
 
     // Legacy files gone, sentinel written.
     for name in ["aaaa.jpg", "bbbb.png", "cccc.webp"] {
         assert!(
-            !dir.join(name).exists(),
+            !covers.path.join(name).exists(),
             "legacy file {name} should have been purged",
         );
     }
     assert!(
-        dir.join(COVERS_SCHEME_SENTINEL).exists(),
+        covers.path.join(COVERS_SCHEME_SENTINEL).exists(),
         "sentinel should be present after first purge",
     );
 
     // A freshly-written cover after the purge must survive a second
     // call — the sentinel short-circuits the sweep.
-    let kept = dir.join("dddd.jpg");
+    let kept = covers.path.join("dddd.jpg");
     std::fs::write(&kept, b"y").unwrap();
-    purge_legacy_covers_once(&dir);
+    purge_legacy_covers_once(&covers.path);
     assert!(
         kept.exists(),
         "post-sentinel cover writes must not be deleted",
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn purge_legacy_covers_once_handles_missing_dir() {
-    // Cold-boot before any covers have ever been written — must not panic
-    // and must not create the directory.
-    let pid = std::process::id();
-    let seq = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!("omnibus_purge_missing_{pid}_{seq}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    purge_legacy_covers_once(&dir);
+fn purge_legacy_covers_once_creates_and_marks_a_missing_dir() {
+    // Cold boot before any covers have ever been written: nothing to purge,
+    // but the scheme still has to be marked, so the dir is created for the
+    // sentinel to live in.
+    let covers = CoversTempDir::new("purge_missing");
     assert!(
-        !dir.exists(),
-        "purge must not create the covers dir as a side effect",
+        !covers.path.exists(),
+        "precondition: dir does not exist yet"
     );
+
+    purge_legacy_covers_once(&covers.path);
+
+    assert!(
+        covers.path.join(COVERS_SCHEME_SENTINEL).exists(),
+        "a missing covers dir must still be created and marked",
+    );
+    let entries: Vec<_> = std::fs::read_dir(&covers.path).unwrap().flatten().collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "the sentinel should be the only thing written",
+    );
+}
+
+#[test]
+fn purge_legacy_covers_once_leaves_covers_extracted_after_a_missing_dir_boot() {
+    // The fresh-install regression: boot 1 finds no covers dir, boot 1's
+    // indexing run then extracts every cover into it, and boot 2 must not
+    // mistake that populated cache for an unswept legacy one.
+    let covers = CoversTempDir::new("purge_fresh_install");
+
+    // Boot 1: no dir yet.
+    purge_legacy_covers_once(&covers.path);
+
+    // Boot 1's indexer extracts covers into the now-existing dir.
+    for name in ["aaaa.jpg", "bbbb.png", "cccc.webp"] {
+        std::fs::write(covers.path.join(name), b"x").unwrap();
+    }
+
+    // Boot 2.
+    purge_legacy_covers_once(&covers.path);
+
+    for name in ["aaaa.jpg", "bbbb.png", "cccc.webp"] {
+        assert!(
+            covers.path.join(name).exists(),
+            "cover {name} extracted after the first boot must survive the second",
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn purge_legacy_covers_once_leaves_scheme_unmarked_when_a_file_cannot_be_removed() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // A partial sweep must not write the sentinel: marking a dir that still
+    // holds a legacy file would orphan that file forever.
+    let covers = CoversTempDir::new("purge_readonly");
+    std::fs::create_dir_all(&covers.path).unwrap();
+    let stuck = covers.path.join("aaaa.jpg");
+    std::fs::write(&stuck, b"x").unwrap();
+
+    // A read-only directory rejects the unlink of an entry inside it.
+    std::fs::set_permissions(&covers.path, std::fs::Permissions::from_mode(0o555)).unwrap();
+    purge_legacy_covers_once(&covers.path);
+    // Restore before asserting so the temp dir is still removable on drop.
+    std::fs::set_permissions(&covers.path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    // Running as root ignores the mode bits, so the unlink succeeds and there
+    // is no partial sweep to assert on.
+    if stuck.exists() {
+        assert!(
+            !covers.path.join(COVERS_SCHEME_SENTINEL).exists(),
+            "a sweep that left a legacy file behind must leave the scheme unmarked",
+        );
+    }
 }
 
 #[tokio::test]
