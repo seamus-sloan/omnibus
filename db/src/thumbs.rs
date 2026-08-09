@@ -128,8 +128,16 @@ pub async fn is_stale_async(book_id: i64, size: ThumbSize, last_modified_epoch: 
 /// holding a validator from the old scheme is forced to re-fetch even though
 /// the book's `last_modified_epoch` never moved. This repo doesn't need to
 /// detect the encoder version dynamically, so a hand-bumped constant is
-/// enough.
-const THUMB_ENCODER_VERSION: u32 = 1;
+/// enough. It also names the on-disk sentinel
+/// ([`scheme_sentinel_name`]), so one bump both rotates every client's
+/// validator and sweeps the cached files the old encoder wrote.
+///
+/// v2: lossy libwebp encode at [`THUMB_QUALITY`], replacing `image`'s
+/// lossless-only WebP encoder.
+const THUMB_ENCODER_VERSION: u32 = 2;
+
+/// Quality passed to libwebp's lossy encoder, on its 0–100 scale.
+const THUMB_QUALITY: f32 = 80.0;
 
 /// Derive a thumbnail's `ETag` from its freshness key — `(book_id, size,
 /// last_modified_epoch)`, the exact triple [`is_stale`]/[`is_stale_async`]
@@ -170,7 +178,26 @@ pub fn thumb_etag(book_id: i64, size: ThumbSize, last_modified_epoch: i64) -> St
     thumb_etag_versioned(book_id, size, last_modified_epoch, THUMB_ENCODER_VERSION)
 }
 
-/// Resize a pre-decoded cover and write the WebP to disk for one size.
+/// Encode an already-resized cover as lossy WebP at [`THUMB_QUALITY`].
+///
+/// Alpha is carried only when the source has it: an RGBA encode of an opaque
+/// cover spends bytes on a constant alpha plane for nothing.
+fn encode_lossy_webp(resized: &image::DynamicImage, w: u32, h: u32) -> Result<Vec<u8>, ThumbError> {
+    let encoded = if resized.color().has_alpha() {
+        let rgba = resized.to_rgba8();
+        webp::Encoder::from_rgba(rgba.as_raw(), w, h).encode_simple(false, THUMB_QUALITY)
+    } else {
+        let rgb = resized.to_rgb8();
+        webp::Encoder::from_rgb(rgb.as_raw(), w, h).encode_simple(false, THUMB_QUALITY)
+    };
+    // `encode_simple` is the Result-returning half of the pair; `encode`
+    // unwraps internally, which would panic the worker's encode loop.
+    encoded
+        .map(|mem| mem.to_vec())
+        .map_err(|e| ThumbError::Failed(format!("WebP encode failed: {e:?}")))
+}
+
+/// Resize a pre-decoded cover and write the lossy WebP to disk for one size.
 ///
 /// Atomic on POSIX: the WebP is written to a per-(book,size) temp file in
 /// `thumbs_dir()` and then `rename`d into place, so a concurrent reader can
@@ -180,7 +207,7 @@ fn write_thumbnail(
     size: ThumbSize,
     decoded: &image::DynamicImage,
 ) -> Result<usize, ThumbError> {
-    use image::{imageops::FilterType, ImageFormat};
+    use image::imageops::FilterType;
 
     let (w, h) = size.dimensions();
     // `resize_to_fill` guarantees output dimensions equal `(w, h)` by
@@ -189,13 +216,7 @@ fn write_thumbnail(
     // `width`/`height` attributes and stretch covers.
     let resized = decoded.resize_to_fill(w, h, FilterType::Lanczos3);
 
-    let webp_bytes = {
-        let mut buf = std::io::Cursor::new(Vec::new());
-        resized
-            .write_to(&mut buf, ImageFormat::WebP)
-            .map_err(|e| ThumbError::Failed(format!("WebP encode failed: {e}")))?;
-        buf.into_inner()
-    };
+    let webp_bytes = encode_lossy_webp(&resized, w, h)?;
 
     let dir = thumbs_dir();
     std::fs::create_dir_all(&dir).map_err(|e| ThumbError::Failed(format!("I/O error: {e}")))?;
@@ -261,6 +282,86 @@ pub fn ensure_thumbnails_sync(
 pub fn invalidate_thumbs(book_id: i64) {
     for size in ThumbSize::all() {
         let _ = std::fs::remove_file(thumb_path_for(book_id, size));
+    }
+}
+
+/// Filename prefix for the sentinel marking `thumbs_dir()` as already written
+/// by some encoder scheme. Mirrors the covers dir's `.omnibus-cover-scheme-v5`.
+const SCHEME_SENTINEL_PREFIX: &str = ".omnibus-thumb-scheme-v";
+
+/// Sentinel filename for the encoder scheme this build writes.
+fn scheme_sentinel_name() -> String {
+    format!("{SCHEME_SENTINEL_PREFIX}{THUMB_ENCODER_VERSION}")
+}
+
+/// Delete every cached thumbnail left by an earlier encoder scheme, once per
+/// [`THUMB_ENCODER_VERSION`]. Call at boot, before serving.
+///
+/// [`is_stale`] only compares a thumb's mtime against its book's
+/// `last_modified_epoch`, so a file written by an older encoder stays "fresh"
+/// forever and would be served indefinitely. Naming the sentinel after the
+/// version is what makes the re-encode automatic: a bump renames the file the
+/// short-circuit looks for, so the next boot sweeps and every size is
+/// regenerated on demand.
+///
+/// Best-effort by design — the thumbs dir is a regenerable cache, so a
+/// missing dir, an unreadable entry, or a failed unlink is logged and
+/// swallowed rather than failing boot. A sentinel that could not be written
+/// simply leaves the sweep to retry next boot.
+///
+/// Must be called inside `tokio::task::spawn_blocking`.
+pub fn purge_stale_scheme_once() {
+    let dir = thumbs_dir();
+    // Nothing cached yet, and creating the dir eagerly would be surprising —
+    // the first thumbnail write creates it.
+    if !dir.exists() || dir.join(scheme_sentinel_name()).exists() {
+        return;
+    }
+
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::warn!(
+                dir = %dir.display(),
+                error = %e,
+                "thumbs: could not read cache dir to purge the previous encoder scheme; skipping"
+            );
+            return;
+        }
+    };
+
+    let mut removed: usize = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        // Top-level regular files only; nothing writes subdirectories here
+        // today and a future layout shouldn't be swept away by this.
+        if !path.is_file() {
+            continue;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => removed += 1,
+            Err(e) => tracing::warn!(
+                path = ?path,
+                error = %e,
+                "thumbs: failed to remove previous-scheme thumbnail"
+            ),
+        }
+    }
+
+    let sentinel = dir.join(scheme_sentinel_name());
+    if let Err(e) = std::fs::write(&sentinel, b"\n") {
+        tracing::warn!(
+            sentinel = %sentinel.display(),
+            error = %e,
+            "thumbs: failed to write scheme sentinel; will retry on next boot"
+        );
+    } else {
+        tracing::info!(
+            dir = %dir.display(),
+            removed,
+            version = THUMB_ENCODER_VERSION,
+            "thumbs: purged previous-scheme thumbnails"
+        );
     }
 }
 

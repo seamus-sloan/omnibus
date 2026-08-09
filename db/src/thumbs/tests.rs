@@ -1,11 +1,68 @@
 //! Unit tests for the `thumbs` module — `thumbs_dir` env-var resolution,
 //! `thumb_path_for` formatting, `is_stale` mtime comparison (incl. the
 //! same-second tie case), `ThumbSize` FromStr roundtrip, `thumb_etag`
-//! derivation, `generate_thumbnail` WebP output, and LRU-on-read
+//! derivation, `generate_thumbnail`'s lossy WebP output and size budget,
+//! `purge_stale_scheme_once` re-encode invalidation, and LRU-on-read
 //! `evict_if_over_cap` cap enforcement.
 
 use super::*;
 use crate::test_support::EnvVarGuard;
+
+/// A synthetic stand-in for a photographic cover: smooth gradients carrying
+/// low-amplitude noise, encoded as PNG. Noise is what separates the two
+/// encoders — it defeats the lossless coder's prediction while a lossy
+/// quantizer discards most of it — so a flat test image would make the size
+/// assertions below pass for the wrong reason. The LCG keeps it deterministic
+/// without a `rand` dependency.
+fn photographic_png(w: u32, h: u32) -> Vec<u8> {
+    use image::{ImageBuffer, Rgb};
+
+    let mut seed: u32 = 0x9e37_79b9;
+    let mut next = move || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        ((seed >> 16) & 0x0f) as i32 - 8
+    };
+    let img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_fn(w, h, |x, y| {
+        let base = [
+            (x * 255 / w) as i32,
+            (y * 255 / h) as i32,
+            ((x * x + y * y) / 512 % 256) as i32,
+        ];
+        let n = next();
+        Rgb(std::array::from_fn(|i| {
+            base[i].saturating_add(n).clamp(0, 255) as u8
+        }))
+    });
+
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    png
+}
+
+/// The four-byte chunk id following the `RIFF....WEBP` header: `VP8 ` for a
+/// lossy bitstream, `VP8L` for a lossless one, `VP8X` for the extended
+/// container an alpha-bearing lossy image uses.
+fn webp_fourcc(bytes: &[u8]) -> [u8; 4] {
+    assert_eq!(&bytes[0..4], b"RIFF");
+    assert_eq!(&bytes[8..12], b"WEBP");
+    [bytes[12], bytes[13], bytes[14], bytes[15]]
+}
+
+/// The old encode path: `image` 0.25's WebP encoder, which is lossless-only.
+fn lossless_webp(png: &[u8], size: ThumbSize) -> Vec<u8> {
+    use image::imageops::FilterType;
+
+    let (w, h) = size.dimensions();
+    let resized = image::load_from_memory(png)
+        .unwrap()
+        .resize_to_fill(w, h, FilterType::Lanczos3);
+    let mut buf = std::io::Cursor::new(Vec::new());
+    resized
+        .write_to(&mut buf, image::ImageFormat::WebP)
+        .unwrap();
+    buf.into_inner()
+}
 
 #[test]
 fn thumbs_dir_defaults_to_dot_thumbs() {
@@ -158,6 +215,165 @@ fn generate_thumbnail_produces_valid_webp() {
     // RIFF....WEBP magic
     assert_eq!(&out[0..4], b"RIFF");
     assert_eq!(&out[8..12], b"WEBP");
+}
+
+#[test]
+fn generate_thumbnail_writes_a_lossy_bitstream_rather_than_a_lossless_one() {
+    let png = photographic_png(800, 1200);
+    let tmp = tempfile::tempdir().unwrap();
+    let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(tmp.path().as_os_str()));
+
+    generate_thumbnail(20, ThumbSize::Md, &png).unwrap();
+
+    let out = std::fs::read(tmp.path().join("20_md.webp")).unwrap();
+    assert_eq!(
+        &webp_fourcc(&out),
+        b"VP8 ",
+        "an opaque cover must encode as a plain lossy VP8 chunk, not VP8L"
+    );
+}
+
+#[test]
+fn generate_thumbnail_keeps_a_photographic_cover_inside_the_per_size_byte_budget() {
+    let png = photographic_png(800, 1200);
+    let tmp = tempfile::tempdir().unwrap();
+    let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(tmp.path().as_os_str()));
+
+    let md = generate_thumbnail(21, ThumbSize::Md, &png).unwrap();
+    let lg = generate_thumbnail(21, ThumbSize::Lg, &png).unwrap();
+
+    assert!(md < 30_000, "md thumb was {md} bytes");
+    assert!(lg < 80_000, "lg thumb was {lg} bytes");
+}
+
+#[test]
+fn generate_thumbnail_is_far_smaller_than_the_lossless_encoder_at_every_size() {
+    // The regression this guards is a cache several times the size of the
+    // covers it thumbnails; the lossless encoder is the baseline that caused
+    // it, so the ratio — not an absolute byte count — is the real contract.
+    let png = photographic_png(800, 1200);
+    let tmp = tempfile::tempdir().unwrap();
+    let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(tmp.path().as_os_str()));
+
+    for size in ThumbSize::all() {
+        let lossy = generate_thumbnail(22, size, &png).unwrap();
+        let lossless = lossless_webp(&png, size).len();
+        assert!(
+            lossy * 3 < lossless,
+            "{size}: lossy {lossy} bytes vs lossless {lossless} bytes"
+        );
+    }
+}
+
+#[test]
+fn generate_thumbnail_writes_exact_dimensions_for_every_size() {
+    // `resize_to_fill`'s contract, re-asserted through the new encoder: the
+    // frontend renders these with fixed width/height attributes, so anything
+    // but an exact match stretches covers.
+    let png = photographic_png(800, 1000);
+    let tmp = tempfile::tempdir().unwrap();
+    let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(tmp.path().as_os_str()));
+
+    for size in ThumbSize::all() {
+        generate_thumbnail(23, size, &png).unwrap();
+        let bytes = std::fs::read(tmp.path().join(format!("23_{size}.webp"))).unwrap();
+        let decoded = image::load_from_memory(&bytes).unwrap();
+        assert_eq!(
+            (decoded.width(), decoded.height()),
+            size.dimensions(),
+            "{size} thumb must be exactly its declared dimensions"
+        );
+    }
+}
+
+#[test]
+fn generate_thumbnail_preserves_alpha_for_a_cover_with_transparency() {
+    use image::{ImageBuffer, Rgba};
+
+    let img: ImageBuffer<Rgba<u8>, Vec<u8>> =
+        ImageBuffer::from_fn(200, 300, |x, _| Rgba([10, 200, 90, (x % 256) as u8]));
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(tmp.path().as_os_str()));
+    generate_thumbnail(24, ThumbSize::Sm, &png).unwrap();
+
+    let out = std::fs::read(tmp.path().join("24_sm.webp")).unwrap();
+    assert_eq!(
+        &webp_fourcc(&out),
+        b"VP8X",
+        "an alpha-bearing cover must use the extended container that carries an ALPH chunk"
+    );
+}
+
+// ---------- one-time re-encode invalidation ----------
+
+#[test]
+fn purge_stale_scheme_once_removes_thumbnails_left_by_a_previous_scheme() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(tmp.path().as_os_str()));
+    std::fs::write(tmp.path().join("1_sm.webp"), b"lossless-era bytes").unwrap();
+    std::fs::write(tmp.path().join(format!("{SCHEME_SENTINEL_PREFIX}1")), b"\n").unwrap();
+
+    purge_stale_scheme_once();
+
+    assert!(
+        !tmp.path().join("1_sm.webp").exists(),
+        "a thumb from the previous encoder must not be served indefinitely"
+    );
+    assert!(
+        !tmp.path()
+            .join(format!("{SCHEME_SENTINEL_PREFIX}1"))
+            .exists(),
+        "the previous scheme's sentinel must be swept with its thumbnails"
+    );
+    assert!(
+        tmp.path().join(scheme_sentinel_name()).exists(),
+        "the current scheme's sentinel must be written"
+    );
+}
+
+#[test]
+fn purge_stale_scheme_once_leaves_thumbnails_alone_when_the_current_sentinel_exists() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(tmp.path().as_os_str()));
+    std::fs::write(tmp.path().join(scheme_sentinel_name()), b"\n").unwrap();
+    std::fs::write(tmp.path().join("2_md.webp"), b"current-scheme bytes").unwrap();
+
+    purge_stale_scheme_once();
+
+    assert!(
+        tmp.path().join("2_md.webp").exists(),
+        "the sweep must run once per encoder version, not on every boot"
+    );
+}
+
+#[test]
+fn purge_stale_scheme_once_does_not_create_the_cache_dir_when_it_is_absent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = tmp.path().join("never-created");
+    let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(missing.as_os_str()));
+
+    purge_stale_scheme_once();
+
+    assert!(!missing.exists(), "an absent cache dir must stay absent");
+}
+
+#[test]
+fn evict_if_over_cap_ignores_the_scheme_sentinel() {
+    // The sentinel is the marker that stops the sweep re-running; evicting it
+    // would re-purge the whole cache on the next boot.
+    let tmp = tempfile::tempdir().unwrap();
+    let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(tmp.path().as_os_str()));
+    std::fs::write(tmp.path().join(scheme_sentinel_name()), vec![0u8; 500]).unwrap();
+    std::fs::write(tmp.path().join("9_sm.webp"), vec![0u8; 500]).unwrap();
+
+    evict_if_over_cap(0).unwrap();
+
+    assert!(tmp.path().join(scheme_sentinel_name()).exists());
+    assert!(!tmp.path().join("9_sm.webp").exists());
 }
 
 #[test]

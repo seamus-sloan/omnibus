@@ -38,7 +38,7 @@ pub enum InitDbError {
 }
 
 /// Initialize or open the SQLite pool at `database_url`, apply per-connection PRAGMAs, run pending
-/// migrations, and — on non-memory databases — perform a one-time legacy cover-cache directory purge.
+/// migrations, and — on non-memory databases — perform the one-time cover- and thumbnail-cache purges.
 pub async fn init_db(database_url: &str) -> Result<SqlitePool, InitDbError> {
     let is_memory = is_memory_url(database_url);
     let pool = connect_pool(database_url, is_memory).await?;
@@ -48,6 +48,7 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, InitDbError> {
 
     if !is_memory {
         run_legacy_cover_purge().await;
+        run_thumb_scheme_purge().await;
     }
 
     Ok(pool)
@@ -277,6 +278,20 @@ async fn run_legacy_cover_purge() {
     .await
     {
         tracing::error!("legacy cover purge spawn_blocking failed: {join_err}");
+    }
+}
+
+/// Run the one-time thumbnail re-encode sweep on the blocking pool.
+///
+/// `thumbs::purge_stale_scheme_once` walks the thumbs dir with synchronous
+/// `std::fs` and can be large on the first boot after an encoder change, so it
+/// runs on the blocking pool for the same reason the cover purge does. A
+/// `JoinError` (a panic in the sweep) is logged and swallowed: the thumbs dir
+/// is a regenerable cache, so a failed purge must not abort boot.
+async fn run_thumb_scheme_purge() {
+    if let Err(join_err) = tokio::task::spawn_blocking(crate::thumbs::purge_stale_scheme_once).await
+    {
+        tracing::error!("thumb scheme purge spawn_blocking failed: {join_err}");
     }
 }
 

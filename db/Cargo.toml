@@ -106,6 +106,18 @@ base64 = "0.22"
 # frame instead of failing `The image format Gif is not supported` (#828).
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 
+# F1.2 thumbnail pipeline, encode half: `image`'s WebP encoder is lossless-only
+# (`write_to(ImageFormat::WebP)` routes to `new_lossless`, with no quality
+# knob), which made every cached thumb several times larger than the cover it
+# thumbnails. These libwebp bindings supply the lossy encoder; `image` still
+# owns decode + resize. Default features off to skip the crate's `image` bridge
+# — `Encoder::from_rgb`/`from_rgba` take raw buffers, so nothing here has to
+# track which `image` major the bridge was built against. `libwebp-sys` vendors
+# libwebp and compiles it with `cc`, so no system package or pkg-config probe
+# is involved, and only the `server` feature pulls `omnibus-db` into the
+# frontend — the wasm32 build never sees it.
+webp = { version = "0.3", default-features = false }
+
 # HTML sanitization for EPUB description fields (issue #62) and F3.2 journal
 # entries. OPF `<dc:description>` is often HTML; journal bodies are
 # user-authored markdown. Both are rendered server-side and sanitized with a
