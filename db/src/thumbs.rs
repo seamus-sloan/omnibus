@@ -65,8 +65,11 @@ pub enum ThumbError {
     Db(#[from] sqlx::Error),
 }
 
-/// Default eviction cap (5 GiB).
-const DEFAULT_CAP_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+/// Default eviction cap (1 GiB). Sized for the lossy encoder (#1750): the
+/// 1,635-book dev library holds ~50 MB of thumbnails across all three sizes,
+/// so a gigabyte is still ~20× headroom. The pre-#1750 default was 5 GiB
+/// because lossless WebP needed it.
+const DEFAULT_CAP_BYTES: u64 = 1024 * 1024 * 1024;
 
 /// Root directory for thumbnail files. Override with `OMNIBUS_THUMBS_DIR`.
 pub fn thumbs_dir() -> PathBuf {
@@ -129,7 +132,13 @@ pub async fn is_stale_async(book_id: i64, size: ThumbSize, last_modified_epoch: 
 /// the book's `last_modified_epoch` never moved. This repo doesn't need to
 /// detect the encoder version dynamically, so a hand-bumped constant is
 /// enough.
-const THUMB_ENCODER_VERSION: u32 = 1;
+///
+/// v2 (#1750): lossless `image` WebP → lossy libwebp at
+/// [`THUMB_QUALITY`]. A bump also purges the on-disk cache once at boot —
+/// see [`purge_stale_scheme_thumbs_once`], which is the other half of this
+/// constant's contract: the ETag alone would re-validate a client while the
+/// server kept serving the old bytes forever.
+const THUMB_ENCODER_VERSION: u32 = 2;
 
 /// Derive a thumbnail's `ETag` from its freshness key — `(book_id, size,
 /// last_modified_epoch)`, the exact triple [`is_stale`]/[`is_stale_async`]
@@ -170,6 +179,123 @@ pub fn thumb_etag(book_id: i64, size: ThumbSize, last_modified_epoch: i64) -> St
     thumb_etag_versioned(book_id, size, last_modified_epoch, THUMB_ENCODER_VERSION)
 }
 
+/// Marker written into `thumbs_dir()` once its contents are known to come
+/// from the current [`THUMB_ENCODER_VERSION`]. Deliberately not a `.webp`,
+/// so [`used_bytes`] and [`evict_if_over_cap`] both skip it.
+fn scheme_sentinel_name() -> String {
+    format!(".omnibus-thumb-scheme-v{THUMB_ENCODER_VERSION}")
+}
+
+/// One-time purge of thumbnails written by an older encoder, run at boot.
+/// Returns the number of files removed.
+///
+/// [`is_stale`] compares a thumb's mtime against its book's
+/// `last_modified_epoch` and nothing else, so a re-encode at the same source
+/// bytes never invalidates anything — an upgraded install would serve its
+/// pre-existing lossless thumbs forever. Bumping [`THUMB_ENCODER_VERSION`]
+/// rotates the sentinel filename, this sweep sees the new name missing and
+/// empties the directory once, and the next request regenerates each thumb
+/// through the current encoder.
+///
+/// Best-effort throughout, like the covers-dir purge in `pool`: a missing
+/// directory, an unreadable entry, or a failed unlink is logged and skipped
+/// rather than surfaced. The thumbnail directory is a cache, so the worst
+/// outcome of a failure is a stale file, never a broken boot.
+///
+/// **The sentinel lands only on a clean sweep.** Writing it after a partial
+/// one would mark the directory current while a previous-scheme file is still
+/// sitting in it, and `is_stale` would go on serving that file until its
+/// book's `last_modified_epoch` happened to move — the exact
+/// serve-it-forever case this function exists to prevent. Leaving the
+/// sentinel absent costs a re-sweep of an already-empty directory next boot.
+///
+/// Must be called inside `tokio::task::spawn_blocking`.
+pub fn purge_stale_scheme_thumbs_once() -> usize {
+    let dir = thumbs_dir();
+    let sentinel = dir.join(scheme_sentinel_name());
+    if sentinel.exists() {
+        return 0;
+    }
+
+    // A directory that doesn't exist yet has nothing to purge, but it still
+    // gets marked below — leaving a fresh install unmarked means its *second*
+    // boot finds an unmarked directory and throws away the cache the first
+    // one just built.
+    let mut removed = 0usize;
+    let mut left_behind = 0usize;
+    if dir.exists() {
+        match std::fs::read_dir(&dir) {
+            Ok(entries) => {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    // Files only: nothing writes subdirectories here today,
+                    // and a future version that does shouldn't have them
+                    // swept out from under it.
+                    if !path.is_file() {
+                        continue;
+                    }
+                    match std::fs::remove_file(&path) {
+                        Ok(()) => removed += 1,
+                        Err(err) => {
+                            left_behind += 1;
+                            tracing::warn!(
+                                path = %path.display(),
+                                error = %err,
+                                "thumbs: failed to remove previous-scheme thumbnail",
+                            );
+                        }
+                    }
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    thumbs_dir = %dir.display(),
+                    error = %err,
+                    "thumbs: could not read dir to purge previous-scheme thumbs; skipping",
+                );
+                return 0;
+            }
+        }
+    } else if let Err(err) = std::fs::create_dir_all(&dir) {
+        tracing::warn!(
+            thumbs_dir = %dir.display(),
+            error = %err,
+            "thumbs: could not create dir to mark the encoder scheme; will retry on next boot",
+        );
+        return 0;
+    }
+
+    if left_behind > 0 {
+        tracing::warn!(
+            thumbs_dir = %dir.display(),
+            removed,
+            left_behind,
+            "thumbs: previous-scheme purge incomplete; leaving the scheme unmarked so it retries on next boot",
+        );
+    } else if let Err(err) = std::fs::write(&sentinel, b"\n") {
+        tracing::warn!(
+            sentinel = %sentinel.display(),
+            error = %err,
+            "thumbs: failed to write scheme sentinel; will retry on next boot",
+        );
+    } else {
+        tracing::info!(
+            thumbs_dir = %dir.display(),
+            removed,
+            version = THUMB_ENCODER_VERSION,
+            "thumbs: purged previous-scheme thumbnails",
+        );
+    }
+
+    removed
+}
+
+/// Lossy WebP quality passed to libwebp, on its 0-100 scale. 80 is the
+/// customary photographic setting — visually indistinguishable from lossless
+/// on cover art at thumbnail dimensions, at roughly a tenth of the bytes.
+/// Changing it means bumping [`THUMB_ENCODER_VERSION`].
+const THUMB_QUALITY: f32 = 80.0;
+
 /// Resize a pre-decoded cover and write the WebP to disk for one size.
 ///
 /// Atomic on POSIX: the WebP is written to a per-(book,size) temp file in
@@ -180,7 +306,7 @@ fn write_thumbnail(
     size: ThumbSize,
     decoded: &image::DynamicImage,
 ) -> Result<usize, ThumbError> {
-    use image::{imageops::FilterType, ImageFormat};
+    use image::imageops::FilterType;
 
     let (w, h) = size.dimensions();
     // `resize_to_fill` guarantees output dimensions equal `(w, h)` by
@@ -189,13 +315,16 @@ fn write_thumbnail(
     // `width`/`height` attributes and stretch covers.
     let resized = decoded.resize_to_fill(w, h, FilterType::Lanczos3);
 
-    let webp_bytes = {
-        let mut buf = std::io::Cursor::new(Vec::new());
-        resized
-            .write_to(&mut buf, ImageFormat::WebP)
-            .map_err(|e| ThumbError::Failed(format!("WebP encode failed: {e}")))?;
-        buf.into_inner()
-    };
+    // RGBA rather than RGB: a cover with transparency would otherwise have
+    // its alpha channel dropped without blending, painting whatever garbage
+    // sits under the transparent pixels. libwebp drops the alpha plane by
+    // itself when the image turns out to be fully opaque, so the common case
+    // costs nothing.
+    let rgba = resized.to_rgba8();
+    let webp_bytes = webp::Encoder::from_rgba(rgba.as_raw(), w, h)
+        .encode_simple(false, THUMB_QUALITY)
+        .map_err(|e| ThumbError::Failed(format!("WebP encode failed: {e:?}")))?
+        .to_vec();
 
     let dir = thumbs_dir();
     std::fs::create_dir_all(&dir).map_err(|e| ThumbError::Failed(format!("I/O error: {e}")))?;

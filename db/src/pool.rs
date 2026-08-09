@@ -48,6 +48,7 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, InitDbError> {
 
     if !is_memory {
         run_legacy_cover_purge().await;
+        run_thumb_scheme_purge().await;
     }
 
     Ok(pool)
@@ -277,6 +278,23 @@ async fn run_legacy_cover_purge() {
     .await
     {
         tracing::error!(error = %join_err, "legacy cover purge spawn_blocking failed");
+    }
+}
+
+/// Run the one-time thumbnail-cache purge for the current encoder scheme on
+/// the blocking pool.
+///
+/// Same shape and rationale as [`run_legacy_cover_purge`] above: the sweep is
+/// synchronous `std::fs` over a directory that holds three files per book, so
+/// it runs on the blocking pool while boot awaits it, and a `JoinError` is
+/// logged and swallowed because a rebuildable cache must never abort boot.
+/// See `thumbs::purge_stale_scheme_thumbs_once` for why a re-encode needs
+/// this at all.
+async fn run_thumb_scheme_purge() {
+    if let Err(join_err) =
+        tokio::task::spawn_blocking(crate::thumbs::purge_stale_scheme_thumbs_once).await
+    {
+        tracing::error!(error = %join_err, "thumb scheme purge spawn_blocking failed");
     }
 }
 
