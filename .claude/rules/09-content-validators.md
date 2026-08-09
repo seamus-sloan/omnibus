@@ -27,12 +27,11 @@ statement, so they cannot disagree.
 - **Never add a manual version counter**, for the same reason.
 - **Never hash file contents** to build it. Byte-hashing a library of
   multi-hundred-MB audiobooks on every scan is not a validator, it's a
-  rescan. (The cover and comic-page handlers *do* hash — they have already
-  read the bytes into memory to serve them, so it's free there. Thumbs are
-  the exception: `thumb_etag` derives its value from a freshness key —
-  `(book_id, size, last_modified_epoch, encoder_version)` — so the 304
-  path never opens the file. **Known residual:** a re-encode that changes
-  bytes without moving that key reads as unchanged.)
+  rescan. (Cover and comic-page handlers *do* hash — they have read the bytes
+  in to serve them, so it's free there. Thumbs are the exception: `thumb_etag`
+  derives from `(book_id, size, last_modified_epoch, encoder_version)`, so its
+  304 path never opens the file. **Known residual:** a re-encode that changes
+  the bytes without moving that key is not detected as stale.)
 - `(0, 0)` is the never-observed sentinel and must map to `None`, so the
   one-time stat backfill never reads as a content change on a device
   holding a download.
