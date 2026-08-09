@@ -1246,7 +1246,7 @@ async fn sync_audiobooks_drops_unsafe_accent_color() {
 // ── Progress-callback contract ────────────────────────────────────
 //
 // `sync_books_with_progress` and `sync_audiobooks_with_progress` feed
-// the worker's `report_progress` so the UI indicator can render a
+// the worker's `report_progress_update` so the UI indicator can render a
 // determinate `processed / total` bar. The contract: emit `(0, total)`
 // before any per-book write, then tick `processed` monotonically up to
 // `total` (one tick per New + Changed book), with `total` constant

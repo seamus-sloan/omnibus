@@ -991,8 +991,10 @@ async fn backfill_chapters_inserts_synthetic_chapters_for_all_books_in_batch() {
     let bfid_b = seed_audiobook_for_backfill(&pool, lib, "book-b", "book-b/part.m4b", "M4B").await;
 
     let mut progress_calls: Vec<(u32, u32)> = Vec::new();
-    backfill_chapters(&pool, lib, |processed, total| {
+    let mut items: Vec<String> = Vec::new();
+    backfill_chapters(&pool, lib, |processed, total, item| {
         progress_calls.push((processed, total));
+        items.push(item.to_string());
     })
     .await
     .unwrap();
@@ -1025,6 +1027,15 @@ async fn backfill_chapters_inserts_synthetic_chapters_for_all_books_in_batch() {
     );
     assert_eq!(progress_calls[0], (1, 2));
     assert_eq!(progress_calls[1], (2, 2));
+    // Item paths are the library directory name plus the part's relative
+    // path (#1802) — never the absolute `/tmp/...` root.
+    assert_eq!(
+        items,
+        vec![
+            "backfill_test_lib/book-a/part.m4b".to_string(),
+            "backfill_test_lib/book-b/part.m4b".to_string(),
+        ]
+    );
 }
 
 #[tokio::test]
@@ -1045,7 +1056,7 @@ async fn backfill_chapters_is_idempotent_after_all_books_have_chapters() {
     .unwrap();
 
     let mut progress_calls = 0u32;
-    backfill_chapters(&pool, lib, |_, _| {
+    backfill_chapters(&pool, lib, |_, _, _| {
         progress_calls += 1;
     })
     .await
@@ -1122,9 +1133,11 @@ async fn backfill_word_counts_fills_null_rows_from_the_epub_spine() {
     let b = seed_ebook_missing_word_count(&pool, &dir, "beta.epub", "uuid-b").await;
 
     let mut progress: Vec<(u32, u32)> = Vec::new();
-    backfill_word_counts(&pool, dir.to_str().unwrap(), |p, t| progress.push((p, t)))
-        .await
-        .unwrap();
+    backfill_word_counts(&pool, dir.to_str().unwrap(), |p, t, _| {
+        progress.push((p, t))
+    })
+    .await
+    .unwrap();
 
     assert_eq!(word_count_of(&pool, a).await, Some(4));
     assert_eq!(word_count_of(&pool, b).await, Some(10));
@@ -1139,14 +1152,14 @@ async fn backfill_word_counts_is_idempotent_once_filled() {
     let dir = make_test_dir("wc-backfill-idempotent");
     seed_ebook_missing_word_count(&pool, &dir, "alpha.epub", "uuid-a").await;
 
-    backfill_word_counts(&pool, dir.to_str().unwrap(), |_, _| {})
+    backfill_word_counts(&pool, dir.to_str().unwrap(), |_, _, _| {})
         .await
         .unwrap();
 
     // Second pass: every book now has a count, so there are no candidates
     // and `on_progress` never fires.
     let mut calls = 0u32;
-    backfill_word_counts(&pool, dir.to_str().unwrap(), |_, _| calls += 1)
+    backfill_word_counts(&pool, dir.to_str().unwrap(), |_, _, _| calls += 1)
         .await
         .unwrap();
     assert_eq!(calls, 0);
@@ -1227,9 +1240,11 @@ async fn backfill_page_counts_fills_null_rows_from_the_cbz_archive() {
     let b = seed_cbz_missing_page_count(&pool, &dir, "uuid-b", 7).await;
 
     let mut progress: Vec<(u32, u32)> = Vec::new();
-    backfill_page_counts(&pool, dir.to_str().unwrap(), |p, t| progress.push((p, t)))
-        .await
-        .unwrap();
+    backfill_page_counts(&pool, dir.to_str().unwrap(), |p, t, _| {
+        progress.push((p, t))
+    })
+    .await
+    .unwrap();
 
     assert_eq!(page_count_of(&pool, a).await, Some(3));
     assert_eq!(page_count_of(&pool, b).await, Some(7));
@@ -1244,14 +1259,14 @@ async fn backfill_page_counts_is_idempotent_once_filled() {
     let dir = make_test_dir("pc-backfill-idempotent");
     seed_cbz_missing_page_count(&pool, &dir, "uuid-a", 3).await;
 
-    backfill_page_counts(&pool, dir.to_str().unwrap(), |_, _| {})
+    backfill_page_counts(&pool, dir.to_str().unwrap(), |_, _, _| {})
         .await
         .unwrap();
 
     // Second pass: every book now has a count, so there are no candidates
     // and `on_progress` never fires.
     let mut calls = 0u32;
-    backfill_page_counts(&pool, dir.to_str().unwrap(), |_, _| calls += 1)
+    backfill_page_counts(&pool, dir.to_str().unwrap(), |_, _, _| calls += 1)
         .await
         .unwrap();
     assert_eq!(calls, 0);
@@ -1271,7 +1286,7 @@ async fn backfill_page_counts_is_a_noop_when_no_candidates_exist() {
         .unwrap();
 
     let mut calls = 0u32;
-    backfill_page_counts(&pool, dir.to_str().unwrap(), |_, _| calls += 1)
+    backfill_page_counts(&pool, dir.to_str().unwrap(), |_, _, _| calls += 1)
         .await
         .unwrap();
     assert_eq!(calls, 0);

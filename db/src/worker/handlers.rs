@@ -6,6 +6,8 @@
 
 use std::sync::Arc;
 
+use omnibus_shared::TaskDetail;
+
 use super::types::{Task, TaskId, TaskOutcome, TaskSuccessDetail, Worker};
 
 /// Log `e`'s real text server-side and return a [`TaskOutcome::Err`] that
@@ -78,27 +80,37 @@ impl Worker {
                 book_file_id,
                 library_path,
                 profile,
-            } => anyhow_outcome(
-                "HLS transcode",
-                crate::hls::transcode_book(
-                    &self.pool,
-                    book_id,
-                    book_file_id,
-                    &library_path,
-                    &profile,
+            } => {
+                self.report_book_detail(id, book_id).await;
+                anyhow_outcome(
+                    "HLS transcode",
+                    crate::hls::transcode_book(
+                        &self.pool,
+                        book_id,
+                        book_file_id,
+                        &library_path,
+                        &profile,
+                    )
+                    .await,
                 )
-                .await,
-            ),
-            Task::ResolveAuthorPhoto { author_id } => anyhow_outcome(
-                "author photo lookup",
-                crate::author_photos::resolve(&self.pool, author_id).await,
-            ),
+            }
+            Task::ResolveAuthorPhoto { author_id } => {
+                self.report_author_detail(id, author_id).await;
+                anyhow_outcome(
+                    "author photo lookup",
+                    crate::author_photos::resolve(&self.pool, author_id).await,
+                )
+            }
             Task::RefetchAuthorPhotos => self.handle_refetch_author_photos(id).await,
             Task::BackfillChapters { library_path } => anyhow_outcome(
                 "chapter backfill",
-                crate::indexer::backfill_chapters(&self.pool, &library_path, |processed, total| {
-                    self.report_progress(id, processed, Some(total));
-                })
+                crate::indexer::backfill_chapters(
+                    &self.pool,
+                    &library_path,
+                    |processed, total, item| {
+                        self.report_item_progress(id, processed, total, item);
+                    },
+                )
                 .await,
             ),
             Task::BackfillWordCounts { library_path } => anyhow_outcome(
@@ -106,8 +118,8 @@ impl Worker {
                 crate::indexer::backfill_word_counts(
                     &self.pool,
                     &library_path,
-                    |processed, total| {
-                        self.report_progress(id, processed, Some(total));
+                    |processed, total, item| {
+                        self.report_item_progress(id, processed, total, item);
                     },
                 )
                 .await,
@@ -117,40 +129,54 @@ impl Worker {
                 crate::indexer::backfill_page_counts(
                     &self.pool,
                     &library_path,
-                    |processed, total| {
-                        self.report_progress(id, processed, Some(total));
+                    |processed, total, item| {
+                        self.report_item_progress(id, processed, total, item);
                     },
                 )
                 .await,
             ),
             Task::BackfillThumbs { library_path } => anyhow_outcome(
                 "thumbnail backfill",
-                crate::indexer::backfill_thumbs(&self.pool, &library_path, |processed, total| {
-                    self.report_progress(id, processed, Some(total));
-                })
+                crate::indexer::backfill_thumbs(
+                    &self.pool,
+                    &library_path,
+                    |processed, total, item| {
+                        self.report_item_progress(id, processed, total, item);
+                    },
+                )
                 .await,
             ),
             Task::RebuildFtsIndex => anyhow_outcome(
                 "FTS rebuild",
                 crate::sync::rebuild_all_fts(&self.pool).await,
             ),
-            Task::ResolveSuggestions { book_uuid } => anyhow_outcome(
-                "suggestions lookup",
-                crate::suggestions::resolve(&self.pool, &book_uuid).await,
-            ),
-            Task::KepubConvert { book_id } => self.handle_kepub_convert(book_id).await,
+            Task::ResolveSuggestions { book_uuid } => {
+                self.report_book_detail_by_uuid(id, &book_uuid).await;
+                anyhow_outcome(
+                    "suggestions lookup",
+                    crate::suggestions::resolve(&self.pool, &book_uuid).await,
+                )
+            }
+            Task::KepubConvert { book_id } => {
+                self.report_book_detail(id, book_id).await;
+                self.handle_kepub_convert(book_id).await
+            }
             Task::SendToKindle {
                 book_id,
                 book_file_id,
                 recipient_email,
-            } => kindle_outcome(
-                crate::kindle::send(&self.pool, book_id, book_file_id, &recipient_email).await,
-            ),
-            Task::RewriteAllEpubs => self.handle_rewrite_all_epubs().await,
+            } => {
+                self.report_book_detail(id, book_id).await;
+                kindle_outcome(
+                    crate::kindle::send(&self.pool, book_id, book_file_id, &recipient_email).await,
+                )
+            }
+            Task::RewriteAllEpubs => self.handle_rewrite_all_epubs(id).await,
             Task::GenerateThumbs {
                 book_id,
                 last_modified_epoch,
             } => {
+                self.report_book_detail(id, book_id).await;
                 self.handle_generate_thumbs(book_id, last_modified_epoch)
                     .await
             }
@@ -163,6 +189,62 @@ impl Worker {
                 ..
             } => handle_test_task(latency_ms, on_run, on_done).await,
         }
+    }
+
+    /// Best-effort current-item report: the book's display title. A lookup
+    /// failure (or unknown id) just leaves the task's kind label in place —
+    /// naming the item is never worth failing the task over.
+    async fn report_book_detail(&self, id: TaskId, book_id: i64) {
+        if let Ok(Some(title)) = crate::books::book_display_title(&self.pool, book_id).await {
+            self.report_detail(
+                id,
+                TaskDetail {
+                    current_item: Some(title),
+                    ..TaskDetail::default()
+                },
+            );
+        }
+    }
+
+    /// [`Worker::report_book_detail`] keyed by uuid (merged-uuid aware).
+    async fn report_book_detail_by_uuid(&self, id: TaskId, uuid: &str) {
+        if let Ok(Some(title)) = crate::books::book_display_title_by_uuid(&self.pool, uuid).await {
+            self.report_detail(
+                id,
+                TaskDetail {
+                    current_item: Some(title),
+                    ..TaskDetail::default()
+                },
+            );
+        }
+    }
+
+    /// Best-effort current-item report: the author's name.
+    async fn report_author_detail(&self, id: TaskId, author_id: i64) {
+        if let Ok(Some(name)) = crate::author_photos_data::author_name(&self.pool, author_id).await
+        {
+            self.report_detail(
+                id,
+                TaskDetail {
+                    current_item: Some(name),
+                    ..TaskDetail::default()
+                },
+            );
+        }
+    }
+
+    /// Counted progress plus the current item in one report — the shape the
+    /// per-book backfill and bake loops feed.
+    fn report_item_progress(&self, id: TaskId, processed: u32, total: u32, item: &str) {
+        self.report_progress_update(
+            id,
+            processed,
+            Some(total),
+            TaskDetail {
+                current_item: Some(item.to_string()),
+                ..TaskDetail::default()
+            },
+        );
     }
 
     /// `Task::KepubConvert` plus the Web→Kobo annotation materialization it
@@ -227,8 +309,12 @@ impl Worker {
     /// each per-book `message` (from `db::epub_rewrite`, which can carry a
     /// server filesystem path) is logged here, server-side only, and never
     /// reaches `rpc_worker_status`, which any authenticated user can poll.
-    async fn handle_rewrite_all_epubs(self: &Arc<Self>) -> TaskOutcome {
-        match crate::rewrite_all_epubs_with_overrides(&self.pool).await {
+    async fn handle_rewrite_all_epubs(self: &Arc<Self>, id: TaskId) -> TaskOutcome {
+        match crate::rewrite_all_epubs_with_progress(&self.pool, |processed, total, current| {
+            self.report_item_progress(id, processed, total, current.unwrap_or("…"));
+        })
+        .await
+        {
             Ok(summary) => {
                 tracing::info!(
                     rewritten = summary.rewritten,
@@ -256,8 +342,16 @@ impl Worker {
 
     /// Re-resolve every author's photo, reporting progress as it goes.
     async fn handle_refetch_author_photos(self: &Arc<Self>, id: TaskId) -> TaskOutcome {
-        match crate::author_photos::refetch_all(&self.pool, |processed, total| {
-            self.report_progress(id, processed, total);
+        match crate::author_photos::refetch_all(&self.pool, |processed, total, name| {
+            self.report_progress_update(
+                id,
+                processed,
+                total,
+                TaskDetail {
+                    current_item: name.map(str::to_string),
+                    ..TaskDetail::default()
+                },
+            );
         })
         .await
         {

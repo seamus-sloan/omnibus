@@ -19,7 +19,7 @@
 //!   semaphore + terminal-state projection.
 //! * [`handlers`] — `Worker::execute` per-task-kind handlers.
 //! * [`progress`] — `progress_snapshot` + retention/eviction +
-//!   `report_progress` + the terminal-state writer.
+//!   `report_progress_update`/`report_detail` + the terminal-state writer.
 //! * [`metrics`] — `Worker::metrics`: per-task-type queue depth and a
 //!   bounded recent-completions window, for a future admin health page.
 //! * [`periodic_scan`] — the testable "read settings, decide, post" step

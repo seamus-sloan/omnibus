@@ -96,7 +96,7 @@ async fn bulk_fetch_parts(
 pub(crate) async fn backfill_chapters(
     pool: &SqlitePool,
     library_path: &str,
-    mut on_progress: impl FnMut(u32, u32),
+    mut on_progress: impl FnMut(u32, u32, &str),
 ) -> anyhow::Result<()> {
     let rows = fetch_backfill_candidates(pool, library_path).await?;
     if rows.is_empty() {
@@ -114,6 +114,7 @@ pub(crate) async fn backfill_chapters(
 
     // Process books in batches of 250 to bound transaction size (mirrors the
     // sync/audiobooks.rs backfill pattern).
+    let root_name = super::root_display_name(library_path);
     let lib_root = PathBuf::from(library_path);
     for (batch_idx, chunk) in rows.chunks(250).enumerate() {
         let mut tx = pool.begin().await?;
@@ -143,7 +144,11 @@ pub(crate) async fn backfill_chapters(
             let progress = u32::try_from(global_idx)
                 .unwrap_or(u32::MAX)
                 .saturating_add(1);
-            on_progress(progress, total);
+            on_progress(
+                progress,
+                total,
+                &super::display_item(&root_name, first_part_filename),
+            );
         }
         tx.commit().await?;
     }
@@ -169,26 +174,28 @@ pub(crate) async fn backfill_chapters(
 pub(crate) async fn backfill_word_counts(
     pool: &SqlitePool,
     library_path: &str,
-    mut on_progress: impl FnMut(u32, u32),
+    mut on_progress: impl FnMut(u32, u32, &str),
 ) -> anyhow::Result<()> {
-    let ids = fetch_word_count_candidates(pool, library_path).await?;
-    if ids.is_empty() {
+    let candidates = fetch_word_count_candidates(pool, library_path).await?;
+    if candidates.is_empty() {
         return Ok(());
     }
 
-    let total = u32::try_from(ids.len()).unwrap_or(u32::MAX);
+    let total = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
     tracing::info!(count = total, "backfilling word counts for existing ebooks");
 
     // One batched path lookup up front (chunked internally), same helper the
     // stats read path used to call per-request.
+    let ids: Vec<i64> = candidates.iter().map(|(id, _)| *id).collect();
     let paths = crate::book_file_paths(pool, &ids, "EPUB").await?;
 
     let mut processed = 0u32;
-    for chunk in ids.chunks(250) {
+    for chunk in candidates.chunks(250) {
         let mut tx = pool.begin().await?;
-        for &id in chunk {
+        for (id, title) in chunk {
+            let id = *id;
             processed = processed.saturating_add(1);
-            on_progress(processed, total);
+            on_progress(processed, total, title);
 
             let Some(path) = paths.get(&id).cloned() else {
                 continue;
@@ -228,9 +235,9 @@ pub(crate) async fn backfill_word_counts(
 async fn fetch_word_count_candidates(
     pool: &SqlitePool,
     library_path: &str,
-) -> anyhow::Result<Vec<i64>> {
-    let ids: Vec<i64> = sqlx::query_scalar(
-        "SELECT DISTINCT b.id \
+) -> anyhow::Result<Vec<(i64, String)>> {
+    let rows: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT DISTINCT b.id, COALESCE(NULLIF(b.title, ''), b.scan_key) \
          FROM books b \
          JOIN scan_roots l ON b.library_id = l.id \
          JOIN book_files bf ON bf.book_id = b.id AND bf.format = 'EPUB' COLLATE NOCASE \
@@ -240,7 +247,7 @@ async fn fetch_word_count_candidates(
     .bind(library_path)
     .fetch_all(pool)
     .await?;
-    Ok(ids)
+    Ok(rows)
 }
 
 /// Fill `books.page_count` for CBZ-backed books under `library_path` that
@@ -261,26 +268,28 @@ async fn fetch_word_count_candidates(
 pub(crate) async fn backfill_page_counts(
     pool: &SqlitePool,
     library_path: &str,
-    mut on_progress: impl FnMut(u32, u32),
+    mut on_progress: impl FnMut(u32, u32, &str),
 ) -> anyhow::Result<()> {
-    let ids = fetch_page_count_candidates(pool, library_path).await?;
-    if ids.is_empty() {
+    let candidates = fetch_page_count_candidates(pool, library_path).await?;
+    if candidates.is_empty() {
         return Ok(());
     }
 
-    let total = u32::try_from(ids.len()).unwrap_or(u32::MAX);
+    let total = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
     tracing::info!(count = total, "backfilling page counts for existing comics");
 
     // One batched path lookup up front (chunked internally), same pattern
     // `backfill_word_counts` uses.
+    let ids: Vec<i64> = candidates.iter().map(|(id, _)| *id).collect();
     let paths = crate::book_file_paths(pool, &ids, "CBZ").await?;
 
     let mut processed = 0u32;
-    for chunk in ids.chunks(250) {
+    for chunk in candidates.chunks(250) {
         let mut tx = pool.begin().await?;
-        for &id in chunk {
+        for (id, title) in chunk {
+            let id = *id;
             processed = processed.saturating_add(1);
-            on_progress(processed, total);
+            on_progress(processed, total, title);
 
             let Some(path) = paths.get(&id).cloned() else {
                 continue;
@@ -320,9 +329,9 @@ pub(crate) async fn backfill_page_counts(
 async fn fetch_page_count_candidates(
     pool: &SqlitePool,
     library_path: &str,
-) -> anyhow::Result<Vec<i64>> {
-    let ids: Vec<i64> = sqlx::query_scalar(
-        "SELECT DISTINCT b.id \
+) -> anyhow::Result<Vec<(i64, String)>> {
+    let rows: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT DISTINCT b.id, COALESCE(NULLIF(b.title, ''), b.scan_key) \
          FROM books b \
          JOIN scan_roots l ON b.library_id = l.id \
          JOIN book_files bf ON bf.book_id = b.id AND bf.format = 'CBZ' COLLATE NOCASE \
@@ -332,7 +341,7 @@ async fn fetch_page_count_candidates(
     .bind(library_path)
     .fetch_all(pool)
     .await?;
-    Ok(ids)
+    Ok(rows)
 }
 
 /// Pre-generate all three WebP thumbnail sizes for every book under
@@ -356,7 +365,7 @@ async fn fetch_page_count_candidates(
 pub(crate) async fn backfill_thumbs(
     pool: &SqlitePool,
     library_path: &str,
-    mut on_progress: impl FnMut(u32, u32),
+    mut on_progress: impl FnMut(u32, u32, &str),
 ) -> anyhow::Result<()> {
     let candidates = fetch_thumb_candidates(pool, library_path).await?;
     if candidates.is_empty() {
@@ -370,9 +379,9 @@ pub(crate) async fn backfill_thumbs(
     );
 
     let mut processed = 0u32;
-    for (book_id, last_modified_epoch) in candidates {
+    for (book_id, last_modified_epoch, title) in candidates {
         processed = processed.saturating_add(1);
-        on_progress(processed, total);
+        on_progress(processed, total, &title);
         regenerate_thumbs_if_stale(pool, book_id, last_modified_epoch).await;
     }
 
@@ -451,9 +460,10 @@ async fn regenerate_thumbs_if_stale(pool: &SqlitePool, book_id: i64, last_modifi
 async fn fetch_thumb_candidates(
     pool: &SqlitePool,
     library_path: &str,
-) -> anyhow::Result<Vec<(i64, i64)>> {
-    let rows: Vec<(i64, i64)> = sqlx::query_as(
-        "SELECT b.id, CAST(COALESCE(b.last_modified, strftime('%s','now')) AS INTEGER) \
+) -> anyhow::Result<Vec<(i64, i64, String)>> {
+    let rows: Vec<(i64, i64, String)> = sqlx::query_as(
+        "SELECT b.id, CAST(COALESCE(b.last_modified, strftime('%s','now')) AS INTEGER), \
+                COALESCE(NULLIF(b.title, ''), b.scan_key) \
          FROM books b \
          JOIN scan_roots l ON b.library_id = l.id \
          WHERE l.path = ? AND b.has_cover = 1 \

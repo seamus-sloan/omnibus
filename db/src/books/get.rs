@@ -177,6 +177,34 @@ where
     .await?)
 }
 
+/// Display title for one book — `books.title`, falling back to the
+/// library-relative `scan_key` when the title is NULL or empty. Used by
+/// worker tasks to name the book they are working on in the progress feed
+/// (the scan_key fallback is relative, so it never leaks a server path).
+pub async fn book_display_title(
+    pool: &SqlitePool,
+    id: i64,
+) -> Result<Option<String>, super::BooksError> {
+    Ok(
+        sqlx::query_scalar("SELECT COALESCE(NULLIF(title, ''), scan_key) FROM books WHERE id = ?")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?,
+    )
+}
+
+/// [`book_display_title`] keyed by uuid, resolving through `merged_uuids`
+/// like every other uuid read path.
+pub async fn book_display_title_by_uuid(
+    pool: &SqlitePool,
+    uuid: &str,
+) -> Result<Option<String>, super::BooksError> {
+    let Some(id) = resolve_book_id_by_uuid(pool, uuid).await? else {
+        return Ok(None);
+    };
+    book_display_title(pool, id).await
+}
+
 /// Return `books.last_modified` (unix seconds), defaulting to `0` when the
 /// column is NULL. Used by the Kobo cover-image handler to derive a weak
 /// `ETag` from `(book id, last_modified)`; callers are expected to have

@@ -549,11 +549,11 @@ async fn progress_snapshot_evicts_terminals_after_retention() {
     assert_eq!(w.progress_len(), 0, "progress map should be empty");
 }
 
-/// `report_progress` is the phase-2 seam used to surface per-EPUB
-/// counts mid-scan. Exercising it here keeps it from being dropped
-/// as dead code and pins down the "ignored after terminal" invariant.
+/// `report_progress_update` is the mid-task seam used to surface per-EPUB
+/// counts mid-scan. Exercising it here pins down the "ignored after
+/// terminal" invariant.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn report_progress_updates_running_count() {
+async fn report_progress_update_updates_running_count() {
     let w = make_worker_default(pool().await);
     let id = w.post(Task::Test {
         tag: "report",
@@ -564,7 +564,7 @@ async fn report_progress_updates_running_count() {
         on_done: None,
     });
     // Pretend we're mid-scan and have processed 3 of 10.
-    w.report_progress(id, 3, Some(10));
+    w.report_progress_update(id, 3, Some(10), TaskDetail::default());
     let snap = w.progress_snapshot();
     let entry = snap
         .active
@@ -582,7 +582,7 @@ async fn report_progress_updates_running_count() {
 
     // After completion, the entry is terminal and further reports are
     // ignored (the run loop's terminal write is authoritative).
-    w.report_progress(id, 99, Some(10));
+    w.report_progress_update(id, 99, Some(10), TaskDetail::default());
     let snap2 = w.progress_snapshot();
     let entry2 = snap2
         .recent_complete
@@ -593,11 +593,10 @@ async fn report_progress_updates_running_count() {
 }
 
 /// `report_progress_update` stores the verbose detail alongside the
-/// counted state, a bare `report_progress` tick leaves it in place, and
-/// the terminal write keeps only the tallies (phase and current-item
-/// would read as stale on a done row).
+/// counted state, and the terminal write keeps only the tallies (phase
+/// and current-item would read as stale on a done row).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn report_progress_update_keeps_detail_and_terminal_write_prunes_to_tallies() {
+async fn report_progress_update_stores_detail_and_terminal_write_prunes_to_tallies() {
     let w = make_worker_default(pool().await);
     let id = w.post(Task::Test {
         tag: "detail",
@@ -638,16 +637,6 @@ async fn report_progress_update_keeps_detail_and_terminal_write_prunes_to_tallie
         Some("books/Author/Title.epub")
     );
     assert_eq!(detail.tallies, Some(tallies));
-
-    // A bare count tick must not erase the detail.
-    w.report_progress(id, 4, Some(10));
-    let snap = w.progress_snapshot();
-    let entry = snap
-        .active
-        .iter()
-        .find(|p| p.task_id == id)
-        .expect("running entry");
-    assert!(entry.detail.is_some(), "count tick erased the detail");
 
     let _ = w.await_completion(id).await;
     let snap = w.progress_snapshot();
@@ -696,6 +685,51 @@ async fn terminal_write_drops_detail_without_tallies() {
         .find(|p| p.task_id == id)
         .expect("terminal entry");
     assert_eq!(entry.detail, None, "tally-less detail must not survive");
+}
+
+/// `report_detail` replaces only the detail, leaving the counted state
+/// alone — the shape single-item tasks (one thumbnail, one author photo)
+/// use to name their subject without a processed/total surface.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn report_detail_sets_current_item_without_touching_the_counted_state() {
+    let w = make_worker_default(pool().await);
+    let id = w.post(Task::Test {
+        tag: "detail-only",
+        latency_ms: 50,
+        resource: Some("detail-only".into()),
+        route_through_scan_sem: false,
+        on_run: None,
+        on_done: None,
+    });
+    w.report_progress_update(id, 3, Some(10), TaskDetail::default());
+    w.report_detail(
+        id,
+        TaskDetail {
+            current_item: Some("The Fellowship of the Ring".into()),
+            ..TaskDetail::default()
+        },
+    );
+    let snap = w.progress_snapshot();
+    let entry = snap
+        .active
+        .iter()
+        .find(|p| p.task_id == id)
+        .expect("running entry");
+    assert!(matches!(
+        entry.state,
+        ProgressState::Running {
+            processed: 3,
+            total: Some(10)
+        }
+    ));
+    assert_eq!(
+        entry
+            .detail
+            .as_ref()
+            .and_then(|d| d.current_item.as_deref()),
+        Some("The Fellowship of the Ring")
+    );
+    let _ = w.await_completion(id).await;
 }
 
 /// Poisoning the `progress` mutex (a thread panics while holding its

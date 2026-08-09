@@ -212,6 +212,18 @@ pub async fn delete_author_photos_bulk(
 ///
 /// Returns the number of books that were un-linked (used by the admin
 /// confirmation modal to show "this affects N books"). Returns `Ok(0)`
+/// The author's display name, or `None` for an unknown id. Used by worker
+/// tasks to name the author they are working on in the progress feed.
+pub async fn author_name(
+    pool: &SqlitePool,
+    author_id: i64,
+) -> Result<Option<String>, AuthorPhotosDataError> {
+    Ok(sqlx::query_scalar("SELECT name FROM authors WHERE id = ?")
+        .bind(author_id)
+        .fetch_optional(pool)
+        .await?)
+}
+
 /// without touching the blocklist if `author_id` does not exist — a
 /// stale tab firing a second Delete must not leak a stale row into
 /// `ignored_authors`.

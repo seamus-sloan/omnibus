@@ -1,8 +1,9 @@
 //! Progress tracking + eviction. Hosts `Worker::progress_snapshot` and
 //! its owner-scoped sibling, the test-only retention seam, the internal
 //! `write_terminal_progress` invoked from both [`super::exec`] and the
-//! panic guard in [`super::queue`], and `report_progress` — the phase-2
-//! seam tests use to exercise mid-task counts.
+//! panic guard in [`super::queue`], and the mid-task report seams —
+//! `report_progress_update` (counted state + verbose detail) and
+//! `report_detail` (detail only).
 
 use std::time::{Duration, Instant};
 
@@ -130,25 +131,11 @@ impl Worker {
         }
     }
 
-    /// Write the in-flight progress count for `id`. The terminal state is
-    /// written separately at the end of [`Worker::run`] so a mid-task
-    /// report can't accidentally flip a task to `Done`. Leaves any
-    /// previously-reported [`TaskDetail`] in place, so a bare count tick
-    /// doesn't erase a phase or current-item line.
-    pub(crate) fn report_progress(&self, id: TaskId, processed: u32, total: Option<u32>) {
-        let mut map = lock_unpoison(&self.progress);
-        if let Some(entry) = map.get_mut(&id) {
-            if entry.terminal_at.is_some() {
-                return; // race: terminal already recorded
-            }
-            entry.progress.state = ProgressState::Running { processed, total };
-            entry.progress.last_update_ms = wall_clock_ms();
-        }
-    }
-
-    /// [`Worker::report_progress`] plus a full [`TaskDetail`] replacement in
-    /// one lock acquisition — the verbose path used by the scan pipeline.
-    /// An empty detail clears the field rather than storing `Some(empty)`.
+    /// Write the in-flight progress count for `id`, plus a full
+    /// [`TaskDetail`] replacement, in one lock acquisition. The terminal
+    /// state is written separately at the end of [`Worker::run`] so a
+    /// mid-task report can't accidentally flip a task to `Done`. An empty
+    /// detail clears the field rather than storing `Some(empty)`.
     pub(crate) fn report_progress_update(
         &self,
         id: TaskId,
@@ -162,6 +149,21 @@ impl Worker {
                 return; // race: terminal already recorded
             }
             entry.progress.state = ProgressState::Running { processed, total };
+            entry.progress.detail = (!detail.is_empty()).then_some(detail);
+            entry.progress.last_update_ms = wall_clock_ms();
+        }
+    }
+
+    /// Replace only the [`TaskDetail`] for `id`, leaving the counted state
+    /// untouched. For task kinds that name their current item once at start
+    /// (a single book's thumbnail, one author's photo) without a
+    /// processed/total surface.
+    pub(crate) fn report_detail(&self, id: TaskId, detail: TaskDetail) {
+        let mut map = lock_unpoison(&self.progress);
+        if let Some(entry) = map.get_mut(&id) {
+            if entry.terminal_at.is_some() {
+                return; // race: terminal already recorded
+            }
             entry.progress.detail = (!detail.is_empty()).then_some(detail);
             entry.progress.last_update_ms = wall_clock_ms();
         }

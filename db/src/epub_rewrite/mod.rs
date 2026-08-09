@@ -320,6 +320,17 @@ fn rewrite_blocking(src: &Path, dst: &Path, book: &EbookMetadata) -> anyhow::Res
 pub async fn rewrite_all_epubs_with_overrides(
     pool: &SqlitePool,
 ) -> Result<BulkRewriteSummary, EpubRewriteError> {
+    rewrite_all_epubs_with_progress(pool, |_, _, _| {}).await
+}
+
+/// [`rewrite_all_epubs_with_overrides`] variant that calls
+/// `on_progress(processed, total, current)` before each per-book rewrite
+/// (`current` is the book's title, falling back to its filename), so the
+/// worker can name the book being baked in the progress feed.
+pub async fn rewrite_all_epubs_with_progress(
+    pool: &SqlitePool,
+    mut on_progress: impl FnMut(u32, u32, Option<&str>),
+) -> Result<BulkRewriteSummary, EpubRewriteError> {
     // An existing `metadata_overrides` row IS "has an active override" — the
     // write paths that clear overrides entirely (`delete_metadata_overrides`,
     // `clear_cover_override`) delete the row rather than leaving an empty one.
@@ -348,7 +359,17 @@ pub async fn rewrite_all_epubs_with_overrides(
         .map(|b| (b.id, b))
         .collect();
 
+    let total = u32::try_from(uuids.len()).unwrap_or(u32::MAX);
+    let mut processed = 0u32;
     for uuid in uuids {
+        processed = processed.saturating_add(1);
+        {
+            let current = id_map
+                .get(&uuid)
+                .and_then(|book_id| books_by_id.get(book_id))
+                .map(|b| b.title.as_deref().unwrap_or(&b.filename));
+            on_progress(processed, total, current);
+        }
         // Ghosted: the override row outlived its book (source file removed
         // by a scan, or the book deleted concurrently between the listing
         // query above and this pass).
