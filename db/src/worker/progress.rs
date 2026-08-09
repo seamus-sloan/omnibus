@@ -168,25 +168,4 @@ impl Worker {
             entry.progress.last_update_ms = wall_clock_ms();
         }
     }
-
-    /// [`Worker::report_progress`] plus a full [`TaskDetail`] replacement in
-    /// one lock acquisition — the verbose path used by the scan pipeline.
-    /// An empty detail clears the field rather than storing `Some(empty)`.
-    pub(crate) fn report_progress_update(
-        &self,
-        id: TaskId,
-        processed: u32,
-        total: Option<u32>,
-        detail: TaskDetail,
-    ) {
-        let mut map = lock_unpoison(&self.progress);
-        if let Some(entry) = map.get_mut(&id) {
-            if entry.terminal_at.is_some() {
-                return; // race: terminal already recorded
-            }
-            entry.progress.state = ProgressState::Running { processed, total };
-            entry.progress.detail = (!detail.is_empty()).then_some(detail);
-            entry.progress.last_update_ms = wall_clock_ms();
-        }
-    }
 }
