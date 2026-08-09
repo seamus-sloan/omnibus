@@ -596,7 +596,7 @@ async fn resolve_close_match_caps_the_candidate_list() {
     );
 }
 
-/// #1343: the no-override arm of `query_norm_candidate` compares
+/// #1343: the no-override arm of `query_norm_candidates` compares
 /// `books.title_norm`/`books.author_norm` directly (no `metadata_overrides`
 /// join), so it must be servable by `idx_books_norm` — a `SEARCH`, not a
 /// `SCAN books` — for the common case where the exact-ISBN rung misses and no
