@@ -249,7 +249,8 @@ pub async fn get_cover(
             tracing::error!(
                 book_id,
                 uuid = %uuid,
-                "get_cover spawn_blocking {kind}: {join_err}"
+                error = %join_err,
+                "get_cover spawn_blocking {kind}"
             );
             None
         }

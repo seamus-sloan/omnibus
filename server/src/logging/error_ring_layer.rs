@@ -5,6 +5,15 @@
 //! the process with no explicit call site required at each error (AC3),
 //! extracting the message plus any book/file identifier field so the admin
 //! "Last errors" section can link the offending item.
+//!
+//! **Redaction convention.** The captured `message` is served verbatim over
+//! `GET /api/rpc/errors` to any admin session — network-reachable, unlike
+//! the durable JSON log sink it complements. `FieldVisitor` below applies no
+//! redaction, so every `tracing::error!` call site is responsible for never
+//! string-interpolating a secret-bearing value (an API key, a password, an
+//! SMTP credential) into the message literal — pass it as a named field
+//! instead, e.g. `error = %e`, which this layer deliberately does not
+//! capture. See #1777.
 
 use omnibus_db::error_ring::{self, CapturedError};
 use tracing::field::{Field, Visit};

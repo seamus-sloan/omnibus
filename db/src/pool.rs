@@ -276,7 +276,7 @@ async fn run_legacy_cover_purge() {
     })
     .await
     {
-        tracing::error!("legacy cover purge spawn_blocking failed: {join_err}");
+        tracing::error!(error = %join_err, "legacy cover purge spawn_blocking failed");
     }
 }
 
