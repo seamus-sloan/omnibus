@@ -1398,6 +1398,23 @@ struct WishlistAddRequest: Codable, Sendable {
     }
 }
 
+/// `GET /api/physical/{uuid}/wishlist` — the caller's tracking entry for a
+/// book, or a JSON `null` (decoded as `nil`) when the book isn't wishlisted.
+struct WishlistEntry: Codable, Equatable, Sendable {
+    var id: Int64
+    var userID: Int64
+    var bookUUID: String
+    var addedAt: Int64
+    var source: WishlistSource
+
+    enum CodingKeys: String, CodingKey {
+        case id, source
+        case userID = "user_id"
+        case bookUUID = "book_uuid"
+        case addedAt = "added_at"
+    }
+}
+
 /// `Json(BookRef { book_uuid })` — returned by all three scan writes.
 struct BookRef: Codable, Sendable {
     var bookUUID: String
