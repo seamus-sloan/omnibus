@@ -1,19 +1,21 @@
-//! Authors arm of the search palette: substring `LIKE` match scoped to a
-//! library, ordered by an override-aware effective book count. Visibility
-//! still requires at least one canonical link so override-only authors
-//! (no navigable id) don't appear.
+//! Authors arm of the search palette: substring `LIKE` match scoped to the
+//! visible books, ordered by an override-aware effective book count.
+//! Visibility still requires at least one canonical link so override-only
+//! authors (no navigable id) don't appear.
+
+use std::sync::OnceLock;
 
 use omnibus_shared::PaletteAuthorHit;
 use sqlx::{Row, SqlitePool};
 
-use crate::helpers::library_paths_json;
+use crate::helpers::{library_paths_json, visible_book_sql};
 
 use super::PaletteError;
 
 /// Authors-arm palette query, bound `?1 = library_path`, `?2 = like_pattern`,
 /// `?3 = limit`.
 ///
-/// Library scoping (`l.path = ?1`) is applied before aggregation so
+/// Visibility scoping ([`visible_book_sql`]) is applied before aggregation so
 /// book_count stays library-correct (covered by
 /// `search_palette_scoped_to_library` and
 /// `search_palette_taxonomy_counts_scoped_per_library`). The join plan is
@@ -24,12 +26,13 @@ use super::PaletteError;
 /// reassigned through the metadata edit form (e.g. "Sanderson, Brandon" →
 /// "Brandon Sanderson") keeps reporting the canonical count even though
 /// `/author/:id` shows zero. Visibility still requires at least one canonical
-/// link row in this library so we don't list authors that exist only as a
+/// link row on a visible book so we don't list authors that exist only as a
 /// string inside override JSON (no navigable id), matching the rest of the
 /// palette's behavior.
 ///
 /// The per-author correlated `COUNT(*)` is replaced with a
-/// single-pass `effective` membership CTE (scoped to the library up front) —
+/// single-pass `effective` membership CTE (scoped to the visible books up
+/// front) —
 /// the UNION of (1) canonical `books_authors_link` rows whose book has no
 /// `creators` override and (2) override-extracted creator names from
 /// `json_each(mo.overrides, '$.creators')`. Each visible author's count is
@@ -38,14 +41,21 @@ use super::PaletteError;
 /// The override name match stays BINARY (`= a.name`, no COLLATE) exactly as
 /// before. The empty-array clear-all case falls out: a `Some([])` override
 /// drops the book from arm (1) and yields no `json_each` rows in arm (2).
-const SEARCH_AUTHORS_SQL: &str = r"
+pub(super) fn search_authors_sql() -> &'static str {
+    static SQL: OnceLock<String> = OnceLock::new();
+    SQL.get_or_init(|| {
+        let vis = visible_book_sql("b", "l2", "?1");
+        let vis_lead = visible_book_sql("b3", "l3", "?1");
+        let vis_exists = visible_book_sql("b", "l", "?1");
+        format!(
+            r"
         WITH effective AS (
           SELECT bal.author AS author_id, NULL AS author_name, bal.book AS book_id
             FROM books_authors_link bal
             JOIN books b ON b.id = bal.book
             JOIN scan_roots l2 ON l2.id = b.library_id
             LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
-           WHERE l2.path IN (SELECT value FROM json_each(?1))
+           WHERE {vis}
              AND (mo.book_uuid IS NULL
                   OR json_type(mo.overrides, '$.creators') IS NULL)
           UNION
@@ -56,7 +66,7 @@ const SEARCH_AUTHORS_SQL: &str = r"
             JOIN scan_roots l2 ON l2.id = b.library_id
             JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
             JOIN json_each(mo.overrides, '$.creators') je
-           WHERE l2.path IN (SELECT value FROM json_each(?1))
+           WHERE {vis}
              AND json_type(mo.overrides, '$.creators') IS NOT NULL
         )
         SELECT a.id, a.name,
@@ -68,7 +78,7 @@ const SEARCH_AUTHORS_SQL: &str = r"
              JOIN scan_roots l3 ON l3.id = b3.library_id
              LEFT JOIN metadata_overrides mo3 ON mo3.book_uuid = b3.uuid
             WHERE bal3.author = a.id
-              AND l3.path IN (SELECT value FROM json_each(?1))
+              AND {vis_lead}
             ORDER BY b3.sort, b3.id LIMIT 1) AS lead_book_title
         FROM authors a
         WHERE a.name LIKE ?2 ESCAPE '\'
@@ -77,11 +87,14 @@ const SEARCH_AUTHORS_SQL: &str = r"
               JOIN books b ON b.id = bal.book
               JOIN scan_roots l ON l.id = b.library_id
              WHERE bal.author = a.id
-               AND l.path IN (SELECT value FROM json_each(?1))
+               AND {vis_exists}
           )
         ORDER BY book_count DESC, a.name
         LIMIT ?3
-        ";
+        "
+        )
+    })
+}
 
 /// Run the authors arm of the palette for `like_pattern` (already escaped)
 /// scoped to `library_path`, capped to `limit`.
@@ -104,7 +117,7 @@ pub async fn search_authors_for_paths(
     if library_paths.is_empty() {
         return Ok(Vec::new());
     }
-    let rows = sqlx::query(SEARCH_AUTHORS_SQL)
+    let rows = sqlx::query(search_authors_sql())
         .bind(library_paths_json(library_paths))
         .bind(like_pattern)
         .bind(limit)
@@ -124,8 +137,8 @@ pub async fn search_authors_for_paths(
 
 /// Count visible authors matching `like_pattern` in `library_path` — the
 /// uncapped total behind the palette's 5-hit author cap. "Visible" mirrors
-/// [`search_authors`]: the author needs at least one canonical link in this
-/// library (override-only names have no navigable id and are excluded).
+/// [`search_authors`]: the author needs at least one canonical link on a
+/// visible book (override-only names have no navigable id and are excluded).
 pub async fn count_authors(
     pool: &SqlitePool,
     library_path: &str,
@@ -143,7 +156,8 @@ pub async fn count_authors_for_paths(
     if library_paths.is_empty() {
         return Ok(0);
     }
-    Ok(sqlx::query_scalar::<_, i64>(
+    let visible = visible_book_sql("b", "l", "?1");
+    Ok(sqlx::query_scalar::<_, i64>(&format!(
         r"
         SELECT COUNT(*) FROM authors a
         WHERE a.name LIKE ?2 ESCAPE '\'
@@ -152,10 +166,10 @@ pub async fn count_authors_for_paths(
               JOIN books b ON b.id = bal.book
               JOIN scan_roots l ON l.id = b.library_id
              WHERE bal.author = a.id
-               AND l.path IN (SELECT value FROM json_each(?1))
+               AND {visible}
           )
-        ",
-    )
+        "
+    ))
     .bind(library_paths_json(library_paths))
     .bind(like_pattern)
     .fetch_one(pool)
