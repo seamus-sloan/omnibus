@@ -113,7 +113,10 @@ pub(super) fn LandingHeader(
                 }
             }
             if let Some(msg) = page_error.as_ref() {
-                p { class: "error", "⚠ {msg}" }
+                // Tagged because a failed shelf-member fetch and a genuinely
+                // empty shelf both render an empty grid — this banner is the
+                // only thing that tells them apart.
+                p { class: "error", "data-testid": "lib-page-error", "⚠ {msg}" }
             }
             if let Some(msg) = lib_err.as_ref() {
                 p { class: "error", "⚠ {msg}" }
