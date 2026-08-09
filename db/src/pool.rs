@@ -336,13 +336,38 @@ fn purge_legacy_covers_once(dir: &Path) {
                 return;
             }
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            // An entry we can't read is one we can't verify or remove —
+            // flattening it away would land the sentinel on an unclean sweep.
+            let entry = match entry {
+                Ok(e) => e,
+                Err(err) => {
+                    left_behind += 1;
+                    tracing::warn!(
+                        covers_dir = %dir.display(),
+                        error = %err,
+                        "could not read covers dir entry; leaving the scheme unmarked",
+                    );
+                    continue;
+                }
+            };
             let path = entry.path();
             // Only touch regular files at the top level. Leave subdirectories
             // alone — nothing in this layer writes them today, but if a future
-            // version does we'd rather not blow them away.
-            if !path.is_file() {
-                continue;
+            // version does we'd rather not blow them away. An unstattable
+            // entry counts as left behind for the same reason as above.
+            match std::fs::metadata(&path) {
+                Ok(meta) if !meta.is_file() => continue,
+                Ok(_) => {}
+                Err(err) => {
+                    left_behind += 1;
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %err,
+                        "could not stat covers dir entry; leaving the scheme unmarked",
+                    );
+                    continue;
+                }
             }
             match std::fs::remove_file(&path) {
                 Ok(()) => removed += 1,

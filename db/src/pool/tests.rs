@@ -1062,6 +1062,28 @@ fn purge_legacy_covers_once_leaves_scheme_unmarked_when_a_file_cannot_be_removed
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn purge_legacy_covers_once_leaves_scheme_unmarked_when_an_entry_cannot_be_statted() {
+    // An entry the sweep can't stat is one it can't verify or remove, so the
+    // sentinel must not land. A dangling symlink is the reproducible case:
+    // `std::fs::metadata` follows the link and errors on the missing target.
+    let covers = CoversTempDir::new("purge_unstattable");
+    std::fs::create_dir_all(&covers.path).unwrap();
+    std::os::unix::fs::symlink(
+        covers.path.join("no-such-target"),
+        covers.path.join("dangling.jpg"),
+    )
+    .unwrap();
+
+    purge_legacy_covers_once(&covers.path);
+
+    assert!(
+        !covers.path.join(COVERS_SCHEME_SENTINEL).exists(),
+        "a sweep with an unstattable entry must leave the scheme unmarked",
+    );
+}
+
 #[tokio::test]
 async fn migration_0069_creates_library_cleanup_tables_with_unique_constraints() {
     // AC1: a fresh in-memory DB applies migration 0069 cleanly and all three
