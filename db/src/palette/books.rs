@@ -13,7 +13,7 @@ use crate::metadata_overrides::load_overrides_bulk;
 
 use super::PaletteError;
 
-/// FTS5 books-arm palette query, bound `?1 = match_expr`, `?2 = library_path`,
+/// FTS5 books-arm palette query, bound `?1 = match_expr`, `?2 = library_paths JSON array`,
 /// `?3 = limit`. The `bm25` MATCH scan runs once inside a `MATERIALIZED` CTE
 /// and `total_count` is a scalar `COUNT(*)` over it, so the true (pre-cap)
 /// match total ships on every row alongside the capped result set.

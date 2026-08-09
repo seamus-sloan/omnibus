@@ -12,7 +12,7 @@ use crate::helpers::{library_paths_json, visible_book_sql};
 
 use super::PaletteError;
 
-/// Series-arm palette query, bound `?1 = library_path`, `?2 = like_pattern`,
+/// Series-arm palette query, bound `?1 = library_paths JSON array`, `?2 = like_pattern`,
 /// `?3 = limit`.
 ///
 /// Both the count and the `author_display` line use the effective
