@@ -552,6 +552,52 @@ fn bearer_req(method: &str, uri: &str, token: &str) -> Request<Body> {
         .unwrap()
 }
 
+/// A minimal `AuthUser` for driving `get_sessions_handler` /
+/// `delete_session_handler` directly (bypassing the `AuthUser` extractor).
+/// Needed because both handlers' own DB-failure branch shares the
+/// `sessions` table with the extractor's own session lookup: closing the
+/// pool (or dropping the table) before the request would fail extraction
+/// itself rather than the handler body under test, so the handler is
+/// invoked directly with a hand-built caller and a pool closed only after
+/// extraction would have happened.
+fn fake_auth_user(id: i64, session_id: i64) -> AuthUser {
+    AuthUser {
+        id,
+        username: "alice".to_string(),
+        is_admin: false,
+        can_upload: false,
+        can_edit: false,
+        can_download: true,
+        kindle_email: None,
+        display_name: None,
+        has_avatar: false,
+        hidden_formats: Vec::new(),
+        session_id,
+        session_kind: SessionKind::Bearer,
+    }
+}
+
+#[tokio::test]
+async fn get_sessions_handler_returns_500_when_pool_closed() {
+    let (_app, pool) = app().await;
+    pool.close().await;
+    let state = AppState::new(pool);
+    let res = get_sessions_handler(fake_auth_user(1, 1), State(state)).await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn delete_session_handler_returns_500_when_pool_closed() {
+    let (_app, pool) = app().await;
+    pool.close().await;
+    let state = AppState::new(pool);
+    // session_id (2) deliberately differs from the caller's own session_id
+    // (1) so the handler's "cannot revoke the current session" 400 guard
+    // doesn't short-circuit before the DB call under test runs.
+    let res = delete_session_handler(fake_auth_user(1, 1), State(state), Path(2)).await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
 #[tokio::test]
 async fn get_sessions_returns_401_when_anonymous() {
     let (app, _pool) = app().await;
