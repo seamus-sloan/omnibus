@@ -2,8 +2,21 @@
 //! gated behind the same live-session auth as `/api/*` (each handler takes
 //! [`crate::auth::AuthUser`] directly). Deliberately ebook-library scoped —
 //! every read filters to `settings.ebook_library_path` — so every
-//! acquisition entry carries a working download link. Series and category
-//! browses are not yet implemented.
+//! acquisition entry carries a working download link. The Atom catalog's
+//! series and category browses are not implemented; the `/opds/v2/*` JSON
+//! catalog below adds a series browse and carries category (subject/genre)
+//! data inline on every publication.
+//!
+//! `/opds/v2/*` is the OPDS 2.0 JSON counterpart (`application/opds+json`,
+//! [`omnibus_shared::opds`]) for modern OPDS clients — a distinct path
+//! rather than `Accept`-negotiated on `/opds` itself, so a client (or a
+//! proxy cache keyed on path) never needs content negotiation to reach it,
+//! and so this module's routing table stays as simple as the Atom one's.
+//! The `json_*` submodules mirror the flat `atom`-era module names
+//! one-for-one (`json_nav` ~ `nav`, `json_authors` ~ `authors`, …) and
+//! reuse their DB reads and format-selection helpers directly, so the two
+//! catalogs cannot silently drift on what a book, author, or search result
+//! actually is.
 
 use axum::{
     http::header,
@@ -11,6 +24,7 @@ use axum::{
     routing::get,
     Extension, Router,
 };
+use omnibus_shared::opds as opds2;
 
 use crate::http_errors::internal;
 
@@ -19,6 +33,12 @@ use super::AppState;
 mod atom;
 mod authors;
 mod entries;
+mod json_authors;
+mod json_entries;
+mod json_nav;
+mod json_new;
+mod json_search;
+mod json_series;
 mod nav;
 mod new;
 mod search;
@@ -39,6 +59,14 @@ pub fn opds_router(state: AppState) -> Router {
         .route("/opds/authors", get(authors::letter_index))
         .route("/opds/authors/{letter}", get(authors::by_letter))
         .route("/opds/author/{id}", get(authors::acquisition_feed))
+        .route("/opds/v2", get(json_nav::root))
+        .route("/opds/v2/search", get(json_search::search))
+        .route("/opds/v2/new", get(json_new::new_arrivals))
+        .route("/opds/v2/authors", get(json_authors::letter_index))
+        .route("/opds/v2/authors/{letter}", get(json_authors::by_letter))
+        .route("/opds/v2/author/{id}", get(json_authors::acquisition_feed))
+        .route("/opds/v2/series", get(json_series::index))
+        .route("/opds/v2/series/{id}", get(json_series::acquisition_feed))
         .with_state(state)
         .layer(Extension(pool))
 }
@@ -98,4 +126,27 @@ fn nav_entry(
         authors: Vec::new(),
         links: vec![atom::Link::new("subsection", href.to_string(), kind)],
     }
+}
+
+/// Serialize an [`opds2::Feed`] as a `200 application/opds+json` response —
+/// the JSON analog of [`xml_response`]. Serialization only fails if a
+/// `Feed` somehow carries non-UTF-8/non-finite float data it can't have
+/// (every field here is a `String`/`Option`/`Vec`), so the error arm exists
+/// for soundness rather than an expected path.
+fn json_response(feed: &opds2::Feed) -> Response {
+    match serde_json::to_string(feed) {
+        Ok(body) => ([(header::CONTENT_TYPE, opds2::MEDIA_TYPE)], body).into_response(),
+        Err(e) => internal("serialize opds2 feed", e),
+    }
+}
+
+/// A navigation [`opds2::Link`] — the JSON counterpart to [`nav_entry`]:
+/// `rel="subsection"` into another feed, with the target's title inline
+/// (JSON navigation has no separate `<summary>` slot the way Atom's
+/// `<entry>` does).
+fn json_nav_link(title: &str, href: &str) -> opds2::Link {
+    opds2::Link::new(href)
+        .with_rel("subsection")
+        .with_type(opds2::MEDIA_TYPE)
+        .with_title(title)
 }

@@ -1,21 +1,18 @@
-//! `GET /opds/new` — OPDS acquisition feed of the most recently added books.
+//! `GET /opds/v2/new` — OPDS 2.0 JSON feed of the most recently added books
+//! (AC2). Same query, same row cap (`new::NEW_LIMIT`), and the same
+//! ebook-only scope as `/opds/new`, so the two "recently added" feeds
+//! always agree.
 
 use axum::{extract::State, response::Response};
 use omnibus_db as db;
+use omnibus_shared::opds::{Feed, FeedMetadata, Link, MEDIA_TYPE};
 use omnibus_shared::{SortDir, SortKey, ViewFilters};
 
-use super::atom::{Feed, Link, ACQUISITION_TYPE, NAVIGATION_TYPE};
-use super::entries::book_entry;
-use super::{internal, now_rfc3339, xml_response};
+use super::json_entries::book_publication;
+use super::new::NEW_LIMIT;
+use super::{internal, json_response};
 use crate::auth::AuthUser;
 use crate::backend::AppState;
-
-/// Row cap for the recently-added feed — generous for a client's first
-/// screen without needing to page further. This endpoint doesn't expose a
-/// `?cursor=`; a client that wants more follows `/opds/authors` instead.
-/// `pub(super)` — `opds::json_new` reuses the same cap so both catalogs'
-/// "recently added" feeds can't drift apart in size.
-pub(super) const NEW_LIMIT: i64 = 50;
 
 pub(super) async fn new_arrivals(_user: AuthUser, State(state): State<AppState>) -> Response {
     let settings = match db::get_settings(&state.pool).await {
@@ -44,14 +41,21 @@ pub(super) async fn new_arrivals(_user: AuthUser, State(state): State<AppState>)
         }
     };
     let feed = Feed {
-        id: "urn:omnibus:opds:new".to_string(),
-        title: "Recently Added".to_string(),
-        updated: now_rfc3339(),
+        metadata: FeedMetadata {
+            title: "Recently Added".to_string(),
+            number_of_items: Some(books.len() as i64),
+            ..Default::default()
+        },
         links: vec![
-            Link::new("self", "/opds/new", ACQUISITION_TYPE),
-            Link::new("start", "/opds", NAVIGATION_TYPE),
+            Link::new("/opds/v2/new")
+                .with_rel("self")
+                .with_type(MEDIA_TYPE),
+            Link::new("/opds/v2")
+                .with_rel("start")
+                .with_type(MEDIA_TYPE),
         ],
-        entries: books.iter().map(book_entry).collect(),
+        navigation: Vec::new(),
+        publications: books.iter().map(book_publication).collect(),
     };
-    xml_response(ACQUISITION_TYPE, feed.to_xml())
+    json_response(&feed)
 }
