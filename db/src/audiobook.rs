@@ -24,7 +24,8 @@ pub use chapters::{extract_chapters, RawChapter};
 pub use codec::{classify_filenames, is_direct_playable, mime_for_filename, PlaybackMode};
 pub use group::{group_into_books, AudiobookGroup};
 pub use parse::{
-    parse_audiobook_targets, parse_groups, AudiobookParseTarget, AudiobookPart, IndexedAudiobook,
+    parse_audiobook_targets, parse_groups, parse_groups_with_progress, AudiobookParseTarget,
+    AudiobookPart, IndexedAudiobook,
 };
 pub use stat::{stat_audiobook_library, AudiobookStatEntry, AudiobookStatScanResult};
 

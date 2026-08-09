@@ -17,7 +17,7 @@ mod wordcount;
 
 pub use accent::extract_accent;
 pub(crate) use cover::resolve_cover_with;
-pub use parse::{parse_ebook_targets, ParseTarget};
+pub use parse::{parse_ebook_targets, parse_ebook_targets_with_progress, ParseTarget};
 pub use stat::{stat_ebook_library, StatEntry, StatScanResult};
 pub use wordcount::estimate_word_count;
 

@@ -74,7 +74,7 @@ async fn sync_audiobooks_new_inserts_a_new_audiobook_and_its_rows() {
         Some("Author"),
     )];
     let mut tx = pool.begin().await.unwrap();
-    let covers = sync_audiobooks_new(&mut tx, library_id, "/lib", &new_books, &[], || {})
+    let covers = sync_audiobooks_new(&mut tx, library_id, "/lib", &new_books, &[], |_| {})
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -169,7 +169,7 @@ async fn sync_audiobooks_new_rewrites_a_fileless_book_in_place_when_scan_key_mat
     // … and returned, so the next scan classifies the same scan_key as New.
     let returned = indexed_audiobook("Author/Book.m4b", "Book", Some("Seed Author"));
     let mut tx = pool.begin().await.unwrap();
-    sync_audiobooks_new(&mut tx, library_id, "/lib", &[returned], &[], || {})
+    sync_audiobooks_new(&mut tx, library_id, "/lib", &[returned], &[], |_| {})
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -203,7 +203,7 @@ async fn sync_audiobooks_new_is_a_noop_for_empty_batch() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let library_id = seed_scan_root(&pool).await;
     let mut tx = pool.begin().await.unwrap();
-    let covers = sync_audiobooks_new(&mut tx, library_id, "/lib", &[], &[], || {})
+    let covers = sync_audiobooks_new(&mut tx, library_id, "/lib", &[], &[], |_| {})
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -232,7 +232,7 @@ async fn sync_audiobooks_changed_updates_an_existing_audiobook_row_in_place() {
     let mut changed = indexed_audiobook("Author/Book.m4b", "Updated Title", Some("New Author"));
     changed.parts[0].duration_seconds = 7200.0;
     let mut tx = pool.begin().await.unwrap();
-    sync_audiobooks_changed(&mut tx, library_id, "/lib", &[changed], || {})
+    sync_audiobooks_changed(&mut tx, library_id, "/lib", &[changed], |_| {})
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -295,7 +295,7 @@ async fn sync_audiobooks_changed_promotes_to_new_insert_on_toctou_miss() {
 
     let phantom = indexed_audiobook("Author/Phantom.m4b", "Phantom", Some("Author"));
     let mut tx = pool.begin().await.unwrap();
-    sync_audiobooks_changed(&mut tx, library_id, "/lib", &[phantom], || {})
+    sync_audiobooks_changed(&mut tx, library_id, "/lib", &[phantom], |_| {})
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -348,7 +348,7 @@ async fn sync_audiobooks_changed_refreshes_attached_file_via_merged_uuids_ledger
     let mut refreshed = indexed_audiobook("Stoker/Dracula.m4b", "Dracula", Some("Bram Stoker"));
     refreshed.parts[0].duration_seconds = 9999.0;
     let mut tx = pool.begin().await.unwrap();
-    sync_audiobooks_changed(&mut tx, library_id, "/lib", &[refreshed], || {})
+    sync_audiobooks_changed(&mut tx, library_id, "/lib", &[refreshed], |_| {})
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -389,7 +389,7 @@ async fn sync_audiobooks_changed_is_a_noop_for_empty_batch() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let library_id = seed_scan_root(&pool).await;
     let mut tx = pool.begin().await.unwrap();
-    let covers = sync_audiobooks_changed(&mut tx, library_id, "/lib", &[], || {})
+    let covers = sync_audiobooks_changed(&mut tx, library_id, "/lib", &[], |_| {})
         .await
         .unwrap();
     tx.commit().await.unwrap();

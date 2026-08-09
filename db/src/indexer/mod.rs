@@ -152,6 +152,76 @@ fn ghost_warning_threshold_exceeded(removed: usize, db_file_backed: usize) -> bo
     fraction > MASS_MISSING_WARN_FRACTION
 }
 
+/// Phase label reported while the scanner walks the library tree.
+pub const PHASE_WALKING: &str = "Walking the library";
+/// Phase label reported while Phase B parses new/changed files.
+pub const PHASE_PARSING: &str = "Reading file metadata";
+/// Phase label reported while the sync writer applies the diff.
+pub const PHASE_SYNCING: &str = "Updating the library";
+
+/// One verbose progress event from a reindex: the counted state plus the
+/// phase / current-item / tally detail the worker forwards to the UI via
+/// [`omnibus_shared::TaskDetail`]. `current_item` inside `detail` is always
+/// the library directory name plus the library-relative path — never an
+/// absolute server path (the worker status feed is readable by any
+/// authenticated user).
+#[derive(Debug, Clone)]
+pub struct ScanUpdate {
+    pub processed: u32,
+    pub total: Option<u32>,
+    pub detail: omnibus_shared::TaskDetail,
+}
+
+impl ScanUpdate {
+    /// A count-free event carrying only a phase label — the shape the
+    /// pre-count walk phase reports.
+    fn phase(phase: &str) -> Self {
+        ScanUpdate {
+            processed: 0,
+            total: None,
+            detail: omnibus_shared::TaskDetail {
+                phase: Some(phase.to_string()),
+                current_item: None,
+                tallies: None,
+            },
+        }
+    }
+}
+
+/// The display prefix for scan `current_item` paths: the library root's
+/// directory name (`/mnt/media/books` → `books`), so the UI shows
+/// `books/Author/Title.epub` without leaking where the library lives.
+fn root_display_name(library_path: &str) -> String {
+    Path::new(library_path)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// Join the root display name with a library-relative path for the UI.
+fn display_item(root_name: &str, relative: &str) -> String {
+    if root_name.is_empty() {
+        relative.to_string()
+    } else {
+        format!("{root_name}/{relative}")
+    }
+}
+
+/// Project a [`ReindexDiff`] (plus the walk's file count) into the wire
+/// tallies the UI renders. Saturating: a library past `u32::MAX` files has
+/// bigger problems than a pinned tally.
+fn diff_tallies(found: usize, diff: &ReindexDiff) -> omnibus_shared::ScanTallies {
+    let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    omnibus_shared::ScanTallies {
+        found: count(found),
+        new: count(diff.new.len()),
+        changed: count(diff.changed.len()),
+        removed: count(diff.removed.len()),
+        moved: count(diff.moved.len()),
+        unchanged: count(diff.unchanged.len()),
+    }
+}
+
 /// Per-scan tallies handed back to the worker so it can decide whether to
 /// attach a [`omnibus_shared::GhostFilesWarning`] to the task's `Done`
 /// state. `removed` is this scan's ghost count; `file_backed_total` is the
@@ -612,19 +682,26 @@ fn path_format(scan_key: &str) -> String {
 /// elapses). Per-book parse failures are *not* fatal; they land in the
 /// DB as rows with `error = Some(_)`, same as before.
 pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<ReindexStats> {
-    reindex_with_progress(pool, library_path, |_, _| {}).await
+    reindex_with_progress(pool, library_path, |_| {}).await
 }
 
-/// [`reindex`] variant that calls `on_progress(processed, total)` after
-/// each per-book write inside `sync_books`. Used by
-/// [`crate::worker::Worker`] to report determinate `processed / total`
-/// counts to the UI indicator. Returns the scan's ghost-count tallies
-/// (issue #1057) so the caller can decide whether to attach a warning.
+/// [`reindex`] variant that reports verbose [`ScanUpdate`] events: a
+/// [`PHASE_WALKING`] event before the tree walk, a per-file
+/// [`PHASE_PARSING`] event during the Phase-B metadata parse, and a
+/// per-book [`PHASE_SYNCING`] event after each write inside `sync_books` —
+/// the parse and sync events carry the diff's [`omnibus_shared::ScanTallies`]
+/// and the current item's display path. Used by [`crate::worker::Worker`]
+/// to feed the UI's live activity panel. `Send + 'static` because the
+/// callback rides into the Phase-B `spawn_blocking` (and back out).
+/// Returns the scan's ghost-count tallies (issue #1057) so the caller can
+/// decide whether to attach a warning.
 pub async fn reindex_with_progress(
     pool: &SqlitePool,
     library_path: &str,
-    on_progress: impl FnMut(u32, u32),
+    on_progress: impl FnMut(ScanUpdate) + Send + 'static,
 ) -> anyhow::Result<ReindexStats> {
+    let mut on_progress = on_progress;
+    on_progress(ScanUpdate::phase(PHASE_WALKING));
     let path_for_scan = library_path.to_owned();
     let library_key_for_scan = library_path.to_owned();
     let stat = tokio::task::spawn_blocking(move || {
@@ -673,23 +750,53 @@ pub async fn reindex_with_progress(
         );
     }
 
+    // Tallies are fixed once the diff lands; every parse and sync event
+    // carries the same copy so the panel's counts never regress mid-scan.
+    let found = stat
+        .entries
+        .iter()
+        .filter(|e| !e.scan_key.is_empty())
+        .count();
+    let tallies = diff_tallies(found, &diff);
+    let root_name = root_display_name(library_path);
+
     // Parse Phase B only for the buckets that need it. `diff.removed`/
     // `.backfill` are read again below, but `.new`/`.changed` are not, so
     // move them out instead of cloning every scan target on every reindex.
     let new_targets = std::mem::take(&mut diff.new);
     let changed_targets = std::mem::take(&mut diff.changed);
-    let parsed = tokio::task::spawn_blocking(move || {
+    let parse_total = u32::try_from(new_targets.len() + changed_targets.len()).unwrap_or(u32::MAX);
+    let root_for_parse = root_name.clone();
+    // The callback moves into the blocking task for per-file reporting and
+    // rides back out in the return value for the sync phase below.
+    let (parsed, on_progress) = tokio::task::spawn_blocking(move || {
         // Materialize cover sidecars so future scans skip the zip
         // (F0.6). Best-effort: read-only filesystems fall through to the
         // in-memory bytes for the current scan and retry next time.
         let opts = ebook::ScanOptions {
             materialize_sidecars: true,
         };
-        let new_books = ebook::parse_ebook_targets(new_targets, opts.clone());
-        let changed_books = ebook::parse_ebook_targets(changed_targets, opts);
-        (new_books, changed_books)
+        let mut parsed_count = 0u32;
+        let mut report = |t: &ebook::ParseTarget| {
+            parsed_count = parsed_count.saturating_add(1);
+            on_progress(ScanUpdate {
+                processed: parsed_count,
+                total: Some(parse_total),
+                detail: omnibus_shared::TaskDetail {
+                    phase: Some(PHASE_PARSING.to_string()),
+                    current_item: Some(display_item(&root_for_parse, &t.filename)),
+                    tallies: Some(tallies),
+                },
+            });
+        };
+        let new_books =
+            ebook::parse_ebook_targets_with_progress(new_targets, opts.clone(), &mut report);
+        let changed_books =
+            ebook::parse_ebook_targets_with_progress(changed_targets, opts, &mut report);
+        ((new_books, changed_books), on_progress)
     })
     .await?;
+    let mut on_progress = on_progress;
 
     let plan = sync::SyncPlan {
         new_books: parsed.0,
@@ -698,7 +805,18 @@ pub async fn reindex_with_progress(
         removed_uuids: diff.removed,
         backfill: diff.backfill,
     };
-    sync::sync_books_with_progress(pool, library_path, plan, on_progress).await?;
+    sync::sync_books_with_progress(pool, library_path, plan, |processed, total, current| {
+        on_progress(ScanUpdate {
+            processed,
+            total: Some(total),
+            detail: omnibus_shared::TaskDetail {
+                phase: Some(PHASE_SYNCING.to_string()),
+                current_item: current.map(|c| display_item(&root_name, c)),
+                tallies: Some(tallies),
+            },
+        });
+    })
+    .await?;
     gc_missing_files_best_effort(pool).await;
     Ok(ReindexStats {
         removed: removed_count,

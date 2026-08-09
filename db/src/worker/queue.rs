@@ -105,6 +105,7 @@ impl Worker {
                         total: None,
                     },
                     resource_key: task.resource_key(),
+                    detail: None,
                     started_at_ms: now_ms,
                     last_update_ms: now_ms,
                 },

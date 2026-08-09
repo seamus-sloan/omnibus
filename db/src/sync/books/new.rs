@@ -26,7 +26,7 @@ pub(super) async fn sync_new(
     library_path: &str,
     new_books: &[crate::ebook::IndexedBook],
     removed_uuids: &[String],
-    mut on_book_written: impl FnMut(),
+    mut on_book_written: impl FnMut(&str),
 ) -> Result<Vec<(String, String, Vec<u8>)>, sqlx::Error> {
     if new_books.is_empty() {
         return Ok(Vec::new());
@@ -74,18 +74,18 @@ pub(super) async fn sync_new(
         // an attachment.
         if let Some((book_id, uuid)) = id_map.get(scan_key).map(|(id, u)| (*id, u.clone())) {
             rewrite_book_in_place(tx, book_id, &uuid, b, &mut new_covers).await?;
-            on_book_written();
+            on_book_written(&b.metadata.filename);
             continue;
         }
         if try_attach_new_ebook(tx, library_path, b, &removed_this_scan, &mut new_covers).await? {
-            on_book_written();
+            on_book_written(&b.metadata.filename);
             continue;
         }
         let inserted = insert_book_row(tx, library_id, library_path, b).await?;
         insert_metadata_links(tx, inserted.book_id, &b.metadata).await?;
         upsert_fts(tx, inserted.book_id).await?;
         super::super::push_cover(&mut new_covers, &inserted.uuid, &b.cover);
-        on_book_written();
+        on_book_written(&b.metadata.filename);
     }
     Ok(new_covers)
 }

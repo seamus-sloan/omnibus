@@ -29,7 +29,7 @@ pub(super) async fn sync_changed(
     library_id: i64,
     library_path: &str,
     changed_books: &[crate::ebook::IndexedBook],
-    mut on_book_written: impl FnMut(),
+    mut on_book_written: impl FnMut(&str),
 ) -> Result<Vec<(String, String, Vec<u8>)>, sqlx::Error> {
     if changed_books.is_empty() {
         return Ok(Vec::new());
@@ -78,7 +78,7 @@ pub(super) async fn sync_changed(
             &mut changed_covers,
         )
         .await?;
-        on_book_written();
+        on_book_written(&b.metadata.filename);
     }
     Ok(changed_covers)
 }

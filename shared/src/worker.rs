@@ -76,6 +76,50 @@ pub struct GhostFilesWarning {
     pub total: u32,
 }
 
+/// Live verbose detail attached to a [`TaskProgress`] entry: which phase the
+/// task is in, the item it is working on right now, and (for scans) the
+/// diff's classification tallies. Every field is optional so task kinds
+/// opt in piecemeal; all three absent serializes to no `detail` key at all.
+///
+/// `current_item` is user-facing display text and must never carry an
+/// absolute server path — scans report the library directory name plus the
+/// library-relative path (`books/Author/Title.epub`), other tasks report a
+/// book title or author name. `rpc_worker_status` is readable by any
+/// authenticated user, so this is a security boundary, not a style choice.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskDetail {
+    /// Short human-readable phase label, e.g. "Walking the library".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    /// The item being processed right now, e.g. "books/Author/Title.epub".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_item: Option<String>,
+    /// Scan classification tallies; retained on the terminal `Done` entry so
+    /// the completion row can summarize what the scan changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tallies: Option<ScanTallies>,
+}
+
+impl TaskDetail {
+    /// `true` when no field carries anything — the "render nothing" state.
+    pub fn is_empty(&self) -> bool {
+        self.phase.is_none() && self.current_item.is_none() && self.tallies.is_none()
+    }
+}
+
+/// Running tallies from a library scan's diff: how many files the walk
+/// `found`, and how the diff classified them. Counts are fixed once the
+/// diff completes; the UI renders them alongside the per-file progress.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScanTallies {
+    pub found: u32,
+    pub new: u32,
+    pub changed: u32,
+    pub removed: u32,
+    pub moved: u32,
+    pub unchanged: u32,
+}
+
 /// One row of the worker progress feed. `task_id` is the process-local
 /// worker id (not stable across server restarts); the UI uses it only as a
 /// stable key for list rendering and dismiss-tracking.
@@ -86,6 +130,11 @@ pub struct TaskProgress {
     pub state: ProgressState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_key: Option<String>,
+    /// Live phase / current-item / tally detail. `None` for task kinds that
+    /// haven't opted in, and omitted from the wire entirely in that case so
+    /// pre-existing payload shapes are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<TaskDetail>,
     /// Milliseconds since the UNIX epoch — wall-clock, for UI elapsed-time
     /// display only. The server's actual eviction logic uses a monotonic
     /// `Instant` internally, so these timestamps don't have to be precise.
@@ -167,6 +216,67 @@ mod tests {
         let json = serde_json::to_string(&state).unwrap();
         let round_tripped: ProgressState = serde_json::from_str(&json).unwrap();
         assert_eq!(state, round_tripped);
+    }
+
+    #[test]
+    fn task_progress_without_detail_omits_the_field_from_the_wire() {
+        let progress = TaskProgress {
+            task_id: 1,
+            kind: TaskKind::Scan,
+            state: ProgressState::Running {
+                processed: 0,
+                total: None,
+            },
+            resource_key: None,
+            detail: None,
+            started_at_ms: 0,
+            last_update_ms: 0,
+        };
+        let json = serde_json::to_string(&progress).unwrap();
+        assert!(
+            !json.contains("detail"),
+            "expected no detail key, got {json}"
+        );
+    }
+
+    #[test]
+    fn task_progress_with_detail_round_trips_phase_item_and_tallies() {
+        let progress = TaskProgress {
+            task_id: 1,
+            kind: TaskKind::Scan,
+            state: ProgressState::Running {
+                processed: 3,
+                total: Some(10),
+            },
+            resource_key: None,
+            detail: Some(TaskDetail {
+                phase: Some("Reading file metadata".into()),
+                current_item: Some("books/Author/Title.epub".into()),
+                tallies: Some(ScanTallies {
+                    found: 10,
+                    new: 3,
+                    changed: 1,
+                    removed: 2,
+                    moved: 1,
+                    unchanged: 3,
+                }),
+            }),
+            started_at_ms: 0,
+            last_update_ms: 0,
+        };
+        let json = serde_json::to_string(&progress).unwrap();
+        let round_tripped: TaskProgress = serde_json::from_str(&json).unwrap();
+        assert_eq!(progress, round_tripped);
+    }
+
+    #[test]
+    fn task_detail_is_empty_only_when_every_field_is_absent() {
+        assert!(TaskDetail::default().is_empty());
+        assert!(!TaskDetail {
+            phase: Some("Walking the library".into()),
+            ..Default::default()
+        }
+        .is_empty());
     }
 
     #[test]

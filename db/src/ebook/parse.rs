@@ -32,9 +32,21 @@ pub struct ParseTarget {
 /// absolute path so we don't re-walk, and the Phase-A stat values so the
 /// resulting `IndexedBook` ships them straight through to the writer.
 pub fn parse_ebook_targets(targets: Vec<ParseTarget>, opts: ScanOptions) -> Vec<IndexedBook> {
+    parse_ebook_targets_with_progress(targets, opts, |_| {})
+}
+
+/// [`parse_ebook_targets`] variant that calls `on_file` with each target
+/// just before parsing it, so the reindex pipeline can name the file
+/// currently being read in the worker progress feed.
+pub fn parse_ebook_targets_with_progress(
+    targets: Vec<ParseTarget>,
+    opts: ScanOptions,
+    mut on_file: impl FnMut(&ParseTarget),
+) -> Vec<IndexedBook> {
     targets
         .into_iter()
         .map(|t| {
+            on_file(&t);
             let mut book = if crate::comic::is_comic_path(&t.absolute) {
                 crate::comic::extract_comic(&t.absolute, t.filename, &opts)
             } else {

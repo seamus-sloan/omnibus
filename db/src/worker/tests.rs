@@ -8,7 +8,9 @@ use std::sync::Arc;
 use std::sync::Mutex as TestMutex;
 use std::time::{Duration, Instant};
 
-use omnibus_shared::{GhostFilesWarning, MetadataOverrides, ProgressState, TaskKind};
+use omnibus_shared::{
+    GhostFilesWarning, MetadataOverrides, ProgressState, ScanTallies, TaskDetail, TaskKind,
+};
 use sqlx::SqlitePool;
 use tempfile::TempDir;
 
@@ -588,6 +590,112 @@ async fn report_progress_updates_running_count() {
         .find(|p| p.task_id == id)
         .expect("terminal entry");
     assert!(matches!(entry2.state, ProgressState::Done { .. }));
+}
+
+/// `report_progress_update` stores the verbose detail alongside the
+/// counted state, a bare `report_progress` tick leaves it in place, and
+/// the terminal write keeps only the tallies (phase and current-item
+/// would read as stale on a done row).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn report_progress_update_keeps_detail_and_terminal_write_prunes_to_tallies() {
+    let w = make_worker_default(pool().await);
+    let id = w.post(Task::Test {
+        tag: "detail",
+        latency_ms: 50,
+        resource: Some("detail".into()),
+        route_through_scan_sem: false,
+        on_run: None,
+        on_done: None,
+    });
+    let tallies = ScanTallies {
+        found: 10,
+        new: 3,
+        changed: 1,
+        removed: 2,
+        moved: 0,
+        unchanged: 4,
+    };
+    w.report_progress_update(
+        id,
+        3,
+        Some(10),
+        TaskDetail {
+            phase: Some("Reading file metadata".into()),
+            current_item: Some("books/Author/Title.epub".into()),
+            tallies: Some(tallies),
+        },
+    );
+    let snap = w.progress_snapshot();
+    let entry = snap
+        .active
+        .iter()
+        .find(|p| p.task_id == id)
+        .expect("running entry");
+    let detail = entry.detail.as_ref().expect("detail stored");
+    assert_eq!(detail.phase.as_deref(), Some("Reading file metadata"));
+    assert_eq!(
+        detail.current_item.as_deref(),
+        Some("books/Author/Title.epub")
+    );
+    assert_eq!(detail.tallies, Some(tallies));
+
+    // A bare count tick must not erase the detail.
+    w.report_progress(id, 4, Some(10));
+    let snap = w.progress_snapshot();
+    let entry = snap
+        .active
+        .iter()
+        .find(|p| p.task_id == id)
+        .expect("running entry");
+    assert!(entry.detail.is_some(), "count tick erased the detail");
+
+    let _ = w.await_completion(id).await;
+    let snap = w.progress_snapshot();
+    let entry = snap
+        .recent_complete
+        .iter()
+        .find(|p| p.task_id == id)
+        .expect("terminal entry");
+    let detail = entry.detail.as_ref().expect("tallies survive the terminal");
+    assert_eq!(detail.phase, None, "phase must be cleared on terminal");
+    assert_eq!(
+        detail.current_item, None,
+        "current_item must be cleared on terminal"
+    );
+    assert_eq!(detail.tallies, Some(tallies));
+}
+
+/// A detail with no tallies is dropped entirely at the terminal write, so
+/// the done row carries no empty `detail` object on the wire.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn terminal_write_drops_detail_without_tallies() {
+    let w = make_worker_default(pool().await);
+    let id = w.post(Task::Test {
+        tag: "detail-no-tallies",
+        latency_ms: 50,
+        resource: Some("detail-no-tallies".into()),
+        route_through_scan_sem: false,
+        on_run: None,
+        on_done: None,
+    });
+    w.report_progress_update(
+        id,
+        1,
+        None,
+        TaskDetail {
+            phase: Some("Walking the library".into()),
+            current_item: None,
+            tallies: None,
+        },
+    );
+    let _ = w.await_completion(id).await;
+    let snap = w.progress_snapshot();
+    let entry = snap
+        .recent_complete
+        .iter()
+        .find(|p| p.task_id == id)
+        .expect("terminal entry");
+    assert_eq!(entry.detail, None, "tally-less detail must not survive");
 }
 
 /// Poisoning the `progress` mutex (a thread panics while holding its
