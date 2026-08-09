@@ -9,7 +9,7 @@ use dioxus_router::use_navigator;
 use omnibus_shared::PaletteResults;
 
 use super::keyboard::{make_keydown_handler, KeyboardContext};
-use super::model::{build_flat_items, plural};
+use super::model::{build_flat_items, plural, FlatItem};
 use super::results::SpResultsList;
 use super::PaletteOpen;
 use crate::components::glyphs::search_glyph;
@@ -92,35 +92,72 @@ fn sp_meta_and_error(has_results: bool, total: usize, duration: u64, is_errored:
     }
 }
 
-/// Floating overlay: dark scrim + centered panel with input, results, footer.
-#[component]
-pub(super) fn SpOverlay(open: PaletteOpen) -> Element {
-    let mut open = open;
-    let server_url = use_server_url();
-    let mut query = use_signal(String::new);
-    let results = use_signal(|| Option::<PaletteResults>::None);
-    let mut selected = use_signal(|| 0_usize);
-    let loading = use_signal(|| false);
+/// Local reactive state for one [`SpOverlay`] instance — a custom-hook-style
+/// helper (the same pattern `chip_editor::use_chip_editor_state` uses) so the
+/// component itself starts from the derived wiring instead of a wall of
+/// signal declarations.
+#[derive(Clone, Copy)]
+struct SpOverlayState {
+    query: Signal<String>,
+    results: Signal<Option<PaletteResults>>,
+    selected: Signal<usize>,
+    loading: Signal<bool>,
     // Set on a failed search, distinct from "no matches" (mirrors
     // `search_mobile.rs`'s `errored` signal for the same underlying call).
-    let errored = use_signal(|| false);
+    errored: Signal<bool>,
     // Tracks whether the user has driven selection with arrow keys this
     // session. When false, pressing Enter navigates to the full-page
     // search results instead of drilling into `selected`.
-    let mut has_navigated = use_signal(|| false);
+    has_navigated: Signal<bool>,
     // #126: handle of the in-flight debounce+RPC task — see
     // `build_search_dispatcher`.
-    let current_task = use_signal(|| Option::<Task>::None);
-    let nav = use_navigator();
+    current_task: Signal<Option<Task>>,
+}
 
-    // Build a flat list of selectable items for keyboard navigation.
+fn use_sp_overlay_state() -> SpOverlayState {
+    SpOverlayState {
+        query: use_signal(String::new),
+        results: use_signal(|| Option::<PaletteResults>::None),
+        selected: use_signal(|| 0_usize),
+        loading: use_signal(|| false),
+        errored: use_signal(|| false),
+        has_navigated: use_signal(|| false),
+        current_task: use_signal(|| Option::<Task>::None),
+    }
+}
+
+/// Derived wiring for [`SpOverlay`]: the flat selectable-item list plus the
+/// close/keydown/search handlers the panel renders with. Every hook call
+/// here still runs during [`SpOverlay`]'s own render, in the same order
+/// every time — required since Dioxus hooks must stay unconditional and
+/// order-stable regardless of which function body they're written in.
+#[allow(clippy::type_complexity)]
+fn build_overlay_wiring(
+    open: PaletteOpen,
+    server_url: String,
+    state: SpOverlayState,
+) -> (
+    Memo<Vec<FlatItem>>,
+    impl FnMut() + 'static,
+    impl FnMut(Event<KeyboardData>) + 'static,
+    impl FnMut(String) + 'static,
+) {
+    let SpOverlayState {
+        query,
+        results,
+        selected,
+        loading,
+        errored,
+        has_navigated,
+        current_task,
+    } = state;
+    let mut open_mut = open;
+    let nav = use_navigator();
     let flat_items = use_memo(move || build_flat_items(&results.read()));
 
-    // Close the palette.
-    let mut close = move || {
-        open.0.set(false);
+    let close = move || {
+        open_mut.0.set(false);
     };
-
     let on_keydown = make_keydown_handler(KeyboardContext {
         open,
         selected,
@@ -129,15 +166,34 @@ pub(super) fn SpOverlay(open: PaletteOpen) -> Element {
         query,
         nav,
     });
-
-    let mut spawn_search = build_search_dispatcher(
-        server_url.clone(),
+    let spawn_search = build_search_dispatcher(
+        server_url,
         results,
         selected,
         loading,
         errored,
         current_task,
     );
+
+    (flat_items, close, on_keydown, spawn_search)
+}
+
+/// Floating overlay: dark scrim + centered panel with input, results, footer.
+#[component]
+pub(super) fn SpOverlay(open: PaletteOpen) -> Element {
+    let server_url = use_server_url();
+    let state = use_sp_overlay_state();
+    let SpOverlayState {
+        mut query,
+        results,
+        mut selected,
+        loading,
+        errored,
+        mut has_navigated,
+        ..
+    } = state;
+    let (flat_items, mut close, on_keydown, mut spawn_search) =
+        build_overlay_wiring(open, server_url, state);
 
     let res = results.read();
     let is_loading = loading();
