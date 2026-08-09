@@ -163,9 +163,9 @@ impl Worker {
     /// [`TaskOutcome`]. A task that already finished still reports its real
     /// outcome for as long as the progress map retains the terminal entry
     /// (~[`super::types::TERMINAL_RETENTION`]). Returns
-    /// [`TaskOutcome::Err`]`("unknown task id")` once that window has passed,
-    /// or if `id` was never posted; [`TaskOutcome::Err`] likewise if the
-    /// spawned task was dropped before reporting an outcome.
+    /// `TaskOutcome::Err("unknown task id")` once that window has passed, or
+    /// if `id` was never posted; [`TaskOutcome::Err`] likewise if the spawned
+    /// task was dropped before reporting an outcome.
     pub async fn await_completion(&self, id: TaskId) -> TaskOutcome {
         // Take ownership of the receiver out of the map rather than cloning
         // it. The held receiver observes the channel's final value regardless
