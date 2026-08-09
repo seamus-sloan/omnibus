@@ -301,6 +301,100 @@ async fn resolve_exact_isbn_tolerates_urn_scheme_and_separators() {
 }
 
 #[tokio::test]
+async fn resolve_finds_the_book_a_hand_linked_copy_was_checked_in_against() {
+    // The link-an-existing-book escape hatch: the barcode belongs to no
+    // `book_identifiers` row, so only the physical-copy arm can bridge it —
+    // and it must, or the reader is asked the same question on every re-scan.
+    let pool = pool().await;
+    seed_book(&pool, "u1", "Effective Java", "Joshua Bloch", None).await;
+    check_in_copy(&pool, "u1", Some(ISBN), None, None)
+        .await
+        .unwrap();
+    let server = MockServer::start().await; // must not be hit
+
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
+        .await
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        ScanOutcome::AlreadyOwned { book } if book.uuid == "u1"
+    ));
+}
+
+#[tokio::test]
+async fn resolve_prefers_the_identifier_arm_over_a_copys_isbn() {
+    // Two books claim the ISBN: one publishes it, the other only holds a copy
+    // filed under it. The published identifier is the stronger claim.
+    let pool = pool().await;
+    seed_book(
+        &pool,
+        "published",
+        "Effective Java",
+        "Joshua Bloch",
+        Some(ISBN),
+    )
+    .await;
+    seed_book(&pool, "linked", "A Different Book", "Ada Lovelace", None).await;
+    check_in_copy(&pool, "linked", Some(ISBN), None, None)
+        .await
+        .unwrap();
+    let server = MockServer::start().await; // must not be hit
+
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
+        .await
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        ScanOutcome::InLibraryUnowned { book } if book.uuid == "published"
+    ));
+}
+
+#[tokio::test]
+async fn check_in_copy_stores_a_typed_isbn10_in_its_canonical_form() {
+    // The ladder compares against a canonical ISBN-13, so a copy filed from a
+    // keypad-entered ISBN-10 must be stored folded or it is unfindable.
+    let pool = pool().await;
+    seed_book(&pool, "u1", "Effective Java", "Joshua Bloch", None).await;
+
+    let copy = check_in_copy(&pool, "u1", Some("0-13-468599-7"), None, None)
+        .await
+        .unwrap();
+    assert_eq!(copy.isbn.as_deref(), Some(ISBN));
+
+    let server = MockServer::start().await; // must not be hit
+    let outcome = resolve_scan(&pool, USER_ID, ISBN, &config_for(&server))
+        .await
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        ScanOutcome::AlreadyOwned { book } if book.uuid == "u1"
+    ));
+}
+
+#[tokio::test]
+async fn check_in_copy_drops_an_isbn_that_does_not_validate() {
+    let pool = pool().await;
+    seed_book(&pool, "u1", "Effective Java", "Joshua Bloch", None).await;
+
+    let copy = check_in_copy(&pool, "u1", Some("not-an-isbn"), None, None)
+        .await
+        .unwrap();
+    assert_eq!(copy.isbn, None, "a wrong identifier is worse than none");
+}
+
+#[tokio::test]
+async fn check_in_copy_errors_when_the_book_is_missing() {
+    let pool = pool().await;
+    let err = check_in_copy(&pool, "nope", Some(ISBN), None, None)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        ScanError::Physical(PhysicalError::BookNotFound)
+    ));
+}
+
+#[tokio::test]
 async fn resolve_close_match_via_online_then_norm() {
     let pool = pool().await;
     // Same title/author but NO matching ISBN identifier → exact rung misses.

@@ -180,7 +180,7 @@ pub(super) async fn post_check_in(
     if let Err(msg) = req.validate() {
         return (StatusCode::BAD_REQUEST, msg).into_response();
     }
-    match db::add_physical_copy(
+    match db::check_in_copy(
         &state.pool,
         &req.book_uuid,
         req.isbn.as_deref(),
@@ -193,7 +193,7 @@ pub(super) async fn post_check_in(
             book_uuid: copy.book_uuid,
         })
         .into_response(),
-        Err(e) => scan_error("scan_check_in", e.into()),
+        Err(e) => scan_error("scan_check_in", e),
     }
 }
 

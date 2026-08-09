@@ -2,7 +2,7 @@
 
 use omnibus_shared::isbn::{normalize_isbn, IsbnError};
 use omnibus_shared::metadata_lookup::ExternalBookMeta;
-use omnibus_shared::physical::WishlistSource;
+use omnibus_shared::physical::{PhysicalCopy, WishlistSource};
 use omnibus_shared::scan::{ScanBook, ScanOutcome};
 use sqlx::{Row, SqlitePool};
 
@@ -135,6 +135,26 @@ async fn library_outcome(
     })
 }
 
+/// Check in a physical copy of a library book, canonicalizing the scanned ISBN
+/// before it is stored. Returns the inserted copy.
+///
+/// The ISBN reaches this call from a client — a barcode decode, a keypad, or a
+/// provider record — so it is folded to the same 13-digit form
+/// [`find_book_by_isbn`] compares against. Without that, a copy checked in
+/// under an ISBN-10 would be invisible to the re-scan of the very barcode that
+/// filed it. An ISBN that doesn't validate is dropped rather than stored, the
+/// same way [`add_physical_only`] drops one: no identifier beats a wrong one.
+pub async fn check_in_copy(
+    pool: &SqlitePool,
+    book_uuid: &str,
+    isbn: Option<&str>,
+    added_by_user_id: Option<i64>,
+    note: Option<&str>,
+) -> Result<PhysicalCopy, ScanError> {
+    let isbn = isbn.and_then(|raw| normalize_isbn(raw).ok());
+    Ok(add_physical_copy(pool, book_uuid, isbn.as_deref(), added_by_user_id, note).await?)
+}
+
 /// Add a physical-only book from resolved external metadata: mint a fileless
 /// book (cover fetched now, not at lookup time) and check in its first copy.
 /// Returns the new book's uuid.
@@ -208,29 +228,43 @@ fn canonical_isbn(meta: &ExternalBookMeta) -> Option<String> {
     normalize_isbn(&meta.isbn13).ok()
 }
 
-/// Exact-identifier rung: the book carrying this ISBN in `book_identifiers`.
+/// Exact-identifier rung: the book carrying this ISBN in `book_identifiers`,
+/// or failing that the book a physical copy carrying it was checked in against.
 ///
 /// OPF identifiers are stored losslessly, so the scheme is free-form
 /// (`ISBN`, `isbn`, `urn:isbn`) and the value may carry hyphens/spaces. Match
 /// any `%isbn%` scheme (case-insensitive) and strip separators from the stored
 /// value before comparing — mirroring `derive_isbn13`'s tolerance — so a real
 /// library ISBN isn't missed and mis-routed to online lookup.
+///
+/// The `physical_copies` arm is what makes a hand-linked copy stick. A print
+/// edition's barcode is a different ISBN from the ebook's, so a reader who
+/// linked one to a library book by hand would otherwise be asked the same
+/// question on every later scan of that same barcode. It ranks *after* the
+/// identifier arm so a book that genuinely publishes the ISBN still wins.
 async fn find_book_by_isbn(
     pool: &SqlitePool,
     isbn13: &str,
 ) -> Result<Option<ScanBook>, sqlx::Error> {
-    let row = sqlx::query(
-        "SELECT b.uuid, b.title, b.has_cover,
+    let cols = "b.uuid AS uuid, b.title AS title, b.has_cover AS has_cover,
                 (SELECT group_concat(a.name, ', ')
                    FROM books_authors_link bal JOIN authors a ON a.id = bal.author
                   WHERE bal.book = b.id ORDER BY bal.position) AS authors,
-                EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid) AS has_physical
+                EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid)
+                    AS has_physical";
+    let row = sqlx::query(&format!(
+        "SELECT {cols}, 0 AS rung
            FROM books b
            JOIN book_identifiers bi ON bi.book_id = b.id
           WHERE bi.scheme LIKE '%isbn%'
             AND REPLACE(REPLACE(bi.value, '-', ''), ' ', '') = ?1
-          LIMIT 1",
-    )
+         UNION ALL
+         SELECT {cols}, 1 AS rung
+           FROM books b
+           JOIN physical_copies c ON c.book_uuid = b.uuid
+          WHERE REPLACE(REPLACE(c.isbn, '-', ''), ' ', '') = ?1
+          ORDER BY rung LIMIT 1"
+    ))
     .bind(isbn13)
     .fetch_optional(pool)
     .await?;

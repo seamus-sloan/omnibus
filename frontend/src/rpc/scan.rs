@@ -133,7 +133,7 @@ pub async fn rpc_google_books_configured() -> Result<bool> {
 /// user's wishlist for it).
 #[post("/api/rpc/scan/check-in", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_check_in(req: CheckInRequest) -> Result<BookRef> {
-    let copy = db::add_physical_copy(
+    let copy = db::check_in_copy(
         &pool.0,
         &req.book_uuid,
         req.isbn.as_deref(),
@@ -141,7 +141,7 @@ pub async fn rpc_check_in(req: CheckInRequest) -> Result<BookRef> {
         req.note.as_deref(),
     )
     .await
-    .map_err(|e| map_scan_err(e.into()))?;
+    .map_err(map_scan_err)?;
     Ok(BookRef {
         book_uuid: copy.book_uuid,
     })
