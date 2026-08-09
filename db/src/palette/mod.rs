@@ -2,7 +2,8 @@
 //! series, and tags. Books go through the FTS5 MATCH path (with
 //! override-aware overlays applied after hydration); taxonomy categories
 //! use scoped `LIKE` substring matches against the name columns. Bounded
-//! per category and scoped to one or more configured library paths.
+//! per category, and scoped to the books `helpers::visible_book_sql` admits
+//! — under a configured library path, or holding a physical copy.
 
 use omnibus_shared::PaletteResults;
 use sqlx::SqlitePool;

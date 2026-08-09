@@ -68,6 +68,104 @@ async fn get_author_returns_none_for_missing_id() {
     let missing = get_author(&pool, 999_999).await.unwrap();
     assert!(missing.is_none());
 }
+/// Add one book by Ada Lovelace under a second scan root, so the fixture
+/// has an author whose books straddle two libraries.
+async fn seed_second_library_book(pool: &sqlx::SqlitePool) {
+    replace_books(
+        pool,
+        "/other",
+        vec![indexed(
+            "elsewhere.epub",
+            Some("Elsewhere"),
+            &["Ada Lovelace"],
+            &[],
+            None,
+            None,
+        )],
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn get_author_for_paths_excludes_books_indexed_under_another_library() {
+    let (pool, _guard) = seed_discovery_fixture().await;
+    seed_second_library_book(&pool).await;
+    let id = author_id_by_name(&pool, "Ada Lovelace").await;
+
+    let scoped = get_author_for_paths(&pool, id, &["/lib"])
+        .await
+        .unwrap()
+        .expect("author exists");
+
+    let titles: Vec<_> = scoped
+        .books
+        .iter()
+        .filter_map(|b| b.title.clone())
+        .collect();
+    assert!(!titles.contains(&"Elsewhere".to_string()));
+    assert_eq!(scoped.books.len(), 3);
+    assert_eq!(scoped.book_count, 3, "book_count follows the same scope");
+}
+
+#[tokio::test]
+async fn get_author_for_paths_includes_books_from_every_listed_library() {
+    let (pool, _guard) = seed_discovery_fixture().await;
+    seed_second_library_book(&pool).await;
+    let id = author_id_by_name(&pool, "Ada Lovelace").await;
+
+    let scoped = get_author_for_paths(&pool, id, &["/lib", "/other"])
+        .await
+        .unwrap()
+        .expect("author exists");
+
+    assert_eq!(scoped.books.len(), 4);
+    assert_eq!(scoped.book_count, 4);
+}
+
+#[tokio::test]
+async fn get_author_for_paths_returns_no_books_for_an_empty_path_list() {
+    let (pool, _guard) = seed_discovery_fixture().await;
+    let id = author_id_by_name(&pool, "Ada Lovelace").await;
+
+    let scoped = get_author_for_paths(&pool, id, &[])
+        .await
+        .unwrap()
+        .expect("author exists");
+
+    assert!(scoped.books.is_empty());
+    assert_eq!(scoped.book_count, 0);
+}
+
+#[tokio::test]
+async fn get_author_returns_books_from_every_library_when_unscoped() {
+    let (pool, _guard) = seed_discovery_fixture().await;
+    seed_second_library_book(&pool).await;
+    let id = author_id_by_name(&pool, "Ada Lovelace").await;
+
+    let author = get_author(&pool, id).await.unwrap().expect("author exists");
+
+    assert_eq!(author.books.len(), 4);
+    assert_eq!(author.book_count, 4);
+}
+
+#[tokio::test]
+async fn get_author_for_paths_returns_none_for_missing_id() {
+    let (pool, _guard) = seed_discovery_fixture().await;
+    let missing = get_author_for_paths(&pool, 999_999, &["/lib"])
+        .await
+        .unwrap();
+    assert!(missing.is_none());
+}
+
+#[tokio::test]
+async fn get_author_for_paths_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = get_author_for_paths(&pool, 1, &["/lib"]).await.unwrap_err();
+    assert!(matches!(err, DiscoveryError::Db(_)));
+}
+
 #[tokio::test]
 async fn get_series_returns_books_ordered_by_series_index() {
     let (pool, _guard) = seed_discovery_fixture().await;

@@ -247,6 +247,69 @@ async fn api_search_palette_returns_matching_audiobook_from_configured_audiobook
     assert_eq!(results.books[0].formats, ["M4B"]);
 }
 
+/// Issue #1788: a checked-in print book lives under the synthetic
+/// `physical://local` root, which is never a configured library path. The
+/// palette scoped on the path alone, so `/api/search` returned the book and
+/// `/api/search/palette` did not.
+#[tokio::test]
+async fn api_search_palette_returns_a_physical_only_book_with_a_copy() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    db::set_settings(
+        &pool,
+        &Settings {
+            ebook_library_path: Some("/lib".into()),
+            audiobook_library_path: None,
+            scan_interval_hours: None,
+        },
+    )
+    .await
+    .unwrap();
+    let uuid = db::create_fileless_book(
+        &pool,
+        db::FilelessBook {
+            title: "Paper Only".into(),
+            authors: vec!["Ada Lovelace".into()],
+            isbn: None,
+            pubdate: None,
+            description: None,
+            cover: None,
+        },
+    )
+    .await
+    .unwrap();
+    db::add_physical_copy(&pool, &uuid, None, None, None)
+        .await
+        .unwrap();
+
+    // The books arm matches on title, the authors arm on the author name —
+    // two queries, because no token is shared between them.
+    let by_title: omnibus_shared::PaletteResults =
+        palette_query(app.clone(), &token, "paper").await;
+    assert_eq!(by_title.books.len(), 1, "got {by_title:?}");
+    assert_eq!(by_title.books[0].title, "Paper Only");
+
+    let by_author: omnibus_shared::PaletteResults = palette_query(app, &token, "lovelace").await;
+    assert_eq!(by_author.authors.len(), 1, "got {by_author:?}");
+    assert_eq!(by_author.authors[0].name, "Ada Lovelace");
+    assert_eq!(by_author.authors[0].book_count, 1);
+}
+
+/// Issue one palette request and decode the body, asserting a 200 on the way.
+async fn palette_query(app: axum::Router, token: &str, q: &str) -> omnibus_shared::PaletteResults {
+    let response = app
+        .oneshot(get_with_bearer(
+            &format!("/api/search/palette?q={q}"),
+            token,
+        ))
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
 #[tokio::test]
 async fn api_search_palette_returns_empty_when_path_not_configured() {
     let (app, _state, pool) = fixture().await;

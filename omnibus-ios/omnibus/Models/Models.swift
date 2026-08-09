@@ -1324,12 +1324,15 @@ enum ScanOutcome: Decodable, Equatable, Sendable {
     case alreadyOwned(book: ScanBook)
     case onWishlist(book: ScanBook)
     case inLibraryUnowned(book: ScanBook)
-    case closeMatch(book: ScanBook, scanned: ExternalBookMeta)
+    /// Every library row whose (title, author) matched, in server order — an
+    /// EPUB and the audiobook nothing attached to it are one work in two rows,
+    /// so this is a picker, never empty.
+    case closeMatch(books: [ScanBook], scanned: ExternalBookMeta)
     case notInLibrary(online: ExternalBookMeta)
     case unresolved
 
     enum CodingKeys: String, CodingKey {
-        case kind, book, scanned, online
+        case kind, book, others, scanned, online
     }
 
     init(from decoder: Decoder) throws {
@@ -1342,8 +1345,13 @@ enum ScanOutcome: Decodable, Equatable, Sendable {
         case "in_library_unowned":
             self = .inLibraryUnowned(book: try c.decode(ScanBook.self, forKey: .book))
         case "close_match":
+            // Head + tail on the wire, so a build that predates the picker
+            // still decodes `book` alone; `others` is absent for the common
+            // single-candidate match.
+            let first = try c.decode(ScanBook.self, forKey: .book)
+            let others = try c.decodeIfPresent([ScanBook].self, forKey: .others) ?? []
             self = .closeMatch(
-                book: try c.decode(ScanBook.self, forKey: .book),
+                books: [first] + others,
                 scanned: try c.decode(ExternalBookMeta.self, forKey: .scanned)
             )
         case "not_in_library":

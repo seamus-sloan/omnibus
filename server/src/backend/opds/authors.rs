@@ -8,7 +8,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use omnibus_db as db;
-use omnibus_shared::AuthorSummary;
+use omnibus_shared::{AuthorDetail, AuthorSummary};
 
 use super::atom::{Feed, Link, ACQUISITION_TYPE, NAVIGATION_TYPE};
 use super::entries::book_entry;
@@ -143,34 +143,54 @@ pub(super) async fn acquisition_feed(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Response {
-    match db::get_author(&state.pool, id).await {
-        Ok(Some(author)) => {
-            // `db::get_author` returns books across every library, but this
-            // catalog is ebook-scoped (see the module doc); an audiobook-only
-            // or physical-only row has no epub/cbz format and would otherwise
-            // surface as an entry with no acquisition link.
-            let is_ebook_format =
-                |f: &String| f.eq_ignore_ascii_case("epub") || f.eq_ignore_ascii_case("cbz");
-            let feed = Feed {
-                id: format!("urn:omnibus:opds:author:{id}"),
-                title: author.name.clone(),
-                updated: now_rfc3339(),
-                links: vec![
-                    Link::new("self", format!("/opds/author/{id}"), ACQUISITION_TYPE),
-                    Link::new("start", "/opds", NAVIGATION_TYPE),
-                ],
-                entries: author
-                    .books
-                    .iter()
-                    .filter(|b| b.formats.iter().any(is_ebook_format))
-                    .map(book_entry)
-                    .collect(),
-            };
-            xml_response(ACQUISITION_TYPE, feed.to_xml())
-        }
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => internal("read author", e),
-    }
+    let author = match load_author(&state, id).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(resp) => return resp,
+    };
+    let feed = Feed {
+        id: format!("urn:omnibus:opds:author:{id}"),
+        title: author.name.clone(),
+        updated: now_rfc3339(),
+        links: vec![
+            Link::new("self", format!("/opds/author/{id}"), ACQUISITION_TYPE),
+            Link::new("start", "/opds", NAVIGATION_TYPE),
+        ],
+        entries: author.books.iter().map(book_entry).collect(),
+    };
+    xml_response(ACQUISITION_TYPE, feed.to_xml())
+}
+
+/// Load one author with their books narrowed to what this catalog may
+/// serve: the configured ebook library only (see the `opds` module doc),
+/// then to the formats an acquisition link can point at — an audiobook-only
+/// or physical-only row would otherwise surface as an entry with no
+/// download. `Ok(None)` is an unknown author id; `Err` is a ready-to-return
+/// failure response. `pub(super)` — reused by `opds::json_authors` so both
+/// catalogs' author feeds carry the same entries.
+pub(super) async fn load_author(
+    state: &AppState,
+    author_id: i64,
+) -> Result<Option<AuthorDetail>, Response> {
+    let settings = db::get_settings(&state.pool)
+        .await
+        .map_err(|e| internal("read settings", e))?;
+    let paths = db::collect_paths(settings.ebook_library_path.as_deref(), None);
+    let author = db::get_author_for_paths(&state.pool, author_id, &paths)
+        .await
+        .map_err(|e| internal("read author", e))?;
+    Ok(author.map(|mut author| {
+        author
+            .books
+            .retain(|b| b.formats.iter().any(|f| is_ebook_format(f)));
+        author
+    }))
+}
+
+/// Whether a `book_files` format string is one this catalog offers as a
+/// download.
+fn is_ebook_format(format: &str) -> bool {
+    format.eq_ignore_ascii_case("epub") || format.eq_ignore_ascii_case("cbz")
 }
 
 /// Load every author across the configured ebook library (see the `opds`

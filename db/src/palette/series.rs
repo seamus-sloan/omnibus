@@ -1,16 +1,18 @@
 //! Series arm of the search palette: substring `LIKE` match with
 //! override-aware book count plus an author_display drawn from the
 //! first book's effective creators. Visibility still requires at least
-//! one canonical link in this library.
+//! one canonical link on a visible book.
+
+use std::sync::OnceLock;
 
 use omnibus_shared::PaletteSeriesHit;
 use sqlx::{Row, SqlitePool};
 
-use crate::helpers::library_paths_json;
+use crate::helpers::{library_paths_json, visible_book_sql};
 
 use super::PaletteError;
 
-/// Series-arm palette query, bound `?1 = library_path`, `?2 = like_pattern`,
+/// Series-arm palette query, bound `?1 = library_paths JSON array`, `?2 = like_pattern`,
 /// `?3 = limit`.
 ///
 /// Both the count and the `author_display` line use the effective
@@ -18,11 +20,12 @@ use super::PaletteError;
 /// count. `overrides.series` (string) drives membership; if a book's first
 /// creator was renamed through the metadata edit form,
 /// `overrides.creators[0].name` drives the displayed author. Visibility still
-/// requires at least one canonical link in this library so we don't list
+/// requires at least one canonical link on a visible book so we don't list
 /// series that exist only inside override JSON (no navigable id).
 ///
 /// The per-series correlated `COUNT(*)` is replaced with a
-/// single-pass `effective` membership CTE (scoped to the library up front) —
+/// single-pass `effective` membership CTE (scoped to the visible books up
+/// front) —
 /// the UNION of (1) canonical `books_series_link` rows whose book has no
 /// `series` override and (2) the scalar `overrides.series` string for books
 /// that do. Each visible series' count is then a single scan of that union.
@@ -32,14 +35,22 @@ use super::PaletteError;
 /// arm (2). The `author_display` subquery is unchanged (not a count — out of
 /// scope). UNION (not ALL) is harmless here (a book has one scalar
 /// series override) but keeps the shape uniform with the other sites.
-const SEARCH_SERIES_SQL: &str = r"
+pub(super) fn search_series_sql() -> &'static str {
+    static SQL: OnceLock<String> = OnceLock::new();
+    SQL.get_or_init(|| {
+        let vis = visible_book_sql("b", "l2", "?1");
+        let vis_author = visible_book_sql("b2", "l2", "?1");
+        let vis_lead = visible_book_sql("b3", "l3", "?1");
+        let vis_exists = visible_book_sql("b", "l", "?1");
+        format!(
+            r"
         WITH effective AS (
           SELECT bsl.series AS series_id, NULL AS series_name, bsl.book AS book_id
             FROM books_series_link bsl
             JOIN books b ON b.id = bsl.book
             JOIN scan_roots l2 ON l2.id = b.library_id
             LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
-           WHERE l2.path IN (SELECT value FROM json_each(?1))
+           WHERE {vis}
              AND (mo.book_uuid IS NULL
                   OR json_type(mo.overrides, '$.series') IS NULL)
           UNION
@@ -49,7 +60,7 @@ const SEARCH_SERIES_SQL: &str = r"
             FROM books b
             JOIN scan_roots l2 ON l2.id = b.library_id
             JOIN metadata_overrides mo ON mo.book_uuid = b.uuid
-           WHERE l2.path IN (SELECT value FROM json_each(?1))
+           WHERE {vis}
              AND json_type(mo.overrides, '$.series') IS NOT NULL
         )
         SELECT s.id, s.name,
@@ -70,7 +81,7 @@ const SEARCH_SERIES_SQL: &str = r"
              JOIN scan_roots l2 ON l2.id = b2.library_id
              LEFT JOIN metadata_overrides mo2 ON mo2.book_uuid = b2.uuid
             WHERE bsl2.series = s.id
-              AND l2.path IN (SELECT value FROM json_each(?1))
+              AND {vis_author}
             ORDER BY b2.sort, b2.id LIMIT 1) AS author_display,
           (SELECT COALESCE(json_extract(mo3.overrides, '$.title'), b3.title)
              FROM books_series_link bsl3
@@ -78,7 +89,7 @@ const SEARCH_SERIES_SQL: &str = r"
              JOIN scan_roots l3 ON l3.id = b3.library_id
              LEFT JOIN metadata_overrides mo3 ON mo3.book_uuid = b3.uuid
             WHERE bsl3.series = s.id
-              AND l3.path IN (SELECT value FROM json_each(?1))
+              AND {vis_lead}
             ORDER BY b3.sort, b3.id LIMIT 1) AS lead_book_title
         FROM series s
         WHERE s.name LIKE ?2 ESCAPE '\'
@@ -87,11 +98,14 @@ const SEARCH_SERIES_SQL: &str = r"
               JOIN books b ON b.id = bsl.book
               JOIN scan_roots l ON l.id = b.library_id
              WHERE bsl.series = s.id
-               AND l.path IN (SELECT value FROM json_each(?1))
+               AND {vis_exists}
           )
         ORDER BY book_count DESC, s.name
         LIMIT ?3
-        ";
+        "
+        )
+    })
+}
 
 /// Run the series arm of the palette for `like_pattern` (already escaped)
 /// scoped to `library_path`, capped to `limit`.
@@ -114,7 +128,7 @@ pub async fn search_series_for_paths(
     if library_paths.is_empty() {
         return Ok(Vec::new());
     }
-    let rows = sqlx::query(SEARCH_SERIES_SQL)
+    let rows = sqlx::query(search_series_sql())
         .bind(library_paths_json(library_paths))
         .bind(like_pattern)
         .bind(limit)
@@ -135,7 +149,7 @@ pub async fn search_series_for_paths(
 
 /// Count visible series matching `like_pattern` in `library_path` — the
 /// uncapped total behind the palette's 5-hit series cap. Visibility mirrors
-/// [`search_series`]: at least one canonical link in this library.
+/// [`search_series`]: at least one canonical link on a visible book.
 pub async fn count_series(
     pool: &SqlitePool,
     library_path: &str,
@@ -153,7 +167,8 @@ pub async fn count_series_for_paths(
     if library_paths.is_empty() {
         return Ok(0);
     }
-    Ok(sqlx::query_scalar::<_, i64>(
+    let visible = visible_book_sql("b", "l", "?1");
+    Ok(sqlx::query_scalar::<_, i64>(&format!(
         r"
         SELECT COUNT(*) FROM series s
         WHERE s.name LIKE ?2 ESCAPE '\'
@@ -162,10 +177,10 @@ pub async fn count_series_for_paths(
               JOIN books b ON b.id = bsl.book
               JOIN scan_roots l ON l.id = b.library_id
              WHERE bsl.series = s.id
-               AND l.path IN (SELECT value FROM json_each(?1))
+               AND {visible}
           )
-        ",
-    )
+        "
+    ))
     .bind(library_paths_json(library_paths))
     .bind(like_pattern)
     .fetch_one(pool)

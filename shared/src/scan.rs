@@ -25,7 +25,8 @@ pub struct ScanBook {
 
 /// Outcome of resolving a scanned/typed ISBN down the matching ladder. A fuzzy
 /// (title, author) hit is a [`ScanOutcome::CloseMatch`] — never auto-resolved;
-/// the client must confirm before any write.
+/// the client must confirm before any write, so a hit on several rows is a
+/// picker rather than a reason to decline the match.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ScanOutcome {
@@ -37,10 +38,18 @@ pub enum ScanOutcome {
     OnWishlist { book: ScanBook },
     /// Exact identifier hit; in the library digitally, no physical copy yet.
     InLibraryUnowned { book: ScanBook },
-    /// Online-resolved and (title, author)-matched a library book — needs a
-    /// human "is this the book?" confirmation before any write.
+    /// Online-resolved and (title, author)-matched at least one library book —
+    /// needs a human "is this the book?" confirmation before any write.
+    ///
+    /// Carried as head + tail rather than one list so the single-candidate wire
+    /// shape is byte-identical to what shipped: a client that only knows `book`
+    /// still decodes the outcome and renders a usable confirm screen instead of
+    /// failing on an unknown shape. Clients that know both render `book`
+    /// followed by `others` as one picker.
     CloseMatch {
         book: ScanBook,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        others: Vec<ScanBook>,
         scanned: ExternalBookMeta,
     },
     /// Online-resolved but not in the library.

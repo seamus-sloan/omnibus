@@ -17,7 +17,7 @@ mod tags;
 #[cfg(test)]
 mod tests;
 
-pub use authors::{get_author, MAX_DISCOVERY_BOOKS};
+pub use authors::{get_author, get_author_for_paths, MAX_DISCOVERY_BOOKS};
 pub use genres::get_genre_cloud;
 pub use series::get_series;
 pub use tags::get_tag_cloud;

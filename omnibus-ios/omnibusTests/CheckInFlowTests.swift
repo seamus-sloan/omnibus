@@ -69,7 +69,9 @@ struct CheckInFlowTests {
         #expect(CheckInFlow.showsNoteField(for: .inLibraryUnowned(book: scanBook())))
         #expect(!CheckInFlow.showsNoteField(for: .alreadyOwned(book: scanBook())))
         #expect(!CheckInFlow.showsNoteField(for: .onWishlist(book: scanBook())))
-        #expect(!CheckInFlow.showsNoteField(for: .closeMatch(book: scanBook(), scanned: externalMeta())))
+        #expect(
+            !CheckInFlow.showsNoteField(for: .closeMatch(books: [scanBook()], scanned: externalMeta()))
+        )
         #expect(!CheckInFlow.showsNoteField(for: .notInLibrary(online: externalMeta())))
         #expect(!CheckInFlow.showsNoteField(for: .unresolved))
     }
@@ -145,6 +147,62 @@ struct CheckInFlowTests {
         #expect(CheckInFlow.detailUUID(for: .inLibraryUnowned(book: scanBook())) == nil)
         #expect(CheckInFlow.detailUUID(for: .notInLibrary(online: externalMeta())) == nil)
         #expect(CheckInFlow.detailUUID(for: .unresolved) == nil)
+    }
+
+    @Test func offersLinkExistingOnlyWhereTheLadderFailedToPlaceTheCopy() {
+        // The two screens that already named a library book don't need the
+        // escape hatch; the three that couldn't do.
+        #expect(CheckInFlow.offersLinkExisting(for: .notInLibrary(online: externalMeta())))
+        #expect(CheckInFlow.offersLinkExisting(for: .unresolved))
+        #expect(
+            CheckInFlow.offersLinkExisting(
+                for: .closeMatch(books: [scanBook()], scanned: externalMeta())
+            )
+        )
+        #expect(!CheckInFlow.offersLinkExisting(for: .alreadyOwned(book: scanBook())))
+        #expect(!CheckInFlow.offersLinkExisting(for: .onWishlist(book: scanBook())))
+        #expect(!CheckInFlow.offersLinkExisting(for: .inLibraryUnowned(book: scanBook())))
+    }
+
+    @Test func linkISBNTakesTheScannedIdentifierNotTheLibraryEditions() {
+        #expect(
+            CheckInFlow.linkISBN(for: .notInLibrary(online: externalMeta()), typed: "")
+                == "9781250903440"
+        )
+        #expect(
+            CheckInFlow.linkISBN(
+                for: .closeMatch(books: [scanBook()], scanned: externalMeta()), typed: ""
+            ) == "9781250903440"
+        )
+        // The unresolved screen has no provider record to read it from, so the
+        // typed/scanned digits are the only source.
+        #expect(CheckInFlow.linkISBN(for: .unresolved, typed: "9780441013593") == "9780441013593")
+        #expect(CheckInFlow.linkISBN(for: .unresolved, typed: "  ") == nil)
+        #expect(CheckInFlow.linkISBN(for: .alreadyOwned(book: scanBook()), typed: "x") == nil)
+    }
+
+    @Test func linkTargetSplitsTheJoinedAuthorsAndCarriesTheScannedISBN() {
+        let hit = PaletteBookHit(
+            id: 3, uuid: "lib-1", title: "The Robin on the Oak Throne",
+            authorDisplay: "Rebecca Yarros, Someone Else", year: "2026",
+            formats: ["EPUB"], coverURL: "/api/covers/lib-1", accent: nil
+        )
+        let book = CheckInFlow.linkTarget(from: hit, isbn: "9781649378521")
+        #expect(book.uuid == "lib-1")
+        #expect(book.authors == ["Rebecca Yarros", "Someone Else"])
+        #expect(book.coverURL == "/api/covers/lib-1")
+        // The copy is filed under the barcode in the reader's hand, never
+        // under an identifier the picked library book publishes.
+        #expect(book.isbn == "9781649378521")
+        #expect(!book.hasPhysical)
+    }
+
+    @Test func linkTruncationNoteOnlySpeaksUpWhenMatchesAreHidden() {
+        #expect(CheckInFlow.linkTruncationNote(shown: 5, total: 5) == nil)
+        #expect(CheckInFlow.linkTruncationNote(shown: 2, total: 2) == nil)
+        #expect(
+            CheckInFlow.linkTruncationNote(shown: 5, total: 12)?.contains("Showing 5 of 12") == true
+        )
     }
 
     @Test func externalURLDetectionSplitsAbsoluteFromServerRelative() {

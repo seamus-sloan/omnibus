@@ -78,27 +78,38 @@ pub(super) fn ConfirmScreen(
     }
 }
 
-/// 2b — a fuzzy (title, author) hit. Never auto-resolved: the reader confirms
-/// it, seeing both ISBNs, or falls through to the 3c chooser.
+/// 2b — the fuzzy (title, author) hits. Never auto-resolved: the reader picks
+/// the book they're holding, seeing both ISBNs, or falls through to the 3c
+/// chooser.
+///
+/// Always a picker, because more than one row can carry the same effective
+/// norm — an EPUB and the audiobook nothing ever attached to it are one work
+/// in two rows, and declining that pair would offer to create a third.
 #[component]
 pub(super) fn CloseMatchScreen(
-    book: ScanBook,
+    books: Vec<ScanBook>,
     scanned: ExternalBookMeta,
-    on_yes: EventHandler<()>,
+    on_yes: EventHandler<ScanBook>,
     on_no: EventHandler<ExternalBookMeta>,
 ) -> Element {
-    let library_isbn = book.isbn.clone();
+    let many = books.len() > 1;
+    let copy = CloseMatchCopy::for_count(many);
     let fallthrough = scanned.clone();
     rsx! {
         div { class: "check-in-screen", "data-testid": "check-in-close-match",
-            h1 { "Is this the book?" }
-            p { class: "subtitle",
-                "The ISBN you entered isn't on any book in your library, but the title and author match this one."
-            }
-            LibraryBookCard { book }
+            h1 { "{copy.heading}" }
+            p { class: "subtitle", "{copy.subtitle}" }
             p { class: "check-in-isbn-line", "Scanned ISBN {scanned.isbn13}" }
-            if let Some(isbn) = library_isbn {
-                p { class: "check-in-isbn-line", "Library edition ISBN {isbn}" }
+            ul { class: "check-in-match-list", "data-testid": "check-in-close-match-list",
+                for book in books {
+                    LibraryPickOption {
+                        key: "{book.uuid}",
+                        book,
+                        pick_label: copy.pick.to_string(),
+                        pick_testid: "check-in-close-match-pick".to_string(),
+                        on_pick: on_yes,
+                    }
+                }
             }
             p { class: "check-in-why",
                 "Print and digital editions carry different ISBNs, so we ask before checking a copy in against the wrong book."
@@ -106,33 +117,92 @@ pub(super) fn CloseMatchScreen(
             div { class: "settings-actions",
                 button {
                     r#type: "button",
-                    class: "btn primary",
-                    "data-testid": "check-in-close-match-yes",
-                    onclick: move |_| on_yes.call(()),
-                    "Yes, that's it"
-                }
-                button {
-                    r#type: "button",
                     class: "btn ghost",
                     "data-testid": "check-in-close-match-no",
                     onclick: move |_| on_no.call(fallthrough.clone()),
-                    "No, different book"
+                    "{copy.decline}"
                 }
             }
         }
     }
 }
 
-/// 3c — resolved online but absent from the library: own it, wishlist it, or
-/// start over.
+/// The close-match screen's four strings, which all swap together on whether
+/// the ladder offered one candidate or several.
+pub(super) struct CloseMatchCopy {
+    pub(super) heading: &'static str,
+    pub(super) subtitle: &'static str,
+    pub(super) pick: &'static str,
+    pub(super) decline: &'static str,
+}
+
+impl CloseMatchCopy {
+    /// `many` is `books.len() > 1`.
+    pub(super) fn for_count(many: bool) -> Self {
+        if many {
+            Self {
+                heading: "Which one is this?",
+                subtitle: "The ISBN you entered isn't on any book in your library, but the title and author match these.",
+                pick: "This one",
+                decline: "None of these",
+            }
+        } else {
+            Self {
+                heading: "Is this the book?",
+                subtitle: "The ISBN you entered isn't on any book in your library, but the title and author match this one.",
+                pick: "Yes, that's it",
+                decline: "No, different book",
+            }
+        }
+    }
+}
+
+/// One row of a library-book picker: the library card, that edition's ISBN
+/// when it has one, and the button that checks the scanned copy in against it.
+///
+/// Shared by the two screens that ask "which of these is the book you're
+/// holding?" — the close-match candidates the ladder proposed, and the
+/// [`super::link::LinkExistingScreen`] results the reader searched for
+/// themselves. Same question, same `ScanBook`, same answer, so the label and
+/// the testid are the only per-screen parts.
+#[component]
+pub(super) fn LibraryPickOption(
+    book: ScanBook,
+    pick_label: String,
+    pick_testid: String,
+    on_pick: EventHandler<ScanBook>,
+) -> Element {
+    let library_isbn = book.isbn.clone();
+    let picked = book.clone();
+    rsx! {
+        li { class: "check-in-match-option",
+            LibraryBookCard { book }
+            if let Some(isbn) = library_isbn {
+                p { class: "check-in-isbn-line", "Library edition ISBN {isbn}" }
+            }
+            button {
+                r#type: "button",
+                class: "btn primary",
+                "data-testid": "{pick_testid}",
+                onclick: move |_| on_pick.call(picked.clone()),
+                "{pick_label}"
+            }
+        }
+    }
+}
+
+/// 3c — resolved online but absent from the library: own it, link it to a
+/// book already on the shelf, wishlist it, or start over.
 #[component]
 pub(super) fn ChooseScreen(
     online: ExternalBookMeta,
-    busy: Signal<bool>,
+    state: FlowState,
     on_own_it: EventHandler<ExternalBookMeta>,
     on_wishlist: EventHandler<WishlistAddRequest>,
+    on_link: EventHandler<()>,
     on_restart: EventHandler<()>,
 ) -> Element {
+    let busy = state.busy;
     let own_meta = online.clone();
     let wish_meta = online.clone();
     rsx! {
@@ -148,6 +218,18 @@ pub(super) fn ChooseScreen(
                     "data-testid": "check-in-own-it",
                     onclick: move |_| on_own_it.call(own_meta.clone()),
                     "I own it \u{2014} add to my collection"
+                }
+                // A provider record can carry a placeholder title that shares
+                // nothing with the library book, which no matching rung can
+                // bridge — this is the reader's way to say so before a
+                // duplicate exists to merge.
+                button {
+                    r#type: "button",
+                    class: "btn ghost",
+                    disabled: busy(),
+                    "data-testid": "check-in-link-existing",
+                    onclick: move |_| on_link.call(()),
+                    "I already have this book"
                 }
                 button {
                     r#type: "button",
@@ -176,6 +258,7 @@ pub(super) fn ChooseScreen(
 pub(super) fn UnresolvedScreen(
     isbn: String,
     on_search: EventHandler<()>,
+    on_link: EventHandler<()>,
     on_restart: EventHandler<()>,
 ) -> Element {
     rsx! {
@@ -191,6 +274,15 @@ pub(super) fn UnresolvedScreen(
                     "data-testid": "check-in-search-instead",
                     onclick: move |_| on_search.call(()),
                     "Search by title instead"
+                }
+                // No provider knows the barcode, but the reader may well own
+                // the book already — filing the copy needs no provider at all.
+                button {
+                    r#type: "button",
+                    class: "btn ghost",
+                    "data-testid": "check-in-link-existing",
+                    onclick: move |_| on_link.call(()),
+                    "I already have this book"
                 }
                 button {
                     r#type: "button",
@@ -248,9 +340,10 @@ pub(super) fn SuccessScreen(
     }
 }
 
-/// Cover + title + authors for a library book on a confirm screen.
+/// Cover + title + authors for a library book on a confirm screen, and for
+/// each row of the link-to-an-existing-book picker.
 #[component]
-fn LibraryBookCard(book: ScanBook) -> Element {
+pub(super) fn LibraryBookCard(book: ScanBook) -> Element {
     let server_url = use_server_url();
     let cover = book.cover_url.as_deref().map(|p| media_url(&server_url, p));
     rsx! {
