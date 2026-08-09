@@ -5064,6 +5064,30 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   margin-top: 1rem;
 }
 
+/* Admin server-health page (`/admin/health`, #952): five read-only cards —
+   index status, worker queue, FTS health, storage, last errors. Reuses
+   `.card`, `.settings-status`, `.users-table`, and `.logs-stream`/`.logs-*`
+   for the sections that map onto an existing shape; this block only covers
+   the page-level layout and the label/value rows unique to this page. */
+.ah-head { margin-bottom: 1.25rem; }
+.ah-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.ah-card h2 { font-size: 1rem; font-weight: 600; margin: 0 0 0.75rem; }
+.ah-kv { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 0.75rem; }
+.ah-kv-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.875rem;
+}
+.ah-kv-label { color: var(--ink-2); }
+.ah-kv-value { color: var(--ink-0); font-family: var(--mono); text-align: right; }
+
 /* F4.3 Send-to-Kindle result toast — fixed bottom-center, mirrors
    .bd-merge-toast so action feedback is consistent across the book page. */
 .kindle-toast, .kobo-toast {

@@ -161,6 +161,26 @@ fn generate_thumbnail_produces_valid_webp() {
 }
 
 #[test]
+fn used_bytes_sums_only_webp_files_in_the_thumbs_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(tmp.path().as_os_str()));
+    std::fs::write(tmp.path().join("1_sm.webp"), vec![0u8; 100]).unwrap();
+    std::fs::write(tmp.path().join("2_md.webp"), vec![0u8; 50]).unwrap();
+    // A non-webp stray must not be counted.
+    std::fs::write(tmp.path().join("stray.tmp"), vec![0u8; 999]).unwrap();
+
+    assert_eq!(used_bytes(), 150);
+}
+
+#[test]
+fn used_bytes_is_zero_when_the_thumbs_dir_does_not_exist() {
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = tmp.path().join("does-not-exist");
+    let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(missing.as_os_str()));
+    assert_eq!(used_bytes(), 0);
+}
+
+#[test]
 fn evict_if_over_cap_removes_oldest_files() {
     let tmp = tempfile::tempdir().unwrap();
     let _guard = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(tmp.path().as_os_str()));

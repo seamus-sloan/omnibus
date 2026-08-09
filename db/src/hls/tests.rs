@@ -425,6 +425,31 @@ async fn get_parts_propagates_db_error_when_pool_is_closed() {
     assert!(matches!(err, HlsError::Db(_)));
 }
 
+#[test]
+fn used_bytes_sums_every_segment_file_across_book_directories() {
+    let (_guard, _dir) = data_dir_guard();
+    let base = hls_dir();
+    let book0 = base.join("0").join(AUDIO64);
+    let book1 = base.join("1").join(AUDIO64);
+    std::fs::create_dir_all(&book0).unwrap();
+    std::fs::create_dir_all(&book1).unwrap();
+    std::fs::write(book0.join("seg0.ts"), vec![0u8; 100]).unwrap();
+    std::fs::write(book1.join("seg0.ts"), vec![0u8; 50]).unwrap();
+    std::fs::write(book1.join("seg1.ts"), vec![0u8; 25]).unwrap();
+
+    assert_eq!(used_bytes(), 175);
+}
+
+#[test]
+fn used_bytes_is_zero_when_the_hls_dir_does_not_exist() {
+    let (_guard, _dir) = data_dir_guard();
+    // `data_dir_guard` points `OMNIBUS_DATA_DIR` at a fresh tempdir, but
+    // `hls_dir()` (`<data_dir>/hls`) itself is never created until the
+    // first transcode — assert the pre-first-run state reads as empty.
+    assert!(!hls_dir().exists());
+    assert_eq!(used_bytes(), 0);
+}
+
 /// Mirrors `thumbs::tests::evict_if_over_cap_removes_oldest_files`'s shape:
 /// FIFO-by-mtime eviction, but scoped to whole `<book_id>/<profile>/` segment
 /// directories rather than individual thumbnail files.

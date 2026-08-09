@@ -307,8 +307,9 @@ fn FailedRow(kind: TaskKind, message: String, on_dismiss: EventHandler<MouseEven
 /// the tense ("Scanning" vs "Library scan") so the indicator reads
 /// naturally in both the in-flight and terminal contexts. New `TaskKind`
 /// variants add one match arm here and inherit the same active/done/failed
-/// rendering for free.
-fn kind_label(kind: TaskKind, running: bool) -> &'static str {
+/// rendering for free. `pub(crate)` so `pages::admin_health`'s worker-queue
+/// section can reuse the same labels instead of a second mapping (#952).
+pub(crate) fn kind_label(kind: TaskKind, running: bool) -> &'static str {
     match (kind, running) {
         (TaskKind::Scan, true) => "Scanning library",
         (TaskKind::Scan, false) => "Library scan",
