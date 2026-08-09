@@ -58,7 +58,7 @@ services:
       AUDIOBOOK_LIBRARY_PATH: "/audiobooks"
 
       # --- Optional tuning (sensible defaults baked into the image) ----------
-      # OMNIBUS_THUMBS_CAP_BYTES: "5368709120"   # thumbnail cache cap (5 GiB)
+      # OMNIBUS_THUMBS_CAP_BYTES: "1073741824"   # thumbnail cache cap (1 GiB)
       # OMNIBUS_HLS_CAP_BYTES: "5368709120"      # HLS transcode cache cap (5 GiB)
       # OMNIBUS_HLS_TRANSCODE_TIMEOUT_SECS: "1800"
 

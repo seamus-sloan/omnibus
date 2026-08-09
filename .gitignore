@@ -13,9 +13,11 @@ target
 /covers/
 server/covers/
 db/covers/
-# Dev-server thumbnail WebP cache (F1.2)
+# Dev-server thumbnail WebP cache (F1.2). Same CWD note as covers above —
+# init_db writes the encoder-scheme sentinel here on any on-disk database.
 /thumbs/
 server/thumbs/
+db/thumbs/
 # F2.3 HLS transcode cache (OMNIBUS_DATA_DIR default = ./data; segments + concat.txt + .progress)
 /data/
 
