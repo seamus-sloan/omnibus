@@ -549,6 +549,42 @@ async fn v2_series_acquisition_feed_includes_the_books_series_position_and_categ
 }
 
 #[tokio::test]
+async fn v2_series_acquisition_feed_serializes_a_non_finite_series_index_as_a_null_position() {
+    // Regression: `series_index` is free-text and Calibre-sourced, so a
+    // garbage value like "NaN" parses as a valid f64 — but serde_json can't
+    // serialize a non-finite float, which would 500 the whole feed if
+    // `series_ref` didn't filter it out before it reached the response.
+    let (app, pool, token) = fixture().await;
+    seed_synced_ebook_with_series(
+        &pool,
+        "dune.epub",
+        "Dune",
+        "Frank Herbert",
+        &["Science Fiction"],
+        ("Dune Saga", "NaN"),
+    )
+    .await;
+    let series_id = series_id_by_name(&pool, "Dune Saga").await;
+
+    let res = app
+        .oneshot(get_with_bearer(
+            &format!("/opds/v2/series/{series_id}"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let json = body_json(res).await;
+    let pubs = json["publications"].as_array().unwrap();
+    assert_eq!(pubs.len(), 1);
+    assert_eq!(
+        pubs[0]["metadata"]["belongsTo"]["series"][0]["name"],
+        "Dune Saga"
+    );
+    assert!(pubs[0]["metadata"]["belongsTo"]["series"][0]["position"].is_null());
+}
+
+#[tokio::test]
 async fn v2_series_acquisition_feed_returns_404_for_an_unknown_series_id() {
     let (app, _pool, token) = fixture().await;
     let res = app

@@ -1,5 +1,6 @@
 //! OPDS 2.0 (Readium Web Publication Manifest) wire types, serialized as
-//! `application/opds+json` by `server/src/backend/opds/v2/`. A parallel
+//! `application/opds+json` by the `json_*` handlers under
+//! `server/src/backend/opds/` (`json_nav.rs`, `json_search.rs`, etc). A parallel
 //! presentation of the same navigation/acquisition data the OPDS 1.2 Atom
 //! catalog at `/opds/*` exposes (hand-rolled XML in
 //! `server/src/backend/opds/atom.rs`) for OPDS clients that speak JSON

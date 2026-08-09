@@ -129,10 +129,10 @@ fn nav_entry(
 }
 
 /// Serialize an [`opds2::Feed`] as a `200 application/opds+json` response —
-/// the JSON analog of [`xml_response`]. Serialization only fails if a
-/// `Feed` somehow carries non-UTF-8/non-finite float data it can't have
-/// (every field here is a `String`/`Option`/`Vec`), so the error arm exists
-/// for soundness rather than an expected path.
+/// the JSON analog of [`xml_response`]. Builders are responsible for keeping
+/// `Feed` serializable (e.g. `json_entries::series_ref` filters
+/// `series_index` to finite floats before it ever reaches this point), so
+/// the error arm exists for soundness rather than an expected path.
 fn json_response(feed: &opds2::Feed) -> Response {
     match serde_json::to_string(feed) {
         Ok(body) => ([(header::CONTENT_TYPE, opds2::MEDIA_TYPE)], body).into_response(),

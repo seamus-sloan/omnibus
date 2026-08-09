@@ -10,7 +10,7 @@ use super::entry_updated;
 
 /// Wire mime for a served CBZ archive — mirrors `ebooks::CBZ_MIME`, kept as
 /// its own constant since that one is `pub(super)` to the `backend` module,
-/// not reachable from here. `pub(super)` so `opds::v2::entries` can build
+/// not reachable from here. `pub(super)` so `opds::json_entries` can build
 /// the same acquisition link without duplicating the mime string.
 pub(super) const CBZ_MIME: &str = "application/vnd.comicbook+zip";
 
@@ -56,7 +56,7 @@ pub(super) fn book_entry(book: &EbookMetadata) -> Entry {
 /// dual-format or audiobook-only entry still links somewhere. `None` when
 /// the book carries no format this catalog can link to (e.g. a
 /// physical-only entry with no files). Returns a bare tuple rather than an
-/// [`atom::Link`](super::atom::Link) so `opds::v2::entries` can build the
+/// [`atom::Link`](super::atom::Link) so `opds::json_entries` can build the
 /// same link as its own JSON `Link` type — the whole point of factoring
 /// this out is one format-selection decision feeding both catalogs.
 pub(super) fn download_link(uuid: &str, book: &EbookMetadata) -> Option<(String, &'static str)> {
