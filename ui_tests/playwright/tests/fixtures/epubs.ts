@@ -191,6 +191,12 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     language: "fr",
     hasCover: true,
   },
+  // Reserved for check_in_link_existing.spec.ts: it checks a real physical
+  // copy in against this book. `physical_copies` rows are library-wide (they
+  // add a PHYS badge to the formats cell and flip the detail page's physical
+  // pill for every user), and the scanned ISBN then resolves to this book on
+  // the exact-identifier rung forever after — so no other spec may read it,
+  // even though the spec deletes the copy again on the way out.
   {
     slug: "polyglot-2",
     filename: "polyglot-2.epub",

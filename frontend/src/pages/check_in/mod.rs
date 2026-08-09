@@ -6,6 +6,7 @@
 //! gating, so SSR and the first WASM paint agree (rule 07).
 
 mod entry;
+mod link;
 mod lookup;
 mod scan;
 mod screens;
@@ -23,6 +24,7 @@ use omnibus_shared::{
 use crate::focus_after_paint::focus_after_paint;
 use crate::{data, use_server_url, Route};
 use entry::EntryScreen;
+use link::LinkExistingScreen;
 use lookup::LookupScreen;
 use scan::ScanScreen;
 use screens::{
@@ -138,6 +140,12 @@ pub(crate) enum Stage {
     },
     /// 3c — resolved online but not in the library: own it, or wishlist it.
     Choose { online: ExternalBookMeta },
+    /// The reader says the copy belongs to a book already on the shelf and is
+    /// picking which one. Carries the ISBN to file the copy under, since the
+    /// picked book won't be the one the ladder failed to reach, and the screen
+    /// that opened it so Back restores that screen's resolved book rather than
+    /// dropping the reader on a blank ISBN field.
+    LinkExisting { isbn: String, origin: Box<Stage> },
     /// Neither the library nor any provider knew the ISBN.
     Unresolved { isbn: String },
     /// 4 — the copy is checked in.
@@ -343,15 +351,8 @@ fn CheckInStage(state: FlowState, handlers: CheckInHandlers) -> Element {
             ConfirmScreen { book, isbn, state, on_check_in: handlers.on_check_in, on_cancel: on_restart }
         },
         Stage::CloseMatch { book, scanned } => close_match_stage(book, scanned, state),
-        Stage::Choose { online } => rsx! {
-            ChooseScreen {
-                online,
-                busy: state.busy,
-                on_own_it: handlers.on_own_it,
-                on_wishlist: handlers.on_wishlist,
-                on_restart,
-            }
-        },
+        Stage::Choose { online } => choose_stage(online, state, handlers, on_restart),
+        Stage::LinkExisting { isbn, origin } => link_stage(isbn, *origin, state),
         Stage::Unresolved { isbn } => unresolved_stage(isbn, state, on_restart),
         Stage::CheckedIn { uuid, title } => rsx! {
             SuccessScreen {
@@ -471,10 +472,73 @@ fn close_match_stage(book: ScanBook, scanned: ExternalBookMeta, state: FlowState
     }
 }
 
+/// [`Stage::Choose`]: resolved online but absent from the library.
+fn choose_stage(
+    online: ExternalBookMeta,
+    state: FlowState,
+    handlers: CheckInHandlers,
+    on_restart: EventHandler<()>,
+) -> Element {
+    let origin = Stage::Choose {
+        online: online.clone(),
+    };
+    let isbn = online.isbn13.clone();
+    rsx! {
+        ChooseScreen {
+            online,
+            state,
+            on_own_it: handlers.on_own_it,
+            on_wishlist: handlers.on_wishlist,
+            on_link: go_to_link(state, isbn, origin),
+            on_restart,
+        }
+    }
+}
+
+/// [`Stage::LinkExisting`]: pick the library book this copy belongs to, then
+/// hand it to the same confirm screen an exact-ISBN hit would have opened.
+fn link_stage(isbn: String, origin: Stage, state: FlowState) -> Element {
+    let mut stage = state.stage;
+    let back_to = origin.clone();
+    rsx! {
+        LinkExistingScreen {
+            state,
+            on_pick: EventHandler::new(move |book: ScanBook| {
+                stage.set(Stage::Confirm { book, isbn: isbn.clone() });
+            }),
+            on_back: EventHandler::new(move |_| stage.set(back_to.clone())),
+        }
+    }
+}
+
+/// Open [`Stage::LinkExisting`] for `isbn`, remembering `origin` so Back
+/// restores the outcome screen the reader left rather than restarting.
+fn go_to_link(state: FlowState, isbn: String, origin: Stage) -> EventHandler<()> {
+    let FlowState {
+        mut stage,
+        mut error,
+        ..
+    } = state;
+    EventHandler::new(move |_| {
+        error.set(None);
+        stage.set(Stage::LinkExisting {
+            isbn: isbn.clone(),
+            origin: Box::new(origin.clone()),
+        });
+    })
+}
+
 /// [`Stage::Unresolved`]: neither the library nor any provider knew the ISBN.
 fn unresolved_stage(isbn: String, state: FlowState, on_restart: EventHandler<()>) -> Element {
+    let origin = Stage::Unresolved { isbn: isbn.clone() };
+    let link_isbn = isbn.clone();
     rsx! {
-        UnresolvedScreen { isbn, on_search: go_to_search(state), on_restart }
+        UnresolvedScreen {
+            isbn,
+            on_search: go_to_search(state),
+            on_link: go_to_link(state, link_isbn, origin),
+            on_restart,
+        }
     }
 }
 

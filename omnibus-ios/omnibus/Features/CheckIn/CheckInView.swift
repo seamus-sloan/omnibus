@@ -45,6 +45,22 @@ struct CheckInView: View {
                     scannerSection
                 case let .outcome(outcome):
                     outcomeSection(outcome)
+                case let .linkExisting(isbn, returnTo):
+                    CheckInLinkView(
+                        isbn: isbn,
+                        onPick: { book in
+                            // The picked book is, by the reader's own account,
+                            // in the library without this copy — exactly the
+                            // in-library confirm's contract, so it files the
+                            // copy through the one existing write path.
+                            withAnimation(Motion.settle) {
+                                stage = .outcome(.inLibraryUnowned(book: book))
+                            }
+                        },
+                        onBack: {
+                            withAnimation(Motion.settle) { stage = .outcome(returnTo) }
+                        }
+                    )
                 case let .success(success):
                     CheckInSuccessView(
                         success: success,
@@ -295,6 +311,25 @@ struct CheckInView: View {
                         message: "Neither your library nor the online providers recognised that ISBN."
                     )
                     searchSection
+                }
+
+                // The escape hatch for a copy the ladder couldn't place: rather
+                // than mint a duplicate the reader has to notice and merge
+                // later, let them name the book they already own.
+                if CheckInFlow.offersLinkExisting(for: outcome) {
+                    Button("I already have this book") {
+                        error = nil
+                        withAnimation(Motion.settle) {
+                            stage = .linkExisting(
+                                isbn: CheckInFlow.linkISBN(for: outcome, typed: manualISBN),
+                                returnTo: outcome
+                            )
+                        }
+                    }
+                    .buttonStyle(QuietButtonStyle())
+                    .frame(maxWidth: .infinity)
+                    .disabled(isWriting)
+                    .opacity(isWriting ? 0.55 : 1)
                 }
 
                 // Without this the outcome screen's writes failed in silence —
