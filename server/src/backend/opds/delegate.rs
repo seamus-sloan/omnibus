@@ -9,14 +9,23 @@
 
 use axum::{
     extract::{Path, Query, Request, State},
-    http::HeaderMap,
-    response::Response,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
 };
 
-use crate::auth::{MediaAuthUser, OpdsAuthUser};
+use crate::auth::{AuthUser, MediaAuthUser, OpdsAuthUser};
 
 use super::super::{audiobooks, covers, ebooks};
 use super::AppState;
+
+/// 403 unless the user may download. Applied to the acquisition routes
+/// only — covers/thumbs stay open to any authenticated user because the
+/// catalog is unrenderable without them, matching the browse UI. (The
+/// `/api/*` download originals predate `can_download` and don't enforce
+/// it yet — tracked separately.)
+fn deny_without_download(user: &AuthUser) -> Option<Response> {
+    (!user.can_download).then(|| (StatusCode::FORBIDDEN, "download not permitted").into_response())
+}
 
 /// `GET /opds/covers/{uuid}` → [`covers::get_cover`].
 pub(super) async fn cover(
@@ -47,6 +56,9 @@ pub(super) async fn ebook_file(
     query: Query<ebooks::EbookFileQuery>,
     req: Request,
 ) -> Response {
+    if let Some(denied) = deny_without_download(&user.0) {
+        return denied;
+    }
     ebooks::get_ebook_file(MediaAuthUser(user.0), state, path, query, req).await
 }
 
@@ -59,6 +71,9 @@ pub(super) async fn ebook_download(
     query: Query<ebooks::EbookFileQuery>,
     req: Request,
 ) -> Response {
+    if let Some(denied) = deny_without_download(&user.0) {
+        return denied;
+    }
     ebooks::get_ebook_download(user.0, state, path, query, req).await
 }
 
@@ -70,5 +85,8 @@ pub(super) async fn audiobook_download(
     query: Query<audiobooks::DownloadQuery>,
     req: Request,
 ) -> Response {
+    if let Some(denied) = deny_without_download(&user.0) {
+        return denied;
+    }
     audiobooks::get_audiobook_download(user.0, state, path, query, req).await
 }

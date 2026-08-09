@@ -924,3 +924,42 @@ async fn download_delegate_serves_the_epub_with_basic_credentials() {
     );
     std::fs::remove_dir_all(&tmp).ok();
 }
+
+#[tokio::test]
+async fn acquisition_delegates_403_without_the_download_permission() {
+    // AC2 (#1805): the download routes enforce `can_download`; covers and
+    // thumbs deliberately don't — the catalog is unrenderable without its
+    // images, matching the browse UI.
+    let (app, pool, _token) = fixture().await;
+    let user =
+        auth_test_support::create_user_with_password(&pool, "no-dl", "opds-basic-pass-1").await;
+    sqlx::query("UPDATE users SET can_download = 0 WHERE id = ?")
+        .bind(user.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    for uri in [
+        "/opds/ebooks/some-uuid/file",
+        "/opds/ebooks/some-uuid/download",
+        "/opds/audiobooks/some-uuid/download",
+    ] {
+        let res = app
+            .clone()
+            .oneshot(get_with_basic(uri, "no-dl", "opds-basic-pass-1"))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN, "uri={uri}");
+    }
+
+    // Covers stay reachable: 404 (nothing seeded), never 401/403.
+    let res = app
+        .oneshot(get_with_basic(
+            "/opds/covers/some-uuid",
+            "no-dl",
+            "opds-basic-pass-1",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
