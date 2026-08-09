@@ -26,8 +26,11 @@ pub(super) fn is_ereader_format(format: &str) -> bool {
 /// Drop every book without an e-reader-servable file. The shared list
 /// queries surface physical-only books on purpose for the web UI (#1181),
 /// but in a catalog for e-readers a row with no usable acquisition link is
-/// dead weight (#1811). Every feed builder calls this right after its
-/// fetch, so both catalogs filter identically.
+/// dead weight (#1811). Strictly EPUB/CBZ: audiobook-only books are
+/// excluded too, so [`download_link`]'s audio fallback arms never fire
+/// from a feed — they remain only for defense on unfiltered callers.
+/// Every feed builder calls this right after its fetch, so both catalogs
+/// filter identically.
 pub(super) fn retain_ereader_books(books: &mut Vec<EbookMetadata>) {
     books.retain(|b| b.formats.iter().any(|f| is_ereader_format(f)));
 }

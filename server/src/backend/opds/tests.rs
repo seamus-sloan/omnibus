@@ -1010,15 +1010,21 @@ async fn physical_only_books_are_excluded_from_new_and_search_feeds() {
         "physical-only book must remain visible to the web list query"
     );
 
+    // The author feeds filtered before this change — the per-author URIs
+    // here are regression coverage so the shared predicate never lets a
+    // physical-only book leak back in as a linkless entry.
+    let author_id = author_id_by_name(&pool, "Print Author").await;
     for uri in [
-        "/opds/new",
-        "/opds/search?q=chronicle",
-        "/opds/v2/new",
-        "/opds/v2/search?q=chronicle",
+        "/opds/new".to_string(),
+        "/opds/search?q=chronicle".to_string(),
+        "/opds/v2/new".to_string(),
+        "/opds/v2/search?q=chronicle".to_string(),
+        format!("/opds/author/{author_id}"),
+        format!("/opds/v2/author/{author_id}"),
     ] {
         let res = app
             .clone()
-            .oneshot(get_with_bearer(uri, &token))
+            .oneshot(get_with_bearer(&uri, &token))
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK, "uri={uri}");
