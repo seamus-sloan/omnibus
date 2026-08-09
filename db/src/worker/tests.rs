@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use omnibus_shared::{GhostFilesWarning, MetadataOverrides, ProgressState, TaskKind};
 use sqlx::SqlitePool;
+use tempfile::TempDir;
 
 use crate::ebook::test_support::copy_fixture_into;
 use crate::epub_rewrite::tests::seed_epub_row;
@@ -179,7 +180,9 @@ async fn concurrency_cap_respected() {
 async fn await_completion_unknown_id_errors() {
     let w = make_worker_default(pool().await);
     match w.await_completion(99999).await {
-        TaskOutcome::Err(_) => {}
+        // Pinned verbatim: a never-posted id must stay distinguishable from
+        // a task that ran and had its completion slot reclaimed.
+        TaskOutcome::Err(msg) => assert_eq!(msg, "unknown task id"),
         other => panic!("expected Err, got {other:?}"),
     }
 }
@@ -228,6 +231,78 @@ async fn poll_resource_locks_empty(w: &Arc<Worker>) -> bool {
             return false;
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// A task that finishes before its caller reaches `await_completion` must
+/// still report its real outcome. `CompletionsPruneGuard` reclaims the slot
+/// the moment the spawned future ends, so the lookup has to fall back to the
+/// retained terminal progress entry instead of reporting an unknown id.
+/// Draining the maps first forces the losing interleaving rather than hoping
+/// for it — the natural race only loses reliably on fast Linux runners.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn await_completion_returns_the_outcome_after_the_slot_was_pruned() {
+    let w = make_worker_default(pool().await);
+    let id = w.post(Task::Test {
+        tag: "pruned-before-await",
+        latency_ms: 0,
+        resource: None,
+        route_through_scan_sem: false,
+        on_run: None,
+        on_done: None,
+    });
+    assert!(poll_maps_empty(&w).await, "task never finished");
+    match w.await_completion(id).await {
+        TaskOutcome::Ok(None) => {}
+        other => panic!("expected Ok(None) from the retained terminal, got {other:?}"),
+    }
+}
+
+/// Failure sibling of
+/// [`await_completion_returns_the_outcome_after_the_slot_was_pruned`]: the
+/// recovered outcome carries the real terminal message, so a late awaiter
+/// can still tell why the task failed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn await_completion_returns_the_failure_after_the_slot_was_pruned() {
+    let w = make_worker_default(pool().await);
+    let id = w.post(Task::Test {
+        tag: "pruned-panicker",
+        latency_ms: 0,
+        resource: None,
+        route_through_scan_sem: false,
+        on_run: Some(Arc::new(|| panic!("intentional test panic"))),
+        on_done: None,
+    });
+    assert!(poll_maps_empty(&w).await, "task never finished");
+    match w.await_completion(id).await {
+        TaskOutcome::Err(msg) => assert_eq!(msg, "task panicked"),
+        other => panic!("expected the recorded failure, got {other:?}"),
+    }
+}
+
+/// The recovery window is exactly the progress map's retention, not
+/// forever: once the terminal entry is evicted the id reads as unknown
+/// again, which is what keeps the fallback from turning into a second
+/// unbounded map.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn await_completion_reports_unknown_id_once_the_terminal_is_evicted() {
+    let w = make_worker_default(pool().await);
+    let id = w.post(Task::Test {
+        tag: "evicted-terminal",
+        latency_ms: 0,
+        resource: None,
+        route_through_scan_sem: false,
+        on_run: None,
+        on_done: None,
+    });
+    assert!(poll_maps_empty(&w).await, "task never finished");
+    // Zero retention evicts the terminal on the very next snapshot read.
+    w.progress_snapshot_with_retention(Duration::ZERO);
+    assert_eq!(w.progress_len(), 0);
+
+    match w.await_completion(id).await {
+        TaskOutcome::Err(msg) => assert_eq!(msg, "unknown task id"),
+        other => panic!("expected Err after eviction, got {other:?}"),
     }
 }
 
@@ -927,22 +1002,25 @@ async fn task_scan_reports_ghost_warning_in_the_warn_band_below_abort() {
 /// `TaskSuccessDetail::BakeErrors` (#1739). A book with a real fixture on
 /// disk bakes successfully alongside it, so the run doesn't abort on the
 /// first failure.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn task_rewrite_all_epubs_reports_bake_errors_via_task_outcome() {
+/// Seed the two-book fixture a `Task::RewriteAllEpubs` run needs to leave
+/// exactly one book unbaked: `uuid-ok` has a real EPUB on disk, `uuid-bad`
+/// points at a source that was never written. The returned guards redirect
+/// the export cache and own the library dirs, so the caller must hold them
+/// for the life of the test.
+async fn seed_one_failing_bake(pool: &SqlitePool) -> (EnvVarGuard, TempDir, TempDir, TempDir) {
     let export = tempfile::tempdir().unwrap();
-    let _env = EnvVarGuard::set_os("OMNIBUS_EXPORT_EPUB_DIR", Some(export.path().as_os_str()));
+    let env = EnvVarGuard::set_os("OMNIBUS_EXPORT_EPUB_DIR", Some(export.path().as_os_str()));
 
-    let pool = pool().await;
-    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+    let user_id = crate::auth::create_user(pool, "admin", "securepassword1")
         .await
         .unwrap()
         .id;
 
     let lib_ok = tempfile::tempdir().unwrap();
     copy_fixture_into("alpha.epub", lib_ok.path());
-    seed_epub_row(&pool, lib_ok.path(), "uuid-ok", "Book OK", "alpha").await;
+    seed_epub_row(pool, lib_ok.path(), "uuid-ok", "Book OK", "alpha").await;
     crate::upsert_metadata_overrides(
-        &pool,
+        pool,
         "uuid-ok",
         &MetadataOverrides {
             title: Some("Fixed".into()),
@@ -955,9 +1033,9 @@ async fn task_rewrite_all_epubs_reports_bake_errors_via_task_outcome() {
     .unwrap();
 
     let lib_bad = tempfile::tempdir().unwrap();
-    seed_epub_row(&pool, lib_bad.path(), "uuid-bad", "Book Bad", "missing").await;
+    seed_epub_row(pool, lib_bad.path(), "uuid-bad", "Book Bad", "missing").await;
     crate::upsert_metadata_overrides(
-        &pool,
+        pool,
         "uuid-bad",
         &MetadataOverrides {
             title: Some("Never Applied".into()),
@@ -969,6 +1047,14 @@ async fn task_rewrite_all_epubs_reports_bake_errors_via_task_outcome() {
     .await
     .unwrap();
 
+    (env, export, lib_ok, lib_bad)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn task_rewrite_all_epubs_reports_bake_errors_via_task_outcome() {
+    let pool = pool().await;
+    let _guards = seed_one_failing_bake(&pool).await;
+
     let w = make_worker_default(pool);
     let id = w.post(Task::RewriteAllEpubs);
     match w.await_completion(id).await {
@@ -976,6 +1062,26 @@ async fn task_rewrite_all_epubs_reports_bake_errors_via_task_outcome() {
             assert_eq!(errors, vec!["uuid-bad".to_string()]);
         }
         other => panic!("expected Ok with bake errors, got {other:?}"),
+    }
+}
+
+/// The [`TaskSuccessDetail`] survives the completion slot being reclaimed
+/// first, so a late awaiter still learns *which* books failed rather than a
+/// bare `Ok(None)` — the detail-bearing counterpart to
+/// [`await_completion_returns_the_outcome_after_the_slot_was_pruned`].
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn task_rewrite_all_epubs_reports_bake_errors_after_the_slot_was_pruned() {
+    let pool = pool().await;
+    let _guards = seed_one_failing_bake(&pool).await;
+
+    let w = make_worker_default(pool);
+    let id = w.post(Task::RewriteAllEpubs);
+    assert!(poll_maps_empty(&w).await, "bake never finished");
+    match w.await_completion(id).await {
+        TaskOutcome::Ok(Some(TaskSuccessDetail::BakeErrors(errors))) => {
+            assert_eq!(errors, vec!["uuid-bad".to_string()]);
+        }
+        other => panic!("expected the retained bake errors, got {other:?}"),
     }
 }
 

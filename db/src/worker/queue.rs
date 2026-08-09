@@ -13,7 +13,8 @@ use omnibus_shared::{ProgressState, TaskProgress};
 use tokio::sync::watch;
 
 use super::types::{
-    lock_unpoison, wall_clock_ms, ProgressEntry, Task, TaskId, TaskOutcome, Worker,
+    lock_unpoison, wall_clock_ms, ProgressEntry, Task, TaskId, TaskOutcome, TaskSuccessDetail,
+    Worker,
 };
 
 /// RAII guard that reclaims a `Worker::completions` slot when dropped.
@@ -130,7 +131,9 @@ impl Worker {
             // `Failed { "task panicked" }` so the UI's red-banner path
             // fires the same way it does for an `Err(_)` outcome. On the
             // happy path `run` records the real terminal and this drop is
-            // a no-op (terminal_at is already Some).
+            // a no-op (terminal_at is already Some). Declared *after*
+            // `_prune` so it drops *before* it: `retained_outcome` relies on
+            // a terminal state existing by the time the slot disappears.
             let _progress_guard = ProgressTerminalGuard {
                 progress: progress.clone(),
                 id,
@@ -148,7 +151,8 @@ impl Worker {
             // slot. A `watch::Receiver` that `await_completion` took out of
             // the map *before* this runs keeps observing the final value
             // even after `tx` drops and the slot is gone, so an in-flight
-            // awaiter still resolves.
+            // awaiter still resolves; one that arrives *after* the slot is
+            // gone reads the retained progress entry instead.
             let _ = tx.send(Some(outcome));
         });
 
@@ -156,9 +160,12 @@ impl Worker {
     }
 
     /// Wait for the task identified by `id` to finish and return its
-    /// [`TaskOutcome`]. Returns [`TaskOutcome::Err`] if `id` was never posted
-    /// (or already pruned) or if the spawned task was dropped before reporting
-    /// an outcome (e.g. it panicked, which closes the watch channel).
+    /// [`TaskOutcome`]. A task that already finished still reports its real
+    /// outcome for as long as the progress map retains the terminal entry
+    /// (~[`super::types::TERMINAL_RETENTION`]). Returns
+    /// [`TaskOutcome::Err`]`("unknown task id")` once that window has passed,
+    /// or if `id` was never posted; [`TaskOutcome::Err`] likewise if the
+    /// spawned task was dropped before reporting an outcome.
     pub async fn await_completion(&self, id: TaskId) -> TaskOutcome {
         // Take ownership of the receiver out of the map rather than cloning
         // it. The held receiver observes the channel's final value regardless
@@ -169,7 +176,9 @@ impl Worker {
             let mut map = lock_unpoison(&self.completions);
             match map.remove(&id) {
                 Some(rx) => rx,
-                None => return TaskOutcome::Err("unknown task id".into()),
+                // No slot: most often the task finished first and
+                // `CompletionsPruneGuard` got here before the caller did.
+                None => return self.retained_outcome(id),
             }
         };
         loop {
@@ -179,6 +188,42 @@ impl Worker {
             if rx.changed().await.is_err() {
                 return TaskOutcome::Err("worker dropped task before completion".into());
             }
+        }
+    }
+
+    /// Recover a finished task's outcome from its retained progress entry,
+    /// for a caller that reached [`await_completion`](Worker::await_completion)
+    /// after the completion slot was already reclaimed.
+    ///
+    /// The progress map is the right place to read this from rather than a
+    /// second retention window on `completions`: it already retains terminal
+    /// entries for [`super::types::TERMINAL_RETENTION`] and already evicts
+    /// them, so nothing new can grow unbounded. The read is sound because
+    /// `post` drops [`ProgressTerminalGuard`] *before*
+    /// [`CompletionsPruneGuard`] — so whenever the slot is gone, the terminal
+    /// state has already been written.
+    fn retained_outcome(&self, id: TaskId) -> TaskOutcome {
+        let terminal = lock_unpoison(&self.progress)
+            .get(&id)
+            .filter(|entry| entry.terminal_at.is_some())
+            .map(|entry| entry.progress.state.clone());
+        match terminal {
+            // Inverse of `exec::project_terminal`: a task attaches at most one
+            // detail, so at most one of these two fields is ever set.
+            Some(ProgressState::Done {
+                ghost_warning,
+                bake_errors,
+                ..
+            }) => TaskOutcome::Ok(
+                ghost_warning
+                    .map(TaskSuccessDetail::GhostFiles)
+                    .or_else(|| bake_errors.map(TaskSuccessDetail::BakeErrors)),
+            ),
+            Some(ProgressState::Failed { message }) => TaskOutcome::Err(message),
+            // Never posted, evicted after the retention window, or a
+            // concurrent awaiter already took the receiver while the task is
+            // still running — none of which this handle can resolve.
+            _ => TaskOutcome::Err("unknown task id".into()),
         }
     }
 
