@@ -127,10 +127,10 @@ fn use_sp_overlay_state() -> SpOverlayState {
 }
 
 /// Derived wiring for [`SpOverlay`]: the flat selectable-item list plus the
-/// close/keydown/search handlers the panel renders with. Split out purely to
-/// keep [`SpOverlay`] itself under the file's line-count guidance — every
-/// hook call here still runs during that component's own render, in the
-/// same order every time.
+/// close/keydown/search handlers the panel renders with. Every hook call
+/// here still runs during [`SpOverlay`]'s own render, in the same order
+/// every time — required since Dioxus hooks must stay unconditional and
+/// order-stable regardless of which function body they're written in.
 #[allow(clippy::type_complexity)]
 fn build_overlay_wiring(
     open: PaletteOpen,

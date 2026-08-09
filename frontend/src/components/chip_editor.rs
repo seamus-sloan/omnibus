@@ -245,8 +245,7 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
 
 /// Assemble the input area's focus/blur/input/keydown/pick callbacks from
 /// the editor's local signals and the already-built `on_keydown`/`commit`
-/// closures. Split out of [`ChipEditor`] purely to keep that component's
-/// body under the file's line-count guidance — no behavioral change.
+/// closures.
 #[allow(clippy::too_many_arguments)]
 fn build_input_area_callbacks(
     mut input: Signal<String>,
