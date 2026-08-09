@@ -730,8 +730,10 @@ fn evict_if_over_cap_is_a_noop_when_the_export_dir_does_not_exist() {
 /// `book_files` (EPUB) row for `uuid`, so `book_file_path` resolves to
 /// `lib_dir/<filename_stem>.epub` — real enough for `rewrite_blocking` to
 /// open when the caller has also copied a fixture there (or left it
-/// missing, to exercise the per-book failure branch).
-async fn seed_epub_row(
+/// missing, to exercise the per-book failure branch). `pub(crate)` so
+/// `worker::tests` can reuse it for the `Task::RewriteAllEpubs` bake-error
+/// tests rather than duplicating the same three inserts.
+pub(crate) async fn seed_epub_row(
     pool: &sqlx::SqlitePool,
     lib_dir: &std::path::Path,
     uuid: &str,
