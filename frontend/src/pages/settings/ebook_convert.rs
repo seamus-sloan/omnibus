@@ -5,10 +5,44 @@
 //! (rule 07).
 
 use dioxus::prelude::*;
-use omnibus_shared::EbookConvertStatus;
+use omnibus_shared::{EbookConvertStatus, DEFAULT_EBOOK_CONVERT_BIN};
 
 use crate::components::credential_card::{credential_status_line, credential_status_message};
 use crate::{data, use_server_url};
+
+/// The input's placeholder: the resolved command once the status lands, else
+/// what the backend actually falls back to — the bare name resolved on `$PATH`,
+/// not a distro-specific absolute path.
+fn placeholder_for(status: Option<&EbookConvertStatus>) -> String {
+    status.map_or_else(|| DEFAULT_EBOOK_CONVERT_BIN.to_string(), |s| s.path.clone())
+}
+
+/// Whether a saved settings override (rather than the env var or `$PATH`) is in
+/// force — the only case where "Use auto-detection" has anything to clear.
+fn is_overridden(status: Option<&EbookConvertStatus>) -> bool {
+    status.is_some_and(|s| s.source == "settings")
+}
+
+/// Detail line beside the status dot. Empty until the status lands, so the
+/// unresolved card falls back to the caller's "Not detected" label.
+fn status_detail(status: Option<&EbookConvertStatus>) -> String {
+    status.map_or_else(String::new, |s| {
+        format!("Detected \u{00b7} {} \u{00b7} {}", s.source, s.path)
+    })
+}
+
+/// Message and error flag for a successful save: a path the server saved but
+/// can't run is a warning, not a success.
+fn save_outcome_message(available: bool) -> (String, bool) {
+    if available {
+        ("ebook-convert path saved.".to_string(), false)
+    } else {
+        (
+            "Path saved, but ebook-convert is not runnable there.".to_string(),
+            true,
+        )
+    }
+}
 
 /// Admin field to override the `ebook_convert_path` setting. Clearing falls
 /// back to `OMNIBUS_EBOOK_CONVERT_PATH`, then `ebook-convert` on `$PATH`.
@@ -46,15 +80,11 @@ pub fn EbookConvertField() -> Element {
         spawn(async move {
             match data::save_ebook_convert(&url, Some(value)).await {
                 Ok(s) => {
-                    let detected = s.available;
+                    let (text, is_error) = save_outcome_message(s.available);
                     status.set(Some(s));
                     path_input.set(String::new());
-                    msg.set(Some(if detected {
-                        "ebook-convert path saved.".to_string()
-                    } else {
-                        "Path saved, but ebook-convert is not runnable there.".to_string()
-                    }));
-                    msg_is_error.set(!detected);
+                    msg.set(Some(text));
+                    msg_is_error.set(is_error);
                 }
                 Err(_) => {
                     msg.set(Some("Failed to save ebook-convert path.".to_string()));
@@ -89,16 +119,10 @@ pub fn EbookConvertField() -> Element {
     };
 
     let st = status();
-    let available = st.as_ref().map(|s| s.available).unwrap_or(false);
-    let overridden = st.as_ref().map(|s| s.source == "settings").unwrap_or(false);
-    let placeholder = st
-        .as_ref()
-        .map(|s| s.path.clone())
-        .unwrap_or_else(|| "/usr/bin/ebook-convert".to_string());
-    let detail = st
-        .as_ref()
-        .map(|s| format!("Detected \u{00b7} {} \u{00b7} {}", s.source, s.path))
-        .unwrap_or_default();
+    let available = st.as_ref().is_some_and(|s| s.available);
+    let overridden = is_overridden(st.as_ref());
+    let placeholder = placeholder_for(st.as_ref());
+    let detail = status_detail(st.as_ref());
 
     rsx! {
         section { class: "card", "data-testid": "ebook-convert-card",
@@ -147,3 +171,6 @@ pub fn EbookConvertField() -> Element {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

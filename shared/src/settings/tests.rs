@@ -195,3 +195,28 @@ fn settings_validate_rejects_scan_interval_of_zero() {
         SettingsError::ScanIntervalTooSmall
     );
 }
+
+#[test]
+fn ebook_convert_status_round_trips_through_json() {
+    let s = EbookConvertStatus {
+        available: true,
+        path: "/opt/calibre/ebook-convert".to_string(),
+        source: "settings".to_string(),
+    };
+    let json = serde_json::to_string(&s).unwrap();
+    assert_eq!(
+        serde_json::from_str::<EbookConvertStatus>(&json).unwrap(),
+        s
+    );
+}
+
+#[test]
+fn ebook_convert_status_default_is_the_unconfigured_path_lookup() {
+    // The default is what the UI and a keyless server both mean by "nothing
+    // configured": resolve the bare name on $PATH, and claim nothing about
+    // whether it is runnable until something has probed it.
+    let d = EbookConvertStatus::default();
+    assert!(!d.available);
+    assert_eq!(d.path, DEFAULT_EBOOK_CONVERT_BIN);
+    assert_eq!(d.source, "path");
+}
