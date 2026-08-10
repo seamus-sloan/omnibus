@@ -284,7 +284,7 @@ pub(super) fn BdJournalEntryCard(
             } else {
                 BdJournalEntryBody {
                     body_html: entry.body_html.clone(),
-                    body_class: body_class.to_string(),
+                    body_class,
                     can_expand,
                     expanded,
                     error: error(),
@@ -300,7 +300,7 @@ pub(super) fn BdJournalEntryCard(
 #[component]
 fn BdJournalEntryBody(
     body_html: String,
-    body_class: String,
+    body_class: &'static str,
     can_expand: bool,
     mut expanded: Signal<bool>,
     error: Option<String>,
