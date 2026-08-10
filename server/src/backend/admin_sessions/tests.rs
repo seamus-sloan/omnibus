@@ -242,7 +242,6 @@ async fn admin_revoke_session_returns_400_when_targeting_own_current_session() {
         .unwrap();
 
     let res = app
-        .clone()
         .oneshot(req(
             "DELETE",
             &format!("/api/admin/sessions/{}", own_session.id),
@@ -253,15 +252,14 @@ async fn admin_revoke_session_returns_400_when_targeting_own_current_session() {
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
 
     // The session must still be live — the guard rejected before revoking.
-    let res = app
-        .oneshot(req("GET", "/api/auth/me", &admin_tok))
+    // `/api/auth/me` lives on the separate `auth_router` (server/src/auth/
+    // handlers.rs), only merged with `rest_router` in main.rs, so this
+    // fixture's app can't route it; check liveness directly against the
+    // pool instead, matching the pattern the sibling revoke test above
+    // uses.
+    omnibus_db::auth::lookup_session(&pool, &admin_tok)
         .await
-        .unwrap();
-    assert_eq!(
-        res.status(),
-        StatusCode::OK,
-        "own session must remain usable after the rejected self-revoke"
-    );
+        .expect("own session must remain usable after the rejected self-revoke");
 }
 
 /// The guard is scoped to the requester's *own* session id — an admin can
