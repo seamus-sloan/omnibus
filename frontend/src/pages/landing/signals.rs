@@ -136,6 +136,9 @@ fn use_fetch_signals() -> FetchSignals {
         error: use_signal(|| None::<String>),
         fetch_epoch: use_signal(|| 0u64),
         generation: crate::use_cache_generation(),
+        // Seeds false on every target: SSR never runs the hydration effect, so
+        // it renders the same empty grid it always did (rule 07).
+        prefs_ready: use_signal(|| false),
     }
 }
 
@@ -214,8 +217,9 @@ struct ShelfWiring {
 
 /// Arm every reactive side-effect the landing page needs: admin-gated
 /// suggestion-pool refetch, page-1 fetch on sort/filter/query change, the
-/// load-more append + web scroll observer, and prefs hydration once the
-/// library path resolves.
+/// load-more append + web scroll observer, and the two-stage prefs hydration
+/// (last-browsed library on mount, then the authoritative path once a fetch
+/// resolves it).
 #[allow(clippy::too_many_arguments)] // one bundle per pipeline; splitting further hides the wiring
 fn wire_landing_effects(
     server_url: &str,
@@ -282,10 +286,26 @@ fn wire_landing_effects(
         }
     });
 
-    // Hydrate persisted prefs when the library path resolves. The `!=` guard
-    // makes this idempotent: re-running it after a page-1 refetch (which re-sets
-    // `lib_path`) is a no-op once prefs match, so it can't loop with the
-    // fetch effect.
+    // Hydrate prefs from the last-browsed library *before* page 1 goes out, so
+    // the grid's first paint is already in the viewer's sort order (#1818).
+    // Reads nothing reactively, so it runs exactly once after mount — and
+    // `prefs_ready` flips either way, since a first-ever visit has no pointer
+    // and must still proceed on the defaults rather than never fetching.
+    let mut prefs_ready = fetch_sigs.prefs_ready;
+    use_effect(move || {
+        if let Some(stored) = view_prefs::load_last() {
+            if stored != *prefs.peek() {
+                prefs.set(stored);
+            }
+        }
+        prefs_ready.set(true);
+    });
+
+    // Reconcile against the authoritative library path once a fetch reveals it,
+    // covering the case the pointer above guessed wrong (the viewer switched
+    // libraries since their last save). The `!=` guard makes this idempotent:
+    // re-running it after a page-1 refetch (which re-sets `lib_path`) is a no-op
+    // once prefs match, so it can't loop with the fetch effect.
     let lib_path = fetch_sigs.lib_path;
     use_effect(move || {
         if let Some(path) = lib_path.read().clone() {
