@@ -79,15 +79,17 @@ pub async fn storage_stats(pool: &SqlitePool) -> Result<StorageStats, AdminHealt
         sqlx::query_scalar("SELECT COALESCE(SUM(size_bytes), 0) FROM book_files")
             .fetch_one(pool)
             .await?;
-    let (covers_bytes, thumbs_bytes, hls_bytes) = tokio::task::spawn_blocking(|| {
-        (
-            dir_size_flat(&crate::covers::covers_dir()),
-            crate::thumbs::used_bytes(),
-            crate::hls::used_bytes(),
-        )
-    })
-    .await
-    .unwrap_or((0, 0, 0));
+    let (covers_bytes, thumbs_bytes, hls_bytes, export_epub_bytes) =
+        tokio::task::spawn_blocking(|| {
+            (
+                dir_size_flat(&crate::covers::covers_dir()),
+                crate::thumbs::used_bytes(),
+                crate::hls::used_bytes(),
+                crate::epub_rewrite::used_bytes(),
+            )
+        })
+        .await
+        .unwrap_or((0, 0, 0, 0));
     Ok(StorageStats {
         library_bytes,
         covers_bytes,
@@ -95,6 +97,8 @@ pub async fn storage_stats(pool: &SqlitePool) -> Result<StorageStats, AdminHealt
         thumbs_cap_bytes: crate::thumbs::cap_bytes(),
         hls_bytes,
         hls_cap_bytes: crate::hls::cap_bytes(),
+        export_epub_bytes,
+        export_epub_cap_bytes: crate::epub_rewrite::cap_bytes(),
     })
 }
 

@@ -84,6 +84,29 @@ pub fn cap_bytes() -> u64 {
         .unwrap_or(DEFAULT_CAP_BYTES)
 }
 
+/// Sum the sizes of every cached rewritten EPUB under `export_epub_dir()`,
+/// for `db::admin_health::storage_stats` — the read-only counterpart of
+/// [`evict_if_over_cap`]'s usage sum, mirroring `thumbs::used_bytes`/
+/// `hls::used_bytes`. Skips in-flight temp files the same way
+/// [`evict_if_over_cap`] does.
+pub fn used_bytes() -> u64 {
+    let dir = export_epub_dir();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            !name.starts_with('.') && name.ends_with(".epub")
+        })
+        .filter_map(|entry| entry.metadata().ok())
+        .filter(|meta| meta.is_file())
+        .map(|meta| meta.len())
+        .sum()
+}
+
 /// Delete the cached rewritten EPUB for `book_id`, if present.
 ///
 /// Called once a book's override state fully clears — see

@@ -129,20 +129,29 @@ async fn storage_stats_sums_covers_thumbs_and_hls_dir_bytes() {
     std::fs::create_dir_all(&hls_book_dir).unwrap();
     std::fs::write(hls_book_dir.join("seg0.ts"), vec![0u8; 10]).unwrap();
 
+    let export_epub_dir = tempfile::tempdir().unwrap();
+    std::fs::write(export_epub_dir.path().join("1.epub"), vec![0u8; 15]).unwrap();
+
     // One `EnvVarGuard` chain (not a `CoversTempDir` plus separate
     // `EnvVarGuard`s): both hold the same process-wide `ENV_LOCK`, and it's
     // a plain `std::sync::Mutex` — not reentrant — so acquiring it a second
     // time on this thread while the first guard is still alive deadlocks.
     let _guard = EnvVarGuard::set_os("OMNIBUS_COVERS_DIR", Some(covers_dir.path().as_os_str()))
         .also_set_os("OMNIBUS_THUMBS_DIR", Some(thumbs_dir.path().as_os_str()))
-        .also_set_os("OMNIBUS_DATA_DIR", Some(data_dir.path().as_os_str()));
+        .also_set_os("OMNIBUS_DATA_DIR", Some(data_dir.path().as_os_str()))
+        .also_set_os(
+            "OMNIBUS_EXPORT_EPUB_DIR",
+            Some(export_epub_dir.path().as_os_str()),
+        );
 
     let stats = storage_stats(&pool).await.unwrap();
     assert_eq!(stats.covers_bytes, 30);
     assert_eq!(stats.thumbs_bytes, 20);
     assert_eq!(stats.hls_bytes, 10);
+    assert_eq!(stats.export_epub_bytes, 15);
     assert!(stats.thumbs_cap_bytes > 0);
     assert!(stats.hls_cap_bytes > 0);
+    assert!(stats.export_epub_cap_bytes > 0);
 }
 
 #[tokio::test]
