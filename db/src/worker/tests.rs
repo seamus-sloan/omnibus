@@ -1251,6 +1251,15 @@ async fn task_rewrite_all_epubs_reports_sanitized_err_when_the_pool_is_closed() 
 
     let w = make_worker_default(pool);
     let id = w.post(Task::RewriteAllEpubs);
+    // `RewriteAllEpubs` has no `on_run` hook to gate, and against an
+    // already-closed pool it fails (and prunes its completions slot)
+    // essentially instantly — on a fast CI runner that reliably beats the
+    // caller to `await_completion`, which then documents the pruned-slot
+    // case as `Err("unknown task id")` rather than this test's asserted
+    // sanitized message. Draining the maps first forces that interleaving
+    // deterministically instead of racing it — same pattern as
+    // `await_completion_returns_the_outcome_after_the_slot_was_pruned`.
+    assert!(poll_maps_empty(&w).await, "task never finished");
     match w.await_completion(id).await {
         TaskOutcome::Err(msg) => {
             assert!(msg.contains("epub override bake"), "{msg}");
