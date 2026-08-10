@@ -54,6 +54,14 @@ pub(super) async fn root(_user: OpdsAuthUser) -> Response {
                 NAVIGATION_TYPE,
                 "Browse by series",
             ),
+            nav_entry(
+                "urn:omnibus:opds:shelves",
+                "Shelves",
+                &updated,
+                "/opds/shelves",
+                NAVIGATION_TYPE,
+                "Your shelves and public shelves",
+            ),
         ],
     };
     xml_response(NAVIGATION_TYPE, feed.to_xml())

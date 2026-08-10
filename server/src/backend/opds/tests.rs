@@ -130,6 +130,7 @@ async fn root_feed_is_a_navigation_feed_with_search_new_and_authors_links() {
     assert!(body.contains(r#"href="/opds/authors""#));
     assert!(body.contains(r#"href="/opds/all""#));
     assert!(body.contains(r#"href="/opds/series""#));
+    assert!(body.contains(r#"href="/opds/shelves""#));
 }
 
 #[tokio::test]
@@ -1209,6 +1210,117 @@ async fn atom_series_browse_matches_the_json_catalog() {
 
     let res = app
         .oneshot(get_with_bearer("/opds/series/999999", &token))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+// ---------------------------------------------------------------- Shelves
+
+async fn seed_shelf(
+    pool: &SqlitePool,
+    owner_id: i64,
+    name: &str,
+    visibility: omnibus_shared::Visibility,
+    book_uuids: Vec<String>,
+) -> omnibus_shared::Shelf {
+    db::create_shelf(
+        pool,
+        owner_id,
+        &omnibus_shared::CreateShelfRequest {
+            kind: omnibus_shared::ShelfKind::Manual,
+            name: name.into(),
+            description: None,
+            visibility,
+            match_mode: None,
+            rules: Vec::new(),
+            book_uuids,
+        },
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn shelves_browse_lists_only_the_viewers_visible_shelves() {
+    // AC1 (#1813): the listing is the viewer's — owner sees their private
+    // shelf, another user sees only the public one; identically in both
+    // catalogs (AC3).
+    let (app, pool, token) = fixture().await;
+    let owner = auth_test_support::create_user(&pool, "shelf-owner").await;
+    let owner_token = auth_test_support::bearer_token(&pool, owner.id).await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Frank Herbert").await;
+    seed_shelf(
+        &pool,
+        owner.id,
+        "Secret Stack",
+        omnibus_shared::Visibility::Private,
+        vec![uuid.clone()],
+    )
+    .await;
+    seed_shelf(
+        &pool,
+        owner.id,
+        "Front Window",
+        omnibus_shared::Visibility::Public,
+        vec![uuid],
+    )
+    .await;
+
+    for (tok, sees_private, who) in [(&owner_token, true, "owner"), (&token, false, "other")] {
+        for base in ["/opds/shelves", "/opds/v2/shelves"] {
+            let res = app
+                .clone()
+                .oneshot(get_with_bearer(base, tok))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::OK, "{who} {base}");
+            let body = body_string(res).await;
+            assert!(body.contains("Front Window"), "{who} {base}");
+            assert_eq!(body.contains("Secret Stack"), sees_private, "{who} {base}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn private_shelf_feed_404s_for_a_non_viewer_and_serves_members_for_the_owner() {
+    // AC2 (#1813): the per-shelf feed serves members to a permitted viewer
+    // and 404s (not 403 — no existence leak) for anyone else.
+    let (app, pool, token) = fixture().await;
+    let owner = auth_test_support::create_user(&pool, "shelf-owner").await;
+    let owner_token = auth_test_support::bearer_token(&pool, owner.id).await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Frank Herbert").await;
+    let shelf = seed_shelf(
+        &pool,
+        owner.id,
+        "Secret Stack",
+        omnibus_shared::Visibility::Private,
+        vec![uuid],
+    )
+    .await;
+
+    for base in ["/opds/shelves", "/opds/v2/shelves"] {
+        let uri = format!("{base}/{}", shelf.id);
+        let res = app
+            .clone()
+            .oneshot(get_with_bearer(&uri, &owner_token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "owner {uri}");
+        let body = body_string(res).await;
+        assert!(body.contains("Dune"), "owner {uri}");
+
+        let res = app
+            .clone()
+            .oneshot(get_with_bearer(&uri, &token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND, "other {uri}");
+    }
+
+    // Unknown id 404s the same way for everyone.
+    let res = app
+        .oneshot(get_with_bearer("/opds/shelves/999999", &owner_token))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
