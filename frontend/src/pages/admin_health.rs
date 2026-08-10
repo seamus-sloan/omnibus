@@ -225,6 +225,10 @@ fn StorageCard(storage: StorageStats) -> Element {
                     label: "HLS transcode cache",
                     value: format_cache_usage(storage.hls_bytes, storage.hls_cap_bytes),
                 }
+                AhKvRow {
+                    label: "Export-EPUB cache",
+                    value: format_cache_usage(storage.export_epub_bytes, storage.export_epub_cap_bytes),
+                }
             }
         }
     }

@@ -133,11 +133,15 @@ fn storage_card_renders_every_figure() {
         thumbs_cap_bytes: 5_000_000_000,
         hls_bytes: 0,
         hls_cap_bytes: 5_000_000_000,
+        export_epub_bytes: 2_000,
+        export_epub_cap_bytes: 5_000_000_000,
     };
     let html = dioxus::ssr::render_element(rsx! { StorageCard { storage } });
     assert!(html.contains("data-testid=\"admin-health-storage-card\""));
     assert!(html.contains("3.1 MB"));
     assert!(html.contains("512 B"));
+    assert!(html.contains("Export-EPUB cache"));
+    assert!(html.contains("2.0 KB"));
     assert!(html.contains("cap"));
 }
 

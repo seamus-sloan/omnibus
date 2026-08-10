@@ -53,6 +53,8 @@ pub struct StorageStats {
     pub thumbs_cap_bytes: u64,
     pub hls_bytes: u64,
     pub hls_cap_bytes: u64,
+    pub export_epub_bytes: u64,
+    pub export_epub_cap_bytes: u64,
 }
 
 /// Full report backing `/admin/health`'s five sections, returned in one
