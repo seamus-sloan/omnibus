@@ -1251,6 +1251,13 @@ async fn task_rewrite_all_epubs_reports_sanitized_err_when_the_pool_is_closed() 
 
     let w = make_worker_default(pool);
     let id = w.post(Task::RewriteAllEpubs);
+    // `RewriteAllEpubs` has no `on_run` hook to gate, and against a closed
+    // pool it fails (and prunes its completions slot) almost instantly, so
+    // without draining first this races `await_completion` grabbing the
+    // live receiver against the prune. Forcing the pruned-slot interleaving
+    // here, as in `await_completion_returns_the_outcome_after_the_slot_was_pruned`,
+    // makes the test deterministically exercise the retained-outcome path.
+    assert!(poll_maps_empty(&w).await, "task never finished");
     match w.await_completion(id).await {
         TaskOutcome::Err(msg) => {
             assert!(msg.contains("epub override bake"), "{msg}");
