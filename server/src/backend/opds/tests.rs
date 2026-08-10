@@ -2,15 +2,44 @@
 //! (like `kobo/tests.rs`, since it's mounted outside `rest_router`) via
 //! `oneshot` against an in-memory DB.
 
-use axum::{body::to_bytes, http::StatusCode, Router};
-use omnibus_db::{self as db, test_support::seed_synced_ebook};
+use axum::{
+    body::to_bytes,
+    extract::{Path, Query, State},
+    http::StatusCode,
+    Router,
+};
+use omnibus_db::{self as db, auth::SessionKind, test_support::seed_synced_ebook};
 use omnibus_shared::Settings;
 use sqlx::SqlitePool;
 use tower::ServiceExt;
 
 use super::*;
 use crate::auth::test_support as auth_test_support;
+use crate::auth::{AuthUser, OpdsAuthUser};
 use crate::backend::test_support::{get_anon, get_with_bearer};
+
+/// Minimal `OpdsAuthUser` for driving a handler directly, bypassing the
+/// extractor — mirroring `fake_admin` in `admin_sessions/tests.rs`. Needed
+/// because each handler's own DB-failure branch shares the `sessions`
+/// table with `OpdsAuthUser`'s own session lookup, so closing the pool
+/// before a routed request would fail extraction itself, not the handler
+/// body under test.
+fn fake_opds_user() -> OpdsAuthUser {
+    OpdsAuthUser(AuthUser {
+        id: 1,
+        username: "opds-reader".to_string(),
+        is_admin: false,
+        can_upload: false,
+        can_edit: false,
+        can_download: true,
+        kindle_email: None,
+        display_name: None,
+        has_avatar: false,
+        hidden_formats: Vec::new(),
+        session_id: 1,
+        session_kind: SessionKind::Bearer,
+    })
+}
 
 /// `opds_router` wired to a fresh in-memory DB, plus a bearer token for a
 /// freshly created user. Settings point the ebook library at `/ebooks` —
@@ -192,6 +221,20 @@ async fn search_with_no_matches_returns_an_empty_acquisition_feed() {
 }
 
 #[tokio::test]
+async fn search_returns_500_when_the_pool_is_closed() {
+    let (_app, pool, _token) = fixture().await;
+    let state = AppState::new(pool.clone());
+    pool.close().await;
+    let res = search::search(
+        fake_opds_user(),
+        State(state),
+        Query(search::SearchQuery { q: "dune".into() }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
 async fn new_arrivals_lists_a_recently_indexed_book() {
     let (app, pool, token) = fixture().await;
     seed_synced_ebook(&pool, "dune.epub", "Dune", "Frank Herbert").await;
@@ -203,6 +246,15 @@ async fn new_arrivals_lists_a_recently_indexed_book() {
     assert_eq!(res.status(), StatusCode::OK);
     let body = body_string(res).await;
     assert!(body.contains("<title>Dune</title>"));
+}
+
+#[tokio::test]
+async fn new_arrivals_returns_500_when_the_pool_is_closed() {
+    let (_app, pool, _token) = fixture().await;
+    let state = AppState::new(pool.clone());
+    pool.close().await;
+    let res = new::new_arrivals(fake_opds_user(), State(state)).await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 #[tokio::test]
@@ -245,6 +297,15 @@ async fn authors_letter_index_percent_encodes_the_hash_bucket_href() {
 }
 
 #[tokio::test]
+async fn authors_letter_index_returns_500_when_the_pool_is_closed() {
+    let (_app, pool, _token) = fixture().await;
+    let state = AppState::new(pool.clone());
+    pool.close().await;
+    let res = authors::letter_index(fake_opds_user(), State(state)).await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
 async fn authors_by_letter_lists_the_authors_acquisition_feed_link() {
     let (app, pool, token) = fixture().await;
     seed_synced_ebook(&pool, "dune.epub", "Dune", "Frank Herbert").await;
@@ -268,6 +329,28 @@ async fn authors_by_letter_rejects_a_multi_character_letter() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn authors_by_letter_rejects_a_single_non_alphabetic_non_hash_character() {
+    let (app, _pool, token) = fixture().await;
+    for uri in ["/opds/authors/1", "/opds/authors/!"] {
+        let res = app
+            .clone()
+            .oneshot(get_with_bearer(uri, &token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "uri={uri}");
+    }
+}
+
+#[tokio::test]
+async fn authors_by_letter_returns_500_when_the_pool_is_closed() {
+    let (_app, pool, _token) = fixture().await;
+    let state = AppState::new(pool.clone());
+    pool.close().await;
+    let res = authors::by_letter(fake_opds_user(), State(state), Path("F".into())).await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 #[tokio::test]
@@ -346,6 +429,45 @@ async fn author_acquisition_feed_returns_404_for_an_unknown_author_id() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn author_acquisition_feed_returns_500_when_the_pool_is_closed() {
+    let (_app, pool, _token) = fixture().await;
+    let state = AppState::new(pool.clone());
+    pool.close().await;
+    let res = authors::acquisition_feed(fake_opds_user(), State(state), Path(1)).await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+// --------------------------------------------------------- Timestamp parsing
+
+#[tokio::test]
+async fn entry_updated_falls_back_to_the_current_instant_for_a_missing_timestamp() {
+    let before = time::OffsetDateTime::now_utc();
+    let result = entry_updated(None);
+    let after = time::OffsetDateTime::now_utc();
+    let parsed =
+        time::OffsetDateTime::parse(&result, &time::format_description::well_known::Rfc3339)
+            .unwrap();
+    assert!(
+        parsed >= before && parsed <= after,
+        "expected {parsed} between {before} and {after}"
+    );
+}
+
+#[tokio::test]
+async fn entry_updated_falls_back_to_the_current_instant_for_a_malformed_timestamp() {
+    let before = time::OffsetDateTime::now_utc();
+    let result = entry_updated(Some("not-a-timestamp"));
+    let after = time::OffsetDateTime::now_utc();
+    let parsed =
+        time::OffsetDateTime::parse(&result, &time::format_description::well_known::Rfc3339)
+            .unwrap();
+    assert!(
+        parsed >= before && parsed <= after,
+        "expected {parsed} between {before} and {after}"
+    );
 }
 
 // ---------------------------------------------------------------------------
