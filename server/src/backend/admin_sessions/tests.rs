@@ -230,6 +230,63 @@ async fn admin_revoke_session_returns_404_for_unknown_id() {
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }
 
+/// Mirrors `auth::handlers::delete_session_handler`'s self-lockout guard:
+/// an admin revoking the session their own request authenticated with is
+/// rejected with `400`, not honored.
+#[tokio::test]
+async fn admin_revoke_session_returns_400_when_targeting_own_current_session() {
+    let (app, _, pool) = fixture().await;
+    let admin_tok = admin_token(&pool, "alice").await;
+    let (_user, own_session) = omnibus_db::auth::lookup_session(&pool, &admin_tok)
+        .await
+        .unwrap();
+
+    let res = app
+        .clone()
+        .oneshot(req(
+            "DELETE",
+            &format!("/api/admin/sessions/{}", own_session.id),
+            &admin_tok,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // The session must still be live — the guard rejected before revoking.
+    let res = app
+        .oneshot(req("GET", "/api/auth/me", &admin_tok))
+        .await
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "own session must remain usable after the rejected self-revoke"
+    );
+}
+
+/// The guard is scoped to the requester's *own* session id — an admin can
+/// still revoke a different admin's current session (only self-lockout is
+/// refused, matching the self-service handler's behavior).
+#[tokio::test]
+async fn admin_revokes_another_admins_current_session() {
+    let (app, _, pool) = fixture().await;
+    let admin_tok = admin_token(&pool, "alice").await;
+    let other_admin_tok = admin_token(&pool, "carol").await;
+    let (_user, other_session) = omnibus_db::auth::lookup_session(&pool, &other_admin_tok)
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(req(
+            "DELETE",
+            &format!("/api/admin/sessions/{}", other_session.id),
+            &admin_tok,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+}
+
 // ── Revoke device (admin-success + cascades sessions + 404) ───────
 
 #[tokio::test]
@@ -318,7 +375,10 @@ async fn get_user_devices_returns_500_when_pool_closed() {
 async fn delete_session_returns_500_when_pool_closed() {
     let (_app, state, pool) = fixture().await;
     pool.close().await;
-    let res = delete_session(AdminUser(fake_admin(1)), State(state), Path(1)).await;
+    // Target id (2) deliberately differs from `fake_admin`'s own
+    // `session_id` (1) so the self-lockout guard below doesn't
+    // short-circuit before reaching the DB call this test targets.
+    let res = delete_session(AdminUser(fake_admin(1)), State(state), Path(2)).await;
     assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
