@@ -31,6 +31,7 @@ pub(super) async fn root(_user: OpdsAuthUser) -> Response {
                 .templated(),
         ],
         navigation: vec![
+            json_nav_link("All Books", "/opds/v2/all"),
             json_nav_link("Recently Added", "/opds/v2/new"),
             json_nav_link("Authors", "/opds/v2/authors"),
             json_nav_link("Series", "/opds/v2/series"),

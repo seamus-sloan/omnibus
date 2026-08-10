@@ -128,6 +128,8 @@ async fn root_feed_is_a_navigation_feed_with_search_new_and_authors_links() {
     assert!(body.contains(r#"rel="search" href="/opds/osd""#));
     assert!(body.contains(r#"href="/opds/new""#));
     assert!(body.contains(r#"href="/opds/authors""#));
+    assert!(body.contains(r#"href="/opds/all""#));
+    assert!(body.contains(r#"href="/opds/series""#));
 }
 
 #[tokio::test]
@@ -1043,4 +1045,171 @@ async fn physical_only_books_are_excluded_from_new_and_search_feeds() {
         body_string(res).await.contains("Dune"),
         "file-backed books must still flow through the feed"
     );
+}
+
+// ------------------------------------------------------- All Books + Series
+
+/// Pull the `rel="next"` href out of an Atom feed body, if present.
+fn next_href(body: &str) -> Option<String> {
+    let marker = r#"rel="next" href=""#;
+    let start = body.find(marker)? + marker.len();
+    let rest = &body[start..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
+#[tokio::test]
+async fn all_books_pages_through_the_whole_library_with_rel_next() {
+    // AC2 (#1812): the All Books feed walks the entire library via
+    // rel="next" — 55 seeded books over a 50-row page cap means exactly two
+    // pages, and the entry total across them must equal the library.
+    let (app, pool, token) = fixture().await;
+    for i in 0..55 {
+        seed_synced_ebook(
+            &pool,
+            &format!("book{i:02}.epub"),
+            &format!("Book {i:02}"),
+            "Bulk Author",
+        )
+        .await;
+    }
+
+    let res = app
+        .clone()
+        .oneshot(get_with_bearer("/opds/all", &token))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let page1 = body_string(res).await;
+    assert_eq!(page1.matches("<entry>").count(), 50);
+    let next = next_href(&page1).expect("page 1 must carry a rel=next link");
+
+    let res = app
+        .clone()
+        .oneshot(get_with_bearer(&next, &token))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let page2 = body_string(res).await;
+    assert_eq!(page2.matches("<entry>").count(), 5);
+    assert!(
+        next_href(&page2).is_none(),
+        "the final page must not advertise a next link"
+    );
+    // Keyset paging: the pages must not overlap.
+    assert!(page1.contains("<title>Book 00</title>"));
+    assert!(page2.contains("<title>Book 54</title>"));
+    assert!(!page2.contains("<title>Book 00</title>"));
+}
+
+#[tokio::test]
+async fn v2_all_books_pages_like_the_atom_feed() {
+    let (app, pool, token) = fixture().await;
+    for i in 0..55 {
+        seed_synced_ebook(
+            &pool,
+            &format!("book{i:02}.epub"),
+            &format!("Book {i:02}"),
+            "Bulk Author",
+        )
+        .await;
+    }
+    let res = app
+        .clone()
+        .oneshot(get_with_bearer("/opds/v2/all", &token))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let json = body_json(res).await;
+    assert_eq!(json["publications"].as_array().unwrap().len(), 50);
+    let next = json["links"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["rel"] == "next")
+        .expect("page 1 must carry a next link")["href"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let res = app.oneshot(get_with_bearer(&next, &token)).await.unwrap();
+    let json = body_json(res).await;
+    assert_eq!(json["publications"].as_array().unwrap().len(), 5);
+    assert!(!json["links"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|l| l["rel"] == "next"));
+}
+
+#[tokio::test]
+async fn all_books_rejects_a_malformed_cursor() {
+    let (app, _pool, token) = fixture().await;
+    for uri in [
+        "/opds/all?cursor=%%%not-a-cursor",
+        "/opds/v2/all?cursor=%%%not-a-cursor",
+    ] {
+        let res = app
+            .clone()
+            .oneshot(get_with_bearer(uri, &token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "uri={uri}");
+    }
+}
+
+#[tokio::test]
+async fn atom_series_browse_matches_the_json_catalog() {
+    // AC3 (#1812): the Atom series browse serves the same series and
+    // members as the /opds/v2 equivalent it reaches parity with.
+    let (app, pool, token) = fixture().await;
+    seed_synced_ebook_with_series(
+        &pool,
+        "dune.epub",
+        "Dune",
+        "Frank Herbert",
+        &["Science Fiction"],
+        ("Dune Saga", "1"),
+    )
+    .await;
+    let series_id = series_id_by_name(&pool, "Dune Saga").await;
+
+    let res = app
+        .clone()
+        .oneshot(get_with_bearer("/opds/series", &token))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = body_string(res).await;
+    assert!(body.contains("<title>Dune Saga</title>"));
+    assert!(body.contains(&format!("href=\"/opds/series/{series_id}\"")));
+
+    let res = app
+        .clone()
+        .oneshot(get_with_bearer(
+            &format!("/opds/series/{series_id}"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let atom_body = body_string(res).await;
+    let atom_count = atom_body.matches("<entry>").count();
+    assert!(atom_body.contains("<title>Dune</title>"));
+
+    let res = app
+        .clone()
+        .oneshot(get_with_bearer(
+            &format!("/opds/v2/series/{series_id}"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    let json = body_json(res).await;
+    assert_eq!(atom_count, json["publications"].as_array().unwrap().len());
+
+    let res = app
+        .oneshot(get_with_bearer("/opds/series/999999", &token))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }
