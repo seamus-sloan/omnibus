@@ -116,7 +116,7 @@ async fn storage_stats_sums_library_bytes_from_book_files() {
 }
 
 #[tokio::test]
-async fn storage_stats_sums_covers_thumbs_and_hls_dir_bytes() {
+async fn storage_stats_sums_covers_thumbs_hls_and_export_epub_dir_bytes() {
     let pool = pool().await;
     let covers_dir = tempfile::tempdir().unwrap();
     std::fs::write(covers_dir.path().join("book-a.jpg"), vec![0u8; 30]).unwrap();
