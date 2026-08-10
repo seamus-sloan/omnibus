@@ -161,10 +161,10 @@ fn use_chip_editor_state(autofocus: bool) -> ChipEditorState {
 #[component]
 pub fn ChipEditor(props: ChipEditorProps) -> Element {
     let ChipEditorState {
-        mut input,
-        mut highlight,
+        input,
+        highlight,
         focused,
-        mut suppress_open,
+        suppress_open,
         mut root_el,
     } = use_chip_editor_state(props.options.autofocus);
 
@@ -175,35 +175,16 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
     let on_change_remove = on_change;
     let on_close = props.on_close;
 
-    let mut commit = move |name: String| {
-        commit_chip(
-            name,
-            &mut values_sig,
-            &mut input,
-            &mut highlight,
-            &mut suppress_open,
-            &on_change,
-        );
-    };
-    let on_keydown = move |e: Event<KeyboardData>| {
-        dispatch_keydown(
-            e,
-            &selection_kd,
-            &mut input,
-            &mut highlight,
-            &mut commit,
-            &on_close,
-        );
-    };
-    let callbacks = build_input_area_callbacks(
+    let callbacks = build_callbacks(
+        values_sig,
         input,
         highlight,
         focused,
         suppress_open,
         root_el,
+        on_change,
         on_close,
-        on_keydown,
-        commit,
+        selection_kd,
     );
 
     rsx! {
@@ -241,6 +222,53 @@ pub fn ChipEditor(props: ChipEditorProps) -> Element {
             }
         }
     }
+}
+
+/// Build the `commit`/`on_keydown` closures from the editor's local signals
+/// and `selection`, then hand them to [`build_input_area_callbacks`] along
+/// with the remaining input-area signals.
+#[allow(clippy::too_many_arguments)]
+fn build_callbacks(
+    mut values_sig: Signal<Vec<String>>,
+    mut input: Signal<String>,
+    mut highlight: Signal<Option<usize>>,
+    focused: Signal<bool>,
+    mut suppress_open: Signal<bool>,
+    root_el: Signal<Option<ChipEditorRoot>>,
+    on_change: EventHandler<Vec<String>>,
+    on_close: EventHandler<()>,
+    selection: SelectionView,
+) -> ChipInputAreaCallbacks {
+    let mut commit = move |name: String| {
+        commit_chip(
+            name,
+            &mut values_sig,
+            &mut input,
+            &mut highlight,
+            &mut suppress_open,
+            &on_change,
+        );
+    };
+    let on_keydown = move |e: Event<KeyboardData>| {
+        dispatch_keydown(
+            e,
+            &selection,
+            &mut input,
+            &mut highlight,
+            &mut commit,
+            &on_close,
+        );
+    };
+    build_input_area_callbacks(
+        input,
+        highlight,
+        focused,
+        suppress_open,
+        root_el,
+        on_close,
+        on_keydown,
+        commit,
+    )
 }
 
 /// Assemble the input area's focus/blur/input/keydown/pick callbacks from
