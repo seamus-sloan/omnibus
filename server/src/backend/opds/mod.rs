@@ -45,10 +45,12 @@ mod json_nav;
 mod json_new;
 mod json_search;
 mod json_series;
+mod json_shelves;
 mod nav;
 mod new;
 mod search;
 mod series;
+mod shelves;
 #[cfg(test)]
 mod tests;
 
@@ -70,6 +72,8 @@ pub fn opds_router(state: AppState) -> Router {
         .route("/opds/author/{id}", get(authors::acquisition_feed))
         .route("/opds/series", get(series::index))
         .route("/opds/series/{id}", get(series::acquisition_feed))
+        .route("/opds/shelves", get(shelves::index))
+        .route("/opds/shelves/{id}", get(shelves::acquisition_feed))
         .route("/opds/v2", get(json_nav::root))
         .route("/opds/v2/search", get(json_search::search))
         .route("/opds/v2/new", get(json_new::new_arrivals))
@@ -79,6 +83,8 @@ pub fn opds_router(state: AppState) -> Router {
         .route("/opds/v2/author/{id}", get(json_authors::acquisition_feed))
         .route("/opds/v2/series", get(json_series::index))
         .route("/opds/v2/series/{id}", get(json_series::acquisition_feed))
+        .route("/opds/v2/shelves", get(json_shelves::index))
+        .route("/opds/v2/shelves/{id}", get(json_shelves::acquisition_feed))
         .route("/opds/covers/{uuid}", get(delegate::cover))
         .route("/opds/thumbs/{uuid}/{size}", get(delegate::thumb))
         .route("/opds/ebooks/{uuid}/file", get(delegate::ebook_file))

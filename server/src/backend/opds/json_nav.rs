@@ -35,6 +35,7 @@ pub(super) async fn root(_user: OpdsAuthUser) -> Response {
             json_nav_link("Recently Added", "/opds/v2/new"),
             json_nav_link("Authors", "/opds/v2/authors"),
             json_nav_link("Series", "/opds/v2/series"),
+            json_nav_link("Shelves", "/opds/v2/shelves"),
         ],
         publications: Vec::new(),
     };
