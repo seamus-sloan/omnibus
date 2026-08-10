@@ -235,7 +235,7 @@ pub(super) fn BdJournalEntryCard(
         error: use_signal(|| None::<String>),
         reload,
     };
-    let mut expanded = use_signal(|| false);
+    let expanded = use_signal(|| false);
     let editing = edit.editing;
     let error = edit.error;
 
@@ -282,24 +282,43 @@ pub(super) fn BdJournalEntryCard(
                     edit,
                 }
             } else {
-                div {
-                    class: "{body_class}",
-                    dangerous_inner_html: "{entry.body_html}",
-                }
-                if can_expand && !expanded() {
-                    button {
-                        r#type: "button",
-                        class: "btn ghost sm bd-journal-show-more",
-                        "data-testid": "journal-show-more",
-                        "aria-expanded": "{expanded()}",
-                        onclick: move |_| expanded.set(true),
-                        "Show more \u{2193}"
-                    }
-                }
-                if let Some(msg) = error() {
-                    span { class: "mono bd-journal-error", role: "alert", "{msg}" }
+                BdJournalEntryBody {
+                    body_html: entry.body_html.clone(),
+                    body_class: body_class.to_string(),
+                    can_expand,
+                    expanded,
+                    error: error(),
                 }
             }
+        }
+    }
+}
+
+/// Rendered markdown body + "Show more" toggle + inline error, extracted
+/// from [`BdJournalEntryCard`] to keep it under the line cap. Rendered only
+/// when the entry isn't in edit mode.
+#[component]
+fn BdJournalEntryBody(
+    body_html: String,
+    body_class: String,
+    can_expand: bool,
+    mut expanded: Signal<bool>,
+    error: Option<String>,
+) -> Element {
+    rsx! {
+        div { class: "{body_class}", dangerous_inner_html: "{body_html}" }
+        if can_expand && !expanded() {
+            button {
+                r#type: "button",
+                class: "btn ghost sm bd-journal-show-more",
+                "data-testid": "journal-show-more",
+                "aria-expanded": "{expanded()}",
+                onclick: move |_| expanded.set(true),
+                "Show more \u{2193}"
+            }
+        }
+        if let Some(msg) = error {
+            span { class: "mono bd-journal-error", role: "alert", "{msg}" }
         }
     }
 }
