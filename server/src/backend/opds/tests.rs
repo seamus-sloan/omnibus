@@ -986,6 +986,19 @@ async fn basic_auth_surfaces_an_account_lockout_as_403() {
 }
 
 #[tokio::test]
+async fn basic_auth_returns_500_when_the_pool_closes_during_credential_verification() {
+    // A closed pool must surface as a 5xx during `verify_login`, not
+    // silently fall through to an anonymous 401 challenge.
+    let (app, pool, _token) = fixture().await;
+    pool.close().await;
+    let res = app
+        .oneshot(get_with_basic("/opds", "basic-reader", "opds-basic-pass-1"))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
 async fn bearer_sessions_still_authenticate_after_the_basic_fallback_landed() {
     // AC3 (#1805): the session path is tried first and unchanged — a valid
     // bearer token must not be affected by the Basic fallback.
@@ -1287,6 +1300,34 @@ async fn all_books_rejects_a_malformed_cursor() {
 }
 
 #[tokio::test]
+async fn all_books_returns_500_when_the_pool_is_closed() {
+    let (_app, pool, _token) = fixture().await;
+    let state = AppState::new(pool.clone());
+    pool.close().await;
+    let res = all::all_books(
+        fake_opds_user(),
+        State(state),
+        Query(all::AllQuery { cursor: None }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn v2_all_books_returns_500_when_the_pool_is_closed() {
+    let (_app, pool, _token) = fixture().await;
+    let state = AppState::new(pool.clone());
+    pool.close().await;
+    let res = json_all::all_books(
+        fake_opds_user(),
+        State(state),
+        Query(all::AllQuery { cursor: None }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
 async fn atom_series_browse_matches_the_json_catalog() {
     // AC3 (#1812): the Atom series browse serves the same series and
     // members as the /opds/v2 equivalent it reaches parity with.
@@ -1341,6 +1382,24 @@ async fn atom_series_browse_matches_the_json_catalog() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn series_index_returns_500_when_the_pool_is_closed() {
+    let (_app, pool, _token) = fixture().await;
+    let state = AppState::new(pool.clone());
+    pool.close().await;
+    let res = series::index(fake_opds_user(), State(state)).await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn series_acquisition_feed_returns_500_when_the_pool_is_closed() {
+    let (_app, pool, _token) = fixture().await;
+    let state = AppState::new(pool.clone());
+    pool.close().await;
+    let res = series::acquisition_feed(fake_opds_user(), State(state), Path(1)).await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 // ---------------------------------------------------------------- Shelves
@@ -1500,4 +1559,40 @@ async fn shelf_feeds_exclude_non_ebook_library_members() {
         );
     }
     let _ = token;
+}
+
+#[tokio::test]
+async fn shelves_index_returns_500_when_the_pool_is_closed() {
+    let (_app, pool, _token) = fixture().await;
+    let state = AppState::new(pool.clone());
+    pool.close().await;
+    let res = shelves::index(fake_opds_user(), State(state)).await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn shelves_acquisition_feed_returns_500_when_the_pool_is_closed() {
+    let (_app, pool, _token) = fixture().await;
+    let state = AppState::new(pool.clone());
+    pool.close().await;
+    let res = shelves::acquisition_feed(fake_opds_user(), State(state), Path(1)).await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn v2_shelves_index_returns_500_when_the_pool_is_closed() {
+    let (_app, pool, _token) = fixture().await;
+    let state = AppState::new(pool.clone());
+    pool.close().await;
+    let res = json_shelves::index(fake_opds_user(), State(state)).await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn v2_shelves_acquisition_feed_returns_500_when_the_pool_is_closed() {
+    let (_app, pool, _token) = fixture().await;
+    let state = AppState::new(pool.clone());
+    pool.close().await;
+    let res = json_shelves::acquisition_feed(fake_opds_user(), State(state), Path(1)).await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
