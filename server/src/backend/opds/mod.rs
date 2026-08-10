@@ -6,10 +6,9 @@
 //! the [`delegate`] routes on this router — the `/api/*` originals sit
 //! behind cookie/bearer-only auth. Deliberately ebook-library scoped —
 //! every read filters to `settings.ebook_library_path` — so every
-//! acquisition entry carries a working download link. The Atom catalog's
-//! series and category browses are not implemented; the `/opds/v2/*` JSON
-//! catalog below adds a series browse and carries category (subject/genre)
-//! data inline on every publication.
+//! acquisition entry carries a working download link. A category browse is
+//! not implemented in either catalog; the `/opds/v2/*` JSON catalog
+//! carries category (subject/genre) data inline on every publication.
 //!
 //! `/opds/v2/*` is the OPDS 2.0 JSON counterpart (`application/opds+json`,
 //! [`omnibus_shared::opds`]) for modern OPDS clients — a distinct path
@@ -34,10 +33,12 @@ use crate::http_errors::internal;
 
 use super::AppState;
 
+mod all;
 mod atom;
 mod authors;
 mod delegate;
 mod entries;
+mod json_all;
 mod json_authors;
 mod json_entries;
 mod json_nav;
@@ -47,6 +48,7 @@ mod json_series;
 mod nav;
 mod new;
 mod search;
+mod series;
 #[cfg(test)]
 mod tests;
 
@@ -62,12 +64,16 @@ pub fn opds_router(state: AppState) -> Router {
         .route("/opds/osd", get(nav::osd))
         .route("/opds/search", get(search::search))
         .route("/opds/new", get(new::new_arrivals))
+        .route("/opds/all", get(all::all_books))
         .route("/opds/authors", get(authors::letter_index))
         .route("/opds/authors/{letter}", get(authors::by_letter))
         .route("/opds/author/{id}", get(authors::acquisition_feed))
+        .route("/opds/series", get(series::index))
+        .route("/opds/series/{id}", get(series::acquisition_feed))
         .route("/opds/v2", get(json_nav::root))
         .route("/opds/v2/search", get(json_search::search))
         .route("/opds/v2/new", get(json_new::new_arrivals))
+        .route("/opds/v2/all", get(json_all::all_books))
         .route("/opds/v2/authors", get(json_authors::letter_index))
         .route("/opds/v2/authors/{letter}", get(json_authors::by_letter))
         .route("/opds/v2/author/{id}", get(json_authors::acquisition_feed))

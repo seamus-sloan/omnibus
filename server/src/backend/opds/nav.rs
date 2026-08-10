@@ -23,6 +23,14 @@ pub(super) async fn root(_user: OpdsAuthUser) -> Response {
         ],
         entries: vec![
             nav_entry(
+                "urn:omnibus:opds:all",
+                "All Books",
+                &updated,
+                "/opds/all",
+                ACQUISITION_TYPE,
+                "Every book in the library, A to Z",
+            ),
+            nav_entry(
                 "urn:omnibus:opds:new",
                 "Recently Added",
                 &updated,
@@ -37,6 +45,14 @@ pub(super) async fn root(_user: OpdsAuthUser) -> Response {
                 "/opds/authors",
                 NAVIGATION_TYPE,
                 "Browse by author, A to Z",
+            ),
+            nav_entry(
+                "urn:omnibus:opds:series",
+                "Series",
+                &updated,
+                "/opds/series",
+                NAVIGATION_TYPE,
+                "Browse by series",
             ),
         ],
     };
