@@ -350,10 +350,12 @@ async fn fetch_page_count_candidates(
 /// lazy generation path in `server::backend::covers::thumb_cache_miss_response`.
 ///
 /// Posted as a separate worker task after each ebook library scan (mirroring
-/// [`backfill_word_counts`]). Cheap when caught up: a book whose three sizes
-/// are already fresh per [`thumbs::is_stale_async`] is skipped without touching its
-/// cover bytes, so a re-scan of an unchanged library does no re-encoding —
-/// exactly what [`thumbs::ensure_thumbnails_sync`] does for a single book.
+/// [`backfill_word_counts`]). Cheap when caught up: candidates are first
+/// partitioned by [`thumbs::is_stale_async`] into the subset actually needing
+/// a re-encode (#1817) — a book with all three sizes already fresh never
+/// touches its cover bytes, is never logged, and never advances the reported
+/// `total`, so a re-scan of an unchanged library posts no visible progress
+/// task at all.
 ///
 /// Processes one book at a time (decode + encode is CPU-bound and runs on
 /// the blocking pool via `spawn_blocking`) rather than fanning out, so a
@@ -361,7 +363,8 @@ async fn fetch_page_count_candidates(
 /// for CPU. A per-book failure (missing cover, decode error, I/O) is logged
 /// and skipped rather than aborting the batch — the next scan or an
 /// interactive view retries it via the lazy path. `on_progress(processed,
-/// total)` is called per book for the UI, mirroring the sibling backfills.
+/// total)` is called once per stale book for the UI, mirroring the sibling
+/// backfills.
 pub(crate) async fn backfill_thumbs(
     pool: &SqlitePool,
     library_path: &str,
@@ -372,17 +375,27 @@ pub(crate) async fn backfill_thumbs(
         return Ok(());
     }
 
-    let total = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
+    let mut stale = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        if is_any_thumb_stale(candidate.0, candidate.1).await {
+            stale.push(candidate);
+        }
+    }
+    if stale.is_empty() {
+        return Ok(());
+    }
+
+    let total = u32::try_from(stale.len()).unwrap_or(u32::MAX);
     tracing::info!(
         count = total,
         "pre-generating thumbnails for existing covers"
     );
 
     let mut processed = 0u32;
-    for (book_id, last_modified_epoch, title) in candidates {
+    for (book_id, last_modified_epoch, title) in stale {
         processed = processed.saturating_add(1);
         on_progress(processed, total, &title);
-        regenerate_thumbs_if_stale(pool, book_id, last_modified_epoch).await;
+        regenerate_thumbs(pool, book_id, last_modified_epoch).await;
     }
 
     let cap = thumbs::cap_bytes();
@@ -399,21 +412,22 @@ pub(crate) async fn backfill_thumbs(
     Ok(())
 }
 
-/// Regenerate one book's three thumbnail sizes if any is stale per
-/// [`thumbs::is_stale_async`], skipping (and logging) a missing cover,
-/// fetch failure, or generation failure rather than aborting the batch.
-async fn regenerate_thumbs_if_stale(pool: &SqlitePool, book_id: i64, last_modified_epoch: i64) {
-    let mut all_fresh = true;
+/// Whether any of a book's three thumbnail sizes is stale per
+/// [`thumbs::is_stale_async`] — the [`backfill_thumbs`] partition predicate.
+async fn is_any_thumb_stale(book_id: i64, last_modified_epoch: i64) -> bool {
     for size in thumbs::ThumbSize::all() {
         if thumbs::is_stale_async(book_id, size, last_modified_epoch).await {
-            all_fresh = false;
-            break;
+            return true;
         }
     }
-    if all_fresh {
-        return;
-    }
+    false
+}
 
+/// Regenerate one book's three thumbnail sizes, skipping (and logging) a
+/// missing cover, fetch failure, or generation failure rather than aborting
+/// the batch. Callers are expected to have already established via
+/// [`is_any_thumb_stale`] that this book needs re-encoding.
+async fn regenerate_thumbs(pool: &SqlitePool, book_id: i64, last_modified_epoch: i64) {
     let cover = match covers::get_cover(pool, book_id).await {
         Ok(Some((_mime, bytes))) => bytes,
         Ok(None) => return,
