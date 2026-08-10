@@ -85,25 +85,44 @@ mod mobile_tests {
 
     static TEST_GUARD: Mutex<()> = Mutex::new(());
 
+    /// RAII guard that restores `$HOME` and resets the mobile store on drop —
+    /// including on an unwind from a failed assertion inside `f`. Without
+    /// this, a panicking test would skip the restore and leave `$HOME`
+    /// pointed at a deleted tempdir plus a dirty process-global mobile store
+    /// for every later test in the same process.
+    struct IsolatedStoreGuard {
+        prior_home: Option<std::ffi::OsString>,
+    }
+
+    impl Drop for IsolatedStoreGuard {
+        fn drop(&mut self) {
+            crate::client_store::reset_for_test();
+            match self.prior_home.take() {
+                Some(home) => std::env::set_var("HOME", home),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+    }
+
     /// Run `f` with `$HOME` redirected to a scratch dir and the mobile store
     /// reset, so the mobile backend's disk flush (`client_store.rs`) lands in
     /// a throwaway location instead of a developer's real `~/.omnibus`.
-    /// Nothing else in this crate reads or writes `$HOME` under `test`, so
-    /// this is safe alongside `TEST_GUARD` serializing the map/call-counter
-    /// state that lives independently of the env var.
+    /// `$HOME` is process-global and also read by `crate::data::app_dirs::data_dir`,
+    /// and tests can run in parallel within one process — callers must hold
+    /// `TEST_GUARD` for the duration. Cleanup runs via `IsolatedStoreGuard`'s
+    /// `Drop`, so it fires even if `f` panics — the panic still propagates
+    /// once unwinding drops the guard.
     fn with_isolated_store(f: impl FnOnce()) {
         let scratch = tempfile::tempdir().expect("tempdir for isolated client_store");
-        let prior_home = std::env::var_os("HOME");
+        let guard = IsolatedStoreGuard {
+            prior_home: std::env::var_os("HOME"),
+        };
         std::env::set_var("HOME", scratch.path());
         crate::client_store::reset_for_test();
 
         f();
 
-        crate::client_store::reset_for_test();
-        match prior_home {
-            Some(home) => std::env::set_var("HOME", home),
-            None => std::env::remove_var("HOME"),
-        }
+        drop(guard);
     }
 
     fn sample_prefs() -> ViewPrefs {
