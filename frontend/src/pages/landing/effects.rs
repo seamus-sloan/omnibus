@@ -43,6 +43,11 @@ pub(super) struct FetchSignals {
     /// Offline-cache generation (mobile): a bump re-runs the page-1 fetch,
     /// which is then served from the freshly revalidated cache.
     pub(super) generation: Signal<u64>,
+    /// False until the post-mount effect has had its chance to hydrate `prefs`
+    /// from the last-browsed library. [`spawn_page_fetch_effect`] holds page 1
+    /// until it flips, so the first request carries the viewer's own sort
+    /// instead of [`omnibus_shared::ViewPrefs::default`] (#1818).
+    pub(super) prefs_ready: Signal<bool>,
 }
 
 /// Refetch the admin-only author/tag/genre suggestion pools whenever `is_admin` changes.
@@ -87,7 +92,9 @@ pub(super) fn spawn_suggestion_pools_effect(
     });
 }
 
-/// Refetch page 1 on query/sort/filter changes; epoch-guarded so stale in-flight requests drop.
+/// Refetch page 1 on query/sort/filter changes; epoch-guarded so stale
+/// in-flight requests drop, and held until `prefs_ready` so the first request
+/// out carries the viewer's persisted sort rather than the defaults.
 pub(super) fn spawn_page_fetch_effect(
     server_url: String,
     fetch_key: Memo<(
@@ -107,11 +114,18 @@ pub(super) fn spawn_page_fetch_effect(
     let mut error = sigs.error;
     let mut fetch_epoch = sigs.fetch_epoch;
     let generation = sigs.generation;
+    let prefs_ready = sigs.prefs_ready;
     use_effect(move || {
         // Re-run when a background cache revalidation lands changed data;
         // the refetch below is then a fresh cache hit (zero network).
         let _ = generation();
         let (q, sort_key, sort_dir, filters, exclude_formats) = fetch_key();
+        // Read every dependency *before* the gate so the subscription set is
+        // identical on the held run and the real one — bailing early on an
+        // unread signal would drop `fetch_key` from this effect's deps.
+        if !prefs_ready() {
+            return;
+        }
         let epoch = {
             fetch_epoch.with_mut(|e| *e += 1);
             *fetch_epoch.peek()
