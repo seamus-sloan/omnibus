@@ -252,12 +252,15 @@ pub(super) struct DownloadQuery {
 /// yield the first part today — there is no on-the-fly archiving yet, so
 /// per-part downloads go through the format switcher's file picker.
 pub(super) async fn get_audiobook_download(
-    _user: AuthUser,
+    user: AuthUser,
     State(state): State<AppState>,
     Path(uuid): Path<String>,
     Query(query): Query<DownloadQuery>,
     req: Request,
 ) -> Response {
+    if let Some(denied) = super::deny_without_download(&user) {
+        return denied;
+    }
     let resolved = match hls::resolve_audiobook_file(&state.pool, &uuid, query.file_id).await {
         Ok(Some(r)) => r,
         Ok(None) => return axum::http::StatusCode::NOT_FOUND.into_response(),

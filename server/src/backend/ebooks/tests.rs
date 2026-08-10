@@ -436,6 +436,28 @@ async fn api_get_ebook_file_returns_200_with_epub_bytes() {
     std::fs::remove_dir_all(&tmp).ok();
 }
 
+/// AC1 (#1810): `/file` is the in-app reader stream, not a download — it
+/// must stay reachable even for a `can_download = 0` user. Only the
+/// `Content-Disposition: attachment` routes (`/download`, `/kepub`) enforce
+/// the flag.
+#[tokio::test]
+async fn api_get_ebook_file_returns_200_when_user_cannot_download() {
+    let (_, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    revoke_can_download(&pool, user.id).await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let (uuid, _book_id, tmp) = seed_epub_on_disk(&pool).await;
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    let res = app
+        .oneshot(get_with_bearer(&format!("/api/ebooks/{uuid}/file"), &token))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::OK);
+
+    std::fs::remove_dir_all(&tmp).ok();
+}
+
 /// The `/file` stream is gated by `MediaAuthUser`, so a `?token=` query param
 /// authenticates it with neither a cookie nor a bearer header — the path
 /// epub.js takes from inside the mobile WebView. Mirrors the bearer 200 test
@@ -752,6 +774,21 @@ async fn api_get_ebook_kepub_returns_401_when_anonymous() {
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 }
 
+/// AC1 (#1810): `can_download = 0` must 403 the KEPUB download route, the
+/// same guard the OPDS acquisition delegates already enforce.
+#[tokio::test]
+async fn api_get_ebook_kepub_returns_403_when_user_cannot_download() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    revoke_can_download(&pool, user.id).await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let res = app
+        .oneshot(get_with_bearer("/api/ebooks/some-uuid/kepub", &token))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
 #[tokio::test]
 async fn api_get_ebook_kepub_returns_404_for_unknown_uuid() {
     let (app, _state, pool) = fixture().await;
@@ -841,6 +878,22 @@ async fn api_get_ebook_download_returns_401_when_anonymous() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// AC1 (#1810): `can_download = 0` must 403 the raw-EPUB download route
+/// before it ever resolves the uuid, mirroring `deny_without_download` on
+/// the OPDS acquisition delegate for the same URL shape.
+#[tokio::test]
+async fn api_get_ebook_download_returns_403_when_user_cannot_download() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    revoke_can_download(&pool, user.id).await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let res = app
+        .oneshot(get_with_bearer("/api/ebooks/some-uuid/download", &token))
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

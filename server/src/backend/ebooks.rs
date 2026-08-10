@@ -480,10 +480,13 @@ const KEPUB_CONVERT_BUDGET: std::time::Duration = std::time::Duration::from_secs
 /// the canonical `book_uuid` so a future USB annotation import can map the
 /// device's `ContentID` back to the book.
 pub(super) async fn get_ebook_kepub(
-    _user: AuthUser,
+    user: AuthUser,
     State(state): State<AppState>,
     Path(uuid): Path<String>,
 ) -> Response {
+    if let Some(denied) = super::deny_without_download(&user) {
+        return denied;
+    }
     let id = match db::resolve_book_id_by_uuid(&state.pool, &uuid).await {
         Ok(Some(id)) => id,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
@@ -575,12 +578,15 @@ fn download_response(bytes: Vec<u8>, filename: &str) -> Response {
 /// disposition differs, so the in-app reader keeps streaming inline via
 /// `/file` while the export menu drives a real save-to-disk via `/download`.
 pub(super) async fn get_ebook_download(
-    _user: AuthUser,
+    user: AuthUser,
     State(state): State<AppState>,
     Path(uuid): Path<String>,
     Query(query): Query<EbookFileQuery>,
     req: Request,
 ) -> Response {
+    if let Some(denied) = super::deny_without_download(&user) {
+        return denied;
+    }
     let (source, id) = match resolve_epub_path(&state, &uuid, query.file_id).await {
         Ok(resolved) => resolved,
         Err((resp, _)) => return resp,
