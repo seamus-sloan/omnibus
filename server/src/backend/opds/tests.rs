@@ -444,9 +444,9 @@ async fn author_acquisition_feed_returns_500_when_the_pool_is_closed() {
 
 #[tokio::test]
 async fn entry_updated_falls_back_to_the_current_instant_for_a_missing_timestamp() {
-    let before = time::OffsetDateTime::now_utc();
+    let before = time::OffsetDateTime::now_utc() - time::Duration::seconds(2);
     let result = entry_updated(None);
-    let after = time::OffsetDateTime::now_utc();
+    let after = time::OffsetDateTime::now_utc() + time::Duration::seconds(2);
     let parsed =
         time::OffsetDateTime::parse(&result, &time::format_description::well_known::Rfc3339)
             .unwrap();
@@ -458,9 +458,9 @@ async fn entry_updated_falls_back_to_the_current_instant_for_a_missing_timestamp
 
 #[tokio::test]
 async fn entry_updated_falls_back_to_the_current_instant_for_a_malformed_timestamp() {
-    let before = time::OffsetDateTime::now_utc();
+    let before = time::OffsetDateTime::now_utc() - time::Duration::seconds(2);
     let result = entry_updated(Some("not-a-timestamp"));
-    let after = time::OffsetDateTime::now_utc();
+    let after = time::OffsetDateTime::now_utc() + time::Duration::seconds(2);
     let parsed =
         time::OffsetDateTime::parse(&result, &time::format_description::well_known::Rfc3339)
             .unwrap();
