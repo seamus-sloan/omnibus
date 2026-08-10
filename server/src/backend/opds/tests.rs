@@ -963,3 +963,84 @@ async fn acquisition_delegates_403_without_the_download_permission() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn physical_only_books_are_excluded_from_new_and_search_feeds() {
+    // #1811: the shared list/search queries surface physical-only books on
+    // purpose for the web UI (#1181), but a catalog entry with no
+    // acquisition link is a dead row on an e-reader. The author and series
+    // feeds already filtered; new and search must too.
+    let (app, pool, token) = fixture().await;
+    seed_synced_ebook(&pool, "dune.epub", "Dune", "Frank Herbert").await;
+    let phys = db::physical::create_fileless_book(
+        &pool,
+        db::physical::FilelessBook {
+            title: "Print Only Chronicle".into(),
+            authors: vec!["Print Author".into()],
+            isbn: None,
+            pubdate: None,
+            description: None,
+            cover: None,
+        },
+    )
+    .await
+    .unwrap();
+    db::physical::add_physical_copy(&pool, &phys, None, None, None)
+        .await
+        .unwrap();
+
+    // Sanity: the book IS visible to the web-facing list query — what the
+    // feeds do below is OPDS-specific filtering, not general invisibility.
+    let page = db::list_books_page(
+        &pool,
+        &["/ebooks"],
+        omnibus_shared::SortKey::NewestAdded,
+        omnibus_shared::SortDir::Desc,
+        &omnibus_shared::ViewFilters::default(),
+        &[],
+        None,
+        50,
+    )
+    .await
+    .unwrap();
+    assert!(
+        page.books
+            .iter()
+            .any(|b| b.display_title() == "Print Only Chronicle"),
+        "physical-only book must remain visible to the web list query"
+    );
+
+    // The author feeds filtered before this change — the per-author URIs
+    // here are regression coverage so the shared predicate never lets a
+    // physical-only book leak back in as a linkless entry.
+    let author_id = author_id_by_name(&pool, "Print Author").await;
+    for uri in [
+        "/opds/new".to_string(),
+        "/opds/search?q=chronicle".to_string(),
+        "/opds/v2/new".to_string(),
+        "/opds/v2/search?q=chronicle".to_string(),
+        format!("/opds/author/{author_id}"),
+        format!("/opds/v2/author/{author_id}"),
+    ] {
+        let res = app
+            .clone()
+            .oneshot(get_with_bearer(&uri, &token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "uri={uri}");
+        let body = body_string(res).await;
+        assert!(
+            !body.contains("Print Only Chronicle"),
+            "uri={uri} must exclude the fileless book"
+        );
+    }
+
+    let res = app
+        .oneshot(get_with_bearer("/opds/new", &token))
+        .await
+        .unwrap();
+    assert!(
+        body_string(res).await.contains("Dune"),
+        "file-backed books must still flow through the feed"
+    );
+}

@@ -11,7 +11,7 @@ use omnibus_db as db;
 use omnibus_shared::{AuthorDetail, AuthorSummary};
 
 use super::atom::{Feed, Link, ACQUISITION_TYPE, NAVIGATION_TYPE};
-use super::entries::book_entry;
+use super::entries::{book_entry, retain_ereader_books};
 use super::{internal, nav_entry, now_rfc3339, xml_response};
 use crate::auth::OpdsAuthUser;
 use crate::backend::AppState;
@@ -180,17 +180,9 @@ pub(super) async fn load_author(
         .await
         .map_err(|e| internal("read author", e))?;
     Ok(author.map(|mut author| {
-        author
-            .books
-            .retain(|b| b.formats.iter().any(|f| is_ebook_format(f)));
+        retain_ereader_books(&mut author.books);
         author
     }))
-}
-
-/// Whether a `book_files` format string is one this catalog offers as a
-/// download.
-fn is_ebook_format(format: &str) -> bool {
-    format.eq_ignore_ascii_case("epub") || format.eq_ignore_ascii_case("cbz")
 }
 
 /// Load every author across the configured ebook library (see the `opds`

@@ -13,6 +13,7 @@ use axum::{
 use omnibus_db as db;
 use omnibus_shared::opds::{Feed, FeedMetadata, Link, MEDIA_TYPE};
 
+use super::entries::retain_ereader_books;
 use super::json_entries::book_publication;
 use super::{internal, json_nav_link, json_response};
 use crate::auth::OpdsAuthUser;
@@ -66,18 +67,12 @@ pub(super) async fn acquisition_feed(
     Path(id): Path<i64>,
 ) -> Response {
     match db::get_series(&state.pool, id).await {
-        Ok(Some(series)) => {
+        Ok(Some(mut series)) => {
             // Ebook-scoped like the author acquisition feed — an
             // audiobook/physical-only book in the same series would carry
             // no working acquisition link here.
-            let is_ebook_format =
-                |f: &String| f.eq_ignore_ascii_case("epub") || f.eq_ignore_ascii_case("cbz");
-            let publications: Vec<_> = series
-                .books
-                .iter()
-                .filter(|b| b.formats.iter().any(is_ebook_format))
-                .map(book_publication)
-                .collect();
+            retain_ereader_books(&mut series.books);
+            let publications: Vec<_> = series.books.iter().map(book_publication).collect();
             let feed = Feed {
                 metadata: FeedMetadata {
                     title: series.name.clone(),
