@@ -334,6 +334,18 @@ impl Drop for DataDirGuard {
     }
 }
 
+/// Flip `can_download` off for an already-created user. `auth::test_support`
+/// user factories always insert `can_download = 1`, so download-permission
+/// tests start from a real user and revoke the flag here rather than adding
+/// a third factory variant just for this one column.
+pub(crate) async fn revoke_can_download(pool: &sqlx::SqlitePool, user_id: i64) {
+    sqlx::query("UPDATE users SET can_download = 0 WHERE id = ?")
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .expect("revoke can_download");
+}
+
 pub(crate) async fn seed_author(pool: &sqlx::SqlitePool, name: &str) -> i64 {
     sqlx::query_scalar::<_, i64>("INSERT INTO authors (name, sort) VALUES (?, ?) RETURNING id")
         .bind(name)

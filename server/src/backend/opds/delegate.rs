@@ -9,23 +9,14 @@
 
 use axum::{
     extract::{Path, Query, Request, State},
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
+    http::HeaderMap,
+    response::Response,
 };
 
-use crate::auth::{AuthUser, MediaAuthUser, OpdsAuthUser};
+use crate::auth::{MediaAuthUser, OpdsAuthUser};
 
-use super::super::{audiobooks, covers, ebooks};
+use super::super::{audiobooks, covers, deny_without_download, ebooks};
 use super::AppState;
-
-/// 403 unless the user may download. Applied to the acquisition routes
-/// only — covers/thumbs stay open to any authenticated user because the
-/// catalog is unrenderable without them, matching the browse UI. (The
-/// `/api/*` download originals predate `can_download` and don't enforce
-/// it yet — tracked separately.)
-fn deny_without_download(user: &AuthUser) -> Option<Response> {
-    (!user.can_download).then(|| (StatusCode::FORBIDDEN, "download not permitted").into_response())
-}
 
 /// `GET /opds/covers/{uuid}` → [`covers::get_cover`].
 pub(super) async fn cover(
