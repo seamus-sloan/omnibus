@@ -33,13 +33,22 @@ pub fn load(library_path: &str) -> ViewPrefs {
 /// keeps its in-memory copy regardless.
 ///
 /// Also records `library_path` as the last-browsed library so [`load_last`] can
-/// find these prefs before a fetch has revealed which library is on screen. The
-/// pointer is only written once the prefs themselves serialized, so it can never
-/// point at a key that was never stored.
+/// find these prefs before a fetch has revealed which library is on screen. That
+/// write is skipped when the pointer already names this path: the mobile
+/// `client_store` reserializes and re-flushes its whole map on every `set`, so
+/// re-stamping an unchanged path on each sort toggle is pure I/O.
+///
+/// Storage is best-effort and swallows failures, so the pointer can outlive a
+/// prefs write that never landed. That degrades to [`load`] handing back
+/// [`ViewPrefs::default`] for the pointed-at key — exactly what a missing
+/// pointer would have produced — so a lost write costs the extra fetch this
+/// pointer exists to avoid rather than applying someone else's prefs.
 pub fn save(library_path: &str, prefs: &ViewPrefs) {
     if let Ok(raw) = serde_json::to_string(prefs) {
         crate::client_store::set(&storage_key(library_path), &raw);
-        crate::client_store::set(LAST_LIBRARY_KEY, library_path);
+        if crate::client_store::get(LAST_LIBRARY_KEY).as_deref() != Some(library_path) {
+            crate::client_store::set(LAST_LIBRARY_KEY, library_path);
+        }
     }
 }
 
