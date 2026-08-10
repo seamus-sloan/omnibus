@@ -1674,34 +1674,93 @@ async fn reindex_audiobooks_with_progress_reports_phases_tallies_and_relative_cu
     .unwrap();
 
     let updates = updates.lock().unwrap();
-    assert_eq!(
-        updates.first().and_then(|u| u.detail.phase.as_deref()),
-        Some(PHASE_WALKING),
-        "the walking phase must open the stream"
+
+    // Phase ordering: walking opens the stream, and every parse event's
+    // index precedes every sync event's index — not just "a parse event
+    // exists somewhere and a sync event exists somewhere", which would
+    // pass even if the phases interleaved out of order.
+    let walking_idx = updates
+        .iter()
+        .position(|u| u.detail.phase.as_deref() == Some(PHASE_WALKING))
+        .expect("a walking-phase event");
+    assert_eq!(walking_idx, 0, "the walking phase must open the stream");
+
+    let parse_indices: Vec<usize> = updates
+        .iter()
+        .enumerate()
+        .filter(|(_, u)| u.detail.phase.as_deref() == Some(PHASE_PARSING))
+        .map(|(i, _)| i)
+        .collect();
+    assert!(
+        !parse_indices.is_empty(),
+        "expected at least one parse-phase event for the New file"
+    );
+    let sync_indices: Vec<usize> = updates
+        .iter()
+        .enumerate()
+        .filter(|(_, u)| u.detail.phase.as_deref() == Some(PHASE_SYNCING))
+        .map(|(i, _)| i)
+        .collect();
+    assert!(
+        !sync_indices.is_empty(),
+        "expected at least one sync-phase event"
+    );
+    let last_parse_idx = *parse_indices.last().unwrap();
+    let first_sync_idx = sync_indices[0];
+    assert!(
+        walking_idx < parse_indices[0],
+        "walking ({walking_idx}) must precede parsing ({})",
+        parse_indices[0]
+    );
+    assert!(
+        last_parse_idx < first_sync_idx,
+        "every parse event ({last_parse_idx} last) must precede every sync event \
+         ({first_sync_idx} first) — PHASE_WALKING -> PHASE_PARSING -> PHASE_SYNCING"
     );
 
-    let parse_event = updates
-        .iter()
-        .find(|u| u.detail.phase.as_deref() == Some(PHASE_PARSING))
-        .expect("a parse-phase event for the New file");
-    let item = parse_event.detail.current_item.as_deref().unwrap();
-    assert_eq!(item, format!("{root_name}/fresh.m4b"));
-    let tallies = parse_event
+    // Tallies are fixed once the diff lands (see reindex_audiobooks_with_progress's
+    // doc comment), so every parse event — not just one sampled event — must
+    // carry the identical ScanTallies, and every sync event must carry the
+    // same tallies too.
+    let expected_tallies = updates[parse_indices[0]]
         .detail
         .tallies
         .expect("parse events carry tallies");
-    assert_eq!(tallies.found, 3);
-    assert_eq!(tallies.new, 1);
-    assert_eq!(tallies.unchanged, 2);
+    assert_eq!(expected_tallies.found, 3);
+    assert_eq!(expected_tallies.new, 1);
+    assert_eq!(expected_tallies.unchanged, 2);
+    for &i in &parse_indices {
+        assert_eq!(
+            updates[i].detail.tallies,
+            Some(expected_tallies),
+            "parse event at index {i} carried different tallies than the first parse event"
+        );
+    }
+    for &i in &sync_indices {
+        assert_eq!(
+            updates[i].detail.tallies,
+            Some(expected_tallies),
+            "sync event at index {i} carried different tallies than the parse phase"
+        );
+    }
+    let parse_item = updates[parse_indices[0]]
+        .detail
+        .current_item
+        .as_deref()
+        .unwrap();
+    assert_eq!(parse_item, format!("{root_name}/fresh.m4b"));
 
-    let sync_event = updates
+    let sync_named_idx = sync_indices
         .iter()
-        .find(|u| {
-            u.detail.phase.as_deref() == Some(PHASE_SYNCING) && u.detail.current_item.is_some()
-        })
+        .copied()
+        .find(|&i| updates[i].detail.current_item.is_some())
         .expect("a sync-phase event naming the written book");
     assert_eq!(
-        sync_event.detail.current_item.as_deref().unwrap(),
+        updates[sync_named_idx]
+            .detail
+            .current_item
+            .as_deref()
+            .unwrap(),
         format!("{root_name}/fresh.m4b")
     );
 
