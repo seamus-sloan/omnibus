@@ -77,6 +77,8 @@ mod mobile_store {
     /// target) so a crash mid-write can't leave a half-written `prefs.json`
     /// that fails to parse on next launch and drops every stored pref.
     pub fn set(key: &str, value: &str) {
+        #[cfg(test)]
+        SET_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let snapshot = {
             let Ok(mut m) = map().write() else {
                 return;
@@ -91,6 +93,24 @@ mod mobile_store {
                 tracing::warn!(error = %e, path = %path.display(), "could not persist client prefs");
             }
         }
+    }
+
+    /// Test-only count of [`set`] calls, so a caller-level test can observe a
+    /// dedup-write skip (a call that never reaches this module) without
+    /// reaching into the private map itself.
+    #[cfg(test)]
+    pub(super) static SET_CALLS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    /// Test-only reset: empties the map and zeroes the call counter, so each
+    /// test starts from a clean slate despite sharing this process-global
+    /// store.
+    #[cfg(test)]
+    pub(super) fn reset_for_test() {
+        if let Ok(mut m) = map().write() {
+            m.clear();
+        }
+        SET_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
     }
 
     #[cfg(test)]
@@ -111,6 +131,22 @@ mod mobile_store {
             assert!(parse_map("[1,2,3]").is_empty());
         }
     }
+}
+
+/// Test-only: reset the mobile backend's in-memory map and [`set`] call
+/// counter. Exposed at module scope so cross-file test modules (e.g.
+/// [`crate::view_prefs`]'s) can reach it without `mobile_store` itself being
+/// `pub`.
+#[cfg(all(test, feature = "mobile"))]
+pub fn reset_for_test() {
+    mobile_store::reset_for_test();
+}
+
+/// Test-only: total number of [`set`] calls the mobile backend has serviced
+/// since the last [`reset_for_test`].
+#[cfg(all(test, feature = "mobile"))]
+pub fn set_call_count_for_test() -> usize {
+    mobile_store::SET_CALLS.load(std::sync::atomic::Ordering::SeqCst)
 }
 
 #[cfg(feature = "mobile")]

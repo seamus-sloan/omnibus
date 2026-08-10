@@ -71,6 +71,96 @@ pub fn load_last() -> Option<ViewPrefs> {
     last_library().map(|path| load(&path))
 }
 
+// Mobile tests — the only non-wasm target where `client_store` actually
+// persists, so it's the only place `load_last`'s positive path and `save`'s
+// dedup-write skip can be exercised without a browser. The mobile backend is
+// one process-global map flushed to a file under `$HOME` (`client_store.rs`),
+// so tests serialize on `TEST_GUARD` and reset it between cases rather than
+// touching a developer's real `$HOME/.omnibus`.
+#[cfg(all(test, feature = "mobile"))]
+mod mobile_tests {
+    use super::*;
+    use omnibus_shared::{SortDir, SortKey, ViewFilters, ViewMode};
+    use std::sync::Mutex;
+
+    static TEST_GUARD: Mutex<()> = Mutex::new(());
+
+    /// Run `f` with `$HOME` redirected to a scratch dir and the mobile store
+    /// reset, so the mobile backend's disk flush (`client_store.rs`) lands in
+    /// a throwaway location instead of a developer's real `~/.omnibus`.
+    /// Nothing else in this crate reads or writes `$HOME` under `test`, so
+    /// this is safe alongside `TEST_GUARD` serializing the map/call-counter
+    /// state that lives independently of the env var.
+    fn with_isolated_store(f: impl FnOnce()) {
+        let scratch = tempfile::tempdir().expect("tempdir for isolated client_store");
+        let prior_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", scratch.path());
+        crate::client_store::reset_for_test();
+
+        f();
+
+        crate::client_store::reset_for_test();
+        match prior_home {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+
+    fn sample_prefs() -> ViewPrefs {
+        ViewPrefs {
+            view_mode: ViewMode::Table,
+            sort_key: SortKey::Author,
+            sort_dir: SortDir::Desc,
+            filters: ViewFilters {
+                formats: vec!["epub".into()],
+                ..Default::default()
+            },
+            filters_open: true,
+        }
+    }
+
+    #[test]
+    fn load_last_returns_the_saved_prefs_after_save_records_the_pointer() {
+        let _guard = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        with_isolated_store(|| {
+            assert_eq!(last_library(), None);
+            assert_eq!(load_last(), None);
+
+            let prefs = sample_prefs();
+            save("/library/a", &prefs);
+
+            assert_eq!(last_library(), Some("/library/a".to_string()));
+            assert_eq!(load_last(), Some(prefs));
+        });
+    }
+
+    #[test]
+    fn save_skips_the_pointer_write_when_the_library_already_matches() {
+        let _guard = TEST_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        with_isolated_store(|| {
+            // First save for this library: the pointer is unset, so it names
+            // "/library/a" and also writes the pointer — two underlying
+            // `client_store::set` calls (the per-library record, then the
+            // pointer).
+            save("/library/a", &ViewPrefs::default());
+            let calls_after_first = crate::client_store::set_call_count_for_test();
+            assert_eq!(calls_after_first, 2);
+
+            // Re-saving the same library — even with different prefs — must
+            // skip the pointer write, since it already names "/library/a".
+            // Only the per-library record write should land, so the call
+            // count grows by one, not two.
+            let updated = sample_prefs();
+            save("/library/a", &updated);
+            let calls_after_second = crate::client_store::set_call_count_for_test();
+            assert_eq!(calls_after_second - calls_after_first, 1);
+
+            assert_eq!(load("/library/a"), updated);
+            assert_eq!(last_library(), Some("/library/a".to_string()));
+        });
+    }
+}
+
 // SSR / server-only tests — exercise the no-persistence path that compiles
 // under the default `cargo test -p omnibus-frontend --features server`. The
 // `web`/`mobile` persistence lives in `client_store` behind its own cfgs and is
