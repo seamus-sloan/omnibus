@@ -1,7 +1,7 @@
-//! Atom series browse — parity with the JSON catalog's `json_series`
-//! (which shipped first, #931): `/opds/series` (navigation feed of every
-//! series with ≥1 visible book) and `/opds/series/{id}` (one series'
-//! acquisition feed, in series-index order). Reuses `db::list_series` /
+//! Atom series browse — parity with the JSON catalog's `json_series`,
+//! which shipped first: `/opds/series` (navigation feed of every series
+//! with ≥1 visible book) and `/opds/series/{id}` (one series' acquisition
+//! feed, in series-index order). Reuses `db::list_series` /
 //! `db::get_series`, the same reads the web series pages use.
 
 use axum::{
