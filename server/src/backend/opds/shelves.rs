@@ -1,10 +1,8 @@
-//! Shelves browse: `/opds/shelves` (navigation feed of the shelves the
-//! authenticated viewer may see) and `/opds/shelves/{id}` (one shelf's
-//! acquisition feed, title order). The first OPDS surface that reads the
-//! caller's identity: the listing goes through `db::list_visible_shelves`
-//! and the per-shelf feed re-checks `db::can_view`, answering 404 for a
-//! shelf the viewer can't see so the browse never leaks that a private
-//! shelf exists.
+//! Shelves browse: `/opds/shelves` (navigation feed of the viewer's
+//! visible shelves) and `/opds/shelves/{id}` (one shelf's acquisition
+//! feed, title order). The one OPDS surface that reads the caller's
+//! identity: listing via `db::list_visible_shelves`, per-shelf access
+//! re-checked with `db::can_view` — a non-visible shelf 404s, never 403s.
 
 use axum::{
     extract::{Path, State},
@@ -89,6 +87,11 @@ pub(super) async fn acquisition_feed(
         Ok(p) => p,
         Err(e) => return internal("read shelf members", e),
     };
+    // `shelf_page` is not path-scoped, but the format filter subsumes the
+    // module's ebook-library invariant here: EPUB/CBZ files exist only
+    // under the ebook library, so members from anywhere else (e.g. the
+    // audiobook library, on a mixed shelf) drop out. Pinned by
+    // `shelf_feeds_exclude_non_ebook_library_members`.
     retain_ereader_books(&mut page.books);
     let feed = Feed {
         id: format!("urn:omnibus:opds:shelf:{id}"),

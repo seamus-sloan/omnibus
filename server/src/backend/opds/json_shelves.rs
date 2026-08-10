@@ -59,6 +59,9 @@ pub(super) async fn acquisition_feed(
         Ok(p) => p,
         Err(e) => return internal("read shelf members", e),
     };
+    // Same non-path-scoped read + subsuming format filter as the Atom
+    // feed — see `shelves::acquisition_feed` for why this satisfies the
+    // module's ebook-library invariant.
     retain_ereader_books(&mut page.books);
     let publications: Vec<_> = page.books.iter().map(book_publication).collect();
     let feed = Feed {

@@ -94,6 +94,10 @@ async fn every_opds_route_401s_without_a_session_and_offers_a_basic_challenge() 
         "/opds/ebooks/some-uuid/file",
         "/opds/ebooks/some-uuid/download",
         "/opds/audiobooks/some-uuid/download",
+        "/opds/shelves",
+        "/opds/shelves/1",
+        "/opds/v2/shelves",
+        "/opds/v2/shelves/1",
     ] {
         let res = app.clone().oneshot(get_anon(uri)).await.unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "uri={uri}");
@@ -436,6 +440,8 @@ async fn v2_root_feed_is_opds_json_with_search_new_authors_and_series_navigation
     assert!(nav.iter().any(|l| l["href"] == "/opds/v2/new"));
     assert!(nav.iter().any(|l| l["href"] == "/opds/v2/authors"));
     assert!(nav.iter().any(|l| l["href"] == "/opds/v2/series"));
+    assert!(nav.iter().any(|l| l["href"] == "/opds/v2/all"));
+    assert!(nav.iter().any(|l| l["href"] == "/opds/v2/shelves"));
     assert!(json.get("publications").is_none());
 }
 
@@ -1318,10 +1324,58 @@ async fn private_shelf_feed_404s_for_a_non_viewer_and_serves_members_for_the_own
         assert_eq!(res.status(), StatusCode::NOT_FOUND, "other {uri}");
     }
 
-    // Unknown id 404s the same way for everyone.
-    let res = app
-        .oneshot(get_with_bearer("/opds/shelves/999999", &owner_token))
-        .await
-        .unwrap();
-    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    // Unknown id 404s the same way for everyone, in both catalogs.
+    for base in ["/opds/shelves", "/opds/v2/shelves"] {
+        for tok in [&owner_token, &token] {
+            let res = app
+                .clone()
+                .oneshot(get_with_bearer(&format!("{base}/999999"), tok))
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::NOT_FOUND, "{base}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn shelf_feeds_exclude_non_ebook_library_members() {
+    // The opds module's ebook-library invariant, for shelves: `shelf_page`
+    // is not path-scoped, so a mixed shelf can hold audiobook-library
+    // members — the e-reader-format filter must drop them from the feed.
+    let (app, pool, token) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "mixed-owner").await;
+    let user_token = auth_test_support::bearer_token(&pool, user.id).await;
+    let epub = seed_synced_ebook(&pool, "dune.epub", "Dune", "Frank Herbert").await;
+    let audio = db::test_support::seed_synced_audiobook(
+        &pool,
+        "hail-mary",
+        "Project Hail Mary",
+        "Andy Weir",
+    )
+    .await;
+    let shelf = seed_shelf(
+        &pool,
+        user.id,
+        "Mixed Media",
+        omnibus_shared::Visibility::Public,
+        vec![epub, audio],
+    )
+    .await;
+
+    for base in ["/opds/shelves", "/opds/v2/shelves"] {
+        let uri = format!("{base}/{}", shelf.id);
+        let res = app
+            .clone()
+            .oneshot(get_with_bearer(&uri, &user_token))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "{uri}");
+        let body = body_string(res).await;
+        assert!(body.contains("Dune"), "{uri}");
+        assert!(
+            !body.contains("Project Hail Mary"),
+            "{uri} must drop the audiobook-library member"
+        );
+    }
+    let _ = token;
 }
