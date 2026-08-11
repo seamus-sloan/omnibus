@@ -695,7 +695,7 @@ async fn refetch_all_processes_every_author_across_multiple_concurrency_chunks()
     .await
     .unwrap();
 
-    // Every refetched author reports its name as the current item (#1802);
+    // Every refetched author reports its name as the current item;
     // completion order under concurrency is arbitrary, so only membership
     // is asserted.
     let names = names.into_inner().unwrap();

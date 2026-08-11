@@ -1028,7 +1028,7 @@ async fn backfill_chapters_inserts_synthetic_chapters_for_all_books_in_batch() {
     assert_eq!(progress_calls[0], (1, 2));
     assert_eq!(progress_calls[1], (2, 2));
     // Item paths are the library directory name plus the part's relative
-    // path (#1802) — never the absolute `/tmp/...` root.
+    // path — never the absolute `/tmp/...` root.
     assert_eq!(
         items,
         vec![
@@ -1516,10 +1516,10 @@ fn root_display_name_survives_trailing_separators_and_degrades_for_rootless_path
     );
 }
 
-/// The verbose progress stream (issue #1802): a walking-phase event opens
-/// the scan, parse and sync events carry the diff's tallies plus the
-/// current item, and every reported path is the library directory name
-/// plus the relative path — never the absolute server path.
+/// The verbose progress stream: a walking-phase event opens the scan,
+/// parse and sync events carry the diff's tallies plus the current item,
+/// and every reported path is the library directory name plus the
+/// relative path — never the absolute server path.
 #[tokio::test]
 async fn reindex_with_progress_reports_phases_tallies_and_relative_current_items() {
     let _covers = CoversTempDir::new("reindex-verbose");
