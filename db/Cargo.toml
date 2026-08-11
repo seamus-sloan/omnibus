@@ -157,6 +157,12 @@ uuid = { version = "1", features = ["v4", "v5"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 urlencoding = "2"
 
+# F5.9 library cleanup (#962): regex-based detectors — junk-author tooling
+# artifacts, book-title cruft prefixes/suffixes. Already present in
+# Cargo.lock transitively (via other crates' deps), so this adds no new
+# download, just a direct edge for this crate's own use.
+regex = "1"
+
 # F4.3 Send-to-Kindle: SMTP delivery of the EPUB as an email attachment.
 # rustls-based TLS matches the async-TLS choice used by sqlx/reqwest so we
 # never pull in OpenSSL; `builder` provides the multipart `Message` API.
