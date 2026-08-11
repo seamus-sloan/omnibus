@@ -266,23 +266,25 @@ fn author_avatar(
                     });
                 }
             },
-            if let Some(url) =
-                photo_url.filter(|u| broken_photo_src.read().as_deref() != Some(u.as_str()))
-            {
-                img {
-                    class: "disc-avatar disc-avatar--photo",
-                    // `media_url` server-prefixes and (mobile) appends the
-                    // session token so the WebView's `<img>` fetch
-                    // authenticates; no-op on web.
-                    src: "{url}",
-                    alt: "{a.name}",
-                    onerror: {
-                        let url = url.clone();
-                        move |_| broken_photo_src.set(Some(url.clone()))
-                    },
+            div { class: "disc-avatar",
+                if let Some(url) =
+                    photo_url.filter(|u| broken_photo_src.read().as_deref() != Some(u.as_str()))
+                {
+                    img {
+                        class: "disc-avatar--photo",
+                        // `media_url` server-prefixes and (mobile) appends the
+                        // session token so the WebView's `<img>` fetch
+                        // authenticates; no-op on web.
+                        src: "{url}",
+                        alt: "{a.name}",
+                        onerror: {
+                            let url = url.clone();
+                            move |_| broken_photo_src.set(Some(url.clone()))
+                        },
+                    }
+                } else {
+                    "{initial}"
                 }
-            } else {
-                div { class: "disc-avatar", "{initial}" }
             }
         }
     }

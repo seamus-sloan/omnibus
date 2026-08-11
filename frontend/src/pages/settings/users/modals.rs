@@ -226,9 +226,10 @@ pub(super) fn EditUserModal(
 
 /// Delete-confirmation modal. Warns when the admin is deleting their own
 /// account; the last-admin guard is enforced server-side and surfaced inline.
-/// Built on the shared `ConfirmModal` shell (see `components::confirm_modal`)
-/// rather than `ModalShell`, so the backdrop can't be dismissed mid-delete —
-/// `ModalShell`'s own backdrop has no busy gate at all.
+/// Passes `busy` through to the shared `ConfirmModal` shell (see
+/// `components::confirm_modal`) so the backdrop can't be dismissed
+/// mid-delete — unlike `ModalShell` above, which always passes `busy: false`
+/// since none of its callers need that gate.
 #[component]
 pub(super) fn DeleteUserModal(
     user: AdminUserRow,
@@ -450,8 +451,14 @@ fn render_device_list(
     }
 }
 
-/// Shared modal overlay + card chrome. Clicking the scrim or the close button
-/// dismisses; clicks inside the card don't propagate.
+/// Shared modal overlay + card chrome, built on the `ConfirmModal` shell
+/// (see `components::confirm_modal`) with its `head` slot carrying the
+/// title bar and close button. Clicking the scrim or the close button
+/// dismisses; clicks inside the card don't propagate. Unlike
+/// `DeleteUserModal`'s use of `ConfirmModal`, this always passes `busy:
+/// false` — none of `ModalShell`'s callers (new/edit/sessions) gate the
+/// backdrop on an in-flight save, matching this shell's pre-refactor
+/// behavior.
 #[component]
 fn ModalShell(
     title: String,
@@ -460,15 +467,14 @@ fn ModalShell(
     children: Element,
 ) -> Element {
     rsx! {
-        div {
-            class: "users-modal-overlay",
-            "data-testid": "{testid}",
-            onclick: move |_| on_close.call(()),
-            div {
-                class: "users-modal-card",
-                role: "dialog",
-                "aria-modal": "true",
-                onclick: move |e| e.stop_propagation(),
+        ConfirmModal {
+            testid: testid.clone(),
+            aria_label: title.clone(),
+            backdrop_class: "users-modal-overlay".to_string(),
+            dialog_class: "users-modal-card".to_string(),
+            busy: false,
+            on_dismiss: move |_| on_close.call(()),
+            head: rsx! {
                 div { class: "users-modal-head",
                     h3 { "{title}" }
                     button {
@@ -479,8 +485,8 @@ fn ModalShell(
                         "\u{00d7}"
                     }
                 }
-                div { class: "users-modal-body", {children} }
-            }
+            },
+            div { class: "users-modal-body", {children} }
         }
     }
 }

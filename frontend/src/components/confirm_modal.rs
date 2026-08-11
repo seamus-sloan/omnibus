@@ -35,19 +35,30 @@ fn dismiss_unless_busy(busy: bool, on_dismiss: EventHandler<()>) {
 /// Modal backdrop + panel shell shared by every dialog in the app: a
 /// backdrop click dismisses (unless `busy`), a click inside the panel
 /// itself does not bubble to the backdrop. Callers supply their own body
-/// markup as `children`.
+/// markup as `children`, and optionally a `head` slot (title + close
+/// button) rendered above it — `backdrop_class` defaults to the original
+/// fixed class so every pre-existing caller is unaffected; a caller
+/// with its own backdrop chrome (centered vs. bottom-sheet, blur, z-index)
+/// overrides it. The `head` slot stays a raw `Element` rather than a
+/// `title: String` because callers disagree on heading tag and class
+/// (`ModalShell`'s `h3`/`users-modal-*` vs. `DrillIn`'s `h4`/`st-drill-*`
+/// plus a leading grabber bar) — forcing one shape would change either
+/// caller's rendered markup, which is the one thing this refactor must not
+/// do.
 #[component]
 pub fn ConfirmModal(
     testid: String,
     aria_label: String,
+    #[props(default = "author-photo-modal-backdrop".to_string())] backdrop_class: String,
     dialog_class: String,
     busy: bool,
     on_dismiss: EventHandler<()>,
+    #[props(default)] head: Option<Element>,
     children: Element,
 ) -> Element {
     rsx! {
         div {
-            class: "author-photo-modal-backdrop",
+            class: "{backdrop_class}",
             role: "dialog",
             aria_modal: "true",
             aria_label: "{aria_label}",
@@ -56,7 +67,10 @@ pub fn ConfirmModal(
                 evt.stop_propagation();
                 dismiss_unless_busy(busy, on_dismiss);
             },
-            div { class: "{dialog_class}", onclick: move |evt| evt.stop_propagation(), {children} }
+            div { class: "{dialog_class}", onclick: move |evt| evt.stop_propagation(),
+                if let Some(h) = head { {h} }
+                {children}
+            }
         }
     }
 }
