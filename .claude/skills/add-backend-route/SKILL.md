@@ -10,7 +10,7 @@ Omnibus is a Dioxus fullstack app with two parallel transport layers. Pick the r
 | Client | Transport | Path convention | Lives in |
 |---|---|---|---|
 | **Web (WASM)** | Dioxus server function — `#[get]` / `#[post]` macro | `/api/rpc/<name>` | [frontend/src/rpc/](../../../frontend/src/rpc/) (per-domain submodule) |
-| **Mobile (Dioxus Native)** | Hand-written axum handler called via `reqwest` | `/api/<resource>` | [server/src/backend.rs](../../../server/src/backend.rs) |
+| **Mobile (Dioxus Native)** | Hand-written axum handler called via `reqwest` | `/api/<resource>` | [server/src/backend/](../../../server/src/backend/) (handler + registered in `routes.rs`) |
 
 A new user-facing feature typically needs **both** (mobile+web parity), since the components in `frontend/src/pages/` drive both targets through `frontend/src/data.rs`.
 
