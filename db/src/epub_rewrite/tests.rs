@@ -576,10 +576,14 @@ async fn rewritten_epub_path_propagates_a_db_error_when_pool_is_closed() {
     let err = super::rewritten_epub_path(&pool, id, &src)
         .await
         .unwrap_err();
-    // Nothing downstream branches on the concrete error type any more (#1840)
-    // — the get_book lookup's `BooksError` still rides along in the anyhow
-    // source chain for the server log to surface.
-    assert!(err.downcast_ref::<crate::books::BooksError>().is_some());
+    // Nothing downstream branches on the concrete error type any more — the
+    // get_book lookup's `BooksError` still rides along in the anyhow source
+    // chain for the server log to surface. Check the whole chain rather than
+    // just the top frame, so this stays true if a future `.context(...)` is
+    // added around the lookup.
+    assert!(err
+        .chain()
+        .any(|e| e.downcast_ref::<crate::books::BooksError>().is_some()));
 }
 
 #[tokio::test]
