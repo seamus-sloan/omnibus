@@ -14,9 +14,9 @@ use omnibus_db as db;
 use super::{internal, AppState};
 use crate::auth::AdminUser;
 
-/// `GET /api/admin/health` — the combined server-health report. Read-only;
-/// no polling built in here (see issue #955 for a future live-updating
-/// variant).
+/// `GET /api/admin/health` — the combined server-health report. Read-only
+/// point-in-time fetch; the web page's 5-second live-update loop (#955) is
+/// client-side polling of `rpc_get_admin_health`, not this REST twin.
 pub(super) async fn get_admin_health(_admin: AdminUser, State(state): State<AppState>) -> Response {
     match db::admin_health::build_report(state.pool(), state.worker()).await {
         Ok(report) => Json(report).into_response(),

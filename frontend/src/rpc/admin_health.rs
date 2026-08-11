@@ -12,9 +12,10 @@ use omnibus_shared::admin_health::AdminHealthReport;
 #[cfg(feature = "server")]
 use super::{internal_rpc_error, AdminUser, PoolExt, WorkerExt};
 
-/// Admin-only: the full `/admin/health` report in one request. No polling —
-/// the page fetches this once on load (see issue #955 for a future
-/// live-updating variant).
+/// Admin-only: the full `/admin/health` report in one request. Called both
+/// on the page's first load and on its 5-second live-update poll (#955) —
+/// this endpoint itself stays a plain point-in-time fetch; the interval
+/// lives client-side in `pages::admin_health`.
 #[post("/api/rpc/admin-health", pool: PoolExt, worker: WorkerExt, _admin: AdminUser)]
 pub async fn rpc_get_admin_health() -> Result<AdminHealthReport> {
     Ok(db::admin_health::build_report(&pool.0, &worker.0)
