@@ -33,7 +33,14 @@ pub(super) fn book_publication(book: &EbookMetadata) -> Publication {
         images.push(
             Link::new(format!("/opds/covers/{uuid}"))
                 .with_rel("http://opds-spec.org/image")
-                .with_type(db::cover_mime_hint(uuid, book.has_cover_override)),
+                // Skip the stat-probing lookup entirely for a book with no
+                // cover on record — the prior hardcoded literal was already
+                // correct for that case, so there's nothing to probe for.
+                .with_type(if book.cover_url.is_some() {
+                    db::cover_mime_hint(uuid, book.has_cover_override)
+                } else {
+                    "image/jpeg"
+                }),
         );
         images.push(
             Link::new(format!("/opds/thumbs/{uuid}/sm"))

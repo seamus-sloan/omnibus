@@ -194,6 +194,13 @@ pub(crate) fn find_override_cover_file(uuid: &str) -> Option<(String, Vec<u8>)> 
 /// advertised before this existed — when no cover file is found under any
 /// known extension; the byte-serving endpoint 404s in that case regardless,
 /// so the advertised type is moot.
+///
+/// Deliberately synchronous `std::fs` (unlike [`get_cover`]'s
+/// `spawn_blocking`-wrapped probes): callers skip it entirely for a book
+/// with no `cover_url` (the common no-cover case), and an OPDS page is
+/// capped at a bounded book count — a few extra `stat`s per row is not the
+/// kind of hot loop `spawn_blocking`'s dispatch overhead is worth paying
+/// for. Revisit if a caller ever calls this outside that bound.
 pub fn cover_mime_hint(uuid: &str, has_cover_override: bool) -> &'static str {
     let dir = covers_dir();
     if has_cover_override {
@@ -207,7 +214,7 @@ pub fn cover_mime_hint(uuid: &str, has_cover_override: bool) -> &'static str {
         }
     }
     for fmt in ImageFormat::PROBE_ORDER {
-        if cover_path_for(uuid, fmt.to_ext()).is_file() {
+        if dir.join(format!("{uuid}.{}", fmt.to_ext())).is_file() {
             return fmt.to_mime();
         }
     }
