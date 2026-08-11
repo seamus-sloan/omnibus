@@ -67,7 +67,7 @@ fn convert_path_is_book_id_and_lowercased_target_format_under_data_dir() {
     let dir = tempfile::tempdir().unwrap();
     let _guard = EnvVarGuard::set_os("OMNIBUS_DATA_DIR", Some(dir.path().as_os_str()));
     let expected = dir.path().join("convert").join("42.mobi");
-    assert_eq!(convert_path(42, "MOBI"), expected);
+    assert_eq!(convert_path(42, "MOBI").unwrap(), expected);
 }
 
 #[test]
@@ -77,7 +77,66 @@ fn convert_dir_prefers_explicit_override_over_data_dir() {
     let _guard = EnvVarGuard::set_os("OMNIBUS_DATA_DIR", Some(data.path().as_os_str()))
         .also_set_os("OMNIBUS_CONVERT_DIR", Some(over.path().as_os_str()));
     assert_eq!(convert_dir(), over.path());
-    assert_eq!(convert_path(1, "AZW3"), over.path().join("1.azw3"));
+    assert_eq!(convert_path(1, "AZW3").unwrap(), over.path().join("1.azw3"));
+}
+
+#[test]
+fn convert_path_rejects_a_traversal_payload_in_target_format() {
+    let dir = tempfile::tempdir().unwrap();
+    let _guard = EnvVarGuard::set_os("OMNIBUS_DATA_DIR", Some(dir.path().as_os_str()));
+    let err = convert_path(1, "../../etc/passwd").unwrap_err();
+    assert!(
+        matches!(&err, ConvertError::InvalidFormat { field } if *field == "target_format"),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn convert_path_rejects_an_embedded_path_separator_in_target_format() {
+    let dir = tempfile::tempdir().unwrap();
+    let _guard = EnvVarGuard::set_os("OMNIBUS_DATA_DIR", Some(dir.path().as_os_str()));
+    let err = convert_path(1, "a/b").unwrap_err();
+    assert!(
+        matches!(&err, ConvertError::InvalidFormat { field } if *field == "target_format"),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn convert_path_rejects_an_empty_target_format() {
+    let dir = tempfile::tempdir().unwrap();
+    let _guard = EnvVarGuard::set_os("OMNIBUS_DATA_DIR", Some(dir.path().as_os_str()));
+    assert!(matches!(
+        convert_path(1, "").unwrap_err(),
+        ConvertError::InvalidFormat {
+            field: "target_format"
+        }
+    ));
+}
+
+#[test]
+fn convert_path_rejects_a_target_format_over_the_length_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    let _guard = EnvVarGuard::set_os("OMNIBUS_DATA_DIR", Some(dir.path().as_os_str()));
+    let too_long = "a".repeat(17);
+    assert!(matches!(
+        convert_path(1, &too_long).unwrap_err(),
+        ConvertError::InvalidFormat {
+            field: "target_format"
+        }
+    ));
+}
+
+#[test]
+fn convert_path_accepts_every_legitimate_conversion_target_format() {
+    let dir = tempfile::tempdir().unwrap();
+    let _guard = EnvVarGuard::set_os("OMNIBUS_DATA_DIR", Some(dir.path().as_os_str()));
+    for fmt in ["EPUB", "MOBI", "AZW3", "PDF", "TXT", "DOCX", "FB2", "epub"] {
+        assert!(
+            convert_path(1, fmt).is_ok(),
+            "expected {fmt} to be accepted"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -157,7 +216,7 @@ async fn convert_book_produces_the_converted_file_at_the_cache_path() {
         .also_set_os("OMNIBUS_EBOOK_CONVERT_PATH", Some(script.as_os_str()));
 
     let out = convert_book(&pool, book_id, "EPUB", "MOBI").await.unwrap();
-    assert_eq!(out, convert_path(book_id, "MOBI"));
+    assert_eq!(out, convert_path(book_id, "MOBI").unwrap());
     assert_eq!(
         std::fs::read(&out).unwrap(),
         b"epub",
@@ -215,6 +274,41 @@ async fn convert_book_returns_binary_unavailable_when_ebook_convert_is_missing()
     );
 }
 
+/// End-to-end: `convert_book` rejects a path-traversal payload in
+/// `target_format` before touching the DB, the binary probe, or the
+/// filesystem — no seeded book or configured `ebook-convert` is needed to
+/// observe the rejection.
+#[tokio::test]
+async fn convert_book_rejects_a_path_traversal_payload_in_target_format() {
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    let (_env, _dir) = data_dir_guard();
+
+    let err = convert_book(&pool, 1, "EPUB", "../../etc/passwd")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, ConvertError::InvalidFormat { field } if *field == "target_format"),
+        "got {err:?}"
+    );
+}
+
+/// Same as above for `source_format` — defense in depth, even though today
+/// `source_format` only reaches a parameterized DB query and never a
+/// filesystem path.
+#[tokio::test]
+async fn convert_book_rejects_a_path_traversal_payload_in_source_format() {
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    let (_env, _dir) = data_dir_guard();
+
+    let err = convert_book(&pool, 1, "../../etc/passwd", "MOBI")
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, ConvertError::InvalidFormat { field } if *field == "source_format"),
+        "got {err:?}"
+    );
+}
+
 #[tokio::test]
 async fn convert_book_returns_failed_when_ebook_convert_exits_non_zero() {
     let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
@@ -236,7 +330,7 @@ async fn convert_book_returns_failed_when_ebook_convert_exits_non_zero() {
         "got {err:?}"
     );
     // No cache file left behind on failure.
-    assert!(!convert_path(book_id, "MOBI").exists());
+    assert!(!convert_path(book_id, "MOBI").unwrap().exists());
 }
 
 #[tokio::test]
@@ -258,7 +352,7 @@ async fn convert_book_returns_timeout_when_the_job_exceeds_the_configured_watchd
         .unwrap_err();
     assert!(matches!(err, ConvertError::Timeout(1)), "got {err:?}");
     // No cache file left behind on timeout.
-    assert!(!convert_path(book_id, "MOBI").exists());
+    assert!(!convert_path(book_id, "MOBI").unwrap().exists());
 }
 
 #[tokio::test]

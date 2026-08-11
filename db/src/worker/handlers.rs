@@ -69,10 +69,11 @@ fn kepub_outcome(result: Result<std::path::PathBuf, crate::kepub::KepubError>) -
 }
 
 /// Variant-aware mapping for [`crate::convert::ConvertError`]: a missing
-/// source file, an unavailable `ebook-convert` binary, and a timeout are
-/// safe, specific messages (#948); the collapsed `Failed` variant (DB
-/// lookups, I/O, a non-zero `ebook-convert` exit) carries subprocess stderr
-/// / lower-level internals, so it goes through [`sanitized_err`].
+/// source file, an unavailable `ebook-convert` binary, a timeout, and an
+/// invalid format token are safe, specific messages (#948); the collapsed
+/// `Failed` variant (DB lookups, I/O, a non-zero `ebook-convert` exit)
+/// carries subprocess stderr / lower-level internals, so it goes through
+/// [`sanitized_err`].
 fn convert_outcome(
     result: Result<std::path::PathBuf, crate::convert::ConvertError>,
 ) -> TaskOutcome {
@@ -82,7 +83,8 @@ fn convert_outcome(
         Err(
             e @ (ConvertError::SourceMissing { .. }
             | ConvertError::BinaryUnavailable
-            | ConvertError::Timeout(_)),
+            | ConvertError::Timeout(_)
+            | ConvertError::InvalidFormat { .. }),
         ) => TaskOutcome::Err(e.to_string()),
         Err(e) => sanitized_err("format conversion", e),
     }
