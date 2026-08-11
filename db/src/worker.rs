@@ -5,6 +5,8 @@
 //!   jobs run concurrently (acquired from a per-Worker scan [`Semaphore`]).
 //! - `hls_concurrency` caps concurrent `Task::HlsTranscode` jobs (acquired
 //!   from a separate HLS [`Semaphore`]).
+//! - `convert_concurrency` caps concurrent `Task::ConvertFormat` jobs
+//!   (acquired from a separate convert [`Semaphore`]).
 //! - A per-resource keyed mutex map serializes any tasks that share the
 //!   same resource key, so e.g. two scans of the same library path queue
 //!   behind each other while different paths run in parallel.
