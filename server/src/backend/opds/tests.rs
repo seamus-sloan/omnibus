@@ -16,7 +16,7 @@ use tower::ServiceExt;
 use super::*;
 use crate::auth::test_support as auth_test_support;
 use crate::auth::{AuthUser, OpdsAuthUser};
-use crate::backend::test_support::{get_anon, get_with_bearer};
+use crate::backend::test_support::{get_anon, get_with_bearer, CoversDirGuard, TINY_PNG};
 
 /// Minimal `OpdsAuthUser` for driving a handler directly, bypassing the
 /// extractor — mirroring `fake_admin` in `admin_sessions/tests.rs`. Needed
@@ -391,6 +391,34 @@ async fn author_acquisition_feed_includes_download_and_cover_links() {
 }
 
 #[tokio::test]
+async fn author_acquisition_feed_cover_link_reflects_a_non_jpeg_cover_format() {
+    // #1772: the cover `<link>`'s `type` must match the actual on-disk
+    // format rather than a hardcoded `image/jpeg` literal.
+    let (app, pool, token) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Frank Herbert").await;
+    let author_id = author_id_by_name(&pool, "Frank Herbert").await;
+    sqlx::query("UPDATE books SET has_cover = 1 WHERE uuid = ?")
+        .bind(&uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let _covers_guard = CoversDirGuard::new("opds_atom_png_cover");
+    std::fs::write(db::covers_dir().join(format!("{uuid}.png")), TINY_PNG).unwrap();
+
+    let res = app
+        .oneshot(get_with_bearer(
+            &format!("/opds/author/{author_id}"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = body_string(res).await;
+    assert!(body.contains(&format!(r#"href="/opds/covers/{uuid}" type="image/png""#)));
+    assert!(!body.contains(&format!(r#"href="/opds/covers/{uuid}" type="image/jpeg""#)));
+}
+
+#[tokio::test]
 async fn author_acquisition_feed_omits_a_book_indexed_outside_the_ebook_library() {
     // The catalog is ebook-library scoped (see the `opds` module doc), so an
     // epub the author also has under another scan root must not appear —
@@ -679,6 +707,37 @@ async fn v2_author_acquisition_feed_includes_download_and_cover_links() {
     assert!(images
         .iter()
         .any(|l| l["rel"] == "http://opds-spec.org/image/thumbnail"));
+}
+
+#[tokio::test]
+async fn v2_author_acquisition_feed_cover_link_reflects_a_non_jpeg_cover_format() {
+    // #1772, JSON counterpart: `book_publication`'s image `type` must match
+    // `entries::book_entry`'s, keeping the two catalogs in agreement (AC3).
+    let (app, pool, token) = fixture().await;
+    let uuid = seed_synced_ebook(&pool, "dune.epub", "Dune", "Frank Herbert").await;
+    let author_id = author_id_by_name(&pool, "Frank Herbert").await;
+    sqlx::query("UPDATE books SET has_cover = 1 WHERE uuid = ?")
+        .bind(&uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let _covers_guard = CoversDirGuard::new("opds_v2_png_cover");
+    std::fs::write(db::covers_dir().join(format!("{uuid}.png")), TINY_PNG).unwrap();
+
+    let res = app
+        .oneshot(get_with_bearer(
+            &format!("/opds/v2/author/{author_id}"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let json = body_json(res).await;
+    let pubs = json["publications"].as_array().unwrap();
+    let images = pubs[0]["images"].as_array().unwrap();
+    assert!(images
+        .iter()
+        .any(|l| l["rel"] == "http://opds-spec.org/image" && l["type"] == "image/png"));
 }
 
 #[tokio::test]

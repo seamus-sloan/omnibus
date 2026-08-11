@@ -6,6 +6,7 @@
 
 use std::collections::HashSet;
 
+use omnibus_db as db;
 use omnibus_shared::opds::{
     BelongsTo, Contributor, Link, Publication, PublicationMetadata, SeriesRef, Subject,
 };
@@ -32,11 +33,20 @@ pub(super) fn book_publication(book: &EbookMetadata) -> Publication {
         images.push(
             Link::new(format!("/opds/covers/{uuid}"))
                 .with_rel("http://opds-spec.org/image")
-                .with_type("image/jpeg"),
+                // Skip the stat-probing lookup entirely for a book with no
+                // cover on record — the prior hardcoded literal was already
+                // correct for that case, so there's nothing to probe for.
+                .with_type(if book.cover_url.is_some() {
+                    db::cover_mime_hint(uuid, book.has_cover_override)
+                } else {
+                    "image/jpeg"
+                }),
         );
         images.push(
             Link::new(format!("/opds/thumbs/{uuid}/sm"))
                 .with_rel("http://opds-spec.org/image/thumbnail")
+                // Always WebP regardless of source format — see the
+                // matching comment in `entries::book_entry`.
                 .with_type("image/webp"),
         );
     }

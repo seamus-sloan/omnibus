@@ -182,6 +182,45 @@ pub(crate) fn find_override_cover_file(uuid: &str) -> Option<(String, Vec<u8>)> 
     None
 }
 
+/// Cheaply resolve a book's cover MIME type by checking which known
+/// extension exists on disk — unlike [`get_cover`] / [`find_cover_file`],
+/// no file bytes are read, only a handful of `stat`-class existence checks.
+/// Meant for callers (the OPDS catalog) that need an accurate `type`
+/// attribute on a cover link without paying for the full read that actually
+/// serving the file requires. Checks the override path first when
+/// `has_cover_override` is set, matching [`get_cover`]'s precedence.
+///
+/// Falls back to `image/jpeg` — the common case, and what every OPDS entry
+/// advertised before this existed — when no cover file is found under any
+/// known extension; the byte-serving endpoint 404s in that case regardless,
+/// so the advertised type is moot.
+///
+/// Deliberately synchronous `std::fs` (unlike [`get_cover`]'s
+/// `spawn_blocking`-wrapped probes): callers skip it entirely for a book
+/// with no `cover_url` (the common no-cover case), and an OPDS page is
+/// capped at a bounded book count — a few extra `stat`s per row is not the
+/// kind of hot loop `spawn_blocking`'s dispatch overhead is worth paying
+/// for. Revisit if a caller ever calls this outside that bound.
+pub fn cover_mime_hint(uuid: &str, has_cover_override: bool) -> &'static str {
+    let dir = covers_dir();
+    if has_cover_override {
+        for fmt in ImageFormat::PROBE_ORDER {
+            if dir
+                .join(format!("override-{uuid}.{}", fmt.to_ext()))
+                .is_file()
+            {
+                return fmt.to_mime();
+            }
+        }
+    }
+    for fmt in ImageFormat::PROBE_ORDER {
+        if dir.join(format!("{uuid}.{}", fmt.to_ext())).is_file() {
+            return fmt.to_mime();
+        }
+    }
+    ImageFormat::Jpeg.to_mime()
+}
+
 /// Load a book's cover image bytes + mime type from disk. The `id` parameter
 /// is the `books.id` primary key — the REST surface is uuid-keyed at
 /// `/api/covers/{uuid}` (`server/src/backend.rs`), where the handler resolves

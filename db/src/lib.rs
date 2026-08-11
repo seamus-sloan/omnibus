@@ -80,7 +80,7 @@ pub use books::{
     IndexedRow, PageCursor, MAX_BOOKS_RETURNED,
 };
 pub use browse::*;
-pub use covers::{covers_dir, get_cover, get_last_modified_epoch, CoversError};
+pub use covers::{cover_mime_hint, covers_dir, get_cover, get_last_modified_epoch, CoversError};
 pub use deletion::{
     book_deletion_manifest, delete_book_items, DeleteError, DeleteOutcome, DeletionImpact,
     DeletionManifest,

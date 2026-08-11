@@ -4,6 +4,7 @@
 //! call the `/api/ebooks/*` and `/api/covers|thumbs/*` handler bodies)
 //! rather than duplicating their resolution logic.
 
+use omnibus_db as db;
 use omnibus_shared::EbookMetadata;
 
 use super::atom::{Entry, Link};
@@ -48,11 +49,21 @@ pub(super) fn book_entry(book: &EbookMetadata) -> Entry {
         links.push(Link::new(
             "http://opds-spec.org/image",
             format!("/opds/covers/{uuid}"),
-            "image/jpeg",
+            // Skip the stat-probing lookup entirely for a book with no
+            // cover on record — the prior hardcoded literal was already
+            // correct for that case, so there's nothing to probe for.
+            if book.cover_url.is_some() {
+                db::cover_mime_hint(uuid, book.has_cover_override)
+            } else {
+                "image/jpeg"
+            },
         ));
         links.push(Link::new(
             "http://opds-spec.org/image/thumbnail",
             format!("/opds/thumbs/{uuid}/sm"),
+            // Thumbnails are always re-encoded to WebP regardless of the
+            // source cover's format (`db::thumbs::thumb_path_for`), so this
+            // one is accurate unconditionally — no lookup needed.
             "image/webp",
         ));
     }
