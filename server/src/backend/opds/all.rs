@@ -10,11 +10,12 @@ use axum::{
 use omnibus_db::{self as db, CursorError, PageCursor};
 use omnibus_shared::{SortDir, SortKey, ViewFilters};
 
+use crate::auth::OpdsAuthUser;
+use crate::backend::AppState;
+
 use super::atom::{Feed, Link, ACQUISITION_TYPE, NAVIGATION_TYPE};
 use super::entries::{book_entry, retain_ereader_books};
 use super::{internal, now_rfc3339, xml_response};
-use crate::auth::OpdsAuthUser;
-use crate::backend::AppState;
 
 /// Page size for the All Books feed. `pub(super)` — `opds::json_all` uses
 /// the same cap so the two catalogs' pages can't drift apart in size.

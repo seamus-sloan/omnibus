@@ -11,12 +11,13 @@ use omnibus_db as db;
 use omnibus_shared::opds::{Feed, FeedMetadata, Link, MEDIA_TYPE};
 use omnibus_shared::{SortDir, SortKey};
 
+use crate::auth::OpdsAuthUser;
+use crate::backend::AppState;
+
 use super::entries::retain_ereader_books;
 use super::json_entries::book_publication;
 use super::shelves::load_visible_shelf;
 use super::{internal, json_nav_link, json_response};
-use crate::auth::OpdsAuthUser;
-use crate::backend::AppState;
 
 pub(super) async fn index(user: OpdsAuthUser, State(state): State<AppState>) -> Response {
     let shelves = match db::list_visible_shelves(&state.pool, user.0.id, user.0.is_admin).await {

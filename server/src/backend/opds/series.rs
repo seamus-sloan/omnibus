@@ -11,11 +11,12 @@ use axum::{
 };
 use omnibus_db as db;
 
+use crate::auth::OpdsAuthUser;
+use crate::backend::AppState;
+
 use super::atom::{Feed, Link, ACQUISITION_TYPE, NAVIGATION_TYPE};
 use super::entries::{book_entry, retain_ereader_books};
 use super::{internal, nav_entry, now_rfc3339, xml_response};
-use crate::auth::OpdsAuthUser;
-use crate::backend::AppState;
 
 /// `GET /opds/series` — navigation feed of every series, each linking to
 /// its `/opds/series/{id}` acquisition feed.
