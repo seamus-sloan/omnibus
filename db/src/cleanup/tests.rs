@@ -155,13 +155,13 @@ fn fuzzy_merge_suggestions_blocks_pairs_with_different_first_token() {
         id: 1,
         name: "A".into(),
         sort: None,
-        book_count: 0,
+        book_ids: HashSet::new(),
     };
     let row_b = EntityRow {
         id: 2,
         name: "B".into(),
         sort: None,
-        book_count: 0,
+        book_ids: HashSet::new(),
     };
     let singles = [(key_a, &row_a), (key_b, &row_b)];
     assert!(fuzzy_merge_suggestions(CleanupKind::Author, &singles).is_empty());
@@ -177,13 +177,13 @@ fn pick_canonical_prefers_more_books_then_lower_id() {
         id: 5,
         name: "Few".into(),
         sort: None,
-        book_count: 1,
+        book_ids: HashSet::from([101]),
     };
     let many_books = EntityRow {
         id: 9,
         name: "Many".into(),
         sort: None,
-        book_count: 4,
+        book_ids: HashSet::from([201, 202, 203, 204]),
     };
     let group = [&few_books, &many_books];
     assert_eq!(pick_canonical(&group).unwrap().id, many_books.id);
@@ -192,13 +192,13 @@ fn pick_canonical_prefers_more_books_then_lower_id() {
         id: 9,
         name: "High".into(),
         sort: None,
-        book_count: 1,
+        book_ids: HashSet::from([301]),
     };
     let tie_low_id = EntityRow {
         id: 2,
         name: "Low".into(),
         sort: None,
-        book_count: 1,
+        book_ids: HashSet::from([302]),
     };
     let tied = [&tie_high_id, &tie_low_id];
     assert_eq!(pick_canonical(&tied).unwrap().id, tie_low_id.id);
@@ -495,6 +495,28 @@ async fn detect_tags_merge_collapses_punctuation_variants_into_one_tier0_merge()
     // Both rows have equal (zero) book counts, so the lower id wins the tie.
     assert_eq!(canonical_id, canonical);
     assert_eq!(source_ids, [duplicate]);
+}
+
+#[tokio::test]
+async fn detect_tags_merge_book_count_is_distinct_not_summed_across_the_group() {
+    // A book linked to *both* the canonical and the duplicate tag (common
+    // for tags: a book often carries near-duplicate tag spellings at once)
+    // must be counted once, not twice.
+    let pool = new_pool().await;
+    let lib = seed_root(&pool).await;
+    let canonical = insert_tag(&pool, "Sci-Fi").await;
+    let duplicate = insert_tag(&pool, "Sci Fi").await;
+    let shared = insert_book(&pool, lib, "u1", "Shared Book").await;
+    let only_canonical = insert_book(&pool, lib, "u2", "Canonical Only").await;
+    link_tag(&pool, shared, canonical).await;
+    link_tag(&pool, shared, duplicate).await;
+    link_tag(&pool, only_canonical, canonical).await;
+
+    let suggestions = detect_tags_merge(&pool).await.unwrap();
+    assert_eq!(suggestions.len(), 1);
+    // Naively summing per-entity counts would give 3 (2 + 1); the correct
+    // distinct count is 2 (`shared` and `only_canonical`).
+    assert_eq!(suggestions[0].book_count, 2);
 }
 
 #[tokio::test]

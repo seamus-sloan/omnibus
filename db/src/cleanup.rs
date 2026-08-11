@@ -1,8 +1,8 @@
-//! Library-cleanup detection (F5.9, #962): five domain-specific algorithms
-//! that surface near-duplicate authors/series/tags, semicolon-soup tags,
-//! filename cruft in book titles, and junk-author rows left behind by a
-//! third-party import. Detection only — the persisted `dedup_suggestions`
-//! queue and the apply/undo primitives are separate follow-up modules.
+//! Library-cleanup detection: five domain-specific algorithms that surface
+//! near-duplicate authors/series/tags, semicolon-soup tags, filename cruft
+//! in book titles, and junk-author rows left behind by a third-party
+//! import. Detection only — the persisted `dedup_suggestions` queue and
+//! the apply/undo primitives are separate follow-up modules.
 
 use std::collections::{HashMap, HashSet};
 
@@ -82,7 +82,9 @@ pub struct DetectedSuggestion {
     /// The other name in a two-way merge, or the proposed title for a
     /// rename. `None` when the suggestion has no single "other" name.
     pub secondary_name: Option<String>,
-    /// How many library books are affected if the suggestion is applied.
+    /// How many *distinct* library books are affected if the suggestion is
+    /// applied — a merge group's book is counted once even if it's linked
+    /// to more than one of the group's members.
     pub book_count: i64,
     pub payload: CleanupPayload,
 }
@@ -132,9 +134,25 @@ pub async fn detect_book_titles(
     let prefixes = compile_all(TITLE_PREFIX_PATTERNS)?;
     let suffix = Regex::new(TITLE_SUFFIX_PATTERN)?;
 
-    let rows: Vec<(i64, String, String)> = sqlx::query_as("SELECT id, uuid, title FROM books")
-        .fetch_all(pool)
-        .await?;
+    // Sound prefilter: every pattern in TITLE_PREFIX_PATTERNS /
+    // TITLE_SUFFIX_PATTERN requires at least one of these five literal
+    // characters to match at all (','+'-' for the author-dash prefix,
+    // '['/']' for the series-bracket prefix, '#' for the series-hash
+    // prefix, '-' for the acronym-index prefix, '('/')' for the trailing
+    // parenthetical) — a title with none of them cannot match any pattern,
+    // so skipping it here can never miss a real suggestion. Cuts the
+    // regex work (and the row transfer) down from every book to only the
+    // ones that could plausibly match.
+    let rows: Vec<(i64, String, String)> = sqlx::query_as(
+        "SELECT id, uuid, title FROM books
+          WHERE instr(title, ',') > 0
+             OR instr(title, '-') > 0
+             OR instr(title, '[') > 0
+             OR instr(title, '#') > 0
+             OR instr(title, '(') > 0",
+    )
+    .fetch_all(pool)
+    .await?;
 
     Ok(rows
         .into_iter()
@@ -179,45 +197,71 @@ impl MergeEntity {
         }
     }
 
-    /// `(id, name, sort, book_count)` for every row, `sort` NULL where the
-    /// table has no such column (tags).
+    /// `(id, name, sort, book_id)` — one row per linked book, `NULL` book_id
+    /// for an entity with none, `sort` NULL where the table has no such
+    /// column (tags). Left un-aggregated (no `COUNT`/`GROUP BY`) so a merge
+    /// group can later count *distinct* affected books instead of summing
+    /// each entity's count, which would double-count a book linked to more
+    /// than one of the group's members.
     fn sql(self) -> &'static str {
         match self {
             Self::Author => {
-                "SELECT a.id, a.name, a.sort, COUNT(bal.book) AS book_count
+                "SELECT a.id, a.name, a.sort, bal.book AS book_id
                    FROM authors a
-                   LEFT JOIN books_authors_link bal ON bal.author = a.id
-                  GROUP BY a.id, a.name, a.sort"
+                   LEFT JOIN books_authors_link bal ON bal.author = a.id"
             }
             Self::Series => {
-                "SELECT s.id, s.name, s.sort, COUNT(bsl.book) AS book_count
+                "SELECT s.id, s.name, s.sort, bsl.book AS book_id
                    FROM series s
-                   LEFT JOIN books_series_link bsl ON bsl.series = s.id
-                  GROUP BY s.id, s.name, s.sort"
+                   LEFT JOIN books_series_link bsl ON bsl.series = s.id"
             }
             Self::Tag => {
-                "SELECT t.id, t.name, NULL AS sort, COUNT(btl.book) AS book_count
+                "SELECT t.id, t.name, NULL AS sort, btl.book AS book_id
                    FROM tags t
-                   LEFT JOIN books_tags_link btl ON btl.tag = t.id
-                  GROUP BY t.id, t.name"
+                   LEFT JOIN books_tags_link btl ON btl.tag = t.id"
             }
         }
     }
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug)]
 struct EntityRow {
     id: i64,
     name: String,
     sort: Option<String>,
-    book_count: i64,
+    /// Ids of every book linked to this entity — a set (not a count) so a
+    /// merge group can union several entities' books and count *distinct*
+    /// rows rather than double-counting a book linked to more than one.
+    book_ids: HashSet<i64>,
 }
 
+impl EntityRow {
+    fn book_count(&self) -> i64 {
+        self.book_ids.len() as i64
+    }
+}
+
+/// Fetch every row of `entity`'s table, folding the one-row-per-linked-book
+/// result of [`MergeEntity::sql`] into one [`EntityRow`] per distinct id.
 async fn fetch_entity_rows(
     pool: &SqlitePool,
     entity: MergeEntity,
 ) -> Result<Vec<EntityRow>, CleanupError> {
-    Ok(sqlx::query_as(entity.sql()).fetch_all(pool).await?)
+    let raw: Vec<(i64, String, Option<String>, Option<i64>)> =
+        sqlx::query_as(entity.sql()).fetch_all(pool).await?;
+    let mut rows: HashMap<i64, EntityRow> = HashMap::new();
+    for (id, name, sort, book_id) in raw {
+        let row = rows.entry(id).or_insert_with(|| EntityRow {
+            id,
+            name,
+            sort,
+            book_ids: HashSet::new(),
+        });
+        if let Some(book_id) = book_id {
+            row.book_ids.insert(book_id);
+        }
+    }
+    Ok(rows.into_values().collect())
 }
 
 /// Shared merge-detection body: Tier-0 GROUP-BY on the normalized key, then
@@ -269,23 +313,28 @@ fn fuzzy_merge_suggestions(
     kind: CleanupKind,
     singles: &[(&str, &EntityRow)],
 ) -> Vec<DetectedSuggestion> {
-    let mut first_token_buckets: HashMap<&str, Vec<(&str, &EntityRow)>> = HashMap::new();
+    // Each candidate's token set is built once here, up front, and reused
+    // for every pairwise comparison its bucket runs below — rebuilding it
+    // per comparison would redo the same split/collect work O(bucket_len)
+    // times over.
+    let mut first_token_buckets: HashMap<&str, Vec<(HashSet<&str>, &EntityRow)>> = HashMap::new();
     for &(key, row) in singles {
-        if let Some(first) = key.split_whitespace().next() {
-            first_token_buckets
-                .entry(first)
-                .or_default()
-                .push((key, row));
-        }
+        let Some(first) = key.split_whitespace().next() else {
+            continue;
+        };
+        first_token_buckets
+            .entry(first)
+            .or_default()
+            .push((token_set(key), row));
     }
 
     let mut suggestions = Vec::new();
     for bucket in first_token_buckets.values() {
-        for (i, &(key_a, row_a)) in bucket.iter().enumerate() {
-            for &(key_b, row_b) in &bucket[i + 1..] {
-                let score = jaccard(&token_set(key_a), &token_set(key_b));
+        for (i, (tokens_a, row_a)) in bucket.iter().enumerate() {
+            for (tokens_b, row_b) in &bucket[i + 1..] {
+                let score = jaccard(tokens_a, tokens_b);
                 if score >= FUZZY_JACCARD_THRESHOLD {
-                    let pair = [row_a, row_b];
+                    let pair = [*row_a, *row_b];
                     if let Some(canonical) = pick_canonical(&pair) {
                         suggestions.push(merge_suggestion(
                             kind,
@@ -323,8 +372,8 @@ fn jaccard(a: &HashSet<&str>, b: &HashSet<&str>) -> f64 {
 /// empty, which callers never pass.
 fn pick_canonical<'a>(group: &[&'a EntityRow]) -> Option<&'a EntityRow> {
     group.iter().copied().reduce(|best, row| {
-        if row.book_count > best.book_count
-            || (row.book_count == best.book_count && row.id < best.id)
+        if row.book_count() > best.book_count()
+            || (row.book_count() == best.book_count() && row.id < best.id)
         {
             row
         } else {
@@ -350,7 +399,14 @@ fn merge_suggestion(
         .filter(|r| r.id != canonical.id)
         .map(|r| r.name.clone())
         .collect();
-    let book_count = group.iter().map(|r| r.book_count).sum();
+    // Distinct union, not a sum: a book linked to more than one of the
+    // group's members (common for tags, possible for messy author imports)
+    // must be counted once, not once per member that links to it.
+    let book_count = group
+        .iter()
+        .flat_map(|r| r.book_ids.iter())
+        .collect::<HashSet<_>>()
+        .len() as i64;
     DetectedSuggestion {
         kind,
         action: CleanupAction::Merge,
@@ -389,7 +445,7 @@ async fn detect_junk_authors(pool: &SqlitePool) -> Result<Vec<DetectedSuggestion
             score: 1.0,
             primary_name: row.name.clone(),
             secondary_name: None,
-            book_count: row.book_count,
+            book_count: row.book_count(),
             payload: CleanupPayload::Delete {
                 entity_id: row.id,
                 name: row.name,
@@ -447,7 +503,7 @@ fn tag_split_suggestion(
         score,
         primary_name: row.name.clone(),
         secondary_name: None,
-        book_count: row.book_count,
+        book_count: row.book_count(),
         payload: CleanupPayload::Split {
             source_id: row.id,
             source_name: row.name,
