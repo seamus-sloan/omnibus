@@ -68,6 +68,28 @@ fn kepub_outcome(result: Result<std::path::PathBuf, crate::kepub::KepubError>) -
     }
 }
 
+/// Variant-aware mapping for [`crate::convert::ConvertError`]: a missing
+/// source file, an unavailable `ebook-convert` binary, a timeout, and an
+/// invalid format token are safe, specific messages (#948); the collapsed
+/// `Failed` variant (DB lookups, I/O, a non-zero `ebook-convert` exit)
+/// carries subprocess stderr / lower-level internals, so it goes through
+/// [`sanitized_err`].
+fn convert_outcome(
+    result: Result<std::path::PathBuf, crate::convert::ConvertError>,
+) -> TaskOutcome {
+    use crate::convert::ConvertError;
+    match result {
+        Ok(_) => TaskOutcome::Ok(None),
+        Err(
+            e @ (ConvertError::SourceMissing { .. }
+            | ConvertError::BinaryUnavailable
+            | ConvertError::Timeout(_)
+            | ConvertError::InvalidFormat { .. }),
+        ) => TaskOutcome::Err(e.to_string()),
+        Err(e) => sanitized_err("format conversion", e),
+    }
+}
+
 impl Worker {
     pub(super) async fn execute(self: &Arc<Self>, task: Task, id: TaskId) -> TaskOutcome {
         match task {
@@ -160,6 +182,22 @@ impl Worker {
             Task::KepubConvert { book_id } => {
                 self.report_book_detail(id, book_id).await;
                 self.handle_kepub_convert(book_id).await
+            }
+            Task::ConvertFormat {
+                book_id,
+                source_format,
+                target_format,
+            } => {
+                self.report_book_detail(id, book_id).await;
+                convert_outcome(
+                    crate::convert::convert_book(
+                        &self.pool,
+                        book_id,
+                        &source_format,
+                        &target_format,
+                    )
+                    .await,
+                )
             }
             Task::SendToKindle {
                 book_id,
