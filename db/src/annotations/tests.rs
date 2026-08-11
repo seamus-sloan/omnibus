@@ -685,6 +685,60 @@ async fn ingest_kobo_annotations_deletes_rows_by_device_minted_id() {
 }
 
 #[tokio::test]
+async fn ingest_kobo_annotations_applies_a_multi_row_batch_conflict_insert_and_delete_together() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+
+    // Pre-existing rows: kobo-1 will be updated in place, kobo-3 will be
+    // deleted, both inside the same batched call under test.
+    ingest_kobo_annotations(
+        &pool,
+        user,
+        &uuid,
+        &[
+            kobo_upload("kobo-1", HighlightColor::Amber, None),
+            kobo_upload("kobo-3", HighlightColor::Blue, None),
+        ],
+        &[],
+    )
+    .await
+    .unwrap();
+
+    // One call carries a conflicting update (kobo-1), a fresh insert
+    // (kobo-2), and a delete (kobo-3) — exercising the chunked multi-row
+    // VALUES upsert and the IN (...) delete together.
+    let mut edited_kobo_1 = kobo_upload("kobo-1", HighlightColor::Violet, Some("edited"));
+    edited_kobo_1.text = Some("re-selected prose".into());
+    ingest_kobo_annotations(
+        &pool,
+        user,
+        &uuid,
+        &[
+            edited_kobo_1,
+            kobo_upload("kobo-2", HighlightColor::Green, None),
+        ],
+        &["kobo-3".to_string()],
+    )
+    .await
+    .unwrap();
+
+    let mut listed = list_highlights(&pool, user, &uuid).await.unwrap();
+    listed.sort_by(|a, b| a.client_id.cmp(&b.client_id));
+    assert_eq!(listed.len(), 2, "kobo-3 deleted, kobo-1 and kobo-2 remain");
+    assert_eq!(listed[0].client_id.as_deref(), Some("kobo-1"));
+    assert_eq!(listed[0].color, HighlightColor::Violet);
+    assert_eq!(listed[0].note.as_deref(), Some("edited"));
+    assert_eq!(listed[0].text.as_deref(), Some("re-selected prose"));
+    assert_eq!(listed[1].client_id.as_deref(), Some("kobo-2"));
+    assert_eq!(listed[1].color, HighlightColor::Green);
+
+    let served = served_kobo_annotations(&pool, user, &uuid).await.unwrap();
+    assert_eq!(served.len(), 2);
+    assert!(served.iter().all(|s| s.client_id != "kobo-3"));
+}
+
+#[tokio::test]
 async fn ingest_kobo_annotations_returns_book_not_found_for_an_unknown_uuid() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;

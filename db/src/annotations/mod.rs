@@ -5,7 +5,7 @@
 //! `*_kobo_annotations` functions.
 
 use omnibus_shared::{CreateHighlight, Highlight, HighlightColor};
-use sqlx::{Row, SqlitePool};
+use sqlx::{Row, Sqlite, SqlitePool, Transaction};
 
 use crate::resolve_canonical_book_uuid;
 
@@ -361,6 +361,17 @@ pub async fn served_kobo_annotations_batch(
     Ok(out)
 }
 
+/// Bound-parameter-safe chunk size for the upsert VALUES batch: 8 binds per
+/// row keeps each chunked statement's total well under SQLite's ~999
+/// bound-parameter cap (120 * 8 = 960), mirroring the chunking pattern in
+/// `metadata_overrides::upsert::load_overrides_bulk`.
+const UPSERT_CHUNK_SIZE: usize = 120;
+
+/// Bound-parameter-safe chunk size for the delete `IN (...)` batch: one bind
+/// for `user_id` plus one per client_id keeps each chunked statement well
+/// under SQLite's ~999 bound-parameter cap.
+const DELETE_CHUNK_SIZE: usize = 500;
+
 /// Apply one device PATCH: upsert `updates` (keyed on the device-minted id in
 /// `client_id` — a re-upload updates color/note/text/anchor in place, so
 /// replays are idempotent) and delete `deleted_client_ids`, in one
@@ -378,15 +389,34 @@ pub async fn ingest_kobo_annotations(
         .ok_or(HighlightError::BookNotFound)?;
 
     let mut tx = pool.begin().await.map_err(HighlightError::Sqlx)?;
-    for a in updates {
+    upsert_kobo_annotations(&mut tx, user_id, &canonical, updates).await?;
+    delete_kobo_annotations(&mut tx, user_id, deleted_client_ids).await?;
+    tx.commit().await.map_err(HighlightError::Sqlx)?;
+    Ok(())
+}
+
+/// Chunked multi-row upsert for a device PATCH's `updates` batch, in place of
+/// one `INSERT ... ON CONFLICT` per row.
+async fn upsert_kobo_annotations(
+    tx: &mut Transaction<'_, Sqlite>,
+    user_id: i64,
+    canonical_book_uuid: &str,
+    updates: &[IngestKoboAnnotation],
+) -> Result<(), HighlightError> {
+    for chunk in updates.chunks(UPSERT_CHUNK_SIZE) {
+        let rows = std::iter::repeat_n("(?, ?, ?, ?, ?, ?, ?, ?)", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
         // The CFI conflict rule keeps the stored web anchor truthful: a
         // moved kobo_location takes the fresh derivation even when it's
         // NULL (a stale CFI is a wrong location), while an unmoved anchor
-        // keeps an existing CFI over a derivation that merely failed.
-        sqlx::query(
+        // keeps an existing CFI over a derivation that merely failed. Each
+        // conflicting row in the batch resolves this independently against
+        // its own `excluded.*` values.
+        let sql = format!(
             "INSERT INTO annotations
                  (user_id, book_uuid, epub_cfi_range, kobo_location, color, note, text, client_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             VALUES {rows}
              ON CONFLICT(user_id, client_id) WHERE client_id IS NOT NULL DO UPDATE SET
                  epub_cfi_range = CASE
                      WHEN annotations.kobo_location IS NOT excluded.kobo_location
@@ -397,27 +427,44 @@ pub async fn ingest_kobo_annotations(
                  color = excluded.color,
                  note = excluded.note,
                  text = excluded.text,
-                 updated_at = strftime('%s','now')",
-        )
-        .bind(user_id)
-        .bind(&canonical)
-        .bind(a.epub_cfi_range.as_deref())
-        .bind(&a.kobo_location)
-        .bind(a.color.as_str())
-        .bind(a.note.as_deref())
-        .bind(a.text.as_deref())
-        .bind(&a.client_id)
-        .execute(&mut *tx)
-        .await?;
+                 updated_at = strftime('%s','now')"
+        );
+        let mut q = sqlx::query(&sql);
+        for a in chunk {
+            q = q
+                .bind(user_id)
+                .bind(canonical_book_uuid)
+                .bind(a.epub_cfi_range.as_deref())
+                .bind(&a.kobo_location)
+                .bind(a.color.as_str())
+                .bind(a.note.as_deref())
+                .bind(a.text.as_deref())
+                .bind(&a.client_id);
+        }
+        q.execute(&mut **tx).await?;
     }
-    for client_id in deleted_client_ids {
-        sqlx::query("DELETE FROM annotations WHERE user_id = ? AND client_id = ?")
-            .bind(user_id)
-            .bind(client_id)
-            .execute(&mut *tx)
-            .await?;
+    Ok(())
+}
+
+/// Chunked `DELETE ... WHERE client_id IN (...)` for a device PATCH's
+/// `deleted_client_ids` batch, in place of one `DELETE` per row.
+async fn delete_kobo_annotations(
+    tx: &mut Transaction<'_, Sqlite>,
+    user_id: i64,
+    deleted_client_ids: &[String],
+) -> Result<(), HighlightError> {
+    for chunk in deleted_client_ids.chunks(DELETE_CHUNK_SIZE) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql =
+            format!("DELETE FROM annotations WHERE user_id = ? AND client_id IN ({placeholders})");
+        let mut q = sqlx::query(&sql).bind(user_id);
+        for client_id in chunk {
+            q = q.bind(client_id);
+        }
+        q.execute(&mut **tx).await?;
     }
-    tx.commit().await.map_err(HighlightError::Sqlx)?;
     Ok(())
 }
 
