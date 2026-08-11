@@ -1,8 +1,8 @@
 //! Admin server-health page — the first admin route in the app. Five
-//! read-only sections over one [`AdminHealthReport`] fetch, refreshed once
-//! on mount in a post-mount `use_effect` (never the render body, for
-//! hydration parity). Web/SSR-only; the real authorization boundary is the
-//! `AdminUser` extractor on `rpc_get_admin_health`.
+//! read-only sections over one [`AdminHealthReport`], polled every
+//! [`POLL_INTERVAL_MS`] from a post-mount `use_future` loop (never the
+//! render body, for hydration parity). Web/SSR-only; the real
+//! authorization boundary is the `AdminUser` extractor on `rpc_get_admin_health`.
 #![cfg(not(feature = "mobile"))]
 
 use dioxus::prelude::*;
@@ -12,7 +12,14 @@ use omnibus_shared::admin_health::{
 use omnibus_shared::error_ring::CapturedError;
 
 use crate::components::worker_status::kind_label;
-use crate::data;
+use crate::data::{self, DataError};
+use crate::platform_sleep::async_sleep_ms;
+
+/// Polling cadence in milliseconds — AC1 asks for "approximately a
+/// 5-second cadence". Same self-hosted-single-admin reasoning as
+/// `worker_status::POLL_INTERVAL_MS`: no idle-throttling, the report is
+/// small and this page has one viewer at a time.
+const POLL_INTERVAL_MS: u32 = 5_000;
 
 /// The `/admin/health` page.
 #[component]
@@ -21,7 +28,7 @@ pub fn AdminHealthPage() -> Element {
     let result = use_signal(|| None::<AdminHealthReport>);
     let error = use_signal(|| false);
 
-    spawn_admin_health_fetch(result, error);
+    spawn_admin_health_fetch(is_admin, result, error);
 
     rsx! {
         div { class: "ah-page", "data-testid": "admin-health-page",
@@ -42,22 +49,60 @@ pub fn AdminHealthPage() -> Element {
     }
 }
 
-/// Fetch the combined report on mount, mapping success/failure onto the
-/// result/error signals — same shape as `LastErrorsSection`'s
-/// `spawn_last_errors_fetch` in `pages::settings::health`.
+/// Poll the combined report every [`POLL_INTERVAL_MS`] from a post-mount
+/// `use_future` loop — fetch, apply, sleep, repeat. Dioxus cancels the future
+/// when the page unmounts, the same guarantee
+/// `components::worker_status::WorkerStatusIndicator` relies on for its own
+/// 1 Hz loop, so no explicit `use_drop` teardown is needed. Always runs (the
+/// hook itself can't be conditional without breaking Dioxus's hook-order
+/// rule), but [`should_poll`] gates the fetch each tick so a non-admin
+/// visitor never hits the admin-gated RPC.
 fn spawn_admin_health_fetch(
+    is_admin: ReadSignal<bool>,
     mut result: Signal<Option<AdminHealthReport>>,
     mut error: Signal<bool>,
 ) {
-    use_effect(move || {
-        error.set(false);
-        spawn(async move {
-            match data::get_admin_health().await {
-                Ok(report) => result.set(Some(report)),
-                Err(_) => error.set(true),
+    use_future(move || async move {
+        loop {
+            if should_poll(is_admin()) {
+                let outcome = data::get_admin_health().await;
+                apply_poll_result(outcome, &mut result, &mut error);
             }
-        });
+            async_sleep_ms(POLL_INTERVAL_MS).await;
+        }
     });
+}
+
+/// Whether a poll tick should fetch. The RPC itself already 403s a
+/// non-admin, but the page must not even attempt it — a visitor who isn't
+/// admin (or whose `CurrentUser` hasn't resolved yet) would otherwise
+/// generate a 401/403 every [`POLL_INTERVAL_MS`] for as long as the page
+/// stays open. Re-checked every tick, not just once at mount, so admin
+/// status flipping mid-session starts or stops polling within one interval.
+fn should_poll(is_admin: bool) -> bool {
+    is_admin
+}
+
+/// Merge one poll's outcome into the `result`/`error` signals. A success
+/// always replaces the report and clears any prior error. A failure only
+/// flips the page to its error state when there is no report to keep
+/// showing yet (the first load) — a later transient blip leaves the last
+/// known-good report on screen rather than flashing the whole page to an
+/// error, mirroring `WorkerStatusIndicator`'s "keep the last known
+/// snapshot" behavior.
+fn apply_poll_result(
+    outcome: Result<AdminHealthReport, DataError>,
+    result: &mut Signal<Option<AdminHealthReport>>,
+    error: &mut Signal<bool>,
+) {
+    match outcome {
+        Ok(report) => {
+            result.set(Some(report));
+            error.set(false);
+        }
+        Err(_) if result.peek().is_none() => error.set(true),
+        Err(_) => {}
+    }
 }
 
 /// The result region: loading / error / populated states.

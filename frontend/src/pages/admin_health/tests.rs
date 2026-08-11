@@ -1,10 +1,122 @@
-//! Tests for the admin server-health page: the pure formatters, and a
-//! render assertion per section (rendered output contains the expected
-//! content, per `.claude/rules/03-unit-testing.md`'s frontend guidance).
+//! Tests for the admin server-health page: the pure formatters, the
+//! live-poll merge logic, and a render assertion per section (rendered
+//! output contains the expected content, per
+//! `.claude/rules/03-unit-testing.md`'s frontend guidance).
 
 use omnibus_shared::worker::TaskKind;
 
 use super::*;
+
+// ---------- poll gating ----------
+
+#[test]
+fn should_poll_fetches_only_for_an_admin_viewer() {
+    assert!(should_poll(true));
+    assert!(
+        !should_poll(false),
+        "a non-admin viewer must never trigger the admin-gated RPC"
+    );
+}
+
+// ---------- live-poll merge logic (#955) ----------
+//
+// `apply_poll_result` reads/writes `Signal`s, which need an active Dioxus
+// scope (same reasoning as `read_status_auto::tests`'s
+// `apply_fetched_status` cases) — so each case runs inside a mounted dummy
+// component via `VirtualDom::rebuild_in_place` rather than constructing
+// bare `Signal`s at the top of a `#[test] fn`.
+
+fn sample_report(book_count: i64) -> AdminHealthReport {
+    AdminHealthReport {
+        index: IndexStatus {
+            book_count,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+#[test]
+fn apply_poll_result_populates_result_and_clears_error_on_first_success() {
+    #[component]
+    fn AssertFirstSuccessPopulates() -> Element {
+        let mut result = Signal::new(None::<AdminHealthReport>);
+        let mut error = Signal::new(false);
+
+        apply_poll_result(Ok(sample_report(1)), &mut result, &mut error);
+
+        assert_eq!(result().map(|r| r.index.book_count), Some(1));
+        assert!(!error());
+        rsx! {}
+    }
+    VirtualDom::new(AssertFirstSuccessPopulates).rebuild_in_place();
+}
+
+#[test]
+fn apply_poll_result_sets_error_when_the_first_fetch_fails() {
+    #[component]
+    fn AssertFirstFailureSetsError() -> Element {
+        let mut result = Signal::new(None::<AdminHealthReport>);
+        let mut error = Signal::new(false);
+
+        apply_poll_result(
+            Err(DataError::Other("boom".to_string())),
+            &mut result,
+            &mut error,
+        );
+
+        assert!(result().is_none());
+        assert!(error());
+        rsx! {}
+    }
+    VirtualDom::new(AssertFirstFailureSetsError).rebuild_in_place();
+}
+
+#[test]
+fn apply_poll_result_keeps_the_last_known_report_when_a_later_poll_fails() {
+    #[component]
+    fn AssertTransientFailureKeepsReport() -> Element {
+        let mut result = Signal::new(None::<AdminHealthReport>);
+        let mut error = Signal::new(false);
+        apply_poll_result(Ok(sample_report(7)), &mut result, &mut error);
+
+        apply_poll_result(
+            Err(DataError::Other("transient".to_string())),
+            &mut result,
+            &mut error,
+        );
+
+        assert_eq!(result().map(|r| r.index.book_count), Some(7));
+        assert!(
+            !error(),
+            "a transient poll failure must not flip an already-loaded page to the error state"
+        );
+        rsx! {}
+    }
+    VirtualDom::new(AssertTransientFailureKeepsReport).rebuild_in_place();
+}
+
+#[test]
+fn apply_poll_result_replaces_a_stale_report_on_the_next_success() {
+    #[component]
+    fn AssertNextSuccessReplacesStaleReport() -> Element {
+        let mut result = Signal::new(None::<AdminHealthReport>);
+        let mut error = Signal::new(false);
+        apply_poll_result(Ok(sample_report(7)), &mut result, &mut error);
+        apply_poll_result(
+            Err(DataError::Other("transient".to_string())),
+            &mut result,
+            &mut error,
+        );
+
+        apply_poll_result(Ok(sample_report(9)), &mut result, &mut error);
+
+        assert_eq!(result().map(|r| r.index.book_count), Some(9));
+        assert!(!error());
+        rsx! {}
+    }
+    VirtualDom::new(AssertNextSuccessReplacesStaleReport).rebuild_in_place();
+}
 
 // ---------- pure formatters ----------
 
