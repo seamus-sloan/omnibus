@@ -436,7 +436,7 @@ fn row_to_admin_user(row: &sqlx::sqlite::SqliteRow, now: i64) -> AdminUserRow {
     }
 }
 
-/// List every user for the admin Users table, oldest first, up to
+/// List users for the admin Users table, oldest first, capped at
 /// [`LIST_USERS_LIMIT`]. Returns the safe [`AdminUserRow`] projection (no
 /// password material) with per-row created time and live locked state.
 pub async fn list_users(pool: &SqlitePool) -> AuthResult<Vec<AdminUserRow>> {
