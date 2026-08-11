@@ -126,25 +126,18 @@ fn build_new_user_submit_handler(
     }
 }
 
-/// Edit-user modal: permission toggles + an optional password reset.
-#[component]
-pub(super) fn EditUserModal(
-    user: AdminUserRow,
-    on_close: EventHandler<()>,
+/// Builds the edit-user submit handler: saves permissions, then (if a new
+/// password was entered) resets it, mirroring
+/// [`build_new_user_submit_handler`]'s shape.
+fn build_edit_user_submit_handler(
+    uid: i64,
+    perms: Signal<UserPermissions>,
+    new_password: Signal<String>,
+    mut error: Signal<Option<String>>,
+    mut saving: Signal<bool>,
     on_saved: EventHandler<()>,
-) -> Element {
-    let uid = user.id;
-    let perms = use_signal(|| UserPermissions {
-        is_admin: user.is_admin,
-        can_upload: user.can_upload,
-        can_edit: user.can_edit,
-        can_download: user.can_download,
-    });
-    let mut new_password = use_signal(String::new);
-    let mut error = use_signal(|| None::<String>);
-    let mut saving = use_signal(|| false);
-
-    let submit = move |evt: Event<FormData>| {
+) -> impl FnMut(Event<FormData>) + 'static {
+    move |evt: Event<FormData>| {
         evt.prevent_default();
         if saving() {
             return;
@@ -169,7 +162,27 @@ pub(super) fn EditUserModal(
             on_saved.call(());
             saving.set(false);
         });
-    };
+    }
+}
+
+/// Edit-user modal: permission toggles + an optional password reset.
+#[component]
+pub(super) fn EditUserModal(
+    user: AdminUserRow,
+    on_close: EventHandler<()>,
+    on_saved: EventHandler<()>,
+) -> Element {
+    let uid = user.id;
+    let perms = use_signal(|| UserPermissions {
+        is_admin: user.is_admin,
+        can_upload: user.can_upload,
+        can_edit: user.can_edit,
+        can_download: user.can_download,
+    });
+    let mut new_password = use_signal(String::new);
+    let mut error = use_signal(|| None::<String>);
+    let saving = use_signal(|| false);
+    let submit = build_edit_user_submit_handler(uid, perms, new_password, error, saving, on_saved);
 
     let pw = new_password();
     let show_meter = !pw.is_empty();

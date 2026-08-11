@@ -71,33 +71,12 @@ pub(super) fn LandingHeader(
                 }
             }
             div { class: "lib-header-row",
-                div { class: "lib-header-title-wrap",
-                    p { class: "lib-header-title", "data-testid": "lib-section-title",
-                        em { "{section_title}" }
-                        span { class: "lib-header-count",
-                            " · {book_count} "
-                            if book_count == 1 { "book" } else { "books" }
-                        }
-                        // The receipt: hidden books must never look like
-                        // data loss, so the exclusion always shows its count.
-                        if let Some(n) = hidden_count.filter(|n| *n > 0) {
-                            span {
-                                class: "lib-header-hidden",
-                                "data-testid": "lib-hidden-count",
-                                " · {n} hidden"
-                            }
-                        }
-                    }
-                    if can_edit {
-                        button {
-                            r#type: "button",
-                            class: "shelf-edit-btn",
-                            "data-testid": "shelf-edit",
-                            "aria-label": "Edit shelf",
-                            onclick: move |_| on_edit_shelf.call(()),
-                            {pencil_glyph()}
-                        }
-                    }
+                LandingHeaderTitleRow {
+                    section_title,
+                    book_count,
+                    hidden_count,
+                    can_edit,
+                    on_edit_shelf,
                 }
                 Toolbar {
                     prefs: prefs,
@@ -107,20 +86,75 @@ pub(super) fn LandingHeader(
             if let Some(shelf) = selected_shelf.as_ref() {
                 ShelfFacets { shelf: shelf.clone() }
             }
-            if path_missing {
-                p { class: "lib-header-hint",
-                    "Configure your ebook library path in Settings."
+            LandingHeaderMessages { path_missing, page_error, lib_err }
+        }
+    }
+}
+
+/// Section title + book count + hidden-formats receipt + the shelf edit
+/// pencil, extracted from [`LandingHeader`] to keep it under the line cap.
+#[component]
+fn LandingHeaderTitleRow(
+    section_title: String,
+    book_count: usize,
+    hidden_count: Option<i64>,
+    can_edit: bool,
+    on_edit_shelf: EventHandler<()>,
+) -> Element {
+    rsx! {
+        div { class: "lib-header-title-wrap",
+            p { class: "lib-header-title", "data-testid": "lib-section-title",
+                em { "{section_title}" }
+                span { class: "lib-header-count",
+                    " · {book_count} "
+                    if book_count == 1 { "book" } else { "books" }
+                }
+                // The receipt: hidden books must never look like data loss,
+                // so the exclusion always shows its count.
+                if let Some(n) = hidden_count.filter(|n| *n > 0) {
+                    span {
+                        class: "lib-header-hidden",
+                        "data-testid": "lib-hidden-count",
+                        " · {n} hidden"
+                    }
                 }
             }
-            if let Some(msg) = page_error.as_ref() {
-                // Tagged because a failed shelf-member fetch and a genuinely
-                // empty shelf both render an empty grid — this banner is the
-                // only thing that tells them apart.
-                p { class: "error", "data-testid": "lib-page-error", "⚠ {msg}" }
+            if can_edit {
+                button {
+                    r#type: "button",
+                    class: "shelf-edit-btn",
+                    "data-testid": "shelf-edit",
+                    "aria-label": "Edit shelf",
+                    onclick: move |_| on_edit_shelf.call(()),
+                    {pencil_glyph()}
+                }
             }
-            if let Some(msg) = lib_err.as_ref() {
-                p { class: "error", "⚠ {msg}" }
+        }
+    }
+}
+
+/// Path-missing hint + page-level + library-path error banners, extracted
+/// from [`LandingHeader`] to keep it under the line cap.
+#[component]
+fn LandingHeaderMessages(
+    path_missing: bool,
+    page_error: Option<String>,
+    lib_err: Option<String>,
+) -> Element {
+    rsx! {
+        if path_missing {
+            p { class: "lib-header-hint",
+                "Configure your ebook library path in Settings."
             }
+        }
+        if let Some(msg) = page_error.as_ref() {
+            // Tagged because a failed shelf-member fetch and a genuinely
+            // empty shelf both render an empty grid — this banner is the
+            // only thing that tells them apart.
+            p { class: "error", "data-testid": "lib-page-error", "⚠ {msg}" }
+        }
+        if let Some(msg) = lib_err.as_ref() {
+            p { class: "error", "⚠ {msg}" }
         }
     }
 }
