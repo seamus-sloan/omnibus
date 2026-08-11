@@ -411,6 +411,12 @@ pub async fn registration_enabled(pool: &SqlitePool) -> AuthResult<bool> {
 
 // ── Admin user management (F5.4) ─────────────────────────────────────
 
+/// Hard cap on how many users `list_users` returns for the admin Users
+/// table. Matches `LIST_DEVICES_LIMIT`/`LIST_SESSIONS_LIMIT` — a defensive
+/// ceiling so a pathological user count can't produce an unbounded REST
+/// response; a real deployment is nowhere near this.
+pub const LIST_USERS_LIMIT: i64 = 1000;
+
 /// Map a `users` row to the admin-table [`AdminUserRow`] projection,
 /// resolving `locked` against `now` (a `locked_until` in the past is not a
 /// live lockout).
@@ -430,15 +436,16 @@ fn row_to_admin_user(row: &sqlx::sqlite::SqliteRow, now: i64) -> AdminUserRow {
     }
 }
 
-/// List every user for the admin Users table, oldest first. Returns the
-/// safe [`AdminUserRow`] projection (no password material) with per-row
-/// created time and live locked state.
+/// List every user for the admin Users table, oldest first, up to
+/// [`LIST_USERS_LIMIT`]. Returns the safe [`AdminUserRow`] projection (no
+/// password material) with per-row created time and live locked state.
 pub async fn list_users(pool: &SqlitePool) -> AuthResult<Vec<AdminUserRow>> {
     let rows = sqlx::query(
         "SELECT id, username, is_admin, can_upload, can_edit, can_download,
                 kindle_email, display_name, created_at, locked_until
-         FROM users ORDER BY created_at ASC, id ASC",
+         FROM users ORDER BY created_at ASC, id ASC LIMIT ?",
     )
+    .bind(LIST_USERS_LIMIT)
     .fetch_all(pool)
     .await?;
     let now = now_unix();
