@@ -1,9 +1,30 @@
 //! Tests for user account management: first-user admin promotion and
 //! registration lockout, username collision/validation, password changes
-//! (including session revocation on change), and the admin user projection.
+//! (including session revocation on change), and the admin user projection
+//! (including its `LIST_USERS_LIMIT` response ceiling).
 
 use super::*;
 use crate::auth::test_support::pool;
+
+/// Bulk-insert `count` user rows without going through `create_user` /
+/// `admin_create_user` — used only to exercise `list_users`'s
+/// `LIST_USERS_LIMIT` in isolation, well above what a real registration
+/// flow would ever populate in a test.
+async fn seed_users_raw(pool: &SqlitePool, count: i64) {
+    sqlx::query(
+        r"
+        WITH RECURSIVE n(i) AS (
+            SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?
+        )
+        INSERT INTO users (username, password_hash, created_at)
+        SELECT 'bulk-user-' || i, 'not-a-real-hash', i FROM n
+        ",
+    )
+    .bind(count)
+    .execute(pool)
+    .await
+    .unwrap();
+}
 
 #[tokio::test]
 async fn first_user_is_admin_and_disables_registration() {
@@ -409,6 +430,22 @@ async fn list_users_returns_projection_ordered_oldest_first() {
     assert_eq!(rows[1].id, reader.id);
     assert!(!rows[1].is_admin);
     assert!(rows[1].can_download && !rows[1].can_upload);
+}
+
+/// `list_users` must not return more than `LIST_USERS_LIMIT` rows even when
+/// the underlying table holds more.
+#[tokio::test]
+async fn list_users_caps_response_at_list_users_limit() {
+    let p = pool().await;
+    let over_cap = LIST_USERS_LIMIT + 50;
+    seed_users_raw(&p, over_cap).await;
+
+    let rows = list_users(&p).await.unwrap();
+    assert_eq!(
+        rows.len() as i64,
+        LIST_USERS_LIMIT,
+        "list_users must not return more than LIST_USERS_LIMIT rows",
+    );
 }
 
 #[tokio::test]
