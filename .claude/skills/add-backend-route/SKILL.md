@@ -10,7 +10,7 @@ Omnibus is a Dioxus fullstack app with two parallel transport layers. Pick the r
 | Client | Transport | Path convention | Lives in |
 |---|---|---|---|
 | **Web (WASM)** | Dioxus server function — `#[get]` / `#[post]` macro | `/api/rpc/<name>` | [frontend/src/rpc/](../../../frontend/src/rpc/) (per-domain submodule) |
-| **Mobile (Dioxus Native)** | Hand-written axum handler called via `reqwest` | `/api/<resource>` | [server/src/backend.rs](../../../server/src/backend.rs) |
+| **Mobile (Dioxus Native)** | Hand-written axum handler called via `reqwest` | `/api/<resource>` | [server/src/backend/](../../../server/src/backend/) (handler + registered in `routes.rs`) |
 
 A new user-facing feature typically needs **both** (mobile+web parity), since the components in `frontend/src/pages/` drive both targets through `frontend/src/data.rs`.
 
@@ -48,9 +48,19 @@ pub async fn rpc_my_action(input: MyInput) -> Result<MyOutput> {
 
 ## 4. Add the hand-written REST handler (mobile transport)
 
-In [server/src/backend.rs](../../../server/src/backend.rs):
+Write the handler function in the matching per-domain module under
+[server/src/backend/](../../../server/src/backend/) (e.g. `backend/ebooks.rs`,
+`backend/progress.rs`), then register it with `.route(...)` inside the
+matching builder function in
+[server/src/backend/routes.rs](../../../server/src/backend/routes.rs) —
+`content_routes()`, `data_routes()`, `progress_routes()`, `shelf_routes()`,
+`check_in_routes()`, and the other per-domain builders it defines, or add a
+new one and merge it into `data_routes()` (or `content_routes()`) if none
+fits. `rest_router()` / `rest_router_with_search_limiter()` in
+[server/src/backend.rs](../../../server/src/backend.rs) only **compose**
+these builder functions into the final router — individual `.route(...)`
+calls no longer live there.
 
-- Register on `rest_router()` with `.route(...)`.
 - **First argument is the auth extractor** (`_user: AuthUser` for read paths and per-user mutations, `_admin: AdminUser` for shared-config writes). Then `State<AppState>` for the pool, `Json<T>` / `Path<…>` / `Query<…>` for the rest. F0.7 makes this mandatory — without an extractor the route would default to "any logged-in user" which defeats the per-user permission columns.
 - **Image-serving GET whose bytes go into an `<img src>`** (covers/thumbs/photos): use `_user: MediaAuthUser` instead of `AuthUser`, and add the path prefix to `is_media_read_path` in `auth/gate.rs`. Both accept the session as a `?token=` query param — a mobile WebView's `<img>` fetch carries neither the bearer header nor a cookie. On the frontend build the URL via `crate::media_url` / `crate::thumb_url` (in `contexts.rs`) so the token is appended per URL, including each `srcset` candidate.
 - **GET that streams bytes off disk** (a book file, an audio part, a download): route it through `backend::conditional` so it publishes an `ETag`, answers `If-None-Match` with a 304, and refuses a `Range` whose `If-Range` went stale. `tower-http`'s `ServeFile` gives you an ETag but has **no `If-Range` support**, so delegating to it alone lets a resume splice the tail of a new file onto the head of an old one. See [09-content-validators.md](../../rules/09-content-validators.md) for the call shape and why `ETag` and `Vary` must travel together.
