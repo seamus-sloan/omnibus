@@ -98,8 +98,11 @@ test("admin upload swaps the letter avatar for the photo", async ({
   }).toPass({ timeout: 20_000, intervals: [500, 1_000, 2_000] });
 
   await expect(img).toHaveAttribute("src", `/api/authors/${id}/photo`);
-  // Letter variant should no longer render in the hero.
-  await expect(page.locator("div.disc-avatar")).toHaveCount(0);
+  // #1839 — `.disc-avatar` is the stable outer circle (rule 07: a
+  // `has_photo` flip must patch the child, not swap the element), so it
+  // stays present with the photo inside; only the letter fallback text
+  // should be gone.
+  await expect(page.locator("div.disc-avatar")).not.toContainText("A");
 
   // Sanity-check the image bytes load — fetch directly from the page
   // context so cookies ride along. We can't rely on `waitForResponse` here
