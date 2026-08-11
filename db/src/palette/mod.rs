@@ -43,6 +43,27 @@ pub enum PaletteError {
     Db(#[from] sqlx::Error),
 }
 
+impl From<crate::metadata_overrides::MetadataOverridesError> for PaletteError {
+    fn from(e: crate::metadata_overrides::MetadataOverridesError) -> Self {
+        match e {
+            crate::metadata_overrides::MetadataOverridesError::Db(inner) => PaletteError::Db(inner),
+            crate::metadata_overrides::MetadataOverridesError::Serialization(inner) => {
+                PaletteError::Db(sqlx::Error::Decode(Box::new(inner)))
+            }
+            crate::metadata_overrides::MetadataOverridesError::Io(inner) => {
+                PaletteError::Db(sqlx::Error::Io(inner))
+            }
+            // Bulk-write-only variants that can't arise on the palette read
+            // path; folded with their message preserved rather than panicking
+            // (mirrors `BooksError`'s `From<MetadataOverridesError>`).
+            other @ (crate::metadata_overrides::MetadataOverridesError::BookNotFound(_)
+            | crate::metadata_overrides::MetadataOverridesError::TooManyValues {
+                ..
+            }) => PaletteError::Db(sqlx::Error::Protocol(other.to_string())),
+        }
+    }
+}
+
 /// Per-category display cap. Each arm returns at most this many hits; the
 /// uncapped per-category totals (`book_total` etc.) are computed separately.
 const LIMIT: i32 = 5;

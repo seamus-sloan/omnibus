@@ -10,6 +10,8 @@ use sqlx::{Row, SqlitePool};
 use crate::helpers::format_series_index;
 use crate::metadata_overrides::{apply_overrides, load_overrides_bulk};
 
+use super::BooksError;
+
 /// Hard server-side cap on the number of books any single list/search
 /// response returns. 50k is well above the client-side sort/filter
 /// ceiling (anything beyond needs server-side pagination anyway) and
@@ -338,7 +340,7 @@ pub(crate) async fn backfill_creator_ids(
 pub(crate) async fn merge_overrides_into_books(
     pool: &SqlitePool,
     books: &mut [EbookMetadata],
-) -> Result<(), sqlx::Error> {
+) -> Result<(), BooksError> {
     let uuids: Vec<String> = books
         .iter()
         .filter_map(|b| b.unique_identifier.clone())

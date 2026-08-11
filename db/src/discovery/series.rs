@@ -156,7 +156,7 @@ async fn merge_and_pin_series(
     books: &mut [EbookMetadata],
     series_id: i64,
     series_name: &str,
-) -> Result<(), sqlx::Error> {
+) -> Result<(), DiscoveryError> {
     let uuids: Vec<String> = books
         .iter()
         .filter_map(|b| b.unique_identifier.clone())
