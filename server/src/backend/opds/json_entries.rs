@@ -6,6 +6,7 @@
 
 use std::collections::HashSet;
 
+use omnibus_db as db;
 use omnibus_shared::opds::{
     BelongsTo, Contributor, Link, Publication, PublicationMetadata, SeriesRef, Subject,
 };
@@ -32,11 +33,13 @@ pub(super) fn book_publication(book: &EbookMetadata) -> Publication {
         images.push(
             Link::new(format!("/opds/covers/{uuid}"))
                 .with_rel("http://opds-spec.org/image")
-                .with_type("image/jpeg"),
+                .with_type(db::cover_mime_hint(uuid, book.has_cover_override)),
         );
         images.push(
             Link::new(format!("/opds/thumbs/{uuid}/sm"))
                 .with_rel("http://opds-spec.org/image/thumbnail")
+                // Always WebP regardless of source format — see the
+                // matching comment in `entries::book_entry`.
                 .with_type("image/webp"),
         );
     }

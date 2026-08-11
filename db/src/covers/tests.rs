@@ -185,6 +185,37 @@ async fn cover_returns_none_for_missing_book_id() {
     assert!(get_cover(&pool, 999_999).await.unwrap().is_none());
 }
 
+/// A cover stored under `<uuid>.png` reports `image/png`, not the hardcoded
+/// `image/jpeg` a caller might otherwise assume (#1772).
+#[test]
+fn cover_mime_hint_reflects_a_png_cover_on_disk() {
+    let _covers = CoversTempDir::new("mime_hint_png");
+    std::fs::create_dir_all(covers_dir()).unwrap();
+    std::fs::write(cover_path_for("png-book", "png"), b"PNGBYTES").unwrap();
+    assert_eq!(cover_mime_hint("png-book", false), "image/png");
+}
+
+/// With `has_cover_override` set, the override file's format wins even when
+/// a differently-formatted original also exists on disk — matching
+/// [`get_cover`]'s own precedence.
+#[test]
+fn cover_mime_hint_prefers_the_override_file_when_flagged() {
+    let _covers = CoversTempDir::new("mime_hint_override");
+    std::fs::create_dir_all(covers_dir()).unwrap();
+    std::fs::write(cover_path_for("ov-book", "jpg"), b"ORIGINAL").unwrap();
+    std::fs::write(covers_dir().join("override-ov-book.webp"), b"OVERRIDEBYTES").unwrap();
+    assert_eq!(cover_mime_hint("ov-book", true), "image/webp");
+}
+
+/// No cover file under any known extension falls back to `image/jpeg` — the
+/// literal every OPDS entry advertised before this lookup existed, and the
+/// byte-serving endpoint 404s regardless so the advertised type is moot.
+#[test]
+fn cover_mime_hint_falls_back_to_jpeg_when_no_file_exists() {
+    let _covers = CoversTempDir::new("mime_hint_missing");
+    assert_eq!(cover_mime_hint("no-such-book", false), "image/jpeg");
+}
+
 /// A minimal but valid 1x1 GIF87a: header + logical-screen descriptor + a
 /// 2-colour global table + one image descriptor and a single-pixel LZW frame.
 /// Enough for `image` to sniff the format and decode a first frame.
