@@ -1,11 +1,22 @@
-//! Tests for the admin server-health page: the pure formatters, the live-poll
-//! merge logic (#955), and a render assertion per section (rendered output
-//! contains the expected content, per
+//! Tests for the admin server-health page: the pure formatters, the
+//! live-poll merge logic, and a render assertion per section (rendered
+//! output contains the expected content, per
 //! `.claude/rules/03-unit-testing.md`'s frontend guidance).
 
 use omnibus_shared::worker::TaskKind;
 
 use super::*;
+
+// ---------- poll gating ----------
+
+#[test]
+fn should_poll_fetches_only_for_an_admin_viewer() {
+    assert!(should_poll(true));
+    assert!(
+        !should_poll(false),
+        "a non-admin viewer must never trigger the admin-gated RPC"
+    );
+}
 
 // ---------- live-poll merge logic (#955) ----------
 //

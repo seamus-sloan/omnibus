@@ -1,9 +1,8 @@
 //! Admin server-health page — the first admin route in the app. Five
-//! read-only sections over one [`AdminHealthReport`] fetch, polled every
+//! read-only sections over one [`AdminHealthReport`], polled every
 //! [`POLL_INTERVAL_MS`] from a post-mount `use_future` loop (never the
-//! render body, for hydration parity — see #955). Web/SSR-only; the real
-//! authorization boundary is the `AdminUser` extractor on
-//! `rpc_get_admin_health`.
+//! render body, for hydration parity). Web/SSR-only; the real
+//! authorization boundary is the `AdminUser` extractor on `rpc_get_admin_health`.
 #![cfg(not(feature = "mobile"))]
 
 use dioxus::prelude::*;
@@ -29,7 +28,7 @@ pub fn AdminHealthPage() -> Element {
     let result = use_signal(|| None::<AdminHealthReport>);
     let error = use_signal(|| false);
 
-    spawn_admin_health_fetch(result, error);
+    spawn_admin_health_fetch(is_admin, result, error);
 
     rsx! {
         div { class: "ah-page", "data-testid": "admin-health-page",
@@ -51,21 +50,37 @@ pub fn AdminHealthPage() -> Element {
 }
 
 /// Poll the combined report every [`POLL_INTERVAL_MS`] from a post-mount
-/// `use_future` loop (#955 AC1/AC2) — fetch, apply, sleep, repeat. Dioxus
-/// cancels the future when the page unmounts (AC4), same guarantee
+/// `use_future` loop — fetch, apply, sleep, repeat. Dioxus cancels the future
+/// when the page unmounts, the same guarantee
 /// `components::worker_status::WorkerStatusIndicator` relies on for its own
-/// 1 Hz loop, so no explicit `use_drop` teardown is needed.
+/// 1 Hz loop, so no explicit `use_drop` teardown is needed. Always runs (the
+/// hook itself can't be conditional without breaking Dioxus's hook-order
+/// rule), but [`should_poll`] gates the fetch each tick so a non-admin
+/// visitor never hits the admin-gated RPC.
 fn spawn_admin_health_fetch(
+    is_admin: ReadSignal<bool>,
     mut result: Signal<Option<AdminHealthReport>>,
     mut error: Signal<bool>,
 ) {
     use_future(move || async move {
         loop {
-            let outcome = data::get_admin_health().await;
-            apply_poll_result(outcome, &mut result, &mut error);
+            if should_poll(is_admin()) {
+                let outcome = data::get_admin_health().await;
+                apply_poll_result(outcome, &mut result, &mut error);
+            }
             async_sleep_ms(POLL_INTERVAL_MS).await;
         }
     });
+}
+
+/// Whether a poll tick should fetch. The RPC itself already 403s a
+/// non-admin, but the page must not even attempt it — a visitor who isn't
+/// admin (or whose `CurrentUser` hasn't resolved yet) would otherwise
+/// generate a 401/403 every [`POLL_INTERVAL_MS`] for as long as the page
+/// stays open. Re-checked every tick, not just once at mount, so admin
+/// status flipping mid-session starts or stops polling within one interval.
+fn should_poll(is_admin: bool) -> bool {
+    is_admin
 }
 
 /// Merge one poll's outcome into the `result`/`error` signals. A success
