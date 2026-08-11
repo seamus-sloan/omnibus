@@ -12,11 +12,12 @@ use axum::{
 use omnibus_db as db;
 use omnibus_shared::{Shelf, SortDir, SortKey};
 
+use crate::auth::OpdsAuthUser;
+use crate::backend::AppState;
+
 use super::atom::{Feed, Link, ACQUISITION_TYPE, NAVIGATION_TYPE};
 use super::entries::{book_entry, retain_ereader_books};
 use super::{internal, nav_entry, now_rfc3339, xml_response};
-use crate::auth::OpdsAuthUser;
-use crate::backend::AppState;
 
 /// `GET /opds/shelves` — navigation feed of the viewer's visible shelves,
 /// each linking to its `/opds/shelves/{id}` acquisition feed.

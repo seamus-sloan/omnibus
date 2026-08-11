@@ -8,11 +8,12 @@ use axum::{
 };
 use omnibus_shared::opds::{Feed, FeedMetadata, Link, MEDIA_TYPE};
 
+use crate::auth::OpdsAuthUser;
+use crate::backend::AppState;
+
 use super::all::{bad_cursor_response, load_page, parse_cursor, self_href, AllQuery};
 use super::json_entries::book_publication;
 use super::json_response;
-use crate::auth::OpdsAuthUser;
-use crate::backend::AppState;
 
 pub(super) async fn all_books(
     _user: OpdsAuthUser,
