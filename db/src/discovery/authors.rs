@@ -233,7 +233,7 @@ async fn count_effective_author_members(
 async fn merge_overrides_into_author_books(
     pool: &SqlitePool,
     books: &mut [EbookMetadata],
-) -> Result<(), sqlx::Error> {
+) -> Result<(), DiscoveryError> {
     let uuids: Vec<String> = books
         .iter()
         .filter_map(|b| b.unique_identifier.clone())

@@ -347,7 +347,7 @@ pub async fn delete_metadata_overrides(
 pub(crate) async fn load_overrides_bulk(
     pool: &SqlitePool,
     uuids: &[String],
-) -> Result<HashMap<String, (MetadataOverrides, bool)>, sqlx::Error> {
+) -> Result<HashMap<String, (MetadataOverrides, bool)>, MetadataOverridesError> {
     if uuids.is_empty() {
         return Ok(HashMap::new());
     }

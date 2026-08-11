@@ -32,24 +32,6 @@ use opf::transform_opf;
 /// clobber each other's temp file before the final rename.
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// Errors from the export-rewrite path.
-///
-/// `BookNotFound` is the one state a caller branches on (404); DB lookups
-/// surface via `Books`, and every foreign-system failure (zip, XML, image,
-/// filesystem, blocking-join) collapses into `Failed` — the caller only ever
-/// falls back to serving the source EPUB, so a finer split buys nothing.
-#[derive(Debug, thiserror::Error)]
-pub enum EpubRewriteError {
-    #[error("book {0} not found")]
-    BookNotFound(i64),
-    #[error(transparent)]
-    Books(#[from] crate::books::BooksError),
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-    #[error("epub rewrite failed: {0}")]
-    Failed(#[from] anyhow::Error),
-}
-
 /// Root directory for the rewritten-EPUB export cache.
 ///
 /// Override with `$OMNIBUS_EXPORT_EPUB_DIR` (used verbatim); otherwise defaults
@@ -188,10 +170,10 @@ pub async fn rewritten_epub_path(
     pool: &SqlitePool,
     book_id: i64,
     source: &Path,
-) -> Result<Option<PathBuf>, EpubRewriteError> {
+) -> anyhow::Result<Option<PathBuf>> {
     let book = crate::books::get_book(pool, book_id)
         .await?
-        .ok_or(EpubRewriteError::BookNotFound(book_id))?;
+        .ok_or_else(|| anyhow::anyhow!("book {book_id} not found"))?;
     // Only the override/stale-check path below reads `last_modified` — skip
     // the query on the common no-override path, matching the pre-batching
     // behavior (the bulk fleet-wide pass has its own cheap bulk fetch and
@@ -199,7 +181,7 @@ pub async fn rewritten_epub_path(
     let last_modified = if book.has_override || book.has_cover_override {
         crate::get_last_modified_epoch(pool, book_id)
             .await
-            .map_err(|e| EpubRewriteError::Failed(anyhow::Error::new(e)))?
+            .context("look up book last_modified")?
             .unwrap_or(0)
     } else {
         0
@@ -220,7 +202,7 @@ async fn rewrite_or_reuse_cache(
     source: &Path,
     book: &EbookMetadata,
     last_modified: i64,
-) -> Result<Option<PathBuf>, EpubRewriteError> {
+) -> anyhow::Result<Option<PathBuf>> {
     // Effective state already reflects the library's metadata-source precedence
     // (an admin who ranks embedded tags above overrides gets no rewrite).
     // Nothing to bake → source.
@@ -260,11 +242,11 @@ async fn rewrite_or_reuse_cache(
     let tmp_for_task = tmp.clone();
     let rewrite = tokio::task::spawn_blocking(move || rewrite_blocking(&src, &tmp_for_task, &book))
         .await
-        .map_err(|e| EpubRewriteError::Failed(anyhow::Error::new(e)))?;
+        .context("epub rewrite task join failed")?;
     if let Err(e) = rewrite {
         // Don't leave a half-written temp behind on a rewrite failure.
         let _ = tokio::fs::remove_file(&tmp).await;
-        return Err(e.into());
+        return Err(e);
     }
 
     // Atomic promote so a concurrent reader never sees a torn file.
@@ -342,7 +324,7 @@ fn rewrite_blocking(src: &Path, dst: &Path, book: &EbookMetadata) -> anyhow::Res
 /// filesystem-bound rewrite itself.
 pub async fn rewrite_all_epubs_with_overrides(
     pool: &SqlitePool,
-) -> Result<BulkRewriteSummary, EpubRewriteError> {
+) -> anyhow::Result<BulkRewriteSummary> {
     rewrite_all_epubs_with_progress(pool, |_, _, _| {}).await
 }
 
@@ -353,14 +335,14 @@ pub async fn rewrite_all_epubs_with_overrides(
 pub async fn rewrite_all_epubs_with_progress(
     pool: &SqlitePool,
     mut on_progress: impl FnMut(u32, u32, Option<&str>),
-) -> Result<BulkRewriteSummary, EpubRewriteError> {
+) -> anyhow::Result<BulkRewriteSummary> {
     // An existing `metadata_overrides` row IS "has an active override" — the
     // write paths that clear overrides entirely (`delete_metadata_overrides`,
     // `clear_cover_override`) delete the row rather than leaving an empty one.
     let uuids: Vec<String> = sqlx::query_scalar("SELECT book_uuid FROM metadata_overrides")
         .fetch_all(pool)
         .await
-        .map_err(crate::books::BooksError::Db)?;
+        .context("list overridden book uuids")?;
 
     let mut summary = BulkRewriteSummary::default();
     if uuids.is_empty() {
@@ -375,7 +357,7 @@ pub async fn rewrite_all_epubs_with_progress(
     let source_paths = crate::books::book_file_paths(pool, &ids, "EPUB").await?;
     let last_modified_map = crate::covers::last_modified_bulk(pool, &ids)
         .await
-        .map_err(|e| EpubRewriteError::Failed(anyhow::Error::new(e)))?;
+        .context("bulk look up book last_modified")?;
     let books_by_id: HashMap<i64, EbookMetadata> = crate::books::get_books_by_ids(pool, &ids)
         .await?
         .into_iter()

@@ -28,3 +28,26 @@ pub enum DiscoveryError {
     #[error(transparent)]
     Db(#[from] sqlx::Error),
 }
+
+impl From<crate::metadata_overrides::MetadataOverridesError> for DiscoveryError {
+    fn from(e: crate::metadata_overrides::MetadataOverridesError) -> Self {
+        match e {
+            crate::metadata_overrides::MetadataOverridesError::Db(inner) => {
+                DiscoveryError::Db(inner)
+            }
+            crate::metadata_overrides::MetadataOverridesError::Serialization(inner) => {
+                DiscoveryError::Db(sqlx::Error::Decode(Box::new(inner)))
+            }
+            crate::metadata_overrides::MetadataOverridesError::Io(inner) => {
+                DiscoveryError::Db(sqlx::Error::Io(inner))
+            }
+            // Bulk-write-only variants that can't arise on the discovery read
+            // path; folded with their message preserved rather than panicking
+            // (mirrors `BooksError`'s `From<MetadataOverridesError>`).
+            other @ (crate::metadata_overrides::MetadataOverridesError::BookNotFound(_)
+            | crate::metadata_overrides::MetadataOverridesError::TooManyValues {
+                ..
+            }) => DiscoveryError::Db(sqlx::Error::Protocol(other.to_string())),
+        }
+    }
+}
