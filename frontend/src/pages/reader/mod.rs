@@ -26,6 +26,7 @@ mod reader_bookmarks;
 mod search_panel;
 mod selection;
 mod signals;
+mod sync_banner;
 mod toc_drawer;
 mod typography;
 
@@ -558,6 +559,8 @@ fn ReaderLayout(
                 on_back,
             }
 
+            {sync_banner_slot(&uuid)}
+
             ReaderViewerStage { status }
 
             ReaderPageTurnButtons { on_prev, on_next }
@@ -609,4 +612,18 @@ fn ReaderLayout(
             }
         }
     }
+}
+
+/// Web-only slot for the cross-format jump banner; the hybrid mobile
+/// shell renders nothing here.
+#[cfg(not(feature = "mobile"))]
+fn sync_banner_slot(uuid: &str) -> Element {
+    rsx! {
+        sync_banner::SyncJumpBanner { uuid: uuid.to_string() }
+    }
+}
+
+#[cfg(feature = "mobile")]
+fn sync_banner_slot(_uuid: &str) -> Element {
+    rsx! {}
 }

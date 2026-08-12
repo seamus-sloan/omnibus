@@ -88,6 +88,17 @@ export const AUDIOBOOK_BOOKS: readonly ExpectedAudiobook[] = [
     source: "generated",
   },
 
+  // Second dual-format pair — RESERVED for cross_format_prompts.spec.ts.
+  // Appended last for the same `.find(MP3 && generated)` stability reason.
+  {
+    title: "Parallel Latitudes",
+    author: "Vera Molnar",
+    format: "MP3",
+    parts: 1,
+    hasCover: true,
+    source: "generated",
+  },
+
   // Merge-only pair — see MERGE_PRIMARY/MERGE_SECONDARY below. Appended last
   // for the same reason as "Immersive Voyage": the `.find(MP3 && generated)`
   // and `.find(MP3 && parts > 1)` selectors in listen/mini-dock/book_detail
