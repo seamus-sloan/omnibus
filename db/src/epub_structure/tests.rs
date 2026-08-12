@@ -224,3 +224,25 @@ async fn backfill_epub_structure_skips_an_unreadable_file_and_retries_later() {
         .unwrap();
     assert_eq!(seen, 1);
 }
+
+#[test]
+fn percent_at_saturates_on_absurd_offsets_and_ignores_slice_order() {
+    let stats = vec![
+        SpineStatRow {
+            spine_index: 1,
+            href: "c2.xhtml".into(),
+            visible_chars: 60,
+            chars_before: 40,
+        },
+        SpineStatRow {
+            spine_index: 0,
+            href: "c1.xhtml".into(),
+            visible_chars: 40,
+            chars_before: 0,
+        },
+    ];
+    // Reversed slice order must not distort the total.
+    assert_eq!(percent_at(&stats, 1, 0), Some(40));
+    // A u64 offset beyond i64 saturates and clamps instead of overflowing.
+    assert_eq!(percent_at(&stats, 1, u64::MAX), Some(100));
+}

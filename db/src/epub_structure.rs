@@ -143,10 +143,18 @@ pub async fn get_chapters(
 /// when the stats don't cover `spine_index` or the book measured empty.
 pub fn percent_at(stats: &[SpineStatRow], spine_index: i64, offset_in_file: u64) -> Option<i64> {
     let row = stats.iter().find(|s| s.spine_index == spine_index)?;
-    let total: i64 = stats.last().map(|s| s.chars_before + s.visible_chars)?;
+    // Order-independent total (never trusts slice order) and saturating
+    // arithmetic throughout: a corrupt or absurd offset clamps to 100
+    // rather than overflowing the multiply.
+    let total: i64 = stats
+        .iter()
+        .fold(0i64, |acc, s| acc.saturating_add(s.visible_chars.max(0)));
     if total <= 0 {
         return Some(0);
     }
-    let at = row.chars_before + i64::try_from(offset_in_file).unwrap_or(i64::MAX);
-    Some(((100 * at) / total).clamp(0, 100))
+    let at = row
+        .chars_before
+        .max(0)
+        .saturating_add(i64::try_from(offset_in_file).unwrap_or(i64::MAX));
+    Some((100i64.saturating_mul(at) / total).clamp(0, 100))
 }
