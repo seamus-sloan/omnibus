@@ -111,9 +111,22 @@ function kvValue(card: Locator, label: string): Locator {
 }
 
 test("renders the admin health layout", async ({ page }) => {
+  // `should_poll` re-reads `is_admin()` every tick, and `CurrentUser` boots
+  // unresolved (`Signal::new(None)` in `lib.rs`) until its own async fetch
+  // lands — so the poll loop's very first tick almost always sees
+  // `is_admin() == false` and skips straight to its 5s sleep, landing the
+  // *real* first admin-health request a full POLL_INTERVAL_MS after mount
+  // rather than immediately. `expectMutation`'s default 5s timeout races
+  // that, so give this one enough room for one skipped tick plus WASM boot
+  // overhead.
   await expectMutation(
     page,
-    { method: "POST", url: "/api/rpc/admin-health", expectedStatus: 200 },
+    {
+      method: "POST",
+      url: "/api/rpc/admin-health",
+      expectedStatus: 200,
+      timeout: 12_000,
+    },
     async () => gotoReady(page, ADMIN_HEALTH),
   );
 
