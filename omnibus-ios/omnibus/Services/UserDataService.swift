@@ -38,8 +38,34 @@ enum UserDataService {
     /// The position this device last knew about, with no network in the path.
     /// The reader opens on this; anything the server has to add arrives through
     /// `progress(uuid:format:)` afterwards.
+    ///
+    /// The newest of the replica row and the queued outbox write — not the
+    /// replica alone. The two can disagree: a drained op's answer, or a read
+    /// that slipped in after the op was held aside, can put an older server row
+    /// in the replica while the outbox still holds where the listener actually
+    /// is. Opening on the replica then re-saves the stale position with a fresh
+    /// clock, which coalesce-deletes the newer op — one transient clobber made
+    /// permanent. The outbox is this device's own statement of record, so it
+    /// gets equal standing.
     static func localProgress(uuid: String, format: ProgressFormat) async -> ProgressRecord? {
-        await Cache.read(CacheKey.progress(uuid, format), as: ProgressRecord.self)
+        let replica = await Cache.read(CacheKey.progress(uuid, format), as: ProgressRecord.self)
+        guard let queued = await queuedProgress(uuid: uuid, format: format) else { return replica }
+        guard let replica else { return queued }
+        return PositionSync.newest(replica, queued)
+    }
+
+    /// The position still sitting in the outbox for one book and format, as
+    /// the record it would become — including one held aside as rejected: the
+    /// server refusing a write does not change where the listener was.
+    private static func queuedProgress(
+        uuid: String, format: ProgressFormat
+    ) async -> ProgressRecord? {
+        let kind = OpKind.progress(uuid, format)
+        guard let op = await OfflineStore.shared.latestOp(kind: kind),
+              let body = op.body,
+              let update = try? JSONDecoder().decode(ProgressUpdate.self, from: body)
+        else { return nil }
+        return update.optimisticRecord
     }
 
     static func recentProgress() -> AsyncThrowingStream<CacheRead<[ResumePoint]>, Error> {
@@ -64,20 +90,7 @@ enum UserDataService {
     /// opening another — pass `true`. See `SyncEngine.record`.
     static func saveProgress(_ update: ProgressUpdate, push: Bool = true) async {
         let key = CacheKey.progress(update.bookUUID, update.format)
-        let optimistic = ProgressRecord(
-            bookUUID: update.bookUUID,
-            format: update.format,
-            epubCFI: update.epubCFI,
-            audioPositionSeconds: update.audioPositionSeconds,
-            progressPercent: update.progressPercent,
-            // The device clock on both, because that is what this write will
-            // be ordered on when it reaches the server. Leaving `clientUpdatedAt`
-            // unset here would make the optimistic row the one thing in the
-            // replica that couldn't be compared against a server answer.
-            updatedAt: update.clientUpdatedAt,
-            clientUpdatedAt: update.clientUpdatedAt,
-            bookFileID: update.bookFileID
-        )
+        let optimistic = update.optimisticRecord
         await Cache.write(key, optimistic)
         await noteResumePoint(optimistic)
 

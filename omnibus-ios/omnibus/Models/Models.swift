@@ -501,6 +501,26 @@ struct ProgressRecord: Codable, Sendable {
     }
 }
 
+extension ProgressUpdate {
+    /// This write as the replica row it will become, before the server has
+    /// answered. The device clock fills both timestamp fields, because that is
+    /// what the write will be ordered on when it reaches the server — leaving
+    /// `clientUpdatedAt` unset would make the optimistic row the one thing in
+    /// the replica that couldn't be compared against a server answer.
+    var optimisticRecord: ProgressRecord {
+        ProgressRecord(
+            bookUUID: bookUUID,
+            format: format,
+            epubCFI: epubCFI,
+            audioPositionSeconds: audioPositionSeconds,
+            progressPercent: progressPercent,
+            updatedAt: clientUpdatedAt,
+            clientUpdatedAt: clientUpdatedAt,
+            bookFileID: bookFileID
+        )
+    }
+}
+
 struct ResumePoint: Codable, Sendable, Identifiable {
     var record: ProgressRecord
     var book: Book

@@ -243,6 +243,97 @@ struct ReplayOutcomeTests {
             #expect(!SyncEngine.isTerminalRejection(status))
         }
     }
+
+    @Test("a position is never parked by the retry cap")
+    func positionKindsOutlastTheRetryCap() {
+        // Parking a coalesced position converts hours of listening into a
+        // stale row the next server read silently restores — the chapter-19
+        // to chapter-13 revert. The cap exists for ops that can wedge the
+        // whole queue, which a single coalesced value cannot.
+        #expect(SyncEngine.outlastsRetryCap(OpKind.progress("b-1", .audio)))
+        #expect(SyncEngine.outlastsRetryCap(OpKind.progress("b-1", .epub)))
+        #expect(SyncEngine.outlastsRetryCap(OpKind.playbackRate("b-1")))
+    }
+
+    @Test("discrete-event kinds still park at the cap")
+    func discreteKindsStillPark() {
+        for kind in [
+            OpKind.highlight, OpKind.bookmark, OpKind.journal,
+            OpKind.session, OpKind.shelfMembership,
+            OpKind.rating("b-1"), OpKind.readStatus("b-1"),
+        ] {
+            #expect(!SyncEngine.outlastsRetryCap(kind), "\(kind) should stay capped")
+        }
+    }
+}
+
+// MARK: - Position restore sources
+
+@Suite("Position restore sources")
+struct PositionRestoreTests {
+    private func record(clock: Int64, seconds: Double) -> ProgressRecord {
+        ProgressRecord(
+            bookUUID: "b-1", format: .audio, epubCFI: nil,
+            audioPositionSeconds: seconds, updatedAt: clock, clientUpdatedAt: clock
+        )
+    }
+
+    @Test("the newer of replica and queued op wins, from either side")
+    func newestPicksTheLaterClock() {
+        // The replica can trail the outbox after a stale server answer was
+        // folded in; opening on it re-stamps the old position with a fresh
+        // clock and the newer op is coalesce-deleted — permanent loss.
+        let replica = record(clock: 1_000, seconds: 4_800)
+        let queued = record(clock: 2_000, seconds: 11_400)
+        #expect(PositionSync.newest(replica, queued)?.audioPositionSeconds == 11_400)
+        #expect(PositionSync.newest(queued, replica)?.audioPositionSeconds == 11_400)
+    }
+
+    @Test("either source alone answers, and a tie keeps the first")
+    func newestHandlesAbsentSides() {
+        let only = record(clock: 1_000, seconds: 4_800)
+        #expect(PositionSync.newest(nil, only)?.audioPositionSeconds == 4_800)
+        #expect(PositionSync.newest(only, nil)?.audioPositionSeconds == 4_800)
+        #expect(PositionSync.newest(nil, nil) == nil)
+        let tied = record(clock: 1_000, seconds: 9_999)
+        #expect(PositionSync.newest(only, tied)?.audioPositionSeconds == 4_800)
+    }
+
+    @Test("a queued op's body decodes back into the position it recorded")
+    func opBodyRoundTripsThroughOptimisticRecord() throws {
+        // The restore path reads the outbox row's stored bytes, not a live
+        // object — this is the decode it depends on.
+        let update = ProgressUpdate(
+            bookUUID: "b-1", format: .audio, epubCFI: nil,
+            audioPositionSeconds: 11_400, clientUpdatedAt: 2_000, bookFileID: 917
+        )
+        let body = try JSONEncoder().encode(update)
+        let decoded = try JSONDecoder().decode(ProgressUpdate.self, from: body)
+        let restored = decoded.optimisticRecord
+        #expect(restored.audioPositionSeconds == 11_400)
+        #expect(restored.orderingClock == 2_000)
+        #expect(restored.bookFileID == 917)
+    }
+
+    @Test("a drained answer older than the replica is not folded in")
+    func staleResponsesDoNotSupersede() {
+        // The server answers a refused write with the row that won — which,
+        // mid-playback, is older than the ticks that have already moved the
+        // replica. Adopting it would seat the player on the old position.
+        let held = record(clock: 2_000, seconds: 11_400)
+        let stale = record(clock: 1_000, seconds: 4_800)
+        #expect(!SyncEngine.responseSupersedes(stale, held: held))
+    }
+
+    @Test("a drained answer adopts on an equal or newer clock, or an empty replica")
+    func currentResponsesSupersede() {
+        let held = record(clock: 2_000, seconds: 11_400)
+        // Equal: same position, but the answer carries the server's
+        // `updated_at`, the clock later sync offers are judged against.
+        #expect(SyncEngine.responseSupersedes(record(clock: 2_000, seconds: 11_400), held: held))
+        #expect(SyncEngine.responseSupersedes(record(clock: 3_000, seconds: 12_000), held: held))
+        #expect(SyncEngine.responseSupersedes(record(clock: 1_000, seconds: 4_800), held: nil))
+    }
 }
 
 // MARK: - Position wire contract

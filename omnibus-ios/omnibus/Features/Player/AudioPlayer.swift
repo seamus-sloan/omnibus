@@ -568,7 +568,12 @@ final class AudioPlayer {
         // book to attribute, and putting it last leaves the mini bar on screen
         // until the network answers.
         let closing = book
-        let finalPosition = position
+        // Zeroed until the open has reconciled against the server, for the
+        // same reason `persistPosition` checks `positionSettled`: dismissing
+        // the mini bar during a slow open would otherwise stamp the pre-read
+        // resume position with a fresh clock, which beats every genuinely
+        // newer write on the wire.
+        let finalPosition = positionSettled ? position : 0
         let finalFileID = fileID
         let pending = takePendingReport()
 
