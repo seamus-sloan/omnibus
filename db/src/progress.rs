@@ -682,7 +682,17 @@ async fn collapse_linked_points(
             .filter(|p| p.record.book_uuid == uuid)
             .collect();
         if rows.len() > 1 {
-            rows.sort_by_key(|p| std::cmp::Reverse(p.record.client_updated_at));
+            // Deterministic ordering all the way down: same-second writes
+            // tie-break on receipt time, then a fixed format rank (audio
+            // first) — an unstable sort on equal keys would let the
+            // surviving card flip between refreshes.
+            rows.sort_by_key(|p| {
+                std::cmp::Reverse((
+                    p.record.client_updated_at,
+                    p.record.updated_at,
+                    matches!(p.record.format, ProgressFormat::Audio) as i64,
+                ))
+            });
             for older in &rows[1..] {
                 drop_keys.insert((uuid.clone(), older.record.format));
             }
