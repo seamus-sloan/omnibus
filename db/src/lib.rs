@@ -18,6 +18,7 @@ pub mod cleanup;
 pub mod comic;
 pub mod convert;
 pub mod covers;
+pub mod cross_format;
 pub mod deletion;
 pub mod discovery;
 pub mod ebook;

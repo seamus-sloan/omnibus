@@ -1,0 +1,396 @@
+//! Tests for cross-format links and the linear mapping tier: link CRUD and
+//! snapshot staleness, sequence/narrations timelines, percent ↔ seconds
+//! mapping with inverse consistency, and the resume-candidate state machine.
+
+use omnibus_shared::ProgressUpdate;
+use sqlx::SqlitePool;
+
+use crate::init_db;
+
+use super::*;
+
+async fn seed_user(pool: &SqlitePool, name: &str) -> i64 {
+    sqlx::query_scalar::<_, i64>(
+        "INSERT INTO users (username, password_hash, is_admin, can_upload, can_edit, can_download)
+         VALUES (?, '!x', 0, 0, 0, 1) RETURNING id",
+    )
+    .bind(name)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+/// One dual-format book: an EPUB file plus one M4B `book_files` row per
+/// entry of `durations` (ordinals in order, one part each). Returns
+/// `(book_id, uuid, audio book_file ids)`.
+async fn seed_dual_book(pool: &SqlitePool, durations: &[f64]) -> (i64, String, Vec<i64>) {
+    sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES ('/lib', 'lib')")
+        .execute(pool)
+        .await
+        .unwrap();
+    let library_id: i64 = sqlx::query_scalar("SELECT id FROM scan_roots WHERE path = '/lib'")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let book_id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, scan_key, library_id, path, title, sort)
+         VALUES ('book-uuid-1', 'b1.epub', ?, '/lib/b1', 'Dual', 'dual') RETURNING id",
+    )
+    .bind(library_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch, scan_key)
+         VALUES (?, 'EPUB', 'b1', 10, 10, 'b1.epub')",
+    )
+    .bind(book_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    let mut audio_ids = Vec::new();
+    for (i, duration) in durations.iter().enumerate() {
+        let file_id: i64 = sqlx::query_scalar(
+            "INSERT INTO book_files
+                (book_id, format, filename, size_bytes, mtime_epoch, scan_key, ordinal)
+             VALUES (?, 'M4B', ?, ?, ?, ?, ?) RETURNING id",
+        )
+        .bind(book_id)
+        .bind(format!("part{i}"))
+        .bind(100 + i as i64)
+        .bind(1_000 + i as i64)
+        .bind(format!("a{i}.m4b"))
+        .bind(i as i64)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO book_file_parts
+                (book_file_id, ordinal, filename, size_bytes, mtime_epoch, duration_seconds)
+             VALUES (?, 0, ?, ?, ?, ?)",
+        )
+        .bind(file_id)
+        .bind(format!("a{i}.m4b"))
+        .bind(100 + i as i64)
+        .bind(1_000 + i as i64)
+        .bind(duration)
+        .execute(pool)
+        .await
+        .unwrap();
+        audio_ids.push(file_id);
+    }
+    (book_id, "book-uuid-1".to_string(), audio_ids)
+}
+
+fn epub_percent_update(uuid: &str, percent: i64, clock: i64) -> ProgressUpdate {
+    ProgressUpdate {
+        book_uuid: uuid.to_string(),
+        format: ProgressFormat::Epub,
+        epub_cfi: None,
+        audio_position_seconds: None,
+        progress_percent: Some(percent),
+        kobo_location: None,
+        book_file_id: None,
+        client_updated_at: Some(clock),
+    }
+}
+
+fn audio_update(uuid: &str, seconds: f64, file_id: Option<i64>, clock: i64) -> ProgressUpdate {
+    ProgressUpdate {
+        book_uuid: uuid.to_string(),
+        format: ProgressFormat::Audio,
+        epub_cfi: None,
+        audio_position_seconds: Some(seconds),
+        progress_percent: None,
+        kobo_location: None,
+        book_file_id: file_id,
+        client_updated_at: Some(clock),
+    }
+}
+
+#[tokio::test]
+async fn upsert_get_delete_link_round_trips() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, audio) = seed_dual_book(&pool, &[600.0]).await;
+
+    let link = upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    assert_eq!(link.mode, CrossFormatLinkMode::Sequence);
+    assert!(link.audio_snapshot.contains("a0.m4b"));
+    assert!(link.confirmed_at > 0);
+
+    // Re-confirming as narrations replaces the row wholesale.
+    let link = upsert_link(
+        &pool,
+        user,
+        &uuid,
+        CrossFormatLinkMode::Narrations,
+        Some(audio[0]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(link.mode, CrossFormatLinkMode::Narrations);
+    assert_eq!(link.primary_book_file_id, Some(audio[0]));
+
+    assert!(delete_link(&pool, user, &uuid).await.unwrap());
+    assert!(!delete_link(&pool, user, &uuid).await.unwrap());
+    assert!(get_link(&pool, user, &uuid).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn upsert_link_returns_book_not_found_for_unknown_uuid() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let err = upsert_link(&pool, user, "no-such", CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CrossFormatError::BookNotFound));
+}
+
+#[tokio::test]
+async fn link_is_stale_flips_when_the_audio_file_set_changes() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (book_id, uuid, audio) = seed_dual_book(&pool, &[600.0, 300.0]).await;
+    let link = upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    assert!(!link_is_stale(&pool, book_id, &link).await.unwrap());
+
+    // A replaced file moves its wire etag (mtime/size) → stale.
+    sqlx::query("UPDATE book_files SET mtime_epoch = 9999 WHERE id = ?")
+        .bind(audio[0])
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(link_is_stale(&pool, book_id, &link).await.unwrap());
+}
+
+#[tokio::test]
+async fn audio_timeline_concatenates_sequence_files_by_ordinal() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (book_id, uuid, audio) = seed_dual_book(&pool, &[600.0, 300.0, 100.0]).await;
+    let link = upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+
+    let tl = audio_timeline(&pool, book_id, &link)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(tl.total_seconds, 1_000.0);
+    assert_eq!(
+        tl.files
+            .iter()
+            .map(|f| (f.book_file_id, f.start_seconds))
+            .collect::<Vec<_>>(),
+        vec![(audio[0], 0.0), (audio[1], 600.0), (audio[2], 900.0)]
+    );
+}
+
+#[tokio::test]
+async fn map_percent_to_audio_lands_in_the_right_file_and_inverts() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (book_id, uuid, audio) = seed_dual_book(&pool, &[600.0, 300.0, 100.0]).await;
+    let link = upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    let tl = audio_timeline(&pool, book_id, &link)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(map_percent_to_audio(&tl, 0), Some((audio[0], 0.0)));
+    assert_eq!(map_percent_to_audio(&tl, 65), Some((audio[1], 50.0)));
+    assert_eq!(map_percent_to_audio(&tl, 95), Some((audio[2], 50.0)));
+    // 100% belongs to the last file's end, never past it.
+    assert_eq!(map_percent_to_audio(&tl, 100), Some((audio[2], 100.0)));
+    assert_eq!(map_percent_to_audio(&tl, 101), None);
+
+    // Inverse consistency within the floor's 1% granularity.
+    for pct in [0i64, 13, 42, 65, 95, 100] {
+        let (file, secs) = map_percent_to_audio(&tl, pct).unwrap();
+        let back = map_audio_to_percent(&tl, file, secs).unwrap();
+        assert!(
+            (back - pct).abs() <= 1,
+            "round trip drifted: {pct} -> {back}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn narrations_timeline_aligns_only_the_primary() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (book_id, uuid, audio) = seed_dual_book(&pool, &[600.0, 620.0]).await;
+    let link = upsert_link(
+        &pool,
+        user,
+        &uuid,
+        CrossFormatLinkMode::Narrations,
+        Some(audio[1]),
+    )
+    .await
+    .unwrap();
+
+    let tl = audio_timeline(&pool, book_id, &link)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(tl.files.len(), 1);
+    assert_eq!(tl.total_seconds, 620.0);
+    assert_eq!(tl.files[0].book_file_id, audio[1]);
+    // The non-primary narration is deliberately unaligned.
+    assert_eq!(map_audio_to_percent(&tl, audio[0], 100.0), None);
+}
+
+#[tokio::test]
+async fn resume_candidate_walks_the_state_machine() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, audio) = seed_dual_book(&pool, &[600.0, 300.0, 100.0]).await;
+
+    // Unlinked → sync off.
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Audio)
+        .await
+        .unwrap();
+    assert_eq!(r.state, CrossFormatResumeState::NotLinked);
+
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+
+    // Linked but no source position → nothing to offer.
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Audio)
+        .await
+        .unwrap();
+    assert_eq!(r.state, CrossFormatResumeState::NothingNewer);
+
+    // Newer reading position → audio candidate at the mapped spot.
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 65, 2_000))
+        .await
+        .unwrap();
+    progress::upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 10.0, Some(audio[0]), 1_000),
+    )
+    .await
+    .unwrap();
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Audio)
+        .await
+        .unwrap();
+    assert_eq!(r.state, CrossFormatResumeState::Candidate);
+    let c = r.candidate.unwrap();
+    assert_eq!(c.book_file_id, Some(audio[1]));
+    assert_eq!(c.audio_position_seconds, Some(50.0));
+    assert_eq!(c.total_duration_seconds, Some(1_000.0));
+    assert_eq!(c.source_client_updated_at, 2_000);
+
+    // The other direction: listening moved past reading → epub candidate.
+    progress::upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 50.0, Some(audio[1]), 3_000),
+    )
+    .await
+    .unwrap();
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Epub)
+        .await
+        .unwrap();
+    assert_eq!(r.state, CrossFormatResumeState::Candidate);
+    assert_eq!(r.candidate.unwrap().percent, Some(65));
+
+    // Target newer than source → nothing newer.
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Audio)
+        .await
+        .unwrap();
+    assert_eq!(r.state, CrossFormatResumeState::NothingNewer);
+}
+
+#[tokio::test]
+async fn resume_candidate_pauses_on_a_stale_link_and_rejects_unknown_books() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, audio) = seed_dual_book(&pool, &[600.0]).await;
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 50, 2_000))
+        .await
+        .unwrap();
+
+    sqlx::query("UPDATE book_files SET mtime_epoch = 9999 WHERE id = ?")
+        .bind(audio[0])
+        .execute(&pool)
+        .await
+        .unwrap();
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Audio)
+        .await
+        .unwrap();
+    assert_eq!(r.state, CrossFormatResumeState::LinkStale);
+
+    let err = resume_candidate(&pool, user, "no-such", ProgressFormat::Audio)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CrossFormatError::BookNotFound));
+}
+
+#[test]
+fn map_audio_to_percent_refuses_a_zero_length_timeline() {
+    let tl = AudioTimeline {
+        files: vec![TimelineFile {
+            book_file_id: 1,
+            start_seconds: 0.0,
+            duration_seconds: 0.0,
+        }],
+        total_seconds: 0.0,
+    };
+    assert_eq!(map_audio_to_percent(&tl, 1, 0.0), None);
+}
+
+#[tokio::test]
+async fn resume_candidate_refuses_a_fileless_audio_row_on_a_multi_file_timeline() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, _) = seed_dual_book(&pool, &[600.0, 300.0]).await;
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    // An audio position with no recorded file: ambiguous across two files.
+    progress::upsert_progress(&pool, user, &audio_update(&uuid, 50.0, None, 3_000))
+        .await
+        .unwrap();
+
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Epub)
+        .await
+        .unwrap();
+    assert_eq!(
+        r.state,
+        CrossFormatResumeState::NothingNewer,
+        "an ambiguous source must refuse, not guess the first file"
+    );
+}
+
+#[tokio::test]
+async fn resume_candidate_accepts_a_fileless_audio_row_on_a_single_file_timeline() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, _) = seed_dual_book(&pool, &[600.0]).await;
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    progress::upsert_progress(&pool, user, &audio_update(&uuid, 300.0, None, 3_000))
+        .await
+        .unwrap();
+
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Epub)
+        .await
+        .unwrap();
+    assert_eq!(r.state, CrossFormatResumeState::Candidate);
+    assert_eq!(r.candidate.unwrap().percent, Some(50));
+}
