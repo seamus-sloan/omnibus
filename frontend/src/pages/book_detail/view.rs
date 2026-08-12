@@ -22,6 +22,8 @@ use super::hero::{self, BdHeroSection};
 use super::mobile;
 #[cfg(not(feature = "mobile"))]
 use super::physical;
+#[cfg(not(feature = "mobile"))]
+use super::sync_link;
 use super::{BdCrumbItem, DescriptionSignals, PhysSignals};
 
 fn kicker_label(year: &str) -> String {
@@ -167,6 +169,9 @@ pub(super) struct LoadedCtx {
     pub(super) is_admin: bool,
     pub(super) refresh: Signal<u32>,
     pub(super) phys: PhysSignals,
+    /// One-shot flag from the merge dialog: a merge that just produced a
+    /// dual-format book auto-opens the alignment modal.
+    pub(super) after_merge: Signal<bool>,
 }
 
 /// Render the fully-loaded book detail view — mobile re-flow into a single
@@ -187,9 +192,10 @@ pub(super) fn render_loaded(
         is_admin,
         refresh,
         phys,
+        after_merge,
     } = ctx;
     let _ = rail;
-    let _ = (refresh, phys);
+    let _ = (refresh, phys, after_merge);
     mobile::render_loaded_mobile(mobile::MobileBookView {
         b,
         author_books,
@@ -216,6 +222,7 @@ pub(super) fn render_loaded(
         is_admin,
         refresh,
         phys,
+        after_merge,
     } = ctx;
     // Web keeps its own local copy inside `BdTitleCol` (hero.rs), a real
     // `#[component]` that gets a fresh scope per mount — no hook-order risk
@@ -255,6 +262,13 @@ pub(super) fn render_loaded(
                     has_comic,
                 },
                 phys,
+            }
+            if has_ebook && has_audio {
+                sync_link::BdSyncPanel {
+                    uuid: uuid.clone(),
+                    refresh,
+                    after_merge,
+                }
             }
             physical::BdPhysicalPanel {
                 uuid: uuid.clone(),

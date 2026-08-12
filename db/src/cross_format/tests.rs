@@ -394,3 +394,111 @@ async fn resume_candidate_accepts_a_fileless_audio_row_on_a_single_file_timeline
     assert_eq!(r.state, CrossFormatResumeState::Candidate);
     assert_eq!(r.candidate.unwrap().percent, Some(50));
 }
+
+#[tokio::test]
+async fn alignment_view_assembles_link_positions_and_audio_lanes() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, audio) = seed_dual_book(&pool, &[600.0, 300.0]).await;
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 65, 2_000))
+        .await
+        .unwrap();
+    progress::upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 42.0, Some(audio[0]), 1_000),
+    )
+    .await
+    .unwrap();
+
+    let view = alignment_view(&pool, user, &uuid).await.unwrap();
+    let link = view.link.unwrap();
+    assert!(!link.stale);
+    assert_eq!(link.mode, CrossFormatLinkMode::Sequence);
+    assert_eq!(view.audio_files.len(), 2);
+    assert_eq!(view.audio_files[0].duration_seconds, 600.0);
+    // No spine stats seeded: the text lane is honestly absent, and the
+    // synthetic-chapter-free audio files carry no tick offsets.
+    assert!(view.ebook.is_none());
+    assert!(view.audio_files[0].chapter_starts.is_empty());
+    assert_eq!(view.reading.unwrap().percent, Some(65));
+    assert_eq!(view.listening.unwrap().seconds, 42.0);
+}
+
+#[tokio::test]
+async fn alignment_view_reports_ebook_ticks_when_structure_exists() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, _) = seed_dual_book(&pool, &[600.0]).await;
+    let epub_file: i64 =
+        sqlx::query_scalar("SELECT id FROM book_files WHERE format = 'EPUB' LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    crate::epub_structure::replace_structure(
+        &pool,
+        epub_file,
+        &crate::ebook::toc::EpubStructure {
+            spine: vec![
+                crate::ebook::toc::SpineStat {
+                    spine_index: 0,
+                    href: "c1.xhtml".into(),
+                    visible_chars: 40,
+                },
+                crate::ebook::toc::SpineStat {
+                    spine_index: 1,
+                    href: "c2.xhtml".into(),
+                    visible_chars: 60,
+                },
+            ],
+            chapters: vec![crate::ebook::toc::TocChapter {
+                ordinal: 0,
+                title: "Chapter Two".into(),
+                href: "c2.xhtml".into(),
+                spine_index: 1,
+                start_chars: 40,
+            }],
+        },
+    )
+    .await
+    .unwrap();
+
+    let view = alignment_view(&pool, user, &uuid).await.unwrap();
+    let ebook = view.ebook.unwrap();
+    assert_eq!(ebook.total_chars, 100);
+    assert_eq!(ebook.chapters.len(), 1);
+    assert_eq!(ebook.chapters[0].title, "Chapter Two");
+    assert!((ebook.chapters[0].percent - 40.0).abs() < f64::EPSILON);
+}
+
+#[tokio::test]
+async fn set_audio_order_persists_and_refuses_a_mismatched_set() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, audio) = seed_dual_book(&pool, &[600.0, 300.0]).await;
+
+    set_audio_order(&pool, &uuid, &[audio[1], audio[0]])
+        .await
+        .unwrap();
+    let view = alignment_view(&pool, user, &uuid).await.unwrap();
+    assert_eq!(
+        view.audio_files
+            .iter()
+            .map(|f| f.book_file_id)
+            .collect::<Vec<_>>(),
+        vec![audio[1], audio[0]]
+    );
+
+    // Anything that isn't exactly the current set refuses: missing file,
+    // foreign id, duplicate.
+    assert!(set_audio_order(&pool, &uuid, &[audio[0]]).await.is_err());
+    assert!(set_audio_order(&pool, &uuid, &[audio[0], 999_999])
+        .await
+        .is_err());
+    assert!(set_audio_order(&pool, &uuid, &[audio[0], audio[0]])
+        .await
+        .is_err());
+}

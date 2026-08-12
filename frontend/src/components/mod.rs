@@ -93,6 +93,7 @@ pub mod author_photo_edit;
 // Shared backdrop/panel modal shell (dismiss-on-click, click-through-safe)
 // used by the merge, delete, author-photo, and physical-copy dialogs, plus
 // a title/body/action-row body for the common single-confirm case.
+pub mod alignment_modal;
 pub mod confirm_modal;
 pub use confirm_modal::{confirm_modal_body, ConfirmModal, ConfirmModalAction, ConfirmModalTone};
 
