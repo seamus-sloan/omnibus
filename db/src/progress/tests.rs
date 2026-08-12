@@ -2609,3 +2609,53 @@ async fn derive_epub_percent_returns_false_for_an_unparseable_cfi() {
         .unwrap();
     assert!(!derived);
 }
+
+#[tokio::test]
+async fn derive_epub_percent_agrees_with_stored_spine_stats() {
+    // Same two-identical-chapter book as the full-walk test, but with the
+    // 0071 structure extracted first: the stats fast-path must land the
+    // same value (exactly 50 at the start of chapter 2), and the row's
+    // clocks must stay untouched.
+    let dir = crate::test_support::make_test_dir("derive_percent_stats");
+    std::fs::write(
+        dir.join("book.epub"),
+        crate::test_support::build_test_epub(&[
+            ("c1.xhtml", PERCENT_CHAPTER),
+            ("c2.xhtml", PERCENT_CHAPTER),
+        ]),
+    )
+    .unwrap();
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let (_, uuid) = seed_named_file(&pool, dir.to_str().unwrap(), "Book", "book.epub").await;
+    let user = seed_user(&pool, "alice").await;
+    crate::indexer::backfill_epub_structure(&pool, dir.to_str().unwrap(), |_, _, _| {})
+        .await
+        .unwrap();
+    let file_id: i64 = sqlx::query_scalar("SELECT id FROM book_files LIMIT 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        !crate::epub_structure::get_spine_stats(&pool, file_id)
+            .await
+            .unwrap()
+            .is_empty(),
+        "precondition: stats extracted so the fast path is the one exercised"
+    );
+
+    let cfi = "epubcfi(/6/4!/4/2/1:0)";
+    let saved = upsert_progress(&pool, user, &cfi_update(&uuid, cfi, 1_000))
+        .await
+        .unwrap();
+    let derived = derive_epub_percent(&pool, user, &uuid, cfi, saved.client_updated_at)
+        .await
+        .unwrap();
+    assert!(derived);
+    let row = get_progress(&pool, user, &uuid, ProgressFormat::Epub)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.progress_percent, Some(50));
+    assert_eq!(row.client_updated_at, saved.client_updated_at);
+    assert_eq!(row.updated_at, saved.updated_at);
+}

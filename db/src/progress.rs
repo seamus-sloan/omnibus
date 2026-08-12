@@ -269,15 +269,31 @@ pub async fn derive_epub_percent(
     let Some(book_id) = crate::resolve_book_id_by_uuid(pool, book_uuid).await? else {
         return Ok(false);
     };
-    let Some(source) = crate::book_file_path(pool, book_id, "EPUB").await? else {
+    let Some((file_id, source)) = crate::book_file_with_id(pool, book_id, "EPUB").await? else {
         return Ok(false);
     };
+    // Stored spine stats (migration 0071) reduce the derivation to one
+    // spine-document walk plus arithmetic; a book the backfill hasn't
+    // reached yet falls back to the full-book walk. Both paths share the
+    // same normalization and floor semantics, so they cannot disagree.
+    let stats = crate::epub_structure::get_spine_stats(pool, file_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("read spine stats for file {file_id}: {e}"))?;
     let cfi = cfi.to_owned();
-    let derived =
+    let percent = if stats.is_empty() {
         tokio::task::spawn_blocking(move || crate::kobo_position::cfi_to_span(None, &source, &cfi))
             .await
-            .context("percent derivation task panicked")??;
-    let Some(percent) = derived.percent else {
+            .context("percent derivation task panicked")??
+            .percent
+    } else {
+        tokio::task::spawn_blocking(move || crate::kobo_position::cfi_spine_offset(&source, &cfi))
+            .await
+            .context("percent derivation task panicked")??
+            .and_then(|(spine_index, offset)| {
+                crate::epub_structure::percent_at(&stats, spine_index as i64, offset)
+            })
+    };
+    let Some(percent) = percent else {
         return Ok(false);
     };
     match attach_derived_percent(

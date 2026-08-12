@@ -438,6 +438,35 @@ pub async fn book_file_path(
     }))
 }
 
+/// [`book_file_path`] plus the `book_files.id` the path came from, for
+/// callers that key derived data (e.g. `epub_spine_stats`) on the file row.
+/// Same lowest-`ordinal` tie-break; `Ok(None)` when absent.
+pub async fn book_file_with_id(
+    pool: &SqlitePool,
+    id: i64,
+    format: &str,
+) -> Result<Option<(i64, std::path::PathBuf)>, super::BooksError> {
+    let row = sqlx::query_as::<_, (i64, String, String, String, String)>(
+        "SELECT bf.id, COALESCE(bf.library_path, l.path), COALESCE(bf.path, b.path), \
+                bf.filename, bf.format \
+         FROM books b \
+         JOIN scan_roots l ON l.id = b.library_id \
+         JOIN book_files bf ON bf.book_id = b.id \
+         WHERE b.id = ? AND bf.format = ? COLLATE NOCASE \
+         ORDER BY bf.ordinal LIMIT 1",
+    )
+    .bind(id)
+    .bind(format)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(file_id, lib, dir, stem, fmt)| {
+        let path = std::path::Path::new(&lib)
+            .join(&dir)
+            .join(format!("{stem}.{}", fmt.to_lowercase()));
+        (file_id, path)
+    }))
+}
+
 /// Resolve the scan-root-relative directory of a book's file for the given
 /// format (e.g. "EPUB"), as stored verbatim in `book_files.path` /
 /// `books.path`. Used where a caller must not echo the server's absolute
