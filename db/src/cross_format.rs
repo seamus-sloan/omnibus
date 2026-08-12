@@ -22,6 +22,8 @@ mod tests;
 pub enum CrossFormatError {
     #[error("book not found")]
     BookNotFound,
+    #[error("audio files changed since the alignment loaded")]
+    AudioSetMismatch,
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
 }
@@ -494,20 +496,18 @@ pub async fn alignment_view(
         None => None,
     };
 
-    let mut audio = Vec::new();
-    for f in audio_files(pool, book_id).await? {
-        let chapter_starts = crate::hls::get_chapters(pool, f.book_file_id)
-            .await?
-            .into_iter()
-            .map(|c| c.start_seconds)
-            .collect();
-        audio.push(AlignmentAudioFile {
+    let files = audio_files(pool, book_id).await?;
+    let ids: Vec<i64> = files.iter().map(|f| f.book_file_id).collect();
+    let mut starts_by_file = bulk_chapter_starts(pool, &ids).await?;
+    let audio = files
+        .into_iter()
+        .map(|f| AlignmentAudioFile {
             book_file_id: f.book_file_id,
-            label: f.scan_key.clone(),
+            label: f.scan_key,
             duration_seconds: f.duration_seconds,
-            chapter_starts,
-        });
-    }
+            chapter_starts: starts_by_file.remove(&f.book_file_id).unwrap_or_default(),
+        })
+        .collect();
 
     let reading = progress::get_progress(pool, user_id, &book_uuid, ProgressFormat::Epub)
         .await?
@@ -535,11 +535,37 @@ pub async fn alignment_view(
     })
 }
 
+/// Chapter start offsets for a set of audio files in one query (the
+/// modal's lane ticks), grouped in memory — one round trip instead of
+/// one per file. Chunked under SQLite's bind cap.
+async fn bulk_chapter_starts(
+    pool: &SqlitePool,
+    book_file_ids: &[i64],
+) -> Result<std::collections::HashMap<i64, Vec<f64>>, sqlx::Error> {
+    let mut map: std::collections::HashMap<i64, Vec<f64>> = std::collections::HashMap::new();
+    for chunk in book_file_ids.chunks(500) {
+        let placeholders = vec!["?"; chunk.len()].join(", ");
+        let sql = format!(
+            "SELECT book_file_id, start_seconds FROM file_chapters
+             WHERE book_file_id IN ({placeholders})
+             ORDER BY book_file_id, start_seconds"
+        );
+        let mut q = sqlx::query_as::<_, (i64, f64)>(&sql);
+        for id in chunk {
+            q = q.bind(id);
+        }
+        for (file_id, start) in q.fetch_all(pool).await? {
+            map.entry(file_id).or_default().push(start);
+        }
+    }
+    Ok(map)
+}
+
 /// Persist a re-ordering of the book's audio files. `order` must name
-/// exactly the book's current audio file set — anything else refuses,
-/// so a stale modal can't scramble ordinals after a re-index. Two-phase
-/// ordinal write because `UNIQUE(book_id, format, ordinal)` is enforced
-/// per row.
+/// exactly the book's current audio file set — anything else refuses with
+/// [`CrossFormatError::AudioSetMismatch`], so a stale modal can't scramble
+/// ordinals after a re-index. Two-phase ordinal write because
+/// `UNIQUE(book_id, format, ordinal)` is enforced per row.
 pub async fn set_audio_order(
     pool: &SqlitePool,
     book_uuid: &str,
@@ -558,7 +584,7 @@ pub async fn set_audio_order(
         .collect();
     let proposed: std::collections::HashSet<i64> = order.iter().copied().collect();
     if proposed.len() != order.len() || proposed != current {
-        return Err(CrossFormatError::BookNotFound);
+        return Err(CrossFormatError::AudioSetMismatch);
     }
     let mut tx = pool.begin().await?;
     for (i, id) in order.iter().enumerate() {

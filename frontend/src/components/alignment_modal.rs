@@ -13,9 +13,10 @@ use omnibus_shared::{
 use crate::components::confirm_modal::ConfirmModal;
 use crate::data;
 
-/// `"6h 31m"` / `"41m"` for lane labels and the mapped preview.
+/// `"6h 31m"` / `"41m"` for lane labels and the mapped preview. Floor
+/// minutes — a duration label must never claim more time than exists.
 pub(crate) fn fmt_hm(seconds: f64) -> String {
-    let mins = (seconds.max(0.0) / 60.0).round() as i64;
+    let mins = (seconds.max(0.0) / 60.0).floor() as i64;
     let (h, m) = (mins / 60, mins % 60);
     if h > 0 {
         format!("{h}h {m:02}m")
@@ -358,6 +359,7 @@ fn render_choice(
                 button {
                     class: if seq { "al-choice-card is-picked" } else { "al-choice-card" },
                     "data-testid": "alignment-mode-sequence",
+                    aria_pressed: seq,
                     onclick: move |_| mode.set(CrossFormatLinkMode::Sequence),
                     strong { "One book, in sequence" }
                     span { "The files play end to end as a single audiobook." }
@@ -365,6 +367,7 @@ fn render_choice(
                 button {
                     class: if !seq { "al-choice-card is-picked" } else { "al-choice-card" },
                     "data-testid": "alignment-mode-narrations",
+                    aria_pressed: !seq,
                     onclick: move |_| mode.set(CrossFormatLinkMode::Narrations),
                     strong { "Different narrations of the same book" }
                     span { "Each file is the complete book — pick a primary to align." }
@@ -408,6 +411,7 @@ fn render_choice(
                                 button {
                                     class: radio_class(primary() == Some(id)),
                                     "data-testid": "alignment-primary-{id}",
+                                    aria_pressed: primary() == Some(id),
                                     aria_label: "Set as primary narration",
                                     onclick: move |_| primary.set(Some(id)),
                                 }
@@ -427,10 +431,12 @@ mod tests {
     use super::fmt_hm;
 
     #[test]
-    fn fmt_hm_renders_hours_and_bare_minutes() {
+    fn fmt_hm_floors_and_renders_hours_and_bare_minutes() {
         assert_eq!(fmt_hm(23_460.0), "6h 31m");
         assert_eq!(fmt_hm(2_460.0), "41m");
         assert_eq!(fmt_hm(0.0), "0m");
         assert_eq!(fmt_hm(-5.0), "0m");
+        // 59:59 must not over-report as an hour.
+        assert_eq!(fmt_hm(3_599.0), "59m");
     }
 }

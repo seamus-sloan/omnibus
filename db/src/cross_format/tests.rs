@@ -492,13 +492,16 @@ async fn set_audio_order_persists_and_refuses_a_mismatched_set() {
         vec![audio[1], audio[0]]
     );
 
-    // Anything that isn't exactly the current set refuses: missing file,
-    // foreign id, duplicate.
-    assert!(set_audio_order(&pool, &uuid, &[audio[0]]).await.is_err());
-    assert!(set_audio_order(&pool, &uuid, &[audio[0], 999_999])
-        .await
-        .is_err());
-    assert!(set_audio_order(&pool, &uuid, &[audio[0], audio[0]])
-        .await
-        .is_err());
+    // Anything that isn't exactly the current set refuses with the
+    // dedicated mismatch variant: missing file, foreign id, duplicate.
+    for bad in [
+        vec![audio[0]],
+        vec![audio[0], 999_999],
+        vec![audio[0], audio[0]],
+    ] {
+        assert!(matches!(
+            set_audio_order(&pool, &uuid, &bad).await.unwrap_err(),
+            CrossFormatError::AudioSetMismatch
+        ));
+    }
 }

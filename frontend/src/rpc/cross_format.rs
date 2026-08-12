@@ -21,6 +21,9 @@ pub async fn rpc_get_alignment(uuid: String) -> Result<AlignmentView> {
         Err(db::cross_format::CrossFormatError::BookNotFound) => {
             Err(ServerFnError::new("book not found").into())
         }
+        Err(e @ db::cross_format::CrossFormatError::AudioSetMismatch) => {
+            Err(ServerFnError::new(e.to_string()).into())
+        }
         Err(db::cross_format::CrossFormatError::Sqlx(e)) => {
             Err(internal_rpc_error("get alignment", e).into())
         }
@@ -44,10 +47,10 @@ pub async fn rpc_confirm_cross_format_link(update: ConfirmCrossFormatLink) -> Re
         match db::cross_format::set_audio_order(&pool.0, &update.book_uuid, order).await {
             Ok(()) => {}
             Err(db::cross_format::CrossFormatError::BookNotFound) => {
-                return Err(ServerFnError::new(
-                    "audio files changed since the alignment loaded — reopen and retry",
-                )
-                .into());
+                return Err(ServerFnError::new("book not found").into());
+            }
+            Err(e @ db::cross_format::CrossFormatError::AudioSetMismatch) => {
+                return Err(ServerFnError::new(format!("{e} — reopen and retry")).into());
             }
             Err(db::cross_format::CrossFormatError::Sqlx(e)) => {
                 return Err(internal_rpc_error("set audio order", e).into());
@@ -67,6 +70,9 @@ pub async fn rpc_confirm_cross_format_link(update: ConfirmCrossFormatLink) -> Re
         Err(db::cross_format::CrossFormatError::BookNotFound) => {
             Err(ServerFnError::new("book not found").into())
         }
+        Err(e @ db::cross_format::CrossFormatError::AudioSetMismatch) => {
+            Err(ServerFnError::new(e.to_string()).into())
+        }
         Err(db::cross_format::CrossFormatError::Sqlx(e)) => {
             Err(internal_rpc_error("confirm cross-format link", e).into())
         }
@@ -80,6 +86,9 @@ pub async fn rpc_unlink_cross_format(uuid: String) -> Result<bool> {
         Ok(existed) => Ok(existed),
         Err(db::cross_format::CrossFormatError::BookNotFound) => {
             Err(ServerFnError::new("book not found").into())
+        }
+        Err(e @ db::cross_format::CrossFormatError::AudioSetMismatch) => {
+            Err(ServerFnError::new(e.to_string()).into())
         }
         Err(db::cross_format::CrossFormatError::Sqlx(e)) => {
             Err(internal_rpc_error("unlink cross-format", e).into())

@@ -22,6 +22,7 @@ pub(super) fn BdSyncPanel(
     // Outer None = state unknown (SSR / first paint); inner Option is the
     // fetched link.
     let mut link = use_signal(|| None::<Option<AlignmentLink>>);
+    let mut fetch_failed = use_signal(|| false);
     let modal_open = use_signal(|| false);
     let mut epoch = use_signal(|| 0u32);
 
@@ -31,8 +32,15 @@ pub(super) fn BdSyncPanel(
         let _ = epoch();
         let uuid = fetch_uuid.clone();
         spawn(async move {
-            if let Ok(v) = data::get_alignment("", &uuid).await {
-                link.set(Some(v.link));
+            match data::get_alignment("", &uuid).await {
+                Ok(v) => {
+                    fetch_failed.set(false);
+                    link.set(Some(v.link));
+                }
+                // Keep any previously-fetched state; only flag the failure
+                // when there is nothing better to show, so the row never
+                // vanishes without a way back in (the modal is the retry).
+                Err(_) => fetch_failed.set(true),
             }
         });
     });
@@ -52,6 +60,19 @@ pub(super) fn BdSyncPanel(
     rsx! {
         section { class: "bd-sync-panel", "data-testid": "sync-link-row",
             match link() {
+                None if fetch_failed() => rsx! {
+                    div { class: "al-entry al-entry-unlinked", role: "status",
+                        span { class: "al-entry-copy",
+                            "Couldn't load the sync status."
+                        }
+                        button {
+                            class: "btn sm",
+                            "data-testid": "sync-link-retry",
+                            onclick: move |_| epoch.set(epoch() + 1),
+                            "Retry"
+                        }
+                    }
+                },
                 None => rsx! {},
                 Some(None) => rsx! {
                     div { class: "al-entry al-entry-unlinked",

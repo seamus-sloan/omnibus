@@ -65,7 +65,8 @@ async function fetchDualFormatUuid(
       { timeout: 45_000 },
     )
     .toBe(true);
-  return uuid as unknown as string;
+  // The poll above only succeeds once `uuid` is non-null.
+  return uuid!;
 }
 
 test("renders the sync entry row for a dual-format book", async ({
