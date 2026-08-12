@@ -9277,6 +9277,14 @@ html {
 .al-entry-meta { font-size: 10.5px; opacity: 0.6; }
 .al-entry-chevron { opacity: 0.5; }
 
+.al-matched {
+  font-size: 12.5px;
+  border: 1px solid rgba(72, 160, 100, 0.45);
+  background: rgba(72, 160, 100, 0.08);
+  border-radius: 8px;
+  padding: 9px 12px;
+  margin: 14px 0 0;
+}
 /* ── Cross-format resume prompts (player card + reader banner) ──────── */
 .lp-sync-prompt {
   position: absolute;

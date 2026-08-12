@@ -142,7 +142,12 @@ pub fn AlignmentModal(uuid: String, open: Signal<bool>, on_changed: EventHandler
                 if multi {
                     {render_choice(v.audio_files.clone(), mode, primary, order)}
                 }
-                if v.ebook.is_none() {
+                if let Some(m) = v.anchor_match {
+                    p { class: "al-matched", role: "note", "data-testid": "alignment-match",
+                        "\u{2713} {m.matched} of {m.ebook_chapters} chapters matched — "
+                        "jumps land chapter-accurately."
+                    }
+                } else {
                     p { class: "al-lowconf", role: "note", "data-testid": "alignment-lowconf",
                         "No chapter anchors yet — this mapping is a straight percent-for-percent "
                         "estimate, so jumps land close, not exact."
