@@ -25,6 +25,8 @@ pub enum CrossFormatLinkMode {
 #[serde(rename_all = "snake_case")]
 pub enum MappingConfidence {
     Linear,
+    /// Piecewise interpolation through matched chapter anchors.
+    ChapterAnchored,
 }
 
 /// Why (or whether) the endpoint has a candidate to offer.
@@ -91,6 +93,10 @@ pub struct CrossFormatCandidate {
 pub struct AlignmentView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<AlignmentLink>,
+    /// Chapter-anchor match statistics for a linked, non-stale book —
+    /// `None` when no trustworthy anchoring exists (the linear notice).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_match: Option<AlignmentMatch>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ebook: Option<AlignmentEbook>,
     pub audio_files: Vec<AlignmentAudioFile>,
@@ -98,6 +104,15 @@ pub struct AlignmentView {
     pub reading: Option<AlignmentPosition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listening: Option<AlignmentAudioPosition>,
+}
+
+/// How well the two chapter structures matched, for the modal's readout
+/// ("12 of 14 chapter names matched").
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct AlignmentMatch {
+    pub matched: i64,
+    pub ebook_chapters: i64,
+    pub confidence: MappingConfidence,
 }
 
 /// The stored link as the modal needs it, plus whether the audio set has
