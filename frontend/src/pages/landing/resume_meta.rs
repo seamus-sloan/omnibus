@@ -87,6 +87,8 @@ mod tests {
                 client_updated_at: 0,
             },
             book: EbookMetadata::default(),
+            linked: false,
+            cross_format: None,
             total_duration_seconds: total,
             chapter_number: Some(3),
             chapter_count: Some(10),

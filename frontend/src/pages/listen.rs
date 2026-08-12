@@ -44,6 +44,7 @@ mod sleep_panel;
 mod speed_panel;
 #[cfg(not(feature = "mobile"))]
 mod stage;
+pub(crate) mod sync_prompt;
 
 #[cfg(not(feature = "mobile"))]
 use ready_player::{PlaybackSignals, ReadyPlayer};

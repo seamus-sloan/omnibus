@@ -752,5 +752,70 @@ async fn alignment_view_reports_the_anchor_match_even_before_linking() {
     assert_eq!(
         m.confidence,
         omnibus_shared::cross_format::MappingConfidence::ChapterAnchored
+#[tokio::test]
+async fn resume_points_collapse_a_linked_book_to_one_card_with_the_counterpart() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, audio) = seed_dual_book(&pool, &[600.0]).await;
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 50, 2_000))
+        .await
+        .unwrap();
+    progress::upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 60.0, Some(audio[0]), 1_000),
+    )
+    .await
+    .unwrap();
+
+    // Unlinked: the book competes with itself — two cards, neither linked.
+    let before = progress::resume_points(&pool, user, 5).await.unwrap();
+    assert_eq!(before.len(), 2);
+    assert!(before.iter().all(|p| !p.linked && p.cross_format.is_none()));
+
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    let after = progress::resume_points(&pool, user, 5).await.unwrap();
+    assert_eq!(after.len(), 1, "linked books collapse to the newest card");
+    let card = &after[0];
+    assert_eq!(card.record.format, ProgressFormat::Epub);
+    assert!(card.linked);
+    let counterpart = card.cross_format.as_ref().unwrap();
+    assert_eq!(counterpart.target, ProgressFormat::Audio);
+    assert_eq!(counterpart.audio_position_seconds, Some(300.0));
+    assert_eq!(counterpart.book_file_id, Some(audio[0]));
+}
+
+#[tokio::test]
+async fn resume_points_collapse_marks_a_stale_link_without_a_counterpart() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, audio) = seed_dual_book(&pool, &[600.0]).await;
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 50, 2_000))
+        .await
+        .unwrap();
+    progress::upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 60.0, Some(audio[0]), 1_000),
+    )
+    .await
+    .unwrap();
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE book_files SET mtime_epoch = 9999 WHERE id = ?")
+        .bind(audio[0])
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let points = progress::resume_points(&pool, user, 5).await.unwrap();
+    assert_eq!(points.len(), 1, "a stale link still collapses");
+    assert!(points[0].linked);
+    assert!(
+        points[0].cross_format.is_none(),
+        "mapping is paused while stale — no counterpart affordance"
     );
 }
