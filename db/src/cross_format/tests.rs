@@ -339,3 +339,58 @@ async fn resume_candidate_pauses_on_a_stale_link_and_rejects_unknown_books() {
         .unwrap_err();
     assert!(matches!(err, CrossFormatError::BookNotFound));
 }
+
+#[test]
+fn map_audio_to_percent_refuses_a_zero_length_timeline() {
+    let tl = AudioTimeline {
+        files: vec![TimelineFile {
+            book_file_id: 1,
+            start_seconds: 0.0,
+            duration_seconds: 0.0,
+        }],
+        total_seconds: 0.0,
+    };
+    assert_eq!(map_audio_to_percent(&tl, 1, 0.0), None);
+}
+
+#[tokio::test]
+async fn resume_candidate_refuses_a_fileless_audio_row_on_a_multi_file_timeline() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, _) = seed_dual_book(&pool, &[600.0, 300.0]).await;
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    // An audio position with no recorded file: ambiguous across two files.
+    progress::upsert_progress(&pool, user, &audio_update(&uuid, 50.0, None, 3_000))
+        .await
+        .unwrap();
+
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Epub)
+        .await
+        .unwrap();
+    assert_eq!(
+        r.state,
+        CrossFormatResumeState::NothingNewer,
+        "an ambiguous source must refuse, not guess the first file"
+    );
+}
+
+#[tokio::test]
+async fn resume_candidate_accepts_a_fileless_audio_row_on_a_single_file_timeline() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, _) = seed_dual_book(&pool, &[600.0]).await;
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    progress::upsert_progress(&pool, user, &audio_update(&uuid, 300.0, None, 3_000))
+        .await
+        .unwrap();
+
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Epub)
+        .await
+        .unwrap();
+    assert_eq!(r.state, CrossFormatResumeState::Candidate);
+    assert_eq!(r.candidate.unwrap().percent, Some(50));
+}

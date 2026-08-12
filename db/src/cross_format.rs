@@ -65,11 +65,13 @@ fn mode_str(mode: CrossFormatLinkMode) -> &'static str {
 }
 
 fn parse_mode(raw: &str) -> CrossFormatLinkMode {
-    // The CHECK constraint rules out anything else; default to the
-    // conservative narrations-less reading rather than panic.
+    // The CHECK constraint rules out anything else; an unknown string
+    // defaults to narrations, the maximally conservative reading — with
+    // no primary recorded it refuses to map at all, rather than
+    // concatenating files the user never declared sequential.
     match raw {
-        "narrations" => CrossFormatLinkMode::Narrations,
-        _ => CrossFormatLinkMode::Sequence,
+        "sequence" => CrossFormatLinkMode::Sequence,
+        _ => CrossFormatLinkMode::Narrations,
     }
 }
 
@@ -321,7 +323,7 @@ pub fn map_audio_to_percent(
         .iter()
         .find(|f| f.book_file_id == book_file_id)?;
     if timeline.total_seconds <= 0.0 {
-        return Some(0);
+        return None;
     }
     let global = f.start_seconds + seconds_within.clamp(0.0, f.duration_seconds);
     Some(((100.0 * global / timeline.total_seconds).floor() as i64).clamp(0, 100))
@@ -390,11 +392,12 @@ pub async fn resume_candidate(
             })
         }),
         ProgressFormat::Epub => source.audio_position_seconds.and_then(|seconds| {
-            // The row's own file when recorded, else the timeline's first —
-            // mirroring how `audio_totals` resolves a resume point.
+            // The row's own file when recorded. A file-less row is only
+            // unambiguous on a single-file timeline — guessing the first
+            // of several would map another file's offset, so refuse.
             let file_id = source
                 .book_file_id
-                .or_else(|| timeline.files.first().map(|f| f.book_file_id))?;
+                .or_else(|| (timeline.files.len() == 1).then(|| timeline.files[0].book_file_id))?;
             map_audio_to_percent(&timeline, file_id, seconds).map(|pct| CrossFormatCandidate {
                 target,
                 source_format,

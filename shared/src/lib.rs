@@ -99,6 +99,7 @@ pub use audiobook::*;
 pub use auth::*;
 pub use bookmark::*;
 pub use cleanup::*;
+pub use cross_format::*;
 pub use deletion::*;
 pub use discovery::*;
 pub use ebook::*;
