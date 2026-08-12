@@ -70,6 +70,9 @@ struct ReaderView: View {
     /// A further position another device reached, waiting on the reader to
     /// accept it. Never applied on its own.
     @State private var syncOffer: String?
+    /// The cross-format candidate ("you listened further"), offered the
+    /// same way — never applied on its own.
+    @State private var crossOffer: CrossFormatCandidate?
     @State private var didConfigure = false
     /// When the current stretch of reading began, or `nil` while the app is in
     /// the background. Cleared and restarted across a backgrounding rather than
@@ -130,6 +133,17 @@ struct ReaderView: View {
                         dismissSyncOffer()
                     },
                     onDismiss: dismissSyncOffer
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if let cross = crossOffer, let pct = cross.percent {
+                SyncOfferBanner(
+                    title: "Listened further in the audiobook",
+                    detail: "Your listening maps to about \(pct)% through.",
+                    onGo: {
+                        controller.seek(toFraction: Double(pct) / 100.0)
+                        dismissCrossOffer(cross)
+                    },
+                    onDismiss: { dismissCrossOffer(cross) }
                 )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -724,7 +738,39 @@ struct ReaderView: View {
                 guard let settled = await remote.value, settled != startCFI else { return }
                 withAnimation(Motion.settle) { syncOffer = settled }
             }
+            group.addTask { @MainActor in
+                // Cross-format: reading resumes where listening got to.
+                // Best-effort network read (rule 08 — never queued); the
+                // same-format offer wins the banner slot when both fire.
+                guard let resume = try? await UserDataService.crossFormatResume(
+                    uuid: book.uuid,
+                    target: .epub
+                ),
+                    resume.state == .candidate,
+                    let candidate = resume.candidate,
+                    candidate.percent != nil
+                else { return }
+                let seen = await SyncPromptStore.dismissedClock(uuid: book.uuid, target: .epub)
+                guard SyncPromptStore.shouldOffer(
+                    sourceClock: candidate.sourceClientUpdatedAt,
+                    dismissed: seen
+                ) else { return }
+                withAnimation(Motion.settle) { crossOffer = candidate }
+            }
         }
+    }
+
+    /// Declining (or taking) the cross-format offer stores the source clock
+    /// so it re-arms only after the listening position advances.
+    private func dismissCrossOffer(_ candidate: CrossFormatCandidate) {
+        Task {
+            await SyncPromptStore.storeDismissedClock(
+                candidate.sourceClientUpdatedAt,
+                uuid: book.uuid,
+                target: .epub
+            )
+        }
+        withAnimation(Motion.settle) { crossOffer = nil }
     }
 
     /// Record where the reader is. The write into the replica and the outbox

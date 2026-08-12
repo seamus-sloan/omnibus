@@ -168,6 +168,15 @@ fn progress_routes() -> Router<AppState> {
             "/api/books/{uuid}/cross-format-resume",
             get(cross_format::get_cross_format_resume),
         )
+        .route(
+            "/api/books/{uuid}/alignment",
+            get(cross_format::get_alignment),
+        )
+        .route(
+            "/api/books/{uuid}/cross-format-link",
+            post(cross_format::post_cross_format_link)
+                .delete(cross_format::delete_cross_format_link),
+        )
 }
 
 /// F2.4b highlight annotations — mobile-facing REST. Web hits the analogous
