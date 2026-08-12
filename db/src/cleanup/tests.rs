@@ -378,6 +378,37 @@ async fn detect_authors_collapses_last_first_swap_into_one_tier0_merge_suggestio
 }
 
 #[tokio::test]
+async fn detect_authors_sets_secondary_name_none_for_a_three_way_merge_group() {
+    // #1855: a merge group of 3+ has no single "other" name, so
+    // secondary_name must be None even though the two-way case above sets
+    // it to the sole source name.
+    let pool = new_pool().await;
+    let canonical = insert_author(&pool, "Brandon Sanderson", None).await;
+    let dup_a = insert_author(&pool, "Sanderson, Brandon", None).await;
+    // `authors.name` is UNIQUE COLLATE NOCASE, so the third duplicate must
+    // differ from the other two by more than case — trailing punctuation
+    // folds away in `normalize_author` without changing the DB-level name.
+    let dup_b = insert_author(&pool, "Brandon Sanderson!!!", None).await;
+
+    let suggestions = detect_authors(&pool).await.unwrap();
+    let merges: Vec<_> = suggestions
+        .iter()
+        .filter(|s| s.action == CleanupAction::Merge)
+        .collect();
+    assert_eq!(merges.len(), 1);
+    let s = merges[0];
+    assert_eq!(s.secondary_name, None);
+    let (source_ids, source_names, canonical_id, _) = merge_payload(s);
+    // All three rows have zero linked books, so the tie breaks toward the
+    // lowest id — the first one inserted.
+    assert_eq!(canonical_id, canonical);
+    assert_eq!(source_ids.len(), 2);
+    assert!(source_ids.contains(&dup_a));
+    assert!(source_ids.contains(&dup_b));
+    assert_eq!(source_names.len(), 2);
+}
+
+#[tokio::test]
 async fn detect_authors_surfaces_tier1_fuzzy_merge_with_visible_score_at_or_above_085() {
     // AC2: token-set Jaccard >= 0.85 surfaces with a visible score even
     // though the two names never share a Tier-0 normalized key.
