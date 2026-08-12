@@ -123,7 +123,8 @@ pub(super) async fn anchor_map(
             .collect();
     }
 
-    let matched = anchors.len();
+    // Count after the monotonic filter so the modal's "X of Y matched"
+    // reflects the anchors the interpolation actually uses.
     let anchors = monotonic(anchors);
     if anchors.len() < MIN_ANCHORS
         || (anchors.len() as f64) < MIN_MATCH_FRACTION * text.len() as f64
@@ -131,8 +132,8 @@ pub(super) async fn anchor_map(
         return Ok(None);
     }
     Ok(Some(AnchorMap {
+        matched: anchors.len() as i64,
         anchors,
-        matched: matched as i64,
         ebook_chapters: text.len() as i64,
     }))
 }
