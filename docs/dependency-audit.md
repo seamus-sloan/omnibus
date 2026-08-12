@@ -37,6 +37,16 @@ this list.
 
 - `thiserror` in `db/Cargo.toml` and `frontend/Cargo.toml` aligned to `thiserror.workspace = true` (workspace declares `thiserror = "2"`). Previously both crates pinned `thiserror = "1"` independently. The workspace now acts as a single source of truth — new crates must use `.workspace = true`.
 
+## Accepted advisories
+
+- `lru 0.16.4` — RUSTSEC-2026-0253 (unsound: use-after-free in
+  `LruCache::pop()` under a panicking `Drop`). Reaches the production graph
+  via the git-pinned `dioxus-server` → `dioxus` (see #522 for the pin
+  itself); not independently bumpable. Accepted — exploiting it requires
+  `catch_unwind` plus a panicking `Drop` on a cached key during a pop, which
+  `dioxus-server`'s internal use does not trigger. `deny.toml` ignores it
+  with a matching comment. Revisit when Dioxus bumps `lru` to >= 0.18.2.
+
 ## Yanked crates
 
 - `spin 0.9.8` — flagged by `cargo audit` as yanked from crates.io (no

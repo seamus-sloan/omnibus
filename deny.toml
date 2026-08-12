@@ -70,6 +70,17 @@ ignore = [
     # to the Dioxus pin. See Cargo.lock.
     { id = "RUSTSEC-2024-0429", reason = "glib 0.18.5 VariantStrIter unsoundness — mobile/desktop only via wry→gtk→glib (patched in glib 0.20, forced by upstream gtk-rs 0.18 pin under wry); not reachable in the server build" },
     { id = "RUSTSEC-2026-0097", reason = "rand 0.7.3 unsoundness — aliased mutable reference when a custom `log` logger calls rand::rng()/thread_rng() and ThreadRng reseeds mid-log; build-dependency only via phf_generator 0.8 (ammonia/html5ever codegen under wry), never links into any runtime binary and that logger-reseed path is not exercised in a build script" },
+
+    # ---- Unsound (informational) advisory reachable in the DEFAULT (server)
+    # build — unlike the two mobile/desktop-confined entries just above, `lru`
+    # is pulled in transitively via the git-pinned `dioxus-server` -> `dioxus`
+    # (see #522 for the pin itself; `cargo tree -i lru` shows
+    # `dioxus-server -> dioxus -> omnibus`/`omnibus-frontend`). Triggering the
+    # unsoundness requires `catch_unwind` plus a panicking `Drop` on a cached
+    # key during `LruCache::pop()`, which `dioxus-server`'s internal use does
+    # not exercise. Triaged 2026-08-12 (issue #1859). Revisit when Dioxus
+    # bumps its `lru` dependency to >= 0.18.2.
+    { id = "RUSTSEC-2026-0253", reason = "lru 0.16.4 LruCache::pop() use-after-free under a panicking Drop — reachable via the git-pinned dioxus-server -> dioxus dependency (see #522 for the pin); requires catch_unwind plus a panicking key Drop during a cache pop, which dioxus-server's internal use does not trigger" },
 ]
 
 # NB: RUSTSEC-2026-0221 (event-listener unsoundness, reachable via sqlx-core)
