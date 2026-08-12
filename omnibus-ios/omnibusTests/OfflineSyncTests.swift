@@ -327,6 +327,155 @@ struct ProgressClockTests {
     }
 }
 
+// MARK: - Audiobook position recovery (#1860)
+//
+// A listener who reaches chapter 19 offline and reopens to chapter 13 is
+// this bug: the newest position lived only in the replica plus one queued
+// `progress:` op, and losing that op (a terminal rejection, six retryable
+// failures, or an undecodable drained response) let a stale server row win,
+// which the player then re-saved with a fresh clock — permanently. These pin
+// the four guards that close the gap.
+
+@Suite("Restoring the newer of the replica and a queued position")
+struct PositionRestoreTests {
+    private func record(_ seconds: Double, clock: Int64) -> ProgressRecord {
+        ProgressRecord(
+            bookUUID: "book-1", format: .audio, epubCFI: nil,
+            audioPositionSeconds: seconds, updatedAt: clock, clientUpdatedAt: clock
+        )
+    }
+
+    @Test("AC1: a queued op ahead of the replica wins")
+    func queuedOpAheadOfReplicaWins() {
+        // The incident this reproduces: chapter 19 sits only in the queued
+        // op, chapter 13 is what a lost op left behind in the replica.
+        let replica = record(13 * 60, clock: 1_000)
+        let queued = record(19 * 60, clock: 2_000)
+        #expect(PositionSync.newest(replica, queued)?.audioPositionSeconds == 19 * 60)
+    }
+
+    @Test("a replica ahead of a stale queued op wins")
+    func replicaAheadOfQueuedOpWins() {
+        // The other direction matters too: an op queued before the replica
+        // last moved must not drag a restore backwards.
+        let replica = record(19 * 60, clock: 2_000)
+        let queued = record(13 * 60, clock: 1_000)
+        #expect(PositionSync.newest(replica, queued)?.audioPositionSeconds == 19 * 60)
+    }
+
+    @Test("a tie keeps the first argument")
+    func tieKeepsTheFirstArgument() {
+        let replica = record(19 * 60, clock: 2_000)
+        let queued = record(19 * 60, clock: 2_000)
+        #expect(PositionSync.newest(replica, queued)?.audioPositionSeconds == replica.audioPositionSeconds)
+    }
+
+    @Test("nothing queued falls back to the replica, and vice versa")
+    func eitherSideMayBeAbsent() {
+        let replica = record(13 * 60, clock: 1_000)
+        #expect(PositionSync.newest(replica, nil)?.audioPositionSeconds == 13 * 60)
+        #expect(PositionSync.newest(nil, replica)?.audioPositionSeconds == 13 * 60)
+        #expect(PositionSync.newest(nil, nil) == nil)
+    }
+
+    @Test("a queued op decodes into the record it asserts")
+    func queuedOpDecodesIntoItsRecord() {
+        // What `UserDataService.localProgress` actually compares: the
+        // `ProgressUpdate` body a `progress:` op carries, converted with its
+        // own client clock filling both timestamp fields.
+        let update = ProgressUpdate(
+            bookUUID: "book-1", format: .audio, epubCFI: nil,
+            audioPositionSeconds: 19 * 60, clientUpdatedAt: 2_000, bookFileID: 7
+        )
+        let asRecord = update.asRecord
+        #expect(asRecord.bookUUID == "book-1")
+        #expect(asRecord.audioPositionSeconds == 19 * 60)
+        #expect(asRecord.bookFileID == 7)
+        #expect(asRecord.orderingClock == 2_000)
+    }
+}
+
+@Suite("Folding a drained progress response into the replica")
+struct ProgressResponseSupersessionTests {
+    private func record(clock: Int64) -> ProgressRecord {
+        ProgressRecord(
+            bookUUID: "book-1", format: .audio, epubCFI: nil,
+            audioPositionSeconds: 100, updatedAt: clock, clientUpdatedAt: clock
+        )
+    }
+
+    @Test("AC2: a response older than the replica's row is refused")
+    func olderResponseIsRefused() {
+        // The response answers a request this device sent minutes or hours
+        // ago; by the time it drains, a newer local write (or another
+        // device's answer) may already sit in the replica. Adopting the old
+        // answer would revert it.
+        let held = record(clock: 2_000)
+        let response = record(clock: 1_000)
+        #expect(!SyncEngine.responseSupersedesReplica(response, held: held))
+    }
+
+    @Test("a response at least as new as the replica's row is adopted")
+    func newerOrEqualResponseIsAdopted() {
+        let held = record(clock: 1_000)
+        #expect(SyncEngine.responseSupersedesReplica(record(clock: 2_000), held: held))
+        // Equal clocks still adopt: same position, but now carrying the
+        // server's `updated_at`, which a later sync offer is judged against.
+        #expect(SyncEngine.responseSupersedesReplica(record(clock: 1_000), held: held))
+    }
+
+    @Test("nothing held means nothing to be older than")
+    func noHeldRecordAlwaysAdopts() {
+        #expect(SyncEngine.responseSupersedesReplica(record(clock: 1_000), held: nil))
+    }
+}
+
+@Suite("Replay cap exemption for coalesced position kinds")
+struct ReplayCapExemptionTests {
+    @Test("AC3: progress and playback-rate kinds are exempt")
+    func positionKindsAreExempt() {
+        // Idempotent, coalesced to one op each — parking one trades away
+        // hours of listening for queue hygiene it does not need.
+        #expect(SyncEngine.isExemptFromReplayCap(OpKind.progress("book-1", .audio)))
+        #expect(SyncEngine.isExemptFromReplayCap(OpKind.progress("book-1", .epub)))
+        #expect(SyncEngine.isExemptFromReplayCap(OpKind.playbackRate("book-1")))
+    }
+
+    @Test("every other kind still parks at the cap")
+    func nonPositionKindsAreNotExempt() {
+        #expect(!SyncEngine.isExemptFromReplayCap(OpKind.rating("book-1")))
+        #expect(!SyncEngine.isExemptFromReplayCap(OpKind.readStatus("book-1")))
+        #expect(!SyncEngine.isExemptFromReplayCap(OpKind.highlight))
+        #expect(!SyncEngine.isExemptFromReplayCap(OpKind.bookmark))
+        #expect(!SyncEngine.isExemptFromReplayCap(OpKind.journal))
+        #expect(!SyncEngine.isExemptFromReplayCap(OpKind.session))
+        #expect(!SyncEngine.isExemptFromReplayCap(OpKind.shelfMembership))
+    }
+}
+
+@Suite("Close-time position flush")
+struct ClosePositionFlushTests {
+    @Test("AC4: closing before the opening position has settled writes nothing")
+    func unsettledCloseWritesNothing() {
+        // The open-time reconcile window: the player may be sitting at 0, or
+        // a stale resume, and stamping either with a fresh clock can beat —
+        // and coalesce-delete — a genuinely newer position still in flight
+        // from another device.
+        #expect(!AudioPlayer.shouldPersistOnClose(settled: false, finalPosition: 42))
+    }
+
+    @Test("closing at position zero writes nothing, settled or not")
+    func zeroPositionWritesNothing() {
+        #expect(!AudioPlayer.shouldPersistOnClose(settled: true, finalPosition: 0))
+        #expect(!AudioPlayer.shouldPersistOnClose(settled: false, finalPosition: 0))
+    }
+
+    @Test("a settled close with real progress writes")
+    func settledCloseWithProgressWrites() {
+        #expect(AudioPlayer.shouldPersistOnClose(settled: true, finalPosition: 42))
+    }
+}
+
 // MARK: - Audiobook file selection
 
 @Suite("Progress file identity")

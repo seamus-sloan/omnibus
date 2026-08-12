@@ -501,6 +501,24 @@ struct ProgressRecord: Codable, Sendable {
     }
 }
 
+extension ProgressUpdate {
+    /// This write as the record it asserts, for comparing against what the
+    /// replica already holds. The device clock fills both timestamp fields —
+    /// this is the only clock the write carries until the server answers.
+    var asRecord: ProgressRecord {
+        ProgressRecord(
+            bookUUID: bookUUID,
+            format: format,
+            epubCFI: epubCFI,
+            audioPositionSeconds: audioPositionSeconds,
+            progressPercent: progressPercent,
+            updatedAt: clientUpdatedAt,
+            clientUpdatedAt: clientUpdatedAt,
+            bookFileID: bookFileID
+        )
+    }
+}
+
 struct ResumePoint: Codable, Sendable, Identifiable {
     var record: ProgressRecord
     var book: Book

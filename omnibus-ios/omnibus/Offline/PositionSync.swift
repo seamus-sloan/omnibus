@@ -37,6 +37,15 @@ enum PositionSync {
         return newest
     }
 
+    /// The further-along of two records for the same (book, format), by
+    /// `orderingClock`. Ties keep `a` — callers put the value they'd rather
+    /// keep metadata from (usually the replica row) first.
+    static func newest(_ a: ProgressRecord?, _ b: ProgressRecord?) -> ProgressRecord? {
+        guard let a else { return b }
+        guard let b else { return a }
+        return b.orderingClock > a.orderingClock ? b : a
+    }
+
     /// Whether a record actually names a place in the book. The endpoint answers
     /// with a row per `(book, format)`, and a row can exist with the position
     /// field for its format unset — which is not somewhere to send a reader.

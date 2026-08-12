@@ -557,6 +557,16 @@ final class AudioPlayer {
 
     // MARK: - Lifecycle
 
+    /// Whether a close-time flush is safe to write, mirroring the guard
+    /// `persistPosition` applies on every tick: nothing may leave this device
+    /// before the opening position has been reconciled against the server,
+    /// because every write carries a clock newer than anything already
+    /// stored and would beat a genuinely further-along position still in
+    /// flight from another device.
+    nonisolated static func shouldPersistOnClose(settled: Bool, finalPosition: Double) -> Bool {
+        settled && finalPosition > 0
+    }
+
     /// Stop playback and put the player away — what the mini bar's dismiss
     /// means. The position and the session are flushed before the book is
     /// released, since both are keyed on it.
@@ -570,6 +580,13 @@ final class AudioPlayer {
         let closing = book
         let finalPosition = position
         let finalFileID = fileID
+        // Captured before `teardown`, which resets it — matching the same
+        // guard `persistPosition` applies on every tick. Without it, closing
+        // during the open-time reconcile window stamps whatever the player
+        // happened to be sitting at (0, or a stale resume) with a fresh
+        // clock, which can beat — and coalesce-delete — a genuinely newer
+        // position still in flight from another device.
+        let settled = positionSettled
         let pending = takePendingReport()
 
         teardown()
@@ -582,7 +599,7 @@ final class AudioPlayer {
 
         guard let closing else { return }
         Task {
-            if finalPosition > 0 {
+            if Self.shouldPersistOnClose(settled: settled, finalPosition: finalPosition) {
                 await UserDataService.saveProgress(
                     ProgressUpdate(
                         bookUUID: closing.uuid, format: .audio,
