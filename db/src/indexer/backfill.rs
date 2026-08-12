@@ -488,3 +488,85 @@ async fn fetch_thumb_candidates(
     .await?;
     Ok(rows)
 }
+
+/// Every EPUB `book_files` row under `library_path` with no
+/// `epub_spine_stats` yet, carrying the resolved on-disk path — the same
+/// path shape `book_file_path` builds, inlined so one query serves the
+/// whole candidate set with per-file (not per-book lowest-ordinal) paths.
+async fn fetch_epub_structure_candidates(
+    pool: &SqlitePool,
+    library_path: &str,
+) -> anyhow::Result<Vec<(i64, String, PathBuf)>> {
+    let rows: Vec<(i64, String, String, String, String, String)> = sqlx::query_as(
+        "SELECT bf.id, COALESCE(NULLIF(b.title, ''), b.scan_key), \
+                COALESCE(bf.library_path, l.path), COALESCE(bf.path, b.path), \
+                bf.filename, bf.format \
+         FROM book_files bf \
+         JOIN books b ON bf.book_id = b.id \
+         JOIN scan_roots l ON b.library_id = l.id \
+         WHERE l.path = ? \
+           AND bf.format = 'EPUB' COLLATE NOCASE \
+           AND NOT EXISTS (SELECT 1 FROM epub_spine_stats s WHERE s.book_file_id = bf.id) \
+         ORDER BY bf.id",
+    )
+    .bind(library_path)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, title, lib, dir, stem, fmt)| {
+            let path = std::path::Path::new(&lib)
+                .join(&dir)
+                .join(format!("{stem}.{}", fmt.to_lowercase()));
+            (id, title, path)
+        })
+        .collect())
+}
+
+/// Fill `epub_spine_stats` + `ebook_chapters` for every EPUB file that has
+/// none. The NOT EXISTS predicate keys on the stats table, which extraction
+/// always writes for a readable book — so an honestly TOC-less book stores
+/// stats plus zero chapters and is done, while an unreadable file stores
+/// nothing and is retried on the next scan (the `backfill_word_counts`
+/// NULL semantics).
+pub(crate) async fn backfill_epub_structure(
+    pool: &SqlitePool,
+    library_path: &str,
+    mut on_progress: impl FnMut(u32, u32, &str),
+) -> anyhow::Result<()> {
+    let candidates = fetch_epub_structure_candidates(pool, library_path).await?;
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    let total = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
+    tracing::info!(
+        count = total,
+        "backfilling epub structure for existing ebooks"
+    );
+
+    let mut processed = 0u32;
+    for (book_file_id, title, path) in candidates {
+        processed = processed.saturating_add(1);
+        on_progress(processed, total, &title);
+        let structure = tokio::task::spawn_blocking(move || {
+            epub::doc::EpubDoc::new(&path)
+                .ok()
+                .and_then(|mut doc| ebook::toc::extract_structure(&mut doc))
+        })
+        .await
+        .unwrap_or_else(|join_err| {
+            tracing::warn!(
+                book_file_id,
+                %join_err,
+                is_panic = join_err.is_panic(),
+                "epub structure task failed; leaving unextracted"
+            );
+            None
+        });
+        let Some(structure) = structure else { continue };
+        crate::epub_structure::replace_structure(pool, book_file_id, &structure)
+            .await
+            .map_err(|e| anyhow::anyhow!("store epub structure for file {book_file_id}: {e}"))?;
+    }
+    Ok(())
+}

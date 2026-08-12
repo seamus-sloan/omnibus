@@ -17,10 +17,11 @@ mod tests;
 pub use facets::library_facets;
 pub use get::{
     book_display_title, book_display_title_by_uuid, book_file_path, book_file_path_by_id,
-    book_file_paths, book_file_relative_dir, book_last_modified_for, download_validators, get_book,
-    get_book_by_uuid, get_book_files, get_book_files_exec, get_book_uuid_by_scan_key,
-    resolve_book_id_by_uuid, resolve_book_id_by_uuid_exec, resolve_canonical_book_uuid,
-    resolve_canonical_book_uuid_exec, resolve_canonical_book_uuids_bulk_exec,
+    book_file_paths, book_file_relative_dir, book_file_with_id, book_last_modified_for,
+    download_validators, get_book, get_book_by_uuid, get_book_files, get_book_files_exec,
+    get_book_uuid_by_scan_key, resolve_book_id_by_uuid, resolve_book_id_by_uuid_exec,
+    resolve_canonical_book_uuid, resolve_canonical_book_uuid_exec,
+    resolve_canonical_book_uuids_bulk_exec,
 };
 pub use list::{
     collect_paths, count_books, count_books_for_paths, library_from_db, library_from_db_combined,
