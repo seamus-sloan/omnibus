@@ -63,9 +63,27 @@ enum UserDataService {
     ) async -> ProgressRecord? {
         guard let op = await OfflineStore.shared.latestOp(kind: OpKind.progress(uuid, format)),
               let body = op.body,
-              let update = try? JSONDecoder().decode(ProgressUpdate.self, from: body)
+              var update = try? JSONDecoder().decode(ProgressUpdate.self, from: body)
         else { return nil }
+        // `clientUpdatedAt` defaults to `Date()` in `ProgressUpdate`'s own
+        // decoding, so a body queued before the field existed — or any body
+        // that simply omits it — would otherwise decode as "just now" and
+        // make a stale op look newest, which is the exact failure this
+        // restore exists to prevent. `op.createdAt`, the outbox's own enqueue
+        // timestamp, is what the write actually happened on when the field
+        // itself is missing.
+        if !Self.bodyHasClientUpdatedAt(body) {
+            update.clientUpdatedAt = op.createdAt
+        }
         return update.asRecord
+    }
+
+    /// Whether a queued op's raw body carries `client_updated_at`, as opposed
+    /// to `ProgressUpdate`'s decoder silently filling the gap with now.
+    static func bodyHasClientUpdatedAt(_ body: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+        else { return false }
+        return object["client_updated_at"] != nil
     }
 
     static func recentProgress() -> AsyncThrowingStream<CacheRead<[ResumePoint]>, Error> {

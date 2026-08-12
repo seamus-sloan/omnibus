@@ -365,9 +365,14 @@ struct PositionRestoreTests {
 
     @Test("a tie keeps the first argument")
     func tieKeepsTheFirstArgument() {
-        let replica = record(19 * 60, clock: 2_000)
-        let queued = record(19 * 60, clock: 2_000)
-        #expect(PositionSync.newest(replica, queued)?.audioPositionSeconds == replica.audioPositionSeconds)
+        // `bookFileID` is the field that distinguishes the two records here —
+        // `audioPositionSeconds` alone would still match even if the tie-break
+        // picked the wrong side, since both share the same position.
+        var replica = record(19 * 60, clock: 2_000)
+        replica.bookFileID = 1
+        var queued = record(19 * 60, clock: 2_000)
+        queued.bookFileID = 2
+        #expect(PositionSync.newest(replica, queued)?.bookFileID == 1)
     }
 
     @Test("nothing queued falls back to the replica, and vice versa")
@@ -392,6 +397,28 @@ struct PositionRestoreTests {
         #expect(asRecord.audioPositionSeconds == 19 * 60)
         #expect(asRecord.bookFileID == 7)
         #expect(asRecord.orderingClock == 2_000)
+    }
+
+    @Test("a body carrying client_updated_at is recognised as such")
+    func bodyWithClientUpdatedAtIsDetected() {
+        let body = Data(#"{"book_uuid":"b","format":"audio","client_updated_at":2000}"#.utf8)
+        #expect(UserDataService.bodyHasClientUpdatedAt(body))
+    }
+
+    @Test("a body missing client_updated_at is not mistaken for one that has it")
+    func bodyWithoutClientUpdatedAtIsDetected() {
+        // `ProgressUpdate.clientUpdatedAt` defaults to `Date()`, so decoding
+        // this body directly would silently stamp "now" — this is the check
+        // that catches it before the fallback to `op.createdAt` runs (#1874
+        // review).
+        let body = Data(#"{"book_uuid":"b","format":"audio"}"#.utf8)
+        #expect(!UserDataService.bodyHasClientUpdatedAt(body))
+    }
+
+    @Test("an explicit null still counts as the key being present")
+    func explicitNullIsPresent() {
+        let body = Data(#"{"book_uuid":"b","format":"audio","client_updated_at":null}"#.utf8)
+        #expect(UserDataService.bodyHasClientUpdatedAt(body))
     }
 }
 
