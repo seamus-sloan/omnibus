@@ -132,11 +132,15 @@ fn register_window_callbacks(
                 let uuid_for_post = uuid_for_save.clone();
                 let cfi_for_post = cfi.clone();
                 wasm_bindgen_futures::spawn_local(async move {
+                    // `client_updated_at` is the event time the server's
+                    // conditional upsert arbitrates on; without it a write
+                    // degrades to receipt-time last-write-wins (#1864).
                     let body = serde_json::json!({
                         "update": {
                             "book_uuid": uuid_for_post,
                             "format": "epub",
                             "epub_cfi": cfi_for_post,
+                            "client_updated_at": crate::time::now_unix(),
                         }
                     });
                     if let Ok(req) = gloo_net::http::Request::post("/api/rpc/progress").json(&body)
