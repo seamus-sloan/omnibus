@@ -248,6 +248,7 @@ async fn load_and_drain(
             parts,
             total_duration_seconds,
             chapters,
+            ..
         } => {
             // Same fail-fast as the reader's offline guard: with no completed
             // audio download, the <audio> element would stall against the

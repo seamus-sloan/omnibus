@@ -64,18 +64,52 @@ pub struct ChapterInfo {
 /// works for any source the browser / native player decodes natively
 /// (m4b, m4a, mp3, aac). `hls` falls back to the segmented transcode
 /// path for codecs that need conversion (flac, ac3, eac3, …).
+/// Both variants carry the identity of the file the server resolved:
+/// `book_file_id` is the `book_files` row this manifest describes (what a
+/// progress write for the session must name), and `audio_file_count` is how
+/// many audio files the book carries — `> 1` means a stored position is only
+/// meaningful together with its file id. Both are `#[serde(default)]` (0) so
+/// a payload from a server predating them still decodes; clients treat 0 as
+/// "identity unknown".
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "mode", rename_all = "lowercase")]
 pub enum AudiobookManifest {
     Direct {
+        #[serde(default)]
+        book_file_id: i64,
+        #[serde(default)]
+        audio_file_count: i64,
         parts: Vec<ManifestPart>,
         total_duration_seconds: f64,
         #[serde(default)]
         chapters: Vec<ChapterInfo>,
     },
     Hls {
+        #[serde(default)]
+        book_file_id: i64,
+        #[serde(default)]
+        audio_file_count: i64,
         playlist_url: String,
     },
+}
+
+impl AudiobookManifest {
+    /// The `(book_file_id, audio_file_count)` identity pair, zero-valued
+    /// when the serving server predates those fields.
+    pub fn file_identity(&self) -> (i64, i64) {
+        match self {
+            AudiobookManifest::Direct {
+                book_file_id,
+                audio_file_count,
+                ..
+            }
+            | AudiobookManifest::Hls {
+                book_file_id,
+                audio_file_count,
+                ..
+            } => (*book_file_id, *audio_file_count),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -104,6 +138,31 @@ mod tests {
             let update = AudiobookPlaybackRateUpdate { playback_rate };
             assert!(update.validate().is_err());
         }
+    }
+
+    #[test]
+    fn manifest_decodes_legacy_payload_without_file_identity_as_zeros() {
+        let legacy = r#"{"mode":"direct","parts":[],"total_duration_seconds":1.5}"#;
+        let manifest: AudiobookManifest = serde_json::from_str(legacy).unwrap();
+        assert_eq!(manifest.file_identity(), (0, 0));
+    }
+
+    #[test]
+    fn manifest_file_identity_reads_both_variants() {
+        let direct = AudiobookManifest::Direct {
+            book_file_id: 919,
+            audio_file_count: 5,
+            parts: vec![],
+            total_duration_seconds: 1.0,
+            chapters: vec![],
+        };
+        let hls = AudiobookManifest::Hls {
+            book_file_id: 7,
+            audio_file_count: 2,
+            playlist_url: "/x.m3u8".into(),
+        };
+        assert_eq!(direct.file_identity(), (919, 5));
+        assert_eq!(hls.file_identity(), (7, 2));
     }
 
     #[test]

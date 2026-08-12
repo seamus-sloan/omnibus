@@ -9,7 +9,7 @@
 use dioxus::prelude::*;
 use wasm_bindgen::prelude::*;
 
-use super::helpers::post_audio_progress;
+use super::helpers::{post_audio_progress, resolve_boot_file, resolve_boot_position};
 use crate::data;
 
 mod js;
@@ -21,14 +21,11 @@ use js::{control_surface_js, eval_hls_init, inject_hls_script};
 /// closure that registers them.
 type JsCallbackHolder = std::rc::Rc<std::cell::RefCell<Vec<Closure<dyn FnMut(f64)>>>>;
 
-// Below: the pure Rust decision surface, extracted so it can be unit-tested.
-// The rest of the module is JS/WASM interop (`eval`, `window.*` callbacks).
-
-/// Select the resume position: prefer the server-authoritative value when
-/// available, fall back to the locally cached initial position.
-fn resolve_resume_pos(server_pos: Option<f64>, local_pos: f64) -> f64 {
-    server_pos.unwrap_or(local_pos)
-}
+// The pure resume-decision helpers (`resolve_boot_file`,
+// `resolve_boot_position`) live in `super::helpers` — this module is
+// web-gated, so tests here never run under the crate's test matrix (which
+// exercises the `server` + `mobile` features). The rest of this module is
+// JS/WASM interop (`eval`, `window.*` callbacks).
 
 /// Whether the driver must (re)load for a newly-requested `(uuid, file_id)`.
 ///
@@ -158,7 +155,7 @@ fn boot_new_book(
     register_js_callbacks(
         cb_holder,
         uuid.to_string(),
-        file_id,
+        playback.loaded_file_id,
         playback.duration,
         playback.elapsed,
         playback.playing,
@@ -197,7 +194,9 @@ fn reset_per_book_signals(playback: &crate::PlaybackState, user_id: Option<i64>,
     let mut book = playback.book;
     let mut error = playback.error;
     let mut chapters = playback.chapters;
+    let mut loaded_file_id = playback.loaded_file_id;
 
+    loaded_file_id.set(None);
     duration.set(0.0_f64);
     elapsed.set(0.0_f64);
     playing.set(false);
@@ -271,13 +270,16 @@ fn spawn_manifest_init(
 /// Registered before the JS bootstrap so a fast `loadedmetadata` always finds
 /// them.
 ///
-/// `file_id` is the file this boot loaded; it rides along on every position
-/// POST. Re-registered on each boot, and a file switch always re-boots (see
-/// [`needs_reload`]), so the captured value can't outlive its file.
+/// `loaded_file_id` is the shared signal `run_manifest_init` fills once the
+/// manifest names the file it resolved; every position POST reads it live,
+/// so writes name the file playback is actually in even though these
+/// closures are registered before the manifest lands (#1888). A file switch
+/// always re-boots (see [`needs_reload`]), which resets the signal before
+/// the next manifest fills it again.
 fn register_js_callbacks(
     cb_holder: &JsCallbackHolder,
     uuid_cb: String,
-    file_id: Option<i64>,
+    loaded_file_id: Signal<Option<i64>>,
     mut duration: Signal<f64>,
     mut elapsed: Signal<f64>,
     mut playing: Signal<bool>,
@@ -295,7 +297,7 @@ fn register_js_callbacks(
         }
         last_saved = secs;
         crate::audiobook_progress::save(&uuid_for_save, secs);
-        post_audio_progress(uuid_for_save.clone(), file_id, secs);
+        post_audio_progress(uuid_for_save.clone(), *loaded_file_id.peek(), secs);
     });
     let on_duration = Closure::<dyn FnMut(f64)>::new(move |d: f64| {
         duration.set(d);
@@ -331,7 +333,7 @@ fn register_js_callbacks(
     let on_pause = Closure::<dyn FnMut(f64)>::new(move |secs: f64| {
         playing.set(false);
         crate::audiobook_progress::save(&uuid_for_pause, secs);
-        post_audio_progress(uuid_for_pause.clone(), file_id, secs);
+        post_audio_progress(uuid_for_pause.clone(), *loaded_file_id.peek(), secs);
     });
     // Fired from the init-poll's `n >= 200` branch when
     // `window.OmnibusAudio` never appears (mount loop gave
@@ -395,8 +397,10 @@ fn install_control_surface(uuid: &str, initial_rate: f64, initial_volume: f64) {
     let _ = dioxus::document::eval(&control_surface_js(&rate_lit, &vol_lit, &uuid_lit));
 }
 
-/// Fetch `/api/audiobooks/{uuid}/manifest` (with optional `?file_id`)
-/// and either:
+/// Fetch `/api/audiobooks/{uuid}/manifest` — targeting the picker's
+/// `file_id` when one was selected, else the progress row's stored
+/// `book_file_id` so multi-file books resume in the file the seconds were
+/// recorded in (#1888) — then either:
 /// * **Direct mode** — call `initDirect` with the parts list and flip
 ///   `hls_ready` true (instant playback for m4b/m4a/mp3/aac).
 /// * **HLS mode** — poll `/status` until `ready` (call `initHls` + flip
@@ -433,15 +437,13 @@ async fn run_manifest_init(
             user_id,
         )
     };
-    // Reconcile resume position with the server upfront so
-    // both init paths see the same starting point.
-    let server_pos = data::get_progress("", &uuid_for_fetch, omnibus_shared::ProgressFormat::Audio)
+    // Reconcile resume state with the server upfront: the row carries both
+    // the seconds and the `book_files` row they were recorded in, and the
+    // file decides which manifest to fetch before any position applies.
+    let server_row = data::get_progress("", &uuid_for_fetch, omnibus_shared::ProgressFormat::Audio)
         .await
         .ok()
-        .flatten()
-        .and_then(|r| r.audio_position_seconds);
-    let resume_pos = resolve_resume_pos(server_pos, initial_position);
-    let pos_lit = serde_json::to_string(&resume_pos).unwrap_or_else(|_| "0".into());
+        .flatten();
 
     let server_rate = data::get_playback_rate("", &uuid_for_fetch).await;
     if !is_current() {
@@ -472,7 +474,17 @@ async fn run_manifest_init(
         }
     }
 
-    let manifest = fetch_manifest(&uuid_for_fetch, file_id).await;
+    let row_file = server_row.as_ref().and_then(|r| r.book_file_id);
+    let boot_file = resolve_boot_file(file_id, row_file);
+    let mut manifest = fetch_manifest(&uuid_for_fetch, boot_file).await;
+    // The row's stored id is a soft reference — a reindex may have replaced
+    // the `book_files` row since the position was saved. Fall back to the
+    // server's default file rather than a failure overlay, mirroring
+    // `db::progress::resume_points`. Never applied to an explicit picker
+    // selection: a dead `?file_id=` should fail loudly, not play another file.
+    if manifest.is_none() && file_id.is_none() && boot_file.is_some() {
+        manifest = fetch_manifest(&uuid_for_fetch, None).await;
+    }
 
     // A newer book may have been selected while the manifest was in flight.
     // The Direct + None arms below are synchronous, so this single guard covers
@@ -481,11 +493,37 @@ async fn run_manifest_init(
         return;
     }
 
+    let Some(manifest) = manifest else {
+        // Manifest unreachable (network failure, 5xx,
+        // 404 between settings save and reindex). Show
+        // the same failure overlay as a terminal HLS
+        // transcode failure — a manual refresh is the
+        // recovery path either way.
+        playback_failed.set(true);
+        return;
+    };
+
+    let (loaded_file, audio_file_count) = manifest.file_identity();
+    // `0` = a server predating the identity fields; keep posting no file id
+    // rather than inventing one (`resolve_boot_position` degrades the same
+    // way via `audio_file_count == 0`).
+    let mut loaded_file_sig = playback.loaded_file_id;
+    loaded_file_sig.set((loaded_file > 0).then_some(loaded_file));
+    let resume_pos = resolve_boot_position(
+        server_row
+            .as_ref()
+            .map(|r| (r.book_file_id, r.audio_position_seconds)),
+        initial_position,
+        loaded_file,
+        audio_file_count,
+    );
+    let pos_lit = serde_json::to_string(&resume_pos).unwrap_or_else(|_| "0".into());
+
     match manifest {
-        Some(omnibus_shared::AudiobookManifest::Direct {
+        omnibus_shared::AudiobookManifest::Direct {
             parts, chapters, ..
-        }) => init_direct_play(parts, chapters, &pos_lit, chapters_sig, hls_ready),
-        Some(omnibus_shared::AudiobookManifest::Hls { playlist_url }) => {
+        } => init_direct_play(parts, chapters, &pos_lit, chapters_sig, hls_ready),
+        omnibus_shared::AudiobookManifest::Hls { playlist_url, .. } => {
             init_hls(
                 &uuid_for_fetch,
                 &playlist_url,
@@ -495,14 +533,6 @@ async fn run_manifest_init(
                 playback_failed,
             )
             .await;
-        }
-        None => {
-            // Manifest unreachable (network failure, 5xx,
-            // 404 between settings save and reindex). Show
-            // the same failure overlay as a terminal HLS
-            // transcode failure — a manual refresh is the
-            // recovery path either way.
-            playback_failed.set(true);
         }
     }
 }
@@ -607,21 +637,6 @@ async fn fetch_hls_status(uuid: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn resolve_resume_pos_prefers_server_position_when_present() {
-        assert!((resolve_resume_pos(Some(120.0), 5.0) - 120.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn resolve_resume_pos_falls_back_to_local_when_server_absent() {
-        assert!((resolve_resume_pos(None, 42.5) - 42.5).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn resolve_resume_pos_returns_zero_local_when_both_absent() {
-        assert!((resolve_resume_pos(None, 0.0)).abs() < f64::EPSILON);
-    }
 
     #[test]
     fn needs_reload_when_nothing_booted_or_book_changed() {

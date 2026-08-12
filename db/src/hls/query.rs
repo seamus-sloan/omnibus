@@ -64,6 +64,20 @@ pub async fn resolve_audiobook_file(
     )
 }
 
+/// Number of audio-format `book_files` rows `book_id` carries. The format
+/// list mirrors [`resolve_audiobook_file`] — this counts the candidates that
+/// resolver chooses between, so `> 1` marks a multi-file audiobook whose
+/// positions are only meaningful together with a `book_file_id`.
+pub async fn count_audio_files(pool: &SqlitePool, book_id: i64) -> Result<i64, HlsError> {
+    Ok(sqlx::query_scalar(
+        "SELECT COUNT(*) FROM book_files \
+         WHERE book_id = ? AND format IN ('M4B', 'M4A', 'MP3')",
+    )
+    .bind(book_id)
+    .fetch_one(pool)
+    .await?)
+}
+
 /// Fetch ordered `book_file_parts` for `book_file_id`.
 pub async fn get_parts(pool: &SqlitePool, book_file_id: i64) -> Result<Vec<HlsPart>, HlsError> {
     let rows = sqlx::query_as::<_, (i64, String, f64)>(

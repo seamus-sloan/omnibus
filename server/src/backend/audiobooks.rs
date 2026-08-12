@@ -147,6 +147,13 @@ pub(super) async fn get_audiobook_manifest(
         return axum::http::StatusCode::NOT_FOUND.into_response();
     }
 
+    // How many audio files the book carries rides along so clients know
+    // whether a stored position needs a `book_file_id` to be meaningful.
+    let audio_file_count = match hls::count_audio_files(&state.pool, resolved.book_id).await {
+        Ok(count) => count,
+        Err(e) => return internal("count_audio_files", e),
+    };
+
     let filenames: Vec<&str> = parts.iter().map(|p| p.filename.as_str()).collect();
     let file_id_suffix = query
         .file_id
@@ -172,12 +179,16 @@ pub(super) async fn get_audiobook_manifest(
                 Err(e) => return internal("get_chapters", e),
             };
             AudiobookManifest::Direct {
+                book_file_id: resolved.book_file_id,
+                audio_file_count,
                 parts: manifest_parts,
                 total_duration_seconds,
                 chapters,
             }
         }
         PlaybackMode::Hls => AudiobookManifest::Hls {
+            book_file_id: resolved.book_file_id,
+            audio_file_count,
             playlist_url: format!("/api/audiobooks/{uuid}/playlist.m3u8"),
         },
     };

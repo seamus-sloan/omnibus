@@ -298,6 +298,12 @@ pub struct PlaybackState {
     /// backend pick the lowest-ordinal audio file. Tracked as a signal so the
     /// App-level driver reboots when the *same* book's selected file changes.
     pub file_id: Signal<Option<i64>>,
+    /// The `book_files` row the manifest actually resolved for the current
+    /// boot — `file_id` is the *request* (picker selection, often `None`),
+    /// this is the answer. Progress posts read it so a multi-file book's
+    /// writes always name the file playback is really in (#1888). `None`
+    /// until a manifest lands, and reset on every book swap.
+    pub loaded_file_id: Signal<Option<i64>>,
     pub book: Signal<Option<omnibus_shared::EbookMetadata>>,
     pub loading: Signal<bool>,
     pub error: Signal<Option<String>>,
@@ -322,6 +328,7 @@ impl PlaybackState {
         Self {
             uuid: Signal::new(None),
             file_id: Signal::new(None),
+            loaded_file_id: Signal::new(None),
             book: Signal::new(None),
             loading: Signal::new(false),
             error: Signal::new(None),
