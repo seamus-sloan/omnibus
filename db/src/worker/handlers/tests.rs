@@ -2,7 +2,8 @@
 //! foreign-system internal (SMTP/lettre, subprocess stderr, a DB driver)
 //! must never let that text reach the returned [`TaskOutcome::Err`].
 
-use super::{anyhow_outcome, kepub_outcome, kindle_outcome, sanitized_err};
+use super::{anyhow_outcome, convert_outcome, kepub_outcome, kindle_outcome, sanitized_err};
+use crate::convert::ConvertError;
 use crate::kepub::KepubError;
 use crate::kindle::KindleError;
 use crate::worker::TaskOutcome;
@@ -99,4 +100,44 @@ fn kepub_outcome_sanitizes_subprocess_stderr() {
     )))));
     assert!(!msg.contains("0xdeadbeef"));
     assert!(msg.contains("kepub conversion"));
+}
+
+#[test]
+fn convert_outcome_returns_ok_none_on_success() {
+    assert!(matches!(
+        convert_outcome(Ok(std::path::PathBuf::from("/tmp/book.mobi"))),
+        TaskOutcome::Ok(None)
+    ));
+}
+
+#[test]
+fn convert_outcome_passes_through_the_safe_enumerable_variants() {
+    let msg = err_text(convert_outcome(Err(ConvertError::SourceMissing {
+        book_id: 1,
+        format: "MOBI".into(),
+    })));
+    assert_eq!(msg, "book 1 has no MOBI file to convert");
+
+    let msg = err_text(convert_outcome(Err(ConvertError::BinaryUnavailable)));
+    assert_eq!(msg, "ebook-convert is not installed or not runnable");
+
+    let msg = err_text(convert_outcome(Err(ConvertError::Timeout(300))));
+    assert_eq!(msg, "conversion timed out after 300s");
+
+    let msg = err_text(convert_outcome(Err(ConvertError::InvalidFormat {
+        field: "target_format",
+    })));
+    assert_eq!(
+        msg,
+        "invalid target_format: must be 1-16 ASCII alphanumeric characters"
+    );
+}
+
+#[test]
+fn convert_outcome_sanitizes_the_failed_variant() {
+    let msg = err_text(convert_outcome(Err(ConvertError::Failed(anyhow::anyhow!(
+        "ebook-convert exited with 1: stack trace at /srv/lib/book.epub"
+    )))));
+    assert!(!msg.contains("/srv/lib/book.epub"));
+    assert!(msg.contains("format conversion"));
 }
