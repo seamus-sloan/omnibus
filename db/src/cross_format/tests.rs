@@ -752,6 +752,9 @@ async fn alignment_view_reports_the_anchor_match_even_before_linking() {
     assert_eq!(
         m.confidence,
         omnibus_shared::cross_format::MappingConfidence::ChapterAnchored
+    );
+}
+
 #[tokio::test]
 async fn resume_points_collapse_a_linked_book_to_one_card_with_the_counterpart() {
     let pool = init_db("sqlite::memory:").await.unwrap();
