@@ -6,14 +6,16 @@
 
 use omnibus_shared::cross_format::{
     AlignmentAudioFile, AlignmentAudioPosition, AlignmentEbook, AlignmentEbookChapter,
-    AlignmentLink, AlignmentPosition, AlignmentView, CrossFormatCandidate, CrossFormatLinkMode,
-    CrossFormatResume, CrossFormatResumeState, MappingConfidence,
+    AlignmentLink, AlignmentMatch, AlignmentPosition, AlignmentView, CrossFormatCandidate,
+    CrossFormatLinkMode, CrossFormatResume, CrossFormatResumeState, MappingConfidence,
 };
 use omnibus_shared::ProgressFormat;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 use crate::{progress, resolve_book_id_by_uuid, resolve_canonical_book_uuid};
+
+mod anchors;
 
 #[cfg(test)]
 mod tests;
@@ -310,10 +312,19 @@ pub async fn audio_timeline(
 /// — the shape `reading_progress` stores for audio. `None` for anything
 /// out of range rather than a clamped guess at the wrong file.
 pub fn map_percent_to_audio(timeline: &AudioTimeline, percent: i64) -> Option<(i64, f64)> {
-    if !(0..=100).contains(&percent) || timeline.total_seconds <= 0.0 {
+    if !(0..=100).contains(&percent) {
         return None;
     }
-    let global = timeline.total_seconds * (percent as f64) / 100.0;
+    map_fraction_to_audio(timeline, (percent as f64) / 100.0)
+}
+
+/// Fraction-level half of [`map_percent_to_audio`], shared with the
+/// anchored tier (which interpolates the fraction first).
+fn map_fraction_to_audio(timeline: &AudioTimeline, frac: f64) -> Option<(i64, f64)> {
+    if !(0.0..=1.0).contains(&frac) || timeline.total_seconds <= 0.0 {
+        return None;
+    }
+    let global = timeline.total_seconds * frac;
     let last_idx = timeline.files.len().checked_sub(1)?;
     for (i, f) in timeline.files.iter().enumerate() {
         let end = f.start_seconds + f.duration_seconds;
@@ -337,6 +348,13 @@ pub fn map_audio_to_percent(
     book_file_id: i64,
     seconds_within: f64,
 ) -> Option<i64> {
+    let frac = audio_fraction(timeline, book_file_id, seconds_within)?;
+    Some(((100.0 * frac).floor() as i64).clamp(0, 100))
+}
+
+/// Fraction-level half of [`map_audio_to_percent`], shared with the
+/// anchored tier so interpolation runs before the floor loses precision.
+fn audio_fraction(timeline: &AudioTimeline, book_file_id: i64, seconds_within: f64) -> Option<f64> {
     let f = timeline
         .files
         .iter()
@@ -345,7 +363,7 @@ pub fn map_audio_to_percent(
         return None;
     }
     let global = f.start_seconds + seconds_within.clamp(0.0, f.duration_seconds);
-    Some(((100.0 * global / timeline.total_seconds).floor() as i64).clamp(0, 100))
+    Some((global / timeline.total_seconds).clamp(0.0, 1.0))
 }
 
 /// Compose the answer for `GET /api/books/{uuid}/cross-format-resume`:
@@ -397,13 +415,32 @@ pub async fn resume_candidate(
         ));
     };
 
+    // The anchored tier engages when the served EPUB has extracted
+    // structure and its chapters match the audio marks; otherwise every
+    // path below falls through to the linear tier.
+    let anchor_map = match crate::book_file_with_id(pool, book_id, "EPUB").await? {
+        Some((ebook_file_id, _)) => anchors::anchor_map(pool, ebook_file_id, &timeline).await?,
+        None => None,
+    };
+    let confidence = if anchor_map.is_some() {
+        MappingConfidence::ChapterAnchored
+    } else {
+        MappingConfidence::Linear
+    };
     let candidate = match target {
         ProgressFormat::Audio => source.progress_percent.and_then(|pct| {
-            map_percent_to_audio(&timeline, pct).map(|(file_id, seconds)| CrossFormatCandidate {
+            if !(0..=100).contains(&pct) {
+                return None;
+            }
+            let frac = match &anchor_map {
+                Some(map) => anchors::interpolate(&map.anchors, (pct as f64) / 100.0, true),
+                None => (pct as f64) / 100.0,
+            };
+            map_fraction_to_audio(&timeline, frac).map(|(file_id, seconds)| CrossFormatCandidate {
                 target,
                 source_format,
                 source_client_updated_at: source.client_updated_at,
-                confidence: MappingConfidence::Linear,
+                confidence,
                 book_file_id: Some(file_id),
                 audio_position_seconds: Some(seconds),
                 total_duration_seconds: Some(timeline.total_seconds),
@@ -417,11 +454,17 @@ pub async fn resume_candidate(
             let file_id = source
                 .book_file_id
                 .or_else(|| (timeline.files.len() == 1).then(|| timeline.files[0].book_file_id))?;
-            map_audio_to_percent(&timeline, file_id, seconds).map(|pct| CrossFormatCandidate {
+            let raw_frac = audio_fraction(&timeline, file_id, seconds)?;
+            let frac = match &anchor_map {
+                Some(map) => anchors::interpolate(&map.anchors, raw_frac, false),
+                None => raw_frac,
+            };
+            let pct = ((100.0 * frac).floor() as i64).clamp(0, 100);
+            Some(CrossFormatCandidate {
                 target,
                 source_format,
                 source_client_updated_at: source.client_updated_at,
-                confidence: MappingConfidence::Linear,
+                confidence,
                 book_file_id: None,
                 audio_position_seconds: None,
                 total_duration_seconds: None,
@@ -453,9 +496,10 @@ pub async fn alignment_view(
         .await?
         .ok_or(CrossFormatError::BookNotFound)?;
 
-    let link = match get_link(pool, user_id, &book_uuid).await? {
+    let raw_link = get_link(pool, user_id, &book_uuid).await?;
+    let link = match &raw_link {
         Some(link) => {
-            let stale = link_is_stale(pool, book_id, &link).await?;
+            let stale = link_is_stale(pool, book_id, link).await?;
             Some(AlignmentLink {
                 mode: link.mode,
                 primary_book_file_id: link.primary_book_file_id,
@@ -464,6 +508,32 @@ pub async fn alignment_view(
             })
         }
         None => None,
+    };
+    // Anchor preview: for an unlinked book, evaluate against the default
+    // sequence declaration so the modal can honestly say whether anchoring
+    // would engage; a stale link stays quiet (mapping is paused anyway).
+    let anchor_match = if link.as_ref().is_some_and(|l| l.stale) {
+        None
+    } else {
+        let preview = raw_link.clone().unwrap_or(CrossFormatLink {
+            mode: CrossFormatLinkMode::Sequence,
+            primary_book_file_id: None,
+            audio_snapshot: String::new(),
+            confirmed_at: 0,
+        });
+        match audio_timeline(pool, book_id, &preview).await? {
+            Some(timeline) => match crate::book_file_with_id(pool, book_id, "EPUB").await? {
+                Some((ebook_file_id, _)) => anchors::anchor_map(pool, ebook_file_id, &timeline)
+                    .await?
+                    .map(|m| AlignmentMatch {
+                        matched: m.matched,
+                        ebook_chapters: m.ebook_chapters,
+                        confidence: MappingConfidence::ChapterAnchored,
+                    }),
+                None => None,
+            },
+            None => None,
+        }
     };
 
     // Text lane: stored spine stats (0071). Absent until the structure
@@ -528,6 +598,7 @@ pub async fn alignment_view(
 
     Ok(AlignmentView {
         link,
+        anchor_match,
         ebook,
         audio_files: audio,
         reading,

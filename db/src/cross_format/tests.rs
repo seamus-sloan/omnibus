@@ -505,3 +505,252 @@ async fn set_audio_order_persists_and_refuses_a_mismatched_set() {
         ));
     }
 }
+
+// ── chapter-anchored tier ───────────────────────────────────────────
+
+async fn seed_epub_chapters(pool: &SqlitePool, titles: &[(&str, i64)], per_chapter: i64) {
+    let epub_file: i64 =
+        sqlx::query_scalar("SELECT id FROM book_files WHERE format = 'EPUB' LIMIT 1")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let spine = titles
+        .iter()
+        .enumerate()
+        .map(|(i, _)| crate::ebook::toc::SpineStat {
+            spine_index: i as i64,
+            href: format!("c{i}.xhtml"),
+            visible_chars: per_chapter,
+        })
+        .collect();
+    let chapters = titles
+        .iter()
+        .enumerate()
+        .map(|(i, (title, start))| crate::ebook::toc::TocChapter {
+            ordinal: i as i64,
+            title: (*title).to_string(),
+            href: format!("c{i}.xhtml"),
+            spine_index: i as i64,
+            start_chars: *start,
+        })
+        .collect();
+    crate::epub_structure::replace_structure(
+        pool,
+        epub_file,
+        &crate::ebook::toc::EpubStructure { spine, chapters },
+    )
+    .await
+    .unwrap();
+}
+
+async fn seed_audio_chapters(pool: &SqlitePool, file_id: i64, chapters: &[(&str, f64)]) {
+    for (i, (title, start)) in chapters.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO file_chapters (book_file_id, ordinal, title, start_seconds, duration_seconds)
+             VALUES (?, ?, ?, ?, 0)",
+        )
+        .bind(file_id)
+        .bind(i as i64)
+        .bind(title)
+        .bind(start)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+}
+
+#[test]
+fn is_synthetic_title_matches_only_the_indexer_fallback() {
+    use super::anchors::is_synthetic_title;
+    assert!(is_synthetic_title("Part 1"));
+    assert!(is_synthetic_title("Part 42"));
+    assert!(!is_synthetic_title("Part"));
+    assert!(!is_synthetic_title("Party 3"));
+    assert!(!is_synthetic_title("Chapter 1"));
+}
+
+#[test]
+fn interpolate_maps_piecewise_through_anchors_in_both_directions() {
+    use super::anchors::{interpolate, Anchor};
+    let anchors = vec![Anchor {
+        text_frac: 0.2,
+        audio_frac: 0.4,
+    }];
+    assert!((interpolate(&anchors, 0.1, true) - 0.2).abs() < 1e-9);
+    assert!((interpolate(&anchors, 0.2, true) - 0.4).abs() < 1e-9);
+    assert!((interpolate(&anchors, 0.6, true) - 0.7).abs() < 1e-9);
+    // Inverse direction mirrors.
+    assert!((interpolate(&anchors, 0.4, false) - 0.2).abs() < 1e-9);
+    assert!((interpolate(&anchors, 0.7, false) - 0.6).abs() < 1e-9);
+}
+
+#[tokio::test]
+async fn resume_candidate_uses_chapter_anchors_when_titles_match() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, audio) = seed_dual_book(&pool, &[600.0]).await;
+    // Text chapters at 0 / one-third / two-thirds; the narration spends
+    // disproportionate time early (Bravo at 300s, Charlie at 480s of 600).
+    seed_epub_chapters(&pool, &[("Alpha", 0), ("Bravo", 40), ("Charlie", 80)], 40).await;
+    seed_audio_chapters(
+        &pool,
+        audio[0],
+        &[("Alpha", 0.0), ("Bravo", 300.0), ("Charlie", 480.0)],
+    )
+    .await;
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 33, 2_000))
+        .await
+        .unwrap();
+
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Audio)
+        .await
+        .unwrap();
+    let c = r.candidate.unwrap();
+    assert_eq!(
+        c.confidence,
+        omnibus_shared::cross_format::MappingConfidence::ChapterAnchored
+    );
+    // Anchored: 33% of text ≈ the Bravo anchor → ≈ 300s (linear would say
+    // 198s). Allow a little slack for the 33-vs-1/3 floor.
+    let secs = c.audio_position_seconds.unwrap();
+    assert!(
+        (295.0..=305.0).contains(&secs),
+        "expected the anchored map near 300s, got {secs}"
+    );
+
+    // Inverse: listening at Charlie's start maps back to two-thirds text.
+    progress::upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 480.0, Some(audio[0]), 3_000),
+    )
+    .await
+    .unwrap();
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Epub)
+        .await
+        .unwrap();
+    let c = r.candidate.unwrap();
+    assert_eq!(
+        c.confidence,
+        omnibus_shared::cross_format::MappingConfidence::ChapterAnchored
+    );
+    let pct = c.percent.unwrap();
+    assert!((65..=67).contains(&pct), "expected ≈ 66%, got {pct}");
+}
+
+#[tokio::test]
+async fn anchoring_degrades_to_linear_when_nothing_trustworthy_matches() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, audio) = seed_dual_book(&pool, &[600.0]).await;
+    // Three text chapters vs two synthetic audio marks: no titles, no
+    // count alignment — the linear tier must answer.
+    seed_epub_chapters(&pool, &[("Alpha", 0), ("Bravo", 40), ("Charlie", 80)], 40).await;
+    seed_audio_chapters(&pool, audio[0], &[("Part 1", 0.0), ("Part 2", 300.0)]).await;
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 50, 2_000))
+        .await
+        .unwrap();
+
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Audio)
+        .await
+        .unwrap();
+    let c = r.candidate.unwrap();
+    assert_eq!(
+        c.confidence,
+        omnibus_shared::cross_format::MappingConfidence::Linear
+    );
+    assert_eq!(c.audio_position_seconds, Some(300.0));
+}
+
+#[tokio::test]
+async fn per_chapter_mp3_stems_anchor_when_chapters_are_synthetic() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    // One audio file with three per-chapter parts (the MP3-folder shape):
+    // synthetic chapter titles, real names in the filename stems.
+    let (_, uuid, audio) = seed_dual_book(&pool, &[600.0]).await;
+    sqlx::query("DELETE FROM book_file_parts WHERE book_file_id = ?")
+        .bind(audio[0])
+        .execute(&pool)
+        .await
+        .unwrap();
+    for (i, (name, dur)) in [
+        ("01 - Alpha.mp3", 100.0),
+        ("02 - Bravo.mp3", 350.0),
+        ("03 - Charlie.mp3", 150.0),
+    ]
+    .iter()
+    .enumerate()
+    {
+        sqlx::query(
+            "INSERT INTO book_file_parts
+                (book_file_id, ordinal, filename, size_bytes, mtime_epoch, duration_seconds)
+             VALUES (?, ?, ?, 1, 1, ?)",
+        )
+        .bind(audio[0])
+        .bind(i as i64)
+        .bind(name)
+        .bind(dur)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    seed_audio_chapters(
+        &pool,
+        audio[0],
+        &[("Part 1", 0.0), ("Part 2", 100.0), ("Part 3", 450.0)],
+    )
+    .await;
+    seed_epub_chapters(&pool, &[("Alpha", 0), ("Bravo", 40), ("Charlie", 80)], 40).await;
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 33, 2_000))
+        .await
+        .unwrap();
+
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Audio)
+        .await
+        .unwrap();
+    let c = r.candidate.unwrap();
+    assert_eq!(
+        c.confidence,
+        omnibus_shared::cross_format::MappingConfidence::ChapterAnchored
+    );
+    // 33% of text ≈ the "Bravo" stem anchor at 100s (linear: 198s).
+    let secs = c.audio_position_seconds.unwrap();
+    assert!(
+        (95.0..=105.0).contains(&secs),
+        "expected the stem-anchored map near 100s, got {secs}"
+    );
+}
+
+#[tokio::test]
+async fn alignment_view_reports_the_anchor_match_even_before_linking() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, audio) = seed_dual_book(&pool, &[600.0]).await;
+    seed_epub_chapters(&pool, &[("Alpha", 0), ("Bravo", 40), ("Charlie", 80)], 40).await;
+    seed_audio_chapters(
+        &pool,
+        audio[0],
+        &[("Alpha", 0.0), ("Bravo", 300.0), ("Charlie", 480.0)],
+    )
+    .await;
+
+    // Unlinked: the preview still evaluates against the default sequence
+    // declaration so the modal can promise chapter accuracy honestly.
+    let view = alignment_view(&pool, user, &uuid).await.unwrap();
+    let m = view.anchor_match.unwrap();
+    assert_eq!((m.matched, m.ebook_chapters), (3, 3));
+    assert_eq!(
+        m.confidence,
+        omnibus_shared::cross_format::MappingConfidence::ChapterAnchored
+    );
+}
