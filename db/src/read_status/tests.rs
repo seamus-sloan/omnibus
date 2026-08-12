@@ -222,3 +222,36 @@ async fn set_read_status_resolves_merged_uuid_to_surviving_book() {
         .unwrap();
     assert_eq!(got.status, ReadStatus::Finished);
 }
+
+/// #1862: `set_read_status_tx` reads (resolves the canonical uuid) before it
+/// writes, the same shape that made `progress::upsert_progress_tx` vulnerable
+/// to `SQLITE_BUSY_SNAPSHOT` under a plain `pool.begin()`. Several rounds of
+/// overlapping writers — on the same row and on distinct rows — give that
+/// race a real chance to have fired without the `BEGIN IMMEDIATE` fix.
+#[tokio::test]
+async fn set_read_status_succeeds_for_many_concurrent_writers_on_one_pool() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "reader").await;
+    let (_, shared_uuid) = seed(&pool, "/lib", "Shared Book").await;
+    let mut solo_uuids = Vec::new();
+    for i in 0..4 {
+        let (_, uuid) = seed(&pool, "/lib", &format!("Solo Status Book {i}")).await;
+        solo_uuids.push(uuid);
+    }
+
+    for _round in 0..5 {
+        let mut handles = Vec::new();
+        for book_uuid in std::iter::once(shared_uuid.clone()).chain(solo_uuids.iter().cloned()) {
+            let pool = pool.clone();
+            handles.push(tokio::spawn(async move {
+                set_read_status(&pool, user, &set(&book_uuid, ReadStatus::Reading)).await
+            }));
+        }
+        for handle in handles {
+            handle
+                .await
+                .expect("writer task panicked")
+                .expect("concurrent set_read_status must not surface a database error");
+        }
+    }
+}

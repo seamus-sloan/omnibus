@@ -49,7 +49,12 @@ pub async fn put_state(
     if let Some(rejected) = reject_oversized_state_request(&body) {
         return rejected;
     }
-    let mut tx = match state.pool().begin().await {
+    // `BEGIN IMMEDIATE`: each entry's `upsert_progress_tx` resolves the book
+    // uuid (a read) before its write, so a DEFERRED transaction risks
+    // `SQLITE_BUSY_SNAPSHOT` (517) when this batch races another writer on
+    // the same row (#1862) — see the matching comment on
+    // `db::progress::upsert_progress`.
+    let mut tx = match state.pool().begin_with("BEGIN IMMEDIATE").await {
         Ok(tx) => tx,
         Err(e) => return internal("kobo put_state begin", e),
     };

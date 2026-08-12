@@ -130,8 +130,14 @@ async fn record_sessions_batch(
     user_id: i64,
     reports: &[SessionReport],
 ) -> Result<u64, ServerFnError> {
+    // `BEGIN IMMEDIATE`: this is the web/mobile path behind the
+    // `POST /api/rpc/progress/sessions` 500 in #1862 — the bulk-resolve
+    // below reads before the insert loop writes, so a DEFERRED transaction
+    // risks `SQLITE_BUSY_SNAPSHOT` (517) when two devices post batches
+    // concurrently. See the matching comment on
+    // `db::progress::upsert_progress`.
     let mut tx = pool
-        .begin()
+        .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(|e| internal_rpc_error("begin sessions batch", e))?;
     let batch_uuids: Vec<String> = reports.iter().map(|r| r.book_uuid.clone()).collect();
