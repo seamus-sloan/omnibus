@@ -5,8 +5,9 @@
 //! to no answer, never a wrong one; unlinked books get no answer at all.
 
 use omnibus_shared::cross_format::{
-    CrossFormatCandidate, CrossFormatLinkMode, CrossFormatResume, CrossFormatResumeState,
-    MappingConfidence,
+    AlignmentAudioFile, AlignmentAudioPosition, AlignmentEbook, AlignmentEbookChapter,
+    AlignmentLink, AlignmentPosition, AlignmentView, CrossFormatCandidate, CrossFormatLinkMode,
+    CrossFormatResume, CrossFormatResumeState, MappingConfidence,
 };
 use omnibus_shared::ProgressFormat;
 use serde::{Deserialize, Serialize};
@@ -21,6 +22,8 @@ mod tests;
 pub enum CrossFormatError {
     #[error("book not found")]
     BookNotFound,
+    #[error("audio files changed since the alignment loaded")]
+    AudioSetMismatch,
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
 }
@@ -34,6 +37,22 @@ impl From<crate::books::BooksError> for CrossFormatError {
             crate::books::BooksError::OverridesJson(inner) => {
                 CrossFormatError::Sqlx(sqlx::Error::Decode(Box::new(inner)))
             }
+        }
+    }
+}
+
+impl From<crate::epub_structure::EpubStructureError> for CrossFormatError {
+    fn from(e: crate::epub_structure::EpubStructureError) -> Self {
+        match e {
+            crate::epub_structure::EpubStructureError::Sqlx(inner) => CrossFormatError::Sqlx(inner),
+        }
+    }
+}
+
+impl From<crate::hls::HlsError> for CrossFormatError {
+    fn from(e: crate::hls::HlsError) -> Self {
+        match e {
+            crate::hls::HlsError::Db(inner) => CrossFormatError::Sqlx(inner),
         }
     }
 }
@@ -417,4 +436,172 @@ pub async fn resume_candidate(
         },
         None => CrossFormatResume::empty(CrossFormatResumeState::NothingNewer),
     })
+}
+
+/// Assemble everything the alignment modal renders in one read: link +
+/// staleness, ebook chapter ticks over the stored spine stats, per-file
+/// audio segments with chapter offsets, and both current positions.
+pub async fn alignment_view(
+    pool: &SqlitePool,
+    user_id: i64,
+    book_uuid: &str,
+) -> Result<AlignmentView, CrossFormatError> {
+    let book_uuid = resolve_canonical_book_uuid(pool, book_uuid)
+        .await?
+        .ok_or(CrossFormatError::BookNotFound)?;
+    let book_id = resolve_book_id_by_uuid(pool, &book_uuid)
+        .await?
+        .ok_or(CrossFormatError::BookNotFound)?;
+
+    let link = match get_link(pool, user_id, &book_uuid).await? {
+        Some(link) => {
+            let stale = link_is_stale(pool, book_id, &link).await?;
+            Some(AlignmentLink {
+                mode: link.mode,
+                primary_book_file_id: link.primary_book_file_id,
+                stale,
+                confirmed_at: link.confirmed_at,
+            })
+        }
+        None => None,
+    };
+
+    // Text lane: stored spine stats (0071). Absent until the structure
+    // backfill reaches the book — the modal shows the honest linear
+    // notice in that case rather than fabricated ticks.
+    let ebook = match crate::book_file_with_id(pool, book_id, "EPUB").await? {
+        Some((file_id, _)) => {
+            let stats = crate::epub_structure::get_spine_stats(pool, file_id).await?;
+            let total: i64 = stats
+                .iter()
+                .fold(0i64, |acc, s| acc.saturating_add(s.visible_chars.max(0)));
+            if stats.is_empty() || total <= 0 {
+                None
+            } else {
+                let chapters = crate::epub_structure::get_chapters(pool, file_id)
+                    .await?
+                    .into_iter()
+                    .map(|c| AlignmentEbookChapter {
+                        title: c.title,
+                        percent: (100.0 * c.start_chars.max(0) as f64 / total as f64)
+                            .clamp(0.0, 100.0),
+                    })
+                    .collect();
+                Some(AlignmentEbook {
+                    total_chars: total,
+                    chapters,
+                })
+            }
+        }
+        None => None,
+    };
+
+    let files = audio_files(pool, book_id).await?;
+    let ids: Vec<i64> = files.iter().map(|f| f.book_file_id).collect();
+    let mut starts_by_file = bulk_chapter_starts(pool, &ids).await?;
+    let audio = files
+        .into_iter()
+        .map(|f| AlignmentAudioFile {
+            book_file_id: f.book_file_id,
+            label: f.scan_key,
+            duration_seconds: f.duration_seconds,
+            chapter_starts: starts_by_file.remove(&f.book_file_id).unwrap_or_default(),
+        })
+        .collect();
+
+    let reading = progress::get_progress(pool, user_id, &book_uuid, ProgressFormat::Epub)
+        .await?
+        .map(|r| AlignmentPosition {
+            percent: r.progress_percent,
+            client_updated_at: r.client_updated_at,
+        });
+    let listening = progress::get_progress(pool, user_id, &book_uuid, ProgressFormat::Audio)
+        .await?
+        .and_then(|r| {
+            r.audio_position_seconds
+                .map(|seconds| AlignmentAudioPosition {
+                    book_file_id: r.book_file_id,
+                    seconds,
+                    client_updated_at: r.client_updated_at,
+                })
+        });
+
+    Ok(AlignmentView {
+        link,
+        ebook,
+        audio_files: audio,
+        reading,
+        listening,
+    })
+}
+
+/// Chapter start offsets for a set of audio files in one query (the
+/// modal's lane ticks), grouped in memory — one round trip instead of
+/// one per file. Chunked under SQLite's bind cap.
+async fn bulk_chapter_starts(
+    pool: &SqlitePool,
+    book_file_ids: &[i64],
+) -> Result<std::collections::HashMap<i64, Vec<f64>>, sqlx::Error> {
+    let mut map: std::collections::HashMap<i64, Vec<f64>> = std::collections::HashMap::new();
+    for chunk in book_file_ids.chunks(500) {
+        let placeholders = vec!["?"; chunk.len()].join(", ");
+        let sql = format!(
+            "SELECT book_file_id, start_seconds FROM file_chapters
+             WHERE book_file_id IN ({placeholders})
+             ORDER BY book_file_id, start_seconds"
+        );
+        let mut q = sqlx::query_as::<_, (i64, f64)>(&sql);
+        for id in chunk {
+            q = q.bind(id);
+        }
+        for (file_id, start) in q.fetch_all(pool).await? {
+            map.entry(file_id).or_default().push(start);
+        }
+    }
+    Ok(map)
+}
+
+/// Persist a re-ordering of the book's audio files. `order` must name
+/// exactly the book's current audio file set — anything else refuses with
+/// [`CrossFormatError::AudioSetMismatch`], so a stale modal can't scramble
+/// ordinals after a re-index. Two-phase ordinal write because
+/// `UNIQUE(book_id, format, ordinal)` is enforced per row.
+pub async fn set_audio_order(
+    pool: &SqlitePool,
+    book_uuid: &str,
+    order: &[i64],
+) -> Result<(), CrossFormatError> {
+    let book_uuid = resolve_canonical_book_uuid(pool, book_uuid)
+        .await?
+        .ok_or(CrossFormatError::BookNotFound)?;
+    let book_id = resolve_book_id_by_uuid(pool, &book_uuid)
+        .await?
+        .ok_or(CrossFormatError::BookNotFound)?;
+    let current: std::collections::HashSet<i64> = audio_files(pool, book_id)
+        .await?
+        .into_iter()
+        .map(|f| f.book_file_id)
+        .collect();
+    let proposed: std::collections::HashSet<i64> = order.iter().copied().collect();
+    if proposed.len() != order.len() || proposed != current {
+        return Err(CrossFormatError::AudioSetMismatch);
+    }
+    let mut tx = pool.begin().await?;
+    for (i, id) in order.iter().enumerate() {
+        sqlx::query("UPDATE book_files SET ordinal = ? WHERE id = ? AND book_id = ?")
+            .bind(-(i as i64) - 1)
+            .bind(id)
+            .bind(book_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    sqlx::query(
+        "UPDATE book_files SET ordinal = -ordinal - 1
+         WHERE book_id = ? AND format IN ('M4B', 'M4A', 'MP3') AND ordinal < 0",
+    )
+    .bind(book_id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
 }

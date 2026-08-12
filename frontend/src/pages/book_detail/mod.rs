@@ -22,6 +22,7 @@ mod journal_editor;
 mod merge;
 mod rating;
 mod read_status;
+mod sync_link;
 mod view;
 
 // Web renders the split hero + body-grid; mobile re-flows the same loaded-book
@@ -154,6 +155,7 @@ fn use_book_detail_signals() -> BookDetailSignals {
             result: use_signal(|| None),
             undo_error: use_signal(|| None),
             refresh,
+            after_merge: use_signal(|| false),
         },
         delete_open: use_signal(|| false),
         phys: PhysSignals {
@@ -262,6 +264,9 @@ struct MergeSignals {
     result: Signal<Option<MergeBooksResult>>,
     undo_error: Signal<Option<String>>,
     refresh: Signal<u32>,
+    /// One-shot: set by a successful merge so the alignment panel can
+    /// offer linking the freshly dual-format book.
+    after_merge: Signal<bool>,
 }
 
 /// Assemble the loaded-book view: derive the admin flag, build the (web-only)
@@ -306,6 +311,7 @@ fn render_book_shell(
             is_admin: is_admin_flag,
             refresh: merge.refresh,
             phys,
+            after_merge: merge.after_merge,
         },
     );
     rsx! {
@@ -334,6 +340,7 @@ fn build_merge_pieces(
         merge.result,
         merge.undo_error,
         merge.refresh,
+        merge.after_merge,
         server_url.to_string(),
         b.clone(),
     );
@@ -348,8 +355,17 @@ fn build_merge_pieces(
             result,
             undo_error,
             refresh,
+            after_merge,
         } = merge;
-        let _ = (open, result, undo_error, refresh, server_url, b);
+        let _ = (
+            open,
+            result,
+            undo_error,
+            refresh,
+            after_merge,
+            server_url,
+            b,
+        );
         merge::build_merge_ui()
     };
 

@@ -43,6 +43,7 @@ pub(super) fn build_merge_ui(
     mut merge_result: Signal<Option<MergeBooksResult>>,
     mut undo_error: Signal<Option<String>>,
     mut refresh: Signal<u32>,
+    mut after_merge: Signal<bool>,
     server_url: String,
     target: EbookMetadata,
 ) -> Option<Element> {
@@ -56,6 +57,9 @@ pub(super) fn build_merge_ui(
                     undo_error.set(None);
                     merge_result.set(Some(res));
                     refresh.set(refresh() + 1);
+                    // Second entry point for the alignment modal: the merge
+                    // may have just made this book dual-format.
+                    after_merge.set(true);
                 },
                 on_close: move |_| merge_open.set(false),
             }

@@ -9129,3 +9129,150 @@ html {
 .profile-avatar-buttons { display: flex; align-items: center; gap: 8px; }
 .profile-avatar-actions .subtitle { margin: 0; }
 .profile-avatar-input { display: none; }
+
+/* ── Cross-format alignment (modal + book-detail entry row) ─────────── */
+.al-modal {
+  width: min(720px, 92vw);
+  max-height: 84vh;
+  overflow-y: auto;
+  padding: 22px 26px;
+}
+.al-head h3 { margin: 4px 0 6px; }
+.al-kicker {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  opacity: 0.7;
+  margin: 0;
+}
+.al-sub { font-size: 13px; opacity: 0.75; margin: 0 0 14px; max-width: 60ch; }
+.al-lanes { margin: 10px 0 4px; }
+.al-lane-label { font-size: 11.5px; opacity: 0.7; margin: 12px 0 5px; }
+.al-lane {
+  position: relative;
+  height: 34px;
+  border: 1px solid var(--line, rgba(127, 127, 127, 0.35));
+  border-radius: 8px;
+  overflow: visible;
+  background: rgba(127, 127, 127, 0.08);
+}
+.al-lane-audio { display: flex; gap: 3px; background: none; border: 0; }
+.al-seg {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 9px;
+  border: 1px solid var(--line, rgba(127, 127, 127, 0.35));
+  border-radius: 8px;
+  background: rgba(127, 127, 127, 0.08);
+  overflow: hidden;
+}
+.al-seg-label {
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.al-seg-dur { font-size: 10px; opacity: 0.6; white-space: nowrap; }
+.al-tick {
+  position: absolute;
+  top: 22%;
+  bottom: 22%;
+  width: 1px;
+  background: rgba(127, 127, 127, 0.45);
+}
+.al-marker {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 2px;
+  background: var(--accent, #6a8bd7);
+  border-radius: 1px;
+}
+.al-marker-mapped { width: 0; background: none; border-left: 2px dashed var(--accent, #6a8bd7); }
+.al-mapped-note { font-size: 11.5px; opacity: 0.75; margin: 6px 0 0; }
+.al-lowconf {
+  font-size: 12.5px;
+  border: 1px solid rgba(214, 158, 46, 0.5);
+  background: rgba(214, 158, 46, 0.08);
+  border-radius: 8px;
+  padding: 9px 12px;
+  margin: 14px 0 0;
+}
+.al-loading { font-size: 13px; opacity: 0.7; margin: 18px 0; }
+.al-choice { margin-top: 16px; }
+.al-choice-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.al-choice-card {
+  text-align: left;
+  padding: 11px 13px;
+  border: 1px solid var(--line, rgba(127, 127, 127, 0.35));
+  border-radius: 10px;
+  background: none;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font: inherit;
+  color: inherit;
+}
+.al-choice-card span { font-size: 12px; opacity: 0.7; }
+.al-choice-card.is-picked { border-color: var(--accent, #6a8bd7); }
+.al-file-rows { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.al-file-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.al-file-ord {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid var(--line, rgba(127, 127, 127, 0.4));
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  flex: 0 0 18px;
+}
+.al-file-move { padding: 0 6px; min-width: 26px; }
+.al-file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.al-radio {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 1.5px solid var(--line, rgba(127, 127, 127, 0.5));
+  background: none;
+  cursor: pointer;
+  flex: 0 0 16px;
+  padding: 0;
+}
+.al-radio.is-picked { border-color: var(--accent, #6a8bd7); box-shadow: inset 0 0 0 3.5px var(--accent, #6a8bd7); }
+.al-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line, rgba(127, 127, 127, 0.25));
+}
+.al-foot-spacer { flex: 1; }
+.bd-sync-panel { margin: 10px 0 0; }
+.al-entry {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 12.5px;
+}
+.al-entry-unlinked { border: 1px dashed var(--line, rgba(127, 127, 127, 0.4)); }
+.al-entry-stale { border: 1px solid rgba(214, 158, 46, 0.5); background: rgba(214, 158, 46, 0.08); }
+.al-entry-linked {
+  border: 1px solid var(--accent, #6a8bd7);
+  background: rgba(106, 139, 215, 0.08);
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  width: 100%;
+  text-align: left;
+}
+.al-entry-copy { flex: 1; }
+.al-entry-meta { font-size: 10.5px; opacity: 0.6; }
+.al-entry-chevron { opacity: 0.5; }

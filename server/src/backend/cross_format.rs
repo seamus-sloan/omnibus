@@ -38,6 +38,9 @@ pub(super) async fn get_cross_format_resume(
         Err(db::cross_format::CrossFormatError::BookNotFound) => {
             (axum::http::StatusCode::NOT_FOUND, "book not found").into_response()
         }
+        Err(e @ db::cross_format::CrossFormatError::AudioSetMismatch) => {
+            (axum::http::StatusCode::CONFLICT, e.to_string()).into_response()
+        }
         Err(db::cross_format::CrossFormatError::Sqlx(e)) => internal("cross_format_resume", e),
     }
 }
