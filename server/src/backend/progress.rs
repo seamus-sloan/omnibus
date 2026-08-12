@@ -127,7 +127,8 @@ pub(super) async fn post_sessions(
             return (axum::http::StatusCode::BAD_REQUEST, msg).into_response();
         }
     }
-    let mut tx = match state.pool.begin().await {
+    // BEGIN IMMEDIATE avoids a stale-snapshot 517 on concurrent batches (#1862).
+    let mut tx = match state.pool.begin_with("BEGIN IMMEDIATE").await {
         Ok(tx) => tx,
         Err(e) => return internal("begin", e),
     };

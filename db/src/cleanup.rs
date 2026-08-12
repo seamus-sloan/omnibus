@@ -80,7 +80,9 @@ pub struct DetectedSuggestion {
     /// split/rename/delete acts on.
     pub primary_name: String,
     /// The other name in a two-way merge, or the proposed title for a
-    /// rename. `None` when the suggestion has no single "other" name.
+    /// rename. `None` when the suggestion has no single "other" name —
+    /// including a merge group of 3+ duplicate names, where no single
+    /// source name can stand in for "the other one".
     pub secondary_name: Option<String>,
     /// How many *distinct* library books are affected if the suggestion is
     /// applied — a merge group's book is counted once even if it's linked
@@ -407,13 +409,20 @@ fn merge_suggestion(
         .flat_map(|r| r.book_ids.iter())
         .collect::<HashSet<_>>()
         .len() as i64;
+    // Only a genuine two-way merge has a single "other" name; a 3+-way
+    // group has no one source name that can stand in for the rest.
+    let secondary_name = if group.len() == 2 {
+        source_names.first().cloned()
+    } else {
+        None
+    };
     DetectedSuggestion {
         kind,
         action: CleanupAction::Merge,
         tier,
         score,
         primary_name: canonical.name.clone(),
-        secondary_name: source_names.first().cloned(),
+        secondary_name,
         book_count,
         payload: CleanupPayload::Merge {
             source_ids,

@@ -49,7 +49,8 @@ pub async fn put_state(
     if let Some(rejected) = reject_oversized_state_request(&body) {
         return rejected;
     }
-    let mut tx = match state.pool().begin().await {
+    // BEGIN IMMEDIATE avoids a stale-snapshot 517 on concurrent writers (#1862).
+    let mut tx = match state.pool().begin_with("BEGIN IMMEDIATE").await {
         Ok(tx) => tx,
         Err(e) => return internal("kobo put_state begin", e),
     };
