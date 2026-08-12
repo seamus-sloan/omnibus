@@ -1,8 +1,9 @@
 //  SyncPromptStore.swift
 //  Dismissal memory for the cross-format resume prompts: the newest source
 //  clock the user has declined, per (book, target). Account-scoped in the
-//  offline kv store — wiped on account switch — mirroring the web client's
-//  `omn.syncprompt::{uuid}::{target}` localStorage key.
+//  offline kv store — wiped on account switch. The web client keeps the
+//  same memory in localStorage under its own key shape; only the re-arm
+//  rule is shared, not the literal key.
 
 import Foundation
 

@@ -65,6 +65,7 @@ struct AlignmentSheet: View {
         .task { await load() }
     }
 
+    @MainActor
     private func load() async {
         do {
             let v = try await UserDataService.alignment(uuid: book.uuid)
