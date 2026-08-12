@@ -122,11 +122,7 @@ pub(super) async fn post_sessions(
             return (axum::http::StatusCode::BAD_REQUEST, msg).into_response();
         }
     }
-    // `BEGIN IMMEDIATE`: the bulk-resolve below is a read that would
-    // otherwise seed a DEFERRED transaction's snapshot before the insert
-    // loop's writes, risking `SQLITE_BUSY_SNAPSHOT` (517) under concurrent
-    // session-report batches from two devices (#1862) — see the matching
-    // comment on `db::progress::upsert_progress`.
+    // BEGIN IMMEDIATE avoids a stale-snapshot 517 on concurrent batches (#1862).
     let mut tx = match state.pool.begin_with("BEGIN IMMEDIATE").await {
         Ok(tx) => tx,
         Err(e) => return internal("begin", e),

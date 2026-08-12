@@ -57,16 +57,7 @@ pub async fn set_read_status(
     user_id: i64,
     update: &SetReadStatus,
 ) -> Result<ReadStatusRecord, ReadStatusError> {
-    // `BEGIN IMMEDIATE`, not plain `pool.begin()`: `set_read_status_tx` reads
-    // (`resolve_canonical_book_uuid_exec`) before it writes, same shape as
-    // `progress::upsert_progress_tx`. A DEFERRED transaction takes its
-    // snapshot on that read and only requests the write lock on the later
-    // `INSERT ... ON CONFLICT`; a concurrent writer (a second device, or a
-    // reader auto-marking status on the same book) committing in between
-    // leaves the snapshot stale, and SQLite reports `SQLITE_BUSY_SNAPSHOT`
-    // (517) instead of retrying — `busy_timeout` only covers lock
-    // *acquisition*, not a snapshot upgrade (#1862). Taking the write lock
-    // up front removes the upgrade entirely.
+    // Same BEGIN IMMEDIATE reasoning as `progress::upsert_progress` (#1862).
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let record = set_read_status_tx(&mut tx, user_id, update).await?;
     tx.commit().await?;

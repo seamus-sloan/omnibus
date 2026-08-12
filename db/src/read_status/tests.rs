@@ -223,11 +223,7 @@ async fn set_read_status_resolves_merged_uuid_to_surviving_book() {
     assert_eq!(got.status, ReadStatus::Finished);
 }
 
-/// #1862: `set_read_status_tx` reads (resolves the canonical uuid) before it
-/// writes, the same shape that made `progress::upsert_progress_tx` vulnerable
-/// to `SQLITE_BUSY_SNAPSHOT` under a plain `pool.begin()`. Several rounds of
-/// overlapping writers — on the same row and on distinct rows — give that
-/// race a real chance to have fired without the `BEGIN IMMEDIATE` fix.
+/// Regression test for the BEGIN IMMEDIATE stale-snapshot 517 fix (#1862).
 #[tokio::test]
 async fn set_read_status_succeeds_for_many_concurrent_writers_on_one_pool() {
     let pool = init_db("sqlite::memory:").await.unwrap();

@@ -2430,26 +2430,7 @@ fn kobo_statistics_is_empty_only_when_both_counters_are_absent() {
     .is_empty());
 }
 
-// ---------------------------------------------------------------------------
-// #1862: concurrent writers must not surface SQLITE_BUSY_SNAPSHOT (517)
-// ---------------------------------------------------------------------------
-//
-// `upsert_progress_tx` and `record_session_tx` both read (resolving the
-// canonical book uuid) before they write. Under a plain `pool.begin()`
-// (DEFERRED), that read seeds the transaction's snapshot; if a concurrent
-// writer commits before this transaction's later INSERT runs, SQLite can't
-// upgrade the stale snapshot to a write lock and returns
-// `SQLITE_BUSY_SNAPSHOT` immediately — `PRAGMA busy_timeout` only retries
-// *lock acquisition*, not a snapshot upgrade, so the caller sees a 500
-// within single-digit milliseconds (the production incident this issue
-// reports). `upsert_progress` / `record_session` now open with
-// `BEGIN IMMEDIATE`, taking the write lock before the read runs, so a
-// losing writer queues behind `busy_timeout` instead of erroring.
-//
-// Several rounds of many overlapping writers — some contending on the same
-// row (forcing the `ON CONFLICT` path), some on distinct rows (still
-// contending for SQLite's single writer lock) — give the underlying race a
-// real chance to have fired without the fix.
+// Regression tests for the BEGIN IMMEDIATE stale-snapshot 517 fix (#1862).
 const CONCURRENT_ROUNDS: i64 = 5;
 const CONCURRENT_WRITERS_PER_ROUND: usize = 5;
 

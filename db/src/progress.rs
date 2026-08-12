@@ -89,18 +89,7 @@ pub async fn upsert_progress(
     user_id: i64,
     update: &ProgressUpdate,
 ) -> Result<ProgressRecord, ProgressError> {
-    // `BEGIN IMMEDIATE`, not plain `pool.begin()`: `upsert_progress_tx`
-    // reads (`resolve_canonical_book_uuid_exec`) before it writes, so a
-    // DEFERRED transaction takes its snapshot on that read and only
-    // requests the write lock later, on the `INSERT ... ON CONFLICT`. Two
-    // devices racing a position write for the same book can then have the
-    // loser's snapshot go stale the instant the winner commits, which
-    // SQLite reports as `SQLITE_BUSY_SNAPSHOT` (code 517) rather than
-    // retrying — `busy_timeout` only covers lock *acquisition*, not a
-    // stale-snapshot upgrade, so the loser 500s instead of queueing (#1862).
-    // Taking the write lock up front removes the upgrade entirely: the
-    // second writer just queues behind `busy_timeout` like any other lock
-    // wait.
+    // BEGIN IMMEDIATE avoids a stale-snapshot 517 on concurrent writes (#1862).
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let record = upsert_progress_tx(&mut tx, user_id, update).await?;
     tx.commit().await?;
@@ -664,10 +653,7 @@ pub async fn record_session(
     user_id: i64,
     report: &SessionReport,
 ) -> Result<bool, ProgressError> {
-    // Same `BEGIN IMMEDIATE` reasoning as `upsert_progress`:
-    // `record_session_tx` resolves the book uuid (a read) before its
-    // `INSERT OR IGNORE`, so a plain `pool.begin()` risks the same
-    // stale-snapshot 517 under concurrent session reports for one user.
+    // Same BEGIN IMMEDIATE reasoning as `upsert_progress` above (#1862).
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let result = record_session_tx(&mut tx, user_id, report).await?;
     tx.commit().await?;
