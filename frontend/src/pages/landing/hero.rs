@@ -141,11 +141,36 @@ fn HeroCard(point: ResumePoint, server_url: String) -> Element {
         .map(|c| c.name.clone())
         .unwrap_or_default();
     let is_audio = point.record.format == ProgressFormat::Audio;
-    let (eyebrow, cta_label) = if is_audio {
-        ("Continue listening", "Play")
-    } else {
-        ("Continue reading", "Read")
+    let (eyebrow, cta_label) = match (is_audio, point.linked) {
+        (true, true) => ("Continue \u{00b7} synced", "Play"),
+        (false, true) => ("Continue \u{00b7} synced", "Read"),
+        (true, false) => ("Continue listening", "Play"),
+        (false, false) => ("Continue reading", "Read"),
     };
+    // Linked books carry the mapped "resume in the other format" candidate;
+    // the CTA routes to that surface, whose own prompt offers the precise
+    // jump once loaded.
+    let counterpart = point.cross_format.as_ref().map(|cf| {
+        let (route, label) = match cf.target {
+            ProgressFormat::Audio => (
+                Route::BookListen {
+                    uuid: uuid.clone(),
+                    file_id: cf.book_file_id,
+                },
+                format!(
+                    "Listen \u{00b7} \u{2248} {}",
+                    crate::components::alignment_modal::fmt_hm(
+                        cf.audio_position_seconds.unwrap_or(0.0),
+                    ),
+                ),
+            ),
+            ProgressFormat::Epub => (
+                Route::BookRead { uuid: uuid.clone() },
+                format!("Read \u{00b7} \u{2248} {}%", cf.percent.unwrap_or(0)),
+            ),
+        };
+        (route, label)
+    });
     // Shared dispatch (routes::resume_route) rather than a local format
     // match: it carries the audio point's `book_file_id` and sends a
     // CBZ-only book to the comic pager — the mobile resume card already
@@ -185,6 +210,14 @@ fn HeroCard(point: ResumePoint, server_url: String) -> Element {
                 }
                 div { class: "ch-foot",
                     span { class: "mono ch-meta", "{meta}" }
+                    if let Some((route, label)) = counterpart {
+                        Link {
+                            to: route,
+                            class: "ch-cta ch-cta-alt",
+                            "data-testid": "hero-crossformat-{uuid}",
+                            span { "{label}" }
+                        }
+                    }
                     Link {
                         to: resume_route,
                         class: "ch-cta",

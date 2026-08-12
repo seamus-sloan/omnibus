@@ -400,6 +400,23 @@ const FIXTURES: EpubInput[] = [
     withCover: true,
   },
 
+  // --- Second dual-format pair, RESERVED for cross_format_prompts.spec.ts:
+  // that spec links the formats and writes reading/listening progress, all
+  // globally visible server state — no other spec may touch this book. Same
+  // byte-identical (title, author) rule as "Immersive Voyage"; the author
+  // appears nowhere else in either generator, and the title sorts before
+  // "The Isle of Functions" so the landing sort test is undisturbed.
+  {
+    filename: "parallel-latitudes.epub",
+    id: "urn:omnibus-test:parallel-latitudes",
+    title: "Parallel Latitudes",
+    authors: ["Vera Molnar"],
+    publisher: "Omnibus Test Press",
+    published: "1968-05-01",
+    language: "en",
+    withCover: true,
+  },
+
   // --- Bulk-edit targets (2 books) ---
   // Reserved for landing_bulk_edit.spec.ts, which bulk-writes publisher/tag
   // overrides to BOTH books (reverted at test end, but the suite is

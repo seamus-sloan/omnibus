@@ -1696,6 +1696,16 @@
     });
   }
 
+  // Jump to a whole-book percentage (0..100) via the generated locations
+  // map — the cross-format sync banner's entry point. No-op until the
+  // locations have resolved (generated on first open, cached after).
+  function displayPercentage(pct) {
+    if (!book || !book.locations || !book.locations.length()) return;
+    var frac = Math.min(Math.max(Number(pct) / 100, 0), 1);
+    var cfi = book.locations.cfiFromPercentage(frac);
+    if (cfi) displaySettled(cfi);
+  }
+
   window.OmnibusReader = {
     init: init,
     next: next,
@@ -1712,6 +1722,7 @@
     clearAnnotations: clearAnnotations,
     requestToc: requestToc,
     display: display,
+    displayPercentage: displayPercentage,
     copyText: copyText,
     shareText: shareText,
     search: search,
