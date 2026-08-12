@@ -52,7 +52,12 @@ pub(super) async fn post_progress(
         return (axum::http::StatusCode::BAD_REQUEST, msg).into_response();
     }
     match db::progress::upsert_progress(&state.pool, user.id, &update).await {
-        Ok(rec) => Json(rec).into_response(),
+        Ok(rec) => {
+            // Epub CFI writes without a percent get one derived off-path;
+            // the response carries the record as stored, percent follows.
+            db::progress::spawn_epub_percent_derivation(state.pool.clone(), user.id, &rec);
+            Json(rec).into_response()
+        }
         Err(ProgressError::BookNotFound) => {
             (axum::http::StatusCode::NOT_FOUND, "book not found").into_response()
         }

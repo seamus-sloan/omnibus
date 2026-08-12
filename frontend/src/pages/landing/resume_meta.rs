@@ -1,6 +1,6 @@
 //! Resume-point meta formatting shared by the mobile resume card and the web
 //! continue-reading hero: percent/remaining labels for audio, and the plain
-//! continue affordance for epub (whose CFI position has no honest percentage).
+//! continue affordance for epub rows that lack a stored percent.
 
 use omnibus_shared::{ProgressFormat, ResumePoint};
 
@@ -9,8 +9,9 @@ use omnibus_shared::{ProgressFormat, ResumePoint};
 /// the raw position; epub rows read as a plain continue affordance.
 pub(super) fn resume_meta(point: &ResumePoint) -> (String, Option<i64>) {
     if point.record.format == ProgressFormat::Epub {
-        // A stored whole-book percent (a Kobo's write, or the comic pager's
-        // page/count mapping) is honest enough for a bar; a bare CFI is not.
+        // A stored whole-book percent (a Kobo's write, the comic pager's
+        // page/count mapping, or the percent the server derives for a web
+        // CFI write) is honest enough for a bar; a bare CFI is not.
         return match point.record.progress_percent {
             Some(pct) => (format!("{pct}% \u{00b7} Continue reading"), Some(pct)),
             None => ("Continue reading".to_string(), None),
