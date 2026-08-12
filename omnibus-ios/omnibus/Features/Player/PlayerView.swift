@@ -55,6 +55,15 @@ struct PlayerView: View {
                     onDismiss: { player.dismissSyncOffer() }
                 )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if let cross = player.crossFormatOffer,
+                      let seconds = cross.audioPositionSeconds {
+                SyncOfferBanner(
+                    title: "Read further in the ebook",
+                    detail: "Your reading maps to about \(Format.duration(seconds)).",
+                    onGo: { Task { await player.acceptCrossFormatOffer() } },
+                    onDismiss: { Task { await player.dismissCrossFormatOffer() } }
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         // `containerRelativeFrame` pins these rows to a definite width. Without

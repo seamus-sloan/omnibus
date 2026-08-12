@@ -150,3 +150,100 @@ async fn api_cross_format_resume_500s_when_the_db_is_gone() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
+
+#[tokio::test]
+async fn api_alignment_and_link_lifecycle_round_trips() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let (book_id, uuid) = seed_book_with_uuid(&pool, "/lib", "Dual").await;
+    attach_audio(&pool, book_id).await;
+
+    // Alignment read renders (no link yet).
+    let res = app
+        .clone()
+        .oneshot(get_with_bearer(
+            &format!("/api/books/{uuid}/alignment"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Confirm via REST → 204; resume state leaves not_linked.
+    let body = serde_json::json!({ "book_uuid": "ignored", "mode": "sequence" });
+    let res = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!("/api/books/{uuid}/cross-format-link"))
+                .method("POST")
+                .header("content-type", "application/json")
+                .header(axum::http::header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(axum::body::Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let res = app
+        .clone()
+        .oneshot(get_with_bearer(
+            &format!("/api/books/{uuid}/cross-format-resume?target=audio"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    let resume = body_json(res).await;
+    assert_ne!(resume.state, CrossFormatResumeState::NotLinked);
+
+    // Unlink via REST → 204, idempotent.
+    for _ in 0..2 {
+        let res = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!("/api/books/{uuid}/cross-format-link"))
+                    .method("DELETE")
+                    .header(axum::http::header::AUTHORIZATION, format!("Bearer {token}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    }
+}
+
+#[tokio::test]
+async fn api_cross_format_link_gates_reorder_on_edit_permission() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "norights").await;
+    sqlx::query("UPDATE users SET can_edit = 0 WHERE id = ?")
+        .bind(user.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let (book_id, uuid) = seed_book_with_uuid(&pool, "/lib", "Dual").await;
+    let file_id = attach_audio(&pool, book_id).await;
+
+    let body = serde_json::json!({
+        "book_uuid": "ignored",
+        "mode": "sequence",
+        "audio_order": [file_id],
+    });
+    let res = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!("/api/books/{uuid}/cross-format-link"))
+                .method("POST")
+                .header("content-type", "application/json")
+                .header(axum::http::header::AUTHORIZATION, format!("Bearer {token}"))
+                .body(axum::body::Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
