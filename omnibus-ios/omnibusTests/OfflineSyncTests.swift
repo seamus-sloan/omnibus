@@ -28,7 +28,7 @@ private func replayedValue(_ json: String, key: String) throws -> Any? {
     return object?[key]
 }
 
-@Suite("Outbox body re-encoding")
+@Suite("Outbox body re-encoding", .serialized)
 struct RawJSONTests {
     @Test("one-star rating survives replay as a number, not a boolean")
     func oneStarRatingStaysNumeric() throws {
@@ -89,7 +89,7 @@ struct RawJSONTests {
 
 // MARK: - Revalidation scoping
 
-@Suite("Outbox scope")
+@Suite("Outbox scope", .serialized)
 struct OutboxScopeTests {
     private let uuid = "11111111-2222-3333-4444-555555555555"
 
@@ -188,7 +188,7 @@ struct OutboxScopeTests {
 
 // MARK: - Reachability signals
 
-@Suite("Cancellation is not a reachability signal")
+@Suite("Cancellation is not a reachability signal", .serialized)
 struct CancellationTests {
     @Test("a cancelled URL task is recognised as cancellation")
     func urlCancellationIsRecognised() {
@@ -210,7 +210,7 @@ struct CancellationTests {
 
 // MARK: - Replay outcome classification
 
-@Suite("Replay outcomes")
+@Suite("Replay outcomes", .serialized)
 struct ReplayOutcomeTests {
     @Test("a payload the server refuses on its merits is never retried")
     func refusalsAreTerminal() {
@@ -247,7 +247,7 @@ struct ReplayOutcomeTests {
 
 // MARK: - Position wire contract
 
-@Suite("Progress client clock")
+@Suite("Progress client clock", .serialized)
 struct ProgressClockTests {
     private func encoded(_ update: ProgressUpdate) throws -> [String: Any] {
         let data = try JSONEncoder().encode(update)
@@ -336,7 +336,7 @@ struct ProgressClockTests {
 // which the player then re-saved with a fresh clock — permanently. These pin
 // the four guards that close the gap.
 
-@Suite("Restoring the newer of the replica and a queued position")
+@Suite("Restoring the newer of the replica and a queued position", .serialized)
 struct PositionRestoreTests {
     private func record(_ seconds: Double, clock: Int64) -> ProgressRecord {
         ProgressRecord(
@@ -422,7 +422,7 @@ struct PositionRestoreTests {
     }
 }
 
-@Suite("Folding a drained progress response into the replica")
+@Suite("Folding a drained progress response into the replica", .serialized)
 struct ProgressResponseSupersessionTests {
     private func record(clock: Int64) -> ProgressRecord {
         ProgressRecord(
@@ -457,7 +457,7 @@ struct ProgressResponseSupersessionTests {
     }
 }
 
-@Suite("Replay cap exemption for coalesced position kinds")
+@Suite("Replay cap exemption for coalesced position kinds", .serialized)
 struct ReplayCapExemptionTests {
     @Test("AC3: progress and playback-rate kinds are exempt")
     func positionKindsAreExempt() {
@@ -480,7 +480,7 @@ struct ReplayCapExemptionTests {
     }
 }
 
-@Suite("Close-time position flush")
+@Suite("Close-time position flush", .serialized)
 struct ClosePositionFlushTests {
     @Test("AC4: closing before the opening position has settled writes nothing")
     func unsettledCloseWritesNothing() {
@@ -505,7 +505,7 @@ struct ClosePositionFlushTests {
 
 // MARK: - Audiobook file selection
 
-@Suite("Progress file identity")
+@Suite("Progress file identity", .serialized)
 struct ProgressFileIdentityTests {
     private func encoded(_ update: ProgressUpdate) throws -> [String: Any] {
         let data = try JSONEncoder().encode(update)
@@ -555,7 +555,7 @@ struct ProgressFileIdentityTests {
     }
 }
 
-@Suite("Selectable audio files")
+@Suite("Selectable audio files", .serialized)
 struct AudioFileSelectionTests {
     private func file(
         _ id: Int64, format: String, ordinal: Int64
@@ -609,7 +609,7 @@ struct AudioFileSelectionTests {
 
 // MARK: - Optimistic journal authorship (#1740)
 
-@Suite("Optimistic journal entry")
+@Suite("Optimistic journal entry", .serialized)
 struct OptimisticJournalEntryTests {
     private let payload = CreateJournalEntry(
         bookUUID: "11111111-2222-3333-4444-555555555555",
@@ -671,7 +671,7 @@ struct OptimisticJournalEntryTests {
 
 // MARK: - Account scoping
 
-@Suite("User-scoped cache wipe")
+@Suite("User-scoped cache wipe", .serialized)
 struct UserScopedPrefixTests {
     private let uuid = "11111111-2222-3333-4444-555555555555"
 
@@ -729,7 +729,7 @@ struct UserScopedPrefixTests {
 
 // MARK: - Content validators (#1231)
 
-@Suite("Download staleness")
+@Suite("Download staleness", .serialized)
 struct DownloadStalenessTests {
     private func file(
         _ id: Int64, format: String, ordinal: Int64, etag: String?
@@ -818,7 +818,7 @@ struct DownloadStalenessTests {
     }
 }
 
-@Suite("Book file validator wire shape")
+@Suite("Book file validator wire shape", .serialized)
 struct BookFileEtagCodecTests {
     @Test("the validator decodes from the server's snake_case payload")
     func etagDecodes() throws {
@@ -840,7 +840,7 @@ struct BookFileEtagCodecTests {
     }
 }
 
-@Suite("Downloaded-file selection")
+@Suite("Downloaded-file selection", .serialized)
 struct DownloadTargetFileTests {
     private func file(
         _ id: Int64, format: String, ordinal: Int64, etag: String?
