@@ -9,6 +9,7 @@ pub mod audiobook;
 pub mod auth;
 pub mod bookmark;
 pub mod cleanup;
+pub mod cross_format;
 pub mod deletion;
 pub mod discovery;
 pub mod ebook;
