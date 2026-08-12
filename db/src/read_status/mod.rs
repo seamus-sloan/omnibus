@@ -57,7 +57,8 @@ pub async fn set_read_status(
     user_id: i64,
     update: &SetReadStatus,
 ) -> Result<ReadStatusRecord, ReadStatusError> {
-    let mut tx = pool.begin().await?;
+    // Same BEGIN IMMEDIATE reasoning as `progress::upsert_progress` (#1862).
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let record = set_read_status_tx(&mut tx, user_id, update).await?;
     tx.commit().await?;
     Ok(record)

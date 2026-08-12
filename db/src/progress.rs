@@ -89,7 +89,8 @@ pub async fn upsert_progress(
     user_id: i64,
     update: &ProgressUpdate,
 ) -> Result<ProgressRecord, ProgressError> {
-    let mut tx = pool.begin().await?;
+    // BEGIN IMMEDIATE avoids a stale-snapshot 517 on concurrent writes (#1862).
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let record = upsert_progress_tx(&mut tx, user_id, update).await?;
     tx.commit().await?;
     Ok(record)
@@ -652,7 +653,8 @@ pub async fn record_session(
     user_id: i64,
     report: &SessionReport,
 ) -> Result<bool, ProgressError> {
-    let mut tx = pool.begin().await?;
+    // Same BEGIN IMMEDIATE reasoning as `upsert_progress` above (#1862).
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let result = record_session_tx(&mut tx, user_id, report).await?;
     tx.commit().await?;
     Ok(result)

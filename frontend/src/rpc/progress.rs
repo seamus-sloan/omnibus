@@ -130,8 +130,9 @@ async fn record_sessions_batch(
     user_id: i64,
     reports: &[SessionReport],
 ) -> Result<u64, ServerFnError> {
+    // BEGIN IMMEDIATE avoids a stale-snapshot 517 on concurrent batches (#1862).
     let mut tx = pool
-        .begin()
+        .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(|e| internal_rpc_error("begin sessions batch", e))?;
     let batch_uuids: Vec<String> = reports.iter().map(|r| r.book_uuid.clone()).collect();
