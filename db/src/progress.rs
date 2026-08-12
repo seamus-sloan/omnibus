@@ -306,6 +306,23 @@ fn percent_derivations_in_flight() -> &'static Mutex<HashSet<(i64, String)>> {
     IN_FLIGHT.get_or_init(Mutex::default)
 }
 
+/// Removes its key from the in-flight set on drop, so the slot frees even
+/// when the derivation future panics or is dropped mid-flight — a leaked
+/// key would suppress every later derivation for that `(user, book)` until
+/// process restart.
+struct InFlightGuard {
+    key: (i64, String),
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        percent_derivations_in_flight()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.key);
+    }
+}
+
 /// Fire-and-forget percent derivation for an accepted epub write that landed
 /// without one (the web reader sends only a CFI). Runs off the request path:
 /// the caller responds immediately and the percent attaches clock-neutrally
@@ -327,15 +344,14 @@ pub fn spawn_epub_percent_derivation(pool: SqlitePool, user_id: i64, record: &Pr
             return;
         }
     }
+    // The guard exists from here on, so the key leaves the set no matter
+    // how the future ends — completion, panic, or being dropped unrun.
+    let guard = InFlightGuard { key };
     let book_uuid = record.book_uuid.clone();
     let expected = record.client_updated_at;
     tokio::spawn(async move {
-        let result = derive_epub_percent(&pool, user_id, &book_uuid, &cfi, expected).await;
-        percent_derivations_in_flight()
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&key);
-        if let Err(e) = result {
+        let _guard = guard;
+        if let Err(e) = derive_epub_percent(&pool, user_id, &book_uuid, &cfi, expected).await {
             tracing::warn!(%book_uuid, error = %e, "epub percent derivation failed");
         }
     });
