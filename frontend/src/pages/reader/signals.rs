@@ -55,6 +55,14 @@ pub(crate) struct RelocateData {
     pub(crate) chapter: u32,
     pub(crate) total_chapters: u32,
     pub(crate) chapter_title: String,
+    /// True when the glue re-states a position the host already knows (the
+    /// restore settle, the locations-resolved re-emit) rather than reporting
+    /// movement. Rendered like any relocate, but never persisted: an echo
+    /// write stamps a fresh clock on an unmoved position, which out-orders a
+    /// newer counterpart-format position at the cross-format clock gate.
+    #[serde(default)]
+    #[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
+    pub(crate) echo: bool,
 }
 
 /// Format the bottom-bar `page` and `chapter` strings from a relocate

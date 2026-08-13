@@ -127,10 +127,14 @@ fn register_window_callbacks(
     let uuid_for_save = uuid_cb;
     let relocate = Closure::<dyn FnMut(String)>::new(move |json: String| {
         if let Ok(data) = serde_json::from_str::<super::RelocateData>(&json) {
-            if let Some(ref cfi) = data.cfi {
-                crate::reader_progress::save(&uuid_for_save, cfi);
+            // Echo emissions re-state a position the server already holds —
+            // persisting one would stamp a fresh clock on an unmoved
+            // position and shadow a newer audiobook spot at the
+            // cross-format clock gate. Render, don't write.
+            if let Some(cfi) = data.cfi.clone().filter(|_| !data.echo) {
+                crate::reader_progress::save(&uuid_for_save, &cfi);
                 let uuid_for_post = uuid_for_save.clone();
-                let cfi_for_post = cfi.clone();
+                let cfi_for_post = cfi;
                 wasm_bindgen_futures::spawn_local(async move {
                     // `client_updated_at` is the event time the server's
                     // conditional upsert arbitrates on; without it a write

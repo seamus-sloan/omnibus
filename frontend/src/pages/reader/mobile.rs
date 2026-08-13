@@ -214,7 +214,12 @@ async fn drain_reader_events(
     crate::js_interop::drain_events(eval, move |event: ReaderEvent| match event {
         ReaderEvent::Relocate { json } => {
             if let Ok(data) = serde_json::from_str::<RelocateData>(&json) {
-                if let Some(cfi) = data.cfi.clone() {
+                // Echo emissions (restore settle, locations re-emit) re-state
+                // a position the server already holds — persisting one stamps
+                // a fresh clock on an unmoved position and shadows a newer
+                // audiobook spot at the cross-format clock gate. Same rule as
+                // the web interop; render, don't write.
+                if let Some(cfi) = data.cfi.clone().filter(|_| !data.echo) {
                     crate::reader_progress::save(&uuid, &cfi);
                     // Only POST on an actual position change (the glue
                     // debounces, but re-renders can re-emit the same CFI).
