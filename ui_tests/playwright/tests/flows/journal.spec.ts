@@ -73,16 +73,22 @@ async function cancelComposerDiscardingDraft(page: Page) {
   await expect(page.getByTestId("journal-composer")).toHaveCount(0);
 }
 
-/** Delete the entry whose rendered body contains `marker`. */
+/**
+ * Delete the entry whose rendered body contains `marker`. Delete opens a
+ * "This can't be undone" confirm modal (#1907) before the RPC fires — the
+ * mutation is asserted around the modal's own confirm button, not the
+ * card's Delete button.
+ */
 async function deleteEntry(
   page: import("@playwright/test").Page,
   marker: string,
 ) {
   const card = page.getByTestId("journal-entry").filter({ hasText: marker });
+  await card.getByTestId("journal-delete").click();
   await expectMutation(
     page,
     { method: "POST", url: "/api/rpc/journals/delete", expectedStatus: 200 },
-    async () => card.getByTestId("journal-delete").click(),
+    async () => page.getByTestId("journal-delete-confirm").click(),
   );
   await expect(
     page.getByTestId("journal-entry").filter({ hasText: marker }),
@@ -588,16 +594,27 @@ test("surfaces an error on the entry card when the owner's delete fails", async 
       body: "delete exploded",
     }),
   );
+  await card.getByTestId("journal-delete").click();
   await expectMutation(
     page,
     { method: "POST", url: "/api/rpc/journals/delete", expectedStatus: 500 },
-    async () => card.getByTestId("journal-delete").click(),
+    async () => page.getByTestId("journal-delete-confirm").click(),
   );
 
   // The card stays put and the owner sees the inline error (previously hidden).
   await expect(card).toBeVisible();
   await expect(card.getByRole("alert")).toBeVisible();
 
+  // A failed delete leaves the confirm modal open (only a successful delete
+  // clears it), so retry through the already-open modal rather than
+  // re-clicking the card's Delete button, which the modal now covers.
   await page.unroute("**/api/rpc/journals/delete");
-  await deleteEntry(page, marker);
+  await expectMutation(
+    page,
+    { method: "POST", url: "/api/rpc/journals/delete", expectedStatus: 200 },
+    async () => page.getByTestId("journal-delete-confirm").click(),
+  );
+  await expect(
+    page.getByTestId("journal-entry").filter({ hasText: marker }),
+  ).toHaveCount(0);
 });
