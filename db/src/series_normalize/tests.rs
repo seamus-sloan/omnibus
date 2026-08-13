@@ -174,6 +174,51 @@ async fn backfill_embedded_series_index_handles_the_comma_book_variant_and_is_id
 }
 
 #[tokio::test]
+async fn backfill_embedded_series_index_never_stamps_a_preexisting_canonical_books_index() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib_id = seed_scan_root(&pool).await;
+    // A canonical "Mistborn" row already exists (e.g. from a book indexed
+    // with no embedded number at all) with its own book that has no
+    // series_index of its own — this book must never be touched by a later
+    // merge of an unrelated fragmented "Mistborn #N" row onto the same name.
+    let canonical_book = seed_fragmented_book(&pool, lib_id, "u1", "Mistborn", None).await;
+    let fragmented_book = seed_fragmented_book(&pool, lib_id, "u2", "Mistborn #2", None).await;
+
+    backfill_embedded_series_index(&pool).await.unwrap();
+
+    let series: Vec<(i64, String)> = sqlx::query_as("SELECT id, name FROM series")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        series.len(),
+        1,
+        "both rows merge onto the one canonical row"
+    );
+
+    let canonical_idx: Option<f64> =
+        sqlx::query_scalar("SELECT series_index FROM books WHERE id = ?1")
+            .bind(canonical_book)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        canonical_idx, None,
+        "a book already on the canonical row must never be stamped by an unrelated merge"
+    );
+
+    let fragmented_idx: f64 = sqlx::query_scalar("SELECT series_index FROM books WHERE id = ?1")
+        .bind(fragmented_book)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        fragmented_idx, 2.0,
+        "the book that actually came from the fragmented row gets its embedded index"
+    );
+}
+
+#[tokio::test]
 async fn backfill_embedded_series_index_propagates_db_error_when_pool_is_closed() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     pool.close().await;

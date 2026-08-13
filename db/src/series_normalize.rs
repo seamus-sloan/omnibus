@@ -1,11 +1,8 @@
-//! Boot backfill (#1912) that merges `series` rows whose stored name embeds
-//! a trailing index — "Mistborn #2", "Mistborn, Book 2" — into the same
-//! cleaned, canonical series name the sync writers now resolve fresh scans
-//! to (`helpers::split_embedded_series_index`), repoints their
-//! `books_series_link` rows onto it, and fills `books.series_index` for any
-//! linked book that has no explicit index of its own. Runs once per boot
-//! from `init_db`, before `sort_keys::backfill_series_sort` so that pass
-//! reads the merged link rather than the stale, pre-merge one.
+//! Boot backfill that merges `series` rows whose stored name embeds a
+//! trailing index ("Mistborn #2") into the cleaned, canonical series name,
+//! repoints their `books_series_link` rows, and fills `books.series_index`
+//! for newly-linked books that have none. Runs once per boot from
+//! `init_db`, before `sort_keys::backfill_series_sort`.
 
 use sqlx::{SqlitePool, Transaction};
 
@@ -63,6 +60,16 @@ async fn merge_series_row(
 ) -> Result<(), sqlx::Error> {
     let target_id = resolve_or_insert_series(tx, cleaned_name).await?;
 
+    // Capture the books linked to the fragmented row *before* the union
+    // below, so the index backfill only ever touches books that came from
+    // this source row — never a book already sitting on the canonical row
+    // for an unrelated reason.
+    let source_book_ids: Vec<i64> =
+        sqlx::query_scalar("SELECT book FROM books_series_link WHERE series = ?")
+            .bind(source_id)
+            .fetch_all(&mut **tx)
+            .await?;
+
     if target_id != source_id {
         // Union onto the canonical row — `INSERT OR IGNORE` so a book that
         // (unusually) already links to both the fragmented and the
@@ -83,20 +90,17 @@ async fn merge_series_row(
     }
 
     // AC2: only fills the gap — a book with its own explicit series_index
-    // is never touched.
+    // is never touched. Scoped to `source_book_ids` (not "every book on
+    // `target_id`") so a canonical row with pre-existing, unrelated books
+    // that happen to have no index of their own is never stamped.
     if let Some(idx_val) = parse_series_index(embedded_idx) {
-        sqlx::query(
-            "UPDATE books SET series_index = ?
-              WHERE series_index IS NULL
-                AND EXISTS (
-                  SELECT 1 FROM books_series_link
-                   WHERE book = books.id AND series = ?
-                )",
-        )
-        .bind(idx_val)
-        .bind(target_id)
-        .execute(&mut **tx)
-        .await?;
+        for book_id in source_book_ids {
+            sqlx::query("UPDATE books SET series_index = ? WHERE id = ? AND series_index IS NULL")
+                .bind(idx_val)
+                .bind(book_id)
+                .execute(&mut **tx)
+                .await?;
+        }
     }
 
     Ok(())
