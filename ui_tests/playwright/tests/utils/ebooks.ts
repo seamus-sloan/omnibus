@@ -90,6 +90,49 @@ function expectedSeriesText(book: ExpectedBook): string {
   return "";
 }
 
+const MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+// Calibre's "no publish date" placeholder (`UNDEFINED_DATE =
+// datetime(101, 1, 1, tzinfo=utc)`) and anything at or before it in year —
+// mirrors `SENTINEL_YEAR_MAX` in `frontend/src/format.rs`.
+const SENTINEL_YEAR_MAX = 101;
+
+/**
+ * Expected text for the published cell, mirroring
+ * `frontend::format::format_date_short` (#1905): a stored `YYYY[-MM[-DD]]`
+ * date renders as `"Month D, YYYY"`, narrowing to `"Month YYYY"` or `"YYYY"`
+ * as the source narrows; an absent, unparsable, or sentinel date renders as
+ * an em dash. Keep the two formatters in lockstep.
+ */
+function expectedPublishedText(raw: string): string {
+  const datePart = raw.trim().split(/[T ]/)[0] ?? "";
+  const [yearStr, monthStr, dayStr] = datePart.split("-");
+  const year = Number(yearStr);
+  if (!yearStr || !Number.isFinite(year) || year <= SENTINEL_YEAR_MAX) {
+    return "—";
+  }
+  const month = monthStr ? Number(monthStr) : undefined;
+  const day = dayStr ? Number(dayStr) : undefined;
+  const monthName =
+    month && month >= 1 && month <= 12 ? MONTH_NAMES[month - 1] : undefined;
+  if (monthName && day) return `${monthName} ${day}, ${year}`;
+  if (monthName) return `${monthName} ${year}`;
+  return `${year}`;
+}
+
 /**
  * Assert every visible cell in a fixture's row matches the expected metadata.
  * Each per-cell testid (`ebook-cell-title`, `-author`, `-series`,
@@ -123,7 +166,7 @@ export async function expectRowMatches(
     );
   }
   await expect(row.getByTestId("ebook-cell-published")).toHaveText(
-    expected.published ?? "",
+    expectedPublishedText(expected.published ?? ""),
   );
   await expect(row.getByTestId("ebook-cell-language")).toHaveText(
     expected.language,
