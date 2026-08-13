@@ -37,6 +37,14 @@ interface EpubInput {
   id: string;
   /** Optional publisher colour applied through a class on the chapter body. */
   publisherBodyColor?: string;
+  /**
+   * When true, fill the chapter with ~32KB of deterministic prose (~32
+   * epub.js 1024-char locations) instead of one short paragraph. The
+   * cross-format specs need a jump target that is *visually* distinct: a
+   * one-location book maps every percentage to the start of the book, so a
+   * correct auto-jump and a silently-dropped one render identically.
+   */
+  longBody?: boolean;
 }
 
 const FIXTURES: EpubInput[] = [
@@ -415,6 +423,9 @@ const FIXTURES: EpubInput[] = [
     published: "1968-05-01",
     language: "en",
     withCover: true,
+    // Cross-format jump assertions need real location granularity — see
+    // the `longBody` doc on EpubInput.
+    longBody: true,
   },
 
   // --- Bulk-edit targets (2 books) ---
@@ -543,10 +554,23 @@ function buildChapter(input: EpubInput): string {
     ? `<link href="publisher.css" rel="stylesheet" type="text/css"/>`
     : "";
   const bodyClass = input.publisherBodyColor ? ` class="calibre"` : "";
+  // Deterministic (no randomness) so the generated zip stays byte-stable.
+  const prose = input.longBody
+    ? Array.from({ length: 40 }, (_, i) => {
+        const sentence =
+          `Paragraph ${i + 1} of the long-body fixture. ` +
+          "The expedition charted latitude after latitude, logging each " +
+          "reading twice and comparing the drift against the morning's " +
+          "sightings before the fog closed over the instruments again. ".repeat(
+            4,
+          );
+        return `<p>${sentence.trim()}</p>`;
+      }).join("\n")
+    : "<p>Synthetic test content.</p>";
   return `<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head><title>${escapeXml(input.title)}</title>${stylesheet}</head>
-<body${bodyClass}><h1>${escapeXml(input.title)}</h1><p>Synthetic test content.</p></body>
+<body${bodyClass}><h1>${escapeXml(input.title)}</h1>${prose}</body>
 </html>
 `;
 }
