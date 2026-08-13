@@ -233,12 +233,22 @@ struct AlignmentSheet: View {
 
     private func matchNote(_ view: AlignmentView) -> some View {
         Group {
-            if let match = view.anchorMatch {
+            if view.link?.stale == true {
+                // Anchoring (and the marks count) is suppressed while
+                // stale — say so instead of misreading the zeros.
+                Text("The audio files changed since you linked — sync is paused, and the alignment re-checks when you confirm again.")
+                    .font(.ui(12))
+                    .foregroundStyle(palette.ink2Color)
+            } else if let match = view.anchorMatch {
                 Text("\u{2713} \(match.matched) of \(match.ebookChapters) chapters matched — jumps land chapter-accurately.")
                     .font(.ui(12))
                     .foregroundStyle(palette.ink2Color)
+            } else if (view.audioChapterMarks ?? 0) > 0 {
+                Text("The audio's chapter marks couldn't be aligned with this ebook — the mapping is a straight percent-for-percent estimate, so jumps land close, not exact.")
+                    .font(.ui(12))
+                    .foregroundStyle(palette.ink2Color)
             } else {
-                Text("No chapter anchors yet — the mapping is a straight percent-for-percent estimate, so jumps land close, not exact.")
+                Text("No chapter marks in the audio — the mapping is a straight percent-for-percent estimate, so jumps land close, not exact.")
                     .font(.ui(12))
                     .foregroundStyle(palette.ink2Color)
             }
