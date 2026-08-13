@@ -96,7 +96,7 @@ fn transport_controls_js() -> &'static str {
         // browsers fire unreliably (or not at all) for a seek issued while
         // paused, leaving the readout and scrub position stuck at the old
         // value until playback starts (#1897).
-        if (window.__omnibusOnAudioTime) { window.__omnibusOnAudioTime(s); }
+        if (typeof window.__omnibusOnAudioTime === 'function') { window.__omnibusOnAudioTime(s); }
         if (this._mode === 'direct' && this._parts) {
           var i = 0;
           while (i < this._cumOffsets.length - 1 && s >= this._cumOffsets[i + 1]) i++;
@@ -367,7 +367,11 @@ mod tests {
         // A paused seek must push the transport display immediately (#1897)
         // rather than waiting on the element's own `timeupdate`.
         assert!(
-            js.contains("if (window.__omnibusOnAudioTime) { window.__omnibusOnAudioTime(s); }"),
+            js.contains("typeof window.__omnibusOnAudioTime === 'function'"),
+            "seek does not guard the immediate time push with a typeof check"
+        );
+        assert!(
+            js.contains("__omnibusOnAudioTime(s)"),
             "seek does not push the target time immediately"
         );
         // Sanity: no stray `{{` / `}}` escape pairs leaked from a `format!`.
