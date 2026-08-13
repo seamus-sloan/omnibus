@@ -115,6 +115,40 @@ fn percent_at_uses_floor_semantics_and_clamps() {
 }
 
 #[test]
+fn fraction_at_keeps_sub_percent_precision_that_percent_at_floors() {
+    let stats = vec![
+        SpineStatRow {
+            spine_index: 0,
+            href: "c1.xhtml".into(),
+            visible_chars: 40,
+            chars_before: 0,
+        },
+        SpineStatRow {
+            spine_index: 1,
+            href: "c2.xhtml".into(),
+            visible_chars: 60,
+            chars_before: 40,
+        },
+    ];
+    // 73 of 100 chars → 0.73 exactly; 33 chars into c2 → 73%.
+    assert_eq!(fraction_at(&stats, 1, 33), Some(0.73));
+    // A position percent_at floors away: 45/100 vs 45.0%… but with a
+    // non-decimal total the fraction keeps what the integer loses.
+    let uneven = vec![SpineStatRow {
+        spine_index: 0,
+        href: "c1.xhtml".into(),
+        visible_chars: 90,
+        chars_before: 0,
+    }];
+    let f = fraction_at(&uneven, 0, 50).unwrap();
+    assert!((f - 50.0 / 90.0).abs() < 1e-12);
+    assert_eq!(percent_at(&uneven, 0, 50), Some(55)); // floor(55.55…)
+                                                      // Same refusal and clamp rules as percent_at.
+    assert_eq!(fraction_at(&stats, 7, 0), None);
+    assert_eq!(fraction_at(&stats, 1, 10_000), Some(1.0));
+}
+
+#[test]
 fn percent_at_reports_zero_for_an_empty_book() {
     let stats = vec![SpineStatRow {
         spine_index: 0,

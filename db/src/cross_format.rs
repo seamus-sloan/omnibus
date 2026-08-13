@@ -366,6 +366,47 @@ fn audio_fraction(timeline: &AudioTimeline, book_file_id: i64, seconds_within: f
     Some((global / timeline.total_seconds).clamp(0.0, 1.0))
 }
 
+/// Full-precision whole-book fraction of a reading row: derived from the
+/// stored CFI via spine stats when both exist (sub-percent, the same
+/// machinery as `derive_epub_percent`), else the stored integer percent.
+/// Every failure along the precise path — no stats yet, unreadable file,
+/// unanchorable CFI — degrades to the integer fallback rather than
+/// erroring: the caller is composing an offer, and a coarser offer beats
+/// no answer.
+async fn epub_source_fraction(
+    pool: &SqlitePool,
+    book_id: i64,
+    source: &omnibus_shared::ProgressRecord,
+) -> Option<f64> {
+    let fallback = source
+        .progress_percent
+        .filter(|p| (0..=100).contains(p))
+        .map(|p| p as f64 / 100.0);
+    let Some(cfi) = source.epub_cfi.clone() else {
+        return fallback;
+    };
+    let precise = async {
+        let (file_id, epub_path) = crate::book_file_with_id(pool, book_id, "EPUB")
+            .await
+            .ok()??;
+        let stats = crate::epub_structure::get_spine_stats(pool, file_id)
+            .await
+            .ok()?;
+        if stats.is_empty() {
+            return None;
+        }
+        let (spine_index, offset) = tokio::task::spawn_blocking(move || {
+            crate::kobo_position::cfi_spine_offset(&epub_path, &cfi)
+        })
+        .await
+        .ok()?
+        .ok()??;
+        crate::epub_structure::fraction_at(&stats, spine_index as i64, offset)
+    }
+    .await;
+    precise.or(fallback)
+}
+
 /// Compose the answer for `GET /api/books/{uuid}/cross-format-resume`:
 /// gate on the link (off until confirmed, paused while stale), compare the
 /// two rows' ordering clocks, and map the newer source onto `target`.
@@ -428,25 +469,28 @@ pub async fn resume_candidate(
         MappingConfidence::Linear
     };
     let candidate = match target {
-        ProgressFormat::Audio => source.progress_percent.and_then(|pct| {
-            if !(0..=100).contains(&pct) {
-                return None;
+        ProgressFormat::Audio => match epub_source_fraction(pool, book_id, &source).await {
+            None => None,
+            Some(src_frac) => {
+                let frac = match &anchor_map {
+                    Some(map) => anchors::interpolate(&map.anchors, src_frac, true),
+                    None => src_frac,
+                };
+                map_fraction_to_audio(&timeline, frac).map(|(file_id, seconds)| {
+                    CrossFormatCandidate {
+                        target,
+                        source_format,
+                        source_client_updated_at: source.client_updated_at,
+                        confidence,
+                        book_file_id: Some(file_id),
+                        audio_position_seconds: Some(seconds),
+                        total_duration_seconds: Some(timeline.total_seconds),
+                        percent: None,
+                        fraction: None,
+                    }
+                })
             }
-            let frac = match &anchor_map {
-                Some(map) => anchors::interpolate(&map.anchors, (pct as f64) / 100.0, true),
-                None => (pct as f64) / 100.0,
-            };
-            map_fraction_to_audio(&timeline, frac).map(|(file_id, seconds)| CrossFormatCandidate {
-                target,
-                source_format,
-                source_client_updated_at: source.client_updated_at,
-                confidence,
-                book_file_id: Some(file_id),
-                audio_position_seconds: Some(seconds),
-                total_duration_seconds: Some(timeline.total_seconds),
-                percent: None,
-            })
-        }),
+        },
         ProgressFormat::Epub => source.audio_position_seconds.and_then(|seconds| {
             // The row's own file when recorded. A file-less row is only
             // unambiguous on a single-file timeline — guessing the first
@@ -469,6 +513,7 @@ pub async fn resume_candidate(
                 audio_position_seconds: None,
                 total_duration_seconds: None,
                 percent: Some(pct),
+                fraction: Some(frac.clamp(0.0, 1.0)),
             })
         }),
     };

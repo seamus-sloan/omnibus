@@ -1461,6 +1461,9 @@ struct CrossFormatCandidate: Codable, Hashable, Sendable {
     var audioPositionSeconds: Double?
     var totalDurationSeconds: Double?
     var percent: Int64?
+    /// Full-precision jump fraction (0...1) on epub targets; `percent` is
+    /// its floored display twin.
+    var fraction: Double?
 
     enum CodingKeys: String, CodingKey {
         case target
@@ -1471,6 +1474,7 @@ struct CrossFormatCandidate: Codable, Hashable, Sendable {
         case audioPositionSeconds = "audio_position_seconds"
         case totalDurationSeconds = "total_duration_seconds"
         case percent
+        case fraction
     }
 }
 

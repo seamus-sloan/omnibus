@@ -24,6 +24,20 @@ struct CrossFormatCodecTests {
         #expect(c.bookFileID == 7)
         #expect(c.audioPositionSeconds == 312.5)
         #expect(c.percent == nil)
+        #expect(c.fraction == nil)
+    }
+
+    @Test("epub-target candidate carries the full-precision fraction")
+    func fractionDecodes() throws {
+        let json = """
+        {"state":"candidate","candidate":{"target":"epub","source_format":"audio",
+         "source_client_updated_at":1755000000,"confidence":"linear",
+         "percent":12,"fraction":0.12752}}
+        """
+        let resume = try JSONDecoder().decode(CrossFormatResume.self, from: Data(json.utf8))
+        let c = try #require(resume.candidate)
+        #expect(c.percent == 12)
+        #expect(c.fraction == 0.12752)
     }
 
     @Test("candidate-less states decode without a candidate")
