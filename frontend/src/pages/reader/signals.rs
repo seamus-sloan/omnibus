@@ -189,6 +189,7 @@ mod tests {
             chapter: 3,
             total_chapters: 24,
             chapter_title: String::new(),
+            echo: false,
         };
         let (page, chapter) = format_progress_labels(&data);
         assert!(page.contains("p."));
@@ -289,6 +290,7 @@ mod tests {
             chapter: 0,
             total_chapters: 0,
             chapter_title: String::new(),
+            echo: false,
         };
         let (page, chapter) = format_progress_labels(&data);
         assert_eq!(page, "7%");
