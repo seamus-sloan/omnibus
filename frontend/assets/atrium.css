@@ -9253,7 +9253,9 @@ html {
   border-top: 1px solid var(--line, rgba(127, 127, 127, 0.25));
 }
 .al-foot-spacer { flex: 1; }
-.bd-sync-panel { margin: 10px 0 0; }
+/* Contained per the Format Sync design: the entry is a compact card in
+   the progress cluster, never a full-bleed strip. */
+.bd-sync-panel { margin: 14px 0 0; max-width: 560px; }
 .al-entry {
   display: flex;
   align-items: center;
@@ -9316,3 +9318,121 @@ html {
 }
 .rd-sync-copy { flex: 1; }
 .ch-cta-alt { opacity: 0.85; }
+
+/* ── Cross-format sync: design-fidelity additions (Format Sync design) ── */
+.al-modal { width: min(880px, calc(100vw - 48px)); }
+.al-kicker-glyph { display: inline-flex; margin-right: 6px; vertical-align: -2px; color: var(--accent, #6a8bd7); }
+.al-identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  font-size: 13px;
+}
+.al-identity-title { font-style: italic; }
+.al-identity-author { font-size: 11px; opacity: 0.6; }
+.al-identity-spacer { flex: 1; }
+.al-pair-mark { display: inline-flex; align-items: center; gap: 5px; opacity: 0.7; }
+.al-entry-glyph { display: inline-flex; opacity: 0.75; }
+.al-entry-linked .al-entry-glyph { color: var(--accent, #6a8bd7); opacity: 1; }
+.al-warn-badge {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
+  border-radius: 999px;
+  border: 1.5px solid rgba(214, 158, 46, 0.9);
+  color: rgba(214, 158, 46, 0.95);
+  display: grid;
+  place-items: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  margin-top: 1px;
+}
+.al-lowconf-callout {
+  display: flex;
+  gap: 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  border: 1px solid rgba(214, 158, 46, 0.5);
+  background: rgba(214, 158, 46, 0.08);
+  border-radius: 10px;
+  padding: 11px 13px;
+  margin: 14px 0 0;
+}
+.al-chip-row { position: relative; height: 26px; }
+.al-chip-row-tall { height: 54px; }
+.al-chip {
+  position: absolute;
+  top: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+  font-size: 10.5px;
+  border: 1px solid var(--line, rgba(127, 127, 127, 0.35));
+  background: var(--bg-1, rgba(127, 127, 127, 0.1));
+  z-index: 3;
+}
+.al-chip-accent {
+  border-color: color-mix(in oklch, var(--accent, #6a8bd7) 55%, transparent);
+  background: color-mix(in oklch, var(--accent, #6a8bd7) 18%, var(--bg-1, transparent));
+}
+.al-chip-dashed { border-style: dashed; }
+.al-chip-staggered { top: 28px; }
+.al-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: color-mix(in oklch, var(--accent, #6a8bd7) 13%, transparent);
+  pointer-events: none;
+}
+.al-connector { height: 44px; margin: 2px 0; }
+.al-connector svg { display: block; width: 100%; height: 100%; }
+.al-thread {
+  stroke: var(--line, rgba(127, 127, 127, 0.4));
+  stroke-opacity: 0.35;
+  vector-effect: non-scaling-stroke;
+}
+.al-thread-mapped {
+  stroke: var(--accent, #6a8bd7);
+  stroke-width: 1.6;
+  stroke-dasharray: 5 4;
+  vector-effect: non-scaling-stroke;
+}
+.al-lane-overlay { position: absolute; inset: 0; pointer-events: none; }
+.al-lane-audio { position: relative; }
+.al-foot-note { font-size: 10.5px; opacity: 0.6; }
+.al-file-row-dim { opacity: 0.55; }
+.al-primary-pill {
+  font-size: 9.5px;
+  color: var(--accent, #6a8bd7);
+  border: 1px solid color-mix(in oklch, var(--accent, #6a8bd7) 45%, transparent);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+.al-narr-note { font-size: 10.5px; opacity: 0.6; margin: 10px 0 0; }
+.rd-sync-here { font-size: 10.5px; }
+.lp-sync-kicker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent, #6a8bd7);
+}
+.lp-sync-kicker-spacer { flex: 1; }
+.ch-eyebrow-glyph { display: inline-flex; margin-left: 6px; vertical-align: -2px; color: var(--accent, #6a8bd7); opacity: 0.9; }
+.ch-link-invite {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 8px 12px;
+  border: 1px dashed var(--line, rgba(127, 127, 127, 0.4));
+  border-radius: 10px;
+  font-size: 12px;
+}

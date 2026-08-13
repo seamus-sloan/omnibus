@@ -73,12 +73,30 @@ pub(super) fn SyncJumpBanner(uuid: String) -> Element {
     let jump_uuid = uuid.clone();
     let dismiss_uuid = uuid.clone();
 
-    // A backward offer must not claim "past this page".
+    // A backward offer must not claim "past this page". The listening
+    // position + recency come along per the design ("≈ 16h 05m, yesterday").
     let behind = c.source_ahead == Some(false);
+    let listened = c
+        .source_position_seconds
+        .map(|s| {
+            let when = crate::components::alignment_modal::recency(c.source_client_updated_at);
+            if when.is_empty() {
+                format!(
+                    " (\u{2248} {})",
+                    crate::components::alignment_modal::fmt_hm(s)
+                )
+            } else {
+                format!(
+                    " (\u{2248} {}, {when})",
+                    crate::components::alignment_modal::fmt_hm(s)
+                )
+            }
+        })
+        .unwrap_or_default();
     let copy = if behind {
-        format!("Your audiobook sits earlier — jump back to \u{2248} {pct}%?")
+        format!("Your audiobook sits earlier{listened} — jump back to \u{2248} {pct}%?")
     } else {
-        format!("You listened past this page — jump to \u{2248} {pct}%?")
+        format!("You listened past this page{listened} — jump to \u{2248} {pct}%?")
     };
     let jump_label = if behind { "Jump back" } else { "Jump" };
 
@@ -108,6 +126,12 @@ pub(super) fn SyncJumpBanner(uuid: String) -> Element {
                     hidden.set(true);
                 },
                 "Stay here"
+            }
+            dioxus_router::Link {
+                to: crate::routes::Route::BookDetail { uuid: uuid.clone() },
+                class: "lp-sync-alignment",
+                "data-testid": "sync-banner-alignment",
+                "View alignment \u{2192}"
             }
         }
     }

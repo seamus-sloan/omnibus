@@ -95,6 +95,7 @@ pub mod author_photo_edit;
 // a title/body/action-row body for the common single-confirm case.
 pub mod alignment_modal;
 pub mod confirm_modal;
+pub mod sync_glyph;
 pub use confirm_modal::{confirm_modal_body, ConfirmModal, ConfirmModalAction, ConfirmModalTone};
 
 // Shareable quote-card editor (preview + presets + PNG export), shared by

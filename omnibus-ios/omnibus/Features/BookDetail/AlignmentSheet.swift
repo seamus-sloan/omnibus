@@ -36,6 +36,7 @@ struct AlignmentSheet: View {
 
                     if let view {
                         lanes(view)
+                        legend(view)
                         if view.audioFiles.count > 1 { choice(view) }
                         matchNote(view)
                         actions(view)
@@ -91,9 +92,28 @@ struct AlignmentSheet: View {
             lane(
                 ticks: audioTicks(view),
                 marker: listeningFraction(view),
-                mapped: view.reading?.percent.map { Double($0) / 100 }
+                mapped: mappedFraction(view)
             )
         }
+    }
+
+    /// Reading fraction mapped through the served anchor pairs — the same
+    /// interpolation the jump runs, so the preview cannot disagree.
+    private func mappedFraction(_ view: AlignmentView) -> Double? {
+        guard let pct = view.reading?.percent else { return nil }
+        var frac = Double(pct) / 100
+        var prev = (0.0, 0.0)
+        for pair in view.anchorPairs + [[1.0, 1.0]] where pair.count == 2 {
+            let (t, a) = (pair[0], pair[1])
+            if frac <= t {
+                if t - prev.0 < .ulpOfOne { return prev.1 }
+                let k = (frac - prev.0) / (t - prev.0)
+                frac = min(max(prev.1 + k * (a - prev.1), 0), 1)
+                return frac
+            }
+            prev = (t, a)
+        }
+        return frac
     }
 
     private func laneLabel(_ text: String) -> some View {
@@ -255,17 +275,69 @@ struct AlignmentSheet: View {
         }
     }
 
+    /// The al-mobile artboard's legend: each marker named with its value,
+    /// so the lanes read without decoding line styles.
+    @ViewBuilder
+    private func legend(_ view: AlignmentView) -> some View {
+        VStack(spacing: 0) {
+            if let reading = view.reading, let pct = reading.percent {
+                legendRow(dashed: false, label: "You're reading", value: "\(pct)%")
+            }
+            if let mapped = mappedFraction(view) {
+                let total = timelineFiles(view).reduce(0.0) { $0 + $1.durationSeconds }
+                if total > 0 {
+                    legendRow(
+                        dashed: true,
+                        label: "Maps to the audio",
+                        value: "\u{2248} " + Format.duration(mapped * total)
+                    )
+                }
+            }
+            if let listened = listeningFraction(view) {
+                let total = timelineFiles(view).reduce(0.0) { $0 + $1.durationSeconds }
+                if total > 0 {
+                    legendRow(
+                        dashed: false,
+                        label: "Last listened",
+                        value: Format.duration(listened * total)
+                    )
+                }
+            }
+        }
+        .padding(.top, Spacing.xs)
+    }
+
+    private func legendRow(dashed: Bool, label: String, value: String) -> some View {
+        HStack(spacing: Spacing.sm) {
+            Rectangle()
+                .fill(palette.accentColor.opacity(dashed ? 0.7 : 1))
+                .frame(width: 2, height: 13)
+            Text(label)
+                .font(.ui(12))
+                .foregroundStyle(palette.ink2Color)
+            Spacer()
+            Text(value)
+                .font(.ui(12, weight: .medium))
+                .foregroundStyle(palette.ink1Color)
+        }
+        .padding(.vertical, 5)
+    }
+
     private func actions(_ view: AlignmentView) -> some View {
         VStack(spacing: Spacing.sm) {
             Button {
                 confirm()
             } label: {
-                Text(busy ? "Saving…" : "Looks right — turn on sync")
+                Text(busy ? "Saving…" : "Looks right — sync positions")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(FilledButtonStyle())
             .disabled(busy || !connectivity.isOnline)
             .accessibilityIdentifier("alignment-confirm")
+
+            Button("Not now") { dismiss() }
+                .disabled(busy)
+                .accessibilityIdentifier("alignment-not-now")
 
             if view.link != nil {
                 Button("Unlink", role: .destructive) { unlink() }

@@ -101,6 +101,11 @@ pub struct CrossFormatCandidate {
     /// precision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fraction: Option<f64>,
+    /// The source listening row's own position as global timeline seconds
+    /// — the reader banner's "you listened to ≈ 16h 05m" copy. Epub
+    /// targets only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_position_seconds: Option<f64>,
     /// Whether the mapped source position sits ahead of the target's own
     /// current position — `Some(false)` marks a backward offer (the source
     /// regressed), so prompt copy must not claim "further". `None` when
@@ -129,6 +134,12 @@ pub struct AlignmentView {
     pub reading: Option<AlignmentPosition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listening: Option<AlignmentAudioPosition>,
+    /// Matched anchor pairs `(text_frac, audio_frac)` in `0.0..=1.0`, in
+    /// text order — the modal's connector threads and its anchored
+    /// mapped-preview interpolation (the same pairs the jump uses, so the
+    /// preview cannot lie). Empty when anchoring is off.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub anchor_pairs: Vec<(f64, f64)>,
     /// Usable (titled, non-synthetic) audio chapter marks on the preview
     /// timeline. With `anchor_match` absent on a *non-stale* view, zero
     /// means "no marks in the audio" and nonzero means "marks exist but
