@@ -91,12 +91,19 @@ struct ParsedDate {
 /// `T` or space onward (time-of-day, offset) is dropped — every caller here
 /// renders a calendar date, never a clock time. Returns `None` when the
 /// leading segment isn't a parseable year.
+///
+/// A day outside 1–31 (`YYYY-MM-00`, a stray admin override, …) is treated
+/// the same as an absent day rather than parsed literally — narrowing to
+/// month/year is the graceful failure, not `"Month 0, YYYY"`.
 fn parse_date_prefix(raw: &str) -> Option<ParsedDate> {
     let date_part = raw.trim().split(['T', ' ']).next()?;
     let mut segments = date_part.split('-');
     let year = segments.next()?.parse().ok()?;
     let month = segments.next().and_then(|m| m.parse().ok());
-    let day = segments.next().and_then(|d| d.parse().ok());
+    let day = segments
+        .next()
+        .and_then(|d| d.parse().ok())
+        .filter(|d| (1..=31).contains(d));
     Some(ParsedDate { year, month, day })
 }
 

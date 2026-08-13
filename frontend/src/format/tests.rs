@@ -84,6 +84,12 @@ fn format_date_short_falls_back_to_the_bare_year_with_no_month() {
 }
 
 #[test]
+fn format_date_short_narrows_to_month_and_year_when_the_day_is_out_of_range() {
+    assert_eq!(format_date_short("2016-05-00"), "May 2016");
+    assert_eq!(format_date_short("2016-05-32"), "May 2016");
+}
+
+#[test]
 fn format_date_short_renders_an_em_dash_for_an_empty_string() {
     assert_eq!(format_date_short(""), "\u{2014}");
 }
