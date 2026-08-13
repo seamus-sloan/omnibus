@@ -75,14 +75,10 @@ pub(crate) fn format_progress_labels(loc: &RelocateData) -> (String, String) {
     (page, chapter)
 }
 
-/// Resolve the displayed chapter index/total from the flat TOC's own order
-/// rather than trusting the glue's `chapter`/`total_chapters` pair verbatim.
-/// A front-matter spine item with no direct TOC entry arrives with an empty
-/// `chapter_title`, and the glue's own href match falls through to 0 for
-/// it — which reads as the counter going backwards mid-front-matter (issue
-/// #1909, AC1). When the title doesn't resolve, the previous chapter is
-/// carried forward instead of regressing to 0; a title that *does* match
-/// always wins outright, including a legitimate backward jump.
+/// Resolve the displayed chapter index/total from the flat TOC's own array
+/// order rather than the glue's `chapter`/`total_chapters` pair verbatim,
+/// carrying the previous chapter forward instead of regressing to 0 when
+/// the incoming title doesn't match any TOC entry.
 #[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 pub(crate) fn resolve_chapter_position(
     toc: &[TocEntry],

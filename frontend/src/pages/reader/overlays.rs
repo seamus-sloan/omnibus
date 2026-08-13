@@ -127,13 +127,9 @@ pub(super) struct OverlayMeta {
 
 /// Contents (table-of-contents) drawer, shown while `show_toc` is set.
 ///
-/// `on_navigate` flips `status` to [`ReaderStatus::Loading`] before asking
-/// the glue to display the target — the same overlay `ReaderViewerStage`
-/// already renders for the initial book load covers the jump too, and the
-/// header blanks the outgoing chapter's title in step (`derive_reader_display`
-/// in `mod.rs`) rather than showing it alongside the new chapter's content.
-/// The relocate that lands once the target has rendered flips `status` back
-/// to `Ready` (`interop`/`mobile`'s relocate handlers) — see issue #1909 (AC3).
+/// `on_navigate` flips `status` to [`ReaderStatus::Loading`] before asking the
+/// glue to display the target, so the header blanks the outgoing chapter
+/// until the relocate that confirms the jump landed flips it back to `Ready`.
 fn render_toc_overlay(
     show_toc: Signal<bool>,
     toc: Signal<Vec<super::toc_drawer::TocEntry>>,

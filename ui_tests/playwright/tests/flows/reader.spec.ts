@@ -181,10 +181,8 @@ test("shows a loading state during a TOC jump and blanks the outgoing chapter in
 
   // Establish a real baseline chapter in the header before jumping — proves
   // the assertion below is about the readout actually clearing, not just
-  // never having had anything to clear in the first place. No dedicated
-  // testid on this span (`chrome.rs`'s `reader_title_block`), so this is the
-  // one spot in the file that reaches for a class locator.
-  const headerChapter = page.locator(".rd-title-ch");
+  // never having had anything to clear in the first place.
+  const headerChapter = page.getByTestId("reader-header-chapter");
   await expect(headerChapter).toBeVisible({ timeout: 20_000 });
 
   await page.getByTestId("reader-toc").click();
@@ -194,15 +192,24 @@ test("shows a loading state during a TOC jump and blanks the outgoing chapter in
   // A row a few entries in, so the jump actually moves off the current
   // (front-matter) chapter rather than re-displaying it.
   await expect(rows.nth(3)).toBeVisible();
-  await rows.nth(3).click();
 
-  // The drawer closes and the loading affordance appears immediately — this
-  // is synchronous with the click (`overlays::render_toc_overlay`), so it
-  // never races the epub.js render — and the header must not show the
-  // outgoing chapter alongside it.
-  await expect(drawer).toHaveCount(0);
-  await expect(page.getByTestId("reader-loading")).toBeVisible();
-  await expect(headerChapter).toHaveCount(0);
+  // The jump lands via the same relocate that fires the progress-save POST,
+  // so asserting that mutation is also the strongest signal the jump landed.
+  await expectMutation(
+    page,
+    { ...PROGRESS_POST, timeout: 20_000 },
+    async () => {
+      await rows.nth(3).click();
+
+      // The drawer closes and the loading affordance appears immediately —
+      // this is synchronous with the click (`overlays::render_toc_overlay`),
+      // so it never races the epub.js render — and the header must not show
+      // the outgoing chapter alongside it.
+      await expect(drawer).toHaveCount(0);
+      await expect(page.getByTestId("reader-loading")).toBeVisible();
+      await expect(headerChapter).toHaveCount(0);
+    },
+  );
 
   // Once the jump lands, the loading overlay clears and the header shows a
   // chapter again — never stuck blank, never stuck loading.
