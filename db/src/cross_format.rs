@@ -650,6 +650,7 @@ pub async fn alignment_view(
     // Anchor preview: for an unlinked book, evaluate against the default
     // sequence declaration so the modal can honestly say whether anchoring
     // would engage; a stale link stays quiet (mapping is paused anyway).
+    let mut audio_chapter_marks = 0i64;
     let anchor_match = if link.as_ref().is_some_and(|l| l.stale) {
         None
     } else {
@@ -660,16 +661,19 @@ pub async fn alignment_view(
             confirmed_at: 0,
         });
         match audio_timeline(pool, book_id, &preview).await? {
-            Some(timeline) => match crate::book_file_with_id(pool, book_id, "EPUB").await? {
-                Some((ebook_file_id, _)) => anchors::anchor_map(pool, ebook_file_id, &timeline)
-                    .await?
-                    .map(|m| AlignmentMatch {
-                        matched: m.matched,
-                        ebook_chapters: m.ebook_chapters,
-                        confidence: MappingConfidence::ChapterAnchored,
-                    }),
-                None => None,
-            },
+            Some(timeline) => {
+                audio_chapter_marks = anchors::usable_audio_marks(pool, &timeline).await?;
+                match crate::book_file_with_id(pool, book_id, "EPUB").await? {
+                    Some((ebook_file_id, _)) => anchors::anchor_map(pool, ebook_file_id, &timeline)
+                        .await?
+                        .map(|m| AlignmentMatch {
+                            matched: m.matched,
+                            ebook_chapters: m.ebook_chapters,
+                            confidence: MappingConfidence::ChapterAnchored,
+                        }),
+                    None => None,
+                }
+            }
             None => None,
         }
     };
@@ -741,6 +745,7 @@ pub async fn alignment_view(
         audio_files: audio,
         reading,
         listening,
+        audio_chapter_marks,
     })
 }
 

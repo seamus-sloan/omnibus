@@ -62,6 +62,7 @@ fn strip_track_prefix(raw: &str) -> &str {
 #[derive(Debug, Clone)]
 struct AudioMark {
     key: Option<String>,
+    chapter_no: Option<u32>,
     synthetic: bool,
     frac: f64,
 }
@@ -70,7 +71,76 @@ struct AudioMark {
 #[derive(Debug, Clone)]
 struct TextMark {
     key: Option<String>,
+    chapter_no: Option<u32>,
     frac: f64,
+}
+
+/// Chapter ordinal parsed from a `Chapter <n>[: subtitle]`-shaped title,
+/// arabic or spelled out — so a mark decorated with subtitles ("Chapter
+/// One: The Pigeon Drop: In Which…") pairs with a nav's terser "Chapter 1".
+pub(super) fn chapter_number(raw: &str) -> Option<u32> {
+    let lower = strip_track_prefix(raw).trim_start().to_lowercase();
+    let rest = lower.strip_prefix("chapter")?;
+    let rest = rest.trim_start_matches([' ', '.', '-', '_', ':']);
+    if rest.is_empty() || rest.len() == lower.len() - "chapter".len() {
+        // No separator after "chapter" ("chapterhouse") is a word, not a
+        // numbering — unless the ordinal follows immediately ("chapter1").
+        if !rest.starts_with(|c: char| c.is_ascii_digit()) {
+            return None;
+        }
+    }
+    let token: &str = rest
+        .split(|c: char| !(c.is_alphanumeric() || c == '-'))
+        .next()
+        .filter(|t| !t.is_empty())?;
+    token.parse::<u32>().ok().or_else(|| word_number(token))
+}
+
+/// Spelled-out ordinal → number, through ninety-nine ("twenty-one").
+fn word_number(word: &str) -> Option<u32> {
+    const UNITS: [(&str, u32); 19] = [
+        ("one", 1),
+        ("two", 2),
+        ("three", 3),
+        ("four", 4),
+        ("five", 5),
+        ("six", 6),
+        ("seven", 7),
+        ("eight", 8),
+        ("nine", 9),
+        ("ten", 10),
+        ("eleven", 11),
+        ("twelve", 12),
+        ("thirteen", 13),
+        ("fourteen", 14),
+        ("fifteen", 15),
+        ("sixteen", 16),
+        ("seventeen", 17),
+        ("eighteen", 18),
+        ("nineteen", 19),
+    ];
+    const TENS: [(&str, u32); 8] = [
+        ("twenty", 20),
+        ("thirty", 30),
+        ("forty", 40),
+        ("fifty", 50),
+        ("sixty", 60),
+        ("seventy", 70),
+        ("eighty", 80),
+        ("ninety", 90),
+    ];
+    let lookup = |w: &str| UNITS.iter().find(|(n, _)| *n == w).map(|(_, v)| *v);
+    if let Some(v) = lookup(word) {
+        return Some(v);
+    }
+    if let Some((tens_word, unit_word)) = word.split_once('-') {
+        let tens = TENS
+            .iter()
+            .find(|(n, _)| *n == tens_word)
+            .map(|(_, v)| *v)?;
+        return Some(tens + lookup(unit_word).filter(|v| *v < 10)?);
+    }
+    TENS.iter().find(|(n, _)| *n == word).map(|(_, v)| *v)
 }
 
 /// Build the anchor map for a linked book, or `None` when no trustworthy
@@ -93,6 +163,7 @@ pub(super) async fn anchor_map(
         .into_iter()
         .map(|c| TextMark {
             key: title_key(&c.title),
+            chapter_no: chapter_number(&c.title),
             frac: (c.start_chars.max(0) as f64 / total_chars as f64).clamp(0.0, 1.0),
         })
         .collect();
@@ -105,37 +176,137 @@ pub(super) async fn anchor_map(
         return Ok(None);
     }
 
-    // Rung 1: normalized title equality (synthetic titles excluded), taken
-    // in order so a duplicated chapter name pairs positionally.
-    let mut anchors = match_by_title(&text, &audio);
+    // The match bar scores against the *smaller* mark list: a nav padded
+    // with front matter (Cover, Copyright, Contents…) must not raise the
+    // bar past what the audio side could ever supply (#1894).
+    let usable_audio = audio
+        .iter()
+        .filter(|a| !a.synthetic && a.key.is_some())
+        .count();
+    let denom = text.len().min(usable_audio.max(1));
+    let passes = |a: &[Anchor]| {
+        a.len() >= MIN_ANCHORS && (a.len() as f64) >= MIN_MATCH_FRACTION * denom as f64
+    };
 
-    // Rung 2: count alignment — when every chapter lines up one-to-one
-    // (the per-chapter MP3 folder, or two editions wording titles
-    // differently), pair by index instead.
-    if anchors.len() < MIN_ANCHORS && text.len() == audio.len() {
-        anchors = text
-            .iter()
-            .zip(audio.iter())
-            .map(|(t, a)| Anchor {
-                text_frac: t.frac,
-                audio_frac: a.frac,
-            })
-            .collect();
+    // Rungs, most exact first; the first that clears the bar (after the
+    // monotonic filter, so the count reflects anchors the interpolation
+    // actually uses) wins. Junk encoder labels ("STORMLIGHT0501P01")
+    // clear none of them and fall through to an honest refusal.
+    let mut chosen: Option<Vec<Anchor>> = None;
+    for rung in [
+        match_by_title(&text, &audio),
+        match_by_chapter_number(&text, &audio),
+        match_by_title_prefix(&text, &audio),
+    ] {
+        let m = monotonic(rung);
+        if passes(&m) {
+            chosen = Some(m);
+            break;
+        }
     }
-
-    // Count after the monotonic filter so the modal's "X of Y matched"
-    // reflects the anchors the interpolation actually uses.
-    let anchors = monotonic(anchors);
-    if anchors.len() < MIN_ANCHORS
-        || (anchors.len() as f64) < MIN_MATCH_FRACTION * text.len() as f64
-    {
-        return Ok(None);
-    }
+    // Count alignment last: one-to-one lists pair positionally (the
+    // per-chapter MP3 folder, or two editions wording titles differently).
+    let anchors = match chosen {
+        Some(a) => a,
+        None if text.len() == audio.len() => {
+            let m = monotonic(
+                text.iter()
+                    .zip(audio.iter())
+                    .map(|(t, a)| Anchor {
+                        text_frac: t.frac,
+                        audio_frac: a.frac,
+                    })
+                    .collect(),
+            );
+            if !passes(&m) {
+                return Ok(None);
+            }
+            m
+        }
+        None => return Ok(None),
+    };
     Ok(Some(AnchorMap {
         matched: anchors.len() as i64,
         anchors,
         ebook_chapters: text.len() as i64,
     }))
+}
+
+/// Ordered pairing on parsed chapter numbers — the rung that survives
+/// subtitle decoration and numbering-style drift ("Chapter One: …" vs
+/// "Chapter 1").
+fn match_by_chapter_number(text: &[TextMark], audio: &[AudioMark]) -> Vec<Anchor> {
+    let mut anchors = Vec::new();
+    let mut ai = 0usize;
+    for t in text {
+        let Some(t_no) = t.chapter_no else { continue };
+        let mut j = ai;
+        while j < audio.len() {
+            let a = &audio[j];
+            if !a.synthetic && a.chapter_no == Some(t_no) {
+                anchors.push(Anchor {
+                    text_frac: t.frac,
+                    audio_frac: a.frac,
+                });
+                ai = j + 1;
+                break;
+            }
+            j += 1;
+        }
+    }
+    anchors
+}
+
+/// Minimum normalized-key length before a prefix counts as a match — one
+/// short word prefixing another title is coincidence, not correspondence.
+const MIN_PREFIX_CHARS: usize = 8;
+
+fn keys_prefix_match(a: &str, b: &str) -> bool {
+    let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    short.len() >= MIN_PREFIX_CHARS && long.starts_with(short)
+}
+
+/// Ordered pairing where one normalized title is a prefix of the other —
+/// the shape of a terse nav entry against a subtitle-decorated audio mark
+/// (or vice versa) when neither side carries a chapter number.
+fn match_by_title_prefix(text: &[TextMark], audio: &[AudioMark]) -> Vec<Anchor> {
+    let mut anchors = Vec::new();
+    let mut ai = 0usize;
+    for t in text {
+        let Some(t_key) = &t.key else { continue };
+        let mut j = ai;
+        while j < audio.len() {
+            let a = &audio[j];
+            if !a.synthetic
+                && a.key
+                    .as_ref()
+                    .is_some_and(|a_key| keys_prefix_match(a_key, t_key))
+            {
+                anchors.push(Anchor {
+                    text_frac: t.frac,
+                    audio_frac: a.frac,
+                });
+                ai = j + 1;
+                break;
+            }
+            j += 1;
+        }
+    }
+    anchors
+}
+
+/// How many usable (titled, non-synthetic) audio marks the timeline
+/// carries — lets the modal distinguish "no marks in the audio" from
+/// "marks exist but couldn't be aligned".
+pub(super) async fn usable_audio_marks(
+    pool: &SqlitePool,
+    timeline: &AudioTimeline,
+) -> Result<i64, CrossFormatError> {
+    Ok(audio_marks(pool, timeline)
+        .await?
+        .iter()
+        .filter(|a| !a.synthetic && a.key.is_some())
+        .count() as i64)
 }
 
 /// Audio anchor candidates across the timeline: real chapter marks carry
@@ -163,6 +334,7 @@ async fn audio_marks(
                     .unwrap_or(&part.filename);
                 marks.push(AudioMark {
                     key: title_key(stem),
+                    chapter_no: chapter_number(stem),
                     synthetic: false,
                     frac: ((file.start_seconds + start) / timeline.total_seconds).clamp(0.0, 1.0),
                 });
@@ -172,6 +344,7 @@ async fn audio_marks(
             for c in &chapters {
                 marks.push(AudioMark {
                     key: title_key(&c.title),
+                    chapter_no: chapter_number(&c.title),
                     synthetic: is_synthetic_title(&c.title),
                     frac: ((file.start_seconds + c.start_seconds) / timeline.total_seconds)
                         .clamp(0.0, 1.0),

@@ -1107,3 +1107,192 @@ fn audio_equivalence_floor_scales_down_for_short_books() {
     assert!((audio_equivalence_floor(60.0) - 1.2).abs() < 1e-9);
     assert_eq!(audio_equivalence_floor(0.0), 0.0);
 }
+
+#[test]
+fn chapter_number_parses_real_title_shapes_and_refuses_junk() {
+    use super::anchors::chapter_number;
+    assert_eq!(chapter_number("Chapter One: The Pigeon Drop"), Some(1));
+    assert_eq!(
+        chapter_number("Chapter One: The Pigeon Drop: In Which Saeldian Is Given an Offer"),
+        Some(1)
+    );
+    assert_eq!(chapter_number("Chapter 21 - The Long Road"), Some(21));
+    assert_eq!(chapter_number("chapter twenty-one"), Some(21));
+    assert_eq!(chapter_number("Chapter Ninety"), Some(90));
+    assert_eq!(chapter_number("03 - Chapter Three"), Some(3));
+    assert_eq!(chapter_number("Chapter1"), Some(1));
+    assert_eq!(chapter_number("Chapterhouse: Dune"), None);
+    assert_eq!(chapter_number("Part 1"), None);
+    assert_eq!(chapter_number("STORMLIGHT0501P01"), None);
+    assert_eq!(chapter_number("Prologue: To Live"), None);
+}
+
+#[tokio::test]
+async fn anchoring_pairs_subtitle_decorated_chapters_by_number_despite_front_matter() {
+    // The Feywild Job shape (#1894): audio marks carry full decorated
+    // titles, the nav is terser and front-matter-heavy — exact equality
+    // finds nothing, but the chapter-number rung pairs them.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, audio) = seed_dual_book(&pool, &[600.0]).await;
+    seed_epub_chapters(
+        &pool,
+        &[
+            ("Cover", 0),
+            ("Title Page", 0),
+            ("Copyright", 0),
+            ("Contents", 0),
+            ("Chapter One: The Pigeon Drop", 0),
+            ("Chapter Two: A Better Liar", 40),
+            ("Chapter Three: Plan Faster", 80),
+            ("Chapter Four: The Feywild", 120),
+        ],
+        40,
+    )
+    .await;
+    seed_audio_chapters(
+        &pool,
+        audio[0],
+        &[
+            (
+                "Chapter One: The Pigeon Drop: In Which Saeldian Is Given an Offer",
+                0.0,
+            ),
+            (
+                "Chapter Two: A Better Liar than Anyone: In Which Kell Is Offered",
+                250.0,
+            ),
+            ("Chapter Three: Plan Faster: Wherein We Learn", 400.0),
+            ("Chapter Four: The Feywild: At Last", 520.0),
+        ],
+    )
+    .await;
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 25, 2_000))
+        .await
+        .unwrap();
+
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Audio)
+        .await
+        .unwrap();
+    let c = r.candidate.unwrap();
+    assert_eq!(
+        c.confidence,
+        omnibus_shared::cross_format::MappingConfidence::ChapterAnchored,
+        "the chapter-number rung must anchor the decorated-title shape"
+    );
+    // 25% of text = Chapter Three's start (80 of the 320 total chars —
+    // front-matter spine entries count) → ≈ 400s; linear would say 150s.
+    let secs = c.audio_position_seconds.unwrap();
+    assert!(
+        (395.0..=405.0).contains(&secs),
+        "expected the anchored map near 400s, got {secs}"
+    );
+}
+
+#[tokio::test]
+async fn anchoring_pairs_terse_nav_against_decorated_marks_by_prefix() {
+    // No chapter numbering at all — the prefix rung carries books whose
+    // marks decorate the nav's title with a subtitle.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, audio) = seed_dual_book(&pool, &[600.0]).await;
+    seed_epub_chapters(
+        &pool,
+        &[
+            ("Once Long Ago", 0),
+            ("The Wishing Rock", 40),
+            ("Milkweed and Amulets", 80),
+            ("The Long Way Home", 120),
+        ],
+        40,
+    )
+    .await;
+    seed_audio_chapters(
+        &pool,
+        audio[0],
+        &[
+            ("Once Long Ago: A Prologue", 0.0),
+            ("The Wishing Rock: Where It Started", 250.0),
+            ("Milkweed and Amulets: A Bargain", 400.0),
+            ("The Long Way Home: An Ending", 520.0),
+        ],
+    )
+    .await;
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 25, 2_000))
+        .await
+        .unwrap();
+
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Audio)
+        .await
+        .unwrap();
+    let c = r.candidate.unwrap();
+    assert_eq!(
+        c.confidence,
+        omnibus_shared::cross_format::MappingConfidence::ChapterAnchored,
+        "the prefix rung must anchor subtitle-decorated titles"
+    );
+    let secs = c.audio_position_seconds.unwrap();
+    assert!(
+        (245.0..=255.0).contains(&secs),
+        "expected ≈250s, got {secs}"
+    );
+}
+
+#[tokio::test]
+async fn anchoring_still_refuses_junk_encoder_labels() {
+    // The Wind and Truth shape: rip-tool part labels are not titles; no
+    // rung may invent a match, and the modal learns marks exist anyway.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, audio) = seed_dual_book(&pool, &[600.0]).await;
+    seed_epub_chapters(
+        &pool,
+        &[
+            ("Prologue: To Live", 0),
+            ("Day One", 30),
+            ("The Vow", 60),
+            ("Interlude", 90),
+            ("Day Two", 120),
+        ],
+        30,
+    )
+    .await;
+    seed_audio_chapters(
+        &pool,
+        audio[0],
+        &[
+            ("STORMLIGHT0501P01", 0.0),
+            ("STORMLIGHT0501P02", 200.0),
+            ("STORMLIGHT0501P03", 400.0),
+        ],
+    )
+    .await;
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 50, 2_000))
+        .await
+        .unwrap();
+
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Audio)
+        .await
+        .unwrap();
+    let c = r.candidate.unwrap();
+    assert_eq!(
+        c.confidence,
+        omnibus_shared::cross_format::MappingConfidence::Linear,
+        "junk labels must not anchor"
+    );
+
+    // The alignment view distinguishes "marks exist, couldn't align"
+    // (nonzero count, no match) from "no marks at all".
+    let view = alignment_view(&pool, user, &uuid).await.unwrap();
+    assert!(view.anchor_match.is_none());
+    assert_eq!(view.audio_chapter_marks, 3);
+}

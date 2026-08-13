@@ -147,10 +147,16 @@ pub fn AlignmentModal(uuid: String, open: Signal<bool>, on_changed: EventHandler
                         "\u{2713} {m.matched} of {m.ebook_chapters} chapters matched — "
                         "jumps land chapter-accurately."
                     }
+                } else if v.audio_chapter_marks > 0 {
+                    p { class: "al-lowconf", role: "note", "data-testid": "alignment-lowconf",
+                        "The audio's chapter marks couldn't be aligned with this ebook's "
+                        "contents — this mapping is a straight percent-for-percent estimate, "
+                        "so jumps land close, not exact."
+                    }
                 } else {
                     p { class: "al-lowconf", role: "note", "data-testid": "alignment-lowconf",
-                        "No chapter anchors yet — this mapping is a straight percent-for-percent "
-                        "estimate, so jumps land close, not exact."
+                        "No chapter marks in the audio — this mapping is a straight "
+                        "percent-for-percent estimate, so jumps land close, not exact."
                     }
                 }
             } else if error().is_none() {

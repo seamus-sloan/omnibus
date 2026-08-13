@@ -237,8 +237,12 @@ struct AlignmentSheet: View {
                 Text("\u{2713} \(match.matched) of \(match.ebookChapters) chapters matched — jumps land chapter-accurately.")
                     .font(.ui(12))
                     .foregroundStyle(palette.ink2Color)
+            } else if (view.audioChapterMarks ?? 0) > 0 {
+                Text("The audio's chapter marks couldn't be aligned with this ebook — the mapping is a straight percent-for-percent estimate, so jumps land close, not exact.")
+                    .font(.ui(12))
+                    .foregroundStyle(palette.ink2Color)
             } else {
-                Text("No chapter anchors yet — the mapping is a straight percent-for-percent estimate, so jumps land close, not exact.")
+                Text("No chapter marks in the audio — the mapping is a straight percent-for-percent estimate, so jumps land close, not exact.")
                     .font(.ui(12))
                     .foregroundStyle(palette.ink2Color)
             }
