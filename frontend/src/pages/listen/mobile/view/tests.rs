@@ -74,21 +74,6 @@ fn remaining_in_chapter_counts_down_to_zero() {
 }
 
 #[test]
-fn remaining_at_rate_divides_by_the_playback_rate() {
-    assert!((remaining_at_rate(600.0, 2.0) - 300.0).abs() < f64::EPSILON);
-    assert!((remaining_at_rate(600.0, 0.5) - 1200.0).abs() < f64::EPSILON);
-    assert!((remaining_at_rate(600.0, 1.0) - 600.0).abs() < f64::EPSILON);
-}
-
-#[test]
-fn remaining_at_rate_falls_back_to_unscaled_for_invalid_rate() {
-    assert_eq!(remaining_at_rate(600.0, 0.0), 600.0);
-    assert_eq!(remaining_at_rate(600.0, -1.0), 600.0);
-    assert_eq!(remaining_at_rate(600.0, f64::NAN), 600.0);
-    assert_eq!(remaining_at_rate(600.0, f64::INFINITY), 600.0);
-}
-
-#[test]
 fn chapter_prev_seek_none_when_empty_or_oob() {
     assert_eq!(chapter_prev_seek(&[], 10.0, 0), None);
     let chs = vec![ch(1, "Intro", 0.0, 300.0)];

@@ -68,16 +68,21 @@ pub(super) fn sleep_chip_label(remaining: Option<i32>, choice: SleepChoice) -> S
     }
 }
 
-/// Seconds left until the end of the current chapter, for the "End of
-/// chapter" option. `None` when `idx` is out of range (empty/stale list).
+/// Wall-clock seconds left until the end of the current chapter, for the
+/// "End of chapter" option. The countdown ticks in real time while the book
+/// plays at `rate`, so the book-time remainder is divided by the rate —
+/// otherwise a 2x listener's timer fires long after the chapter has ended.
+/// `None` when `idx` is out of range (empty/stale list).
 pub(super) fn end_of_chapter_seconds(
     chapters: &[ChapterInfo],
     idx: usize,
     elapsed: f64,
+    rate: f64,
 ) -> Option<i32> {
     let ch = chapters.get(idx)?;
     let end = ch.start_seconds + ch.duration_seconds;
-    let rem = (end - elapsed).max(0.0).min(f64::from(i32::MAX));
+    let rem =
+        super::helpers::remaining_at_rate((end - elapsed).max(0.0), rate).min(f64::from(i32::MAX));
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     Some(rem.ceil() as i32)
 }
@@ -290,19 +295,28 @@ mod tests {
     fn end_of_chapter_seconds_returns_remaining_in_current_chapter() {
         let chs = vec![ch(0.0, 300.0), ch(300.0, 600.0)];
         // 120 s into chapter 2 (start 300, dur 600 → ends 900); elapsed 420 → 480 left.
-        assert_eq!(end_of_chapter_seconds(&chs, 1, 420.0), Some(480));
+        assert_eq!(end_of_chapter_seconds(&chs, 1, 420.0, 1.0), Some(480));
+    }
+
+    #[test]
+    fn end_of_chapter_seconds_scales_to_wall_clock_at_playback_rate() {
+        let chs = vec![ch(0.0, 300.0), ch(300.0, 600.0)];
+        // 480 book-seconds left plays out in 240 wall-seconds at 2x.
+        assert_eq!(end_of_chapter_seconds(&chs, 1, 420.0, 2.0), Some(240));
+        // A non-positive rate falls back to the unscaled remainder.
+        assert_eq!(end_of_chapter_seconds(&chs, 1, 420.0, 0.0), Some(480));
     }
 
     #[test]
     fn end_of_chapter_seconds_floors_at_zero_past_end() {
         let chs = vec![ch(0.0, 300.0)];
-        assert_eq!(end_of_chapter_seconds(&chs, 0, 999.0), Some(0));
+        assert_eq!(end_of_chapter_seconds(&chs, 0, 999.0, 1.0), Some(0));
     }
 
     #[test]
     fn end_of_chapter_seconds_none_for_out_of_range_index() {
         let chs = vec![ch(0.0, 300.0)];
-        assert_eq!(end_of_chapter_seconds(&chs, 5, 10.0), None);
+        assert_eq!(end_of_chapter_seconds(&chs, 5, 10.0, 1.0), None);
     }
 
     #[test]

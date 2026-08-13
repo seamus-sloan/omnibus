@@ -123,6 +123,9 @@ pub(super) struct ChapterMapProps {
     pub duration: f64,
     /// Seconds remaining in the whole book.
     pub remaining: f64,
+    /// Current playback rate — the remaining readout divides by it so "time
+    /// left" is wall-clock listening time, not book time.
+    pub rate: f64,
     /// Index of the currently-playing chapter.
     pub current_chapter_index: usize,
     /// Fired with the target time in seconds when the bar is clicked or a
@@ -240,6 +243,7 @@ pub(super) fn ChapterMap(props: ChapterMapProps) -> Element {
         elapsed,
         duration,
         remaining,
+        rate,
         current_chapter_index,
         on_seek,
     } = props;
@@ -320,7 +324,9 @@ pub(super) fn ChapterMap(props: ChapterMapProps) -> Element {
             div { class: "lp-scrub-times",
                 span { "{format_hms(effective)}" }
                 span { class: "lp-scrub-remaining",
-                    "\u{00b7} {format_hms(eff_remaining)} remaining"
+                    // Scaled after the scrub preview so a drag previews the
+                    // rate-adjusted time left too (matches the mobile player).
+                    "\u{00b7} {format_hms(helpers::remaining_at_rate(eff_remaining, rate))} remaining"
                 }
                 span { "{format_hms(duration)}" }
             }
