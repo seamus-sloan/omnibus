@@ -6,12 +6,13 @@ use std::path::PathBuf;
 
 use sqlx::SqlitePool;
 
+use crate::{books, ebook, sync};
+
 use super::{
     check_mass_missing, diff_library, diff_tallies, enumeration_is_trustworthy,
     gc_missing_files_best_effort, report_parse_progress, report_sync_progress, root_display_name,
     ReindexDiff, ReindexStats, ScanUpdate, PHASE_WALKING,
 };
-use crate::{books, ebook, sync};
 
 /// Scan `library_path`, diff against the existing index, and apply only
 /// the per-book changes the diff demands. Runs the scan on the blocking

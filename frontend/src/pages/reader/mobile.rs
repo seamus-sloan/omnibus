@@ -16,6 +16,7 @@ use crate::time::now_unix;
 use super::prefs::ReaderPrefs;
 use super::search_panel::SearchResult;
 use super::selection::SelectionData;
+use super::signals::resolve_chapter_position;
 use super::toc_drawer::TocEntry;
 use super::{reader_call_json, reader_call_json2, ReaderStatus, RelocateData};
 
@@ -213,7 +214,17 @@ async fn drain_reader_events(
     let mut last_cfi: Option<String> = None;
     crate::js_interop::drain_events(eval, move |event: ReaderEvent| match event {
         ReaderEvent::Relocate { json } => {
-            if let Ok(data) = serde_json::from_str::<RelocateData>(&json) {
+            if let Ok(mut data) = serde_json::from_str::<RelocateData>(&json) {
+                // Re-derive chapter/total from the TOC's own order rather
+                // than trusting the glue's numbers verbatim — see
+                // `signals::resolve_chapter_position` (issue #1909, AC1).
+                let toc_snapshot = toc.peek().clone();
+                let previous_chapter = loc.peek().chapter;
+                let (chapter, total_chapters) =
+                    resolve_chapter_position(&toc_snapshot, &data, previous_chapter);
+                data.chapter = chapter;
+                data.total_chapters = total_chapters;
+
                 // Echo emissions (restore settle, locations re-emit) re-state
                 // a position the server already holds — persisting one stamps
                 // a fresh clock on an unmoved position and shadows a newer
@@ -227,8 +238,16 @@ async fn drain_reader_events(
                     last_cfi = Some(cfi.clone());
                     if !data.echo && moved {
                         crate::reader_progress::save(&uuid, &cfi);
-                        persist_progress(&uuid, &server_url, cfi);
+                        persist_progress(&uuid, &server_url, cfi, data.pct);
                     }
+                }
+                // A relocate names the (corrected) current position, so it
+                // also signals that an in-flight chapter jump has finished
+                // rendering — flip a TOC-jump-triggered `Loading` back to
+                // `Ready` (issue #1909, AC3). Guarded so a stray relocate
+                // after a load `Failed` can't resurrect the overlay.
+                if *status.peek() == ReaderStatus::Loading {
+                    status.set(ReaderStatus::Ready);
                 }
                 loc.set(data);
             }
@@ -288,8 +307,11 @@ async fn drain_reader_events(
 }
 
 /// Persist the latest CFI to the server (fire-and-forget); the local in-memory
-/// save already happened on the calling side.
-fn persist_progress(uuid: &str, server_url: &str, cfi: String) {
+/// save already happened on the calling side. `pct` is the same whole-book
+/// figure the footer/ribbon render — carrying it into `progress_percent`
+/// keeps the landing hero's stored percent in step with what the reader
+/// itself is showing (issue #1909, AC2).
+fn persist_progress(uuid: &str, server_url: &str, cfi: String, pct: u32) {
     let uuid = uuid.to_string();
     let server_url = server_url.to_string();
     spawn(async move {
@@ -298,7 +320,7 @@ fn persist_progress(uuid: &str, server_url: &str, cfi: String) {
             format: ProgressFormat::Epub,
             epub_cfi: Some(cfi),
             audio_position_seconds: None,
-            progress_percent: None,
+            progress_percent: Some(i64::from(pct.min(100))),
             kobo_location: None,
             book_file_id: None,
             client_updated_at: Some(now_unix()),

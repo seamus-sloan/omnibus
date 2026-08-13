@@ -12,7 +12,7 @@ use crate::components::quote_card::QUOTE_CARD_JS;
 use crate::components::{ConfirmModal, QuoteCardPanel};
 use crate::{data, use_server_url};
 
-use super::dates::fmt_long_date;
+use super::dates::{fmt_long_date, local_date_offset, use_local_dates_ready};
 use super::BdSectionHead;
 
 mod locator;
@@ -93,6 +93,11 @@ fn BdHighlightList(
     quote_target: Signal<Option<Highlight>>,
 ) -> Element {
     let mut expanded = use_signal(|| false);
+    // Hoisted once for the whole list rather than once per card — a heavily
+    // highlighted book runs to hundreds of rows, and each row resolves its
+    // own offset from its own `created_at` via `local_date_offset` (see
+    // `dates.rs`), so sharing this signal doesn't share a stale offset.
+    let dates_ready = use_local_dates_ready();
     let list = highlights();
     let total = list.len();
     let visible = if expanded() {
@@ -110,6 +115,7 @@ fn BdHighlightList(
                     highlights,
                     server_url: server_url.clone(),
                     quote_target,
+                    dates_ready,
                 }
             }
         }
@@ -175,7 +181,9 @@ fn BdHighlightCard(
     highlights: Signal<Vec<Highlight>>,
     server_url: String,
     quote_target: Signal<Option<Highlight>>,
+    dates_ready: ReadSignal<bool>,
 ) -> Element {
+    let offset = local_date_offset(dates_ready(), highlight.created_at);
     let id = highlight.id;
     let color = highlight.color.as_str();
     let quote = highlight
@@ -199,9 +207,9 @@ fn BdHighlightCard(
     {
         Some(loc) => format!(
             "{loc} \u{00b7} saved {}",
-            fmt_long_date(highlight.created_at)
+            fmt_long_date(highlight.created_at, offset)
         ),
-        None => format!("saved {}", fmt_long_date(highlight.created_at)),
+        None => format!("saved {}", fmt_long_date(highlight.created_at, offset)),
     };
     let open_href = highlight
         .epub_cfi_range

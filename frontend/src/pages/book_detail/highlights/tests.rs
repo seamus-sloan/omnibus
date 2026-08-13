@@ -174,6 +174,7 @@ mod render_tests {
                 highlights: use_signal(|| vec![seeded_highlight(None, None)]),
                 server_url: String::new(),
                 quote_target: use_signal(|| None),
+                dates_ready: use_local_dates_ready(),
             }
         }
     }
@@ -219,6 +220,7 @@ mod render_tests {
                 highlights: use_signal(Vec::new),
                 server_url: String::new(),
                 quote_target: use_signal(|| None),
+                dates_ready: use_local_dates_ready(),
             }
         }
     }
@@ -324,6 +326,7 @@ mod render_tests {
                 highlights: use_signal(Vec::new),
                 server_url: String::new(),
                 quote_target: use_signal(|| None),
+                dates_ready: use_local_dates_ready(),
             }
         }
     }

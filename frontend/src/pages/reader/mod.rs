@@ -137,7 +137,7 @@ pub fn BookReadPage(uuid: String) -> Element {
         book_title,
         book_author,
         book_accent,
-    } = derive_reader_display(loc, book_meta);
+    } = derive_reader_display(loc, book_meta, status());
 
     rsx! {
         ReaderLayout {
@@ -172,6 +172,7 @@ pub fn BookReadPage(uuid: String) -> Element {
                 search_results,
                 show_bookmarks,
                 show_annotations,
+                status,
             },
             nav: ReaderNavHandlers {
                 on_keydown,
@@ -384,18 +385,35 @@ struct ReaderDisplay {
 }
 
 /// Derive page/chapter labels and book title/author/accent from `loc` and `book_meta`.
+///
+/// `status` gates the top-bar chapter readout: while a TOC/bookmark/search
+/// jump is in flight (`ReaderStatus::Loading`), the header blanks the
+/// previous chapter's title/sub-line rather than showing it alongside the
+/// loading affordance — see [`ReaderStatus`] and issue #1909 (AC3). The
+/// footer/ribbon strings are left alone; they settle the moment the new
+/// relocate lands, same as `status` itself.
 fn derive_reader_display(
     loc: Signal<RelocateData>,
     book_meta: Signal<Option<omnibus_shared::EbookMetadata>>,
+    status: ReaderStatus,
 ) -> ReaderDisplay {
     // One read: every derived label comes from the same relocate snapshot.
     let loc_now = loc.read();
     let (page_str, chapter_str) = format_progress_labels(&loc_now);
     let ambient_page = format_ambient_page(&loc_now);
-    let title_sub = format_title_sub(&loc_now);
+    let loading = status == ReaderStatus::Loading;
+    let title_sub = if loading {
+        String::new()
+    } else {
+        format_title_sub(&loc_now)
+    };
     let contents_progress = format_contents_progress(&loc_now);
     let pct = loc_now.pct;
-    let chapter_title = loc_now.chapter_title.clone();
+    let chapter_title = if loading {
+        String::new()
+    } else {
+        loc_now.chapter_title.clone()
+    };
     let current_cfi = loc_now.cfi.clone().unwrap_or_default();
     let book_title = book_meta
         .read()
@@ -474,6 +492,9 @@ pub(super) struct ReaderPanelSignals {
     pub search_results: Signal<Vec<SearchResult>>,
     pub show_bookmarks: Signal<bool>,
     pub show_annotations: Signal<bool>,
+    /// Threaded through so a TOC jump can flip the reader into its loading
+    /// state before asking the glue to navigate (see `overlays::render_toc_overlay`).
+    pub status: Signal<ReaderStatus>,
 }
 
 /// Navigation + keyboard handlers for the top bar, page-turn gutters, and surface keydown.
@@ -647,3 +668,6 @@ fn sync_here_slot(uuid: &str, loc: Signal<RelocateData>) -> Element {
 fn sync_here_slot(_uuid: &str, _loc: Signal<RelocateData>) -> Element {
     rsx! {}
 }
+
+#[cfg(test)]
+mod tests;

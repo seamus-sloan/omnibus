@@ -97,7 +97,9 @@ fn apply_poll_result(
 ) {
     match outcome {
         Ok(report) => {
-            result.set(Some(report));
+            if result.peek().as_ref() != Some(&report) {
+                result.set(Some(report));
+            }
             error.set(false);
         }
         Err(_) if result.peek().is_none() => error.set(true),

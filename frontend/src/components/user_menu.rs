@@ -1,6 +1,8 @@
 //! User-menu dropdown mounted in the top nav. Real wiring: recent progress,
-//! Settings, Sign out, Dark/Light theme, and app version. Other account
-//! surfaces remain stubbed. See [`UserMenu`] for the SSR/hydration handling
+//! Settings, Sign out, Dark/Light theme, app version, and (#1913) the
+//! Shelves stat tile. Journal/Highlights/Goals have no aggregate web page
+//! yet, so their tiles render as non-interactive stats rather than dead
+//! links — see [`UmStat`]. See [`UserMenu`] for the SSR/hydration handling
 //! of the pre-auth trigger state.
 
 use dioxus::prelude::*;
@@ -81,6 +83,9 @@ pub fn UserMenu() -> Element {
     rsx! {}
 }
 
+#[cfg(all(test, feature = "server"))]
+mod tests;
+
 #[cfg(any(feature = "web", feature = "server"))]
 #[component]
 fn UserMenuTrigger(user: Option<UserSummary>, open: Signal<bool>) -> Element {
@@ -159,10 +164,15 @@ fn UserMenuPanel(user: UserSummary, open: Signal<bool>) -> Element {
             UmNowReading {}
 
             div { class: "um-stat-grid",
-                UmStat { label: "Journal", detail: "24 entries" }
-                UmStat { label: "Highlights", detail: "412 quotes" }
-                UmStat { label: "Shelves", detail: "3 shared" }
-                UmStat { label: "Goals", detail: "12 / 24 books" }
+                UmStat { label: "Journal", detail: "24 entries", to: None, open }
+                UmStat { label: "Highlights", detail: "412 quotes", to: None, open }
+                UmStat {
+                    label: "Shelves",
+                    detail: "3 shared",
+                    to: Some(Route::Shelves {}),
+                    open,
+                }
+                UmStat { label: "Goals", detail: "12 / 24 books", to: None, open }
             }
 
             UmAccountRows { open, is_admin }
@@ -371,18 +381,17 @@ fn UmAccountRows(open: Signal<bool>, is_admin: bool) -> Element {
 }
 
 /// Session-scoped linear rows: the stubbed "Switch user" row and the
-/// real Sign-out button.
+/// real Sign-out button. "Switch user" has no destination yet (there is
+/// no multi-account switcher on web), so it renders as a plain,
+/// non-interactive `div` rather than a link that swallows the click
+/// (#1913) — same non-anchor stub pattern as the Journal/Highlights/Goals
+/// tiles in [`UmStat`].
 #[cfg(any(feature = "web", feature = "server"))]
 #[component]
 fn UmSessionRows(on_signout: EventHandler<()>) -> Element {
     rsx! {
         div { class: "um-rows",
-            a {
-                class: "um-row",
-                href: "#",
-                "aria-disabled": "true",
-                tabindex: "-1",
-                onclick: move |evt| evt.prevent_default(),
+            div { class: "um-row", "aria-disabled": "true",
                 span { class: "um-row-icon", "⇄" }
                 span { class: "um-row-label", "Switch user" }
             }
@@ -398,19 +407,31 @@ fn UmSessionRows(on_signout: EventHandler<()>) -> Element {
     }
 }
 
+/// One tile in the stat grid. `to: Some(route)` renders a real navigable
+/// link that closes the menu on click (#1913); `to: None` renders a plain,
+/// non-interactive `div` for a stat whose destination page doesn't exist on
+/// web yet — never a link that swallows the click (`href="#"` + `onclick:
+/// prevent_default`), which is what this replaced.
 #[cfg(any(feature = "web", feature = "server"))]
 #[component]
-fn UmStat(label: String, detail: String) -> Element {
-    rsx! {
-        a {
-            class: "um-stat",
-            href: "#",
-            "aria-disabled": "true",
-            tabindex: "-1",
-            onclick: move |evt| evt.prevent_default(),
-            div { class: "um-stat-label", "{label}" }
-            div { class: "um-stat-detail", "{detail}" }
-        }
+fn UmStat(label: String, detail: String, to: Option<Route>, open: Signal<bool>) -> Element {
+    let mut open = open;
+    match to {
+        Some(route) => rsx! {
+            Link {
+                class: "um-stat",
+                to: route,
+                onclick: move |_| open.set(false),
+                div { class: "um-stat-label", "{label}" }
+                div { class: "um-stat-detail", "{detail}" }
+            }
+        },
+        None => rsx! {
+            div { class: "um-stat um-stat-static", "aria-disabled": "true",
+                div { class: "um-stat-label", "{label}" }
+                div { class: "um-stat-detail", "{detail}" }
+            }
+        },
     }
 }
 

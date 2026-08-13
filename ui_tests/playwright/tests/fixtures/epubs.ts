@@ -35,7 +35,11 @@ export interface ExpectedBook {
    * fixtures pin `[]`.
    */
   tags?: string[];
-  /** Verbatim text rendered in the published cell. */
+  /**
+   * Raw stored `dc:date` value (e.g. `"1843-10-01"`). The published cell
+   * renders a formatted human date derived from this, not the raw string —
+   * see `expectedPublishedText` in `utils/ebooks.ts`.
+   */
   published?: string;
   /** Verbatim text rendered in the language cell (BCP-47). */
   language: string;
@@ -523,6 +527,11 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
   // Public-domain Project Gutenberg / Standard Ebooks EPUBs under
   // `test_data/epubs/public_domain/`. Metadata below is what each file's OPF
   // actually claims — `db/tests/public_domain_epubs.rs` keeps the parser honest.
+  //
+  // `dracula` is reserved for the TOC-jump loading-state regression in
+  // reader.spec.ts (issue #1909): it needs a real multi-chapter book so the
+  // contents drawer lists more than one row to jump between — no other spec
+  // may open it in the reader.
   {
     slug: "dracula",
     filename: "public_domain/dracula.epub",

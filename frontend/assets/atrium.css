@@ -2892,7 +2892,8 @@ a.idx-letter-on:focus-visible {
   .um-nr-play:hover { opacity: 0.9; }
 }
 
-/* Stat grid (stubs) */
+/* Stat grid: Shelves links out (#1913); the rest are non-interactive
+   stats (`.um-stat-static`) until they have an aggregate web page. */
 .um-stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .um-stat {
   display: flex; flex-direction: column; gap: 4px;
@@ -2900,7 +2901,10 @@ a.idx-letter-on:focus-visible {
   background: var(--bg-2); border: 1px solid var(--line-2);
   text-decoration: none; color: inherit;
 }
-.um-stat[aria-disabled="true"] { opacity: .85; cursor: not-allowed; }
+@media (hover: hover) {
+  a.um-stat:hover { border-color: var(--line-1); }
+}
+.um-stat-static { cursor: default; opacity: .85; }
 .um-stat-label { color: var(--ink-0); font-size: 12px; font-weight: 500; }
 .um-stat-detail { color: var(--ink-3); font-family: var(--mono); font-size: 10px; }
 

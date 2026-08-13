@@ -6,12 +6,13 @@ use std::path::PathBuf;
 
 use sqlx::SqlitePool;
 
+use crate::{audiobook, books, sync};
+
 use super::{
     check_mass_missing, diff_library, diff_tallies, enumeration_is_trustworthy,
     gc_missing_files_best_effort, report_parse_progress, report_sync_progress, root_display_name,
     ReindexDiff, ReindexStats, ScanUpdate, PHASE_WALKING,
 };
-use crate::{audiobook, books, sync};
 
 /// Audiobook-library sibling of [`super::reindex`]. Groups audio files by
 /// folder, reads multi-part tags, then calls [`sync::sync_audiobooks`] to

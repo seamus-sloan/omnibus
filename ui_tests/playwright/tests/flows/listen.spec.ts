@@ -742,6 +742,52 @@ test("opens chapters drawer and shows played/current/upcoming row states", async
 });
 
 // ---------------------------------------------------------------------------
+// 10b. Paused chapter-list seek shows immediate transport feedback (#1897)
+// ---------------------------------------------------------------------------
+
+test("shows the target time immediately after a paused chapter-list seek (#1897)", async ({
+  page,
+  request,
+}) => {
+  // Two parts → two synthetic chapters, so a chapter-row click seeks to a
+  // real, non-zero target (see the "opens chapters drawer" test above).
+  const uuid = await fetchBookUuidByTitle(request, MULTIPART_MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+
+  // The player boots paused — the regression only reproduces on a seek
+  // issued while paused, so pin that precondition before seeking.
+  await expect(
+    page.getByRole("button", { name: "Play", exact: true }),
+  ).toBeVisible();
+
+  const seek = page.getByRole("slider", { name: "Seek" });
+  await expect(seek).toBeVisible();
+  const before = await seek.inputValue();
+
+  await page.getByRole("button", { name: /^chapters/i }).click();
+  await expect(page.getByTestId("chapters-drawer")).toBeVisible();
+  await page.getByTestId("chapter-row-upcoming").first().click();
+
+  // Still paused — a seek must not itself start playback.
+  await expect(
+    page.getByRole("button", { name: "Play", exact: true }),
+  ).toBeVisible();
+
+  // Bug #1897: without pushing the seek target into the transport display
+  // immediately, the scrub slider and elapsed readout stay at `before`
+  // until a `timeupdate` fires — which never happens while paused. Assert
+  // it updates right away, with no play() call anywhere in this test.
+  await expect
+    .poll(() => seek.inputValue(), {
+      message: "seek slider should reflect the chapter jump while paused",
+    })
+    .not.toBe(before);
+  const target = Number(await seek.inputValue());
+  expect(target).toBeGreaterThan(0);
+});
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

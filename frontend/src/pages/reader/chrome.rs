@@ -143,7 +143,7 @@ fn reader_title_block(book_title: &str, chapter_title: &str, title_sub: &str) ->
             span { class: "rd-title-book", "{book_title}" }
             if !chapter_title.is_empty() {
                 span { class: "rd-title-sep", "\u{b7}" }
-                span { class: "rd-title-ch", "{chapter_title}" }
+                span { class: "rd-title-ch", "data-testid": "reader-header-chapter", "{chapter_title}" }
             }
             // Phone sub-line ("Ch. 14 · 68%") — the breakpoint stacks the
             // title block and swaps the inline chapter for this.

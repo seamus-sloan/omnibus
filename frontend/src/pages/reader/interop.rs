@@ -9,6 +9,7 @@ use omnibus_shared::Highlight;
 use super::prefs::ReaderPrefs;
 use super::search_panel::SearchResult;
 use super::selection::SelectionData;
+use super::signals::resolve_chapter_position;
 use super::toc_drawer::TocEntry;
 use super::ReaderStatus;
 
@@ -126,7 +127,17 @@ fn register_window_callbacks(
 
     let uuid_for_save = uuid_cb;
     let relocate = Closure::<dyn FnMut(String)>::new(move |json: String| {
-        if let Ok(data) = serde_json::from_str::<super::RelocateData>(&json) {
+        if let Ok(mut data) = serde_json::from_str::<super::RelocateData>(&json) {
+            // Re-derive chapter/total from the TOC's own order rather than
+            // trusting the glue's numbers verbatim — see
+            // `signals::resolve_chapter_position` (issue #1909, AC1).
+            let toc_snapshot = toc.peek().clone();
+            let previous_chapter = loc.peek().chapter;
+            let (chapter, total_chapters) =
+                resolve_chapter_position(&toc_snapshot, &data, previous_chapter);
+            data.chapter = chapter;
+            data.total_chapters = total_chapters;
+
             // Echo emissions re-state a position the server already holds —
             // persisting one would stamp a fresh clock on an unmoved
             // position and shadow a newer audiobook spot at the
@@ -135,6 +146,11 @@ fn register_window_callbacks(
                 crate::reader_progress::save(&uuid_for_save, &cfi);
                 let uuid_for_post = uuid_for_save.clone();
                 let cfi_for_post = cfi;
+                // `progress_percent` is the same whole-book figure the
+                // footer/ribbon render (`data.pct`) — sending it keeps the
+                // landing hero's stored percent in step with what the
+                // reader itself is showing (issue #1909, AC2).
+                let percent_for_post = i64::from(data.pct.min(100));
                 wasm_bindgen_futures::spawn_local(async move {
                     // `client_updated_at` is the event time the server's
                     // conditional upsert arbitrates on; without it a write
@@ -144,6 +160,7 @@ fn register_window_callbacks(
                             "book_uuid": uuid_for_post,
                             "format": "epub",
                             "epub_cfi": cfi_for_post,
+                            "progress_percent": percent_for_post,
                             "client_updated_at": crate::time::now_unix(),
                         }
                     });
@@ -152,6 +169,15 @@ fn register_window_callbacks(
                         let _ = req.send().await;
                     }
                 });
+            }
+            // A relocate always names the (corrected) current position, so
+            // it also signals that an in-flight chapter jump has finished
+            // rendering — flip a TOC-jump-triggered `Loading` back to
+            // `Ready` (issue #1909, AC3). Guarded so a relocate stray after
+            // a load `Failed` can't resurrect the overlay as if nothing
+            // went wrong.
+            if *status.peek() == ReaderStatus::Loading {
+                status.set(ReaderStatus::Ready);
             }
             loc.set(data);
         }

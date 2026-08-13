@@ -6,6 +6,7 @@
 use dioxus::prelude::*;
 use omnibus_shared::EbookMetadata;
 
+use super::toc_drawer::TocEntry;
 use crate::contexts::use_server_url;
 use crate::data;
 
@@ -86,6 +87,30 @@ pub(crate) fn format_progress_labels(loc: &RelocateData) -> (String, String) {
         String::new()
     };
     (page, chapter)
+}
+
+/// Resolve the displayed chapter index/total from the flat TOC's own array
+/// order rather than the glue's `chapter`/`total_chapters` pair verbatim,
+/// carrying the previous chapter forward instead of regressing to 0 when
+/// the incoming title doesn't match any TOC entry.
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
+pub(crate) fn resolve_chapter_position(
+    toc: &[TocEntry],
+    incoming: &RelocateData,
+    previous_chapter: u32,
+) -> (u32, u32) {
+    if toc.is_empty() {
+        return (incoming.chapter, incoming.total_chapters);
+    }
+    let total = toc.len() as u32;
+    let chapter = if incoming.chapter_title.is_empty() {
+        previous_chapter
+    } else {
+        toc.iter()
+            .position(|entry| entry.label == incoming.chapter_title)
+            .map_or(previous_chapter, |idx| idx as u32 + 1)
+    };
+    (chapter, total)
 }
 
 /// Format the phone minimal-chrome footer: just the page number (or the
@@ -295,5 +320,66 @@ mod tests {
         let (page, chapter) = format_progress_labels(&data);
         assert_eq!(page, "7%");
         assert_eq!(chapter, "");
+    }
+
+    fn toc_entry(label: &str) -> TocEntry {
+        TocEntry {
+            label: label.to_string(),
+            href: format!("{label}.xhtml"),
+            level: 0,
+        }
+    }
+
+    fn relocate_with_title(title: &str) -> RelocateData {
+        RelocateData {
+            chapter_title: title.to_string(),
+            ..Default::default()
+        }
+    }
+
+    // Regression for issue #1909 (AC1): a front-matter spine item with no
+    // direct TOC entry must never read as chapter 0 — the previous chapter
+    // carries forward instead of the counter going backwards.
+    #[test]
+    fn resolve_chapter_position_carries_previous_chapter_forward_when_title_is_unmatched() {
+        let toc = vec![toc_entry("Cover"), toc_entry("Chapter One")];
+        let (chapter, total) = resolve_chapter_position(&toc, &relocate_with_title(""), 1);
+        assert_eq!((chapter, total), (1, 2));
+    }
+
+    #[test]
+    fn resolve_chapter_position_matches_the_toc_array_position_when_the_title_resolves() {
+        let toc = vec![
+            toc_entry("Cover"),
+            toc_entry("Dedication"),
+            toc_entry("Chapter One"),
+        ];
+        let (chapter, total) =
+            resolve_chapter_position(&toc, &relocate_with_title("Chapter One"), 1);
+        assert_eq!((chapter, total), (3, 3));
+    }
+
+    #[test]
+    fn resolve_chapter_position_falls_back_to_incoming_values_before_the_toc_has_loaded() {
+        let incoming = RelocateData {
+            chapter: 4,
+            total_chapters: 12,
+            ..Default::default()
+        };
+        assert_eq!(resolve_chapter_position(&[], &incoming, 3), (4, 12));
+    }
+
+    // A matched title always wins outright, so a deliberate backward jump
+    // (TOC/bookmark navigation to an earlier chapter) is never clamped by
+    // the forward-carry rule above.
+    #[test]
+    fn resolve_chapter_position_allows_a_matched_title_to_move_backward() {
+        let toc = vec![
+            toc_entry("Cover"),
+            toc_entry("Chapter One"),
+            toc_entry("Chapter Two"),
+        ];
+        let (chapter, _) = resolve_chapter_position(&toc, &relocate_with_title("Chapter One"), 3);
+        assert_eq!(chapter, 2);
     }
 }

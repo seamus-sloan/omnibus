@@ -3,6 +3,9 @@
 //! keyboard hints. Owns the debounced FTS5 search task (cancel-on-keystroke),
 //! using the shared `platform_sleep`/`focus_after_paint` interop helpers.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use dioxus::core::Task;
 use dioxus::prelude::*;
 use dioxus_router::use_navigator;
@@ -252,8 +255,26 @@ pub(super) fn SpOverlay(open: PaletteOpen) -> Element {
 
 /// Search-icon + autofocused query input, with the debounce/RPC dispatch
 /// delegated to `on_input` and the loading spinner shown while a search runs.
+///
+/// Real DOM focus lands a frame after mount (see [`focus_after_paint`]), so
+/// a click-then-immediately-type user's first keystrokes would otherwise
+/// land on whatever had focus before the overlay opened and vanish (#1908).
+/// `install_prefocus_key_buffer` closes that window: a temporary
+/// `document`-level `keydown` listener folds keystrokes into `query` until
+/// real focus lands, at which point `remove_prefocus_key_buffer` detaches
+/// it so ordinary typing goes through `oninput` as usual.
 #[component]
 fn SpInputRow(query: Signal<String>, is_loading: bool, on_input: EventHandler<String>) -> Element {
+    let buffer: PrefocusKeyBufferHolder = use_hook(Rc::default);
+    // Safety net: detach if the overlay closes (e.g. Escape) before real
+    // focus ever lands, so a stale listener doesn't outlive this instance.
+    use_drop({
+        let buffer = Rc::clone(&buffer);
+        move || remove_prefocus_key_buffer(&buffer)
+    });
+
+    let mount_buffer = Rc::clone(&buffer);
+    let focus_buffer = Rc::clone(&buffer);
     rsx! {
         div { class: "sp-input-wrap",
             {search_glyph(18, "sp-input-icon", false)}
@@ -274,7 +295,11 @@ fn SpInputRow(query: Signal<String>, is_loading: bool, on_input: EventHandler<St
                 // attempts with `set_focus(true)`/`spawn` failed).
                 onmounted: move |evt: MountedEvent| {
                     focus_after_paint(&evt);
+                    remove_prefocus_key_buffer(&mount_buffer);
+                    *mount_buffer.borrow_mut() = install_prefocus_key_buffer(query, on_input);
                 },
+                // Real focus has landed — the buffer's job is done.
+                onfocus: move |_| remove_prefocus_key_buffer(&focus_buffer),
                 value: "{query}",
                 oninput: move |evt| on_input.call(evt.value()),
             }
@@ -283,6 +308,129 @@ fn SpInputRow(query: Signal<String>, is_loading: bool, on_input: EventHandler<St
             }
         }
     }
+}
+
+/// Handle for the temporary pre-focus `keydown` buffer — see
+/// [`install_prefocus_key_buffer`]. Held in a [`PrefocusKeyBufferHolder`]
+/// until [`remove_prefocus_key_buffer`] detaches it.
+#[cfg(feature = "web")]
+struct PrefocusKeyBuffer {
+    document: web_sys::Document,
+    closure: wasm_bindgen::closure::Closure<dyn FnMut(web_sys::KeyboardEvent)>,
+}
+
+/// Non-web stub: SSR and native shells don't drive this browser focus race
+/// (mirrors `focus_after_paint`, rule 07).
+#[cfg(not(feature = "web"))]
+struct PrefocusKeyBuffer;
+
+/// Shared slot the `onmounted`/`onfocus`/unmount call sites all reach
+/// through to install and later detach the buffer.
+type PrefocusKeyBufferHolder = Rc<RefCell<Option<PrefocusKeyBuffer>>>;
+
+/// Install a temporary `document`-level `keydown` listener that folds
+/// printable keystrokes (and Backspace) into `query`/`on_input` while real
+/// DOM focus is still in flight. Returns `None` if `window`/`document` is
+/// unavailable — the same best-effort shape as `focus_after_paint`.
+#[cfg(feature = "web")]
+fn install_prefocus_key_buffer(
+    query: Signal<String>,
+    on_input: EventHandler<String>,
+) -> Option<PrefocusKeyBuffer> {
+    use wasm_bindgen::prelude::*;
+    use wasm_bindgen::JsCast;
+
+    let document = web_sys::window()?.document()?;
+    let closure = Closure::wrap(Box::new(move |evt: web_sys::KeyboardEvent| {
+        let Some(edit) = bufferable_key(&evt) else {
+            return;
+        };
+        // Stop the key here, in the capture phase, before it ever reaches
+        // whatever element still holds real focus — a bubble-phase
+        // `prevent_default` alone would be too late to stop a focused
+        // element's own `onkeydown` (e.g. a book tile's Space-to-open)
+        // from already having fired during the same dispatch.
+        evt.prevent_default();
+        evt.stop_propagation();
+        let mut v = query.peek().clone();
+        match edit {
+            Some(c) => v.push(c),
+            None => {
+                v.pop();
+            }
+        }
+        on_input.call(v);
+    }) as Box<dyn FnMut(_)>);
+    document
+        .add_event_listener_with_callback_and_bool(
+            "keydown",
+            closure.as_ref().unchecked_ref(),
+            true,
+        )
+        .ok()?;
+    Some(PrefocusKeyBuffer { document, closure })
+}
+
+#[cfg(not(feature = "web"))]
+fn install_prefocus_key_buffer(
+    _query: Signal<String>,
+    _on_input: EventHandler<String>,
+) -> Option<PrefocusKeyBuffer> {
+    None
+}
+
+/// Detach a buffer installed by [`install_prefocus_key_buffer`], if any.
+/// Idempotent — safe to call from both the input's real `onfocus` and the
+/// row's unmount, whichever comes first.
+fn remove_prefocus_key_buffer(holder: &PrefocusKeyBufferHolder) {
+    let Some(buf) = holder.borrow_mut().take() else {
+        return;
+    };
+    detach_prefocus_key_buffer(buf);
+}
+
+#[cfg(feature = "web")]
+fn detach_prefocus_key_buffer(buf: PrefocusKeyBuffer) {
+    use wasm_bindgen::JsCast;
+
+    let _ = buf.document.remove_event_listener_with_callback_and_bool(
+        "keydown",
+        buf.closure.as_ref().unchecked_ref(),
+        true,
+    );
+}
+
+#[cfg(not(feature = "web"))]
+fn detach_prefocus_key_buffer(_buf: PrefocusKeyBuffer) {}
+
+/// `bufferable_key`'s decision, from primitive fields rather than a real
+/// `web_sys::KeyboardEvent` — that type only constructs on a wasm32 target,
+/// so pulling the classification out keeps it unit-testable on the host.
+/// `Some(Some(c))` appends `c`, `Some(None)` deletes the last character
+/// (Backspace), `None` skips the event — Enter/Tab/arrows/modified combos
+/// are left for the palette's real `onkeydown` once focus lands for real.
+/// Only reachable from `bufferable_key` (web) and the unit tests below — a
+/// non-web, non-test build has neither caller, hence the `cfg`.
+#[cfg(any(feature = "web", test))]
+fn classify_prefocus_key(key: &str, ctrl: bool, meta: bool, alt: bool) -> Option<Option<char>> {
+    if ctrl || meta || alt {
+        return None;
+    }
+    if key == "Backspace" {
+        return Some(None);
+    }
+    let mut chars = key.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) => Some(Some(c)),
+        _ => None,
+    }
+}
+
+/// Classify a `keydown` for the pre-focus buffer — see
+/// [`classify_prefocus_key`] for the rules.
+#[cfg(feature = "web")]
+fn bufferable_key(evt: &web_sys::KeyboardEvent) -> Option<Option<char>> {
+    classify_prefocus_key(&evt.key(), evt.ctrl_key(), evt.meta_key(), evt.alt_key())
 }
 
 #[component]
@@ -301,5 +449,53 @@ fn SpFooter() -> Element {
                 "fts5 · ranked by relevance"
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify_prefocus_key;
+
+    #[test]
+    fn classify_prefocus_key_appends_a_bare_printable_character() {
+        assert_eq!(
+            classify_prefocus_key("a", false, false, false),
+            Some(Some('a'))
+        );
+    }
+
+    #[test]
+    fn classify_prefocus_key_allows_a_shifted_symbol() {
+        // The browser already resolves `key` to the shifted glyph (e.g. "!"
+        // for Shift+1), so there is no separate shift check here.
+        assert_eq!(
+            classify_prefocus_key("!", false, false, false),
+            Some(Some('!'))
+        );
+    }
+
+    #[test]
+    fn classify_prefocus_key_deletes_the_last_character_on_backspace() {
+        assert_eq!(
+            classify_prefocus_key("Backspace", false, false, false),
+            Some(None)
+        );
+    }
+
+    #[test]
+    fn classify_prefocus_key_ignores_ctrl_meta_and_alt_combos() {
+        assert_eq!(classify_prefocus_key("a", true, false, false), None);
+        assert_eq!(classify_prefocus_key("a", false, true, false), None);
+        assert_eq!(classify_prefocus_key("a", false, false, true), None);
+    }
+
+    #[test]
+    fn classify_prefocus_key_ignores_multi_character_key_names() {
+        assert_eq!(classify_prefocus_key("Enter", false, false, false), None);
+        assert_eq!(
+            classify_prefocus_key("ArrowDown", false, false, false),
+            None
+        );
+        assert_eq!(classify_prefocus_key("Tab", false, false, false), None);
     }
 }
