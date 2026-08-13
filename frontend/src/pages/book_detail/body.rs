@@ -399,10 +399,20 @@ pub(super) fn BdRailSection(
 #[component]
 fn BdInsightsCard(uuid: String) -> Element {
     let mut insights = use_signal(|| None::<BookInsights>);
+    // Monotonic load counter, mirroring `BdReadStatusControl`/the rating
+    // widget: a fast SPA navigation between two books can leave a slower
+    // fetch for the *previous* uuid still in flight, and without this guard
+    // its late response would overwrite the new book's insights.
+    let mut load_seq = use_signal(|| 0u64);
     use_effect(use_reactive!(|uuid| {
+        let my_load = *load_seq.peek() + 1;
+        load_seq.set(my_load);
+        insights.set(None);
         spawn(async move {
             if let Ok(fetched) = data::get_book_insights(&uuid).await {
-                insights.set(fetched);
+                if *load_seq.peek() == my_load {
+                    insights.set(fetched);
+                }
             }
         });
     }));

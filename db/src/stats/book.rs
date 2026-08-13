@@ -14,7 +14,7 @@ const BOOK_SESSIONS: &str = "\
     SELECT started_at, seconds_read AS secs FROM reading_sessions \
         WHERE user_id = ? AND book_uuid = ? \
     UNION ALL \
-    SELECT started_at, seconds_listened FROM listening_sessions \
+    SELECT started_at, seconds_listened AS secs FROM listening_sessions \
         WHERE user_id = ? AND book_uuid = ?";
 
 /// Aggregate one user's reading/listening insights for a single book:
