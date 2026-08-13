@@ -197,13 +197,20 @@ pub(super) fn SyncJumpPrompt(uuid: String) -> Element {
 pub(super) fn SyncHereButton() -> Element {
     let playback = crate::use_playback();
     let mut label = use_signal(|| "Synced here");
+    // Seeded online for SSR parity (rule 07); reconciled post-mount.
+    let mut online = use_signal(|| true);
+    use_effect(move || online.set(browser_online()));
     rsx! {
         button {
             class: "btn sm lp-toolbar-btn",
             r#type: "button",
             "data-testid": "listen-sync-here",
             title: "Declare the ebook and audiobook aligned at this spot",
+            disabled: !online(),
             onclick: move |_| {
+                if !browser_online() {
+                    return;
+                }
                 let Some(uuid) = (playback.uuid)() else { return };
                 let decl = omnibus_shared::cross_format::DeclareSyncPoint {
                     book_uuid: uuid,
@@ -222,5 +229,20 @@ pub(super) fn SyncHereButton() -> Element {
             },
             "{label}"
         }
+    }
+}
+
+/// Whether the browser reports connectivity — the "synced here" controls
+/// disable offline (rule 08). Always `true` off-web.
+pub(crate) fn browser_online() -> bool {
+    #[cfg(feature = "web")]
+    {
+        web_sys::window()
+            .map(|w| w.navigator().on_line())
+            .unwrap_or(true)
+    }
+    #[cfg(not(feature = "web"))]
+    {
+        true
     }
 }

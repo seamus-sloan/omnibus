@@ -194,9 +194,11 @@ pub async fn set_follow(
     book_uuid: &str,
     enabled: bool,
 ) -> Result<bool, CrossFormatError> {
-    let Some(book_uuid) = resolve_canonical_book_uuid(pool, book_uuid).await? else {
-        return Ok(false);
-    };
+    // Unknown book is 404 territory; `Ok(false)` is reserved for a known
+    // book with no link to flip.
+    let book_uuid = resolve_canonical_book_uuid(pool, book_uuid)
+        .await?
+        .ok_or(CrossFormatError::BookNotFound)?;
     let result =
         sqlx::query("UPDATE cross_format_links SET follow = ? WHERE user_id = ? AND book_uuid = ?")
             .bind(enabled as i64)

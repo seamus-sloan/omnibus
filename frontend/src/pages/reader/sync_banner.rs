@@ -119,13 +119,20 @@ pub(super) fn SyncJumpBanner(uuid: String) -> Element {
 #[component]
 pub(super) fn SyncHerePill(uuid: String, loc: Signal<super::signals::RelocateData>) -> Element {
     let mut label = use_signal(|| "Synced here");
+    // Seeded online for SSR parity (rule 07); reconciled post-mount.
+    let mut online = use_signal(|| true);
+    use_effect(move || online.set(crate::pages::listen::sync_prompt::browser_online()));
     rsx! {
         button {
             class: "btn ghost sm rd-sync-here",
             r#type: "button",
             "data-testid": "reader-sync-here",
             title: "Declare the ebook and audiobook aligned at this spot",
+            disabled: !online(),
             onclick: move |_| {
+                if !crate::pages::listen::sync_prompt::browser_online() {
+                    return;
+                }
                 let uuid = uuid.clone();
                 let frac = loc.peek().frac;
                 spawn(async move {
