@@ -235,7 +235,16 @@ test("declaring a sync point turns on follow and the reader auto-applies", async
       newest = Math.max(newest, rec?.client_updated_at ?? 0);
     }
   }
-  clock = Math.max(newest, Math.floor(Date.now() / 1000) - 3);
+  // If the newest write is at (or near) wall clock, anchoring on it would
+  // push nextClock() into the future, where the server clamps every write
+  // to now — collapsing them onto one clock that then loses the
+  // strictly-newer gate. Wait out the collision window instead so the
+  // anchor is both strictly newer than every stored clock and far enough
+  // behind wall clock for this test's three writes.
+  await expect
+    .poll(() => Math.floor(Date.now() / 1000), { timeout: 15_000 })
+    .toBeGreaterThan(newest + 3);
+  clock = Math.floor(Date.now() / 1000) - 3;
 
   // Fresh positions: reading behind, listening ahead — then declare from
   // the player so follow mode engages.
