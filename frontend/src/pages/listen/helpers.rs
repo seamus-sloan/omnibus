@@ -95,8 +95,11 @@ pub(super) fn on_skip_forward_30() -> impl FnMut(MouseEvent) + 'static {
 }
 
 /// Seek the shared audio element to an absolute position in seconds. Shared
-/// by the full player's scrub/chapter handlers and the mini-dock's chapter
-/// jumps; no-op off web (SSR has no audio element to poke).
+/// by the full player's scrub/chapter/bookmark handlers and the mini-dock's
+/// chapter jumps; no-op off web (SSR has no audio element to poke). The JS
+/// `seek` shim pushes the target time to the transport display immediately
+/// — playing or paused — rather than waiting on the element's own
+/// `timeupdate` (#1897).
 #[cfg(not(feature = "mobile"))]
 pub(super) fn seek_to(secs: f64) {
     #[cfg(feature = "web")]

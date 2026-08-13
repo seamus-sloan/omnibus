@@ -47,8 +47,10 @@ pub(super) fn control_surface_js(rate_lit: &str, vol_lit: &str, uuid_lit: &str) 
 
 /// OmnibusAudio object scaffold: mode + direct-mode state plus the
 /// transport-control methods (play/pause/toggle/setRate/stop/seek/skip).
-/// Pure JS with no Rust interpolation, so it lives as a raw `&'static
-/// str` with literal braces.
+/// `seek` pushes the target time to the transport display synchronously
+/// (not just via the element's `timeupdate`), so a paused seek shows
+/// immediate feedback (#1897). Pure JS with no Rust interpolation, so it
+/// lives as a raw `&'static str` with literal braces.
 fn transport_controls_js() -> &'static str {
     r#"      // Playback mode. Set by initDirect / initHls; null before either fires.
       _mode: null,
@@ -89,6 +91,12 @@ fn transport_controls_js() -> &'static str {
       // play/pause state across the swap.
       seek: function(absSeconds){
         var s = Math.max(0, absSeconds || 0);
+        // Push the target time to the transport display immediately —
+        // don't wait for the element's own `timeupdate`, which some
+        // browsers fire unreliably (or not at all) for a seek issued while
+        // paused, leaving the readout and scrub position stuck at the old
+        // value until playback starts (#1897).
+        if (window.__omnibusOnAudioTime) { window.__omnibusOnAudioTime(s); }
         if (this._mode === 'direct' && this._parts) {
           var i = 0;
           while (i < this._cumOffsets.length - 1 && s >= this._cumOffsets[i + 1]) i++;
@@ -356,6 +364,12 @@ mod tests {
             "direct_play_init_js missing"
         );
         assert!(js.contains("initHls: function(url"), "hls_init_js missing");
+        // A paused seek must push the transport display immediately (#1897)
+        // rather than waiting on the element's own `timeupdate`.
+        assert!(
+            js.contains("if (window.__omnibusOnAudioTime) { window.__omnibusOnAudioTime(s); }"),
+            "seek does not push the target time immediately"
+        );
         // Sanity: no stray `{{` / `}}` escape pairs leaked from a `format!`.
         assert!(!js.contains("{{"), "literal {{ leaked into JS");
         assert!(!js.contains("}}"), "literal }} leaked into JS");
