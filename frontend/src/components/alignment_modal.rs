@@ -28,30 +28,21 @@ pub(crate) fn fmt_hm(seconds: f64) -> String {
 }
 
 /// Coarse recency for sync copy ("yesterday"), from a client event clock.
-/// Empty off-web (these surfaces render post-mount only, so SSR never
-/// sees it — rule 07 holds).
+/// These surfaces render post-mount only, so SSR never sees the value
+/// (rule 07 holds) and `crate::time::now_unix` serves every target.
 #[cfg_attr(feature = "mobile", allow(dead_code))]
 pub(crate) fn recency(clock_epoch_secs: i64) -> String {
-    #[cfg(feature = "web")]
-    {
-        let now = (web_sys::js_sys::Date::now() / 1000.0) as i64;
-        let d = (now - clock_epoch_secs).max(0);
-        if d < 90 {
-            "just now".into()
-        } else if d < 3_600 {
-            format!("{}m ago", d / 60)
-        } else if d < 86_400 {
-            format!("{}h ago", d / 3_600)
-        } else if d < 172_800 {
-            "yesterday".into()
-        } else {
-            format!("{}d ago", d / 86_400)
-        }
-    }
-    #[cfg(not(feature = "web"))]
-    {
-        let _ = clock_epoch_secs;
-        String::new()
+    let d = (crate::time::now_unix() - clock_epoch_secs).max(0);
+    if d < 90 {
+        "just now".into()
+    } else if d < 3_600 {
+        format!("{}m ago", d / 60)
+    } else if d < 86_400 {
+        format!("{}h ago", d / 3_600)
+    } else if d < 172_800 {
+        "yesterday".into()
+    } else {
+        format!("{}d ago", d / 86_400)
     }
 }
 

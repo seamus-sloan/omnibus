@@ -1485,3 +1485,66 @@ fn merge_user_anchors_outranks_conflicting_chapter_anchors() {
     // No user anchors → chapter map passes through untouched.
     assert!(merge_user_anchors(&[], None).is_none());
 }
+
+#[tokio::test]
+async fn alignment_view_serves_the_anchor_pairs_the_jump_uses() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, audio) = seed_dual_book(&pool, &[600.0]).await;
+    seed_epub_chapters(&pool, &[("Alpha", 0), ("Bravo", 40), ("Charlie", 80)], 40).await;
+    seed_audio_chapters(
+        &pool,
+        audio[0],
+        &[("Alpha", 0.0), ("Bravo", 300.0), ("Charlie", 480.0)],
+    )
+    .await;
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+
+    // Chapter-anchored: the modal preview interpolates through exactly
+    // these pairs — the mapping the jump runs.
+    let view = alignment_view(&pool, user, &uuid).await.unwrap();
+    assert_eq!(
+        view.anchor_pairs
+            .iter()
+            .map(|(t, a)| ((t * 120.0).round(), (a * 600.0).round()))
+            .collect::<Vec<_>>(),
+        // Ticks at chapter starts: Alpha (0,0), Bravo (40/120 chars,
+        // 300s), Charlie (80/120, 480s).
+        vec![(0.0, 0.0), (40.0, 300.0), (80.0, 480.0)]
+    );
+
+    // A user anchor joins (and outranks) the served pairs.
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 50, 1_000))
+        .await
+        .unwrap();
+    progress::upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 390.0, Some(audio[0]), 2_000),
+    )
+    .await
+    .unwrap();
+    declare_sync_point(
+        &pool,
+        user,
+        &DeclareSyncPoint {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Epub,
+            ebook_fraction: Some(0.5),
+            audio_book_file_id: None,
+            audio_seconds: None,
+        },
+    )
+    .await
+    .unwrap();
+    let view = alignment_view(&pool, user, &uuid).await.unwrap();
+    assert!(
+        view.anchor_pairs
+            .iter()
+            .any(|(t, a)| (t - 0.5).abs() < 1e-9 && (a - 0.65).abs() < 1e-9),
+        "the declared (0.5, 390s/600s) pair must be served: {:?}",
+        view.anchor_pairs
+    );
+}
