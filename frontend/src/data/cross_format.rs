@@ -73,12 +73,18 @@ pub enum SyncPointError {
     Other(DataError),
 }
 
-/// The `LinkRequired` refusal travels as its `thiserror` message — the
-/// same de-facto contract `rpc_set_follow_mode` already relies on.
+/// Prefix of `CrossFormatError::LinkRequired`'s `#[error]` message
+/// (`db/src/cross_format.rs`) — the refusal's de-facto wire contract, the
+/// same one `rpc_set_follow_mode` relies on. The frontend can't import the
+/// db crate on web/mobile builds, so the string is mirrored here.
+#[cfg(not(feature = "mobile"))]
+const LINK_REQUIRED_PREFIX: &str = "confirm the alignment first";
+
+/// The `LinkRequired` refusal travels as its `thiserror` message.
 #[cfg(not(feature = "mobile"))]
 fn classify_sync_point_err(e: DataError) -> SyncPointError {
     match &e {
-        DataError::Other(msg) if msg.starts_with("confirm the alignment first") => {
+        DataError::Other(msg) if msg.starts_with(LINK_REQUIRED_PREFIX) => {
             SyncPointError::LinkRequired
         }
         _ => SyncPointError::Other(e),
