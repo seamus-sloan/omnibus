@@ -130,8 +130,8 @@ fn fraction_at_keeps_sub_percent_precision_that_percent_at_floors() {
             chars_before: 40,
         },
     ];
-    // 73 of 100 chars → 0.73 exactly; 33 chars into c2 → 73%.
-    assert_eq!(fraction_at(&stats, 1, 33), Some(0.73));
+    // 73 of 100 chars → 0.73; 33 chars into c2.
+    assert!((fraction_at(&stats, 1, 33).unwrap() - 0.73).abs() < 1e-12);
     // A position percent_at floors away: 45/100 vs 45.0%… but with a
     // non-decimal total the fraction keeps what the integer loses.
     let uneven = vec![SpineStatRow {

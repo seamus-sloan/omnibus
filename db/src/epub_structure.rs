@@ -163,7 +163,8 @@ pub fn fraction_at(stats: &[SpineStatRow], spine_index: i64, offset_in_file: u64
 /// Whole-book visible-text percent for a position, from stored stats alone:
 /// floor semantics and clamping identical to `kobo_position`'s
 /// `book_percent`, so the two derivation paths cannot disagree. `None`
-/// when the stats don't cover `spine_index` or the book measured empty.
+/// when the stats don't cover `spine_index`; a book that measured empty
+/// reports 0.
 pub fn percent_at(stats: &[SpineStatRow], spine_index: i64, offset_in_file: u64) -> Option<i64> {
     fraction_at(stats, spine_index, offset_in_file)
         .map(|f| ((100.0 * f).floor() as i64).clamp(0, 100))
