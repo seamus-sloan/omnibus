@@ -2649,9 +2649,14 @@ async fn record_session_succeeds_for_many_concurrent_writers_on_one_pool() {
 
 /// Captures every WARN-or-louder `tracing` event's message plus fields as
 /// one formatted line, while installed as the default subscriber —
-/// `set_default` scopes it to the current thread, so `#[tokio::test]`'s
-/// single-threaded current-thread runtime keeps a test's capture isolated
-/// from any other test running in the process. Mirrors the `QueryCounter`
+/// `set_default` scopes it to the current thread, so a single-threaded
+/// runtime keeps a test's capture isolated from any other test running in
+/// the process. Every test using this pattern pins
+/// `#[tokio::test(flavor = "current_thread")]` explicitly rather than
+/// relying on the tokio-macros default (`current_thread` for `#[tokio::test]`
+/// regardless of the `rt-multi-thread` feature — that feature only makes
+/// `flavor = "multi_thread"` available as an opt-in) so the reliance stays
+/// true even if that default ever changed. Mirrors the `QueryCounter`
 /// pattern in `db/src/epub_rewrite/tests.rs`; every `Subscriber` method
 /// besides `event` is a no-op since this only needs to tally/record events,
 /// never spans.
@@ -2687,7 +2692,7 @@ impl tracing::Subscriber for WarnCapture {
     fn exit(&self, _span: &tracing::span::Id) {}
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn upsert_progress_tx_logs_warn_when_write_rejected_by_timestamp_guard() {
     // AC1 (#1861): a rejected write must emit one WARN naming the book and
     // both timestamps, so a revert like the 2026-08-11 chapter-19-to-13 one
@@ -2749,7 +2754,7 @@ async fn upsert_progress_tx_logs_warn_when_write_rejected_by_timestamp_guard() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn upsert_progress_tx_logs_warn_when_accepted_audio_write_jumps_backward_past_threshold() {
     // AC2 (#1861): an accepted write that moves the audio position backward
     // by more than the ~10-minute threshold must emit one WARN with both
@@ -2798,7 +2803,7 @@ async fn upsert_progress_tx_logs_warn_when_accepted_audio_write_jumps_backward_p
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn upsert_progress_tx_logs_nothing_for_a_normal_forward_write() {
     // AC3 (#1861): a plain forward write — newer timestamp, position moving
     // ahead — must not emit either WARN.
@@ -2831,7 +2836,7 @@ async fn upsert_progress_tx_logs_nothing_for_a_normal_forward_write() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn upsert_progress_tx_logs_nothing_for_a_small_backward_audio_seek() {
     // A normal skip-back / chapter re-listen (well under the ~10-minute
     // threshold) is ordinary playback, not a revert — must stay silent.
@@ -2864,7 +2869,7 @@ async fn upsert_progress_tx_logs_nothing_for_a_small_backward_audio_seek() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn upsert_progress_tx_logs_nothing_for_the_first_write_to_a_book() {
     // No prior row means no "old" position to compare against — the very
     // first write for a `(user, book, format)` must never look like a jump.
@@ -2886,7 +2891,7 @@ async fn upsert_progress_tx_logs_nothing_for_the_first_write_to_a_book() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn upsert_progress_tx_logs_nothing_when_a_write_is_rejected_by_the_audio_file_guard() {
     // The multi-file-audio-guard rejection (#1888) is a different rejection
     // reason than the timestamp guard, and out of this issue's scope — it
