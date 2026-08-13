@@ -833,4 +833,15 @@ extension UserDataService {
     static func unlinkCrossFormat(uuid: String) async throws {
         let _: Empty = try await APIClient.shared.delete("/api/books/\(uuid)/cross-format-link")
     }
+
+    /// A "synced here" declaration: records the declaring surface's own
+    /// position as a user anchor and turns follow mode on. Rule 08: a
+    /// deferred declaration would calibrate positions that no longer
+    /// correspond — direct call only, disabled offline at the control.
+    static func declareSyncPoint(_ decl: DeclareSyncPoint) async throws {
+        let _: Empty = try await APIClient.shared.post(
+            "/api/books/\(decl.bookUUID)/sync-point",
+            body: decl
+        )
+    }
 }

@@ -2,6 +2,7 @@
 //! snapshot staleness, sequence/narrations timelines, percent ↔ seconds
 //! mapping with inverse consistency, and the resume-candidate state machine.
 
+use omnibus_shared::cross_format::DeclareSyncPoint;
 use omnibus_shared::ProgressUpdate;
 use sqlx::SqlitePool;
 
@@ -1299,4 +1300,188 @@ async fn anchoring_still_refuses_junk_encoder_labels() {
     let view = alignment_view(&pool, user, &uuid).await.unwrap();
     assert!(view.anchor_match.is_none());
     assert_eq!(view.audio_chapter_marks, 3);
+}
+
+fn declare_audio(uuid: &str, file_id: Option<i64>, seconds: f64) -> DeclareSyncPoint {
+    DeclareSyncPoint {
+        book_uuid: uuid.to_string(),
+        format: ProgressFormat::Audio,
+        ebook_fraction: None,
+        audio_book_file_id: file_id,
+        audio_seconds: Some(seconds),
+    }
+}
+
+#[tokio::test]
+async fn declare_sync_point_records_the_anchor_and_turns_follow_on() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    // Single audio file: the declaration may auto-confirm a sequence link.
+    let (_, uuid, _) = seed_dual_book(&pool, &[1_000.0]).await;
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 40, 1_000))
+        .await
+        .unwrap();
+
+    let link = declare_sync_point(&pool, user, &declare_audio(&uuid, None, 500.0))
+        .await
+        .unwrap();
+    assert!(link.follow);
+    assert_eq!(link.user_anchors.len(), 1);
+    let (t, s) = link.user_anchors[0];
+    assert!((t - 0.40).abs() < 1e-9);
+    assert!((s - 500.0).abs() < 1e-9);
+
+    // The anchor bends the mapping: reading at 40% now maps to 500s
+    // (linear would say 400s), and the resume carries follow + the
+    // user-anchored confidence.
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 40, 2_000))
+        .await
+        .unwrap();
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Audio)
+        .await
+        .unwrap();
+    assert!(r.follow);
+    let c = r.candidate.unwrap();
+    assert_eq!(
+        c.confidence,
+        omnibus_shared::cross_format::MappingConfidence::UserAnchored
+    );
+    let secs = c.audio_position_seconds.unwrap();
+    assert!(
+        (495.0..=505.0).contains(&secs),
+        "user anchor must pin 40% to ≈500s, got {secs}"
+    );
+
+    // Re-declaring nearby replaces the pair instead of stacking.
+    let link = declare_sync_point(&pool, user, &declare_audio(&uuid, None, 520.0))
+        .await
+        .unwrap();
+    assert_eq!(link.user_anchors.len(), 1);
+    assert!((link.user_anchors[0].1 - 520.0).abs() < 1e-9);
+}
+
+#[tokio::test]
+async fn declare_sync_point_refuses_what_it_cannot_pair() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, audio) = seed_dual_book(&pool, &[600.0, 400.0]).await;
+
+    // Multi-file with no link: never guess an order.
+    let err = declare_sync_point(&pool, user, &declare_audio(&uuid, Some(audio[0]), 100.0))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CrossFormatError::LinkRequired));
+
+    // Linked, but the counterpart has no reading position to pair with.
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    let err = declare_sync_point(&pool, user, &declare_audio(&uuid, Some(audio[0]), 100.0))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CrossFormatError::CounterpartMissing));
+
+    // A stale audio set pauses declarations exactly like offers.
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 10, 1_000))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE book_files SET mtime_epoch = 4242 WHERE id = ?")
+        .bind(audio[0])
+        .execute(&pool)
+        .await
+        .unwrap();
+    let err = declare_sync_point(&pool, user, &declare_audio(&uuid, Some(audio[0]), 100.0))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CrossFormatError::AudioSetMismatch));
+}
+
+#[tokio::test]
+async fn reconfirm_keeps_follow_and_clears_anchors_only_when_the_audio_set_changed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, audio) = seed_dual_book(&pool, &[1_000.0]).await;
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 40, 1_000))
+        .await
+        .unwrap();
+    declare_sync_point(&pool, user, &declare_audio(&uuid, None, 500.0))
+        .await
+        .unwrap();
+
+    // Same audio set: re-confirming keeps follow and the anchors.
+    let link = upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    assert!(link.follow);
+    assert_eq!(link.user_anchors.len(), 1);
+
+    // Changed audio set: anchors' global seconds mean nothing on the new
+    // timeline — cleared; the follow opt-in survives.
+    sqlx::query("UPDATE book_files SET mtime_epoch = 777 WHERE id = ?")
+        .bind(audio[0])
+        .execute(&pool)
+        .await
+        .unwrap();
+    let link = upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    assert!(link.follow);
+    assert!(link.user_anchors.is_empty());
+}
+
+#[tokio::test]
+async fn set_follow_flips_only_existing_links() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, _) = seed_dual_book(&pool, &[600.0]).await;
+    assert!(!set_follow(&pool, user, &uuid, true).await.unwrap());
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    assert!(set_follow(&pool, user, &uuid, true).await.unwrap());
+    assert!(get_link(&pool, user, &uuid).await.unwrap().unwrap().follow);
+    assert!(set_follow(&pool, user, &uuid, false).await.unwrap());
+    assert!(!get_link(&pool, user, &uuid).await.unwrap().unwrap().follow);
+}
+
+#[test]
+fn merge_user_anchors_outranks_conflicting_chapter_anchors() {
+    use super::anchors::{merge_user_anchors, Anchor, AnchorMap};
+    let user = [Anchor {
+        text_frac: 0.5,
+        audio_frac: 0.7,
+    }];
+    let chapter = AnchorMap {
+        anchors: vec![
+            // Fits strictly before the user pair on both axes: kept.
+            Anchor {
+                text_frac: 0.2,
+                audio_frac: 0.3,
+            },
+            // Violates monotonicity against the user pair (audio side
+            // sits past it while text sits before): dropped.
+            Anchor {
+                text_frac: 0.4,
+                audio_frac: 0.8,
+            },
+            // Fits strictly after: kept.
+            Anchor {
+                text_frac: 0.9,
+                audio_frac: 0.95,
+            },
+        ],
+        matched: 3,
+        ebook_chapters: 10,
+    };
+    let merged = merge_user_anchors(&user, Some(chapter)).unwrap();
+    assert_eq!(
+        merged
+            .anchors
+            .iter()
+            .map(|a| (a.text_frac, a.audio_frac))
+            .collect::<Vec<_>>(),
+        vec![(0.2, 0.3), (0.5, 0.7), (0.9, 0.95)]
+    );
+    // No user anchors → chapter map passes through untouched.
+    assert!(merge_user_anchors(&[], None).is_none());
 }

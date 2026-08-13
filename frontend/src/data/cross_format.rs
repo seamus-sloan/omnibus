@@ -60,3 +60,50 @@ pub async fn unlink_cross_format(_server_url: &str, _uuid: &str) -> Result<bool,
         "alignment is not available in the mobile shell".into(),
     ))
 }
+
+/// Declare a "synced here" sync point from the reader or player.
+#[cfg(not(feature = "mobile"))]
+pub async fn declare_sync_point(
+    _server_url: &str,
+    decl: omnibus_shared::cross_format::DeclareSyncPoint,
+) -> Result<(), DataError> {
+    crate::rpc::rpc_declare_sync_point(decl)
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Flip follow mode on an existing link.
+#[cfg(not(feature = "mobile"))]
+pub async fn set_follow_mode(
+    _server_url: &str,
+    uuid: &str,
+    enabled: bool,
+) -> Result<(), DataError> {
+    crate::rpc::rpc_set_follow_mode(
+        uuid.to_string(),
+        omnibus_shared::cross_format::SetFollowMode { enabled },
+    )
+    .await
+    .map_err(note_server_fn_err)
+}
+
+#[cfg(feature = "mobile")]
+pub async fn declare_sync_point(
+    _server_url: &str,
+    _decl: omnibus_shared::cross_format::DeclareSyncPoint,
+) -> Result<(), DataError> {
+    Err(DataError::Other(
+        "alignment is not available in the mobile shell".into(),
+    ))
+}
+
+#[cfg(feature = "mobile")]
+pub async fn set_follow_mode(
+    _server_url: &str,
+    _uuid: &str,
+    _enabled: bool,
+) -> Result<(), DataError> {
+    Err(DataError::Other(
+        "alignment is not available in the mobile shell".into(),
+    ))
+}

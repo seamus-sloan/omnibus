@@ -160,6 +160,27 @@ pub fn fraction_at(stats: &[SpineStatRow], spine_index: i64, offset_in_file: u64
     Some((at as f64 / total as f64).clamp(0.0, 1.0))
 }
 
+/// Inverse of [`fraction_at`]: the `(spine_index, offset_in_file)` whose
+/// visible character sits at `frac` of the whole book. `None` when the
+/// stats are empty or the book measured empty.
+pub fn position_at_fraction(stats: &[SpineStatRow], frac: f64) -> Option<(i64, u64)> {
+    let total: i64 = stats
+        .iter()
+        .fold(0i64, |acc, s| acc.saturating_add(s.visible_chars.max(0)));
+    if total <= 0 {
+        return None;
+    }
+    let at = ((frac.clamp(0.0, 1.0) * total as f64) as i64).clamp(0, total - 1);
+    let row = stats
+        .iter()
+        .filter(|s| s.visible_chars > 0 && s.chars_before.max(0) <= at)
+        .max_by_key(|s| s.chars_before)?;
+    Some((
+        row.spine_index,
+        (at - row.chars_before.max(0)).max(0) as u64,
+    ))
+}
+
 /// Whole-book visible-text percent for a position, from stored stats alone:
 /// floor semantics and clamping identical to `kobo_position`'s
 /// `book_percent`, so the two derivation paths cannot disagree. `None`

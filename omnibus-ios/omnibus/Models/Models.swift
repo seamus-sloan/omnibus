@@ -1449,6 +1449,7 @@ enum CrossFormatResumeState: String, Codable, Sendable {
 enum MappingConfidence: String, Codable, Sendable {
     case linear
     case chapterAnchored = "chapter_anchored"
+    case userAnchored = "user_anchored"
 }
 
 enum CrossFormatLinkMode: String, Codable, Sendable {
@@ -1489,6 +1490,8 @@ struct CrossFormatCandidate: Codable, Hashable, Sendable {
 struct CrossFormatResume: Codable, Hashable, Sendable {
     var state: CrossFormatResumeState
     var candidate: CrossFormatCandidate?
+    /// Follow mode: apply a candidate silently instead of offering.
+    var follow: Bool?
 }
 
 struct AlignmentLink: Codable, Hashable, Sendable {
@@ -1496,12 +1499,34 @@ struct AlignmentLink: Codable, Hashable, Sendable {
     var primaryBookFileID: Int64?
     var stale: Bool
     var confirmedAt: Int64
+    var follow: Bool?
+    var userAnchors: Int64?
 
     enum CodingKeys: String, CodingKey {
         case mode
         case primaryBookFileID = "primary_book_file_id"
         case stale
         case confirmedAt = "confirmed_at"
+        case follow
+        case userAnchors = "user_anchors"
+    }
+}
+
+/// Body of `POST /api/books/{uuid}/sync-point` — the declaring surface
+/// names its own position; the counterpart comes from the server's row.
+struct DeclareSyncPoint: Codable, Sendable {
+    var bookUUID: String
+    var format: ProgressFormat
+    var ebookFraction: Double?
+    var audioBookFileID: Int64?
+    var audioSeconds: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case bookUUID = "book_uuid"
+        case format
+        case ebookFraction = "ebook_fraction"
+        case audioBookFileID = "audio_book_file_id"
+        case audioSeconds = "audio_seconds"
     }
 }
 

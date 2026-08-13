@@ -26,6 +26,10 @@ pub enum CrossFormatError {
     BookNotFound,
     #[error("audio files changed since the alignment loaded")]
     AudioSetMismatch,
+    #[error("confirm the alignment first — this book has several audio files")]
+    LinkRequired,
+    #[error("the other format has no position to pair with yet")]
+    CounterpartMissing,
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
 }
@@ -76,6 +80,17 @@ pub struct CrossFormatLink {
     pub primary_book_file_id: Option<i64>,
     pub audio_snapshot: String,
     pub confirmed_at: i64,
+    /// Follow mode: resolve-at-read instead of offer-based prompts.
+    pub follow: bool,
+    /// "Synced here" declarations as `(ebook_fraction, audio_global
+    /// seconds)` pairs, sorted by fraction; they outrank chapter anchors.
+    pub user_anchors: Vec<(f64, f64)>,
+}
+
+fn parse_user_anchors(raw: &str) -> Vec<(f64, f64)> {
+    // A row this module didn't write (or a corrupt one) degrades to no
+    // user anchors rather than an error — mapping still works.
+    serde_json::from_str::<Vec<(f64, f64)>>(raw).unwrap_or_default()
 }
 
 fn mode_str(mode: CrossFormatLinkMode) -> &'static str {
@@ -113,6 +128,9 @@ pub async fn upsert_link(
         .await?
         .ok_or(CrossFormatError::BookNotFound)?;
     let snapshot = snapshot_json(&audio_files(pool, book_id).await?);
+    // Re-confirmation keeps the follow opt-in; user anchors survive only
+    // when the audio set is unchanged — a new set is a new timeline, and
+    // the stored global seconds no longer mean anything on it.
     sqlx::query(
         "INSERT INTO cross_format_links
             (user_id, book_uuid, mode, primary_book_file_id, audio_snapshot, confirmed_at)
@@ -120,6 +138,9 @@ pub async fn upsert_link(
          ON CONFLICT(user_id, book_uuid) DO UPDATE SET
             mode = excluded.mode,
             primary_book_file_id = excluded.primary_book_file_id,
+            user_anchors = CASE
+                WHEN cross_format_links.audio_snapshot = excluded.audio_snapshot
+                THEN cross_format_links.user_anchors ELSE '[]' END,
             audio_snapshot = excluded.audio_snapshot,
             confirmed_at = excluded.confirmed_at",
     )
@@ -144,8 +165,8 @@ pub async fn get_link(
     let Some(book_uuid) = resolve_canonical_book_uuid(pool, book_uuid).await? else {
         return Ok(None);
     };
-    let row: Option<(String, Option<i64>, String, i64)> = sqlx::query_as(
-        "SELECT mode, primary_book_file_id, audio_snapshot, confirmed_at
+    let row: Option<(String, Option<i64>, String, i64, i64, String)> = sqlx::query_as(
+        "SELECT mode, primary_book_file_id, audio_snapshot, confirmed_at, follow, user_anchors
          FROM cross_format_links WHERE user_id = ? AND book_uuid = ?",
     )
     .bind(user_id)
@@ -153,13 +174,151 @@ pub async fn get_link(
     .fetch_optional(pool)
     .await?;
     Ok(row.map(
-        |(mode, primary_book_file_id, audio_snapshot, confirmed_at)| CrossFormatLink {
-            mode: parse_mode(&mode),
-            primary_book_file_id,
-            audio_snapshot,
-            confirmed_at,
+        |(mode, primary_book_file_id, audio_snapshot, confirmed_at, follow, user_anchors)| {
+            CrossFormatLink {
+                mode: parse_mode(&mode),
+                primary_book_file_id,
+                audio_snapshot,
+                confirmed_at,
+                follow: follow != 0,
+                user_anchors: parse_user_anchors(&user_anchors),
+            }
         },
     ))
+}
+
+/// Flip follow mode on an existing link. Returns whether a link existed.
+pub async fn set_follow(
+    pool: &SqlitePool,
+    user_id: i64,
+    book_uuid: &str,
+    enabled: bool,
+) -> Result<bool, CrossFormatError> {
+    // Unknown book is 404 territory; `Ok(false)` is reserved for a known
+    // book with no link to flip.
+    let book_uuid = resolve_canonical_book_uuid(pool, book_uuid)
+        .await?
+        .ok_or(CrossFormatError::BookNotFound)?;
+    let result =
+        sqlx::query("UPDATE cross_format_links SET follow = ? WHERE user_id = ? AND book_uuid = ?")
+            .bind(enabled as i64)
+            .bind(user_id)
+            .bind(&book_uuid)
+            .execute(pool)
+            .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Text-fraction slack inside which a new "synced here" declaration
+/// replaces an existing pair instead of stacking beside it.
+const SYNC_POINT_REPLACE_SLACK: f64 = 0.02;
+
+/// Record a "synced here" declaration: pair the declaring surface's
+/// position with the counterpart format's stored row, store it as a user
+/// anchor, and turn follow mode on. A single-audio-file book with no link
+/// yet is auto-confirmed as a sequence link (unambiguous); a multi-file
+/// book must confirm the alignment first — the declaration never guesses
+/// an order.
+pub async fn declare_sync_point(
+    pool: &SqlitePool,
+    user_id: i64,
+    decl: &omnibus_shared::cross_format::DeclareSyncPoint,
+) -> Result<CrossFormatLink, CrossFormatError> {
+    let book_uuid = resolve_canonical_book_uuid(pool, &decl.book_uuid)
+        .await?
+        .ok_or(CrossFormatError::BookNotFound)?;
+    let book_id = resolve_book_id_by_uuid(pool, &book_uuid)
+        .await?
+        .ok_or(CrossFormatError::BookNotFound)?;
+
+    let link = match get_link(pool, user_id, &book_uuid).await? {
+        Some(link) => link,
+        None => {
+            if audio_files(pool, book_id).await?.len() != 1 {
+                return Err(CrossFormatError::LinkRequired);
+            }
+            upsert_link(
+                pool,
+                user_id,
+                &book_uuid,
+                CrossFormatLinkMode::Sequence,
+                None,
+            )
+            .await?
+        }
+    };
+    if link_is_stale(pool, book_id, &link).await? {
+        return Err(CrossFormatError::AudioSetMismatch);
+    }
+    let timeline = audio_timeline(pool, book_id, &link)
+        .await?
+        .ok_or(CrossFormatError::LinkRequired)?;
+
+    let (text_frac, audio_global) = match decl.format {
+        ProgressFormat::Epub => {
+            let frac = decl
+                .ebook_fraction
+                .filter(|f| (0.0..=1.0).contains(f))
+                .ok_or(CrossFormatError::CounterpartMissing)?;
+            let row = progress::get_progress(pool, user_id, &book_uuid, ProgressFormat::Audio)
+                .await?
+                .ok_or(CrossFormatError::CounterpartMissing)?;
+            let seconds = row
+                .audio_position_seconds
+                .ok_or(CrossFormatError::CounterpartMissing)?;
+            let file_id = row
+                .book_file_id
+                .or_else(|| (timeline.files.len() == 1).then(|| timeline.files[0].book_file_id))
+                .ok_or(CrossFormatError::CounterpartMissing)?;
+            let global = audio_fraction(&timeline, file_id, seconds)
+                .ok_or(CrossFormatError::CounterpartMissing)?
+                * timeline.total_seconds;
+            (frac, global)
+        }
+        ProgressFormat::Audio => {
+            let seconds = decl
+                .audio_seconds
+                .filter(|s| *s >= 0.0)
+                .ok_or(CrossFormatError::CounterpartMissing)?;
+            let file_id = decl
+                .audio_book_file_id
+                .or_else(|| (timeline.files.len() == 1).then(|| timeline.files[0].book_file_id))
+                .ok_or(CrossFormatError::CounterpartMissing)?;
+            let global = audio_fraction(&timeline, file_id, seconds)
+                .ok_or(CrossFormatError::CounterpartMissing)?
+                * timeline.total_seconds;
+            let row = progress::get_progress(pool, user_id, &book_uuid, ProgressFormat::Epub)
+                .await?
+                .ok_or(CrossFormatError::CounterpartMissing)?;
+            let frac = epub_source_fraction(pool, book_id, &row)
+                .await
+                .ok_or(CrossFormatError::CounterpartMissing)?;
+            (frac, global)
+        }
+    };
+
+    let mut anchors: Vec<(f64, f64)> = link
+        .user_anchors
+        .iter()
+        .copied()
+        .filter(|(t, _)| (t - text_frac).abs() >= SYNC_POINT_REPLACE_SLACK)
+        .collect();
+    anchors.push((text_frac, audio_global));
+    anchors.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let json = serde_json::to_string(&anchors).unwrap_or_else(|_| "[]".into());
+
+    sqlx::query(
+        "UPDATE cross_format_links SET user_anchors = ?, follow = 1
+         WHERE user_id = ? AND book_uuid = ?",
+    )
+    .bind(&json)
+    .bind(user_id)
+    .bind(&book_uuid)
+    .execute(pool)
+    .await?;
+    get_link(pool, user_id, &book_uuid)
+        .await?
+        .ok_or(CrossFormatError::BookNotFound)
 }
 
 /// Remove a link (sync off). Returns whether a row existed.
@@ -458,16 +617,33 @@ pub async fn resume_candidate(
 
     // The anchored tier engages when the served EPUB has extracted
     // structure and its chapters match the audio marks; otherwise every
-    // path below falls through to the linear tier.
-    let anchor_map = match crate::book_file_with_id(pool, book_id, "EPUB").await? {
+    // path below falls through to the linear tier. User-declared sync
+    // points outrank both — they seed the anchor set and chapter anchors
+    // survive only where they agree.
+    let chapter_map = match crate::book_file_with_id(pool, book_id, "EPUB").await? {
         Some((ebook_file_id, _)) => anchors::anchor_map(pool, ebook_file_id, &timeline).await?,
         None => None,
     };
-    let confidence = if anchor_map.is_some() {
+    let user_anchors: Vec<anchors::Anchor> = if timeline.total_seconds > 0.0 {
+        link.user_anchors
+            .iter()
+            .map(|(t, s)| anchors::Anchor {
+                text_frac: t.clamp(0.0, 1.0),
+                audio_frac: (s / timeline.total_seconds).clamp(0.0, 1.0),
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let confidence = if !user_anchors.is_empty() {
+        MappingConfidence::UserAnchored
+    } else if chapter_map.is_some() {
         MappingConfidence::ChapterAnchored
     } else {
         MappingConfidence::Linear
     };
+    let anchor_map = anchors::merge_user_anchors(&user_anchors, chapter_map);
+    let follow = link.follow;
     // The gate only engages against an existing target position — skip the
     // stats query entirely on first-open targets.
     let tol_frac = match &target_row {
@@ -571,12 +747,18 @@ pub async fn resume_candidate(
         Some(candidate) if aligned => CrossFormatResume {
             state: CrossFormatResumeState::Aligned,
             candidate: Some(candidate),
+            follow,
         },
         Some(candidate) => CrossFormatResume {
             state: CrossFormatResumeState::Candidate,
             candidate: Some(candidate),
+            follow,
         },
-        None => CrossFormatResume::empty(CrossFormatResumeState::NothingNewer),
+        None => CrossFormatResume {
+            state: CrossFormatResumeState::NothingNewer,
+            candidate: None,
+            follow,
+        },
     })
 }
 
@@ -643,6 +825,8 @@ pub async fn alignment_view(
                 primary_book_file_id: link.primary_book_file_id,
                 stale,
                 confirmed_at: link.confirmed_at,
+                follow: link.follow,
+                user_anchors: link.user_anchors.len() as i64,
             })
         }
         None => None,
@@ -659,6 +843,8 @@ pub async fn alignment_view(
             primary_book_file_id: None,
             audio_snapshot: String::new(),
             confirmed_at: 0,
+            follow: false,
+            user_anchors: Vec::new(),
         });
         match audio_timeline(pool, book_id, &preview).await? {
             Some(timeline) => {

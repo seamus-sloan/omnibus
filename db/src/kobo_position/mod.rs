@@ -280,6 +280,37 @@ pub fn cfi_to_span(
     })
 }
 
+/// Derive a KoboSpan location for a raw spine position — the follow-mode
+/// down-sync lane, where the position comes from an audio mapping (via
+/// spine stats) rather than a CFI. Same snippet-equality proof as
+/// [`cfi_to_span`]; every failure degrades to `None`, never a wrong span.
+pub fn span_at_spine_offset(
+    kepub: &Path,
+    source_epub: &Path,
+    spine_index: usize,
+    offset_in_file: u64,
+) -> anyhow::Result<Option<String>> {
+    let mut sdoc = book::open_doc(source_epub)?;
+    if spine_index >= sdoc.spine.len() {
+        return Ok(None);
+    }
+    let Some(href) = book::spine_href(&sdoc, spine_index) else {
+        return Ok(None);
+    };
+    let s_bytes = book::read_spine_entry(&mut sdoc, spine_index)?;
+    let s_index = walk::index_file(&s_bytes)?;
+    let count = s_index.visible_char_count();
+    if count == 0 {
+        return Ok(None);
+    }
+    let norm_offset = offset_in_file.min(count - 1);
+    let anchor = walk::Anchor {
+        norm_offset,
+        snippet: s_index.snippet_at(norm_offset),
+    };
+    derive_span_half(kepub, &href, &anchor)
+}
+
 /// The kepub half of [`cfi_to_span`]: find the span covering the source
 /// anchor and prove alignment by snippet at the same offset.
 fn derive_span_half(

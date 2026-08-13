@@ -157,6 +157,7 @@ pub fn BookReadPage(uuid: String) -> Element {
                 title_sub,
                 pct,
                 status: status(),
+                loc,
             },
             panels: ReaderPanelSignals {
                 show_aa,
@@ -452,6 +453,9 @@ pub(super) struct ReaderProgress {
     /// shown only by the phone breakpoint.
     pub title_sub: String,
     pub pct: u32,
+    /// The live relocation signal itself — the "synced here" pill reads
+    /// the full-precision fraction at click time.
+    pub loc: Signal<RelocateData>,
     pub status: ReaderStatus,
 }
 
@@ -506,6 +510,7 @@ fn ReaderLayout(
         title_sub,
         pct,
         status,
+        loc,
     } = progress;
     let ReaderNavHandlers {
         on_keydown,
@@ -569,6 +574,7 @@ fn ReaderLayout(
                 class: "rd-bottom",
                 "data-testid": "reader-footer",
                 span { class: "rd-bottom-page", style: "color:var(--ink-2);", "{page_str}" }
+                {sync_here_slot(&uuid, loc)}
                 div { style: "flex:1; text-align:center; letter-spacing:.08em;", "{chapter_str}" }
                 // The phone footer moves the chapter position to the right
                 // edge (the centred div above is hidden there) — rendered on
@@ -625,5 +631,19 @@ fn sync_banner_slot(uuid: &str) -> Element {
 
 #[cfg(feature = "mobile")]
 fn sync_banner_slot(_uuid: &str) -> Element {
+    rsx! {}
+}
+
+/// Web-only slot for the "synced here" footer pill (same split as
+/// [`sync_banner_slot`] — native iOS owns the gesture on mobile).
+#[cfg(not(feature = "mobile"))]
+fn sync_here_slot(uuid: &str, loc: Signal<RelocateData>) -> Element {
+    rsx! {
+        sync_banner::SyncHerePill { uuid: uuid.to_string(), loc }
+    }
+}
+
+#[cfg(feature = "mobile")]
+fn sync_here_slot(_uuid: &str, _loc: Signal<RelocateData>) -> Element {
     rsx! {}
 }

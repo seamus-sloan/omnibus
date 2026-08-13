@@ -22,6 +22,7 @@ struct PlayerView: View {
     @State private var showSleepTimer = false
     @State private var showSpeed = false
     @State private var showBookmarks = false
+    @State private var syncedHere = false
     @State private var showCarMode = false
 
     private static let rates: [Double] = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
@@ -404,6 +405,18 @@ struct PlayerView: View {
             }
             utilityCell("Bookmark") { addBookmark() } glyph: {
                 Image(systemName: "bookmark").font(.system(size: 22))
+            }
+            // "Synced here" (rule 08: direct call, disabled offline) —
+            // dual-format books only; others have nothing to pair with.
+            if book.hasEbook {
+                utilityCell(syncedHere ? "Synced ✓" : "Sync here") {
+                    guard Connectivity.shared.isOnline else { return }
+                    Task { syncedHere = await player.declareSyncPoint() }
+                } glyph: {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 22))
+                }
+                .opacity(Connectivity.shared.isOnline ? 1 : 0.4)
             }
         }
     }

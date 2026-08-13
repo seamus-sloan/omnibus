@@ -7,9 +7,7 @@
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
-use omnibus_shared::cross_format::CrossFormatCandidate;
-#[cfg(feature = "web")]
-use omnibus_shared::cross_format::CrossFormatResumeState;
+use omnibus_shared::cross_format::{CrossFormatCandidate, CrossFormatResumeState};
 
 use crate::components::alignment_modal::fmt_hm;
 use crate::routes::Route;
@@ -49,11 +47,14 @@ pub(crate) fn store_dismissed_clock(uuid: &str, target: &str, clock: i64) {
     }
 }
 
-/// Fetch the mapped resume candidate for `(uuid, target)` — raw REST over
-/// the same-origin cookie session (the `fetch_manifest` pattern). Returns
-/// `None` for every non-candidate state and any transport failure: the
-/// prompt is best-effort chrome, never an error surface.
-pub(crate) async fn fetch_candidate(uuid: &str, target: &str) -> Option<CrossFormatCandidate> {
+/// Fetch the full cross-format resume for `(uuid, target)` — raw REST
+/// over the same-origin cookie session (the `fetch_manifest` pattern).
+/// `None` on any transport failure: the surfaces this feeds are
+/// best-effort chrome, never an error surface.
+pub(crate) async fn fetch_resume(
+    uuid: &str,
+    target: &str,
+) -> Option<omnibus_shared::cross_format::CrossFormatResume> {
     #[cfg(feature = "web")]
     {
         let url = format!("/api/books/{uuid}/cross-format-resume?target={target}");
@@ -61,11 +62,7 @@ pub(crate) async fn fetch_candidate(uuid: &str, target: &str) -> Option<CrossFor
         if resp.status() != 200 {
             return None;
         }
-        let resume: omnibus_shared::cross_format::CrossFormatResume = resp.json().await.ok()?;
-        if resume.state != CrossFormatResumeState::Candidate {
-            return None;
-        }
-        resume.candidate
+        resp.json().await.ok()
     }
     #[cfg(not(feature = "web"))]
     {
@@ -86,9 +83,35 @@ pub(super) fn SyncJumpPrompt(uuid: String) -> Element {
     use_effect(move || {
         let uuid = fetch_uuid.clone();
         spawn(async move {
-            let Some(c) = fetch_candidate(&uuid, "audio").await else {
+            let Some(resume) = fetch_resume(&uuid, "audio").await else {
                 return;
             };
+            if resume.state != CrossFormatResumeState::Candidate {
+                return;
+            }
+            let Some(c) = resume.candidate else {
+                return;
+            };
+            if resume.follow {
+                // Follow mode: resolve-at-open. Apply the mapped position
+                // silently — same seek-vs-navigate file guard as an
+                // accepted offer, no card, no dismissal bookkeeping.
+                let seconds = c.audio_position_seconds.unwrap_or(0.0);
+                let loaded = (playback.file_id)();
+                let same_file = loaded == c.book_file_id
+                    || (loaded.is_none()
+                        && ((playback.duration)() - c.total_duration_seconds.unwrap_or(0.0)).abs()
+                            < 1.0);
+                if same_file {
+                    super::helpers::seek_to(seconds);
+                } else {
+                    dioxus_router::navigator().push(Route::BookListen {
+                        uuid: uuid.clone(),
+                        file_id: c.book_file_id,
+                    });
+                }
+                return;
+            }
             // Re-arm rule: an already-declined source position stays quiet
             // until the reading position advances past it.
             if dismissed_clock(&uuid, "audio")
@@ -164,5 +187,62 @@ pub(super) fn SyncJumpPrompt(uuid: String) -> Element {
                 "View alignment \u{2192}"
             }
         }
+    }
+}
+
+/// "Synced here" toolbar control: declares the current listening position
+/// as a sync point and turns follow mode on. Configuration-shaped (rule
+/// 08): direct call, never queued, failure shown in place.
+#[component]
+pub(super) fn SyncHereButton() -> Element {
+    let playback = crate::use_playback();
+    let mut label = use_signal(|| "Synced here");
+    // Seeded online for SSR parity (rule 07); reconciled post-mount.
+    let mut online = use_signal(|| true);
+    use_effect(move || online.set(browser_online()));
+    rsx! {
+        button {
+            class: "btn sm lp-toolbar-btn",
+            r#type: "button",
+            "data-testid": "listen-sync-here",
+            title: "Declare the ebook and audiobook aligned at this spot",
+            disabled: !online(),
+            onclick: move |_| {
+                if !browser_online() {
+                    return;
+                }
+                let Some(uuid) = (playback.uuid)() else { return };
+                let decl = omnibus_shared::cross_format::DeclareSyncPoint {
+                    book_uuid: uuid,
+                    format: omnibus_shared::ProgressFormat::Audio,
+                    ebook_fraction: None,
+                    audio_book_file_id: (playback.file_id)(),
+                    audio_seconds: Some((playback.elapsed)()),
+                };
+                spawn(async move {
+                    label.set("Syncing\u{2026}");
+                    match crate::data::declare_sync_point("", decl).await {
+                        Ok(()) => label.set("Synced \u{2713}"),
+                        Err(_) => label.set("Sync failed"),
+                    }
+                });
+            },
+            "{label}"
+        }
+    }
+}
+
+/// Whether the browser reports connectivity — the "synced here" controls
+/// disable offline (rule 08). Always `true` off-web.
+pub(crate) fn browser_online() -> bool {
+    #[cfg(feature = "web")]
+    {
+        web_sys::window()
+            .map(|w| w.navigator().on_line())
+            .unwrap_or(true)
+    }
+    #[cfg(not(feature = "web"))]
+    {
+        true
     }
 }

@@ -732,8 +732,12 @@ async fn collapse_linked_points(
 /// routine (treated as no link by the caller).
 fn sqlx_of(e: crate::cross_format::CrossFormatError) -> ProgressError {
     match e {
-        crate::cross_format::CrossFormatError::BookNotFound => ProgressError::BookNotFound,
-        crate::cross_format::CrossFormatError::AudioSetMismatch => ProgressError::BookNotFound,
+        crate::cross_format::CrossFormatError::BookNotFound
+        | crate::cross_format::CrossFormatError::AudioSetMismatch
+        // Declaration-only refusals; the read paths this module calls
+        // never produce them, but fold them safely rather than panic.
+        | crate::cross_format::CrossFormatError::LinkRequired
+        | crate::cross_format::CrossFormatError::CounterpartMissing => ProgressError::BookNotFound,
         crate::cross_format::CrossFormatError::Sqlx(inner) => ProgressError::Sqlx(inner),
     }
 }
