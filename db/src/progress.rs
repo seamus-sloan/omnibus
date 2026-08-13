@@ -61,6 +61,23 @@ fn parse_format(raw: &str) -> ProgressFormat {
     }
 }
 
+/// Backward jump in an accepted audio position write that's worth a WARN
+/// (~10 minutes). A normal skip-back or chapter re-listen is well under
+/// this; the 2026-08-11 chapter-19-to-13 revert was hours.
+const AUDIO_BACKWARD_JUMP_THRESHOLD_SECONDS: f64 = 600.0;
+
+/// Current unix time in seconds. Mirrors the `strftime('%s','now')` clamp
+/// [`upsert_progress_tx`]'s SQL applies, used only to predict — for
+/// logging — whether a write is about to lose to the timestamp guard; the
+/// SQL `WHERE` clause remains the sole source of truth for the real
+/// decision.
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// Upsert a position row for `(user, book, format)` and return the
 /// **surviving** server-authoritative record. Resolves the request uuid to
 /// the **canonical** `books.uuid` (keeping the `BookNotFound` guard — you
@@ -119,6 +136,12 @@ pub async fn upsert_progress_tx(
         .await?
         .ok_or(ProgressError::BookNotFound)?;
     let fmt = format_str(update.format);
+
+    // Snapshot the row this write would land on, purely for the two WARNs
+    // this function logs (#1861) — neither reads back into the upsert itself.
+    let existing = existing_progress_snapshot(tx, user_id, &book_uuid, fmt).await?;
+    warn_if_rejected_by_timestamp_guard(&book_uuid, update.client_updated_at, existing.0);
+
     // `strftime('%s','now')` returns TEXT; SQLite's default storage-class
     // sort order ranks every INTEGER below every TEXT value regardless of
     // magnitude, so `MIN(<int param>, <text now>)` would always pick the
@@ -185,7 +208,7 @@ pub async fn upsert_progress_tx(
     .bind(fmt)
     .fetch_one(&mut **tx)
     .await?;
-    Ok(ProgressRecord {
+    let record = ProgressRecord {
         book_uuid,
         format: update.format,
         epub_cfi: row.try_get::<Option<String>, _>("epub_cfi")?,
@@ -195,7 +218,94 @@ pub async fn upsert_progress_tx(
         book_file_id: row.try_get::<Option<i64>, _>("book_file_id")?,
         updated_at: row.try_get::<i64, _>("updated_at")?,
         client_updated_at: row.try_get::<i64, _>("client_updated_at")?,
-    })
+    };
+
+    // If this write was rejected (by either guard above), the row is
+    // unchanged, so `new` equals the pre-write snapshot and this can't
+    // fire — only a genuinely *accepted* jump ever crosses the threshold.
+    if update.format == ProgressFormat::Audio {
+        warn_if_audio_jumped_backward(&record, existing.1);
+    }
+
+    Ok(record)
+}
+
+/// The `(client_updated_at, audio_position_seconds)` a `(user, book, format)`
+/// row held immediately before an upsert — `None`/`None` when no row exists
+/// yet. Read-only; used solely to detect the two WARN conditions below.
+async fn existing_progress_snapshot(
+    tx: &mut Transaction<'_, Sqlite>,
+    user_id: i64,
+    book_uuid: &str,
+    fmt: &str,
+) -> Result<(Option<i64>, Option<f64>), ProgressError> {
+    let Some(row) = sqlx::query(
+        "SELECT COALESCE(client_updated_at, updated_at) AS client_updated_at,
+                audio_position_seconds
+         FROM reading_progress
+         WHERE user_id = ? AND book_uuid = ? AND format = ?",
+    )
+    .bind(user_id)
+    .bind(book_uuid)
+    .bind(fmt)
+    .fetch_optional(&mut **tx)
+    .await?
+    else {
+        return Ok((None, None));
+    };
+    Ok((
+        Some(row.try_get::<i64, _>("client_updated_at")?),
+        row.try_get::<Option<f64>, _>("audio_position_seconds")?,
+    ))
+}
+
+/// AC1 (#1861): a write is about to lose to the timestamp guard when the
+/// offered stamp — clamped forward to server-now, same as the SQL — is
+/// older than the stamp already on the row. Predicted here in Rust rather
+/// than read back from the upsert's own `WHERE`, purely for logging; a
+/// prediction that ever disagreed with the SQL would still change nothing,
+/// since the guard itself is unmodified.
+fn warn_if_rejected_by_timestamp_guard(
+    book_uuid: &str,
+    client_updated_at: Option<i64>,
+    stored_client_updated_at: Option<i64>,
+) {
+    let Some(stored_ts) = stored_client_updated_at else {
+        return;
+    };
+    let now = now_unix();
+    let offered = client_updated_at.unwrap_or(now).min(now);
+    if offered < stored_ts {
+        tracing::warn!(
+            book_uuid,
+            stored_client_updated_at = stored_ts,
+            offered_client_updated_at = offered,
+            "progress write rejected by timestamp guard"
+        );
+    }
+}
+
+/// AC2 (#1861): an *accepted* audio write whose new position lands more
+/// than [`AUDIO_BACKWARD_JUMP_THRESHOLD_SECONDS`] behind the old one — a
+/// rejected write leaves `record.audio_position_seconds` equal to the old
+/// value, so this can only fire for a write that actually landed.
+fn warn_if_audio_jumped_backward(
+    record: &ProgressRecord,
+    stored_audio_position_seconds: Option<f64>,
+) {
+    let (Some(old), Some(new)) = (stored_audio_position_seconds, record.audio_position_seconds)
+    else {
+        return;
+    };
+    if old - new > AUDIO_BACKWARD_JUMP_THRESHOLD_SECONDS {
+        tracing::warn!(
+            book_uuid = %record.book_uuid,
+            old_position_seconds = old,
+            new_position_seconds = new,
+            client_updated_at = record.client_updated_at,
+            "accepted audio write moved position backward past threshold"
+        );
+    }
 }
 
 /// Attach a server-derived KoboSpan location (and percent, when the row
