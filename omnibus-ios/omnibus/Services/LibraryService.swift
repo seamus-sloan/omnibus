@@ -296,6 +296,12 @@ enum LibraryService {
         }
     }
 
+    static func genres() -> AsyncThrowingStream<CacheRead<[GenreWeight]>, Error> {
+        Cache.live(CacheKey.genres) {
+            try await APIClient.shared.get("/api/genres")
+        }
+    }
+
     /// One settled `Book`, for callers with nowhere to put a provisional one.
     static func settledBook(uuid: String) async throws -> Book {
         try await Cache.settled(CacheKey.book(uuid)) {

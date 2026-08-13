@@ -737,7 +737,11 @@ final class AudioPlayer {
                 // back to stale for as long as the seek takes to settle.
                 guard self.pendingSeekCount == 0 else { return }
                 self.position = time.seconds
-                if self.isPlaying { self.listenedSeconds += 0.5 }
+                // The periodic observer ticks every 0.5 *media* seconds — at
+                // 2x that's twice per wall second — so each tick is converted
+                // to wall-clock before it accrues. Listening stats count the
+                // listener's real time, not the book time covered.
+                if self.isPlaying { self.listenedSeconds += Format.atRate(0.5, rate: self.rate) }
                 await self.persistPosition(force: false)
                 self.updateNowPlaying()
             }

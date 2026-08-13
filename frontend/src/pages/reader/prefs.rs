@@ -229,7 +229,7 @@ fn load_persisted_font_size() -> Option<i32> {
 }
 
 fn default_typeface() -> Typeface {
-    Typeface::Editorial
+    Typeface::Modern
 }
 
 #[cfg(feature = "web")]

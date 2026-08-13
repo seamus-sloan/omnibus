@@ -123,11 +123,12 @@ pub(super) fn DockSleep(open_panel: Signal<Option<DockPanel>>) -> Element {
     let on_end_of_chapter = {
         let chapters = playback.chapters;
         let elapsed = playback.elapsed;
+        let rate = playback.rate;
         move |_: ()| {
             let chs = chapters.peek().clone();
             let now = *elapsed.peek();
             let idx = chapter_index_for_elapsed(&chs, now);
-            if let Some(secs) = end_of_chapter_seconds(&chs, idx, now) {
+            if let Some(secs) = end_of_chapter_seconds(&chs, idx, now, *rate.peek()) {
                 sleep.select_end_of_chapter(secs);
             }
         }

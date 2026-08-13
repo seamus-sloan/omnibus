@@ -87,6 +87,16 @@ fn parse_format(raw: &str) -> ProgressFormat {
 /// derivable CFI, a web CFI with no span) stays NULL as "not known", and
 /// the Kobo sync-out derives the missing half on demand rather than
 /// trusting a stale leftover.
+///
+/// One backstop narrows that rule: an **audio** write naming no
+/// `book_file_id`, landing on a row that names one, for a book carrying
+/// more than one audio file, is rejected wholly — same shape as a
+/// stale-clock rejection, the re-read returns the surviving row. Audio
+/// seconds are only meaningful within one file, so accepting such a write
+/// would turn the row into "N seconds within an unknown file" and destroy a
+/// position another client (e.g. iOS) recorded correctly (#1888). On a
+/// single-file book a fileless write still applies — the server resolves
+/// the same default file the manifest serves, so nothing is ambiguous.
 pub async fn upsert_progress(
     pool: &SqlitePool,
     user_id: i64,
@@ -135,7 +145,16 @@ pub async fn upsert_progress_tx(
              updated_at = strftime('%s','now'),
              client_updated_at = excluded.client_updated_at
          WHERE excluded.client_updated_at >=
-             COALESCE(reading_progress.client_updated_at, reading_progress.updated_at)",
+             COALESCE(reading_progress.client_updated_at, reading_progress.updated_at)
+           AND NOT (
+             excluded.format = 'audio'
+             AND excluded.book_file_id IS NULL
+             AND reading_progress.book_file_id IS NOT NULL
+             AND (SELECT COUNT(*) FROM book_files bf
+                    JOIN books b ON b.id = bf.book_id
+                   WHERE b.uuid = excluded.book_uuid
+                     AND bf.format IN ('M4B', 'M4A', 'MP3')) > 1
+           )",
     )
     .bind(user_id)
     .bind(&book_uuid)

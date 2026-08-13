@@ -250,6 +250,15 @@ struct TagWeight: Codable, Hashable, Sendable, Identifiable {
     var id: String { name }
 }
 
+/// Structurally a `TagWeight`, kept a distinct type because `/api/genres` and
+/// `/api/tags` are two different vocabularies — mirroring the server's
+/// `GenreWeight` / `TagWeight` split.
+struct GenreWeight: Codable, Hashable, Sendable, Identifiable {
+    var name: String
+    var count: Int
+    var id: String { name }
+}
+
 // MARK: - Search palette
 
 struct PaletteBookHit: Codable, Hashable, Sendable, Identifiable {

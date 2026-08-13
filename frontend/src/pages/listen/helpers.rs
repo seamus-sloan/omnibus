@@ -105,6 +105,55 @@ pub(super) fn seek_to(secs: f64) {
     let _ = secs;
 }
 
+// The resume-decision trio below is only *called* from the web bootstrap
+// (`bootstrap::run_manifest_init`), but lives here un-gated-on-web so its
+// tests run under the crate's test matrix (`server` feature) — the
+// bootstrap module itself is `#![cfg(feature = "web")]` and its tests
+// never execute there.
+
+/// Select the resume position: prefer the server-authoritative value when
+/// available, fall back to the locally cached initial position.
+#[cfg(not(feature = "mobile"))]
+#[cfg_attr(not(feature = "web"), allow(dead_code))]
+fn resolve_resume_pos(server_pos: Option<f64>, local_pos: f64) -> f64 {
+    server_pos.unwrap_or(local_pos)
+}
+
+/// The file to request the manifest with: an explicit picker selection wins;
+/// otherwise the progress row's stored `book_file_id`, so resume lands in
+/// the file the seconds were recorded in (#1888); `None` (the server's
+/// lowest-ordinal default) only when neither names one.
+#[cfg(not(feature = "mobile"))]
+#[cfg_attr(not(feature = "web"), allow(dead_code))]
+pub(super) fn resolve_boot_file(requested: Option<i64>, row_file: Option<i64>) -> Option<i64> {
+    requested.or(row_file)
+}
+
+/// Seconds to seed playback with, given the file the manifest actually
+/// resolved. On a single-file book — or when a legacy server reports no
+/// file identity (`audio_file_count == 0`) — this is the historic behavior:
+/// server seconds, else the locally cached position. On a multi-file book
+/// an offset is applied only when the progress row names the loaded file:
+/// seconds recorded in another file, or in no named file at all (the local
+/// cache never names one), start playback at zero rather than splicing one
+/// file's offset into another (#1888).
+#[cfg(not(feature = "mobile"))]
+#[cfg_attr(not(feature = "web"), allow(dead_code))]
+pub(super) fn resolve_boot_position(
+    row: Option<(Option<i64>, Option<f64>)>,
+    local_pos: f64,
+    loaded_file_id: i64,
+    audio_file_count: i64,
+) -> f64 {
+    if audio_file_count <= 1 {
+        return resolve_resume_pos(row.and_then(|(_, seconds)| seconds), local_pos);
+    }
+    match row {
+        Some((Some(row_file), Some(seconds))) if row_file == loaded_file_id => seconds,
+        _ => 0.0,
+    }
+}
+
 /// localStorage key for the persisted session volume preference.
 #[cfg(feature = "web")]
 const VOLUME_KEY: &str = "omnibus.listen.volume";
@@ -236,13 +285,26 @@ pub(super) fn format_hms(seconds: f64) -> String {
     }
 }
 
+/// Rate-adjusted "time left" for a real (1x) `remaining` duration; falls back
+/// to `remaining` unscaled when `rate` is non-finite or non-positive. Shared
+/// by the web and mobile players so every remaining-time readout scales the
+/// same way.
+pub(super) fn remaining_at_rate(remaining: f64, rate: f64) -> f64 {
+    if !rate.is_finite() || rate <= 0.0 {
+        return remaining;
+    }
+    remaining / rate
+}
+
 /// Fire-and-forget POST `/api/rpc/progress` with the audio update.
 ///
-/// `file_id` is the `book_files` row currently playing — recorded so the
-/// Continue surfaces reopen *this* audiobook on a book that carries several,
-/// instead of the first one by ordinal at this one's timestamp. `None` (the
-/// player was entered without a `?file_id=`) leaves the resume path on the
-/// same first-file default the manifest itself served.
+/// `file_id` is the `book_files` row currently playing — the id the
+/// manifest itself resolved (`PlaybackState::loaded_file_id`), so multi-file
+/// writes always name their file and the Continue surfaces reopen *this*
+/// audiobook rather than the first one by ordinal. `None` (no manifest
+/// resolved yet, or a server predating the identity fields) omits the field;
+/// the server-side guard then refuses to blank a named file on a multi-file
+/// row (#1888).
 #[cfg(feature = "web")]
 pub(super) fn post_audio_progress(uuid: String, file_id: Option<i64>, seconds: f64) {
     wasm_bindgen_futures::spawn_local(async move {
@@ -268,7 +330,7 @@ pub(super) fn post_audio_progress(uuid: String, file_id: Option<i64>, seconds: f
 mod tests {
     use omnibus_shared::ChapterInfo;
 
-    use super::{effective_scrub_position, format_hms};
+    use super::{effective_scrub_position, format_hms, remaining_at_rate};
 
     fn ch(ordinal: i64, title: &str, start: f64, dur: f64) -> ChapterInfo {
         ChapterInfo {
@@ -364,6 +426,90 @@ mod tests {
         assert_eq!(format_hms(-12.0), "0:00");
         assert_eq!(format_hms(f64::NAN), "0:00");
         assert_eq!(format_hms(f64::INFINITY), "0:00");
+    }
+
+    #[test]
+    fn remaining_at_rate_divides_by_the_playback_rate() {
+        assert!((remaining_at_rate(600.0, 2.0) - 300.0).abs() < f64::EPSILON);
+        assert!((remaining_at_rate(600.0, 0.5) - 1200.0).abs() < f64::EPSILON);
+        assert!((remaining_at_rate(600.0, 1.0) - 600.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn remaining_at_rate_falls_back_unscaled_for_invalid_rates() {
+        assert!((remaining_at_rate(600.0, 0.0) - 600.0).abs() < f64::EPSILON);
+        assert!((remaining_at_rate(600.0, -1.0) - 600.0).abs() < f64::EPSILON);
+        assert!((remaining_at_rate(600.0, f64::NAN) - 600.0).abs() < f64::EPSILON);
+        assert!((remaining_at_rate(600.0, f64::INFINITY) - 600.0).abs() < f64::EPSILON);
+    }
+}
+
+// The resume-decision helpers don't exist on mobile (the web bootstrap is
+// their only caller), so their tests live in a separately-gated module.
+#[cfg(all(test, not(feature = "mobile")))]
+mod boot_resume_tests {
+    use super::{resolve_boot_file, resolve_boot_position, resolve_resume_pos};
+
+    #[test]
+    fn resolve_resume_pos_prefers_server_position_when_present() {
+        assert!((resolve_resume_pos(Some(120.0), 5.0) - 120.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn resolve_resume_pos_falls_back_to_local_when_server_absent() {
+        assert!((resolve_resume_pos(None, 42.5) - 42.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn resolve_resume_pos_returns_zero_local_when_both_absent() {
+        assert!((resolve_resume_pos(None, 0.0)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn resolve_boot_file_prefers_explicit_picker_selection() {
+        assert_eq!(resolve_boot_file(Some(917), Some(919)), Some(917));
+    }
+
+    #[test]
+    fn resolve_boot_file_falls_back_to_the_progress_rows_file() {
+        assert_eq!(resolve_boot_file(None, Some(919)), Some(919));
+        assert_eq!(resolve_boot_file(None, None), None);
+    }
+
+    #[test]
+    fn resolve_boot_position_applies_row_seconds_when_the_row_names_the_loaded_file() {
+        let row = Some((Some(919), Some(23_718.0)));
+        assert!((resolve_boot_position(row, 5.0, 919, 5) - 23_718.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn resolve_boot_position_starts_at_zero_when_multi_file_seconds_are_unattributable() {
+        // Row names a different file than the one loaded.
+        let other_file = Some((Some(919), Some(23_718.0)));
+        assert_eq!(resolve_boot_position(other_file, 5.0, 917, 5), 0.0);
+        // Row names no file at all — seconds can't be attributed.
+        let fileless = Some((None, Some(23_718.0)));
+        assert_eq!(resolve_boot_position(fileless, 5.0, 917, 5), 0.0);
+        // No row; the local cache never names a file either.
+        assert_eq!(resolve_boot_position(None, 5.0, 917, 5), 0.0);
+    }
+
+    #[test]
+    fn resolve_boot_position_keeps_single_file_resume_behavior() {
+        // Server seconds win; the stored file id (even a stale one from a
+        // replaced `book_files` row) doesn't gate a single-file book.
+        let row = Some((Some(1), Some(120.0)));
+        assert!((resolve_boot_position(row, 5.0, 2, 1) - 120.0).abs() < f64::EPSILON);
+        // No server row → locally cached position, as before.
+        assert!((resolve_boot_position(None, 42.5, 2, 1) - 42.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn resolve_boot_position_treats_legacy_server_without_identity_as_single_file() {
+        // `audio_file_count == 0` = a server predating the identity fields;
+        // degrade to the historic resume behavior rather than zeroing.
+        let row = Some((None, Some(300.0)));
+        assert!((resolve_boot_position(row, 5.0, 0, 0) - 300.0).abs() < f64::EPSILON);
     }
 }
 

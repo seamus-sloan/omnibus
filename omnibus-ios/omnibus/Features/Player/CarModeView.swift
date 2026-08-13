@@ -65,11 +65,17 @@ struct CarModeView: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
 
-            Text(Format.humanDuration(Int64(max(0, player.duration - player.position))) + " left")
+            Text(Format.humanDuration(Int64(bookRemaining)) + " left")
                 .font(.ui(16))
                 .monospacedDigit()
                 .foregroundStyle(palette.ink2Color)
         }
+    }
+
+    /// Rate-adjusted book time left — the wall-clock wait, matching the full
+    /// player's readout.
+    private var bookRemaining: Double {
+        Format.atRate(max(0, player.duration - player.position), rate: player.rate)
     }
 
     private var transport: some View {

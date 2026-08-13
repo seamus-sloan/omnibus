@@ -47,6 +47,13 @@ pub(super) fn BdImmersiveButton(uuid: String) -> Element {
         // the previous book's metadata/error and flag loading first so the dock
         // can't flash the old book under the new reader before the driver reloads.
         let mut uuid_sig = playback.uuid;
+        let mut file_sig = playback.file_id;
+        // Default file selection, published before the uuid so the driver
+        // reads it when the load kicks off (mirrors the mobile variant and
+        // `use_retarget_playback`). Without this a stale picker selection
+        // from a previously-played book would override the bootstrap's
+        // progress-row file resolution — or 404 the new book's manifest.
+        file_sig.set(None);
         if uuid_sig.peek().as_deref() != Some(uuid.as_str()) {
             let mut book_sig = playback.book;
             let mut error_sig = playback.error;

@@ -497,6 +497,15 @@ enum Format {
             : String(format: "%d:%02d", m, s)
     }
 
+    /// Wall-clock seconds it takes to play `seconds` of audio at `rate` —
+    /// the rate-adjusted "time left" a 2x listener actually experiences.
+    /// Non-finite or non-positive rates fall back to the unscaled value,
+    /// mirroring `remaining_at_rate` in the web player.
+    static func atRate(_ seconds: Double, rate: Double) -> Double {
+        guard rate.isFinite, rate > 0 else { return seconds }
+        return seconds / rate
+    }
+
     /// Compact spoken form for stats and metadata rows — "4h 12m".
     static func humanDuration(_ seconds: Int64) -> String {
         guard seconds > 0 else { return "0m" }
