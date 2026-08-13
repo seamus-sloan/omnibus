@@ -147,9 +147,22 @@ struct PlateField: View {
     /// Focus this field as soon as the form appears — for the one field a sheet
     /// exists to collect.
     var autofocus = false
+    /// Autocomplete pool. Non-empty turns the field into the single-value
+    /// counterpart of the chip editor's dropdown (the web's `SuggestField`):
+    /// picking a row overwrites the value, and there is no "+ Create" row
+    /// since typing already edits the value directly.
+    var suggestions: [SuggestionItem] = []
 
     @Environment(\.palette) private var palette
     @FocusState private var focused: Bool
+    /// Whether the dropdown may show — reopened by focus or a keystroke,
+    /// closed by a pick. Needed because the just-picked value is often a
+    /// substring of other pool entries, so "filtered is non-empty" alone
+    /// would keep the dropdown open forever.
+    @State private var open = false
+    /// The name a pick just wrote into `text`, so its `onChange` echo can be
+    /// told apart from a keystroke and not reopen the dropdown.
+    @State private var lastPicked: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -193,10 +206,34 @@ struct PlateField: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
             .animation(Motion.snap, value: isEdited)
+
+            if open, !suggestions.isEmpty {
+                let rows = SuggestionPool.filtered(
+                    pool: suggestions, current: [text], query: text
+                )
+                if !rows.isEmpty {
+                    SuggestionList(items: rows) { name in
+                        lastPicked = name
+                        text = name
+                        open = false
+                    }
+                    .padding(.bottom, 6)
+                }
+            }
         }
         .onAppear {
             guard autofocus else { return }
             focused = true
+        }
+        .onChange(of: focused) { _, isFocused in
+            open = isFocused
+        }
+        .onChange(of: text) { _, newValue in
+            if newValue == lastPicked {
+                lastPicked = nil
+                return
+            }
+            if focused { open = true }
         }
     }
 }

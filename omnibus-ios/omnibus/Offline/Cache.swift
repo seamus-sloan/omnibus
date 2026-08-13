@@ -14,6 +14,7 @@ enum CacheKey {
     static let authors = "authors"
     static let series = "series"
     static let tags = "tags"
+    static let genres = "genres"
     static let shelves = "shelves"
     static let shelfPreviews = "shelf_previews"
 

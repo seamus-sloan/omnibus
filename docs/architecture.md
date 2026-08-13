@@ -269,6 +269,9 @@ Design/             — Theme (Atrium tokens), OKLCH↔sRGB conversion for
                       Components/ (BookCover, RemoteImage, Plate, SearchField,
                       OmnibusTabBar, Masthead, BrandMark — the stoat, a copy of
                       the web's omnibus-stoat.png — FlowLayout, TopEdgeScrim,
+                      SuggestionDropdown — autocomplete pool + rows for the
+                      metadata editor's chip and series fields, the native twin
+                      of the web's `components/suggestion_dropdown/` —
                       UserAvatar — a user's picture or monogram, the native twin
                       of the web's `components/user_avatar.rs`)
 Features/           — one directory per surface: Account, AddBooks, Auth,
