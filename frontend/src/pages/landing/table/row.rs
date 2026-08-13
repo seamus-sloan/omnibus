@@ -163,7 +163,10 @@ struct RowDisplay {
     added: String,
     tags_text: String,
     genres_text: String,
+    /// Raw stored value — seeds the edit input so opening the cell shows the
+    /// editable source string, not the formatted display text.
     published: String,
+    published_display: String,
     language: String,
 }
 
@@ -204,10 +207,13 @@ fn derive_row_display(
         series_line,
         series_text: book.series.clone().unwrap_or_default(),
         authors_text: contributor_names(&book.creators),
-        updated: book.modified.as_deref().unwrap_or("").to_string(),
-        added: book.added_at.as_deref().unwrap_or("").to_string(),
+        updated: crate::format::format_date_short(book.modified.as_deref().unwrap_or("")),
+        added: crate::format::format_date_short(book.added_at.as_deref().unwrap_or("")),
         tags_text: book.subjects.join(", "),
         genres_text: book.genres.join(", "),
+        published_display: crate::format::format_date_short(
+            book.published.as_deref().unwrap_or(""),
+        ),
         published: book.published.clone().unwrap_or_default(),
         language: book.language.clone().unwrap_or_default(),
         book: book.clone(),
@@ -314,6 +320,7 @@ fn EbookRowCells(display: RowDisplay, ctx: RowContext) -> Element {
         tags_text,
         genres_text,
         published,
+        published_display,
         language,
     } = display;
     let cover_alt = title.clone();
@@ -373,7 +380,8 @@ fn EbookRowCells(display: RowDisplay, ctx: RowContext) -> Element {
             display: RowScalarCellDisplay {
                 col_class: "ebook-col-published".to_string(),
                 cell_testid: "ebook-cell-published".to_string(),
-                value: published,
+                value: published_display,
+                edit_value: Some(published),
                 placeholder: "YYYY-MM-DD".to_string(),
             },
             field: EditField::Published,
@@ -388,6 +396,7 @@ fn EbookRowCells(display: RowDisplay, ctx: RowContext) -> Element {
                 cell_testid: "ebook-cell-language".to_string(),
                 value: language,
                 placeholder: "en".to_string(),
+                ..Default::default()
             },
             field: EditField::Language,
             ctx: cell_ctx,

@@ -35,7 +35,11 @@ export interface ExpectedBook {
    * fixtures pin `[]`.
    */
   tags?: string[];
-  /** Verbatim text rendered in the published cell. */
+  /**
+   * Raw stored `dc:date` value (e.g. `"1843-10-01"`). The published cell
+   * renders a formatted human date derived from this, not the raw string —
+   * see `expectedPublishedText` in `utils/ebooks.ts`.
+   */
   published?: string;
   /** Verbatim text rendered in the language cell (BCP-47). */
   language: string;
