@@ -6,6 +6,7 @@ use dioxus::prelude::*;
 use omnibus_shared::{JournalEntry, JournalStatus, UpdateJournalEntry, UserSummary};
 
 use crate::components::user_avatar::UserAvatar;
+use crate::components::{confirm_modal_body, ConfirmModal, ConfirmModalAction, ConfirmModalTone};
 use crate::data;
 use crate::pages::book_detail::dates::fmt_long_date;
 use crate::pages::book_detail::journal_editor::*;
@@ -22,6 +23,10 @@ struct JournalEntryEditState {
     saving: Signal<bool>,
     error: Signal<Option<String>>,
     reload: Signal<u32>,
+    /// Whether the delete confirm modal is open. Set by the Delete button,
+    /// cleared by Cancel or a successful delete — the RPC itself only fires
+    /// from the modal's own confirm button (issue #1907).
+    delete_confirm: Signal<bool>,
 }
 
 /// Presentational fields for a journal entry card header (author identity,
@@ -87,8 +92,8 @@ fn BdJournalPublishDraftButton(
 
 /// Entry card header: author monogram + byline (with a "you" chip for the
 /// owner) + date/progress meta, and — for the owner, while not already
-/// editing — the Edit/Delete action row. Delete removes the entry and
-/// reloads the feed; Edit seeds the edit-form body and opens it.
+/// editing — the Edit/Delete action row. Delete opens a confirm modal before
+/// removing the entry; Edit seeds the edit-form body and opens it.
 #[component]
 fn BdJournalEntryHeader(view: JournalEntryHeaderView, edit: JournalEntryEditState) -> Element {
     let JournalEntryHeaderView {
@@ -157,6 +162,10 @@ fn BdJournalEntryByline(
 }
 
 /// Owner-only action row: optional Publish (drafts only), Edit, and Delete.
+/// Delete opens a confirm modal — mirroring the shelf-delete dialog's
+/// pattern (`render_delete_shelf_modal` in
+/// `pages::shelf_detail::header`) — rather than deleting immediately; the
+/// RPC only fires from the modal's own confirm button.
 #[component]
 fn BdJournalEntryActions(
     server_url: String,
@@ -169,9 +178,10 @@ fn BdJournalEntryActions(
     let JournalEntryEditState {
         mut editing,
         mut edit_body,
-        mut saving,
+        saving,
         mut error,
-        mut reload,
+        mut delete_confirm,
+        ..
     } = edit;
 
     rsx! {
@@ -201,20 +211,81 @@ fn BdJournalEntryActions(
                 class: "btn ghost sm bd-journal-delete",
                 "data-testid": "journal-delete",
                 disabled: saving(),
-                onclick: move |_| {
-                    let url = server_url.clone();
-                    saving.set(true);
-                    error.set(None);
-                    spawn(async move {
-                        match data::delete_journal_entry(&url, entry_id).await {
-                            Ok(()) => reload.set(reload() + 1),
-                            Err(e) => error.set(Some(e.to_string())),
-                        }
-                        saving.set(false);
-                    });
-                },
+                onclick: move |_| delete_confirm.set(true),
                 "Delete"
             }
+        }
+        if delete_confirm() {
+            {render_delete_confirm_modal(server_url.clone(), entry_id, edit)}
+        }
+    }
+}
+
+/// The delete-entry confirm modal: same shared `ConfirmModal` shell,
+/// "can't be undone" copy, and busy-guarded action row as the shelf-delete
+/// dialog. Cancel (and the backdrop dismiss) only closes the modal — the
+/// delete RPC fires solely from the confirm button, and only on success does
+/// the modal close and the feed reload.
+fn render_delete_confirm_modal(
+    server_url: String,
+    entry_id: i64,
+    edit: JournalEntryEditState,
+) -> Element {
+    let JournalEntryEditState {
+        mut saving,
+        mut error,
+        mut reload,
+        mut delete_confirm,
+        ..
+    } = edit;
+    let is_busy = saving();
+    let do_delete = move |_| {
+        // A double-click can land before the disabled state re-renders.
+        if saving() {
+            return;
+        }
+        let url = server_url.clone();
+        saving.set(true);
+        error.set(None);
+        spawn(async move {
+            match data::delete_journal_entry(&url, entry_id).await {
+                Ok(()) => {
+                    delete_confirm.set(false);
+                    reload.set(reload() + 1);
+                }
+                Err(e) => error.set(Some(e.to_string())),
+            }
+            saving.set(false);
+        });
+    };
+
+    rsx! {
+        ConfirmModal {
+            testid: "journal-delete-modal".to_string(),
+            aria_label: "Delete entry?".to_string(),
+            dialog_class: "mg-modal del-modal".to_string(),
+            busy: is_busy,
+            on_dismiss: move |_| delete_confirm.set(false),
+            {confirm_modal_body(
+                "Delete entry?",
+                "Deleting this journal entry removes it for good. This can\u{2019}t be undone.",
+                vec![
+                    ConfirmModalAction {
+                        testid: "journal-delete-cancel".to_string(),
+                        label: "Cancel".to_string(),
+                        tone: ConfirmModalTone::Ghost,
+                        disabled: is_busy,
+                        on_click: EventHandler::new(move |_| delete_confirm.set(false)),
+                    },
+                    ConfirmModalAction {
+                        testid: "journal-delete-confirm".to_string(),
+                        label: if is_busy { "Deleting\u{2026}".to_string() } else { "Delete".to_string() },
+                        tone: ConfirmModalTone::Danger,
+                        disabled: is_busy,
+                        on_click: EventHandler::new(do_delete),
+                    },
+                ],
+            )}
         }
     }
 }
@@ -234,6 +305,7 @@ pub(super) fn BdJournalEntryCard(
         saving: use_signal(|| false),
         error: use_signal(|| None::<String>),
         reload,
+        delete_confirm: use_signal(|| false),
     };
     let expanded = use_signal(|| false);
     let editing = edit.editing;
@@ -384,6 +456,7 @@ fn BdJournalEntryEditForm(
         saving,
         error,
         reload,
+        ..
     } = edit;
     let mut saving = saving;
     let mut error = error;
@@ -479,5 +552,65 @@ mod tests {
         assert!(!should_show_more_button("Short entry"));
         let exactly_twelve = (0..12).map(|_| "line").collect::<Vec<_>>().join("\n");
         assert!(!should_show_more_button(&exactly_twelve));
+    }
+}
+
+// SSR render-smoke coverage of the delete-confirm flow — separate module
+// because these need the `server` feature (`dioxus::ssr`), while the pure
+// `should_show_more_button` tests above run under any target.
+#[cfg(all(test, feature = "server"))]
+mod render_tests {
+    use super::*;
+    use crate::test_support::render_in_vdom;
+
+    fn actions_state(delete_confirm: bool) -> JournalEntryEditState {
+        JournalEntryEditState {
+            editing: Signal::new(false),
+            edit_body: Signal::new(String::new()),
+            saving: Signal::new(false),
+            error: Signal::new(None),
+            reload: Signal::new(0),
+            delete_confirm: Signal::new(delete_confirm),
+        }
+    }
+
+    #[component]
+    fn ActionsHarness(delete_confirm: bool) -> Element {
+        rsx! {
+            BdJournalEntryActions {
+                server_url: "http://localhost".to_string(),
+                entry_id: 1,
+                body_for_edit: "body".to_string(),
+                entry_progress: None,
+                is_draft: false,
+                edit: actions_state(delete_confirm),
+            }
+        }
+    }
+
+    /// AC1 (issue #1907): clicking Delete must not remove the entry
+    /// immediately — the default (pre-click) render shows only the plain
+    /// Delete button, with no confirm modal mounted yet.
+    #[test]
+    fn entry_actions_render_a_delete_button_with_no_confirm_modal_by_default() {
+        let html = render_in_vdom(|| rsx! { ActionsHarness { delete_confirm: false } });
+        assert!(html.contains("data-testid=\"journal-delete\""));
+        assert!(!html.contains("data-testid=\"journal-delete-modal\""));
+        assert!(!html.contains("data-testid=\"journal-delete-confirm\""));
+    }
+
+    /// AC1 + AC2: once delete is pending, the confirm modal renders a
+    /// "can't be undone" warning plus distinct Cancel/Delete affordances —
+    /// the structure the Cancel path relies on to leave the entry untouched
+    /// (Cancel only flips `delete_confirm` back to `false`; it never calls
+    /// the delete RPC — see `render_delete_confirm_modal`).
+    #[test]
+    fn entry_actions_show_a_cant_be_undone_confirm_modal_when_delete_is_pending() {
+        let html = render_in_vdom(|| rsx! { ActionsHarness { delete_confirm: true } });
+        assert!(html.contains("data-testid=\"journal-delete-modal\""));
+        assert!(html.contains("data-testid=\"journal-delete-cancel\""));
+        assert!(html.contains("data-testid=\"journal-delete-confirm\""));
+        assert!(html.contains("Delete entry?"));
+        assert!(html.contains("This can\u{2019}t be undone."));
     }
 }
