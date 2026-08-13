@@ -398,3 +398,60 @@ async fn delete_author_photos_bulk_propagates_db_error_when_pool_is_closed() {
     let err = delete_author_photos_bulk(&pool, &[1, 2]).await.unwrap_err();
     assert!(matches!(err, AuthorPhotosDataError::Db(_)));
 }
+
+// Regression test for the BEGIN IMMEDIATE stale-snapshot 517 fix (#1862),
+// mirroring `upsert_progress_succeeds_for_many_concurrent_writers_on_one_pool`
+// in `db/src/progress/tests.rs`.
+const CONCURRENT_ROUNDS: usize = 5;
+const CONCURRENT_WRITERS_PER_ROUND: usize = 5;
+
+#[tokio::test]
+async fn delete_author_succeeds_for_many_concurrent_writers_on_one_pool() {
+    let _covers = CoversTempDir::new("delete_author_concurrent");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    // One junk author per (round, writer) slot, each also linked to a
+    // shared "Keep Me" author, so every round's concurrent deletes race for
+    // the same `books_authors_link`, `authors`, and `ignored_authors` table
+    // pages instead of each touching disjoint rows.
+    let mut books = Vec::new();
+    let mut names_by_round: Vec<Vec<String>> = Vec::new();
+    for round in 0..CONCURRENT_ROUNDS {
+        let mut names = Vec::new();
+        for i in 0..CONCURRENT_WRITERS_PER_ROUND {
+            let name = format!("Round {round} Junk Author {i}");
+            books.push(indexed(
+                &format!("r{round}-{i}.epub"),
+                Some(&format!("Round {round} Book {i}")),
+                &[name.as_str(), "Keep Me"],
+                &[],
+                None,
+                None,
+            ));
+            names.push(name);
+        }
+        names_by_round.push(names);
+    }
+    replace_books(&pool, "/lib", books).await.unwrap();
+
+    for names in names_by_round {
+        let mut handles = Vec::new();
+        for name in names {
+            let pool = pool.clone();
+            handles.push(tokio::spawn(async move {
+                let author_id: i64 = sqlx::query_scalar("SELECT id FROM authors WHERE name = ?")
+                    .bind(&name)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+                delete_author(&pool, author_id).await
+            }));
+        }
+        for handle in handles {
+            handle
+                .await
+                .expect("writer task panicked")
+                .expect("concurrent delete_author must not surface a database error");
+        }
+    }
+}
