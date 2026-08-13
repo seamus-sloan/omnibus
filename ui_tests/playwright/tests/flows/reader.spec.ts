@@ -45,6 +45,10 @@ const PROGRESS_ERR_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "great-gatsby")!;
 const DEEP_LINK_BOOK = FIXTURE_BOOKS.find(
   (b) => b.slug === "romeo-and-juliet",
 )!;
+// Reserved for the TOC-jump loading-state regression (see the reservation
+// comment on this fixture in fixtures/epubs.ts) — a real multi-chapter book,
+// so the contents drawer lists more than one row to jump between.
+const TOC_JUMP_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "dracula")!;
 
 // The epub.js progress POST fires on the reader's relocate events; pin the
 // exact pathname so the sibling `/api/rpc/progress/get` reads never match.
@@ -160,6 +164,50 @@ test("opens the contents and highlights drawers from the top chrome", async ({
   // Contents drawer opens from the top chrome.
   await page.getByTestId("reader-toc").click();
   await expect(page.getByTestId("reader-toc-drawer")).toBeVisible();
+});
+
+// Regression for issue #1909 (AC3): a TOC jump must show a loading
+// affordance, and the header must never show the outgoing chapter alongside
+// the target's content. `dracula` (reserved above in fixtures/epubs.ts) is a
+// real multi-chapter book so the contents drawer lists more than one row.
+test("shows a loading state during a TOC jump and blanks the outgoing chapter in the header", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(60_000);
+  const uuid = await fetchBookUuidByTitle(request, TOC_JUMP_BOOK.title);
+  await gotoReady(page, `/read/${uuid}`);
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
+
+  // Establish a real baseline chapter in the header before jumping — proves
+  // the assertion below is about the readout actually clearing, not just
+  // never having had anything to clear in the first place. No dedicated
+  // testid on this span (`chrome.rs`'s `reader_title_block`), so this is the
+  // one spot in the file that reaches for a class locator.
+  const headerChapter = page.locator(".rd-title-ch");
+  await expect(headerChapter).toBeVisible({ timeout: 20_000 });
+
+  await page.getByTestId("reader-toc").click();
+  const drawer = page.getByTestId("reader-toc-drawer");
+  await expect(drawer).toBeVisible();
+  const rows = page.getByTestId("reader-toc-row");
+  // A row a few entries in, so the jump actually moves off the current
+  // (front-matter) chapter rather than re-displaying it.
+  await expect(rows.nth(3)).toBeVisible();
+  await rows.nth(3).click();
+
+  // The drawer closes and the loading affordance appears immediately — this
+  // is synchronous with the click (`overlays::render_toc_overlay`), so it
+  // never races the epub.js render — and the header must not show the
+  // outgoing chapter alongside it.
+  await expect(drawer).toHaveCount(0);
+  await expect(page.getByTestId("reader-loading")).toBeVisible();
+  await expect(headerChapter).toHaveCount(0);
+
+  // Once the jump lands, the loading overlay clears and the header shows a
+  // chapter again — never stuck blank, never stuck loading.
+  await expect(page.getByTestId("reader-loading")).toHaveCount(0);
+  await expect(headerChapter).toBeVisible({ timeout: 20_000 });
 });
 
 test("seeds a highlight and deletes it from the highlights drawer", async ({
