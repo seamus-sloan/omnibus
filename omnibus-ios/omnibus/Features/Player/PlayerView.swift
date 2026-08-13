@@ -296,7 +296,7 @@ struct PlayerView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 if player.hasChapters {
-                    Text(Format.humanDuration(Int64(bookRemaining)) + " left")
+                    Text(Format.humanDuration(Int64(Format.atRate(bookRemaining, rate: player.rate))) + " left")
                 }
 
                 Text(chapterRemainingLabel)
@@ -326,7 +326,9 @@ struct PlayerView: View {
     }
 
     private var chapterRemainingLabel: String {
-        let left = max(0, player.chapterDuration - displayedOffset)
+        // Rate-adjusted: "time left" is what the listener will wait through,
+        // not the 1x runtime of the rest of the chapter.
+        let left = Format.atRate(max(0, player.chapterDuration - displayedOffset), rate: player.rate)
         // No sign at the end of a chapter: "-0:00" reads as a broken clock.
         return left < 1 ? "0:00" : "- " + Format.duration(left)
     }

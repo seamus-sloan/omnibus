@@ -10,7 +10,7 @@ use dioxus::prelude::*;
 use dioxus_router::{use_navigator, Link};
 use omnibus_shared::{EbookMetadata, ProgressFormat, ProgressUpdate};
 
-use super::helpers::effective_scrub_position;
+use super::helpers::{effective_scrub_position, remaining_at_rate};
 use crate::components::atrium::Cover;
 use crate::contexts::use_server_url;
 use crate::data;
@@ -30,7 +30,7 @@ use bookmarks_sheet::{use_mobile_bookmarks, BookmarksSheet, MobileBookmarks};
 use effects::{use_marquee_title_refresh, use_retarget_playback};
 use sheets::{snap_rate, ChaptersSheet, SleepSheet, SpeedSheet};
 use state::{sleep_pill_label, use_mobile_playback, SleepState};
-use view::{chapter_index_for_elapsed, format_hms, format_ms, remaining_at_rate, PlayerView};
+use view::{chapter_index_for_elapsed, format_hms, format_ms, PlayerView};
 
 pub use host::MobileAudioHost;
 pub(crate) use mini::mobile_dock_is_active;

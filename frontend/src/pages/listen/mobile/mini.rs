@@ -10,8 +10,9 @@ use crate::components::atrium::Cover;
 use crate::contexts::use_server_url;
 use crate::Route;
 
+use super::super::helpers::remaining_at_rate;
 use super::state::use_mobile_playback;
-use super::view::{chapter_index_for_elapsed, format_hms, remaining_at_rate, PlayerView};
+use super::view::{chapter_index_for_elapsed, format_hms, PlayerView};
 use super::{cover_src, interop};
 
 /// The mini bar's render gate: the loaded view when it's playable, `None`

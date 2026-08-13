@@ -285,6 +285,17 @@ pub(super) fn format_hms(seconds: f64) -> String {
     }
 }
 
+/// Rate-adjusted "time left" for a real (1x) `remaining` duration; falls back
+/// to `remaining` unscaled when `rate` is non-finite or non-positive. Shared
+/// by the web and mobile players so every remaining-time readout scales the
+/// same way.
+pub(super) fn remaining_at_rate(remaining: f64, rate: f64) -> f64 {
+    if !rate.is_finite() || rate <= 0.0 {
+        return remaining;
+    }
+    remaining / rate
+}
+
 /// Fire-and-forget POST `/api/rpc/progress` with the audio update.
 ///
 /// `file_id` is the `book_files` row currently playing — the id the
@@ -319,7 +330,7 @@ pub(super) fn post_audio_progress(uuid: String, file_id: Option<i64>, seconds: f
 mod tests {
     use omnibus_shared::ChapterInfo;
 
-    use super::{effective_scrub_position, format_hms};
+    use super::{effective_scrub_position, format_hms, remaining_at_rate};
 
     fn ch(ordinal: i64, title: &str, start: f64, dur: f64) -> ChapterInfo {
         ChapterInfo {
@@ -415,6 +426,21 @@ mod tests {
         assert_eq!(format_hms(-12.0), "0:00");
         assert_eq!(format_hms(f64::NAN), "0:00");
         assert_eq!(format_hms(f64::INFINITY), "0:00");
+    }
+
+    #[test]
+    fn remaining_at_rate_divides_by_the_playback_rate() {
+        assert!((remaining_at_rate(600.0, 2.0) - 300.0).abs() < f64::EPSILON);
+        assert!((remaining_at_rate(600.0, 0.5) - 1200.0).abs() < f64::EPSILON);
+        assert!((remaining_at_rate(600.0, 1.0) - 600.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn remaining_at_rate_falls_back_unscaled_for_invalid_rates() {
+        assert!((remaining_at_rate(600.0, 0.0) - 600.0).abs() < f64::EPSILON);
+        assert!((remaining_at_rate(600.0, -1.0) - 600.0).abs() < f64::EPSILON);
+        assert!((remaining_at_rate(600.0, f64::NAN) - 600.0).abs() < f64::EPSILON);
+        assert!((remaining_at_rate(600.0, f64::INFINITY) - 600.0).abs() < f64::EPSILON);
     }
 }
 
