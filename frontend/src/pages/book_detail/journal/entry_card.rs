@@ -265,7 +265,14 @@ fn render_delete_confirm_modal(
             aria_label: "Delete entry?".to_string(),
             dialog_class: "mg-modal del-modal".to_string(),
             busy: is_busy,
-            on_dismiss: move |_| delete_confirm.set(false),
+            on_dismiss: move |_| {
+                // Mirrors the double-click guard on `do_delete`: `is_busy` is
+                // stale until the next re-render, so a fast dismiss just
+                // after Confirm could otherwise hide an in-flight delete.
+                if !saving() {
+                    delete_confirm.set(false);
+                }
+            },
             {confirm_modal_body(
                 "Delete entry?",
                 "Deleting this journal entry removes it for good. This can\u{2019}t be undone.",
@@ -275,7 +282,11 @@ fn render_delete_confirm_modal(
                         label: "Cancel".to_string(),
                         tone: ConfirmModalTone::Ghost,
                         disabled: is_busy,
-                        on_click: EventHandler::new(move |_| delete_confirm.set(false)),
+                        on_click: EventHandler::new(move |_| {
+                            if !saving() {
+                                delete_confirm.set(false);
+                            }
+                        }),
                     },
                     ConfirmModalAction {
                         testid: "journal-delete-confirm".to_string(),
