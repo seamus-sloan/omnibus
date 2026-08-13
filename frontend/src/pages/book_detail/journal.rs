@@ -11,6 +11,7 @@ use omnibus_shared::JournalEntry;
 
 use crate::{data, use_server_url};
 
+use super::dates::use_local_dates_ready;
 use super::BdSectionHead;
 
 mod composer;
@@ -131,6 +132,11 @@ fn BdJournalList(
     server_url: String,
     reload: Signal<u32>,
 ) -> Element {
+    // Hoisted once for the whole feed rather than once per card — each card
+    // resolves its own offset from its own `created_at` via
+    // `dates::local_date_offset`, so sharing this readiness signal doesn't
+    // share a stale offset across entries with different dates.
+    let dates_ready = use_local_dates_ready();
     rsx! {
         if list.is_empty() {
             div { class: "bd-journal-empty card", "data-testid": "journal-empty",
@@ -145,6 +151,7 @@ fn BdJournalList(
                         current_user: current_user.clone(),
                         server_url: server_url.clone(),
                         reload,
+                        dates_ready,
                     }
                 }
             }
