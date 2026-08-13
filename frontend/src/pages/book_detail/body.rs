@@ -339,7 +339,7 @@ pub(super) fn BdRailSection(
                         for ident in b.identifiers.iter() {
                             BdMetaRow {
                                 key: "{bd_identifier_key(ident)}",
-                                k: ident.scheme.clone().unwrap_or_else(|| "ID".into()),
+                                k: bd_identifier_label(ident),
                                 v: ident.value.clone(),
                             }
                         }
@@ -420,6 +420,39 @@ pub(super) fn BdRailSection(
 /// key.
 fn bd_identifier_key(ident: &Identifier) -> String {
     format!("{:?}\u{1f}{:?}", ident.scheme, ident.value)
+}
+
+/// Label for a file-details identifier row. A known scheme (`ISBN`, `DOI`,
+/// …) renders as-is; a missing scheme, or the sync layer's `unknown`
+/// placeholder for an EPUB `dc:identifier` with no `opf:scheme` attribute
+/// (`insert_identifier_links` in `db/src/sync/books/shared.rs`), is never
+/// shown to the reader literally — the value's shape decides between `ISBN`
+/// and the generic `Identifier` (#1910).
+fn bd_identifier_label(ident: &Identifier) -> String {
+    match ident.scheme.as_deref() {
+        Some(scheme) if !scheme.eq_ignore_ascii_case("unknown") => scheme.to_string(),
+        _ if bd_looks_like_isbn(&ident.value) => "ISBN".to_string(),
+        _ => "Identifier".to_string(),
+    }
+}
+
+/// True when `value`, with hyphens and whitespace stripped, is the right
+/// length for an ISBN-10 or ISBN-13 (10 or 13 characters) and every
+/// character is a digit — except the last, which an ISBN-10 check digit
+/// allows to be `X`.
+fn bd_looks_like_isbn(value: &str) -> bool {
+    let cleaned: Vec<char> = value
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '-')
+        .collect();
+    if !matches!(cleaned.len(), 10 | 13) {
+        return false;
+    }
+    let last = cleaned.len() - 1;
+    cleaned
+        .iter()
+        .enumerate()
+        .all(|(i, c)| c.is_ascii_digit() || (i == last && c.eq_ignore_ascii_case(&'x')))
 }
 
 #[cfg(test)]

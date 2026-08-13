@@ -49,3 +49,66 @@ fn bd_identifier_key_does_not_collide_when_data_contains_the_delimiter() {
         bd_identifier_key(&split_value)
     );
 }
+
+#[test]
+fn bd_identifier_label_maps_unknown_scheme_isbn10_shape_to_isbn() {
+    // #1910 repro: the sync layer's "unknown" scheme placeholder on an
+    // ISBN-10-shaped value must never surface as the literal word "unknown".
+    let ident = Identifier {
+        value: "0-306-40615-2".into(),
+        scheme: Some("unknown".into()),
+    };
+    assert_eq!(bd_identifier_label(&ident), "ISBN");
+}
+
+#[test]
+fn bd_identifier_label_maps_unknown_scheme_isbn13_shape_to_isbn() {
+    // The Feywild Job repro from the issue: a hyphenated ISBN-13 under the
+    // "unknown" scheme.
+    let ident = Identifier {
+        value: "978-0-593-59980-8".into(),
+        scheme: Some("unknown".into()),
+    };
+    assert_eq!(bd_identifier_label(&ident), "ISBN");
+}
+
+#[test]
+fn bd_identifier_label_maps_unknown_scheme_isbn10_checkdigit_x_to_isbn() {
+    let ident = Identifier {
+        value: "080442957X".into(),
+        scheme: Some("unknown".into()),
+    };
+    assert_eq!(bd_identifier_label(&ident), "ISBN");
+}
+
+#[test]
+fn bd_identifier_label_maps_non_isbn_unknown_scheme_to_generic_identifier() {
+    let ident = Identifier {
+        value: "urn:uuid:c0e51a66-085f-4805-b116-a0d451d281bd".into(),
+        scheme: Some("unknown".into()),
+    };
+    assert_eq!(bd_identifier_label(&ident), "Identifier");
+}
+
+#[test]
+fn bd_identifier_label_maps_missing_scheme_by_value_shape() {
+    let isbn = Identifier {
+        value: "9780593599808".into(),
+        scheme: None,
+    };
+    let other = Identifier {
+        value: "some-other-id".into(),
+        scheme: None,
+    };
+    assert_eq!(bd_identifier_label(&isbn), "ISBN");
+    assert_eq!(bd_identifier_label(&other), "Identifier");
+}
+
+#[test]
+fn bd_identifier_label_keeps_known_scheme_as_is() {
+    let ident = Identifier {
+        value: "https://example.com/book".into(),
+        scheme: Some("URL".into()),
+    };
+    assert_eq!(bd_identifier_label(&ident), "URL");
+}
