@@ -114,8 +114,7 @@ pub(super) fn SyncJumpPrompt(uuid: String) -> Element {
     let target_file = c.book_file_id;
     let total = c.total_duration_seconds.unwrap_or(0.0);
 
-    // Direction-truthful copy: a backward offer (the reader deliberately
-    // went back in the text) must not claim "further".
+    // A backward offer must not claim "further".
     let copy = if c.source_ahead == Some(false) {
         format!("You're re-reading earlier in the ebook — jump back to \u{2248} {label}?")
     } else {

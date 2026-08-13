@@ -468,7 +468,12 @@ pub async fn resume_candidate(
     } else {
         MappingConfidence::Linear
     };
-    let tol_frac = equivalence_fraction(epub_total_chars(pool, book_id).await);
+    // The gate only engages against an existing target position — skip the
+    // stats query entirely on first-open targets.
+    let tol_frac = match &target_row {
+        Some(_) => equivalence_fraction(epub_total_chars(pool, book_id).await),
+        None => equivalence_fraction(None),
+    };
     let (candidate, aligned) = match target {
         ProgressFormat::Audio => match epub_source_fraction(pool, book_id, &source).await {
             None => (None, false),

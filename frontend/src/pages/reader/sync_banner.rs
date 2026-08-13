@@ -51,8 +51,7 @@ pub(super) fn SyncJumpBanner(uuid: String) -> Element {
     let jump_uuid = uuid.clone();
     let dismiss_uuid = uuid.clone();
 
-    // A surviving backward offer (the listener deliberately went back)
-    // must not claim "past this page" — say where the jump actually goes.
+    // A backward offer must not claim "past this page".
     let behind = c.source_ahead == Some(false);
     let copy = if behind {
         format!("Your audiobook sits earlier — jump back to \u{2248} {pct}%?")
