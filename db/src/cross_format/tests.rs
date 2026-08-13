@@ -303,7 +303,10 @@ async fn resume_candidate_walks_the_state_machine() {
         .await
         .unwrap();
     assert_eq!(r.state, CrossFormatResumeState::Candidate);
-    assert_eq!(r.candidate.unwrap().percent, Some(65));
+    let c = r.candidate.unwrap();
+    assert_eq!(c.percent, Some(65));
+    // The wire also carries the un-floored fraction (global 650s of 1000s).
+    assert!((c.fraction.unwrap() - 0.65).abs() < 1e-9);
 
     // Target newer than source → nothing newer.
     let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Audio)
@@ -820,5 +823,149 @@ async fn resume_points_collapse_marks_a_stale_link_without_a_counterpart() {
     assert!(
         points[0].cross_format.is_none(),
         "mapping is paused while stale — no counterpart affordance"
+    );
+}
+
+/// One-paragraph chapter with an odd visible-char count, so mid-chapter
+/// fractions never collapse to exact hundredths (which would make the
+/// precision assertions vacuous).
+const FRACTION_CHAPTER: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>C</title></head>
+<body>
+  <p>First sentence here. Second sentence follows.</p>
+</body>
+</html>"#;
+
+#[tokio::test]
+async fn resume_candidate_audio_target_derives_the_fraction_from_the_stored_cfi() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+
+    // A dual-format book whose EPUB really exists on disk, so the spine
+    // stats backfill and the CFI walk have a file to read.
+    let dir = crate::test_support::make_test_dir("cross_format_cfi_fraction");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(
+        dir.join("sub").join("book.epub"),
+        crate::test_support::build_test_epub(&[
+            ("c1.xhtml", FRACTION_CHAPTER),
+            ("c2.xhtml", FRACTION_CHAPTER),
+        ]),
+    )
+    .unwrap();
+    sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
+        .bind(dir.to_str().unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+    let library_id: i64 =
+        sqlx::query_scalar("SELECT id FROM scan_roots WHERE display_name = 'lib'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let book_id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, scan_key, library_id, path, title, sort)
+         VALUES ('cfi-uuid-1', 'sub/book.epub', ?, 'sub', 'Precise', 'precise') RETURNING id",
+    )
+    .bind(library_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, mtime_epoch, scan_key)
+         VALUES (?, 'EPUB', 'book', 10, 10, 'sub/book.epub')",
+    )
+    .bind(book_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let audio_id: i64 = sqlx::query_scalar(
+        "INSERT INTO book_files
+            (book_id, format, filename, size_bytes, mtime_epoch, scan_key, ordinal)
+         VALUES (?, 'M4B', 'part0', 100, 1000, 'a0.m4b', 0) RETURNING id",
+    )
+    .bind(book_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO book_file_parts
+            (book_file_id, ordinal, filename, size_bytes, mtime_epoch, duration_seconds)
+         VALUES (?, 0, 'a0.m4b', 100, 1000, 1000.0)",
+    )
+    .bind(audio_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    crate::indexer::backfill_epub_structure(&pool, dir.to_str().unwrap(), |_, _, _| {})
+        .await
+        .unwrap();
+    let (epub_file_id, _) = crate::book_file_with_id(&pool, book_id, "EPUB")
+        .await
+        .unwrap()
+        .unwrap();
+    let stats = crate::epub_structure::get_spine_stats(&pool, epub_file_id)
+        .await
+        .unwrap();
+    assert!(!stats.is_empty(), "precondition: stats extracted");
+
+    upsert_link(
+        &pool,
+        user,
+        "cfi-uuid-1",
+        CrossFormatLinkMode::Sequence,
+        None,
+    )
+    .await
+    .unwrap();
+    // A CFI-only reading row (no integer percent): 5 visible chars into
+    // chapter 2 of two identical chapters — a shade past 50%.
+    progress::upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: "cfi-uuid-1".to_string(),
+            format: ProgressFormat::Epub,
+            epub_cfi: Some("epubcfi(/6/4!/4/2/1:5)".to_string()),
+            audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
+            book_file_id: None,
+            client_updated_at: Some(2_000),
+        },
+    )
+    .await
+    .unwrap();
+
+    let r = resume_candidate(&pool, user, "cfi-uuid-1", ProgressFormat::Audio)
+        .await
+        .unwrap();
+    // The old integer-percent source would refuse here (the row has no
+    // percent); a candidate at all proves the CFI path engaged.
+    assert_eq!(r.state, CrossFormatResumeState::Candidate);
+    let c = r.candidate.unwrap();
+    let seconds = c.audio_position_seconds.unwrap();
+    // Expected fraction via the same walk the candidate path runs, so the
+    // assertion can't disagree with the walk's own offset accounting.
+    let (_, epub_path) = crate::book_file_with_id(&pool, book_id, "EPUB")
+        .await
+        .unwrap()
+        .unwrap();
+    let (si, off) = crate::kobo_position::cfi_spine_offset(&epub_path, "epubcfi(/6/4!/4/2/1:5)")
+        .unwrap()
+        .unwrap();
+    let frac = crate::epub_structure::fraction_at(&stats, si as i64, off).unwrap();
+    assert!(
+        frac > 0.5 && frac < 0.6,
+        "mid-chapter-2 offset should sit just past half: {frac}"
+    );
+    assert!(
+        (frac * 100.0).fract() > f64::EPSILON,
+        "fixture must produce a non-integer percent or the precision claim is vacuous: {frac}"
+    );
+    assert!(
+        (seconds - frac * 1000.0).abs() < 0.01,
+        "mapped seconds {seconds} must carry the CFI fraction {frac} at full precision"
     );
 }

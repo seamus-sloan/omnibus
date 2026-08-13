@@ -82,6 +82,12 @@ pub struct CrossFormatCandidate {
     pub total_duration_seconds: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub percent: Option<i64>,
+    /// Full-precision position fraction (`0.0..=1.0`) for epub-target
+    /// candidates: the jump destination; `percent` is its floored display
+    /// twin. Absent on audio targets, whose seconds already carry
+    /// precision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fraction: Option<f64>,
 }
 
 /// Everything the alignment modal renders for one book, in one read:

@@ -137,24 +137,35 @@ pub async fn get_chapters(
     .await?)
 }
 
-/// Whole-book visible-text percent for a position, from stored stats alone:
-/// floor semantics and clamping identical to `kobo_position`'s
-/// `book_percent`, so the two derivation paths cannot disagree. `None`
-/// when the stats don't cover `spine_index` or the book measured empty.
-pub fn percent_at(stats: &[SpineStatRow], spine_index: i64, offset_in_file: u64) -> Option<i64> {
+/// Whole-book visible-text fraction (`0.0..=1.0`) for a position, from
+/// stored stats alone. The full-precision half of [`percent_at`], exposed
+/// for the cross-format mapping where integer-percent quantization would
+/// cost up to 1% of a book (~30 minutes of a long audiobook). `None` when
+/// the stats don't cover `spine_index`.
+pub fn fraction_at(stats: &[SpineStatRow], spine_index: i64, offset_in_file: u64) -> Option<f64> {
     let row = stats.iter().find(|s| s.spine_index == spine_index)?;
     // Order-independent total (never trusts slice order) and saturating
-    // arithmetic throughout: a corrupt or absurd offset clamps to 100
-    // rather than overflowing the multiply.
+    // arithmetic throughout: a corrupt or absurd offset clamps rather
+    // than overflowing.
     let total: i64 = stats
         .iter()
         .fold(0i64, |acc, s| acc.saturating_add(s.visible_chars.max(0)));
     if total <= 0 {
-        return Some(0);
+        return Some(0.0);
     }
     let at = row
         .chars_before
         .max(0)
         .saturating_add(i64::try_from(offset_in_file).unwrap_or(i64::MAX));
-    Some((100i64.saturating_mul(at) / total).clamp(0, 100))
+    Some((at as f64 / total as f64).clamp(0.0, 1.0))
+}
+
+/// Whole-book visible-text percent for a position, from stored stats alone:
+/// floor semantics and clamping identical to `kobo_position`'s
+/// `book_percent`, so the two derivation paths cannot disagree. `None`
+/// when the stats don't cover `spine_index`; a book that measured empty
+/// reports 0.
+pub fn percent_at(stats: &[SpineStatRow], spine_index: i64, offset_in_file: u64) -> Option<i64> {
+    fraction_at(stats, spine_index, offset_in_file)
+        .map(|f| ((100.0 * f).floor() as i64).clamp(0, 100))
 }

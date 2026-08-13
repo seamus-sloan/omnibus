@@ -41,6 +41,12 @@ pub(super) fn SyncJumpBanner(uuid: String) -> Element {
     let Some(pct) = c.percent else {
         return rsx! {};
     };
+    // Jump at full precision (the floored `pct` is display copy only) —
+    // integer percent alone lands up to a page early on a long book.
+    let jump_pct = c
+        .fraction
+        .map(|f| (f * 100.0).clamp(0.0, 100.0))
+        .unwrap_or(pct as f64);
     let source_clock = c.source_client_updated_at;
     let jump_uuid = uuid.clone();
     let dismiss_uuid = uuid.clone();
@@ -59,9 +65,9 @@ pub(super) fn SyncJumpBanner(uuid: String) -> Element {
                     // The glue only exists on interactive targets; SSR
                     // compiles this handler but never runs it.
                     #[cfg(feature = "web")]
-                    super::reader_call("displayPercentage", &pct.to_string());
+                    super::reader_call("displayPercentage", &jump_pct.to_string());
                     #[cfg(not(feature = "web"))]
-                    let _ = pct;
+                    let _ = jump_pct;
                 },
                 "Jump"
             }

@@ -140,7 +140,8 @@ struct ReaderView: View {
                     title: "Listened further in the audiobook",
                     detail: "Your listening maps to about \(pct)% through.",
                     onGo: {
-                        controller.seek(toFraction: Double(pct) / 100.0)
+                        // Full-precision jump; the integer pct is display copy.
+                        controller.seek(toFraction: cross.fraction ?? Double(pct) / 100.0)
                         dismissCrossOffer(cross)
                     },
                     onDismiss: { dismissCrossOffer(cross) }
