@@ -375,6 +375,7 @@ test("persists listening progress when the audio element pauses", async ({
   request,
 }) => {
   const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  const bookFileId = await fetchAudioFileId(request, uuid);
   await gotoReady(page, `/listen/${uuid}`);
   await waitForPlayerReady(page);
 
@@ -383,7 +384,12 @@ test("persists listening progress when the audio element pauses", async ({
   const PAUSE_AT_SEC = 7.5;
   await expectMutationProgress(
     page,
-    { uuid, audioPositionSeconds: PAUSE_AT_SEC, expectedStatus: 200 },
+    {
+      uuid,
+      audioPositionSeconds: PAUSE_AT_SEC,
+      bookFileId,
+      expectedStatus: 200,
+    },
     async () => {
       await page.evaluate((secs) => {
         const cb = (
@@ -413,6 +419,7 @@ test("surfaces a 5xx progress POST without crashing the player", async ({
   request,
 }) => {
   const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  const bookFileId = await fetchAudioFileId(request, uuid);
   await gotoReady(page, `/listen/${uuid}`);
   await waitForPlayerReady(page);
 
@@ -432,7 +439,12 @@ test("surfaces a 5xx progress POST without crashing the player", async ({
   const PAUSE_AT_SEC = 12.25;
   await expectMutationProgress(
     page,
-    { uuid, audioPositionSeconds: PAUSE_AT_SEC, expectedStatus: 500 },
+    {
+      uuid,
+      audioPositionSeconds: PAUSE_AT_SEC,
+      bookFileId,
+      expectedStatus: 500,
+    },
     async () => {
       await page.evaluate((secs) => {
         const cb = (
@@ -736,7 +748,34 @@ test("opens chapters drawer and shows played/current/upcoming row states", async
 interface ProgressMutationOpts {
   uuid: string;
   audioPositionSeconds: number;
+  /** The `book_files` row the player loaded — every audio progress POST
+   * names the file the manifest resolved (#1888). */
+  bookFileId: number;
   expectedStatus: number;
+}
+
+/**
+ * The first audio `book_files` id for a book, from `GET /api/ebooks/:uuid`
+ * (returned in ordinal order — the same default the manifest resolves for a
+ * bare `/listen/:uuid`). This is the id the player's progress POSTs must
+ * carry, so the specs fetch it rather than hard-coding an AUTOINCREMENT id.
+ */
+async function fetchAudioFileId(
+  request: import("@playwright/test").APIRequestContext,
+  uuid: string,
+): Promise<number> {
+  const resp = await request.get(`/api/ebooks/${uuid}`);
+  expect(resp.status(), "GET /api/ebooks/:uuid failed").toBe(200);
+  const detail = (await resp.json()) as {
+    book_files: { id: number; format: string }[];
+  };
+  const audio = detail.book_files.find((f) =>
+    /^(mp3|m4b|m4a)$/i.test(f.format),
+  );
+  if (!audio) {
+    throw new Error(`book ${uuid} has no audio book_files row`);
+  }
+  return audio.id;
 }
 
 const PROGRESS_URL = /\/api\/rpc\/progress(?:\?|$)/;
@@ -759,6 +798,7 @@ async function expectMutationProgress(
           book_uuid: opts.uuid,
           format: "audio",
           audio_position_seconds: opts.audioPositionSeconds,
+          book_file_id: opts.bookFileId,
         },
       },
     },
