@@ -11,7 +11,7 @@ use super::*;
 #[test]
 fn bd_insight_values_shows_em_dashes_when_insights_is_none() {
     assert_eq!(
-        bd_insight_values(None),
+        bd_insight_values(None, false),
         ["\u{2014}", "\u{2014}", "\u{2014}", "\u{2014}"]
     );
 }
@@ -23,7 +23,7 @@ fn bd_insight_values_formats_started_time_read_sessions_and_pace() {
         seconds_total: 5400,       // 1h 30m across 3 sessions
         sessions: 3,
     };
-    let [started, time_read, sessions, pace] = bd_insight_values(Some(insights));
+    let [started, time_read, sessions, pace] = bd_insight_values(Some(insights), false);
     assert_eq!(started, "November 14, 2023");
     assert_eq!(time_read, "1h 30m");
     assert_eq!(sessions, "3");
@@ -41,7 +41,7 @@ fn bd_insight_values_guards_against_a_zero_session_count() {
         sessions: 0,
     };
     assert_eq!(
-        bd_insight_values(Some(insights)),
+        bd_insight_values(Some(insights), false),
         ["\u{2014}", "\u{2014}", "\u{2014}", "\u{2014}"]
     );
 }
