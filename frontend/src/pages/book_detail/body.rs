@@ -339,7 +339,7 @@ pub(super) fn BdRailSection(
                         for ident in b.identifiers.iter() {
                             BdMetaRow {
                                 key: "{bd_identifier_key(ident)}",
-                                k: ident.scheme.clone().unwrap_or_else(|| "ID".into()),
+                                k: bd_identifier_label(ident),
                                 v: ident.value.clone(),
                             }
                         }
@@ -420,6 +420,34 @@ pub(super) fn BdRailSection(
 /// key.
 fn bd_identifier_key(ident: &Identifier) -> String {
     format!("{:?}\u{1f}{:?}", ident.scheme, ident.value)
+}
+
+/// Label for a file-details identifier row: a known scheme renders as-is; a missing or `unknown` scheme is inferred from the value's shape as `ISBN` or `Identifier`.
+fn bd_identifier_label(ident: &Identifier) -> String {
+    match ident.scheme.as_deref() {
+        Some(scheme) if !scheme.eq_ignore_ascii_case("unknown") => scheme.to_string(),
+        _ if bd_looks_like_isbn(&ident.value) => "ISBN".to_string(),
+        _ => "Identifier".to_string(),
+    }
+}
+
+/// True when `value`, with hyphens and whitespace stripped, is the right length for an ISBN-10 or ISBN-13, digits-only except a trailing ISBN-10 `X` check digit.
+fn bd_looks_like_isbn(value: &str) -> bool {
+    let cleaned: Vec<char> = value
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '-')
+        .collect();
+    match cleaned.len() {
+        10 => {
+            let last = cleaned.len() - 1;
+            cleaned
+                .iter()
+                .enumerate()
+                .all(|(i, c)| c.is_ascii_digit() || (i == last && c.eq_ignore_ascii_case(&'x')))
+        }
+        13 => cleaned.iter().all(|c| c.is_ascii_digit()),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
