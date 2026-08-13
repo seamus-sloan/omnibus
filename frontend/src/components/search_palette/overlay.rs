@@ -295,6 +295,7 @@ fn SpInputRow(query: Signal<String>, is_loading: bool, on_input: EventHandler<St
                 // attempts with `set_focus(true)`/`spawn` failed).
                 onmounted: move |evt: MountedEvent| {
                     focus_after_paint(&evt);
+                    remove_prefocus_key_buffer(&mount_buffer);
                     *mount_buffer.borrow_mut() = install_prefocus_key_buffer(query, on_input);
                 },
                 // Real focus has landed — the buffer's job is done.
@@ -344,7 +345,13 @@ fn install_prefocus_key_buffer(
         let Some(edit) = bufferable_key(&evt) else {
             return;
         };
+        // Stop the key here, in the capture phase, before it ever reaches
+        // whatever element still holds real focus — a bubble-phase
+        // `prevent_default` alone would be too late to stop a focused
+        // element's own `onkeydown` (e.g. a book tile's Space-to-open)
+        // from already having fired during the same dispatch.
         evt.prevent_default();
+        evt.stop_propagation();
         let mut v = query.peek().clone();
         match edit {
             Some(c) => v.push(c),
@@ -355,7 +362,11 @@ fn install_prefocus_key_buffer(
         on_input.call(v);
     }) as Box<dyn FnMut(_)>);
     document
-        .add_event_listener_with_callback("keydown", closure.as_ref().unchecked_ref())
+        .add_event_listener_with_callback_and_bool(
+            "keydown",
+            closure.as_ref().unchecked_ref(),
+            true,
+        )
         .ok()?;
     Some(PrefocusKeyBuffer { document, closure })
 }
@@ -382,9 +393,11 @@ fn remove_prefocus_key_buffer(holder: &PrefocusKeyBufferHolder) {
 fn detach_prefocus_key_buffer(buf: PrefocusKeyBuffer) {
     use wasm_bindgen::JsCast;
 
-    let _ = buf
-        .document
-        .remove_event_listener_with_callback("keydown", buf.closure.as_ref().unchecked_ref());
+    let _ = buf.document.remove_event_listener_with_callback_and_bool(
+        "keydown",
+        buf.closure.as_ref().unchecked_ref(),
+        true,
+    );
 }
 
 #[cfg(not(feature = "web"))]
