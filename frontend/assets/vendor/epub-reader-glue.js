@@ -73,6 +73,10 @@
   // so the first-pass landing (a page or two off until fonts/theme reflow) is
   // never persisted as reading progress.
   var restoreSettled = true;
+  // True from a CFI restore until its first post-settle emission — that
+  // emission re-states the restored position and is tagged `echo` so the
+  // host renders it without persisting it (see emitRelocate).
+  var restoreEchoPending = false;
   var tocFlat = [];
   var currentTheme = "dark";
   // Whether the section iframe runs scripts. Only then can we await the
@@ -361,14 +365,16 @@
         // Re-emit current location now that locations are resolved so the
         // Rust side gets a real whole-book `pct` on first load (page/total
         // are already live off the current render — see buildRelocateData).
+        // An echo: it re-states the position, it doesn't report movement.
         if (rendition && rendition.location) {
-          emitRelocate(rendition.location);
+          emitRelocate(rendition.location, true);
         }
         // A follow-mode auto-jump that raced this pass now has a locations
         // map to resolve against — apply it unless navigation cancelled it.
         if (pendingJumpPct !== null && book && book.locations) {
           var pct = pendingJumpPct;
           pendingJumpPct = null;
+          restoreEchoPending = false;
           applyPercentage(pct);
         }
       })
@@ -388,6 +394,7 @@
     // saved progress paint (and report ready) immediately.
     var initialCfi = opts.cfi || null;
     restoreSettled = !initialCfi;
+    restoreEchoPending = !!initialCfi;
     rendition.display(initialCfi || undefined).then(
       function () {
         if (!initialCfi) {
@@ -497,9 +504,23 @@
     });
   }
 
-  function emitRelocate(location) {
+  // `isEcho` marks an emission that re-states a position the host already
+  // knows (the restore settle, the locations-resolved re-emit) rather than
+  // reporting movement. The host renders echoes but must not persist them:
+  // an echo write stamps a fresh clock on an unmoved position, which
+  // out-orders a newer counterpart-format position at the cross-format
+  // clock gate. The first emission after a CFI restore is an echo even
+  // when it arrives through the debounced relocated handler, so the flag
+  // is consumed here rather than trusted to the call sites.
+  function emitRelocate(location, isEcho) {
     if (!restoreSettled) return;
+    var echo = !!isEcho;
+    if (restoreEchoPending) {
+      restoreEchoPending = false;
+      echo = true;
+    }
     var data = buildRelocateData(location);
+    data.echo = echo;
     if (data.cfi && typeof window.__omnibusOnRelocate === "function") {
       window.__omnibusOnRelocate(JSON.stringify(data));
     }
@@ -508,12 +529,14 @@
   function next() {
     if (!rendition) return;
     pendingJumpPct = null;
+    restoreEchoPending = false;
     return rendition.next();
   }
 
   function prev() {
     if (!rendition) return;
     pendingJumpPct = null;
+    restoreEchoPending = false;
     return rendition.prev();
   }
 
@@ -1609,6 +1632,7 @@
   function display(target) {
     if (!rendition || !target) return;
     pendingJumpPct = null;
+    restoreEchoPending = false;
     var t = String(target);
     var hash = t.indexOf("#");
     // CFIs and bare hrefs pass straight through. Fragment hrefs resolve to
@@ -1742,6 +1766,10 @@
   // mode auto-jump fires right after mount) is parked and applied by the
   // locations .then in init() rather than silently dropped.
   function displayPercentage(pct) {
+    // A percentage jump — user-accepted or follow-mode — is real movement:
+    // its landing (even one emitted by the restore-settle unmute) must
+    // persist, so it clears the pending echo tag.
+    restoreEchoPending = false;
     if (!book || !book.locations || !book.locations.length()) {
       pendingJumpPct = pct;
       return;
