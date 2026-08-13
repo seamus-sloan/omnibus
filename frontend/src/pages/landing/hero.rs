@@ -141,12 +141,42 @@ fn HeroCard(point: ResumePoint, server_url: String) -> Element {
         .map(|c| c.name.clone())
         .unwrap_or_default();
     let is_audio = point.record.format == ProgressFormat::Audio;
-    let (eyebrow, cta_label) = match (is_audio, point.linked) {
-        (true, true) => ("Continue \u{00b7} synced", "Play"),
-        (false, true) => ("Continue \u{00b7} synced", "Read"),
-        (true, false) => ("Continue listening", "Play"),
-        (false, false) => ("Continue reading", "Read"),
+    let eyebrow = match (is_audio, point.linked) {
+        (_, true) => "Continue \u{00b7} synced",
+        (true, false) => "Continue listening",
+        (false, false) => "Continue reading",
     };
+    // Linked cards carry the position on the primary CTA ("Play · 16h 05m")
+    // per the design; unlinked keep the bare verb.
+    let cta_label = {
+        let verb = if is_audio { "Play" } else { "Read" };
+        let position = if point.linked {
+            if is_audio {
+                point
+                    .record
+                    .audio_position_seconds
+                    .map(crate::components::alignment_modal::fmt_hm)
+            } else {
+                point.record.progress_percent.map(|p| format!("{p}%"))
+            }
+        } else {
+            None
+        };
+        match position {
+            Some(p) => format!("{verb} \u{00b7} {p}"),
+            None => verb.to_string(),
+        }
+    };
+    // Dual-format but unlinked: the hero carries the link invitation the
+    // design draws under the two-card state.
+    let dual_unlinked = !point.linked
+        && book.formats.iter().any(|f| f.eq_ignore_ascii_case("epub"))
+        && book.formats.iter().any(|f| {
+            matches!(
+                f.to_ascii_lowercase().as_str(),
+                "m4b" | "m4a" | "mp3" | "aac" | "flac" | "ogg" | "opus" | "wav"
+            )
+        });
     // Linked books carry the mapped "resume in the other format" candidate;
     // the CTA routes to that surface, whose own prompt offers the precise
     // jump once loaded.
@@ -196,7 +226,14 @@ fn HeroCard(point: ResumePoint, server_url: String) -> Element {
                 }
             }
             div { class: "ch-body",
-                span { class: "ch-eyebrow", "{eyebrow}" }
+                span { class: "ch-eyebrow",
+                    "{eyebrow}"
+                    if point.linked {
+                        span { class: "ch-eyebrow-glyph",
+                            crate::components::sync_glyph::SyncGlyph { size: 11 }
+                        }
+                    }
+                }
                 Link {
                     to: Route::BookDetail { uuid: uuid.clone() },
                     class: "ch-title-link",
@@ -208,8 +245,23 @@ fn HeroCard(point: ResumePoint, server_url: String) -> Element {
                 if let Some(pct) = pct {
                     span { class: "ch-bar", i { style: "width:{pct}%" } }
                 }
+                if dual_unlinked {
+                    Link {
+                        to: Route::BookDetail { uuid: uuid.clone() },
+                        class: "ch-link-invite",
+                        "data-testid": "hero-link-invite-{uuid}",
+                        crate::components::sync_glyph::SyncGlyph { size: 12 }
+                        span { "Same book, two spots — link the formats to carry one position." }
+                    }
+                }
                 div { class: "ch-foot",
-                    span { class: "mono ch-meta", "{meta}" }
+                    span { class: "mono ch-meta",
+                        if point.linked { "newest spot: " }
+                        if point.linked {
+                            if is_audio { "audiobook \u{00b7} " } else { "ebook \u{00b7} " }
+                        }
+                        "{meta}"
+                    }
                     if let Some((route, label)) = counterpart {
                         Link {
                             to: route,

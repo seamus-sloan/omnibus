@@ -692,6 +692,7 @@ pub async fn resume_candidate(
                             total_duration_seconds: Some(timeline.total_seconds),
                             percent: None,
                             fraction: None,
+                            source_position_seconds: None,
                             source_ahead: current_global.map(|cur| mapped_global > cur),
                         };
                         (Some(candidate), aligned)
@@ -732,6 +733,7 @@ pub async fn resume_candidate(
                         total_duration_seconds: None,
                         percent: Some(pct),
                         fraction: Some(frac.clamp(0.0, 1.0)),
+                        source_position_seconds: Some(raw_frac * timeline.total_seconds),
                         source_ahead: current.map(|cur| frac > cur),
                     };
                     (Some(candidate), aligned)
@@ -835,6 +837,7 @@ pub async fn alignment_view(
     // sequence declaration so the modal can honestly say whether anchoring
     // would engage; a stale link stays quiet (mapping is paused anyway).
     let mut audio_chapter_marks = 0i64;
+    let mut anchor_pairs: Vec<(f64, f64)> = Vec::new();
     let anchor_match = if link.as_ref().is_some_and(|l| l.stale) {
         None
     } else {
@@ -850,13 +853,39 @@ pub async fn alignment_view(
             Some(timeline) => {
                 audio_chapter_marks = anchors::usable_audio_marks(pool, &timeline).await?;
                 match crate::book_file_with_id(pool, book_id, "EPUB").await? {
-                    Some((ebook_file_id, _)) => anchors::anchor_map(pool, ebook_file_id, &timeline)
-                        .await?
-                        .map(|m| AlignmentMatch {
-                            matched: m.matched,
-                            ebook_chapters: m.ebook_chapters,
+                    Some((ebook_file_id, _)) => {
+                        // User anchors fold in exactly as the jump path
+                        // does, so the preview's threads and interpolation
+                        // are the pairs the mapping will really use.
+                        let chapter_map =
+                            anchors::anchor_map(pool, ebook_file_id, &timeline).await?;
+                        let user: Vec<anchors::Anchor> = raw_link
+                            .as_ref()
+                            .filter(|_| timeline.total_seconds > 0.0)
+                            .map(|l| {
+                                l.user_anchors
+                                    .iter()
+                                    .map(|(t, s)| anchors::Anchor {
+                                        text_frac: t.clamp(0.0, 1.0),
+                                        audio_frac: (s / timeline.total_seconds).clamp(0.0, 1.0),
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let stats = chapter_map.as_ref().map(|m| (m.matched, m.ebook_chapters));
+                        if let Some(merged) = anchors::merge_user_anchors(&user, chapter_map) {
+                            anchor_pairs = merged
+                                .anchors
+                                .iter()
+                                .map(|a| (a.text_frac, a.audio_frac))
+                                .collect();
+                        }
+                        stats.map(|(matched, ebook_chapters)| AlignmentMatch {
+                            matched,
+                            ebook_chapters,
                             confidence: MappingConfidence::ChapterAnchored,
-                        }),
+                        })
+                    }
                     None => None,
                 }
             }
@@ -931,6 +960,7 @@ pub async fn alignment_view(
         audio_files: audio,
         reading,
         listening,
+        anchor_pairs,
         audio_chapter_marks,
     })
 }

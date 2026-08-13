@@ -76,6 +76,9 @@ pub(super) fn BdSyncPanel(
                 None => rsx! {},
                 Some(None) => rsx! {
                     div { class: "al-entry al-entry-unlinked",
+                        span { class: "al-entry-glyph",
+                            crate::components::sync_glyph::SyncGlyph { size: 14 }
+                        }
                         span { class: "al-entry-copy",
                             "Positions aren't synced — each format keeps its own spot."
                         }
@@ -101,13 +104,21 @@ pub(super) fn BdSyncPanel(
                         }
                     }
                 },
-                Some(Some(_)) => rsx! {
+                Some(Some(l)) => rsx! {
                     button {
                         class: "al-entry al-entry-linked",
                         "data-testid": "sync-link-manage",
                         onclick: move |_| open_modal.set(true),
-                        span { class: "al-entry-copy", "Positions synced" }
-                        span { class: "al-entry-meta", "ebook \u{2194} audiobook" }
+                        span { class: "al-entry-glyph",
+                            crate::components::sync_glyph::SyncGlyph { size: 14 }
+                        }
+                        span { class: "al-entry-copy",
+                            if l.follow { "Positions synced — following" } else { "Positions synced" }
+                        }
+                        span { class: "al-entry-meta",
+                            "ebook \u{2194} audiobook \u{b7} confirmed "
+                            {crate::components::alignment_modal::recency(l.confirmed_at)}
+                        }
                         span { class: "al-entry-chevron", "\u{203a}" }
                     }
                 },

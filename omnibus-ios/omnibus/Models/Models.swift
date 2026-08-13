@@ -1605,6 +1605,9 @@ struct AlignmentView: Codable, Hashable, Sendable {
     /// Usable audio chapter marks: with no anchor match, zero means "no
     /// marks" and nonzero means "marks exist but couldn't be aligned".
     var audioChapterMarks: Int64?
+    /// Matched anchor pairs (text_frac, audio_frac) — the mapped-preview
+    /// interpolation, identical to the pairs the jump uses.
+    var anchorPairs: [[Double]] = []
 
     enum CodingKeys: String, CodingKey {
         case link
@@ -1614,6 +1617,7 @@ struct AlignmentView: Codable, Hashable, Sendable {
         case reading
         case listening
         case audioChapterMarks = "audio_chapter_marks"
+        case anchorPairs = "anchor_pairs"
     }
 }
 

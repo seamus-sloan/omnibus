@@ -144,8 +144,24 @@ pub(super) fn SyncJumpPrompt(uuid: String) -> Element {
         format!("You read further in the ebook — jump to \u{2248} {label}?")
     };
 
+    let kicker_dismiss_uuid = uuid.clone();
     rsx! {
         div { class: "lp-sync-prompt card", role: "status", "data-testid": "sync-prompt",
+            div { class: "lp-sync-kicker",
+                crate::components::sync_glyph::SyncGlyph { size: 12 }
+                "Cross-format sync"
+                span { class: "lp-sync-kicker-spacer" }
+                button {
+                    class: "btn ghost sm",
+                    "data-testid": "sync-prompt-close",
+                    aria_label: "Dismiss",
+                    onclick: move |_| {
+                        store_dismissed_clock(&kicker_dismiss_uuid, "audio", source_clock);
+                        hidden.set(true);
+                    },
+                    "\u{2715}"
+                }
+            }
             span { class: "lp-sync-copy", "{copy}" }
             button {
                 class: "btn sm",
