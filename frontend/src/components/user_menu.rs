@@ -381,18 +381,17 @@ fn UmAccountRows(open: Signal<bool>, is_admin: bool) -> Element {
 }
 
 /// Session-scoped linear rows: the stubbed "Switch user" row and the
-/// real Sign-out button.
+/// real Sign-out button. "Switch user" has no destination yet (there is
+/// no multi-account switcher on web), so it renders as a plain,
+/// non-interactive `div` rather than a link that swallows the click
+/// (#1913) — same non-anchor stub pattern as the Journal/Highlights/Goals
+/// tiles in [`UmStat`].
 #[cfg(any(feature = "web", feature = "server"))]
 #[component]
 fn UmSessionRows(on_signout: EventHandler<()>) -> Element {
     rsx! {
         div { class: "um-rows",
-            a {
-                class: "um-row",
-                href: "#",
-                "aria-disabled": "true",
-                tabindex: "-1",
-                onclick: move |evt| evt.prevent_default(),
+            div { class: "um-row", "aria-disabled": "true",
                 span { class: "um-row-icon", "⇄" }
                 span { class: "um-row-label", "Switch user" }
             }
