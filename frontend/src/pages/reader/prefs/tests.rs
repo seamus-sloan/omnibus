@@ -13,7 +13,7 @@ fn default_font_size_matches_the_documented_starting_size() {
 
 #[test]
 fn default_typeface_matches_the_documented_starting_typeface() {
-    assert_eq!(default_typeface(), Typeface::Editorial);
+    assert_eq!(default_typeface(), Typeface::Modern);
 }
 
 #[test]
