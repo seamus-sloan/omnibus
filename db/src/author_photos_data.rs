@@ -236,7 +236,8 @@ pub async fn delete_author(
     pool: &SqlitePool,
     author_id: i64,
 ) -> Result<u64, AuthorPhotosDataError> {
-    let mut tx = pool.begin().await?;
+    // BEGIN IMMEDIATE avoids a stale-snapshot 517 on concurrent writes (#1862).
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
     let Some(name): Option<String> = sqlx::query_scalar("SELECT name FROM authors WHERE id = ?")
         .bind(author_id)
