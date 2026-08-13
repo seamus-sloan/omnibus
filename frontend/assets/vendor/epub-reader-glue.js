@@ -169,6 +169,9 @@
   function buildRelocateData(location) {
     var cfi = location && location.start ? location.start.cfi : undefined;
     var pct = location && location.start ? Math.round((location.start.percentage || 0) * 100) : 0;
+    // Full-precision twin of `pct` for the "synced here" declaration —
+    // an anchor pair is only as good as the fraction it records.
+    var frac = location && location.start ? (location.start.percentage || 0) : 0;
     // `displayed` is the visual column epub.js just rendered in the current
     // paginated flow — 1-indexed, and always exactly one away from the
     // previous relocate's page after a next()/prev() turn. This replaced a
@@ -188,6 +191,7 @@
       page: page,
       totalPages: totalPages,
       pct: pct,
+      frac: frac,
       // epub.js sets `atEnd` when the displayed range reaches the last page
       // of the last spine item — `pct` alone tops out below 100 because it
       // tracks the *start* of the visible range.

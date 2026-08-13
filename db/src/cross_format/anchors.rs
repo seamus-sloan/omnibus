@@ -448,3 +448,37 @@ pub(super) fn interpolate(anchors: &[Anchor], frac: f64, text_to_audio: bool) ->
     }
     frac
 }
+
+/// Fold user-declared sync points into the anchor set. User pairs are
+/// ground truth: they seed the set, and chapter anchors survive only where
+/// they stay strictly monotonic between the user pairs on both axes.
+pub(super) fn merge_user_anchors(user: &[Anchor], chapter: Option<AnchorMap>) -> Option<AnchorMap> {
+    if user.is_empty() {
+        return chapter;
+    }
+    let mut merged: Vec<Anchor> = user.to_vec();
+    merged.sort_by(|a, b| a.text_frac.total_cmp(&b.text_frac));
+    let merged = monotonic(merged);
+    let (chapter_anchors, matched, ebook_chapters) = match &chapter {
+        Some(m) => (m.anchors.as_slice(), m.matched, m.ebook_chapters),
+        None => (&[][..], 0, 0),
+    };
+    let mut out: Vec<Anchor> = merged.clone();
+    for c in chapter_anchors {
+        // Strictly between its would-be neighbors on both axes, measured
+        // against the set built so far.
+        let pos = out.partition_point(|a| a.text_frac < c.text_frac);
+        let below_ok = pos == 0
+            || (out[pos - 1].text_frac < c.text_frac && out[pos - 1].audio_frac < c.audio_frac);
+        let above_ok = pos == out.len()
+            || (c.text_frac < out[pos].text_frac && c.audio_frac < out[pos].audio_frac);
+        if below_ok && above_ok {
+            out.insert(pos, *c);
+        }
+    }
+    Some(AnchorMap {
+        anchors: out,
+        matched,
+        ebook_chapters,
+    })
+}

@@ -254,6 +254,7 @@ pub(super) fn Toolbar(state: ToolbarState) -> Element {
                 onclick: move |evt| on_chapters.call(evt),
                 "{ch_label}"
             }
+            super::sync_prompt::SyncHereButton {}
         }
     }
 }

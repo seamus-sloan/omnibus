@@ -40,6 +40,43 @@ struct CrossFormatCodecTests {
         #expect(c.fraction == 0.12752)
     }
 
+    @Test("follow mode and link anchors decode from the wire")
+    func followDecodes() throws {
+        let json = """
+        {"state":"candidate","follow":true,"candidate":{"target":"epub",
+         "source_format":"audio","source_client_updated_at":1,"confidence":"user_anchored",
+         "percent":40,"fraction":0.405}}
+        """
+        let resume = try JSONDecoder().decode(CrossFormatResume.self, from: Data(json.utf8))
+        #expect(resume.follow == true)
+        #expect(resume.candidate?.confidence == .userAnchored)
+
+        let linkJSON = """
+        {"mode":"sequence","stale":false,"confirmed_at":9,"follow":true,"user_anchors":2}
+        """
+        let link = try JSONDecoder().decode(AlignmentLink.self, from: Data(linkJSON.utf8))
+        #expect(link.follow == true)
+        #expect(link.userAnchors == 2)
+    }
+
+    @Test("sync point declaration encodes snake_case keys")
+    func declarationEncodes() throws {
+        let decl = DeclareSyncPoint(
+            bookUUID: "u-1",
+            format: .audio,
+            ebookFraction: nil,
+            audioBookFileID: 7,
+            audioSeconds: 123.5
+        )
+        let data = try JSONEncoder().encode(decl)
+        let obj = try #require(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        #expect(obj["book_uuid"] as? String == "u-1")
+        #expect(obj["audio_book_file_id"] as? Int == 7)
+        #expect(obj["audio_seconds"] as? Double == 123.5)
+    }
+
     @Test("candidate-less states decode without a candidate")
     func statesDecode() throws {
         for (raw, state) in [

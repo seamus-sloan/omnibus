@@ -8,7 +8,7 @@
 use dioxus::prelude::*;
 use omnibus_shared::cross_format::CrossFormatCandidate;
 
-use crate::pages::listen::sync_prompt::{dismissed_clock, fetch_candidate, store_dismissed_clock};
+use crate::pages::listen::sync_prompt::{dismissed_clock, store_dismissed_clock};
 
 /// The banner. Renders nothing until the post-mount fetch finds an
 /// undismissed candidate, so SSR and the first WASM paint agree.
@@ -21,9 +21,31 @@ pub(super) fn SyncJumpBanner(uuid: String) -> Element {
     use_effect(move || {
         let uuid = fetch_uuid.clone();
         spawn(async move {
-            let Some(c) = fetch_candidate(&uuid, "epub").await else {
+            let Some(resume) = crate::pages::listen::sync_prompt::fetch_resume(&uuid, "epub").await
+            else {
                 return;
             };
+            if resume.state != omnibus_shared::cross_format::CrossFormatResumeState::Candidate {
+                return;
+            }
+            let Some(c) = resume.candidate else {
+                return;
+            };
+            if resume.follow {
+                // Follow mode: resolve-at-open — move the text to the
+                // mapped spot silently, full precision, no banner.
+                #[cfg(feature = "web")]
+                {
+                    let jump = c
+                        .fraction
+                        .map(|f| (f * 100.0).clamp(0.0, 100.0))
+                        .or(c.percent.map(|p| p as f64));
+                    if let Some(pct) = jump {
+                        super::reader_call("displayPercentage", &pct.to_string());
+                    }
+                }
+                return;
+            }
             if dismissed_clock(&uuid, "epub").is_some_and(|seen| c.source_client_updated_at <= seen)
             {
                 return;
@@ -87,6 +109,41 @@ pub(super) fn SyncJumpBanner(uuid: String) -> Element {
                 },
                 "Stay here"
             }
+        }
+    }
+}
+
+/// "Synced here" footer pill: declares the current reading position (full
+/// precision) as a sync point and turns follow mode on. Configuration-
+/// shaped (rule 08): direct call, never queued, failure shown in place.
+#[component]
+pub(super) fn SyncHerePill(uuid: String, loc: Signal<super::signals::RelocateData>) -> Element {
+    let mut label = use_signal(|| "Synced here");
+    rsx! {
+        button {
+            class: "btn ghost sm rd-sync-here",
+            r#type: "button",
+            "data-testid": "reader-sync-here",
+            title: "Declare the ebook and audiobook aligned at this spot",
+            onclick: move |_| {
+                let uuid = uuid.clone();
+                let frac = loc.peek().frac;
+                spawn(async move {
+                    label.set("Syncing\u{2026}");
+                    let decl = omnibus_shared::cross_format::DeclareSyncPoint {
+                        book_uuid: uuid,
+                        format: omnibus_shared::ProgressFormat::Epub,
+                        ebook_fraction: Some(frac.clamp(0.0, 1.0)),
+                        audio_book_file_id: None,
+                        audio_seconds: None,
+                    };
+                    match crate::data::declare_sync_point("", decl).await {
+                        Ok(()) => label.set("Synced \u{2713}"),
+                        Err(_) => label.set("Sync failed"),
+                    }
+                });
+            },
+            "{label}"
         }
     }
 }

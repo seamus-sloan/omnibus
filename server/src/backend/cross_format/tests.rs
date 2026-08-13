@@ -247,3 +247,139 @@ async fn api_cross_format_link_gates_reorder_on_edit_permission() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
 }
+
+/// Bearer-authed JSON POST, shared by the declaration/follow tests.
+fn post_json_with_bearer(
+    uri: &str,
+    token: &str,
+    body: &serde_json::Value,
+) -> axum::http::Request<axum::body::Body> {
+    axum::http::Request::builder()
+        .uri(uri)
+        .method("POST")
+        .header("content-type", "application/json")
+        .header(axum::http::header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn api_sync_point_declares_and_conflicts_map_to_409() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let (book_id, uuid) = seed_book_with_uuid(&pool, "/lib", "Dual").await;
+    attach_audio(&pool, book_id).await;
+    db::progress::upsert_progress(
+        &pool,
+        user.id,
+        &ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Epub,
+            epub_cfi: None,
+            audio_position_seconds: None,
+            progress_percent: Some(40),
+            kobo_location: None,
+            book_file_id: None,
+            client_updated_at: Some(1_000),
+        },
+    )
+    .await
+    .unwrap();
+
+    // Happy path: single-file book auto-links, records the anchor, and
+    // the follow flag reaches the resume payload.
+    let body = serde_json::json!({
+        "book_uuid": "ignored",
+        "format": "audio",
+        "audio_seconds": 300.0,
+    });
+    let res = app
+        .clone()
+        .oneshot(post_json_with_bearer(
+            &format!("/api/books/{uuid}/sync-point"),
+            &token,
+            &body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let res = app
+        .clone()
+        .oneshot(get_with_bearer(
+            &format!("/api/books/{uuid}/cross-format-resume?target=audio"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let resume = body_json(res).await;
+    assert!(resume.follow);
+
+    // A declaration with no counterpart position → 409 with a renderable
+    // message (fresh user, no reading row).
+    let bob = auth_test_support::create_user(&pool, "bob").await;
+    let bob_token = auth_test_support::bearer_token(&pool, bob.id).await;
+    let res = app
+        .clone()
+        .oneshot(post_json_with_bearer(
+            &format!("/api/books/{uuid}/sync-point"),
+            &bob_token,
+            &body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    // Malformed declaration (audio without seconds) → 422.
+    let res = app
+        .clone()
+        .oneshot(post_json_with_bearer(
+            &format!("/api/books/{uuid}/sync-point"),
+            &token,
+            &serde_json::json!({"book_uuid": "x", "format": "audio"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn api_cross_format_follow_flips_and_conflicts_without_a_link() {
+    let (app, _state, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let (book_id, uuid) = seed_book_with_uuid(&pool, "/lib", "Dual").await;
+    attach_audio(&pool, book_id).await;
+
+    let res = app
+        .clone()
+        .oneshot(post_json_with_bearer(
+            &format!("/api/books/{uuid}/cross-format-follow"),
+            &token,
+            &serde_json::json!({"enabled": true}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    db::cross_format::upsert_link(&pool, user.id, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    let res = app
+        .oneshot(post_json_with_bearer(
+            &format!("/api/books/{uuid}/cross-format-follow"),
+            &token,
+            &serde_json::json!({"enabled": true}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert!(
+        db::cross_format::get_link(&pool, user.id, &uuid)
+            .await
+            .unwrap()
+            .unwrap()
+            .follow
+    );
+}

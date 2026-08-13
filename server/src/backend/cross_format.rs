@@ -23,6 +23,20 @@ pub(super) struct ResumeQuery {
     target: ProgressFormat,
 }
 
+/// One error mapping for every handler in this module: 404 for an unknown
+/// book, 409 for declaration refusals the client can act on, 500 for the
+/// rest.
+fn error_response(op: &'static str, e: db::cross_format::CrossFormatError) -> Response {
+    use db::cross_format::CrossFormatError as E;
+    match e {
+        E::BookNotFound => (axum::http::StatusCode::NOT_FOUND, "book not found").into_response(),
+        e @ (E::AudioSetMismatch | E::LinkRequired | E::CounterpartMissing) => {
+            (axum::http::StatusCode::CONFLICT, e.to_string()).into_response()
+        }
+        E::Sqlx(e) => internal(op, e),
+    }
+}
+
 /// `GET /api/books/{uuid}/cross-format-resume?target=` — the mapped resume
 /// candidate plus the state that explains a missing one (`not_linked`,
 /// `link_stale`, `nothing_newer`). 404 only for a book the server has
@@ -35,13 +49,7 @@ pub(super) async fn get_cross_format_resume(
 ) -> Response {
     match db::cross_format::resume_candidate(&state.pool, user.id, &uuid, q.target).await {
         Ok(resume) => Json(resume).into_response(),
-        Err(db::cross_format::CrossFormatError::BookNotFound) => {
-            (axum::http::StatusCode::NOT_FOUND, "book not found").into_response()
-        }
-        Err(e @ db::cross_format::CrossFormatError::AudioSetMismatch) => {
-            (axum::http::StatusCode::CONFLICT, e.to_string()).into_response()
-        }
-        Err(db::cross_format::CrossFormatError::Sqlx(e)) => internal("cross_format_resume", e),
+        Err(e) => error_response("cross_format_resume", e),
     }
 }
 
@@ -54,13 +62,7 @@ pub(super) async fn get_alignment(
 ) -> Response {
     match db::cross_format::alignment_view(&state.pool, user.id, &uuid).await {
         Ok(view) => Json(view).into_response(),
-        Err(db::cross_format::CrossFormatError::BookNotFound) => {
-            (axum::http::StatusCode::NOT_FOUND, "book not found").into_response()
-        }
-        Err(e @ db::cross_format::CrossFormatError::AudioSetMismatch) => {
-            (axum::http::StatusCode::CONFLICT, e.to_string()).into_response()
-        }
-        Err(db::cross_format::CrossFormatError::Sqlx(e)) => internal("get_alignment", e),
+        Err(e) => error_response("get_alignment", e),
     }
 }
 
@@ -88,15 +90,7 @@ pub(super) async fn post_cross_format_link(
         }
         match db::cross_format::set_audio_order(&state.pool, &update.book_uuid, order).await {
             Ok(()) => {}
-            Err(db::cross_format::CrossFormatError::BookNotFound) => {
-                return (axum::http::StatusCode::NOT_FOUND, "book not found").into_response();
-            }
-            Err(e @ db::cross_format::CrossFormatError::AudioSetMismatch) => {
-                return (axum::http::StatusCode::CONFLICT, e.to_string()).into_response();
-            }
-            Err(db::cross_format::CrossFormatError::Sqlx(e)) => {
-                return internal("set_audio_order", e);
-            }
+            Err(e) => return error_response("set_audio_order", e),
         }
     }
     match db::cross_format::upsert_link(
@@ -109,13 +103,7 @@ pub(super) async fn post_cross_format_link(
     .await
     {
         Ok(_) => axum::http::StatusCode::NO_CONTENT.into_response(),
-        Err(db::cross_format::CrossFormatError::BookNotFound) => {
-            (axum::http::StatusCode::NOT_FOUND, "book not found").into_response()
-        }
-        Err(e @ db::cross_format::CrossFormatError::AudioSetMismatch) => {
-            (axum::http::StatusCode::CONFLICT, e.to_string()).into_response()
-        }
-        Err(db::cross_format::CrossFormatError::Sqlx(e)) => internal("confirm_cross_format", e),
+        Err(e) => error_response("confirm_cross_format", e),
     }
 }
 
@@ -129,12 +117,47 @@ pub(super) async fn delete_cross_format_link(
 ) -> Response {
     match db::cross_format::delete_link(&state.pool, user.id, &uuid).await {
         Ok(_) => axum::http::StatusCode::NO_CONTENT.into_response(),
-        Err(db::cross_format::CrossFormatError::BookNotFound) => {
-            (axum::http::StatusCode::NOT_FOUND, "book not found").into_response()
-        }
-        Err(e @ db::cross_format::CrossFormatError::AudioSetMismatch) => {
-            (axum::http::StatusCode::CONFLICT, e.to_string()).into_response()
-        }
-        Err(db::cross_format::CrossFormatError::Sqlx(e)) => internal("unlink_cross_format", e),
+        Err(e) => error_response("unlink_cross_format", e),
+    }
+}
+
+/// `POST /api/books/{uuid}/sync-point` — a "synced here" declaration: the
+/// path uuid is authoritative; the body names the declaring surface's own
+/// position and the counterpart comes from its stored row. Turns follow
+/// mode on. 409 when the alignment must be confirmed first (multi-file,
+/// no link), when the audio set went stale, or when the counterpart has
+/// no position to pair with.
+pub(super) async fn post_sync_point(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Path(uuid): Path<String>,
+    Json(mut decl): Json<omnibus_shared::cross_format::DeclareSyncPoint>,
+) -> Response {
+    decl.book_uuid = uuid;
+    if let Err(msg) = decl.validate() {
+        return (axum::http::StatusCode::UNPROCESSABLE_ENTITY, msg).into_response();
+    }
+    match db::cross_format::declare_sync_point(&state.pool, user.id, &decl).await {
+        Ok(_) => axum::http::StatusCode::NO_CONTENT.into_response(),
+        Err(e) => error_response("declare_sync_point", e),
+    }
+}
+
+/// `POST /api/books/{uuid}/cross-format-follow` — flip follow mode on an
+/// existing link. 409 when no link exists to flip.
+pub(super) async fn post_cross_format_follow(
+    user: AuthUser,
+    State(state): State<AppState>,
+    Path(uuid): Path<String>,
+    Json(body): Json<omnibus_shared::cross_format::SetFollowMode>,
+) -> Response {
+    match db::cross_format::set_follow(&state.pool, user.id, &uuid, body.enabled).await {
+        Ok(true) => axum::http::StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (
+            axum::http::StatusCode::CONFLICT,
+            "confirm the alignment first",
+        )
+            .into_response(),
+        Err(e) => error_response("set_follow", e),
     }
 }

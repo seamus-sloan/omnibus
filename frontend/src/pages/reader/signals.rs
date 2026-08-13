@@ -41,6 +41,12 @@ pub(crate) struct RelocateData {
     pub(crate) page: u32,
     pub(crate) total_pages: u32,
     pub(crate) pct: u32,
+    /// Full-precision twin of `pct` (0.0..=1.0) — the "synced here"
+    /// declaration records this, not the rounded display value. Read only
+    /// by the web pill; native iOS owns the gesture on mobile.
+    #[serde(default)]
+    #[cfg_attr(feature = "mobile", allow(dead_code))]
+    pub(crate) frac: f64,
     // True when the rendered range reaches the book's end (epub.js
     // `location.atEnd`) — the auto `Finished` trigger. `pct` can't stand in:
     // it tracks the start of the visible range, so it tops out below 100.
@@ -170,6 +176,7 @@ mod tests {
             page: 42,
             total_pages: 300,
             pct: 14,
+            frac: 0.14,
             at_end: false,
             chapter: 3,
             total_chapters: 24,
@@ -269,6 +276,7 @@ mod tests {
             page: 0,
             total_pages: 0,
             pct: 7,
+            frac: 0.07,
             at_end: false,
             chapter: 0,
             total_chapters: 0,

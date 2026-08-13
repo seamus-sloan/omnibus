@@ -177,6 +177,14 @@ fn progress_routes() -> Router<AppState> {
             post(cross_format::post_cross_format_link)
                 .delete(cross_format::delete_cross_format_link),
         )
+        .route(
+            "/api/books/{uuid}/sync-point",
+            post(cross_format::post_sync_point),
+        )
+        .route(
+            "/api/books/{uuid}/cross-format-follow",
+            post(cross_format::post_cross_format_follow),
+        )
 }
 
 /// F2.4b highlight annotations — mobile-facing REST. Web hits the analogous

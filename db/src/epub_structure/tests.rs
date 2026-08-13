@@ -280,3 +280,26 @@ fn percent_at_saturates_on_absurd_offsets_and_ignores_slice_order() {
     // A u64 offset beyond i64 saturates and clamps instead of overflowing.
     assert_eq!(percent_at(&stats, 1, u64::MAX), Some(100));
 }
+
+#[test]
+fn position_at_fraction_inverts_fraction_at() {
+    let stats = vec![
+        SpineStatRow {
+            spine_index: 0,
+            href: "c1.xhtml".into(),
+            visible_chars: 40,
+            chars_before: 0,
+        },
+        SpineStatRow {
+            spine_index: 1,
+            href: "c2.xhtml".into(),
+            visible_chars: 60,
+            chars_before: 40,
+        },
+    ];
+    assert_eq!(position_at_fraction(&stats, 0.0), Some((0, 0)));
+    assert_eq!(position_at_fraction(&stats, 0.73), Some((1, 33)));
+    // 1.0 clamps to the last visible char, never past the end.
+    assert_eq!(position_at_fraction(&stats, 1.0), Some((1, 59)));
+    assert_eq!(position_at_fraction(&[], 0.5), None);
+}

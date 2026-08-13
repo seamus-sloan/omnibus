@@ -48,6 +48,7 @@ struct ReaderView: View {
     /// Live position while the Contents row is being scrubbed, driving the
     /// chapter/page readout above it.
     @State private var scrubFraction: Double?
+    @State private var syncHereLabel = "Synced here"
     /// Flips the ribbon solid for a beat after saving a bookmark — the only
     /// confirmation that an instant, invisible action actually happened.
     @State private var justBookmarked = false
@@ -607,6 +608,38 @@ struct ReaderView: View {
             showSettings = true
         }
         .transition(.opacity.combined(with: .move(edge: .bottom)))
+
+        // "Synced here": declare the current spot as a cross-format sync
+        // point (rule 08 — direct call, disabled offline). Dual-format
+        // books only; others have nothing to pair with.
+        if book.hasAudiobook, book.hasEbook {
+            ReaderMenuRow(
+                title: syncHereLabel,
+                icon: "arrow.triangle.2.circlepath",
+                ink: barInk
+            ) {
+                guard Connectivity.shared.isOnline else { return }
+                let frac = controller.location?.fraction ?? 0
+                Task {
+                    syncHereLabel = "Syncing…"
+                    let decl = DeclareSyncPoint(
+                        bookUUID: book.uuid,
+                        format: .epub,
+                        ebookFraction: min(max(frac, 0.0), 1.0),
+                        audioBookFileID: nil,
+                        audioSeconds: nil
+                    )
+                    do {
+                        try await UserDataService.declareSyncPoint(decl)
+                        syncHereLabel = "Synced ✓"
+                    } catch {
+                        syncHereLabel = "Sync failed"
+                    }
+                }
+            }
+            .opacity(Connectivity.shared.isOnline ? 1 : 0.4)
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
+        }
     }
 
     private var quickActions: some View {
@@ -755,6 +788,14 @@ struct ReaderView: View {
                     let candidate = resume.candidate,
                     candidate.percent != nil
                 else { return }
+                if resume.follow == true {
+                    // Follow mode: resolve-at-open — move the text to the
+                    // mapped spot silently, full precision, no banner.
+                    let frac = candidate.fraction
+                        ?? Double(candidate.percent ?? 0) / 100.0
+                    controller.seek(toFraction: min(max(frac, 0.0), 1.0))
+                    return
+                }
                 let seen = await SyncPromptStore.dismissedClock(uuid: book.uuid, target: .epub)
                 guard SyncPromptStore.shouldOffer(
                     sourceClock: candidate.sourceClientUpdatedAt,

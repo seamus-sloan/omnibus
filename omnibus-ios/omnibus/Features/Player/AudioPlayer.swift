@@ -382,12 +382,38 @@ final class AudioPlayer {
                       candidate: candidate.bookFileID
                   )
             else { return }
+            if resume.follow == true, let seconds = candidate.audioPositionSeconds {
+                // Follow mode: resolve-at-open — apply the mapped position
+                // silently, no banner, no dismissal bookkeeping.
+                await seek(to: seconds)
+                return
+            }
             let seen = await SyncPromptStore.dismissedClock(uuid: uuid, target: .audio)
             guard SyncPromptStore.shouldOffer(
                 sourceClock: candidate.sourceClientUpdatedAt,
                 dismissed: seen
             ) else { return }
             withAnimation(Motion.settle) { crossFormatOffer = candidate }
+        }
+    }
+
+    /// "Synced here": declare the current listening position as a sync
+    /// point (rule 08 — direct call, never queued; the control is disabled
+    /// offline). Returns whether the declaration was accepted.
+    func declareSyncPoint() async -> Bool {
+        guard let uuid = book?.uuid else { return false }
+        let decl = DeclareSyncPoint(
+            bookUUID: uuid,
+            format: .audio,
+            ebookFraction: nil,
+            audioBookFileID: fileID ?? book?.audioFiles.first?.id,
+            audioSeconds: position
+        )
+        do {
+            try await UserDataService.declareSyncPoint(decl)
+            return true
+        } catch {
+            return false
         }
     }
 

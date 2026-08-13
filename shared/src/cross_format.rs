@@ -27,6 +27,9 @@ pub enum MappingConfidence {
     Linear,
     /// Piecewise interpolation through matched chapter anchors.
     ChapterAnchored,
+    /// At least one user-declared sync point backs the interpolation —
+    /// ground truth that outranks chapter matching.
+    UserAnchored,
 }
 
 /// Why (or whether) the endpoint has a candidate to offer.
@@ -55,6 +58,10 @@ pub struct CrossFormatResume {
     pub state: CrossFormatResumeState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub candidate: Option<CrossFormatCandidate>,
+    /// Follow mode on the link: a `Candidate` should be applied silently
+    /// (resolve-at-read) instead of offered as a prompt.
+    #[serde(default)]
+    pub follow: bool,
 }
 
 impl CrossFormatResume {
@@ -63,6 +70,7 @@ impl CrossFormatResume {
         Self {
             state,
             candidate: None,
+            follow: false,
         }
     }
 }
@@ -149,6 +157,13 @@ pub struct AlignmentLink {
     pub primary_book_file_id: Option<i64>,
     pub stale: bool,
     pub confirmed_at: i64,
+    /// Follow mode: surfaces resolve the freshest position across both
+    /// formats instead of offering prompts.
+    #[serde(default)]
+    pub follow: bool,
+    /// How many "synced here" declarations back the mapping.
+    #[serde(default)]
+    pub user_anchors: i64,
 }
 
 /// Text-side lane: total visible chars plus chapter tick positions.
@@ -206,6 +221,49 @@ pub struct ConfirmCrossFormatLink {
     pub primary_book_file_id: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_order: Option<Vec<i64>>,
+}
+
+/// One "synced here" declaration: the declaring surface names its own
+/// position; the counterpart half of the anchor pair comes from the
+/// server's stored row for the other format at declaration time.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeclareSyncPoint {
+    pub book_uuid: String,
+    /// The surface making the declaration.
+    pub format: ProgressFormat,
+    /// Reading surface: whole-book fraction (`0.0..=1.0`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ebook_fraction: Option<f64>,
+    /// Listening surface: the playing file and seconds within it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_book_file_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_seconds: Option<f64>,
+}
+
+impl DeclareSyncPoint {
+    /// Boundary validation: the declaring surface must name its own
+    /// position in its own coordinates.
+    pub fn validate(&self) -> Result<(), String> {
+        match self.format {
+            ProgressFormat::Epub => match self.ebook_fraction {
+                Some(f) if (0.0..=1.0).contains(&f) => Ok(()),
+                Some(_) => Err("ebook_fraction must be within 0..=1".into()),
+                None => Err("a reading declaration needs ebook_fraction".into()),
+            },
+            ProgressFormat::Audio => match self.audio_seconds {
+                Some(s) if s >= 0.0 => Ok(()),
+                Some(_) => Err("audio_seconds must be non-negative".into()),
+                None => Err("a listening declaration needs audio_seconds".into()),
+            },
+        }
+    }
+}
+
+/// Body of `POST /api/books/{uuid}/cross-format-follow`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct SetFollowMode {
+    pub enabled: bool,
 }
 
 impl ConfirmCrossFormatLink {

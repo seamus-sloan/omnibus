@@ -14,6 +14,7 @@ import {
 } from "../fixtures/dual_format";
 import { FIXTURE_BOOKS } from "../fixtures/epubs";
 import { expect, test } from "../fixtures/test";
+import { expectMutation } from "../utils/api";
 import { gotoReady } from "../utils/nav";
 import {
   audiobookFixturesDir,
@@ -210,4 +211,34 @@ test("the hero shows one synced card with the counterpart affordance", async ({
   await expect(cards).toHaveCount(1);
   await expect(cards).toContainText("synced");
   await expect(page.getByTestId(`hero-crossformat-${uuid}`)).toBeVisible();
+});
+
+test("declaring a sync point turns on follow and the reader auto-applies", async ({
+  page,
+  request,
+}) => {
+  // Fresh positions: reading behind, listening ahead — then declare from
+  // the player so follow mode engages.
+  await writeEpubPercent(request, 85);
+  await writeAudioSeconds(request, 1);
+
+  await gotoReady(page, `/listen/${uuid}`);
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: `/api/rpc/cross-format/sync-point`,
+      expectedStatus: 200,
+    },
+    async () => page.getByTestId("listen-sync-here").click(),
+  );
+  await expect(page.getByTestId("listen-sync-here")).toContainText("Synced");
+
+  // Listening advances past the declared pair; the reader then opens at
+  // the mapped spot silently — no banner, and the relocation writes the
+  // followed position into the epub row.
+  await writeAudioSeconds(request, 2);
+  await gotoReady(page, `/read/${uuid}`);
+  await page.waitForLoadState("networkidle");
+  await expect(page.getByTestId("sync-banner")).toHaveCount(0);
 });
