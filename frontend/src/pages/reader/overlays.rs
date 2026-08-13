@@ -16,7 +16,7 @@ use super::reader_bookmarks::ReaderBookmarksDrawer;
 use super::search_panel::SearchPanel;
 use super::selection::{SelectionActions, SelectionAnchor, SelectionData, SelectionPopover};
 use super::toc_drawer::TocDrawer;
-use super::ReaderPanelSignals;
+use super::{ReaderPanelSignals, ReaderStatus};
 
 /// Selection popover: highlight / note / quote / copy / share actions for the
 /// current text selection. Renders nothing when there is no selection.
@@ -126,11 +126,16 @@ pub(super) struct OverlayMeta {
 }
 
 /// Contents (table-of-contents) drawer, shown while `show_toc` is set.
+///
+/// `on_navigate` flips `status` to [`ReaderStatus::Loading`] before asking the
+/// glue to display the target, so the header blanks the outgoing chapter
+/// until the relocate that confirms the jump landed flips it back to `Ready`.
 fn render_toc_overlay(
     show_toc: Signal<bool>,
     toc: Signal<Vec<super::toc_drawer::TocEntry>>,
     chapter_title: String,
     contents_progress: String,
+    status: Signal<ReaderStatus>,
 ) -> Element {
     if !show_toc() {
         return rsx! {};
@@ -141,6 +146,8 @@ fn render_toc_overlay(
             current_title: chapter_title,
             progress_label: contents_progress,
             on_navigate: move |href: String| {
+                let mut status = status;
+                status.set(ReaderStatus::Loading);
                 #[cfg(any(feature = "web", feature = "mobile"))]
                 super::reader_call_json("display", &href);
                 let _ = &href;
@@ -385,11 +392,12 @@ pub(super) fn ReaderOverlays(meta: OverlayMeta, panels: ReaderPanelSignals) -> E
         search_results,
         show_bookmarks,
         show_annotations,
+        status,
         ..
     } = panels;
 
     rsx! {
-        {render_toc_overlay(show_toc, toc, chapter_title.clone(), contents_progress)}
+        {render_toc_overlay(show_toc, toc, chapter_title.clone(), contents_progress, status)}
         {render_highlights_overlay(show_highlights, highlights, quote_target, note_target)}
         {render_search_overlay(show_search, search_results)}
         {render_bookmarks_overlay(show_bookmarks, uuid.clone(), current_cfi.clone(), chapter_title.clone())}
