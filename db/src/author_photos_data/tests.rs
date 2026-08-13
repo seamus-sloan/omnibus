@@ -399,9 +399,7 @@ async fn delete_author_photos_bulk_propagates_db_error_when_pool_is_closed() {
     assert!(matches!(err, AuthorPhotosDataError::Db(_)));
 }
 
-// Regression test for the BEGIN IMMEDIATE stale-snapshot 517 fix (#1862),
-// mirroring `upsert_progress_succeeds_for_many_concurrent_writers_on_one_pool`
-// in `db/src/progress/tests.rs`.
+// Regression test for the BEGIN IMMEDIATE stale-snapshot 517 fix (#1862), mirroring `upsert_progress_succeeds_for_many_concurrent_writers_on_one_pool` in `db/src/progress/tests.rs`.
 const CONCURRENT_ROUNDS: usize = 5;
 const CONCURRENT_WRITERS_PER_ROUND: usize = 5;
 
@@ -410,10 +408,7 @@ async fn delete_author_succeeds_for_many_concurrent_writers_on_one_pool() {
     let _covers = CoversTempDir::new("delete_author_concurrent");
     let pool = init_db("sqlite::memory:").await.unwrap();
 
-    // One junk author per (round, writer) slot, each also linked to a
-    // shared "Keep Me" author, so every round's concurrent deletes race for
-    // the same `books_authors_link`, `authors`, and `ignored_authors` table
-    // pages instead of each touching disjoint rows.
+    // One junk author per (round, writer) slot, all linked to a shared "Keep Me" author, so concurrent deletes race for the same rows instead of disjoint ones.
     let mut books = Vec::new();
     let mut names_by_round: Vec<Vec<String>> = Vec::new();
     for round in 0..CONCURRENT_ROUNDS {
