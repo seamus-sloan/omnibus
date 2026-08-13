@@ -58,7 +58,9 @@ struct PlayerView: View {
             } else if let cross = player.crossFormatOffer,
                       let seconds = cross.audioPositionSeconds {
                 SyncOfferBanner(
-                    title: "Read further in the ebook",
+                    title: cross.sourceAhead == false
+                        ? "Re-reading earlier in the ebook"
+                        : "Read further in the ebook",
                     detail: "Your reading maps to about \(Format.duration(seconds)).",
                     onGo: { Task { await player.acceptCrossFormatOffer() } },
                     onDismiss: { Task { await player.dismissCrossFormatOffer() } }

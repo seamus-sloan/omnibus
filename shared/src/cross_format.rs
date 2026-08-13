@@ -42,6 +42,11 @@ pub enum CrossFormatResumeState {
     NothingNewer,
     /// A mapped position is available in `candidate`.
     Candidate,
+    /// The two formats already sit within the equivalence tolerance of
+    /// each other. `candidate` still carries the mapped position (the
+    /// hero's format-switch affordance wants it), but prompt surfaces
+    /// must not offer a jump — it would move the user nowhere.
+    Aligned,
 }
 
 /// Response shape of the cross-format resume read.
@@ -88,6 +93,12 @@ pub struct CrossFormatCandidate {
     /// precision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fraction: Option<f64>,
+    /// Whether the mapped source position sits ahead of the target's own
+    /// current position — `Some(false)` marks a backward offer (the source
+    /// regressed), so prompt copy must not claim "further". `None` when
+    /// the target has no comparable position (treat as ahead).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_ahead: Option<bool>,
 }
 
 /// Everything the alignment modal renders for one book, in one read:

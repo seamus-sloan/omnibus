@@ -291,11 +291,12 @@ async fn resume_candidate_walks_the_state_machine() {
     assert_eq!(c.total_duration_seconds, Some(1_000.0));
     assert_eq!(c.source_client_updated_at, 2_000);
 
-    // The other direction: listening moved past reading → epub candidate.
+    // The other direction: listening moved well past reading (global 850s
+    // = 85% vs the reader's 65%) → epub candidate, marked ahead.
     progress::upsert_progress(
         &pool,
         user,
-        &audio_update(&uuid, 50.0, Some(audio[1]), 3_000),
+        &audio_update(&uuid, 250.0, Some(audio[1]), 3_000),
     )
     .await
     .unwrap();
@@ -304,9 +305,10 @@ async fn resume_candidate_walks_the_state_machine() {
         .unwrap();
     assert_eq!(r.state, CrossFormatResumeState::Candidate);
     let c = r.candidate.unwrap();
-    assert_eq!(c.percent, Some(65));
-    // The wire also carries the un-floored fraction (global 650s of 1000s).
-    assert!((c.fraction.unwrap() - 0.65).abs() < 1e-9);
+    assert_eq!(c.percent, Some(85));
+    // The wire also carries the un-floored fraction (global 850s of 1000s).
+    assert!((c.fraction.unwrap() - 0.85).abs() < 1e-9);
+    assert_eq!(c.source_ahead, Some(true));
 
     // Target newer than source → nothing newer.
     let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Audio)
@@ -968,4 +970,140 @@ async fn resume_candidate_audio_target_derives_the_fraction_from_the_stored_cfi(
         (seconds - frac * 1000.0).abs() < 0.01,
         "mapped seconds {seconds} must carry the CFI fraction {frac} at full precision"
     );
+}
+
+#[tokio::test]
+async fn resume_candidate_aligns_when_the_target_already_sits_at_the_mapped_spot() {
+    // The live We Are Legion case: reader at 19%, listener at the mapped
+    // equivalent, audio clock newer — the old clock-only gate offered
+    // "jump to ≈19%" while at 19%.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, audio) = seed_dual_book(&pool, &[1_000.0]).await;
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 19, 1_000))
+        .await
+        .unwrap();
+    progress::upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 190.0, Some(audio[0]), 2_000),
+    )
+    .await
+    .unwrap();
+
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Epub)
+        .await
+        .unwrap();
+    assert_eq!(r.state, CrossFormatResumeState::Aligned);
+    // The mapped position still rides along for navigation affordances.
+    assert_eq!(r.candidate.as_ref().unwrap().percent, Some(19));
+
+    // Well outside the tolerance: a genuine advance still offers, ahead.
+    progress::upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 400.0, Some(audio[0]), 3_000),
+    )
+    .await
+    .unwrap();
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Epub)
+        .await
+        .unwrap();
+    assert_eq!(r.state, CrossFormatResumeState::Candidate);
+    assert_eq!(r.candidate.unwrap().source_ahead, Some(true));
+}
+
+#[tokio::test]
+async fn resume_candidate_marks_backward_offers_instead_of_claiming_further() {
+    // A newer-clocked source that sits *behind* the target (deliberate
+    // re-listening) survives the gate but is flagged, so prompt copy can
+    // say "back" instead of the false "past this page".
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, audio) = seed_dual_book(&pool, &[1_000.0]).await;
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 60, 1_000))
+        .await
+        .unwrap();
+    progress::upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 100.0, Some(audio[0]), 2_000),
+    )
+    .await
+    .unwrap();
+
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Epub)
+        .await
+        .unwrap();
+    assert_eq!(r.state, CrossFormatResumeState::Candidate);
+    assert_eq!(r.candidate.unwrap().source_ahead, Some(false));
+}
+
+#[tokio::test]
+async fn resume_candidate_audio_target_aligns_and_stands_aside_without_a_placeable_row() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, audio) = seed_dual_book(&pool, &[600.0, 300.0, 100.0]).await;
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    // Reader at 65% (newer); listener already at the mapped global 650s.
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 65, 2_000))
+        .await
+        .unwrap();
+    progress::upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 50.0, Some(audio[1]), 1_000),
+    )
+    .await
+    .unwrap();
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Audio)
+        .await
+        .unwrap();
+    assert_eq!(r.state, CrossFormatResumeState::Aligned);
+    assert_eq!(r.candidate.as_ref().unwrap().book_file_id, Some(audio[1]));
+
+    // A file-less audio row on a multi-file timeline can't be placed, so
+    // the gate stands aside rather than guessing: the offer survives.
+    progress::upsert_progress(&pool, user, &audio_update(&uuid, 50.0, None, 1_500))
+        .await
+        .unwrap();
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 65, 2_500))
+        .await
+        .unwrap();
+    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Audio)
+        .await
+        .unwrap();
+    assert_eq!(r.state, CrossFormatResumeState::Candidate);
+    assert_eq!(r.candidate.unwrap().source_ahead, None);
+}
+
+#[test]
+fn equivalence_fraction_widens_for_short_books_and_caps() {
+    // No stats → the 0.5% base.
+    assert!((equivalence_fraction(None) - 0.005).abs() < 1e-12);
+    // A long book keeps the base (two locations are a sliver).
+    assert!((equivalence_fraction(Some(1_000_000)) - 0.005).abs() < 1e-12);
+    // A short book widens to two reader locations…
+    let short = equivalence_fraction(Some(200_000));
+    assert!((short - 2.0 * 1024.0 / 200_000.0).abs() < 1e-12);
+    // …and a tiny one caps at 5% so offers can still exist at all.
+    assert!((equivalence_fraction(Some(10_000)) - 0.05).abs() < 1e-12);
+}
+
+#[test]
+fn audio_equivalence_floor_scales_down_for_short_books() {
+    // Real audiobook: the full minute of seek noise.
+    assert!((audio_equivalence_floor(36_000.0) - 60.0).abs() < 1e-9);
+    // Short book: 2% of the timeline, so a fixture-length file still
+    // distinguishes "same spot" from a genuine offer.
+    assert!((audio_equivalence_floor(60.0) - 1.2).abs() < 1e-9);
+    assert_eq!(audio_equivalence_floor(0.0), 0.0);
 }

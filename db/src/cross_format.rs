@@ -468,62 +468,155 @@ pub async fn resume_candidate(
     } else {
         MappingConfidence::Linear
     };
-    let candidate = match target {
+    // The gate only engages against an existing target position — skip the
+    // stats query entirely on first-open targets.
+    let tol_frac = match &target_row {
+        Some(_) => equivalence_fraction(epub_total_chars(pool, book_id).await),
+        None => equivalence_fraction(None),
+    };
+    let (candidate, aligned) = match target {
         ProgressFormat::Audio => match epub_source_fraction(pool, book_id, &source).await {
-            None => None,
+            None => (None, false),
             Some(src_frac) => {
                 let frac = match &anchor_map {
                     Some(map) => anchors::interpolate(&map.anchors, src_frac, true),
                     None => src_frac,
                 };
-                map_fraction_to_audio(&timeline, frac).map(|(file_id, seconds)| {
-                    CrossFormatCandidate {
+                match map_fraction_to_audio(&timeline, frac) {
+                    None => (None, false),
+                    Some((file_id, seconds)) => {
+                        let mapped_global = timeline
+                            .files
+                            .iter()
+                            .find(|f| f.book_file_id == file_id)
+                            .map(|f| f.start_seconds + seconds)
+                            .unwrap_or(frac * timeline.total_seconds);
+                        // The target's own spot on the same timeline. A
+                        // file-less multi-file row can't be placed, so the
+                        // gate stands aside and the offer survives.
+                        let current_global = target_row.as_ref().and_then(|t| {
+                            let secs = t.audio_position_seconds?;
+                            let file = t.book_file_id.or_else(|| {
+                                (timeline.files.len() == 1).then(|| timeline.files[0].book_file_id)
+                            })?;
+                            audio_fraction(&timeline, file, secs)
+                                .map(|f| f * timeline.total_seconds)
+                        });
+                        let tol = (tol_frac * timeline.total_seconds)
+                            .max(audio_equivalence_floor(timeline.total_seconds));
+                        let aligned =
+                            current_global.is_some_and(|cur| (mapped_global - cur).abs() <= tol);
+                        let candidate = CrossFormatCandidate {
+                            target,
+                            source_format,
+                            source_client_updated_at: source.client_updated_at,
+                            confidence,
+                            book_file_id: Some(file_id),
+                            audio_position_seconds: Some(seconds),
+                            total_duration_seconds: Some(timeline.total_seconds),
+                            percent: None,
+                            fraction: None,
+                            source_ahead: current_global.map(|cur| mapped_global > cur),
+                        };
+                        (Some(candidate), aligned)
+                    }
+                }
+            }
+        },
+        ProgressFormat::Epub => {
+            // The row's own file when recorded. A file-less row is only
+            // unambiguous on a single-file timeline — guessing the first
+            // of several would map another file's offset, so refuse.
+            let mapped = source.audio_position_seconds.and_then(|seconds| {
+                let file_id = source.book_file_id.or_else(|| {
+                    (timeline.files.len() == 1).then(|| timeline.files[0].book_file_id)
+                })?;
+                audio_fraction(&timeline, file_id, seconds)
+            });
+            match mapped {
+                None => (None, false),
+                Some(raw_frac) => {
+                    let frac = match &anchor_map {
+                        Some(map) => anchors::interpolate(&map.anchors, raw_frac, false),
+                        None => raw_frac,
+                    };
+                    let pct = ((100.0 * frac).floor() as i64).clamp(0, 100);
+                    let current = match &target_row {
+                        Some(t) => epub_source_fraction(pool, book_id, t).await,
+                        None => None,
+                    };
+                    let aligned = current.is_some_and(|cur| (frac - cur).abs() <= tol_frac);
+                    let candidate = CrossFormatCandidate {
                         target,
                         source_format,
                         source_client_updated_at: source.client_updated_at,
                         confidence,
-                        book_file_id: Some(file_id),
-                        audio_position_seconds: Some(seconds),
-                        total_duration_seconds: Some(timeline.total_seconds),
-                        percent: None,
-                        fraction: None,
-                    }
-                })
+                        book_file_id: None,
+                        audio_position_seconds: None,
+                        total_duration_seconds: None,
+                        percent: Some(pct),
+                        fraction: Some(frac.clamp(0.0, 1.0)),
+                        source_ahead: current.map(|cur| frac > cur),
+                    };
+                    (Some(candidate), aligned)
+                }
             }
-        },
-        ProgressFormat::Epub => source.audio_position_seconds.and_then(|seconds| {
-            // The row's own file when recorded. A file-less row is only
-            // unambiguous on a single-file timeline — guessing the first
-            // of several would map another file's offset, so refuse.
-            let file_id = source
-                .book_file_id
-                .or_else(|| (timeline.files.len() == 1).then(|| timeline.files[0].book_file_id))?;
-            let raw_frac = audio_fraction(&timeline, file_id, seconds)?;
-            let frac = match &anchor_map {
-                Some(map) => anchors::interpolate(&map.anchors, raw_frac, false),
-                None => raw_frac,
-            };
-            let pct = ((100.0 * frac).floor() as i64).clamp(0, 100);
-            Some(CrossFormatCandidate {
-                target,
-                source_format,
-                source_client_updated_at: source.client_updated_at,
-                confidence,
-                book_file_id: None,
-                audio_position_seconds: None,
-                total_duration_seconds: None,
-                percent: Some(pct),
-                fraction: Some(frac.clamp(0.0, 1.0)),
-            })
-        }),
+        }
     };
     Ok(match candidate {
+        // Same spot within tolerance: the mapped position still rides
+        // along (the hero's format-switch CTA wants it) but the state
+        // tells prompt surfaces to stay quiet — a jump would move the
+        // user nowhere, or worse, one quantization step backward.
+        Some(candidate) if aligned => CrossFormatResume {
+            state: CrossFormatResumeState::Aligned,
+            candidate: Some(candidate),
+        },
         Some(candidate) => CrossFormatResume {
             state: CrossFormatResumeState::Candidate,
             candidate: Some(candidate),
         },
         None => CrossFormatResume::empty(CrossFormatResumeState::NothingNewer),
     })
+}
+
+/// Positions closer than this fraction of the whole book count as "the
+/// same spot" — an offer inside it is quantization noise, not signal.
+/// Base 0.5%, widened to two reader locations (~1024 visible chars each,
+/// the epub.js jump granularity) on short books where one location is a
+/// large slice, and capped at 5% so a tiny book can't suppress every
+/// offer outright.
+fn equivalence_fraction(total_chars: Option<i64>) -> f64 {
+    const BASE: f64 = 0.005;
+    const READER_LOCATION_CHARS: f64 = 1024.0;
+    const CAP: f64 = 0.05;
+    let location_slack = total_chars
+        .filter(|c| *c > 0)
+        .map(|c| 2.0 * READER_LOCATION_CHARS / c as f64)
+        .unwrap_or(0.0);
+    BASE.max(location_slack).min(CAP)
+}
+
+/// Audio-side floor: sub-minute deltas are seek/heartbeat noise on a real
+/// audiobook — but the floor never exceeds 2% of the timeline, so a short
+/// book keeps meaningful offers instead of counting everything as aligned.
+fn audio_equivalence_floor(total_seconds: f64) -> f64 {
+    60.0f64.min(0.02 * total_seconds.max(0.0))
+}
+
+/// Total visible chars of the served EPUB's extracted spine stats;
+/// `None` until the structure backfill has reached the book.
+async fn epub_total_chars(pool: &SqlitePool, book_id: i64) -> Option<i64> {
+    let (file_id, _) = crate::book_file_with_id(pool, book_id, "EPUB")
+        .await
+        .ok()??;
+    let stats = crate::epub_structure::get_spine_stats(pool, file_id)
+        .await
+        .ok()?;
+    let total = stats
+        .iter()
+        .fold(0i64, |a, s| a.saturating_add(s.visible_chars.max(0)));
+    (total > 0).then_some(total)
 }
 
 /// Assemble everything the alignment modal renders in one read: link +

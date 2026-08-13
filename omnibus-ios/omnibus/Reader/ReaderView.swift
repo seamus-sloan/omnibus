@@ -137,8 +137,12 @@ struct ReaderView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             } else if let cross = crossOffer, let pct = cross.percent {
                 SyncOfferBanner(
-                    title: "Listened further in the audiobook",
-                    detail: "Your listening maps to about \(pct)% through.",
+                    title: cross.sourceAhead == false
+                        ? "Audiobook is earlier in the book"
+                        : "Listened further in the audiobook",
+                    detail: cross.sourceAhead == false
+                        ? "Your listening maps to about \(pct)% — before this page."
+                        : "Your listening maps to about \(pct)% through.",
                     onGo: {
                         // Full-precision jump; the integer pct is display copy.
                         controller.seek(toFraction: cross.fraction ?? Double(pct) / 100.0)
