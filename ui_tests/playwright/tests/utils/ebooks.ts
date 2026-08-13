@@ -129,7 +129,8 @@ function expectedPublishedText(raw: string): string {
   // Explicit range check, not JS truthiness — `0` is a valid `Number` but an
   // invalid day, and falsy-zero would silently disagree with the Rust side's
   // `(1..=31).contains(d)` filter in `parse_date_prefix`.
-  const day = dayNum !== undefined && dayNum >= 1 && dayNum <= 31 ? dayNum : undefined;
+  const day =
+    dayNum !== undefined && dayNum >= 1 && dayNum <= 31 ? dayNum : undefined;
   const monthName =
     month && month >= 1 && month <= 12 ? MONTH_NAMES[month - 1] : undefined;
   if (monthName && day) return `${monthName} ${day}, ${year}`;
