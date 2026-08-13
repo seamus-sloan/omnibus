@@ -528,6 +528,78 @@ async fn api_get_audiobook_manifest_returns_direct_for_mp3_folder() {
 }
 
 #[tokio::test]
+async fn api_get_audiobook_manifest_reports_resolved_file_and_audio_file_count() {
+    let (_, _, pool) = fixture().await;
+    let user = auth_test_support::create_user(&pool, "alice").await;
+    let token = auth_test_support::bearer_token(&pool, user.id).await;
+    let uuid = seed_audiobook_with_parts(
+        &pool,
+        "/audiobooks",
+        "M4B",
+        &[(0, "Author/Book/Part1.m4b", 3600.0)],
+    )
+    .await;
+    // Second audio file on the same book — the multi-file shape (#1888).
+    let book_id = sqlx::query_scalar::<_, i64>("SELECT id FROM books WHERE uuid = ?")
+        .bind(&uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let second_file_id = sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes, ordinal) \
+         VALUES (?, 'M4B', 'book-2', 0, 1)",
+    )
+    .bind(book_id)
+    .execute(&pool)
+    .await
+    .unwrap()
+    .last_insert_rowid();
+    sqlx::query(
+        "INSERT INTO book_file_parts (book_file_id, ordinal, filename, size_bytes, mtime_epoch, duration_seconds) \
+         VALUES (?, 0, 'Author/Book/Part2.m4b', 0, 0, 1800.0)",
+    )
+    .bind(second_file_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let app = crate::backend::rest_router(AppState::new(pool));
+    let res = app
+        .clone()
+        .oneshot(get_with_bearer(
+            &format!("/api/audiobooks/{uuid}/manifest?file_id={second_file_id}"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["book_file_id"].as_i64(), Some(second_file_id));
+    assert_eq!(json["audio_file_count"].as_i64(), Some(2));
+
+    // Without `?file_id=` the manifest resolves — and names — the default
+    // (lowest-ordinal) file.
+    let res = app
+        .oneshot(get_with_bearer(
+            &format!("/api/audiobooks/{uuid}/manifest"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_ne!(json["book_file_id"].as_i64(), Some(second_file_id));
+    assert!(json["book_file_id"].as_i64().unwrap() > 0);
+    assert_eq!(json["audio_file_count"].as_i64(), Some(2));
+}
+
+#[tokio::test]
 async fn api_get_audiobook_manifest_returns_hls_when_any_part_is_flac() {
     let (_, _, pool) = fixture().await;
     let user = auth_test_support::create_user(&pool, "alice").await;

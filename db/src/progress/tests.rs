@@ -265,6 +265,126 @@ async fn upsert_rejects_a_stale_write_wholly_without_field_bleed() {
     assert_eq!(survived.kobo_location, None);
 }
 
+/// Insert `n` audio `book_files` rows for `book_id`, returning their ids.
+/// Gives the multi-file guard in `upsert_progress_tx` real audio rows to
+/// count (the `seed` helper's EPUB file doesn't participate).
+async fn seed_audio_files(pool: &SqlitePool, book_id: i64, n: usize) -> Vec<i64> {
+    let mut ids = Vec::with_capacity(n);
+    for ordinal in 0..n {
+        let id = sqlx::query_scalar::<_, i64>(
+            "INSERT INTO book_files (book_id, format, filename, size_bytes, ordinal)
+             VALUES (?, 'M4B', ?, 1, ?) RETURNING id",
+        )
+        .bind(book_id)
+        .bind(format!("part-{ordinal}.m4b"))
+        .bind(ordinal as i64)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        ids.push(id);
+    }
+    ids
+}
+
+/// Shorthand for an audio `ProgressUpdate` in the multi-file guard tests.
+fn audio_update(
+    uuid: &str,
+    seconds: f64,
+    book_file_id: Option<i64>,
+    client_updated_at: i64,
+) -> ProgressUpdate {
+    ProgressUpdate {
+        book_uuid: uuid.to_string(),
+        format: ProgressFormat::Audio,
+        epub_cfi: None,
+        audio_position_seconds: Some(seconds),
+        progress_percent: None,
+        kobo_location: None,
+        book_file_id,
+        client_updated_at: Some(client_updated_at),
+    }
+}
+
+#[tokio::test]
+async fn upsert_rejects_fileless_audio_write_that_would_blank_a_named_file_on_multi_file_book() {
+    // #1888: a web player that lost track of which file it loaded must not
+    // be able to replace "23,718 s within file 4" with "23,718 s within an
+    // unknown file". The whole write is rejected — seconds included — and
+    // the surviving row is returned, mirroring a stale-clock rejection.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+    let files = seed_audio_files(&pool, book_id, 2).await;
+
+    upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 23_718.0, Some(files[1]), 100),
+    )
+    .await
+    .unwrap();
+    let survived = upsert_progress(&pool, user, &audio_update(&uuid, 60.0, None, 200))
+        .await
+        .unwrap();
+
+    assert_eq!(survived.book_file_id, Some(files[1]));
+    assert_eq!(survived.audio_position_seconds, Some(23_718.0));
+    let stored = get_progress(&pool, user, &uuid, ProgressFormat::Audio)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.book_file_id, Some(files[1]));
+    assert_eq!(stored.audio_position_seconds, Some(23_718.0));
+    assert_eq!(stored.client_updated_at, 100);
+}
+
+#[tokio::test]
+async fn upsert_applies_fileless_audio_write_on_a_single_file_book() {
+    // Legacy single-file behavior is untouched: with one audio file there
+    // is nothing ambiguous about a fileless write, so it still replaces
+    // the whole row (file id included).
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+    let files = seed_audio_files(&pool, book_id, 1).await;
+
+    upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 500.0, Some(files[0]), 100),
+    )
+    .await
+    .unwrap();
+    let record = upsert_progress(&pool, user, &audio_update(&uuid, 600.0, None, 200))
+        .await
+        .unwrap();
+
+    assert_eq!(record.audio_position_seconds, Some(600.0));
+    assert_eq!(record.book_file_id, None);
+}
+
+#[tokio::test]
+async fn upsert_applies_multi_file_audio_write_that_names_its_file() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+    let files = seed_audio_files(&pool, book_id, 2).await;
+
+    upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 23_718.0, Some(files[1]), 100),
+    )
+    .await
+    .unwrap();
+    let record = upsert_progress(&pool, user, &audio_update(&uuid, 30.0, Some(files[0]), 200))
+        .await
+        .unwrap();
+
+    assert_eq!(record.book_file_id, Some(files[0]));
+    assert_eq!(record.audio_position_seconds, Some(30.0));
+}
+
 #[tokio::test]
 async fn attach_derived_kobo_location_fills_the_span_without_touching_clocks() {
     let pool = init_db("sqlite::memory:").await.unwrap();
