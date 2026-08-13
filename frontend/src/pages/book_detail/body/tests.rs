@@ -82,6 +82,17 @@ fn bd_identifier_label_maps_unknown_scheme_isbn10_checkdigit_x_to_isbn() {
 }
 
 #[test]
+fn bd_identifier_label_rejects_13char_value_with_trailing_x() {
+    // A trailing check-digit X is only valid for ISBN-10; a 13-char value
+    // ending in X is not a real ISBN-13 and must fall through to generic.
+    let ident = Identifier {
+        value: "978030640615X".into(),
+        scheme: Some("unknown".into()),
+    };
+    assert_eq!(bd_identifier_label(&ident), "Identifier");
+}
+
+#[test]
 fn bd_identifier_label_maps_non_isbn_unknown_scheme_to_generic_identifier() {
     let ident = Identifier {
         value: "urn:uuid:c0e51a66-085f-4805-b116-a0d451d281bd".into(),
