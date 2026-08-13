@@ -8,7 +8,7 @@ use omnibus_shared::{JournalEntry, JournalStatus, UpdateJournalEntry, UserSummar
 use crate::components::user_avatar::UserAvatar;
 use crate::components::{confirm_modal_body, ConfirmModal, ConfirmModalAction, ConfirmModalTone};
 use crate::data;
-use crate::pages::book_detail::dates::fmt_long_date;
+use crate::pages::book_detail::dates::{fmt_long_date, use_local_date_offset};
 use crate::pages::book_detail::journal_editor::*;
 
 const JOURNAL_COLLAPSE_CHAR_THRESHOLD: usize = 900;
@@ -326,7 +326,8 @@ pub(super) fn BdJournalEntryCard(
         .as_ref()
         .map(|u| u.id == entry.author_id)
         .unwrap_or(false);
-    let date = fmt_long_date(entry.created_at);
+    let date_offset = use_local_date_offset();
+    let date = fmt_long_date(entry.created_at, date_offset());
     let meta_line = match entry.progress {
         Some(p) => format!("{date} \u{00b7} at {p}%"),
         None => date,

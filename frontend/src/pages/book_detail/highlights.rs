@@ -12,7 +12,7 @@ use crate::components::quote_card::QUOTE_CARD_JS;
 use crate::components::{ConfirmModal, QuoteCardPanel};
 use crate::{data, use_server_url};
 
-use super::dates::fmt_long_date;
+use super::dates::{fmt_long_date, use_local_date_offset};
 use super::BdSectionHead;
 
 mod locator;
@@ -176,6 +176,7 @@ fn BdHighlightCard(
     server_url: String,
     quote_target: Signal<Option<Highlight>>,
 ) -> Element {
+    let offset = use_local_date_offset();
     let id = highlight.id;
     let color = highlight.color.as_str();
     let quote = highlight
@@ -199,9 +200,9 @@ fn BdHighlightCard(
     {
         Some(loc) => format!(
             "{loc} \u{00b7} saved {}",
-            fmt_long_date(highlight.created_at)
+            fmt_long_date(highlight.created_at, offset())
         ),
-        None => format!("saved {}", fmt_long_date(highlight.created_at)),
+        None => format!("saved {}", fmt_long_date(highlight.created_at, offset())),
     };
     let open_href = highlight
         .epub_cfi_range
