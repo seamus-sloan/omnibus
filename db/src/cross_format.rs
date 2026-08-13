@@ -503,7 +503,7 @@ pub async fn resume_candidate(
                                 .map(|f| f * timeline.total_seconds)
                         });
                         let tol = (tol_frac * timeline.total_seconds)
-                            .max(AUDIO_EQUIVALENCE_FLOOR_SECONDS);
+                            .max(audio_equivalence_floor(timeline.total_seconds));
                         let aligned =
                             current_global.is_some_and(|cur| (mapped_global - cur).abs() <= tol);
                         let candidate = CrossFormatCandidate {
@@ -597,9 +597,12 @@ fn equivalence_fraction(total_chars: Option<i64>) -> f64 {
     BASE.max(location_slack).min(CAP)
 }
 
-/// The audio-side gate never tightens below a minute: sub-minute deltas
-/// are inside seek/heartbeat noise regardless of book length.
-const AUDIO_EQUIVALENCE_FLOOR_SECONDS: f64 = 60.0;
+/// Audio-side floor: sub-minute deltas are seek/heartbeat noise on a real
+/// audiobook — but the floor never exceeds 2% of the timeline, so a short
+/// book keeps meaningful offers instead of counting everything as aligned.
+fn audio_equivalence_floor(total_seconds: f64) -> f64 {
+    60.0f64.min(0.02 * total_seconds.max(0.0))
+}
 
 /// Total visible chars of the served EPUB's extracted spine stats;
 /// `None` until the structure backfill has reached the book.

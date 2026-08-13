@@ -1001,8 +1001,7 @@ async fn resume_candidate_aligns_when_the_target_already_sits_at_the_mapped_spot
     // The mapped position still rides along for navigation affordances.
     assert_eq!(r.candidate.as_ref().unwrap().percent, Some(19));
 
-    // Just outside the tolerance (60s floor on a 1000s book → 6% of
-    // duration): a genuine advance still offers, marked ahead.
+    // Well outside the tolerance: a genuine advance still offers, ahead.
     progress::upsert_progress(
         &pool,
         user,
@@ -1097,4 +1096,14 @@ fn equivalence_fraction_widens_for_short_books_and_caps() {
     assert!((short - 2.0 * 1024.0 / 200_000.0).abs() < 1e-12);
     // …and a tiny one caps at 5% so offers can still exist at all.
     assert!((equivalence_fraction(Some(10_000)) - 0.05).abs() < 1e-12);
+}
+
+#[test]
+fn audio_equivalence_floor_scales_down_for_short_books() {
+    // Real audiobook: the full minute of seek noise.
+    assert!((audio_equivalence_floor(36_000.0) - 60.0).abs() < 1e-9);
+    // Short book: 2% of the timeline, so a fixture-length file still
+    // distinguishes "same spot" from a genuine offer.
+    assert!((audio_equivalence_floor(60.0) - 1.2).abs() < 1e-9);
+    assert_eq!(audio_equivalence_floor(0.0), 0.0);
 }
