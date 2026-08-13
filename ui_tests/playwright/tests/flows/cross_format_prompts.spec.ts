@@ -124,7 +124,10 @@ test("the player offers the mapped jump when reading is ahead", async ({
   page,
   request,
 }) => {
-  await writeAudioSeconds(request, 2);
+  // Audio parked at the start: on the 2-second fixture MP3, any later
+  // position would sit at/past the mapped reading spot and read as a
+  // backward offer under the equivalence gate's direction flag.
+  await writeAudioSeconds(request, 0);
   await writeEpubPercent(request, 50);
 
   await gotoReady(page, `/listen/${uuid}`);
