@@ -1,8 +1,65 @@
 //! Tests for `bd_identifier_key`: the rendered-list key for a book's
 //! identifiers must stay unique across same-scheme, schemeless, and
-//! delimiter-containing values so React/Dioxus keying never collides.
+//! delimiter-containing values so React/Dioxus keying never collides. Also
+//! covers `bd_insight_values`/`bd_duration_label`, the Insights card's
+//! em-dash-vs-real-value formatting (#1904).
+
+use omnibus_shared::BookInsights;
 
 use super::*;
+
+#[test]
+fn bd_insight_values_shows_em_dashes_when_insights_is_none() {
+    assert_eq!(
+        bd_insight_values(None),
+        ["\u{2014}", "\u{2014}", "\u{2014}", "\u{2014}"]
+    );
+}
+
+#[test]
+fn bd_insight_values_formats_started_time_read_sessions_and_pace() {
+    let insights = BookInsights {
+        started_at: 1_700_000_000, // 2023-11-14
+        seconds_total: 5400,       // 1h 30m across 3 sessions
+        sessions: 3,
+    };
+    let [started, time_read, sessions, pace] = bd_insight_values(Some(insights));
+    assert_eq!(started, "November 14, 2023");
+    assert_eq!(time_read, "1h 30m");
+    assert_eq!(sessions, "3");
+    assert_eq!(pace, "30m/session"); // 5400 / 3 = 1800s = 30m
+}
+
+#[test]
+fn bd_insight_values_guards_against_a_zero_session_count() {
+    // `db::stats::book_insights` never returns `Some` with `sessions == 0`,
+    // but the guard keeps this fn panic-free (no divide-by-zero on Pace) if
+    // that contract is ever violated.
+    let insights = BookInsights {
+        started_at: 0,
+        seconds_total: 0,
+        sessions: 0,
+    };
+    assert_eq!(
+        bd_insight_values(Some(insights)),
+        ["\u{2014}", "\u{2014}", "\u{2014}", "\u{2014}"]
+    );
+}
+
+#[test]
+fn bd_duration_label_scales_minutes_and_hours() {
+    assert_eq!(bd_duration_label(0), "0m");
+    assert_eq!(bd_duration_label(59), "0m");
+    assert_eq!(bd_duration_label(60), "1m");
+    assert_eq!(bd_duration_label(3600), "1h");
+    assert_eq!(bd_duration_label(3600 + 1800), "1h 30m");
+    assert_eq!(bd_duration_label(7 * 3600 + 5 * 60), "7h 5m");
+}
+
+#[test]
+fn bd_duration_label_clamps_negative_input_to_zero() {
+    assert_eq!(bd_duration_label(-100), "0m");
+}
 
 #[test]
 fn bd_identifier_key_is_unique_for_same_scheme_distinct_values() {

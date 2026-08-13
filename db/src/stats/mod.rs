@@ -3,7 +3,9 @@
 //! for completion; no new query-time schema. Every metric is computed in SQL
 //! and cached process-wide per user for 60s. The Pages tile ([`pages`]) sums
 //! the `books.word_count` estimate persisted at index time — see that
-//! module's doc comment for the sourcing model.
+//! module's doc comment for the sourcing model. [`book`] holds the
+//! book-scoped counterpart ([`book::book_insights`]) for the book-detail
+//! page's Insights card.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -15,10 +17,13 @@ use omnibus_shared::{
 };
 use sqlx::{Row, SqlitePool};
 
+mod book;
 mod pages;
 
 #[cfg(test)]
 mod tests;
+
+pub use book::book_insights;
 
 /// Per-user aggregate cache TTL. A reload after a just-finished session
 /// reflects new data within this window; repeated calls inside it hit the
@@ -75,6 +80,22 @@ const FINISHED_EVENTS: &str = "\
 pub enum StatsError {
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
+}
+
+impl From<crate::books::BooksError> for StatsError {
+    fn from(e: crate::books::BooksError) -> Self {
+        match e {
+            crate::books::BooksError::Db(inner) => StatsError::Sqlx(inner),
+            // `resolve_canonical_book_uuid` (the only `BooksError`-returning
+            // call this module makes) never decodes JSON, so this variant is
+            // unreachable here in practice — folded into a generic decode
+            // error rather than panicking, mirroring `db::progress`'s same
+            // mapping.
+            crate::books::BooksError::OverridesJson(inner) => {
+                StatsError::Sqlx(sqlx::Error::Decode(Box::new(inner)))
+            }
+        }
+    }
 }
 
 type Cache = Mutex<HashMap<(i64, StatsRange), (i64, StatsSummary)>>;

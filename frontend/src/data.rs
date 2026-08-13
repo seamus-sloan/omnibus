@@ -26,6 +26,11 @@ mod errors;
 mod genres;
 mod hardcover_fetch;
 mod highlights;
+// Per-book Started/Time-read/Sessions insights (#1904) — the book-detail
+// rail section that renders them doesn't compile on mobile, so there's no
+// REST transport, same shape as `admin_health`/`errors`.
+#[cfg(not(feature = "mobile"))]
+mod insights;
 mod journals;
 mod kindle;
 // Per-user Kobo device tokens (#923) — web (server-fn) + SSR stubs; the Account
@@ -77,6 +82,8 @@ pub use errors::*;
 pub use genres::*;
 pub use hardcover_fetch::*;
 pub use highlights::*;
+#[cfg(not(feature = "mobile"))]
+pub use insights::*;
 pub use journals::*;
 pub use kindle::*;
 #[cfg(not(feature = "mobile"))]
