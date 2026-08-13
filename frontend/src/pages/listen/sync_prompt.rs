@@ -239,6 +239,9 @@ pub(super) fn SyncHereButton() -> Element {
                     label.set("Syncing\u{2026}");
                     match crate::data::declare_sync_point("", decl).await {
                         Ok(()) => label.set("Synced \u{2713}"),
+                        Err(crate::data::SyncPointError::LinkRequired) => {
+                            label.set("Link formats first")
+                        }
                         Err(_) => label.set("Sync failed"),
                     }
                 });

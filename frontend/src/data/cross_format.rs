@@ -61,15 +61,39 @@ pub async fn unlink_cross_format(_server_url: &str, _uuid: &str) -> Result<bool,
     ))
 }
 
+/// Why a "synced here" declaration failed, split so the surfaces can
+/// route "link first" to the link affordance instead of a dead-end
+/// generic failure.
+#[derive(Debug)]
+pub enum SyncPointError {
+    /// No link yet and the book can't auto-link (several audio files) —
+    /// the fix is confirming the alignment, not retrying.
+    LinkRequired,
+    /// Genuine failure: offline, server error, anything else.
+    Other(DataError),
+}
+
+/// The `LinkRequired` refusal travels as its `thiserror` message — the
+/// same de-facto contract `rpc_set_follow_mode` already relies on.
+#[cfg(not(feature = "mobile"))]
+fn classify_sync_point_err(e: DataError) -> SyncPointError {
+    match &e {
+        DataError::Other(msg) if msg.starts_with("confirm the alignment first") => {
+            SyncPointError::LinkRequired
+        }
+        _ => SyncPointError::Other(e),
+    }
+}
+
 /// Declare a "synced here" sync point from the reader or player.
 #[cfg(not(feature = "mobile"))]
 pub async fn declare_sync_point(
     _server_url: &str,
     decl: omnibus_shared::cross_format::DeclareSyncPoint,
-) -> Result<(), DataError> {
+) -> Result<(), SyncPointError> {
     crate::rpc::rpc_declare_sync_point(decl)
         .await
-        .map_err(note_server_fn_err)
+        .map_err(|e| classify_sync_point_err(note_server_fn_err(e)))
 }
 
 /// Flip follow mode on an existing link.
@@ -91,10 +115,10 @@ pub async fn set_follow_mode(
 pub async fn declare_sync_point(
     _server_url: &str,
     _decl: omnibus_shared::cross_format::DeclareSyncPoint,
-) -> Result<(), DataError> {
-    Err(DataError::Other(
+) -> Result<(), SyncPointError> {
+    Err(SyncPointError::Other(DataError::Other(
         "alignment is not available in the mobile shell".into(),
-    ))
+    )))
 }
 
 #[cfg(feature = "mobile")]
@@ -106,4 +130,29 @@ pub async fn set_follow_mode(
     Err(DataError::Other(
         "alignment is not available in the mobile shell".into(),
     ))
+}
+
+#[cfg(all(test, not(feature = "mobile")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_sync_point_err_maps_link_refusal_to_link_required() {
+        let e = DataError::Other(
+            "confirm the alignment first — this book has several audio files".into(),
+        );
+        assert!(matches!(
+            classify_sync_point_err(e),
+            SyncPointError::LinkRequired
+        ));
+    }
+
+    #[test]
+    fn classify_sync_point_err_passes_other_failures_through() {
+        let e = DataError::Other("connection reset".into());
+        assert!(matches!(
+            classify_sync_point_err(e),
+            SyncPointError::Other(_)
+        ));
+    }
 }

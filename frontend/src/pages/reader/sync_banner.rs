@@ -170,6 +170,9 @@ pub(super) fn SyncHerePill(uuid: String, loc: Signal<super::signals::RelocateDat
                     };
                     match crate::data::declare_sync_point("", decl).await {
                         Ok(()) => label.set("Synced \u{2713}"),
+                        Err(crate::data::SyncPointError::LinkRequired) => {
+                            label.set("Link formats first")
+                        }
                         Err(_) => label.set("Sync failed"),
                     }
                 });
