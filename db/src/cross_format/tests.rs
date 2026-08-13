@@ -1073,13 +1073,20 @@ async fn resume_candidate_audio_target_aligns_and_stands_aside_without_a_placeab
 
     // A file-less audio row on a multi-file timeline can't be placed, so
     // the gate stands aside rather than guessing: the offer survives.
-    progress::upsert_progress(&pool, user, &audio_update(&uuid, 50.0, None, 1_500))
+    // Since #1889's write-path backstop preserves a stored file id against
+    // NULL overwrites, the shape is only reachable as a *first* write —
+    // use a fresh user.
+    let bob = seed_user(&pool, "bob").await;
+    upsert_link(&pool, bob, &uuid, CrossFormatLinkMode::Sequence, None)
         .await
         .unwrap();
-    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 65, 2_500))
+    progress::upsert_progress(&pool, bob, &audio_update(&uuid, 50.0, None, 1_500))
         .await
         .unwrap();
-    let r = resume_candidate(&pool, user, &uuid, ProgressFormat::Audio)
+    progress::upsert_progress(&pool, bob, &epub_percent_update(&uuid, 65, 2_500))
+        .await
+        .unwrap();
+    let r = resume_candidate(&pool, bob, &uuid, ProgressFormat::Audio)
         .await
         .unwrap();
     assert_eq!(r.state, CrossFormatResumeState::Candidate);
