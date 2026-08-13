@@ -1440,6 +1440,10 @@ enum CrossFormatResumeState: String, Codable, Sendable {
     case linkStale = "link_stale"
     case nothingNewer = "nothing_newer"
     case candidate
+    /// Both formats already sit within the server's equivalence tolerance:
+    /// the candidate rides along for navigation affordances, but prompt
+    /// surfaces stay quiet.
+    case aligned
 }
 
 enum MappingConfidence: String, Codable, Sendable {
@@ -1464,6 +1468,9 @@ struct CrossFormatCandidate: Codable, Hashable, Sendable {
     /// Full-precision jump fraction (0...1) on epub targets; `percent` is
     /// its floored display twin.
     var fraction: Double?
+    /// `false` marks a backward offer (the source regressed) — copy must
+    /// not claim "further". Absent means ahead.
+    var sourceAhead: Bool?
 
     enum CodingKeys: String, CodingKey {
         case target
@@ -1475,6 +1482,7 @@ struct CrossFormatCandidate: Codable, Hashable, Sendable {
         case totalDurationSeconds = "total_duration_seconds"
         case percent
         case fraction
+        case sourceAhead = "source_ahead"
     }
 }
 

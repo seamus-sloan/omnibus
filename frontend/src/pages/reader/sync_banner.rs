@@ -51,11 +51,19 @@ pub(super) fn SyncJumpBanner(uuid: String) -> Element {
     let jump_uuid = uuid.clone();
     let dismiss_uuid = uuid.clone();
 
+    // A surviving backward offer (the listener deliberately went back)
+    // must not claim "past this page" — say where the jump actually goes.
+    let behind = c.source_ahead == Some(false);
+    let copy = if behind {
+        format!("Your audiobook sits earlier — jump back to \u{2248} {pct}%?")
+    } else {
+        format!("You listened past this page — jump to \u{2248} {pct}%?")
+    };
+    let jump_label = if behind { "Jump back" } else { "Jump" };
+
     rsx! {
         div { class: "rd-sync-banner card", role: "status", "data-testid": "sync-banner",
-            span { class: "rd-sync-copy",
-                "You listened past this page — jump to \u{2248} {pct}%?"
-            }
+            span { class: "rd-sync-copy", "{copy}" }
             button {
                 class: "btn sm",
                 "data-testid": "sync-banner-jump",
@@ -69,7 +77,7 @@ pub(super) fn SyncJumpBanner(uuid: String) -> Element {
                     #[cfg(not(feature = "web"))]
                     let _ = jump_pct;
                 },
-                "Jump"
+                "{jump_label}"
             }
             button {
                 class: "btn ghost sm",
