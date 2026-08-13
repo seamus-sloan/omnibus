@@ -174,24 +174,33 @@ test("shows a loading state during a TOC jump and blanks the outgoing chapter in
   page,
   request,
 }) => {
-  test.setTimeout(60_000);
+  test.setTimeout(90_000);
   const uuid = await fetchBookUuidByTitle(request, TOC_JUMP_BOOK.title);
   await gotoReady(page, `/read/${uuid}`);
   await expect(page.getByTestId("reader-viewer")).toBeVisible();
 
-  // Establish a real baseline chapter in the header before jumping — proves
-  // the assertion below is about the readout actually clearing, not just
-  // never having had anything to clear in the first place.
   const headerChapter = page.getByTestId("reader-header-chapter");
+  const drawer = page.getByTestId("reader-toc-drawer");
+  const rows = page.getByTestId("reader-toc-row");
+
+  // The book opens on its cover — a spine item with no direct TOC entry, so
+  // the header renders nothing there. Jump to a real TOC row first to
+  // establish a genuine baseline chapter in the header, so the assertion
+  // below is about the readout actually clearing, not just never having had
+  // anything to clear in the first place.
+  await page.getByTestId("reader-toc").click();
+  await expect(drawer).toBeVisible();
+  await expect(rows.nth(3)).toBeVisible();
+  await expectMutation(page, { ...PROGRESS_POST, timeout: 20_000 }, async () =>
+    rows.nth(3).click(),
+  );
+  await expect(drawer).toHaveCount(0);
   await expect(headerChapter).toBeVisible({ timeout: 20_000 });
 
+  // Jump again, further into the book — this is the transition under test.
   await page.getByTestId("reader-toc").click();
-  const drawer = page.getByTestId("reader-toc-drawer");
   await expect(drawer).toBeVisible();
-  const rows = page.getByTestId("reader-toc-row");
-  // A row a few entries in, so the jump actually moves off the current
-  // (front-matter) chapter rather than re-displaying it.
-  await expect(rows.nth(3)).toBeVisible();
+  await expect(rows.nth(6)).toBeVisible();
 
   // The jump lands via the same relocate that fires the progress-save POST,
   // so asserting that mutation is also the strongest signal the jump landed.
@@ -199,7 +208,7 @@ test("shows a loading state during a TOC jump and blanks the outgoing chapter in
     page,
     { ...PROGRESS_POST, timeout: 20_000 },
     async () => {
-      await rows.nth(3).click();
+      await rows.nth(6).click();
 
       // The drawer closes and the loading affordance appears immediately —
       // this is synchronous with the click (`overlays::render_toc_overlay`),
