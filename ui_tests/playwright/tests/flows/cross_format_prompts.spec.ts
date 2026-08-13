@@ -217,6 +217,35 @@ test("declaring a sync point turns on follow and the reader auto-applies", async
   page,
   request,
 }) => {
+  // Earlier tests in this serial file leave WALL-clock progress writes
+  // (a reader relocate, a player flush), which outrank this file's
+  // synthetic `now-60+n` clocks at the resume clock gate — the follow
+  // candidate would read as NothingNewer and the auto-apply would never
+  // fire. Re-anchor above the newest stored clock (staying at-or-behind
+  // wall clock, which the server clamps to).
+  let newest = 0;
+  for (const format of ["epub", "audio"] as const) {
+    const resp = await request.post("/api/rpc/progress/get", {
+      data: { uuid, format },
+    });
+    if (resp.status() === 200) {
+      const rec = (await resp.json()) as {
+        client_updated_at: number | null;
+      } | null;
+      newest = Math.max(newest, rec?.client_updated_at ?? 0);
+    }
+  }
+  // If the newest write is at (or near) wall clock, anchoring on it would
+  // push nextClock() into the future, where the server clamps every write
+  // to now — collapsing them onto one clock that then loses the
+  // strictly-newer gate. Wait out the collision window instead so the
+  // anchor is both strictly newer than every stored clock and far enough
+  // behind wall clock for this test's three writes.
+  await expect
+    .poll(() => Math.floor(Date.now() / 1000), { timeout: 15_000 })
+    .toBeGreaterThan(newest + 3);
+  clock = Math.floor(Date.now() / 1000) - 3;
+
   // Fresh positions: reading behind, listening ahead — then declare from
   // the player so follow mode engages.
   await writeEpubPercent(request, 85);
@@ -235,10 +264,22 @@ test("declaring a sync point turns on follow and the reader auto-applies", async
   await expect(page.getByTestId("listen-sync-here")).toContainText("Synced");
 
   // Listening advances past the declared pair; the reader then opens at
-  // the mapped spot silently — no banner, and the relocation writes the
-  // followed position into the epub row.
+  // the mapped spot silently — no banner, and the view lands near the end.
+  // Banner absence alone is not the contract (a silently-dropped jump also
+  // shows no banner): the footer must show the moved position. The jump
+  // fires before epub.js locations resolve, so this exercises the glue's
+  // pending-jump path (displayPercentage parks the percentage and init's
+  // locations hook applies it) — the fixture's `longBody` is what gives
+  // the book enough locations for the jump to be visually distinct.
   await writeAudioSeconds(request, 2);
   await gotoReady(page, `/read/${uuid}`);
   await page.waitForLoadState("networkidle");
   await expect(page.getByTestId("sync-banner")).toHaveCount(0);
+  // The footer's whole-book percent proves the view actually moved to the
+  // mapped spot (audio at end → epub ≈ 100%), not merely that no banner
+  // showed — a silently-dropped jump also shows no banner.
+  await expect(page.getByTestId("reader-footer")).toContainText(
+    /(8[6-9]|9\d|100)%/,
+    { timeout: 20_000 },
+  );
 });

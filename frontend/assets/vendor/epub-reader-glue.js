@@ -92,6 +92,14 @@
   // flush adds that raced it.
   var pendingAnnotations = [];
   var annotationRepaintTimer = null;
+  // A displayPercentage call that arrived before the book/locations were
+  // ready — the follow-mode auto-jump fires ~50ms after mount, racing both
+  // init() (book still null) and the locations pass (seconds on a first
+  // open). Applied by init()'s locations .then; cancelled by any user
+  // navigation (their own movement outranks a stale auto-jump). Like
+  // pendingAnnotations, NOT cleared in teardown() — init() tears down
+  // first and must still honor a jump that raced it; destroy() clears it.
+  var pendingJumpPct = null;
 
   function emitStatus(state) {
     if (typeof window.__omnibusOnStatus === "function") {
@@ -356,6 +364,13 @@
         if (rendition && rendition.location) {
           emitRelocate(rendition.location);
         }
+        // A follow-mode auto-jump that raced this pass now has a locations
+        // map to resolve against — apply it unless navigation cancelled it.
+        if (pendingJumpPct !== null && book && book.locations) {
+          var pct = pendingJumpPct;
+          pendingJumpPct = null;
+          applyPercentage(pct);
+        }
       })
       .catch(function () {
         emitStatus("error");
@@ -492,11 +507,13 @@
 
   function next() {
     if (!rendition) return;
+    pendingJumpPct = null;
     return rendition.next();
   }
 
   function prev() {
     if (!rendition) return;
+    pendingJumpPct = null;
     return rendition.prev();
   }
 
@@ -1397,6 +1414,7 @@
 
   function destroy() {
     if (!rendition) return;
+    pendingJumpPct = null;
     teardown();
   }
 
@@ -1590,6 +1608,7 @@
 
   function display(target) {
     if (!rendition || !target) return;
+    pendingJumpPct = null;
     var t = String(target);
     var hash = t.indexOf("#");
     // CFIs and bare hrefs pass straight through. Fragment hrefs resolve to
@@ -1700,14 +1719,34 @@
     });
   }
 
-  // Jump to a whole-book percentage (0..100) via the generated locations
-  // map — the cross-format sync banner's entry point. No-op until the
-  // locations have resolved (generated on first open, cached after).
-  function displayPercentage(pct) {
-    if (!book || !book.locations || !book.locations.length()) return;
+  function applyPercentage(pct) {
     var frac = Math.min(Math.max(Number(pct) / 100, 0), 1);
     var cfi = book.locations.cfiFromPercentage(frac);
+    // locations store RANGE CFIs; rendition.display() rejects them (and
+    // displaySettled swallows the rejection), so collapse to the start.
+    if (cfi && cfi.indexOf(",") !== -1) {
+      try {
+        var collapsed = new ePub.CFI(cfi);
+        collapsed.collapse(true);
+        cfi = collapsed.toString();
+      } catch (e) {
+        /* leave the range CFI; display may still handle it */
+      }
+    }
     if (cfi) displaySettled(cfi);
+  }
+
+  // Jump to a whole-book percentage (0..100) via the generated locations
+  // map — the cross-format sync banner's entry point. Locations resolve
+  // seconds after a first open, so a call that arrives early (the follow-
+  // mode auto-jump fires right after mount) is parked and applied by the
+  // locations .then in init() rather than silently dropped.
+  function displayPercentage(pct) {
+    if (!book || !book.locations || !book.locations.length()) {
+      pendingJumpPct = pct;
+      return;
+    }
+    applyPercentage(pct);
   }
 
   window.OmnibusReader = {
