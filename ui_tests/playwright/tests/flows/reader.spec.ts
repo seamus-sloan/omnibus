@@ -495,8 +495,11 @@ test("restores the exact reading position when the reader is reopened", async ({
   await expect
     .poll(async () => footerPageLabel(page), { timeout: 20_000 })
     .toBe(leftAt);
-  expect(progressPosts, "a reopen must not write progress").toEqual([]);
   await expect.poll(storedCfi, { timeout: 10_000 }).toBe(leftCfi);
+  // Asserted last in the phase: the slower polls above outlast the glue's
+  // relocate debounce + async POST spawn, so a straggler echo write would
+  // have landed in the collector by now.
+  expect(progressPosts, "a reopen must not write progress").toEqual([]);
 
   // A real page turn after the restore still persists — the echo skip
   // must not mute genuine movement.
@@ -513,8 +516,8 @@ test("restores the exact reading position when the reader is reopened", async ({
   await expect
     .poll(async () => footerPageLabel(page), { timeout: 20_000 })
     .toBe(turnedAt);
-  expect(progressPosts, "a reopen must not write progress").toEqual([]);
   await expect.poll(storedCfi, { timeout: 10_000 }).toBe(turnedCfi);
+  expect(progressPosts, "a reopen must not write progress").toEqual([]);
 });
 
 test("a ?cfi= deep link opens the reader at that passage, not the resume point", async ({

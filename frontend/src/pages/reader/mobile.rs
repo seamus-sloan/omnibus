@@ -218,13 +218,15 @@ async fn drain_reader_events(
                 // a position the server already holds — persisting one stamps
                 // a fresh clock on an unmoved position and shadows a newer
                 // audiobook spot at the cross-format clock gate. Same rule as
-                // the web interop; render, don't write.
-                if let Some(cfi) = data.cfi.clone().filter(|_| !data.echo) {
-                    crate::reader_progress::save(&uuid, &cfi);
-                    // Only POST on an actual position change (the glue
-                    // debounces, but re-renders can re-emit the same CFI).
-                    if last_cfi.as_deref() != Some(cfi.as_str()) {
-                        last_cfi = Some(cfi.clone());
+                // the web interop; render, don't write. `last_cfi` tracks the
+                // last SEEN position (echoes included), so a later non-echo
+                // re-emit of the same CFI (a re-render) stays deduped rather
+                // than re-posting the unmoved position.
+                if let Some(cfi) = data.cfi.clone() {
+                    let moved = last_cfi.as_deref() != Some(cfi.as_str());
+                    last_cfi = Some(cfi.clone());
+                    if !data.echo && moved {
+                        crate::reader_progress::save(&uuid, &cfi);
                         persist_progress(&uuid, &server_url, cfi);
                     }
                 }
