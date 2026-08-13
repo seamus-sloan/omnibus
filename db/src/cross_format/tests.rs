@@ -1118,6 +1118,10 @@ fn chapter_number_parses_real_title_shapes_and_refuses_junk() {
     );
     assert_eq!(chapter_number("Chapter 21 - The Long Road"), Some(21));
     assert_eq!(chapter_number("chapter twenty-one"), Some(21));
+    // Spaced and Unicode-hyphen composites must not truncate to the tens.
+    assert_eq!(chapter_number("Chapter Twenty One"), Some(21));
+    assert_eq!(chapter_number("chapter twenty\u{2011}one"), Some(21));
+    assert_eq!(chapter_number("Chapter Twenty: The Storm"), Some(20));
     assert_eq!(chapter_number("Chapter Ninety"), Some(90));
     assert_eq!(chapter_number("03 - Chapter Three"), Some(3));
     assert_eq!(chapter_number("Chapter1"), Some(1));

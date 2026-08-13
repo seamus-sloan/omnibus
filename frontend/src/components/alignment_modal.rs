@@ -142,7 +142,14 @@ pub fn AlignmentModal(uuid: String, open: Signal<bool>, on_changed: EventHandler
                 if multi {
                     {render_choice(v.audio_files.clone(), mode, primary, order)}
                 }
-                if let Some(m) = v.anchor_match {
+                if v.link.as_ref().is_some_and(|l| l.stale) {
+                    // Anchoring (and the marks count) is suppressed while
+                    // stale — say so instead of misreading the zeros.
+                    p { class: "al-lowconf", role: "note", "data-testid": "alignment-lowconf",
+                        "The audio files changed since you linked — sync is paused, and "
+                        "the alignment re-checks when you confirm again."
+                    }
+                } else if let Some(m) = v.anchor_match {
                     p { class: "al-matched", role: "note", "data-testid": "alignment-match",
                         "\u{2713} {m.matched} of {m.ebook_chapters} chapters matched — "
                         "jumps land chapter-accurately."

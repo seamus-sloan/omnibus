@@ -122,9 +122,11 @@ pub struct AlignmentView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listening: Option<AlignmentAudioPosition>,
     /// Usable (titled, non-synthetic) audio chapter marks on the preview
-    /// timeline. With `anchor_match` absent, zero means "no marks in the
-    /// audio" and nonzero means "marks exist but couldn't be aligned" —
-    /// two different linear notices.
+    /// timeline. With `anchor_match` absent on a *non-stale* view, zero
+    /// means "no marks in the audio" and nonzero means "marks exist but
+    /// couldn't be aligned" — two different linear notices. On a stale
+    /// link the whole preview (this count included) is suppressed at 0;
+    /// check `link.stale` before interpreting it.
     #[serde(default)]
     pub audio_chapter_marks: i64,
 }

@@ -89,11 +89,25 @@ pub(super) fn chapter_number(raw: &str) -> Option<u32> {
             return None;
         }
     }
-    let token: &str = rest
+    // Unicode hyphen variants fold to ASCII so "twenty‑one" tokenizes as
+    // one composite word.
+    let cleaned = rest.replace(['\u{2010}', '\u{2011}', '\u{2012}', '\u{2013}'], "-");
+    let mut tokens = cleaned
         .split(|c: char| !(c.is_alphanumeric() || c == '-'))
-        .next()
-        .filter(|t| !t.is_empty())?;
-    token.parse::<u32>().ok().or_else(|| word_number(token))
+        .filter(|t| !t.is_empty());
+    let first = tokens.next()?;
+    if let Ok(n) = first.parse::<u32>() {
+        return Some(n);
+    }
+    let value = word_number(first)?;
+    // A spaced composite ("Chapter Twenty One") spells its unit as the
+    // next token — prefer the combined value over the bare tens.
+    if value >= 20 && value % 10 == 0 {
+        if let Some(unit) = tokens.next().and_then(word_number).filter(|u| *u < 10) {
+            return Some(value + unit);
+        }
+    }
+    Some(value)
 }
 
 /// Spelled-out ordinal → number, through ninety-nine ("twenty-one").
@@ -259,11 +273,20 @@ fn match_by_chapter_number(text: &[TextMark], audio: &[AudioMark]) -> Vec<Anchor
 
 /// Minimum normalized-key length before a prefix counts as a match — one
 /// short word prefixing another title is coincidence, not correspondence.
+/// Multi-word keys qualify shorter ("Day One" ↔ "Day One: …"), since two
+/// words already carry structure a lone stem doesn't.
 const MIN_PREFIX_CHARS: usize = 8;
+const MIN_MULTIWORD_PREFIX_CHARS: usize = 5;
 
 fn keys_prefix_match(a: &str, b: &str) -> bool {
     let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
-    short.len() >= MIN_PREFIX_CHARS && long.starts_with(short)
+    let qualified = short.len() >= MIN_PREFIX_CHARS
+        || (short.contains(' ') && short.len() >= MIN_MULTIWORD_PREFIX_CHARS);
+    // The prefix must end on a word boundary in the longer key — "day one"
+    // must not pair with "day ones revenge".
+    qualified
+        && long.starts_with(short)
+        && (long.len() == short.len() || long.as_bytes().get(short.len()) == Some(&b' '))
 }
 
 /// Ordered pairing where one normalized title is a prefix of the other —
