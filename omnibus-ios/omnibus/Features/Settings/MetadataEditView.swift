@@ -37,6 +37,13 @@ struct MetadataEditView: View {
     /// Same, for the genres field.
     @State private var pendingGenre = ""
 
+    /// Autocomplete pools for the chip and series fields, filled best-effort
+    /// while the editor is up — an empty pool just means no dropdown.
+    @State private var authorPool: [SuggestionItem] = []
+    @State private var tagPool: [SuggestionItem] = []
+    @State private var genrePool: [SuggestionItem] = []
+    @State private var seriesPool: [SuggestionItem] = []
+
     private var pendingAuthorName: String {
         pendingAuthor.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -45,8 +52,13 @@ struct MetadataEditView: View {
         pendingTag.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private var pendingGenreName: String {
+        pendingGenre.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private var isDirty: Bool {
         draft != loaded || !pendingAuthorName.isEmpty || !pendingTagName.isEmpty
+            || !pendingGenreName.isEmpty
     }
 
     var body: some View {
@@ -62,6 +74,7 @@ struct MetadataEditView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
         .task { await load() }
+        .task { await loadSuggestionPools() }
     }
 
     private var content: some View {
@@ -77,14 +90,15 @@ struct MetadataEditView: View {
                             placeholder: "Add an author",
                             values: $draft.authors,
                             entry: $pendingAuthor,
-                            isEdited: draft.authors != loaded.authors
+                            isEdited: draft.authors != loaded.authors,
+                            suggestions: authorPool
                         )
                     }
                 }
 
                 group("Series") {
                     Plate {
-                        field("Series", \.series, isFirst: true)
+                        field("Series", \.series, isFirst: true, suggestions: seriesPool)
                         field("Index", \.seriesIndex, keyboard: .decimalPad)
                     }
                 }
@@ -107,7 +121,8 @@ struct MetadataEditView: View {
                             entry: $pendingTag,
                             isEdited: draft.tags != loaded.tags,
                             deduplicates: true,
-                            isFirst: true
+                            isFirst: true,
+                            suggestions: tagPool
                         )
                     }
                 }
@@ -121,7 +136,8 @@ struct MetadataEditView: View {
                             entry: $pendingGenre,
                             isEdited: draft.genres != loaded.genres,
                             deduplicates: true,
-                            isFirst: true
+                            isFirst: true,
+                            suggestions: genrePool
                         )
                     }
                 }
@@ -195,7 +211,8 @@ struct MetadataEditView: View {
         isFirst: Bool = false,
         hint: String? = nil,
         keyboard: UIKeyboardType = .default,
-        multiline: Bool = false
+        multiline: Bool = false,
+        suggestions: [SuggestionItem] = []
     ) -> some View {
         PlateField(
             label: label,
@@ -207,7 +224,8 @@ struct MetadataEditView: View {
             isFirst: isFirst,
             hint: hint,
             keyboard: keyboard,
-            multiline: multiline
+            multiline: multiline,
+            suggestions: suggestions
         )
     }
 
@@ -251,6 +269,50 @@ struct MetadataEditView: View {
         loaded = MetadataDraft(book: book)
         draft = loaded
         isLoading = false
+    }
+
+    /// Fill the four autocomplete pools, mirroring the web editor's
+    /// `use_suggestion_pools`. Each pool streams replica-first (`Cache.live`),
+    /// so a cached listing paints suggestions immediately and the server's
+    /// answer refines them; a failed read just leaves that pool empty.
+    private func loadSuggestionPools() async {
+        async let authors: Void = collectAuthorPool()
+        async let tags: Void = collectTagPool()
+        async let genres: Void = collectGenrePool()
+        async let series: Void = collectSeriesPool()
+        _ = await (authors, tags, genres, series)
+    }
+
+    private func collectAuthorPool() async {
+        for await authors in LibraryService.authors().values() {
+            authorPool = SuggestionPool.collect(
+                authors.map { SuggestionItem(name: $0.name, count: $0.bookCount) }
+            )
+        }
+    }
+
+    private func collectTagPool() async {
+        for await tags in LibraryService.tags().values() {
+            tagPool = SuggestionPool.collect(
+                tags.map { SuggestionItem(name: $0.name, count: $0.count) }
+            )
+        }
+    }
+
+    private func collectGenrePool() async {
+        for await genres in LibraryService.genres().values() {
+            genrePool = SuggestionPool.collect(
+                genres.map { SuggestionItem(name: $0.name, count: $0.count) }
+            )
+        }
+    }
+
+    private func collectSeriesPool() async {
+        for await series in LibraryService.series().values() {
+            seriesPool = SuggestionPool.collect(
+                series.map { SuggestionItem(name: $0.name, count: $0.bookCount) }
+            )
+        }
     }
 
     private func save() async {
@@ -322,8 +384,17 @@ private struct ChipListField: View {
     var deduplicates = false
     /// First row of its plate — no leading hairline.
     var isFirst = false
+    /// Autocomplete pool for the entry field. Empty → free-text entry only,
+    /// same as the web chip editor.
+    var suggestions: [SuggestionItem] = []
 
     @Environment(\.palette) private var palette
+    @FocusState private var entryFocused: Bool
+    /// Whether the dropdown may show. Tracks focus, but stays closed after a
+    /// commit until the next keystroke or refocus — mirroring the web
+    /// editor's `suppress_open`, so the just-emptied entry doesn't instantly
+    /// re-surface the pool.
+    @State private var open = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -372,6 +443,7 @@ private struct ChipListField: View {
                         .autocorrectionDisabled()
                         .submitLabel(.done)
                         .tint(palette.accentColor)
+                        .focused($entryFocused)
                         .onSubmit(commit)
 
                     if !entry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -385,6 +457,28 @@ private struct ChipListField: View {
             .padding(.vertical, 12)
             .animation(Motion.snap, value: isEdited)
             .animation(Motion.snap, value: values)
+
+            if open {
+                let rows = SuggestionPool.filtered(
+                    pool: suggestions, current: values, query: entry
+                )
+                let trimmed = entry.trimmingCharacters(in: .whitespacesAndNewlines)
+                let create = SuggestionPool.showsCreateRow(
+                    pool: suggestions, current: values, typed: entry
+                ) ? trimmed : nil
+                if !rows.isEmpty || create != nil {
+                    SuggestionList(items: rows, createText: create) { pick($0) }
+                        .padding(.bottom, 6)
+                }
+            }
+        }
+        .onChange(of: entryFocused) { _, focused in
+            open = focused
+        }
+        .onChange(of: entry) { _, newValue in
+            // Only a keystroke reopens: the commit path clears the entry
+            // programmatically, and that clear must not resurface the pool.
+            if !newValue.isEmpty { open = true }
         }
     }
 
@@ -413,11 +507,20 @@ private struct ChipListField: View {
     }
 
     private func commit() {
-        // A refused duplicate still clears the field: the input was
-        // understood, and leaving the text sitting there reads as a failure.
-        defer { entry = "" }
+        pick(entry)
+    }
+
+    /// Commit `name` as a chip — from the entry field, a suggestion row, or
+    /// the "+ Create" row. The entry always clears and the dropdown closes:
+    /// a refused duplicate was still understood, and leaving the text (or
+    /// the pool) sitting there reads as a failure.
+    private func pick(_ name: String) {
+        defer {
+            entry = ""
+            open = false
+        }
         guard let chip = ChipEntry.committed(
-            from: entry, existing: values, deduplicating: deduplicates
+            from: name, existing: values, deduplicating: deduplicates
         ) else { return }
         Haptics.select()
         values.append(chip)
