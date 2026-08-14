@@ -90,11 +90,15 @@ test("renders the listen page layout for an mp3 audiobook", async ({
   // "Now playing" kicker above the book title.
   await expect(page.getByText("Now playing")).toBeVisible();
 
-  // Book metadata in the player stage.
+  // Book metadata in the player stage — the title/byline block is a link
+  // back to the book's detail page.
   await expect(
     page.getByRole("heading", { name: MP3_BOOK.title }),
   ).toBeVisible();
   await expect(page.getByText(`by ${MP3_BOOK.author}`)).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: `Open details for ${MP3_BOOK.title}` }),
+  ).toBeVisible();
 
   // Transport: chapter map + seek scrubber + skip-back / play / skip-forward / rate / volume.
   await expect(page.getByTestId("chapter-map")).toBeVisible();
@@ -112,6 +116,20 @@ test("renders the listen page layout for an mp3 audiobook", async ({
     page.getByRole("button", { name: "Playback speed" }),
   ).toBeVisible();
   await expect(page.getByRole("slider", { name: "Volume" })).toBeVisible();
+});
+
+test("clicking the book title opens the book detail page", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+
+  await page
+    .getByRole("link", { name: `Open details for ${MP3_BOOK.title}` })
+    .click();
+  await expect(page).toHaveURL(new RegExp(`/books/${uuid}$`));
 });
 
 // ---------------------------------------------------------------------------

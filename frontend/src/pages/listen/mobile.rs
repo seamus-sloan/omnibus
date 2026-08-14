@@ -240,8 +240,13 @@ fn render_unsupported(
                 }
             }
             div { class: "m-player-now",
-                {player_title(&view.title)}
-                div { class: "m-player-by", "by {view.author}" }
+                Link {
+                    class: "m-player-booklink",
+                    to: Route::BookDetail { uuid: uuid.to_string() },
+                    "aria-label": "Open details for {view.title}",
+                    {player_title(&view.title)}
+                    div { class: "m-player-by", "by {view.author}" }
+                }
             }
             div { class: "m-player-msg",
                 p { class: "subtitle",
@@ -477,8 +482,13 @@ fn render_player_header(
             div { class: "label m-player-eyebrow",
                 "Now playing \u{00b7} Chapter {derived.chapter_no} of {derived.chapter_count}"
             }
-            {player_title(&view.title)}
-            div { class: "m-player-by", "by {view.author}" }
+            Link {
+                class: "m-player-booklink",
+                to: Route::BookDetail { uuid: uuid.to_string() },
+                "aria-label": "Open details for {view.title}",
+                {player_title(&view.title)}
+                div { class: "m-player-by", "by {view.author}" }
+            }
             if derived.has_chapters {
                 div { class: "m-player-chline", "Ch. {derived.chapter_no} \u{00b7} {derived.chapter_title}" }
             }
