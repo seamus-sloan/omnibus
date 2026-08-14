@@ -110,9 +110,16 @@ pub fn BookReadPage(uuid: String) -> Element {
         book_meta,
         chrome_hidden,
     } = use_reader_signals(&uuid, theme);
-    let (on_back, on_prev, on_next, on_keydown) = chrome_handlers::install_chrome_handlers(
+    let chrome_handlers::ChromeHandlers {
+        on_back,
+        on_prev,
+        on_next,
+        on_retry,
+        on_keydown,
+    } = chrome_handlers::install_chrome_handlers(
         uuid.clone(),
         selection,
+        status,
         chrome_handlers::OverlaySignals {
             show_aa,
             show_toc,
@@ -177,6 +184,7 @@ pub fn BookReadPage(uuid: String) -> Element {
                 on_back,
                 on_prev,
                 on_next,
+                on_retry,
             },
             chrome_hidden,
         }
@@ -499,6 +507,8 @@ pub(super) struct ReaderNavHandlers {
     pub on_back: EventHandler<MouseEvent>,
     pub on_prev: EventHandler<MouseEvent>,
     pub on_next: EventHandler<MouseEvent>,
+    /// The error overlay's "Retry" action (issue #1895, AC3).
+    pub on_retry: EventHandler<MouseEvent>,
 }
 
 /// Reader chrome + panels (top bar, viewer stage, gutters, status bar, Aa panel, selection popover).
@@ -532,6 +542,7 @@ fn ReaderLayout(
         on_back,
         on_prev,
         on_next,
+        on_retry,
     } = nav;
 
     let show_aa = panels.show_aa;
@@ -579,7 +590,7 @@ fn ReaderLayout(
                 on_back,
             }
 
-            ReaderViewerStage { status }
+            ReaderViewerStage { status, on_retry }
 
             ReaderPageTurnButtons { on_prev, on_next }
 

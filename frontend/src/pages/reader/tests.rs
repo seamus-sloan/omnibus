@@ -1,8 +1,10 @@
-//! Tests for `derive_reader_display`. `Signal::new` needs a Dioxus runtime,
-//! so this runs inside a `VirtualDom` (the pattern in
-//! `frontend/src/pages/reader/prefs/tests.rs`).
+//! Tests for `derive_reader_display` (needs a Dioxus runtime for
+//! `Signal::new`, the pattern in `frontend/src/pages/reader/prefs/tests.rs`)
+//! and an SSR render-smoke check on `ReaderViewerStage`'s error overlay
+//! (issue #1895, AC3).
 
 use super::*;
+use crate::test_support::render;
 
 #[test]
 fn derive_reader_display_blanks_chapter_title_while_loading_and_restores_it_once_ready() {
@@ -28,4 +30,31 @@ fn derive_reader_display_blanks_chapter_title_while_loading_and_restores_it_once
         rsx! {}
     }
     VirtualDom::new(AssertDisplay).rebuild_in_place();
+}
+
+// ---------- ReaderViewerStage error overlay (issue #1895, AC3) ----------
+
+#[component]
+fn ViewerStageHarness(status: ReaderStatus) -> Element {
+    rsx! {
+        ReaderViewerStage {
+            status,
+            on_retry: EventHandler::new(|_| {}),
+        }
+    }
+}
+
+#[test]
+fn reader_viewer_stage_renders_a_retry_action_when_failed() {
+    let html = render(rsx! { ViewerStageHarness { status: ReaderStatus::Failed } });
+    assert!(html.contains("data-testid=\"reader-error\""));
+    assert!(html.contains("data-testid=\"reader-retry\""));
+    assert!(html.contains("Retry"));
+}
+
+#[test]
+fn reader_viewer_stage_omits_the_error_overlay_when_ready() {
+    let html = render(rsx! { ViewerStageHarness { status: ReaderStatus::Ready } });
+    assert!(!html.contains("reader-error"));
+    assert!(!html.contains("reader-retry"));
 }
