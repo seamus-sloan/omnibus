@@ -442,8 +442,10 @@
         // Before the first paint this is a failed open and the host must
         // show its error state. After it, the reader is already usable —
         // a background locations failure only degrades the percent, so
-        // don't replace a working page with the failure overlay.
-        if (!painted) emitStatus("error");
+        // don't replace a working page with the failure overlay. A chain
+        // whose init has been superseded (book swapped) reports nothing:
+        // its failure describes a book no longer on screen.
+        if (!painted && book === locBook) emitStatus("error");
       });
 
     // Restoring a saved position must go through the same settle-then-
