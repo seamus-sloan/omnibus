@@ -8,6 +8,7 @@ use dioxus_router::use_navigator;
 use omnibus_shared::Highlight;
 
 use super::selection::SelectionData;
+use super::ReaderStatus;
 
 /// Overlay-dismissal signals threaded into the Escape handler so a single
 /// Escape press peels back the topmost open overlay before navigating away.
@@ -23,28 +24,41 @@ pub(super) struct OverlaySignals {
     pub quote_target: Signal<Option<Highlight>>,
 }
 
-/// Build the `(on_back, on_prev, on_next, on_keydown)` handlers consumed
-/// by `ReaderLayout`. Each handler closes over the passed signals and
-/// (where applicable) the router navigator.
+/// The chrome event handlers [`install_chrome_handlers`] builds, named
+/// rather than a tuple — five `EventHandler`s in positional order reads as
+/// noise at both the definition and every call site.
+pub(super) struct ChromeHandlers {
+    pub on_back: EventHandler<MouseEvent>,
+    pub on_prev: EventHandler<MouseEvent>,
+    pub on_next: EventHandler<MouseEvent>,
+    pub on_retry: EventHandler<MouseEvent>,
+    pub on_keydown: EventHandler<KeyboardEvent>,
+}
+
+/// Build the chrome handlers consumed by `ReaderLayout`. Each handler closes
+/// over the passed signals and (where applicable) the router navigator.
 pub(super) fn install_chrome_handlers(
     uuid: String,
     selection: Signal<Option<SelectionData>>,
+    status: Signal<ReaderStatus>,
     overlays: OverlaySignals,
-) -> (
-    EventHandler<MouseEvent>,
-    EventHandler<MouseEvent>,
-    EventHandler<MouseEvent>,
-    EventHandler<KeyboardEvent>,
-) {
+) -> ChromeHandlers {
     let nav = use_navigator();
     let back_uuid = uuid.clone();
     let on_back = EventHandler::new(move |_: MouseEvent| back_to_book(nav, &back_uuid));
     let on_prev = EventHandler::new(move |_: MouseEvent| advance_page(selection, Direction::Prev));
     let on_next = EventHandler::new(move |_: MouseEvent| advance_page(selection, Direction::Next));
+    let on_retry = EventHandler::new(move |_: MouseEvent| retry_reader(status));
     let on_keydown = EventHandler::new(move |evt: KeyboardEvent| {
         handle_keydown(evt, selection, overlays, nav, &uuid);
     });
-    (on_back, on_prev, on_next, on_keydown)
+    ChromeHandlers {
+        on_back,
+        on_prev,
+        on_next,
+        on_retry,
+        on_keydown,
+    }
 }
 
 /// Leave the reader: always route to the book's detail page. History-walking
@@ -79,6 +93,20 @@ fn advance_page(mut selection: Signal<Option<SelectionData>>, dir: Direction) {
 /// SSR stub: the JS glue only exists in the WebView, so paging is a no-op.
 #[cfg(not(any(feature = "web", feature = "mobile")))]
 fn advance_page(_: Signal<Option<SelectionData>>, _: Direction) {}
+
+/// Recover from a load failure or a wedged page turn: flip the overlay back
+/// to `Loading` immediately (rather than waiting on the glue round trip) and
+/// ask it to replay the last `init()` verbatim (issue #1895, AC3) — the
+/// error overlay's "Retry" affordance.
+#[cfg(any(feature = "web", feature = "mobile"))]
+fn retry_reader(mut status: Signal<ReaderStatus>) {
+    status.set(ReaderStatus::Loading);
+    super::reader_call("retry", "");
+}
+
+/// SSR stub: no glue to retry against.
+#[cfg(not(any(feature = "web", feature = "mobile")))]
+fn retry_reader(_: Signal<ReaderStatus>) {}
 
 /// Reader keyboard map: arrows page the book; Escape peels back the topmost
 /// overlay (selection → note composer → contents → highlights → AA panel)
