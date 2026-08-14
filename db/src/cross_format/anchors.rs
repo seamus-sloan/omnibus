@@ -80,7 +80,23 @@ struct TextMark {
 /// One: The Pigeon Drop: In Which…") pairs with a nav's terser "Chapter 1".
 pub(super) fn chapter_number(raw: &str) -> Option<u32> {
     let lower = strip_track_prefix(raw).trim_start().to_lowercase();
-    let rest = lower.strip_prefix("chapter")?;
+    let Some(rest) = lower.strip_prefix("chapter") else {
+        // Bare leading-ordinal shape — "1.\u{9}Sky God", "12) …", "3: …" —
+        // the dominant ebook-nav convention when chapters are numbered
+        // without the word. Parsed from the RAW title: `strip_track_prefix`
+        // above eats exactly this shape as track noise. The separator is
+        // required so a title that merely IS a number ("1984") never reads
+        // as chapter 1984, and a spaced track prefix ("03 - …") stays out.
+        let bare = raw.trim_start();
+        let digits: String = bare.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if digits.is_empty() || digits.len() > 4 {
+            return None;
+        }
+        return match bare[digits.len()..].chars().next() {
+            Some('.' | ')' | ':' | '-') => digits.parse().ok(),
+            _ => None,
+        };
+    };
     let rest = rest.trim_start_matches([' ', '.', '-', '_', ':']);
     if rest.is_empty() || rest.len() == lower.len() - "chapter".len() {
         // No separator after "chapter" ("chapterhouse") is a word, not a
@@ -422,6 +438,40 @@ fn monotonic(anchors: Vec<Anchor>) -> Vec<Anchor> {
 /// `(0,0)`/`(1,1)` endpoints). `axis_text_to_audio` picks the direction.
 pub(super) fn interpolate(anchors: &[Anchor], frac: f64, text_to_audio: bool) -> f64 {
     let frac = frac.clamp(0.0, 1.0);
+    // Past the last anchor, extend the MEASURED local rate (the slope of
+    // the final anchor-to-anchor segment) instead of pinning to the (1,1)
+    // endpoint: with sparse anchors on a multi-hour book the linear-to-end
+    // segment swallows the whole remainder, and the pin quietly asserts a
+    // correspondence nobody measured. Engages only with two or more
+    // anchors — a single point has no measured slope, and extending the
+    // origin segment can fling a steep early anchor past the end of the
+    // book. Clamped to the book either way.
+    if anchors.len() >= 2 {
+        let last = &anchors[anchors.len() - 1];
+        let prev = &anchors[anchors.len() - 2];
+        let (from_last, to_last, pf, pt) = if text_to_audio {
+            (
+                last.text_frac,
+                last.audio_frac,
+                prev.text_frac,
+                prev.audio_frac,
+            )
+        } else {
+            (
+                last.audio_frac,
+                last.text_frac,
+                prev.audio_frac,
+                prev.text_frac,
+            )
+        };
+        if frac > from_last {
+            let denom = from_last - pf;
+            if denom > f64::EPSILON {
+                let slope = (to_last - pt) / denom;
+                return (to_last + slope * (frac - from_last)).clamp(0.0, 1.0);
+            }
+        }
+    }
     let mut prev = (0.0f64, 0.0f64);
     for a in anchors.iter().chain(std::iter::once(&Anchor {
         text_frac: 1.0,

@@ -253,6 +253,10 @@ fn direct_play_init_js() -> &'static str {
     r#"      // Direct-play init: parts is the array from the manifest endpoint
       // (`[{ordinal, url, duration_seconds, mime}]`), initialPositionAbs
       // is the absolute resume position in seconds.
+      // `initialPositionAbs` may be null: an unattributable resume (the
+      // row's seconds live in another file) boots at the top of the file
+      // WITHOUT seeding — the transport's gate stays closed, so nothing
+      // can persist this element's position until a real play or seek.
       initDirect: function(parts, initialPositionAbs){
         this._mode = 'direct';
         this._seeded = false;
@@ -270,7 +274,8 @@ fn direct_play_init_js() -> &'static str {
           window.__omnibusOnAudioDuration(this._totalDuration);
         }
         // Pick the starting part for the resume position.
-        var s = Math.max(0, initialPositionAbs || 0);
+        var seedKnown = typeof initialPositionAbs === 'number';
+        var s = Math.max(0, seedKnown ? initialPositionAbs : 0);
         var idx = 0;
         while (idx < this._cumOffsets.length - 1 && s >= this._cumOffsets[idx + 1]) idx++;
         this._index = idx;
@@ -278,8 +283,10 @@ fn direct_play_init_js() -> &'static str {
         var oa = this;
         var onMeta = function(){
           el.removeEventListener('loadedmetadata', onMeta);
-          try { el.currentTime = local; } catch(_) {}
-          oa._seeded = true;
+          if (seedKnown) {
+            try { el.currentTime = local; } catch(_) {}
+            oa._seeded = true;
+          }
         };
         el.addEventListener('loadedmetadata', onMeta);
         el.src = parts[idx].url;

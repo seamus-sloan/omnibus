@@ -54,13 +54,26 @@ pub(super) fn BdImmersiveButton(uuid: String) -> Element {
         // from a previously-played book would override the bootstrap's
         // progress-row file resolution — or 404 the new book's manifest.
         file_sig.set(None);
-        if uuid_sig.peek().as_deref() != Some(uuid.as_str()) {
+        // Re-resolve unless the SAME book is actively playing: the old
+        // same-uuid short-circuit kept whatever in-memory state the dock
+        // held, which on an idle target can be stale against the stored
+        // rows (issue #1954). A live playback is the one state that must
+        // not be interrupted — everything else re-runs the boot's resume
+        // + follow resolution.
+        let same_book = uuid_sig.peek().as_deref() == Some(uuid.as_str());
+        let live = same_book && *playback.playing.peek();
+        if !live {
             let mut book_sig = playback.book;
             let mut error_sig = playback.error;
             let mut loading_sig = playback.loading;
             book_sig.set(None);
             error_sig.set(None);
             loading_sig.set(true);
+            if same_book {
+                // Same uuid: nudge the driver by clearing first — the
+                // reactive load keys on the uuid value changing.
+                uuid_sig.set(None);
+            }
             uuid_sig.set(Some(uuid.clone()));
         }
         dioxus_router::navigator().push(Route::BookRead { uuid: uuid.clone() });

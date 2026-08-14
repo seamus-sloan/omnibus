@@ -537,18 +537,20 @@ async fn run_manifest_init(
             None => true,
         })
         .map(|(_, seconds)| *seconds);
-    let resume_pos = match follow_pos {
-        Some(mapped) => mapped,
-        None => resolve_boot_position(
+    // `None` = unseeded: `initDirect` gets a JSON `null`, applies no seek,
+    // and leaves the transport's seed gate closed — an unattributable boot
+    // must stay unpersistable until the user really plays or seeks.
+    let resume_pos = follow_pos.or_else(|| {
+        resolve_boot_position(
             server_row
                 .as_ref()
                 .map(|r| (r.book_file_id, r.audio_position_seconds)),
             initial_position,
             loaded_file,
             audio_file_count,
-        ),
-    };
-    let pos_lit = serde_json::to_string(&resume_pos).unwrap_or_else(|_| "0".into());
+        )
+    });
+    let pos_lit = serde_json::to_string(&resume_pos).unwrap_or_else(|_| "null".into());
 
     match manifest {
         omnibus_shared::AudiobookManifest::Direct {
