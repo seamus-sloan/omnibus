@@ -6,11 +6,13 @@
 #![cfg(not(feature = "mobile"))]
 
 use dioxus::prelude::*;
+use dioxus_router::Link;
 use omnibus_shared::{ChapterInfo, EbookMetadata};
 
 use super::chapter_map::ChapterMap;
 use super::controls::{Toolbar, TransportButtons};
 use crate::components::atrium::Cover;
+use crate::Route;
 
 /// Build the "Now playing" kicker text, including chapter counter when available.
 pub(super) fn kicker_text(ch_count: usize, current_chapter_index: usize) -> String {
@@ -97,10 +99,12 @@ pub(super) struct PlaybackPosition {
     pub current_chapter_index: usize,
 }
 
-/// Static per-book display content: the book itself, title, author, and the full chapter list.
+/// Static per-book display content: the book itself, its route uuid, title,
+/// author, and the full chapter list.
 #[derive(Clone, PartialEq)]
 pub(super) struct PlayerContent {
     pub book: EbookMetadata,
+    pub uuid: String,
     pub title: String,
     pub author: String,
     pub chapters: Vec<ChapterInfo>,
@@ -165,6 +169,7 @@ pub(super) fn PlayerStage(
 ) -> Element {
     let PlayerContent {
         book,
+        uuid,
         title,
         author,
         chapters,
@@ -182,8 +187,13 @@ pub(super) fn PlayerStage(
             }
             div { class: "lp-info-col",
                 div { class: "lp-kicker", "{kicker}" }
-                h1 { class: "lp-title", "{title}" }
-                div { class: "lp-author", "by {author}" }
+                Link {
+                    class: "lp-booklink",
+                    to: Route::BookDetail { uuid: uuid.clone() },
+                    "aria-label": "Open details for {title}",
+                    h1 { class: "lp-title", "{title}" }
+                    div { class: "lp-author", "by {author}" }
+                }
                 if let Some(sub) = chapter_sub {
                     div { class: "lp-chapter-sub", "{sub}" }
                 }

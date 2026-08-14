@@ -195,7 +195,7 @@ pub(super) fn ReadyPlayer(
             }
 
             PlayerStageBinding {
-                book_meta: BookMeta { book: book.clone(), title, author },
+                book_meta: BookMeta { book: book.clone(), uuid: uuid.clone(), title, author },
                 signals,
                 panes,
                 chapter_state: ChapterSignals {
@@ -234,6 +234,7 @@ pub(super) fn ReadyPlayer(
 #[derive(Clone, PartialEq)]
 pub(super) struct BookMeta {
     pub book: EbookMetadata,
+    pub uuid: String,
     pub title: String,
     pub author: String,
 }
@@ -313,6 +314,7 @@ pub(super) fn PlayerStageBinding(
 ) -> Element {
     let BookMeta {
         book,
+        uuid,
         title,
         author,
     } = book_meta;
@@ -351,6 +353,7 @@ pub(super) fn PlayerStageBinding(
         PlayerStage {
             content: PlayerContent {
                 book: book.clone(),
+                uuid,
                 title,
                 author,
                 chapters: chs.clone(),

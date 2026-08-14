@@ -103,6 +103,20 @@ test("renders the reader layout", async ({ page, request }) => {
   await expect(page.getByTestId("reader-spread-double")).toBeVisible();
 });
 
+test("the back button leaves the reader for the book detail page", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/read/${uuid}`);
+  await expect(page.getByTestId("reader-back")).toBeVisible();
+
+  // Back always routes to the book's detail page — never to whatever entry
+  // point (landing, search, Continue hero) the reader was opened from.
+  await page.getByTestId("reader-back").click();
+  await expect(page).toHaveURL(new RegExp(`/books/${uuid}$`));
+});
+
 test("black theme overrides a publisher color on the EPUB body", async ({
   page,
   request,
@@ -538,8 +552,8 @@ test("restores the exact reading position when the reader is reopened", async ({
     return body?.epub_cfi ?? "";
   };
 
-  // Leave the reader (explicit navigation — the reader-back button walks
-  // browser history, which in a test context leads to about:blank), then
+  // Leave the reader (explicit navigation — equivalent to the reader-back
+  // button, which routes to the book's detail page), then
   // reopen: it must land on the exact page we left, not a page drifted by
   // the first-pass display's pre-webfont layout. The restore POST is
   // page-load triggered (hydration + epub render + settle + debounce), so

@@ -47,19 +47,16 @@ pub(super) fn install_chrome_handlers(
     (on_back, on_prev, on_next, on_keydown)
 }
 
-/// Leave the reader: back through history when there is any, else route to
-/// the book's detail page. The native shell has no browser history to lean
-/// on when it cold-starts into `/read/:uuid`, and its `go_back` was a no-op
-/// for years — the explicit detail-page fallback matches the audiobook
-/// player's back affordance.
+/// Leave the reader: always route to the book's detail page. History-walking
+/// (`go_back`) returned to wherever the reader was entered from — the landing
+/// grid, search, the Continue hero — but the reader's back affordance means
+/// "close this book", and its home is the detail page. `replace` keeps the
+/// reader itself out of history so the browser back button doesn't bounce
+/// between the reader and the detail page.
 fn back_to_book(nav: dioxus_router::Navigator, uuid: &str) {
-    if nav.can_go_back() {
-        nav.go_back();
-    } else {
-        let _ = nav.push(crate::Route::BookDetail {
-            uuid: uuid.to_string(),
-        });
-    }
+    let _ = nav.replace(crate::Route::BookDetail {
+        uuid: uuid.to_string(),
+    });
 }
 
 /// Whether a page-turn was triggered backwards or forwards.
