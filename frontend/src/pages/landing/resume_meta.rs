@@ -4,7 +4,7 @@
 
 use omnibus_shared::{ProgressFormat, ResumePoint};
 
-use crate::pages::listen::helpers::remaining_at_rate;
+use crate::pages::listen::remaining_at_rate;
 
 /// Meta line + progress percentage for a resume point. Audio rows with known
 /// totals get "Ch. N · 42% · 7h 50m left" — the "left" span rate-adjusted by

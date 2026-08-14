@@ -267,8 +267,10 @@ private struct HeroCard: View {
             if let total = point.totalDurationSeconds,
                let position = point.record.audioPositionSeconds {
                 // Rate-adjusted: the wall-clock wait at the saved speed,
-                // matching the player's own "left" readout.
-                let left = Format.atRate(total - position, rate: point.playbackRate ?? 1.0)
+                // matching the player's own "left" readout. Clamped first —
+                // a saved position past the reported total (stale metadata)
+                // must read as 0 left, not a negative span.
+                let left = Format.atRate(max(0, total - position), rate: point.playbackRate ?? 1.0)
                 return Format.humanDuration(Int64(left)) + " left"
             }
             return "In progress"
