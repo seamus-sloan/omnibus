@@ -723,8 +723,7 @@ test("pages through image front matter without blanking the rendition, even at r
     .poll(
       () =>
         svgImage.evaluate((el) => {
-          const href =
-            el.getAttribute("href") ?? el.getAttribute("xlink:href");
+          const href = el.getAttribute("href") ?? el.getAttribute("xlink:href");
           if (!href) return 0;
           return new Promise<number>((resolve) => {
             const probe = new Image();
