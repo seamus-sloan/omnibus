@@ -21,6 +21,12 @@ pub(super) struct ResumeQuery {
     /// The format the client wants to resume in; the other format's
     /// position is the mapping source.
     target: ProgressFormat,
+    /// `cfi` asks the server to derive the mapped point CFI for an
+    /// epub-target candidate (`CrossFormatCandidate::epub_cfi`) — opt-in
+    /// because it opens the EPUB, and the hero/list callers must stay
+    /// I/O-free. Anything else (or absent) skips derivation.
+    #[serde(default)]
+    derive: Option<String>,
 }
 
 /// One error mapping for every handler in this module: 404 for an unknown
@@ -48,7 +54,23 @@ pub(super) async fn get_cross_format_resume(
     Query(q): Query<ResumeQuery>,
 ) -> Response {
     match db::cross_format::resume_candidate(&state.pool, user.id, &uuid, q.target).await {
-        Ok(resume) => Json(resume).into_response(),
+        Ok(mut resume) => {
+            // Response-only derivation, mirroring the Kobo follow lane: the
+            // stored rows are never touched, and a derivation failure just
+            // leaves the fraction fallback in place.
+            if q.derive.as_deref() == Some("cfi") {
+                if let Some(c) = resume.candidate.as_mut() {
+                    if c.target == ProgressFormat::Epub && c.epub_cfi.is_none() {
+                        if let Some(frac) = c.fraction {
+                            c.epub_cfi =
+                                db::cross_format::derive_candidate_cfi(&state.pool, &uuid, frac)
+                                    .await;
+                        }
+                    }
+                }
+            }
+            Json(resume).into_response()
+        }
         Err(e) => error_response("cross_format_resume", e),
     }
 }

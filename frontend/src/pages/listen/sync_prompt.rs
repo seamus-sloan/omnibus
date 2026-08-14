@@ -55,9 +55,21 @@ pub(crate) async fn fetch_resume(
     uuid: &str,
     target: &str,
 ) -> Option<omnibus_shared::cross_format::CrossFormatResume> {
+    fetch_resume_with(uuid, target, false).await
+}
+
+/// [`fetch_resume`] with the server-side CFI derivation opt-in — only the
+/// reader surfaces ask (`derive=cfi` opens the EPUB server-side), so the
+/// audio/boot callers stay on the plain fetch.
+pub(crate) async fn fetch_resume_with(
+    uuid: &str,
+    target: &str,
+    derive_cfi: bool,
+) -> Option<omnibus_shared::cross_format::CrossFormatResume> {
     #[cfg(feature = "web")]
     {
-        let url = format!("/api/books/{uuid}/cross-format-resume?target={target}");
+        let derive = if derive_cfi { "&derive=cfi" } else { "" };
+        let url = format!("/api/books/{uuid}/cross-format-resume?target={target}{derive}");
         let resp = gloo_net::http::Request::get(&url).send().await.ok()?;
         if resp.status() != 200 {
             return None;
@@ -66,7 +78,7 @@ pub(crate) async fn fetch_resume(
     }
     #[cfg(not(feature = "web"))]
     {
-        let _ = (uuid, target);
+        let _ = (uuid, target, derive_cfi);
         None
     }
 }
@@ -222,6 +234,7 @@ pub(super) fn SyncHereButton() -> Element {
                     book_uuid: uuid,
                     format: omnibus_shared::ProgressFormat::Audio,
                     ebook_fraction: None,
+                    epub_cfi: None,
                     audio_book_file_id: (playback.file_id)(),
                     audio_seconds: Some((playback.elapsed)()),
                 };

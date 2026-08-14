@@ -21,7 +21,8 @@ pub(super) fn SyncJumpBanner(uuid: String) -> Element {
     use_effect(move || {
         let uuid = fetch_uuid.clone();
         spawn(async move {
-            let Some(resume) = crate::pages::listen::sync_prompt::fetch_resume(&uuid, "epub").await
+            let Some(resume) =
+                crate::pages::listen::sync_prompt::fetch_resume_with(&uuid, "epub", true).await
             else {
                 return;
             };
@@ -33,14 +34,18 @@ pub(super) fn SyncJumpBanner(uuid: String) -> Element {
             };
             if resume.follow {
                 // Follow mode: resolve-at-open — move the text to the
-                // mapped spot silently, full precision, no banner.
+                // mapped spot silently, no banner. The server-derived CFI
+                // is the precise target (one ruler end to end); the
+                // locations-scale percentage is only the fallback.
                 #[cfg(feature = "web")]
                 {
-                    let jump = c
+                    if let Some(cfi) = c.epub_cfi.as_deref() {
+                        super::reader_call_json("displayCfi", cfi);
+                    } else if let Some(pct) = c
                         .fraction
                         .map(|f| (f * 100.0).clamp(0.0, 100.0))
-                        .or(c.percent.map(|p| p as f64));
-                    if let Some(pct) = jump {
+                        .or(c.percent.map(|p| p as f64))
+                    {
                         super::reader_call("displayPercentage", &pct.to_string());
                     }
                 }
@@ -69,6 +74,7 @@ pub(super) fn SyncJumpBanner(uuid: String) -> Element {
         .fraction
         .map(|f| (f * 100.0).clamp(0.0, 100.0))
         .unwrap_or(pct as f64);
+    let jump_cfi = c.epub_cfi.clone();
     let source_clock = c.source_client_updated_at;
     let jump_uuid = uuid.clone();
     let dismiss_uuid = uuid.clone();
@@ -112,9 +118,12 @@ pub(super) fn SyncJumpBanner(uuid: String) -> Element {
                     // The glue only exists on interactive targets; SSR
                     // compiles this handler but never runs it.
                     #[cfg(feature = "web")]
-                    super::reader_call("displayPercentage", &jump_pct.to_string());
+                    match jump_cfi.as_deref() {
+                        Some(cfi) => super::reader_call_json("displayCfi", cfi),
+                        None => super::reader_call("displayPercentage", &jump_pct.to_string()),
+                    }
                     #[cfg(not(feature = "web"))]
-                    let _ = jump_pct;
+                    let _ = (jump_pct, &jump_cfi);
                 },
                 "{jump_label}"
             }
@@ -159,12 +168,16 @@ pub(super) fn SyncHerePill(uuid: String, loc: Signal<super::signals::RelocateDat
                 }
                 let uuid = uuid.clone();
                 let frac = loc.peek().frac;
+                // The CFI names this spot on the server's own ruler; the
+                // locations-scale fraction rides along as the fallback.
+                let cfi = loc.peek().cfi.clone();
                 spawn(async move {
                     label.set("Syncing\u{2026}");
                     let decl = omnibus_shared::cross_format::DeclareSyncPoint {
                         book_uuid: uuid,
                         format: omnibus_shared::ProgressFormat::Epub,
                         ebook_fraction: Some(frac.clamp(0.0, 1.0)),
+                        epub_cfi: cfi,
                         audio_book_file_id: None,
                         audio_seconds: None,
                     };

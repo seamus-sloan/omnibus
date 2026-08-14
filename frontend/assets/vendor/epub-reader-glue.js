@@ -111,6 +111,11 @@
   // pendingAnnotations, NOT cleared in teardown() — init() tears down
   // first and must still honor a jump that raced it; destroy() clears it.
   var pendingJumpPct = null;
+  // CFI twin of pendingJumpPct: a displayCfi that raced init. Applied
+  // from the same locations hook (a CFI jump needs only the rendition,
+  // but one known safe point keeps the two paths in step); at most one
+  // of the two slots is ever set.
+  var pendingJumpCfi = null;
 
   function emitStatus(state) {
     if (typeof window.__omnibusOnStatus === "function") {
@@ -376,9 +381,17 @@
         if (rendition && rendition.location) {
           emitRelocate(rendition.location, true);
         }
-        // A follow-mode auto-jump that raced this pass now has a locations
-        // map to resolve against — apply it unless navigation cancelled it.
-        if (pendingJumpPct !== null && book && book.locations) {
+        // A follow-mode auto-jump that raced this pass now has a rendition
+        // (and locations) to resolve against — apply it unless navigation
+        // cancelled it. The CFI slot wins: it is the server-derived precise
+        // target, the percentage its locations-scale fallback.
+        if (pendingJumpCfi !== null) {
+          var jumpCfi = pendingJumpCfi;
+          pendingJumpCfi = null;
+          pendingJumpPct = null;
+          restoreEchoPending = false;
+          displaySettled(jumpCfi);
+        } else if (pendingJumpPct !== null && book && book.locations) {
           var pct = pendingJumpPct;
           pendingJumpPct = null;
           restoreEchoPending = false;
@@ -543,6 +556,7 @@
   function next() {
     if (!rendition) return;
     pendingJumpPct = null;
+    pendingJumpCfi = null;
     restoreEchoPending = false;
     displayToken++;
     return rendition.next();
@@ -551,6 +565,7 @@
   function prev() {
     if (!rendition) return;
     pendingJumpPct = null;
+    pendingJumpCfi = null;
     restoreEchoPending = false;
     displayToken++;
     return rendition.prev();
@@ -1454,6 +1469,7 @@
   function destroy() {
     if (!rendition) return;
     pendingJumpPct = null;
+    pendingJumpCfi = null;
     teardown();
   }
 
@@ -1654,6 +1670,7 @@
   function display(target) {
     if (!rendition || !target) return;
     pendingJumpPct = null;
+    pendingJumpCfi = null;
     restoreEchoPending = false;
     var t = String(target);
     var hash = t.indexOf("#");
@@ -1792,11 +1809,28 @@
     // its landing (even one emitted by the restore-settle unmute) must
     // persist, so it clears the pending echo tag.
     restoreEchoPending = false;
+    pendingJumpCfi = null;
     if (!book || !book.locations || !book.locations.length()) {
       pendingJumpPct = pct;
       return;
     }
     applyPercentage(pct);
+  }
+
+  // Jump straight to a server-derived point CFI — the cross-format sync
+  // surfaces' precise entry point (displayPercentage is their fallback).
+  // Parked until init builds the rendition, like a pre-locations
+  // percentage jump.
+  function displayCfi(cfi) {
+    if (!cfi) return;
+    restoreEchoPending = false;
+    pendingJumpPct = null;
+    if (!rendition) {
+      pendingJumpCfi = cfi;
+      return;
+    }
+    pendingJumpCfi = null;
+    displaySettled(cfi);
   }
 
   window.OmnibusReader = {
@@ -1816,6 +1850,7 @@
     requestToc: requestToc,
     display: display,
     displayPercentage: displayPercentage,
+    displayCfi: displayCfi,
     copyText: copyText,
     shareText: shareText,
     search: search,
