@@ -90,6 +90,7 @@ fn transport_controls_js() -> &'static str {
       // `el.src` if it differs from the current part, preserving the
       // play/pause state across the swap.
       seek: function(absSeconds){
+        this._seeded = true;
         var s = Math.max(0, absSeconds || 0);
         // Push the target time to the transport display immediately —
         // don't wait for the element's own `timeupdate`, which some
@@ -190,17 +191,29 @@ fn listeners_js() -> &'static str {
         window.__omnibusOnAudioDuration(d);
       }
     });
+    // The seed gate: until the boot's initial position has actually been
+    // applied to the element (or the user seeks/plays for real), the
+    // element sits at 0 — and a pause fired by a load()/src swap in that
+    // window would flush a hard 0.0 over the stored position with a fresh
+    // clock, which the cross-format follow then propagates into the other
+    // format. No emission may persist an unseeded element's position.
     el.addEventListener('timeupdate', function(){
+      var oa = window.OmnibusAudio;
+      if (oa && !oa._seeded) return;
       if (window.__omnibusOnAudioTime) {
         window.__omnibusOnAudioTime(absTime());
       }
     });
     el.addEventListener('play', function(){
+      var oa = window.OmnibusAudio;
+      if (oa) oa._seeded = true;
       if (window.__omnibusOnAudioPlay) {
         window.__omnibusOnAudioPlay(absTime());
       }
     });
     el.addEventListener('pause', function(){
+      var oa = window.OmnibusAudio;
+      if (oa && !oa._seeded) return;
       if (window.__omnibusOnAudioPause) {
         window.__omnibusOnAudioPause(absTime());
       }
@@ -237,6 +250,7 @@ fn direct_play_init_js() -> &'static str {
       // is the absolute resume position in seconds.
       initDirect: function(parts, initialPositionAbs){
         this._mode = 'direct';
+        this._seeded = false;
         this._parts = parts;
         var acc = 0;
         this._cumOffsets = [];
@@ -256,9 +270,11 @@ fn direct_play_init_js() -> &'static str {
         while (idx < this._cumOffsets.length - 1 && s >= this._cumOffsets[idx + 1]) idx++;
         this._index = idx;
         var local = s - this._cumOffsets[idx];
+        var oa = this;
         var onMeta = function(){
           el.removeEventListener('loadedmetadata', onMeta);
           try { el.currentTime = local; } catch(_) {}
+          oa._seeded = true;
         };
         el.addEventListener('loadedmetadata', onMeta);
         el.src = parts[idx].url;
@@ -276,6 +292,7 @@ fn hls_init_js() -> &'static str {
       // `null` to skip the seek.
       initHls: function(url, initialPositionAbs){
         this._mode = 'hls';
+        this._seeded = false;
         if (typeof Hls !== 'undefined' && Hls.isSupported()) {
           var hls = new Hls();
           hls.loadSource(url);
@@ -292,10 +309,16 @@ fn hls_init_js() -> &'static str {
         } else {
           console.warn('OmnibusAudio: no HLS support in this browser');
         }
+        if (typeof initialPositionAbs !== 'number' || initialPositionAbs <= 0) {
+          // No stored position to apply: the element's 0 IS the position.
+          this._seeded = true;
+        }
         if (typeof initialPositionAbs === 'number' && initialPositionAbs > 0) {
+          var hoa = this;
           var onMeta = function(){
             el.removeEventListener('loadedmetadata', onMeta);
             try { el.currentTime = Math.max(0, initialPositionAbs); } catch(_) {}
+            hoa._seeded = true;
           };
           el.addEventListener('loadedmetadata', onMeta);
         }
