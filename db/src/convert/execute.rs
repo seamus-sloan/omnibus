@@ -2,9 +2,7 @@
 //! book's `source_format` file to `target_format`, writing the result into
 //! the conversion cache ([`super::fs::convert_path`]) via an atomic
 //! temp-then-rename, mirroring `crate::kepub::convert::convert_book`. Driven
-//! by the worker's `Task::ConvertFormat` (`crate::worker`), which gates
-//! calls behind a concurrency semaphore and a per-`(book_id, source_format,
-//! target_format)` keyed mutex.
+//! by `Task::ConvertFormat` (`crate::worker`).
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -60,6 +58,10 @@ pub enum ConvertError {
 /// binary isn't runnable, the source file is missing, the job exceeds
 /// `OMNIBUS_CONVERT_TIMEOUT_SECS` (default [`DEFAULT_TIMEOUT_SECS`]), or
 /// `ebook-convert` exits non-zero.
+///
+/// Callers run this behind the worker's convert-concurrency semaphore and a
+/// per-`(book_id, source_format, target_format)` keyed mutex — see
+/// `Task::ConvertFormat` in `crate::worker`.
 pub async fn convert_book(
     pool: &SqlitePool,
     book_id: i64,
