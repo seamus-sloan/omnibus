@@ -118,6 +118,20 @@ test("renders the listen page layout for an mp3 audiobook", async ({
   await expect(page.getByRole("slider", { name: "Volume" })).toBeVisible();
 });
 
+test("clicking the book title opens the book detail page", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+
+  await page
+    .getByRole("link", { name: `Open details for ${MP3_BOOK.title}` })
+    .click();
+  await expect(page).toHaveURL(new RegExp(`/books/${uuid}$`));
+});
+
 // ---------------------------------------------------------------------------
 // 2. Layout — M4B audiobook
 // ---------------------------------------------------------------------------
@@ -138,20 +152,6 @@ test("renders the listen page layout for an m4b audiobook", async ({
   await expect(page.getByText(`by ${M4B_BOOK.author}`)).toBeVisible();
 
   await waitForPlayerReady(page);
-});
-
-test("clicking the book title opens the book detail page", async ({
-  page,
-  request,
-}) => {
-  const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
-  await gotoReady(page, `/listen/${uuid}`);
-  await waitForPlayerReady(page);
-
-  await page
-    .getByRole("link", { name: `Open details for ${MP3_BOOK.title}` })
-    .click();
-  await expect(page).toHaveURL(new RegExp(`/books/${uuid}$`));
 });
 
 test("persists playback speed per audiobook across reloads", async ({

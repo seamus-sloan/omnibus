@@ -189,7 +189,7 @@ pub(super) fn PlayerStage(
                 div { class: "lp-kicker", "{kicker}" }
                 Link {
                     class: "lp-booklink",
-                    to: Route::BookDetail { uuid: uuid.clone() },
+                    to: Route::BookDetail { uuid },
                     "aria-label": "Open details for {title}",
                     h1 { class: "lp-title", "{title}" }
                     div { class: "lp-author", "by {author}" }
