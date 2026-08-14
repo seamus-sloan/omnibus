@@ -497,6 +497,7 @@ mod boot_resume_tests {
                 total_duration_seconds: Some(35_760.0),
                 percent: None,
                 fraction: None,
+                epub_cfi: None,
                 source_position_seconds: None,
                 source_ahead: Some(true),
             }),

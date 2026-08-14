@@ -1,27 +1,24 @@
-//! Cross-format resume banner on the web reader: when the linked book's
-//! listening position is newer, a slim banner under the top bar offers the
-//! mapped percent jump (via the glue's `displayPercentage`). Declining
-//! stores the source clock locally so the banner re-arms only after the
-//! listening position advances. Web-only surface.
+//! Cross-format follow resolution on the web reader, plus the "Synced
+//! here" footer pill. Follow-only: opening a linked book whose listening
+//! position is newer silently moves the text to the mapped spot (the
+//! server-derived CFI when available). The old "jump ahead?" banner is
+//! gone — linking IS turning sync on, and a linked book that still
+//! prompts on every surface switch reads as broken. Web-only surface.
 #![cfg(not(feature = "mobile"))]
 
 use dioxus::prelude::*;
-use omnibus_shared::cross_format::CrossFormatCandidate;
 
-use crate::pages::listen::sync_prompt::{dismissed_clock, store_dismissed_clock};
-
-/// The banner. Renders nothing until the post-mount fetch finds an
-/// undismissed candidate, so SSR and the first WASM paint agree.
+/// Invisible resolver: fetches the resume candidate once per mount and,
+/// in follow mode, applies the mapped position through the glue. Renders
+/// nothing on every target, so SSR and the first WASM paint agree.
 #[component]
 pub(super) fn SyncJumpBanner(uuid: String) -> Element {
-    let mut candidate = use_signal(|| None::<CrossFormatCandidate>);
-    let mut hidden = use_signal(|| false);
-
     let fetch_uuid = uuid.clone();
     use_effect(move || {
         let uuid = fetch_uuid.clone();
         spawn(async move {
-            let Some(resume) = crate::pages::listen::sync_prompt::fetch_resume(&uuid, "epub").await
+            let Some(resume) =
+                crate::pages::listen::sync_prompt::fetch_resume_with(&uuid, "epub", true).await
             else {
                 return;
             };
@@ -31,110 +28,31 @@ pub(super) fn SyncJumpBanner(uuid: String) -> Element {
             let Some(c) = resume.candidate else {
                 return;
             };
-            if resume.follow {
-                // Follow mode: resolve-at-open — move the text to the
-                // mapped spot silently, full precision, no banner.
-                #[cfg(feature = "web")]
-                {
-                    let jump = c
-                        .fraction
-                        .map(|f| (f * 100.0).clamp(0.0, 100.0))
-                        .or(c.percent.map(|p| p as f64));
-                    if let Some(pct) = jump {
-                        super::reader_call("displayPercentage", &pct.to_string());
-                    }
-                }
+            if !resume.follow {
                 return;
             }
-            if dismissed_clock(&uuid, "epub").is_some_and(|seen| c.source_client_updated_at <= seen)
+            // Only the web target has a glue to drive; SSR compiles the
+            // candidate binding but never consumes it.
+            #[cfg(not(feature = "web"))]
+            let _ = c;
+            // Resolve-at-open — move the text to the mapped spot silently.
+            // The server-derived CFI is the precise target (one ruler end
+            // to end); the locations-scale percentage is only the fallback.
+            #[cfg(feature = "web")]
             {
-                return;
+                if let Some(cfi) = c.epub_cfi.as_deref() {
+                    super::reader_call_json("displayCfi", cfi);
+                } else if let Some(pct) = c
+                    .fraction
+                    .map(|f| (f * 100.0).clamp(0.0, 100.0))
+                    .or(c.percent.map(|p| p as f64))
+                {
+                    super::reader_call("displayPercentage", &pct.to_string());
+                }
             }
-            candidate.set(Some(c));
         });
     });
-
-    let Some(c) = candidate() else {
-        return rsx! {};
-    };
-    if hidden() {
-        return rsx! {};
-    }
-    let Some(pct) = c.percent else {
-        return rsx! {};
-    };
-    // Jump at full precision (the floored `pct` is display copy only) —
-    // integer percent alone lands up to a page early on a long book.
-    let jump_pct = c
-        .fraction
-        .map(|f| (f * 100.0).clamp(0.0, 100.0))
-        .unwrap_or(pct as f64);
-    let source_clock = c.source_client_updated_at;
-    let jump_uuid = uuid.clone();
-    let dismiss_uuid = uuid.clone();
-
-    // A backward offer must not claim "past this page". The listening
-    // position + recency come along per the design ("≈ 16h 05m, yesterday").
-    let behind = c.source_ahead == Some(false);
-    let listened = c
-        .source_position_seconds
-        .map(|s| {
-            let when = crate::components::alignment_modal::recency(c.source_client_updated_at);
-            if when.is_empty() {
-                format!(
-                    " (\u{2248} {})",
-                    crate::components::alignment_modal::fmt_hm(s)
-                )
-            } else {
-                format!(
-                    " (\u{2248} {}, {when})",
-                    crate::components::alignment_modal::fmt_hm(s)
-                )
-            }
-        })
-        .unwrap_or_default();
-    let copy = if behind {
-        format!("Your audiobook sits earlier{listened} — jump back to \u{2248} {pct}%?")
-    } else {
-        format!("You listened past this page{listened} — jump to \u{2248} {pct}%?")
-    };
-    let jump_label = if behind { "Jump back" } else { "Jump" };
-
-    rsx! {
-        div { class: "rd-sync-banner card", role: "status", "data-testid": "sync-banner",
-            span { class: "rd-sync-copy", "{copy}" }
-            button {
-                class: "btn sm",
-                "data-testid": "sync-banner-jump",
-                onclick: move |_| {
-                    store_dismissed_clock(&jump_uuid, "epub", source_clock);
-                    hidden.set(true);
-                    // The glue only exists on interactive targets; SSR
-                    // compiles this handler but never runs it.
-                    #[cfg(feature = "web")]
-                    super::reader_call("displayPercentage", &jump_pct.to_string());
-                    #[cfg(not(feature = "web"))]
-                    let _ = jump_pct;
-                },
-                "{jump_label}"
-            }
-            button {
-                class: "btn ghost sm",
-                "data-testid": "sync-banner-dismiss",
-                onclick: move |_| {
-                    store_dismissed_clock(&dismiss_uuid, "epub", source_clock);
-                    hidden.set(true);
-                },
-                "Stay here"
-            }
-            dioxus_router::Link {
-                to: crate::routes::Route::BookDetail { uuid: uuid.clone() },
-                class: "lp-sync-alignment",
-                "data-testid": "sync-banner-alignment",
-                "View alignment \u{2192}"
-            }
-        }
-    }
+    rsx! {}
 }
 
 /// "Synced here" footer pill: declares the current reading position (full
@@ -159,12 +77,16 @@ pub(super) fn SyncHerePill(uuid: String, loc: Signal<super::signals::RelocateDat
                 }
                 let uuid = uuid.clone();
                 let frac = loc.peek().frac;
+                // The CFI names this spot on the server's own ruler; the
+                // locations-scale fraction rides along as the fallback.
+                let cfi = loc.peek().cfi.clone();
                 spawn(async move {
                     label.set("Syncing\u{2026}");
                     let decl = omnibus_shared::cross_format::DeclareSyncPoint {
                         book_uuid: uuid,
                         format: omnibus_shared::ProgressFormat::Epub,
                         ebook_fraction: Some(frac.clamp(0.0, 1.0)),
+                        epub_cfi: cfi,
                         audio_book_file_id: None,
                         audio_seconds: None,
                     };

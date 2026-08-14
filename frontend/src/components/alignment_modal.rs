@@ -215,6 +215,14 @@ pub fn AlignmentModal(uuid: String, open: Signal<bool>, on_changed: EventHandler
         "Sync stays off until you confirm. You can unlink any time."
     };
 
+    // The design themes the whole modal off the BOOK's accent — fills,
+    // chips, markers, and the header wash all derive from it. Absent an
+    // extracted accent the app default cascades through unchanged.
+    let accent_style = book()
+        .as_ref()
+        .and_then(|b| b.accent.clone())
+        .map(|a| format!("--accent: {a};"))
+        .unwrap_or_default();
     rsx! {
         ConfirmModal {
             testid: "alignment-modal",
@@ -222,6 +230,7 @@ pub fn AlignmentModal(uuid: String, open: Signal<bool>, on_changed: EventHandler
             dialog_class: "al-modal card",
             busy: busy(),
             on_dismiss: move |_| open.set(false),
+            div { class: "al-body", style: "{accent_style}",
             div { class: "al-head",
                 p { class: "al-kicker",
                     span { class: "al-kicker-glyph", SyncGlyph { size: 13 } }
@@ -363,6 +372,7 @@ pub fn AlignmentModal(uuid: String, open: Signal<bool>, on_changed: EventHandler
                     },
                     "{confirm_label}"
                 }
+            }
             }
         }
     }

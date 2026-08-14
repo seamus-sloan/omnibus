@@ -311,6 +311,33 @@ pub fn span_at_spine_offset(
     derive_span_half(kepub, &href, &anchor)
 }
 
+/// Derive a point CFI at a visible-character offset inside one spine item
+/// of the source EPUB — the cross-format jump-target derivation. No kepub
+/// half: the web reader consumes the CFI directly, so there is nothing to
+/// prove alignment against; an out-of-range offset clamps to the item's
+/// last character rather than failing.
+pub fn cfi_at_spine_offset(
+    source_epub: &Path,
+    spine_index: usize,
+    offset_in_file: u64,
+) -> anyhow::Result<Option<String>> {
+    let mut sdoc = book::open_doc(source_epub)?;
+    if spine_index >= sdoc.spine.len() {
+        return Ok(None);
+    }
+    let s_bytes = book::read_spine_entry(&mut sdoc, spine_index)?;
+    let s_index = walk::index_file(&s_bytes)?;
+    let count = s_index.visible_char_count();
+    if count == 0 {
+        return Ok(None);
+    }
+    let norm_offset = offset_in_file.min(count - 1);
+    let Some((tail, _)) = s_index.tail_at(norm_offset) else {
+        return Ok(None);
+    };
+    Ok(Some(cfi::format_cfi(spine_index, &tail)))
+}
+
 /// The kepub half of [`cfi_to_span`]: find the span covering the source
 /// anchor and prove alignment by snippet at the same offset.
 fn derive_span_half(

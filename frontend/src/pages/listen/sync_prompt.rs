@@ -1,63 +1,26 @@
-//! Cross-format resume prompt on the web player: when the linked book's
-//! reading position is newer, a floating dismissable card offers the
-//! mapped jump. Declining stores the source's event clock locally so the
-//! prompt re-arms only after the reading position advances — never a
-//! progress write. Web-only surface, like the mini dock.
+//! Cross-format transport for the web player: the resume fetch shared by
+//! the reader's follow resolver and the listen bootstrap, plus the
+//! "Synced here" toolbar control. Follow-only — the old "jump ahead?"
+//! card is gone (linking IS turning sync on), and follow resolution at
+//! boot owns the mapped position. Web-only surface, like the mini dock.
 #![cfg(not(feature = "mobile"))]
 
 use dioxus::prelude::*;
-use dioxus_router::Link;
-use omnibus_shared::cross_format::{CrossFormatCandidate, CrossFormatResumeState};
-
-use crate::components::alignment_modal::fmt_hm;
-use crate::routes::Route;
-
-/// Dismissal memory: the newest source clock the user has declined, per
-/// `(book, target)`. Stored in localStorage on web; no-ops elsewhere.
-pub(crate) fn dismissed_clock(uuid: &str, target: &str) -> Option<i64> {
-    #[cfg(feature = "web")]
-    {
-        let storage = web_sys::window()?.local_storage().ok()??;
-        storage
-            .get_item(&format!("omn.syncprompt::{uuid}::{target}"))
-            .ok()?
-            .and_then(|v| v.parse().ok())
-    }
-    #[cfg(not(feature = "web"))]
-    {
-        let _ = (uuid, target);
-        None
-    }
-}
-
-/// Persist a declined candidate's source clock (see [`dismissed_clock`]).
-pub(crate) fn store_dismissed_clock(uuid: &str, target: &str, clock: i64) {
-    #[cfg(feature = "web")]
-    {
-        if let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-            let _ = storage.set_item(
-                &format!("omn.syncprompt::{uuid}::{target}"),
-                &clock.to_string(),
-            );
-        }
-    }
-    #[cfg(not(feature = "web"))]
-    {
-        let _ = (uuid, target, clock);
-    }
-}
 
 /// Fetch the full cross-format resume for `(uuid, target)` — raw REST
-/// over the same-origin cookie session (the `fetch_manifest` pattern).
-/// `None` on any transport failure: the surfaces this feeds are
-/// best-effort chrome, never an error surface.
-pub(crate) async fn fetch_resume(
+/// over the same-origin cookie session. `derive_cfi` asks the server to
+/// attach the mapped point CFI (`?derive=cfi`) — only the
+/// reader surfaces ask (`derive=cfi` opens the EPUB server-side), so the
+/// audio/boot callers stay on the plain fetch.
+pub(crate) async fn fetch_resume_with(
     uuid: &str,
     target: &str,
+    derive_cfi: bool,
 ) -> Option<omnibus_shared::cross_format::CrossFormatResume> {
     #[cfg(feature = "web")]
     {
-        let url = format!("/api/books/{uuid}/cross-format-resume?target={target}");
+        let derive = if derive_cfi { "&derive=cfi" } else { "" };
+        let url = format!("/api/books/{uuid}/cross-format-resume?target={target}{derive}");
         let resp = gloo_net::http::Request::get(&url).send().await.ok()?;
         if resp.status() != 200 {
             return None;
@@ -66,133 +29,8 @@ pub(crate) async fn fetch_resume(
     }
     #[cfg(not(feature = "web"))]
     {
-        let _ = (uuid, target);
+        let _ = (uuid, target, derive_cfi);
         None
-    }
-}
-
-/// The floating prompt card. Renders nothing until the post-mount fetch
-/// finds an undismissed candidate (SSR and first WASM paint agree).
-#[component]
-pub(super) fn SyncJumpPrompt(uuid: String) -> Element {
-    let mut candidate = use_signal(|| None::<CrossFormatCandidate>);
-    let mut hidden = use_signal(|| false);
-    let playback = crate::use_playback();
-
-    let fetch_uuid = uuid.clone();
-    use_effect(move || {
-        let uuid = fetch_uuid.clone();
-        spawn(async move {
-            let Some(resume) = fetch_resume(&uuid, "audio").await else {
-                return;
-            };
-            if resume.state != CrossFormatResumeState::Candidate {
-                return;
-            }
-            let Some(c) = resume.candidate else {
-                return;
-            };
-            if resume.follow {
-                // Follow mode: resolve-at-open is the boot's job
-                // (`resolve_follow_boot` seeds the mapped file + position
-                // before the first play). A second actor here raced the
-                // boot's one-shot restore seek — and, deciding against a
-                // not-yet-loaded player, could re-navigate into an
-                // explicit-file boot that skipped follow entirely. No
-                // card, no seek: stay quiet.
-                return;
-            }
-            // Re-arm rule: an already-declined source position stays quiet
-            // until the reading position advances past it.
-            if dismissed_clock(&uuid, "audio")
-                .is_some_and(|seen| c.source_client_updated_at <= seen)
-            {
-                return;
-            }
-            candidate.set(Some(c));
-        });
-    });
-
-    let Some(c) = candidate() else {
-        return rsx! {};
-    };
-    if hidden() {
-        return rsx! {};
-    }
-    let seconds = c.audio_position_seconds.unwrap_or(0.0);
-    let label = fmt_hm(seconds);
-    let dismiss_uuid = uuid.clone();
-    let accept_uuid = uuid.clone();
-    let source_clock = c.source_client_updated_at;
-    let target_file = c.book_file_id;
-    let total = c.total_duration_seconds.unwrap_or(0.0);
-
-    // A backward offer must not claim "further".
-    let copy = if c.source_ahead == Some(false) {
-        format!("You're re-reading earlier in the ebook — jump back to \u{2248} {label}?")
-    } else {
-        format!("You read further in the ebook — jump to \u{2248} {label}?")
-    };
-
-    let kicker_dismiss_uuid = uuid.clone();
-    rsx! {
-        div { class: "lp-sync-prompt card", role: "status", "data-testid": "sync-prompt",
-            div { class: "lp-sync-kicker",
-                crate::components::sync_glyph::SyncGlyph { size: 12 }
-                "Cross-format sync"
-                span { class: "lp-sync-kicker-spacer" }
-                button {
-                    class: "btn ghost sm",
-                    "data-testid": "sync-prompt-close",
-                    aria_label: "Dismiss",
-                    onclick: move |_| {
-                        store_dismissed_clock(&kicker_dismiss_uuid, "audio", source_clock);
-                        hidden.set(true);
-                    },
-                    "\u{2715}"
-                }
-            }
-            span { class: "lp-sync-copy", "{copy}" }
-            button {
-                class: "btn sm",
-                "data-testid": "sync-prompt-accept",
-                onclick: move |_| {
-                    hidden.set(true);
-                    store_dismissed_clock(&accept_uuid, "audio", source_clock);
-                    // Seek only when the mapped file is the one the player
-                    // loaded (explicitly, or implicitly for a single-file
-                    // timeline); otherwise navigate so the right file
-                    // loads and this prompt re-offers the precise seek.
-                    let loaded = (playback.file_id)();
-                    let same_file = loaded == target_file
-                        || (loaded.is_none() && ((playback.duration)() - total).abs() < 1.0);
-                    if same_file {
-                        super::helpers::seek_to(seconds);
-                    } else {
-                        dioxus_router::navigator().push(Route::BookListen {
-                            uuid: accept_uuid.clone(),
-                            file_id: target_file,
-                        });
-                    }
-                },
-                "Jump"
-            }
-            button {
-                class: "btn ghost sm",
-                "data-testid": "sync-prompt-dismiss",
-                onclick: move |_| {
-                    store_dismissed_clock(&dismiss_uuid, "audio", source_clock);
-                    hidden.set(true);
-                },
-                "Keep my spot"
-            }
-            Link {
-                to: Route::BookDetail { uuid: uuid.clone() },
-                class: "lp-sync-alignment",
-                "data-testid": "sync-prompt-alignment",
-                "View alignment \u{2192}"
-            }
-        }
     }
 }
 
@@ -222,6 +60,7 @@ pub(super) fn SyncHereButton() -> Element {
                     book_uuid: uuid,
                     format: omnibus_shared::ProgressFormat::Audio,
                     ebook_fraction: None,
+                    epub_cfi: None,
                     audio_book_file_id: (playback.file_id)(),
                     audio_seconds: Some((playback.elapsed)()),
                 };

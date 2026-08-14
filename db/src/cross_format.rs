@@ -128,15 +128,19 @@ pub async fn upsert_link(
         .await?
         .ok_or(CrossFormatError::BookNotFound)?;
     let snapshot = snapshot_json(&audio_files(pool, book_id).await?);
-    // Re-confirmation keeps the follow opt-in; user anchors survive only
+    // Confirming the alignment IS turning sync on — the modal's confirm
+    // button says exactly that, and a linked book that still prompts on
+    // every surface switch reads as broken (live QA on #1944). The follow
+    // toggle can still switch it off afterward; user anchors survive only
     // when the audio set is unchanged — a new set is a new timeline, and
     // the stored global seconds no longer mean anything on it.
     sqlx::query(
         "INSERT INTO cross_format_links
-            (user_id, book_uuid, mode, primary_book_file_id, audio_snapshot, confirmed_at)
-         VALUES (?, ?, ?, ?, ?, CAST(strftime('%s','now') AS INTEGER))
+            (user_id, book_uuid, mode, primary_book_file_id, audio_snapshot, confirmed_at, follow)
+         VALUES (?, ?, ?, ?, ?, CAST(strftime('%s','now') AS INTEGER), 1)
          ON CONFLICT(user_id, book_uuid) DO UPDATE SET
             mode = excluded.mode,
+            follow = 1,
             primary_book_file_id = excluded.primary_book_file_id,
             user_anchors = CASE
                 WHEN cross_format_links.audio_snapshot = excluded.audio_snapshot
@@ -256,9 +260,15 @@ pub async fn declare_sync_point(
 
     let (text_frac, audio_global) = match decl.format {
         ProgressFormat::Epub => {
-            let frac = decl
-                .ebook_fraction
-                .filter(|f| (0.0..=1.0).contains(f))
+            // The declared CFI names the spot on the server's own ruler —
+            // prefer it over the client fraction, which the web reader
+            // measures on epub.js's different locations scale.
+            let cfi_frac = match decl.epub_cfi.clone() {
+                Some(cfi) => fraction_for_cfi(pool, book_id, cfi).await,
+                None => None,
+            };
+            let frac = cfi_frac
+                .or_else(|| decl.ebook_fraction.filter(|f| (0.0..=1.0).contains(f)))
                 .ok_or(CrossFormatError::CounterpartMissing)?;
             let row = progress::get_progress(pool, user_id, &book_uuid, ProgressFormat::Audio)
                 .await?
@@ -544,26 +554,52 @@ async fn epub_source_fraction(
     let Some(cfi) = source.epub_cfi.clone() else {
         return fallback;
     };
-    let precise = async {
-        let (file_id, epub_path) = crate::book_file_with_id(pool, book_id, "EPUB")
-            .await
-            .ok()??;
-        let stats = crate::epub_structure::get_spine_stats(pool, file_id)
-            .await
-            .ok()?;
-        if stats.is_empty() {
-            return None;
-        }
-        let (spine_index, offset) = tokio::task::spawn_blocking(move || {
-            crate::kobo_position::cfi_spine_offset(&epub_path, &cfi)
-        })
+    fraction_for_cfi(pool, book_id, cfi).await.or(fallback)
+}
+
+/// Full-precision whole-book fraction of one CFI via spine stats — the
+/// single ruler every cross-format exchange resolves on. `None` on any
+/// missing input (no stats yet, unreadable file, unanchorable CFI).
+async fn fraction_for_cfi(pool: &SqlitePool, book_id: i64, cfi: String) -> Option<f64> {
+    let (file_id, epub_path) = crate::book_file_with_id(pool, book_id, "EPUB")
         .await
-        .ok()?
         .ok()??;
-        crate::epub_structure::fraction_at(&stats, spine_index as i64, offset)
+    let stats = crate::epub_structure::get_spine_stats(pool, file_id)
+        .await
+        .ok()?;
+    if stats.is_empty() {
+        return None;
     }
-    .await;
-    precise.or(fallback)
+    let (spine_index, offset) = tokio::task::spawn_blocking(move || {
+        crate::kobo_position::cfi_spine_offset(&epub_path, &cfi)
+    })
+    .await
+    .ok()?
+    .ok()??;
+    crate::epub_structure::fraction_at(&stats, spine_index as i64, offset)
+}
+
+/// Derive the point CFI at a whole-book fraction — the jump target the web
+/// reader consumes directly, so the fraction is never reinterpreted on
+/// epub.js's different locations scale. Response-only and on request (the
+/// resume endpoint's `?derive=cfi`); `None` degrades to the fraction path.
+pub async fn derive_candidate_cfi(pool: &SqlitePool, book_uuid: &str, frac: f64) -> Option<String> {
+    let book_uuid = resolve_canonical_book_uuid(pool, book_uuid).await.ok()??;
+    let book_id = resolve_book_id_by_uuid(pool, &book_uuid).await.ok()??;
+    let (file_id, epub_path) = crate::book_file_with_id(pool, book_id, "EPUB")
+        .await
+        .ok()??;
+    let stats = crate::epub_structure::get_spine_stats(pool, file_id)
+        .await
+        .ok()?;
+    let (spine_index, offset) = crate::epub_structure::position_at_fraction(&stats, frac)?;
+    tokio::task::spawn_blocking(move || {
+        crate::kobo_position::cfi_at_spine_offset(&epub_path, spine_index as usize, offset)
+    })
+    .await
+    .ok()?
+    .ok()
+    .flatten()
 }
 
 /// Compose the answer for `GET /api/books/{uuid}/cross-format-resume`:
@@ -692,6 +728,7 @@ pub async fn resume_candidate(
                             total_duration_seconds: Some(timeline.total_seconds),
                             percent: None,
                             fraction: None,
+                            epub_cfi: None,
                             source_position_seconds: None,
                             source_ahead: current_global.map(|cur| mapped_global > cur),
                         };
@@ -733,6 +770,10 @@ pub async fn resume_candidate(
                         total_duration_seconds: None,
                         percent: Some(pct),
                         fraction: Some(frac.clamp(0.0, 1.0)),
+                        // Derived on request by the resume endpoint
+                        // (`derive_candidate_cfi`), never here — every
+                        // hero card calls this fn and must stay I/O-free.
+                        epub_cfi: None,
                         source_position_seconds: Some(raw_frac * timeline.total_seconds),
                         source_ahead: current.map(|cur| frac > cur),
                     };

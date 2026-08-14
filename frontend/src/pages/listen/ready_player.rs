@@ -209,7 +209,6 @@ pub(super) fn ReadyPlayer(
                 },
             }
 
-            {sync_prompt_slot(&uuid)}
 
             PlayerOverlays {
                 panes,
@@ -529,18 +528,4 @@ pub(super) fn PlayerOverlays(
             }
         }
     }
-}
-
-/// Web-only slot for the cross-format jump prompt; the hybrid mobile
-/// shell renders nothing here (native iOS owns its own prompt).
-#[cfg(not(feature = "mobile"))]
-fn sync_prompt_slot(uuid: &str) -> Element {
-    rsx! {
-        super::sync_prompt::SyncJumpPrompt { uuid: uuid.to_string() }
-    }
-}
-
-#[cfg(feature = "mobile")]
-fn sync_prompt_slot(_uuid: &str) -> Element {
-    rsx! {}
 }

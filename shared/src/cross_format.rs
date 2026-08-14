@@ -101,6 +101,13 @@ pub struct CrossFormatCandidate {
     /// precision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fraction: Option<f64>,
+    /// Server-derived point CFI at the mapped fraction, present only when
+    /// the caller asked (`?derive=cfi`): the web reader displays it
+    /// directly, so the fraction is never reinterpreted on epub.js's
+    /// different locations scale. Absent on audio targets and on
+    /// derivation failure — `fraction` remains the fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epub_cfi: Option<String>,
     /// The source listening row's own position as global timeline seconds
     /// — the reader banner's "you listened to ≈ 16h 05m" copy. Epub
     /// targets only.
@@ -245,6 +252,12 @@ pub struct DeclareSyncPoint {
     /// Reading surface: whole-book fraction (`0.0..=1.0`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ebook_fraction: Option<f64>,
+    /// Reading surface, optional precision upgrade: the reader's current
+    /// CFI. When present the server derives the anchor fraction from it on
+    /// its own spine-stats ruler, overriding `ebook_fraction` (which the
+    /// web reader measures on epub.js's different locations scale).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epub_cfi: Option<String>,
     /// Listening surface: the playing file and seconds within it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_book_file_id: Option<i64>,

@@ -480,7 +480,7 @@ async fn run_manifest_init(
     // `initDirect`'s one-shot restore seek and lose. Skipped entirely for an
     // explicit picker `?file_id=` (see `resolve_follow_boot`).
     let follow_resume = if file_id.is_none() {
-        super::sync_prompt::fetch_resume(&uuid_for_fetch, "audio").await
+        super::sync_prompt::fetch_resume_with(&uuid_for_fetch, "audio", false).await
     } else {
         None
     };
