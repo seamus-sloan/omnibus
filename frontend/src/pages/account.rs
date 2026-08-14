@@ -719,7 +719,8 @@ fn AccountLinkRow(to: Route, label: String) -> Element {
 #[cfg(feature = "mobile")]
 #[component]
 fn ThemeControl() -> Element {
-    let mut theme = use_context::<Signal<Theme>>();
+    let theme = use_context::<Signal<Theme>>();
+    let snap = use_context::<crate::components::atrium::ThemeSnap>();
     let current = theme.read().as_attr();
     rsx! {
         div { class: "m-account-theme",
@@ -731,10 +732,11 @@ fn ThemeControl() -> Element {
                         r#type: "button",
                         class: if kind.as_attr() == current { "m-account-seg-btn on" } else { "m-account-seg-btn" },
                         "aria-pressed": if kind.as_attr() == current { "true" } else { "false" },
-                        onclick: move |_| {
-                            theme.set(kind.to_theme());
-                            crate::components::atrium::persist_theme(kind.to_theme());
-                        },
+                        onclick: move |_| crate::components::atrium::apply_theme(
+                            theme,
+                            snap,
+                            kind.to_theme(),
+                        ),
                         "{name}"
                     }
                 }

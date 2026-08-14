@@ -9,7 +9,7 @@ use dioxus::prelude::*;
 use dioxus_router::{use_navigator, Link};
 use omnibus_shared::{ProgressFormat, ResumePoint, UserSummary};
 
-use crate::components::atrium::{persist_theme, Cover, Theme};
+use crate::components::atrium::{Cover, Theme};
 use crate::components::glyphs::{book_glyph, play_glyph};
 use crate::components::user_avatar::UserAvatar;
 use crate::focus_after_paint::focus_after_paint;
@@ -438,7 +438,7 @@ fn UmStat(label: String, detail: String, to: Option<Route>, open: Signal<bool>) 
 #[cfg(any(feature = "web", feature = "server"))]
 #[component]
 fn UmThemeSeg(theme: Signal<Theme>) -> Element {
-    let mut theme = theme;
+    let snap = use_context::<crate::components::atrium::ThemeSnap>();
     let current = *theme.read();
     let dark_on = matches!(current, Theme::Dark);
     let black_on = matches!(current, Theme::Black);
@@ -452,40 +452,44 @@ fn UmThemeSeg(theme: Signal<Theme>) -> Element {
                     class: if dark_on { "um-theme-btn on" } else { "um-theme-btn" },
                     r#type: "button",
                     "data-testid": "theme-dark",
-                    onclick: move |_| {
-                        theme.set(Theme::Dark);
-                        persist_theme(Theme::Dark);
-                    },
+                    onclick: move |_| crate::components::atrium::apply_theme(
+                        theme,
+                        snap,
+                        Theme::Dark,
+                    ),
                     "Dark"
                 }
                 button {
                     class: if black_on { "um-theme-btn on" } else { "um-theme-btn" },
                     r#type: "button",
                     "data-testid": "theme-black",
-                    onclick: move |_| {
-                        theme.set(Theme::Black);
-                        persist_theme(Theme::Black);
-                    },
+                    onclick: move |_| crate::components::atrium::apply_theme(
+                        theme,
+                        snap,
+                        Theme::Black,
+                    ),
                     "Black"
                 }
                 button {
                     class: if light_on { "um-theme-btn on" } else { "um-theme-btn" },
                     r#type: "button",
                     "data-testid": "theme-light",
-                    onclick: move |_| {
-                        theme.set(Theme::Light);
-                        persist_theme(Theme::Light);
-                    },
+                    onclick: move |_| crate::components::atrium::apply_theme(
+                        theme,
+                        snap,
+                        Theme::Light,
+                    ),
                     "Light"
                 }
                 button {
                     class: if sepia_on { "um-theme-btn on" } else { "um-theme-btn" },
                     r#type: "button",
                     "data-testid": "theme-sepia",
-                    onclick: move |_| {
-                        theme.set(Theme::Sepia);
-                        persist_theme(Theme::Sepia);
-                    },
+                    onclick: move |_| crate::components::atrium::apply_theme(
+                        theme,
+                        snap,
+                        Theme::Sepia,
+                    ),
                     "Sepia"
                 }
             }
