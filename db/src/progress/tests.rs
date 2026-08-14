@@ -7,7 +7,7 @@
 use omnibus_shared::EbookMetadata;
 
 use super::*;
-use crate::{init_db, replace_books};
+use crate::{auth::now_unix, init_db, replace_books};
 
 /// Map a merged/auto-attached `uuid` onto an existing `book_id` the way the
 /// merge transaction does (`db/src/merge/transaction.rs`), so the session path
@@ -532,15 +532,6 @@ async fn upsert_is_last_write_wins() {
     };
     let saved = upsert_progress(&pool, user, &second).await.unwrap();
     assert_eq!(saved.epub_cfi.as_deref(), Some("epubcfi(/6/12!/4/8/3:7)"));
-}
-
-/// Current unix seconds, for asserting a stored `client_updated_at` landed
-/// near "now" without pinning an exact value the test doesn't control.
-fn now_unix() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 #[tokio::test]
