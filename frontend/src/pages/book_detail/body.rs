@@ -10,7 +10,7 @@ use crate::components::atrium::Cover;
 use crate::components::{BookActionMeta, FormatSwitcher};
 use crate::{data, Route};
 
-use super::dates::fmt_long_date;
+use super::dates::{fmt_long_date, local_date_offset, use_local_dates_ready};
 use super::discovery::{
     cover_src, list_count_label, same_hand_author_label, same_hand_title, same_hand_year,
     suggestion_cover_book, SuggestionsSpinner,
@@ -416,7 +416,8 @@ fn BdInsightsCard(uuid: String) -> Element {
             }
         });
     }));
-    let [started, time_read, sessions, pace] = bd_insight_values(insights());
+    let dates_ready = use_local_dates_ready();
+    let [started, time_read, sessions, pace] = bd_insight_values(insights(), dates_ready());
 
     rsx! {
         div { class: "card", "data-testid": "insights-card",
@@ -448,11 +449,13 @@ fn BdInsightsCard(uuid: String) -> Element {
 /// `None` (no sessions yet, whether because the fetch hasn't resolved or the
 /// book truly has none) renders all four as em-dashes — the SSR seed and the
 /// AC2 empty state are the same value, so there is no flash-then-revert.
-fn bd_insight_values(insights: Option<BookInsights>) -> [String; 4] {
+/// `dates_ready` gates the Started date's local-day offset (rule 07; see
+/// [`use_local_dates_ready`]).
+fn bd_insight_values(insights: Option<BookInsights>, dates_ready: bool) -> [String; 4] {
     let dash = || "\u{2014}".to_string();
     match insights {
         Some(i) if i.sessions > 0 => [
-            fmt_long_date(i.started_at),
+            fmt_long_date(i.started_at, local_date_offset(dates_ready, i.started_at)),
             bd_duration_label(i.seconds_total),
             i.sessions.to_string(),
             format!(

@@ -48,6 +48,10 @@ mod stage;
 #[cfg(not(feature = "mobile"))]
 use ready_player::{PlaybackSignals, ReadyPlayer};
 
+// The one helper the landing resume surfaces share with the players, so
+// every remaining-time readout scales identically; `helpers` stays private.
+pub(crate) use helpers::remaining_at_rate;
+
 // App-root re-exports: the audio element + dock are mounted by `App` /
 // `ScreenLayout`, and the playback driver is called once from `App`.
 #[cfg(feature = "web")]

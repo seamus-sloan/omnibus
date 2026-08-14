@@ -611,12 +611,33 @@ pub async fn resume_points(
                 (None, None, None)
             }
         };
+        // Only rows that will render a listening card need the preference —
+        // it feeds the rate-adjusted "left" readout on the resume surfaces.
+        // Direct lookup, not `get_playback_rate`: `record.book_uuid` was
+        // canonicalized by `upsert_progress_tx` at write time, so re-resolving
+        // per row would double this endpoint's query count for a no-op. A row
+        // predating a later merge can miss the preference and fall back to 1x
+        // until its next write re-canonicalizes it — cosmetic, and accepted.
+        let playback_rate = match total_duration_seconds {
+            Some(_) => sqlx::query(
+                "SELECT playback_rate FROM audiobook_playback_preferences
+                 WHERE user_id = ? AND book_uuid = ?",
+            )
+            .bind(user_id)
+            .bind(&record.book_uuid)
+            .fetch_optional(pool)
+            .await?
+            .map(|row| row.try_get::<f64, _>("playback_rate"))
+            .transpose()?,
+            None => None,
+        };
         points.push(ResumePoint {
             record,
             book,
             total_duration_seconds,
             chapter_number,
             chapter_count,
+            playback_rate,
         });
     }
     Ok(points)
