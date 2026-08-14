@@ -66,18 +66,6 @@ fn parse_format(raw: &str) -> ProgressFormat {
 /// this; the 2026-08-11 chapter-19-to-13 revert was hours.
 const AUDIO_BACKWARD_JUMP_THRESHOLD_SECONDS: f64 = 600.0;
 
-/// Current unix time in seconds. Mirrors the `strftime('%s','now')` clamp
-/// [`upsert_progress_tx`]'s SQL applies, used only to predict — for
-/// logging — whether a write is about to lose to the timestamp guard; the
-/// SQL `WHERE` clause remains the sole source of truth for the real
-/// decision.
-fn now_unix() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-}
-
 /// Upsert a position row for `(user, book, format)` and return the
 /// **surviving** server-authoritative record. Resolves the request uuid to
 /// the **canonical** `books.uuid` (keeping the `BookNotFound` guard — you
@@ -273,7 +261,7 @@ fn warn_if_rejected_by_timestamp_guard(
     let Some(stored_ts) = stored_client_updated_at else {
         return;
     };
-    let now = now_unix();
+    let now = crate::auth::now_unix();
     let offered = client_updated_at.unwrap_or(now).min(now);
     if offered < stored_ts {
         tracing::warn!(
