@@ -474,8 +474,26 @@ async fn run_manifest_init(
         }
     }
 
+    // Resolve follow at boot: when the link follows the counterpart and the
+    // reading position maps newer, seed playback with the mapped spot
+    // instead of the stored row — a post-boot corrective seek would race
+    // `initDirect`'s one-shot restore seek and lose. Skipped entirely for an
+    // explicit picker `?file_id=` (see `resolve_follow_boot`).
+    let follow_resume = if file_id.is_none() {
+        super::sync_prompt::fetch_resume(&uuid_for_fetch, "audio").await
+    } else {
+        None
+    };
+    if !is_current() {
+        return;
+    }
+    let follow_boot = super::helpers::resolve_follow_boot(file_id, follow_resume.as_ref());
+
     let row_file = server_row.as_ref().and_then(|r| r.book_file_id);
-    let boot_file = resolve_boot_file(file_id, row_file);
+    let boot_file = follow_boot
+        .as_ref()
+        .and_then(|(file, _)| *file)
+        .or_else(|| resolve_boot_file(file_id, row_file));
     let mut manifest = fetch_manifest(&uuid_for_fetch, boot_file).await;
     // The row's stored id is a soft reference — a reindex may have replaced
     // the `book_files` row since the position was saved. Fall back to the
@@ -509,14 +527,27 @@ async fn run_manifest_init(
     // way via `audio_file_count == 0`).
     let mut loaded_file_sig = playback.loaded_file_id;
     loaded_file_sig.set((loaded_file > 0).then_some(loaded_file));
-    let resume_pos = resolve_boot_position(
-        server_row
-            .as_ref()
-            .map(|r| (r.book_file_id, r.audio_position_seconds)),
-        initial_position,
-        loaded_file,
-        audio_file_count,
-    );
+    // The mapped position applies only when the manifest actually loaded the
+    // candidate's file (the dead-row fallback above may have swapped it) —
+    // otherwise fall back to the stored-row resolution unchanged.
+    let follow_pos = follow_boot
+        .as_ref()
+        .filter(|(file, _)| match file {
+            Some(fid) => *fid == loaded_file || loaded_file == 0,
+            None => true,
+        })
+        .map(|(_, seconds)| *seconds);
+    let resume_pos = match follow_pos {
+        Some(mapped) => mapped,
+        None => resolve_boot_position(
+            server_row
+                .as_ref()
+                .map(|r| (r.book_file_id, r.audio_position_seconds)),
+            initial_position,
+            loaded_file,
+            audio_file_count,
+        ),
+    };
     let pos_lit = serde_json::to_string(&resume_pos).unwrap_or_else(|_| "0".into());
 
     match manifest {

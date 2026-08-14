@@ -73,6 +73,13 @@
   // so the first-pass landing (a page or two off until fonts/theme reflow) is
   // never persisted as reading progress.
   var restoreSettled = true;
+  // Monotonic navigation generation: bumped by every explicit display
+  // (jumps, TOC/link nav, page turns). The restore settle chain and each
+  // displaySettled capture the value at start and skip their corrective
+  // redisplay when a later navigation has superseded them — without this
+  // the restore's re-display(initialCfi) yanks the view back off a
+  // follow-mode jump that landed while it was settling.
+  var displayToken = 0;
   // True from a CFI restore until its first post-settle emission — that
   // emission re-states the restored position and is tagged `echo` so the
   // host renders it without persisting it (see emitRelocate).
@@ -395,6 +402,12 @@
     var initialCfi = opts.cfi || null;
     restoreSettled = !initialCfi;
     restoreEchoPending = !!initialCfi;
+    // A jump or turn during the settle supersedes the restore — its
+    // corrective redisplay must not pull the view back (see displayToken).
+    var restoreToken = displayToken;
+    var restoreCurrent = function () {
+      return displayToken === restoreToken;
+    };
     rendition.display(initialCfi || undefined).then(
       function () {
         if (!initialCfi) {
@@ -427,8 +440,9 @@
             emitRelocate(rendition.location);
           }
         };
-        redisplayWhenSettled(initialCfi)
+        redisplayWhenSettled(initialCfi, restoreCurrent)
           .then(function () {
+            if (!restoreCurrent()) return;
             return nudgeToTarget(initialCfi);
           })
           .catch(function () {
@@ -530,6 +544,7 @@
     if (!rendition) return;
     pendingJumpPct = null;
     restoreEchoPending = false;
+    displayToken++;
     return rendition.next();
   }
 
@@ -537,6 +552,7 @@
     if (!rendition) return;
     pendingJumpPct = null;
     restoreEchoPending = false;
+    displayToken++;
     return rendition.prev();
   }
 
@@ -1509,7 +1525,7 @@
   // Wait for the active section's webfonts to settle, then re-display
   // `target` against the final layout. Returns a promise resolving once the
   // corrective redisplay completes, so callers can sequence on it.
-  function redisplayWhenSettled(target) {
+  function redisplayWhenSettled(target, stillCurrent) {
     var doc = null;
     try {
       var contents = rendition.getContents();
@@ -1539,6 +1555,7 @@
         });
       })
       .then(function () {
+        if (stillCurrent && !stillCurrent()) return;
         if (rendition) return rendition.display(target);
       });
   }
@@ -1595,11 +1612,16 @@
 
   function displaySettled(target) {
     if (!rendition) return;
+    displayToken++;
+    var myToken = displayToken;
+    var current = function () {
+      return displayToken === myToken;
+    };
     var reveal = beginSettleFade();
     rendition
       .display(target)
       .then(function () {
-        return redisplayWhenSettled(target);
+        return redisplayWhenSettled(target, current);
       })
       .then(reveal, function () {
         /* target may be gone after a teardown */

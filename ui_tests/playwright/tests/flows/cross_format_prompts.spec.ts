@@ -217,12 +217,24 @@ test("declaring a sync point turns on follow and the reader auto-applies", async
   page,
   request,
 }) => {
+  // Establish a REAL stored CFI first: the live failure mode was the
+  // restore settle chain yanking the view back off the follow jump, and
+  // that chain only engages when a stored CFI restore is in flight — a
+  // percent-only row skips the restore entirely, which is how the earlier
+  // version of this test missed it.
+  await gotoReady(page, `/read/${uuid}`);
+  await expectMutation(
+    page,
+    { method: "POST", url: /\/api\/rpc\/progress(?:\?|$)/ },
+    async () => page.getByTestId("reader-next").click(),
+  );
+
   // Earlier tests in this serial file leave WALL-clock progress writes
-  // (a reader relocate, a player flush), which outrank this file's
-  // synthetic `now-60+n` clocks at the resume clock gate — the follow
-  // candidate would read as NothingNewer and the auto-apply would never
-  // fire. Re-anchor above the newest stored clock (staying at-or-behind
-  // wall clock, which the server clamps to).
+  // (a reader relocate, a player flush — and the page turn above), which
+  // outrank this file's synthetic `now-60+n` clocks at the resume clock
+  // gate — the follow candidate would read as NothingNewer and the
+  // auto-apply would never fire. Re-anchor above the newest stored clock
+  // (staying at-or-behind wall clock, which the server clamps to).
   let newest = 0;
   for (const format of ["epub", "audio"] as const) {
     const resp = await request.post("/api/rpc/progress/get", {
@@ -246,9 +258,8 @@ test("declaring a sync point turns on follow and the reader auto-applies", async
     .toBeGreaterThan(newest + 3);
   clock = Math.floor(Date.now() / 1000) - 3;
 
-  // Fresh positions: reading behind, listening ahead — then declare from
-  // the player so follow mode engages.
-  await writeEpubPercent(request, 85);
+  // Reading behind (the stored page-turn CFI above), listening ahead —
+  // then declare from the player so follow mode engages.
   await writeAudioSeconds(request, 1);
 
   await gotoReady(page, `/listen/${uuid}`);

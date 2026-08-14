@@ -93,23 +93,13 @@ pub(super) fn SyncJumpPrompt(uuid: String) -> Element {
                 return;
             };
             if resume.follow {
-                // Follow mode: resolve-at-open. Apply the mapped position
-                // silently — same seek-vs-navigate file guard as an
-                // accepted offer, no card, no dismissal bookkeeping.
-                let seconds = c.audio_position_seconds.unwrap_or(0.0);
-                let loaded = (playback.file_id)();
-                let same_file = loaded == c.book_file_id
-                    || (loaded.is_none()
-                        && ((playback.duration)() - c.total_duration_seconds.unwrap_or(0.0)).abs()
-                            < 1.0);
-                if same_file {
-                    super::helpers::seek_to(seconds);
-                } else {
-                    dioxus_router::navigator().push(Route::BookListen {
-                        uuid: uuid.clone(),
-                        file_id: c.book_file_id,
-                    });
-                }
+                // Follow mode: resolve-at-open is the boot's job
+                // (`resolve_follow_boot` seeds the mapped file + position
+                // before the first play). A second actor here raced the
+                // boot's one-shot restore seek — and, deciding against a
+                // not-yet-loaded player, could re-navigate into an
+                // explicit-file boot that skipped follow entirely. No
+                // card, no seek: stay quiet.
                 return;
             }
             // Re-arm rule: an already-declined source position stays quiet
