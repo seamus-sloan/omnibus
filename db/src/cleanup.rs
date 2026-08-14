@@ -25,9 +25,9 @@ pub enum CleanupError {
     Pattern(#[from] regex::Error),
 }
 
-/// Confidence tier of a detected suggestion, per F5.9's technical design:
-/// Tier 0 is a high-confidence normalized-key or regex match; Tier 1 is a
-/// fuzzy match, always surfaced (never gated behind an opt-in toggle).
+/// Confidence tier of a detected suggestion: Tier 0 is a high-confidence
+/// normalized-key or regex match; Tier 1 is a fuzzy match, always surfaced
+/// (never gated behind an opt-in toggle).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tier {
@@ -353,7 +353,7 @@ fn fuzzy_merge_suggestions(
     suggestions
 }
 
-/// Fuzzy-match threshold: token-set Jaccard >= 0.85 (F5.9 technical design).
+/// Fuzzy-match threshold: token-set Jaccard >= 0.85.
 const FUZZY_JACCARD_THRESHOLD: f64 = 0.85;
 
 fn token_set(key: &str) -> HashSet<&str> {
