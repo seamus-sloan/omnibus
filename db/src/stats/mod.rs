@@ -31,7 +31,10 @@ use omnibus_shared::{StatsRange, StatsSummary};
 use sqlx::SqlitePool;
 
 #[cfg(test)]
-use compute::*;
+use compute::{
+    avg_stars, books_active, books_per_month, finished_books, finished_count, genre_share,
+    listening_daily, previous_period, rating_monthly, FINISHED_BOOKS_LIMIT,
+};
 use compute::{compute, FINISHED_EVENTS};
 
 /// Failure space of the aggregation layer. Every metric is a SQL query, so a
