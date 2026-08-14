@@ -696,45 +696,35 @@ test("pages through image front matter without blanking the rendition, even at r
   await expect(page.getByTestId("reader-viewer")).toBeVisible();
 
   // Intentional exception: this regression must inspect rendered EPUB
-  // markup to confirm the front-matter images actually loaded pixels,
-  // not just occupied a styled box (AC2).
+  // markup to confirm the front-matter images actually occupy real space,
+  // not collapse to nothing (AC2 — "render as completely empty spreads" is
+  // the issue's own description of the symptom). A rendered bounding box is
+  // the more robust signal here than a manual decode probe: it's what a
+  // reader actually sees, and it doesn't race the async blob->data URI
+  // repair the way polling `naturalWidth` on a throwaway Image() does —
+  // Playwright's own `boundingBox()` already waits for layout to settle.
   const viewerFrame = page.frameLocator("#omnibus-viewer iframe");
 
   // Title page: a full-page plain <img> — the most common real-world shape.
   const titleImg = viewerFrame.locator("img").first();
   await expect(titleImg).toBeVisible();
   await expect
-    .poll(
-      () => titleImg.evaluate((el) => (el as HTMLImageElement).naturalWidth),
-      { timeout: 10_000 },
-    )
-    .toBeGreaterThan(0);
+    .poll(async () => (await titleImg.boundingBox())?.height ?? 0, {
+      timeout: 15_000,
+    })
+    .toBeGreaterThan(10);
 
   // Copyright page: an SVG-wrapped <image> — the shape a real publisher
   // scan uses, and the one that rendered blank while the plain <img> page
-  // worked. SVGImageElement has no `naturalWidth`, so instead of polling a
-  // property that would always read 0, decode the bytes the element's
-  // href actually points at (expected to be a data: URI once the glue's
-  // blob-inlining fix runs) through a throwaway Image().
+  // worked.
   await page.getByTestId("reader-next").click();
   const svgImage = viewerFrame.locator("image").first();
   await expect(svgImage).toBeVisible();
   await expect
-    .poll(
-      () =>
-        svgImage.evaluate((el) => {
-          const href = el.getAttribute("href") ?? el.getAttribute("xlink:href");
-          if (!href) return 0;
-          return new Promise<number>((resolve) => {
-            const probe = new Image();
-            probe.onload = () => resolve(probe.naturalWidth);
-            probe.onerror = () => resolve(0);
-            probe.src = href;
-          });
-        }),
-      { timeout: 10_000 },
-    )
-    .toBeGreaterThan(0);
+    .poll(async () => (await svgImage.boundingBox())?.height ?? 0, {
+      timeout: 15_000,
+    })
+    .toBeGreaterThan(10);
 
   // Rapid-fire the remaining turns with no waiting between clicks — the
   // condition (~1 click/sec or faster) that wedged the rendition on a real
