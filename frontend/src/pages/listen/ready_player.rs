@@ -529,15 +529,3 @@ pub(super) fn PlayerOverlays(
         }
     }
 }
-
-/// Web-only slot for the cross-format jump prompt; the hybrid mobile
-/// shell renders nothing here (native iOS owns its own prompt).
-#[cfg(not(feature = "mobile"))]
-fn sync_prompt_slot(uuid: &str) -> Element {
-    rsx! {}
-}
-
-#[cfg(feature = "mobile")]
-fn sync_prompt_slot(_uuid: &str) -> Element {
-    rsx! {}
-}
