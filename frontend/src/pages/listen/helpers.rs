@@ -157,6 +157,30 @@ pub(super) fn resolve_boot_position(
     }
 }
 
+/// Follow-at-boot override: with follow on and a mapped Candidate, the
+/// boot seeds the mapped `(file, seconds)` instead of the stored row — a
+/// post-boot corrective seek would race `initDirect`'s one-shot restore
+/// seek and lose. An explicit picker `?file_id=` outranks follow: that is
+/// a deliberate navigation to a specific file, not a resume.
+#[cfg(not(feature = "mobile"))]
+#[cfg_attr(not(feature = "web"), allow(dead_code))]
+pub(super) fn resolve_follow_boot(
+    explicit_file: Option<i64>,
+    resume: Option<&omnibus_shared::cross_format::CrossFormatResume>,
+) -> Option<(Option<i64>, f64)> {
+    if explicit_file.is_some() {
+        return None;
+    }
+    let resume = resume?;
+    if !resume.follow
+        || resume.state != omnibus_shared::cross_format::CrossFormatResumeState::Candidate
+    {
+        return None;
+    }
+    let c = resume.candidate.as_ref()?;
+    Some((c.book_file_id, c.audio_position_seconds?))
+}
+
 /// localStorage key for the persisted session volume preference.
 #[cfg(feature = "web")]
 const VOLUME_KEY: &str = "omnibus.listen.volume";
@@ -451,7 +475,58 @@ mod tests {
 // their only caller), so their tests live in a separately-gated module.
 #[cfg(all(test, not(feature = "mobile")))]
 mod boot_resume_tests {
-    use super::{resolve_boot_file, resolve_boot_position, resolve_resume_pos};
+    use omnibus_shared::cross_format::{
+        CrossFormatCandidate, CrossFormatResume, CrossFormatResumeState, MappingConfidence,
+    };
+    use omnibus_shared::ProgressFormat;
+
+    use super::{
+        resolve_boot_file, resolve_boot_position, resolve_follow_boot, resolve_resume_pos,
+    };
+
+    fn follow_resume(follow: bool, state: CrossFormatResumeState) -> CrossFormatResume {
+        CrossFormatResume {
+            state,
+            candidate: Some(CrossFormatCandidate {
+                target: ProgressFormat::Audio,
+                source_format: ProgressFormat::Epub,
+                source_client_updated_at: 1,
+                confidence: MappingConfidence::UserAnchored,
+                book_file_id: Some(917),
+                audio_position_seconds: Some(21_822.0),
+                total_duration_seconds: Some(35_760.0),
+                percent: None,
+                fraction: None,
+                source_position_seconds: None,
+                source_ahead: Some(true),
+            }),
+            follow,
+        }
+    }
+
+    #[test]
+    fn resolve_follow_boot_seeds_the_mapped_file_and_seconds() {
+        let resume = follow_resume(true, CrossFormatResumeState::Candidate);
+        assert_eq!(
+            resolve_follow_boot(None, Some(&resume)),
+            Some((Some(917), 21_822.0))
+        );
+    }
+
+    #[test]
+    fn resolve_follow_boot_stands_aside_for_an_explicit_picker_file() {
+        let resume = follow_resume(true, CrossFormatResumeState::Candidate);
+        assert_eq!(resolve_follow_boot(Some(919), Some(&resume)), None);
+    }
+
+    #[test]
+    fn resolve_follow_boot_requires_follow_and_a_candidate_state() {
+        let no_follow = follow_resume(false, CrossFormatResumeState::Candidate);
+        assert_eq!(resolve_follow_boot(None, Some(&no_follow)), None);
+        let aligned = follow_resume(true, CrossFormatResumeState::Aligned);
+        assert_eq!(resolve_follow_boot(None, Some(&aligned)), None);
+        assert_eq!(resolve_follow_boot(None, None), None);
+    }
 
     #[test]
     fn resolve_resume_pos_prefers_server_position_when_present() {
