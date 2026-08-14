@@ -209,7 +209,6 @@ pub(super) fn ReadyPlayer(
                 },
             }
 
-            {sync_prompt_slot(&uuid)}
 
             PlayerOverlays {
                 panes,
@@ -535,9 +534,7 @@ pub(super) fn PlayerOverlays(
 /// shell renders nothing here (native iOS owns its own prompt).
 #[cfg(not(feature = "mobile"))]
 fn sync_prompt_slot(uuid: &str) -> Element {
-    rsx! {
-        super::sync_prompt::SyncJumpPrompt { uuid: uuid.to_string() }
-    }
+    rsx! {}
 }
 
 #[cfg(feature = "mobile")]

@@ -45,13 +45,6 @@ test.beforeAll(async ({ request }) => {
     data: { update: { book_uuid: uuid, mode: "sequence" } },
   });
   expect(link.status(), "link confirm failed").toBe(200);
-  // Confirming a link now turns follow on (auto-apply, no prompts). The
-  // prompt tests below cover the follow-OFF surfaces, so switch it off
-  // explicitly; the sync-point test re-enables it via its declaration.
-  const followOff = await request.post("/api/rpc/cross-format/follow", {
-    data: { uuid, body: { enabled: false } },
-  });
-  expect(followOff.status(), "disable follow for prompt tests").toBe(200);
 });
 
 test.afterAll(async ({ request }) => {
@@ -128,63 +121,28 @@ async function writeAudioSeconds(
   expect(resp.status(), "audio progress write failed").toBe(200);
 }
 
-test("the player offers the mapped jump when reading is ahead", async ({
+test("a linked book resolves silently on the player — no prompt, mapped seek", async ({
   page,
   request,
 }) => {
-  // Audio parked at the start: on the 2-second fixture MP3, any later
-  // position would sit at/past the mapped reading spot and read as a
-  // backward offer under the equivalence gate's direction flag.
+  // Linking turns follow on, and follow-only is the whole surface now:
+  // the old "jump ahead?" card is gone, the boot itself seeds the mapped
+  // position (resolve_follow_boot). Reading ahead at 50% of the text maps
+  // to ~1s of the 2-second fixture — the seek slider must boot past 0
+  // with no prompt card anywhere.
   await writeAudioSeconds(request, 0);
   await writeEpubPercent(request, 50);
 
   await gotoReady(page, `/listen/${uuid}`);
-  const prompt = page.getByTestId("sync-prompt");
-  await expect(prompt).toBeVisible();
-  await expect(prompt).toContainText("jump to");
-
-  await page.getByTestId("sync-prompt-accept").click();
-  await expect(prompt).toHaveCount(0);
-});
-
-test("declining stores the spot and re-arms only when reading advances", async ({
-  page,
-  request,
-}) => {
-  await writeEpubPercent(request, 60);
-  await gotoReady(page, `/listen/${uuid}`);
-  await expect(page.getByTestId("sync-prompt")).toBeVisible();
-
-  await page.getByTestId("sync-prompt-dismiss").click();
-  await expect(page.getByTestId("sync-prompt")).toHaveCount(0);
-
-  // Same position after a fresh navigation: still quiet. Wait for the
-  // network to settle so the candidate fetch has definitely resolved
-  // before asserting absence.
-  await gotoReady(page, `/listen/${uuid}`);
   await page.waitForLoadState("networkidle");
   await expect(page.getByTestId("sync-prompt")).toHaveCount(0);
-
-  // The reading position advances: the prompt re-arms.
-  await writeEpubPercent(request, 70);
-  await gotoReady(page, `/listen/${uuid}`);
-  await expect(page.getByTestId("sync-prompt")).toBeVisible();
-  await page.getByTestId("sync-prompt-dismiss").click();
-});
-
-test("the reader offers the inverse jump when listening is ahead", async ({
-  page,
-  request,
-}) => {
-  await writeAudioSeconds(request, 55);
-
-  await gotoReady(page, `/read/${uuid}`);
-  const banner = page.getByTestId("sync-banner");
-  await expect(banner).toBeVisible();
-  await expect(banner).toContainText("%");
-
-  await page.getByTestId("sync-banner-dismiss").click();
-  await expect(banner).toHaveCount(0);
+  const seek = page.getByRole("slider", { name: "Seek" });
+  await expect
+    .poll(async () => Number(await seek.inputValue()), {
+      timeout: 15_000,
+      message: "the boot should seed the mapped (non-zero) position",
+    })
+    .toBeGreaterThan(0);
 });
 
 test("the hero shows one synced card with the counterpart affordance", async ({
@@ -292,7 +250,6 @@ test("declaring a sync point turns on follow and the reader auto-applies", async
   await writeAudioSeconds(request, 2);
   await gotoReady(page, `/read/${uuid}`);
   await page.waitForLoadState("networkidle");
-  await expect(page.getByTestId("sync-banner")).toHaveCount(0);
   // The footer's whole-book percent proves the view actually moved to the
   // mapped spot (audio at end → epub ≈ 100%), not merely that no banner
   // showed — a silently-dropped jump also shows no banner.
