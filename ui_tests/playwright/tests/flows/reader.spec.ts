@@ -58,9 +58,10 @@ const PROGRESS_POST = {
   expectedStatus: 200,
 };
 
-// The bottom-bar page label ("p. 3 of 12 · 25%") renders only after epub.js
-// has painted AND the whole-book pagination resolved — the strongest signal
-// that relocates are flowing. Note the NBSP after "p." in the label.
+// The bottom-bar page label ("p. 3 of 12 · 25%" — or "· ~25%" while the
+// whole-book pagination still resolves in the background, issue #1896)
+// renders once epub.js has painted and the first relocate landed — the
+// signal that relocates are flowing. Note the NBSP after "p." in the label.
 const PAGE_LABEL = /p\.\u00a0\d+ of \d+/;
 
 async function footerPageLabel(page: Page): Promise<string> {
