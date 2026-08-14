@@ -161,6 +161,12 @@ fn boot_new_book(
         playback.playing,
         playback.playback_failed,
     );
+    register_readiness_callbacks(
+        cb_holder,
+        playback.hls_ready,
+        playback.buffering,
+        playback.playback_failed,
+    );
     inject_hls_script();
     install_control_surface(uuid, initial_rate, initial_volume);
 
@@ -188,6 +194,7 @@ fn reset_per_book_signals(playback: &crate::PlaybackState, user_id: Option<i64>,
     let mut elapsed = playback.elapsed;
     let mut playing = playback.playing;
     let mut hls_ready = playback.hls_ready;
+    let mut buffering = playback.buffering;
     let mut playback_failed = playback.playback_failed;
     let mut rate = playback.rate;
     let mut rate_error = playback.rate_error;
@@ -201,6 +208,7 @@ fn reset_per_book_signals(playback: &crate::PlaybackState, user_id: Option<i64>,
     elapsed.set(0.0_f64);
     playing.set(false);
     hls_ready.set(false);
+    buffering.set(false);
     playback_failed.set(false);
     book.set(None);
     error.set(None);
@@ -385,6 +393,55 @@ fn register_js_callbacks(
     ];
 }
 
+/// Wire the three JS→Rust readiness/health callbacks added for #1903:
+/// `__omnibusOnAudioBooted` fires once `initDirect`/`initHls` has actually
+/// committed a source to the element — the authoritative "ready" signal,
+/// replacing the old optimistic `hls_ready.set(true)` issued right after
+/// firing the init eval (a real, if usually tiny, race against the JS
+/// actually running). `__omnibusOnAudioBuffering` mirrors the JS
+/// watchdog's `readyState < HAVE_FUTURE_DATA` check while playing.
+/// `__omnibusOnAudioStalled` reuses `playback_failed` — a stall with no
+/// forward progress is exactly as unrecoverable-without-a-reload as an
+/// init timeout. Closures are appended to `cb_holder` alongside
+/// `register_js_callbacks`'s so both sets outlive the installing effect.
+fn register_readiness_callbacks(
+    cb_holder: &JsCallbackHolder,
+    mut hls_ready: Signal<bool>,
+    mut buffering: Signal<bool>,
+    mut playback_failed: Signal<bool>,
+) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let on_booted = Closure::<dyn FnMut(f64)>::new(move |_: f64| {
+        hls_ready.set(true);
+    });
+    let on_buffering = Closure::<dyn FnMut(f64)>::new(move |flag: f64| {
+        buffering.set(flag > 0.5);
+    });
+    let on_stalled = Closure::<dyn FnMut(f64)>::new(move |_: f64| {
+        playback_failed.set(true);
+    });
+    let _ = js_sys::Reflect::set(
+        &window,
+        &JsValue::from_str("__omnibusOnAudioBooted"),
+        on_booted.as_ref().unchecked_ref(),
+    );
+    let _ = js_sys::Reflect::set(
+        &window,
+        &JsValue::from_str("__omnibusOnAudioBuffering"),
+        on_buffering.as_ref().unchecked_ref(),
+    );
+    let _ = js_sys::Reflect::set(
+        &window,
+        &JsValue::from_str("__omnibusOnAudioStalled"),
+        on_stalled.as_ref().unchecked_ref(),
+    );
+    cb_holder
+        .borrow_mut()
+        .extend([on_booted, on_buffering, on_stalled]);
+}
+
 /// Install the `window.OmnibusAudio` control surface immediately so
 /// the transport buttons are wired even before `initDirect` / `initHls`
 /// attaches. The two init paths are responsible for setting their own
@@ -401,10 +458,12 @@ fn install_control_surface(uuid: &str, initial_rate: f64, initial_volume: f64) {
 /// `file_id` when one was selected, else the progress row's stored
 /// `book_file_id` so multi-file books resume in the file the seconds were
 /// recorded in (#1888) — then either:
-/// * **Direct mode** — call `initDirect` with the parts list and flip
-///   `hls_ready` true (instant playback for m4b/m4a/mp3/aac).
-/// * **HLS mode** — poll `/status` until `ready` (call `initHls` + flip
-///   `hls_ready`) or `failed` (flip `playback_failed`).
+/// * **Direct mode** — call `initDirect` with the parts list (instant
+///   playback for m4b/m4a/mp3/aac). `hls_ready` flips once the JS side
+///   confirms via `__omnibusOnAudioBooted` that a source is actually
+///   committed (#1903), not optimistically here.
+/// * **HLS mode** — poll `/status` until `ready` (call `initHls`, same
+///   JS-confirmed `hls_ready` flip) or `failed` (flip `playback_failed`).
 /// * **No manifest** — show the same failure overlay as a terminal HLS
 ///   transcode failure.
 async fn run_manifest_init(
@@ -417,7 +476,6 @@ async fn run_manifest_init(
 ) {
     let mut rate = playback.rate;
     let mut rate_error = playback.rate_error;
-    let hls_ready = playback.hls_ready;
     let mut playback_failed = playback.playback_failed;
     let chapters_sig = playback.chapters;
     let uuid_guard = playback.uuid;
@@ -522,14 +580,13 @@ async fn run_manifest_init(
     match manifest {
         omnibus_shared::AudiobookManifest::Direct {
             parts, chapters, ..
-        } => init_direct_play(parts, chapters, &pos_lit, chapters_sig, hls_ready),
+        } => init_direct_play(parts, chapters, &pos_lit, chapters_sig),
         omnibus_shared::AudiobookManifest::Hls { playlist_url, .. } => {
             init_hls(
                 &uuid_for_fetch,
                 &playlist_url,
                 &pos_lit,
                 is_current,
-                hls_ready,
                 playback_failed,
             )
             .await;
@@ -553,15 +610,17 @@ async fn fetch_manifest(
     }
 }
 
-/// Direct-mode arm: hand the part list to the JS `initDirect` shim,
-/// publish the chapter map, and flip `hls_ready` true. Synchronous —
-/// the caller's `is_current` guard covered the only `await`.
+/// Direct-mode arm: hand the part list to the JS `initDirect` shim and
+/// publish the chapter map. Synchronous — the caller's `is_current` guard
+/// covered the only `await`. `hls_ready` is no longer flipped here — the
+/// JS shim reports back via `__omnibusOnAudioBooted` once it has actually
+/// committed a source, closing the race where a click could fire
+/// `el.play()` before `el.src` existed (#1903).
 fn init_direct_play(
     parts: Vec<omnibus_shared::ManifestPart>,
     chapters: Vec<omnibus_shared::ChapterInfo>,
     pos_lit: &str,
     mut chapters_sig: Signal<Vec<omnibus_shared::ChapterInfo>>,
-    mut hls_ready: Signal<bool>,
 ) {
     // Populate chapter signal from manifest data.
     chapters_sig.set(chapters);
@@ -573,11 +632,11 @@ fn init_direct_play(
         r#"(function(){{ var n=0; (function go(){{ if (window.OmnibusAudio) {{ window.OmnibusAudio.initDirect({parts_json}, {pos_lit}); }} else if (n++ < 200) {{ setTimeout(go, 50); }} else {{ console.error('OmnibusAudio never installed; init timed out'); if (typeof window.__omnibusOnInitTimeout === 'function') {{ window.__omnibusOnInitTimeout(0); }} }} }})(); }})();"#
     );
     let _ = dioxus::document::eval(&init_js);
-    hls_ready.set(true);
 }
 
 /// HLS arm: poll `/api/audiobooks/{uuid}/status` until `ready` (call
-/// `initHls` + flip `hls_ready`) or `failed` (flip `playback_failed`).
+/// `initHls`, which reports back via `__omnibusOnAudioBooted` the same way
+/// the direct-mode arm does) or `failed` (flip `playback_failed`).
 /// Re-checks `is_current` every iteration so a stale poll can't clobber
 /// the newly-active book's signals.
 async fn init_hls(
@@ -585,7 +644,6 @@ async fn init_hls(
     playlist_url: &str,
     pos_lit: &str,
     is_current: impl Fn() -> bool,
-    mut hls_ready: Signal<bool>,
     mut playback_failed: Signal<bool>,
 ) {
     let playlist_lit = serde_json::to_string(playlist_url).unwrap_or_else(|_| "\"\"".into());
@@ -604,7 +662,6 @@ async fn init_hls(
             }
             Some("ready") => {
                 eval_hls_init(&playlist_lit, pos_lit);
-                hls_ready.set(true);
                 return;
             }
             _ => {}

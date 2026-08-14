@@ -314,6 +314,12 @@ pub struct PlaybackState {
     pub rate_error: Signal<Option<String>>,
     pub chapters: Signal<Vec<omnibus_shared::ChapterInfo>>,
     pub hls_ready: Signal<bool>,
+    /// True while the element is waiting on network data after a play was
+    /// requested (`readyState < HAVE_FUTURE_DATA`) — drives the transport's
+    /// buffering badge so a slow initial fetch reads as "loading" rather
+    /// than a playing clock frozen at 0:00 (#1903). JS-driven; reset false
+    /// on every book swap.
+    pub buffering: Signal<bool>,
     pub playback_failed: Signal<bool>,
     /// User's target volume (0.0–1.0), web-only UI. Session-wide, not reset
     /// on a book swap — the sleep-timer fade in `pages::listen::sleep`
@@ -339,6 +345,7 @@ impl PlaybackState {
             rate_error: Signal::new(None),
             chapters: Signal::new(Vec::new()),
             hls_ready: Signal::new(false),
+            buffering: Signal::new(false),
             playback_failed: Signal::new(false),
             volume: Signal::new(1.0),
         }

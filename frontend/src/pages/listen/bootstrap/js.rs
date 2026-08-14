@@ -224,7 +224,34 @@ fn listeners_js() -> &'static str {
       if (window.__omnibusOnAudioEnded) {
         window.__omnibusOnAudioEnded(absTime());
       }
-    });"#
+    });
+
+    // Buffering / stall watchdog (#1903). Polls `readyState` so the UI can
+    // show a buffering indicator instead of a playing clock frozen at
+    // 0:00, and surfaces a real error if no forward progress arrives for
+    // too long rather than leaving playback silently wedged. `timeupdate`
+    // and `progress` both count as progress — a fully-cached response can
+    // fire one without the other. A stale watchdog from a prior boot is
+    // cleared first, since this whole block re-runs on every book swap
+    // without anything else ever calling `clearInterval` on it.
+    var HAVE_FUTURE_DATA = 3;
+    var lastProgressAt = Date.now();
+    var stallReported = false;
+    function markProgress(){ lastProgressAt = Date.now(); stallReported = false; }
+    el.addEventListener('timeupdate', markProgress);
+    el.addEventListener('progress', markProgress);
+    try { if (window.__omnibusStallWatchdog) { clearInterval(window.__omnibusStallWatchdog); } } catch(_) {}
+    window.__omnibusStallWatchdog = setInterval(function(){
+      var buffering = !el.paused && el.readyState < HAVE_FUTURE_DATA;
+      if (window.__omnibusOnAudioBuffering) { window.__omnibusOnAudioBuffering(buffering ? 1 : 0); }
+      if (!buffering) { stallReported = false; lastProgressAt = Date.now(); return; }
+      if (stallReported) { return; }
+      if (Date.now() - lastProgressAt > 15000) {
+        stallReported = true;
+        try { el.pause(); } catch(_) {}
+        if (window.__omnibusOnAudioStalled) { window.__omnibusOnAudioStalled(0); }
+      }
+    }, 500);"#
 }
 
 /// JS body for `initDirect: function(parts, initialPositionAbs)` — picks
@@ -263,6 +290,12 @@ fn direct_play_init_js() -> &'static str {
         el.addEventListener('loadedmetadata', onMeta);
         el.src = parts[idx].url;
         el.load();
+        // Confirms to Rust that a source has actually been committed to
+        // the element. Closes the race where `hls_ready` (and thus the
+        // transport's enabled state) flipped true before `el.src` even
+        // existed, which let an early click fire `el.play()` on an empty
+        // element and leave it wedged reporting "playing" at 0:00 (#1903).
+        if (window.__omnibusOnAudioBooted) { window.__omnibusOnAudioBooted(0); }
       },"#
 }
 
@@ -299,6 +332,8 @@ fn hls_init_js() -> &'static str {
           };
           el.addEventListener('loadedmetadata', onMeta);
         }
+        // See initDirect above — same booted confirmation for the HLS path.
+        if (window.__omnibusOnAudioBooted) { window.__omnibusOnAudioBooted(0); }
       },"#
 }
 
@@ -364,6 +399,32 @@ mod tests {
             "direct_play_init_js missing"
         );
         assert!(js.contains("initHls: function(url"), "hls_init_js missing");
+        // Both init paths report back once a source is actually committed
+        // (#1903) — this is what `hls_ready` now waits on instead of
+        // flipping optimistically the instant the init eval is fired.
+        let booted_calls = js.matches("window.__omnibusOnAudioBooted").count();
+        assert_eq!(
+            booted_calls, 2,
+            "expected one __omnibusOnAudioBooted call in each of initDirect/initHls, found {booted_calls}"
+        );
+        // The buffering/stall watchdog (#1903): polls readyState, reports
+        // buffering state, and clears a stale watchdog from a prior boot.
+        assert!(
+            js.contains("HAVE_FUTURE_DATA"),
+            "buffering watchdog missing"
+        );
+        assert!(
+            js.contains("window.__omnibusOnAudioBuffering"),
+            "buffering callback wiring missing"
+        );
+        assert!(
+            js.contains("window.__omnibusOnAudioStalled"),
+            "stall callback wiring missing"
+        );
+        assert!(
+            js.contains("clearInterval(window.__omnibusStallWatchdog)"),
+            "watchdog does not clear a prior boot's stale interval"
+        );
         // A paused seek must push the transport display immediately (#1897)
         // rather than waiting on the element's own `timeupdate`.
         assert!(
