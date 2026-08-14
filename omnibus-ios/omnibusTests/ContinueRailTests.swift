@@ -177,3 +177,27 @@ struct ResumeSpliceTests {
         #expect(spliced?.contains { $0.id == "book-5:epub" } == false)
     }
 }
+
+// MARK: - Wire decode
+
+@Suite("Resume point playback rate")
+struct ResumePointPlaybackRateTests {
+    @Test("carries the saved rate under the wire key the server writes")
+    func rateRoundTripsUnderTheWireKey() throws {
+        var p = point(record(format: .audio, at: 450), duration: 1_200)
+        p.playbackRate = 2.0
+        let data = try JSONEncoder().encode(p)
+        // Pin the snake_case wire name, not just a same-struct round-trip.
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        #expect(object?["playback_rate"] as? Double == 2.0)
+        #expect(try JSONDecoder().decode(ResumePoint.self, from: data).playbackRate == 2.0)
+    }
+
+    @Test("a payload without a saved rate decodes to nil, read as 1x")
+    func missingRateDecodesToNil() throws {
+        let data = try JSONEncoder().encode(point(record(format: .audio, at: 450), duration: 1_200))
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        #expect(object?.keys.contains("playback_rate") == false)
+        #expect(try JSONDecoder().decode(ResumePoint.self, from: data).playbackRate == nil)
+    }
+}

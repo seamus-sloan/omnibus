@@ -516,6 +516,10 @@ struct ResumePoint: Codable, Sendable, Identifiable {
     var totalDurationSeconds: Double?
     var chapterNumber: Int64?
     var chapterCount: Int64?
+    /// The saved playback rate for this book's audio, so the hero's "left"
+    /// readout can show the wall-clock wait. `nil` for epub rows, when no
+    /// preference is saved (1x), and against older servers.
+    var playbackRate: Double?
 
     /// Scoped by format as well as book, mirroring `CacheKey.progress`.
     ///
@@ -539,6 +543,7 @@ struct ResumePoint: Codable, Sendable, Identifiable {
         case totalDurationSeconds = "total_duration_seconds"
         case chapterNumber = "chapter_number"
         case chapterCount = "chapter_count"
+        case playbackRate = "playback_rate"
     }
 
     /// Fraction complete for the progress bar, when the format supports one.
