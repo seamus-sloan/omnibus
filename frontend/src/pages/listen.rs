@@ -25,7 +25,7 @@ mod chapter_nav;
 mod chapters_drawer;
 #[cfg(not(feature = "mobile"))]
 mod controls;
-mod helpers;
+pub(crate) mod helpers;
 #[cfg(not(feature = "mobile"))]
 mod mini_dock;
 #[cfg(feature = "mobile")]

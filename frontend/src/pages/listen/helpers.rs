@@ -290,9 +290,9 @@ pub(super) fn format_hms(seconds: f64) -> String {
 
 /// Rate-adjusted "time left" for a real (1x) `remaining` duration; falls back
 /// to `remaining` unscaled when `rate` is non-finite or non-positive. Shared
-/// by the web and mobile players so every remaining-time readout scales the
-/// same way.
-pub(super) fn remaining_at_rate(remaining: f64, rate: f64) -> f64 {
+/// by the web and mobile players and the landing resume hero so every
+/// remaining-time readout scales the same way.
+pub(crate) fn remaining_at_rate(remaining: f64, rate: f64) -> f64 {
     if !rate.is_finite() || rate <= 0.0 {
         return remaining;
     }

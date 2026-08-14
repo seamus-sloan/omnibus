@@ -484,6 +484,7 @@ mod tests {
             total_duration_seconds: None,
             chapter_number: None,
             chapter_count: None,
+            playback_rate: None,
         }
     }
 

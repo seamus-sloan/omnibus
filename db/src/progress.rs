@@ -611,12 +611,21 @@ pub async fn resume_points(
                 (None, None, None)
             }
         };
+        // Only rows that will render a listening card need the preference —
+        // it feeds the rate-adjusted "left" readout on the resume surfaces.
+        let playback_rate = match total_duration_seconds {
+            Some(_) => get_playback_rate(pool, user_id, &record.book_uuid)
+                .await?
+                .map(|r| r.playback_rate),
+            None => None,
+        };
         points.push(ResumePoint {
             record,
             book,
             total_duration_seconds,
             chapter_number,
             chapter_count,
+            playback_rate,
         });
     }
     Ok(points)
