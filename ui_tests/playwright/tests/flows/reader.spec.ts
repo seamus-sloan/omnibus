@@ -712,17 +712,27 @@ test("pages through image front matter without blanking the rendition, even at r
 
   // Copyright page: an SVG-wrapped <image> — the shape a real publisher
   // scan uses, and the one that rendered blank while the plain <img> page
-  // worked.
+  // worked. SVGImageElement has no `naturalWidth`, so instead of polling a
+  // property that would always read 0, decode the bytes the element's
+  // href actually points at (expected to be a data: URI once the glue's
+  // blob-inlining fix runs) through a throwaway Image().
   await page.getByTestId("reader-next").click();
   const svgImage = viewerFrame.locator("image").first();
   await expect(svgImage).toBeVisible();
   await expect
     .poll(
       () =>
-        svgImage.evaluate(
-          (el) =>
-            (el as unknown as { naturalWidth?: number }).naturalWidth ?? 0,
-        ),
+        svgImage.evaluate((el) => {
+          const href =
+            el.getAttribute("href") ?? el.getAttribute("xlink:href");
+          if (!href) return 0;
+          return new Promise<number>((resolve) => {
+            const probe = new Image();
+            probe.onload = () => resolve(probe.naturalWidth);
+            probe.onerror = () => resolve(0);
+            probe.src = href;
+          });
+        }),
       { timeout: 10_000 },
     )
     .toBeGreaterThan(0);
