@@ -41,6 +41,12 @@ test("toggles dark to light, persists across reload", async ({ page }) => {
   await page.getByTestId("theme-light").click();
   await expect(root).toHaveAttribute("data-theme", "light");
 
+  // The switch briefly holds a `theme-snap` class on the root that disables
+  // CSS transitions so every surface repaints in the same frame. It must
+  // clear again (two animation frames later) or hover transitions would stay
+  // dead for the whole session — poll for the settled class.
+  await expect.poll(async () => root.getAttribute("class")).toBe("atrium");
+
   const stored = await page.evaluate(() =>
     window.localStorage.getItem("omn.theme"),
   );
