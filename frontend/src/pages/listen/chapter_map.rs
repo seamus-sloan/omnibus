@@ -131,7 +131,7 @@ pub(super) struct ChapterMapProps {
     /// Fired with the target time in seconds when the bar is clicked or a
     /// drag is released.
     pub on_seek: EventHandler<f64>,
-    /// True while playing but waiting on network data (#1903) — shows a
+    /// True while playing but waiting on network data — shows a
     /// buffering badge below the scrub times instead of a clock that looks
     /// stuck.
     pub buffering: bool,

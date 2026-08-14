@@ -58,7 +58,7 @@ pub(super) struct PlaybackSignals {
     pub volume: Signal<f64>,
     pub hls_ready: Signal<bool>,
     /// True while the element is waiting on network data after a play was
-    /// requested — drives the transport's buffering badge (#1903).
+    /// requested — drives the transport's buffering badge.
     pub buffering: Signal<bool>,
 }
 

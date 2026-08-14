@@ -393,7 +393,7 @@ fn register_js_callbacks(
     ];
 }
 
-/// Wire the three JS→Rust readiness/health callbacks added for #1903:
+/// Wire the three JS→Rust readiness/health callbacks:
 /// `__omnibusOnAudioBooted` fires once `initDirect`/`initHls` has actually
 /// committed a source to the element — the authoritative "ready" signal,
 /// replacing the old optimistic `hls_ready.set(true)` issued right after
@@ -461,7 +461,7 @@ fn install_control_surface(uuid: &str, initial_rate: f64, initial_volume: f64) {
 /// * **Direct mode** — call `initDirect` with the parts list (instant
 ///   playback for m4b/m4a/mp3/aac). `hls_ready` flips once the JS side
 ///   confirms via `__omnibusOnAudioBooted` that a source is actually
-///   committed (#1903), not optimistically here.
+///   committed, not optimistically here.
 /// * **HLS mode** — poll `/status` until `ready` (call `initHls`, same
 ///   JS-confirmed `hls_ready` flip) or `failed` (flip `playback_failed`).
 /// * **No manifest** — show the same failure overlay as a terminal HLS
@@ -615,7 +615,7 @@ async fn fetch_manifest(
 /// covered the only `await`. `hls_ready` is no longer flipped here — the
 /// JS shim reports back via `__omnibusOnAudioBooted` once it has actually
 /// committed a source, closing the race where a click could fire
-/// `el.play()` before `el.src` existed (#1903).
+/// `el.play()` before `el.src` existed.
 fn init_direct_play(
     parts: Vec<omnibus_shared::ManifestPart>,
     chapters: Vec<omnibus_shared::ChapterInfo>,

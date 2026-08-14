@@ -317,7 +317,7 @@ pub struct PlaybackState {
     /// True while the element is waiting on network data after a play was
     /// requested (`readyState < HAVE_FUTURE_DATA`) — drives the transport's
     /// buffering badge so a slow initial fetch reads as "loading" rather
-    /// than a playing clock frozen at 0:00 (#1903). JS-driven; reset false
+    /// than a playing clock frozen at 0:00. JS-driven; reset false
     /// on every book swap.
     pub buffering: Signal<bool>,
     pub playback_failed: Signal<bool>,

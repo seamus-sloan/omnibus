@@ -16,7 +16,7 @@ use dioxus::prelude::*;
 /// Terminal failure overlay shown when the HLS `.failed` marker is present,
 /// the manifest fetch failed outright, the JS bootstrap never installed
 /// (`__omnibusOnInitTimeout`), or a load stalled with no forward progress
-/// for too long (`__omnibusOnAudioStalled`, #1903) — all four reuse
+/// for too long (`__omnibusOnAudioStalled`) — all four reuse
 /// `playback_failed` since none of them recover without a reload.
 #[component]
 pub(super) fn FailedOverlay() -> Element {
@@ -34,7 +34,7 @@ pub(super) fn FailedOverlay() -> Element {
 }
 
 /// HLS-transcode preparing overlay. Direct-play books flip `ready` true as
-/// soon as the JS bootstrap confirms (`__omnibusOnAudioBooted`, #1903) that
+/// soon as the JS bootstrap confirms (`__omnibusOnAudioBooted`) that
 /// `initDirect` committed a source, so this only ever renders for the HLS
 /// fallback path.
 #[component]

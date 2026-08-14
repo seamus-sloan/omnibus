@@ -3090,7 +3090,7 @@ a.idx-letter-on:focus-visible {
 }
 .lp-scrub-remaining { color: var(--ink-3); }
 
-/* Buffering badge (#1903) — shown below the scrub times while playing but
+/* Buffering badge — shown below the scrub times while playing but
    still waiting on network data, so a slow fetch reads as "loading"
    instead of a clock frozen at 0:00. */
 .lp-buffering {
@@ -3105,6 +3105,9 @@ a.idx-letter-on:focus-visible {
 @keyframes lp-buffering-pulse {
   0%, 100% { opacity: .3; }
   50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lp-buffering::before { animation: none; }
 }
 
 /* Chapter map / seek scrubber */

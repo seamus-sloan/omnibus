@@ -226,18 +226,26 @@ fn listeners_js() -> &'static str {
       }
     });
 
-    // Buffering / stall watchdog (#1903). Polls `readyState` so the UI can
-    // show a buffering indicator instead of a playing clock frozen at
-    // 0:00, and surfaces a real error if no forward progress arrives for
-    // too long rather than leaving playback silently wedged. `timeupdate`
-    // and `progress` both count as progress — a fully-cached response can
-    // fire one without the other. A stale watchdog from a prior boot is
-    // cleared first, since this whole block re-runs on every book swap
-    // without anything else ever calling `clearInterval` on it.
+    // Buffering / stall watchdog. Polls `readyState` so the UI can show a
+    // buffering indicator instead of a playing clock frozen at 0:00, and
+    // surfaces a real error if no forward progress arrives for too long
+    // rather than leaving playback silently wedged. `timeupdate` and
+    // `progress` both count as progress — a fully-cached response can fire
+    // one without the other. This whole block re-runs on every book swap
+    // against the same persistent <audio> element, so both the stale
+    // interval and the stale listeners from a prior boot are cleared first
+    // — otherwise every swap would pile on another pair of listeners.
     var HAVE_FUTURE_DATA = 3;
     var lastProgressAt = Date.now();
     var stallReported = false;
     function markProgress(){ lastProgressAt = Date.now(); stallReported = false; }
+    try {
+      if (window.__omnibusMarkProgress) {
+        el.removeEventListener('timeupdate', window.__omnibusMarkProgress);
+        el.removeEventListener('progress', window.__omnibusMarkProgress);
+      }
+    } catch(_) {}
+    window.__omnibusMarkProgress = markProgress;
     el.addEventListener('timeupdate', markProgress);
     el.addEventListener('progress', markProgress);
     try { if (window.__omnibusStallWatchdog) { clearInterval(window.__omnibusStallWatchdog); } } catch(_) {}
@@ -294,7 +302,7 @@ fn direct_play_init_js() -> &'static str {
         // the element. Closes the race where `hls_ready` (and thus the
         // transport's enabled state) flipped true before `el.src` even
         // existed, which let an early click fire `el.play()` on an empty
-        // element and leave it wedged reporting "playing" at 0:00 (#1903).
+        // element and leave it wedged reporting "playing" at 0:00.
         if (window.__omnibusOnAudioBooted) { window.__omnibusOnAudioBooted(0); }
       },"#
 }
@@ -399,15 +407,15 @@ mod tests {
             "direct_play_init_js missing"
         );
         assert!(js.contains("initHls: function(url"), "hls_init_js missing");
-        // Both init paths report back once a source is actually committed
-        // (#1903) — this is what `hls_ready` now waits on instead of
-        // flipping optimistically the instant the init eval is fired.
+        // Both init paths report back once a source is actually committed —
+        // this is what `hls_ready` now waits on instead of flipping
+        // optimistically the instant the init eval is fired.
         let booted_calls = js.matches("window.__omnibusOnAudioBooted").count();
         assert_eq!(
             booted_calls, 2,
             "expected one __omnibusOnAudioBooted call in each of initDirect/initHls, found {booted_calls}"
         );
-        // The buffering/stall watchdog (#1903): polls readyState, reports
+        // The buffering/stall watchdog: polls readyState, reports
         // buffering state, and clears a stale watchdog from a prior boot.
         assert!(
             js.contains("HAVE_FUTURE_DATA"),

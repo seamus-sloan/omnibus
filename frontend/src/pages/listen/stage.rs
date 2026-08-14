@@ -97,9 +97,7 @@ pub(super) struct PlaybackPosition {
     pub rate: f64,
     pub scrub_max: f64,
     pub current_chapter_index: usize,
-    /// True while playing but the element is still waiting on network data
-    /// (#1903) — the scrubber shows a buffering badge instead of a clock
-    /// that looks frozen.
+    /// True while playing but the element is still waiting on network data.
     pub buffering: bool,
 }
 
