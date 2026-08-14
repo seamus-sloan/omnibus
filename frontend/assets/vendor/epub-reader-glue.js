@@ -69,6 +69,11 @@
   var book = null;
   var rendition = null;
   var relocateTimer = null;
+  // Whether epub.js "locations" (the whole-book pagination map) are usable
+  // for the current book — loaded from cache or generated. Until then the
+  // relocate payload carries a coarse spine-derived percent flagged
+  // `pctApprox` instead of epub.js's frozen 0 (issue #1896).
+  var locationsReady = false;
   // False while an initial CFI restore is still settling — mutes emitRelocate
   // so the first-pass landing (a page or two off until fonts/theme reflow) is
   // never persisted as reading progress.
@@ -128,6 +133,7 @@
     endSectionTurn();
     endSettleFade();
     tocFlat = [];
+    locationsReady = false;
     if (rendition) {
       try {
         rendition.destroy();
@@ -166,9 +172,57 @@
     return null;
   }
 
+  // Coarse whole-book percent from spine position alone — the honest stand-in
+  // while the locations map is still being generated (issue #1896). Spine
+  // index plus the visual page fraction within the current section, over the
+  // spine count. Clamped below 100 so an approximation can never claim the
+  // book is finished.
+  function spineApproxPct(start) {
+    try {
+      var spine = book && book.spine;
+      var count = spine
+        ? (spine.spineItems || spine.items || []).length || spine.length || 0
+        : 0;
+      if (!count) return 0;
+      var idx = typeof start.index === "number" ? start.index : 0;
+      var frac = 0;
+      var d = start.displayed;
+      if (d && d.total > 0 && d.page > 0) frac = (d.page - 1) / d.total;
+      var pct = Math.round(((idx + frac) / count) * 100);
+      return Math.max(0, Math.min(99, pct));
+    } catch (e) {
+      return 0;
+    }
+  }
+
   function buildRelocateData(location) {
     var cfi = location && location.start ? location.start.cfi : undefined;
-    var pct = location && location.start ? Math.round((location.start.percentage || 0) * 100) : 0;
+    // Whole-book percent needs the locations map; until it resolves,
+    // epub.js reports `percentage` as a flat 0 for the entire session.
+    // Substitute the spine-derived approximation and say so (`pctApprox`)
+    // rather than rendering a frozen 0% (issue #1896).
+    var pct = 0;
+    var pctApprox = false;
+    if (location && location.start) {
+      if (locationsReady) {
+        // `start.percentage` is a snapshot taken when the relocate fired;
+        // the post-generation re-emit reuses a location minted *before* the
+        // map existed, whose snapshot is a frozen 0 — recompute from the
+        // CFI in that case rather than reporting a mid-book position as 0%.
+        var p = location.start.percentage || 0;
+        if (!p && cfi && book && book.locations) {
+          try {
+            p = book.locations.percentageFromCfi(cfi) || 0;
+          } catch (e) {
+            p = 0;
+          }
+        }
+        pct = Math.round(p * 100);
+      } else {
+        pct = spineApproxPct(location.start);
+        pctApprox = true;
+      }
+    }
     // `displayed` is the visual column epub.js just rendered in the current
     // paginated flow — 1-indexed, and always exactly one away from the
     // previous relocate's page after a next()/prev() turn. This replaced a
@@ -188,6 +242,7 @@
       page: page,
       totalPages: totalPages,
       pct: pct,
+      pctApprox: pctApprox,
       // epub.js sets `atEnd` when the displayed range reaches the last page
       // of the last spine item — `pct` alone tops out below 100 because it
       // tracks the *start* of the visible range.
@@ -307,6 +362,19 @@
       }
     }
 
+    // Resolved when this init's first page is on screen (the same moment
+    // the host's loading overlay drops) — the gate that keeps the
+    // locations pass out of the open path. `painted` is the synchronous
+    // mirror the error handler below reads.
+    var painted = false;
+    var paintResolve = null;
+    var firstPaint = new Promise(function (res) {
+      paintResolve = function () {
+        painted = true;
+        res();
+      };
+    });
+
     // The whole-book `pct` figure comes from epub.js "locations" — a
     // whole-book pagination pass that takes seconds on desktop and much
     // longer in the mobile WebView (the visual page/section total in
@@ -317,7 +385,15 @@
     // entries just fall back to regeneration. Caveat: replacing a book's
     // file under the same uuid can leave a slightly stale pct until the
     // entry is cleared.
+    //
+    // Generation (cache miss only) is gated on `firstPaint`: it walks and
+    // parses every spine section on the main thread, so starting it at
+    // book.ready lets it race the initial section render and starve the
+    // relocate timers — the "Loading…"-for-the-whole-book-parse and
+    // frozen-footer symptoms of issue #1896. Until it resolves, relocates
+    // carry the spine-approximate `pct` (see buildRelocateData).
     var locationsCacheKey = opts.locationsKey ? "omn.locs::" + opts.locationsKey : null;
+    var locBook = book;
     book.ready
       .then(function () {
         tocFlat = [];
@@ -334,27 +410,40 @@
         if (cached) {
           try {
             book.locations.load(cached);
+            locationsReady = true;
             return null;
           } catch (e) { /* corrupt cache — regenerate below */ }
         }
-        return book.locations.generate(1024).then(function () {
-          if (locationsCacheKey) {
-            try {
-              window.localStorage.setItem(locationsCacheKey, book.locations.save());
-            } catch (e) { /* quota/unavailable — regenerate next open */ }
-          }
+        return firstPaint.then(function () {
+          // A teardown+init for another book may have superseded this one
+          // while the gate was pending — never generate against it.
+          if (book !== locBook) return null;
+          return locBook.locations.generate(1024).then(function () {
+            if (book !== locBook) return null;
+            locationsReady = true;
+            if (locationsCacheKey) {
+              try {
+                window.localStorage.setItem(locationsCacheKey, locBook.locations.save());
+              } catch (e) { /* quota/unavailable — regenerate next open */ }
+            }
+            return null;
+          });
         });
       })
       .then(function () {
         // Re-emit current location now that locations are resolved so the
         // Rust side gets a real whole-book `pct` on first load (page/total
         // are already live off the current render — see buildRelocateData).
-        if (rendition && rendition.location) {
+        if (book === locBook && rendition && rendition.location) {
           emitRelocate(rendition.location);
         }
       })
       .catch(function () {
-        emitStatus("error");
+        // Before the first paint this is a failed open and the host must
+        // show its error state. After it, the reader is already usable —
+        // a background locations failure only degrades the percent, so
+        // don't replace a working page with the failure overlay.
+        if (!painted) emitStatus("error");
       });
 
     // Restoring a saved position must go through the same settle-then-
@@ -373,6 +462,7 @@
       function () {
         if (!initialCfi) {
           emitStatus("ready");
+          paintResolve();
           return;
         }
         var r = rendition;
@@ -382,6 +472,7 @@
           if (rendition !== r || restoreSettled) return;
           restoreSettled = true;
           emitStatus("ready");
+          paintResolve();
           // A relocate already in flight (debounce pending) carries the
           // freshest measured landing and will emit now that the mute is
           // lifted — don't shadow it with a snapshot. Otherwise emit the

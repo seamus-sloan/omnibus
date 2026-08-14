@@ -42,6 +42,13 @@ pub(crate) struct RelocateData {
     pub(crate) page: u32,
     pub(crate) total_pages: u32,
     pub(crate) pct: u32,
+    // True while `pct` is the glue's coarse spine-derived approximation —
+    // the whole-book locations map hasn't resolved yet (generation runs in
+    // the background after first paint; issue #1896). The formatters render
+    // an approximate percent as "~N%" so a first session never shows a
+    // frozen, falsely-precise "0%".
+    #[serde(default)]
+    pub(crate) pct_approx: bool,
     // True when the rendered range reaches the book's end (epub.js
     // `location.atEnd`) — the auto `Finished` trigger. `pct` can't stand in:
     // it tracks the start of the visible range, so it tops out below 100.
@@ -52,6 +59,17 @@ pub(crate) struct RelocateData {
     pub(crate) chapter_title: String,
 }
 
+/// The percent readout: "N%" once the whole-book locations map has
+/// resolved, "~N%" while `pct` is still the coarse spine approximation —
+/// honest instead of falsely precise (issue #1896).
+fn pct_label(loc: &RelocateData) -> String {
+    if loc.pct_approx {
+        format!("~{}%", loc.pct)
+    } else {
+        format!("{}%", loc.pct)
+    }
+}
+
 /// Format the bottom-bar `page` and `chapter` strings from a relocate
 /// event. `page`/`total_pages` are scoped to the current chapter (see
 /// [`RelocateData`]). Returns `("", "")` until epub.js has produced a
@@ -59,11 +77,13 @@ pub(crate) struct RelocateData {
 pub(crate) fn format_progress_labels(loc: &RelocateData) -> (String, String) {
     let page = if loc.total_pages > 0 {
         format!(
-            "p.\u{a0}{} of {}\u{a0}\u{b7}\u{a0}{}%",
-            loc.page, loc.total_pages, loc.pct
+            "p.\u{a0}{} of {}\u{a0}\u{b7}\u{a0}{}",
+            loc.page,
+            loc.total_pages,
+            pct_label(loc)
         )
     } else if loc.pct > 0 {
-        format!("{}%", loc.pct)
+        pct_label(loc)
     } else {
         String::new()
     };
@@ -107,7 +127,7 @@ pub(crate) fn format_ambient_page(loc: &RelocateData) -> String {
     if loc.total_pages > 0 {
         loc.page.to_string()
     } else if loc.pct > 0 {
-        format!("{}%", loc.pct)
+        pct_label(loc)
     } else {
         String::new()
     }
@@ -119,9 +139,9 @@ pub(crate) fn format_ambient_page(loc: &RelocateData) -> String {
 /// only the phone breakpoint displays it.
 pub(crate) fn format_title_sub(loc: &RelocateData) -> String {
     if loc.chapter > 0 {
-        format!("Ch.\u{a0}{} \u{b7} {}%", loc.chapter, loc.pct)
+        format!("Ch.\u{a0}{} \u{b7} {}", loc.chapter, pct_label(loc))
     } else if loc.pct > 0 {
-        format!("{}%", loc.pct)
+        pct_label(loc)
     } else {
         String::new()
     }
@@ -131,7 +151,12 @@ pub(crate) fn format_title_sub(loc: &RelocateData) -> String {
 /// epub.js has paginated the book.
 pub(crate) fn format_contents_progress(loc: &RelocateData) -> String {
     if loc.total_pages > 0 {
-        format!("{} / {} \u{b7} {}%", loc.page, loc.total_pages, loc.pct)
+        format!(
+            "{} / {} \u{b7} {}",
+            loc.page,
+            loc.total_pages,
+            pct_label(loc)
+        )
     } else {
         String::new()
     }
@@ -195,6 +220,7 @@ mod tests {
             page: 42,
             total_pages: 300,
             pct: 14,
+            pct_approx: false,
             at_end: false,
             chapter: 3,
             total_chapters: 24,
@@ -287,6 +313,58 @@ mod tests {
         );
     }
 
+    // Issue #1896 (AC2): while the locations map is still resolving, the
+    // percent renders as an explicit approximation ("~N%") rather than a
+    // frozen, falsely-precise figure.
+    #[test]
+    fn format_progress_labels_marks_an_approximate_pct_with_a_tilde() {
+        let data = RelocateData {
+            page: 1,
+            total_pages: 20,
+            pct: 47,
+            pct_approx: true,
+            ..Default::default()
+        };
+        let (page, _) = format_progress_labels(&data);
+        assert_eq!(page, "p.\u{a0}1 of 20\u{a0}\u{b7}\u{a0}~47%");
+    }
+
+    #[test]
+    fn format_title_sub_and_ambient_page_and_contents_mark_approximate_pct() {
+        let data = RelocateData {
+            page: 3,
+            total_pages: 20,
+            pct: 47,
+            pct_approx: true,
+            chapter: 2,
+            total_chapters: 50,
+            ..Default::default()
+        };
+        assert_eq!(format_title_sub(&data), "Ch.\u{a0}2 \u{b7} ~47%");
+        assert_eq!(format_contents_progress(&data), "3 / 20 \u{b7} ~47%");
+        let bare = RelocateData {
+            pct: 47,
+            pct_approx: true,
+            ..Default::default()
+        };
+        assert_eq!(format_ambient_page(&bare), "~47%");
+    }
+
+    // The glue's relocate payload flags the approximation as `pctApprox`;
+    // a payload without it (older glue, tests) must decode as exact.
+    #[test]
+    fn relocate_data_decodes_pct_approx_from_camel_case_and_defaults_false() {
+        let with: RelocateData =
+            serde_json::from_str(r#"{"page":1,"totalPages":2,"pct":40,"pctApprox":true,"chapter":0,"totalChapters":0,"chapterTitle":""}"#)
+                .expect("decode");
+        assert!(with.pct_approx);
+        let without: RelocateData = serde_json::from_str(
+            r#"{"page":1,"totalPages":2,"pct":40,"chapter":0,"totalChapters":0,"chapterTitle":""}"#,
+        )
+        .expect("decode");
+        assert!(!without.pct_approx);
+    }
+
     #[test]
     fn format_progress_labels_falls_back_to_pct_only_when_total_pages_unknown() {
         let data = RelocateData {
@@ -294,6 +372,7 @@ mod tests {
             page: 0,
             total_pages: 0,
             pct: 7,
+            pct_approx: false,
             at_end: false,
             chapter: 0,
             total_chapters: 0,

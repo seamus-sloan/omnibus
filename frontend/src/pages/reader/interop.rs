@@ -95,6 +95,7 @@ pub(crate) fn install_reader_web_interop(uuid: String, prefs: ReaderPrefs, sigs:
             deep_link_cfi,
             bootstrap,
             highlights,
+            sigs.loc,
         ));
     }));
 
@@ -257,6 +258,12 @@ struct BootstrapLiterals {
 /// the book-detail saved-passages list), so resuming where this book was last
 /// left off would ignore the whole point of the link. The relocate handler
 /// then persists the new position as usual.
+///
+/// The same progress fetch also seeds `loc` with the server's stored
+/// whole-book percent (flagged approximate) so the footer/ribbon show the
+/// last-known position immediately — not a blank (or a frozen 0%) while
+/// epub.js fetches, parses, and paginates the book (issue #1896, AC2). The
+/// first real relocate overwrites the seed wholesale.
 #[cfg(feature = "web")]
 async fn spawn_bootstrap_and_highlights(
     uuid: String,
@@ -264,6 +271,7 @@ async fn spawn_bootstrap_and_highlights(
     deep_link_cfi: Option<String>,
     lits: BootstrapLiterals,
     mut highlights: Signal<Vec<Highlight>>,
+    mut loc: Signal<super::RelocateData>,
 ) {
     use super::bootstrap::{reader_bootstrap_js, BootstrapArgs};
     use super::reader_call_json2;
@@ -274,13 +282,23 @@ async fn spawn_bootstrap_and_highlights(
     let chosen = match deep_link_cfi {
         Some(cfi) => Some(cfi),
         None => {
-            let server_cfi =
-                crate::data::get_progress("", &uuid, omnibus_shared::ProgressFormat::Epub)
-                    .await
-                    .ok()
-                    .flatten()
-                    .and_then(|r| r.epub_cfi);
-            server_cfi.or(local_saved)
+            let record = crate::data::get_progress("", &uuid, omnibus_shared::ProgressFormat::Epub)
+                .await
+                .ok()
+                .flatten();
+            let stored_pct = record.as_ref().and_then(|r| r.progress_percent);
+            if let Some(pct) = stored_pct.filter(|p| (1..=100).contains(p)) {
+                // Guarded on "no relocate yet" so a fast epub.js mount can
+                // never be clobbered by this slower round trip.
+                if loc.peek().cfi.is_none() {
+                    loc.set(super::RelocateData {
+                        pct: pct as u32,
+                        pct_approx: true,
+                        ..Default::default()
+                    });
+                }
+            }
+            record.and_then(|r| r.epub_cfi).or(local_saved)
         }
     };
     let cfi_arg = json_literal(&chosen);
