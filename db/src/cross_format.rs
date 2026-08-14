@@ -128,15 +128,19 @@ pub async fn upsert_link(
         .await?
         .ok_or(CrossFormatError::BookNotFound)?;
     let snapshot = snapshot_json(&audio_files(pool, book_id).await?);
-    // Re-confirmation keeps the follow opt-in; user anchors survive only
+    // Confirming the alignment IS turning sync on — the modal's confirm
+    // button says exactly that, and a linked book that still prompts on
+    // every surface switch reads as broken (live QA on #1944). The follow
+    // toggle can still switch it off afterward; user anchors survive only
     // when the audio set is unchanged — a new set is a new timeline, and
     // the stored global seconds no longer mean anything on it.
     sqlx::query(
         "INSERT INTO cross_format_links
-            (user_id, book_uuid, mode, primary_book_file_id, audio_snapshot, confirmed_at)
-         VALUES (?, ?, ?, ?, ?, CAST(strftime('%s','now') AS INTEGER))
+            (user_id, book_uuid, mode, primary_book_file_id, audio_snapshot, confirmed_at, follow)
+         VALUES (?, ?, ?, ?, ?, CAST(strftime('%s','now') AS INTEGER), 1)
          ON CONFLICT(user_id, book_uuid) DO UPDATE SET
             mode = excluded.mode,
+            follow = 1,
             primary_book_file_id = excluded.primary_book_file_id,
             user_anchors = CASE
                 WHEN cross_format_links.audio_snapshot = excluded.audio_snapshot

@@ -45,6 +45,13 @@ test.beforeAll(async ({ request }) => {
     data: { update: { book_uuid: uuid, mode: "sequence" } },
   });
   expect(link.status(), "link confirm failed").toBe(200);
+  // Confirming a link now turns follow on (auto-apply, no prompts). The
+  // prompt tests below cover the follow-OFF surfaces, so switch it off
+  // explicitly; the sync-point test re-enables it via its declaration.
+  const followOff = await request.post("/api/rpc/cross-format/follow", {
+    data: { uuid, body: { enabled: false } },
+  });
+  expect(followOff.status(), "disable follow for prompt tests").toBe(200);
 });
 
 test.afterAll(async ({ request }) => {
