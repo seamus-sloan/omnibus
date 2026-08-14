@@ -55,7 +55,7 @@ impl Theme {
 /// duration. Raised by [`apply_theme`], cleared by the root two animation
 /// frames later.
 #[derive(Clone, Copy)]
-pub struct ThemeSnap(pub Signal<bool>);
+pub(crate) struct ThemeSnap(pub(crate) Signal<bool>);
 
 /// Install the theme signal in the app context. Call once from the root
 /// component.
@@ -85,7 +85,7 @@ pub fn init_theme() {
 /// with a hover `transition` (buttons, chips, rows, captions) animates the
 /// palette change at its own 0.08–0.25s duration while untransitioned
 /// surfaces snap, and the switch visibly repaints in pieces.
-pub fn apply_theme(mut theme: Signal<Theme>, snap: ThemeSnap, t: Theme) {
+pub(crate) fn apply_theme(mut theme: Signal<Theme>, snap: ThemeSnap, t: Theme) {
     let mut flag = snap.0;
     flag.set(true);
     theme.set(t);
@@ -111,8 +111,15 @@ pub fn AtriumRoot(children: Element) -> Element {
     use_effect(move || {
         if snap() {
             spawn(async move {
+                // The setTimeout race bounds the wait: rAF never fires in a
+                // throttled/hidden tab, and a stuck flag would leave hover
+                // transitions off for the whole session. An eval that fails
+                // outright errors `recv`, which clears the flag the same way.
                 let mut eval = dioxus::document::eval(
-                    "requestAnimationFrame(() => requestAnimationFrame(() => dioxus.send(true)));",
+                    "let done = false;
+                     const fin = () => { if (!done) { done = true; dioxus.send(true); } };
+                     requestAnimationFrame(() => requestAnimationFrame(fin));
+                     setTimeout(fin, 250);",
                 );
                 let _ = eval.recv::<bool>().await;
                 snap_writer.set(false);
