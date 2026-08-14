@@ -197,23 +197,28 @@ fn listeners_js() -> &'static str {
     // window would flush a hard 0.0 over the stored position with a fresh
     // clock, which the cross-format follow then propagates into the other
     // format. No emission may persist an unseeded element's position.
+    // Fail CLOSED when the shim is null (dom_reset_js clears it during
+    // SPA-nav): a stale element's listeners can still fire in that window,
+    // and an unowned element is exactly the unseeded-position source this
+    // gate exists to silence.
     el.addEventListener('timeupdate', function(){
       var oa = window.OmnibusAudio;
-      if (oa && !oa._seeded) return;
+      if (!oa || !oa._seeded) return;
       if (window.__omnibusOnAudioTime) {
         window.__omnibusOnAudioTime(absTime());
       }
     });
     el.addEventListener('play', function(){
       var oa = window.OmnibusAudio;
-      if (oa) oa._seeded = true;
+      if (!oa) return;
+      oa._seeded = true;
       if (window.__omnibusOnAudioPlay) {
         window.__omnibusOnAudioPlay(absTime());
       }
     });
     el.addEventListener('pause', function(){
       var oa = window.OmnibusAudio;
-      if (oa && !oa._seeded) return;
+      if (!oa || !oa._seeded) return;
       if (window.__omnibusOnAudioPause) {
         window.__omnibusOnAudioPause(absTime());
       }
