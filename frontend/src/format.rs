@@ -1,8 +1,8 @@
 //! Small display formatters shared across surfaces: file size/label for
 //! `book_files` pickers, [`plural`] for search-result summaries, and the
 //! [`format_date_short`]/[`format_date_month_year`] pair for table and
-//! series-card dates. Pure, dependency-free functions, so they unit-test
-//! without a renderer and compute identically on SSR and WASM (rule 07).
+//! series-card dates. Pure functions with no Dioxus/renderer state, so
+//! they unit-test easily and render identically on SSR and WASM (rule 07).
 
 use omnibus_shared::BookFileInfo;
 
