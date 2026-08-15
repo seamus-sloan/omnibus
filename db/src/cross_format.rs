@@ -215,7 +215,10 @@ pub async fn set_follow(
 
 /// Text-fraction slack inside which a new "synced here" declaration
 /// replaces an existing pair instead of stacking beside it.
-const SYNC_POINT_REPLACE_SLACK: f64 = 0.02;
+// Tight on purpose: on a marks-less multi-hour book every declaration is
+// hard-won calibration, and 2% of a 50-hour timeline discarded re-syncs an
+// hour apart. Only a true re-declaration of the same spot replaces.
+const SYNC_POINT_REPLACE_SLACK: f64 = 0.005;
 
 /// Record a "synced here" declaration: pair the declaring surface's
 /// position with the counterpart format's stored row, store it as a user

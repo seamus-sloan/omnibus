@@ -147,13 +147,21 @@ pub(super) fn resolve_boot_position(
     local_pos: f64,
     loaded_file_id: i64,
     audio_file_count: i64,
-) -> f64 {
+) -> Option<f64> {
     if audio_file_count <= 1 {
-        return resolve_resume_pos(row.and_then(|(_, seconds)| seconds), local_pos);
+        return Some(resolve_resume_pos(
+            row.and_then(|(_, seconds)| seconds),
+            local_pos,
+        ));
     }
     match row {
-        Some((Some(row_file), Some(seconds))) if row_file == loaded_file_id => seconds,
-        _ => 0.0,
+        Some((Some(row_file), Some(seconds))) if row_file == loaded_file_id => Some(seconds),
+        // Seconds recorded in another file (or in none) can't be spliced
+        // into this one (#1888) — and `None` here means UNSEEDED, not
+        // "position 0": a zero seed marks the element's 0 as a real
+        // position, which the transport then persists over the row the
+        // seconds actually live in (#1954's data-loss arm).
+        _ => None,
     }
 }
 
@@ -558,19 +566,20 @@ mod boot_resume_tests {
     #[test]
     fn resolve_boot_position_applies_row_seconds_when_the_row_names_the_loaded_file() {
         let row = Some((Some(919), Some(23_718.0)));
-        assert!((resolve_boot_position(row, 5.0, 919, 5) - 23_718.0).abs() < f64::EPSILON);
+        assert!((resolve_boot_position(row, 5.0, 919, 5).unwrap() - 23_718.0).abs() < f64::EPSILON);
     }
 
     #[test]
-    fn resolve_boot_position_starts_at_zero_when_multi_file_seconds_are_unattributable() {
-        // Row names a different file than the one loaded.
+    fn resolve_boot_position_stays_unseeded_when_multi_file_seconds_are_unattributable() {
+        // Row names a different file than the one loaded: `None` (unseeded),
+        // never a zero seed the transport could persist (#1954).
         let other_file = Some((Some(919), Some(23_718.0)));
-        assert_eq!(resolve_boot_position(other_file, 5.0, 917, 5), 0.0);
+        assert_eq!(resolve_boot_position(other_file, 5.0, 917, 5), None);
         // Row names no file at all — seconds can't be attributed.
         let fileless = Some((None, Some(23_718.0)));
-        assert_eq!(resolve_boot_position(fileless, 5.0, 917, 5), 0.0);
+        assert_eq!(resolve_boot_position(fileless, 5.0, 917, 5), None);
         // No row; the local cache never names a file either.
-        assert_eq!(resolve_boot_position(None, 5.0, 917, 5), 0.0);
+        assert_eq!(resolve_boot_position(None, 5.0, 917, 5), None);
     }
 
     #[test]
@@ -578,9 +587,9 @@ mod boot_resume_tests {
         // Server seconds win; the stored file id (even a stale one from a
         // replaced `book_files` row) doesn't gate a single-file book.
         let row = Some((Some(1), Some(120.0)));
-        assert!((resolve_boot_position(row, 5.0, 2, 1) - 120.0).abs() < f64::EPSILON);
+        assert!((resolve_boot_position(row, 5.0, 2, 1).unwrap() - 120.0).abs() < f64::EPSILON);
         // No server row → locally cached position, as before.
-        assert!((resolve_boot_position(None, 42.5, 2, 1) - 42.5).abs() < f64::EPSILON);
+        assert!((resolve_boot_position(None, 42.5, 2, 1).unwrap() - 42.5).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -588,7 +597,7 @@ mod boot_resume_tests {
         // `audio_file_count == 0` = a server predating the identity fields;
         // degrade to the historic resume behavior rather than zeroing.
         let row = Some((None, Some(300.0)));
-        assert!((resolve_boot_position(row, 5.0, 0, 0) - 300.0).abs() < f64::EPSILON);
+        assert!((resolve_boot_position(row, 5.0, 0, 0).unwrap() - 300.0).abs() < f64::EPSILON);
     }
 }
 

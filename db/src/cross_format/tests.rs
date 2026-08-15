@@ -1703,3 +1703,104 @@ async fn alignment_view_serves_the_anchor_pairs_the_jump_uses() {
         view.anchor_pairs
     );
 }
+
+#[test]
+fn interpolate_extends_the_measured_slope_past_two_or_more_anchors() {
+    use super::anchors::{interpolate, Anchor};
+    // Two anchors measure a local rate of 1.0 audio per text; past the
+    // last one the map extends that rate — text 0.75 lands at 0.65, not
+    // at the endpoint-linear 0.7.
+    let anchors = vec![
+        Anchor {
+            text_frac: 0.4,
+            audio_frac: 0.3,
+        },
+        Anchor {
+            text_frac: 0.5,
+            audio_frac: 0.4,
+        },
+    ];
+    let mapped = interpolate(&anchors, 0.75, true);
+    assert!(
+        (mapped - 0.65).abs() < 1e-9,
+        "expected measured-slope extension 0.65, got {mapped}"
+    );
+    // Clamped at the end of the book, never past it.
+    assert!(interpolate(&anchors, 1.0, true) <= 1.0);
+    // A single anchor keeps the endpoint-linear behavior — one point has
+    // no measured slope to extend.
+    let single = vec![Anchor {
+        text_frac: 0.2,
+        audio_frac: 0.4,
+    }];
+    assert!((interpolate(&single, 0.6, true) - 0.7).abs() < 1e-9);
+}
+
+#[tokio::test]
+async fn declare_sync_point_accumulates_nearby_anchors() {
+    // Two declarations 1% of the book apart must BOTH survive — on a
+    // 50-hour timeline the old 2% replace slack silently discarded
+    // re-syncs an hour apart (#1954).
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, audio) = seed_dual_book(&pool, &[1_000.0]).await;
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 40, 1_000))
+        .await
+        .unwrap();
+    declare_sync_point(
+        &pool,
+        user,
+        &DeclareSyncPoint {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Audio,
+            ebook_fraction: None,
+            epub_cfi: None,
+            audio_book_file_id: Some(audio[0]),
+            audio_seconds: Some(400.0),
+        },
+    )
+    .await
+    .unwrap();
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 41, 2_000))
+        .await
+        .unwrap();
+    let link = declare_sync_point(
+        &pool,
+        user,
+        &DeclareSyncPoint {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Audio,
+            ebook_fraction: None,
+            epub_cfi: None,
+            audio_book_file_id: Some(audio[0]),
+            audio_seconds: Some(410.0),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        link.user_anchors.len(),
+        2,
+        "a re-sync 1% away must accumulate, not replace: {:?}",
+        link.user_anchors
+    );
+}
+
+#[test]
+fn chapter_number_parses_bare_ordinals_and_noisy_audio_marks() {
+    use super::anchors::chapter_number;
+    // The Bobiverse shape (live #1954 evidence): the ebook nav numbers
+    // chapters without the word, the audio marks pad and append a runtime.
+    assert_eq!(chapter_number("1.\u{9}Sky God"), Some(1));
+    assert_eq!(chapter_number("12. Colony Site"), Some(12));
+    assert_eq!(chapter_number("3) Life in Camelot"), Some(3));
+    assert_eq!(chapter_number(" Chapter 001  - 00:17:05"), Some(1));
+    // A title that merely IS a number never reads as its chapter.
+    assert_eq!(chapter_number("1984"), None);
+    // Front matter stays unnumbered.
+    assert_eq!(chapter_number("Acknowledgements"), None);
+    assert_eq!(chapter_number("Table of Contents"), None);
+}

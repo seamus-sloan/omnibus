@@ -160,6 +160,8 @@ fn boot_new_book(
         playback.elapsed,
         playback.playing,
         playback.playback_failed,
+        playback.file_id,
+        playback.uuid,
     );
     inject_hls_script();
     install_control_surface(uuid, initial_rate, initial_volume);
@@ -189,6 +191,7 @@ fn reset_per_book_signals(playback: &crate::PlaybackState, user_id: Option<i64>,
     let mut playing = playback.playing;
     let mut hls_ready = playback.hls_ready;
     let mut playback_failed = playback.playback_failed;
+    NEXT_SEQUENCE_FILE.with(|c| c.set(None));
     let mut rate = playback.rate;
     let mut rate_error = playback.rate_error;
     let mut book = playback.book;
@@ -276,6 +279,7 @@ fn spawn_manifest_init(
 /// closures are registered before the manifest lands (#1888). A file switch
 /// always re-boots (see [`needs_reload`]), which resets the signal before
 /// the next manifest fills it again.
+#[expect(clippy::too_many_arguments, reason = "one closure per JS callback")]
 fn register_js_callbacks(
     cb_holder: &JsCallbackHolder,
     uuid_cb: String,
@@ -284,6 +288,8 @@ fn register_js_callbacks(
     mut elapsed: Signal<f64>,
     mut playing: Signal<bool>,
     mut playback_failed: Signal<bool>,
+    file_sig: Signal<Option<i64>>,
+    uuid_sig: Signal<Option<String>>,
 ) {
     let Some(window) = web_sys::window() else {
         return;
@@ -320,10 +326,27 @@ fn register_js_callbacks(
             crate::read_status_auto::apply_auto_read_status("", &uuid, false).await;
         });
     });
-    // Every file played through — see the `ended` handler in `js.rs`, which
-    // only calls this once there is no next part to advance to.
+    // This FILE played through (the `ended` handler in `js.rs` only calls
+    // once there is no next part). On a multi-file sequence the book is
+    // not done — advance the player to the next file's start (paused;
+    // the boot leaves it unseeded until a real play) instead of marking
+    // five-hours-in as finished. Only the last file finishes the book.
     let uuid_for_end = uuid_cb.clone();
     let on_ended = Closure::<dyn FnMut(f64)>::new(move |_: f64| {
+        if let Some(next) = NEXT_SEQUENCE_FILE.with(|c| c.get()) {
+            let uuid = uuid_for_end.clone();
+            let mut file_sig = file_sig;
+            let mut uuid_sig = uuid_sig;
+            file_sig.set(Some(next));
+            // The driver keys on the uuid changing; a None→Some pair in
+            // one render collapses to no-change, so the Some lands from a
+            // spawned task after the None commits.
+            uuid_sig.set(None);
+            wasm_bindgen_futures::spawn_local(async move {
+                uuid_sig.set(Some(uuid));
+            });
+            return;
+        }
         let uuid = uuid_for_end.clone();
         wasm_bindgen_futures::spawn_local(async move {
             crate::read_status_auto::apply_auto_read_status("", &uuid, true).await;
@@ -395,6 +418,14 @@ fn install_control_surface(uuid: &str, initial_rate: f64, initial_volume: f64) {
     let vol_lit = serde_json::to_string(&initial_volume).unwrap_or_else(|_| "1".into());
     let uuid_lit = serde_json::to_string(uuid).unwrap_or_else(|_| "\"\"".into());
     let _ = dioxus::document::eval(&control_surface_js(&rate_lit, &vol_lit, &uuid_lit));
+}
+
+thread_local! {
+    /// The manifest's next-file pointer for the CURRENT boot — read by the
+    /// `ended` callback (registered before any manifest exists) to decide
+    /// between sequence-advance and marking the book finished. Reset at
+    /// every boot entry so a failed load can't leave a stale advance.
+    static NEXT_SEQUENCE_FILE: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
 }
 
 /// Fetch `/api/audiobooks/{uuid}/manifest` — targeting the picker's
@@ -522,6 +553,7 @@ async fn run_manifest_init(
     };
 
     let (loaded_file, audio_file_count) = manifest.file_identity();
+    NEXT_SEQUENCE_FILE.with(|c| c.set(manifest.next_file_id()));
     // `0` = a server predating the identity fields; keep posting no file id
     // rather than inventing one (`resolve_boot_position` degrades the same
     // way via `audio_file_count == 0`).
@@ -537,18 +569,20 @@ async fn run_manifest_init(
             None => true,
         })
         .map(|(_, seconds)| *seconds);
-    let resume_pos = match follow_pos {
-        Some(mapped) => mapped,
-        None => resolve_boot_position(
+    // `None` = unseeded: `initDirect` gets a JSON `null`, applies no seek,
+    // and leaves the transport's seed gate closed — an unattributable boot
+    // must stay unpersistable until the user really plays or seeks.
+    let resume_pos = follow_pos.or_else(|| {
+        resolve_boot_position(
             server_row
                 .as_ref()
                 .map(|r| (r.book_file_id, r.audio_position_seconds)),
             initial_position,
             loaded_file,
             audio_file_count,
-        ),
-    };
-    let pos_lit = serde_json::to_string(&resume_pos).unwrap_or_else(|_| "0".into());
+        )
+    });
+    let pos_lit = serde_json::to_string(&resume_pos).unwrap_or_else(|_| "null".into());
 
     match manifest {
         omnibus_shared::AudiobookManifest::Direct {

@@ -91,6 +91,7 @@ fn transport_controls_js() -> &'static str {
       // play/pause state across the swap.
       seek: function(absSeconds){
         this._seeded = true;
+        this._lastAbs = Math.max(0, absSeconds || 0);
         var s = Math.max(0, absSeconds || 0);
         // Push the target time to the transport display immediately —
         // don't wait for the element's own `timeupdate`, which some
@@ -204,9 +205,26 @@ fn listeners_js() -> &'static str {
     el.addEventListener('timeupdate', function(){
       var oa = window.OmnibusAudio;
       if (!oa || !oa._seeded) return;
+      var t = absTime();
+      // Same teardown-artifact rule as `pause` below: a media element
+      // being destroyed can fire one last timeupdate with its clock
+      // already reset to 0 — BEFORE pagehide dispatches. A real restart
+      // reaches 0 through the seek path, which resets _lastAbs first.
+      if (t < 1 && typeof oa._lastAbs === 'number' && oa._lastAbs > 60) return;
+      // Last position this session really reached.
+      oa._lastAbs = t;
       if (window.__omnibusOnAudioTime) {
-        window.__omnibusOnAudioTime(absTime());
+        window.__omnibusOnAudioTime(t);
       }
+    });
+    // A full-page navigation destroys the media element mid-session; the
+    // browser's teardown can zero currentTime BEFORE the final pause event
+    // dispatches, and that dying flush overwrote a real 2h48m position
+    // with 0.0 live (#1954). The heartbeat persisted a ≤5s-stale position
+    // moments earlier, so closing the gate loses nothing meaningful.
+    window.addEventListener('pagehide', function(){
+      var oa = window.OmnibusAudio;
+      if (oa) oa._seeded = false;
     });
     el.addEventListener('play', function(){
       var oa = window.OmnibusAudio;
@@ -219,8 +237,14 @@ fn listeners_js() -> &'static str {
     el.addEventListener('pause', function(){
       var oa = window.OmnibusAudio;
       if (!oa || !oa._seeded) return;
+      // Teardown artifact: a pause reporting ~0 when this session was
+      // materially past it is the element being reset, not a listener
+      // rewinding — a real jump-to-start arrives as a seek, which updates
+      // _lastAbs through the ungated seek path before any pause fires.
+      var t = absTime();
+      if (t < 1 && typeof oa._lastAbs === 'number' && oa._lastAbs > 60) return;
       if (window.__omnibusOnAudioPause) {
-        window.__omnibusOnAudioPause(absTime());
+        window.__omnibusOnAudioPause(t);
       }
     });
     // Cross-part advance — direct mode only. HLS treats the whole
@@ -253,6 +277,10 @@ fn direct_play_init_js() -> &'static str {
     r#"      // Direct-play init: parts is the array from the manifest endpoint
       // (`[{ordinal, url, duration_seconds, mime}]`), initialPositionAbs
       // is the absolute resume position in seconds.
+      // `initialPositionAbs` may be null: an unattributable resume (the
+      // row's seconds live in another file) boots at the top of the file
+      // WITHOUT seeding — the transport's gate stays closed, so nothing
+      // can persist this element's position until a real play or seek.
       initDirect: function(parts, initialPositionAbs){
         this._mode = 'direct';
         this._seeded = false;
@@ -270,7 +298,8 @@ fn direct_play_init_js() -> &'static str {
           window.__omnibusOnAudioDuration(this._totalDuration);
         }
         // Pick the starting part for the resume position.
-        var s = Math.max(0, initialPositionAbs || 0);
+        var seedKnown = typeof initialPositionAbs === 'number';
+        var s = Math.max(0, seedKnown ? initialPositionAbs : 0);
         var idx = 0;
         while (idx < this._cumOffsets.length - 1 && s >= this._cumOffsets[idx + 1]) idx++;
         this._index = idx;
@@ -278,8 +307,10 @@ fn direct_play_init_js() -> &'static str {
         var oa = this;
         var onMeta = function(){
           el.removeEventListener('loadedmetadata', onMeta);
-          try { el.currentTime = local; } catch(_) {}
-          oa._seeded = true;
+          if (seedKnown) {
+            try { el.currentTime = local; } catch(_) {}
+            oa._seeded = true;
+          }
         };
         el.addEventListener('loadedmetadata', onMeta);
         el.src = parts[idx].url;
@@ -314,8 +345,12 @@ fn hls_init_js() -> &'static str {
         } else {
           console.warn('OmnibusAudio: no HLS support in this browser');
         }
-        if (typeof initialPositionAbs !== 'number' || initialPositionAbs <= 0) {
-          // No stored position to apply: the element's 0 IS the position.
+        if (typeof initialPositionAbs === 'number' && initialPositionAbs <= 0) {
+          // An explicit zero is a real position (a fresh book boots as
+          // number 0). JSON `null` is an UNATTRIBUTABLE resume — the
+          // row's seconds live in another file — and must stay unseeded,
+          // exactly like initDirect, or the HLS arm re-opens the
+          // zero-wipe path (#1954).
           this._seeded = true;
         }
         if (typeof initialPositionAbs === 'number' && initialPositionAbs > 0) {

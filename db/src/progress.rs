@@ -126,6 +126,46 @@ pub async fn upsert_progress(
     Ok(record)
 }
 
+/// Read the current row back as a [`ProgressRecord`] — shared by the
+/// normal post-write read-back and the teardown-signature early return.
+async fn read_progress_row(
+    tx: &mut Transaction<'_, Sqlite>,
+    user_id: i64,
+    book_uuid: String,
+    format: ProgressFormat,
+    fmt: &str,
+) -> Result<ProgressRecord, ProgressError> {
+    let row = sqlx::query(
+        "SELECT epub_cfi, audio_position_seconds, progress_percent, kobo_location,
+                book_file_id, updated_at,
+                COALESCE(client_updated_at, updated_at) AS client_updated_at
+         FROM reading_progress
+         WHERE user_id = ? AND book_uuid = ? AND format = ?",
+    )
+    .bind(user_id)
+    .bind(&book_uuid)
+    .bind(fmt)
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(ProgressRecord {
+        book_uuid,
+        format,
+        epub_cfi: row.try_get::<Option<String>, _>("epub_cfi")?,
+        audio_position_seconds: row.try_get::<Option<f64>, _>("audio_position_seconds")?,
+        progress_percent: row.try_get::<Option<i64>, _>("progress_percent")?,
+        kobo_location: row.try_get::<Option<String>, _>("kobo_location")?,
+        book_file_id: row.try_get::<Option<i64>, _>("book_file_id")?,
+        updated_at: row.try_get::<i64, _>("updated_at")?,
+        client_updated_at: row.try_get::<i64, _>("client_updated_at")?,
+    })
+}
+
+/// A near-zero audio write against a row this far into the book is the
+/// teardown signature, not a listen (see the refusal in
+/// [`upsert_progress_tx`]).
+const AUDIO_TEARDOWN_ZERO_CUTOFF_SECONDS: f64 = 1.0;
+const AUDIO_TEARDOWN_ZERO_MIN_STORED_SECONDS: f64 = 600.0;
+
 /// Transaction-scoped [`upsert_progress`], for callers that batch it with
 /// other writes (e.g. the Kobo `put_state` handler) inside one shared
 /// `Transaction` so a mid-batch failure rolls back every entry, not just the
@@ -144,6 +184,31 @@ pub async fn upsert_progress_tx(
     // this function logs (#1861) — neither reads back into the upsert itself.
     let existing = existing_progress_snapshot(tx, user_id, &book_uuid, fmt).await?;
     warn_if_rejected_by_timestamp_guard(&book_uuid, update.client_updated_at, existing.0);
+
+    // Teardown signature, last line of defense (#1954): a dying page's
+    // media element flushes its reset clock — audio position ~0 — with a
+    // perfectly fresh event time, and the client-side gates cannot cover
+    // every event ordering every browser invents. Refuse a near-zero
+    // audio write against a row that sits far into the book: the write is
+    // dropped, the stored row returned. A genuine restart-from-the-start
+    // persists within one heartbeat anyway — its next report is already
+    // past the cutoff.
+    if update.format == ProgressFormat::Audio {
+        if let (Some(new), Some(old)) = (update.audio_position_seconds, existing.1) {
+            if new < AUDIO_TEARDOWN_ZERO_CUTOFF_SECONDS
+                && old > AUDIO_TEARDOWN_ZERO_MIN_STORED_SECONDS
+            {
+                tracing::warn!(
+                    book_uuid = %book_uuid,
+                    old_position_seconds = old,
+                    new_position_seconds = new,
+                    client_updated_at = update.client_updated_at,
+                    "refused near-zero audio write against a far-advanced row (teardown signature)"
+                );
+                return read_progress_row(tx, user_id, book_uuid, update.format, fmt).await;
+            }
+        }
+    }
 
     // `strftime('%s','now')` returns TEXT; SQLite's default storage-class
     // sort order ranks every INTEGER below every TEXT value regardless of
@@ -199,29 +264,7 @@ pub async fn upsert_progress_tx(
     .execute(&mut **tx)
     .await?;
 
-    let row = sqlx::query(
-        "SELECT epub_cfi, audio_position_seconds, progress_percent, kobo_location,
-                book_file_id, updated_at,
-                COALESCE(client_updated_at, updated_at) AS client_updated_at
-         FROM reading_progress
-         WHERE user_id = ? AND book_uuid = ? AND format = ?",
-    )
-    .bind(user_id)
-    .bind(&book_uuid)
-    .bind(fmt)
-    .fetch_one(&mut **tx)
-    .await?;
-    let record = ProgressRecord {
-        book_uuid,
-        format: update.format,
-        epub_cfi: row.try_get::<Option<String>, _>("epub_cfi")?,
-        audio_position_seconds: row.try_get::<Option<f64>, _>("audio_position_seconds")?,
-        progress_percent: row.try_get::<Option<i64>, _>("progress_percent")?,
-        kobo_location: row.try_get::<Option<String>, _>("kobo_location")?,
-        book_file_id: row.try_get::<Option<i64>, _>("book_file_id")?,
-        updated_at: row.try_get::<i64, _>("updated_at")?,
-        client_updated_at: row.try_get::<i64, _>("client_updated_at")?,
-    };
+    let record = read_progress_row(tx, user_id, book_uuid, update.format, fmt).await?;
 
     // If this write was rejected (by either guard above), the row is
     // unchanged, so `new` equals the pre-write snapshot and this can't
