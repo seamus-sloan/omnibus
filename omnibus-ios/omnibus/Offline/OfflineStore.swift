@@ -455,6 +455,27 @@ actor OfflineStore {
         )
     }
 
+    /// The newest queued op of one `kind`, held-aside rows included.
+    ///
+    /// A restore reading the outbox wants this device's last statement of the
+    /// value regardless of whether it will ever land — a position parked by a
+    /// terminal 4xx is still the newest place this device knows the listener
+    /// reached, and `last_error IS NULL` (as `listOps` filters on) would hide
+    /// exactly the row this exists to recover.
+    func latestOp(kind: String) -> PendingOp? {
+        guard isOpen else { return nil }
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        let sql = """
+            SELECT id, kind, path, method, body, created_at, attempts, last_error
+            FROM ops WHERE kind = ? ORDER BY id DESC LIMIT 1
+            """
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+        bind(stmt, 1, kind)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+        return readOp(stmt)
+    }
+
     func pendingCount() -> Int {
         count("SELECT COUNT(*) FROM ops WHERE last_error IS NULL")
     }

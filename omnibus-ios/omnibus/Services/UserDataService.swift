@@ -38,8 +38,52 @@ enum UserDataService {
     /// The position this device last knew about, with no network in the path.
     /// The reader opens on this; anything the server has to add arrives through
     /// `progress(uuid:format:)` afterwards.
+    ///
+    /// Compares the replica row against a still-queued `progress:` op and
+    /// returns whichever is further along (#1860). The two can disagree: a
+    /// queued op that is later lost — a terminal rejection, six retryable
+    /// failures, a drained response whose body fails to decode — leaves the
+    /// replica holding whatever the server answered with last, while the
+    /// outbox row is still this device's own record of somewhere further on.
+    /// Reading the replica alone would open there and, worse, immediately
+    /// re-save it with a fresh clock — coalesce-deleting any surviving op that
+    /// still remembered the real position.
     static func localProgress(uuid: String, format: ProgressFormat) async -> ProgressRecord? {
-        await Cache.read(CacheKey.progress(uuid, format), as: ProgressRecord.self)
+        let replica = await Cache.read(CacheKey.progress(uuid, format), as: ProgressRecord.self)
+        let queued = await queuedProgress(uuid: uuid, format: format)
+        return PositionSync.newest(replica, queued)
+    }
+
+    /// The still-queued `progress:` op for (uuid, format), decoded as the
+    /// record it asserts. `nil` when nothing is queued, or the body no longer
+    /// decodes as a `ProgressUpdate` — the shape every write to this kind
+    /// encodes.
+    private static func queuedProgress(
+        uuid: String, format: ProgressFormat
+    ) async -> ProgressRecord? {
+        guard let op = await OfflineStore.shared.latestOp(kind: OpKind.progress(uuid, format)),
+              let body = op.body,
+              var update = try? JSONDecoder().decode(ProgressUpdate.self, from: body)
+        else { return nil }
+        // `clientUpdatedAt` defaults to `Date()` in `ProgressUpdate`'s own
+        // decoding, so a body queued before the field existed — or any body
+        // that simply omits it — would otherwise decode as "just now" and
+        // make a stale op look newest, which is the exact failure this
+        // restore exists to prevent. `op.createdAt`, the outbox's own enqueue
+        // timestamp, is what the write actually happened on when the field
+        // itself is missing.
+        if !Self.bodyHasClientUpdatedAt(body) {
+            update.clientUpdatedAt = op.createdAt
+        }
+        return update.asRecord
+    }
+
+    /// Whether a queued op's raw body carries `client_updated_at`, as opposed
+    /// to `ProgressUpdate`'s decoder silently filling the gap with now.
+    static func bodyHasClientUpdatedAt(_ body: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+        else { return false }
+        return object["client_updated_at"] != nil
     }
 
     static func recentProgress() -> AsyncThrowingStream<CacheRead<[ResumePoint]>, Error> {
