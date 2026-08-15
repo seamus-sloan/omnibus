@@ -1,9 +1,8 @@
-//! Persist a completed conversion's output as a `book_files` row (#949), so
-//! the converted format becomes a real, listed format of the book — visible
-//! on the book detail page and to downloads — rather than an invisible file
-//! sitting in the conversion cache. File-write shape mirrors
-//! `crate::kepub::convert::convert_book`'s cache write; the DB write is new
-//! (KEPUB is served from its own cache, never `book_files`).
+//! Persist a completed conversion's output as a `book_files` row, so the
+//! converted format becomes a real, listed format of the book — visible on
+//! the book detail page and in downloads — rather than a file only the
+//! conversion cache knows about. File-write shape mirrors
+//! `crate::kepub::convert::convert_book`; the DB write is new here.
 
 use std::path::Path;
 

@@ -368,7 +368,7 @@ async fn convert_book_propagates_db_error_when_pool_is_closed() {
 }
 
 // ---------------------------------------------------------------------------
-// persist: converted output becomes a book_files row (#949)
+// persist: converted output becomes a book_files row
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
