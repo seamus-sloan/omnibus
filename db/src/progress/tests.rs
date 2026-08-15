@@ -7,7 +7,7 @@
 use omnibus_shared::EbookMetadata;
 
 use super::*;
-use crate::{init_db, replace_books};
+use crate::{auth::now_unix, init_db, replace_books};
 
 /// Map a merged/auto-attached `uuid` onto an existing `book_id` the way the
 /// merge transaction does (`db/src/merge/transaction.rs`), so the session path
@@ -265,6 +265,126 @@ async fn upsert_rejects_a_stale_write_wholly_without_field_bleed() {
     assert_eq!(survived.kobo_location, None);
 }
 
+/// Insert `n` audio `book_files` rows for `book_id`, returning their ids.
+/// Gives the multi-file guard in `upsert_progress_tx` real audio rows to
+/// count (the `seed` helper's EPUB file doesn't participate).
+async fn seed_audio_files(pool: &SqlitePool, book_id: i64, n: usize) -> Vec<i64> {
+    let mut ids = Vec::with_capacity(n);
+    for ordinal in 0..n {
+        let id = sqlx::query_scalar::<_, i64>(
+            "INSERT INTO book_files (book_id, format, filename, size_bytes, ordinal)
+             VALUES (?, 'M4B', ?, 1, ?) RETURNING id",
+        )
+        .bind(book_id)
+        .bind(format!("part-{ordinal}.m4b"))
+        .bind(ordinal as i64)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        ids.push(id);
+    }
+    ids
+}
+
+/// Shorthand for an audio `ProgressUpdate` in the multi-file guard tests.
+fn audio_update(
+    uuid: &str,
+    seconds: f64,
+    book_file_id: Option<i64>,
+    client_updated_at: i64,
+) -> ProgressUpdate {
+    ProgressUpdate {
+        book_uuid: uuid.to_string(),
+        format: ProgressFormat::Audio,
+        epub_cfi: None,
+        audio_position_seconds: Some(seconds),
+        progress_percent: None,
+        kobo_location: None,
+        book_file_id,
+        client_updated_at: Some(client_updated_at),
+    }
+}
+
+#[tokio::test]
+async fn upsert_rejects_fileless_audio_write_that_would_blank_a_named_file_on_multi_file_book() {
+    // #1888: a web player that lost track of which file it loaded must not
+    // be able to replace "23,718 s within file 4" with "23,718 s within an
+    // unknown file". The whole write is rejected — seconds included — and
+    // the surviving row is returned, mirroring a stale-clock rejection.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+    let files = seed_audio_files(&pool, book_id, 2).await;
+
+    upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 23_718.0, Some(files[1]), 100),
+    )
+    .await
+    .unwrap();
+    let survived = upsert_progress(&pool, user, &audio_update(&uuid, 60.0, None, 200))
+        .await
+        .unwrap();
+
+    assert_eq!(survived.book_file_id, Some(files[1]));
+    assert_eq!(survived.audio_position_seconds, Some(23_718.0));
+    let stored = get_progress(&pool, user, &uuid, ProgressFormat::Audio)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.book_file_id, Some(files[1]));
+    assert_eq!(stored.audio_position_seconds, Some(23_718.0));
+    assert_eq!(stored.client_updated_at, 100);
+}
+
+#[tokio::test]
+async fn upsert_applies_fileless_audio_write_on_a_single_file_book() {
+    // Legacy single-file behavior is untouched: with one audio file there
+    // is nothing ambiguous about a fileless write, so it still replaces
+    // the whole row (file id included).
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+    let files = seed_audio_files(&pool, book_id, 1).await;
+
+    upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 500.0, Some(files[0]), 100),
+    )
+    .await
+    .unwrap();
+    let record = upsert_progress(&pool, user, &audio_update(&uuid, 600.0, None, 200))
+        .await
+        .unwrap();
+
+    assert_eq!(record.audio_position_seconds, Some(600.0));
+    assert_eq!(record.book_file_id, None);
+}
+
+#[tokio::test]
+async fn upsert_applies_multi_file_audio_write_that_names_its_file() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+    let files = seed_audio_files(&pool, book_id, 2).await;
+
+    upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 23_718.0, Some(files[1]), 100),
+    )
+    .await
+    .unwrap();
+    let record = upsert_progress(&pool, user, &audio_update(&uuid, 30.0, Some(files[0]), 200))
+        .await
+        .unwrap();
+
+    assert_eq!(record.book_file_id, Some(files[0]));
+    assert_eq!(record.audio_position_seconds, Some(30.0));
+}
+
 #[tokio::test]
 async fn attach_derived_kobo_location_fills_the_span_without_touching_clocks() {
     let pool = init_db("sqlite::memory:").await.unwrap();
@@ -412,15 +532,6 @@ async fn upsert_is_last_write_wins() {
     };
     let saved = upsert_progress(&pool, user, &second).await.unwrap();
     assert_eq!(saved.epub_cfi.as_deref(), Some("epubcfi(/6/12!/4/8/3:7)"));
-}
-
-/// Current unix seconds, for asserting a stored `client_updated_at` landed
-/// near "now" without pinning an exact value the test doesn't control.
-fn now_unix() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 #[tokio::test]
@@ -1487,6 +1598,44 @@ async fn resume_points_enrich_audio_rows_with_duration_and_chapter() {
     assert_eq!(p.total_duration_seconds, Some(1200.0));
     assert_eq!(p.chapter_number, Some(2));
     assert_eq!(p.chapter_count, Some(3));
+    // No saved preference: the resume surfaces treat this as 1x.
+    assert_eq!(p.playback_rate, None);
+}
+
+#[tokio::test]
+async fn resume_points_carry_the_saved_playback_rate_for_audio_rows() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    seed_audiobook(&pool, uuid).await;
+    upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.into(),
+            format: ProgressFormat::Audio,
+            epub_cfi: None,
+            audio_position_seconds: Some(450.0),
+            progress_percent: None,
+            kobo_location: None,
+            book_file_id: None,
+            client_updated_at: None,
+        },
+    )
+    .await
+    .unwrap();
+    set_playback_rate(
+        &pool,
+        user,
+        uuid,
+        &omnibus_shared::AudiobookPlaybackRateUpdate { playback_rate: 2.0 },
+    )
+    .await
+    .unwrap();
+
+    let points = resume_points(&pool, user, 5).await.unwrap();
+    assert_eq!(points.len(), 1);
+    assert_eq!(points[0].playback_rate, Some(2.0));
 }
 
 /// Attach a second audiobook file to `book_id` — a different narration of
@@ -2428,4 +2577,380 @@ fn kobo_statistics_is_empty_only_when_both_counters_are_absent() {
         updated_at: None,
     }
     .is_empty());
+}
+
+// Regression tests for the BEGIN IMMEDIATE stale-snapshot 517 fix (#1862).
+const CONCURRENT_ROUNDS: i64 = 5;
+const CONCURRENT_WRITERS_PER_ROUND: usize = 5;
+
+#[tokio::test]
+async fn upsert_progress_succeeds_for_many_concurrent_writers_on_one_pool() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, shared_uuid) = seed(&pool, "/lib", "Shared Book").await;
+    let mut solo_uuids = Vec::new();
+    for i in 0..CONCURRENT_WRITERS_PER_ROUND - 1 {
+        let (_, uuid) = seed(&pool, "/lib", &format!("Solo Book {i}")).await;
+        solo_uuids.push(uuid);
+    }
+
+    for round in 0..CONCURRENT_ROUNDS {
+        let mut handles = Vec::new();
+        for (i, book_uuid) in std::iter::once(shared_uuid.clone())
+            .chain(solo_uuids.iter().cloned())
+            .enumerate()
+        {
+            let pool = pool.clone();
+            handles.push(tokio::spawn(async move {
+                upsert_progress(
+                    &pool,
+                    user,
+                    &ProgressUpdate {
+                        book_uuid,
+                        format: ProgressFormat::Epub,
+                        epub_cfi: Some(format!("epubcfi(/6/4!/4/{i}/1:0)")),
+                        audio_position_seconds: None,
+                        progress_percent: None,
+                        kobo_location: None,
+                        book_file_id: None,
+                        client_updated_at: Some(1_700_000_000 + round * 10 + i as i64),
+                    },
+                )
+                .await
+            }));
+        }
+        for handle in handles {
+            handle
+                .await
+                .expect("writer task panicked")
+                .expect("concurrent upsert_progress must not surface a database error");
+        }
+    }
+}
+
+#[tokio::test]
+async fn record_session_succeeds_for_many_concurrent_writers_on_one_pool() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, shared_uuid) = seed(&pool, "/lib", "Shared Book").await;
+    let mut solo_uuids = Vec::new();
+    for i in 0..CONCURRENT_WRITERS_PER_ROUND - 1 {
+        let (_, uuid) = seed(&pool, "/lib", &format!("Solo Session Book {i}")).await;
+        solo_uuids.push(uuid);
+    }
+
+    for round in 0..CONCURRENT_ROUNDS {
+        let mut handles = Vec::new();
+        for (i, book_uuid) in std::iter::once(shared_uuid.clone())
+            .chain(solo_uuids.iter().cloned())
+            .enumerate()
+        {
+            let pool = pool.clone();
+            let started_at = round * 1000 + i as i64;
+            handles.push(tokio::spawn(async move {
+                record_session(
+                    &pool,
+                    user,
+                    &SessionReport {
+                        book_uuid,
+                        format: ProgressFormat::Epub,
+                        started_at,
+                        ended_at: started_at + 60,
+                        progress_units: 60,
+                        device_id: None,
+                        client_id: None,
+                    },
+                )
+                .await
+            }));
+        }
+        for handle in handles {
+            let inserted = handle
+                .await
+                .expect("writer task panicked")
+                .expect("concurrent record_session must not surface a database error");
+            assert!(inserted, "known uuid must always insert");
+        }
+    }
+}
+
+// --- #1861: WARN logging on rejected writes and backward audio jumps ---
+
+/// Captures every WARN-or-louder `tracing` event's message plus fields as
+/// one formatted line, while installed as the default subscriber —
+/// `set_default` scopes it to the current thread, so a single-threaded
+/// runtime keeps a test's capture isolated from any other test running in
+/// the process. Every test using this pattern pins
+/// `#[tokio::test(flavor = "current_thread")]` explicitly rather than
+/// relying on the tokio-macros default (`current_thread` for `#[tokio::test]`
+/// regardless of the `rt-multi-thread` feature — that feature only makes
+/// `flavor = "multi_thread"` available as an opt-in) so the reliance stays
+/// true even if that default ever changed. Mirrors the `QueryCounter`
+/// pattern in `db/src/epub_rewrite/tests.rs`; every `Subscriber` method
+/// besides `event` is a no-op since this only needs to tally/record events,
+/// never spans.
+struct WarnCapture(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+struct FieldLine(String);
+
+impl tracing::field::Visit for FieldLine {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        use std::fmt::Write as _;
+        let _ = write!(self.0, " {}={:?}", field.name(), value);
+    }
+}
+
+impl tracing::Subscriber for WarnCapture {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        metadata.level() <= &tracing::Level::WARN
+    }
+    fn new_span(&self, _attrs: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        if event.metadata().level() > &tracing::Level::WARN {
+            return;
+        }
+        let mut line = FieldLine(String::new());
+        event.record(&mut line);
+        self.0.lock().unwrap().push(line.0);
+    }
+    fn enter(&self, _span: &tracing::span::Id) {}
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn upsert_progress_tx_logs_warn_when_write_rejected_by_timestamp_guard() {
+    // AC1 (#1861): a rejected write must emit one WARN naming the book and
+    // both timestamps, so a revert like the 2026-08-11 chapter-19-to-13 one
+    // leaves a trace even though the response silently carries the winner.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Book A").await;
+    upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Epub,
+            epub_cfi: Some("epubcfi(newer)".into()),
+            audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
+            book_file_id: None,
+            client_updated_at: Some(2000),
+        },
+    )
+    .await
+    .unwrap();
+
+    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let guard = tracing::subscriber::set_default(WarnCapture(events.clone()));
+    upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.clone(),
+            format: ProgressFormat::Epub,
+            epub_cfi: Some("epubcfi(stale-offline-replay)".into()),
+            audio_position_seconds: None,
+            progress_percent: None,
+            kobo_location: None,
+            book_file_id: None,
+            client_updated_at: Some(1000),
+        },
+    )
+    .await
+    .unwrap();
+    drop(guard);
+
+    let captured = events.lock().unwrap();
+    assert_eq!(captured.len(), 1, "exactly one WARN, got {captured:?}");
+    let line = &captured[0];
+    assert!(
+        line.contains(&format!("book_uuid={uuid:?}")),
+        "missing book uuid: {line}"
+    );
+    assert!(
+        line.contains("stored_client_updated_at=2000"),
+        "missing stored stamp: {line}"
+    );
+    assert!(
+        line.contains("offered_client_updated_at=1000"),
+        "missing offered stamp: {line}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn upsert_progress_tx_logs_warn_when_accepted_audio_write_jumps_backward_past_threshold() {
+    // AC2 (#1861): an accepted write that moves the audio position backward
+    // by more than the ~10-minute threshold must emit one WARN with both
+    // positions.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+    let files = seed_audio_files(&pool, book_id, 1).await;
+    upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 20_000.0, Some(files[0]), 100),
+    )
+    .await
+    .unwrap();
+
+    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let guard = tracing::subscriber::set_default(WarnCapture(events.clone()));
+    let saved = upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 100.0, Some(files[0]), 200),
+    )
+    .await
+    .unwrap();
+    drop(guard);
+
+    assert_eq!(saved.audio_position_seconds, Some(100.0), "write must land");
+    let captured = events.lock().unwrap();
+    assert_eq!(captured.len(), 1, "exactly one WARN, got {captured:?}");
+    let line = &captured[0];
+    // Unlike the timestamp-guard WARN above, this call site formats
+    // `book_uuid` with `%` (Display), so the captured field carries no
+    // Debug-quoting — see `warn_if_audio_jumped_backward` in progress.rs.
+    assert!(
+        line.contains(&format!("book_uuid={uuid}")),
+        "missing book uuid: {line}"
+    );
+    assert!(
+        line.contains("old_position_seconds=20000.0"),
+        "missing old position: {line}"
+    );
+    assert!(
+        line.contains("new_position_seconds=100.0"),
+        "missing new position: {line}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn upsert_progress_tx_logs_nothing_for_a_normal_forward_write() {
+    // AC3 (#1861): a plain forward write — newer timestamp, position moving
+    // ahead — must not emit either WARN.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+    let files = seed_audio_files(&pool, book_id, 1).await;
+    upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 100.0, Some(files[0]), 100),
+    )
+    .await
+    .unwrap();
+
+    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let guard = tracing::subscriber::set_default(WarnCapture(events.clone()));
+    upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 400.0, Some(files[0]), 200),
+    )
+    .await
+    .unwrap();
+    drop(guard);
+
+    assert!(
+        events.lock().unwrap().is_empty(),
+        "a forward write must not log a new WARN"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn upsert_progress_tx_logs_nothing_for_a_small_backward_audio_seek() {
+    // A normal skip-back / chapter re-listen (well under the ~10-minute
+    // threshold) is ordinary playback, not a revert — must stay silent.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+    let files = seed_audio_files(&pool, book_id, 1).await;
+    upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 1_000.0, Some(files[0]), 100),
+    )
+    .await
+    .unwrap();
+
+    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let guard = tracing::subscriber::set_default(WarnCapture(events.clone()));
+    upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 970.0, Some(files[0]), 200),
+    )
+    .await
+    .unwrap();
+    drop(guard);
+
+    assert!(
+        events.lock().unwrap().is_empty(),
+        "a 30s skip-back must not cross the ~10-minute threshold"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn upsert_progress_tx_logs_nothing_for_the_first_write_to_a_book() {
+    // No prior row means no "old" position to compare against — the very
+    // first write for a `(user, book, format)` must never look like a jump.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+    let files = seed_audio_files(&pool, book_id, 1).await;
+
+    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let guard = tracing::subscriber::set_default(WarnCapture(events.clone()));
+    upsert_progress(&pool, user, &audio_update(&uuid, 5.0, Some(files[0]), 100))
+        .await
+        .unwrap();
+    drop(guard);
+
+    assert!(
+        events.lock().unwrap().is_empty(),
+        "the first write for a book must not log a WARN"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn upsert_progress_tx_logs_nothing_when_a_write_is_rejected_by_the_audio_file_guard() {
+    // The multi-file-audio-guard rejection (#1888) is a different rejection
+    // reason than the timestamp guard, and out of this issue's scope — it
+    // must not be misreported as a timestamp-guard rejection.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (book_id, uuid) = seed(&pool, "/lib", "Book A").await;
+    let files = seed_audio_files(&pool, book_id, 2).await;
+    upsert_progress(
+        &pool,
+        user,
+        &audio_update(&uuid, 23_718.0, Some(files[1]), 100),
+    )
+    .await
+    .unwrap();
+
+    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let guard = tracing::subscriber::set_default(WarnCapture(events.clone()));
+    let survived = upsert_progress(&pool, user, &audio_update(&uuid, 60.0, None, 200))
+        .await
+        .unwrap();
+    drop(guard);
+
+    assert_eq!(
+        survived.audio_position_seconds,
+        Some(23_718.0),
+        "the audio-file guard must still reject the write"
+    );
+    assert!(
+        events.lock().unwrap().is_empty(),
+        "the audio-file-guard rejection is out of #1861's scope"
+    );
 }

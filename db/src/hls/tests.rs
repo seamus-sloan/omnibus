@@ -418,11 +418,79 @@ async fn transcode_book_clears_orphan_progress_on_restart() {
 }
 
 #[tokio::test]
+async fn count_audio_files_counts_only_audio_rows_for_the_book() {
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
+        .bind("/lib")
+        .execute(&pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    let book_id = sqlx::query(
+        "INSERT INTO books (uuid, library_id, path, title) VALUES ('u', ?, '/lib', 't')",
+    )
+    .bind(lib_id)
+    .execute(&pool)
+    .await
+    .unwrap()
+    .last_insert_rowid();
+    // Two audio files plus an EPUB on the same book — only the audio rows
+    // count toward the multi-file total.
+    for (format, ordinal) in [("M4B", 0), ("M4B", 1), ("EPUB", 0)] {
+        sqlx::query(
+            "INSERT INTO book_files (book_id, format, filename, size_bytes, ordinal) \
+             VALUES (?, ?, 'f', 0, ?)",
+        )
+        .bind(book_id)
+        .bind(format)
+        .bind(ordinal)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    assert_eq!(count_audio_files(&pool, book_id).await.unwrap(), 2);
+    assert_eq!(count_audio_files(&pool, book_id + 1).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn count_audio_files_propagates_db_error_when_pool_is_closed() {
+    let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = count_audio_files(&pool, 1).await.unwrap_err();
+    assert!(matches!(err, HlsError::Db(_)));
+}
+
+#[tokio::test]
 async fn get_parts_propagates_db_error_when_pool_is_closed() {
     let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
     pool.close().await;
     let err = get_parts(&pool, 1).await.unwrap_err();
     assert!(matches!(err, HlsError::Db(_)));
+}
+
+#[test]
+fn used_bytes_sums_every_segment_file_across_book_directories() {
+    let (_guard, _dir) = data_dir_guard();
+    let base = hls_dir();
+    let book0 = base.join("0").join(AUDIO64);
+    let book1 = base.join("1").join(AUDIO64);
+    std::fs::create_dir_all(&book0).unwrap();
+    std::fs::create_dir_all(&book1).unwrap();
+    std::fs::write(book0.join("seg0.ts"), vec![0u8; 100]).unwrap();
+    std::fs::write(book1.join("seg0.ts"), vec![0u8; 50]).unwrap();
+    std::fs::write(book1.join("seg1.ts"), vec![0u8; 25]).unwrap();
+
+    assert_eq!(used_bytes(), 175);
+}
+
+#[test]
+fn used_bytes_is_zero_when_the_hls_dir_does_not_exist() {
+    let (_guard, _dir) = data_dir_guard();
+    // `data_dir_guard` points `OMNIBUS_DATA_DIR` at a fresh tempdir, but
+    // `hls_dir()` (`<data_dir>/hls`) itself is never created until the
+    // first transcode — assert the pre-first-run state reads as empty.
+    assert!(!hls_dir().exists());
+    assert_eq!(used_bytes(), 0);
 }
 
 /// Mirrors `thumbs::tests::evict_if_over_cap_removes_oldest_files`'s shape:

@@ -197,6 +197,34 @@ pub struct SmtpConfigStatus {
     pub source: String,
 }
 
+/// Default `ebook-convert` command used when neither the settings override nor
+/// `OMNIBUS_EBOOK_CONVERT_PATH` is set — resolved on `$PATH` at spawn time.
+pub const DEFAULT_EBOOK_CONVERT_BIN: &str = "ebook-convert";
+
+/// Resolved state of Calibre's `ebook-convert` binary for the Settings UI.
+/// Calibre is optional: `available == false` means format conversion is
+/// disabled, not that the server is misconfigured.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EbookConvertStatus {
+    /// `true` when [`EbookConvertStatus::path`] is present and runnable.
+    pub available: bool,
+    /// The command that will be invoked — a settings override, the env var, or
+    /// the bare [`DEFAULT_EBOOK_CONVERT_BIN`] name.
+    pub path: String,
+    /// Where the path came from: `"settings"`, `"env"`, or `"path"`.
+    pub source: String,
+}
+
+impl Default for EbookConvertStatus {
+    fn default() -> Self {
+        Self {
+            available: false,
+            path: DEFAULT_EBOOK_CONVERT_BIN.to_string(),
+            source: "path".to_string(),
+        }
+    }
+}
+
 /// Amazon Send-to-Kindle size limits — Kindle-imposed and provider-independent.
 /// We deliberately don't model per-SMTP-provider caps (e.g. Gmail's 25 MB),
 /// only Amazon's own: email delivery of a personal document rejects messages

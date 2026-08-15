@@ -11,6 +11,7 @@ use dioxus::prelude::ServerFnError;
 mod tests;
 
 mod account;
+mod admin_health;
 mod authors;
 mod background_tasks;
 mod bookmarks;
@@ -36,6 +37,7 @@ mod stats;
 mod summary;
 
 pub use account::*;
+pub use admin_health::*;
 pub use authors::*;
 pub use background_tasks::*;
 pub use bookmarks::*;

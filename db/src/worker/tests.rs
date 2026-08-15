@@ -3,15 +3,20 @@
 //! progress-snapshot eviction window — all of which are the acceptance
 //! gates for the worker submodule split.
 
+use std::os::unix::fs::PermissionsExt;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::sync::Mutex as TestMutex;
 use std::time::{Duration, Instant};
 
-use omnibus_shared::{GhostFilesWarning, MetadataOverrides, ProgressState, TaskKind};
+use omnibus_shared::{
+    GhostFilesWarning, MetadataOverrides, ProgressState, ScanTallies, TaskDetail, TaskKind,
+};
 use sqlx::SqlitePool;
+use tempfile::TempDir;
 
 use crate::ebook::test_support::copy_fixture_into;
+use crate::epub_rewrite::tests::seed_epub_row;
 use crate::sync::{sync_books, SyncPlan};
 use crate::test_support::{indexed_with_stat, make_test_dir, EnvVarGuard};
 
@@ -130,6 +135,7 @@ async fn concurrency_cap_respected() {
         WorkerConfig {
             scan_concurrency: 1,
             hls_concurrency: 1,
+            convert_concurrency: 1,
         },
     );
     let running = Arc::new(AtomicUsize::new(0));
@@ -178,7 +184,9 @@ async fn concurrency_cap_respected() {
 async fn await_completion_unknown_id_errors() {
     let w = make_worker_default(pool().await);
     match w.await_completion(99999).await {
-        TaskOutcome::Err(_) => {}
+        // Pinned verbatim: a never-posted id must stay distinguishable from
+        // a task that ran and had its completion slot reclaimed.
+        TaskOutcome::Err(msg) => assert_eq!(msg, "unknown task id"),
         other => panic!("expected Err, got {other:?}"),
     }
 }
@@ -227,6 +235,78 @@ async fn poll_resource_locks_empty(w: &Arc<Worker>) -> bool {
             return false;
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// A task that finishes before its caller reaches `await_completion` must
+/// still report its real outcome. `CompletionsPruneGuard` reclaims the slot
+/// the moment the spawned future ends, so the lookup has to fall back to the
+/// retained terminal progress entry instead of reporting an unknown id.
+/// Draining the maps first forces the losing interleaving rather than hoping
+/// for it — the natural race only loses reliably on fast Linux runners.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn await_completion_returns_the_outcome_after_the_slot_was_pruned() {
+    let w = make_worker_default(pool().await);
+    let id = w.post(Task::Test {
+        tag: "pruned-before-await",
+        latency_ms: 0,
+        resource: None,
+        route_through_scan_sem: false,
+        on_run: None,
+        on_done: None,
+    });
+    assert!(poll_maps_empty(&w).await, "task never finished");
+    match w.await_completion(id).await {
+        TaskOutcome::Ok(None) => {}
+        other => panic!("expected Ok(None) from the retained terminal, got {other:?}"),
+    }
+}
+
+/// Failure sibling of
+/// [`await_completion_returns_the_outcome_after_the_slot_was_pruned`]: the
+/// recovered outcome carries the real terminal message, so a late awaiter
+/// can still tell why the task failed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn await_completion_returns_the_failure_after_the_slot_was_pruned() {
+    let w = make_worker_default(pool().await);
+    let id = w.post(Task::Test {
+        tag: "pruned-panicker",
+        latency_ms: 0,
+        resource: None,
+        route_through_scan_sem: false,
+        on_run: Some(Arc::new(|| panic!("intentional test panic"))),
+        on_done: None,
+    });
+    assert!(poll_maps_empty(&w).await, "task never finished");
+    match w.await_completion(id).await {
+        TaskOutcome::Err(msg) => assert_eq!(msg, "task panicked"),
+        other => panic!("expected the recorded failure, got {other:?}"),
+    }
+}
+
+/// The recovery window is exactly the progress map's retention, not
+/// forever: once the terminal entry is evicted the id reads as unknown
+/// again, which is what keeps the fallback from turning into a second
+/// unbounded map.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn await_completion_reports_unknown_id_once_the_terminal_is_evicted() {
+    let w = make_worker_default(pool().await);
+    let id = w.post(Task::Test {
+        tag: "evicted-terminal",
+        latency_ms: 0,
+        resource: None,
+        route_through_scan_sem: false,
+        on_run: None,
+        on_done: None,
+    });
+    assert!(poll_maps_empty(&w).await, "task never finished");
+    // Zero retention evicts the terminal on the very next snapshot read.
+    w.progress_snapshot_with_retention(Duration::ZERO);
+    assert_eq!(w.progress_len(), 0);
+
+    match w.await_completion(id).await {
+        TaskOutcome::Err(msg) => assert_eq!(msg, "unknown task id"),
+        other => panic!("expected Err after eviction, got {other:?}"),
     }
 }
 
@@ -471,11 +551,11 @@ async fn progress_snapshot_evicts_terminals_after_retention() {
     assert_eq!(w.progress_len(), 0, "progress map should be empty");
 }
 
-/// `report_progress` is the phase-2 seam used to surface per-EPUB
-/// counts mid-scan. Exercising it here keeps it from being dropped
-/// as dead code and pins down the "ignored after terminal" invariant.
+/// `report_progress_update` is the mid-task seam used to surface per-EPUB
+/// counts mid-scan. Exercising it here pins down the "ignored after
+/// terminal" invariant.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn report_progress_updates_running_count() {
+async fn report_progress_update_updates_running_count() {
     let w = make_worker_default(pool().await);
     let id = w.post(Task::Test {
         tag: "report",
@@ -486,7 +566,7 @@ async fn report_progress_updates_running_count() {
         on_done: None,
     });
     // Pretend we're mid-scan and have processed 3 of 10.
-    w.report_progress(id, 3, Some(10));
+    w.report_progress_update(id, 3, Some(10), TaskDetail::default());
     let snap = w.progress_snapshot();
     let entry = snap
         .active
@@ -504,7 +584,7 @@ async fn report_progress_updates_running_count() {
 
     // After completion, the entry is terminal and further reports are
     // ignored (the run loop's terminal write is authoritative).
-    w.report_progress(id, 99, Some(10));
+    w.report_progress_update(id, 99, Some(10), TaskDetail::default());
     let snap2 = w.progress_snapshot();
     let entry2 = snap2
         .recent_complete
@@ -512,6 +592,146 @@ async fn report_progress_updates_running_count() {
         .find(|p| p.task_id == id)
         .expect("terminal entry");
     assert!(matches!(entry2.state, ProgressState::Done { .. }));
+}
+
+/// `report_progress_update` stores the verbose detail alongside the
+/// counted state, and the terminal write keeps only the tallies (phase
+/// and current-item would read as stale on a done row).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn report_progress_update_stores_detail_and_terminal_write_prunes_to_tallies() {
+    let w = make_worker_default(pool().await);
+    let id = w.post(Task::Test {
+        tag: "detail",
+        latency_ms: 50,
+        resource: Some("detail".into()),
+        route_through_scan_sem: false,
+        on_run: None,
+        on_done: None,
+    });
+    let tallies = ScanTallies {
+        found: 10,
+        new: 3,
+        changed: 1,
+        removed: 2,
+        moved: 0,
+        unchanged: 4,
+    };
+    w.report_progress_update(
+        id,
+        3,
+        Some(10),
+        TaskDetail {
+            phase: Some("Reading file metadata".into()),
+            current_item: Some("books/Author/Title.epub".into()),
+            tallies: Some(tallies),
+        },
+    );
+    let snap = w.progress_snapshot();
+    let entry = snap
+        .active
+        .iter()
+        .find(|p| p.task_id == id)
+        .expect("running entry");
+    let detail = entry.detail.as_ref().expect("detail stored");
+    assert_eq!(detail.phase.as_deref(), Some("Reading file metadata"));
+    assert_eq!(
+        detail.current_item.as_deref(),
+        Some("books/Author/Title.epub")
+    );
+    assert_eq!(detail.tallies, Some(tallies));
+
+    let _ = w.await_completion(id).await;
+    let snap = w.progress_snapshot();
+    let entry = snap
+        .recent_complete
+        .iter()
+        .find(|p| p.task_id == id)
+        .expect("terminal entry");
+    let detail = entry.detail.as_ref().expect("tallies survive the terminal");
+    assert_eq!(detail.phase, None, "phase must be cleared on terminal");
+    assert_eq!(
+        detail.current_item, None,
+        "current_item must be cleared on terminal"
+    );
+    assert_eq!(detail.tallies, Some(tallies));
+}
+
+/// A detail with no tallies is dropped entirely at the terminal write, so
+/// the done row carries no empty `detail` object on the wire.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn terminal_write_drops_detail_without_tallies() {
+    let w = make_worker_default(pool().await);
+    let id = w.post(Task::Test {
+        tag: "detail-no-tallies",
+        latency_ms: 50,
+        resource: Some("detail-no-tallies".into()),
+        route_through_scan_sem: false,
+        on_run: None,
+        on_done: None,
+    });
+    w.report_progress_update(
+        id,
+        1,
+        None,
+        TaskDetail {
+            phase: Some("Walking the library".into()),
+            current_item: None,
+            tallies: None,
+        },
+    );
+    let _ = w.await_completion(id).await;
+    let snap = w.progress_snapshot();
+    let entry = snap
+        .recent_complete
+        .iter()
+        .find(|p| p.task_id == id)
+        .expect("terminal entry");
+    assert_eq!(entry.detail, None, "tally-less detail must not survive");
+}
+
+/// `report_detail` replaces only the detail, leaving the counted state
+/// alone — the shape single-item tasks (one thumbnail, one author photo)
+/// use to name their subject without a processed/total surface.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn report_detail_sets_current_item_without_touching_the_counted_state() {
+    let w = make_worker_default(pool().await);
+    let id = w.post(Task::Test {
+        tag: "detail-only",
+        latency_ms: 50,
+        resource: Some("detail-only".into()),
+        route_through_scan_sem: false,
+        on_run: None,
+        on_done: None,
+    });
+    w.report_progress_update(id, 3, Some(10), TaskDetail::default());
+    w.report_detail(
+        id,
+        TaskDetail {
+            current_item: Some("The Fellowship of the Ring".into()),
+            ..TaskDetail::default()
+        },
+    );
+    let snap = w.progress_snapshot();
+    let entry = snap
+        .active
+        .iter()
+        .find(|p| p.task_id == id)
+        .expect("running entry");
+    assert!(matches!(
+        entry.state,
+        ProgressState::Running {
+            processed: 3,
+            total: Some(10)
+        }
+    ));
+    assert_eq!(
+        entry
+            .detail
+            .as_ref()
+            .and_then(|d| d.current_item.as_deref()),
+        Some("The Fellowship of the Ring")
+    );
+    let _ = w.await_completion(id).await;
 }
 
 /// Poisoning the `progress` mutex (a thread panics while holding its
@@ -919,45 +1139,6 @@ async fn task_scan_reports_ghost_warning_in_the_warn_band_below_abort() {
 
 // ---------- #1739: bulk EPUB-bake per-book errors on Task::RewriteAllEpubs ----------
 
-/// Insert a `books` row backed by a `book_files` EPUB entry, mirroring
-/// `epub_rewrite::tests::seed_epub_row` — the sibling helper that module
-/// uses to drive `rewrite_all_epubs_with_overrides` directly. Duplicated
-/// rather than shared across crate-internal test modules since it's a
-/// handful of inserts with no reuse-worthy behavior of its own.
-async fn seed_epub_row_for_bake(
-    pool: &SqlitePool,
-    lib_dir: &std::path::Path,
-    uuid: &str,
-    title: &str,
-    filename_stem: &str,
-) -> i64 {
-    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'lib')")
-        .bind(lib_dir.to_string_lossy().to_string())
-        .execute(pool)
-        .await
-        .unwrap()
-        .last_insert_rowid();
-    let book_id =
-        sqlx::query("INSERT INTO books (uuid, library_id, path, title) VALUES (?, ?, '', ?)")
-            .bind(uuid)
-            .bind(lib_id)
-            .bind(title)
-            .execute(pool)
-            .await
-            .unwrap()
-            .last_insert_rowid();
-    sqlx::query(
-        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
-         VALUES (?, 'EPUB', ?, 0)",
-    )
-    .bind(book_id)
-    .bind(filename_stem)
-    .execute(pool)
-    .await
-    .unwrap();
-    book_id
-}
-
 /// A `Task::RewriteAllEpubs` run that leaves one book unbaked (its
 /// `book_files` row points at a source that was never written to disk)
 /// completes as `TaskOutcome::Ok`, and the failed `book_uuid` — the error
@@ -965,22 +1146,25 @@ async fn seed_epub_row_for_bake(
 /// `TaskSuccessDetail::BakeErrors` (#1739). A book with a real fixture on
 /// disk bakes successfully alongside it, so the run doesn't abort on the
 /// first failure.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn task_rewrite_all_epubs_reports_bake_errors_via_task_outcome() {
+/// Seed the two-book fixture a `Task::RewriteAllEpubs` run needs to leave
+/// exactly one book unbaked: `uuid-ok` has a real EPUB on disk, `uuid-bad`
+/// points at a source that was never written. The returned guards redirect
+/// the export cache and own the library dirs, so the caller must hold them
+/// for the life of the test.
+async fn seed_one_failing_bake(pool: &SqlitePool) -> (EnvVarGuard, TempDir, TempDir, TempDir) {
     let export = tempfile::tempdir().unwrap();
-    let _env = EnvVarGuard::set_os("OMNIBUS_EXPORT_EPUB_DIR", Some(export.path().as_os_str()));
+    let env = EnvVarGuard::set_os("OMNIBUS_EXPORT_EPUB_DIR", Some(export.path().as_os_str()));
 
-    let pool = pool().await;
-    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+    let user_id = crate::auth::create_user(pool, "admin", "securepassword1")
         .await
         .unwrap()
         .id;
 
     let lib_ok = tempfile::tempdir().unwrap();
     copy_fixture_into("alpha.epub", lib_ok.path());
-    seed_epub_row_for_bake(&pool, lib_ok.path(), "uuid-ok", "Book OK", "alpha").await;
+    seed_epub_row(pool, lib_ok.path(), "uuid-ok", "Book OK", "alpha").await;
     crate::upsert_metadata_overrides(
-        &pool,
+        pool,
         "uuid-ok",
         &MetadataOverrides {
             title: Some("Fixed".into()),
@@ -993,9 +1177,9 @@ async fn task_rewrite_all_epubs_reports_bake_errors_via_task_outcome() {
     .unwrap();
 
     let lib_bad = tempfile::tempdir().unwrap();
-    seed_epub_row_for_bake(&pool, lib_bad.path(), "uuid-bad", "Book Bad", "missing").await;
+    seed_epub_row(pool, lib_bad.path(), "uuid-bad", "Book Bad", "missing").await;
     crate::upsert_metadata_overrides(
-        &pool,
+        pool,
         "uuid-bad",
         &MetadataOverrides {
             title: Some("Never Applied".into()),
@@ -1007,6 +1191,14 @@ async fn task_rewrite_all_epubs_reports_bake_errors_via_task_outcome() {
     .await
     .unwrap();
 
+    (env, export, lib_ok, lib_bad)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn task_rewrite_all_epubs_reports_bake_errors_via_task_outcome() {
+    let pool = pool().await;
+    let _guards = seed_one_failing_bake(&pool).await;
+
     let w = make_worker_default(pool);
     let id = w.post(Task::RewriteAllEpubs);
     match w.await_completion(id).await {
@@ -1014,6 +1206,26 @@ async fn task_rewrite_all_epubs_reports_bake_errors_via_task_outcome() {
             assert_eq!(errors, vec!["uuid-bad".to_string()]);
         }
         other => panic!("expected Ok with bake errors, got {other:?}"),
+    }
+}
+
+/// The [`TaskSuccessDetail`] survives the completion slot being reclaimed
+/// first, so a late awaiter still learns *which* books failed rather than a
+/// bare `Ok(None)` — the detail-bearing counterpart to
+/// [`await_completion_returns_the_outcome_after_the_slot_was_pruned`].
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn task_rewrite_all_epubs_reports_bake_errors_after_the_slot_was_pruned() {
+    let pool = pool().await;
+    let _guards = seed_one_failing_bake(&pool).await;
+
+    let w = make_worker_default(pool);
+    let id = w.post(Task::RewriteAllEpubs);
+    assert!(poll_maps_empty(&w).await, "bake never finished");
+    match w.await_completion(id).await {
+        TaskOutcome::Ok(Some(TaskSuccessDetail::BakeErrors(errors))) => {
+            assert_eq!(errors, vec!["uuid-bad".to_string()]);
+        }
+        other => panic!("expected the retained bake errors, got {other:?}"),
     }
 }
 
@@ -1041,6 +1253,13 @@ async fn task_rewrite_all_epubs_reports_sanitized_err_when_the_pool_is_closed() 
 
     let w = make_worker_default(pool);
     let id = w.post(Task::RewriteAllEpubs);
+    // `RewriteAllEpubs` has no `on_run` hook to gate, and against a closed
+    // pool it fails (and prunes its completions slot) almost instantly, so
+    // without draining first this races `await_completion` grabbing the
+    // live receiver against the prune. Forcing the pruned-slot interleaving
+    // here, as in `await_completion_returns_the_outcome_after_the_slot_was_pruned`,
+    // makes the test deterministically exercise the retained-outcome path.
+    assert!(poll_maps_empty(&w).await, "task never finished");
     match w.await_completion(id).await {
         TaskOutcome::Err(msg) => {
             assert!(msg.contains("epub override bake"), "{msg}");
@@ -1313,6 +1532,208 @@ async fn task_backfill_thumbs_skips_a_book_whose_thumbnails_are_already_fresh() 
             "already-fresh thumbnail for size {size} was re-encoded"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Task::ConvertFormat (#948)
+// ---------------------------------------------------------------------------
+
+/// Write a fake `ebook-convert` at `path`: handles `--version`, otherwise
+/// mimics the real `ebook-convert <src> <out>` positional invocation by
+/// copying `$1` → `$2`.
+fn write_copying_ebook_convert(path: &std::path::Path) {
+    let script = "#!/bin/sh\n\
+         if [ \"$1\" = \"--version\" ]; then echo 'ebook-convert 0-fake'; exit 0; fi\n\
+         cp \"$1\" \"$2\"\n";
+    std::fs::write(path, script).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// Write a fake `ebook-convert` that answers `--version` immediately but
+/// sleeps past any short test timeout on a real invocation.
+fn write_slow_ebook_convert(path: &std::path::Path) {
+    let script = "#!/bin/sh\n\
+         if [ \"$1\" = \"--version\" ]; then echo 'ebook-convert 0-fake'; exit 0; fi\n\
+         sleep 5\n\
+         cp \"$1\" \"$2\"\n";
+    std::fs::write(path, script).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// Write a fake `ebook-convert` that atomically `mkdir`s a lock directory
+/// before "converting" and `rmdir`s it after, appending to `collisions` if
+/// the directory already existed — i.e. if a peer invocation was already
+/// mid-run. `mkdir` is atomic on POSIX filesystems, so this is a reliable
+/// concurrent-invocation detector without any Rust-side synchronization.
+fn write_locking_ebook_convert(
+    path: &std::path::Path,
+    lockdir: &std::path::Path,
+    collisions: &std::path::Path,
+) {
+    let script = format!(
+        "#!/bin/sh\n\
+         if [ \"$1\" = \"--version\" ]; then echo 'ebook-convert 0-fake'; exit 0; fi\n\
+         if ! mkdir '{lockdir}' 2>/dev/null; then\n\
+         echo collision >> '{collisions}'\n\
+         else\n\
+         sleep 0.2\n\
+         rmdir '{lockdir}'\n\
+         fi\n\
+         cp \"$1\" \"$2\"\n",
+        lockdir = lockdir.display(),
+        collisions = collisions.display(),
+    );
+    std::fs::write(path, script).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// AC1/AC4 happy path: a valid `(source_format, target_format)` pair
+/// completes with a successful [`TaskOutcome`].
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn convert_format_task_completes_with_ok_outcome_for_a_valid_pair() {
+    let pool = pool().await;
+    let lib = tempfile::tempdir().unwrap();
+    let book_id = crate::test_support::seed_epub_book_at(&pool, lib.path())
+        .await
+        .0;
+
+    let cache = tempfile::tempdir().unwrap();
+    let bin_dir = tempfile::tempdir().unwrap();
+    let script = bin_dir.path().join("ebook-convert");
+    write_copying_ebook_convert(&script);
+    let _env = EnvVarGuard::set_os("OMNIBUS_DATA_DIR", Some(cache.path().as_os_str()))
+        .also_set_os("OMNIBUS_EBOOK_CONVERT_PATH", Some(script.as_os_str()));
+
+    let w = make_worker_default(pool);
+    let id = w.post(Task::ConvertFormat {
+        book_id,
+        source_format: "EPUB".into(),
+        target_format: "MOBI".into(),
+    });
+    match w.await_completion(id).await {
+        TaskOutcome::Ok(_) => {}
+        other => panic!("expected Ok, got {other:?}"),
+    }
+}
+
+/// AC4 failure path: a missing/non-runnable `ebook-convert` binary reports a
+/// specific, client-facing failure rather than hanging or a generic error.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn convert_format_task_reports_failure_when_binary_is_missing() {
+    let pool = pool().await;
+    let lib = tempfile::tempdir().unwrap();
+    let book_id = crate::test_support::seed_epub_book_at(&pool, lib.path())
+        .await
+        .0;
+    let cache = tempfile::tempdir().unwrap();
+    let _env = EnvVarGuard::set_os("OMNIBUS_DATA_DIR", Some(cache.path().as_os_str())).also_set(
+        "OMNIBUS_EBOOK_CONVERT_PATH",
+        Some("/nonexistent/omnibus-ebook-convert-probe"),
+    );
+
+    let w = make_worker_default(pool);
+    let id = w.post(Task::ConvertFormat {
+        book_id,
+        source_format: "EPUB".into(),
+        target_format: "MOBI".into(),
+    });
+    match w.await_completion(id).await {
+        TaskOutcome::Err(msg) => assert!(
+            msg.contains("not installed") || msg.contains("not runnable"),
+            "got {msg}"
+        ),
+        other => panic!("expected Err, got {other:?}"),
+    }
+}
+
+/// AC3/AC4: a job that outruns `OMNIBUS_CONVERT_TIMEOUT_SECS` aborts and
+/// reports failure rather than hanging the worker.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn convert_format_task_reports_failure_on_timeout() {
+    let pool = pool().await;
+    let lib = tempfile::tempdir().unwrap();
+    let book_id = crate::test_support::seed_epub_book_at(&pool, lib.path())
+        .await
+        .0;
+    let cache = tempfile::tempdir().unwrap();
+    let bin_dir = tempfile::tempdir().unwrap();
+    let script = bin_dir.path().join("ebook-convert");
+    write_slow_ebook_convert(&script);
+    let _env = EnvVarGuard::set_os("OMNIBUS_DATA_DIR", Some(cache.path().as_os_str()))
+        .also_set_os("OMNIBUS_EBOOK_CONVERT_PATH", Some(script.as_os_str()))
+        .also_set("OMNIBUS_CONVERT_TIMEOUT_SECS", Some("1"));
+
+    let w = make_worker_default(pool);
+    let id = w.post(Task::ConvertFormat {
+        book_id,
+        source_format: "EPUB".into(),
+        target_format: "MOBI".into(),
+    });
+    match w.await_completion(id).await {
+        TaskOutcome::Err(msg) => assert!(msg.contains("timed out"), "got {msg}"),
+        other => panic!("expected Err, got {other:?}"),
+    }
+}
+
+/// AC2: two conversions for the same book (different `target_format`, so
+/// they don't share a resource key and would otherwise run in parallel) never
+/// overlap when `convert_concurrency=1` — proven by an atomic `mkdir`-based
+/// lock in the fake binary rather than racing a real subprocess on timing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn convert_format_task_respects_the_convert_concurrency_cap() {
+    let pool = pool().await;
+    let lib = tempfile::tempdir().unwrap();
+    let book_id = crate::test_support::seed_epub_book_at(&pool, lib.path())
+        .await
+        .0;
+
+    let cache = tempfile::tempdir().unwrap();
+    let bin_dir = tempfile::tempdir().unwrap();
+    let script = bin_dir.path().join("ebook-convert");
+    let lockdir = bin_dir.path().join("lock");
+    let collisions = bin_dir.path().join("collisions");
+    write_locking_ebook_convert(&script, &lockdir, &collisions);
+    let _env = EnvVarGuard::set_os("OMNIBUS_DATA_DIR", Some(cache.path().as_os_str()))
+        .also_set_os("OMNIBUS_EBOOK_CONVERT_PATH", Some(script.as_os_str()));
+
+    let w = Worker::new(
+        pool,
+        WorkerConfig {
+            scan_concurrency: 1,
+            hls_concurrency: 1,
+            convert_concurrency: 1,
+        },
+    );
+
+    let id1 = w.post(Task::ConvertFormat {
+        book_id,
+        source_format: "EPUB".into(),
+        target_format: "MOBI".into(),
+    });
+    let id2 = w.post(Task::ConvertFormat {
+        book_id,
+        source_format: "EPUB".into(),
+        target_format: "AZW3".into(),
+    });
+
+    let (out1, out2) = tokio::join!(w.await_completion(id1), w.await_completion(id2));
+    assert!(matches!(out1, TaskOutcome::Ok(_)), "got {out1:?}");
+    assert!(matches!(out2, TaskOutcome::Ok(_)), "got {out2:?}");
+    assert!(
+        !collisions.exists(),
+        "convert_concurrency=1 must serialize the two conversions"
+    );
+}
+
+/// [`WorkerConfig::default`]'s `convert_concurrency` follows the same
+/// `max(1, num_cpus / 2)` formula as `hls_concurrency` (#948 AC2) — the two
+/// fields are computed from the same `num_cpus()` call, so they must agree
+/// regardless of how many CPUs the test host has.
+#[test]
+fn worker_config_default_convert_concurrency_matches_the_hls_concurrency_formula() {
+    let cfg = WorkerConfig::default();
+    assert_eq!(cfg.convert_concurrency, cfg.hls_concurrency);
+    assert!(cfg.convert_concurrency >= 1);
 }
 
 // ── #941: `background_tasks` persistence ──

@@ -8,6 +8,7 @@ use sqlx::{Row, SqlitePool};
 use super::*;
 use crate::books::list_books;
 use crate::metadata_overrides::upsert_metadata_overrides;
+use crate::physical::{add_physical_copy, create_fileless_book, FilelessBook};
 use crate::pool::init_db;
 use crate::sync::replace_books;
 use crate::test_support::{indexed, CoversTempDir};
@@ -893,12 +894,22 @@ async fn search_palette_series_author_display_reflects_override() {
         "palette author line must follow override.creators, got {results:?}",
     );
 }
-/// Capture `EXPLAIN QUERY PLAN` for each of the three rewritten taxonomy
-/// queries and assert the planner uses the link-table indexes. This is a
-/// structural check — it doesn't pin the literal plan string
-/// (SQLite's wording can shift across point releases) but it does fail
-/// loudly if any of the link tables fall back to a full SCAN, which
-/// would defeat the whole point of this optimization.
+/// Capture `EXPLAIN QUERY PLAN` for each of the three taxonomy queries and
+/// assert the link table is read **once** — one pass to build the
+/// `effective` membership set, every other reference an indexed seek. That
+/// is what the single-pass rewrite bought (issue #154); a second scan means
+/// a per-entity correlated subquery has crept back in and the plan is
+/// O(entities × link rows) again. Structural, not a pinned plan string:
+/// SQLite's wording shifts across point releases.
+///
+/// The SQL comes from the arms themselves, not a copy — a copy stops
+/// describing the query it guards the moment the real one changes, and this
+/// one had already drifted (it still scoped on `l2.path = ?1`).
+///
+/// That one membership scan is newly a scan rather than a seek: visibility is
+/// a disjunction — under a configured root *or* holding a physical copy — so
+/// the planner can no longer drive in from `scan_roots`. Same O(link rows)
+/// work, different order.
 #[tokio::test]
 async fn search_palette_taxonomy_query_plans_use_indexes() {
     let pool = init_db("sqlite::memory:").await.unwrap();
@@ -917,122 +928,52 @@ async fn search_palette_taxonomy_query_plans_use_indexes() {
             .join("\n")
     }
 
-    // Authors — single-pass effective-membership CTE (issue #154).
-    // Canonical arm (1) of the union must still drive through the
-    // `books_authors_link` index (the library-scoped join), not a full
-    // scan, and the visibility `EXISTS` must too.
-    let plan = plan_text(
-        &pool,
-        "WITH effective AS ( \
-           SELECT bal.author AS author_id, NULL AS author_name, bal.book AS book_id \
-             FROM books_authors_link bal \
-             JOIN books b ON b.id = bal.book \
-             JOIN scan_roots l2 ON l2.id = b.library_id \
-             LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid \
-            WHERE l2.path = ?1 \
-              AND (mo.book_uuid IS NULL OR json_type(mo.overrides, '$.creators') IS NULL) \
-           UNION \
-           SELECT NULL AS author_id, json_extract(je.value, '$.name') AS author_name, b.id AS book_id \
-             FROM books b \
-             JOIN scan_roots l2 ON l2.id = b.library_id \
-             JOIN metadata_overrides mo ON mo.book_uuid = b.uuid \
-             JOIN json_each(mo.overrides, '$.creators') je \
-            WHERE l2.path = ?1 AND json_type(mo.overrides, '$.creators') IS NOT NULL \
-         ) \
-         SELECT a.id, a.name, \
-           (SELECT COUNT(*) FROM effective e \
-             WHERE e.author_id = a.id OR e.author_name = a.name) AS book_count \
-         FROM authors a \
-         WHERE a.name LIKE ?2 ESCAPE '\\' \
-           AND EXISTS (SELECT 1 FROM books_authors_link bal \
-                         JOIN books b ON b.id = bal.book \
-                         JOIN scan_roots l ON l.id = b.library_id \
-                        WHERE bal.author = a.id AND l.path = ?1) \
-         ORDER BY book_count DESC, a.name \
-         LIMIT ?3",
-    )
-    .await;
-    assert!(
-        !plan.contains("SCAN books_authors_link") && !plan.contains("SCAN bal"),
-        "authors plan should not full-scan the link table:\n{plan}"
-    );
-
-    // Series — single-pass effective-membership CTE (issue #154).
-    // Canonical arm (1) and the visibility `EXISTS` must still drive
-    // through the `books_series_link` index, not a full scan.
-    let plan = plan_text(
-        &pool,
-        "WITH effective AS ( \
-           SELECT bsl.series AS series_id, NULL AS series_name, bsl.book AS book_id \
-             FROM books_series_link bsl \
-             JOIN books b ON b.id = bsl.book \
-             JOIN scan_roots l2 ON l2.id = b.library_id \
-             LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid \
-            WHERE l2.path = ?1 \
-              AND (mo.book_uuid IS NULL OR json_type(mo.overrides, '$.series') IS NULL) \
-           UNION \
-           SELECT NULL AS series_id, json_extract(mo.overrides, '$.series') AS series_name, b.id AS book_id \
-             FROM books b \
-             JOIN scan_roots l2 ON l2.id = b.library_id \
-             JOIN metadata_overrides mo ON mo.book_uuid = b.uuid \
-            WHERE l2.path = ?1 AND json_type(mo.overrides, '$.series') IS NOT NULL \
-         ) \
-         SELECT s.id, s.name, \
-           (SELECT COUNT(*) FROM effective e \
-             WHERE e.series_id = s.id OR e.series_name = s.name) AS book_count \
-         FROM series s \
-         WHERE s.name LIKE ?2 ESCAPE '\\' \
-           AND EXISTS (SELECT 1 FROM books_series_link bsl \
-                         JOIN books b ON b.id = bsl.book \
-                         JOIN scan_roots l ON l.id = b.library_id \
-                        WHERE bsl.series = s.id AND l.path = ?1) \
-         ORDER BY book_count DESC, s.name \
-         LIMIT ?3",
-    )
-    .await;
-    assert!(
-        !plan.contains("SCAN books_series_link") && !plan.contains("SCAN bsl"),
-        "series plan should not full-scan the link table:\n{plan}"
-    );
-
-    // Tags — single-pass effective-membership CTE (issue #154).
-    // Canonical arm (1) and the visibility `EXISTS` must still drive
-    // through the `books_tags_link` index, not a full scan.
-    let plan = plan_text(
-        &pool,
-        "WITH effective AS ( \
-           SELECT btl.tag AS tag_id, NULL AS tag_name, btl.book AS book_id \
-             FROM books_tags_link btl \
-             JOIN books b ON b.id = btl.book \
-             JOIN scan_roots l2 ON l2.id = b.library_id \
-             LEFT JOIN metadata_overrides mo ON mo.book_uuid = b.uuid \
-            WHERE l2.path = ?1 \
-              AND (mo.book_uuid IS NULL OR json_type(mo.overrides, '$.subjects') IS NULL) \
-           UNION \
-           SELECT NULL AS tag_id, je.value AS tag_name, b.id AS book_id \
-             FROM books b \
-             JOIN scan_roots l2 ON l2.id = b.library_id \
-             JOIN metadata_overrides mo ON mo.book_uuid = b.uuid \
-             JOIN json_each(mo.overrides, '$.subjects') je \
-            WHERE l2.path = ?1 AND json_type(mo.overrides, '$.subjects') IS NOT NULL \
-         ) \
-         SELECT t.id, t.name, \
-           (SELECT COUNT(*) FROM effective e \
-             WHERE e.tag_id = t.id OR e.tag_name = t.name) AS book_count \
-         FROM tags t \
-         WHERE t.name LIKE ?2 ESCAPE '\\' \
-           AND EXISTS (SELECT 1 FROM books_tags_link btl \
-                         JOIN books b ON b.id = btl.book \
-                         JOIN scan_roots l ON l.id = b.library_id \
-                        WHERE btl.tag = t.id AND l.path = ?1) \
-         ORDER BY book_count DESC, t.name \
-         LIMIT ?3",
-    )
-    .await;
-    assert!(
-        !plan.contains("SCAN books_tags_link") && !plan.contains("SCAN btl"),
-        "tags plan should not full-scan the link table:\n{plan}"
-    );
+    for (arm, sql, link_table, link_alias) in [
+        (
+            "authors",
+            authors::search_authors_sql(),
+            "books_authors_link",
+            "bal",
+        ),
+        (
+            "series",
+            series::search_series_sql(),
+            "books_series_link",
+            "bsl",
+        ),
+        ("tags", tags::search_tags_sql(), "books_tags_link", "btl"),
+    ] {
+        let plan = plan_text(&pool, sql).await;
+        let mut scans = 0;
+        for line in plan.lines() {
+            let mut words = line.split_whitespace();
+            let (Some(verb), Some(target)) = (words.next(), words.next()) else {
+                continue;
+            };
+            // Whole-word match on the table plus its per-subquery aliases
+            // (`bsl`, `bsl2`, `bsl3`), so `b`/`b2` don't answer for them.
+            let is_link = target == link_table
+                || (target.starts_with(link_alias)
+                    && target[link_alias.len()..]
+                        .chars()
+                        .all(|c| c.is_ascii_digit()));
+            if !is_link {
+                continue;
+            }
+            match verb {
+                "SCAN" => scans += 1,
+                _ => assert!(
+                    line.contains("USING") && line.contains("INDEX"),
+                    "{arm} plan reads the link table without an index:\n{plan}"
+                ),
+            }
+        }
+        assert!(
+            scans <= 1,
+            "{arm} plan reads the link table {scans} times; only the \
+             `effective` membership pass may:\n{plan}"
+        );
+    }
 }
 /// F1 results-page header: per-category totals report the true match count
 /// even when the 5-hit display cap clips the returned vec. Seven books share
@@ -1781,4 +1722,220 @@ async fn count_tags_for_paths_counts_across_given_library_paths() {
         .await
         .unwrap();
     assert_eq!(total, 2, "should count /lib-a and /lib-b but not /lib-c");
+}
+
+// ── physical-only visibility (#1788) ─────────────────────────────
+// A physical-only book lives under the synthetic `physical://local` root,
+// which is never a configured library path, so the physical arm of the
+// shared visibility predicate is the only way it reaches search. Each arm
+// gets its own test: they carried four independent copies of the scoping
+// rule and can regress one at a time.
+
+/// Mint a fileless book (synthetic `physical://local` root) with one author
+/// and no copy — a wishlist-only entry, invisible to search.
+async fn seed_fileless(pool: &SqlitePool, title: &str, author: &str) -> String {
+    create_fileless_book(
+        pool,
+        FilelessBook {
+            title: title.to_string(),
+            authors: vec![author.to_string()],
+            isbn: None,
+            pubdate: None,
+            description: None,
+            cover: None,
+        },
+    )
+    .await
+    .unwrap()
+}
+
+/// A fileless book with a checked-in print copy — the physical-only shape.
+async fn seed_physical_only(pool: &SqlitePool, title: &str, author: &str) -> String {
+    let uuid = seed_fileless(pool, title, author).await;
+    add_physical_copy(pool, &uuid, None, None, None)
+        .await
+        .unwrap();
+    uuid
+}
+
+/// Attach `uuid`'s book to a (created-on-demand) series.
+async fn link_series(pool: &SqlitePool, uuid: &str, name: &str) {
+    link_taxonomy(pool, uuid, name, "series", "books_series_link", "series").await;
+}
+
+/// Attach `uuid`'s book to a (created-on-demand) tag.
+async fn link_tag(pool: &SqlitePool, uuid: &str, name: &str) {
+    link_taxonomy(pool, uuid, name, "tags", "books_tags_link", "tag").await;
+}
+
+/// Resolve-or-insert a taxonomy row by name and link it to `uuid`'s book.
+/// The two link tables differ only in their names, so one body serves both.
+async fn link_taxonomy(
+    pool: &SqlitePool,
+    uuid: &str,
+    name: &str,
+    table: &str,
+    link_table: &str,
+    link_column: &str,
+) {
+    let book_id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE uuid = ?1")
+        .bind(uuid)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    sqlx::query(&format!("INSERT OR IGNORE INTO {table} (name) VALUES (?1)"))
+        .bind(name)
+        .execute(pool)
+        .await
+        .unwrap();
+    let id: i64 = sqlx::query_scalar(&format!("SELECT id FROM {table} WHERE name = ?1"))
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    sqlx::query(&format!(
+        "INSERT INTO {link_table} (book, {link_column}) VALUES (?1, ?2)"
+    ))
+    .bind(book_id)
+    .bind(id)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn search_palette_finds_physical_only_book_when_it_has_a_copy() {
+    let _covers = CoversTempDir::new("palette_physical_book");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_physical_only(&pool, "Paper Only", "Ada Lovelace").await;
+
+    let results = search_palette(&pool, "/lib", "paper").await.unwrap();
+
+    assert_eq!(
+        results.books.len(),
+        1,
+        "a checked-in print book must reach the palette, got {results:?}"
+    );
+    assert_eq!(results.books[0].title, "Paper Only");
+    assert_eq!(results.books[0].author_display, "Ada Lovelace");
+    assert!(
+        results.books[0].formats.is_empty(),
+        "a physical-only book carries no file formats"
+    );
+    assert_eq!(results.book_total, 1);
+
+    // AC3: the palette and `/api/search` answer the same question.
+    let full = crate::books::search_books_for_paths(&pool, &["/lib"], "paper")
+        .await
+        .unwrap();
+    assert_eq!(full.len(), 1, "precondition: full search already found it");
+}
+
+#[tokio::test]
+async fn search_palette_authors_arm_finds_an_author_known_only_from_a_physical_book() {
+    let _covers = CoversTempDir::new("palette_physical_author");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_physical_only(&pool, "Paper Only", "Ada Lovelace").await;
+
+    let results = search_palette(&pool, "/lib", "lovelace").await.unwrap();
+
+    assert_eq!(
+        results.authors.len(),
+        1,
+        "physical-only book must surface its author, got {results:?}"
+    );
+    assert_eq!(results.authors[0].name, "Ada Lovelace");
+    assert_eq!(
+        results.authors[0].book_count, 1,
+        "the effective-membership CTE must count the physical book too"
+    );
+    assert_eq!(
+        results.authors[0].lead_book_title.as_deref(),
+        Some("Paper Only")
+    );
+    assert_eq!(
+        count_authors(&pool, "/lib", "%lovelace%").await.unwrap(),
+        1,
+        "the uncapped count must agree with the arm"
+    );
+}
+
+#[tokio::test]
+async fn search_palette_series_arm_finds_a_series_known_only_from_a_physical_book() {
+    let _covers = CoversTempDir::new("palette_physical_series");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let uuid = seed_physical_only(&pool, "Paper Saga #1", "Ada Lovelace").await;
+    link_series(&pool, &uuid, "Paper Saga").await;
+
+    let results = search_palette(&pool, "/lib", "paper saga").await.unwrap();
+
+    assert_eq!(
+        results.series.len(),
+        1,
+        "physical-only book must surface its series, got {results:?}"
+    );
+    assert_eq!(results.series[0].name, "Paper Saga");
+    assert_eq!(results.series[0].book_count, 1);
+    assert_eq!(
+        results.series[0].author_display.as_deref(),
+        Some("Ada Lovelace")
+    );
+    assert_eq!(
+        results.series[0].lead_book_title.as_deref(),
+        Some("Paper Saga #1")
+    );
+    assert_eq!(
+        count_series(&pool, "/lib", "%paper saga%").await.unwrap(),
+        1,
+        "the uncapped count must agree with the arm"
+    );
+}
+
+#[tokio::test]
+async fn search_palette_tags_arm_finds_a_tag_known_only_from_a_physical_book() {
+    let _covers = CoversTempDir::new("palette_physical_tag");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let uuid = seed_physical_only(&pool, "Paper Only", "Ada Lovelace").await;
+    link_tag(&pool, &uuid, "letterpress").await;
+
+    let results = search_palette(&pool, "/lib", "letterpress").await.unwrap();
+
+    assert_eq!(
+        results.tags.len(),
+        1,
+        "physical-only book must surface its tag, got {results:?}"
+    );
+    assert_eq!(results.tags[0].name, "letterpress");
+    assert_eq!(results.tags[0].book_count, 1);
+    assert_eq!(
+        count_tags(&pool, "/lib", "%letterpress%").await.unwrap(),
+        1,
+        "the uncapped count must agree with the arm"
+    );
+}
+
+/// AC3, the other direction: a fileless book with no copy is a wishlist
+/// entry. `/api/search` hides it, so every palette arm must too — the fix
+/// admits books with a *copy*, not every book under the physical root.
+#[tokio::test]
+async fn search_palette_hides_a_wishlist_only_book_in_every_arm() {
+    let _covers = CoversTempDir::new("palette_wishlist_only");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let uuid = seed_fileless(&pool, "Papyrus Someday", "Papyrus Hopper").await;
+    link_series(&pool, &uuid, "Papyrus Cycle").await;
+    link_tag(&pool, &uuid, "papyrus").await;
+
+    let results = search_palette(&pool, "/lib", "papyrus").await.unwrap();
+    let full = crate::books::search_books_for_paths(&pool, &["/lib"], "papyrus")
+        .await
+        .unwrap();
+
+    assert!(
+        full.is_empty(),
+        "precondition: full search hides a book with neither a file nor a copy"
+    );
+    assert!(results.books.is_empty(), "books arm: {results:?}");
+    assert!(results.authors.is_empty(), "authors arm: {results:?}");
+    assert!(results.series.is_empty(), "series arm: {results:?}");
+    assert!(results.tags.is_empty(), "tags arm: {results:?}");
 }

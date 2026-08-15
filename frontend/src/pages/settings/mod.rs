@@ -13,6 +13,10 @@
 // `health`'s "Last errors" panel.
 #[cfg(not(feature = "mobile"))]
 mod background_tasks;
+// Web/server only: the format-conversion card calls the web-only
+// `data::get_ebook_convert`/`save_ebook_convert` (no mobile RPC route yet).
+#[cfg(not(feature = "mobile"))]
+mod ebook_convert;
 // Web/server only: the Server Health "Last errors" panel calls the web-only
 // `data::get_last_errors` (no mobile RPC route yet), same shape as `logs`.
 #[cfg(not(feature = "mobile"))]
@@ -34,6 +38,8 @@ use dioxus::prelude::*;
 
 #[cfg(not(feature = "mobile"))]
 use background_tasks::BackgroundTasksSection;
+#[cfg(not(feature = "mobile"))]
+use ebook_convert::EbookConvertField;
 #[cfg(not(feature = "mobile"))]
 use health::LastErrorsSection;
 use library::LibraryLocationSection;
@@ -160,7 +166,10 @@ fn section_content(active: SettingsSection) -> Element {
         SettingsSection::Account => rsx! { super::AccountPage {} },
         SettingsSection::Kindle => rsx! { super::account::KindleEmailCard {} },
         SettingsSection::Kobo => rsx! { super::account::kobo::KoboDevicesCard {} },
-        SettingsSection::Library => rsx! { LibraryLocationSection {} },
+        SettingsSection::Library => rsx! {
+            LibraryLocationSection {}
+            EbookConvertField {}
+        },
         SettingsSection::Metadata => rsx! {
             metadata_precedence::MetadataPrecedenceField {}
             SecretKeyField { kind: SecretKeyKind::Hardcover }

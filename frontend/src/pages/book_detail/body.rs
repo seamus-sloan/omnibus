@@ -2,12 +2,15 @@
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
-use omnibus_shared::{BookSuggestion, EbookMetadata, Identifier, SuggestionsResponse};
+use omnibus_shared::{
+    BookInsights, BookSuggestion, EbookMetadata, Identifier, SuggestionsResponse,
+};
 
 use crate::components::atrium::Cover;
 use crate::components::{BookActionMeta, FormatSwitcher};
-use crate::Route;
+use crate::{data, Route};
 
+use super::dates::{fmt_long_date, local_date_offset, use_local_dates_ready};
 use super::discovery::{
     cover_src, list_count_label, same_hand_author_label, same_hand_title, same_hand_year,
     suggestion_cover_book, SuggestionsSpinner,
@@ -339,7 +342,7 @@ pub(super) fn BdRailSection(
                         for ident in b.identifiers.iter() {
                             BdMetaRow {
                                 key: "{bd_identifier_key(ident)}",
-                                k: ident.scheme.clone().unwrap_or_else(|| "ID".into()),
+                                k: bd_identifier_label(ident),
                                 v: ident.value.clone(),
                             }
                         }
@@ -381,29 +384,100 @@ pub(super) fn BdRailSection(
                     p { class: "bd-rail-body", "Not part of a series." }
                 }
             }
-            div { class: "card",
-                div { class: "bd-insights-head",
-                    div { class: "label", "Insights" }
-                    span { class: "mono bd-insights-tag", "this book" }
-                }
-                div { class: "bd-insights-grid", aria_hidden: "true",
-                    BdInsightCell { label: "Started".to_string(), value: "—".to_string() }
-                    BdInsightCell { label: "Time read".to_string(), value: "—".to_string() }
-                    BdInsightCell { label: "Sessions".to_string(), value: "—".to_string() }
-                    BdInsightCell { label: "Pace".to_string(), value: "—".to_string() }
-                }
-                div { class: "divider" }
-                div { class: "label bd-rail-head", "Activity · last 22 days" }
-                div { class: "bd-activity-bar", aria_hidden: "true",
-                    for tick_idx in 0..22u32 { i { key: "{tick_idx}", class: "bd-activity-tick" } }
-                }
-                div { class: "bd-activity-axis mono",
-                    span { "3wk ago" }
-                    span { "minutes read · by day" }
-                    span { "today" }
+            BdInsightsCard { uuid: uuid.clone() }
+        }
+    }
+}
+
+/// Reading-insights card: Started / Time read / Sessions / Pace for this
+/// book, plus the (still-static) Activity strip. The grid is seeded to the
+/// em-dash placeholders on both SSR and the first WASM paint (rule 07) —
+/// identical to a book with no sessions (AC2) — and a post-mount effect
+/// fetches [`BookInsights`] from `rpc_book_insights`, re-rendering with
+/// concrete values once it resolves. A book with no recorded sessions
+/// resolves to `None` and the placeholders never change.
+#[component]
+fn BdInsightsCard(uuid: String) -> Element {
+    let mut insights = use_signal(|| None::<BookInsights>);
+    // Monotonic load counter, mirroring `BdReadStatusControl`/the rating
+    // widget: a fast SPA navigation between two books can leave a slower
+    // fetch for the *previous* uuid still in flight, and without this guard
+    // its late response would overwrite the new book's insights.
+    let mut load_seq = use_signal(|| 0u64);
+    use_effect(use_reactive!(|uuid| {
+        let my_load = *load_seq.peek() + 1;
+        load_seq.set(my_load);
+        insights.set(None);
+        spawn(async move {
+            if let Ok(fetched) = data::get_book_insights(&uuid).await {
+                if *load_seq.peek() == my_load {
+                    insights.set(fetched);
                 }
             }
+        });
+    }));
+    let dates_ready = use_local_dates_ready();
+    let [started, time_read, sessions, pace] = bd_insight_values(insights(), dates_ready());
+
+    rsx! {
+        div { class: "card", "data-testid": "insights-card",
+            div { class: "bd-insights-head",
+                div { class: "label", "Insights" }
+                span { class: "mono bd-insights-tag", "this book" }
+            }
+            div { class: "bd-insights-grid",
+                BdInsightCell { label: "Started".to_string(), value: started }
+                BdInsightCell { label: "Time read".to_string(), value: time_read }
+                BdInsightCell { label: "Sessions".to_string(), value: sessions }
+                BdInsightCell { label: "Pace".to_string(), value: pace }
+            }
+            div { class: "divider" }
+            div { class: "label bd-rail-head", "Activity · last 22 days" }
+            div { class: "bd-activity-bar", aria_hidden: "true",
+                for tick_idx in 0..22u32 { i { key: "{tick_idx}", class: "bd-activity-tick" } }
+            }
+            div { class: "bd-activity-axis mono",
+                span { "3wk ago" }
+                span { "minutes read · by day" }
+                span { "today" }
+            }
         }
+    }
+}
+
+/// Started / Time read / Sessions / Pace cell values for the Insights grid.
+/// `None` (no sessions yet, whether because the fetch hasn't resolved or the
+/// book truly has none) renders all four as em-dashes — the SSR seed and the
+/// AC2 empty state are the same value, so there is no flash-then-revert.
+/// `dates_ready` gates the Started date's local-day offset (rule 07; see
+/// [`use_local_dates_ready`]).
+fn bd_insight_values(insights: Option<BookInsights>, dates_ready: bool) -> [String; 4] {
+    let dash = || "\u{2014}".to_string();
+    match insights {
+        Some(i) if i.sessions > 0 => [
+            fmt_long_date(i.started_at, local_date_offset(dates_ready, i.started_at)),
+            bd_duration_label(i.seconds_total),
+            i.sessions.to_string(),
+            format!(
+                "{}/session",
+                bd_duration_label(i.seconds_total / i.sessions)
+            ),
+        ],
+        _ => [dash(), dash(), dash(), dash()],
+    }
+}
+
+/// "Xh Ym" / "Xm" duration label for the Time-read and Pace cells. Never
+/// negative — `db::stats::book_insights` only ever sums non-negative session
+/// durations, but the clamp keeps this fn safe to call standalone.
+fn bd_duration_label(secs: i64) -> String {
+    let secs = secs.max(0);
+    let hours = secs / 3600;
+    let minutes = (secs % 3600) / 60;
+    match (hours, minutes) {
+        (0, m) => format!("{m}m"),
+        (h, 0) => format!("{h}h"),
+        (h, m) => format!("{h}h {m}m"),
     }
 }
 
@@ -420,6 +494,34 @@ pub(super) fn BdRailSection(
 /// key.
 fn bd_identifier_key(ident: &Identifier) -> String {
     format!("{:?}\u{1f}{:?}", ident.scheme, ident.value)
+}
+
+/// Label for a file-details identifier row: a known scheme renders as-is; a missing or `unknown` scheme is inferred from the value's shape as `ISBN` or `Identifier`.
+fn bd_identifier_label(ident: &Identifier) -> String {
+    match ident.scheme.as_deref() {
+        Some(scheme) if !scheme.eq_ignore_ascii_case("unknown") => scheme.to_string(),
+        _ if bd_looks_like_isbn(&ident.value) => "ISBN".to_string(),
+        _ => "Identifier".to_string(),
+    }
+}
+
+/// True when `value`, with hyphens and whitespace stripped, is the right length for an ISBN-10 or ISBN-13, digits-only except a trailing ISBN-10 `X` check digit.
+fn bd_looks_like_isbn(value: &str) -> bool {
+    let cleaned: Vec<char> = value
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '-')
+        .collect();
+    match cleaned.len() {
+        10 => {
+            let last = cleaned.len() - 1;
+            cleaned
+                .iter()
+                .enumerate()
+                .all(|(i, c)| c.is_ascii_digit() || (i == last && c.eq_ignore_ascii_case(&'x')))
+        }
+        13 => cleaned.iter().all(|c| c.is_ascii_digit()),
+        _ => false,
+    }
 }
 
 #[cfg(test)]

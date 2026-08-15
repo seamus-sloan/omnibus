@@ -4,7 +4,7 @@
 //! [`crate::worker::Worker`] on startup (when stale) and on settings save;
 //! scans run via `spawn_blocking` so the axum runtime stays responsive.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use sqlx::SqlitePool;
 
@@ -12,11 +12,18 @@ use crate::{books, ebook, sync};
 
 mod audiobooks;
 mod backfill;
+mod ebooks;
+mod progress;
 
 pub use audiobooks::{reindex_audiobooks, reindex_audiobooks_with_progress};
 pub(crate) use backfill::{
     backfill_chapters, backfill_page_counts, backfill_thumbs, backfill_word_counts,
 };
+pub use ebooks::{reindex, reindex_with_progress};
+pub(crate) use progress::{
+    diff_tallies, display_item, report_parse_progress, report_sync_progress, root_display_name,
+};
+pub use progress::{ScanUpdate, PHASE_PARSING, PHASE_SYNCING, PHASE_WALKING};
 
 /// Errors returned by the pure-DB indexer reads (`is_stale`). The
 /// transparent `Db` variant honors the `02-error-handling` boundary rule
@@ -600,113 +607,6 @@ fn path_format(scan_key: &str) -> String {
         .unwrap_or_else(|| "UNKNOWN".to_string())
 }
 
-/// Scan `library_path`, diff against the existing index, and apply only
-/// the per-book changes the diff demands. Runs the scan on the blocking
-/// pool so callers can `await` it from a normal async context without
-/// blocking the runtime.
-///
-/// A fatal scan error (missing or unreadable root) is returned as `Err`
-/// and the existing index is **not** touched — we'd rather serve
-/// stale-but-good data than wipe the table and mark the index "fresh"
-/// (which would also suppress retries until [`REFRESH_AFTER_SECS`]
-/// elapses). Per-book parse failures are *not* fatal; they land in the
-/// DB as rows with `error = Some(_)`, same as before.
-pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<ReindexStats> {
-    reindex_with_progress(pool, library_path, |_, _| {}).await
-}
-
-/// [`reindex`] variant that calls `on_progress(processed, total)` after
-/// each per-book write inside `sync_books`. Used by
-/// [`crate::worker::Worker`] to report determinate `processed / total`
-/// counts to the UI indicator. Returns the scan's ghost-count tallies
-/// (issue #1057) so the caller can decide whether to attach a warning.
-pub async fn reindex_with_progress(
-    pool: &SqlitePool,
-    library_path: &str,
-    on_progress: impl FnMut(u32, u32),
-) -> anyhow::Result<ReindexStats> {
-    let path_for_scan = library_path.to_owned();
-    let library_key_for_scan = library_path.to_owned();
-    let stat = tokio::task::spawn_blocking(move || {
-        ebook::stat_ebook_library(Some(&path_for_scan), &library_key_for_scan)
-    })
-    .await?;
-    if let Some(msg) = stat.error {
-        anyhow::bail!("scan of {library_path} failed: {msg}");
-    }
-
-    // Scope to ebook formats so a shared ebook + audiobook library_path
-    // does not classify audiobook rows here as Removed (#328 inverse).
-    let mut db_rows =
-        books::list_indexed_rows_for_formats(pool, library_path, ebook::EBOOK_FORMATS).await?;
-    // Files attached to a book elsewhere (auto-attach or manual merge)
-    // have no books.uuid of their own; their merged_uuids entries stand
-    // in here so they classify Unchanged/Changed instead of New.
-    db_rows.extend(
-        books::list_merged_rows_for_formats(pool, library_path, ebook::EBOOK_FORMATS).await?,
-    );
-    let library_root: PathBuf = PathBuf::from(library_path);
-    let db_file_backed = db_rows.iter().filter(|r| r.has_file).count();
-    let trustworthy =
-        enumeration_is_trustworthy(stat.incomplete, stat.saw_any_file, db_file_backed > 0);
-    if !trustworthy {
-        tracing::warn!(
-            library_path,
-            incomplete = stat.incomplete,
-            saw_any_file = stat.saw_any_file,
-            db_file_backed,
-            "reindex: enumeration incomplete or a populated root read empty — \
-             skipping the removal pass; no books marked missing (issue #819)"
-        );
-    }
-    let mut diff = diff_library(&stat.entries, &db_rows, &library_root, trustworthy);
-    let removed_count = diff.removed.len();
-    let moved_count = diff.moved.len();
-    // Moved files never entered `removed`, so a reorganization — however
-    // large — can't trip the breaker that exists to catch a vanished mount.
-    check_mass_missing(removed_count, db_file_backed)?;
-    if moved_count > 0 {
-        tracing::info!(
-            library_path,
-            moved = moved_count,
-            "reindex: matched relocated files by stat pair"
-        );
-    }
-
-    // Parse Phase B only for the buckets that need it. `diff.removed`/
-    // `.backfill` are read again below, but `.new`/`.changed` are not, so
-    // move them out instead of cloning every scan target on every reindex.
-    let new_targets = std::mem::take(&mut diff.new);
-    let changed_targets = std::mem::take(&mut diff.changed);
-    let parsed = tokio::task::spawn_blocking(move || {
-        // Materialize cover sidecars so future scans skip the zip
-        // (F0.6). Best-effort: read-only filesystems fall through to the
-        // in-memory bytes for the current scan and retry next time.
-        let opts = ebook::ScanOptions {
-            materialize_sidecars: true,
-        };
-        let new_books = ebook::parse_ebook_targets(new_targets, opts.clone());
-        let changed_books = ebook::parse_ebook_targets(changed_targets, opts);
-        (new_books, changed_books)
-    })
-    .await?;
-
-    let plan = sync::SyncPlan {
-        new_books: parsed.0,
-        changed_books: parsed.1,
-        moved: diff.moved,
-        removed_uuids: diff.removed,
-        backfill: diff.backfill,
-    };
-    sync::sync_books_with_progress(pool, library_path, plan, on_progress).await?;
-    gc_missing_files_best_effort(pool).await;
-    Ok(ReindexStats {
-        removed: removed_count,
-        file_backed_total: db_file_backed,
-        moved: moved_count,
-    })
-}
-
 /// Best-effort GC of books whose files have been missing past the retention
 /// window and that carry no user data. Logged, never surfaced as an error so a
 /// GC failure can never abort a reindex — matches the best-effort cover/FTS
@@ -721,7 +621,7 @@ async fn gc_missing_files_best_effort(pool: &SqlitePool) {
     {
         Ok(purged) if purged > 0 => tracing::info!(purged, "reindex: GC'd books missing files"),
         Ok(_) => {}
-        Err(e) => tracing::error!("reindex: missing-files GC failed: {e}"),
+        Err(e) => tracing::error!(error = %e, "reindex: missing-files GC failed"),
     }
 }
 

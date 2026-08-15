@@ -24,7 +24,7 @@ pub(super) async fn sync_audiobooks_new(
     library_path: &str,
     new_books: &[crate::audiobook::IndexedAudiobook],
     removed_uuids: &[String],
-    mut on_book_written: impl FnMut(),
+    mut on_book_written: impl FnMut(&str),
 ) -> Result<Vec<(String, String, Vec<u8>)>, SyncError> {
     let mut new_covers: Vec<(String, String, Vec<u8>)> = Vec::new();
     if new_books.is_empty() {
@@ -58,17 +58,17 @@ pub(super) async fn sync_audiobooks_new(
         // cross-format attach heuristic, preserving `books.uuid`.
         if let Some((book_id, uuid)) = id_map.get(&b.scan_key).map(|(id, u)| (*id, u.clone())) {
             rewrite_audiobook_in_place(tx, book_id, &uuid, b, &mut new_covers).await?;
-            on_book_written();
+            on_book_written(&b.scan_key);
             continue;
         }
         if try_attach_new_audiobook(tx, library_path, b, &removed_this_scan, &mut new_covers)
             .await?
         {
-            on_book_written();
+            on_book_written(&b.scan_key);
             continue;
         }
         insert_new_audiobook(tx, library_id, b, &mut new_covers).await?;
-        on_book_written();
+        on_book_written(&b.scan_key);
     }
     Ok(new_covers)
 }

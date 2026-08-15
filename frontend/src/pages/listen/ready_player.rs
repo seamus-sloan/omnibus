@@ -66,6 +66,7 @@ fn build_sleep_panel_state(
     sleep: SleepController,
     chapters: Signal<Vec<ChapterInfo>>,
     elapsed: Signal<f64>,
+    rate: Signal<f64>,
     current_chapter_index: Memo<usize>,
     has_chapters: bool,
 ) -> (SleepPanelState, Option<i32>, bool) {
@@ -73,7 +74,7 @@ fn build_sleep_panel_state(
     let on_sleep_end_of_chapter = move |_: ()| {
         let chs_now = chapters.peek().clone();
         let idx = current_chapter_index();
-        if let Some(secs) = end_of_chapter_seconds(&chs_now, idx, *elapsed.peek()) {
+        if let Some(secs) = end_of_chapter_seconds(&chs_now, idx, *elapsed.peek(), *rate.peek()) {
             sleep.select_end_of_chapter(secs);
         }
     };
@@ -174,6 +175,7 @@ pub(super) fn ReadyPlayer(
         sleep,
         chapters,
         elapsed,
+        signals.rate,
         current_chapter_index,
         !chs.is_empty(),
     );
@@ -193,7 +195,7 @@ pub(super) fn ReadyPlayer(
             }
 
             PlayerStageBinding {
-                book_meta: BookMeta { book: book.clone(), title, author },
+                book_meta: BookMeta { book: book.clone(), uuid: uuid.clone(), title, author },
                 signals,
                 panes,
                 chapter_state: ChapterSignals {
@@ -232,6 +234,7 @@ pub(super) fn ReadyPlayer(
 #[derive(Clone, PartialEq)]
 pub(super) struct BookMeta {
     pub book: EbookMetadata,
+    pub uuid: String,
     pub title: String,
     pub author: String,
 }
@@ -311,6 +314,7 @@ pub(super) fn PlayerStageBinding(
 ) -> Element {
     let BookMeta {
         book,
+        uuid,
         title,
         author,
     } = book_meta;
@@ -349,6 +353,7 @@ pub(super) fn PlayerStageBinding(
         PlayerStage {
             content: PlayerContent {
                 book: book.clone(),
+                uuid,
                 title,
                 author,
                 chapters: chs.clone(),
@@ -357,6 +362,7 @@ pub(super) fn PlayerStageBinding(
                 elapsed: elapsed_now,
                 duration: dur,
                 remaining: (dur - elapsed_now).max(0.0),
+                rate: (signals.rate)(),
                 scrub_max: scrub_max(dur),
                 current_chapter_index: current_chapter_index(),
             },

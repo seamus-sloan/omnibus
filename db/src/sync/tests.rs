@@ -1246,7 +1246,7 @@ async fn sync_audiobooks_drops_unsafe_accent_color() {
 // ── Progress-callback contract ────────────────────────────────────
 //
 // `sync_books_with_progress` and `sync_audiobooks_with_progress` feed
-// the worker's `report_progress` so the UI indicator can render a
+// the worker's `report_progress_update` so the UI indicator can render a
 // determinate `processed / total` bar. The contract: emit `(0, total)`
 // before any per-book write, then tick `processed` monotonically up to
 // `total` (one tick per New + Changed book), with `total` constant
@@ -1268,7 +1268,7 @@ async fn sync_books_with_progress_emits_initial_zero_and_monotonic_ticks() {
     };
     let ticks = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(u32, u32)>::new()));
     let ticks_cb = ticks.clone();
-    sync_books_with_progress(&pool, "/lib", plan, move |p, t| {
+    sync_books_with_progress(&pool, "/lib", plan, move |p, t, _| {
         ticks_cb.lock().unwrap().push((p, t));
     })
     .await
@@ -1296,7 +1296,7 @@ async fn sync_books_with_progress_reports_zero_total_for_no_op_plan() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let ticks = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(u32, u32)>::new()));
     let ticks_cb = ticks.clone();
-    sync_books_with_progress(&pool, "/lib", SyncPlan::default(), move |p, t| {
+    sync_books_with_progress(&pool, "/lib", SyncPlan::default(), move |p, t, _| {
         ticks_cb.lock().unwrap().push((p, t));
     })
     .await
@@ -1337,7 +1337,7 @@ async fn sync_books_with_progress_excludes_removed_and_backfill_from_total() {
     };
     let ticks = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(u32, u32)>::new()));
     let ticks_cb = ticks.clone();
-    sync_books_with_progress(&pool, "/lib", plan, move |p, t| {
+    sync_books_with_progress(&pool, "/lib", plan, move |p, t, _| {
         ticks_cb.lock().unwrap().push((p, t));
     })
     .await
@@ -1363,7 +1363,7 @@ async fn sync_audiobooks_with_progress_emits_initial_zero_and_monotonic_ticks() 
     };
     let ticks = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(u32, u32)>::new()));
     let ticks_cb = ticks.clone();
-    sync_audiobooks_with_progress(&pool, "/lib", plan, move |p, t| {
+    sync_audiobooks_with_progress(&pool, "/lib", plan, move |p, t, _| {
         ticks_cb.lock().unwrap().push((p, t));
     })
     .await

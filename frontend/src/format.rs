@@ -1,8 +1,11 @@
 //! Small display formatters shared across surfaces that render `book_files`
-//! — the hero's file picker and the admin delete dialog — plus [`plural`], a
+//! — the hero's file picker and the admin delete dialog — [`plural`], a
 //! trivial pluralizer reused by the desktop and mobile search result
-//! summaries. Pure functions, no Dioxus, so they unit-test without a
-//! renderer.
+//! summaries, and the [`format_date_short`]/[`format_date_month_year`] pair
+//! that turns a stored date string into a human one for the landing table
+//! and series pages. Pure functions, no Dioxus, so they unit-test without a
+//! renderer, and — per `.claude/rules/07-hydration.md` — compute identically
+//! on SSR and the WASM client since neither reads any target-specific state.
 
 use omnibus_shared::BookFileInfo;
 
@@ -47,55 +50,103 @@ pub fn plural(n: u32) -> &'static str {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Em dash used for a date with nothing displayable — absent, unparsable, or
+/// a sentinel value (see [`SENTINEL_YEAR_MAX`]).
+const EM_DASH: &str = "\u{2014}";
 
-    fn file(format: &str, ordinal: i64, label: Option<&str>) -> BookFileInfo {
-        BookFileInfo {
-            id: 1,
-            format: format.to_string(),
-            filename: "f".into(),
-            ordinal,
-            label: label.map(str::to_string),
-            size_bytes: 0,
-            path: None,
-            etag: None,
-        }
-    }
+/// Calibre's "no publish date" placeholder — `UNDEFINED_DATE =
+/// datetime(101, 1, 1, tzinfo=utc)`, serialized into OPF as
+/// `0101-01-01T00:00:00+00:00` — and anything at or before it in year. No
+/// book in a real library has a genuine publication date that old, so any
+/// parsed year in this range means "date unknown," not "ancient."
+const SENTINEL_YEAR_MAX: i32 = 101;
 
-    #[test]
-    fn file_size_scales_the_unit_to_the_byte_count() {
-        assert_eq!(file_size(512), Some("512 B".into()));
-        assert_eq!(file_size(3_100), Some("3.1 KB".into()));
-        assert_eq!(file_size(3_100_000), Some("3.1 MB".into()));
-        assert_eq!(file_size(2_500_000_000), Some("2.5 GB".into()));
-    }
+const MONTH_NAMES: [&str; 12] = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
 
-    #[test]
-    fn file_size_is_absent_for_an_unstated_size() {
-        assert_eq!(file_size(0), None);
-        assert_eq!(file_size(-1), None);
-    }
+/// A calendar date pulled from a stored date string's leading `YYYY`,
+/// `YYYY-MM`, or `YYYY-MM-DD` prefix.
+struct ParsedDate {
+    year: i32,
+    month: Option<u32>,
+    day: Option<u32>,
+}
 
-    #[test]
-    fn file_label_prefers_the_stored_label_over_the_ordinal() {
-        assert_eq!(
-            file_label(&file("epub", 0, Some("10th anniversary"))),
-            "EPUB · 10th anniversary"
-        );
-    }
+/// Parse the leading date out of a stored date string. Handles a full ISO
+/// 8601 timestamp (`2016-05-02T21:00:00+00:00`, `2026-07-31T00:01:35Z`), the
+/// SQLite `datetime()` shape `added_at` uses (`2024-01-02 03:04:05`), a bare
+/// `YYYY-MM-DD`, or a year-only / year-month OPF `dc:date`. Everything from a
+/// `T` or space onward (time-of-day, offset) is dropped — every caller here
+/// renders a calendar date, never a clock time. Returns `None` when the
+/// leading segment isn't a parseable year.
+///
+/// A day outside 1–31 (`YYYY-MM-00`, a stray admin override, …) is treated
+/// the same as an absent day rather than parsed literally — narrowing to
+/// month/year is the graceful failure, not `"Month 0, YYYY"`.
+fn parse_date_prefix(raw: &str) -> Option<ParsedDate> {
+    let date_part = raw.trim().split(['T', ' ']).next()?;
+    let mut segments = date_part.split('-');
+    let year = segments.next()?.parse().ok()?;
+    let month = segments.next().and_then(|m| m.parse().ok());
+    let day = segments
+        .next()
+        .and_then(|d| d.parse().ok())
+        .filter(|d| (1..=31).contains(d));
+    Some(ParsedDate { year, month, day })
+}
 
-    #[test]
-    fn file_label_falls_back_to_a_one_based_part_number() {
-        assert_eq!(file_label(&file("mp3", 1, None)), "MP3 · Part 2");
-        assert_eq!(file_label(&file("mp3", 1, Some("  "))), "MP3 · Part 2");
-    }
+/// Full month name for a 1-based month number, or `None` when it's out of
+/// range (a malformed source value) — callers fall back to a bare year.
+fn month_name(month: u32) -> Option<&'static str> {
+    month
+        .checked_sub(1)
+        .and_then(|i| MONTH_NAMES.get(i as usize))
+        .copied()
+}
 
-    #[test]
-    fn plural_matches_count() {
-        assert_eq!(plural(0), "s");
-        assert_eq!(plural(1), "");
-        assert_eq!(plural(2), "s");
+/// Shared absent/sentinel gate for the two public formatters below: parses
+/// `raw`, renders it with `render` when it names a real year, and falls back
+/// to an em dash otherwise.
+fn render_date(raw: &str, render: impl FnOnce(&ParsedDate) -> String) -> String {
+    match parse_date_prefix(raw) {
+        Some(d) if d.year > SENTINEL_YEAR_MAX => render(&d),
+        _ => EM_DASH.to_string(),
     }
 }
+
+/// Format a stored date string as a short human date for a table cell —
+/// `"May 2, 2016"`, falling back to `"May 2016"` or `"2016"` as the source
+/// narrows. Absent, unparsable, and sentinel dates (see
+/// [`SENTINEL_YEAR_MAX`]) render as an em dash.
+pub fn format_date_short(raw: &str) -> String {
+    render_date(raw, |d| match (d.month.and_then(month_name), d.day) {
+        (Some(month), Some(day)) => format!("{month} {day}, {}", d.year),
+        (Some(month), None) => format!("{month} {}", d.year),
+        (None, _) => d.year.to_string(),
+    })
+}
+
+/// Format a stored date string as `"May 2016"` for a series card — coarser
+/// than [`format_date_short`] since a card only has room for month + year.
+/// Same absent/sentinel handling.
+pub fn format_date_month_year(raw: &str) -> String {
+    render_date(raw, |d| match d.month.and_then(month_name) {
+        Some(month) => format!("{month} {}", d.year),
+        None => d.year.to_string(),
+    })
+}
+
+#[cfg(test)]
+mod tests;

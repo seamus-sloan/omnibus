@@ -9,6 +9,7 @@ use omnibus_shared::Highlight;
 use super::prefs::ReaderPrefs;
 use super::search_panel::SearchResult;
 use super::selection::SelectionData;
+use super::signals::resolve_chapter_position;
 use super::toc_drawer::TocEntry;
 use super::ReaderStatus;
 
@@ -94,6 +95,7 @@ pub(crate) fn install_reader_web_interop(uuid: String, prefs: ReaderPrefs, sigs:
             deep_link_cfi,
             bootstrap,
             highlights,
+            sigs.loc,
         ));
     }));
 
@@ -126,17 +128,33 @@ fn register_window_callbacks(
 
     let uuid_for_save = uuid_cb;
     let relocate = Closure::<dyn FnMut(String)>::new(move |json: String| {
-        if let Ok(data) = serde_json::from_str::<super::RelocateData>(&json) {
+        if let Ok(mut data) = serde_json::from_str::<super::RelocateData>(&json) {
+            // Re-derive chapter/total from the TOC's own order rather than
+            // trusting the glue's numbers verbatim — see
+            // `signals::resolve_chapter_position` (issue #1909, AC1).
+            let toc_snapshot = toc.peek().clone();
+            let previous_chapter = loc.peek().chapter;
+            let (chapter, total_chapters) =
+                resolve_chapter_position(&toc_snapshot, &data, previous_chapter);
+            data.chapter = chapter;
+            data.total_chapters = total_chapters;
+
             if let Some(ref cfi) = data.cfi {
                 crate::reader_progress::save(&uuid_for_save, cfi);
                 let uuid_for_post = uuid_for_save.clone();
                 let cfi_for_post = cfi.clone();
+                // `progress_percent` is the same whole-book figure the
+                // footer/ribbon render (`data.pct`) — sending it keeps the
+                // landing hero's stored percent in step with what the
+                // reader itself is showing (issue #1909, AC2).
+                let percent_for_post = i64::from(data.pct.min(100));
                 wasm_bindgen_futures::spawn_local(async move {
                     let body = serde_json::json!({
                         "update": {
                             "book_uuid": uuid_for_post,
                             "format": "epub",
                             "epub_cfi": cfi_for_post,
+                            "progress_percent": percent_for_post,
                         }
                     });
                     if let Ok(req) = gloo_net::http::Request::post("/api/rpc/progress").json(&body)
@@ -144,6 +162,15 @@ fn register_window_callbacks(
                         let _ = req.send().await;
                     }
                 });
+            }
+            // A relocate always names the (corrected) current position, so
+            // it also signals that an in-flight chapter jump has finished
+            // rendering — flip a TOC-jump-triggered `Loading` back to
+            // `Ready` (issue #1909, AC3). Guarded so a relocate stray after
+            // a load `Failed` can't resurrect the overlay as if nothing
+            // went wrong.
+            if *status.peek() == ReaderStatus::Loading {
+                status.set(ReaderStatus::Ready);
             }
             loc.set(data);
         }
@@ -231,6 +258,12 @@ struct BootstrapLiterals {
 /// the book-detail saved-passages list), so resuming where this book was last
 /// left off would ignore the whole point of the link. The relocate handler
 /// then persists the new position as usual.
+///
+/// The same progress fetch also seeds `loc` with the server's stored
+/// whole-book percent (flagged approximate) so the footer/ribbon show the
+/// last-known position immediately — not a blank (or a frozen 0%) while
+/// epub.js fetches, parses, and paginates the book (issue #1896, AC2). The
+/// first real relocate overwrites the seed wholesale.
 #[cfg(feature = "web")]
 async fn spawn_bootstrap_and_highlights(
     uuid: String,
@@ -238,6 +271,7 @@ async fn spawn_bootstrap_and_highlights(
     deep_link_cfi: Option<String>,
     lits: BootstrapLiterals,
     mut highlights: Signal<Vec<Highlight>>,
+    mut loc: Signal<super::RelocateData>,
 ) {
     use super::bootstrap::{reader_bootstrap_js, BootstrapArgs};
     use super::reader_call_json2;
@@ -248,13 +282,23 @@ async fn spawn_bootstrap_and_highlights(
     let chosen = match deep_link_cfi {
         Some(cfi) => Some(cfi),
         None => {
-            let server_cfi =
-                crate::data::get_progress("", &uuid, omnibus_shared::ProgressFormat::Epub)
-                    .await
-                    .ok()
-                    .flatten()
-                    .and_then(|r| r.epub_cfi);
-            server_cfi.or(local_saved)
+            let record = crate::data::get_progress("", &uuid, omnibus_shared::ProgressFormat::Epub)
+                .await
+                .ok()
+                .flatten();
+            let stored_pct = record.as_ref().and_then(|r| r.progress_percent);
+            if let Some(pct) = stored_pct.filter(|p| (1..=100).contains(p)) {
+                // Guarded on "no relocate yet" so a fast epub.js mount can
+                // never be clobbered by this slower round trip.
+                if loc.peek().cfi.is_none() {
+                    loc.set(super::RelocateData {
+                        pct: pct as u32,
+                        pct_approx: true,
+                        ..Default::default()
+                    });
+                }
+            }
+            record.and_then(|r| r.epub_cfi).or(local_saved)
         }
     };
     let cfi_arg = json_literal(&chosen);

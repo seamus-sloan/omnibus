@@ -4,9 +4,10 @@
 //! by the confirm screens, and the shared jump-to-title-search handler.
 
 use super::entry::apply_key;
-use super::screens::{byline, meta_details};
+use super::link::{scan_book_from_hit, truncation_note};
+use super::screens::{byline, meta_details, CloseMatchCopy};
 use super::*;
-use omnibus_shared::MetadataProvider;
+use omnibus_shared::{MetadataProvider, PaletteBookHit};
 
 fn scan_book() -> ScanBook {
     ScanBook {
@@ -145,12 +146,50 @@ fn stage_for_in_library_unowned_opens_the_check_in_confirm() {
 fn stage_for_close_match_opens_the_confirm_prompt_not_a_write() {
     let outcome = ScanOutcome::CloseMatch {
         book: scan_book(),
+        others: Vec::new(),
         scanned: external(),
     };
-    assert!(matches!(
-        stage_for(outcome, "9780441013593"),
-        Some(Stage::CloseMatch { .. })
-    ));
+    let Some(Stage::CloseMatch { books, .. }) = stage_for(outcome, "9780441013593") else {
+        panic!("expected the close-match stage");
+    };
+    assert_eq!(books.len(), 1);
+}
+
+#[test]
+fn stage_for_close_match_flattens_the_wire_head_and_tail_into_one_picker() {
+    // Two rows for one work (an EPUB and its unattached audiobook) arrive as
+    // `book` + `others`; the screen renders them as a single ordered list.
+    let second = ScanBook {
+        uuid: "audiobook-uuid".into(),
+        ..scan_book()
+    };
+    let outcome = ScanOutcome::CloseMatch {
+        book: scan_book(),
+        others: vec![second],
+        scanned: external(),
+    };
+    let Some(Stage::CloseMatch { books, .. }) = stage_for(outcome, "9780441013593") else {
+        panic!("expected the close-match stage");
+    };
+    assert_eq!(
+        books.iter().map(|b| b.uuid.as_str()).collect::<Vec<_>>(),
+        vec!["book-uuid", "audiobook-uuid"]
+    );
+}
+
+#[test]
+fn close_match_copy_asks_which_one_only_when_several_books_are_offered() {
+    let one = CloseMatchCopy::for_count(false);
+    assert_eq!(one.heading, "Is this the book?");
+    assert_eq!(one.pick, "Yes, that's it");
+    assert_eq!(one.decline, "No, different book");
+
+    let many = CloseMatchCopy::for_count(true);
+    assert_eq!(many.heading, "Which one is this?");
+    assert_eq!(many.pick, "This one");
+    assert_eq!(many.decline, "None of these");
+    // A picker that says "match this one" reads as a single suggestion.
+    assert!(many.subtitle.ends_with("match these."), "{}", many.subtitle);
 }
 
 #[test]
@@ -265,6 +304,77 @@ fn go_to_search_opens_the_lookup_stage_and_clears_a_stale_error() {
         rsx! {}
     }
     VirtualDom::new(AssertGoToSearch).rebuild_in_place();
+}
+
+fn palette_hit() -> PaletteBookHit {
+    PaletteBookHit {
+        id: 7,
+        uuid: "library-uuid".into(),
+        title: "The Robin on the Oak Throne".into(),
+        author_display: "Rebecca Yarros, Someone Else".into(),
+        year: Some("2026".into()),
+        formats: vec!["EPUB".into()],
+        cover_url: Some("/api/covers/library-uuid".into()),
+        accent: None,
+    }
+}
+
+#[test]
+fn scan_book_from_hit_splits_the_pre_joined_author_display() {
+    let book = scan_book_from_hit(&palette_hit());
+    assert_eq!(book.uuid, "library-uuid");
+    assert_eq!(book.title, "The Robin on the Oak Throne");
+    assert_eq!(
+        book.authors,
+        vec!["Rebecca Yarros".to_string(), "Someone Else".to_string()]
+    );
+    assert_eq!(book.cover_url.as_deref(), Some("/api/covers/library-uuid"));
+}
+
+#[test]
+fn scan_book_from_hit_yields_no_authors_for_an_empty_display() {
+    let mut hit = palette_hit();
+    hit.author_display = String::new();
+    assert!(scan_book_from_hit(&hit).authors.is_empty());
+}
+
+#[test]
+fn truncation_note_only_speaks_up_when_matches_are_hidden() {
+    assert_eq!(truncation_note(5, 5), None);
+    assert_eq!(truncation_note(2, 2), None);
+    assert!(truncation_note(5, 12)
+        .expect("a capped list must say so")
+        .contains("Showing 5 of 12"));
+}
+
+#[test]
+fn go_to_link_opens_the_picker_with_the_scanned_isbn_and_a_way_back() {
+    #[component]
+    fn AssertGoToLink() -> Element {
+        let origin = Stage::Unresolved {
+            isbn: "9780441013593".to_string(),
+        };
+        let state = FlowState {
+            stage: Signal::new(origin.clone()),
+            isbn: Signal::new("9780441013593".to_string()),
+            note: Signal::new(String::new()),
+            busy: Signal::new(false),
+            error: Signal::new(Some("Could not look that up".to_string())),
+        };
+        go_to_link(state, "9780441013593".to_string(), origin).call(());
+
+        let Stage::LinkExisting { isbn, origin } = (state.stage)() else {
+            panic!("expected the link-existing stage");
+        };
+        // The copy is filed under the ISBN that was scanned, not under
+        // whatever identifier the picked library book happens to publish.
+        assert_eq!(isbn, "9780441013593");
+        assert!(matches!(*origin, Stage::Unresolved { .. }));
+        assert_eq!((state.error)(), None);
+
+        rsx! {}
+    }
+    VirtualDom::new(AssertGoToLink).rebuild_in_place();
 }
 
 #[test]

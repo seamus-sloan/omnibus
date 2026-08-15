@@ -138,9 +138,23 @@ pub fn parse_groups(
     groups: Vec<super::AudiobookGroup>,
     library_root: &Path,
 ) -> Vec<IndexedAudiobook> {
+    parse_groups_with_progress(groups, library_root, |_| {})
+}
+
+/// [`parse_groups`] variant that calls `on_group` with each group just
+/// before parsing it, so the reindex pipeline can name the book currently
+/// being read in the worker progress feed.
+pub fn parse_groups_with_progress(
+    groups: Vec<super::AudiobookGroup>,
+    library_root: &Path,
+    mut on_group: impl FnMut(&super::AudiobookGroup),
+) -> Vec<IndexedAudiobook> {
     groups
         .into_iter()
-        .map(|g| parse_one_group(g, library_root))
+        .map(|g| {
+            on_group(&g);
+            parse_one_group(g, library_root)
+        })
         .collect()
 }
 

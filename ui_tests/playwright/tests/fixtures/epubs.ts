@@ -35,7 +35,11 @@ export interface ExpectedBook {
    * fixtures pin `[]`.
    */
   tags?: string[];
-  /** Verbatim text rendered in the published cell. */
+  /**
+   * Raw stored `dc:date` value (e.g. `"1843-10-01"`). The published cell
+   * renders a formatted human date derived from this, not the raw string —
+   * see `expectedPublishedText` in `utils/ebooks.ts`.
+   */
   published?: string;
   /** Verbatim text rendered in the language cell (BCP-47). */
   language: string;
@@ -191,6 +195,12 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     language: "fr",
     hasCover: true,
   },
+  // Reserved for check_in_link_existing.spec.ts: it checks a real physical
+  // copy in against this book. `physical_copies` rows are library-wide (they
+  // add a PHYS badge to the formats cell and flip the detail page's physical
+  // pill for every user), and the scanned ISBN then resolves to this book on
+  // the exact-identifier rung forever after — so no other spec may read it,
+  // even though the spec deletes the copy again on the way out.
   {
     slug: "polyglot-2",
     filename: "polyglot-2.epub",
@@ -468,6 +478,22 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     hasCover: true,
   },
 
+  // Reserved for the paging-race / blank-front-matter regression in
+  // reader.spec.ts (issue #1895) — five one-page sections (two full-page
+  // images, three text) ahead of chapter1, so paging through it crosses
+  // section boundaries repeatedly. No other spec may page through this book.
+  {
+    slug: "frontmatter-relay",
+    filename: "frontmatter-relay.epub",
+    title: "Frontmatter Relay",
+    authors: ["Rozsa Peter"],
+    publisher: "Omnibus Test Press",
+    published: "1951-01-01",
+    tags: [],
+    language: "en",
+    hasCover: true,
+  },
+
   // The two CBZ fixtures (tools/make_cbz.ts) are reserved for the
   // comic-pager spec (comic_reader.spec.ts): `aurora-station-01` receives
   // that spec's progress and read-status writes (the pager auto-marks
@@ -502,6 +528,11 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
   // Public-domain Project Gutenberg / Standard Ebooks EPUBs under
   // `test_data/epubs/public_domain/`. Metadata below is what each file's OPF
   // actually claims — `db/tests/public_domain_epubs.rs` keeps the parser honest.
+  //
+  // `dracula` is reserved for the TOC-jump loading-state regression in
+  // reader.spec.ts (issue #1909): it needs a real multi-chapter book so the
+  // contents drawer lists more than one row to jump between — no other spec
+  // may open it in the reader.
   {
     slug: "dracula",
     filename: "public_domain/dracula.epub",

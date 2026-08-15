@@ -5,12 +5,12 @@ use axum::response::Response;
 
 use super::atom::{Feed, Link, ACQUISITION_TYPE, NAVIGATION_TYPE, OPENSEARCH_TYPE};
 use super::{nav_entry, now_rfc3339, xml_response};
-use crate::auth::AuthUser;
+use crate::auth::OpdsAuthUser;
 
 /// `GET /opds` — the root navigation feed. Links to search (`rel="search"`)
 /// and entries into recently-added and the author browse (AC1). Static: no
 /// DB read, since it only advertises the other endpoints' existence.
-pub(super) async fn root(_user: AuthUser) -> Response {
+pub(super) async fn root(_user: OpdsAuthUser) -> Response {
     let updated = now_rfc3339();
     let feed = Feed {
         id: "urn:omnibus:opds:root".to_string(),
@@ -22,6 +22,14 @@ pub(super) async fn root(_user: AuthUser) -> Response {
             Link::new("search", "/opds/osd", OPENSEARCH_TYPE),
         ],
         entries: vec![
+            nav_entry(
+                "urn:omnibus:opds:all",
+                "All Books",
+                &updated,
+                "/opds/all",
+                ACQUISITION_TYPE,
+                "Every book in the library, A to Z",
+            ),
             nav_entry(
                 "urn:omnibus:opds:new",
                 "Recently Added",
@@ -37,6 +45,22 @@ pub(super) async fn root(_user: AuthUser) -> Response {
                 "/opds/authors",
                 NAVIGATION_TYPE,
                 "Browse by author, A to Z",
+            ),
+            nav_entry(
+                "urn:omnibus:opds:series",
+                "Series",
+                &updated,
+                "/opds/series",
+                NAVIGATION_TYPE,
+                "Browse by series",
+            ),
+            nav_entry(
+                "urn:omnibus:opds:shelves",
+                "Shelves",
+                &updated,
+                "/opds/shelves",
+                NAVIGATION_TYPE,
+                "Your shelves and public shelves",
             ),
         ],
     };
@@ -60,6 +84,6 @@ const OSD_XML: &str = concat!(
 
 /// `GET /opds/osd` — the OpenSearch description document `rel="search"` on
 /// the root feed points at (AC3).
-pub(super) async fn osd(_user: AuthUser) -> Response {
+pub(super) async fn osd(_user: OpdsAuthUser) -> Response {
     xml_response(OPENSEARCH_TYPE, OSD_XML.to_string())
 }

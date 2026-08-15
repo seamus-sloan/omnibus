@@ -92,6 +92,9 @@ wiremock = "0.6"
 # baked into its metadata (F5.8 #1372). Same version as `db`'s dependency, so
 # cargo unifies on one build.
 epub = "2"
+# Encode `Authorization: Basic` credentials in the OPDS Basic-auth tests.
+# Same version as `db`'s dependency, so cargo unifies on one build.
+base64 = "0.22"
 
 [features]
 default = ["server"]

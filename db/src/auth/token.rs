@@ -98,6 +98,26 @@ pub fn parse_session_token(
     None
 }
 
+/// Parse `Authorization: Basic <base64(user:pass)>` credentials (RFC 7617).
+/// Returns `None` for any other scheme, undecodable base64, non-UTF-8
+/// bytes, or a payload with no `:` separator. The password keeps any `:`
+/// it contains — only the first separator splits.
+///
+/// Pure-string API like [`parse_session_token`], for the same reason: the
+/// server's OPDS Basic-auth extractor passes the header value through.
+pub fn parse_basic_credentials(authorization: &str) -> Option<(String, String)> {
+    let encoded = authorization.strip_prefix("Basic ")?.trim();
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
+    let text = String::from_utf8(decoded).ok()?;
+    let (username, password) = text.split_once(':')?;
+    if username.is_empty() {
+        return None;
+    }
+    Some((username.to_string(), password.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,6 +171,39 @@ mod tests {
             Some("__Host-omnibus_session=cookie-token"),
         );
         assert_eq!(got, Some(("bear-token".to_string(), SessionKind::Bearer)));
+    }
+
+    #[test]
+    fn parse_basic_credentials_decodes_user_and_password() {
+        use base64::engine::general_purpose::STANDARD;
+        let header = format!("Basic {}", STANDARD.encode("reader:s3cret"));
+        let got = parse_basic_credentials(&header);
+        assert_eq!(got, Some(("reader".to_string(), "s3cret".to_string())));
+    }
+
+    #[test]
+    fn parse_basic_credentials_keeps_colons_in_password() {
+        use base64::engine::general_purpose::STANDARD;
+        let header = format!("Basic {}", STANDARD.encode("reader:pa:ss:word"));
+        let got = parse_basic_credentials(&header);
+        assert_eq!(got, Some(("reader".to_string(), "pa:ss:word".to_string())));
+    }
+
+    #[test]
+    fn parse_basic_credentials_rejects_other_schemes_and_garbage() {
+        use base64::engine::general_purpose::STANDARD;
+        assert_eq!(parse_basic_credentials("Bearer abc"), None);
+        assert_eq!(parse_basic_credentials("Basic !!!not-base64!!!"), None);
+        // No colon separator in the decoded payload.
+        assert_eq!(
+            parse_basic_credentials(&format!("Basic {}", STANDARD.encode("no-separator"))),
+            None
+        );
+        // Empty username.
+        assert_eq!(
+            parse_basic_credentials(&format!("Basic {}", STANDARD.encode(":password"))),
+            None
+        );
     }
 
     #[test]

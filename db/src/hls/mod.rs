@@ -20,8 +20,10 @@ pub use fs::{
     read_ffmpeg_manifest, read_progress, segment_dir,
 };
 pub use manifest::{build_manifest, ffmpeg_progress_fraction, parse_ffmpeg_progress_us};
-pub use query::{get_chapters, get_parts, resolve_audiobook, resolve_audiobook_file};
-pub use transcode::{evict_if_over_cap, transcode_book};
+pub use query::{
+    count_audio_files, get_chapters, get_parts, resolve_audiobook, resolve_audiobook_file,
+};
+pub use transcode::{evict_if_over_cap, transcode_book, used_bytes};
 
 /// Errors returned by the HLS DB queries. `transcode_book` uses
 /// `anyhow::Result` because ffmpeg + filesystem + timeouts dominate its

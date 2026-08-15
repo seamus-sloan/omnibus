@@ -740,6 +740,17 @@ enum UserDataService {
         await OfflineStore.shared.cacheDelete(CacheKey.shelfPreviews)
     }
 
+    // MARK: - Wishlist
+
+    /// The caller's wishlist entry for a book, or `nil` when not tracked.
+    /// Read-only here: wishlist writes fail rule 08's test 3 (the payload
+    /// comes from the server's lookup), so they never queue offline.
+    static func wishlistEntry(uuid: String) -> AsyncThrowingStream<CacheRead<WishlistEntry?>, Error> {
+        Cache.live(CacheKey.wishlistEntry(uuid)) {
+            try await APIClient.shared.get("/api/physical/\(uuid)/wishlist")
+        }
+    }
+
     // MARK: - Stats
 
     static func stats(range: StatsRange) -> AsyncThrowingStream<CacheRead<StatsSummary>, Error> {

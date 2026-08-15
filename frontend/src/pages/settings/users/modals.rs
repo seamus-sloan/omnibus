@@ -126,25 +126,18 @@ fn build_new_user_submit_handler(
     }
 }
 
-/// Edit-user modal: permission toggles + an optional password reset.
-#[component]
-pub(super) fn EditUserModal(
-    user: AdminUserRow,
-    on_close: EventHandler<()>,
+/// Builds the edit-user submit handler: saves permissions, then (if a new
+/// password was entered) resets it, mirroring
+/// [`build_new_user_submit_handler`]'s shape.
+fn build_edit_user_submit_handler(
+    uid: i64,
+    perms: Signal<UserPermissions>,
+    new_password: Signal<String>,
+    mut error: Signal<Option<String>>,
+    mut saving: Signal<bool>,
     on_saved: EventHandler<()>,
-) -> Element {
-    let uid = user.id;
-    let perms = use_signal(|| UserPermissions {
-        is_admin: user.is_admin,
-        can_upload: user.can_upload,
-        can_edit: user.can_edit,
-        can_download: user.can_download,
-    });
-    let mut new_password = use_signal(String::new);
-    let mut error = use_signal(|| None::<String>);
-    let mut saving = use_signal(|| false);
-
-    let submit = move |evt: Event<FormData>| {
+) -> impl FnMut(Event<FormData>) + 'static {
+    move |evt: Event<FormData>| {
         evt.prevent_default();
         if saving() {
             return;
@@ -169,7 +162,27 @@ pub(super) fn EditUserModal(
             on_saved.call(());
             saving.set(false);
         });
-    };
+    }
+}
+
+/// Edit-user modal: permission toggles + an optional password reset.
+#[component]
+pub(super) fn EditUserModal(
+    user: AdminUserRow,
+    on_close: EventHandler<()>,
+    on_saved: EventHandler<()>,
+) -> Element {
+    let uid = user.id;
+    let perms = use_signal(|| UserPermissions {
+        is_admin: user.is_admin,
+        can_upload: user.can_upload,
+        can_edit: user.can_edit,
+        can_download: user.can_download,
+    });
+    let mut new_password = use_signal(String::new);
+    let mut error = use_signal(|| None::<String>);
+    let saving = use_signal(|| false);
+    let submit = build_edit_user_submit_handler(uid, perms, new_password, error, saving, on_saved);
 
     let pw = new_password();
     let show_meter = !pw.is_empty();
@@ -213,9 +226,10 @@ pub(super) fn EditUserModal(
 
 /// Delete-confirmation modal. Warns when the admin is deleting their own
 /// account; the last-admin guard is enforced server-side and surfaced inline.
-/// Built on the shared `ConfirmModal` shell (see `components::confirm_modal`)
-/// rather than `ModalShell`, so the backdrop can't be dismissed mid-delete —
-/// `ModalShell`'s own backdrop has no busy gate at all.
+/// Passes `busy` through to the shared `ConfirmModal` shell (see
+/// `components::confirm_modal`) so the backdrop can't be dismissed
+/// mid-delete — unlike `ModalShell` above, which always passes `busy: false`
+/// since none of its callers need that gate.
 #[component]
 pub(super) fn DeleteUserModal(
     user: AdminUserRow,
@@ -437,8 +451,14 @@ fn render_device_list(
     }
 }
 
-/// Shared modal overlay + card chrome. Clicking the scrim or the close button
-/// dismisses; clicks inside the card don't propagate.
+/// Shared modal overlay + card chrome, built on the `ConfirmModal` shell
+/// (see `components::confirm_modal`) with its `head` slot carrying the
+/// title bar and close button. Clicking the scrim or the close button
+/// dismisses; clicks inside the card don't propagate. Unlike
+/// `DeleteUserModal`'s use of `ConfirmModal`, this always passes `busy:
+/// false` — none of `ModalShell`'s callers (new/edit/sessions) gate the
+/// backdrop on an in-flight save, matching this shell's pre-refactor
+/// behavior.
 #[component]
 fn ModalShell(
     title: String,
@@ -447,15 +467,14 @@ fn ModalShell(
     children: Element,
 ) -> Element {
     rsx! {
-        div {
-            class: "users-modal-overlay",
-            "data-testid": "{testid}",
-            onclick: move |_| on_close.call(()),
-            div {
-                class: "users-modal-card",
-                role: "dialog",
-                "aria-modal": "true",
-                onclick: move |e| e.stop_propagation(),
+        ConfirmModal {
+            testid: testid.clone(),
+            aria_label: title.clone(),
+            backdrop_class: "users-modal-overlay".to_string(),
+            dialog_class: "users-modal-card".to_string(),
+            busy: false,
+            on_dismiss: move |_| on_close.call(()),
+            head: rsx! {
                 div { class: "users-modal-head",
                     h3 { "{title}" }
                     button {
@@ -466,8 +485,8 @@ fn ModalShell(
                         "\u{00d7}"
                     }
                 }
-                div { class: "users-modal-body", {children} }
-            }
+            },
+            div { class: "users-modal-body", {children} }
         }
     }
 }

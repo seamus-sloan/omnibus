@@ -90,11 +90,15 @@ test("renders the listen page layout for an mp3 audiobook", async ({
   // "Now playing" kicker above the book title.
   await expect(page.getByText("Now playing")).toBeVisible();
 
-  // Book metadata in the player stage.
+  // Book metadata in the player stage — the title/byline block is a link
+  // back to the book's detail page.
   await expect(
     page.getByRole("heading", { name: MP3_BOOK.title }),
   ).toBeVisible();
   await expect(page.getByText(`by ${MP3_BOOK.author}`)).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: `Open details for ${MP3_BOOK.title}` }),
+  ).toBeVisible();
 
   // Transport: chapter map + seek scrubber + skip-back / play / skip-forward / rate / volume.
   await expect(page.getByTestId("chapter-map")).toBeVisible();
@@ -112,6 +116,20 @@ test("renders the listen page layout for an mp3 audiobook", async ({
     page.getByRole("button", { name: "Playback speed" }),
   ).toBeVisible();
   await expect(page.getByRole("slider", { name: "Volume" })).toBeVisible();
+});
+
+test("clicking the book title opens the book detail page", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+
+  await page
+    .getByRole("link", { name: `Open details for ${MP3_BOOK.title}` })
+    .click();
+  await expect(page).toHaveURL(new RegExp(`/books/${uuid}$`));
 });
 
 // ---------------------------------------------------------------------------
@@ -375,6 +393,7 @@ test("persists listening progress when the audio element pauses", async ({
   request,
 }) => {
   const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  const bookFileId = await fetchAudioFileId(request, uuid);
   await gotoReady(page, `/listen/${uuid}`);
   await waitForPlayerReady(page);
 
@@ -383,7 +402,12 @@ test("persists listening progress when the audio element pauses", async ({
   const PAUSE_AT_SEC = 7.5;
   await expectMutationProgress(
     page,
-    { uuid, audioPositionSeconds: PAUSE_AT_SEC, expectedStatus: 200 },
+    {
+      uuid,
+      audioPositionSeconds: PAUSE_AT_SEC,
+      bookFileId,
+      expectedStatus: 200,
+    },
     async () => {
       await page.evaluate((secs) => {
         const cb = (
@@ -413,6 +437,7 @@ test("surfaces a 5xx progress POST without crashing the player", async ({
   request,
 }) => {
   const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  const bookFileId = await fetchAudioFileId(request, uuid);
   await gotoReady(page, `/listen/${uuid}`);
   await waitForPlayerReady(page);
 
@@ -432,7 +457,12 @@ test("surfaces a 5xx progress POST without crashing the player", async ({
   const PAUSE_AT_SEC = 12.25;
   await expectMutationProgress(
     page,
-    { uuid, audioPositionSeconds: PAUSE_AT_SEC, expectedStatus: 500 },
+    {
+      uuid,
+      audioPositionSeconds: PAUSE_AT_SEC,
+      bookFileId,
+      expectedStatus: 500,
+    },
     async () => {
       await page.evaluate((secs) => {
         const cb = (
@@ -730,13 +760,86 @@ test("opens chapters drawer and shows played/current/upcoming row states", async
 });
 
 // ---------------------------------------------------------------------------
+// 10b. Paused chapter-list seek shows immediate transport feedback (#1897)
+// ---------------------------------------------------------------------------
+
+test("shows the target time immediately after a paused chapter-list seek (#1897)", async ({
+  page,
+  request,
+}) => {
+  // Two parts → two synthetic chapters, so a chapter-row click seeks to a
+  // real, non-zero target (see the "opens chapters drawer" test above).
+  const uuid = await fetchBookUuidByTitle(request, MULTIPART_MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+
+  // The player boots paused — the regression only reproduces on a seek
+  // issued while paused, so pin that precondition before seeking.
+  await expect(
+    page.getByRole("button", { name: "Play", exact: true }),
+  ).toBeVisible();
+
+  const seek = page.getByRole("slider", { name: "Seek" });
+  await expect(seek).toBeVisible();
+  const before = await seek.inputValue();
+
+  await page.getByRole("button", { name: /^chapters/i }).click();
+  await expect(page.getByTestId("chapters-drawer")).toBeVisible();
+  await page.getByTestId("chapter-row-upcoming").first().click();
+
+  // Still paused — a seek must not itself start playback.
+  await expect(
+    page.getByRole("button", { name: "Play", exact: true }),
+  ).toBeVisible();
+
+  // Bug #1897: without pushing the seek target into the transport display
+  // immediately, the scrub slider and elapsed readout stay at `before`
+  // until a `timeupdate` fires — which never happens while paused. Assert
+  // it updates right away, with no play() call anywhere in this test.
+  await expect
+    .poll(() => seek.inputValue(), {
+      message: "seek slider should reflect the chapter jump while paused",
+    })
+    .not.toBe(before);
+  const target = Number(await seek.inputValue());
+  expect(target).toBeGreaterThan(0);
+});
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 interface ProgressMutationOpts {
   uuid: string;
   audioPositionSeconds: number;
+  /** The `book_files` row the player loaded — every audio progress POST
+   * names the file the manifest resolved (#1888). */
+  bookFileId: number;
   expectedStatus: number;
+}
+
+/**
+ * The first audio `book_files` id for a book, from `GET /api/ebooks/:uuid`
+ * (returned in ordinal order — the same default the manifest resolves for a
+ * bare `/listen/:uuid`). This is the id the player's progress POSTs must
+ * carry, so the specs fetch it rather than hard-coding an AUTOINCREMENT id.
+ */
+async function fetchAudioFileId(
+  request: import("@playwright/test").APIRequestContext,
+  uuid: string,
+): Promise<number> {
+  const resp = await request.get(`/api/ebooks/${uuid}`);
+  expect(resp.status(), "GET /api/ebooks/:uuid failed").toBe(200);
+  const detail = (await resp.json()) as {
+    book_files: { id: number; format: string }[];
+  };
+  const audio = detail.book_files.find((f) =>
+    /^(mp3|m4b|m4a)$/i.test(f.format),
+  );
+  if (!audio) {
+    throw new Error(`book ${uuid} has no audio book_files row`);
+  }
+  return audio.id;
 }
 
 const PROGRESS_URL = /\/api\/rpc\/progress(?:\?|$)/;
@@ -759,6 +862,7 @@ async function expectMutationProgress(
           book_uuid: opts.uuid,
           format: "audio",
           audio_position_seconds: opts.audioPositionSeconds,
+          book_file_id: opts.bookFileId,
         },
       },
     },

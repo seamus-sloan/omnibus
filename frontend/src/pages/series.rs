@@ -123,8 +123,8 @@ fn series_book_row(book: &EbookMetadata) -> Element {
                     if let Some(ref idx) = book.series_index {
                         "Book #{idx}"
                     }
-                    if let Some(ref year) = book.published {
-                        " · {year}"
+                    if let Some(ref published) = book.published {
+                        " · {crate::format::format_date_month_year(published)}"
                     }
                 }
                 h3 { class: "series-card-title",

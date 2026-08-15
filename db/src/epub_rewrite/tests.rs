@@ -8,7 +8,6 @@ use omnibus_shared::{Contributor, EbookMetadata, MetadataOverrides};
 
 use super::cover::encode_cover_for;
 use super::opf::transform_opf;
-use super::EpubRewriteError;
 use crate::ebook::test_support::{copy_fixture_into, fixture};
 use crate::test_support::{CoversTempDir, EnvVarGuard};
 
@@ -548,21 +547,21 @@ async fn rewritten_epub_path_removes_a_leftover_cache_file_when_no_override_is_a
     );
 }
 
-// --- rewritten_epub_path error variants (#1396) ------------------------
+// --- rewritten_epub_path error paths (#1396, collapsed to anyhow #1840) ---
 
 #[tokio::test]
-async fn rewritten_epub_path_returns_book_not_found_for_unknown_book_id() {
+async fn rewritten_epub_path_returns_an_error_for_unknown_book_id() {
     let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
     let src = fixture("alpha.epub");
 
     let err = super::rewritten_epub_path(&pool, 9999, &src)
         .await
         .unwrap_err();
-    assert!(matches!(err, EpubRewriteError::BookNotFound(9999)));
+    assert!(err.to_string().contains("book 9999 not found"));
 }
 
 #[tokio::test]
-async fn rewritten_epub_path_returns_books_error_when_pool_is_closed() {
+async fn rewritten_epub_path_propagates_a_db_error_when_pool_is_closed() {
     let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
     let uuid =
         crate::test_support::seed_synced_ebook(&pool, "closed-pool.epub", "Closed Pool", "Author")
@@ -577,11 +576,18 @@ async fn rewritten_epub_path_returns_books_error_when_pool_is_closed() {
     let err = super::rewritten_epub_path(&pool, id, &src)
         .await
         .unwrap_err();
-    assert!(matches!(err, EpubRewriteError::Books(_)));
+    // Nothing downstream branches on the concrete error type any more — the
+    // get_book lookup's `BooksError` still rides along in the anyhow source
+    // chain for the server log to surface. Check the whole chain rather than
+    // just the top frame, so this stays true if a future `.context(...)` is
+    // added around the lookup.
+    assert!(err
+        .chain()
+        .any(|e| e.downcast_ref::<crate::books::BooksError>().is_some()));
 }
 
 #[tokio::test]
-async fn rewritten_epub_path_returns_failed_when_the_source_epub_is_missing() {
+async fn rewritten_epub_path_returns_an_error_when_the_source_epub_is_missing() {
     let export = tempfile::tempdir().unwrap();
     let _env = EnvVarGuard::set_os("OMNIBUS_EXPORT_EPUB_DIR", Some(export.path().as_os_str()));
 
@@ -611,28 +617,12 @@ async fn rewritten_epub_path_returns_failed_when_the_source_epub_is_missing() {
         .unwrap();
 
     // An override is active, so `rewritten_epub_path` attempts the rewrite —
-    // but `source` doesn't exist on disk, so opening it as an epub fails and
-    // the anyhow error collapses into `Failed` per the module's doc comment.
+    // but `source` doesn't exist on disk, so opening it as an epub fails.
     let src = export.path().join("does-not-exist.epub");
     let err = super::rewritten_epub_path(&pool, id, &src)
         .await
         .unwrap_err();
-    assert!(matches!(err, EpubRewriteError::Failed(_)));
-}
-
-/// `EpubRewriteError::Io` is declared for completeness but every filesystem
-/// failure inside `rewritten_epub_path` is deliberately routed through
-/// `anyhow` context first — per the enum's own doc comment, "every
-/// foreign-system failure... collapses into `Failed`" — so `Io` is never
-/// constructed by that function today. This exercises the `#[from]
-/// std::io::Error` conversion directly so the variant still has a passing
-/// test and a regression catches it if a future caller starts constructing
-/// it.
-#[test]
-fn epub_rewrite_error_io_variant_wraps_a_source_io_error_via_from() {
-    let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "missing file");
-    let err: EpubRewriteError = io_err.into();
-    assert!(matches!(err, EpubRewriteError::Io(_)));
+    assert!(err.to_string().contains("open source epub"));
 }
 
 // --- cap_bytes / evict_if_over_cap / invalidate_export_epub_cache -----
@@ -730,8 +720,10 @@ fn evict_if_over_cap_is_a_noop_when_the_export_dir_does_not_exist() {
 /// `book_files` (EPUB) row for `uuid`, so `book_file_path` resolves to
 /// `lib_dir/<filename_stem>.epub` — real enough for `rewrite_blocking` to
 /// open when the caller has also copied a fixture there (or left it
-/// missing, to exercise the per-book failure branch).
-async fn seed_epub_row(
+/// missing, to exercise the per-book failure branch). `pub(crate)` so
+/// `worker::tests` can reuse it for the `Task::RewriteAllEpubs` bake-error
+/// tests rather than duplicating the same three inserts.
+pub(crate) async fn seed_epub_row(
     pool: &sqlx::SqlitePool,
     lib_dir: &std::path::Path,
     uuid: &str,
@@ -834,13 +826,33 @@ async fn rewrite_all_epubs_with_overrides_rewrites_only_books_with_active_overri
     .await
     .unwrap();
 
-    let summary = super::rewrite_all_epubs_with_overrides(&pool)
-        .await
-        .unwrap();
+    let progress = std::sync::Mutex::new(Vec::new());
+    let summary = super::rewrite_all_epubs_with_progress(&pool, |processed, total, current| {
+        progress
+            .lock()
+            .unwrap()
+            .push((processed, total, current.map(str::to_string)));
+    })
+    .await
+    .unwrap();
 
     assert_eq!(summary.rewritten, 1, "{summary:?}");
     assert_eq!(summary.skipped, 1, "{summary:?}");
     assert!(summary.errors.is_empty(), "{summary:?}");
+
+    // One progress call per override row (A and C — B has no override), each
+    // naming the book being baked. The metadata fetch merges overrides, so
+    // A reports its overridden title. Order follows the override listing,
+    // so only membership is asserted.
+    let calls = progress.into_inner().unwrap();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    assert!(calls.iter().all(|(_, total, _)| *total == 2), "{calls:?}");
+    let names: Vec<Option<String>> = calls.into_iter().map(|(_, _, n)| n).collect();
+    assert!(
+        names.contains(&Some("Overridden A".to_string()))
+            && names.contains(&Some("Overridden C".to_string())),
+        "{names:?}"
+    );
 }
 
 #[tokio::test]
@@ -911,13 +923,13 @@ async fn rewrite_all_epubs_with_overrides_returns_a_zero_summary_when_no_overrid
 }
 
 #[tokio::test]
-async fn rewrite_all_epubs_with_overrides_propagates_a_books_error_when_pool_is_closed() {
+async fn rewrite_all_epubs_with_overrides_propagates_a_db_error_when_pool_is_closed() {
     let pool = crate::pool::init_db("sqlite::memory:").await.unwrap();
     pool.close().await;
     let err = super::rewrite_all_epubs_with_overrides(&pool)
         .await
         .unwrap_err();
-    assert!(matches!(err, EpubRewriteError::Books(_)));
+    assert!(err.to_string().contains("list overridden book uuids"));
 }
 
 // --- AC1/AC4 (#1718): batched resolution, not one query set per book ---

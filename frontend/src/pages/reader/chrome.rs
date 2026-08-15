@@ -143,7 +143,7 @@ fn reader_title_block(book_title: &str, chapter_title: &str, title_sub: &str) ->
             span { class: "rd-title-book", "{book_title}" }
             if !chapter_title.is_empty() {
                 span { class: "rd-title-sep", "\u{b7}" }
-                span { class: "rd-title-ch", "{chapter_title}" }
+                span { class: "rd-title-ch", "data-testid": "reader-header-chapter", "{chapter_title}" }
             }
             // Phone sub-line ("Ch. 14 · 68%") — the breakpoint stacks the
             // title block and swaps the inline chapter for this.
@@ -270,9 +270,14 @@ fn ReaderTopChrome(state: ReaderChromeState, handlers: ReaderChromeHandlers) -> 
     }
 }
 
-/// epub.js mount target plus loading/error/ready overlay.
+/// epub.js mount target plus loading/error/ready overlay. `on_retry` is the
+/// `Failed` overlay's recovery action — never a silent black screen for a
+/// load failure or a wedged page turn (issue #1895, AC3).
 #[component]
-pub(super) fn ReaderViewerStage(status: ReaderStatus) -> Element {
+pub(super) fn ReaderViewerStage(
+    status: ReaderStatus,
+    on_retry: EventHandler<MouseEvent>,
+) -> Element {
     rsx! {
         div {
             class: "rd-stage",
@@ -283,10 +288,17 @@ pub(super) fn ReaderViewerStage(status: ReaderStatus) -> Element {
                 },
                 ReaderStatus::Failed => rsx! {
                     div {
-                        class: "rd-overlay",
+                        class: "rd-overlay rd-overlay-error",
                         "data-testid": "reader-error",
                         role: "alert",
-                        "This book couldn\u{2019}t be loaded."
+                        p { "This book couldn\u{2019}t be loaded." }
+                        button {
+                            r#type: "button",
+                            class: "btn sm",
+                            "data-testid": "reader-retry",
+                            onclick: move |evt| on_retry.call(evt),
+                            "Retry"
+                        }
                     }
                 },
                 ReaderStatus::Offline => rsx! {

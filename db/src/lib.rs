@@ -4,6 +4,7 @@
 //! (axum REST handlers) and `frontend/` (Dioxus server functions under
 //! `feature = "server"`).
 
+pub mod admin_health;
 pub mod annotations;
 pub mod audiobook;
 pub mod auth;
@@ -14,7 +15,9 @@ pub mod book_summary;
 pub mod bookmarks;
 pub mod books;
 pub mod browse;
+pub mod cleanup;
 pub mod comic;
+pub mod convert;
 pub mod covers;
 pub mod deletion;
 pub mod discovery;
@@ -79,14 +82,16 @@ pub use books::{
     IndexedRow, PageCursor, MAX_BOOKS_RETURNED,
 };
 pub use browse::*;
-pub use covers::{covers_dir, get_cover, get_last_modified_epoch, CoversError};
+pub use cleanup::*;
+pub use covers::{cover_mime_hint, covers_dir, get_cover, get_last_modified_epoch, CoversError};
 pub use deletion::{
     book_deletion_manifest, delete_book_items, DeleteError, DeleteOutcome, DeletionImpact,
     DeletionManifest,
 };
 pub use discovery::*;
 pub use epub_rewrite::{
-    export_epub_dir, rewrite_all_epubs_with_overrides, rewritten_epub_path, EpubRewriteError,
+    export_epub_dir, rewrite_all_epubs_with_overrides, rewrite_all_epubs_with_progress,
+    rewritten_epub_path,
 };
 pub use helpers::{build_fts_match, sanitize_fts_query};
 pub use kepub::{convert_book, kepub_path, kepubify_available, warn_if_unavailable, KepubError};
@@ -107,7 +112,9 @@ pub use physical::{
     remove_wishlist_entry, update_physical_copy_note, FilelessBook, FilelessCover, PhysicalError,
 };
 pub use pool::*;
-pub use scan::{add_physical_only, resolve_meta, resolve_scan, wishlist_add, ScanError};
+pub use scan::{
+    add_physical_only, check_in_copy, resolve_meta, resolve_scan, wishlist_add, ScanError,
+};
 pub use settings::*;
 pub use shelves::{
     add_books, can_edit, can_view, create_shelf, delete_shelf, get_shelf, list_visible_shelves,

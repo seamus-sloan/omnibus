@@ -250,6 +250,15 @@ struct TagWeight: Codable, Hashable, Sendable, Identifiable {
     var id: String { name }
 }
 
+/// Structurally a `TagWeight`, kept a distinct type because `/api/genres` and
+/// `/api/tags` are two different vocabularies — mirroring the server's
+/// `GenreWeight` / `TagWeight` split.
+struct GenreWeight: Codable, Hashable, Sendable, Identifiable {
+    var name: String
+    var count: Int
+    var id: String { name }
+}
+
 // MARK: - Search palette
 
 struct PaletteBookHit: Codable, Hashable, Sendable, Identifiable {
@@ -507,6 +516,10 @@ struct ResumePoint: Codable, Sendable, Identifiable {
     var totalDurationSeconds: Double?
     var chapterNumber: Int64?
     var chapterCount: Int64?
+    /// The saved playback rate for this book's audio, so the hero's "left"
+    /// readout can show the wall-clock wait. `nil` for epub rows, when no
+    /// preference is saved (1x), and against older servers.
+    var playbackRate: Double?
 
     /// Scoped by format as well as book, mirroring `CacheKey.progress`.
     ///
@@ -530,6 +543,7 @@ struct ResumePoint: Codable, Sendable, Identifiable {
         case totalDurationSeconds = "total_duration_seconds"
         case chapterNumber = "chapter_number"
         case chapterCount = "chapter_count"
+        case playbackRate = "playback_rate"
     }
 
     /// Fraction complete for the progress bar, when the format supports one.
@@ -1324,12 +1338,15 @@ enum ScanOutcome: Decodable, Equatable, Sendable {
     case alreadyOwned(book: ScanBook)
     case onWishlist(book: ScanBook)
     case inLibraryUnowned(book: ScanBook)
-    case closeMatch(book: ScanBook, scanned: ExternalBookMeta)
+    /// Every library row whose (title, author) matched, in server order — an
+    /// EPUB and the audiobook nothing attached to it are one work in two rows,
+    /// so this is a picker, never empty.
+    case closeMatch(books: [ScanBook], scanned: ExternalBookMeta)
     case notInLibrary(online: ExternalBookMeta)
     case unresolved
 
     enum CodingKeys: String, CodingKey {
-        case kind, book, scanned, online
+        case kind, book, others, scanned, online
     }
 
     init(from decoder: Decoder) throws {
@@ -1342,8 +1359,13 @@ enum ScanOutcome: Decodable, Equatable, Sendable {
         case "in_library_unowned":
             self = .inLibraryUnowned(book: try c.decode(ScanBook.self, forKey: .book))
         case "close_match":
+            // Head + tail on the wire, so a build that predates the picker
+            // still decodes `book` alone; `others` is absent for the common
+            // single-candidate match.
+            let first = try c.decode(ScanBook.self, forKey: .book)
+            let others = try c.decodeIfPresent([ScanBook].self, forKey: .others) ?? []
             self = .closeMatch(
-                book: try c.decode(ScanBook.self, forKey: .book),
+                books: [first] + others,
                 scanned: try c.decode(ExternalBookMeta.self, forKey: .scanned)
             )
         case "not_in_library":
@@ -1387,6 +1409,23 @@ struct WishlistAddRequest: Codable, Sendable {
     enum CodingKeys: String, CodingKey {
         case meta, source
         case bookUUID = "book_uuid"
+    }
+}
+
+/// `GET /api/physical/{uuid}/wishlist` — the caller's tracking entry for a
+/// book, or a JSON `null` (decoded as `nil`) when the book isn't wishlisted.
+struct WishlistEntry: Codable, Equatable, Sendable {
+    var id: Int64
+    var userID: Int64
+    var bookUUID: String
+    var addedAt: Int64
+    var source: WishlistSource
+
+    enum CodingKeys: String, CodingKey {
+        case id, source
+        case userID = "user_id"
+        case bookUUID = "book_uuid"
+        case addedAt = "added_at"
     }
 }
 

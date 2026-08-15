@@ -32,24 +32,6 @@ use opf::transform_opf;
 /// clobber each other's temp file before the final rename.
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// Errors from the export-rewrite path.
-///
-/// `BookNotFound` is the one state a caller branches on (404); DB lookups
-/// surface via `Books`, and every foreign-system failure (zip, XML, image,
-/// filesystem, blocking-join) collapses into `Failed` — the caller only ever
-/// falls back to serving the source EPUB, so a finer split buys nothing.
-#[derive(Debug, thiserror::Error)]
-pub enum EpubRewriteError {
-    #[error("book {0} not found")]
-    BookNotFound(i64),
-    #[error(transparent)]
-    Books(#[from] crate::books::BooksError),
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-    #[error("epub rewrite failed: {0}")]
-    Failed(#[from] anyhow::Error),
-}
-
 /// Root directory for the rewritten-EPUB export cache.
 ///
 /// Override with `$OMNIBUS_EXPORT_EPUB_DIR` (used verbatim); otherwise defaults
@@ -82,6 +64,29 @@ pub fn cap_bytes() -> u64 {
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(DEFAULT_CAP_BYTES)
+}
+
+/// Sum the sizes of every cached rewritten EPUB under `export_epub_dir()`,
+/// for `db::admin_health::storage_stats` — the read-only counterpart of
+/// [`evict_if_over_cap`]'s usage sum, mirroring `thumbs::used_bytes`/
+/// `hls::used_bytes`. Skips in-flight temp files the same way
+/// [`evict_if_over_cap`] does.
+pub fn used_bytes() -> u64 {
+    let dir = export_epub_dir();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            !name.starts_with('.') && name.ends_with(".epub")
+        })
+        .filter_map(|entry| entry.metadata().ok())
+        .filter(|meta| meta.is_file())
+        .map(|meta| meta.len())
+        .sum()
 }
 
 /// Delete the cached rewritten EPUB for `book_id`, if present.
@@ -165,10 +170,10 @@ pub async fn rewritten_epub_path(
     pool: &SqlitePool,
     book_id: i64,
     source: &Path,
-) -> Result<Option<PathBuf>, EpubRewriteError> {
+) -> anyhow::Result<Option<PathBuf>> {
     let book = crate::books::get_book(pool, book_id)
         .await?
-        .ok_or(EpubRewriteError::BookNotFound(book_id))?;
+        .ok_or_else(|| anyhow::anyhow!("book {book_id} not found"))?;
     // Only the override/stale-check path below reads `last_modified` — skip
     // the query on the common no-override path, matching the pre-batching
     // behavior (the bulk fleet-wide pass has its own cheap bulk fetch and
@@ -176,7 +181,7 @@ pub async fn rewritten_epub_path(
     let last_modified = if book.has_override || book.has_cover_override {
         crate::get_last_modified_epoch(pool, book_id)
             .await
-            .map_err(|e| EpubRewriteError::Failed(anyhow::Error::new(e)))?
+            .context("look up book last_modified")?
             .unwrap_or(0)
     } else {
         0
@@ -197,7 +202,7 @@ async fn rewrite_or_reuse_cache(
     source: &Path,
     book: &EbookMetadata,
     last_modified: i64,
-) -> Result<Option<PathBuf>, EpubRewriteError> {
+) -> anyhow::Result<Option<PathBuf>> {
     // Effective state already reflects the library's metadata-source precedence
     // (an admin who ranks embedded tags above overrides gets no rewrite).
     // Nothing to bake → source.
@@ -237,11 +242,11 @@ async fn rewrite_or_reuse_cache(
     let tmp_for_task = tmp.clone();
     let rewrite = tokio::task::spawn_blocking(move || rewrite_blocking(&src, &tmp_for_task, &book))
         .await
-        .map_err(|e| EpubRewriteError::Failed(anyhow::Error::new(e)))?;
+        .context("epub rewrite task join failed")?;
     if let Err(e) = rewrite {
         // Don't leave a half-written temp behind on a rewrite failure.
         let _ = tokio::fs::remove_file(&tmp).await;
-        return Err(e.into());
+        return Err(e);
     }
 
     // Atomic promote so a concurrent reader never sees a torn file.
@@ -319,14 +324,25 @@ fn rewrite_blocking(src: &Path, dst: &Path, book: &EbookMetadata) -> anyhow::Res
 /// filesystem-bound rewrite itself.
 pub async fn rewrite_all_epubs_with_overrides(
     pool: &SqlitePool,
-) -> Result<BulkRewriteSummary, EpubRewriteError> {
+) -> anyhow::Result<BulkRewriteSummary> {
+    rewrite_all_epubs_with_progress(pool, |_, _, _| {}).await
+}
+
+/// [`rewrite_all_epubs_with_overrides`] variant that calls
+/// `on_progress(processed, total, current)` before each per-book rewrite
+/// (`current` is the book's title, falling back to its filename), so the
+/// worker can name the book being baked in the progress feed.
+pub async fn rewrite_all_epubs_with_progress(
+    pool: &SqlitePool,
+    mut on_progress: impl FnMut(u32, u32, Option<&str>),
+) -> anyhow::Result<BulkRewriteSummary> {
     // An existing `metadata_overrides` row IS "has an active override" — the
     // write paths that clear overrides entirely (`delete_metadata_overrides`,
     // `clear_cover_override`) delete the row rather than leaving an empty one.
     let uuids: Vec<String> = sqlx::query_scalar("SELECT book_uuid FROM metadata_overrides")
         .fetch_all(pool)
         .await
-        .map_err(crate::books::BooksError::Db)?;
+        .context("list overridden book uuids")?;
 
     let mut summary = BulkRewriteSummary::default();
     if uuids.is_empty() {
@@ -341,14 +357,32 @@ pub async fn rewrite_all_epubs_with_overrides(
     let source_paths = crate::books::book_file_paths(pool, &ids, "EPUB").await?;
     let last_modified_map = crate::covers::last_modified_bulk(pool, &ids)
         .await
-        .map_err(|e| EpubRewriteError::Failed(anyhow::Error::new(e)))?;
+        .context("bulk look up book last_modified")?;
     let books_by_id: HashMap<i64, EbookMetadata> = crate::books::get_books_by_ids(pool, &ids)
         .await?
         .into_iter()
         .map(|b| (b.id, b))
         .collect();
 
+    let total = u32::try_from(uuids.len()).unwrap_or(u32::MAX);
+    let mut processed = 0u32;
     for uuid in uuids {
+        processed = processed.saturating_add(1);
+        {
+            let current = id_map
+                .get(&uuid)
+                .and_then(|book_id| books_by_id.get(book_id))
+                // An empty title (possible in both the DB column and an
+                // override) must fall through to the filename like a
+                // missing one, or the UI names the book "".
+                .map(|b| {
+                    b.title
+                        .as_deref()
+                        .filter(|t| !t.is_empty())
+                        .unwrap_or(&b.filename)
+                });
+            on_progress(processed, total, current);
+        }
         // Ghosted: the override row outlived its book (source file removed
         // by a scan, or the book deleted concurrently between the listing
         // query above and this pass).
@@ -407,4 +441,4 @@ async fn is_stale(path: &Path, last_modified_epoch: i64) -> bool {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

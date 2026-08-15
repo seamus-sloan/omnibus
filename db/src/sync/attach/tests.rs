@@ -75,6 +75,31 @@ async fn ebook_attaches_to_existing_audiobook_with_matching_title_and_author() {
 }
 
 #[tokio::test]
+async fn attach_matches_ampersand_title_against_spelled_out_and() {
+    // The two libraries routinely disagree on how the conjunction is written
+    // — an EPUB's OPF title against an audiobook's album tag. Both spellings
+    // must fold to the same key or the pair silently stays two books.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_ebook(
+        &pool,
+        "Quill/Mirth.epub",
+        "A Tale of Mirth & Magic",
+        "Ada Quill",
+    )
+    .await;
+    seed_audiobook(
+        &pool,
+        "Quill/Mirth.m4b",
+        "A Tale of Mirth and Magic",
+        "Ada Quill",
+    )
+    .await;
+
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM books").await, 1);
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM book_files").await, 2);
+}
+
+#[tokio::test]
 async fn attach_matches_author_across_last_first_name_order() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     seed_ebook(&pool, "Stoker/Dracula.epub", "Dracula", "Stoker, Bram").await;

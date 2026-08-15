@@ -16,6 +16,7 @@ use crate::time::now_unix;
 use super::prefs::ReaderPrefs;
 use super::search_panel::SearchResult;
 use super::selection::SelectionData;
+use super::signals::resolve_chapter_position;
 use super::toc_drawer::TocEntry;
 use super::{reader_call_json, reader_call_json2, ReaderStatus, RelocateData};
 
@@ -112,12 +113,27 @@ async fn mount_and_drain(
 ) {
     prefs_storage::load_and_apply_reader_prefs(prefs).await;
     let local_saved = crate::reader_progress::load(&uuid);
-    let server_cfi = data::get_progress(&server_url, &uuid, ProgressFormat::Epub)
+    let record = data::get_progress(&server_url, &uuid, ProgressFormat::Epub)
         .await
         .ok()
-        .flatten()
-        .and_then(|r| r.epub_cfi);
-    let cfi = server_cfi.or(local_saved);
+        .flatten();
+    // Seed the footer with the server's stored whole-book percent (flagged
+    // approximate) so the position shows during the WebView's slow
+    // fetch/parse/paginate window instead of a blank or frozen 0% — the
+    // mobile mirror of the web bootstrap's seed (issue #1896, AC2). The
+    // first real relocate overwrites it wholesale.
+    let stored_pct = record.as_ref().and_then(|r| r.progress_percent);
+    if let Some(pct) = stored_pct.filter(|p| (1..=100).contains(p)) {
+        let mut loc = sigs.loc;
+        if loc.peek().cfi.is_none() {
+            loc.set(RelocateData {
+                pct: pct as u32,
+                pct_approx: true,
+                ..Default::default()
+            });
+        }
+    }
+    let cfi = record.and_then(|r| r.epub_cfi).or(local_saved);
 
     // Backstop for the route-level offline bounce (`BookReadPage`'s guard):
     // at cold start the app may still believe it's online, and the progress
@@ -213,15 +229,33 @@ async fn drain_reader_events(
     let mut last_cfi: Option<String> = None;
     crate::js_interop::drain_events(eval, move |event: ReaderEvent| match event {
         ReaderEvent::Relocate { json } => {
-            if let Ok(data) = serde_json::from_str::<RelocateData>(&json) {
+            if let Ok(mut data) = serde_json::from_str::<RelocateData>(&json) {
+                // Re-derive chapter/total from the TOC's own order rather
+                // than trusting the glue's numbers verbatim — see
+                // `signals::resolve_chapter_position` (issue #1909, AC1).
+                let toc_snapshot = toc.peek().clone();
+                let previous_chapter = loc.peek().chapter;
+                let (chapter, total_chapters) =
+                    resolve_chapter_position(&toc_snapshot, &data, previous_chapter);
+                data.chapter = chapter;
+                data.total_chapters = total_chapters;
+
                 if let Some(cfi) = data.cfi.clone() {
                     crate::reader_progress::save(&uuid, &cfi);
                     // Only POST on an actual position change (the glue
                     // debounces, but re-renders can re-emit the same CFI).
                     if last_cfi.as_deref() != Some(cfi.as_str()) {
                         last_cfi = Some(cfi.clone());
-                        persist_progress(&uuid, &server_url, cfi);
+                        persist_progress(&uuid, &server_url, cfi, data.pct);
                     }
+                }
+                // A relocate names the (corrected) current position, so it
+                // also signals that an in-flight chapter jump has finished
+                // rendering — flip a TOC-jump-triggered `Loading` back to
+                // `Ready` (issue #1909, AC3). Guarded so a stray relocate
+                // after a load `Failed` can't resurrect the overlay.
+                if *status.peek() == ReaderStatus::Loading {
+                    status.set(ReaderStatus::Ready);
                 }
                 loc.set(data);
             }
@@ -281,8 +315,11 @@ async fn drain_reader_events(
 }
 
 /// Persist the latest CFI to the server (fire-and-forget); the local in-memory
-/// save already happened on the calling side.
-fn persist_progress(uuid: &str, server_url: &str, cfi: String) {
+/// save already happened on the calling side. `pct` is the same whole-book
+/// figure the footer/ribbon render — carrying it into `progress_percent`
+/// keeps the landing hero's stored percent in step with what the reader
+/// itself is showing (issue #1909, AC2).
+fn persist_progress(uuid: &str, server_url: &str, cfi: String, pct: u32) {
     let uuid = uuid.to_string();
     let server_url = server_url.to_string();
     spawn(async move {
@@ -291,7 +328,7 @@ fn persist_progress(uuid: &str, server_url: &str, cfi: String) {
             format: ProgressFormat::Epub,
             epub_cfi: Some(cfi),
             audio_position_seconds: None,
-            progress_percent: None,
+            progress_percent: Some(i64::from(pct.min(100))),
             kobo_location: None,
             book_file_id: None,
             client_updated_at: Some(now_unix()),

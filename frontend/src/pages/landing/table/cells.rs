@@ -247,11 +247,16 @@ pub(super) fn RowSeriesCell(series_line: String, series_text: String, ctx: CellE
 }
 
 /// Grouped display fields (column class, testid, value, placeholder) for a [`RowScalarCell`].
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Default)]
 pub(super) struct RowScalarCellDisplay {
     pub col_class: String,
     pub cell_testid: String,
     pub value: String,
+    /// Raw value to seed the input with when edit mode opens, when it
+    /// differs from the rendered `value` — e.g. Published shows a formatted
+    /// date (see [`crate::format::format_date_short`]) but must still edit
+    /// the underlying stored string. Defaults to `value`.
+    pub edit_value: Option<String>,
     pub placeholder: String,
 }
 
@@ -268,6 +273,7 @@ pub(super) fn RowScalarCell(
         col_class,
         cell_testid,
         value,
+        edit_value,
         placeholder,
     } = display;
     let CellEditCtx {
@@ -281,8 +287,8 @@ pub(super) fn RowScalarCell(
                 col_class,
                 cell_testid,
                 display_value: value,
+                edit_value,
                 placeholder,
-                ..Default::default()
             },
             field,
             is_admin,

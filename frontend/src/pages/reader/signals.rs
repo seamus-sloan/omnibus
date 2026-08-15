@@ -6,6 +6,7 @@
 use dioxus::prelude::*;
 use omnibus_shared::EbookMetadata;
 
+use super::toc_drawer::TocEntry;
 use crate::contexts::use_server_url;
 use crate::data;
 
@@ -41,6 +42,13 @@ pub(crate) struct RelocateData {
     pub(crate) page: u32,
     pub(crate) total_pages: u32,
     pub(crate) pct: u32,
+    // True while `pct` is the glue's coarse spine-derived approximation —
+    // the whole-book locations map hasn't resolved yet (generation runs in
+    // the background after first paint; issue #1896). The formatters render
+    // an approximate percent as "~N%" so a first session never shows a
+    // frozen, falsely-precise "0%".
+    #[serde(default)]
+    pub(crate) pct_approx: bool,
     // True when the rendered range reaches the book's end (epub.js
     // `location.atEnd`) — the auto `Finished` trigger. `pct` can't stand in:
     // it tracks the start of the visible range, so it tops out below 100.
@@ -51,6 +59,17 @@ pub(crate) struct RelocateData {
     pub(crate) chapter_title: String,
 }
 
+/// The percent readout: "N%" once the whole-book locations map has
+/// resolved, "~N%" while `pct` is still the coarse spine approximation —
+/// honest instead of falsely precise (issue #1896).
+fn pct_label(loc: &RelocateData) -> String {
+    if loc.pct_approx {
+        format!("~{}%", loc.pct)
+    } else {
+        format!("{}%", loc.pct)
+    }
+}
+
 /// Format the bottom-bar `page` and `chapter` strings from a relocate
 /// event. `page`/`total_pages` are scoped to the current chapter (see
 /// [`RelocateData`]). Returns `("", "")` until epub.js has produced a
@@ -58,11 +77,13 @@ pub(crate) struct RelocateData {
 pub(crate) fn format_progress_labels(loc: &RelocateData) -> (String, String) {
     let page = if loc.total_pages > 0 {
         format!(
-            "p.\u{a0}{} of {}\u{a0}\u{b7}\u{a0}{}%",
-            loc.page, loc.total_pages, loc.pct
+            "p.\u{a0}{} of {}\u{a0}\u{b7}\u{a0}{}",
+            loc.page,
+            loc.total_pages,
+            pct_label(loc)
         )
     } else if loc.pct > 0 {
-        format!("{}%", loc.pct)
+        pct_label(loc)
     } else {
         String::new()
     };
@@ -74,6 +95,30 @@ pub(crate) fn format_progress_labels(loc: &RelocateData) -> (String, String) {
     (page, chapter)
 }
 
+/// Resolve the displayed chapter index/total from the flat TOC's own array
+/// order rather than the glue's `chapter`/`total_chapters` pair verbatim,
+/// carrying the previous chapter forward instead of regressing to 0 when
+/// the incoming title doesn't match any TOC entry.
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
+pub(crate) fn resolve_chapter_position(
+    toc: &[TocEntry],
+    incoming: &RelocateData,
+    previous_chapter: u32,
+) -> (u32, u32) {
+    if toc.is_empty() {
+        return (incoming.chapter, incoming.total_chapters);
+    }
+    let total = toc.len() as u32;
+    let chapter = if incoming.chapter_title.is_empty() {
+        previous_chapter
+    } else {
+        toc.iter()
+            .position(|entry| entry.label == incoming.chapter_title)
+            .map_or(previous_chapter, |idx| idx as u32 + 1)
+    };
+    (chapter, total)
+}
+
 /// Format the phone minimal-chrome footer: just the page number (or the
 /// percent, before pagination resolves) — no "of total", no chapter. The
 /// richer [`format_progress_labels`] readout is what the visible footer
@@ -82,7 +127,7 @@ pub(crate) fn format_ambient_page(loc: &RelocateData) -> String {
     if loc.total_pages > 0 {
         loc.page.to_string()
     } else if loc.pct > 0 {
-        format!("{}%", loc.pct)
+        pct_label(loc)
     } else {
         String::new()
     }
@@ -94,9 +139,9 @@ pub(crate) fn format_ambient_page(loc: &RelocateData) -> String {
 /// only the phone breakpoint displays it.
 pub(crate) fn format_title_sub(loc: &RelocateData) -> String {
     if loc.chapter > 0 {
-        format!("Ch.\u{a0}{} \u{b7} {}%", loc.chapter, loc.pct)
+        format!("Ch.\u{a0}{} \u{b7} {}", loc.chapter, pct_label(loc))
     } else if loc.pct > 0 {
-        format!("{}%", loc.pct)
+        pct_label(loc)
     } else {
         String::new()
     }
@@ -106,7 +151,12 @@ pub(crate) fn format_title_sub(loc: &RelocateData) -> String {
 /// epub.js has paginated the book.
 pub(crate) fn format_contents_progress(loc: &RelocateData) -> String {
     if loc.total_pages > 0 {
-        format!("{} / {} \u{b7} {}%", loc.page, loc.total_pages, loc.pct)
+        format!(
+            "{} / {} \u{b7} {}",
+            loc.page,
+            loc.total_pages,
+            pct_label(loc)
+        )
     } else {
         String::new()
     }
@@ -170,6 +220,7 @@ mod tests {
             page: 42,
             total_pages: 300,
             pct: 14,
+            pct_approx: false,
             at_end: false,
             chapter: 3,
             total_chapters: 24,
@@ -262,6 +313,58 @@ mod tests {
         );
     }
 
+    // Issue #1896 (AC2): while the locations map is still resolving, the
+    // percent renders as an explicit approximation ("~N%") rather than a
+    // frozen, falsely-precise figure.
+    #[test]
+    fn format_progress_labels_marks_an_approximate_pct_with_a_tilde() {
+        let data = RelocateData {
+            page: 1,
+            total_pages: 20,
+            pct: 47,
+            pct_approx: true,
+            ..Default::default()
+        };
+        let (page, _) = format_progress_labels(&data);
+        assert_eq!(page, "p.\u{a0}1 of 20\u{a0}\u{b7}\u{a0}~47%");
+    }
+
+    #[test]
+    fn format_title_sub_and_ambient_page_and_contents_mark_approximate_pct() {
+        let data = RelocateData {
+            page: 3,
+            total_pages: 20,
+            pct: 47,
+            pct_approx: true,
+            chapter: 2,
+            total_chapters: 50,
+            ..Default::default()
+        };
+        assert_eq!(format_title_sub(&data), "Ch.\u{a0}2 \u{b7} ~47%");
+        assert_eq!(format_contents_progress(&data), "3 / 20 \u{b7} ~47%");
+        let bare = RelocateData {
+            pct: 47,
+            pct_approx: true,
+            ..Default::default()
+        };
+        assert_eq!(format_ambient_page(&bare), "~47%");
+    }
+
+    // The glue's relocate payload flags the approximation as `pctApprox`;
+    // a payload without it (older glue, tests) must decode as exact.
+    #[test]
+    fn relocate_data_decodes_pct_approx_from_camel_case_and_defaults_false() {
+        let with: RelocateData =
+            serde_json::from_str(r#"{"page":1,"totalPages":2,"pct":40,"pctApprox":true,"chapter":0,"totalChapters":0,"chapterTitle":""}"#)
+                .expect("decode");
+        assert!(with.pct_approx);
+        let without: RelocateData = serde_json::from_str(
+            r#"{"page":1,"totalPages":2,"pct":40,"chapter":0,"totalChapters":0,"chapterTitle":""}"#,
+        )
+        .expect("decode");
+        assert!(!without.pct_approx);
+    }
+
     #[test]
     fn format_progress_labels_falls_back_to_pct_only_when_total_pages_unknown() {
         let data = RelocateData {
@@ -269,6 +372,7 @@ mod tests {
             page: 0,
             total_pages: 0,
             pct: 7,
+            pct_approx: false,
             at_end: false,
             chapter: 0,
             total_chapters: 0,
@@ -277,5 +381,66 @@ mod tests {
         let (page, chapter) = format_progress_labels(&data);
         assert_eq!(page, "7%");
         assert_eq!(chapter, "");
+    }
+
+    fn toc_entry(label: &str) -> TocEntry {
+        TocEntry {
+            label: label.to_string(),
+            href: format!("{label}.xhtml"),
+            level: 0,
+        }
+    }
+
+    fn relocate_with_title(title: &str) -> RelocateData {
+        RelocateData {
+            chapter_title: title.to_string(),
+            ..Default::default()
+        }
+    }
+
+    // Regression for issue #1909 (AC1): a front-matter spine item with no
+    // direct TOC entry must never read as chapter 0 — the previous chapter
+    // carries forward instead of the counter going backwards.
+    #[test]
+    fn resolve_chapter_position_carries_previous_chapter_forward_when_title_is_unmatched() {
+        let toc = vec![toc_entry("Cover"), toc_entry("Chapter One")];
+        let (chapter, total) = resolve_chapter_position(&toc, &relocate_with_title(""), 1);
+        assert_eq!((chapter, total), (1, 2));
+    }
+
+    #[test]
+    fn resolve_chapter_position_matches_the_toc_array_position_when_the_title_resolves() {
+        let toc = vec![
+            toc_entry("Cover"),
+            toc_entry("Dedication"),
+            toc_entry("Chapter One"),
+        ];
+        let (chapter, total) =
+            resolve_chapter_position(&toc, &relocate_with_title("Chapter One"), 1);
+        assert_eq!((chapter, total), (3, 3));
+    }
+
+    #[test]
+    fn resolve_chapter_position_falls_back_to_incoming_values_before_the_toc_has_loaded() {
+        let incoming = RelocateData {
+            chapter: 4,
+            total_chapters: 12,
+            ..Default::default()
+        };
+        assert_eq!(resolve_chapter_position(&[], &incoming, 3), (4, 12));
+    }
+
+    // A matched title always wins outright, so a deliberate backward jump
+    // (TOC/bookmark navigation to an earlier chapter) is never clamped by
+    // the forward-carry rule above.
+    #[test]
+    fn resolve_chapter_position_allows_a_matched_title_to_move_backward() {
+        let toc = vec![
+            toc_entry("Cover"),
+            toc_entry("Chapter One"),
+            toc_entry("Chapter Two"),
+        ];
+        let (chapter, _) = resolve_chapter_position(&toc, &relocate_with_title("Chapter One"), 3);
+        assert_eq!(chapter, 2);
     }
 }

@@ -7,6 +7,10 @@
 //! on-device persistence they build on.
 
 mod account;
+// Admin server-health report (F5, #952) — web (server-fn) + SSR stubs; not
+// a mobile surface, same shape as `errors`/`logs`.
+#[cfg(not(feature = "mobile"))]
+mod admin_health;
 // Admin device & session management (F5.4, #910) — web (gloo REST) + SSR
 // stubs; no mobile surface.
 #[cfg(not(feature = "mobile"))]
@@ -26,6 +30,11 @@ mod errors;
 mod genres;
 mod hardcover_fetch;
 mod highlights;
+// Per-book Started/Time-read/Sessions insights (#1904) — the book-detail
+// rail section that renders them doesn't compile on mobile, so there's no
+// REST transport, same shape as `admin_health`/`errors`.
+#[cfg(not(feature = "mobile"))]
+mod insights;
 mod journals;
 mod kindle;
 // Per-user Kobo device tokens (#923) — web (server-fn) + SSR stubs; the Account
@@ -64,6 +73,8 @@ mod transport;
 // unconditionally without diverging hook order between SSR and WASM).
 pub use account::*;
 #[cfg(not(feature = "mobile"))]
+pub use admin_health::*;
+#[cfg(not(feature = "mobile"))]
 pub use admin_sessions::*;
 #[cfg(any(feature = "web", feature = "mobile", feature = "server"))]
 pub use auth::*;
@@ -77,6 +88,8 @@ pub use errors::*;
 pub use genres::*;
 pub use hardcover_fetch::*;
 pub use highlights::*;
+#[cfg(not(feature = "mobile"))]
+pub use insights::*;
 pub use journals::*;
 pub use kindle::*;
 #[cfg(not(feature = "mobile"))]

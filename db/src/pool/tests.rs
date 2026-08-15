@@ -1,11 +1,12 @@
 //! Tests for pool init and migrations: `init_db` error surfacing on a bad
 //! URL or a tampered applied-migration checksum, and per-migration
 //! correctness checks (schema cleanup, timestamp coercion, orphan
-//! row handling) run against a fresh `sqlite::memory:` database.
+//! row handling, derived-key reset) run against a fresh `sqlite::memory:`
+//! database.
 
 use super::*;
 
-use crate::test_support::count_rows as count;
+use crate::test_support::{count_rows as count, CoversTempDir};
 
 #[tokio::test]
 async fn init_db_returns_db_error_when_url_is_invalid() {
@@ -473,6 +474,167 @@ async fn migrator_is_idempotent_on_rerun() {
 
     drop(pool2);
     let _ = std::fs::remove_file(&tmp);
+}
+
+/// Migration 0070 plus the boot backfill re-derive the keys the `&`
+/// expansion invalidated. Simulates an upgrade over an existing database:
+/// rows written by the old folder (which dropped `&`) and a
+/// `_sqlx_migrations` table that has not yet seen 0070, then a second
+/// `init_db` over the same file.
+///
+/// Covers all four shapes the two arms have to get right: a `&` title with a
+/// link, a `&` title *without* one (the blocklisted-first-creator gap, where
+/// the stored author key is the only copy and must survive), a `&` in the
+/// position-0 author's name, and a row with no `&` at all.
+#[tokio::test]
+async fn migration_0070_recomputes_stale_ampersand_norms_on_upgrade() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("omnibus.db");
+    let url = format!("sqlite://{}?mode=rwc", db_path.display());
+    let pool = init_db(&url).await.expect("initial init_db should succeed");
+
+    sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES ('/lib', 'lib')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Every `*_norm` seeded here is what the pre-change folder wrote: the
+    // ampersand collapsed to a space like any other punctuation. The two
+    // `sentinel` keys are deliberately wrong, so any recompute shows up.
+    let ampersand_title = "A Tale of Mirth & Magic";
+    seed_pre_ampersand_book(
+        &pool,
+        "u1",
+        ampersand_title,
+        "a tale of mirth magic",
+        "ada quill",
+        Some("Ada Quill"),
+    )
+    .await;
+    seed_pre_ampersand_book(
+        &pool,
+        "u2",
+        "Dracula",
+        "sentinel",
+        "sentinel",
+        Some("Ada Quill"),
+    )
+    .await;
+    seed_pre_ampersand_book(
+        &pool,
+        "u3",
+        ampersand_title,
+        "a tale of mirth magic",
+        "blocklisted quill",
+        None,
+    )
+    .await;
+    seed_pre_ampersand_book(
+        &pool,
+        "u4",
+        "Duet",
+        "duet",
+        "vale quill",
+        Some("Vale & Quill"),
+    )
+    .await;
+    sqlx::query(
+        "INSERT INTO metadata_overrides (book_uuid, overrides, title_norm, author_norm)
+         VALUES ('u1', '{\"title\":\"A Tale of Mirth & Magic\"}', 'a tale of mirth magic', NULL)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Hand the database back its pre-0070 migration state and re-open it.
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 70")
+        .execute(&pool)
+        .await
+        .unwrap();
+    drop(pool);
+    let pool = init_db(&url).await.expect("upgrade init_db should succeed");
+
+    assert_eq!(
+        norms(&pool, "u1").await,
+        ("a tale of mirth and magic".into(), Some("ada quill".into())),
+        "a `&` title heals; its derivable author key is unchanged"
+    );
+    assert_eq!(
+        norms(&pool, "u2").await,
+        ("sentinel".into(), Some("sentinel".into())),
+        "a row with no `&` on either side is not reset at all"
+    );
+    assert_eq!(
+        norms(&pool, "u3").await,
+        (
+            "a tale of mirth and magic".into(),
+            Some("blocklisted quill".into())
+        ),
+        "a `&` title must not cost a book its non-derivable author key"
+    );
+    assert_eq!(
+        norms(&pool, "u4").await,
+        ("duet".into(), Some("vale and quill".into())),
+        "a `&` in the position-0 author's name heals the author key"
+    );
+    // The override keys need no migration — their boot pass recomputes every
+    // row from the `overrides` JSON and rewrites the ones that disagree.
+    let override_norm: String =
+        sqlx::query_scalar("SELECT title_norm FROM metadata_overrides WHERE book_uuid = 'u1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(override_norm, "a tale of mirth and magic");
+}
+
+/// Seed a book carrying hand-written `_norm` keys, standing in for a row the
+/// pre-`&`-expansion folder wrote. `link_author` is the position-0 author link
+/// the boot backfill re-derives `author_norm` from; `None` reproduces the
+/// blocklisted-first-creator gap, where the link is absent and the stored key
+/// is the only copy of it.
+async fn seed_pre_ampersand_book(
+    pool: &SqlitePool,
+    uuid: &str,
+    title: &str,
+    title_norm: &str,
+    author_norm: &str,
+    link_author: Option<&str>,
+) {
+    let book_id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, library_id, path, title, title_norm, author_norm)
+         VALUES (?1, (SELECT id FROM scan_roots WHERE path = '/lib'), '', ?2, ?3, ?4)
+         RETURNING id",
+    )
+    .bind(uuid)
+    .bind(title)
+    .bind(title_norm)
+    .bind(author_norm)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let Some(name) = link_author else { return };
+    sqlx::query("INSERT OR IGNORE INTO authors (name) VALUES (?1)")
+        .bind(name)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO books_authors_link (book, author, position)
+         VALUES (?1, (SELECT id FROM authors WHERE name = ?2), 0)",
+    )
+    .bind(book_id)
+    .bind(name)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// The stored `(title_norm, author_norm)` pair for one book.
+async fn norms(pool: &SqlitePool, uuid: &str) -> (String, Option<String>) {
+    sqlx::query_as("SELECT title_norm, author_norm FROM books WHERE uuid = ?1")
+        .bind(uuid)
+        .fetch_one(pool)
+        .await
+        .unwrap()
 }
 
 struct GhostedRepairFixture {
@@ -947,65 +1109,140 @@ async fn boot_repair_spares_a_same_scan_key_book_in_another_library() {
 
 #[test]
 fn purge_legacy_covers_once_sweeps_then_no_ops() {
-    // Standalone temp dir so we don't depend on CoversTempDir's env var
-    // (purge_legacy_covers_once takes the dir as a parameter, and we
-    // want to assert the function in isolation from init_db).
-    let pid = std::process::id();
-    let seq = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!("omnibus_purge_test_{pid}_{seq}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    // `CoversTempDir` pins `OMNIBUS_COVERS_DIR` at a unique temp path under
+    // the shared env lock and removes it on drop; the purge takes the dir as
+    // a parameter, so this asserts the function in isolation from `init_db`.
+    let covers = CoversTempDir::new("purge_sweep");
+    std::fs::create_dir_all(&covers.path).unwrap();
 
     // Seed three "legacy" cover files.
     for name in ["aaaa.jpg", "bbbb.png", "cccc.webp"] {
-        std::fs::write(dir.join(name), b"x").unwrap();
+        std::fs::write(covers.path.join(name), b"x").unwrap();
     }
 
-    purge_legacy_covers_once(&dir);
+    purge_legacy_covers_once(&covers.path);
 
     // Legacy files gone, sentinel written.
     for name in ["aaaa.jpg", "bbbb.png", "cccc.webp"] {
         assert!(
-            !dir.join(name).exists(),
+            !covers.path.join(name).exists(),
             "legacy file {name} should have been purged",
         );
     }
     assert!(
-        dir.join(COVERS_SCHEME_SENTINEL).exists(),
+        covers.path.join(COVERS_SCHEME_SENTINEL).exists(),
         "sentinel should be present after first purge",
     );
 
     // A freshly-written cover after the purge must survive a second
     // call — the sentinel short-circuits the sweep.
-    let kept = dir.join("dddd.jpg");
+    let kept = covers.path.join("dddd.jpg");
     std::fs::write(&kept, b"y").unwrap();
-    purge_legacy_covers_once(&dir);
+    purge_legacy_covers_once(&covers.path);
     assert!(
         kept.exists(),
         "post-sentinel cover writes must not be deleted",
     );
-
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn purge_legacy_covers_once_handles_missing_dir() {
-    // Cold-boot before any covers have ever been written — must not panic
-    // and must not create the directory.
-    let pid = std::process::id();
-    let seq = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!("omnibus_purge_missing_{pid}_{seq}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    purge_legacy_covers_once(&dir);
+fn purge_legacy_covers_once_creates_and_marks_a_missing_dir() {
+    // Cold boot before any covers have ever been written: nothing to purge,
+    // but the scheme still has to be marked, so the dir is created for the
+    // sentinel to live in.
+    let covers = CoversTempDir::new("purge_missing");
     assert!(
-        !dir.exists(),
-        "purge must not create the covers dir as a side effect",
+        !covers.path.exists(),
+        "precondition: dir does not exist yet"
+    );
+
+    purge_legacy_covers_once(&covers.path);
+
+    assert!(
+        covers.path.join(COVERS_SCHEME_SENTINEL).exists(),
+        "a missing covers dir must still be created and marked",
+    );
+    let entries: Vec<_> = std::fs::read_dir(&covers.path).unwrap().flatten().collect();
+    assert_eq!(
+        entries.len(),
+        1,
+        "the sentinel should be the only thing written",
+    );
+}
+
+#[test]
+fn purge_legacy_covers_once_leaves_covers_extracted_after_a_missing_dir_boot() {
+    // The fresh-install regression: boot 1 finds no covers dir, boot 1's
+    // indexing run then extracts every cover into it, and boot 2 must not
+    // mistake that populated cache for an unswept legacy one.
+    let covers = CoversTempDir::new("purge_fresh_install");
+
+    // Boot 1: no dir yet.
+    purge_legacy_covers_once(&covers.path);
+
+    // Boot 1's indexer extracts covers into the now-existing dir.
+    for name in ["aaaa.jpg", "bbbb.png", "cccc.webp"] {
+        std::fs::write(covers.path.join(name), b"x").unwrap();
+    }
+
+    // Boot 2.
+    purge_legacy_covers_once(&covers.path);
+
+    for name in ["aaaa.jpg", "bbbb.png", "cccc.webp"] {
+        assert!(
+            covers.path.join(name).exists(),
+            "cover {name} extracted after the first boot must survive the second",
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn purge_legacy_covers_once_leaves_scheme_unmarked_when_a_file_cannot_be_removed() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // A partial sweep must not write the sentinel: marking a dir that still
+    // holds a legacy file would orphan that file forever.
+    let covers = CoversTempDir::new("purge_readonly");
+    std::fs::create_dir_all(&covers.path).unwrap();
+    let stuck = covers.path.join("aaaa.jpg");
+    std::fs::write(&stuck, b"x").unwrap();
+
+    // A read-only directory rejects the unlink of an entry inside it.
+    std::fs::set_permissions(&covers.path, std::fs::Permissions::from_mode(0o555)).unwrap();
+    purge_legacy_covers_once(&covers.path);
+    // Restore before asserting so the temp dir is still removable on drop.
+    std::fs::set_permissions(&covers.path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    // Running as root ignores the mode bits, so the unlink succeeds and there
+    // is no partial sweep to assert on.
+    if stuck.exists() {
+        assert!(
+            !covers.path.join(COVERS_SCHEME_SENTINEL).exists(),
+            "a sweep that left a legacy file behind must leave the scheme unmarked",
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn purge_legacy_covers_once_leaves_scheme_unmarked_when_an_entry_cannot_be_statted() {
+    // An entry the sweep can't stat is one it can't verify or remove, so the
+    // sentinel must not land. A dangling symlink is the reproducible case:
+    // `std::fs::metadata` follows the link and errors on the missing target.
+    let covers = CoversTempDir::new("purge_unstattable");
+    std::fs::create_dir_all(&covers.path).unwrap();
+    std::os::unix::fs::symlink(
+        covers.path.join("no-such-target"),
+        covers.path.join("dangling.jpg"),
+    )
+    .unwrap();
+
+    purge_legacy_covers_once(&covers.path);
+
+    assert!(
+        !covers.path.join(COVERS_SCHEME_SENTINEL).exists(),
+        "a sweep with an unstattable entry must leave the scheme unmarked",
     );
 }
 

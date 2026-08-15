@@ -174,6 +174,18 @@ body.atrium,
    can't bounce. */
 html, body { overscroll-behavior: none; }
 
+/* A theme switch must repaint every surface in one frame. The hover/focus
+   transitions on buttons, chips, rows, and captions otherwise animate the
+   token flip too — each at its own 0.08–0.25s duration — so controls recolor
+   at visibly different times while the grounds snap. `AtriumRoot` holds this
+   class for the flip frame only (cleared two animation frames later), so
+   hover polish is untouched outside the switch. */
+.atrium.theme-snap *,
+.atrium.theme-snap *::before,
+.atrium.theme-snap *::after {
+  transition: none !important;
+}
+
 .atrium *,
 .atrium *::before,
 .atrium *::after { box-sizing: border-box; }
@@ -1599,6 +1611,7 @@ button.spoiler {
   border: 1px solid var(--line-2);
   display: grid;
   place-items: center;
+  overflow: hidden;
   font-family: var(--serif);
   font-size: 56px;
   font-style: italic;
@@ -1608,12 +1621,16 @@ button.spoiler {
   .disc-avatar { width: 80px; height: 80px; font-size: 36px; }
 }
 
-/* F1.11 — When the avatar is the resolved profile photo, drop the
-   typographic styling and clip the image to the circle. The `img` element
-   shares the `.disc-avatar` class so the size/border tokens stay in sync
-   with the letter variant. */
+/* F1.11 — When the avatar is the resolved profile photo, the `img` nests
+   inside the stable `.disc-avatar` circle (rule 07 — a `has_photo` flip
+   diffs the child, not the node) rather than swapping element type. Fill
+   the parent's clipped circle instead of carrying its own size/border,
+   mirroring `.idx-card-avatar--photo` / `UserAvatar`'s `-photo` classes. */
 .disc-avatar--photo {
+  width: 100%;
+  height: 100%;
   object-fit: cover;
+  display: block;
   background: var(--bg-2);
 }
 
@@ -2724,6 +2741,21 @@ a.idx-letter-on:focus-visible {
   font-size: 0.8125rem;
   color: var(--ink-2);
 }
+.worker-status-phase {
+  font-size: 0.8125rem;
+  color: var(--ink-1);
+}
+.worker-status-item {
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.worker-status-tallies {
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
 .worker-status-dismiss {
   background: transparent;
   border: none;
@@ -2872,7 +2904,8 @@ a.idx-letter-on:focus-visible {
   .um-nr-play:hover { opacity: 0.9; }
 }
 
-/* Stat grid (stubs) */
+/* Stat grid: Shelves links out (#1913); the rest are non-interactive
+   stats (`.um-stat-static`) until they have an aggregate web page. */
 .um-stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .um-stat {
   display: flex; flex-direction: column; gap: 4px;
@@ -2880,7 +2913,10 @@ a.idx-letter-on:focus-visible {
   background: var(--bg-2); border: 1px solid var(--line-2);
   text-decoration: none; color: inherit;
 }
-.um-stat[aria-disabled="true"] { opacity: .85; cursor: not-allowed; }
+@media (hover: hover) {
+  a.um-stat:hover { border-color: var(--line-1); }
+}
+.um-stat-static { cursor: default; opacity: .85; }
 .um-stat-label { color: var(--ink-0); font-size: 12px; font-weight: 500; }
 .um-stat-detail { color: var(--ink-3); font-family: var(--mono); font-size: 10px; }
 
@@ -2989,6 +3025,13 @@ a.idx-letter-on:focus-visible {
   letter-spacing: 0.14em; text-transform: uppercase;
   color: var(--accent); font-weight: 500;
 }
+
+/* Title + byline link back to the book-detail page; the text keeps the
+   stage typography rather than anchor styling. */
+.lp-booklink {
+  display: block; color: inherit; text-decoration: none;
+}
+.lp-booklink:hover .lp-title { text-decoration: underline; text-underline-offset: 6px; }
 
 .lp-title {
   font-family: var(--serif); font-style: italic;
@@ -5064,6 +5107,30 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   margin-top: 1rem;
 }
 
+/* Admin server-health page (`/admin/health`, #952): five read-only cards —
+   index status, worker queue, FTS health, storage, last errors. Reuses
+   `.card`, `.settings-status`, `.users-table`, and `.logs-stream`/`.logs-*`
+   for the sections that map onto an existing shape; this block only covers
+   the page-level layout and the label/value rows unique to this page. */
+.ah-head { margin-bottom: 1.25rem; }
+.ah-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.ah-card h2 { font-size: 1rem; font-weight: 600; margin: 0 0 0.75rem; }
+.ah-kv { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 0.75rem; }
+.ah-kv-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.875rem;
+}
+.ah-kv-label { color: var(--ink-2); }
+.ah-kv-value { color: var(--ink-0); font-family: var(--mono); text-align: right; }
+
 /* F4.3 Send-to-Kindle result toast — fixed bottom-center, mirrors
    .bd-merge-toast so action feedback is consistent across the book page. */
 .kindle-toast, .kobo-toast {
@@ -5765,6 +5832,10 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .rd-ribbon > i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
 .rd-overlay { position: absolute; inset: 0; z-index: 8; display: flex;
   align-items: center; justify-content: center; color: var(--ink-2); background: var(--rd-page); }
+/* The error overlay adds a Retry action below the message (issue #1895,
+   AC3), so it needs a column stack instead of the base overlay's single
+   centred row. */
+.rd-overlay-error { flex-direction: column; gap: 14px; text-align: center; padding: 0 24px; }
 /* The accent wash rides with the chrome: hidden-chrome mode is pure page
    color edge to edge, so the tint fades out alongside the bars (the fade
    rule lives in the tap-to-hide media block above). */
@@ -7637,6 +7708,8 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 
 .m-player-now { text-align: center; padding: 20px 6px 6px; }
 .m-player-eyebrow { color: var(--accent); }
+/* Title + byline tap through to the book-detail page; keep player styling. */
+.m-player-booklink { display: block; color: inherit; text-decoration: none; }
 /* Scoped under `.atrium` so this outranks the design-system `.atrium h1`
    (font-size: 64px). The player title is an <h1>; without the extra class
    the 64px hero size wins on specificity (0,1,1 vs 0,1,0), overflows the
@@ -8659,6 +8732,18 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   color: var(--accent);
 }
 .check-in-book-detail { font-size: 12.5px; color: var(--ink-3); }
+
+/* ── Close-match picker ───────────────────────────────────────────── */
+.check-in-match-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.check-in-match-option { display: flex; flex-direction: column; gap: 8px; }
+.check-in-match-option .btn { width: 100%; justify-content: center; }
 
 /* ── Title-search results ─────────────────────────────────────────── */
 .check-in-search-results {

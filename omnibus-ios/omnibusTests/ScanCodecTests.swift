@@ -183,6 +183,55 @@ struct ScanOutcomeCodecTests {
         #expect(isUnresolved(try decode(#"{"kind":"invented_later"}"#)))
     }
 
+    /// Two library rows for one work (an EPUB and the audiobook nothing
+    /// attached to it) arrive as `book` + `others`; the picker needs them in
+    /// server order as one list.
+    @Test("a close match carries every candidate the server offered")
+    func decodesCloseMatchCandidateList() throws {
+        let epub = """
+            {"uuid":"epub-1","title":"The Sword of Kaigen","authors":["M L Wang"],
+             "cover_url":null,"has_physical":false}
+            """
+        let audiobook = """
+            {"uuid":"audio-1","title":"The Sword of Kaigen","authors":["M L Wang"],
+             "cover_url":null,"has_physical":false}
+            """
+        let online = """
+            {"isbn13":"9780000000002","title":"The Sword of Kaigen","authors":["M L Wang"],
+             "year":null,"pages":null,"publisher":null,"description":null,
+             "cover_url":null,"source":"open_library"}
+            """
+        let outcome = try decode(
+            #"{"kind":"close_match","book":\#(epub),"others":[\#(audiobook)],"scanned":\#(online)}"#
+        )
+        guard case let .closeMatch(books, _) = outcome else {
+            Issue.record("expected a close match, got \(outcome)")
+            return
+        }
+        #expect(books.map(\.uuid) == ["epub-1", "audio-1"])
+    }
+
+    /// The single-candidate payload omits `others` entirely, which must decode
+    /// as a one-book picker rather than throwing on the missing key.
+    @Test("a close match with no candidate tail decodes as one book")
+    func decodesCloseMatchWithoutOthers() throws {
+        let book = """
+            {"uuid":"book-1","title":"Verify Book","authors":["A Author"],
+             "cover_url":null,"has_physical":false}
+            """
+        let online = """
+            {"isbn13":"9780000000002","title":"Verify Book","authors":["A Author"],
+             "year":null,"pages":null,"publisher":null,"description":null,
+             "cover_url":null,"source":"open_library"}
+            """
+        let outcome = try decode(#"{"kind":"close_match","book":\#(book),"scanned":\#(online)}"#)
+        guard case let .closeMatch(books, _) = outcome else {
+            Issue.record("expected a close match, got \(outcome)")
+            return
+        }
+        #expect(books.map(\.uuid) == ["book-1"])
+    }
+
     private func isAlreadyOwned(_ o: ScanOutcome) -> Bool {
         if case .alreadyOwned = o { return true }
         return false

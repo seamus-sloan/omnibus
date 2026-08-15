@@ -97,6 +97,55 @@ async fn book_last_modified_for_returns_db_error_for_unknown_id() {
 }
 
 #[tokio::test]
+async fn book_display_title_returns_title_and_falls_back_to_scan_key_when_empty() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 2).await;
+    let id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE uuid = 'uuid-1'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        book_display_title(&pool, id).await.unwrap().as_deref(),
+        Some("Title 1")
+    );
+
+    // NULL and empty titles both fall back to the library-relative scan_key.
+    sqlx::query("UPDATE books SET title = '' WHERE uuid = 'uuid-1'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        book_display_title(&pool, id).await.unwrap().as_deref(),
+        Some("b1.epub")
+    );
+}
+
+#[tokio::test]
+async fn book_display_title_returns_none_for_unknown_id() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    assert_eq!(book_display_title(&pool, 999).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn book_display_title_by_uuid_resolves_and_returns_none_for_unknown_uuid() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    seed_minimal_books(&pool, 1).await;
+    assert_eq!(
+        book_display_title_by_uuid(&pool, "uuid-1")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("Title 1")
+    );
+    assert_eq!(
+        book_display_title_by_uuid(&pool, "no-such-uuid")
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
 async fn get_book_reports_epub_size_from_lowest_ordinal_epub() {
     // `epub_size_bytes` drives the export menu's Kindle size gate. It must
     // mirror what the hero send delivers — the lowest-ordinal EPUB — and ignore

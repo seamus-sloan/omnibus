@@ -76,6 +76,23 @@ pub struct RankedEntity {
     pub seconds: i64,
 }
 
+/// Reading/listening insights for one book, scoped to one user — the
+/// book-detail page's Insights card (Started / Time read / Sessions / Pace).
+/// Produced by `db::stats::book_insights` from the same `reading_sessions` /
+/// `listening_sessions` tables [`StatsSummary`] aggregates from, but scoped to
+/// a single `(user, book_uuid)` rather than a user-wide window. The RPC wraps
+/// this in `Option` — `None` means the book has no recorded sessions yet,
+/// driving the card's em-dash empty state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BookInsights {
+    /// Unix seconds of the earliest recorded session (reading or listening).
+    pub started_at: i64,
+    /// Total seconds across every reading and listening session on this book.
+    pub seconds_total: i64,
+    /// Count of reading + listening sessions on this book.
+    pub sessions: i64,
+}
+
 /// One genre-donut slice: a tag and how many distinct books carrying it had
 /// session activity in the window (share by book count, not seconds).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

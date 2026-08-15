@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use axum::{
+    http::StatusCode,
     response::{IntoResponse, Response},
     Extension, Router,
 };
@@ -17,10 +18,12 @@ use omnibus_db::{
 };
 use sqlx::SqlitePool;
 
+use crate::auth::AuthUser;
 use crate::http_errors::internal;
 use crate::rate_limit::RateLimiter;
 
 mod account;
+mod admin_health;
 mod admin_sessions;
 mod audiobooks;
 mod author_photos;
@@ -87,6 +90,17 @@ pub const SEARCH_RATE_LIMIT_MAX: u32 = 30;
 pub const UPLOAD_RATE_LIMIT_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
 /// Max upload requests per [`UPLOAD_RATE_LIMIT_WINDOW`] per IP.
 pub const UPLOAD_RATE_LIMIT_MAX: u32 = 10;
+
+/// 403 unless `user` may download. The single enforcement point for every
+/// download-shaped route — one whose purpose is handing the caller a file to
+/// keep (`Content-Disposition: attachment`), as opposed to the in-app
+/// reading/streaming routes (`/file`, `/parts/{ordinal}`, page images, HLS),
+/// which stay open to any authenticated user. Shared by the `/api/*`
+/// handlers here and by `opds::delegate`'s Basic-auth'd acquisition routes,
+/// so the two surfaces cannot drift on what counts as a download.
+fn deny_without_download(user: &AuthUser) -> Option<Response> {
+    (!user.can_download).then(|| (StatusCode::FORBIDDEN, "download not permitted").into_response())
+}
 
 /// Serve a file from disk as a browser download: streamed (so large
 /// audiobook files aren't buffered into memory), Range-capable, conditional,

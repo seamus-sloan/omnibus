@@ -48,6 +48,7 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, InitDbError> {
 
     if !is_memory {
         run_legacy_cover_purge().await;
+        run_thumb_scheme_purge().await;
     }
 
     Ok(pool)
@@ -276,7 +277,24 @@ async fn run_legacy_cover_purge() {
     })
     .await
     {
-        tracing::error!("legacy cover purge spawn_blocking failed: {join_err}");
+        tracing::error!(error = %join_err, "legacy cover purge spawn_blocking failed");
+    }
+}
+
+/// Run the one-time thumbnail-cache purge for the current encoder scheme on
+/// the blocking pool.
+///
+/// Same shape and rationale as [`run_legacy_cover_purge`] above: the sweep is
+/// synchronous `std::fs` over a directory that holds three files per book, so
+/// it runs on the blocking pool while boot awaits it, and a `JoinError` is
+/// logged and swallowed because a rebuildable cache must never abort boot.
+/// See `thumbs::purge_stale_scheme_thumbs_once` for why a re-encode needs
+/// this at all.
+async fn run_thumb_scheme_purge() {
+    if let Err(join_err) =
+        tokio::task::spawn_blocking(crate::thumbs::purge_stale_scheme_thumbs_once).await
+    {
+        tracing::error!(error = %join_err, "thumb scheme purge spawn_blocking failed");
     }
 }
 
@@ -302,55 +320,102 @@ const COVERS_SCHEME_SENTINEL: &str = ".omnibus-cover-scheme-v5";
 /// — the `books.uuid` column will be rewritten on the next reindex, but the
 /// orphan files would sit in the covers dir forever.
 ///
-/// This is deliberately best-effort: missing dir, permission errors, and
-/// individual unlink failures are all logged-and-swallowed rather than
-/// surfaced. The covers directory is a cache; the worst outcome of failure
-/// is a few stale files, not a broken server. The sentinel file ensures
-/// we only sweep once per install.
+/// This is deliberately best-effort: an unreadable or uncreatable dir,
+/// permission errors, and individual unlink failures are all
+/// logged-and-swallowed rather than surfaced. The covers directory is a
+/// cache; the worst outcome of failure is a few stale files, not a broken
+/// server. The sentinel file ensures we only sweep once per install.
+///
+/// **The sentinel lands only on a clean sweep.** Writing it after a partial
+/// one would mark the directory as current while a legacy file is still
+/// sitting in it, orphaned forever. Leaving the sentinel absent costs a
+/// re-sweep of an already-empty directory on the next boot.
 fn purge_legacy_covers_once(dir: &Path) {
-    // No covers dir yet → nothing to clean, and creating it eagerly would
-    // be surprising. The next cover write will create it.
-    if !dir.exists() {
-        return;
-    }
     let sentinel = dir.join(COVERS_SCHEME_SENTINEL);
     if sentinel.exists() {
         return;
     }
 
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(err) => {
-            tracing::warn!(
-                covers_dir = %dir.display(),
-                error = %err,
-                "could not read covers dir to purge legacy files; skipping",
-            );
-            return;
-        }
-    };
-
+    // A directory that doesn't exist yet has nothing to purge, but it still
+    // gets marked below — leaving a fresh install unmarked means its *second*
+    // boot finds an unmarked directory and deletes every cover the first
+    // boot's indexing run just extracted.
     let mut removed: usize = 0;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        // Only touch regular files at the top level. Leave subdirectories
-        // alone — nothing in this layer writes them today, but if a future
-        // version does we'd rather not blow them away.
-        if !path.is_file() {
-            continue;
+    let mut left_behind: usize = 0;
+    if dir.exists() {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(err) => {
+                tracing::warn!(
+                    covers_dir = %dir.display(),
+                    error = %err,
+                    "could not read covers dir to purge legacy files; skipping",
+                );
+                return;
+            }
+        };
+        for entry in entries {
+            // An entry we can't read is one we can't verify or remove —
+            // flattening it away would land the sentinel on an unclean sweep.
+            let entry = match entry {
+                Ok(e) => e,
+                Err(err) => {
+                    left_behind += 1;
+                    tracing::warn!(
+                        covers_dir = %dir.display(),
+                        error = %err,
+                        "could not read covers dir entry; leaving the scheme unmarked",
+                    );
+                    continue;
+                }
+            };
+            let path = entry.path();
+            // Only touch regular files at the top level. Leave subdirectories
+            // alone — nothing in this layer writes them today, but if a future
+            // version does we'd rather not blow them away. An unstattable
+            // entry counts as left behind for the same reason as above.
+            match std::fs::metadata(&path) {
+                Ok(meta) if !meta.is_file() => continue,
+                Ok(_) => {}
+                Err(err) => {
+                    left_behind += 1;
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %err,
+                        "could not stat covers dir entry; leaving the scheme unmarked",
+                    );
+                    continue;
+                }
+            }
+            match std::fs::remove_file(&path) {
+                Ok(()) => removed += 1,
+                Err(err) => {
+                    left_behind += 1;
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %err,
+                        "failed to remove legacy cover file",
+                    );
+                }
+            }
         }
-        if let Err(err) = std::fs::remove_file(&path) {
-            tracing::warn!(
-                path = %path.display(),
-                error = %err,
-                "failed to remove legacy cover file",
-            );
-        } else {
-            removed += 1;
-        }
+    } else if let Err(err) = std::fs::create_dir_all(dir) {
+        tracing::warn!(
+            covers_dir = %dir.display(),
+            error = %err,
+            "could not create covers dir to mark the cover scheme; will retry on next boot",
+        );
+        return;
     }
 
-    if let Err(err) = std::fs::write(&sentinel, b"v5\n") {
+    if left_behind > 0 {
+        tracing::warn!(
+            covers_dir = %dir.display(),
+            removed,
+            left_behind,
+            "legacy cover purge incomplete; leaving the scheme unmarked so it retries on next boot",
+        );
+    } else if let Err(err) = std::fs::write(&sentinel, b"v5\n") {
         tracing::warn!(
             sentinel = %sentinel.display(),
             error = %err,

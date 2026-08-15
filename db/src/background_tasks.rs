@@ -1,6 +1,6 @@
 //! Durable history of background worker task runs (issue #941).
 //!
-//! The `background_tasks` table (migration `0070`) is the on-disk companion
+//! The `background_tasks` table (migration `0072`) is the on-disk companion
 //! to `worker::types::Worker`'s in-memory `progress` map: `start_task` is
 //! called once a task begins, `finish_task` once it reaches a terminal
 //! state, and `recent_tasks` backs the admin dashboard. Mirrors how

@@ -45,6 +45,16 @@ const PROGRESS_ERR_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "great-gatsby")!;
 const DEEP_LINK_BOOK = FIXTURE_BOOKS.find(
   (b) => b.slug === "romeo-and-juliet",
 )!;
+// Reserved for the TOC-jump loading-state regression (see the reservation
+// comment on this fixture in fixtures/epubs.ts) — a real multi-chapter book,
+// so the contents drawer lists more than one row to jump between.
+const TOC_JUMP_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "dracula")!;
+// Reserved for the paging-race / blank-front-matter regression (issue
+// #1895) — five one-page sections (two full-page images, three text) ahead
+// of chapter1, so paging through it repeatedly crosses section boundaries.
+const FRONTMATTER_BOOK = FIXTURE_BOOKS.find(
+  (b) => b.slug === "frontmatter-relay",
+)!;
 
 // The epub.js progress POST fires on the reader's relocate events; pin the
 // exact pathname so the sibling `/api/rpc/progress/get` reads never match.
@@ -54,9 +64,10 @@ const PROGRESS_POST = {
   expectedStatus: 200,
 };
 
-// The bottom-bar page label ("p. 3 of 12 · 25%") renders only after epub.js
-// has painted AND the whole-book pagination resolved — the strongest signal
-// that relocates are flowing. Note the NBSP after "p." in the label.
+// The bottom-bar page label ("p. 3 of 12 · 25%" — or "· ~25%" while the
+// whole-book pagination still resolves in the background, issue #1896)
+// renders once epub.js has painted and the first relocate landed — the
+// signal that relocates are flowing. Note the NBSP after "p." in the label.
 const PAGE_LABEL = /p\.\u00a0\d+ of \d+/;
 
 async function footerPageLabel(page: Page): Promise<string> {
@@ -96,6 +107,20 @@ test("renders the reader layout", async ({ page, request }) => {
   await expect(page.getByTestId("reader-font-increase")).toBeVisible();
   await expect(page.getByTestId("reader-spread-single")).toBeVisible();
   await expect(page.getByTestId("reader-spread-double")).toBeVisible();
+});
+
+test("the back button leaves the reader for the book detail page", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/read/${uuid}`);
+  await expect(page.getByTestId("reader-back")).toBeVisible();
+
+  // Back always routes to the book's detail page — never to whatever entry
+  // point (landing, search, Continue hero) the reader was opened from.
+  await page.getByTestId("reader-back").click();
+  await expect(page).toHaveURL(new RegExp(`/books/${uuid}$`));
 });
 
 test("black theme overrides a publisher color on the EPUB body", async ({
@@ -160,6 +185,66 @@ test("opens the contents and highlights drawers from the top chrome", async ({
   // Contents drawer opens from the top chrome.
   await page.getByTestId("reader-toc").click();
   await expect(page.getByTestId("reader-toc-drawer")).toBeVisible();
+});
+
+// Regression for issue #1909 (AC3): a TOC jump must show a loading
+// affordance, and the header must never show the outgoing chapter alongside
+// the target's content. `dracula` (reserved above in fixtures/epubs.ts) is a
+// real multi-chapter book so the contents drawer lists more than one row.
+test("shows a loading state during a TOC jump and blanks the outgoing chapter in the header", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(90_000);
+  const uuid = await fetchBookUuidByTitle(request, TOC_JUMP_BOOK.title);
+  await gotoReady(page, `/read/${uuid}`);
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
+
+  const headerChapter = page.getByTestId("reader-header-chapter");
+  const drawer = page.getByTestId("reader-toc-drawer");
+  const rows = page.getByTestId("reader-toc-row");
+
+  // The book opens on its cover — a spine item with no direct TOC entry, so
+  // the header renders nothing there. Jump to a real TOC row first to
+  // establish a genuine baseline chapter in the header, so the assertion
+  // below is about the readout actually clearing, not just never having had
+  // anything to clear in the first place.
+  await page.getByTestId("reader-toc").click();
+  await expect(drawer).toBeVisible();
+  await expect(rows.nth(3)).toBeVisible();
+  await expectMutation(page, { ...PROGRESS_POST, timeout: 20_000 }, async () =>
+    rows.nth(3).click(),
+  );
+  await expect(drawer).toHaveCount(0);
+  await expect(headerChapter).toBeVisible({ timeout: 20_000 });
+
+  // Jump again, further into the book — this is the transition under test.
+  await page.getByTestId("reader-toc").click();
+  await expect(drawer).toBeVisible();
+  await expect(rows.nth(6)).toBeVisible();
+
+  // The jump lands via the same relocate that fires the progress-save POST,
+  // so asserting that mutation is also the strongest signal the jump landed.
+  await expectMutation(
+    page,
+    { ...PROGRESS_POST, timeout: 20_000 },
+    async () => {
+      await rows.nth(6).click();
+
+      // The drawer closes and the loading affordance appears immediately —
+      // this is synchronous with the click (`overlays::render_toc_overlay`),
+      // so it never races the epub.js render — and the header must not show
+      // the outgoing chapter alongside it.
+      await expect(drawer).toHaveCount(0);
+      await expect(page.getByTestId("reader-loading")).toBeVisible();
+      await expect(headerChapter).toHaveCount(0);
+    },
+  );
+
+  // Once the jump lands, the loading overlay clears and the header shows a
+  // chapter again — never stuck blank, never stuck loading.
+  await expect(page.getByTestId("reader-loading")).toHaveCount(0);
+  await expect(headerChapter).toBeVisible({ timeout: 20_000 });
 });
 
 test("seeds a highlight and deletes it from the highlights drawer", async ({
@@ -473,8 +558,8 @@ test("restores the exact reading position when the reader is reopened", async ({
     return body?.epub_cfi ?? "";
   };
 
-  // Leave the reader (explicit navigation — the reader-back button walks
-  // browser history, which in a test context leads to about:blank), then
+  // Leave the reader (explicit navigation — equivalent to the reader-back
+  // button, which routes to the book's detail page), then
   // reopen: it must land on the exact page we left, not a page drifted by
   // the first-pass display's pre-webfont layout. The restore POST is
   // page-load triggered (hydration + epub render + settle + debounce), so
@@ -596,6 +681,66 @@ test("keeps reading when the progress save POST fails", async ({
   );
   await expect(page.getByTestId("reader-viewer")).toBeVisible();
   await expect(page.getByTestId("reader-error")).toHaveCount(0);
+});
+
+// Regression for issue #1895: real publisher front matter is full-page image
+// markup (a plain <img> or an SVG-wrapped <image>), and paging through
+// several short sections in a row — at any speed — must never leave the
+// rendition blank or wedged.
+test("pages through image front matter without blanking the rendition, even at rapid clicks", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, FRONTMATTER_BOOK.title);
+  await gotoReady(page, `/read/${uuid}`);
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
+
+  // Intentional exception: this regression must inspect rendered EPUB
+  // markup to confirm the front-matter images actually occupy real space,
+  // not collapse to nothing (AC2 — "render as completely empty spreads" is
+  // the issue's own description of the symptom). A rendered bounding box is
+  // the more robust signal here than a manual decode probe: it's what a
+  // reader actually sees, and it doesn't race the async blob->data URI
+  // repair the way polling `naturalWidth` on a throwaway Image() does —
+  // Playwright's own `boundingBox()` already waits for layout to settle.
+  const viewerFrame = page.frameLocator("#omnibus-viewer iframe");
+
+  // Title page: a full-page plain <img> — the most common real-world shape.
+  const titleImg = viewerFrame.locator("img").first();
+  await expect(titleImg).toBeVisible();
+  await expect
+    .poll(async () => (await titleImg.boundingBox())?.height ?? 0, {
+      timeout: 15_000,
+    })
+    .toBeGreaterThan(10);
+
+  // Copyright page: an SVG-wrapped <image> — the shape a real publisher
+  // scan uses, and the one that rendered blank while the plain <img> page
+  // worked.
+  await page.getByTestId("reader-next").click();
+  const svgImage = viewerFrame.locator("image").first();
+  await expect(svgImage).toBeVisible();
+  await expect
+    .poll(async () => (await svgImage.boundingBox())?.height ?? 0, {
+      timeout: 15_000,
+    })
+    .toBeGreaterThan(10);
+
+  // Rapid-fire the remaining turns with no waiting between clicks — the
+  // condition (~1 click/sec or faster) that wedged the rendition on a real
+  // book with no console error (AC1). Three text sections plus the final
+  // chapter: five more section-boundary crossings.
+  for (let i = 0; i < 5; i++) {
+    await page.getByTestId("reader-next").click();
+  }
+  await expect(page.getByTestId("reader-error")).toHaveCount(0);
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
+
+  // A wedged rendition never recovers going backwards either — the other
+  // reported symptom ("prev does not restore it").
+  await page.getByTestId("reader-prev").click();
+  await expect(page.getByTestId("reader-error")).toHaveCount(0);
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
 });
 
 // The reader is one shared component: the native mobile shell renders the

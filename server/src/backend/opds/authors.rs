@@ -8,19 +8,20 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use omnibus_db as db;
-use omnibus_shared::AuthorSummary;
+use omnibus_shared::{AuthorDetail, AuthorSummary};
 
 use super::atom::{Feed, Link, ACQUISITION_TYPE, NAVIGATION_TYPE};
-use super::entries::book_entry;
+use super::entries::{book_entry, retain_ereader_books};
 use super::{internal, nav_entry, now_rfc3339, xml_response};
-use crate::auth::AuthUser;
+use crate::auth::OpdsAuthUser;
 use crate::backend::AppState;
 
 /// The bucket an author's sort key falls into: an uppercase ASCII letter,
 /// or `#` for anything that doesn't start with one (numerals, symbols,
 /// non-Latin scripts) — the same "everything else" bucket most library
-/// apps use for a letter-indexed browse.
-fn letter_of(author: &AuthorSummary) -> char {
+/// apps use for a letter-indexed browse. `pub(super)` so `opds::json_authors`
+/// buckets authors identically for the JSON catalog's letter index.
+pub(super) fn letter_of(author: &AuthorSummary) -> char {
     let key = author.sort.as_deref().unwrap_or(&author.name);
     key.chars()
         .next()
@@ -32,8 +33,9 @@ fn letter_of(author: &AuthorSummary) -> char {
 /// URL-path form of a bucket letter. `#` starts a fragment and is never
 /// sent to the server, so the "everything else" bucket must be
 /// percent-encoded (`%23`) in any `href` — the letter itself (used for
-/// display text and ids) stays literal.
-fn letter_path_segment(letter: char) -> String {
+/// display text and ids) stays literal. `pub(super)` — shared with
+/// `opds::json_authors`.
+pub(super) fn letter_path_segment(letter: char) -> String {
     if letter == '#' {
         "%23".to_string()
     } else {
@@ -43,7 +45,7 @@ fn letter_path_segment(letter: char) -> String {
 
 /// `GET /opds/authors` — navigation feed of the letters that have at least
 /// one author, each linking to `/opds/authors/{letter}`.
-pub(super) async fn letter_index(_user: AuthUser, State(state): State<AppState>) -> Response {
+pub(super) async fn letter_index(_user: OpdsAuthUser, State(state): State<AppState>) -> Response {
     let authors = match load_authors(&state).await {
         Ok(a) => a,
         Err(resp) => return resp,
@@ -83,7 +85,7 @@ pub(super) async fn letter_index(_user: AuthUser, State(state): State<AppState>)
 /// acquisition feed. An empty or non-alphabetic `letter` 400s rather than
 /// silently matching the `#` bucket, so a malformed link is visible.
 pub(super) async fn by_letter(
-    _user: AuthUser,
+    _user: OpdsAuthUser,
     State(state): State<AppState>,
     Path(letter): Path<String>,
 ) -> Response {
@@ -137,44 +139,58 @@ pub(super) async fn by_letter(
 
 /// `GET /opds/author/{id}` — acquisition feed of one author's books.
 pub(super) async fn acquisition_feed(
-    _user: AuthUser,
+    _user: OpdsAuthUser,
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Response {
-    match db::get_author(&state.pool, id).await {
-        Ok(Some(author)) => {
-            // `db::get_author` returns books across every library, but this
-            // catalog is ebook-scoped (see the module doc); an audiobook-only
-            // or physical-only row has no epub/cbz format and would otherwise
-            // surface as an entry with no acquisition link.
-            let is_ebook_format =
-                |f: &String| f.eq_ignore_ascii_case("epub") || f.eq_ignore_ascii_case("cbz");
-            let feed = Feed {
-                id: format!("urn:omnibus:opds:author:{id}"),
-                title: author.name.clone(),
-                updated: now_rfc3339(),
-                links: vec![
-                    Link::new("self", format!("/opds/author/{id}"), ACQUISITION_TYPE),
-                    Link::new("start", "/opds", NAVIGATION_TYPE),
-                ],
-                entries: author
-                    .books
-                    .iter()
-                    .filter(|b| b.formats.iter().any(is_ebook_format))
-                    .map(book_entry)
-                    .collect(),
-            };
-            xml_response(ACQUISITION_TYPE, feed.to_xml())
-        }
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => internal("read author", e),
-    }
+    let author = match load_author(&state, id).await {
+        Ok(Some(a)) => a,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(resp) => return resp,
+    };
+    let feed = Feed {
+        id: format!("urn:omnibus:opds:author:{id}"),
+        title: author.name.clone(),
+        updated: now_rfc3339(),
+        links: vec![
+            Link::new("self", format!("/opds/author/{id}"), ACQUISITION_TYPE),
+            Link::new("start", "/opds", NAVIGATION_TYPE),
+        ],
+        entries: author.books.iter().map(book_entry).collect(),
+    };
+    xml_response(ACQUISITION_TYPE, feed.to_xml())
+}
+
+/// Load one author with their books narrowed to what this catalog may
+/// serve: the configured ebook library only (see the `opds` module doc),
+/// then to the formats an acquisition link can point at — an audiobook-only
+/// or physical-only row would otherwise surface as an entry with no
+/// download. `Ok(None)` is an unknown author id; `Err` is a ready-to-return
+/// failure response. `pub(super)` — reused by `opds::json_authors` so both
+/// catalogs' author feeds carry the same entries.
+pub(super) async fn load_author(
+    state: &AppState,
+    author_id: i64,
+) -> Result<Option<AuthorDetail>, Response> {
+    let settings = db::get_settings(&state.pool)
+        .await
+        .map_err(|e| internal("read settings", e))?;
+    let paths = db::collect_paths(settings.ebook_library_path.as_deref(), None);
+    let author = db::get_author_for_paths(&state.pool, author_id, &paths)
+        .await
+        .map_err(|e| internal("read author", e))?;
+    Ok(author.map(|mut author| {
+        retain_ereader_books(&mut author.books);
+        author
+    }))
 }
 
 /// Load every author across the configured ebook library (see the `opds`
 /// module doc for why the browse is ebook-scoped), or `Err` with the
-/// ready-to-return failure response.
-async fn load_authors(state: &AppState) -> Result<Vec<AuthorSummary>, Response> {
+/// ready-to-return failure response. `pub(super)` — reused by
+/// `opds::json_authors` so the Atom and JSON letter indexes read the exact
+/// same author set.
+pub(super) async fn load_authors(state: &AppState) -> Result<Vec<AuthorSummary>, Response> {
     let settings = db::get_settings(&state.pool)
         .await
         .map_err(|e| internal("read settings", e))?;

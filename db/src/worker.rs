@@ -5,6 +5,8 @@
 //!   jobs run concurrently (acquired from a per-Worker scan [`Semaphore`]).
 //! - `hls_concurrency` caps concurrent `Task::HlsTranscode` jobs (acquired
 //!   from a separate HLS [`Semaphore`]).
+//! - `convert_concurrency` caps concurrent `Task::ConvertFormat` jobs
+//!   (acquired from a separate convert [`Semaphore`]).
 //! - A per-resource keyed mutex map serializes any tasks that share the
 //!   same resource key, so e.g. two scans of the same library path queue
 //!   behind each other while different paths run in parallel.
@@ -20,7 +22,7 @@
 //!   semaphore + terminal-state projection.
 //! * [`handlers`] — `Worker::execute` per-task-kind handlers.
 //! * [`progress`] — `progress_snapshot` + retention/eviction +
-//!   `report_progress` + the terminal-state writer.
+//!   `report_progress_update`/`report_detail` + the terminal-state writer.
 //! * [`metrics`] — `Worker::metrics`: per-task-type queue depth and a
 //!   bounded recent-completions window, for a future admin health page.
 //! * [`periodic_scan`] — the testable "read settings, decide, post" step

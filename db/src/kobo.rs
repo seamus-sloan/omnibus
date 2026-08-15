@@ -104,6 +104,27 @@ impl From<crate::books::BooksError> for KoboError {
     }
 }
 
+impl From<crate::metadata_overrides::MetadataOverridesError> for KoboError {
+    fn from(e: crate::metadata_overrides::MetadataOverridesError) -> Self {
+        match e {
+            crate::metadata_overrides::MetadataOverridesError::Db(inner) => Self::Sqlx(inner),
+            crate::metadata_overrides::MetadataOverridesError::Serialization(inner) => {
+                Self::Sqlx(sqlx::Error::Decode(Box::new(inner)))
+            }
+            crate::metadata_overrides::MetadataOverridesError::Io(inner) => {
+                Self::Sqlx(sqlx::Error::Io(inner))
+            }
+            // Bulk-write-only variants that can't arise on the sync read
+            // path; folded with their message preserved rather than
+            // panicking (mirrors `BooksError`'s `From<MetadataOverridesError>`).
+            other @ (crate::metadata_overrides::MetadataOverridesError::BookNotFound(_)
+            | crate::metadata_overrides::MetadataOverridesError::TooManyValues {
+                ..
+            }) => Self::Sqlx(sqlx::Error::Protocol(other.to_string())),
+        }
+    }
+}
+
 /// The books `user_id`'s Kobo devices may sync, newest-modified first: the
 /// union of membership across that user's shelves flagged `sync_to_kobo`.
 ///

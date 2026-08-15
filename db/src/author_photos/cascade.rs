@@ -150,64 +150,71 @@ pub async fn resolve_with(
 /// a running count (not tied to any particular author).
 pub async fn refetch_all(
     pool: &SqlitePool,
-    on_progress: impl Fn(u32, Option<u32>) + Sync,
+    on_progress: impl Fn(u32, Option<u32>, Option<&str>) + Sync,
 ) -> Result<(), AuthorPhotosDataError> {
-    let author_ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM authors ORDER BY id")
+    let authors: Vec<(i64, String)> = sqlx::query_as("SELECT id, name FROM authors ORDER BY id")
         .fetch_all(pool)
         .await?;
-    let total = u32::try_from(author_ids.len()).unwrap_or(u32::MAX);
+    let total = u32::try_from(authors.len()).unwrap_or(u32::MAX);
     let done = AtomicU32::new(0);
 
+    let author_ids: Vec<i64> = authors.iter().map(|(id, _)| *id).collect();
     let statuses = author_photo_status_bulk(pool, &author_ids).await?;
-    let mut to_refetch = Vec::with_capacity(author_ids.len());
-    for author_id in &author_ids {
+    let mut to_refetch = Vec::with_capacity(authors.len());
+    for (author_id, name) in &authors {
         if matches!(
             statuses.get(author_id),
             Some((AuthorPhotoSource::Manual, _))
         ) {
-            report_one(&done, total, &on_progress);
+            report_one(&done, total, None, &on_progress);
         } else {
-            to_refetch.push(*author_id);
+            to_refetch.push((*author_id, name.as_str()));
         }
     }
 
-    delete_author_photos_bulk(pool, &to_refetch).await?;
+    let refetch_ids: Vec<i64> = to_refetch.iter().map(|(id, _)| *id).collect();
+    delete_author_photos_bulk(pool, &refetch_ids).await?;
 
     // Bounded concurrency: at most `REFETCH_CONCURRENCY` resolutions in
     // flight at once, chunk by chunk.
     for chunk in to_refetch.chunks(REFETCH_CONCURRENCY) {
-        join_all(
-            chunk
-                .iter()
-                .map(|author_id| refetch_one(pool, *author_id, &done, total, &on_progress)),
-        )
+        join_all(chunk.iter().map(|(author_id, name)| {
+            refetch_one(pool, *author_id, name, &done, total, &on_progress)
+        }))
         .await;
     }
     Ok(())
 }
 
 /// One concurrent unit of work in [`refetch_all`]: best-effort resolve, then
-/// report progress.
+/// report progress, naming the author just finished.
 async fn refetch_one(
     pool: &SqlitePool,
     author_id: i64,
+    name: &str,
     done: &AtomicU32,
     total: u32,
-    on_progress: &impl Fn(u32, Option<u32>),
+    on_progress: &impl Fn(u32, Option<u32>, Option<&str>),
 ) {
     if let Err(e) = resolve(pool, author_id).await {
         tracing::warn!(author_id, error = %e, "refetch_all: resolve failed, continuing");
     }
-    report_one(done, total, on_progress);
+    report_one(done, total, Some(name), on_progress);
 }
 
 /// Advance the shared completion counter and report it. The counter tracks
 /// how many authors have finished so far — not any particular author's
-/// position — so it stays correct regardless of completion order under
-/// [`REFETCH_CONCURRENCY`].
-fn report_one(done: &AtomicU32, total: u32, on_progress: &impl Fn(u32, Option<u32>)) {
+/// position (`name` is the author that just completed, which under
+/// [`REFETCH_CONCURRENCY`] is not necessarily the counter's author) — so it
+/// stays correct regardless of completion order.
+fn report_one(
+    done: &AtomicU32,
+    total: u32,
+    name: Option<&str>,
+    on_progress: &impl Fn(u32, Option<u32>, Option<&str>),
+) {
     let n = done.fetch_add(1, Ordering::Relaxed).saturating_add(1);
-    on_progress(n, Some(total));
+    on_progress(n, Some(total), name);
 }
 
 /// Two-step Open Library lookup. Returns `(canonical_url, mime, bytes)` on

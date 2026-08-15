@@ -12,7 +12,7 @@ use crate::pool::init_db;
 use crate::sync::{replace_books, sync_audiobooks, sync_books, AudiobookSyncPlan, SyncPlan};
 use crate::test_support::{
     build_stored_zip, count_rows, indexed, indexed_audiobook, indexed_with_stat, make_test_dir,
-    uuid_by_scan_key, CoversTempDir,
+    uuid_by_scan_key, CoversTempDir, EnvVarGuard,
 };
 
 /// Seed a `scan_roots` row for `path` with an explicit `last_indexed`
@@ -991,8 +991,10 @@ async fn backfill_chapters_inserts_synthetic_chapters_for_all_books_in_batch() {
     let bfid_b = seed_audiobook_for_backfill(&pool, lib, "book-b", "book-b/part.m4b", "M4B").await;
 
     let mut progress_calls: Vec<(u32, u32)> = Vec::new();
-    backfill_chapters(&pool, lib, |processed, total| {
+    let mut items: Vec<String> = Vec::new();
+    backfill_chapters(&pool, lib, |processed, total, item| {
         progress_calls.push((processed, total));
+        items.push(item.to_string());
     })
     .await
     .unwrap();
@@ -1025,6 +1027,15 @@ async fn backfill_chapters_inserts_synthetic_chapters_for_all_books_in_batch() {
     );
     assert_eq!(progress_calls[0], (1, 2));
     assert_eq!(progress_calls[1], (2, 2));
+    // Item paths are the library directory name plus the part's relative
+    // path — never the absolute `/tmp/...` root.
+    assert_eq!(
+        items,
+        vec![
+            "backfill_test_lib/book-a/part.m4b".to_string(),
+            "backfill_test_lib/book-b/part.m4b".to_string(),
+        ]
+    );
 }
 
 #[tokio::test]
@@ -1045,7 +1056,7 @@ async fn backfill_chapters_is_idempotent_after_all_books_have_chapters() {
     .unwrap();
 
     let mut progress_calls = 0u32;
-    backfill_chapters(&pool, lib, |_, _| {
+    backfill_chapters(&pool, lib, |_, _, _| {
         progress_calls += 1;
     })
     .await
@@ -1122,9 +1133,11 @@ async fn backfill_word_counts_fills_null_rows_from_the_epub_spine() {
     let b = seed_ebook_missing_word_count(&pool, &dir, "beta.epub", "uuid-b").await;
 
     let mut progress: Vec<(u32, u32)> = Vec::new();
-    backfill_word_counts(&pool, dir.to_str().unwrap(), |p, t| progress.push((p, t)))
-        .await
-        .unwrap();
+    backfill_word_counts(&pool, dir.to_str().unwrap(), |p, t, _| {
+        progress.push((p, t))
+    })
+    .await
+    .unwrap();
 
     assert_eq!(word_count_of(&pool, a).await, Some(4));
     assert_eq!(word_count_of(&pool, b).await, Some(10));
@@ -1139,14 +1152,14 @@ async fn backfill_word_counts_is_idempotent_once_filled() {
     let dir = make_test_dir("wc-backfill-idempotent");
     seed_ebook_missing_word_count(&pool, &dir, "alpha.epub", "uuid-a").await;
 
-    backfill_word_counts(&pool, dir.to_str().unwrap(), |_, _| {})
+    backfill_word_counts(&pool, dir.to_str().unwrap(), |_, _, _| {})
         .await
         .unwrap();
 
     // Second pass: every book now has a count, so there are no candidates
     // and `on_progress` never fires.
     let mut calls = 0u32;
-    backfill_word_counts(&pool, dir.to_str().unwrap(), |_, _| calls += 1)
+    backfill_word_counts(&pool, dir.to_str().unwrap(), |_, _, _| calls += 1)
         .await
         .unwrap();
     assert_eq!(calls, 0);
@@ -1227,9 +1240,11 @@ async fn backfill_page_counts_fills_null_rows_from_the_cbz_archive() {
     let b = seed_cbz_missing_page_count(&pool, &dir, "uuid-b", 7).await;
 
     let mut progress: Vec<(u32, u32)> = Vec::new();
-    backfill_page_counts(&pool, dir.to_str().unwrap(), |p, t| progress.push((p, t)))
-        .await
-        .unwrap();
+    backfill_page_counts(&pool, dir.to_str().unwrap(), |p, t, _| {
+        progress.push((p, t))
+    })
+    .await
+    .unwrap();
 
     assert_eq!(page_count_of(&pool, a).await, Some(3));
     assert_eq!(page_count_of(&pool, b).await, Some(7));
@@ -1244,14 +1259,14 @@ async fn backfill_page_counts_is_idempotent_once_filled() {
     let dir = make_test_dir("pc-backfill-idempotent");
     seed_cbz_missing_page_count(&pool, &dir, "uuid-a", 3).await;
 
-    backfill_page_counts(&pool, dir.to_str().unwrap(), |_, _| {})
+    backfill_page_counts(&pool, dir.to_str().unwrap(), |_, _, _| {})
         .await
         .unwrap();
 
     // Second pass: every book now has a count, so there are no candidates
     // and `on_progress` never fires.
     let mut calls = 0u32;
-    backfill_page_counts(&pool, dir.to_str().unwrap(), |_, _| calls += 1)
+    backfill_page_counts(&pool, dir.to_str().unwrap(), |_, _, _| calls += 1)
         .await
         .unwrap();
     assert_eq!(calls, 0);
@@ -1271,12 +1286,186 @@ async fn backfill_page_counts_is_a_noop_when_no_candidates_exist() {
         .unwrap();
 
     let mut calls = 0u32;
-    backfill_page_counts(&pool, dir.to_str().unwrap(), |_, _| calls += 1)
+    backfill_page_counts(&pool, dir.to_str().unwrap(), |_, _, _| calls += 1)
         .await
         .unwrap();
     assert_eq!(calls, 0);
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---------- thumbnail backfill (#1752 / #1817 phantom-progress fix) ----------
+
+/// Seed a `has_cover = 1` book with a real cover file on disk, so
+/// `backfill_thumbs` has bytes to (maybe) re-encode. `last_modified` is
+/// pinned far in the past so any thumbnail written just now is unambiguously
+/// fresher than it, regardless of clock resolution.
+async fn seed_covered_book(pool: &SqlitePool, lib_id: i64, uuid: &str, title: &str) -> i64 {
+    let book_id: i64 = sqlx::query_scalar(
+        "INSERT INTO books (uuid, scan_key, library_id, path, title, sort, has_cover, last_modified) \
+         VALUES (?, ?, ?, '', ?, ?, 1, 1) RETURNING id",
+    )
+    .bind(uuid)
+    .bind(uuid)
+    .bind(lib_id)
+    .bind(title)
+    .bind(title)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    std::fs::write(
+        crate::covers_dir().join(format!("{uuid}.png")),
+        crate::ebook::test_support::solid_color_png(200, 40, 40, 8, 8),
+    )
+    .unwrap();
+    book_id
+}
+
+/// Write sentinel bytes (never produced by a real encode) at all three
+/// thumbnail sizes for `book_id`, so it reads as fresh relative to its
+/// far-past `last_modified` and a would-be re-encode is detectable.
+fn write_fresh_sentinel_thumbs(book_id: i64) {
+    let sentinel = b"not-a-real-webp-sentinel".to_vec();
+    for size in crate::thumbs::ThumbSize::all() {
+        std::fs::write(crate::thumbs::thumb_path_for(book_id, size), &sentinel).unwrap();
+    }
+}
+
+/// AC1: a library whose covers are all already fresh posts no visible
+/// progress — `on_progress` never fires and `backfill_thumbs` returns
+/// without ever calling into the encode path.
+#[tokio::test]
+async fn backfill_thumbs_reports_no_progress_when_every_cover_is_already_fresh() {
+    let covers_dir = make_test_dir("thumb-backfill-all-fresh-covers");
+    let thumbs_dir = make_test_dir("thumb-backfill-all-fresh-thumbs");
+    let _env = EnvVarGuard::set_os("OMNIBUS_COVERS_DIR", Some(covers_dir.as_os_str()))
+        .also_set_os("OMNIBUS_THUMBS_DIR", Some(thumbs_dir.as_os_str()));
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let dir = make_test_dir("thumb-backfill-all-fresh-lib");
+    let lib_id: i64 = sqlx::query_scalar(
+        "INSERT INTO scan_roots (path, display_name) VALUES (?, ?) RETURNING id",
+    )
+    .bind(dir.to_str().unwrap())
+    .bind(dir.to_str().unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let a = seed_covered_book(&pool, lib_id, "uuid-fresh-a", "Fresh A").await;
+    let b = seed_covered_book(&pool, lib_id, "uuid-fresh-b", "Fresh B").await;
+    write_fresh_sentinel_thumbs(a);
+    write_fresh_sentinel_thumbs(b);
+
+    let mut calls = 0u32;
+    backfill_thumbs(&pool, dir.to_str().unwrap(), |_, _, _| calls += 1)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        calls, 0,
+        "on_progress must not fire when every candidate is already fresh"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&covers_dir);
+    let _ = std::fs::remove_dir_all(&thumbs_dir);
+}
+
+/// AC2: a library where every cover is stale reports `count = N` and calls
+/// `on_progress` exactly N times with `total = N`.
+#[tokio::test]
+async fn backfill_thumbs_reports_count_matching_the_stale_set_when_all_covers_are_stale() {
+    let covers_dir = make_test_dir("thumb-backfill-all-stale-covers");
+    let thumbs_dir = make_test_dir("thumb-backfill-all-stale-thumbs");
+    let _env = EnvVarGuard::set_os("OMNIBUS_COVERS_DIR", Some(covers_dir.as_os_str()))
+        .also_set_os("OMNIBUS_THUMBS_DIR", Some(thumbs_dir.as_os_str()));
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let dir = make_test_dir("thumb-backfill-all-stale-lib");
+    let lib_id: i64 = sqlx::query_scalar(
+        "INSERT INTO scan_roots (path, display_name) VALUES (?, ?) RETURNING id",
+    )
+    .bind(dir.to_str().unwrap())
+    .bind(dir.to_str().unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    // No thumbnails written on disk at all, so every size for every book is
+    // stale (a missing thumbnail counts as stale).
+    seed_covered_book(&pool, lib_id, "uuid-stale-a", "Stale A").await;
+    seed_covered_book(&pool, lib_id, "uuid-stale-b", "Stale B").await;
+
+    let mut progress: Vec<(u32, u32)> = Vec::new();
+    backfill_thumbs(&pool, dir.to_str().unwrap(), |p, t, _| {
+        progress.push((p, t))
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(progress, vec![(1, 2), (2, 2)]);
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&covers_dir);
+    let _ = std::fs::remove_dir_all(&thumbs_dir);
+}
+
+/// AC4: a library with both fresh and stale covers reports progress only
+/// for the stale ones — the mixed case the phantom-progress bug collapsed
+/// into "report every book with a cover".
+#[tokio::test]
+async fn backfill_thumbs_reports_progress_only_for_stale_covers_in_a_mixed_library() {
+    let covers_dir = make_test_dir("thumb-backfill-mixed-covers");
+    let thumbs_dir = make_test_dir("thumb-backfill-mixed-thumbs");
+    let _env = EnvVarGuard::set_os("OMNIBUS_COVERS_DIR", Some(covers_dir.as_os_str()))
+        .also_set_os("OMNIBUS_THUMBS_DIR", Some(thumbs_dir.as_os_str()));
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let dir = make_test_dir("thumb-backfill-mixed-lib");
+    let lib_id: i64 = sqlx::query_scalar(
+        "INSERT INTO scan_roots (path, display_name) VALUES (?, ?) RETURNING id",
+    )
+    .bind(dir.to_str().unwrap())
+    .bind(dir.to_str().unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let fresh = seed_covered_book(&pool, lib_id, "uuid-mixed-fresh", "Mixed Fresh").await;
+    write_fresh_sentinel_thumbs(fresh);
+    // No thumbnails written for this one, so it's the sole stale candidate.
+    seed_covered_book(&pool, lib_id, "uuid-mixed-stale", "Mixed Stale").await;
+
+    let mut titles: Vec<String> = Vec::new();
+    let mut progress: Vec<(u32, u32)> = Vec::new();
+    backfill_thumbs(&pool, dir.to_str().unwrap(), |p, t, title| {
+        progress.push((p, t));
+        titles.push(title.to_string());
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(
+        progress,
+        vec![(1, 1)],
+        "total and processed must both reflect the single stale book, not the two candidates"
+    );
+    assert_eq!(
+        titles,
+        vec!["Mixed Stale".to_string()],
+        "on_progress must not fire for the already-fresh book"
+    );
+
+    let sentinel = b"not-a-real-webp-sentinel".to_vec();
+    for size in crate::thumbs::ThumbSize::all() {
+        let on_disk = std::fs::read(crate::thumbs::thumb_path_for(fresh, size)).unwrap();
+        assert_eq!(
+            on_disk, sentinel,
+            "the already-fresh book's thumbnail for size {size} must not be re-encoded"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&covers_dir);
+    let _ = std::fs::remove_dir_all(&thumbs_dir);
 }
 
 // ---------- #1057: ReindexStats plumbed off a real scan ----------
@@ -1303,6 +1492,286 @@ async fn reindex_returns_stats_with_the_removed_count_and_file_backed_total() {
         stats.file_backed_total, 3,
         "the pre-scan file-backed total is measured before this scan's removal"
     );
+
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+/// `root_display_name` keeps the directory basename through trailing
+/// separators (`Path::file_name` ignores them — see its std doc example
+/// `/usr/bin/` → `bin`); only the degenerate roots `/` and a `..`-ending
+/// path yield no name, and `display_item` then degrades to the bare
+/// relative path rather than emitting a leading slash.
+#[test]
+fn root_display_name_survives_trailing_separators_and_degrades_for_rootless_paths() {
+    assert_eq!(root_display_name("/mnt/media/books"), "books");
+    assert_eq!(root_display_name("/mnt/media/books/"), "books");
+    assert_eq!(root_display_name("/"), "");
+    assert_eq!(
+        display_item(&root_display_name("/mnt/media/books/"), "Author/Title.epub"),
+        "books/Author/Title.epub"
+    );
+    assert_eq!(
+        display_item(&root_display_name("/"), "Author/Title.epub"),
+        "Author/Title.epub"
+    );
+}
+
+/// The verbose progress stream: a walking-phase event opens the scan,
+/// parse and sync events carry the diff's tallies plus the current item,
+/// and every reported path is the library directory name plus the
+/// relative path — never the absolute server path.
+#[tokio::test]
+async fn reindex_with_progress_reports_phases_tallies_and_relative_current_items() {
+    let _covers = CoversTempDir::new("reindex-verbose");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib = make_test_dir("reindex-verbose-lib");
+    let lib_path = lib.to_string_lossy().into_owned();
+    let root_name = lib.file_name().unwrap().to_string_lossy().into_owned();
+
+    seed_ebook_at(&pool, &lib_path, "a.epub", "Dracula").await;
+    seed_ebook_at(&pool, &lib_path, "b.epub", "Frankenstein").await;
+    // A file on disk with no DB row — the New bucket the parse + sync
+    // phases will report on.
+    std::fs::write(lib.join("fresh.epub"), b"stub").unwrap();
+
+    let updates: std::sync::Arc<std::sync::Mutex<Vec<ScanUpdate>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let updates_cb = updates.clone();
+    reindex_with_progress(&pool, &lib_path, move |u| {
+        updates_cb.lock().unwrap().push(u);
+    })
+    .await
+    .unwrap();
+
+    let updates = updates.lock().unwrap();
+    assert_eq!(
+        updates.first().and_then(|u| u.detail.phase.as_deref()),
+        Some(PHASE_WALKING),
+        "the walking phase must open the stream"
+    );
+
+    let parse_event = updates
+        .iter()
+        .find(|u| u.detail.phase.as_deref() == Some(PHASE_PARSING))
+        .expect("a parse-phase event for the New file");
+    let item = parse_event.detail.current_item.as_deref().unwrap();
+    assert_eq!(item, format!("{root_name}/fresh.epub"));
+    let tallies = parse_event
+        .detail
+        .tallies
+        .expect("parse events carry tallies");
+    assert_eq!(tallies.found, 3);
+    assert_eq!(tallies.new, 1);
+    assert_eq!(tallies.unchanged, 2);
+
+    let sync_event = updates
+        .iter()
+        .find(|u| {
+            u.detail.phase.as_deref() == Some(PHASE_SYNCING) && u.detail.current_item.is_some()
+        })
+        .expect("a sync-phase event naming the written book");
+    assert_eq!(
+        sync_event.detail.current_item.as_deref().unwrap(),
+        format!("{root_name}/fresh.epub")
+    );
+
+    for u in updates.iter() {
+        if let Some(item) = u.detail.current_item.as_deref() {
+            assert!(
+                !item.contains(&lib_path),
+                "current_item leaked the absolute library path: {item}"
+            );
+        }
+    }
+
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+/// Index one M4B audiobook through the real `sync_audiobooks` write path at
+/// `library_path` (a real on-disk dir), writing a matching stub file so a
+/// later reindex re-finds it and classifies it Unchanged. `filename` is the
+/// library-relative path — a single-file `.m4b` group is its own book, so
+/// `filename` doubles as both the group's `scan_key` and its one part.
+async fn seed_audiobook_at(pool: &SqlitePool, library_path: &str, filename: &str, title: &str) {
+    let abs = std::path::Path::new(library_path).join(filename);
+    if let Some(parent) = abs.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::write(&abs, b"stub").unwrap();
+    let (mtime, size) = {
+        let meta = std::fs::metadata(&abs).unwrap();
+        (
+            meta.modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0),
+            meta.len() as i64,
+        )
+    };
+    let book = crate::audiobook::IndexedAudiobook {
+        scan_key: filename.to_string(),
+        group_path: filename.to_string(),
+        format: "M4B".to_string(),
+        title: title.to_string(),
+        creator_name: Some("Author".to_string()),
+        cover: None,
+        accent: None,
+        parts: vec![crate::audiobook::AudiobookPart {
+            ordinal: 0,
+            filename: filename.to_string(),
+            size_bytes: size,
+            mtime_epoch: mtime,
+            duration_seconds: 3600.0,
+        }],
+        chapters: vec![],
+        total_size_bytes: size,
+        max_mtime_epoch: mtime,
+        description: None,
+        error: None,
+    };
+    sync_audiobooks(
+        pool,
+        library_path,
+        AudiobookSyncPlan {
+            new_books: vec![book],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// The verbose progress stream's audiobook-pipeline sibling to
+/// `reindex_with_progress_reports_phases_tallies_and_relative_current_items`:
+/// a walking-phase event opens the scan, parse and sync events carry the
+/// diff's tallies plus the current item, and every reported path is the
+/// library directory name plus the relative path — never the absolute
+/// server path.
+#[tokio::test]
+async fn reindex_audiobooks_with_progress_reports_phases_tallies_and_relative_current_items() {
+    let _covers = CoversTempDir::new("reindex-audio-verbose");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib = make_test_dir("reindex-audio-verbose-lib");
+    let lib_path = lib.to_string_lossy().into_owned();
+    let root_name = lib.file_name().unwrap().to_string_lossy().into_owned();
+
+    seed_audiobook_at(&pool, &lib_path, "dracula.m4b", "Dracula").await;
+    seed_audiobook_at(&pool, &lib_path, "frankenstein.m4b", "Frankenstein").await;
+    // A file on disk with no DB row — the New bucket the parse + sync
+    // phases will report on. Not a real M4B container, so lofty's tag read
+    // fails and the parser falls back to zero-duration defaults (a WARN,
+    // not an error) — same tolerance a corrupt file gets in a real library.
+    std::fs::write(lib.join("fresh.m4b"), b"stub").unwrap();
+
+    let updates: std::sync::Arc<std::sync::Mutex<Vec<ScanUpdate>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let updates_cb = updates.clone();
+    reindex_audiobooks_with_progress(&pool, &lib_path, move |u| {
+        updates_cb.lock().unwrap().push(u);
+    })
+    .await
+    .unwrap();
+
+    let updates = updates.lock().unwrap();
+
+    // Phase ordering: walking opens the stream, and every parse event's
+    // index precedes every sync event's index — not just "a parse event
+    // exists somewhere and a sync event exists somewhere", which would
+    // pass even if the phases interleaved out of order.
+    let walking_idx = updates
+        .iter()
+        .position(|u| u.detail.phase.as_deref() == Some(PHASE_WALKING))
+        .expect("a walking-phase event");
+    assert_eq!(walking_idx, 0, "the walking phase must open the stream");
+
+    let parse_indices: Vec<usize> = updates
+        .iter()
+        .enumerate()
+        .filter(|(_, u)| u.detail.phase.as_deref() == Some(PHASE_PARSING))
+        .map(|(i, _)| i)
+        .collect();
+    assert!(
+        !parse_indices.is_empty(),
+        "expected at least one parse-phase event for the New file"
+    );
+    let sync_indices: Vec<usize> = updates
+        .iter()
+        .enumerate()
+        .filter(|(_, u)| u.detail.phase.as_deref() == Some(PHASE_SYNCING))
+        .map(|(i, _)| i)
+        .collect();
+    assert!(
+        !sync_indices.is_empty(),
+        "expected at least one sync-phase event"
+    );
+    let last_parse_idx = *parse_indices.last().unwrap();
+    let first_sync_idx = sync_indices[0];
+    assert!(
+        walking_idx < parse_indices[0],
+        "walking ({walking_idx}) must precede parsing ({})",
+        parse_indices[0]
+    );
+    assert!(
+        last_parse_idx < first_sync_idx,
+        "every parse event ({last_parse_idx} last) must precede every sync event \
+         ({first_sync_idx} first) — PHASE_WALKING -> PHASE_PARSING -> PHASE_SYNCING"
+    );
+
+    // Tallies are fixed once the diff lands (see reindex_audiobooks_with_progress's
+    // doc comment), so every parse event — not just one sampled event — must
+    // carry the identical ScanTallies, and every sync event must carry the
+    // same tallies too.
+    let expected_tallies = updates[parse_indices[0]]
+        .detail
+        .tallies
+        .expect("parse events carry tallies");
+    assert_eq!(expected_tallies.found, 3);
+    assert_eq!(expected_tallies.new, 1);
+    assert_eq!(expected_tallies.unchanged, 2);
+    for &i in &parse_indices {
+        assert_eq!(
+            updates[i].detail.tallies,
+            Some(expected_tallies),
+            "parse event at index {i} carried different tallies than the first parse event"
+        );
+    }
+    for &i in &sync_indices {
+        assert_eq!(
+            updates[i].detail.tallies,
+            Some(expected_tallies),
+            "sync event at index {i} carried different tallies than the parse phase"
+        );
+    }
+    let parse_item = updates[parse_indices[0]]
+        .detail
+        .current_item
+        .as_deref()
+        .unwrap();
+    assert_eq!(parse_item, format!("{root_name}/fresh.m4b"));
+
+    let sync_named_idx = sync_indices
+        .iter()
+        .copied()
+        .find(|&i| updates[i].detail.current_item.is_some())
+        .expect("a sync-phase event naming the written book");
+    assert_eq!(
+        updates[sync_named_idx]
+            .detail
+            .current_item
+            .as_deref()
+            .unwrap(),
+        format!("{root_name}/fresh.m4b")
+    );
+
+    for u in updates.iter() {
+        if let Some(item) = u.detail.current_item.as_deref() {
+            assert!(
+                !item.contains(&lib_path),
+                "current_item leaked the absolute library path: {item}"
+            );
+        }
+    }
 
     let _ = std::fs::remove_dir_all(&lib);
 }

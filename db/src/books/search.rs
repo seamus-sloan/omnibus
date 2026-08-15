@@ -6,7 +6,7 @@
 use omnibus_shared::EbookMetadata;
 use sqlx::{Row, SqlitePool};
 
-use crate::helpers::{build_fts_match, cap_query_len, library_paths_json};
+use crate::helpers::{build_fts_match, cap_query_len, library_paths_json, visible_book_sql};
 
 use super::projection::{
     backfill_creator_ids, merge_overrides_into_books, row_to_ebook, BOOK_COLUMNS,
@@ -103,6 +103,7 @@ async fn fetch_search_rows(
     library_paths: &[&str],
     match_expr: &str,
 ) -> Result<Vec<sqlx::sqlite::SqliteRow>, sqlx::Error> {
+    let visible = visible_book_sql("b", "l", "?");
     let sql = format!(
         r"
         WITH matches AS MATERIALIZED (
@@ -112,8 +113,7 @@ async fn fetch_search_rows(
             JOIN books b ON b.id = books_fts.rowid
             JOIN scan_roots l ON l.id = b.library_id
             WHERE books_fts MATCH ?
-              AND (l.path IN (SELECT value FROM json_each(?))
-                   OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid))
+              AND {visible}
         )
         SELECT {BOOK_COLUMNS},
                (SELECT COUNT(*) FROM matches)               AS total_count
@@ -158,17 +158,17 @@ pub async fn count_search_books_for_paths(
     let Some(match_expr) = build_fts_match(&capped) else {
         return Ok(0);
     };
-    Ok(sqlx::query_scalar::<_, i64>(
+    let visible = visible_book_sql("b", "l", "?");
+    Ok(sqlx::query_scalar::<_, i64>(&format!(
         r"
         SELECT COUNT(*)
           FROM books_fts
           JOIN books b ON b.id = books_fts.rowid
           JOIN scan_roots l ON l.id = b.library_id
          WHERE books_fts MATCH ?
-           AND (l.path IN (SELECT value FROM json_each(?))
-                OR EXISTS (SELECT 1 FROM physical_copies pc WHERE pc.book_uuid = b.uuid))
-        ",
-    )
+           AND {visible}
+        "
+    ))
     .bind(&match_expr)
     .bind(library_paths_json(library_paths))
     .fetch_one(pool)

@@ -121,6 +121,17 @@ pub enum Task {
     /// book collapses onto a single kepubify run; does not consume the scan
     /// semaphore (light single-file work).
     KepubConvert { book_id: i64 },
+    /// Convert one book's `source_format` file to `target_format` via
+    /// Calibre's `ebook-convert` (#948). Acquires the convert semaphore
+    /// (capped at [`WorkerConfig::convert_concurrency`]) and the
+    /// per-`(book_id, source_format, target_format)` keyed mutex, so a
+    /// duplicate request for the same pair serializes behind an in-flight one
+    /// rather than running concurrently; does not consume the scan semaphore.
+    ConvertFormat {
+        book_id: i64,
+        source_format: String,
+        target_format: String,
+    },
     /// Email a book's EPUB to a user's Kindle address over SMTP. Keyed on
     /// a fixed `smtp` resource so every send serializes against the single
     /// configured relay (one slow SMTP server can't fan out); does not consume
@@ -172,6 +183,11 @@ impl Task {
             Task::RebuildFtsIndex => Some("rebuild-fts".into()),
             Task::ResolveSuggestions { book_uuid } => Some(format!("suggestions:{book_uuid}")),
             Task::KepubConvert { book_id } => Some(format!("kepub:{book_id}")),
+            Task::ConvertFormat {
+                book_id,
+                source_format,
+                target_format,
+            } => Some(format!("convert:{book_id}:{source_format}:{target_format}")),
             Task::SendToKindle { .. } => Some("smtp".into()),
             Task::RewriteAllEpubs => Some("rewrite-all-epubs".into()),
             #[cfg(test)]
@@ -194,6 +210,7 @@ impl Task {
             Task::RebuildFtsIndex => false,
             Task::ResolveSuggestions { .. } => false,
             Task::KepubConvert { .. } => false,
+            Task::ConvertFormat { .. } => false,
             Task::SendToKindle { .. } => false,
             Task::RewriteAllEpubs => false,
             #[cfg(test)]
@@ -209,8 +226,14 @@ impl Task {
         matches!(self, Task::HlsTranscode { .. })
     }
 
+    /// `true` for tasks that should acquire the format-conversion
+    /// concurrency semaphore.
+    pub(super) fn uses_convert_sem(&self) -> bool {
+        matches!(self, Task::ConvertFormat { .. })
+    }
+
     /// Free-text label persisted to the `background_tasks` table (issue
-    /// #941, migration `0070`). Deliberately finer-grained than
+    /// #941, migration `0072`). Deliberately finer-grained than
     /// [`Task::kind`]'s wire-facing [`TaskKind`] — several `Task` variants
     /// share one `TaskKind` for the live progress UI (see that method's
     /// per-arm comments), but the admin history view wants to tell e.g. a
@@ -230,6 +253,7 @@ impl Task {
             Task::RebuildFtsIndex => "rebuild_fts_index",
             Task::ResolveSuggestions { .. } => "resolve_suggestions",
             Task::KepubConvert { .. } => "kepub_convert",
+            Task::ConvertFormat { .. } => "convert_format",
             Task::SendToKindle { .. } => "send_to_kindle",
             Task::RewriteAllEpubs => "rewrite_all_epubs",
             #[cfg(test)]
@@ -269,6 +293,9 @@ impl Task {
             // Reuse Scan kind for the KEPUB conversion's progress display
             // rather than growing the wire-facing `TaskKind` enum.
             Task::KepubConvert { .. } => TaskKind::Scan,
+            // Reuse Scan kind for the format conversion's progress display
+            // rather than growing the wire-facing `TaskKind` enum.
+            Task::ConvertFormat { .. } => TaskKind::Scan,
             // Reuse Scan kind for UI display — a send is a rare, short job with
             // no dedicated progress widget (mirrors HLS/FTS).
             Task::SendToKindle { .. } => TaskKind::Scan,
@@ -332,6 +359,11 @@ pub struct WorkerConfig {
     /// `max(1, num_cpus / 2)` so a two-core machine runs one transcode at
     /// a time while an eight-core machine can run four concurrently.
     pub hls_concurrency: usize,
+    /// Maximum number of concurrent [`Task::ConvertFormat`] jobs. Each
+    /// conversion drives one `ebook-convert` process; same
+    /// `max(1, num_cpus / 2)` default and rationale as [`Self::hls_concurrency`]
+    /// (#948).
+    pub convert_concurrency: usize,
 }
 
 impl Default for WorkerConfig {
@@ -340,6 +372,7 @@ impl Default for WorkerConfig {
         Self {
             scan_concurrency: 1,
             hls_concurrency: (cpus / 2).max(1),
+            convert_concurrency: (cpus / 2).max(1),
         }
     }
 }
@@ -376,6 +409,10 @@ pub struct Worker {
     /// Semaphore capping concurrent `Task::HlsTranscode` runs. Separate from
     /// `scan_sem` so HLS jobs don't compete with library scans for permits.
     pub(super) hls_sem: Arc<Semaphore>,
+    /// Semaphore capping concurrent `Task::ConvertFormat` runs. Separate from
+    /// `scan_sem`/`hls_sem` so format conversions don't compete with scans or
+    /// HLS transcodes for permits (#948).
+    pub(super) convert_sem: Arc<Semaphore>,
     pub(super) resource_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     pub(super) completions: Arc<StdMutex<HashMap<TaskId, watch::Receiver<Option<TaskOutcome>>>>>,
     /// Live snapshot of every posted task's lifecycle state. Holds entries
@@ -442,7 +479,7 @@ pub(super) fn wall_clock_ms() -> i64 {
 
 /// Current wall-clock time in whole seconds since the UNIX epoch — the
 /// granularity `background_tasks.started_at`/`finished_at` (migration
-/// `0070`) store. Derived from [`wall_clock_ms`] rather than an independent
+/// `0072`) store. Derived from [`wall_clock_ms`] rather than an independent
 /// `SystemTime` read, so the two can never disagree.
 pub(super) fn wall_clock_secs() -> i64 {
     wall_clock_ms() / 1000
@@ -457,6 +494,7 @@ impl Worker {
             pool,
             scan_sem: Arc::new(Semaphore::new(config.scan_concurrency.max(1))),
             hls_sem: Arc::new(Semaphore::new(config.hls_concurrency.max(1))),
+            convert_sem: Arc::new(Semaphore::new(config.convert_concurrency.max(1))),
             resource_locks: Arc::new(Mutex::new(HashMap::new())),
             completions: Arc::new(StdMutex::new(HashMap::new())),
             progress: Arc::new(StdMutex::new(BTreeMap::new())),

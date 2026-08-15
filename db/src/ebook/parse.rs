@@ -32,9 +32,21 @@ pub struct ParseTarget {
 /// absolute path so we don't re-walk, and the Phase-A stat values so the
 /// resulting `IndexedBook` ships them straight through to the writer.
 pub fn parse_ebook_targets(targets: Vec<ParseTarget>, opts: ScanOptions) -> Vec<IndexedBook> {
+    parse_ebook_targets_with_progress(targets, opts, |_| {})
+}
+
+/// [`parse_ebook_targets`] variant that calls `on_file` with each target
+/// just before parsing it, so the reindex pipeline can name the file
+/// currently being read in the worker progress feed.
+pub fn parse_ebook_targets_with_progress(
+    targets: Vec<ParseTarget>,
+    opts: ScanOptions,
+    mut on_file: impl FnMut(&ParseTarget),
+) -> Vec<IndexedBook> {
     targets
         .into_iter()
         .map(|t| {
+            on_file(&t);
             let mut book = if crate::comic::is_comic_path(&t.absolute) {
                 crate::comic::extract_comic(&t.absolute, t.filename, &opts)
             } else {
@@ -50,21 +62,7 @@ pub fn parse_ebook_targets(targets: Vec<ParseTarget>, opts: ScanOptions) -> Vec<
 fn extract_metadata(path: &Path, filename: String, opts: &ScanOptions) -> IndexedBook {
     let mut doc = match EpubDoc::new(path) {
         Ok(d) => d,
-        Err(e) => {
-            return IndexedBook {
-                metadata: EbookMetadata {
-                    filename,
-                    error: Some(format!("could not open epub: {e}")),
-                    ..Default::default()
-                },
-                cover: None,
-                // Stat values get overwritten by `parse_ebook_targets`
-                // before the writer sees this struct.
-                mtime_epoch: 0,
-                size_bytes: 0,
-                word_count: None,
-            };
-        }
+        Err(e) => return failed_open_book(filename, &e),
     };
 
     // OPF `<dc:creator>` and `<dc:contributor>` both flow into the same
@@ -89,54 +87,97 @@ fn extract_metadata(path: &Path, filename: String, opts: &ScanOptions) -> Indexe
     let word_count = super::estimate_word_count(&mut doc);
 
     IndexedBook {
-        metadata: EbookMetadata {
-            id: 0,
+        metadata: build_opf_metadata(
+            &doc,
             filename,
-            title: first(&doc, "title"),
-            description: first(&doc, "description"),
-            publisher: first(&doc, "publisher"),
-            published: first(&doc, "date"),
-            modified: first(&doc, "dcterms:modified"),
-            language: first(&doc, "language"),
-
             creators,
-            subjects: all(&doc, "subject"),
-            // The OPF has no genre element — genres are user-assigned only
-            // and layered on at read time by `apply_overrides`.
-            genres: Vec::new(),
             identifiers,
-            // Derived at read time from `book_identifiers` (`row_to_ebook`
-            // -> `derive_isbn13`), not at parse time — this struct is
-            // written into the normalized tables before that derivation
-            // ever runs.
-            isbn13: None,
-
             series,
             series_index,
-            series_id: None,
-
-            unique_identifier: doc.unique_identifier.clone(),
-
-            cover_url: None,
             accent,
-            formats: vec![],
-            // Derived at read time from `physical_copies` (projection), not at
-            // parse time — this struct is written before that derivation runs.
-            has_physical: false,
-            added_at: None,
-            error: None,
-            has_override: false,
-            has_cover_override: false,
-            book_files: Vec::new(),
-            epub_size_bytes: None,
-            page_count: None,
-        },
+        ),
         cover,
         // Stat values get overwritten by `parse_ebook_targets` before the
         // writer sees this struct.
         mtime_epoch: 0,
         size_bytes: 0,
         word_count,
+    }
+}
+
+/// The placeholder [`IndexedBook`] for a file `EpubDoc::new` couldn't open —
+/// carries the filename and a user-facing error, no cover or word count.
+fn failed_open_book(filename: String, e: &dyn std::fmt::Display) -> IndexedBook {
+    IndexedBook {
+        metadata: EbookMetadata {
+            filename,
+            error: Some(format!("could not open epub: {e}")),
+            ..Default::default()
+        },
+        cover: None,
+        // Stat values get overwritten by `parse_ebook_targets`
+        // before the writer sees this struct.
+        mtime_epoch: 0,
+        size_bytes: 0,
+        word_count: None,
+    }
+}
+
+/// Build the [`EbookMetadata`] record from an opened OPF doc plus the
+/// fields [`extract_metadata`] already collected (creators, identifiers,
+/// series, accent). Fields derived only at read time (isbn13, has_physical,
+/// …) are left at their zero value — see the inline comments on each.
+#[allow(clippy::too_many_arguments)]
+fn build_opf_metadata<R: std::io::Read + std::io::Seek>(
+    doc: &EpubDoc<R>,
+    filename: String,
+    creators: Vec<Contributor>,
+    identifiers: Vec<Identifier>,
+    series: Option<String>,
+    series_index: Option<String>,
+    accent: Option<String>,
+) -> EbookMetadata {
+    EbookMetadata {
+        id: 0,
+        filename,
+        title: first(doc, "title"),
+        description: first(doc, "description"),
+        publisher: first(doc, "publisher"),
+        published: first(doc, "date"),
+        modified: first(doc, "dcterms:modified"),
+        language: first(doc, "language"),
+
+        creators,
+        subjects: all(doc, "subject"),
+        // The OPF has no genre element — genres are user-assigned only
+        // and layered on at read time by `apply_overrides`.
+        genres: Vec::new(),
+        identifiers,
+        // Derived at read time from `book_identifiers` (`row_to_ebook`
+        // -> `derive_isbn13`), not at parse time — this struct is
+        // written into the normalized tables before that derivation
+        // ever runs.
+        isbn13: None,
+
+        series,
+        series_index,
+        series_id: None,
+
+        unique_identifier: doc.unique_identifier.clone(),
+
+        cover_url: None,
+        accent,
+        formats: vec![],
+        // Derived at read time from `physical_copies` (projection), not at
+        // parse time — this struct is written before that derivation runs.
+        has_physical: false,
+        added_at: None,
+        error: None,
+        has_override: false,
+        has_cover_override: false,
+        book_files: Vec::new(),
+        epub_size_bytes: None,
+        page_count: None,
     }
 }
 

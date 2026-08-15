@@ -53,6 +53,18 @@ impl Worker {
             None
         };
 
+        let _convert_permit = if task.uses_convert_sem() {
+            match self
+                .acquire_permit(&self.convert_sem, id, "convert semaphore closed")
+                .await
+            {
+                Ok(p) => Some(p),
+                Err(outcome) => return outcome,
+            }
+        } else {
+            None
+        };
+
         let outcome = self.execute(task, id).await;
         self.write_terminal_progress(id, self.project_terminal(id, &outcome));
 

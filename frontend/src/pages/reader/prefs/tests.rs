@@ -13,7 +13,7 @@ fn default_font_size_matches_the_documented_starting_size() {
 
 #[test]
 fn default_typeface_matches_the_documented_starting_typeface() {
-    assert_eq!(default_typeface(), Typeface::Editorial);
+    assert_eq!(default_typeface(), Typeface::Modern);
 }
 
 #[test]
@@ -43,6 +43,7 @@ fn font_pct_maps_font_size_bounds_and_midpoint_to_expected_percentage() {
     fn AssertFontPct() -> Element {
         let prefs = ReaderPrefs {
             theme: Signal::new(Theme::Dark),
+            snap: crate::components::atrium::ThemeSnap(Signal::new(false)),
             font_size: Signal::new(FONT_SIZE_MIN),
             typeface: Signal::new(Typeface::Editorial),
             line_spacing: Signal::new(LineSpacing::Cozy),

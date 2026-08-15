@@ -1,9 +1,25 @@
 //! `/opds/*` — an OPDS 1.2 Atom catalog for third-party e-reader clients,
-//! gated behind the same live-session auth as `/api/*` (each handler takes
-//! [`crate::auth::AuthUser`] directly). Deliberately ebook-library scoped —
+//! gated behind the same live sessions as `/api/*` plus an HTTP Basic
+//! fallback (each handler takes [`crate::auth::OpdsAuthUser`] directly),
+//! since Basic is the only scheme OPDS clients like KOReader can send.
+//! For the same reason the download/cover links a feed hands out point at
+//! the [`delegate`] routes on this router — the `/api/*` originals sit
+//! behind cookie/bearer-only auth. Deliberately ebook-library scoped —
 //! every read filters to `settings.ebook_library_path` — so every
-//! acquisition entry carries a working download link. Series and category
-//! browses are not yet implemented.
+//! acquisition entry carries a working download link. A category browse is
+//! not implemented in either catalog; the `/opds/v2/*` JSON catalog
+//! carries category (subject/genre) data inline on every publication.
+//!
+//! `/opds/v2/*` is the OPDS 2.0 JSON counterpart (`application/opds+json`,
+//! [`omnibus_shared::opds`]) for modern OPDS clients — a distinct path
+//! rather than `Accept`-negotiated on `/opds` itself, so a client (or a
+//! proxy cache keyed on path) never needs content negotiation to reach it,
+//! and so this module's routing table stays as simple as the Atom one's.
+//! The `json_*` submodules mirror the flat `atom`-era module names
+//! one-for-one (`json_nav` ~ `nav`, `json_authors` ~ `authors`, …) and
+//! reuse their DB reads and format-selection helpers directly, so the two
+//! catalogs cannot silently drift on what a book, author, or search result
+//! actually is.
 
 use axum::{
     http::header,
@@ -11,23 +27,37 @@ use axum::{
     routing::get,
     Extension, Router,
 };
+use omnibus_shared::opds as opds2;
 
 use crate::http_errors::internal;
 
 use super::AppState;
 
+mod all;
 mod atom;
 mod authors;
+mod delegate;
 mod entries;
+mod json_all;
+mod json_authors;
+mod json_entries;
+mod json_nav;
+mod json_new;
+mod json_search;
+mod json_series;
+mod json_shelves;
 mod nav;
 mod new;
 mod search;
+mod series;
+mod shelves;
 #[cfg(test)]
 mod tests;
 
-/// Build the `/opds/*` router. `Extension(pool)` is layered here so the
+/// Build the `/opds/*` router. `Extension(pool)` (and the Basic-auth
+/// state behind [`crate::auth::OpdsAuthUser`]) are layered here so the
 /// router is self-contained for integration tests, mirroring `kobo_router`
-/// in `super::kobo`; the live server layers the same one at the top
+/// in `super::kobo`; the live server layers the same pool at the top
 /// (harmless overlap, mirroring `rest_router`).
 pub fn opds_router(state: AppState) -> Router {
     let pool = state.pool().clone();
@@ -36,11 +66,39 @@ pub fn opds_router(state: AppState) -> Router {
         .route("/opds/osd", get(nav::osd))
         .route("/opds/search", get(search::search))
         .route("/opds/new", get(new::new_arrivals))
+        .route("/opds/all", get(all::all_books))
         .route("/opds/authors", get(authors::letter_index))
         .route("/opds/authors/{letter}", get(authors::by_letter))
         .route("/opds/author/{id}", get(authors::acquisition_feed))
+        .route("/opds/series", get(series::index))
+        .route("/opds/series/{id}", get(series::acquisition_feed))
+        .route("/opds/shelves", get(shelves::index))
+        .route("/opds/shelves/{id}", get(shelves::acquisition_feed))
+        .route("/opds/v2", get(json_nav::root))
+        .route("/opds/v2/search", get(json_search::search))
+        .route("/opds/v2/new", get(json_new::new_arrivals))
+        .route("/opds/v2/all", get(json_all::all_books))
+        .route("/opds/v2/authors", get(json_authors::letter_index))
+        .route("/opds/v2/authors/{letter}", get(json_authors::by_letter))
+        .route("/opds/v2/author/{id}", get(json_authors::acquisition_feed))
+        .route("/opds/v2/series", get(json_series::index))
+        .route("/opds/v2/series/{id}", get(json_series::acquisition_feed))
+        .route("/opds/v2/shelves", get(json_shelves::index))
+        .route("/opds/v2/shelves/{id}", get(json_shelves::acquisition_feed))
+        .route("/opds/covers/{uuid}", get(delegate::cover))
+        .route("/opds/thumbs/{uuid}/{size}", get(delegate::thumb))
+        .route("/opds/ebooks/{uuid}/file", get(delegate::ebook_file))
+        .route(
+            "/opds/ebooks/{uuid}/download",
+            get(delegate::ebook_download),
+        )
+        .route(
+            "/opds/audiobooks/{uuid}/download",
+            get(delegate::audiobook_download),
+        )
         .with_state(state)
         .layer(Extension(pool))
+        .layer(Extension(crate::auth::BasicAuthState::new_shared()))
 }
 
 /// Wrap an already-serialized XML document as a `200` response with the
@@ -98,4 +156,27 @@ fn nav_entry(
         authors: Vec::new(),
         links: vec![atom::Link::new("subsection", href.to_string(), kind)],
     }
+}
+
+/// Serialize an [`opds2::Feed`] as a `200 application/opds+json` response —
+/// the JSON analog of [`xml_response`]. Builders are responsible for keeping
+/// `Feed` serializable (e.g. `json_entries::series_ref` filters
+/// `series_index` to finite floats before it ever reaches this point), so
+/// the error arm exists for soundness rather than an expected path.
+fn json_response(feed: &opds2::Feed) -> Response {
+    match serde_json::to_string(feed) {
+        Ok(body) => ([(header::CONTENT_TYPE, opds2::MEDIA_TYPE)], body).into_response(),
+        Err(e) => internal("serialize opds2 feed", e),
+    }
+}
+
+/// A navigation [`opds2::Link`] — the JSON counterpart to [`nav_entry`]:
+/// `rel="subsection"` into another feed, with the target's title inline
+/// (JSON navigation has no separate `<summary>` slot the way Atom's
+/// `<entry>` does).
+fn json_nav_link(title: &str, href: &str) -> opds2::Link {
+    opds2::Link::new(href)
+        .with_rel("subsection")
+        .with_type(opds2::MEDIA_TYPE)
+        .with_title(title)
 }

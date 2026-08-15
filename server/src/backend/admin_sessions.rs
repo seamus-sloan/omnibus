@@ -69,13 +69,23 @@ pub(super) async fn get_user_devices(
     }
 }
 
-/// `DELETE /api/admin/sessions/{id}` — revoke any user's session. `404` when
+/// `DELETE /api/admin/sessions/{id}` — revoke any user's session. Refuses to
+/// revoke the session the request itself authenticated with, mirroring the
+/// self-service guard in `auth::handlers::delete_session_handler` (an admin
+/// panel is not exempt from locking its own tab out mid-request). `404` when
 /// the id is unknown or already revoked.
 pub(super) async fn delete_session(
-    _admin: AdminUser,
+    admin: AdminUser,
     State(state): State<AppState>,
     Path(session_id): Path<i64>,
 ) -> Response {
+    if session_id == admin.0.session_id {
+        return (
+            StatusCode::BAD_REQUEST,
+            "cannot revoke the currently-active session",
+        )
+            .into_response();
+    }
     match db::auth::revoke_session_checked(&state.pool, session_id).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(AuthError::SessionNotFound) => StatusCode::NOT_FOUND.into_response(),

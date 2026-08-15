@@ -147,6 +147,13 @@ pub(super) async fn get_audiobook_manifest(
         return axum::http::StatusCode::NOT_FOUND.into_response();
     }
 
+    // How many audio files the book carries rides along so clients know
+    // whether a stored position needs a `book_file_id` to be meaningful.
+    let audio_file_count = match hls::count_audio_files(&state.pool, resolved.book_id).await {
+        Ok(count) => count,
+        Err(e) => return internal("count_audio_files", e),
+    };
+
     let filenames: Vec<&str> = parts.iter().map(|p| p.filename.as_str()).collect();
     let file_id_suffix = query
         .file_id
@@ -172,12 +179,16 @@ pub(super) async fn get_audiobook_manifest(
                 Err(e) => return internal("get_chapters", e),
             };
             AudiobookManifest::Direct {
+                book_file_id: resolved.book_file_id,
+                audio_file_count,
                 parts: manifest_parts,
                 total_duration_seconds,
                 chapters,
             }
         }
         PlaybackMode::Hls => AudiobookManifest::Hls {
+            book_file_id: resolved.book_file_id,
+            audio_file_count,
             playlist_url: format!("/api/audiobooks/{uuid}/playlist.m3u8"),
         },
     };
@@ -252,12 +263,15 @@ pub(super) struct DownloadQuery {
 /// yield the first part today — there is no on-the-fly archiving yet, so
 /// per-part downloads go through the format switcher's file picker.
 pub(super) async fn get_audiobook_download(
-    _user: AuthUser,
+    user: AuthUser,
     State(state): State<AppState>,
     Path(uuid): Path<String>,
     Query(query): Query<DownloadQuery>,
     req: Request,
 ) -> Response {
+    if let Some(denied) = super::deny_without_download(&user) {
+        return denied;
+    }
     let resolved = match hls::resolve_audiobook_file(&state.pool, &uuid, query.file_id).await {
         Ok(Some(r)) => r,
         Ok(None) => return axum::http::StatusCode::NOT_FOUND.into_response(),

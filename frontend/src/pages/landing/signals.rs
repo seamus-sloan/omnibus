@@ -136,6 +136,9 @@ fn use_fetch_signals() -> FetchSignals {
         error: use_signal(|| None::<String>),
         fetch_epoch: use_signal(|| 0u64),
         generation: crate::use_cache_generation(),
+        // Seeds false on every target: SSR never runs the hydration effect, so
+        // it renders the same empty grid it always did (rule 07).
+        prefs_ready: use_signal(|| false),
     }
 }
 
@@ -214,22 +217,46 @@ struct ShelfWiring {
 
 /// Arm every reactive side-effect the landing page needs: admin-gated
 /// suggestion-pool refetch, page-1 fetch on sort/filter/query change, the
-/// load-more append + web scroll observer, and prefs hydration once the
-/// library path resolves.
+/// load-more append + web scroll observer, and the two-stage prefs hydration
+/// (last-browsed library on mount, then the authoritative path once a fetch
+/// resolves it). Each stage is a named helper below so this stays a plain
+/// sequence of calls.
 #[allow(clippy::too_many_arguments)] // one bundle per pipeline; splitting further hides the wiring
 fn wire_landing_effects(
     server_url: &str,
     query: Signal<String>,
-    mut prefs: Signal<ViewPrefs>,
+    prefs: Signal<ViewPrefs>,
     want_more: Signal<u32>,
     is_admin: ReadSignal<bool>,
     pools: SuggestionPools,
     fetch_sigs: FetchSignals,
     shelf_wiring: ShelfWiring,
-    mut bulk_selected: Signal<BTreeSet<String>>,
+    bulk_selected: Signal<BTreeSet<String>>,
 ) {
     spawn_suggestion_pools_effect(server_url.to_string(), is_admin, pools);
 
+    let fetch_key = wire_page_fetch_effects(server_url, query, prefs, want_more, fetch_sigs);
+    wire_bulk_selection_clear(fetch_key, shelf_wiring.selection, bulk_selected);
+    wire_prefs_hydration(prefs, fetch_sigs);
+    wire_shelf_effects(server_url, prefs, shelf_wiring);
+}
+
+/// Refetches page 1 on query/sort/filter/hidden-formats change and arms the
+/// load-more append (plus the web scroll observer). Returns the `fetch_key`
+/// memo so the caller can also key the bulk-selection-clear effect on it.
+fn wire_page_fetch_effects(
+    server_url: &str,
+    query: Signal<String>,
+    prefs: Signal<ViewPrefs>,
+    want_more: Signal<u32>,
+    fetch_sigs: FetchSignals,
+) -> Memo<(
+    String,
+    omnibus_shared::SortKey,
+    omnibus_shared::SortDir,
+    omnibus_shared::ViewFilters,
+    Vec<String>,
+)> {
     // The viewer's hidden-formats pref, canonical order. Starts empty until
     // `/me` resolves (or on SSR), so the very first fetch may run without the
     // exclusion — the memo change then triggers exactly one refetch.
@@ -269,23 +296,55 @@ fn wire_landing_effects(
     #[cfg(feature = "web")]
     spawn_load_more_observer(fetch_sigs.next_cursor);
 
-    // Drop the bulk-edit selection whenever the visible list changes
-    // wholesale — a refetch (query/sort/filter change) or a gallery pick.
-    // Checked rows that are no longer rendered would otherwise be edited
-    // invisibly from a stale selection.
-    let selection_for_bulk = shelf_wiring.selection;
+    fetch_key
+}
+
+/// Drops the bulk-edit selection whenever the visible list changes wholesale
+/// — a refetch (query/sort/filter change) or a gallery pick. Checked rows
+/// that are no longer rendered would otherwise be edited invisibly from a
+/// stale selection.
+fn wire_bulk_selection_clear(
+    fetch_key: Memo<(
+        String,
+        omnibus_shared::SortKey,
+        omnibus_shared::SortDir,
+        omnibus_shared::ViewFilters,
+        Vec<String>,
+    )>,
+    selection: Signal<ShelfSelection>,
+    mut bulk_selected: Signal<BTreeSet<String>>,
+) {
     use_effect(move || {
         let _ = fetch_key();
-        let _ = selection_for_bulk();
+        let _ = selection();
         if !bulk_selected.peek().is_empty() {
             bulk_selected.write().clear();
         }
     });
+}
 
-    // Hydrate persisted prefs when the library path resolves. The `!=` guard
-    // makes this idempotent: re-running it after a page-1 refetch (which re-sets
-    // `lib_path`) is a no-op once prefs match, so it can't loop with the
-    // fetch effect.
+/// Two-stage view-prefs hydration: the last-browsed library on mount (so the
+/// grid's first paint is already sorted, #1818), then the authoritative path
+/// once a fetch reveals it (covering the pointer having guessed wrong).
+fn wire_prefs_hydration(mut prefs: Signal<ViewPrefs>, fetch_sigs: FetchSignals) {
+    // Reads nothing reactively, so it runs exactly once after mount — and
+    // `prefs_ready` flips either way, since a first-ever visit has no pointer
+    // and must still proceed on the defaults rather than never fetching.
+    let mut prefs_ready = fetch_sigs.prefs_ready;
+    use_effect(move || {
+        if let Some(stored) = view_prefs::load_last() {
+            if stored != *prefs.peek() {
+                prefs.set(stored);
+            }
+        }
+        prefs_ready.set(true);
+    });
+
+    // Reconcile against the authoritative library path once a fetch reveals it,
+    // covering the case the pointer above guessed wrong (the viewer switched
+    // libraries since their last save). The `!=` guard makes this idempotent:
+    // re-running it after a page-1 refetch (which re-sets `lib_path`) is a no-op
+    // once prefs match, so it can't loop with the fetch effect.
     let lib_path = fetch_sigs.lib_path;
     use_effect(move || {
         if let Some(path) = lib_path.read().clone() {
@@ -295,7 +354,12 @@ fn wire_landing_effects(
             }
         }
     });
+}
 
+/// Arms the shelf-gallery + hero effects: the shelves list, the hero feed,
+/// the selected shelf's full detail, its member list, and the one-time
+/// reconcile of a persisted gallery pick.
+fn wire_shelf_effects(server_url: &str, prefs: Signal<ViewPrefs>, shelf_wiring: ShelfWiring) {
     let ShelfWiring {
         mut selection,
         shelves,

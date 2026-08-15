@@ -2,20 +2,27 @@
 //! matches with override-aware overlays applied after hydration so the
 //! palette row matches what the rest of the app renders.
 
+use std::sync::OnceLock;
+
 use omnibus_shared::PaletteBookHit;
 use sqlx::{Row, SqlitePool};
 
 use crate::books::parse_json_array;
-use crate::helpers::{build_fts_match, library_paths_json};
+use crate::helpers::{build_fts_match, library_paths_json, visible_book_sql};
 use crate::metadata_overrides::load_overrides_bulk;
 
 use super::PaletteError;
 
-/// FTS5 books-arm palette query, bound `?1 = match_expr`, `?2 = library_path`,
+/// FTS5 books-arm palette query, bound `?1 = match_expr`, `?2 = library_paths JSON array`,
 /// `?3 = limit`. The `bm25` MATCH scan runs once inside a `MATERIALIZED` CTE
 /// and `total_count` is a scalar `COUNT(*)` over it, so the true (pre-cap)
 /// match total ships on every row alongside the capped result set.
-const SEARCH_BOOKS_SQL: &str = r"
+fn search_books_sql() -> &'static str {
+    static SQL: OnceLock<String> = OnceLock::new();
+    SQL.get_or_init(|| {
+        let visible = visible_book_sql("b", "l", "?2");
+        format!(
+            r"
         WITH matches AS MATERIALIZED (
             SELECT books_fts.rowid AS bid,
                    bm25(books_fts, 10.0, 4.0, 3.0, 1.0, 1.0, 1.0) AS rank
@@ -23,7 +30,7 @@ const SEARCH_BOOKS_SQL: &str = r"
             JOIN books b ON b.id = books_fts.rowid
             JOIN scan_roots l ON l.id = b.library_id
             WHERE books_fts MATCH ?1
-              AND l.path IN (SELECT value FROM json_each(?2))
+              AND {visible}
         )
         SELECT b.id, b.uuid, b.title, b.has_cover, b.accent_color,
                SUBSTR(b.pubdate, 1, 4) AS year,
@@ -45,7 +52,10 @@ const SEARCH_BOOKS_SQL: &str = r"
         JOIN books b ON b.id = m.bid
         ORDER BY m.rank, b.sort, b.id
         LIMIT ?3
-        ";
+        "
+        )
+    })
+}
 
 /// Run the FTS5 books arm of the palette for `trimmed` (already-trimmed,
 /// length-capped query) scoped to `library_path`, capped to `limit`.
@@ -79,7 +89,7 @@ pub async fn search_books_for_paths(
         return Ok((Vec::new(), 0));
     };
 
-    let rows = sqlx::query(SEARCH_BOOKS_SQL)
+    let rows = sqlx::query(search_books_sql())
         .bind(&match_expr)
         .bind(library_paths_json(library_paths))
         .bind(limit)

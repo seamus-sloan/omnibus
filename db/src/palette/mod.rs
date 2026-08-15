@@ -2,7 +2,8 @@
 //! series, and tags. Books go through the FTS5 MATCH path (with
 //! override-aware overlays applied after hydration); taxonomy categories
 //! use scoped `LIKE` substring matches against the name columns. Bounded
-//! per category and scoped to one or more configured library paths.
+//! per category, and scoped to the books `helpers::visible_book_sql` admits
+//! — under a configured library path, or holding a physical copy.
 
 use omnibus_shared::PaletteResults;
 use sqlx::SqlitePool;
@@ -40,6 +41,27 @@ use tags::{count_tags, search_tags};
 pub enum PaletteError {
     #[error(transparent)]
     Db(#[from] sqlx::Error),
+}
+
+impl From<crate::metadata_overrides::MetadataOverridesError> for PaletteError {
+    fn from(e: crate::metadata_overrides::MetadataOverridesError) -> Self {
+        match e {
+            crate::metadata_overrides::MetadataOverridesError::Db(inner) => PaletteError::Db(inner),
+            crate::metadata_overrides::MetadataOverridesError::Serialization(inner) => {
+                PaletteError::Db(sqlx::Error::Decode(Box::new(inner)))
+            }
+            crate::metadata_overrides::MetadataOverridesError::Io(inner) => {
+                PaletteError::Db(sqlx::Error::Io(inner))
+            }
+            // Bulk-write-only variants that can't arise on the palette read
+            // path; folded with their message preserved rather than panicking
+            // (mirrors `BooksError`'s `From<MetadataOverridesError>`).
+            other @ (crate::metadata_overrides::MetadataOverridesError::BookNotFound(_)
+            | crate::metadata_overrides::MetadataOverridesError::TooManyValues {
+                ..
+            }) => PaletteError::Db(sqlx::Error::Protocol(other.to_string())),
+        }
+    }
 }
 
 /// Per-category display cap. Each arm returns at most this many hits; the

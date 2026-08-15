@@ -424,6 +424,19 @@ pub fn evict_if_over_cap(cap_bytes: u64) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Total bytes currently held by the HLS transcode cache — every regular
+/// file under `hls_dir()`, recursively. Read-only counterpart to
+/// [`evict_if_over_cap`]'s usage computation, for the admin health page's
+/// storage section. Missing directory reads as empty rather than an
+/// error: no transcode has run yet.
+pub fn used_bytes() -> u64 {
+    let dir = hls_dir();
+    if !dir.exists() {
+        return 0;
+    }
+    dir_size(&dir)
+}
+
 /// Recursively sum the sizes of all regular files under `path`. Errors
 /// (permission denied, symlink loops) are silently skipped — this is a
 /// best-effort estimate used only for eviction decisions.

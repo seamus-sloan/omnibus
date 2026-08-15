@@ -112,7 +112,7 @@ Key vars (see `.env.example` for the full annotated list):
 Optional storage overrides:
 - `OMNIBUS_COVERS_DIR` — where cover image files are stored (default `./covers`). Set to an absolute path on real deployments so covers don't land next to the binary and disappear on redeploy.
 - `OMNIBUS_THUMBS_DIR` — where WebP thumbnails are cached (default `./thumbs`)
-- `OMNIBUS_THUMBS_CAP_BYTES` — eviction cap in bytes (default 5 GiB)
+- `OMNIBUS_THUMBS_CAP_BYTES` — eviction cap in bytes (default 1 GiB; thumbnails are lossy WebP, so a 1,600-book library caches ~50 MB)
 - `OMNIBUS_JOURNAL_IMAGES_DIR` — where images embedded in journal entries are stored, used verbatim when set; otherwise `$OMNIBUS_DATA_DIR/journal-images`. Durable user data (not a regenerable cache) — same absolute-path guidance as covers.
 - `OMNIBUS_MAX_UPLOAD_BYTES` — max accepted size for an "add your own books" upload, as both the upload routes' body limit and a per-file check (default 1 GiB)
 
@@ -125,6 +125,9 @@ HLS audiobook transcode cache (read by `db::hls`):
 Kobo KEPUB conversion (read by `db::kepub`, for the "Send to Kobo" download):
 - `OMNIBUS_KEPUBIFY_PATH` — explicit kepubify path; otherwise kepubify must be on `$PATH`. Absent → download falls back to plain EPUB with a one-time startup warning. Bundled in the `.#web` shell and the release image.
 - `OMNIBUS_KEPUB_DIR` — directory for the KEPUB cache, used verbatim when set; otherwise defaults to `$OMNIBUS_DATA_DIR/kepub/`. Purely a regenerable cache (safe to delete, rebuilt on next download).
+
+Calibre format conversion (read by `db::convert`):
+- `OMNIBUS_EBOOK_CONVERT_PATH` — explicit path to Calibre's `ebook-convert`; otherwise `ebook-convert` must be on `$PATH`. Calibre is optional: an unresolved binary logs exactly one startup warning (`convert::warn_if_unavailable`, `OnceLock`-gated) and leaves conversion disabled rather than failing the boot. Same source-of-truth model as the Hardcover key — the **Settings page wins**: `seed_ebook_convert_path_from_env` seeds the `ebook_convert_path` settings row only when none is saved, and `effective_ebook_convert_path` resolves settings → this var → the bare `ebook-convert` name on `$PATH`. Server-wide, never per-user. Unlike kepubify, Calibre is **not** bundled in the Nix shells or the release image — install it separately.
 
 Export-with-overrides EPUB cache (read by `db::epub_rewrite`, for the "Send to Kobo" + plain EPUB download when a book has overrides):
 - `OMNIBUS_EXPORT_EPUB_DIR` — directory for the override-baked EPUB cache, used verbatim when set; otherwise defaults to `$OMNIBUS_DATA_DIR/export-epub/`. Purely a regenerable cache (safe to delete, rebuilt on next export), invalidated on `books.last_modified` (bumped on every override save).

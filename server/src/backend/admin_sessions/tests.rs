@@ -5,14 +5,40 @@
 
 use axum::{
     body::{to_bytes, Body},
+    extract::{Path, State},
     http::{header::AUTHORIZATION, Request, StatusCode},
 };
 use omnibus_db::auth::SessionKind;
 use omnibus_shared::{DeviceView, SessionView};
 use tower::ServiceExt;
 
+use super::*;
 use crate::auth::test_support as auth_test_support;
+use crate::auth::{AdminUser, AuthUser};
 use crate::backend::test_support::*;
+
+/// A minimal admin `AuthUser` for driving the handlers directly (bypassing
+/// the `AdminUser` extractor). Needed because each handler's own
+/// DB-failure branch shares its target table (`sessions`/`devices`) with
+/// the extractor's own session lookup, so closing the pool before a
+/// routed request would fail extraction rather than the handler body
+/// under test.
+fn fake_admin(id: i64) -> AuthUser {
+    AuthUser {
+        id,
+        username: "admin".to_string(),
+        is_admin: true,
+        can_upload: true,
+        can_edit: true,
+        can_download: true,
+        kindle_email: None,
+        display_name: None,
+        has_avatar: false,
+        hidden_formats: Vec::new(),
+        session_id: 1,
+        session_kind: SessionKind::Bearer,
+    }
+}
 
 fn req(method: &str, uri: &str, token: &str) -> Request<Body> {
     Request::builder()
@@ -204,6 +230,61 @@ async fn admin_revoke_session_returns_404_for_unknown_id() {
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }
 
+/// Mirrors `auth::handlers::delete_session_handler`'s self-lockout guard:
+/// an admin revoking the session their own request authenticated with is
+/// rejected with `400`, not honored.
+#[tokio::test]
+async fn admin_revoke_session_returns_400_when_targeting_own_current_session() {
+    let (app, _, pool) = fixture().await;
+    let admin_tok = admin_token(&pool, "alice").await;
+    let (_user, own_session) = omnibus_db::auth::lookup_session(&pool, &admin_tok)
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(req(
+            "DELETE",
+            &format!("/api/admin/sessions/{}", own_session.id),
+            &admin_tok,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // The session must still be live — the guard rejected before revoking.
+    // `/api/auth/me` lives on the separate `auth_router` (server/src/auth/
+    // handlers.rs), only merged with `rest_router` in main.rs, so this
+    // fixture's app can't route it; check liveness directly against the
+    // pool instead, matching the pattern the sibling revoke test above
+    // uses.
+    omnibus_db::auth::lookup_session(&pool, &admin_tok)
+        .await
+        .expect("own session must remain usable after the rejected self-revoke");
+}
+
+/// The guard is scoped to the requester's *own* session id — an admin can
+/// still revoke a different admin's current session (only self-lockout is
+/// refused, matching the self-service handler's behavior).
+#[tokio::test]
+async fn admin_revokes_another_admins_current_session() {
+    let (app, _, pool) = fixture().await;
+    let admin_tok = admin_token(&pool, "alice").await;
+    let other_admin_tok = admin_token(&pool, "carol").await;
+    let (_user, other_session) = omnibus_db::auth::lookup_session(&pool, &other_admin_tok)
+        .await
+        .unwrap();
+
+    let res = app
+        .oneshot(req(
+            "DELETE",
+            &format!("/api/admin/sessions/{}", other_session.id),
+            &admin_tok,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+}
+
 // ── Revoke device (admin-success + cascades sessions + 404) ───────
 
 #[tokio::test]
@@ -262,4 +343,47 @@ async fn admin_revoke_device_returns_404_for_unknown_id() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+// ── DB-failure paths (500) ─────────────────────────────────────────
+//
+// Each handler is invoked directly (rather than through `oneshot`) with a
+// hand-built `AdminUser` and a pool closed only after the point at which
+// the `AdminUser` extractor would have already run — closing the pool
+// before a routed request would fail extraction itself (same `sessions`
+// table), not the handler body these tests target.
+
+#[tokio::test]
+async fn get_user_sessions_returns_500_when_pool_closed() {
+    let (_app, state, pool) = fixture().await;
+    pool.close().await;
+    let res = get_user_sessions(AdminUser(fake_admin(1)), State(state), Path(1)).await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn get_user_devices_returns_500_when_pool_closed() {
+    let (_app, state, pool) = fixture().await;
+    pool.close().await;
+    let res = get_user_devices(AdminUser(fake_admin(1)), State(state), Path(1)).await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn delete_session_returns_500_when_pool_closed() {
+    let (_app, state, pool) = fixture().await;
+    pool.close().await;
+    // Target id (2) deliberately differs from `fake_admin`'s own
+    // `session_id` (1) so the self-lockout guard below doesn't
+    // short-circuit before reaching the DB call this test targets.
+    let res = delete_session(AdminUser(fake_admin(1)), State(state), Path(2)).await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+#[tokio::test]
+async fn delete_device_returns_500_when_pool_closed() {
+    let (_app, state, pool) = fixture().await;
+    pool.close().await;
+    let res = delete_device(AdminUser(fake_admin(1)), State(state), Path(1)).await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }

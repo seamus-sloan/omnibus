@@ -19,6 +19,8 @@ pub enum Route {
     Settings { section: Option<String> },
     #[route("/logs")]
     Logs {},
+    #[route("/admin/health")]
+    AdminHealth {},
     #[route("/account")]
     Account {},
     #[route("/add-books")]
@@ -104,6 +106,31 @@ pub fn Logs() -> Element {
 #[cfg(feature = "mobile")]
 #[component]
 pub fn Logs() -> Element {
+    let nav = dioxus_router::use_navigator();
+    use_effect(move || {
+        nav.replace(Route::Landing {});
+    });
+    rsx! {}
+}
+
+/// Route target for `/admin/health` (#952) — wraps [`AdminHealthPage`] in
+/// the platform screen layout. Web/server only; the in-page `use_is_admin`
+/// gate (backed by the `AdminUser`-gated `rpc_get_admin_health`) keeps the
+/// chrome off a non-admin screen (AC2/AC4).
+#[cfg(not(feature = "mobile"))]
+#[component]
+pub fn AdminHealth() -> Element {
+    use_page_title(|| Some("Server health".into()));
+    rsx! {
+        ScreenLayout { AdminHealthPage {} }
+    }
+}
+
+/// Mobile stub for `/admin/health`: redirect to the landing page — there is
+/// no admin server-health surface on mobile.
+#[cfg(feature = "mobile")]
+#[component]
+pub fn AdminHealth() -> Element {
     let nav = dioxus_router::use_navigator();
     use_effect(move || {
         nav.replace(Route::Landing {});
@@ -457,6 +484,7 @@ mod tests {
             total_duration_seconds: None,
             chapter_number: None,
             chapter_count: None,
+            playback_rate: None,
         }
     }
 

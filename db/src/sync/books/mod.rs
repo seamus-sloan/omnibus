@@ -128,27 +128,29 @@ pub async fn sync_books(
     library_path: &str,
     plan: SyncPlan,
 ) -> anyhow::Result<()> {
-    sync_books_with_progress(pool, library_path, plan, |_, _| {}).await
+    sync_books_with_progress(pool, library_path, plan, |_, _, _| {}).await
 }
 
-/// [`sync_books`] variant that calls `on_progress(processed, total)`
-/// after each per-book write so the worker can surface a determinate
-/// progress bar. `total` is the count of buckets that loop per book —
-/// Changed + New. Removed, Moved and Backfill are cheap path-column
-/// writes with no parse behind them, so they are not reported as per-book
-/// progress (they're invisible to the user-facing "Scanning" step).
+/// [`sync_books`] variant that calls `on_progress(processed, total,
+/// current)` after each per-book write so the worker can surface a
+/// determinate progress bar naming the book just written (`current` is the
+/// library-relative filename; `None` on the initial pre-write tick).
+/// `total` is the count of buckets that loop per book — Changed + New.
+/// Removed, Moved and Backfill are cheap path-column writes with no parse
+/// behind them, so they are not reported as per-book progress (they're
+/// invisible to the user-facing "Scanning" step).
 pub async fn sync_books_with_progress(
     pool: &SqlitePool,
     library_path: &str,
     plan: SyncPlan,
-    mut on_progress: impl FnMut(u32, u32),
+    mut on_progress: impl FnMut(u32, u32, Option<&str>),
 ) -> anyhow::Result<()> {
     let total: u32 = (plan.changed_books.len() + plan.new_books.len())
         .try_into()
         .unwrap_or(u32::MAX);
     // Emit an initial (0, total) tick so the UI flips from indeterminate
     // spinner to determinate bar before the first per-book write lands.
-    on_progress(0, total);
+    on_progress(0, total, None);
 
     let mut tx = pool.begin().await?;
     let library_id = upsert_library(&mut tx, library_path).await?;
@@ -169,9 +171,9 @@ pub async fn sync_books_with_progress(
         library_id,
         library_path,
         &plan.changed_books,
-        || {
+        |filename| {
             processed = processed.saturating_add(1);
-            on_progress(processed, total);
+            on_progress(processed, total, Some(filename));
         },
     )
     .await?;
@@ -181,9 +183,9 @@ pub async fn sync_books_with_progress(
         library_path,
         &plan.new_books,
         &plan.removed_uuids,
-        || {
+        |filename| {
             processed = processed.saturating_add(1);
-            on_progress(processed, total);
+            on_progress(processed, total, Some(filename));
         },
     )
     .await?;
@@ -214,7 +216,7 @@ pub async fn sync_books_with_progress(
     })
     .await
     {
-        tracing::error!("sync_books: cover reconcile spawn_blocking failed: {join_err}");
+        tracing::error!(error = %join_err, "sync_books: cover reconcile spawn_blocking failed");
     }
 
     Ok(())

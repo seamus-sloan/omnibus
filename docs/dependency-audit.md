@@ -1,6 +1,6 @@
 # Dependency Audit — Cargo.lock Duplicate Families
 
-Last updated: 2026-08-06 (issue #1710; previously issues #1621, #1529, #1530, #1100, #1268, #1147, #643).
+Last updated: 2026-08-09 (issue #1767; previously issues #1710, #1621, #1529, #1530, #1100, #1268, #1147, #643).
 
 Run `cargo tree -d` and inspect the output any time Dioxus or Axum are bumped.
 The `deny.toml` `[bans]` section has matching `skip` entries for all accepted
@@ -15,7 +15,7 @@ this list.
 | `tokio-tungstenite` | 0.28.0, 0.29.0 | 0.28 via `dioxus-fullstack`, `dioxus-server`; 0.29 via `axum` | **blocked by upstream** | Same root cause as the tungstenite split above. |
 | `thiserror` | 1.0.69, 2.0.18 | 1.0.69 via `cairo-rs`, `gio`, `glib`, `gloo-net`, `jni`, `ndk` (all transitive through the Dioxus WASM/desktop/mobile stacks); 2.0.18 via our crates + most of Dioxus | **blocked by upstream** | Our first-party crates (`omnibus-db`, `omnibus-frontend`) are on v2 via `thiserror.workspace = true`. The v1 copy comes only from upstream Dioxus dependencies we do not control. |
 | `const-serialize` | 0.7.2, 0.8.0-alpha.0 | 0.7.2 from crates.io `manganis`; 0.8.0-alpha.0 from the Dioxus git pin | **blocked by upstream** | The pre-release alpha is bundled inside the Dioxus git tag. Cannot be collapsed until Dioxus publishes a stable release with a unified `const-serialize`. |
-| `getrandom` | 0.1.16, 0.2.17, 0.3.4, 0.4.2 | 0.1 from `rand 0.7.3` (via `phf_generator 0.8.0`, build-dep only); 0.2 from our `db` (argon2/rand_core 0.6 auth path) + ring + sqlx; 0.3 from rand 0.9 (tungstenite transitive); 0.4 from `tempfile` (dev-dep only) | **accepted intentionally** | The 0.2 pin in `db` is deliberate: `rand_core@0.6` + `getrandom@0.2` is the stable API surface for `OsRng::generate` in the Argon2 password hashing path (see `db/Cargo.toml` comment). Bumping to 0.3 would require also bumping `rand_core`, `password-hash`, and `argon2` — a non-trivial auth-layer upgrade. `getrandom@0.4` is dev-only (tempfile). `getrandom@0.1` is build-only (`phf_codegen`/`string_cache_codegen` chain) and never links into the runtime binary. |
+| `getrandom` | 0.1.16, 0.2.17, 0.3.4, 0.4.2 | 0.1 from `rand 0.7.3` (via `phf_generator 0.8.0`, build-dep only); 0.2 from our `db` (argon2/rand_core 0.6 auth path) + ring + sqlx; 0.3 from rand 0.9 (tungstenite transitive); 0.4 is a **runtime** dependency via `uuid`'s `v4` feature (`db::helpers::mint_uuid` calls `Uuid::new_v4()` in non-test code) plus `cfb`/`infer` under `dioxus-asset-resolver` — `tempfile` also pulls in the same 0.4 line, but only as a separate dev-only consumer | **accepted intentionally** | The 0.2 pin in `db` is deliberate: `rand_core@0.6` + `getrandom@0.2` is the stable API surface for `OsRng::generate` in the Argon2 password hashing path (see `db/Cargo.toml` comment). Bumping to 0.3 would require also bumping `rand_core`, `password-hash`, and `argon2` — a non-trivial auth-layer upgrade. `getrandom@0.4` links into the shipped server binary via `uuid`'s `v4` feature (and `cfb`/`infer`); `tempfile` is a separate, dev-only consumer of the same version. `getrandom@0.1` is build-only (`phf_codegen`/`string_cache_codegen` chain) and never links into the runtime binary. |
 | `rand_core` | 0.5.1, 0.6.4, 0.9.5 | 0.5.1 via `rand 0.7.3` (build-dep, `phf_generator`); 0.6.4 via argon2 auth path + signature crates; 0.9.5 via `rand 0.9` (tungstenite) | **blocked by upstream** | Three-way split mirrors the `rand` family below. 0.5/0.6 are the auth and build-dep paths described elsewhere; 0.9 is the new tungstenite path. |
 | `hashbrown` | 0.14.5, 0.15.5, 0.16.1, 0.17.1 | 0.14 from `dashmap` (dioxus-server); 0.15 from `sqlx-core` + `hashlink`; 0.16 from `lru` (dioxus-server); 0.17 from `indexmap` (h2 + sqlx + epub/zip) | **blocked by upstream** | Four-way spread across two major upstream stacks (Dioxus + sqlx + h2). All versions are internal impl details of their respective crates — `hashbrown` does not appear in any public API. Collapses as each upstream crate independently catches up to the same `hashbrown` minor. |
 | `foldhash` | 0.1.5, 0.2.0 | 0.1.5 via `hashbrown 0.15.5` (sqlx-core/hashlink path); 0.2.0 via `hashbrown 0.16.1` (dioxus-server's `lru`/`metrics-util` path) | **accepted intentionally** | One copy per `hashbrown` minor — both are internal impl details of `hashbrown`, same root cause as the `hashbrown` row above. Classified separately, though: the `deny.toml` skips for both `foldhash` versions are already in place, unlike `hashbrown`'s still-open four-way spread. Already carries a `deny.toml` skip + comment. |
@@ -36,6 +36,16 @@ this list.
 ## First-party skew resolved in this PR
 
 - `thiserror` in `db/Cargo.toml` and `frontend/Cargo.toml` aligned to `thiserror.workspace = true` (workspace declares `thiserror = "2"`). Previously both crates pinned `thiserror = "1"` independently. The workspace now acts as a single source of truth — new crates must use `.workspace = true`.
+
+## Accepted advisories
+
+- `lru 0.16.4` — RUSTSEC-2026-0253 (unsound: use-after-free in
+  `LruCache::pop()` under a panicking `Drop`). Reaches the production graph
+  via the git-pinned `dioxus-server` → `dioxus` (see #522 for the pin
+  itself); not independently bumpable. Accepted — exploiting it requires
+  `catch_unwind` plus a panicking `Drop` on a cached key during a pop, which
+  `dioxus-server`'s internal use does not trigger. `deny.toml` ignores it
+  with a matching comment. Revisit when Dioxus bumps `lru` to >= 0.18.2.
 
 ## Yanked crates
 

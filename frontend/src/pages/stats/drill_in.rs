@@ -7,7 +7,7 @@
 use dioxus::prelude::*;
 use omnibus_shared::{Contributor, EbookMetadata, FinishedBook, StatsRange, StatsSummary};
 
-use crate::components::{CoverTile, CoverTileKind};
+use crate::components::{ConfirmModal, CoverTile, CoverTileKind};
 use crate::use_server_url;
 
 /// Which headline tile a drill-in sheet/modal is showing detail for.
@@ -244,7 +244,12 @@ fn finished_book_as_ebook(book: &FinishedBook) -> EbookMetadata {
 
 /// The drill-in sheet/modal: header + close, delta chip, trend chart, and
 /// (Finished only) the finished-books list. `expanded` closes on backdrop
-/// click or the close button.
+/// click or the close button. Built on the shared `ConfirmModal` shell (see
+/// `components::confirm_modal`) — `busy: false` since no mutation is ever
+/// in flight here, the grabber + title/close head go in the `head` slot,
+/// and `backdrop_class`/`dialog_class` keep this sheet's own bottom-sheet
+/// (mobile) / centered-modal (desktop) chrome rather than the default
+/// author-photo backdrop.
 #[component]
 pub(super) fn DrillIn(
     metric: Metric,
@@ -258,14 +263,14 @@ pub(super) fn DrillIn(
     let bars = build_trend_bars(&trend_points(metric, &summary));
 
     rsx! {
-        div {
-            class: "st-drill-scrim",
-            "data-testid": "stats-drill-in",
-            role: "dialog",
-            aria_modal: "true",
+        ConfirmModal {
+            testid: "stats-drill-in".to_string(),
             aria_label: "{metric.title()} detail",
-            onclick: move |_| expanded.set(None),
-            div { class: "st-drill-sheet", onclick: move |e| e.stop_propagation(),
+            backdrop_class: "st-drill-scrim".to_string(),
+            dialog_class: "st-drill-sheet".to_string(),
+            busy: false,
+            on_dismiss: move |_| expanded.set(None),
+            head: rsx! {
                 div { class: "st-drill-grabber" }
                 div { class: "st-drill-head",
                     h4 { "{metric.title()}" }
@@ -278,12 +283,12 @@ pub(super) fn DrillIn(
                         "\u{2715}"
                     }
                 }
-                div { class: "st-drill-body",
-                    {render_delta(delta, vs)}
-                    {render_trend(metric, &bars)}
-                    if metric == Metric::Finished {
-                        {render_finished_list(&summary.finished_books, summary.books_finished, &server_url)}
-                    }
+            },
+            div { class: "st-drill-body",
+                {render_delta(delta, vs)}
+                {render_trend(metric, &bars)}
+                if metric == Metric::Finished {
+                    {render_finished_list(&summary.finished_books, summary.books_finished, &server_url)}
                 }
             }
         }
