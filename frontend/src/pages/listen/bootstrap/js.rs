@@ -91,6 +91,7 @@ fn transport_controls_js() -> &'static str {
       // play/pause state across the swap.
       seek: function(absSeconds){
         this._seeded = true;
+        this._lastAbs = Math.max(0, absSeconds || 0);
         var s = Math.max(0, absSeconds || 0);
         // Push the target time to the transport display immediately —
         // don't wait for the element's own `timeupdate`, which some
@@ -204,9 +205,21 @@ fn listeners_js() -> &'static str {
     el.addEventListener('timeupdate', function(){
       var oa = window.OmnibusAudio;
       if (!oa || !oa._seeded) return;
+      // Last position this session really reached — the teardown-artifact
+      // guard on `pause` below compares against it.
+      oa._lastAbs = absTime();
       if (window.__omnibusOnAudioTime) {
         window.__omnibusOnAudioTime(absTime());
       }
+    });
+    // A full-page navigation destroys the media element mid-session; the
+    // browser's teardown can zero currentTime BEFORE the final pause event
+    // dispatches, and that dying flush overwrote a real 2h48m position
+    // with 0.0 live (#1954). The heartbeat persisted a ≤5s-stale position
+    // moments earlier, so closing the gate loses nothing meaningful.
+    window.addEventListener('pagehide', function(){
+      var oa = window.OmnibusAudio;
+      if (oa) oa._seeded = false;
     });
     el.addEventListener('play', function(){
       var oa = window.OmnibusAudio;
@@ -219,8 +232,14 @@ fn listeners_js() -> &'static str {
     el.addEventListener('pause', function(){
       var oa = window.OmnibusAudio;
       if (!oa || !oa._seeded) return;
+      // Teardown artifact: a pause reporting ~0 when this session was
+      // materially past it is the element being reset, not a listener
+      // rewinding — a real jump-to-start arrives as a seek, which updates
+      // _lastAbs through the ungated seek path before any pause fires.
+      var t = absTime();
+      if (t < 1 && typeof oa._lastAbs === 'number' && oa._lastAbs > 60) return;
       if (window.__omnibusOnAudioPause) {
-        window.__omnibusOnAudioPause(absTime());
+        window.__omnibusOnAudioPause(t);
       }
     });
     // Cross-part advance — direct mode only. HLS treats the whole
