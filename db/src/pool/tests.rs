@@ -586,6 +586,105 @@ async fn migration_0070_recomputes_stale_ampersand_norms_on_upgrade() {
     assert_eq!(override_norm, "a tale of mirth and magic");
 }
 
+/// #1912 / AC3: pre-fix rows whose series metadata carried the index inside
+/// the name ("Crowns of Nyaxia #1"/"#2"/"#3") fragmented into three
+/// one-book series, `series_index` never filled. Migration 0071 nulls the
+/// stale `series_sort` those rows already hold and the boot backfills
+/// (`series_normalize::backfill_embedded_series_index`, then
+/// `sort_keys::backfill_series_sort`) merge the fragmented `series` rows
+/// into one and fill each book's index. Simulates an upgrade the same way
+/// `migration_0070_recomputes_stale_ampersand_norms_on_upgrade` does: rows
+/// seeded as the pre-fix folder wrote them, then a second `init_db` over the
+/// same file with 0071 rewound.
+#[tokio::test]
+async fn migration_0071_merges_stale_embedded_index_series_on_upgrade() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("omnibus.db");
+    let url = format!("sqlite://{}?mode=rwc", db_path.display());
+    let pool = init_db(&url).await.expect("initial init_db should succeed");
+
+    let lib_id: i64 = sqlx::query_scalar(
+        "INSERT INTO scan_roots (path, display_name) VALUES ('/lib', 'lib') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    for (uuid, n) in [("u1", 1), ("u2", 2), ("u3", 3)] {
+        let series_name = format!("Crowns of Nyaxia #{n}");
+        let series_id: i64 =
+            sqlx::query_scalar("INSERT INTO series (name) VALUES (?1) RETURNING id")
+                .bind(&series_name)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let book_id: i64 = sqlx::query_scalar(
+            "INSERT INTO books (uuid, library_id, path, title, series_sort)
+             VALUES (?1, ?2, '', ?3, ?4) RETURNING id",
+        )
+        .bind(uuid)
+        .bind(lib_id)
+        .bind(format!("Book {n}"))
+        .bind(&series_name)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO books_series_link (book, series) VALUES (?1, ?2)")
+            .bind(book_id)
+            .bind(series_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    // Hand the database back its pre-0071 migration state and re-open it.
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 71")
+        .execute(&pool)
+        .await
+        .unwrap();
+    drop(pool);
+    let pool = init_db(&url).await.expect("upgrade init_db should succeed");
+
+    let series_rows: Vec<(i64, String)> = sqlx::query_as("SELECT id, name FROM series")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        series_rows.len(),
+        1,
+        "AC3: the three fragmented rows converge on one series: {series_rows:?}"
+    );
+    assert_eq!(series_rows[0].1, "Crowns of Nyaxia");
+
+    let mut rows: Vec<(String, f64, Option<String>)> =
+        sqlx::query_as("SELECT title, series_index, series_sort FROM books ORDER BY series_index")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    rows.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    assert_eq!(
+        rows,
+        vec![
+            (
+                "Book 1".to_string(),
+                1.0,
+                Some("Crowns of Nyaxia".to_string())
+            ),
+            (
+                "Book 2".to_string(),
+                2.0,
+                Some("Crowns of Nyaxia".to_string())
+            ),
+            (
+                "Book 3".to_string(),
+                3.0,
+                Some("Crowns of Nyaxia".to_string())
+            ),
+        ],
+        "each book keeps its parsed index and gets the cleaned series_sort"
+    );
+}
+
 /// Seed a book carrying hand-written `_norm` keys, standing in for a row the
 /// pre-`&`-expansion folder wrote. `link_author` is the position-0 author link
 /// the boot backfill re-derives `author_norm` from; `None` reproduces the

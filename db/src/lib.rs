@@ -50,6 +50,7 @@ pub mod ratings;
 pub mod read_status;
 pub mod scan;
 pub mod scanner;
+pub mod series_normalize;
 pub mod settings;
 pub mod shelves;
 pub mod sort_keys;
@@ -114,6 +115,7 @@ pub use pool::*;
 pub use scan::{
     add_physical_only, check_in_copy, resolve_meta, resolve_scan, wishlist_add, ScanError,
 };
+pub use series_normalize::{backfill_embedded_series_index, SeriesNormalizeError};
 pub use settings::*;
 pub use shelves::{
     add_books, can_edit, can_view, create_shelf, delete_shelf, get_shelf, list_visible_shelves,
