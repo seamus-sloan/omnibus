@@ -3090,6 +3090,26 @@ a.idx-letter-on:focus-visible {
 }
 .lp-scrub-remaining { color: var(--ink-3); }
 
+/* Buffering badge — shown below the scrub times while playing but
+   still waiting on network data, so a slow fetch reads as "loading"
+   instead of a clock frozen at 0:00. */
+.lp-buffering {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 6px; font-family: var(--mono);
+  font-size: 11px; color: var(--ink-3);
+}
+.lp-buffering::before {
+  content: ''; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); animation: lp-buffering-pulse 1s ease-in-out infinite;
+}
+@keyframes lp-buffering-pulse {
+  0%, 100% { opacity: .3; }
+  50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lp-buffering::before { animation: none; }
+}
+
 /* Chapter map / seek scrubber */
 .lp-chapter-map { margin-top: 32px; }
 /* Interactive band: the segmented bar sits centred, a transparent range

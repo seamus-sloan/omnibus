@@ -170,6 +170,7 @@ fn active_listen_view(playback: crate::PlaybackState, uuid: &str) -> Option<Elem
                     rate_error: playback.rate_error,
                     volume: playback.volume,
                     hls_ready: playback.hls_ready,
+                    buffering: playback.buffering,
                 },
                 playback_failed: playback.playback_failed,
                 chapters: playback.chapters,

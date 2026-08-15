@@ -131,6 +131,10 @@ pub(super) struct ChapterMapProps {
     /// Fired with the target time in seconds when the bar is clicked or a
     /// drag is released.
     pub on_seek: EventHandler<f64>,
+    /// True while playing but waiting on network data — shows a
+    /// buffering badge below the scrub times instead of a clock that looks
+    /// stuck.
+    pub buffering: bool,
 }
 
 /// Scrub-state readouts derived for one render of [`ChapterMap`]: the
@@ -246,6 +250,7 @@ pub(super) fn ChapterMap(props: ChapterMapProps) -> Element {
         rate,
         current_chapter_index,
         on_seek,
+        buffering,
     } = props;
 
     // Local scrub state. While the user drags, the segments / thumb / time
@@ -329,6 +334,14 @@ pub(super) fn ChapterMap(props: ChapterMapProps) -> Element {
                     "\u{00b7} {format_hms(helpers::remaining_at_rate(eff_remaining, rate))} remaining"
                 }
                 span { "{format_hms(duration)}" }
+            }
+            if buffering {
+                div {
+                    class: "lp-buffering",
+                    "data-testid": "listen-buffering",
+                    role: "status",
+                    "Buffering\u{2026}"
+                }
             }
         }
     }

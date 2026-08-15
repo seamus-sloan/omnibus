@@ -97,6 +97,8 @@ pub(super) struct PlaybackPosition {
     pub rate: f64,
     pub scrub_max: f64,
     pub current_chapter_index: usize,
+    /// True while playing but the element is still waiting on network data.
+    pub buffering: bool,
 }
 
 /// Static per-book display content: the book itself, its route uuid, title,
@@ -206,6 +208,7 @@ pub(super) fn PlayerStage(
                     rate: position.rate,
                     current_chapter_index: position.current_chapter_index,
                     on_seek: callbacks.on_chapter_seek,
+                    buffering: position.buffering,
                 }
 
                 TransportButtons {
