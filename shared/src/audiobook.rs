@@ -172,6 +172,7 @@ mod tests {
         let direct = AudiobookManifest::Direct {
             book_file_id: 919,
             audio_file_count: 5,
+            next_file_id: Some(922),
             parts: vec![],
             total_duration_seconds: 1.0,
             chapters: vec![],
@@ -179,10 +180,13 @@ mod tests {
         let hls = AudiobookManifest::Hls {
             book_file_id: 7,
             audio_file_count: 2,
+            next_file_id: None,
             playlist_url: "/x.m3u8".into(),
         };
         assert_eq!(direct.file_identity(), (919, 5));
         assert_eq!(hls.file_identity(), (7, 2));
+        assert_eq!(direct.next_file_id(), Some(922));
+        assert_eq!(hls.next_file_id(), None);
     }
 
     #[test]
