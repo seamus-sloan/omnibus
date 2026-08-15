@@ -192,9 +192,9 @@ async fn audio_totals(
 /// index-plus-one display (not the stored `file_chapters.ordinal`, which is
 /// container-supplied and not guaranteed dense).
 ///
-/// `pub(crate)` rather than private: exercised directly by a boundary test
+/// `pub(super)` rather than private: exercised directly by a boundary test
 /// in `progress::tests` alongside the rest of the resume-card coverage.
-pub(crate) fn chapter_number_at(chapters: &[ChapterInfo], elapsed: f64) -> Option<i64> {
+pub(super) fn chapter_number_at(chapters: &[ChapterInfo], elapsed: f64) -> Option<i64> {
     if chapters.is_empty() {
         return None;
     }
