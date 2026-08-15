@@ -1,6 +1,8 @@
 //! Posting and awaiting tasks: `Worker::post`, `await_completion`, and
 //! the RAII guards that keep the `completions` / `progress` maps bounded
-//! even when a spawned future unwinds.
+//! even when a spawned future unwinds. `post` also writes the durable
+//! `background_tasks` history row (issue #941) — insert on start, update
+//! on terminal outcome — via `crate::background_tasks`.
 //!
 //! `prune_resource_lock` lives here too because it's the
 //! map-bookkeeping companion to the keyed-mutex acquire in
@@ -13,8 +15,8 @@ use omnibus_shared::{ProgressState, TaskProgress};
 use tokio::sync::watch;
 
 use super::types::{
-    lock_unpoison, wall_clock_ms, ProgressEntry, Task, TaskId, TaskOutcome, TaskSuccessDetail,
-    Worker,
+    lock_unpoison, wall_clock_ms, wall_clock_secs, ProgressEntry, Task, TaskId, TaskOutcome,
+    TaskSuccessDetail, Worker,
 };
 
 /// RAII guard that reclaims a `Worker::completions` slot when dropped.
@@ -118,6 +120,7 @@ impl Worker {
         let this = self.clone();
         let completions = self.completions.clone();
         let progress = self.progress.clone();
+        let persistence_kind = task.persistence_kind();
         tokio::spawn(async move {
             // RAII guard so the slot is reclaimed on the normal happy path
             // *and* on unwind from a panic inside `run`. Without this, a
@@ -140,6 +143,33 @@ impl Worker {
                 id,
             };
 
+            // Durable history (issue #941): a best-effort row in
+            // `background_tasks`, sibling to the in-memory `progress` entry
+            // above but surviving a restart. Never fails the task itself —
+            // a DB hiccup here is logged and the task proceeds. A task that
+            // panics between this insert and the matching `finish_task`
+            // below (no synchronous `Drop` can await a DB write, unlike the
+            // two guards above) simply leaves its row `running` forever,
+            // which is itself a legitimate signal on the dashboard rather
+            // than something worth hiding.
+            let db_row_id = match crate::background_tasks::start_task(
+                &this.pool,
+                persistence_kind,
+                wall_clock_secs(),
+            )
+            .await
+            {
+                Ok(row_id) => Some(row_id),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        task_kind = persistence_kind,
+                        "worker: failed to persist task start"
+                    );
+                    None
+                }
+            };
+
             let outcome = this.run(task, id).await;
             if let TaskOutcome::Err(ref msg) = outcome {
                 tracing::error!(
@@ -148,6 +178,30 @@ impl Worker {
                     "worker: task failed"
                 );
             }
+
+            if let Some(row_id) = db_row_id {
+                let persisted_outcome = match &outcome {
+                    TaskOutcome::Ok(_) => Ok(()),
+                    TaskOutcome::Err(msg) => Err(msg.as_str()),
+                };
+                if let Err(e) = crate::background_tasks::finish_task(
+                    &this.pool,
+                    row_id,
+                    wall_clock_secs(),
+                    persisted_outcome,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        error = %e,
+                        task_id = id,
+                        task_kind = persistence_kind,
+                        db_row_id = row_id,
+                        "worker: failed to persist task completion"
+                    );
+                }
+            }
+
             // Publish the terminal outcome, then let `_prune` drop the map
             // slot. A `watch::Receiver` that `await_completion` took out of
             // the map *before* this runs keeps observing the final value
