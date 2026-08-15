@@ -11,7 +11,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex as StdMutex};
 
-use omnibus_shared::{BackgroundTaskStatus, ProgressState, TaskProgress};
+use omnibus_shared::{ProgressState, TaskProgress};
 use tokio::sync::watch;
 
 use super::types::{
@@ -180,16 +180,15 @@ impl Worker {
             }
 
             if let Some(row_id) = db_row_id {
-                let (status, error) = match &outcome {
-                    TaskOutcome::Ok(_) => (BackgroundTaskStatus::Success, None),
-                    TaskOutcome::Err(msg) => (BackgroundTaskStatus::Failed, Some(msg.as_str())),
+                let persisted_outcome = match &outcome {
+                    TaskOutcome::Ok(_) => Ok(()),
+                    TaskOutcome::Err(msg) => Err(msg.as_str()),
                 };
                 if let Err(e) = crate::background_tasks::finish_task(
                     &this.pool,
                     row_id,
-                    status,
                     wall_clock_secs(),
-                    error,
+                    persisted_outcome,
                 )
                 .await
                 {

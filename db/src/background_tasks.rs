@@ -40,17 +40,25 @@ pub async fn start_task(
     Ok(row.get("id"))
 }
 
-/// Update a task row to its terminal state, recording the finish time and
-/// (only on failure) the error text. A no-op — not an error — if `id` no
+/// Update a task row to its terminal state, recording the finish time and —
+/// for `Err` — the error text.
+///
+/// The outcome is a `Result` rather than a `(status, error)` pair so the
+/// table's two invariants hold by construction rather than by convention: a
+/// terminal write cannot name the non-terminal `Running`, and an error string
+/// cannot ride along with a success. A no-op — not an error — if `id` no
 /// longer exists; the row is best-effort observability, not a write the
 /// worker's own success depends on.
 pub async fn finish_task(
     pool: &SqlitePool,
     id: i64,
-    status: BackgroundTaskStatus,
     finished_at: i64,
-    error: Option<&str>,
+    outcome: Result<(), &str>,
 ) -> Result<(), BackgroundTaskError> {
+    let (status, error) = match outcome {
+        Ok(()) => (BackgroundTaskStatus::Success, None),
+        Err(msg) => (BackgroundTaskStatus::Failed, Some(msg)),
+    };
     sqlx::query("UPDATE background_tasks SET status = ?, finished_at = ?, error = ? WHERE id = ?")
         .bind(status.as_db_str())
         .bind(finished_at)

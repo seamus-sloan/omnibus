@@ -25,9 +25,7 @@ async fn finish_task_marks_success_with_no_error() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let id = start_task(&pool, "scan", 1_000).await.unwrap();
 
-    finish_task(&pool, id, BackgroundTaskStatus::Success, 1_050, None)
-        .await
-        .unwrap();
+    finish_task(&pool, id, 1_050, Ok(())).await.unwrap();
 
     let rows = recent_tasks(&pool, 10).await.unwrap();
     assert_eq!(rows[0].status, BackgroundTaskStatus::Success);
@@ -43,9 +41,8 @@ async fn finish_task_marks_failed_with_the_error_message() {
     finish_task(
         &pool,
         id,
-        BackgroundTaskStatus::Failed,
         2_010,
-        Some("kepub conversion failed; see server logs for details"),
+        Err("kepub conversion failed; see server logs for details"),
     )
     .await
     .unwrap();
@@ -64,9 +61,7 @@ async fn finish_task_is_a_no_op_when_id_is_unknown() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     // No row was ever inserted for id 999 — this must not error, since the
     // history row is best-effort observability, not load-bearing state.
-    finish_task(&pool, 999, BackgroundTaskStatus::Success, 10, None)
-        .await
-        .unwrap();
+    finish_task(&pool, 999, 10, Ok(())).await.unwrap();
     assert!(recent_tasks(&pool, 10).await.unwrap().is_empty());
 }
 
@@ -97,9 +92,7 @@ async fn background_task_history_survives_a_fresh_pool_reopen_against_the_same_f
     let id = {
         let pool = init_db(&url).await.unwrap();
         let id = start_task(&pool, "scan", 5_000).await.unwrap();
-        finish_task(&pool, id, BackgroundTaskStatus::Success, 5_010, None)
-            .await
-            .unwrap();
+        finish_task(&pool, id, 5_010, Ok(())).await.unwrap();
         drop(pool);
         id
     };
@@ -126,9 +119,7 @@ async fn finish_task_propagates_db_error_when_pool_is_closed() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let id = start_task(&pool, "scan", 0).await.unwrap();
     pool.close().await;
-    let err = finish_task(&pool, id, BackgroundTaskStatus::Success, 1, None)
-        .await
-        .unwrap_err();
+    let err = finish_task(&pool, id, 1, Ok(())).await.unwrap_err();
     assert!(matches!(err, BackgroundTaskError::Sqlx(_)));
 }
 
