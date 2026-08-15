@@ -4,8 +4,10 @@
 //! empty-state, `record_session` dispatch and merged-uuid resolution, and
 //! `record_session_tx` rollback, and client-id replay idempotency.
 
-use omnibus_shared::EbookMetadata;
+use omnibus_shared::{ChapterInfo, EbookMetadata, ProgressUpdate, SessionReport};
+use sqlx::{Row, SqlitePool};
 
+use super::resume::chapter_number_at;
 use super::*;
 use crate::{auth::now_unix, init_db, replace_books};
 
