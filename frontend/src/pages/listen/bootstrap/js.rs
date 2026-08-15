@@ -205,11 +205,16 @@ fn listeners_js() -> &'static str {
     el.addEventListener('timeupdate', function(){
       var oa = window.OmnibusAudio;
       if (!oa || !oa._seeded) return;
-      // Last position this session really reached — the teardown-artifact
-      // guard on `pause` below compares against it.
-      oa._lastAbs = absTime();
+      var t = absTime();
+      // Same teardown-artifact rule as `pause` below: a media element
+      // being destroyed can fire one last timeupdate with its clock
+      // already reset to 0 — BEFORE pagehide dispatches. A real restart
+      // reaches 0 through the seek path, which resets _lastAbs first.
+      if (t < 1 && typeof oa._lastAbs === 'number' && oa._lastAbs > 60) return;
+      // Last position this session really reached.
+      oa._lastAbs = t;
       if (window.__omnibusOnAudioTime) {
-        window.__omnibusOnAudioTime(absTime());
+        window.__omnibusOnAudioTime(t);
       }
     });
     // A full-page navigation destroys the media element mid-session; the

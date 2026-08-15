@@ -3155,3 +3155,34 @@ async fn upsert_progress_tx_logs_nothing_when_a_write_is_rejected_by_the_audio_f
         "the audio-file-guard rejection is out of #1861's scope"
     );
 }
+
+#[tokio::test]
+async fn upsert_progress_refuses_near_zero_audio_write_against_far_advanced_row() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Guarded").await;
+    upsert_progress(&pool, user, &audio_update(&uuid, 10_000.0, None, 1_000))
+        .await
+        .unwrap();
+
+    // The teardown signature: ~0 with a fresh clock. Dropped — the stored
+    // row comes back untouched.
+    let rec = upsert_progress(&pool, user, &audio_update(&uuid, 0.0, None, 2_000))
+        .await
+        .unwrap();
+    assert!((rec.audio_position_seconds.unwrap() - 10_000.0).abs() < f64::EPSILON);
+
+    // A genuine restart persists within one heartbeat: the next report is
+    // already past the cutoff and lands normally.
+    let rec = upsert_progress(&pool, user, &audio_update(&uuid, 5.0, None, 3_000))
+        .await
+        .unwrap();
+    assert!((rec.audio_position_seconds.unwrap() - 5.0).abs() < f64::EPSILON);
+
+    // A barely-started book restarts instantly — the refusal only guards
+    // rows already far into the book.
+    let rec = upsert_progress(&pool, user, &audio_update(&uuid, 0.0, None, 4_000))
+        .await
+        .unwrap();
+    assert!(rec.audio_position_seconds.unwrap() < f64::EPSILON);
+}
