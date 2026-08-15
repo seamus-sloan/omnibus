@@ -46,7 +46,8 @@ pub(super) async fn thumb(
     path: Path<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
-    match is_shelf_hidden(&state.0, &user, &path.0 .0).await {
+    let (uuid, _size) = &path.0;
+    match is_shelf_hidden(&state.0, &user, uuid).await {
         Ok(true) => return StatusCode::NOT_FOUND.into_response(),
         Ok(false) => {}
         Err(resp) => return resp,

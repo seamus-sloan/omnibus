@@ -90,6 +90,7 @@ pub async fn shelf_exclusive_hidden_uuids(
                FROM shelf_books sb
                JOIN shelves s ON s.id = sb.shelf_id
               WHERE sb.book_uuid IN ({placeholders})
+                AND s.kind = 'manual'
               GROUP BY sb.book_uuid"
         );
         let mut q = sqlx::query(&sql).bind(viewer_id).bind(is_admin);
