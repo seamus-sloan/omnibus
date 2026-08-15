@@ -108,16 +108,14 @@ pub(super) fn seek_to(secs: f64) {
     let _ = secs;
 }
 
-// The resume-decision trio below is only *called* from the web bootstrap
-// (`bootstrap::run_manifest_init`), but lives here un-gated-on-web so its
-// tests run under the crate's test matrix (`server` feature) — the
-// bootstrap module itself is `#![cfg(feature = "web")]` and its tests
-// never execute there.
+// The resume-decision trio below is called from both the web bootstrap
+// (`bootstrap::run_manifest_init`) and the mobile host driver
+// (`mobile::host::load_manifest`/`init_direct_and_drain`) — un-gated on
+// either target so it can't drift between the two (#1888, #1923).
 
 /// Select the resume position: prefer the server-authoritative value when
 /// available, fall back to the locally cached initial position.
-#[cfg(not(feature = "mobile"))]
-#[cfg_attr(not(feature = "web"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 fn resolve_resume_pos(server_pos: Option<f64>, local_pos: f64) -> f64 {
     server_pos.unwrap_or(local_pos)
 }
@@ -126,8 +124,7 @@ fn resolve_resume_pos(server_pos: Option<f64>, local_pos: f64) -> f64 {
 /// otherwise the progress row's stored `book_file_id`, so resume lands in
 /// the file the seconds were recorded in (#1888); `None` (the server's
 /// lowest-ordinal default) only when neither names one.
-#[cfg(not(feature = "mobile"))]
-#[cfg_attr(not(feature = "web"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 pub(super) fn resolve_boot_file(requested: Option<i64>, row_file: Option<i64>) -> Option<i64> {
     requested.or(row_file)
 }
@@ -140,8 +137,7 @@ pub(super) fn resolve_boot_file(requested: Option<i64>, row_file: Option<i64>) -
 /// seconds recorded in another file, or in no named file at all (the local
 /// cache never names one), start playback at zero rather than splicing one
 /// file's offset into another (#1888).
-#[cfg(not(feature = "mobile"))]
-#[cfg_attr(not(feature = "web"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 pub(super) fn resolve_boot_position(
     row: Option<(Option<i64>, Option<f64>)>,
     local_pos: f64,
@@ -447,9 +443,9 @@ mod tests {
     }
 }
 
-// The resume-decision helpers don't exist on mobile (the web bootstrap is
-// their only caller), so their tests live in a separately-gated module.
-#[cfg(all(test, not(feature = "mobile")))]
+// The resume-decision helpers are shared by both the web bootstrap and the
+// mobile host driver, so their tests run under every feature combination.
+#[cfg(test)]
 mod boot_resume_tests {
     use super::{resolve_boot_file, resolve_boot_position, resolve_resume_pos};
 
