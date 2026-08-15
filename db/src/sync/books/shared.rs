@@ -11,7 +11,8 @@ use sqlx::Transaction;
 
 use crate::covers::write_cover_file;
 use crate::helpers::{
-    mint_uuid, parse_series_index, sanitize_accent_color, scan_key_for, split_filename, stable_uuid,
+    cleaned_series_name, mint_uuid, resolved_series_index, sanitize_accent_color, scan_key_for,
+    split_filename, stable_uuid,
 };
 use crate::normalize::{normalize_author, normalize_title};
 use crate::sort_keys::series_sort_value;
@@ -246,7 +247,7 @@ async fn update_book_row(
     let (book_path, _, _) = split_filename(&m.filename);
     let scan_key = scan_key_for(&m.filename);
     let title = m.display_title();
-    let series_index_num = m.series_index.as_deref().and_then(parse_series_index);
+    let series_index_num = resolved_series_index(m);
     let author_sort = m
         .creators
         .first()
@@ -310,7 +311,7 @@ pub(super) async fn insert_book_row(
     let scan_key = scan_key_for(&m.filename);
     let (book_path, file_stem, file_ext) = split_filename(&m.filename);
     let title = m.display_title();
-    let series_index_num = m.series_index.as_deref().and_then(parse_series_index);
+    let series_index_num = resolved_series_index(m);
     let author_sort = m
         .creators
         .first()
@@ -389,11 +390,13 @@ pub(super) async fn insert_metadata_links(
 ) -> Result<(), sqlx::Error> {
     insert_author_links(tx, book_id, m).await?;
 
-    // Trim before resolving so the linked `series.name` matches the trimmed
-    // `series_sort` denormalized onto the row (`series_sort_value`) — keeps the
-    // sort key and the link in lockstep, and dedups whitespace variants.
-    if let Some(series_name) = m.series.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        let series_id = resolve_or_insert_series(tx, series_name).await?;
+    // Cleaned (trimmed, embedded-index-stripped — #1912) so the linked
+    // `series.name` matches the `series_sort` denormalized onto the row
+    // (`series_sort_value`) — keeps the sort key and the link in lockstep,
+    // dedups whitespace variants, and collapses "Name #1"/"Name #2" onto one
+    // series row instead of fragmenting.
+    if let Some(series_name) = cleaned_series_name(m) {
+        let series_id = resolve_or_insert_series(tx, &series_name).await?;
         sqlx::query("INSERT OR IGNORE INTO books_series_link (book, series) VALUES (?, ?)")
             .bind(book_id)
             .bind(series_id)
