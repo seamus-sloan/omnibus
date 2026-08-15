@@ -211,6 +211,65 @@ fn pick_canonical_returns_none_for_an_empty_group() {
 }
 
 // ---------------------------------------------------------------------------
+// Pure unit tests: merge_suggestion payload ordering
+// ---------------------------------------------------------------------------
+
+/// `dedup_suggestions`'s `UNIQUE (kind, action, payload_json)` (migration
+/// `0069`) is a plain string comparison over the serialized payload, so
+/// `merge_suggestion` must emit `source_ids`/`source_names` in a stable
+/// order regardless of the order `group` arrives in. `group` traces back to
+/// `fetch_entity_rows`'s `HashMap<i64, EntityRow>::into_values()`, whose
+/// iteration order is not stable across runs — without the id-sort in
+/// `merge_suggestion`, the same logical merge would serialize differently
+/// on a re-run and defeat `INSERT OR IGNORE`, piling up duplicate rows.
+#[test]
+fn merge_suggestion_serializes_identical_payload_json_regardless_of_group_order() {
+    let canonical = EntityRow {
+        id: 1,
+        name: "Canonical".into(),
+        sort: None,
+        book_ids: HashSet::from([100]),
+    };
+    let dup_a = EntityRow {
+        id: 2,
+        name: "Dup A".into(),
+        sort: None,
+        book_ids: HashSet::from([101]),
+    };
+    let dup_b = EntityRow {
+        id: 3,
+        name: "Dup B".into(),
+        sort: None,
+        book_ids: HashSet::from([102]),
+    };
+
+    // Same logical group, two different arrival orders — standing in for
+    // the two different `HashMap` iteration orders the real detector could
+    // hand `merge_suggestion` across two separate runs.
+    let forward = [&canonical, &dup_a, &dup_b];
+    let reversed = [&canonical, &dup_b, &dup_a];
+
+    let s1 = merge_suggestion(CleanupKind::Author, Tier::Zero, 1.0, &forward, &canonical);
+    let s2 = merge_suggestion(CleanupKind::Author, Tier::Zero, 1.0, &reversed, &canonical);
+
+    let json1 = serde_json::to_string(&s1.payload).unwrap();
+    let json2 = serde_json::to_string(&s2.payload).unwrap();
+    assert_eq!(
+        json1, json2,
+        "payload_json must match regardless of group order, or INSERT OR IGNORE's \
+         UNIQUE (kind, action, payload_json) constraint silently stops deduplicating"
+    );
+
+    let (source_ids, source_names, ..) = merge_payload(&s1);
+    assert_eq!(
+        source_ids,
+        [dup_a.id, dup_b.id],
+        "source_ids should be sorted ascending by id"
+    );
+    assert_eq!(source_names, [dup_a.name.clone(), dup_b.name.clone()]);
+}
+
+// ---------------------------------------------------------------------------
 // Pure unit tests: split_candidate
 // ---------------------------------------------------------------------------
 
