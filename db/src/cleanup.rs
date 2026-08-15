@@ -1,8 +1,12 @@
-//! Library-cleanup detection: five domain-specific algorithms that surface
-//! near-duplicate authors/series/tags, semicolon-soup tags, filename cruft
-//! in book titles, and junk-author rows left behind by a third-party
-//! import. Detection only — the persisted `dedup_suggestions` queue and
-//! the apply/undo primitives are separate follow-up modules.
+//! Library-cleanup detection plus the transactional apply/undo primitives
+//! that act on a detected (or on-page) suggestion: five domain-specific
+//! detectors surface near-duplicate authors/series/tags, semicolon-soup
+//! tags, filename cruft in book titles, and junk-author rows left behind
+//! by a third-party import; [`apply`] and [`undo`] execute or reverse one
+//! against the `dedup_suggestions` / `cleanup_log` / `entity_aliases`
+//! tables from migration `0069`. Detection lives here; apply/undo live in
+//! the sibling `apply`/`entity_ops`/`snapshot`/`undo` submodules so this
+//! file stays under the file-shape soft cap.
 
 use std::collections::{HashMap, HashSet};
 
@@ -13,8 +17,19 @@ use sqlx::SqlitePool;
 
 use crate::normalize::normalize_author;
 
+mod apply;
+mod entity_ops;
+mod snapshot;
+mod undo;
+
 #[cfg(test)]
 mod tests;
+
+pub use apply::{
+    apply_book_title_override, apply_delete_author, apply_merge_authors, apply_merge_series,
+    apply_merge_tags, apply_tag_split, CleanupApplyError,
+};
+pub use undo::undo;
 
 /// Errors returned by the cleanup detectors.
 #[derive(Debug, thiserror::Error)]
@@ -182,8 +197,11 @@ pub async fn detect_all(pool: &SqlitePool) -> Result<Vec<DetectedSuggestion>, Cl
 // fuzzy-Jaccard shape, parameterized on which taxonomy table to read.
 // ---------------------------------------------------------------------------
 
-/// Which normalized taxonomy table a merge-detection pass targets.
-#[derive(Debug, Clone, Copy)]
+/// Which normalized taxonomy table a merge-detection pass targets. Reused
+/// by the `apply`/`undo` submodules to parameterize the same shape over
+/// authors/series/tags rather than hand-rolling three near-identical
+/// primitives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MergeEntity {
     Author,
     Series,
@@ -197,6 +215,44 @@ impl MergeEntity {
             Self::Series => CleanupKind::Series,
             Self::Tag => CleanupKind::Tag,
         }
+    }
+
+    /// The entity's own taxonomy table.
+    fn table(self) -> &'static str {
+        match self {
+            Self::Author => "authors",
+            Self::Series => "series",
+            Self::Tag => "tags",
+        }
+    }
+
+    /// The book-link join table for this entity.
+    fn link_table(self) -> &'static str {
+        match self {
+            Self::Author => "books_authors_link",
+            Self::Series => "books_series_link",
+            Self::Tag => "books_tags_link",
+        }
+    }
+
+    /// The link table's foreign-key column naming this entity.
+    fn link_col(self) -> &'static str {
+        match self {
+            Self::Author => "author",
+            Self::Series => "series",
+            Self::Tag => "tag",
+        }
+    }
+
+    /// Whether this entity's own table carries a `sort` column (tags don't).
+    fn has_sort(self) -> bool {
+        !matches!(self, Self::Tag)
+    }
+
+    /// Whether this entity's link table carries a `position` column
+    /// (authors only).
+    fn has_position(self) -> bool {
+        matches!(self, Self::Author)
     }
 
     /// `(id, name, sort, book_id)` — one row per linked book, `NULL` book_id
