@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use sqlx::SqlitePool;
+use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::kobo_position::annotation_locations;
 use crate::worker::{Task, Worker};
@@ -105,28 +105,69 @@ pub async fn downsync_book_annotations(
     let locations =
         tokio::task::spawn_blocking(move || annotation_locations(&kepub, &source, &cfis)).await??;
 
-    for ((id, snapshot_cfi), location) in rows.iter().zip(locations) {
-        let Some(location) = location else { continue };
-        // Guarded against a concurrent write: if the row gained an anchor
-        // (a device PATCH adopting the same client_id) or its CFI moved
-        // since the snapshot, this derivation is stale and must not land.
-        let result = sqlx::query(
-            "UPDATE annotations
-                SET kobo_location = ?, client_id = COALESCE(client_id, ?)
-              WHERE id = ? AND kobo_location IS NULL AND epub_cfi_range = ?",
-        )
-        .bind(&location)
-        .bind(uuid::Uuid::new_v4().hyphenated().to_string())
-        .bind(id)
-        .bind(snapshot_cfi)
-        .execute(pool)
-        .await?;
-        if result.rows_affected() > 0 {
-            stats.derived += 1;
-            stats.unresolved -= 1;
-        }
+    let candidates: Vec<(i64, String, String)> = rows
+        .into_iter()
+        .zip(locations)
+        .filter_map(|((id, snapshot_cfi), location)| location.map(|loc| (id, snapshot_cfi, loc)))
+        .collect();
+    if candidates.is_empty() {
+        return Ok(stats);
     }
+
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let derived = apply_derived_locations(&mut tx, &candidates).await?;
+    tx.commit().await?;
+    stats.derived += derived;
+    stats.unresolved -= derived;
     Ok(stats)
+}
+
+/// Rows per chunk for [`apply_derived_locations`]'s batched UPDATE: 4 binds
+/// per row (id, location, minted client_id, snapshot cfi) keeps each
+/// statement comfortably under SQLite's 999 bound-parameter cap.
+const APPLY_CHUNK_SIZE: usize = 200;
+
+/// Persist every derived `(id, snapshot_cfi, location)` in one chunked
+/// `UPDATE ... FROM (VALUES ...)` per chunk, in place of one round-trip per
+/// row. Returns the count of rows actually written.
+///
+/// Each row keeps the same optimistic-concurrency guard the old per-row loop
+/// used — `kobo_location IS NULL AND epub_cfi_range = <snapshot>` — so a row
+/// that gained an anchor (a device PATCH adopting the same client_id) or
+/// whose CFI moved since the snapshot is left untouched rather than
+/// overwritten with a stale derivation. `RETURNING id` is what makes the
+/// count exact: a batch statement's `rows_affected` alone can't say *which*
+/// of several rows in the same chunk passed the guard.
+async fn apply_derived_locations(
+    tx: &mut Transaction<'_, Sqlite>,
+    candidates: &[(i64, String, String)],
+) -> anyhow::Result<usize> {
+    let mut derived = 0;
+    for chunk in candidates.chunks(APPLY_CHUNK_SIZE) {
+        let rows = std::iter::repeat_n("(?, ?, ?, ?)", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "UPDATE annotations
+                SET kobo_location = v.column2,
+                    client_id = COALESCE(annotations.client_id, v.column3)
+               FROM (VALUES {rows}) AS v
+              WHERE annotations.id = v.column1
+                AND annotations.kobo_location IS NULL
+                AND annotations.epub_cfi_range = v.column4
+              RETURNING annotations.id"
+        );
+        let mut q = sqlx::query_scalar::<_, i64>(&sql);
+        for (id, snapshot_cfi, location) in chunk {
+            q = q
+                .bind(id)
+                .bind(location)
+                .bind(uuid::Uuid::new_v4().hyphenated().to_string())
+                .bind(snapshot_cfi);
+        }
+        derived += q.fetch_all(&mut **tx).await?.len();
+    }
+    Ok(derived)
 }
 
 /// Boot-time pass: materialize every pending (user, book) pair — the retry
