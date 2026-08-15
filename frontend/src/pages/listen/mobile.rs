@@ -149,23 +149,11 @@ struct PlayerProps {
     on_nav_back: EventHandler<MouseEvent>,
 }
 
-/// Reconcile the resume position: server-authoritative value wins, else the
-/// locally cached position, else 0.
-async fn resolve_resume(server_url: &str, uuid: &str) -> f64 {
-    let server_pos = data::get_progress(server_url, uuid, ProgressFormat::Audio)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|r| r.audio_position_seconds);
-    server_pos
-        .or_else(|| crate::audiobook_progress::load(uuid))
-        .unwrap_or(0.0)
-}
-
 /// Persist the latest position both locally and to the server
-/// (fire-and-forget). `file_id` is the `?file_id=` the player was entered
-/// with, so a book carrying several audiobooks resumes in the one being
-/// listened to; `None` keeps the server's first-file default.
+/// (fire-and-forget). `file_id` is the `book_files` row the manifest
+/// actually loaded — not the raw `?file_id=` the player was entered with —
+/// so a book carrying several audiobooks resumes in the one being listened
+/// to (#1888, #1923); `None` only when the server predates file identity.
 fn persist_position(uuid: &str, file_id: Option<i64>, server_url: &str, seconds: f64) {
     crate::audiobook_progress::save(uuid, seconds);
     let uuid = uuid.to_string();
@@ -240,8 +228,13 @@ fn render_unsupported(
                 }
             }
             div { class: "m-player-now",
-                {player_title(&view.title)}
-                div { class: "m-player-by", "by {view.author}" }
+                Link {
+                    class: "m-player-booklink",
+                    to: Route::BookDetail { uuid: uuid.to_string() },
+                    "aria-label": "Open details for {view.title}",
+                    {player_title(&view.title)}
+                    div { class: "m-player-by", "by {view.author}" }
+                }
             }
             div { class: "m-player-msg",
                 p { class: "subtitle",
@@ -477,8 +470,13 @@ fn render_player_header(
             div { class: "label m-player-eyebrow",
                 "Now playing \u{00b7} Chapter {derived.chapter_no} of {derived.chapter_count}"
             }
-            {player_title(&view.title)}
-            div { class: "m-player-by", "by {view.author}" }
+            Link {
+                class: "m-player-booklink",
+                to: Route::BookDetail { uuid: uuid.to_string() },
+                "aria-label": "Open details for {view.title}",
+                {player_title(&view.title)}
+                div { class: "m-player-by", "by {view.author}" }
+            }
             if derived.has_chapters {
                 div { class: "m-player-chline", "Ch. {derived.chapter_no} \u{00b7} {derived.chapter_title}" }
             }

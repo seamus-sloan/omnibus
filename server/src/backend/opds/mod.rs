@@ -20,6 +20,21 @@
 //! reuse their DB reads and format-selection helpers directly, so the two
 //! catalogs cannot silently drift on what a book, author, or search result
 //! actually is.
+//!
+//! Every browse/search/new/nav/author/series **acquisition** read also
+//! narrows to books the caller may see (#932, [`retain_shelf_visible`]): a
+//! book confined to a manual shelf the viewer cannot see (a private shelf
+//! owned by someone else) is dropped, even though the file itself is
+//! otherwise an ordinary, generally-served library book. A book with no
+//! shelf membership, or with at least one shelf visible to the viewer, is
+//! unaffected. The byte-serving [`delegate`] routes apply the single-uuid
+//! form ([`is_shelf_hidden`]) so a known uuid can't be fetched directly
+//! around the feeds either. **Known gap:** the per-author/per-series
+//! *navigation*-level `book_count` shown in `/opds/authors/{letter}` and
+//! `/opds/series` (sourced from `db::list_authors`/`list_series`, informational
+//! summary text only) is **not** narrowed by this filter — only the actual
+//! acquisition-feed entries are. A shelf-exclusive book can still nudge
+//! that count without ever appearing as an entry.
 
 use axum::{
     http::header,
@@ -27,8 +42,11 @@ use axum::{
     routing::get,
     Extension, Router,
 };
+use omnibus_db as db;
 use omnibus_shared::opds as opds2;
+use omnibus_shared::EbookMetadata;
 
+use crate::auth::OpdsAuthUser;
 use crate::http_errors::internal;
 
 use super::AppState;
@@ -179,4 +197,80 @@ fn json_nav_link(title: &str, href: &str) -> opds2::Link {
         .with_rel("subsection")
         .with_type(opds2::MEDIA_TYPE)
         .with_title(title)
+}
+
+/// Drop every book in `books` that's confined to a manual shelf `user`
+/// cannot see (#932): on at least one manual shelf, and every one of those
+/// shelves is private and owned by someone else. A book on no shelf at
+/// all, or on any shelf visible to `user`, is untouched — so this only
+/// ever narrows a page the caller already fetched through the normal
+/// (shelf-unaware) library read. Every browse/search/new/nav handler in
+/// both catalogs runs its page through this after the e-reader-format
+/// filter, so the two catalogs can't drift on the rule.
+async fn retain_shelf_visible(
+    state: &AppState,
+    user: &OpdsAuthUser,
+    books: &mut Vec<EbookMetadata>,
+) -> Result<(), Response> {
+    let candidates: Vec<String> = books
+        .iter()
+        .filter_map(|b| b.unique_identifier.clone())
+        .collect();
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    let hidden = db::shelves::shelf_exclusive_hidden_uuids(
+        &state.pool,
+        user.0.id,
+        user.0.is_admin,
+        &candidates,
+    )
+    .await
+    .map_err(|e| internal("filter shelf-exclusive books", e))?;
+    if !hidden.is_empty() {
+        books.retain(|b| match &b.unique_identifier {
+            Some(uuid) => !hidden.contains(uuid),
+            None => true,
+        });
+    }
+    Ok(())
+}
+
+/// Single-uuid form of [`retain_shelf_visible`] for the byte-serving
+/// [`delegate`] routes, which resolve a `{uuid}` path segment directly
+/// rather than paging through a fetched list. `true` means `user` must not
+/// be shown this book — the delegate routes 404 rather than 403, matching
+/// [`shelves::load_visible_shelf`]'s no-existence-leak rule.
+///
+/// Canonicalizes `uuid` through [`db::resolve_canonical_book_uuid`] first
+/// (#932 follow-up): the media handlers this gate sits in front of resolve
+/// a path uuid via `resolve_book_id_by_uuid`, which falls back to
+/// `merged_uuids` — a book merged away from an old uuid still serves under
+/// it. `shelf_books` only ever names the *canonical* uuid, so checking the
+/// raw path segment let an old/merged uuid walk straight past a shelf that
+/// hides the surviving book. An unresolvable uuid (unknown to both `books`
+/// and `merged_uuids`) is never "shelf-hidden" by this rule — the handler's
+/// own lookup 404s it as not-found, which is the correct answer for that
+/// case.
+async fn is_shelf_hidden(
+    state: &AppState,
+    user: &OpdsAuthUser,
+    uuid: &str,
+) -> Result<bool, Response> {
+    let Some(canonical) = db::resolve_canonical_book_uuid(&state.pool, uuid)
+        .await
+        .map_err(|e| internal("resolve canonical book uuid", e))?
+    else {
+        return Ok(false);
+    };
+    let candidates = [canonical.clone()];
+    let hidden = db::shelves::shelf_exclusive_hidden_uuids(
+        &state.pool,
+        user.0.id,
+        user.0.is_admin,
+        &candidates,
+    )
+    .await
+    .map_err(|e| internal("check shelf-exclusive visibility", e))?;
+    Ok(hidden.contains(&canonical))
 }

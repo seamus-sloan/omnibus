@@ -174,6 +174,18 @@ body.atrium,
    can't bounce. */
 html, body { overscroll-behavior: none; }
 
+/* A theme switch must repaint every surface in one frame. The hover/focus
+   transitions on buttons, chips, rows, and captions otherwise animate the
+   token flip too — each at its own 0.08–0.25s duration — so controls recolor
+   at visibly different times while the grounds snap. `AtriumRoot` holds this
+   class for the flip frame only (cleared two animation frames later), so
+   hover polish is untouched outside the switch. */
+.atrium.theme-snap *,
+.atrium.theme-snap *::before,
+.atrium.theme-snap *::after {
+  transition: none !important;
+}
+
 .atrium *,
 .atrium *::before,
 .atrium *::after { box-sizing: border-box; }
@@ -3014,6 +3026,13 @@ a.idx-letter-on:focus-visible {
   color: var(--accent); font-weight: 500;
 }
 
+/* Title + byline link back to the book-detail page; the text keeps the
+   stage typography rather than anchor styling. */
+.lp-booklink {
+  display: block; color: inherit; text-decoration: none;
+}
+.lp-booklink:hover .lp-title { text-decoration: underline; text-underline-offset: 6px; }
+
 .lp-title {
   font-family: var(--serif); font-style: italic;
   font-size: clamp(36px, 5vw, 64px);
@@ -3070,6 +3089,26 @@ a.idx-letter-on:focus-visible {
   font-size: 12px; color: var(--ink-2);
 }
 .lp-scrub-remaining { color: var(--ink-3); }
+
+/* Buffering badge — shown below the scrub times while playing but
+   still waiting on network data, so a slow fetch reads as "loading"
+   instead of a clock frozen at 0:00. */
+.lp-buffering {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 6px; font-family: var(--mono);
+  font-size: 11px; color: var(--ink-3);
+}
+.lp-buffering::before {
+  content: ''; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); animation: lp-buffering-pulse 1s ease-in-out infinite;
+}
+@keyframes lp-buffering-pulse {
+  0%, 100% { opacity: .3; }
+  50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lp-buffering::before { animation: none; }
+}
 
 /* Chapter map / seek scrubber */
 .lp-chapter-map { margin-top: 32px; }
@@ -5813,6 +5852,10 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .rd-ribbon > i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
 .rd-overlay { position: absolute; inset: 0; z-index: 8; display: flex;
   align-items: center; justify-content: center; color: var(--ink-2); background: var(--rd-page); }
+/* The error overlay adds a Retry action below the message (issue #1895,
+   AC3), so it needs a column stack instead of the base overlay's single
+   centred row. */
+.rd-overlay-error { flex-direction: column; gap: 14px; text-align: center; padding: 0 24px; }
 /* The accent wash rides with the chrome: hidden-chrome mode is pure page
    color edge to edge, so the tint fades out alongside the bars (the fade
    rule lives in the tap-to-hide media block above). */
@@ -7685,6 +7728,8 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 
 .m-player-now { text-align: center; padding: 20px 6px 6px; }
 .m-player-eyebrow { color: var(--accent); }
+/* Title + byline tap through to the book-detail page; keep player styling. */
+.m-player-booklink { display: block; color: inherit; text-decoration: none; }
 /* Scoped under `.atrium` so this outranks the design-system `.atrium h1`
    (font-size: 64px). The player title is an <h1>; without the extra class
    the 64px hero size wins on specificity (0,1,1 vs 0,1,0), overflows the

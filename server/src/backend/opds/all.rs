@@ -44,10 +44,12 @@ pub(super) fn bad_cursor_response() -> Response {
 }
 
 /// Fetch one page of the ebook-scoped library for the All Books feeds:
-/// title order, e-reader formats only. `pub(super)` — the single read both
-/// catalogs' All Books pages come from.
+/// title order, e-reader formats only, narrowed to books `user` may see
+/// (#932 — drops a book confined to a manual shelf `user` cannot see).
+/// `pub(super)` — the single read both catalogs' All Books pages come from.
 pub(super) async fn load_page(
     state: &AppState,
+    user: &OpdsAuthUser,
     cursor: Option<&PageCursor>,
 ) -> Result<db::BookPage, Response> {
     let settings = db::get_settings(&state.pool)
@@ -73,11 +75,12 @@ pub(super) async fn load_page(
     .await
     .map_err(|e| internal("list all books", e))?;
     retain_ereader_books(&mut page.books);
+    super::retain_shelf_visible(state, user, &mut page.books).await?;
     Ok(page)
 }
 
 pub(super) async fn all_books(
-    _user: OpdsAuthUser,
+    user: OpdsAuthUser,
     State(state): State<AppState>,
     Query(query): Query<AllQuery>,
 ) -> Response {
@@ -85,7 +88,7 @@ pub(super) async fn all_books(
         Ok(c) => c,
         Err(_) => return bad_cursor_response(),
     };
-    let page = match load_page(&state, cursor.as_ref()).await {
+    let page = match load_page(&state, &user, cursor.as_ref()).await {
         Ok(p) => p,
         Err(resp) => return resp,
     };

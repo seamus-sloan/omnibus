@@ -49,6 +49,12 @@ const DEEP_LINK_BOOK = FIXTURE_BOOKS.find(
 // comment on this fixture in fixtures/epubs.ts) — a real multi-chapter book,
 // so the contents drawer lists more than one row to jump between.
 const TOC_JUMP_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "dracula")!;
+// Reserved for the paging-race / blank-front-matter regression (issue
+// #1895) — five one-page sections (two full-page images, three text) ahead
+// of chapter1, so paging through it repeatedly crosses section boundaries.
+const FRONTMATTER_BOOK = FIXTURE_BOOKS.find(
+  (b) => b.slug === "frontmatter-relay",
+)!;
 
 // The epub.js progress POST fires on the reader's relocate events; pin the
 // exact pathname so the sibling `/api/rpc/progress/get` reads never match.
@@ -58,9 +64,10 @@ const PROGRESS_POST = {
   expectedStatus: 200,
 };
 
-// The bottom-bar page label ("p. 3 of 12 · 25%") renders only after epub.js
-// has painted AND the whole-book pagination resolved — the strongest signal
-// that relocates are flowing. Note the NBSP after "p." in the label.
+// The bottom-bar page label ("p. 3 of 12 · 25%" — or "· ~25%" while the
+// whole-book pagination still resolves in the background, issue #1896)
+// renders once epub.js has painted and the first relocate landed — the
+// signal that relocates are flowing. Note the NBSP after "p." in the label.
 const PAGE_LABEL = /p\.\u00a0\d+ of \d+/;
 
 async function footerPageLabel(page: Page): Promise<string> {
@@ -100,6 +107,20 @@ test("renders the reader layout", async ({ page, request }) => {
   await expect(page.getByTestId("reader-font-increase")).toBeVisible();
   await expect(page.getByTestId("reader-spread-single")).toBeVisible();
   await expect(page.getByTestId("reader-spread-double")).toBeVisible();
+});
+
+test("the back button leaves the reader for the book detail page", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, TARGET.title);
+  await gotoReady(page, `/read/${uuid}`);
+  await expect(page.getByTestId("reader-back")).toBeVisible();
+
+  // Back always routes to the book's detail page — never to whatever entry
+  // point (landing, search, Continue hero) the reader was opened from.
+  await page.getByTestId("reader-back").click();
+  await expect(page).toHaveURL(new RegExp(`/books/${uuid}$`));
 });
 
 test("black theme overrides a publisher color on the EPUB body", async ({
@@ -537,8 +558,8 @@ test("restores the exact reading position when the reader is reopened", async ({
     return body?.epub_cfi ?? "";
   };
 
-  // Leave the reader (explicit navigation — the reader-back button walks
-  // browser history, which in a test context leads to about:blank), then
+  // Leave the reader (explicit navigation — equivalent to the reader-back
+  // button, which routes to the book's detail page), then
   // reopen: it must land on the exact page we left, not a page drifted by
   // the first-pass display's pre-webfont layout. The restore settle is an
   // ECHO — it re-states a position the server already holds — so the
@@ -680,6 +701,66 @@ test("keeps reading when the progress save POST fails", async ({
   );
   await expect(page.getByTestId("reader-viewer")).toBeVisible();
   await expect(page.getByTestId("reader-error")).toHaveCount(0);
+});
+
+// Regression for issue #1895: real publisher front matter is full-page image
+// markup (a plain <img> or an SVG-wrapped <image>), and paging through
+// several short sections in a row — at any speed — must never leave the
+// rendition blank or wedged.
+test("pages through image front matter without blanking the rendition, even at rapid clicks", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, FRONTMATTER_BOOK.title);
+  await gotoReady(page, `/read/${uuid}`);
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
+
+  // Intentional exception: this regression must inspect rendered EPUB
+  // markup to confirm the front-matter images actually occupy real space,
+  // not collapse to nothing (AC2 — "render as completely empty spreads" is
+  // the issue's own description of the symptom). A rendered bounding box is
+  // the more robust signal here than a manual decode probe: it's what a
+  // reader actually sees, and it doesn't race the async blob->data URI
+  // repair the way polling `naturalWidth` on a throwaway Image() does —
+  // Playwright's own `boundingBox()` already waits for layout to settle.
+  const viewerFrame = page.frameLocator("#omnibus-viewer iframe");
+
+  // Title page: a full-page plain <img> — the most common real-world shape.
+  const titleImg = viewerFrame.locator("img").first();
+  await expect(titleImg).toBeVisible();
+  await expect
+    .poll(async () => (await titleImg.boundingBox())?.height ?? 0, {
+      timeout: 15_000,
+    })
+    .toBeGreaterThan(10);
+
+  // Copyright page: an SVG-wrapped <image> — the shape a real publisher
+  // scan uses, and the one that rendered blank while the plain <img> page
+  // worked.
+  await page.getByTestId("reader-next").click();
+  const svgImage = viewerFrame.locator("image").first();
+  await expect(svgImage).toBeVisible();
+  await expect
+    .poll(async () => (await svgImage.boundingBox())?.height ?? 0, {
+      timeout: 15_000,
+    })
+    .toBeGreaterThan(10);
+
+  // Rapid-fire the remaining turns with no waiting between clicks — the
+  // condition (~1 click/sec or faster) that wedged the rendition on a real
+  // book with no console error (AC1). Three text sections plus the final
+  // chapter: five more section-boundary crossings.
+  for (let i = 0; i < 5; i++) {
+    await page.getByTestId("reader-next").click();
+  }
+  await expect(page.getByTestId("reader-error")).toHaveCount(0);
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
+
+  // A wedged rendition never recovers going backwards either — the other
+  // reported symptom ("prev does not restore it").
+  await page.getByTestId("reader-prev").click();
+  await expect(page.getByTestId("reader-error")).toHaveCount(0);
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
 });
 
 // The reader is one shared component: the native mobile shell renders the

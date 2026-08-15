@@ -1,8 +1,12 @@
 //! Pure helpers shared across the db query layer:
 //! deterministic UUID derivation, filename / accent-color sanitisation,
-//! and the FTS5 query / match builders.
+//! embedded series-index parsing, and the FTS5 query / match builders.
 
 use std::path::Path;
+use std::sync::OnceLock;
+
+use omnibus_shared::EbookMetadata;
+use regex::Regex;
 
 /// Maximum query length (in chars) accepted by the FTS5 search entrypoints
 /// (`search_books`, `count_search_books`, `search_palette`). Inputs beyond
@@ -120,6 +124,63 @@ pub(crate) fn split_filename(filename: &str) -> (String, String, String) {
 /// encode NaN/Inf), so drop them here at the source.
 pub(crate) fn parse_series_index(s: &str) -> Option<f64> {
     s.trim().parse::<f64>().ok().filter(|n| n.is_finite())
+}
+
+/// Split a trailing embedded index off a series name — `"#N"` or `", Book
+/// N"` (case-insensitive, optional decimal), e.g. `"Mistborn #2"` or
+/// `"Mistborn, Book 2"`. Returns `Some((cleaned_name, digits))` when the
+/// suffix is present and something survives after stripping it; `None`
+/// otherwise (including when the whole name is consumed by the marker,
+/// which would leave an empty series name).
+///
+/// Shared by the sync writers (fresh scans, via [`cleaned_series_name`] /
+/// [`resolved_series_index`]) and `series_normalize`'s boot backfill
+/// (existing rows) so a library tagged "Name #1"/"Name #2"/"Name #3"
+/// converges on one series row with per-book indexes either way (#1912).
+pub(crate) fn split_embedded_series_index(name: &str) -> Option<(String, String)> {
+    static PATTERN: OnceLock<Regex> = OnceLock::new();
+    let re = PATTERN.get_or_init(|| {
+        Regex::new(r"(?i)^(?P<name>.+?)\s*,?\s*(?:#\s*|book\s+)(?P<idx>\d+(?:\.\d+)?)\s*$")
+            .expect("embedded series index pattern is a valid, static regex")
+    });
+    let caps = re.captures(name.trim())?;
+    let cleaned = caps["name"].trim().trim_end_matches(',').trim();
+    if cleaned.is_empty() {
+        return None;
+    }
+    Some((cleaned.to_string(), caps["idx"].to_string()))
+}
+
+/// The series name to store for `m`: `m.series` trimmed, with any trailing
+/// embedded index suffix stripped ([`split_embedded_series_index`]) so
+/// "Name #1"/"Name #2" collapse onto one series row instead of fragmenting.
+/// `None` when `m.series` is absent or blank.
+pub(crate) fn cleaned_series_name(m: &EbookMetadata) -> Option<String> {
+    let raw = m
+        .series
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    Some(match split_embedded_series_index(raw) {
+        Some((cleaned, _)) => cleaned,
+        None => raw.to_string(),
+    })
+}
+
+/// The series index to store for `m`: the explicit `series_index` field
+/// when it parses to a finite number (AC2 — explicit metadata always wins),
+/// else an index parsed off a trailing suffix embedded in the series name
+/// itself.
+pub(crate) fn resolved_series_index(m: &EbookMetadata) -> Option<f64> {
+    m.series_index
+        .as_deref()
+        .and_then(parse_series_index)
+        .or_else(|| {
+            m.series
+                .as_deref()
+                .and_then(split_embedded_series_index)
+                .and_then(|(_, idx)| parse_series_index(&idx))
+        })
 }
 
 /// Defense-in-depth gate on `books.accent_color`. The indexer's

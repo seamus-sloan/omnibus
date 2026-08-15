@@ -49,6 +49,10 @@ pub(crate) mod sync_prompt;
 #[cfg(not(feature = "mobile"))]
 use ready_player::{PlaybackSignals, ReadyPlayer};
 
+// The one helper the landing resume surfaces share with the players, so
+// every remaining-time readout scales identically; `helpers` stays private.
+pub(crate) use helpers::remaining_at_rate;
+
 // App-root re-exports: the audio element + dock are mounted by `App` /
 // `ScreenLayout`, and the playback driver is called once from `App`.
 #[cfg(feature = "web")]
@@ -167,6 +171,7 @@ fn active_listen_view(playback: crate::PlaybackState, uuid: &str) -> Option<Elem
                     rate_error: playback.rate_error,
                     volume: playback.volume,
                     hls_ready: playback.hls_ready,
+                    buffering: playback.buffering,
                 },
                 playback_failed: playback.playback_failed,
                 chapters: playback.chapters,

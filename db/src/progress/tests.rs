@@ -4,10 +4,12 @@
 //! empty-state, `record_session` dispatch and merged-uuid resolution, and
 //! `record_session_tx` rollback, and client-id replay idempotency.
 
-use omnibus_shared::EbookMetadata;
+use omnibus_shared::{ChapterInfo, EbookMetadata, ProgressUpdate, SessionReport};
+use sqlx::{Row, SqlitePool};
 
+use super::resume::chapter_number_at;
 use super::*;
-use crate::{init_db, replace_books};
+use crate::{auth::now_unix, init_db, replace_books};
 
 /// Map a merged/auto-attached `uuid` onto an existing `book_id` the way the
 /// merge transaction does (`db/src/merge/transaction.rs`), so the session path
@@ -532,15 +534,6 @@ async fn upsert_is_last_write_wins() {
     };
     let saved = upsert_progress(&pool, user, &second).await.unwrap();
     assert_eq!(saved.epub_cfi.as_deref(), Some("epubcfi(/6/12!/4/8/3:7)"));
-}
-
-/// Current unix seconds, for asserting a stored `client_updated_at` landed
-/// near "now" without pinning an exact value the test doesn't control.
-fn now_unix() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 #[tokio::test]
@@ -1607,6 +1600,44 @@ async fn resume_points_enrich_audio_rows_with_duration_and_chapter() {
     assert_eq!(p.total_duration_seconds, Some(1200.0));
     assert_eq!(p.chapter_number, Some(2));
     assert_eq!(p.chapter_count, Some(3));
+    // No saved preference: the resume surfaces treat this as 1x.
+    assert_eq!(p.playback_rate, None);
+}
+
+#[tokio::test]
+async fn resume_points_carry_the_saved_playback_rate_for_audio_rows() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    seed_audiobook(&pool, uuid).await;
+    upsert_progress(
+        &pool,
+        user,
+        &ProgressUpdate {
+            book_uuid: uuid.into(),
+            format: ProgressFormat::Audio,
+            epub_cfi: None,
+            audio_position_seconds: Some(450.0),
+            progress_percent: None,
+            kobo_location: None,
+            book_file_id: None,
+            client_updated_at: None,
+        },
+    )
+    .await
+    .unwrap();
+    set_playback_rate(
+        &pool,
+        user,
+        uuid,
+        &omnibus_shared::AudiobookPlaybackRateUpdate { playback_rate: 2.0 },
+    )
+    .await
+    .unwrap();
+
+    let points = resume_points(&pool, user, 5).await.unwrap();
+    assert_eq!(points.len(), 1);
+    assert_eq!(points[0].playback_rate, Some(2.0));
 }
 
 /// Attach a second audiobook file to `book_id` — a different narration of

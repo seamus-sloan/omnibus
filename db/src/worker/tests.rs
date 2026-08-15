@@ -1735,3 +1735,259 @@ fn worker_config_default_convert_concurrency_matches_the_hls_concurrency_formula
     assert_eq!(cfg.convert_concurrency, cfg.hls_concurrency);
     assert!(cfg.convert_concurrency >= 1);
 }
+
+// ── #941: `background_tasks` persistence ──
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn post_persists_a_background_tasks_row_on_success() {
+    let pool = pool().await;
+    let w = make_worker_default(pool.clone());
+    let id = w.post(Task::Test {
+        tag: "persist-ok",
+        latency_ms: 0,
+        resource: None,
+        route_through_scan_sem: false,
+        on_run: None,
+        on_done: None,
+    });
+    match w.await_completion(id).await {
+        TaskOutcome::Ok(_) => {}
+        other => panic!("expected Ok, got {other:?}"),
+    }
+
+    let rows = crate::background_tasks::recent_tasks(&pool, 10)
+        .await
+        .unwrap();
+    let row = rows
+        .iter()
+        .find(|r| r.task_kind == "test")
+        .expect("expected a persisted row for the test task");
+    assert_eq!(
+        row.status,
+        omnibus_shared::BackgroundTaskStatus::Success,
+        "successful task must persist as Success"
+    );
+    assert!(row.finished_at.is_some(), "finished_at must be recorded");
+    assert!(
+        row.error.is_none(),
+        "a successful run must not carry an error"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn post_persists_a_failed_background_tasks_row_with_the_error_message() {
+    let pool = pool().await;
+    let w = make_worker_default(pool.clone());
+    // No book with this id exists in the fresh in-memory DB, so the handler
+    // takes its real (non-panic) failure path.
+    let id = w.post(Task::GenerateThumbs {
+        book_id: 999_999,
+        last_modified_epoch: 0,
+    });
+    let outcome = w.await_completion(id).await;
+    let TaskOutcome::Err(expected_msg) = outcome else {
+        panic!("expected Err, got {outcome:?}");
+    };
+
+    let rows = crate::background_tasks::recent_tasks(&pool, 10)
+        .await
+        .unwrap();
+    let row = rows
+        .iter()
+        .find(|r| r.task_kind == "generate_thumbs")
+        .expect("expected a persisted row for the thumbnail task");
+    assert_eq!(row.status, omnibus_shared::BackgroundTaskStatus::Failed);
+    assert!(row.finished_at.is_some());
+    assert_eq!(row.error.as_deref(), Some(expected_msg.as_str()));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn post_persists_a_running_row_immediately_after_posting() {
+    // AC1's "insert on start" half, observed before the task has had a
+    // chance to reach a terminal state: latency keeps the task in flight
+    // long enough to read the row while it's still `running`.
+    let pool = pool().await;
+    let w = make_worker_default(pool.clone());
+    let id = w.post(Task::Test {
+        tag: "persist-running",
+        latency_ms: 200,
+        resource: None,
+        route_through_scan_sem: false,
+        on_run: None,
+        on_done: None,
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let rows = crate::background_tasks::recent_tasks(&pool, 10)
+            .await
+            .unwrap();
+        if rows.iter().any(|r| r.task_kind == "test") {
+            let row = rows.iter().find(|r| r.task_kind == "test").unwrap();
+            assert_eq!(row.status, omnibus_shared::BackgroundTaskStatus::Running);
+            assert!(row.finished_at.is_none());
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!("background_tasks row never appeared for the in-flight task");
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    // Drain the task so it doesn't outlive the test.
+    let _ = w.await_completion(id).await;
+}
+
+// ---------- #965: library-cleanup detection worker task ----------
+
+/// AC1/AC3: `Task::DetectCleanup` serializes against concurrent cleanup runs
+/// via a fixed `cleanup` resource key, and does not contend with the scan
+/// semaphore.
+#[test]
+fn task_detect_cleanup_uses_a_fixed_resource_key_and_skips_the_scan_semaphore() {
+    for kind in [
+        None,
+        Some(omnibus_shared::CleanupKind::Author),
+        Some(omnibus_shared::CleanupKind::BookTitle),
+    ] {
+        let task = Task::DetectCleanup { kind };
+        assert_eq!(task.resource_key(), Some("cleanup".to_string()));
+        assert!(!task.uses_scan_sem());
+    }
+}
+
+/// Seed a book whose title carries the `"Last, First - "` filename-cruft
+/// prefix `cleanup::detect_book_titles` strips (Tier 0), against a
+/// `scan_roots` row it belongs to.
+async fn seed_cruft_titled_book(pool: &SqlitePool, scan_key: &str, uuid: &str, title: &str) {
+    let lib_id: i64 = sqlx::query_scalar(
+        "INSERT INTO scan_roots (path, display_name) VALUES (?, 'cleanup-lib') RETURNING id",
+    )
+    .bind(format!("/{scan_key}"))
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO books (uuid, scan_key, library_id, path, title, sort) \
+         VALUES (?, ?, ?, '', ?, ?)",
+    )
+    .bind(uuid)
+    .bind(scan_key)
+    .bind(lib_id)
+    .bind(title)
+    .bind(title)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+/// AC1: `Task::DetectCleanup` dispatches into the detection module and
+/// persists what it finds as a `dedup_suggestions` row (migration `0069`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn task_detect_cleanup_persists_a_book_title_suggestion_into_dedup_suggestions() {
+    let pool = pool().await;
+    seed_cruft_titled_book(
+        &pool,
+        "cruft.epub",
+        "uuid-cruft",
+        "Maas, Sarah J - Throne of Glass",
+    )
+    .await;
+
+    let w = make_worker_default(pool.clone());
+    let id = w.post(Task::DetectCleanup { kind: None });
+    match w.await_completion(id).await {
+        TaskOutcome::Ok(_) => {}
+        other => panic!("expected Ok, got {other:?}"),
+    }
+
+    let (kind, action): (String, String) =
+        sqlx::query_as("SELECT kind, action FROM dedup_suggestions WHERE kind = 'book_title'")
+            .fetch_one(&pool)
+            .await
+            .expect("expected a persisted book_title suggestion");
+    assert_eq!(kind, "book_title");
+    assert_eq!(action, "rename");
+}
+
+/// Re-running detection over an unchanged library inserts nothing new — the
+/// `dedup_suggestions` table's `UNIQUE (kind, action, payload_json)`
+/// constraint (migration `0069`) makes the `INSERT OR IGNORE` idempotent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn task_detect_cleanup_does_not_duplicate_a_suggestion_on_a_second_run() {
+    let pool = pool().await;
+    seed_cruft_titled_book(
+        &pool,
+        "cruft-again.epub",
+        "uuid-cruft-again",
+        "Maas, Sarah J - Crown of Midnight",
+    )
+    .await;
+
+    let w = make_worker_default(pool.clone());
+    for _ in 0..2 {
+        let id = w.post(Task::DetectCleanup { kind: None });
+        match w.await_completion(id).await {
+            TaskOutcome::Ok(_) => {}
+            other => panic!("expected Ok, got {other:?}"),
+        }
+    }
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM dedup_suggestions WHERE kind = 'book_title' AND action = 'rename'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        count, 1,
+        "second detection run should not duplicate the row"
+    );
+}
+
+/// AC2: a successful `Task::Scan` (the worker's `indexer::reindex` path)
+/// posts a follow-up `Task::DetectCleanup`, so a pre-existing dedup
+/// opportunity elsewhere in the library is refreshed into
+/// `dedup_suggestions` without any admin action. Detection reads the whole
+/// `books` table rather than just the rows the scan itself touched, which
+/// is what lets this test prove the *scan* triggered detection rather than
+/// asserting on a side effect the scan produced directly.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn task_scan_posts_detect_cleanup_that_refreshes_dedup_suggestions() {
+    let thumbs_dir = tempfile::tempdir().unwrap();
+    let covers_dir = tempfile::tempdir().unwrap();
+    let _env = EnvVarGuard::set_os("OMNIBUS_THUMBS_DIR", Some(thumbs_dir.path().as_os_str()))
+        .also_set_os("OMNIBUS_COVERS_DIR", Some(covers_dir.path().as_os_str()));
+
+    let pool = pool().await;
+    seed_cruft_titled_book(
+        &pool,
+        "cruft-elsewhere.epub",
+        "uuid-cruft-elsewhere",
+        "Maas, Sarah J - Heir of Fire",
+    )
+    .await;
+
+    let lib = tempfile::tempdir().unwrap();
+    copy_fixture_into("alpha.epub", lib.path());
+    let library_path = lib.path().to_str().unwrap().to_string();
+
+    let w = make_worker_default(pool.clone());
+    w.post(Task::Scan { library_path });
+
+    assert!(
+        poll_maps_empty(&w).await,
+        "scan and its follow-up tasks (including DetectCleanup) did not drain in time"
+    );
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM dedup_suggestions WHERE kind = 'book_title' AND action = 'rename'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        count, 1,
+        "expected the scan's DetectCleanup follow-up to persist the pre-existing suggestion"
+    );
+}

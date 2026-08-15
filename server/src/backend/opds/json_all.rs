@@ -16,7 +16,7 @@ use super::json_entries::book_publication;
 use super::json_response;
 
 pub(super) async fn all_books(
-    _user: OpdsAuthUser,
+    user: OpdsAuthUser,
     State(state): State<AppState>,
     Query(query): Query<AllQuery>,
 ) -> Response {
@@ -24,7 +24,7 @@ pub(super) async fn all_books(
         Ok(c) => c,
         Err(_) => return bad_cursor_response(),
     };
-    let page = match load_page(&state, cursor.as_ref()).await {
+    let page = match load_page(&state, &user, cursor.as_ref()).await {
         Ok(p) => p,
         Err(resp) => return resp,
     };

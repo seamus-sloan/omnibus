@@ -23,6 +23,8 @@ fn bd_insight_values_formats_started_time_read_sessions_and_pace() {
         seconds_total: 5400,       // 1h 30m across 3 sessions
         sessions: 3,
     };
+    // `dates_ready: false` pins the deterministic UTC day (offset 0), same
+    // as SSR and the first client paint.
     let [started, time_read, sessions, pace] = bd_insight_values(Some(insights), false);
     assert_eq!(started, "November 14, 2023");
     assert_eq!(time_read, "1h 30m");

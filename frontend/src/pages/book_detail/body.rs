@@ -451,6 +451,8 @@ fn BdInsightsCard(uuid: String) -> Element {
 /// `None` (no sessions yet, whether because the fetch hasn't resolved or the
 /// book truly has none) renders all four as em-dashes — the SSR seed and the
 /// AC2 empty state are the same value, so there is no flash-then-revert.
+/// `dates_ready` gates the Started date's local-day offset (rule 07; see
+/// [`use_local_dates_ready`]).
 fn bd_insight_values(insights: Option<BookInsights>, dates_ready: bool) -> [String; 4] {
     let dash = || "\u{2014}".to_string();
     match insights {

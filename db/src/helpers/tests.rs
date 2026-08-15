@@ -1,6 +1,16 @@
 //! Unit tests for the `helpers` module.
 
+use omnibus_shared::EbookMetadata;
+
 use super::*;
+
+fn with_series(series: Option<&str>, series_index: Option<&str>) -> EbookMetadata {
+    EbookMetadata {
+        series: series.map(Into::into),
+        series_index: series_index.map(Into::into),
+        ..Default::default()
+    }
+}
 
 #[test]
 fn parse_series_index_parses_finite_decimals() {
@@ -16,6 +26,71 @@ fn parse_series_index_rejects_non_finite_and_garbage() {
     assert_eq!(parse_series_index("inf"), None);
     assert_eq!(parse_series_index("-inf"), None);
     assert_eq!(parse_series_index("not a number"), None);
+}
+
+#[test]
+fn cleaned_series_name_strips_a_trailing_hash_index() {
+    // AC1: "Name #1"/"Name #2"/"Name #3" all clean to the same "Name".
+    for raw in [
+        "Crowns of Nyaxia #1",
+        "Crowns of Nyaxia #2",
+        "Crowns of Nyaxia #3",
+    ] {
+        assert_eq!(
+            cleaned_series_name(&with_series(Some(raw), None)).as_deref(),
+            Some("Crowns of Nyaxia"),
+            "input {raw:?}"
+        );
+    }
+}
+
+#[test]
+fn cleaned_series_name_strips_a_trailing_comma_book_index() {
+    assert_eq!(
+        cleaned_series_name(&with_series(Some("Mistborn, Book 2"), None)).as_deref(),
+        Some("Mistborn")
+    );
+}
+
+#[test]
+fn cleaned_series_name_leaves_a_plain_name_untouched() {
+    assert_eq!(
+        cleaned_series_name(&with_series(Some("  Foundation  "), None)).as_deref(),
+        Some("Foundation")
+    );
+    assert_eq!(cleaned_series_name(&with_series(None, None)), None);
+    assert_eq!(cleaned_series_name(&with_series(Some("   "), None)), None);
+}
+
+#[test]
+fn resolved_series_index_parses_the_embedded_hash_suffix_when_no_explicit_index() {
+    assert_eq!(
+        resolved_series_index(&with_series(Some("The Bloodsword Saga #2"), None)),
+        Some(2.0)
+    );
+    assert_eq!(
+        resolved_series_index(&with_series(Some("Mistborn, Book 2"), None)),
+        Some(2.0)
+    );
+}
+
+#[test]
+fn resolved_series_index_prefers_the_explicit_index_over_an_embedded_one() {
+    // AC2: an explicit index always wins, even when it disagrees with the
+    // number embedded in the name.
+    assert_eq!(
+        resolved_series_index(&with_series(Some("Mistborn #2"), Some("5"))),
+        Some(5.0)
+    );
+}
+
+#[test]
+fn resolved_series_index_is_none_without_an_explicit_or_embedded_index() {
+    assert_eq!(
+        resolved_series_index(&with_series(Some("Foundation"), None)),
+        None
+    );
+    assert_eq!(resolved_series_index(&with_series(None, None)), None);
 }
 
 #[test]

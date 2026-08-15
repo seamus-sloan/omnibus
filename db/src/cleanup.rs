@@ -1,8 +1,12 @@
-//! Library-cleanup detection: five domain-specific algorithms that surface
-//! near-duplicate authors/series/tags, semicolon-soup tags, filename cruft
-//! in book titles, and junk-author rows left behind by a third-party
-//! import. Detection only — the persisted `dedup_suggestions` queue and
-//! the apply/undo primitives are separate follow-up modules.
+//! Library-cleanup detection plus the transactional apply/undo primitives
+//! that act on a detected (or on-page) suggestion: five domain-specific
+//! detectors surface near-duplicate authors/series/tags, semicolon-soup
+//! tags, filename cruft in book titles, and junk-author rows left behind
+//! by a third-party import; [`apply`] and [`undo`] execute or reverse one
+//! against the `dedup_suggestions` / `cleanup_log` / `entity_aliases`
+//! tables from migration `0069`. Detection lives here; apply/undo live in
+//! the sibling `apply`/`entity_ops`/`snapshot`/`undo` submodules so this
+//! file stays under the file-shape soft cap.
 
 use std::collections::{HashMap, HashSet};
 
@@ -13,8 +17,19 @@ use sqlx::SqlitePool;
 
 use crate::normalize::normalize_author;
 
+mod apply;
+mod entity_ops;
+mod snapshot;
+mod undo;
+
 #[cfg(test)]
 mod tests;
+
+pub use apply::{
+    apply_book_title_override, apply_delete_author, apply_merge_authors, apply_merge_series,
+    apply_merge_tags, apply_tag_split, CleanupApplyError,
+};
+pub use undo::undo;
 
 /// Errors returned by the cleanup detectors.
 #[derive(Debug, thiserror::Error)]
@@ -25,9 +40,9 @@ pub enum CleanupError {
     Pattern(#[from] regex::Error),
 }
 
-/// Confidence tier of a detected suggestion, per F5.9's technical design:
-/// Tier 0 is a high-confidence normalized-key or regex match; Tier 1 is a
-/// fuzzy match, always surfaced (never gated behind an opt-in toggle).
+/// Confidence tier of a detected suggestion: Tier 0 is a high-confidence
+/// normalized-key or regex match; Tier 1 is a fuzzy match, always surfaced
+/// (never gated behind an opt-in toggle).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tier {
@@ -182,8 +197,11 @@ pub async fn detect_all(pool: &SqlitePool) -> Result<Vec<DetectedSuggestion>, Cl
 // fuzzy-Jaccard shape, parameterized on which taxonomy table to read.
 // ---------------------------------------------------------------------------
 
-/// Which normalized taxonomy table a merge-detection pass targets.
-#[derive(Debug, Clone, Copy)]
+/// Which normalized taxonomy table a merge-detection pass targets. Reused
+/// by the `apply`/`undo` submodules to parameterize the same shape over
+/// authors/series/tags rather than hand-rolling three near-identical
+/// primitives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MergeEntity {
     Author,
     Series,
@@ -197,6 +215,44 @@ impl MergeEntity {
             Self::Series => CleanupKind::Series,
             Self::Tag => CleanupKind::Tag,
         }
+    }
+
+    /// The entity's own taxonomy table.
+    fn table(self) -> &'static str {
+        match self {
+            Self::Author => "authors",
+            Self::Series => "series",
+            Self::Tag => "tags",
+        }
+    }
+
+    /// The book-link join table for this entity.
+    fn link_table(self) -> &'static str {
+        match self {
+            Self::Author => "books_authors_link",
+            Self::Series => "books_series_link",
+            Self::Tag => "books_tags_link",
+        }
+    }
+
+    /// The link table's foreign-key column naming this entity.
+    fn link_col(self) -> &'static str {
+        match self {
+            Self::Author => "author",
+            Self::Series => "series",
+            Self::Tag => "tag",
+        }
+    }
+
+    /// Whether this entity's own table carries a `sort` column (tags don't).
+    fn has_sort(self) -> bool {
+        !matches!(self, Self::Tag)
+    }
+
+    /// Whether this entity's link table carries a `position` column
+    /// (authors only).
+    fn has_position(self) -> bool {
+        matches!(self, Self::Author)
     }
 
     /// `(id, name, sort, book_id)` — one row per linked book, `NULL` book_id
@@ -353,7 +409,7 @@ fn fuzzy_merge_suggestions(
     suggestions
 }
 
-/// Fuzzy-match threshold: token-set Jaccard >= 0.85 (F5.9 technical design).
+/// Fuzzy-match threshold: token-set Jaccard >= 0.85.
 const FUZZY_JACCARD_THRESHOLD: f64 = 0.85;
 
 fn token_set(key: &str) -> HashSet<&str> {
@@ -391,16 +447,22 @@ fn merge_suggestion(
     group: &[&EntityRow],
     canonical: &EntityRow,
 ) -> DetectedSuggestion {
-    let source_ids: Vec<i64> = group
+    // Sorted by id (ascending), not left in `group`'s incoming order: `group`
+    // ultimately traces back to `fetch_entity_rows`'s `HashMap<i64,
+    // EntityRow>::into_values()`, whose iteration order is unstable across
+    // runs. `dedup_suggestions`'s `UNIQUE (kind, action, payload_json)`
+    // (migration `0069`) is a plain string comparison over the serialized
+    // payload, so an unstable `source_ids`/`source_names` order would let
+    // the same logical merge re-insert as a "new" row every time detection
+    // reruns instead of being caught by `INSERT OR IGNORE`.
+    let mut sources: Vec<&EntityRow> = group
         .iter()
+        .copied()
         .filter(|r| r.id != canonical.id)
-        .map(|r| r.id)
         .collect();
-    let source_names: Vec<String> = group
-        .iter()
-        .filter(|r| r.id != canonical.id)
-        .map(|r| r.name.clone())
-        .collect();
+    sources.sort_by_key(|r| r.id);
+    let source_ids: Vec<i64> = sources.iter().map(|r| r.id).collect();
+    let source_names: Vec<String> = sources.iter().map(|r| r.name.clone()).collect();
     // Distinct union, not a sum: a book linked to more than one of the
     // group's members (common for tags, possible for messy author imports)
     // must be counted once, not once per member that links to it.

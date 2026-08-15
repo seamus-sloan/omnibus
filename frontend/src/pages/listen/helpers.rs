@@ -108,16 +108,14 @@ pub(super) fn seek_to(secs: f64) {
     let _ = secs;
 }
 
-// The resume-decision trio below is only *called* from the web bootstrap
-// (`bootstrap::run_manifest_init`), but lives here un-gated-on-web so its
-// tests run under the crate's test matrix (`server` feature) — the
-// bootstrap module itself is `#![cfg(feature = "web")]` and its tests
-// never execute there.
+// The resume-decision trio below is called from both the web bootstrap
+// (`bootstrap::run_manifest_init`) and the mobile host driver
+// (`mobile::host::load_manifest`/`init_direct_and_drain`) — un-gated on
+// either target so it can't drift between the two (#1888, #1923).
 
 /// Select the resume position: prefer the server-authoritative value when
 /// available, fall back to the locally cached initial position.
-#[cfg(not(feature = "mobile"))]
-#[cfg_attr(not(feature = "web"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 fn resolve_resume_pos(server_pos: Option<f64>, local_pos: f64) -> f64 {
     server_pos.unwrap_or(local_pos)
 }
@@ -126,8 +124,7 @@ fn resolve_resume_pos(server_pos: Option<f64>, local_pos: f64) -> f64 {
 /// otherwise the progress row's stored `book_file_id`, so resume lands in
 /// the file the seconds were recorded in (#1888); `None` (the server's
 /// lowest-ordinal default) only when neither names one.
-#[cfg(not(feature = "mobile"))]
-#[cfg_attr(not(feature = "web"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 pub(super) fn resolve_boot_file(requested: Option<i64>, row_file: Option<i64>) -> Option<i64> {
     requested.or(row_file)
 }
@@ -140,8 +137,7 @@ pub(super) fn resolve_boot_file(requested: Option<i64>, row_file: Option<i64>) -
 /// seconds recorded in another file, or in no named file at all (the local
 /// cache never names one), start playback at zero rather than splicing one
 /// file's offset into another (#1888).
-#[cfg(not(feature = "mobile"))]
-#[cfg_attr(not(feature = "web"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 pub(super) fn resolve_boot_position(
     row: Option<(Option<i64>, Option<f64>)>,
     local_pos: f64,
@@ -322,9 +318,9 @@ pub(super) fn format_hms(seconds: f64) -> String {
 
 /// Rate-adjusted "time left" for a real (1x) `remaining` duration; falls back
 /// to `remaining` unscaled when `rate` is non-finite or non-positive. Shared
-/// by the web and mobile players so every remaining-time readout scales the
-/// same way.
-pub(super) fn remaining_at_rate(remaining: f64, rate: f64) -> f64 {
+/// by the web and mobile players and the landing resume hero so every
+/// remaining-time readout scales the same way.
+pub(crate) fn remaining_at_rate(remaining: f64, rate: f64) -> f64 {
     if !rate.is_finite() || rate <= 0.0 {
         return remaining;
     }
@@ -479,19 +475,22 @@ mod tests {
     }
 }
 
-// The resume-decision helpers don't exist on mobile (the web bootstrap is
-// their only caller), so their tests live in a separately-gated module.
-#[cfg(all(test, not(feature = "mobile")))]
+// The resume-decision helpers are shared by both the web bootstrap and the
+// mobile host driver, so their tests run under every feature combination.
+#[cfg(test)]
 mod boot_resume_tests {
     use omnibus_shared::cross_format::{
         CrossFormatCandidate, CrossFormatResume, CrossFormatResumeState, MappingConfidence,
     };
     use omnibus_shared::ProgressFormat;
 
-    use super::{
-        resolve_boot_file, resolve_boot_position, resolve_follow_boot, resolve_resume_pos,
-    };
+    #[cfg(not(feature = "mobile"))]
+    use super::resolve_follow_boot;
+    use super::{resolve_boot_file, resolve_boot_position, resolve_resume_pos};
 
+    // Only read by the `resolve_follow_boot` tests, which share its
+    // `not(mobile)` gate.
+    #[cfg_attr(feature = "mobile", allow(dead_code))]
     fn follow_resume(follow: bool, state: CrossFormatResumeState) -> CrossFormatResume {
         CrossFormatResume {
             state,
@@ -513,6 +512,7 @@ mod boot_resume_tests {
         }
     }
 
+    #[cfg(not(feature = "mobile"))]
     #[test]
     fn resolve_follow_boot_seeds_the_mapped_file_and_seconds() {
         let resume = follow_resume(true, CrossFormatResumeState::Candidate);
@@ -522,12 +522,14 @@ mod boot_resume_tests {
         );
     }
 
+    #[cfg(not(feature = "mobile"))]
     #[test]
     fn resolve_follow_boot_stands_aside_for_an_explicit_picker_file() {
         let resume = follow_resume(true, CrossFormatResumeState::Candidate);
         assert_eq!(resolve_follow_boot(Some(919), Some(&resume)), None);
     }
 
+    #[cfg(not(feature = "mobile"))]
     #[test]
     fn resolve_follow_boot_requires_follow_and_a_candidate_state() {
         let no_follow = follow_resume(false, CrossFormatResumeState::Candidate);

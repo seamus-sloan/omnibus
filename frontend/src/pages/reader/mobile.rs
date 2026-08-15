@@ -113,12 +113,27 @@ async fn mount_and_drain(
 ) {
     prefs_storage::load_and_apply_reader_prefs(prefs).await;
     let local_saved = crate::reader_progress::load(&uuid);
-    let server_cfi = data::get_progress(&server_url, &uuid, ProgressFormat::Epub)
+    let record = data::get_progress(&server_url, &uuid, ProgressFormat::Epub)
         .await
         .ok()
-        .flatten()
-        .and_then(|r| r.epub_cfi);
-    let cfi = server_cfi.or(local_saved);
+        .flatten();
+    // Seed the footer with the server's stored whole-book percent (flagged
+    // approximate) so the position shows during the WebView's slow
+    // fetch/parse/paginate window instead of a blank or frozen 0% — the
+    // mobile mirror of the web bootstrap's seed (issue #1896, AC2). The
+    // first real relocate overwrites it wholesale.
+    let stored_pct = record.as_ref().and_then(|r| r.progress_percent);
+    if let Some(pct) = stored_pct.filter(|p| (1..=100).contains(p)) {
+        let mut loc = sigs.loc;
+        if loc.peek().cfi.is_none() {
+            loc.set(RelocateData {
+                pct: pct as u32,
+                pct_approx: true,
+                ..Default::default()
+            });
+        }
+    }
+    let cfi = record.and_then(|r| r.epub_cfi).or(local_saved);
 
     // Backstop for the route-level offline bounce (`BookReadPage`'s guard):
     // at cold start the app may still believe it's online, and the progress

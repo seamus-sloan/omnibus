@@ -10,6 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use omnibus_db as db;
+use omnibus_shared::SeriesDetail;
 
 use crate::auth::OpdsAuthUser;
 use crate::backend::AppState;
@@ -65,27 +66,48 @@ pub(super) async fn index(_user: OpdsAuthUser, State(state): State<AppState>) ->
 /// `GET /opds/series/{id}` — acquisition feed of one series' books, in
 /// series-index order (`db::get_series`'s ordering).
 pub(super) async fn acquisition_feed(
-    _user: OpdsAuthUser,
+    user: OpdsAuthUser,
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Response {
-    match db::get_series(&state.pool, id).await {
-        Ok(Some(mut series)) => {
-            retain_ereader_books(&mut series.books);
-            let feed = Feed {
-                id: format!("urn:omnibus:opds:series:{id}"),
-                title: series.name.clone(),
-                updated: now_rfc3339(),
-                links: vec![
-                    Link::new("self", format!("/opds/series/{id}"), ACQUISITION_TYPE),
-                    Link::new("up", "/opds/series", NAVIGATION_TYPE),
-                    Link::new("start", "/opds", NAVIGATION_TYPE),
-                ],
-                entries: series.books.iter().map(book_entry).collect(),
-            };
-            xml_response(ACQUISITION_TYPE, feed.to_xml())
-        }
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => internal("read series", e),
-    }
+    let series = match load_series(&state, &user, id).await {
+        Ok(Some(s)) => s,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(resp) => return resp,
+    };
+    let feed = Feed {
+        id: format!("urn:omnibus:opds:series:{id}"),
+        title: series.name.clone(),
+        updated: now_rfc3339(),
+        links: vec![
+            Link::new("self", format!("/opds/series/{id}"), ACQUISITION_TYPE),
+            Link::new("up", "/opds/series", NAVIGATION_TYPE),
+            Link::new("start", "/opds", NAVIGATION_TYPE),
+        ],
+        entries: series.books.iter().map(book_entry).collect(),
+    };
+    xml_response(ACQUISITION_TYPE, feed.to_xml())
+}
+
+/// Load one series with its books narrowed to e-reader formats and to
+/// books `user` may see (#932) — an audiobook/physical-only book, or one
+/// confined to a manual shelf `user` cannot see, would otherwise surface
+/// as an entry with no working acquisition link. `Ok(None)` is an unknown
+/// series id; `Err` is a ready-to-return failure response. `pub(super)` —
+/// reused by `opds::json_series` so both catalogs' series feeds carry the
+/// same entries.
+pub(super) async fn load_series(
+    state: &AppState,
+    user: &OpdsAuthUser,
+    series_id: i64,
+) -> Result<Option<SeriesDetail>, Response> {
+    let Some(mut series) = db::get_series(&state.pool, series_id)
+        .await
+        .map_err(|e| internal("read series", e))?
+    else {
+        return Ok(None);
+    };
+    retain_ereader_books(&mut series.books);
+    super::retain_shelf_visible(state, user, &mut series.books).await?;
+    Ok(Some(series))
 }

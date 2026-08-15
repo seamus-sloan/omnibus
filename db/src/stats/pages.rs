@@ -19,7 +19,7 @@ const WORDS_PER_PAGE: f64 = 275.0;
 
 /// Estimated pages read in the window: the persisted word-count sum over
 /// every distinct book finished within it (same completion definition as
-/// [`super::finished_books`] — a 100% journal entry or an explicit
+/// [`super::compute::finished_books`] — a 100% journal entry or an explicit
 /// read-status `finished`), divided by [`WORDS_PER_PAGE`]. A book finished
 /// twice counts once. `None` when no finished book in the window has a stored
 /// word count — none finished, or every finished one is audio-only /

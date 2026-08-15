@@ -21,8 +21,12 @@
  *                                           maxWidth?, justify?,
  *                                           allowScriptedContent?,
  *                                           locationsKey? }
- *   next()
- *   prev()
+ *   next()                          queued/coalesced — see the paging-turn
+ *                                   queue below (issue #1895, AC1)
+ *   prev()                          same queue as next()
+ *   retry()                         re-run the most recent init() verbatim;
+ *                                   the reader error overlay's recovery
+ *                                   action (issue #1895, AC3)
  *   setFontSize(px)
  *   setTheme(name)
  *   setFont(family)
@@ -69,6 +73,11 @@
   var book = null;
   var rendition = null;
   var relocateTimer = null;
+  // Whether epub.js "locations" (the whole-book pagination map) are usable
+  // for the current book — loaded from cache or generated. Until then the
+  // relocate payload carries a coarse spine-derived percent flagged
+  // `pctApprox` instead of epub.js's frozen 0 (issue #1896).
+  var locationsReady = false;
   // False while an initial CFI restore is still settling — mutes emitRelocate
   // so the first-pass landing (a page or two off until fonts/theme reflow) is
   // never persisted as reading progress.
@@ -151,7 +160,9 @@
     cancelTurnAnim();
     endSectionTurn();
     endSettleFade();
+    resetTurnQueue();
     tocFlat = [];
+    locationsReady = false;
     if (rendition) {
       try {
         rendition.destroy();
@@ -190,12 +201,62 @@
     return null;
   }
 
+  // Coarse whole-book percent from spine position alone — the honest stand-in
+  // while the locations map is still being generated (issue #1896). Spine
+  // index plus the visual page fraction within the current section, over the
+  // spine count. Clamped below 100 so an approximation can never claim the
+  // book is finished.
+  function spineApproxPct(start) {
+    try {
+      var spine = book && book.spine;
+      var count = spine
+        ? (spine.spineItems || spine.items || []).length || spine.length || 0
+        : 0;
+      if (!count) return 0;
+      var idx = typeof start.index === "number" ? start.index : 0;
+      var frac = 0;
+      var d = start.displayed;
+      if (d && d.total > 0 && d.page > 0) frac = (d.page - 1) / d.total;
+      var pct = Math.round(((idx + frac) / count) * 100);
+      return Math.max(0, Math.min(99, pct));
+    } catch (e) {
+      return 0;
+    }
+  }
+
   function buildRelocateData(location) {
     var cfi = location && location.start ? location.start.cfi : undefined;
-    var pct = location && location.start ? Math.round((location.start.percentage || 0) * 100) : 0;
+    // Whole-book percent needs the locations map; until it resolves,
+    // epub.js reports `percentage` as a flat 0 for the entire session.
+    // Substitute the spine-derived approximation and say so (`pctApprox`)
+    // rather than rendering a frozen 0% (issue #1896).
+    var pct = 0;
+    var pctApprox = false;
     // Full-precision twin of `pct` for the "synced here" declaration —
     // an anchor pair is only as good as the fraction it records.
-    var frac = location && location.start ? (location.start.percentage || 0) : 0;
+    var frac = 0;
+    if (location && location.start) {
+      if (locationsReady) {
+        // `start.percentage` is a snapshot taken when the relocate fired;
+        // the post-generation re-emit reuses a location minted *before* the
+        // map existed, whose snapshot is a frozen 0 — recompute from the
+        // CFI in that case rather than reporting a mid-book position as 0%.
+        var p = location.start.percentage || 0;
+        if (!p && cfi && book && book.locations) {
+          try {
+            p = book.locations.percentageFromCfi(cfi) || 0;
+          } catch (e) {
+            p = 0;
+          }
+        }
+        pct = Math.round(p * 100);
+        frac = p;
+      } else {
+        pct = spineApproxPct(location.start);
+        pctApprox = true;
+        frac = pct / 100;
+      }
+    }
     // `displayed` is the visual column epub.js just rendered in the current
     // paginated flow — 1-indexed, and always exactly one away from the
     // previous relocate's page after a next()/prev() turn. This replaced a
@@ -216,6 +277,7 @@
       totalPages: totalPages,
       pct: pct,
       frac: frac,
+      pctApprox: pctApprox,
       // epub.js sets `atEnd` when the displayed range reaches the last page
       // of the last spine item — `pct` alone tops out below 100 because it
       // tracks the *start* of the visible range.
@@ -256,9 +318,15 @@
     stageResizeObserver.observe(el);
   }
 
+  // The most recent init() call's arguments — retry() replays them verbatim
+  // so a stalled/failed rendition (AC3) can recover without the Rust side
+  // having to re-derive the bootstrap literals (theme, font, saved CFI, …).
+  var lastInitArgs = null;
+
   function init(elementId, fileUrl, opts) {
     opts = opts || {};
     scriptedContentAllowed = !!opts.allowScriptedContent;
+    lastInitArgs = { elementId: elementId, fileUrl: fileUrl, opts: opts };
 
     if (typeof ePub !== "function") {
       emitStatus("error");
@@ -335,6 +403,19 @@
       }
     }
 
+    // Resolved when this init's first page is on screen (the same moment
+    // the host's loading overlay drops) — the gate that keeps the
+    // locations pass out of the open path. `painted` is the synchronous
+    // mirror the error handler below reads.
+    var painted = false;
+    var paintResolve = null;
+    var firstPaint = new Promise(function (res) {
+      paintResolve = function () {
+        painted = true;
+        res();
+      };
+    });
+
     // The whole-book `pct` figure comes from epub.js "locations" — a
     // whole-book pagination pass that takes seconds on desktop and much
     // longer in the mobile WebView (the visual page/section total in
@@ -345,7 +426,15 @@
     // entries just fall back to regeneration. Caveat: replacing a book's
     // file under the same uuid can leave a slightly stale pct until the
     // entry is cleared.
+    //
+    // Generation (cache miss only) is gated on `firstPaint`: it walks and
+    // parses every spine section on the main thread, so starting it at
+    // book.ready lets it race the initial section render and starve the
+    // relocate timers — the "Loading…"-for-the-whole-book-parse and
+    // frozen-footer symptoms of issue #1896. Until it resolves, relocates
+    // carry the spine-approximate `pct` (see buildRelocateData).
     var locationsCacheKey = opts.locationsKey ? "omn.locs::" + opts.locationsKey : null;
+    var locBook = book;
     book.ready
       .then(function () {
         tocFlat = [];
@@ -362,15 +451,24 @@
         if (cached) {
           try {
             book.locations.load(cached);
+            locationsReady = true;
             return null;
           } catch (e) { /* corrupt cache — regenerate below */ }
         }
-        return book.locations.generate(1024).then(function () {
-          if (locationsCacheKey) {
-            try {
-              window.localStorage.setItem(locationsCacheKey, book.locations.save());
-            } catch (e) { /* quota/unavailable — regenerate next open */ }
-          }
+        return firstPaint.then(function () {
+          // A teardown+init for another book may have superseded this one
+          // while the gate was pending — never generate against it.
+          if (book !== locBook) return null;
+          return locBook.locations.generate(1024).then(function () {
+            if (book !== locBook) return null;
+            locationsReady = true;
+            if (locationsCacheKey) {
+              try {
+                window.localStorage.setItem(locationsCacheKey, locBook.locations.save());
+              } catch (e) { /* quota/unavailable — regenerate next open */ }
+            }
+            return null;
+          });
         });
       })
       .then(function () {
@@ -378,20 +476,21 @@
         // Rust side gets a real whole-book `pct` on first load (page/total
         // are already live off the current render — see buildRelocateData).
         // An echo: it re-states the position, it doesn't report movement.
-        if (rendition && rendition.location) {
+        if (book === locBook && rendition && rendition.location) {
           emitRelocate(rendition.location, true);
         }
         // A follow-mode auto-jump that raced this pass now has a rendition
         // (and locations) to resolve against — apply it unless navigation
-        // cancelled it. The CFI slot wins: it is the server-derived precise
-        // target, the percentage its locations-scale fallback.
-        if (pendingJumpCfi !== null) {
+        // cancelled it (or the book was swapped mid-chain). The CFI slot
+        // wins: it is the server-derived precise target, the percentage its
+        // locations-scale fallback.
+        if (book === locBook && pendingJumpCfi !== null) {
           var jumpCfi = pendingJumpCfi;
           pendingJumpCfi = null;
           pendingJumpPct = null;
           restoreEchoPending = false;
           displaySettled(jumpCfi);
-        } else if (pendingJumpPct !== null && book && book.locations) {
+        } else if (book === locBook && pendingJumpPct !== null && book && book.locations) {
           var pct = pendingJumpPct;
           pendingJumpPct = null;
           restoreEchoPending = false;
@@ -399,7 +498,13 @@
         }
       })
       .catch(function () {
-        emitStatus("error");
+        // Before the first paint this is a failed open and the host must
+        // show its error state. After it, the reader is already usable —
+        // a background locations failure only degrades the percent, so
+        // don't replace a working page with the failure overlay. A chain
+        // whose init has been superseded (book swapped) reports nothing:
+        // its failure describes a book no longer on screen.
+        if (!painted && book === locBook) emitStatus("error");
       });
 
     // Restoring a saved position must go through the same settle-then-
@@ -425,6 +530,7 @@
       function () {
         if (!initialCfi) {
           emitStatus("ready");
+          paintResolve();
           return;
         }
         var r = rendition;
@@ -434,6 +540,7 @@
           if (rendition !== r || restoreSettled) return;
           restoreSettled = true;
           emitStatus("ready");
+          paintResolve();
           // A relocate already in flight (debounce pending) carries the
           // freshest measured landing and will emit now that the mute is
           // lifted — don't shadow it with a snapshot. Otherwise emit the
@@ -553,22 +660,85 @@
     }
   }
 
-  function next() {
+  // ── Paging-turn queue (button / keyboard next()/prev()) ────────────
+  // A click at ~1/sec (or an arrow-key repeat) called rendition.next()/
+  // prev() again before epub.js finished laying out the previous turn —
+  // the second call landed mid-transition and wedged the rendition with no
+  // console error (issue #1895, AC1). Every OmnibusReader.next()/prev() now
+  // goes through this queue: a turn already in flight absorbs later calls
+  // (coalesced to the most recent direction) instead of firing a second
+  // concurrent rendition.next()/prev(), and a watchdog surfaces a genuinely
+  // hung turn as a visible error rather than a silent black screen (AC3).
+  var TURN_WATCHDOG_MS = 4000;
+  var turnInFlight = false;
+  var turnPendingDir = null;
+  var turnWatchdog = null;
+
+  function clearTurnWatchdog() {
+    if (turnWatchdog) {
+      clearTimeout(turnWatchdog);
+      turnWatchdog = null;
+    }
+  }
+
+  // Reset the turn queue outright (teardown, or a book swap mid-turn) so a
+  // later mount can never inherit a stale in-flight flag or watchdog.
+  function resetTurnQueue() {
+    clearTurnWatchdog();
+    turnInFlight = false;
+    turnPendingDir = null;
+  }
+
+  function finishTurn() {
+    clearTurnWatchdog();
+    turnInFlight = false;
+    if (turnPendingDir !== null) {
+      var dir = turnPendingDir;
+      turnPendingDir = null;
+      queueTurn(dir);
+    }
+  }
+
+  function runTurn(dir) {
+    if (!rendition) {
+      turnInFlight = false;
+      return;
+    }
+    turnInFlight = true;
+    var result = dir > 0 ? rendition.next() : rendition.prev();
+    var p = result && typeof result.then === "function" ? result : Promise.resolve(result);
+    // Fail-open: a turn that never settles must not permanently wedge every
+    // later click — surface it once as a visible, retryable error instead.
+    turnWatchdog = setTimeout(function () {
+      turnWatchdog = null;
+      turnInFlight = false;
+      turnPendingDir = null;
+      emitStatus("error");
+    }, TURN_WATCHDOG_MS);
+    p.then(finishTurn, finishTurn);
+  }
+
+  function queueTurn(dir) {
     if (!rendition) return;
+    // A user turn cancels any pending follow-jump or restore echo — the
+    // reader is navigating away from the target position.
     pendingJumpPct = null;
     pendingJumpCfi = null;
     restoreEchoPending = false;
     displayToken++;
-    return rendition.next();
+    if (turnInFlight) {
+      turnPendingDir = dir;
+      return;
+    }
+    runTurn(dir);
+  }
+
+  function next() {
+    queueTurn(1);
   }
 
   function prev() {
-    if (!rendition) return;
-    pendingJumpPct = null;
-    pendingJumpCfi = null;
-    restoreEchoPending = false;
-    displayToken++;
-    return rendition.prev();
+    queueTurn(-1);
   }
 
   var sectionTurnStyleInstalled = false;
@@ -808,6 +978,79 @@
     }
   }
 
+  // Proactively re-point every `<img src>` / SVG `<image href|xlink:href>`
+  // that epub.js resolved to a `blob:` URL at its own bytes as a `data:`
+  // URI, read straight out of the archive — same fix, same rationale as
+  // inlineBookStylesheets above, for the other resource kind it doesn't
+  // cover. Real publisher front matter (title page, copyright, contents) is
+  // routinely a single full-page <img> or SVG-wrapped <image>, and unlike
+  // prose text a blank one is silent: no console error, nothing to notice
+  // (issue #1895, AC2). `resources.urls`/`replacementUrls` are parallel
+  // arrays (manifest-relative href -> resolved blob/base64 URL), so a
+  // reverse lookup recovers the href a `blob:` src came from. Fire-and-forget
+  // and fully guarded, like its stylesheet sibling.
+  function inlineBookImages(doc) {
+    try {
+      if (!book || !book.resources || !book.archive || doc.__omnibusBookImages) {
+        return;
+      }
+      doc.__omnibusBookImages = true;
+      var urls = book.resources.urls || [];
+      var replacementUrls = book.resources.replacementUrls || [];
+      var hrefByReplacement = {};
+      for (var i = 0; i < urls.length; i++) {
+        if (typeof replacementUrls[i] === "string") {
+          hrefByReplacement[replacementUrls[i]] = urls[i];
+        }
+      }
+      function repair(src, apply) {
+        if (!src || src.indexOf("blob:") !== 0) return;
+        var href = hrefByReplacement[src];
+        if (!href) return;
+        var path;
+        try {
+          path = book.resolve(href);
+        } catch (e) {
+          return;
+        }
+        book.archive
+          .getBase64(path)
+          .then(function (dataUri) {
+            if (dataUri) apply(dataUri);
+          })
+          .catch(function () {
+            /* unreadable asset — leave the blob: reference as-is */
+          });
+      }
+
+      var imgs = doc.querySelectorAll("img[src]");
+      for (var j = 0; j < imgs.length; j++) {
+        (function (img) {
+          repair(img.getAttribute("src"), function (dataUri) {
+            img.setAttribute("src", dataUri);
+          });
+        })(imgs[j]);
+      }
+
+      // SVG accepts the image reference as either the modern plain `href` or
+      // the legacy `xlink:href` — real-world publisher markup uses both.
+      var XLINK_NS = "http://www.w3.org/1999/xlink";
+      var svgImages = doc.querySelectorAll("image");
+      for (var k = 0; k < svgImages.length; k++) {
+        (function (el) {
+          var plain = el.hasAttribute("href");
+          var src = plain ? el.getAttribute("href") : el.getAttributeNS(XLINK_NS, "href");
+          repair(src, function (dataUri) {
+            if (plain) el.setAttribute("href", dataUri);
+            else el.setAttributeNS(XLINK_NS, "href", dataUri);
+          });
+        })(svgImages[k]);
+      }
+    } catch (e) {
+      /* never let image repair break rendering */
+    }
+  }
+
   // Reader-owned hyperlink colour. Apple/Kindle paint links with their own
   // accent and ignore the publisher's — so links stay a consistent, legible
   // colour instead of whatever hue (or `:hover` red) a given book's CSS ships.
@@ -865,6 +1108,7 @@
       if (!doc || !doc.head) return;
 
       inlineBookStylesheets(doc);
+      inlineBookImages(doc);
 
       // Hyphenation needs a language for its dictionary; inherit the book's,
       // defaulting to English, without clobbering a per-document `lang`.
@@ -904,14 +1148,26 @@
       // accent. Scoping to `[href]` also spares body text that Gutenberg wraps
       // in a self-closing *named* anchor (`<a id="chapN"/>`, no href), which
       // the HTML parser leaves open across the chapter.
+      //
+      // `html,body{height:100%}` plus the img/svg max-size rules exist for
+      // full-page front-matter markup (a single <img> or SVG-wrapped <image>
+      // filling the section): a percentage-height image resolves against its
+      // containing block, and without an explicit height on that chain it
+      // collapses to nothing — a page that "renders" but shows no pixels
+      // (issue #1895, AC2). epub.js sets an explicit pixel height on body
+      // itself via inline style for the column layout, which (inline always
+      // beating a stylesheet rule) takes precedence over this — the rule only
+      // fills the gap for sections whose body height would otherwise be auto.
       if (!doc.getElementById("__omnibus_baseline")) {
         var style = doc.createElement("style");
         style.id = "__omnibus_baseline";
         style.textContent =
-          "html,body{-webkit-hyphens:auto;-ms-hyphens:auto;hyphens:auto;}" +
+          "html,body{-webkit-hyphens:auto;-ms-hyphens:auto;hyphens:auto;height:100%;}" +
           "body,body *{color:var(--omn-fg,#f5f3f0)!important;}" +
           "a:not([href]){cursor:auto;}" +
-          "a[href]{color:var(--omn-link,#4a86d8)!important;text-decoration:none;}";
+          "a[href]{color:var(--omn-link,#4a86d8)!important;text-decoration:none;}" +
+          "img,svg{max-width:100%;max-height:100%;}" +
+          "svg{display:block;margin:0 auto;}";
         doc.head.appendChild(style);
       }
     });
@@ -1473,6 +1729,16 @@
     teardown();
   }
 
+  // Re-run the most recent init() verbatim — the recovery path behind the
+  // reader's error overlay (issue #1895, AC3). Reopens at the saved CFI the
+  // original mount used rather than wherever a wedged turn left the
+  // rendition, since a stuck rendition's own "current" position can't be
+  // trusted.
+  function retry() {
+    if (!lastInitArgs) return;
+    init(lastInitArgs.elementId, lastInitArgs.fileUrl, lastInitArgs.opts);
+  }
+
   // Walk the nested TOC into a flat [{label, href, level}] list and hand it
   // to the Rust side. Level is the nesting depth (0 = top), used to indent
   // the contents drawer. Re-emittable on demand via requestToc().
@@ -1855,5 +2121,6 @@
     shareText: shareText,
     search: search,
     destroy: destroy,
+    retry: retry,
   };
 })();

@@ -493,6 +493,22 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     hasCover: true,
   },
 
+  // Reserved for the paging-race / blank-front-matter regression in
+  // reader.spec.ts (issue #1895) — five one-page sections (two full-page
+  // images, three text) ahead of chapter1, so paging through it crosses
+  // section boundaries repeatedly. No other spec may page through this book.
+  {
+    slug: "frontmatter-relay",
+    filename: "frontmatter-relay.epub",
+    title: "Frontmatter Relay",
+    authors: ["Rozsa Peter"],
+    publisher: "Omnibus Test Press",
+    published: "1951-01-01",
+    tags: [],
+    language: "en",
+    hasCover: true,
+  },
+
   // The two CBZ fixtures (tools/make_cbz.ts) are reserved for the
   // comic-pager spec (comic_reader.spec.ts): `aurora-station-01` receives
   // that spec's progress and read-status writes (the pager auto-marks

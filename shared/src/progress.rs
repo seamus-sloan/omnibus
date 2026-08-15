@@ -224,6 +224,11 @@ pub struct ResumePoint {
     /// Total chapter count, for a "Ch. 3 of 12" readout. `None` for epub rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chapter_count: Option<i64>,
+    /// The user's saved playback rate for this book, so resume surfaces can
+    /// rate-adjust their "left" readouts. `None` for epub rows and when no
+    /// preference has been saved (treat as 1x).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub playback_rate: Option<f64>,
 }
 
 /// Batched session row (reader / audio open-to-close span). Mobile

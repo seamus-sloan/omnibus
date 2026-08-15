@@ -30,6 +30,8 @@ pub enum InitDbError {
     #[error(transparent)]
     SortKeys(#[from] crate::sort_keys::SortKeysError),
     #[error(transparent)]
+    SeriesNormalize(#[from] crate::series_normalize::SeriesNormalizeError),
+    #[error(transparent)]
     MissingFiles(#[from] MissingFilesError),
     #[error(transparent)]
     Shelves(#[from] crate::shelves::ShelfError),
@@ -102,6 +104,11 @@ async fn run_boot_backfills(pool: &SqlitePool) -> Result<(), InitDbError> {
     // attachments and drop the standalone duplicates the old clobber left.
     // Runs after the scan_key backfill it depends on.
     repair_multipart_audiobook_attachments(pool).await?;
+    // #1912: merge `series` rows whose name still embeds a trailing index
+    // ("Mistborn #2") into their cleaned canonical row and backfill
+    // `books.series_index` for the books that gap-fills. Runs before the
+    // series_sort backfill below so that pass reads the merged link.
+    crate::series_normalize::backfill_embedded_series_index(pool).await?;
     // F5b `series_sort` keyset column for rows indexed before migration 0028,
     // reconstructed from the existing series link.
     crate::sort_keys::backfill_series_sort(pool).await?;

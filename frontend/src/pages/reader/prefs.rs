@@ -6,7 +6,7 @@
 
 use dioxus::prelude::*;
 
-use crate::components::atrium::{persist_theme, Theme};
+use crate::components::atrium::{apply_theme, Theme, ThemeSnap};
 
 #[cfg(feature = "mobile")]
 use super::mobile::prefs_storage::save_reader_pref_mobile;
@@ -30,6 +30,7 @@ pub(crate) const FONT_SIZE_MAX: i32 = 32;
 #[derive(Copy, Clone)]
 pub(crate) struct ReaderPrefs {
     pub theme: Signal<Theme>,
+    pub snap: ThemeSnap,
     pub font_size: Signal<i32>,
     pub typeface: Signal<Typeface>,
     pub line_spacing: Signal<LineSpacing>,
@@ -39,12 +40,11 @@ pub(crate) struct ReaderPrefs {
 }
 
 impl ReaderPrefs {
-    /// Apply `t` and persist it via the atrium theme writer. Themes are
-    /// app-wide (not just reader-scoped) so persistence is shared.
+    /// Apply `t` via the atrium theme writer (raises the transition-snap
+    /// flag and persists). Themes are app-wide (not just reader-scoped) so
+    /// persistence is shared.
     pub(crate) fn set_theme(self, t: Theme) {
-        let mut theme = self.theme;
-        theme.set(t);
-        persist_theme(t);
+        apply_theme(self.theme, self.snap, t);
     }
 
     /// Step the font size down one px (clamped to `FONT_SIZE_MIN`), push
@@ -168,6 +168,7 @@ impl ReaderPrefs {
 /// app-wide atrium signal so changes here flip both reader and the
 /// surrounding chrome.
 pub(crate) fn init_reader_prefs(theme: Signal<Theme>) -> ReaderPrefs {
+    let snap = use_context::<ThemeSnap>();
     let mut font_size = use_signal(default_font_size);
     let mut typeface = use_signal(default_typeface);
     let mut line_spacing = use_signal(default_line_spacing);
@@ -203,6 +204,7 @@ pub(crate) fn init_reader_prefs(theme: Signal<Theme>) -> ReaderPrefs {
 
     ReaderPrefs {
         theme,
+        snap,
         font_size,
         typeface,
         line_spacing,

@@ -46,7 +46,8 @@ mod tests {
     }
 }
 
-/// Grouped playback signals (duration, elapsed, playing, rate, volume, hls_ready).
+/// Grouped playback signals (duration, elapsed, playing, rate, volume,
+/// hls_ready, buffering).
 #[derive(Clone, Copy, PartialEq)]
 pub(super) struct PlaybackSignals {
     pub duration: Signal<f64>,
@@ -56,6 +57,9 @@ pub(super) struct PlaybackSignals {
     pub rate_error: Signal<Option<String>>,
     pub volume: Signal<f64>,
     pub hls_ready: Signal<bool>,
+    /// True while the element is waiting on network data after a play was
+    /// requested — drives the transport's buffering badge.
+    pub buffering: Signal<bool>,
 }
 
 /// Build the sleep-panel state: reactive countdown/choice/fade reads plus
@@ -195,7 +199,7 @@ pub(super) fn ReadyPlayer(
             }
 
             PlayerStageBinding {
-                book_meta: BookMeta { book: book.clone(), title, author },
+                book_meta: BookMeta { book: book.clone(), uuid: uuid.clone(), title, author },
                 signals,
                 panes,
                 chapter_state: ChapterSignals {
@@ -235,6 +239,7 @@ pub(super) fn ReadyPlayer(
 #[derive(Clone, PartialEq)]
 pub(super) struct BookMeta {
     pub book: EbookMetadata,
+    pub uuid: String,
     pub title: String,
     pub author: String,
 }
@@ -314,6 +319,7 @@ pub(super) fn PlayerStageBinding(
 ) -> Element {
     let BookMeta {
         book,
+        uuid,
         title,
         author,
     } = book_meta;
@@ -329,6 +335,7 @@ pub(super) fn PlayerStageBinding(
     let duration = signals.duration;
     let elapsed = signals.elapsed;
     let playing = signals.playing;
+    let buffering = signals.buffering;
     let mut volume = signals.volume;
     let speed_panel_open = panes.speed_panel_open;
     let sleep_panel_open = panes.sleep_panel_open;
@@ -352,6 +359,7 @@ pub(super) fn PlayerStageBinding(
         PlayerStage {
             content: PlayerContent {
                 book: book.clone(),
+                uuid,
                 title,
                 author,
                 chapters: chs.clone(),
@@ -363,6 +371,9 @@ pub(super) fn PlayerStageBinding(
                 rate: (signals.rate)(),
                 scrub_max: scrub_max(dur),
                 current_chapter_index: current_chapter_index(),
+                // Only meaningful once playback was actually requested — a
+                // paused, never-played book has nothing to be "buffering".
+                buffering: playing() && buffering(),
             },
             transport: TransportState {
                 play_label: if playing() { "Pause" } else { "Play" }.to_string(),

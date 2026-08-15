@@ -2,8 +2,7 @@
 //! directory and the per-`(book_id, target_format)` output path. Mirrors
 //! `crate::kepub::fs`. [`convert_path`] is the **only** place a
 //! caller-supplied format token becomes a path component — every other
-//! site that needs the cache path derives it from `convert_path`'s own
-//! output rather than reformatting the token a second time.
+//! site derives the cache path from its output instead.
 
 use std::path::PathBuf;
 
