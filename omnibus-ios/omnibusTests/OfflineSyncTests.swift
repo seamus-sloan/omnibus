@@ -28,7 +28,7 @@ private func replayedValue(_ json: String, key: String) throws -> Any? {
     return object?[key]
 }
 
-@Suite("Outbox body re-encoding", .serialized)
+@Suite("Outbox body re-encoding")
 struct RawJSONTests {
     @Test("one-star rating survives replay as a number, not a boolean")
     func oneStarRatingStaysNumeric() throws {
@@ -89,7 +89,7 @@ struct RawJSONTests {
 
 // MARK: - Revalidation scoping
 
-@Suite("Outbox scope", .serialized)
+@Suite("Outbox scope")
 struct OutboxScopeTests {
     private let uuid = "11111111-2222-3333-4444-555555555555"
 
@@ -188,7 +188,7 @@ struct OutboxScopeTests {
 
 // MARK: - Reachability signals
 
-@Suite("Cancellation is not a reachability signal", .serialized)
+@Suite("Cancellation is not a reachability signal")
 struct CancellationTests {
     @Test("a cancelled URL task is recognised as cancellation")
     func urlCancellationIsRecognised() {
@@ -210,7 +210,7 @@ struct CancellationTests {
 
 // MARK: - Replay outcome classification
 
-@Suite("Replay outcomes", .serialized)
+@Suite("Replay outcomes")
 struct ReplayOutcomeTests {
     @Test("a payload the server refuses on its merits is never retried")
     func refusalsAreTerminal() {
@@ -247,7 +247,7 @@ struct ReplayOutcomeTests {
 
 // MARK: - Position wire contract
 
-@Suite("Progress client clock", .serialized)
+@Suite("Progress client clock")
 struct ProgressClockTests {
     private func encoded(_ update: ProgressUpdate) throws -> [String: Any] {
         let data = try JSONEncoder().encode(update)
@@ -336,8 +336,17 @@ struct ProgressClockTests {
 // which the player then re-saved with a fresh clock — permanently. These pin
 // the four guards that close the gap.
 
-@Suite("Restoring the newer of the replica and a queued position", .serialized)
+@Suite("Restoring the newer of the replica and a queued position")
 struct PositionRestoreTests {
+    // `audioPositionSeconds` is a `Double`, and these must be declared as one
+    // rather than written as a bare `19 * 60` inside an `#expect`: the macro
+    // captures each side of a comparison through a generic, which severs the
+    // literal's inference from the `Double?` it is being compared against and
+    // lets it default to `Int`. The resulting heterogeneous compare comes back
+    // `false` however well the numbers agree — "(→ 1140.0) == (→ 1140)".
+    private static let chapter13Position: Double = 13 * 60
+    private static let chapter19Position: Double = 19 * 60
+
     private func record(_ seconds: Double, clock: Int64) -> ProgressRecord {
         ProgressRecord(
             bookUUID: "book-1", format: .audio, epubCFI: nil,
@@ -349,18 +358,24 @@ struct PositionRestoreTests {
     func queuedOpAheadOfReplicaWins() {
         // The incident this reproduces: chapter 19 sits only in the queued
         // op, chapter 13 is what a lost op left behind in the replica.
-        let replica = record(13 * 60, clock: 1_000)
-        let queued = record(19 * 60, clock: 2_000)
-        #expect(PositionSync.newest(replica, queued)?.audioPositionSeconds == 19 * 60)
+        let replica = record(Self.chapter13Position, clock: 1_000)
+        let queued = record(Self.chapter19Position, clock: 2_000)
+        #expect(
+            PositionSync.newest(replica, queued)?.audioPositionSeconds
+                == Self.chapter19Position
+        )
     }
 
     @Test("a replica ahead of a stale queued op wins")
     func replicaAheadOfQueuedOpWins() {
         // The other direction matters too: an op queued before the replica
         // last moved must not drag a restore backwards.
-        let replica = record(19 * 60, clock: 2_000)
-        let queued = record(13 * 60, clock: 1_000)
-        #expect(PositionSync.newest(replica, queued)?.audioPositionSeconds == 19 * 60)
+        let replica = record(Self.chapter19Position, clock: 2_000)
+        let queued = record(Self.chapter13Position, clock: 1_000)
+        #expect(
+            PositionSync.newest(replica, queued)?.audioPositionSeconds
+                == Self.chapter19Position
+        )
     }
 
     @Test("a tie keeps the first argument")
@@ -368,18 +383,24 @@ struct PositionRestoreTests {
         // `bookFileID` is the field that distinguishes the two records here —
         // `audioPositionSeconds` alone would still match even if the tie-break
         // picked the wrong side, since both share the same position.
-        var replica = record(19 * 60, clock: 2_000)
+        var replica = record(Self.chapter19Position, clock: 2_000)
         replica.bookFileID = 1
-        var queued = record(19 * 60, clock: 2_000)
+        var queued = record(Self.chapter19Position, clock: 2_000)
         queued.bookFileID = 2
         #expect(PositionSync.newest(replica, queued)?.bookFileID == 1)
     }
 
     @Test("nothing queued falls back to the replica, and vice versa")
     func eitherSideMayBeAbsent() {
-        let replica = record(13 * 60, clock: 1_000)
-        #expect(PositionSync.newest(replica, nil)?.audioPositionSeconds == 13 * 60)
-        #expect(PositionSync.newest(nil, replica)?.audioPositionSeconds == 13 * 60)
+        let replica = record(Self.chapter13Position, clock: 1_000)
+        #expect(
+            PositionSync.newest(replica, nil)?.audioPositionSeconds
+                == Self.chapter13Position
+        )
+        #expect(
+            PositionSync.newest(nil, replica)?.audioPositionSeconds
+                == Self.chapter13Position
+        )
         #expect(PositionSync.newest(nil, nil) == nil)
     }
 
@@ -390,11 +411,12 @@ struct PositionRestoreTests {
         // own client clock filling both timestamp fields.
         let update = ProgressUpdate(
             bookUUID: "book-1", format: .audio, epubCFI: nil,
-            audioPositionSeconds: 19 * 60, clientUpdatedAt: 2_000, bookFileID: 7
+            audioPositionSeconds: Self.chapter19Position, clientUpdatedAt: 2_000,
+            bookFileID: 7
         )
         let asRecord = update.asRecord
         #expect(asRecord.bookUUID == "book-1")
-        #expect(asRecord.audioPositionSeconds == 19 * 60)
+        #expect(asRecord.audioPositionSeconds == Self.chapter19Position)
         #expect(asRecord.bookFileID == 7)
         #expect(asRecord.orderingClock == 2_000)
     }
@@ -422,7 +444,7 @@ struct PositionRestoreTests {
     }
 }
 
-@Suite("Folding a drained progress response into the replica", .serialized)
+@Suite("Folding a drained progress response into the replica")
 struct ProgressResponseSupersessionTests {
     private func record(clock: Int64) -> ProgressRecord {
         ProgressRecord(
@@ -457,7 +479,7 @@ struct ProgressResponseSupersessionTests {
     }
 }
 
-@Suite("Replay cap exemption for coalesced position kinds", .serialized)
+@Suite("Replay cap exemption for coalesced position kinds")
 struct ReplayCapExemptionTests {
     @Test("AC3: progress and playback-rate kinds are exempt")
     func positionKindsAreExempt() {
@@ -480,7 +502,7 @@ struct ReplayCapExemptionTests {
     }
 }
 
-@Suite("Close-time position flush", .serialized)
+@Suite("Close-time position flush")
 struct ClosePositionFlushTests {
     @Test("AC4: closing before the opening position has settled writes nothing")
     func unsettledCloseWritesNothing() {
@@ -505,7 +527,7 @@ struct ClosePositionFlushTests {
 
 // MARK: - Audiobook file selection
 
-@Suite("Progress file identity", .serialized)
+@Suite("Progress file identity")
 struct ProgressFileIdentityTests {
     private func encoded(_ update: ProgressUpdate) throws -> [String: Any] {
         let data = try JSONEncoder().encode(update)
@@ -555,7 +577,7 @@ struct ProgressFileIdentityTests {
     }
 }
 
-@Suite("Selectable audio files", .serialized)
+@Suite("Selectable audio files")
 struct AudioFileSelectionTests {
     private func file(
         _ id: Int64, format: String, ordinal: Int64
@@ -609,7 +631,7 @@ struct AudioFileSelectionTests {
 
 // MARK: - Optimistic journal authorship (#1740)
 
-@Suite("Optimistic journal entry", .serialized)
+@Suite("Optimistic journal entry")
 struct OptimisticJournalEntryTests {
     private let payload = CreateJournalEntry(
         bookUUID: "11111111-2222-3333-4444-555555555555",
@@ -671,7 +693,7 @@ struct OptimisticJournalEntryTests {
 
 // MARK: - Account scoping
 
-@Suite("User-scoped cache wipe", .serialized)
+@Suite("User-scoped cache wipe")
 struct UserScopedPrefixTests {
     private let uuid = "11111111-2222-3333-4444-555555555555"
 
@@ -729,7 +751,7 @@ struct UserScopedPrefixTests {
 
 // MARK: - Content validators (#1231)
 
-@Suite("Download staleness", .serialized)
+@Suite("Download staleness")
 struct DownloadStalenessTests {
     private func file(
         _ id: Int64, format: String, ordinal: Int64, etag: String?
@@ -818,7 +840,7 @@ struct DownloadStalenessTests {
     }
 }
 
-@Suite("Book file validator wire shape", .serialized)
+@Suite("Book file validator wire shape")
 struct BookFileEtagCodecTests {
     @Test("the validator decodes from the server's snake_case payload")
     func etagDecodes() throws {
@@ -840,7 +862,7 @@ struct BookFileEtagCodecTests {
     }
 }
 
-@Suite("Downloaded-file selection", .serialized)
+@Suite("Downloaded-file selection")
 struct DownloadTargetFileTests {
     private func file(
         _ id: Int64, format: String, ordinal: Int64, etag: String?
