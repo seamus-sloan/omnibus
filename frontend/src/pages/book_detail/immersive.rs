@@ -70,11 +70,21 @@ pub(super) fn BdImmersiveButton(uuid: String) -> Element {
             error_sig.set(None);
             loading_sig.set(true);
             if same_book {
-                // Same uuid: nudge the driver by clearing first — the
-                // reactive load keys on the uuid value changing.
+                // Same uuid: the driver keys on the value CHANGING, and a
+                // None→Some pair inside one handler collapses to
+                // no-change — which left the dock cleared but never
+                // rebooted (the "Immersive Read doesn't open the player"
+                // regression). Commit the None now; the Some lands from a
+                // spawned task after this render.
                 uuid_sig.set(None);
+                let uuid_next = uuid.clone();
+                let mut uuid_sig_next = uuid_sig;
+                spawn(async move {
+                    uuid_sig_next.set(Some(uuid_next));
+                });
+            } else {
+                uuid_sig.set(Some(uuid.clone()));
             }
-            uuid_sig.set(Some(uuid.clone()));
         }
         dioxus_router::navigator().push(Route::BookRead { uuid: uuid.clone() });
     };
