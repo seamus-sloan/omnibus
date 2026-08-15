@@ -619,3 +619,228 @@ async fn undo_returns_already_undone_on_a_second_call() {
     let err = undo(&pool, log_id).await.unwrap_err();
     assert!(matches!(err, CleanupApplyError::AlreadyUndone));
 }
+
+// ---------------------------------------------------------------------------
+// undo concurrency — the claim-then-mutate ordering fix
+// ---------------------------------------------------------------------------
+
+/// Split `results` into (ok_count, already_undone_count) for a two-caller
+/// race, asserting nothing else showed up (a panic, a DB error, etc. would
+/// mean the race produced more than the two expected outcomes).
+fn tally_race_outcomes(results: &[Result<(), CleanupApplyError>]) -> (usize, usize) {
+    let ok = results.iter().filter(|r| r.is_ok()).count();
+    let already_undone = results
+        .iter()
+        .filter(|r| matches!(r, Err(CleanupApplyError::AlreadyUndone)))
+        .count();
+    assert_eq!(
+        ok + already_undone,
+        results.len(),
+        "every racing call must resolve to either success or AlreadyUndone, nothing else"
+    );
+    (ok, already_undone)
+}
+
+/// Two `undo()` calls on the same merge log entry, released at the same
+/// instant via a barrier (mirroring
+/// `merge_metadata_overrides_concurrent_saves_dont_drop_writes`'s real-
+/// contention shape). Before the ordering fix, `mark_undone_tx` ran *after*
+/// `undo_merge`'s replay, so the loser could recreate the source author a
+/// second time before discovering the entry was already undone. With the
+/// claim moved first, the loser's claim affects zero rows and it exits
+/// before touching `authors` at all — exactly one caller succeeds, and the
+/// end state matches a single clean undo (one restored author row, not two,
+/// and no leftover duplicate link).
+#[tokio::test]
+async fn undo_concurrent_calls_on_a_merge_race_to_exactly_one_success() {
+    use std::sync::Arc;
+    use tokio::sync::Barrier;
+
+    let pool = new_pool().await;
+    let lib = seed_root(&pool).await;
+    let book = insert_book(&pool, lib, "book-1", "Title One").await;
+    let source = insert_author(&pool, "Sandy Brandon", None).await;
+    let canonical = insert_author(&pool, "Brandon Sandy", Some("Sandy, Brandon")).await;
+    link_author(&pool, book, source, 2).await;
+
+    let log_id = apply_merge_authors(&pool, &[source], canonical, None, None)
+        .await
+        .unwrap();
+
+    let barrier = Arc::new(Barrier::new(2));
+    let (pool_a, barrier_a) = (pool.clone(), barrier.clone());
+    let (pool_b, barrier_b) = (pool.clone(), barrier.clone());
+    let task_a = tokio::spawn(async move {
+        barrier_a.wait().await;
+        undo(&pool_a, log_id).await
+    });
+    let task_b = tokio::spawn(async move {
+        barrier_b.wait().await;
+        undo(&pool_b, log_id).await
+    });
+    let results = [task_a.await.unwrap(), task_b.await.unwrap()];
+
+    let (ok, already_undone) = tally_race_outcomes(&results);
+    assert_eq!(ok, 1, "exactly one racing undo() call must succeed");
+    assert_eq!(already_undone, 1, "the other must see AlreadyUndone");
+
+    assert_eq!(
+        count_rows(&pool, "SELECT COUNT(*) FROM authors").await,
+        2,
+        "exactly the recreated source plus the untouched canonical — a double \
+         replay would have recreated the source author a second time"
+    );
+    let (restored_id, _) = author_row(&pool, "Sandy Brandon").await.unwrap();
+    assert_eq!(author_position(&pool, book, restored_id).await, Some(2));
+}
+
+/// Same race as above, against the `BookTitle`/`Rename` log kind — the path
+/// that used to call `mark_undone` (pool-level, its own statement) only
+/// *after* the `metadata_overrides` restore, and outside any shared
+/// transaction with it. Now both the claim and the restore run inside one
+/// transaction via `upsert_one_in_tx`/`delete_one_in_tx`, so the same
+/// claim-then-mutate guarantee holds here too.
+#[tokio::test]
+async fn undo_concurrent_calls_on_a_rename_race_to_exactly_one_success() {
+    use std::sync::Arc;
+    use tokio::sync::Barrier;
+
+    let pool = new_pool().await;
+    let lib = seed_root(&pool).await;
+    let user = seed_user(&pool).await;
+    let book = insert_book(&pool, lib, "book-1", "Cruft Title (Annotated)").await;
+    let uuid: String = sqlx::query_scalar("SELECT uuid FROM books WHERE id = ?")
+        .bind(book)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let log_id = apply_book_title_override(&pool, &uuid, "Cruft Title", None, user)
+        .await
+        .unwrap();
+
+    let barrier = Arc::new(Barrier::new(2));
+    let (pool_a, barrier_a) = (pool.clone(), barrier.clone());
+    let (pool_b, barrier_b) = (pool.clone(), barrier.clone());
+    let task_a = tokio::spawn(async move {
+        barrier_a.wait().await;
+        undo(&pool_a, log_id).await
+    });
+    let task_b = tokio::spawn(async move {
+        barrier_b.wait().await;
+        undo(&pool_b, log_id).await
+    });
+    let results = [task_a.await.unwrap(), task_b.await.unwrap()];
+
+    let (ok, already_undone) = tally_race_outcomes(&results);
+    assert_eq!(ok, 1, "exactly one racing undo() call must succeed");
+    assert_eq!(already_undone, 1, "the other must see AlreadyUndone");
+
+    assert!(get_metadata_overrides(&pool, &uuid)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+// ---------------------------------------------------------------------------
+// undo — entity_aliases restore, not delete
+// ---------------------------------------------------------------------------
+
+/// A merge overwrites an `entity_aliases` row that already pointed
+/// somewhere else (from an earlier, separately-applied merge). Undoing the
+/// later merge must restore that earlier mapping, not delete it outright —
+/// deleting would make the earlier merge's absorbed name resolve to
+/// nothing.
+#[tokio::test]
+async fn apply_merge_authors_undo_restores_a_preexisting_alias_rather_than_deleting_it() {
+    let pool = new_pool().await;
+    let lib = seed_root(&pool).await;
+    let book = insert_book(&pool, lib, "book-1", "Title One").await;
+    let earlier_canonical = insert_author(&pool, "Earlier Canonical", None).await;
+    sqlx::query(
+        "INSERT INTO entity_aliases (kind, alias_name, canonical_id, created_at)
+         VALUES ('author', 'Sandy Brandon', ?, 111)",
+    )
+    .bind(earlier_canonical)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let source = insert_author(&pool, "Sandy Brandon", None).await;
+    let canonical = insert_author(&pool, "Brandon Sandy", Some("Sandy, Brandon")).await;
+    link_author(&pool, book, source, 0).await;
+
+    let log_id = apply_merge_authors(&pool, &[source], canonical, None, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        alias_canonical(&pool, "author", "Sandy Brandon").await,
+        Some(canonical),
+        "the merge overwrites the alias to point at its own canonical"
+    );
+
+    undo(&pool, log_id).await.unwrap();
+
+    assert_eq!(
+        alias_canonical(&pool, "author", "Sandy Brandon").await,
+        Some(earlier_canonical),
+        "undo must restore the pre-merge alias mapping, not delete it"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// apply_tag_split — batched linking at scale
+// ---------------------------------------------------------------------------
+
+/// A source tag linked to many books, split into several atoms, must land
+/// every (book, atom) pair via the batched `move_links`-per-atom path — the
+/// same end state the old per-book-per-atom loop produced, just without the
+/// O(atoms × books) round trips.
+#[tokio::test]
+async fn apply_tag_split_links_every_book_in_a_larger_linked_set() {
+    let pool = new_pool().await;
+    let lib = seed_root(&pool).await;
+    let source = insert_tag(&pool, "scifi;fantasy;horror").await;
+    let mut books = Vec::new();
+    for i in 0..25 {
+        let book = insert_book(&pool, lib, &format!("book-{i}"), &format!("Title {i}")).await;
+        link_tag(&pool, book, source).await;
+        books.push(book);
+    }
+
+    let atoms = vec![
+        "scifi".to_string(),
+        "fantasy".to_string(),
+        "horror".to_string(),
+    ];
+    let log_id = apply_tag_split(&pool, source, ";", &atoms, None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(count_rows(&pool, "SELECT COUNT(*) FROM tags").await, 3);
+    for &book in &books {
+        assert_eq!(
+            count_rows(
+                &pool,
+                &format!("SELECT COUNT(*) FROM books_tags_link WHERE book = {book}")
+            )
+            .await,
+            3,
+            "every book must be linked to all three atoms"
+        );
+    }
+
+    undo(&pool, log_id).await.unwrap();
+
+    assert_eq!(count_rows(&pool, "SELECT COUNT(*) FROM tags").await, 1);
+    for &book in &books {
+        assert_eq!(
+            count_rows(
+                &pool,
+                &format!("SELECT COUNT(*) FROM books_tags_link WHERE book = {book}")
+            )
+            .await,
+            1
+        );
+    }
+}

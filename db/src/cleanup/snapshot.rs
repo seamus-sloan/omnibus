@@ -43,6 +43,15 @@ pub(super) struct BookLink {
     pub position: Option<i64>,
 }
 
+/// The `entity_aliases` row a merge's `write_entity_alias` call is about to
+/// overwrite, captured beforehand so undo can restore it exactly rather than
+/// deleting a mapping that predates this merge.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct AliasSnapshot {
+    pub canonical_id: i64,
+    pub created_at: i64,
+}
+
 /// One entity absorbed into the canonical id during a merge.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct MergedSource {
@@ -53,6 +62,12 @@ pub(super) struct MergedSource {
     /// Authors only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub photo: Option<PhotoSnapshot>,
+    /// The name's `entity_aliases` row before this merge overwrote it —
+    /// `None` if the name had never been merged away before. Undo restores
+    /// this instead of unconditionally deleting the row, so a merge can't
+    /// erase an earlier merge's alias mapping for the same name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_alias: Option<AliasSnapshot>,
 }
 
 /// Full pre-merge state for `apply_merge_authors`/`_series`/`_tags`, enough

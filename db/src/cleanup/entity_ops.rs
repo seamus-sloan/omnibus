@@ -304,8 +304,9 @@ pub(super) async fn write_entity_alias(
 }
 
 /// Remove an `entity_aliases` row — the undo counterpart of
-/// [`write_entity_alias`], run when a merge is reversed so the recreated
-/// (independent) source name no longer resolves to the old canonical id.
+/// [`write_entity_alias`] for a source name that had **no** alias row before
+/// the merge being undone, run so the recreated (independent) source name no
+/// longer resolves to the old canonical id.
 pub(super) async fn delete_entity_alias(
     tx: &mut Transaction<'_, Sqlite>,
     kind: CleanupKind,
@@ -316,6 +317,51 @@ pub(super) async fn delete_entity_alias(
         .bind(alias_name)
         .execute(&mut **tx)
         .await?;
+    Ok(())
+}
+
+/// The `(canonical_id, created_at)` an `entity_aliases` row held *before* a
+/// merge is about to overwrite it via [`write_entity_alias`]'s
+/// `ON CONFLICT` — `None` when no such row exists yet. A merge snapshots
+/// this ahead of writing its own alias so undo can tell "this name never
+/// aliased anything before me" from "this name already pointed somewhere
+/// else, from an earlier merge I must not erase".
+pub(super) async fn fetch_entity_alias(
+    tx: &mut Transaction<'_, Sqlite>,
+    kind: CleanupKind,
+    alias_name: &str,
+) -> Result<Option<(i64, i64)>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT canonical_id, created_at FROM entity_aliases WHERE kind = ? AND alias_name = ?",
+    )
+    .bind(kind.as_str())
+    .bind(alias_name)
+    .fetch_optional(&mut **tx)
+    .await
+}
+
+/// Restore an `entity_aliases` row to exactly `(canonical_id, created_at)` —
+/// the undo counterpart of [`write_entity_alias`] for a source name whose
+/// alias predates the merge being undone, so reversing a later merge can't
+/// destroy the mapping an earlier one recorded.
+pub(super) async fn restore_entity_alias(
+    tx: &mut Transaction<'_, Sqlite>,
+    kind: CleanupKind,
+    alias_name: &str,
+    canonical_id: i64,
+    created_at: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO entity_aliases (kind, alias_name, canonical_id, created_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(kind, alias_name) DO UPDATE SET
+             canonical_id = excluded.canonical_id, created_at = excluded.created_at",
+    )
+    .bind(kind.as_str())
+    .bind(alias_name)
+    .bind(canonical_id)
+    .bind(created_at)
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 

@@ -14,7 +14,7 @@ use crate::taxonomy::delete_orphan_taxonomy;
 use super::apply::CleanupApplyError;
 use super::entity_ops::{
     clear_sort, delete_entity_alias, delete_link, insert_link, lookup_tag_id, recreate_entity,
-    restore_canonical_photo, write_photo,
+    restore_canonical_photo, restore_entity_alias, write_photo,
 };
 use super::snapshot::{DeleteAuthorSnapshot, MergeSnapshot, RenameSnapshot, SplitSnapshot};
 use super::MergeEntity;
@@ -43,16 +43,27 @@ pub async fn undo(pool: &SqlitePool, log_id: i64) -> Result<(), CleanupApplyErro
     let action =
         CleanupAction::from_str(&row.action).ok_or(CleanupApplyError::LogNotFound(log_id))?;
 
-    // The rename action routes through `upsert_metadata_overrides`, which
-    // owns its own transaction — see `apply::apply_book_title_override`'s
-    // doc comment for why this one primitive can't join the shared `tx`
-    // every other kind/action combination below undoes inside.
-    if kind == CleanupKind::BookTitle && action == CleanupAction::Rename {
-        undo_rename(pool, &row.snapshot_json, row.applied_by).await?;
-        return mark_undone(pool, log_id).await;
-    }
-
+    // The row-level check above is only an optimistic fast path (it reads
+    // outside any transaction) — the real guard is `mark_undone_tx` below,
+    // run *first* inside the transaction, before any replay touches a
+    // table. Two concurrent `undo(log_id)` calls both begin
+    // `BEGIN IMMEDIATE`; SQLite's single-writer lock admits only one at a
+    // time, and whichever runs second finds `undone_at` already set, so its
+    // claim affects zero rows and it errors out (rolling back its empty
+    // transaction) *before* replaying a single mutation. Claim-then-mutate,
+    // never the reverse, is what makes "already undone" mean "nothing this
+    // call did landed" rather than "something landed, but here's an error
+    // anyway" — this is why the `BookTitle`/`Rename` path below claims and
+    // replays inside this same transaction too, rather than against its own
+    // separate one the way `apply::apply_book_title_override` must (see
+    // that primitive's doc comment for why *applying* a rename can't join a
+    // shared transaction — undoing one has no such constraint, since the
+    // restore is a plain `metadata_overrides` write with no second owned
+    // transaction of its own once it's expressed as `upsert_one_in_tx`/
+    // `delete_one_in_tx`).
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    mark_undone_tx(&mut tx, log_id).await?;
+    let mut fts_rebuild_uuid: Option<String> = None;
     match (kind, action) {
         (CleanupKind::Author, CleanupAction::Merge) => {
             undo_merge(&mut tx, MergeEntity::Author, &row.snapshot_json).await?
@@ -67,10 +78,22 @@ pub async fn undo(pool: &SqlitePool, log_id: i64) -> Result<(), CleanupApplyErro
         (CleanupKind::Author, CleanupAction::Delete) => {
             undo_delete_author(&mut tx, &row.snapshot_json).await?
         }
+        (CleanupKind::BookTitle, CleanupAction::Rename) => {
+            fts_rebuild_uuid = undo_rename(&mut tx, &row.snapshot_json, row.applied_by).await?;
+        }
         _ => return Err(CleanupApplyError::LogNotFound(log_id)),
     }
-    mark_undone_tx(&mut tx, log_id).await?;
     tx.commit().await?;
+
+    // Best-effort, after commit — matches `upsert_metadata_overrides`'s own
+    // post-commit FTS rebuild exactly (see `undo_rename`): a stale FTS row
+    // self-heals on the next reindex or save and isn't worth failing an
+    // otherwise-successful undo over.
+    if let Some(book_uuid) = fts_rebuild_uuid {
+        if let Err(e) = crate::metadata_overrides::rebuild_fts_for_book(pool, &book_uuid).await {
+            tracing::warn!(book_uuid, error = %e, "books_fts rebuild after title-rename undo failed");
+        }
+    }
     Ok(())
 }
 
@@ -83,22 +106,10 @@ struct CleanupLogRow {
     undone_at: Option<i64>,
 }
 
-/// Stamp `undone_at`, guarded on `undone_at IS NULL` so two concurrent
-/// undo calls can't both report success.
-async fn mark_undone(pool: &SqlitePool, log_id: i64) -> Result<(), CleanupApplyError> {
-    let result = sqlx::query(
-        "UPDATE cleanup_log SET undone_at = strftime('%s','now')
-          WHERE id = ? AND undone_at IS NULL",
-    )
-    .bind(log_id)
-    .execute(pool)
-    .await?;
-    if result.rows_affected() == 0 {
-        return Err(CleanupApplyError::AlreadyUndone);
-    }
-    Ok(())
-}
-
+/// Claim the log row by stamping `undone_at`, guarded on `undone_at IS
+/// NULL` so of two racing transactions only one can affect a row — the
+/// other's `rows_affected() == 0` and it errors here, before either has run
+/// a single replay step (see the ordering note in [`undo`]).
 async fn mark_undone_tx(
     tx: &mut Transaction<'_, Sqlite>,
     log_id: i64,
@@ -117,40 +128,49 @@ async fn mark_undone_tx(
 }
 
 /// Undo `apply_book_title_override`: restore the previous overrides blob,
-/// or delete the override row entirely if there was none. Reuses the
-/// original apply's `applied_by` to attribute the restore, since `undo`
-/// takes no actor of its own — `apply_book_title_override` requires a real
-/// `applied_by`, so this is always `Some` for a Rename row.
+/// or delete the override row entirely if there was none — joining the
+/// caller's transaction via `upsert_one_in_tx`/`delete_one_in_tx` so the
+/// claim in [`undo`] and this restore commit or roll back together. Returns
+/// `Some(book_uuid)` when the restore path needs the post-commit FTS
+/// rebuild `upsert_metadata_overrides` would normally trigger itself — the
+/// delete path already restores canonical FTS inside its own tx-scoped
+/// call, matching `delete_metadata_overrides`.
+///
+/// Reuses the original apply's `applied_by` to attribute the restore, since
+/// `undo` takes no actor of its own — `apply_book_title_override` requires
+/// a real `applied_by`, so this is always `Some` for a Rename row.
 async fn undo_rename(
-    pool: &SqlitePool,
+    tx: &mut Transaction<'_, Sqlite>,
     snapshot_json: &str,
     applied_by: Option<i64>,
-) -> Result<(), CleanupApplyError> {
+) -> Result<Option<String>, CleanupApplyError> {
     let snap: RenameSnapshot = serde_json::from_str(snapshot_json)?;
     match snap.previous_overrides {
         Some(json) => {
             let overrides: omnibus_shared::MetadataOverrides = serde_json::from_str(&json)?;
             let actor = applied_by.ok_or(CleanupApplyError::MissingActor)?;
-            crate::metadata_overrides::upsert_metadata_overrides(
-                pool,
+            crate::metadata_overrides::upsert_one_in_tx(
+                tx,
                 &snap.book_uuid,
                 &overrides,
                 snap.previous_has_cover_override,
                 actor,
             )
             .await?;
+            Ok(Some(snap.book_uuid))
         }
         None => {
-            crate::metadata_overrides::delete_metadata_overrides(pool, &snap.book_uuid).await?;
+            crate::metadata_overrides::delete_one_in_tx(tx, &snap.book_uuid).await?;
+            Ok(None)
         }
     }
-    Ok(())
 }
 
 /// Undo `apply_merge_authors`/`_series`/`_tags`: recreate every absorbed
 /// row, restore its original links (removing the canonical's merge-created
 /// link for any book that didn't already have one), restore the photo/sort
-/// state a merge may have touched, and drop the `entity_aliases` row.
+/// state a merge may have touched, and restore the `entity_aliases` row to
+/// whatever it held before this merge — or delete it, if nothing did.
 async fn undo_merge(
     tx: &mut Transaction<'_, Sqlite>,
     entity: MergeEntity,
@@ -173,7 +193,22 @@ async fn undo_merge(
                 write_photo(tx, new_id, photo).await?;
             }
         }
-        delete_entity_alias(tx, entity.kind(), &source.name).await?;
+        // A name with no prior alias gets its row deleted outright; a name
+        // that already aliased something else (an earlier merge) gets that
+        // mapping restored rather than erased.
+        match &source.previous_alias {
+            Some(prev) => {
+                restore_entity_alias(
+                    tx,
+                    entity.kind(),
+                    &source.name,
+                    prev.canonical_id,
+                    prev.created_at,
+                )
+                .await?
+            }
+            None => delete_entity_alias(tx, entity.kind(), &source.name).await?,
+        }
     }
 
     if snap.canonical_sort_was_backfilled {

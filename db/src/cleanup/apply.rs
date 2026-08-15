@@ -23,11 +23,13 @@ use crate::sync::upsert_fts;
 use crate::taxonomy::{delete_orphan_taxonomy, resolve_or_insert_tag};
 
 use super::entity_ops::{
-    delete_entity_row, delete_links, fetch_linked_book_ids, fetch_links, fetch_name_sort,
-    load_photo_snapshot, move_links, set_sort, write_cleanup_log, write_entity_alias, write_photo,
+    delete_entity_row, delete_links, fetch_entity_alias, fetch_linked_book_ids, fetch_links,
+    fetch_name_sort, load_photo_snapshot, move_links, set_sort, write_cleanup_log,
+    write_entity_alias, write_photo,
 };
 use super::snapshot::{
-    DeleteAuthorSnapshot, MergeSnapshot, MergedSource, PhotoSnapshot, RenameSnapshot, SplitSnapshot,
+    AliasSnapshot, DeleteAuthorSnapshot, MergeSnapshot, MergedSource, PhotoSnapshot,
+    RenameSnapshot, SplitSnapshot,
 };
 use super::MergeEntity;
 
@@ -169,6 +171,16 @@ async fn apply_merge(
             None
         };
 
+        // Snapshot whatever this name already aliased — possibly nothing,
+        // possibly an earlier merge's mapping — *before* the write below
+        // overwrites it, so undo knows whether to restore or delete.
+        let previous_alias = fetch_entity_alias(&mut tx, entity.kind(), &name)
+            .await?
+            .map(|(alias_canonical_id, created_at)| AliasSnapshot {
+                canonical_id: alias_canonical_id,
+                created_at,
+            });
+
         move_links(&mut tx, entity, source_id, canonical_id).await?;
         delete_links(&mut tx, entity, source_id).await?;
         write_entity_alias(&mut tx, entity.kind(), &name, canonical_id).await?;
@@ -179,6 +191,7 @@ async fn apply_merge(
             sort,
             links,
             photo,
+            previous_alias,
         });
     }
 
@@ -272,7 +285,11 @@ async fn reconcile_author_photos(
 
 /// Replace tag `source_id` with `atoms`: resolve-or-insert each atom,
 /// link it to every book the source tag was linked to, drop the source's
-/// links, then delete the source tag row.
+/// links, then delete the source tag row. Each atom's linking is one
+/// set-based `INSERT ... SELECT` (via [`move_links`]) reading the source's
+/// current `books_tags_link` rows, not a per-book round trip — a popular
+/// tag split into a handful of atoms stays O(atoms) queries rather than
+/// O(atoms × books).
 pub async fn apply_tag_split(
     pool: &SqlitePool,
     source_id: i64,
@@ -294,13 +311,11 @@ pub async fn apply_tag_split(
 
     for atom in atoms {
         let atom_id = resolve_or_insert_tag(&mut tx, atom).await?;
-        for &book_id in &book_ids {
-            sqlx::query("INSERT OR IGNORE INTO books_tags_link (book, tag) VALUES (?, ?)")
-                .bind(book_id)
-                .bind(atom_id)
-                .execute(&mut *tx)
-                .await?;
-        }
+        // `book_ids` above is exactly the set `books_tags_link WHERE tag =
+        // source_id` currently holds (the source's links aren't dropped
+        // until after this loop), so moving them onto each atom is the same
+        // set-based copy `move_links` already does for a merge.
+        move_links(&mut tx, MergeEntity::Tag, source_id, atom_id).await?;
     }
 
     delete_links(&mut tx, MergeEntity::Tag, source_id).await?;
