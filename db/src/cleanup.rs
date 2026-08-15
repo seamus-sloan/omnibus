@@ -391,16 +391,22 @@ fn merge_suggestion(
     group: &[&EntityRow],
     canonical: &EntityRow,
 ) -> DetectedSuggestion {
-    let source_ids: Vec<i64> = group
+    // Sorted by id (ascending), not left in `group`'s incoming order: `group`
+    // ultimately traces back to `fetch_entity_rows`'s `HashMap<i64,
+    // EntityRow>::into_values()`, whose iteration order is unstable across
+    // runs. `dedup_suggestions`'s `UNIQUE (kind, action, payload_json)`
+    // (migration `0069`) is a plain string comparison over the serialized
+    // payload, so an unstable `source_ids`/`source_names` order would let
+    // the same logical merge re-insert as a "new" row every time detection
+    // reruns instead of being caught by `INSERT OR IGNORE`.
+    let mut sources: Vec<&EntityRow> = group
         .iter()
+        .copied()
         .filter(|r| r.id != canonical.id)
-        .map(|r| r.id)
         .collect();
-    let source_names: Vec<String> = group
-        .iter()
-        .filter(|r| r.id != canonical.id)
-        .map(|r| r.name.clone())
-        .collect();
+    sources.sort_by_key(|r| r.id);
+    let source_ids: Vec<i64> = sources.iter().map(|r| r.id).collect();
+    let source_names: Vec<String> = sources.iter().map(|r| r.name.clone()).collect();
     // Distinct union, not a sum: a book linked to more than one of the
     // group's members (common for tags, possible for messy author imports)
     // must be counted once, not once per member that links to it.
