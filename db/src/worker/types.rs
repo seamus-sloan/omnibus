@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use omnibus_shared::{TaskKind, TaskProgress};
+use omnibus_shared::{CleanupKind, TaskKind, TaskProgress};
 use sqlx::SqlitePool;
 use tokio::sync::{watch, Mutex, Semaphore};
 
@@ -150,6 +150,18 @@ pub enum Task {
     /// scan semaphore (its DB work is a handful of bulk-fetched queries, not
     /// per-book round trips).
     RewriteAllEpubs,
+    /// Run the library-cleanup dedup detectors (#960/#965) and persist any
+    /// newly-found suggestions into `dedup_suggestions` (migration `0069`).
+    /// `kind = None` runs every detector via `cleanup::detect_all`; `Some(k)`
+    /// scopes to just that domain — the admin-triggered "run detection now"
+    /// shape a future settings action will want, even though the only
+    /// current poster ([`crate::indexer::reindex`]'s success path) always
+    /// passes `None`. Keyed on a fixed `cleanup` resource so concurrent
+    /// detection runs serialize against each other rather than racing
+    /// `INSERT OR IGNORE`s; does not consume the scan semaphore (detection
+    /// reads a handful of already-indexed tables, it doesn't walk the
+    /// filesystem).
+    DetectCleanup { kind: Option<CleanupKind> },
     /// Test-only synthetic task: sleeps `latency_ms` and invokes the
     /// optional `on_run` / `on_done` hooks, with `resource` and
     /// `route_through_scan_sem` letting a test exercise the keyed mutex and
@@ -190,6 +202,7 @@ impl Task {
             } => Some(format!("convert:{book_id}:{source_format}:{target_format}")),
             Task::SendToKindle { .. } => Some("smtp".into()),
             Task::RewriteAllEpubs => Some("rewrite-all-epubs".into()),
+            Task::DetectCleanup { .. } => Some("cleanup".into()),
             #[cfg(test)]
             Task::Test { resource, .. } => resource.clone(),
         }
@@ -213,6 +226,7 @@ impl Task {
             Task::ConvertFormat { .. } => false,
             Task::SendToKindle { .. } => false,
             Task::RewriteAllEpubs => false,
+            Task::DetectCleanup { .. } => false,
             #[cfg(test)]
             Task::Test {
                 route_through_scan_sem,
@@ -256,6 +270,7 @@ impl Task {
             Task::ConvertFormat { .. } => "convert_format",
             Task::SendToKindle { .. } => "send_to_kindle",
             Task::RewriteAllEpubs => "rewrite_all_epubs",
+            Task::DetectCleanup { .. } => "detect_cleanup",
             #[cfg(test)]
             Task::Test { .. } => "test",
         }
@@ -302,6 +317,10 @@ impl Task {
             // Reuse Scan kind for UI display — a rare admin job with no
             // dedicated progress widget, mirroring RebuildFtsIndex/KepubConvert.
             Task::RewriteAllEpubs => TaskKind::Scan,
+            // Reuse Scan kind for UI display — a scan-follow-up with no
+            // dedicated progress widget, mirroring BackfillWordCounts/
+            // BackfillPageCounts above.
+            Task::DetectCleanup { .. } => TaskKind::Scan,
             #[cfg(test)]
             Task::Test { .. } => TaskKind::Scan,
         }

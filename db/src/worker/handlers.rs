@@ -6,7 +6,8 @@
 
 use std::sync::Arc;
 
-use omnibus_shared::TaskDetail;
+use omnibus_shared::{CleanupKind, TaskDetail};
+use sqlx::SqlitePool;
 
 use super::types::{Task, TaskId, TaskOutcome, TaskSuccessDetail, Worker};
 
@@ -88,6 +89,47 @@ fn convert_outcome(
         ) => TaskOutcome::Err(e.to_string()),
         Err(e) => sanitized_err("format conversion", e),
     }
+}
+
+/// Run the requested cleanup detector(s) and persist any newly-found
+/// suggestions into `dedup_suggestions` (migration `0069`). `kind = None`
+/// runs every detector via [`crate::cleanup::detect_all`]; `Some(k)` scopes
+/// to just that domain — `Tag` runs both `detect_tags_merge` and
+/// `detect_tags_split`, since one `CleanupKind::Tag` covers both actions.
+/// The insert relies on the table's `UNIQUE (kind, action, payload_json)`
+/// constraint (`INSERT OR IGNORE`), so re-running detection after nothing
+/// changed inserts nothing new. Returns the count of newly-inserted rows.
+async fn run_cleanup_detection(
+    pool: &SqlitePool,
+    kind: Option<CleanupKind>,
+) -> anyhow::Result<usize> {
+    let suggestions = match kind {
+        Some(CleanupKind::Author) => crate::cleanup::detect_authors(pool).await?,
+        Some(CleanupKind::Series) => crate::cleanup::detect_series(pool).await?,
+        Some(CleanupKind::Tag) => {
+            let mut suggestions = crate::cleanup::detect_tags_merge(pool).await?;
+            suggestions.extend(crate::cleanup::detect_tags_split(pool).await?);
+            suggestions
+        }
+        Some(CleanupKind::BookTitle) => crate::cleanup::detect_book_titles(pool).await?,
+        None => crate::cleanup::detect_all(pool).await?,
+    };
+    let mut inserted = 0usize;
+    for suggestion in &suggestions {
+        let payload_json = serde_json::to_string(&suggestion.payload)?;
+        let result = sqlx::query(
+            "INSERT OR IGNORE INTO dedup_suggestions (kind, action, payload_json) VALUES (?, ?, ?)",
+        )
+        .bind(suggestion.kind.as_str())
+        .bind(suggestion.action.as_str())
+        .bind(payload_json)
+        .execute(pool)
+        .await?;
+        if result.rows_affected() > 0 {
+            inserted += 1;
+        }
+    }
+    Ok(inserted)
 }
 
 impl Worker {
@@ -210,6 +252,10 @@ impl Worker {
                 )
             }
             Task::RewriteAllEpubs => self.handle_rewrite_all_epubs(id).await,
+            Task::DetectCleanup { kind } => anyhow_outcome(
+                "cleanup detection",
+                run_cleanup_detection(&self.pool, kind).await,
+            ),
             Task::GenerateThumbs {
                 book_id,
                 last_modified_epoch,
@@ -308,9 +354,12 @@ impl Worker {
 
     /// Reindex an ebook library, then (on success) post the follow-up
     /// word-count, page-count, and thumbnail-warm-up (#1752) backfill tasks
-    /// for any rows this library still needs them for. All three share the
-    /// scan's resource key, so each waits for this task to fully finish; the
-    /// posts themselves are instant. Mirrors the audiobook chapter backfill.
+    /// for any rows this library still needs them for, plus a library-cleanup
+    /// detection pass (#965) so fresh dedup suggestions appear after an
+    /// import without any admin action. All four share the scan's resource
+    /// key except `DetectCleanup`, which runs under its own `cleanup` key so
+    /// it doesn't wait behind (or block) a same-library rescan; the posts
+    /// themselves are instant. Mirrors the audiobook chapter backfill.
     async fn handle_scan(self: &Arc<Self>, library_path: String, id: TaskId) -> TaskOutcome {
         // Owned clone: the verbose callback rides into the indexer's
         // blocking parse phase, which needs `Send + 'static`.
@@ -329,6 +378,7 @@ impl Worker {
                     library_path: library_path.clone(),
                 });
                 self.post(Task::BackfillThumbs { library_path });
+                self.post(Task::DetectCleanup { kind: None });
                 TaskOutcome::Ok(warning.map(TaskSuccessDetail::GhostFiles))
             }
             Err(e) => sanitized_err("library scan", e),
