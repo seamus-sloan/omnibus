@@ -232,6 +232,35 @@ impl Task {
         matches!(self, Task::ConvertFormat { .. })
     }
 
+    /// Free-text label persisted to the `background_tasks` table (issue
+    /// #941, migration `0072`). Deliberately finer-grained than
+    /// [`Task::kind`]'s wire-facing [`TaskKind`] — several `Task` variants
+    /// share one `TaskKind` for the live progress UI (see that method's
+    /// per-arm comments), but the admin history view wants to tell e.g. a
+    /// KEPUB conversion apart from a full library scan.
+    pub(super) fn persistence_kind(&self) -> &'static str {
+        match self {
+            Task::Scan { .. } => "scan",
+            Task::ScanAudiobooks { .. } => "scan_audiobooks",
+            Task::GenerateThumbs { .. } => "generate_thumbs",
+            Task::ResolveAuthorPhoto { .. } => "resolve_author_photo",
+            Task::HlsTranscode { .. } => "hls_transcode",
+            Task::RefetchAuthorPhotos => "refetch_author_photos",
+            Task::BackfillChapters { .. } => "backfill_chapters",
+            Task::BackfillWordCounts { .. } => "backfill_word_counts",
+            Task::BackfillPageCounts { .. } => "backfill_page_counts",
+            Task::BackfillThumbs { .. } => "backfill_thumbs",
+            Task::RebuildFtsIndex => "rebuild_fts_index",
+            Task::ResolveSuggestions { .. } => "resolve_suggestions",
+            Task::KepubConvert { .. } => "kepub_convert",
+            Task::ConvertFormat { .. } => "convert_format",
+            Task::SendToKindle { .. } => "send_to_kindle",
+            Task::RewriteAllEpubs => "rewrite_all_epubs",
+            #[cfg(test)]
+            Task::Test { .. } => "test",
+        }
+    }
+
     /// Wire-protocol discriminant exposed to the UI via
     /// [`Worker::progress_snapshot`]. Tests deliberately collapse onto an
     /// existing variant so the [`TaskKind`] enum doesn't grow a `Test` arm
@@ -446,6 +475,14 @@ pub(super) fn wall_clock_ms() -> i64 {
         .ok()
         .and_then(|d| i64::try_from(d.as_millis()).ok())
         .unwrap_or(0)
+}
+
+/// Current wall-clock time in whole seconds since the UNIX epoch — the
+/// granularity `background_tasks.started_at`/`finished_at` (migration
+/// `0072`) store. Derived from [`wall_clock_ms`] rather than an independent
+/// `SystemTime` read, so the two can never disagree.
+pub(super) fn wall_clock_secs() -> i64 {
+    wall_clock_ms() / 1000
 }
 
 impl Worker {
