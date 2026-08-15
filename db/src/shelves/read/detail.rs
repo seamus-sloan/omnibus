@@ -2,6 +2,8 @@
 //! rule preview, per-book "which shelves" membership, and the Kobo sync
 //! membership union. The multi-shelf rail lives in [`super::summary`].
 
+use std::collections::HashSet;
+
 use omnibus_shared::{
     EbookMetadata, MatchMode, RulePreview, Shelf, ShelfKind, ShelfPage, ShelfRule, SortDir, SortKey,
 };
@@ -56,6 +58,53 @@ pub async fn manual_shelves_containing(
     rows.into_iter()
         .map(|r| r.try_get::<i64, _>("id").map_err(ShelfError::from))
         .collect()
+}
+
+/// Book uuids in `candidates` that are confined to a manual shelf `viewer_id`
+/// cannot see: on at least one manual shelf, and every one of those shelves
+/// is private and owned by someone else. A book on no shelf at all, or on
+/// any shelf the viewer owns, that's public, or `is_admin` covers, is never
+/// in the result — so this only ever *narrows* an already-visible set.
+///
+/// This is the predicate the OPDS catalogs layer on top of their normal
+/// library reads (#932): a book that's reachable only by hand-picking it
+/// onto a private shelf must not surface in a browse/search/new/nav feed —
+/// or a direct cover/file link — for a viewer who can't see that shelf,
+/// even though the file itself is otherwise an ordinary, generally-served
+/// library book. Chunked like [`manual_shelves_containing`]'s siblings so a
+/// large candidate page stays under SQLite's bound-parameter cap.
+pub async fn shelf_exclusive_hidden_uuids(
+    pool: &SqlitePool,
+    viewer_id: i64,
+    is_admin: bool,
+    candidates: &[String],
+) -> Result<HashSet<String>, ShelfError> {
+    const CHUNK_SIZE: usize = 200;
+    let mut hidden = HashSet::new();
+    for chunk in candidates.chunks(CHUNK_SIZE) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT sb.book_uuid AS uuid,
+                    MAX(CASE WHEN s.owner_user_id = ? OR s.visibility = 'public' OR ?
+                             THEN 1 ELSE 0 END) AS any_visible
+               FROM shelf_books sb
+               JOIN shelves s ON s.id = sb.shelf_id
+              WHERE sb.book_uuid IN ({placeholders})
+              GROUP BY sb.book_uuid"
+        );
+        let mut q = sqlx::query(&sql).bind(viewer_id).bind(is_admin);
+        for uuid in chunk {
+            q = q.bind(uuid);
+        }
+        let rows = q.fetch_all(pool).await?;
+        for r in &rows {
+            let any_visible: i64 = r.try_get("any_visible")?;
+            if any_visible == 0 {
+                hidden.insert(r.try_get::<String, _>("uuid")?);
+            }
+        }
+    }
+    Ok(hidden)
 }
 
 /// Full shelf detail (including its rules), or `None` if the id is unknown.
