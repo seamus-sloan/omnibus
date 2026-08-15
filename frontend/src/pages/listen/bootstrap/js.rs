@@ -340,8 +340,12 @@ fn hls_init_js() -> &'static str {
         } else {
           console.warn('OmnibusAudio: no HLS support in this browser');
         }
-        if (typeof initialPositionAbs !== 'number' || initialPositionAbs <= 0) {
-          // No stored position to apply: the element's 0 IS the position.
+        if (typeof initialPositionAbs === 'number' && initialPositionAbs <= 0) {
+          // An explicit zero is a real position (a fresh book boots as
+          // number 0). JSON `null` is an UNATTRIBUTABLE resume — the
+          // row's seconds live in another file — and must stay unseeded,
+          // exactly like initDirect, or the HLS arm re-opens the
+          // zero-wipe path (#1954).
           this._seeded = true;
         }
         if (typeof initialPositionAbs === 'number' && initialPositionAbs > 0) {
