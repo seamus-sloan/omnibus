@@ -17,7 +17,8 @@ mod detail;
 mod summary;
 
 pub use detail::{
-    get_shelf, kobo_synced_book_uuids, manual_shelves_containing, preview_rule, shelf_page,
+    get_shelf, kobo_synced_book_uuids, manual_shelves_containing, preview_rule,
+    shelf_exclusive_hidden_uuids, shelf_page,
 };
 pub use summary::list_visible_shelves;
 

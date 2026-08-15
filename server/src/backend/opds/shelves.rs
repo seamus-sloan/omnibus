@@ -1,8 +1,11 @@
 //! Shelves browse: `/opds/shelves` (navigation feed of the viewer's
 //! visible shelves) and `/opds/shelves/{id}` (one shelf's acquisition
-//! feed, title order). The one OPDS surface that reads the caller's
-//! identity: listing via `db::list_visible_shelves`, per-shelf access
-//! re-checked with `db::can_view` — a non-visible shelf 404s, never 403s.
+//! feed, title order): listing via `db::list_visible_shelves`, per-shelf
+//! access re-checked with `db::can_view` — a non-visible shelf 404s, never
+//! 403s. Every other OPDS handler now reads the caller's identity too
+//! (#932), via `super::retain_shelf_visible`/`super::is_shelf_hidden` —
+//! this module is just the one surface where the *shelf itself* (rather
+//! than a book confined to one) is the thing being gated.
 
 use axum::{
     extract::{Path, State},

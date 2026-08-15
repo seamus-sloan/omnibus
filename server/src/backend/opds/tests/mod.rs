@@ -1,12 +1,13 @@
 //! HTTP-layer contract tests for `/opds/*`, driving `opds_router` directly
 //! (like `kobo/tests.rs`) via `oneshot` against an in-memory DB. Shared
 //! fixtures live here, alongside the Atom v1 catalog and timestamp-parsing
-//! tests; the JSON catalog, HTTP Basic auth, and All Books/Series/Shelves
-//! tests are split into the sibling modules below.
+//! tests; the JSON catalog, HTTP Basic auth, All Books/Series/Shelves, and
+//! shelf-scoped visibility tests are split into the sibling modules below.
 
 mod all_series_shelves;
 mod basic_auth;
 mod json_catalog;
+mod shelf_scoped_visibility;
 
 use axum::{
     body::to_bytes,

@@ -139,11 +139,11 @@ pub(super) async fn by_letter(
 
 /// `GET /opds/author/{id}` — acquisition feed of one author's books.
 pub(super) async fn acquisition_feed(
-    _user: OpdsAuthUser,
+    user: OpdsAuthUser,
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Response {
-    let author = match load_author(&state, id).await {
+    let author = match load_author(&state, &user, id).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(resp) => return resp,
@@ -165,24 +165,28 @@ pub(super) async fn acquisition_feed(
 /// serve: the configured ebook library only (see the `opds` module doc),
 /// then to the formats an acquisition link can point at — an audiobook-only
 /// or physical-only row would otherwise surface as an entry with no
-/// download. `Ok(None)` is an unknown author id; `Err` is a ready-to-return
-/// failure response. `pub(super)` — reused by `opds::json_authors` so both
-/// catalogs' author feeds carry the same entries.
+/// download — and finally to books `user` may see (#932). `Ok(None)` is an
+/// unknown author id; `Err` is a ready-to-return failure response.
+/// `pub(super)` — reused by `opds::json_authors` so both catalogs' author
+/// feeds carry the same entries.
 pub(super) async fn load_author(
     state: &AppState,
+    user: &OpdsAuthUser,
     author_id: i64,
 ) -> Result<Option<AuthorDetail>, Response> {
     let settings = db::get_settings(&state.pool)
         .await
         .map_err(|e| internal("read settings", e))?;
     let paths = db::collect_paths(settings.ebook_library_path.as_deref(), None);
-    let author = db::get_author_for_paths(&state.pool, author_id, &paths)
+    let Some(mut author) = db::get_author_for_paths(&state.pool, author_id, &paths)
         .await
-        .map_err(|e| internal("read author", e))?;
-    Ok(author.map(|mut author| {
-        retain_ereader_books(&mut author.books);
-        author
-    }))
+        .map_err(|e| internal("read author", e))?
+    else {
+        return Ok(None);
+    };
+    retain_ereader_books(&mut author.books);
+    super::retain_shelf_visible(state, user, &mut author.books).await?;
+    Ok(Some(author))
 }
 
 /// Load every author across the configured ebook library (see the `opds`
