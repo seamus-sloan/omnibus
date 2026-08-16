@@ -65,6 +65,109 @@ fn interpolate_pairs(pairs: &[(f64, f64)], frac: f64) -> f64 {
     frac
 }
 
+/// Which notice/confirm mode the modal is in, derived from the served
+/// view. Stale wins — anchoring and the marks count are suppressed while
+/// a link is stale, so their zeros must not be read as a linear mode.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum AlignMode {
+    /// The audio set drifted since confirmation; re-confirm re-checks.
+    Stale,
+    /// Chapter anchoring engaged — jumps land chapter-accurately.
+    Anchored,
+    /// Marks exist but can't be paired 1:1 — percent mapping.
+    Mismatch,
+    /// No usable marks at all — percent mapping.
+    NoMarks,
+}
+
+fn align_mode(view: &AlignmentView) -> AlignMode {
+    if view.link.as_ref().is_some_and(|l| l.stale) {
+        AlignMode::Stale
+    } else if view.anchor_match.is_some() {
+        AlignMode::Anchored
+    } else if view.audio_chapter_marks > 0 {
+        AlignMode::Mismatch
+    } else {
+        AlignMode::NoMarks
+    }
+}
+
+/// The ebook chapter count the mismatch copy quotes; `None` while the
+/// structure backfill hasn't reached the book (no lane ticks either).
+fn ebook_chapter_count(view: &AlignmentView) -> Option<usize> {
+    view.ebook
+        .as_ref()
+        .map(|e| e.chapters.len())
+        .filter(|n| *n > 0)
+}
+
+/// The default judgement prompt under the title.
+const SUB_DEFAULT: &str =
+    "Check that the mapped position lands about where it should, then confirm.";
+
+/// The intro line under the title: the default prompt, or the honest
+/// explanation of why the mapping is percentage-based.
+fn sub_header(mode: AlignMode, marks: i64, ebook_chapters: Option<usize>) -> String {
+    match mode {
+        AlignMode::Stale | AlignMode::Anchored => SUB_DEFAULT.into(),
+        AlignMode::NoMarks => "This audiobook carries no chapter markers, so there\u{2019}s \
+             nothing to anchor the mapping to."
+            .into(),
+        AlignMode::Mismatch => match ebook_chapters {
+            Some(m) => format!(
+                "The audio carries {marks} chapter marks but the book has {m} chapters, \
+                 so the chapters can\u{2019}t be paired up exactly."
+            ),
+            None => format!(
+                "The audio carries {marks} chapter marks, but they can\u{2019}t be \
+                 paired up with the book\u{2019}s chapters exactly."
+            ),
+        },
+    }
+}
+
+/// The `~` warn pill's text for the two percentage modes. Without an
+/// ebook chapter count the mismatch line drops the vs-clause rather than
+/// quoting a number it doesn't have.
+fn linear_pill(marks: i64, ebook_chapters: Option<usize>) -> String {
+    if marks == 0 {
+        "no chapter marks in the audio — linear estimate".into()
+    } else {
+        match ebook_chapters {
+            Some(m) => format!("{marks} audio marks vs {m} chapters — no 1:1 match"),
+            None => format!("{marks} audio marks — no 1:1 match"),
+        }
+    }
+}
+
+/// The fresh-confirm button names what confirming turns on; a pending
+/// sequence reorder rides along as a prefix. The stale re-confirm keeps
+/// its original labels — anchoring is suppressed there, so neither mode
+/// name would be honest.
+fn confirm_label(mode: AlignMode, save_order: bool) -> &'static str {
+    match (mode, save_order) {
+        (AlignMode::Stale, false) => "Looks right — turn on sync",
+        (AlignMode::Stale, true) => "Save order & turn on sync",
+        (AlignMode::Anchored, false) => "Sync Based On Chapters",
+        (AlignMode::Anchored, true) => "Save order — Sync Based On Chapters",
+        (AlignMode::Mismatch | AlignMode::NoMarks, false) => "Sync Based Off Percentage",
+        (AlignMode::Mismatch | AlignMode::NoMarks, true) => {
+            "Save order — Sync Based Off Percentage"
+        }
+    }
+}
+
+/// The mono footer line; the percentage modes omit it per the design —
+/// the warn banner already carries the caveat.
+fn foot_note(mode: AlignMode) -> Option<&'static str> {
+    match mode {
+        AlignMode::Stale | AlignMode::Anchored => {
+            Some("Sync stays off until you confirm. You can unlink any time.")
+        }
+        AlignMode::Mismatch | AlignMode::NoMarks => None,
+    }
+}
+
 /// The distinguishing tail of a library-relative label: real libraries
 /// nest under `Author/Book/…`, so the shared prefix carries nothing and
 /// ellipsis truncation would hide the part that differs.
@@ -192,9 +295,7 @@ pub fn AlignmentModal(uuid: String, open: Signal<bool>, on_changed: EventHandler
     let confirm_uuid = uuid.clone();
     let has_link = view().as_ref().is_some_and(|v| v.link.is_some());
     let multi = view().as_ref().is_some_and(|v| v.audio_files.len() > 1);
-    let low_conf = view()
-        .as_ref()
-        .is_some_and(|v| v.anchor_match.is_none() && !v.link.as_ref().is_some_and(|l| l.stale));
+    let align = view().as_ref().map(align_mode);
     let reordered = view().as_ref().is_some_and(|v| {
         order()
             != v.audio_files
@@ -202,18 +303,20 @@ pub fn AlignmentModal(uuid: String, open: Signal<bool>, on_changed: EventHandler
                 .map(|f| f.book_file_id)
                 .collect::<Vec<_>>()
     });
-    let confirm_label = if reordered && mode() == CrossFormatLinkMode::Sequence {
-        "Save order & turn on sync"
-    } else if low_conf {
-        "Turn on sync anyway"
-    } else {
-        "Looks right — turn on sync"
-    };
-    let foot_note = if low_conf {
-        "It's approximate — Omnibus will always say ≈ when it jumps."
-    } else {
-        "Sync stays off until you confirm. You can unlink any time."
-    };
+    let save_order = reordered && mode() == CrossFormatLinkMode::Sequence;
+    // While the view is loading the confirm button is disabled, so its
+    // label and the footer only need a sane default.
+    let confirm_text = align.map_or("Looks right — turn on sync", |a| {
+        confirm_label(a, save_order)
+    });
+    let foot = align.map_or(
+        Some("Sync stays off until you confirm. You can unlink any time."),
+        foot_note,
+    );
+    let sub_text = view().as_ref().map_or_else(
+        || SUB_DEFAULT.to_string(),
+        |v| sub_header(align_mode(v), v.audio_chapter_marks, ebook_chapter_count(v)),
+    );
 
     // The design themes the whole modal off the BOOK's accent — fills,
     // chips, markers, and the header wash all derive from it. Absent an
@@ -244,9 +347,7 @@ pub fn AlignmentModal(uuid: String, open: Signal<bool>, on_changed: EventHandler
                     }
                 }
                 {render_identity(&book())}
-                p { class: "al-sub",
-                    "Check that the mapped position lands about where it should, then confirm."
-                }
+                p { class: "al-sub", "{sub_text}" }
             }
             if let Some(v) = view() {
                 {render_lanes(&v, &order(), mode(), primary())}
@@ -265,24 +366,25 @@ pub fn AlignmentModal(uuid: String, open: Signal<bool>, on_changed: EventHandler
                         "\u{2713} {m.matched} of {m.ebook_chapters} chapters matched — "
                         "jumps land chapter-accurately."
                     }
-                } else if v.audio_chapter_marks > 0 {
-                    div { class: "al-lowconf-callout", role: "note", "data-testid": "alignment-lowconf",
-                        span { class: "al-warn-badge", "!" }
-                        div {
-                            strong { "The audio's chapter marks couldn't be aligned with this ebook. " }
-                            "This mapping is a straight percent-for-percent estimate — jumps "
-                            "land close, not exact. A \"synced here\" declaration from the "
-                            "reader or player tightens it up."
-                        }
-                    }
                 } else {
+                    p { class: "al-matched al-matched-warn", role: "note", "data-testid": "alignment-linear-pill",
+                        "~ {linear_pill(v.audio_chapter_marks, ebook_chapter_count(&v))}"
+                    }
                     div { class: "al-lowconf-callout", role: "note", "data-testid": "alignment-lowconf",
                         span { class: "al-warn-badge", "!" }
-                        div {
-                            strong { "No chapter marks in the audio. " }
-                            "This mapping is a straight percent-for-percent estimate — jumps "
-                            "land close, not exact. A \"synced here\" declaration from the "
-                            "reader or player tightens it up."
+                        if v.audio_chapter_marks > 0 {
+                            div {
+                                strong { "The chapter counts don\u{2019}t match, so sync will go by percentage instead. " }
+                                "Jumps will land close, but not exactly. Extra marks are usually "
+                                "opening notes, bonus scenes, credits, remarks, or part numbers."
+                            }
+                        } else {
+                            div {
+                                strong { "This mapping is a straight percent-for-percent estimate. " }
+                                "Jumps will land close, not exact — expect drift of several "
+                                "minutes, especially mid-book. Adding chapter marks to the audio "
+                                "file later will tighten it up."
+                            }
                         }
                     }
                 }
@@ -293,7 +395,9 @@ pub fn AlignmentModal(uuid: String, open: Signal<bool>, on_changed: EventHandler
                 p { role: "alert", class: "bd-merge-error", "{e}" }
             }
             div { class: "al-foot",
-                span { class: "al-foot-note", "{foot_note}" }
+                if let Some(note) = foot {
+                    span { class: "al-foot-note", "{note}" }
+                }
                 if has_link {
                     button {
                         class: "btn ghost sm",
@@ -370,7 +474,7 @@ pub fn AlignmentModal(uuid: String, open: Signal<bool>, on_changed: EventHandler
                             }
                         });
                     },
-                    "{confirm_label}"
+                    "{confirm_text}"
                 }
             }
             }
@@ -718,7 +822,122 @@ fn render_choice(
 
 #[cfg(test)]
 mod tests {
-    use super::{basename, fmt_hm, interpolate_pairs, tick_step};
+    use omnibus_shared::{
+        AlignmentLink, AlignmentMatch, AlignmentView, CrossFormatLinkMode, MappingConfidence,
+    };
+
+    use super::{
+        align_mode, basename, confirm_label, fmt_hm, foot_note, interpolate_pairs, linear_pill,
+        sub_header, tick_step, AlignMode, SUB_DEFAULT,
+    };
+
+    fn bare_view(marks: i64) -> AlignmentView {
+        AlignmentView {
+            link: None,
+            anchor_match: None,
+            ebook: None,
+            audio_files: Vec::new(),
+            reading: None,
+            listening: None,
+            anchor_pairs: Vec::new(),
+            audio_chapter_marks: marks,
+        }
+    }
+
+    #[test]
+    fn align_mode_splits_stale_anchored_and_the_two_linear_modes() {
+        let mut v = bare_view(0);
+        assert_eq!(align_mode(&v), AlignMode::NoMarks);
+        v.audio_chapter_marks = 23;
+        assert_eq!(align_mode(&v), AlignMode::Mismatch);
+        v.anchor_match = Some(AlignmentMatch {
+            matched: 12,
+            ebook_chapters: 14,
+            confidence: MappingConfidence::ChapterAnchored,
+        });
+        assert_eq!(align_mode(&v), AlignMode::Anchored);
+        // Stale wins over everything — the suppressed counts must not be
+        // misread as a linear mode.
+        v.link = Some(AlignmentLink {
+            mode: CrossFormatLinkMode::Sequence,
+            primary_book_file_id: None,
+            stale: true,
+            confirmed_at: 0,
+            follow: false,
+            user_anchors: 0,
+        });
+        assert_eq!(align_mode(&v), AlignMode::Stale);
+    }
+
+    #[test]
+    fn sub_header_explains_each_linear_mode_and_defaults_elsewhere() {
+        assert_eq!(sub_header(AlignMode::Anchored, 23, Some(14)), SUB_DEFAULT);
+        assert_eq!(sub_header(AlignMode::Stale, 0, None), SUB_DEFAULT);
+        assert_eq!(
+            sub_header(AlignMode::Mismatch, 23, Some(14)),
+            "The audio carries 23 chapter marks but the book has 14 chapters, \
+             so the chapters can\u{2019}t be paired up exactly."
+        );
+        assert_eq!(
+            sub_header(AlignMode::Mismatch, 23, None),
+            "The audio carries 23 chapter marks, but they can\u{2019}t be \
+             paired up with the book\u{2019}s chapters exactly."
+        );
+        assert_eq!(
+            sub_header(AlignMode::NoMarks, 0, None),
+            "This audiobook carries no chapter markers, so there\u{2019}s \
+             nothing to anchor the mapping to."
+        );
+    }
+
+    #[test]
+    fn linear_pill_quotes_both_counts_and_degrades_without_the_ebook_side() {
+        assert_eq!(
+            linear_pill(23, Some(14)),
+            "23 audio marks vs 14 chapters — no 1:1 match"
+        );
+        assert_eq!(linear_pill(23, None), "23 audio marks — no 1:1 match");
+        assert_eq!(
+            linear_pill(0, Some(14)),
+            "no chapter marks in the audio — linear estimate"
+        );
+    }
+
+    #[test]
+    fn confirm_label_names_the_mapping_mode_and_keeps_the_stale_wording() {
+        assert_eq!(
+            confirm_label(AlignMode::Anchored, false),
+            "Sync Based On Chapters"
+        );
+        assert_eq!(
+            confirm_label(AlignMode::Anchored, true),
+            "Save order — Sync Based On Chapters"
+        );
+        assert_eq!(
+            confirm_label(AlignMode::Mismatch, false),
+            "Sync Based Off Percentage"
+        );
+        assert_eq!(
+            confirm_label(AlignMode::NoMarks, true),
+            "Save order — Sync Based Off Percentage"
+        );
+        assert_eq!(
+            confirm_label(AlignMode::Stale, false),
+            "Looks right — turn on sync"
+        );
+        assert_eq!(
+            confirm_label(AlignMode::Stale, true),
+            "Save order & turn on sync"
+        );
+    }
+
+    #[test]
+    fn foot_note_is_omitted_for_the_percentage_modes_only() {
+        assert!(foot_note(AlignMode::Anchored).is_some());
+        assert!(foot_note(AlignMode::Stale).is_some());
+        assert_eq!(foot_note(AlignMode::Mismatch), None);
+        assert_eq!(foot_note(AlignMode::NoMarks), None);
+    }
 
     #[test]
     fn fmt_hm_floors_and_renders_hours_and_bare_minutes() {

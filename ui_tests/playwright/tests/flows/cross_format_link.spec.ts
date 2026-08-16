@@ -99,6 +99,19 @@ test("links the formats, shows the chip, then unlinks", async ({
   // renders: lanes, no sequence/narrations choice.
   await expect(page.getByTestId("alignment-lanes")).toBeVisible();
   await expect(page.getByTestId("alignment-choice")).toHaveCount(0);
+  // The fixture's lone audio mark can't pair with the ebook's chapters, so
+  // the mismatch (percentage) state renders: warn banner, ~ pill, no
+  // footer note, and a confirm that names the mapping. The pill's counts
+  // vary with the structure-backfill race, so assert only the stable tail.
+  await expect(page.getByTestId("alignment-lowconf")).toContainText(
+    "so sync will go by percentage instead",
+  );
+  await expect(page.getByTestId("alignment-linear-pill")).toContainText(
+    "no 1:1 match",
+  );
+  await expect(page.getByText("Sync stays off until you confirm")).toHaveCount(
+    0,
+  );
 
   await expectMutation(
     page,
@@ -107,7 +120,8 @@ test("links the formats, shows the chip, then unlinks", async ({
       url: "/api/rpc/cross-format/link",
       expectedStatus: 200,
     },
-    async () => page.getByTestId("alignment-confirm").click(),
+    async () =>
+      modal.getByRole("button", { name: "Sync Based Off Percentage" }).click(),
   );
   await expect(modal).toHaveCount(0);
   await expect(page.getByTestId("sync-link-manage")).toBeVisible();
@@ -151,7 +165,8 @@ test("surfaces a failed link confirm and keeps sync off", async ({
       url: "/api/rpc/cross-format/link",
       expectedStatus: 500,
     },
-    async () => page.getByTestId("alignment-confirm").click(),
+    async () =>
+      page.getByRole("button", { name: "Sync Based Off Percentage" }).click(),
   );
   // The modal stays up with the error surfaced; sync stayed off.
   await expect(page.getByRole("alert")).toBeVisible();

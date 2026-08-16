@@ -9367,6 +9367,10 @@ html {
   padding: 9px 12px;
   margin: 14px 0 0;
 }
+.al-matched-warn {
+  border-color: rgba(214, 158, 46, 0.5);
+  background: rgba(214, 158, 46, 0.08);
+}
 /* ── Cross-format resume prompts (player card + reader banner) ──────── */
 .lp-sync-prompt {
   position: absolute;
