@@ -1,9 +1,7 @@
 //! Shared civil-date formatting for a unix-seconds timestamp. Dependency-free
 //! and deterministic (no wall clock, no locale), so SSR and the first WASM
-//! paint render identically (rule 07). Was duplicated across
-//! `pages::settings::background_tasks`, `pages::settings::health`, and
-//! `pages::book_detail::dates` — hoisted here per rule 05's "hoist when the
-//! second consumer appears".
+//! paint render identically. Used by `pages::settings::background_tasks`,
+//! `pages::settings::health`, and `pages::book_detail::dates`.
 
 /// Convert days since the unix epoch to a `(year, month, day)` civil date —
 /// Howard Hinnant's `civil_from_days` algorithm.
