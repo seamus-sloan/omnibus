@@ -1,6 +1,7 @@
 //! Unit tests for [`resolve_entity_aliases`]: empty input, no match, a
-//! single hit, a mixed batch, and kind-scoping (an alias recorded under one
-//! `CleanupKind` must never leak into a lookup for another).
+//! single hit, a mixed batch, kind-scoping (an alias recorded under one
+//! `CleanupKind` must never leak into a lookup for another), and a
+//! casing-variant hit (the NOCASE match).
 
 use omnibus_shared::CleanupKind;
 
@@ -70,6 +71,21 @@ async fn resolve_entity_aliases_returns_only_the_names_that_hit_in_a_mixed_batch
     assert_eq!(found.len(), 1);
     assert_eq!(found.get("The Wheel of Time"), Some(&7));
     assert!(!found.contains_key("Unrelated Series"));
+}
+
+#[tokio::test]
+async fn resolve_entity_aliases_matches_a_casing_variant_of_a_recorded_alias() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    insert_alias(&pool, CleanupKind::Author, "John Smith", 42).await;
+
+    let mut tx = pool.begin().await.unwrap();
+    // A reindex can hand back a different casing of the same merged-away
+    // name (e.g. the OPF was edited); the guard must still catch it rather
+    // than minting a fresh row (#964).
+    let found = resolve_entity_aliases(&mut tx, CleanupKind::Author, &["JOHN SMITH"])
+        .await
+        .unwrap();
+    assert_eq!(found.get("JOHN SMITH"), Some(&42));
 }
 
 #[tokio::test]

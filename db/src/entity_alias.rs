@@ -21,6 +21,16 @@ mod tests;
 /// WHERE alias_name IN (...)` per chunk rather than a query per name;
 /// chunked at 500 to stay under SQLite's bound-parameter cap alongside the
 /// `kind` bind.
+///
+/// The match is `COLLATE NOCASE` (ASCII case-fold, matching SQLite's builtin
+/// collation and the `authors`/`series`/`tags` columns themselves — migration
+/// `0002`) so a reindex that yields a casing variant of a merged-away name
+/// still resolves to the canonical id rather than resurrecting it. Because
+/// the stored `alias_name` may carry different casing than the queried
+/// `names`, the returned map is keyed by the *input* name (matched via
+/// `eq_ignore_ascii_case`, mirroring SQLite's own fold) rather than the row's
+/// casing, so callers can look it up with the exact string they queried
+/// with.
 pub(crate) async fn resolve_entity_aliases(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     kind: CleanupKind,
@@ -36,13 +46,17 @@ pub(crate) async fn resolve_entity_aliases(
             .join(", ");
         let sql = format!(
             "SELECT alias_name, canonical_id FROM entity_aliases \
-             WHERE kind = ? AND alias_name IN ({placeholders})"
+             WHERE kind = ? AND alias_name COLLATE NOCASE IN ({placeholders})"
         );
         let mut q = sqlx::query_as::<_, (String, i64)>(&sql).bind(kind.as_str());
         for name in chunk {
             q = q.bind(*name);
         }
-        out.extend(q.fetch_all(&mut **tx).await?);
+        for (alias_name, canonical_id) in q.fetch_all(&mut **tx).await? {
+            for name in chunk.iter().filter(|n| n.eq_ignore_ascii_case(&alias_name)) {
+                out.insert((*name).to_string(), canonical_id);
+            }
+        }
     }
     Ok(out)
 }

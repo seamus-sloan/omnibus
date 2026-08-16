@@ -498,8 +498,10 @@ async fn link_aliased_tags(
     if aliased.is_empty() {
         return Ok(());
     }
+    // Each row binds 2 params (book_id, tag_id), so chunk at 499 to stay
+    // under SQLite's 999-parameter cap (499 * 2 = 998).
     let canonical_ids: Vec<i64> = aliased.values().copied().collect();
-    for chunk in canonical_ids.chunks(500) {
+    for chunk in canonical_ids.chunks(499) {
         let rows = std::iter::repeat_n("(?, ?)", chunk.len())
             .collect::<Vec<_>>()
             .join(", ");
