@@ -91,14 +91,15 @@ fn transport_controls_js() -> &'static str {
       // play/pause state across the swap.
       seek: function(absSeconds){
         this._seeded = true;
+        this._userActed = true;
         this._lastAbs = Math.max(0, absSeconds || 0);
         var s = Math.max(0, absSeconds || 0);
-        // Push the target time to the transport display immediately —
-        // don't wait for the element's own `timeupdate`, which some
-        // browsers fire unreliably (or not at all) for a seek issued while
-        // paused, leaving the readout and scrub position stuck at the old
-        // value until playback starts (#1897).
-        if (typeof window.__omnibusOnAudioTime === 'function') { window.__omnibusOnAudioTime(s); }
+        // A seek is discrete user intent: push it to the transport display
+        // AND persist it immediately through the dedicated seek callback —
+        // a paused element fires no `timeupdate` (#1897), and waiting for
+        // one loses the seek entirely if the page exits first (#1972).
+        if (typeof window.__omnibusOnAudioSeeked === 'function') { window.__omnibusOnAudioSeeked(s); }
+        else if (typeof window.__omnibusOnAudioTime === 'function') { window.__omnibusOnAudioTime(s, true); }
         if (this._mode === 'direct' && this._parts) {
           var i = 0;
           while (i < this._cumOffsets.length - 1 && s >= this._cumOffsets[i + 1]) i++;
@@ -213,8 +214,12 @@ fn listeners_js() -> &'static str {
       if (t < 1 && typeof oa._lastAbs === 'number' && oa._lastAbs > 60) return;
       // Last position this session really reached.
       oa._lastAbs = t;
+      // The second argument gates persistence on the Rust side: false
+      // until a real play or user seek this boot. The boot restore's own
+      // `currentTime` assignment fires a timeupdate, and persisting it
+      // re-clocked an unmoved row on every visit (#1972).
       if (window.__omnibusOnAudioTime) {
-        window.__omnibusOnAudioTime(t);
+        window.__omnibusOnAudioTime(t, !!oa._userActed);
       }
     });
     // A full-page navigation destroys the media element mid-session; the
@@ -230,6 +235,7 @@ fn listeners_js() -> &'static str {
       var oa = window.OmnibusAudio;
       if (!oa) return;
       oa._seeded = true;
+      oa._userActed = true;
       if (window.__omnibusOnAudioPlay) {
         window.__omnibusOnAudioPlay(absTime());
       }
@@ -243,8 +249,12 @@ fn listeners_js() -> &'static str {
       // _lastAbs through the ungated seek path before any pause fires.
       var t = absTime();
       if (t < 1 && typeof oa._lastAbs === 'number' && oa._lastAbs > 60) return;
+      // Second argument gates the pause-flush persist (Rust still flips
+      // the playing flag): a pause on an untouched boot — src swap,
+      // element teardown — must not re-state the seeded position with a
+      // fresh clock (#1972).
       if (window.__omnibusOnAudioPause) {
-        window.__omnibusOnAudioPause(t);
+        window.__omnibusOnAudioPause(t, !!oa._userActed);
       }
     });
     // Cross-part advance — direct mode only. HLS treats the whole
@@ -319,6 +329,9 @@ fn direct_play_init_js() -> &'static str {
       initDirect: function(parts, initialPositionAbs){
         this._mode = 'direct';
         this._seeded = false;
+        // Nothing human has happened on this boot yet — the restore seek
+        // below must render, never persist (#1972).
+        this._userActed = false;
         this._parts = parts;
         var acc = 0;
         this._cumOffsets = [];
@@ -370,13 +383,18 @@ fn hls_init_js() -> &'static str {
       initHls: function(url, initialPositionAbs){
         this._mode = 'hls';
         this._seeded = false;
+        // Same rule as initDirect: the restore is not a human action, so
+        // it renders without persisting (#1972).
+        this._userActed = false;
         if (typeof Hls !== 'undefined' && Hls.isSupported()) {
           var hls = new Hls();
           hls.loadSource(url);
           hls.attachMedia(el);
           hls.on(Hls.Events.ERROR, function(_, d) {
             if (d.fatal && window.__omnibusOnAudioPause) {
-              window.__omnibusOnAudioPause(el.currentTime || 0);
+              // Fatal transport error: surface it without persisting —
+              // an errored element's clock is not a listening position.
+              window.__omnibusOnAudioPause(el.currentTime || 0, false);
             }
           });
         } else if (el.canPlayType('application/vnd.apple.mpegurl')) {
@@ -496,15 +514,27 @@ mod tests {
             js.contains("clearInterval(window.__omnibusStallWatchdog)"),
             "watchdog does not clear a prior boot's stale interval"
         );
-        // A paused seek must push the transport display immediately (#1897)
-        // rather than waiting on the element's own `timeupdate`.
+        // A paused seek must push the transport display AND persist
+        // immediately (#1897, #1972) rather than waiting on the element's
+        // own `timeupdate`, which a paused element never fires.
         assert!(
-            js.contains("typeof window.__omnibusOnAudioTime === 'function'"),
-            "seek does not guard the immediate time push with a typeof check"
+            js.contains("typeof window.__omnibusOnAudioSeeked === 'function'"),
+            "seek does not guard the immediate persist push with a typeof check"
         );
         assert!(
-            js.contains("__omnibusOnAudioTime(s)"),
-            "seek does not push the target time immediately"
+            js.contains("__omnibusOnAudioSeeked(s)"),
+            "seek does not persist the target position immediately"
+        );
+        // The heartbeat and pause flush carry the user-acted persistence
+        // gate — a boot restore's own timeupdate/pause must render without
+        // re-clocking the row (#1972).
+        assert!(
+            js.contains("__omnibusOnAudioTime(t, !!oa._userActed)"),
+            "timeupdate does not pass the user-acted persistence gate"
+        );
+        assert!(
+            js.contains("__omnibusOnAudioPause(t, !!oa._userActed)"),
+            "pause flush does not pass the user-acted persistence gate"
         );
         // Sanity: no stray `{{` / `}}` escape pairs leaked from a `format!`.
         assert!(!js.contains("{{"), "literal {{ leaked into JS");

@@ -411,12 +411,16 @@ test("persists listening progress when the audio element pauses", async ({
     async () => {
       await page.evaluate((secs) => {
         const cb = (
-          window as unknown as { __omnibusOnAudioPause?: (s: number) => void }
+          window as unknown as {
+            __omnibusOnAudioPause?: (s: number, userActed: boolean) => void;
+          }
         ).__omnibusOnAudioPause;
         if (typeof cb !== "function") {
           throw new Error("__omnibusOnAudioPause not installed");
         }
-        cb(secs);
+        // `true` mirrors the shim's user-acted gate: only a session the
+        // user actually drove persists its pause position (#1972).
+        cb(secs, true);
       }, PAUSE_AT_SEC);
     },
   );
@@ -466,12 +470,16 @@ test("surfaces a 5xx progress POST without crashing the player", async ({
     async () => {
       await page.evaluate((secs) => {
         const cb = (
-          window as unknown as { __omnibusOnAudioPause?: (s: number) => void }
+          window as unknown as {
+            __omnibusOnAudioPause?: (s: number, userActed: boolean) => void;
+          }
         ).__omnibusOnAudioPause;
         if (typeof cb !== "function") {
           throw new Error("__omnibusOnAudioPause not installed");
         }
-        cb(secs);
+        // `true` mirrors the shim's user-acted gate: only a session the
+        // user actually drove persists its pause position (#1972).
+        cb(secs, true);
       }, PAUSE_AT_SEC);
     },
   );

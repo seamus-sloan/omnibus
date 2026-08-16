@@ -164,17 +164,18 @@ pub(super) fn resolve_boot_position(
 /// Follow-at-boot override: with follow on and a mapped Candidate, the
 /// boot seeds the mapped `(file, seconds)` instead of the stored row — a
 /// post-boot corrective seek would race `initDirect`'s one-shot restore
-/// seek and lose. An explicit picker `?file_id=` outranks follow: that is
-/// a deliberate navigation to a specific file, not a resume.
+/// seek and lose. An explicit picker `?file_id=` outranks follow only
+/// when it names a *different* file than the candidate maps to: picking
+/// the file the mapping already lands in (which every Continue card does
+/// — it always carries the row's file id) is a resume, not a divergent
+/// navigation, and skipping follow there reopened books at the stale spot
+/// (issue #1972).
 #[cfg(not(feature = "mobile"))]
 #[cfg_attr(not(feature = "web"), allow(dead_code))]
 pub(super) fn resolve_follow_boot(
     explicit_file: Option<i64>,
     resume: Option<&omnibus_shared::cross_format::CrossFormatResume>,
 ) -> Option<(Option<i64>, f64)> {
-    if explicit_file.is_some() {
-        return None;
-    }
     let resume = resume?;
     if !resume.follow
         || resume.state != omnibus_shared::cross_format::CrossFormatResumeState::Candidate
@@ -182,6 +183,15 @@ pub(super) fn resolve_follow_boot(
         return None;
     }
     let c = resume.candidate.as_ref()?;
+    if let (Some(picked), Some(mapped)) = (explicit_file, c.book_file_id) {
+        if picked != mapped {
+            return None;
+        }
+    } else if explicit_file.is_some() {
+        // Candidate names no file (shouldn't happen for an audio target,
+        // but a malformed payload must not hijack an explicit pick).
+        return None;
+    }
     Some((c.book_file_id, c.audio_position_seconds?))
 }
 
@@ -525,8 +535,23 @@ mod boot_resume_tests {
     #[cfg(not(feature = "mobile"))]
     #[test]
     fn resolve_follow_boot_stands_aside_for_an_explicit_picker_file() {
+        // 919 names a different file than the candidate maps to (917) — a
+        // deliberate divergent navigation, so follow yields.
         let resume = follow_resume(true, CrossFormatResumeState::Candidate);
         assert_eq!(resolve_follow_boot(Some(919), Some(&resume)), None);
+    }
+
+    #[cfg(not(feature = "mobile"))]
+    #[test]
+    fn resolve_follow_boot_engages_when_the_explicit_file_matches_the_candidate() {
+        // Every Continue card carries the row's file id, which is the same
+        // file the mapping lands in — that is a resume, not a divergent
+        // pick, and follow must still seed the mapped position (#1972).
+        let resume = follow_resume(true, CrossFormatResumeState::Candidate);
+        assert_eq!(
+            resolve_follow_boot(Some(917), Some(&resume)),
+            Some((Some(917), 21_822.0))
+        );
     }
 
     #[cfg(not(feature = "mobile"))]

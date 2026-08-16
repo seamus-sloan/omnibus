@@ -488,12 +488,18 @@
           var jumpCfi = pendingJumpCfi;
           pendingJumpCfi = null;
           pendingJumpPct = null;
-          restoreEchoPending = false;
-          displaySettled(jumpCfi);
+          // Same-position guard as displayCfi: a parked jump that resolves
+          // to the page already on screen is a restatement — skipping it
+          // keeps the restore's echo tag pending so nothing writes (#1972).
+          if (!jumpIsCurrent(jumpCfi)) {
+            restoreEchoPending = false;
+            displaySettled(jumpCfi);
+          }
         } else if (book === locBook && pendingJumpPct !== null && book && book.locations) {
           var pct = pendingJumpPct;
           pendingJumpPct = null;
-          restoreEchoPending = false;
+          // `applyPercentage` clears the echo tag only when its
+          // same-position guard passes (#1972).
           applyPercentage(pct);
         }
       })
@@ -2048,6 +2054,26 @@
     });
   }
 
+  // A jump target that is already on screen (at the visible range's start
+  // or inside it) is a restatement, not movement — applying it lands a
+  // non-echo relocate that stamps a fresh clock on an unmoved row and
+  // shadows the counterpart at the cross-format clock gate (#1972). The
+  // observed loop: the reader restores at the row's CFI, the follow-jump
+  // derives that same CFI from the stale counterpart, and the "jump"
+  // re-clocks a position nobody moved.
+  function jumpIsCurrent(cfi) {
+    try {
+      if (!rendition || !rendition.location || !rendition.location.start) return false;
+      var c = new ePub.CFI();
+      var s = rendition.location.start.cfi;
+      if (c.compare(cfi, s) === 0) return true;
+      var e = rendition.location.end ? rendition.location.end.cfi : null;
+      return !!e && c.compare(cfi, s) >= 0 && c.compare(cfi, e) < 0;
+    } catch (err) {
+      return false;
+    }
+  }
+
   function applyPercentage(pct) {
     var frac = Math.min(Math.max(Number(pct) / 100, 0), 1);
     var cfi = book.locations.cfiFromPercentage(frac);
@@ -2062,7 +2088,13 @@
         /* leave the range CFI; display may still handle it */
       }
     }
-    if (cfi) displaySettled(cfi);
+    if (!cfi) return;
+    // Same-position guard (#1972): leave the restore's echo tag pending
+    // when nothing would move; clear it only for a real jump, whose
+    // landing must persist.
+    if (jumpIsCurrent(cfi)) return;
+    restoreEchoPending = false;
+    displaySettled(cfi);
   }
 
   // Jump to a whole-book percentage (0..100) via the generated locations
@@ -2071,12 +2103,12 @@
   // mode auto-jump fires right after mount) is parked and applied by the
   // locations .then in init() rather than silently dropped.
   function displayPercentage(pct) {
-    // A percentage jump — user-accepted or follow-mode — is real movement:
-    // its landing (even one emitted by the restore-settle unmute) must
-    // persist, so it clears the pending echo tag.
-    restoreEchoPending = false;
+    // A percentage jump that actually moves the view is real movement and
+    // must persist — `applyPercentage` clears the pending echo tag once
+    // its same-position guard passes (#1972).
     pendingJumpCfi = null;
     if (!book || !book.locations || !book.locations.length()) {
+      restoreEchoPending = false;
       pendingJumpPct = pct;
       return;
     }
@@ -2089,13 +2121,18 @@
   // percentage jump.
   function displayCfi(cfi) {
     if (!cfi) return;
-    restoreEchoPending = false;
     pendingJumpPct = null;
     if (!rendition) {
+      restoreEchoPending = false;
       pendingJumpCfi = cfi;
       return;
     }
     pendingJumpCfi = null;
+    // Already on screen: skip the jump entirely, and leave the restore's
+    // echo tag pending — nothing user-visible moved, so nothing may write
+    // (#1972).
+    if (jumpIsCurrent(cfi)) return;
+    restoreEchoPending = false;
     displaySettled(cfi);
   }
 
