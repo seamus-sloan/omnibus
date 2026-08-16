@@ -618,7 +618,8 @@ async fn run_manifest_init(
     // and skipping follow there reopened books at the stale spot (#1972);
     // `resolve_follow_boot` still stands aside when the pick names a
     // *different* file than the candidate maps to.
-    let follow_resume = super::sync_prompt::fetch_resume_with(&uuid_for_fetch, "audio", false).await;
+    let follow_resume =
+        super::sync_prompt::fetch_resume_with(&uuid_for_fetch, "audio", false).await;
     if !is_current() {
         return;
     }
