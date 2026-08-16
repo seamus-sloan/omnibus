@@ -135,11 +135,12 @@ test("a linked book resolves silently on the player — no prompt, mapped seek",
 
   await gotoReady(page, `/listen/${uuid}`);
   await page.waitForLoadState("networkidle");
-  // "No prompt card" pinned to selectors that exist: the toolbar carries
-  // the declare pill, and no dialog/alert surface is mounted. (The old
-  // `sync-prompt` testid never existed, so that assertion was vacuous.)
+  // "No prompt card": the declare pill is the only sync affordance, and
+  // the removed offer card's user-facing copy ("Jump ahead?" / "Sync to")
+  // appears nowhere — pinned to the historical strings so a resurrected
+  // prompt would fail this, unlike a role/testid that never existed.
   await expect(page.getByTestId("listen-sync-here")).toBeVisible();
-  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(page.getByText(/Jump ahead|Sync to \d/)).toHaveCount(0);
   const seek = page.getByRole("slider", { name: "Seek" });
   await expect
     .poll(async () => Number(await seek.inputValue()), {
