@@ -450,6 +450,21 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     hasCover: true,
   },
 
+  // Second dual-format pair, RESERVED for cross_format_prompts.spec.ts —
+  // that spec confirms a cross-format link and writes progress on this
+  // book (globally visible server state), so no other spec may read it.
+  {
+    slug: "parallel-latitudes",
+    filename: "parallel-latitudes.epub",
+    title: "Parallel Latitudes",
+    authors: ["Vera Molnar"],
+    publisher: "Omnibus Test Press",
+    published: "1968-05-01",
+    tags: [],
+    language: "en",
+    hasCover: true,
+  },
+
   // Reserved for landing_bulk_edit.spec.ts — it bulk-writes publisher/tag
   // overrides to BOTH books (reverted at test end, but the suite is
   // fullyParallel, so no other spec may read them). `tags` is deliberately

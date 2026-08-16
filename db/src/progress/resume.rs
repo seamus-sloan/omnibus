@@ -132,13 +132,103 @@ pub async fn resume_points(
         points.push(ResumePoint {
             record,
             book,
+            linked: false,
+            cross_format: None,
             total_duration_seconds,
             chapter_number,
             chapter_count,
             playback_rate,
         });
     }
+    collapse_linked_points(pool, user_id, &mut points).await?;
     Ok(points)
+}
+
+/// Cross-format post-pass: a linked dual-format book competes with itself
+/// when both rows are recent — keep the newer card, mark it linked, and
+/// attach the mapped "resume in the other format" candidate. Unlinked
+/// books keep today's two-card behavior; a stale link still collapses but
+/// carries no candidate (mapping is paused until re-confirmed).
+async fn collapse_linked_points(
+    pool: &SqlitePool,
+    user_id: i64,
+    points: &mut Vec<ResumePoint>,
+) -> Result<(), ProgressError> {
+    use std::collections::HashSet;
+    let uuids: HashSet<String> = points.iter().map(|p| p.record.book_uuid.clone()).collect();
+    let mut drop_keys: HashSet<(String, ProgressFormat)> = HashSet::new();
+    let mut linked_uuids: HashSet<String> = HashSet::new();
+    for uuid in uuids {
+        if crate::cross_format::get_link(pool, user_id, &uuid)
+            .await
+            .map_err(sqlx_of)?
+            .is_none()
+        {
+            continue;
+        }
+        linked_uuids.insert(uuid.clone());
+        let mut rows: Vec<&ResumePoint> = points
+            .iter()
+            .filter(|p| p.record.book_uuid == uuid)
+            .collect();
+        if rows.len() > 1 {
+            // Deterministic ordering all the way down: same-second writes
+            // tie-break on receipt time, then a fixed format rank (audio
+            // first) — an unstable sort on equal keys would let the
+            // surviving card flip between refreshes.
+            rows.sort_by_key(|p| {
+                std::cmp::Reverse((
+                    p.record.client_updated_at,
+                    p.record.updated_at,
+                    matches!(p.record.format, ProgressFormat::Audio) as i64,
+                ))
+            });
+            for older in &rows[1..] {
+                drop_keys.insert((uuid.clone(), older.record.format));
+            }
+        }
+    }
+    points.retain(|p| !drop_keys.contains(&(p.record.book_uuid.clone(), p.record.format)));
+    for p in points.iter_mut() {
+        if !linked_uuids.contains(&p.record.book_uuid) {
+            continue;
+        }
+        p.linked = true;
+        let target = match p.record.format {
+            ProgressFormat::Epub => ProgressFormat::Audio,
+            ProgressFormat::Audio => ProgressFormat::Epub,
+        };
+        // A book that vanished mid-pass is routine here (resume_points
+        // skips vanished books already) — only real DB errors propagate.
+        let resume =
+            match crate::cross_format::resume_candidate(pool, user_id, &p.record.book_uuid, target)
+                .await
+            {
+                Ok(resume) => resume,
+                Err(
+                    crate::cross_format::CrossFormatError::BookNotFound
+                    | crate::cross_format::CrossFormatError::AudioSetMismatch,
+                ) => continue,
+                Err(e) => return Err(sqlx_of(e)),
+            };
+        p.cross_format = resume.candidate;
+    }
+    Ok(())
+}
+
+/// Narrow a `CrossFormatError` into this module's error space — the two
+/// crates share the same failure modes, and a vanished book mid-pass is
+/// routine (treated as no link by the caller).
+fn sqlx_of(e: crate::cross_format::CrossFormatError) -> ProgressError {
+    match e {
+        crate::cross_format::CrossFormatError::BookNotFound
+        | crate::cross_format::CrossFormatError::AudioSetMismatch
+        // Declaration-only refusals; the read paths this module calls
+        // never produce them, but fold them safely rather than panic.
+        | crate::cross_format::CrossFormatError::LinkRequired
+        | crate::cross_format::CrossFormatError::CounterpartMissing => ProgressError::BookNotFound,
+        crate::cross_format::CrossFormatError::Sqlx(inner) => ProgressError::Sqlx(inner),
+    }
 }
 
 /// Which audio file a resume point plays, plus the duration and chapter

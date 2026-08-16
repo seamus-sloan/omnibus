@@ -17,6 +17,10 @@ import SwiftUI
 final class AudioPlayer {
     static let shared = AudioPlayer()
 
+    /// The cross-format candidate on offer ("you read further"), shown by
+    /// the same banner slot as [`syncOffer`].
+    private(set) var crossFormatOffer: CrossFormatCandidate?
+
     private(set) var book: Book?
     private(set) var manifest: AudiobookManifest?
     /// The `book_files` row playback was built against. Resolved on load —
@@ -278,6 +282,7 @@ final class AudioPlayer {
             // than being behind — but it is offered, the same way the reader
             // offers it.
             offerLatePosition(from: remote, uuid: book.uuid)
+            offerCrossFormat()
         } catch {
             isLoading = false
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
@@ -356,6 +361,84 @@ final class AudioPlayer {
     /// nag through the whole chapter.
     func dismissSyncOffer() {
         withAnimation(Motion.settle) { syncOffer = nil }
+    }
+
+    /// Fetch the cross-format candidate for the loaded book (best-effort
+    /// network read; rule 08 — nothing here ever queues). Offered with the
+    /// same banner mechanics as the same-format late-position offer, and
+    /// only when the mapped file is the one playing — the candidate's
+    /// seconds are within that file alone.
+    func offerCrossFormat() {
+        guard let uuid = book?.uuid else { return }
+        Task { @MainActor in
+            guard let resume = try? await UserDataService.crossFormatResume(uuid: uuid, target: .audio),
+                  resume.state == .candidate,
+                  let candidate = resume.candidate,
+                  book?.uuid == uuid,
+                  syncOffer == nil,
+                  SyncPromptStore.fileMatches(
+                      selected: fileID,
+                      defaultID: book?.audioFiles.first?.id,
+                      candidate: candidate.bookFileID
+                  )
+            else { return }
+            if resume.follow == true, let seconds = candidate.audioPositionSeconds {
+                // Follow mode: resolve-at-open — apply the mapped position
+                // silently, no banner, no dismissal bookkeeping.
+                await seek(to: seconds)
+                return
+            }
+            let seen = await SyncPromptStore.dismissedClock(uuid: uuid, target: .audio)
+            guard SyncPromptStore.shouldOffer(
+                sourceClock: candidate.sourceClientUpdatedAt,
+                dismissed: seen
+            ) else { return }
+            withAnimation(Motion.settle) { crossFormatOffer = candidate }
+        }
+    }
+
+    /// "Synced here": declare the current listening position as a sync
+    /// point (rule 08 — direct call, never queued; the control is disabled
+    /// offline). Returns whether the declaration was accepted.
+    func declareSyncPoint() async -> Bool {
+        guard let uuid = book?.uuid else { return false }
+        let decl = DeclareSyncPoint(
+            bookUUID: uuid,
+            format: .audio,
+            ebookFraction: nil,
+            audioBookFileID: fileID ?? book?.audioFiles.first?.id,
+            audioSeconds: position
+        )
+        do {
+            try await UserDataService.declareSyncPoint(decl)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Take the cross-format offer: seek, then force a write so the jump
+    /// carries this device's clock (the normal position path).
+    func acceptCrossFormatOffer() async {
+        guard let candidate = crossFormatOffer,
+              let seconds = candidate.audioPositionSeconds
+        else { return }
+        await dismissCrossFormatOffer()
+        await seek(to: seconds)
+        await persistPosition(force: true)
+    }
+
+    /// Declining stores the source clock so the prompt re-arms only after
+    /// the reading position advances. Never a progress write.
+    func dismissCrossFormatOffer() async {
+        if let candidate = crossFormatOffer, let uuid = book?.uuid {
+            await SyncPromptStore.storeDismissedClock(
+                candidate.sourceClientUpdatedAt,
+                uuid: uuid,
+                target: .audio
+            )
+        }
+        withAnimation(Motion.settle) { crossFormatOffer = nil }
     }
 
     /// The saved playback rate, from the replica when the server can't be

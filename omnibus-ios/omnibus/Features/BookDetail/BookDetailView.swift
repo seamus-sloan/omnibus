@@ -16,6 +16,9 @@ final class BookDetailModel {
     var bookmarks: [Bookmark] = []
     var shelvesContaining: Set<Int64> = []
     var wishlistEntry: WishlistEntry?
+    /// Cross-format sync state for the entry row; `nil` while unknown
+    /// (offline, or the fetch hasn't landed). Network-only read.
+    var syncState: CrossFormatResumeState?
     var isLoading = true
     var error: String?
 
@@ -40,6 +43,11 @@ final class BookDetailModel {
                     }
                 }
                 self.isLoading = false
+            }
+            group.addTask { @MainActor in
+                self.syncState =
+                    (try? await UserDataService.crossFormatResume(uuid: uuid, target: .audio))?
+                        .state
             }
             group.addTask { @MainActor in
                 for await record in UserDataService.rating(uuid: uuid).values() {
@@ -115,6 +123,7 @@ struct BookDetailView: View {
     @State private var model = BookDetailModel()
     @State private var showJournalComposer = false
     @State private var showShelfPicker = false
+    @State private var showAlignment = false
     @State private var showBookmarks = false
     @State private var showAudioFilePicker = false
     /// The file chosen in the picker, opened from the sheet's `onDismiss` —
@@ -162,6 +171,13 @@ struct BookDetailView: View {
         .bookZoomDestination(uuid, in: bookZoom)
         .task { await model.load(uuid: uuid) }
         .refreshTask { await model.load(uuid: uuid) }
+        .sheet(isPresented: $showAlignment) {
+            if let book = model.book {
+                AlignmentSheet(book: book) {
+                    Task { await model.load(uuid: uuid) }
+                }
+            }
+        }
         .sheet(isPresented: $showJournalComposer) {
             if let book = model.book {
                 JournalComposer(book: book, editing: editingJournal) {
@@ -519,6 +535,16 @@ struct BookDetailView: View {
     }
 
     /// Shelving and offline state.
+    /// Entry-row copy for the sync state; unknown states read as unlinked
+    /// (the sheet is the source of truth once opened).
+    private var syncStateLabel: String {
+        switch model.syncState {
+        case .linkStale: "Needs re-confirm"
+        case .notLinked, nil: "Off"
+        default: "On"
+        }
+    }
+
     private func librarySection(_ book: Book) -> some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             SectionLabel("In your library")
@@ -542,6 +568,25 @@ struct BookDetailView: View {
 
                 RecordRow(label: "Offline") {
                     downloadControl(book)
+                }
+
+                if book.hasEbook && book.hasAudiobook {
+                    RecordRow(label: "Position sync") {
+                        Button {
+                            Haptics.tap()
+                            showAlignment = true
+                        } label: {
+                            HStack(spacing: 5) {
+                                Text(syncStateLabel)
+                                    .font(.ui(14.5, weight: .medium))
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 11, weight: .semibold))
+                            }
+                            .foregroundStyle(palette.accentColor)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("position-sync-row")
+                    }
                 }
 
                 RecordRule()

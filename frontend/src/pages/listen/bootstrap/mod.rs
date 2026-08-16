@@ -19,7 +19,10 @@ use js::{control_surface_js, eval_hls_init, inject_hls_script};
 /// Owns the `Closure`s wired into `window.__omnibusOn*` callbacks. Held
 /// across re-renders by `use_hook` so the closures outlive the effect
 /// closure that registers them.
-type JsCallbackHolder = std::rc::Rc<std::cell::RefCell<Vec<Closure<dyn FnMut(f64)>>>>;
+// Boxed as `Any`: the held closures now span two arities (`FnMut(f64)` and
+// the persist-gated `FnMut(f64, bool)`), and the holder only exists to keep
+// them alive for the surface's lifetime — nothing ever downcasts.
+type JsCallbackHolder = std::rc::Rc<std::cell::RefCell<Vec<Box<dyn std::any::Any>>>>;
 
 // The pure resume-decision helpers (`resolve_boot_file`,
 // `resolve_boot_position`) live in `super::helpers` — this module is
@@ -34,10 +37,17 @@ type JsCallbackHolder = std::rc::Rc<std::cell::RefCell<Vec<Closure<dyn FnMut(f64
 /// picker switches parts, while the mini-dock (which relinks with no
 /// `file_id`) resumes the current part instead of restarting from the first
 /// file. Mirrors `pages::listen::mobile::host::needs_reload`.
-fn needs_reload(loaded: &Option<(String, Option<i64>)>, uuid: &str, file_id: Option<i64>) -> bool {
+fn needs_reload(
+    loaded: &Option<(String, Option<i64>, u32)>,
+    uuid: &str,
+    file_id: Option<i64>,
+    epoch: u32,
+) -> bool {
     match loaded {
-        Some((loaded_uuid, loaded_file)) if loaded_uuid == uuid => {
-            file_id.is_some() && file_id != *loaded_file
+        Some((loaded_uuid, loaded_file, loaded_epoch)) if loaded_uuid == uuid => {
+            // A bumped epoch forces a same-book re-boot (resume + follow
+            // re-resolution) without the dock ever unmounting.
+            *loaded_epoch != epoch || (file_id.is_some() && file_id != *loaded_file)
         }
         _ => true,
     }
@@ -76,7 +86,7 @@ pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
     // What's currently booted: (book uuid, the file_id it was booted with).
     // Gates re-boot so a same-book file-pick reloads but a bare mini-dock
     // relink resumes the current part. Held across renders via `use_hook`.
-    let mut loaded_key = use_hook(|| Signal::new(None::<(String, Option<i64>)>));
+    let mut loaded_key = use_hook(|| Signal::new(None::<(String, Option<i64>, u32)>));
 
     use_effect(move || {
         let resolved_user = current_user();
@@ -96,9 +106,13 @@ pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
             return;
         }
         // Reactive dependencies — re-run when the active book *or* the selected
-        // file changes (the picker retargets `file_id` without changing uuid).
+        // file changes (the picker retargets `file_id` without changing uuid),
+        // or when a surface bumps `reload_epoch` to force a same-book re-boot
+        // (Immersive Read re-resolving resume + follow without unmounting the
+        // dock).
         let requested_uuid = playback.uuid.read().clone();
         let requested_file = *playback.file_id.read();
+        let requested_epoch = *playback.reload_epoch.read();
         let Some(uuid) = requested_uuid else {
             // Dismissed via the dock × button. The handler already stopped
             // the element; clear the book so the dock hides everywhere, and
@@ -108,10 +122,15 @@ pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
             loaded_key.set(None);
             return;
         };
-        if !needs_reload(&loaded_key.peek().clone(), &uuid, requested_file) {
+        if !needs_reload(
+            &loaded_key.peek().clone(),
+            &uuid,
+            requested_file,
+            requested_epoch,
+        ) {
             return;
         }
-        loaded_key.set(Some((uuid.clone(), requested_file)));
+        loaded_key.set(Some((uuid.clone(), requested_file, requested_epoch)));
         let user_id = resolved_user.flatten().map(|user| user.id);
         boot_new_book(
             &cb_holder,
@@ -160,6 +179,8 @@ fn boot_new_book(
         playback.elapsed,
         playback.playing,
         playback.playback_failed,
+        playback.file_id,
+        playback.uuid,
     );
     register_readiness_callbacks(
         cb_holder,
@@ -196,6 +217,7 @@ fn reset_per_book_signals(playback: &crate::PlaybackState, user_id: Option<i64>,
     let mut hls_ready = playback.hls_ready;
     let mut buffering = playback.buffering;
     let mut playback_failed = playback.playback_failed;
+    NEXT_SEQUENCE_FILE.with(|c| c.set(None));
     let mut rate = playback.rate;
     let mut rate_error = playback.rate_error;
     let mut book = playback.book;
@@ -284,6 +306,7 @@ fn spawn_manifest_init(
 /// closures are registered before the manifest lands (#1888). A file switch
 /// always re-boots (see [`needs_reload`]), which resets the signal before
 /// the next manifest fills it again.
+#[expect(clippy::too_many_arguments, reason = "one closure per JS callback")]
 fn register_js_callbacks(
     cb_holder: &JsCallbackHolder,
     uuid_cb: String,
@@ -292,21 +315,52 @@ fn register_js_callbacks(
     mut elapsed: Signal<f64>,
     mut playing: Signal<bool>,
     mut playback_failed: Signal<bool>,
+    file_sig: Signal<Option<i64>>,
+    uuid_sig: Signal<Option<String>>,
 ) {
     let Some(window) = web_sys::window() else {
         return;
     };
     let uuid_for_save = uuid_cb.clone();
-    let mut last_saved = 0.0_f64;
-    let on_time = Closure::<dyn FnMut(f64)>::new(move |secs: f64| {
-        elapsed.set(secs);
-        if (secs - last_saved).abs() < 5.0 {
-            return;
-        }
-        last_saved = secs;
-        crate::audiobook_progress::save(&uuid_for_save, secs);
-        post_audio_progress(uuid_for_save.clone(), *loaded_file_id.peek(), secs);
-    });
+    // Shared between the heartbeat and the seek path so a seek resets the
+    // heartbeat's 5s window rather than double-writing moments later.
+    let last_saved = std::rc::Rc::new(std::cell::Cell::new(0.0_f64));
+    let on_time = {
+        let last_saved = last_saved.clone();
+        let uuid_for_save = uuid_for_save.clone();
+        // `user_acted` is the shim's `_userActed`: false until a real play
+        // or user seek this boot. The boot restore sets `currentTime`,
+        // which fires a `timeupdate` — persisting that write re-clocked an
+        // unmoved row on every visit and shadowed the counterpart at the
+        // cross-format clock gate (#1972). Render the time; persist only
+        // positions a human produced.
+        Closure::<dyn FnMut(f64, bool)>::new(move |secs: f64, user_acted: bool| {
+            elapsed.set(secs);
+            if !user_acted {
+                return;
+            }
+            if (secs - last_saved.get()).abs() < 5.0 {
+                return;
+            }
+            last_saved.set(secs);
+            crate::audiobook_progress::save(&uuid_for_save, secs);
+            post_audio_progress(uuid_for_save.clone(), *loaded_file_id.peek(), secs);
+        })
+    };
+    // A seek is discrete user intent — persist it immediately, bypassing
+    // the heartbeat throttle. A paused element fires no further events, so
+    // waiting on the next timeupdate loses the seek if the page exits
+    // first (#1972).
+    let on_seeked = {
+        let last_saved = last_saved.clone();
+        let uuid_for_seek = uuid_for_save.clone();
+        Closure::<dyn FnMut(f64)>::new(move |secs: f64| {
+            elapsed.set(secs);
+            last_saved.set(secs);
+            crate::audiobook_progress::save(&uuid_for_seek, secs);
+            post_audio_progress(uuid_for_seek.clone(), *loaded_file_id.peek(), secs);
+        })
+    };
     let on_duration = Closure::<dyn FnMut(f64)>::new(move |d: f64| {
         duration.set(d);
     });
@@ -328,18 +382,42 @@ fn register_js_callbacks(
             crate::read_status_auto::apply_auto_read_status("", &uuid, false).await;
         });
     });
-    // Every file played through — see the `ended` handler in `js.rs`, which
-    // only calls this once there is no next part to advance to.
+    // This FILE played through (the `ended` handler in `js.rs` only calls
+    // once there is no next part). On a multi-file sequence the book is
+    // not done — advance the player to the next file's start (paused;
+    // the boot leaves it unseeded until a real play) instead of marking
+    // five-hours-in as finished. Only the last file finishes the book.
     let uuid_for_end = uuid_cb.clone();
     let on_ended = Closure::<dyn FnMut(f64)>::new(move |_: f64| {
+        if let Some(next) = NEXT_SEQUENCE_FILE.with(|c| c.get()) {
+            let uuid = uuid_for_end.clone();
+            let mut file_sig = file_sig;
+            let mut uuid_sig = uuid_sig;
+            file_sig.set(Some(next));
+            // The driver keys on the uuid changing; a None→Some pair in
+            // one render collapses to no-change, so the Some lands from a
+            // spawned task after the None commits.
+            uuid_sig.set(None);
+            wasm_bindgen_futures::spawn_local(async move {
+                uuid_sig.set(Some(uuid));
+            });
+            return;
+        }
         let uuid = uuid_for_end.clone();
         wasm_bindgen_futures::spawn_local(async move {
             crate::read_status_auto::apply_auto_read_status("", &uuid, true).await;
         });
     });
     let uuid_for_pause = uuid_cb;
-    let on_pause = Closure::<dyn FnMut(f64)>::new(move |secs: f64| {
+    // The playing flag flips on every pause (src swaps and teardown fire
+    // them too), but only a session the user actually drove persists its
+    // position — a programmatic pause on an untouched boot re-states the
+    // seeded spot with a fresh clock (#1972).
+    let on_pause = Closure::<dyn FnMut(f64, bool)>::new(move |secs: f64, user_acted: bool| {
         playing.set(false);
+        if !user_acted {
+            return;
+        }
         crate::audiobook_progress::save(&uuid_for_pause, secs);
         post_audio_progress(uuid_for_pause.clone(), *loaded_file_id.peek(), secs);
     });
@@ -357,6 +435,11 @@ fn register_js_callbacks(
         &window,
         &JsValue::from_str("__omnibusOnAudioTime"),
         on_time.as_ref().unchecked_ref(),
+    );
+    let _ = js_sys::Reflect::set(
+        &window,
+        &JsValue::from_str("__omnibusOnAudioSeeked"),
+        on_seeked.as_ref().unchecked_ref(),
     );
     let _ = js_sys::Reflect::set(
         &window,
@@ -384,12 +467,13 @@ fn register_js_callbacks(
         on_init_timeout.as_ref().unchecked_ref(),
     );
     *cb_holder.borrow_mut() = vec![
-        on_time,
-        on_duration,
-        on_play,
-        on_pause,
-        on_ended,
-        on_init_timeout,
+        Box::new(on_time),
+        Box::new(on_seeked),
+        Box::new(on_duration),
+        Box::new(on_play),
+        Box::new(on_pause),
+        Box::new(on_ended),
+        Box::new(on_init_timeout),
     ];
 }
 
@@ -437,9 +521,11 @@ fn register_readiness_callbacks(
         &JsValue::from_str("__omnibusOnAudioStalled"),
         on_stalled.as_ref().unchecked_ref(),
     );
-    cb_holder
-        .borrow_mut()
-        .extend([on_booted, on_buffering, on_stalled]);
+    cb_holder.borrow_mut().extend([
+        Box::new(on_booted) as Box<dyn std::any::Any>,
+        Box::new(on_buffering),
+        Box::new(on_stalled),
+    ]);
 }
 
 /// Install the `window.OmnibusAudio` control surface immediately so
@@ -452,6 +538,14 @@ fn install_control_surface(uuid: &str, initial_rate: f64, initial_volume: f64) {
     let vol_lit = serde_json::to_string(&initial_volume).unwrap_or_else(|_| "1".into());
     let uuid_lit = serde_json::to_string(uuid).unwrap_or_else(|_| "\"\"".into());
     let _ = dioxus::document::eval(&control_surface_js(&rate_lit, &vol_lit, &uuid_lit));
+}
+
+thread_local! {
+    /// The manifest's next-file pointer for the CURRENT boot — read by the
+    /// `ended` callback (registered before any manifest exists) to decide
+    /// between sequence-advance and marking the book finished. Reset at
+    /// every boot entry so a failed load can't leave a stale advance.
+    static NEXT_SEQUENCE_FILE: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
 }
 
 /// Fetch `/api/audiobooks/{uuid}/manifest` — targeting the picker's
@@ -532,8 +626,26 @@ async fn run_manifest_init(
         }
     }
 
+    // Resolve follow at boot: when the link follows the counterpart and the
+    // reading position maps newer, seed playback with the mapped spot
+    // instead of the stored row — a post-boot corrective seek would race
+    // `initDirect`'s one-shot restore seek and lose. Fetched even for an
+    // explicit `?file_id=` — every Continue card carries the row's file id,
+    // and skipping follow there reopened books at the stale spot (#1972);
+    // `resolve_follow_boot` still stands aside when the pick names a
+    // *different* file than the candidate maps to.
+    let follow_resume =
+        super::sync_prompt::fetch_resume_with(&uuid_for_fetch, "audio", false).await;
+    if !is_current() {
+        return;
+    }
+    let follow_boot = super::helpers::resolve_follow_boot(file_id, follow_resume.as_ref());
+
     let row_file = server_row.as_ref().and_then(|r| r.book_file_id);
-    let boot_file = resolve_boot_file(file_id, row_file);
+    let boot_file = follow_boot
+        .as_ref()
+        .and_then(|(file, _)| *file)
+        .or_else(|| resolve_boot_file(file_id, row_file));
     let mut manifest = fetch_manifest(&uuid_for_fetch, boot_file).await;
     // The row's stored id is a soft reference — a reindex may have replaced
     // the `book_files` row since the position was saved. Fall back to the
@@ -562,20 +674,45 @@ async fn run_manifest_init(
     };
 
     let (loaded_file, audio_file_count) = manifest.file_identity();
+    // Sequence auto-advance is a DIRECT-mode contract only: the HLS
+    // playlist is book-level and file-blind (`get_audiobook_playlist`
+    // takes no file id), so "advancing" an HLS book reboots the same
+    // stream at 0:00 forever instead of finishing it. HLS keeps the
+    // ended-means-finished behavior.
+    let next_file = match &manifest {
+        omnibus_shared::AudiobookManifest::Direct { .. } => manifest.next_file_id(),
+        omnibus_shared::AudiobookManifest::Hls { .. } => None,
+    };
+    NEXT_SEQUENCE_FILE.with(|c| c.set(next_file));
     // `0` = a server predating the identity fields; keep posting no file id
     // rather than inventing one (`resolve_boot_position` degrades the same
     // way via `audio_file_count == 0`).
     let mut loaded_file_sig = playback.loaded_file_id;
     loaded_file_sig.set((loaded_file > 0).then_some(loaded_file));
-    let resume_pos = resolve_boot_position(
-        server_row
-            .as_ref()
-            .map(|r| (r.book_file_id, r.audio_position_seconds)),
-        initial_position,
-        loaded_file,
-        audio_file_count,
-    );
-    let pos_lit = serde_json::to_string(&resume_pos).unwrap_or_else(|_| "0".into());
+    // The mapped position applies only when the manifest actually loaded the
+    // candidate's file (the dead-row fallback above may have swapped it) —
+    // otherwise fall back to the stored-row resolution unchanged.
+    let follow_pos = follow_boot
+        .as_ref()
+        .filter(|(file, _)| match file {
+            Some(fid) => *fid == loaded_file || loaded_file == 0,
+            None => true,
+        })
+        .map(|(_, seconds)| *seconds);
+    // `None` = unseeded: `initDirect` gets a JSON `null`, applies no seek,
+    // and leaves the transport's seed gate closed — an unattributable boot
+    // must stay unpersistable until the user really plays or seeks.
+    let resume_pos = follow_pos.or_else(|| {
+        resolve_boot_position(
+            server_row
+                .as_ref()
+                .map(|r| (r.book_file_id, r.audio_position_seconds)),
+            initial_position,
+            loaded_file,
+            audio_file_count,
+        )
+    });
+    let pos_lit = serde_json::to_string(&resume_pos).unwrap_or_else(|_| "null".into());
 
     match manifest {
         omnibus_shared::AudiobookManifest::Direct {
@@ -697,23 +834,32 @@ mod tests {
 
     #[test]
     fn needs_reload_when_nothing_booted_or_book_changed() {
-        assert!(needs_reload(&None, "book-a", None));
-        let booted = Some(("book-a".to_string(), Some(917)));
-        assert!(needs_reload(&booted, "book-b", Some(940)));
+        assert!(needs_reload(&None, "book-a", None, 0));
+        let booted = Some(("book-a".to_string(), Some(917), 0));
+        assert!(needs_reload(&booted, "book-b", Some(940), 0));
     }
 
     #[test]
     fn needs_reload_on_explicit_different_part_of_same_book() {
-        let booted = Some(("book-a".to_string(), Some(917)));
-        assert!(needs_reload(&booted, "book-a", Some(918)));
+        let booted = Some(("book-a".to_string(), Some(917), 0));
+        assert!(needs_reload(&booted, "book-a", Some(918), 0));
+    }
+
+    #[test]
+    fn needs_reload_when_the_reload_epoch_was_bumped() {
+        // Immersive Read forces a same-book re-boot without unmounting the
+        // dock — the epoch is the only thing that moved.
+        let booted = Some(("book-a".to_string(), Some(917), 0));
+        assert!(needs_reload(&booted, "book-a", None, 1));
+        assert!(needs_reload(&booted, "book-a", Some(917), 1));
     }
 
     #[test]
     fn no_reload_for_same_part_or_bare_relink_of_same_book() {
-        let booted = Some(("book-a".to_string(), Some(917)));
+        let booted = Some(("book-a".to_string(), Some(917), 0));
         // Same part re-selected → no restart.
-        assert!(!needs_reload(&booted, "book-a", Some(917)));
+        assert!(!needs_reload(&booted, "book-a", Some(917), 0));
         // Mini-dock relinks with no file_id → keep the current part.
-        assert!(!needs_reload(&booted, "book-a", None));
+        assert!(!needs_reload(&booted, "book-a", None, 0));
     }
 }

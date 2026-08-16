@@ -127,6 +127,13 @@ fn register_window_callbacks(
     } = sigs;
 
     let uuid_for_save = uuid_cb;
+    // Last POSTED position — deliberately NOT last-seen (the mobile
+    // variant's rule): the web glue's locations-ready re-emit is an echo
+    // that races a turn's debounced relocate and reads epub.js's already-
+    // updated location, so a last-seen key would swallow the turn's own
+    // write. Echoes never advance this key; a layout re-emission at the
+    // last POSTED spot still dedups, which is the bug this exists for.
+    let mut last_posted_cfi: Option<String> = None;
     let relocate = Closure::<dyn FnMut(String)>::new(move |json: String| {
         if let Ok(mut data) = serde_json::from_str::<super::RelocateData>(&json) {
             // Re-derive chapter/total from the TOC's own order rather than
@@ -139,22 +146,39 @@ fn register_window_callbacks(
             data.chapter = chapter;
             data.total_chapters = total_chapters;
 
-            if let Some(ref cfi) = data.cfi {
-                crate::reader_progress::save(&uuid_for_save, cfi);
+            // Echo emissions re-state a position the server already holds —
+            // persisting one would stamp a fresh clock on an unmoved
+            // position and shadow a newer audiobook spot at the
+            // cross-format clock gate. Render, don't write. The same-CFI
+            // dedup mirrors the mobile reader: layout re-emissions (window
+            // resize, Aa panel changes) re-fire `relocated` at the current
+            // CFI, and a re-post would re-clock the unmoved position too.
+            let moved = match (&data.cfi, &last_posted_cfi) {
+                (Some(new), Some(posted)) => new != posted,
+                (Some(_), None) => true,
+                (None, _) => false,
+            };
+            if let Some(cfi) = data.cfi.clone().filter(|_| !data.echo && moved) {
+                last_posted_cfi = Some(cfi.clone());
+                crate::reader_progress::save(&uuid_for_save, &cfi);
                 let uuid_for_post = uuid_for_save.clone();
-                let cfi_for_post = cfi.clone();
+                let cfi_for_post = cfi;
                 // `progress_percent` is the same whole-book figure the
                 // footer/ribbon render (`data.pct`) — sending it keeps the
                 // landing hero's stored percent in step with what the
                 // reader itself is showing (issue #1909, AC2).
                 let percent_for_post = i64::from(data.pct.min(100));
                 wasm_bindgen_futures::spawn_local(async move {
+                    // `client_updated_at` is the event time the server's
+                    // conditional upsert arbitrates on; without it a write
+                    // degrades to receipt-time last-write-wins (#1864).
                     let body = serde_json::json!({
                         "update": {
                             "book_uuid": uuid_for_post,
                             "format": "epub",
                             "epub_cfi": cfi_for_post,
                             "progress_percent": percent_for_post,
+                            "client_updated_at": crate::time::now_unix(),
                         }
                     });
                     if let Ok(req) = gloo_net::http::Request::post("/api/rpc/progress").json(&body)

@@ -1,6 +1,10 @@
 //! Per-book progress state outside the upsert conflict path: the
-//! server-derived Kobo location attach, the mirrored `Statistics` block,
-//! the plain position getter, and the audiobook playback-rate preference.
+//! server-derived Kobo location attach, the derived whole-book percent
+//! attach, the mirrored `Statistics` block, the plain position getter, and
+//! the audiobook playback-rate preference.
+
+use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 use omnibus_shared::{
     AudiobookPlaybackRateRecord, AudiobookPlaybackRateUpdate, ProgressFormat, ProgressRecord,
@@ -45,6 +49,162 @@ pub async fn attach_derived_kobo_location(
     .execute(pool)
     .await?;
     Ok(result.rows_affected() > 0)
+}
+
+/// Attach a server-derived whole-book percent to an existing epub row
+/// WITHOUT advancing any freshness clock — the same contract as
+/// [`attach_derived_kobo_location`]: the percent describes the position the
+/// row already holds, so bumping a clock would re-fire sync deltas.
+/// Optimistic: no-ops unless the row still has no percent and its event
+/// time is unchanged since the caller read it. Returns whether a row was
+/// updated.
+pub async fn attach_derived_percent(
+    pool: &SqlitePool,
+    user_id: i64,
+    book_uuid: &str,
+    percent: i64,
+    expected_client_updated_at: i64,
+) -> Result<bool, ProgressError> {
+    let book_uuid = resolve_canonical_book_uuid(pool, book_uuid)
+        .await?
+        .ok_or(ProgressError::BookNotFound)?;
+    let result = sqlx::query(
+        "UPDATE reading_progress
+            SET progress_percent = ?
+          WHERE user_id = ? AND book_uuid = ? AND format = 'epub'
+            AND progress_percent IS NULL
+            AND COALESCE(client_updated_at, updated_at) = ?",
+    )
+    .bind(percent)
+    .bind(user_id)
+    .bind(&book_uuid)
+    .bind(expected_client_updated_at)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Derive the whole-book visible-text percent for a stored epub CFI from
+/// the book's source EPUB alone (no kepub involved) and attach it via
+/// [`attach_derived_percent`]. `Ok(false)` covers every underivable case —
+/// no EPUB file row, an unparseable CFI, an unanchorable tail, or a row
+/// whose event time moved on since `expected_client_updated_at` was read —
+/// mirroring `kobo_position`'s rule of degrading to no derived value,
+/// never a wrong one. `Err` is reserved for I/O-level surprises.
+pub async fn derive_epub_percent(
+    pool: &SqlitePool,
+    user_id: i64,
+    book_uuid: &str,
+    cfi: &str,
+    expected_client_updated_at: i64,
+) -> anyhow::Result<bool> {
+    use anyhow::Context;
+
+    let Some(book_id) = crate::resolve_book_id_by_uuid(pool, book_uuid).await? else {
+        return Ok(false);
+    };
+    let Some((file_id, source)) = crate::book_file_with_id(pool, book_id, "EPUB").await? else {
+        return Ok(false);
+    };
+    // Stored spine stats (migration 0074) reduce the derivation to one
+    // spine-document walk plus arithmetic; a book the backfill hasn't
+    // reached yet falls back to the full-book walk. Both paths share the
+    // same normalization and floor semantics, so they cannot disagree.
+    let stats = crate::epub_structure::get_spine_stats(pool, file_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("read spine stats for file {file_id}: {e}"))?;
+    let cfi = cfi.to_owned();
+    let percent = if stats.is_empty() {
+        tokio::task::spawn_blocking(move || crate::kobo_position::cfi_to_span(None, &source, &cfi))
+            .await
+            .context("percent derivation task panicked")??
+            .percent
+    } else {
+        tokio::task::spawn_blocking(move || crate::kobo_position::cfi_spine_offset(&source, &cfi))
+            .await
+            .context("percent derivation task panicked")??
+            .and_then(|(spine_index, offset)| {
+                crate::epub_structure::percent_at(&stats, spine_index as i64, offset)
+            })
+    };
+    let Some(percent) = percent else {
+        return Ok(false);
+    };
+    match attach_derived_percent(
+        pool,
+        user_id,
+        book_uuid,
+        percent,
+        expected_client_updated_at,
+    )
+    .await
+    {
+        Ok(updated) => Ok(updated),
+        // The book vanished between the upsert and the attach; nothing left
+        // to annotate is a non-event, not a failure.
+        Err(ProgressError::BookNotFound) => Ok(false),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// In-flight guard for [`spawn_epub_percent_derivation`]: one spine walk per
+/// `(user, book)` at a time, so a page-turn burst costs one walk. Skipped
+/// writes self-heal — the next accepted write re-spawns after the running
+/// walk finishes.
+fn percent_derivations_in_flight() -> &'static Mutex<HashSet<(i64, String)>> {
+    static IN_FLIGHT: OnceLock<Mutex<HashSet<(i64, String)>>> = OnceLock::new();
+    IN_FLIGHT.get_or_init(Mutex::default)
+}
+
+/// Removes its key from the in-flight set on drop, so the slot frees even
+/// when the derivation future panics or is dropped mid-flight — a leaked
+/// key would suppress every later derivation for that `(user, book)` until
+/// process restart.
+struct InFlightGuard {
+    key: (i64, String),
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        percent_derivations_in_flight()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.key);
+    }
+}
+
+/// Fire-and-forget percent derivation for an accepted epub write that landed
+/// without one (the web reader sends only a CFI). Runs off the request path:
+/// the caller responds immediately and the percent attaches clock-neutrally
+/// when the walk completes. No-op for audio rows, rows already carrying a
+/// percent (Kobo bookmarks, comic anchors), and CFI-less rows.
+pub fn spawn_epub_percent_derivation(pool: SqlitePool, user_id: i64, record: &ProgressRecord) {
+    if record.format != ProgressFormat::Epub || record.progress_percent.is_some() {
+        return;
+    }
+    let Some(cfi) = record.epub_cfi.clone() else {
+        return;
+    };
+    let key = (user_id, record.book_uuid.clone());
+    {
+        let mut in_flight = percent_derivations_in_flight()
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if !in_flight.insert(key.clone()) {
+            return;
+        }
+    }
+    // The guard exists from here on, so the key leaves the set no matter
+    // how the future ends — completion, panic, or being dropped unrun.
+    let guard = InFlightGuard { key };
+    let book_uuid = record.book_uuid.clone();
+    let expected = record.client_updated_at;
+    tokio::spawn(async move {
+        let _guard = guard;
+        if let Err(e) = derive_epub_percent(&pool, user_id, &book_uuid, &cfi, expected).await {
+            tracing::warn!(%book_uuid, error = %e, "epub percent derivation failed");
+        }
+    });
 }
 
 /// The device's own `Statistics` counters, mirrored so sync-out can hand

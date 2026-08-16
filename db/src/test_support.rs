@@ -121,6 +121,69 @@ pub fn build_stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
 /// order, so `href`s map to spine indices 0..n. The OCF-required stored
 /// `mimetype` entry comes first.
 pub fn build_test_epub(spine: &[(&str, &str)]) -> Vec<u8> {
+    assemble_test_epub(spine, "", "", &[])
+}
+
+/// [`build_test_epub`] plus an EPUB3 `nav.xhtml` carrying
+/// `properties="nav"`, whose `<nav epub:type="toc">` lists `toc` as
+/// `(title, href)` anchors. The nav document sits at the OPF root, so
+/// hrefs are OPF-root-relative as written.
+pub fn build_test_epub_with_nav(spine: &[(&str, &str)], toc: &[(&str, &str)]) -> Vec<u8> {
+    let items: String = toc
+        .iter()
+        .map(|(title, href)| format!(r#"<li><a href="{href}">{title}</a></li>"#))
+        .collect();
+    let nav = format!(
+        r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>nav</title></head>
+<body><nav epub:type="toc"><ol>{items}</ol></nav></body>
+</html>"#
+    );
+    assemble_test_epub(
+        spine,
+        r#"<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>"#,
+        "",
+        &[("nav.xhtml", nav.into_bytes())],
+    )
+}
+
+/// [`build_test_epub`] plus an EPUB2-style `toc.ncx` wired via
+/// `<spine toc="ncx">`, listing `toc` as `(title, src)` navPoints — the
+/// shape the `epub` crate parses into `doc.toc`.
+pub fn build_test_epub_with_ncx(spine: &[(&str, &str)], toc: &[(&str, &str)]) -> Vec<u8> {
+    let points: String = toc
+        .iter()
+        .enumerate()
+        .map(|(i, (title, src))| {
+            let n = i + 1;
+            format!(
+                r#"<navPoint id="np{n}" playOrder="{n}"><navLabel><text>{title}</text></navLabel><content src="{src}"/></navPoint>"#
+            )
+        })
+        .collect();
+    let ncx = format!(
+        r#"<?xml version="1.0" encoding="utf-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+<head><meta name="dtb:uid" content="test-epub"/></head>
+<docTitle><text>Test</text></docTitle>
+<navMap>{points}</navMap>
+</ncx>"#
+    );
+    assemble_test_epub(
+        spine,
+        r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>"#,
+        r#" toc="ncx""#,
+        &[("toc.ncx", ncx.into_bytes())],
+    )
+}
+
+fn assemble_test_epub(
+    spine: &[(&str, &str)],
+    extra_manifest: &str,
+    spine_attrs: &str,
+    extra_entries: &[(&str, Vec<u8>)],
+) -> Vec<u8> {
     let container: &[u8] = br#"<?xml version="1.0"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
   <rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles>
@@ -133,6 +196,7 @@ pub fn build_test_epub(spine: &[(&str, &str)]) -> Vec<u8> {
         ));
         spine_xml.push_str(&format!(r#"<itemref idref="it{i}"/>"#));
     }
+    manifest.push_str(extra_manifest);
     let opf = format!(
         r#"<?xml version="1.0"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
@@ -141,7 +205,7 @@ pub fn build_test_epub(spine: &[(&str, &str)]) -> Vec<u8> {
     <dc:title>Test</dc:title>
   </metadata>
   <manifest>{manifest}</manifest>
-  <spine>{spine_xml}</spine>
+  <spine{spine_attrs}>{spine_xml}</spine>
 </package>"#
     );
     let mut entries: Vec<(&str, &[u8])> = vec![
@@ -152,6 +216,9 @@ pub fn build_test_epub(spine: &[(&str, &str)]) -> Vec<u8> {
     entries.push(("content.opf", &opf_bytes));
     for (href, xhtml) in spine {
         entries.push((href, xhtml.as_bytes()));
+    }
+    for (href, bytes) in extra_entries {
+        entries.push((href, bytes.as_slice()));
     }
     build_stored_zip(&entries)
 }

@@ -90,13 +90,16 @@ fn transport_controls_js() -> &'static str {
       // `el.src` if it differs from the current part, preserving the
       // play/pause state across the swap.
       seek: function(absSeconds){
+        this._seeded = true;
+        this._userActed = true;
+        this._lastAbs = Math.max(0, absSeconds || 0);
         var s = Math.max(0, absSeconds || 0);
-        // Push the target time to the transport display immediately —
-        // don't wait for the element's own `timeupdate`, which some
-        // browsers fire unreliably (or not at all) for a seek issued while
-        // paused, leaving the readout and scrub position stuck at the old
-        // value until playback starts (#1897).
-        if (typeof window.__omnibusOnAudioTime === 'function') { window.__omnibusOnAudioTime(s); }
+        // A seek is discrete user intent: push it to the transport display
+        // AND persist it immediately through the dedicated seek callback —
+        // a paused element fires no `timeupdate` (#1897), and waiting for
+        // one loses the seek entirely if the page exits first (#1972).
+        if (typeof window.__omnibusOnAudioSeeked === 'function') { window.__omnibusOnAudioSeeked(s); }
+        else if (typeof window.__omnibusOnAudioTime === 'function') { window.__omnibusOnAudioTime(s, true); }
         if (this._mode === 'direct' && this._parts) {
           var i = 0;
           while (i < this._cumOffsets.length - 1 && s >= this._cumOffsets[i + 1]) i++;
@@ -190,19 +193,68 @@ fn listeners_js() -> &'static str {
         window.__omnibusOnAudioDuration(d);
       }
     });
+    // The seed gate: until the boot's initial position has actually been
+    // applied to the element (or the user seeks/plays for real), the
+    // element sits at 0 — and a pause fired by a load()/src swap in that
+    // window would flush a hard 0.0 over the stored position with a fresh
+    // clock, which the cross-format follow then propagates into the other
+    // format. No emission may persist an unseeded element's position.
+    // Fail CLOSED when the shim is null (dom_reset_js clears it during
+    // SPA-nav): a stale element's listeners can still fire in that window,
+    // and an unowned element is exactly the unseeded-position source this
+    // gate exists to silence.
     el.addEventListener('timeupdate', function(){
+      var oa = window.OmnibusAudio;
+      if (!oa || !oa._seeded) return;
+      var t = absTime();
+      // Same teardown-artifact rule as `pause` below: a media element
+      // being destroyed can fire one last timeupdate with its clock
+      // already reset to 0 — BEFORE pagehide dispatches. A real restart
+      // reaches 0 through the seek path, which resets _lastAbs first.
+      if (t < 1 && typeof oa._lastAbs === 'number' && oa._lastAbs > 60) return;
+      // Last position this session really reached.
+      oa._lastAbs = t;
+      // The second argument gates persistence on the Rust side: false
+      // until a real play or user seek this boot. The boot restore's own
+      // `currentTime` assignment fires a timeupdate, and persisting it
+      // re-clocked an unmoved row on every visit (#1972).
       if (window.__omnibusOnAudioTime) {
-        window.__omnibusOnAudioTime(absTime());
+        window.__omnibusOnAudioTime(t, !!oa._userActed);
       }
     });
+    // A full-page navigation destroys the media element mid-session; the
+    // browser's teardown can zero currentTime BEFORE the final pause event
+    // dispatches, and that dying flush overwrote a real 2h48m position
+    // with 0.0 live (#1954). The heartbeat persisted a ≤5s-stale position
+    // moments earlier, so closing the gate loses nothing meaningful.
+    window.addEventListener('pagehide', function(){
+      var oa = window.OmnibusAudio;
+      if (oa) oa._seeded = false;
+    });
     el.addEventListener('play', function(){
+      var oa = window.OmnibusAudio;
+      if (!oa) return;
+      oa._seeded = true;
+      oa._userActed = true;
       if (window.__omnibusOnAudioPlay) {
         window.__omnibusOnAudioPlay(absTime());
       }
     });
     el.addEventListener('pause', function(){
+      var oa = window.OmnibusAudio;
+      if (!oa || !oa._seeded) return;
+      // Teardown artifact: a pause reporting ~0 when this session was
+      // materially past it is the element being reset, not a listener
+      // rewinding — a real jump-to-start arrives as a seek, which updates
+      // _lastAbs through the ungated seek path before any pause fires.
+      var t = absTime();
+      if (t < 1 && typeof oa._lastAbs === 'number' && oa._lastAbs > 60) return;
+      // Second argument gates the pause-flush persist (Rust still flips
+      // the playing flag): a pause on an untouched boot — src swap,
+      // element teardown — must not re-state the seeded position with a
+      // fresh clock (#1972).
       if (window.__omnibusOnAudioPause) {
-        window.__omnibusOnAudioPause(absTime());
+        window.__omnibusOnAudioPause(t, !!oa._userActed);
       }
     });
     // Cross-part advance — direct mode only. HLS treats the whole
@@ -270,8 +322,16 @@ fn direct_play_init_js() -> &'static str {
     r#"      // Direct-play init: parts is the array from the manifest endpoint
       // (`[{ordinal, url, duration_seconds, mime}]`), initialPositionAbs
       // is the absolute resume position in seconds.
+      // `initialPositionAbs` may be null: an unattributable resume (the
+      // row's seconds live in another file) boots at the top of the file
+      // WITHOUT seeding — the transport's gate stays closed, so nothing
+      // can persist this element's position until a real play or seek.
       initDirect: function(parts, initialPositionAbs){
         this._mode = 'direct';
+        this._seeded = false;
+        // Nothing human has happened on this boot yet — the restore seek
+        // below must render, never persist (#1972).
+        this._userActed = false;
         this._parts = parts;
         var acc = 0;
         this._cumOffsets = [];
@@ -286,14 +346,19 @@ fn direct_play_init_js() -> &'static str {
           window.__omnibusOnAudioDuration(this._totalDuration);
         }
         // Pick the starting part for the resume position.
-        var s = Math.max(0, initialPositionAbs || 0);
+        var seedKnown = typeof initialPositionAbs === 'number';
+        var s = Math.max(0, seedKnown ? initialPositionAbs : 0);
         var idx = 0;
         while (idx < this._cumOffsets.length - 1 && s >= this._cumOffsets[idx + 1]) idx++;
         this._index = idx;
         var local = s - this._cumOffsets[idx];
+        var oa = this;
         var onMeta = function(){
           el.removeEventListener('loadedmetadata', onMeta);
-          try { el.currentTime = local; } catch(_) {}
+          if (seedKnown) {
+            try { el.currentTime = local; } catch(_) {}
+            oa._seeded = true;
+          }
         };
         el.addEventListener('loadedmetadata', onMeta);
         el.src = parts[idx].url;
@@ -317,13 +382,19 @@ fn hls_init_js() -> &'static str {
       // `null` to skip the seek.
       initHls: function(url, initialPositionAbs){
         this._mode = 'hls';
+        this._seeded = false;
+        // Same rule as initDirect: the restore is not a human action, so
+        // it renders without persisting (#1972).
+        this._userActed = false;
         if (typeof Hls !== 'undefined' && Hls.isSupported()) {
           var hls = new Hls();
           hls.loadSource(url);
           hls.attachMedia(el);
           hls.on(Hls.Events.ERROR, function(_, d) {
             if (d.fatal && window.__omnibusOnAudioPause) {
-              window.__omnibusOnAudioPause(el.currentTime || 0);
+              // Fatal transport error: surface it without persisting —
+              // an errored element's clock is not a listening position.
+              window.__omnibusOnAudioPause(el.currentTime || 0, false);
             }
           });
         } else if (el.canPlayType('application/vnd.apple.mpegurl')) {
@@ -333,10 +404,20 @@ fn hls_init_js() -> &'static str {
         } else {
           console.warn('OmnibusAudio: no HLS support in this browser');
         }
+        if (typeof initialPositionAbs === 'number' && initialPositionAbs <= 0) {
+          // An explicit zero is a real position (a fresh book boots as
+          // number 0). JSON `null` is an UNATTRIBUTABLE resume — the
+          // row's seconds live in another file — and must stay unseeded,
+          // exactly like initDirect, or the HLS arm re-opens the
+          // zero-wipe path (#1954).
+          this._seeded = true;
+        }
         if (typeof initialPositionAbs === 'number' && initialPositionAbs > 0) {
+          var hoa = this;
           var onMeta = function(){
             el.removeEventListener('loadedmetadata', onMeta);
             try { el.currentTime = Math.max(0, initialPositionAbs); } catch(_) {}
+            hoa._seeded = true;
           };
           el.addEventListener('loadedmetadata', onMeta);
         }
@@ -433,15 +514,27 @@ mod tests {
             js.contains("clearInterval(window.__omnibusStallWatchdog)"),
             "watchdog does not clear a prior boot's stale interval"
         );
-        // A paused seek must push the transport display immediately (#1897)
-        // rather than waiting on the element's own `timeupdate`.
+        // A paused seek must push the transport display AND persist
+        // immediately (#1897, #1972) rather than waiting on the element's
+        // own `timeupdate`, which a paused element never fires.
         assert!(
-            js.contains("typeof window.__omnibusOnAudioTime === 'function'"),
-            "seek does not guard the immediate time push with a typeof check"
+            js.contains("typeof window.__omnibusOnAudioSeeked === 'function'"),
+            "seek does not guard the immediate persist push with a typeof check"
         );
         assert!(
-            js.contains("__omnibusOnAudioTime(s)"),
-            "seek does not push the target time immediately"
+            js.contains("__omnibusOnAudioSeeked(s)"),
+            "seek does not persist the target position immediately"
+        );
+        // The heartbeat and pause flush carry the user-acted persistence
+        // gate — a boot restore's own timeupdate/pause must render without
+        // re-clocking the row (#1972).
+        assert!(
+            js.contains("__omnibusOnAudioTime(t, !!oa._userActed)"),
+            "timeupdate does not pass the user-acted persistence gate"
+        );
+        assert!(
+            js.contains("__omnibusOnAudioPause(t, !!oa._userActed)"),
+            "pause flush does not pass the user-acted persistence gate"
         );
         // Sanity: no stray `{{` / `}}` escape pairs leaked from a `format!`.
         assert!(!js.contains("{{"), "literal {{ leaked into JS");

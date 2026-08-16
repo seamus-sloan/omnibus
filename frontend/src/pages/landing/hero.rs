@@ -12,6 +12,34 @@ use super::resume_meta::resume_meta;
 use crate::components::glyphs::{book_glyph, play_glyph};
 use crate::Route;
 
+/// Whether the book carries both an ebook and an audiobook — the
+/// dual-format gate for the link invitation (unlinked) and the Immersive
+/// pill (linked).
+fn has_both_formats(book: &omnibus_shared::EbookMetadata) -> bool {
+    // Only the formats the indexer actually attaches (`db::audiobook`) —
+    // matching the detail page's `has_audio`, so an invite here can never
+    // point at a detail page with no sync affordance.
+    book.formats.iter().any(|f| f.eq_ignore_ascii_case("epub"))
+        && book
+            .formats
+            .iter()
+            .any(|f| matches!(f.to_ascii_lowercase().as_str(), "m4b" | "m4a" | "mp3"))
+}
+
+/// The book+soundwave Immersive mark on the linked card's pill, accent
+/// stroked to read as the sync feature's color.
+fn immersive_mark() -> Element {
+    rsx! {
+        svg {
+            width: "12", height: "12", view_box: "0 0 24 24", fill: "none",
+            stroke: "var(--accent)", stroke_width: "1.9", stroke_linecap: "round",
+            stroke_linejoin: "round", "aria-hidden": "true",
+            path { d: "M4 5.2A2 2 0 0 1 6 4h4.2a1.8 1.8 0 0 1 1.8 1.8V18a1.6 1.6 0 0 0-1.6-1.6H6A2 2 0 0 1 4 14.4V5.2z" }
+            path { d: "M15.5 8v8M18.5 6v12M21 9.5v5" }
+        }
+    }
+}
+
 /// Watch the hero cards and report the index of the mostly-visible one, so
 /// the dots track manual swipes/scrolls. Waits briefly for the track to exist
 /// (the eval can run before the DOM patch lands), then observes each card.
@@ -141,11 +169,61 @@ fn HeroCard(point: ResumePoint, server_url: String) -> Element {
         .map(|c| c.name.clone())
         .unwrap_or_default();
     let is_audio = point.record.format == ProgressFormat::Audio;
-    let (eyebrow, cta_label) = if is_audio {
-        ("Continue listening", "Play")
-    } else {
-        ("Continue reading", "Read")
+    let eyebrow = match (is_audio, point.linked) {
+        (_, true) => "Continue \u{00b7} synced",
+        (true, false) => "Continue listening",
+        (false, false) => "Continue reading",
     };
+    // Linked cards carry the position on the primary CTA ("Play · 16h 05m")
+    // per the design; unlinked keep the bare verb.
+    let cta_label = {
+        let verb = if is_audio { "Play" } else { "Read" };
+        let position = if point.linked {
+            if is_audio {
+                point
+                    .record
+                    .audio_position_seconds
+                    .map(crate::components::alignment_modal::fmt_hm)
+            } else {
+                point.record.progress_percent.map(|p| format!("{p}%"))
+            }
+        } else {
+            None
+        };
+        match position {
+            Some(p) => format!("{verb} \u{00b7} {p}"),
+            None => verb.to_string(),
+        }
+    };
+    // Dual-format but unlinked: the hero carries the link invitation the
+    // design draws under the two-card state. Linked dual-format cards get
+    // the Immersive pill instead.
+    let dual_unlinked = !point.linked && has_both_formats(&book);
+    let dual_linked = point.linked && has_both_formats(&book);
+    // Linked books carry the mapped "resume in the other format" candidate;
+    // the CTA routes to that surface, whose own prompt offers the precise
+    // jump once loaded.
+    let counterpart = point.cross_format.as_ref().map(|cf| {
+        let (route, label) = match cf.target {
+            ProgressFormat::Audio => (
+                Route::BookListen {
+                    uuid: uuid.clone(),
+                    file_id: cf.book_file_id,
+                },
+                format!(
+                    "Listen \u{00b7} \u{2248} {}",
+                    crate::components::alignment_modal::fmt_hm(
+                        cf.audio_position_seconds.unwrap_or(0.0),
+                    ),
+                ),
+            ),
+            ProgressFormat::Epub => (
+                Route::BookRead { uuid: uuid.clone() },
+                format!("Read \u{00b7} \u{2248} {}%", cf.percent.unwrap_or(0)),
+            ),
+        };
+        (route, label)
+    });
     // Shared dispatch (routes::resume_route) rather than a local format
     // match: it carries the audio point's `book_file_id` and sends a
     // CBZ-only book to the comic pager — the mobile resume card already
@@ -159,6 +237,13 @@ fn HeroCard(point: ResumePoint, server_url: String) -> Element {
 
     rsx! {
         article { class: "ch-card", "data-testid": "hero-card-{uuid}",
+            if point.linked {
+                span {
+                    class: "ch-sync-corner",
+                    title: "Positions synced across formats",
+                    crate::components::sync_glyph::SyncGlyph { size: 20 }
+                }
+            }
             Link {
                 to: Route::BookDetail { uuid: uuid.clone() },
                 class: "ch-cover",
@@ -183,8 +268,45 @@ fn HeroCard(point: ResumePoint, server_url: String) -> Element {
                 if let Some(pct) = pct {
                     span { class: "ch-bar", i { style: "width:{pct}%" } }
                 }
+                if dual_unlinked {
+                    Link {
+                        to: Route::BookDetail { uuid: uuid.clone() },
+                        class: "ch-link-invite",
+                        "data-testid": "hero-link-invite-{uuid}",
+                        crate::components::sync_glyph::SyncGlyph { size: 12 }
+                        span { "Same book, two spots — link the formats to carry one position." }
+                    }
+                }
                 div { class: "ch-foot",
-                    span { class: "mono ch-meta", "{meta}" }
+                    span { class: "mono ch-meta",
+                        if point.linked { "newest spot: " }
+                        if point.linked {
+                            if is_audio { "audiobook \u{00b7} " } else { "ebook \u{00b7} " }
+                        }
+                        "{meta}"
+                    }
+                    if dual_linked {
+                        button {
+                            r#type: "button",
+                            class: "ch-cta ch-cta-alt",
+                            "data-testid": "hero-immersive-{uuid}",
+                            title: "Open the ereader and audiobook together, kept in sync",
+                            onclick: {
+                                let uuid = uuid.clone();
+                                move |_| crate::pages::retarget_and_open_immersive(uuid.clone())
+                            },
+                            {immersive_mark()}
+                            span { "Immersive" }
+                        }
+                    }
+                    if let Some((route, label)) = counterpart {
+                        Link {
+                            to: route,
+                            class: "ch-cta ch-cta-alt",
+                            "data-testid": "hero-crossformat-{uuid}",
+                            span { "{label}" }
+                        }
+                    }
                     Link {
                         to: resume_route,
                         class: "ch-cta",

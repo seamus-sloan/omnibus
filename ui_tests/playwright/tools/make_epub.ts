@@ -62,6 +62,14 @@ interface EpubInput {
   /** Optional publisher colour applied through a class on the chapter body. */
   publisherBodyColor?: string;
   /**
+   * When true, fill the chapter with ~32KB of deterministic prose (~32
+   * epub.js 1024-char locations) instead of one short paragraph. The
+   * cross-format specs need a jump target that is *visually* distinct: a
+   * one-location book maps every percentage to the start of the book, so a
+   * correct auto-jump and a silently-dropped one render identically.
+   */
+  longBody?: boolean;
+  /**
    * Extra spine sections rendered BEFORE the default chapter1 — each its own
    * one-page section, so paging through them crosses a section boundary per
    * click. Absent for every existing fixture (backward-compatible: omitting
@@ -431,6 +439,26 @@ const FIXTURES: EpubInput[] = [
     withCover: true,
   },
 
+  // --- Second dual-format pair, RESERVED for cross_format_prompts.spec.ts:
+  // that spec links the formats and writes reading/listening progress, all
+  // globally visible server state — no other spec may touch this book. Same
+  // byte-identical (title, author) rule as "Immersive Voyage"; the author
+  // appears nowhere else in either generator, and the title sorts before
+  // "The Isle of Functions" so the landing sort test is undisturbed.
+  {
+    filename: "parallel-latitudes.epub",
+    id: "urn:omnibus-test:parallel-latitudes",
+    title: "Parallel Latitudes",
+    authors: ["Vera Molnar"],
+    publisher: "Omnibus Test Press",
+    published: "1968-05-01",
+    language: "en",
+    withCover: true,
+    // Cross-format jump assertions need real location granularity — see
+    // the `longBody` doc on EpubInput.
+    longBody: true,
+  },
+
   // --- Bulk-edit targets (2 books) ---
   // Reserved for landing_bulk_edit.spec.ts, which bulk-writes publisher/tag
   // overrides to BOTH books (reverted at test end, but the suite is
@@ -625,10 +653,23 @@ function buildChapter(input: EpubInput): string {
     ? `<link href="publisher.css" rel="stylesheet" type="text/css"/>`
     : "";
   const bodyClass = input.publisherBodyColor ? ` class="calibre"` : "";
+  // Deterministic (no randomness) so the generated zip stays byte-stable.
+  const prose = input.longBody
+    ? Array.from({ length: 40 }, (_, i) => {
+        const sentence =
+          `Paragraph ${i + 1} of the long-body fixture. ` +
+          "The expedition charted latitude after latitude, logging each " +
+          "reading twice and comparing the drift against the morning's " +
+          "sightings before the fog closed over the instruments again. ".repeat(
+            4,
+          );
+        return `<p>${sentence.trim()}</p>`;
+      }).join("\n")
+    : "<p>Synthetic test content.</p>";
   return `<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head><title>${escapeXml(input.title)}</title>${stylesheet}</head>
-<body${bodyClass}><h1>${escapeXml(input.title)}</h1><p>Synthetic test content.</p></body>
+<body${bodyClass}><h1>${escapeXml(input.title)}</h1>${prose}</body>
 </html>
 `;
 }

@@ -204,6 +204,17 @@ impl Worker {
                 )
                 .await,
             ),
+            Task::BackfillEpubStructure { library_path } => anyhow_outcome(
+                "epub structure backfill",
+                crate::indexer::backfill_epub_structure(
+                    &self.pool,
+                    &library_path,
+                    |processed, total, item| {
+                        self.report_item_progress(id, processed, total, item);
+                    },
+                )
+                .await,
+            ),
             Task::BackfillThumbs { library_path } => anyhow_outcome(
                 "thumbnail backfill",
                 crate::indexer::backfill_thumbs(
@@ -380,6 +391,9 @@ impl Worker {
                     library_path: library_path.clone(),
                 });
                 self.post(Task::BackfillPageCounts {
+                    library_path: library_path.clone(),
+                });
+                self.post(Task::BackfillEpubStructure {
                     library_path: library_path.clone(),
                 });
                 self.post(Task::BackfillThumbs { library_path });

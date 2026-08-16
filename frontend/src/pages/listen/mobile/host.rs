@@ -420,12 +420,17 @@ async fn init_direct_and_drain(
     // apply only when the row names the file that was actually loaded —
     // otherwise they'd splice one file's offset into another (#1888).
     let local_pos = crate::audiobook_progress::load(&uuid).unwrap_or(0.0);
+    // `None` (multi-file row the loaded file can't claim) boots at 0 here:
+    // this surface has no unseeded-session gate — its persistence only fires
+    // from real playback events in `drain_audio_events`, so a 0 boot can't
+    // be flushed back the way the web teardown path could.
     let resume = resolve_boot_position(
         row.map(|r| (r.book_file_id, r.audio_position_seconds)),
         local_pos,
         loaded_file,
         audio_file_count,
-    );
+    )
+    .unwrap_or(0.0);
     let playback_rate = resolve_playback_rate(ctx, &server_url, &uuid).await;
     let pv = PlayerView::from_direct(book, chapters, total_duration_seconds, parts.clone());
     // Cover artwork for the lock screen: the same tokened thumbnail the

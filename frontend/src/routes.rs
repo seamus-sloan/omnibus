@@ -481,6 +481,8 @@ mod tests {
                 client_updated_at: 0,
             },
             book: Default::default(),
+            linked: false,
+            cross_format: None,
             total_duration_seconds: None,
             chapter_number: None,
             chapter_count: None,

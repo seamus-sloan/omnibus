@@ -325,6 +325,13 @@ pub struct PlaybackState {
     /// on a book swap — the sleep-timer fade in `pages::listen::sleep`
     /// restores to this value rather than always `1.0`.
     pub volume: Signal<f64>,
+    /// Bumped to force the app-level driver to re-run its boot (resume +
+    /// follow resolution) for the *current* book without tearing it down.
+    /// The Immersive Read CTA uses this for the same-book idle case: the
+    /// old `uuid` None→Some nudge unmounted the dock for a frame and raced
+    /// the reader's own mount — losing the race left the player closed or
+    /// the reader stuck loading (#1972 follow-up).
+    pub reload_epoch: Signal<u32>,
 }
 
 #[cfg(not(feature = "mobile"))]
@@ -348,6 +355,7 @@ impl PlaybackState {
             buffering: Signal::new(false),
             playback_failed: Signal::new(false),
             volume: Signal::new(1.0),
+            reload_epoch: Signal::new(0),
         }
     }
 }

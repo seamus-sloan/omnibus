@@ -13,6 +13,7 @@ mod accent;
 mod cover;
 mod parse;
 mod stat;
+pub mod toc;
 mod wordcount;
 
 pub use accent::extract_accent;

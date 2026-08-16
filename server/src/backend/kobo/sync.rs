@@ -158,6 +158,52 @@ async fn enrich_states_with_derived_spans(
         let Some(s) = states.get(&book.uuid) else {
             continue;
         };
+        // Follow-mode lane: when the audiobook holds the freshest position
+        // on a follow link, serve the mapped spot instead of the reader's
+        // older CFI. Response-only — the progress row keeps its real
+        // provenance; the device's own PUT makes the position real once
+        // the reader picks it up there.
+        //
+        // Cheap pre-filter before the multi-query mapping composition:
+        // most changed books have no follow link, and one indexed
+        // `get_link` read skips the timeline/progress/structure reads for
+        // all of them (a large first sync touches every book). Falls
+        // through to the normal derivation lane below either way.
+        let follow_linked = matches!(
+            db::cross_format::get_link(state.pool(), user_id, &book.uuid).await,
+            Ok(Some(link)) if link.follow
+        );
+        let resume = if follow_linked {
+            db::cross_format::resume_candidate(
+                state.pool(),
+                user_id,
+                &book.uuid,
+                omnibus_shared::ProgressFormat::Epub,
+            )
+            .await
+            .ok()
+        } else {
+            None
+        };
+        if let Some(resume) = resume {
+            if resume.follow
+                && resume.state == omnibus_shared::cross_format::CrossFormatResumeState::Candidate
+            {
+                if let Some(c) = &resume.candidate {
+                    if let Some(frac) = c.fraction {
+                        budget -= 1;
+                        let loc = derive_span_for_fraction(state, book.id, &book.uuid, frac).await;
+                        if let Some(s) = states.get_mut(&book.uuid) {
+                            if let Some(loc) = loc {
+                                s.kobo_location = Some(loc);
+                            }
+                            s.percent = c.percent.or(s.percent);
+                        }
+                        continue;
+                    }
+                }
+            }
+        }
         let Some(cfi) = (s.kobo_location.is_none())
             .then(|| s.epub_cfi.clone())
             .flatten()
@@ -188,6 +234,47 @@ async fn enrich_states_with_derived_spans(
             // empty bookmark. Not persisted — the row keeps meaning "no
             // span known" so a later sync retries the full derivation.
             s.percent = s.percent.or(derived.percent);
+        }
+    }
+}
+
+/// Best-effort fraction→KoboSpan derivation for the follow-mode lane:
+/// spine stats invert the fraction to a `(spine, offset)` position, and
+/// the kepub walk proves alignment before emitting a span. `None` serves
+/// percent-only — truthful, just less precise — and queues the kepub
+/// conversion for a later sync, mirroring [`derive_span_for_cfi`].
+async fn derive_span_for_fraction(
+    state: &AppState,
+    book_id: i64,
+    uuid: &str,
+    frac: f64,
+) -> Option<String> {
+    let (file_id, source) = db::book_file_with_id(state.pool(), book_id, "EPUB")
+        .await
+        .ok()??;
+    let stats = db::epub_structure::get_spine_stats(state.pool(), file_id)
+        .await
+        .ok()?;
+    let (spine_index, offset) = db::epub_structure::position_at_fraction(&stats, frac)?;
+    let kepub = db::kepub_path(book_id);
+    if !tokio::fs::try_exists(&kepub).await.unwrap_or(false) {
+        state.worker().post(Task::KepubConvert { book_id });
+        return None;
+    }
+    let uuid = uuid.to_owned();
+    let result = tokio::task::spawn_blocking(move || {
+        db::kobo_position::span_at_spine_offset(&kepub, &source, spine_index as usize, offset)
+    })
+    .await;
+    match result {
+        Ok(Ok(loc)) => loc,
+        Ok(Err(e)) => {
+            tracing::warn!(%uuid, error = %e, "kobo fraction→span derivation failed");
+            None
+        }
+        Err(e) => {
+            tracing::warn!(%uuid, error = %e, "kobo fraction→span task panicked");
+            None
         }
     }
 }

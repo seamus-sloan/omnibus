@@ -42,6 +42,12 @@ pub(crate) struct RelocateData {
     pub(crate) page: u32,
     pub(crate) total_pages: u32,
     pub(crate) pct: u32,
+    /// Full-precision twin of `pct` (0.0..=1.0) — the "synced here"
+    /// declaration records this, not the rounded display value. Read only
+    /// by the web pill; native iOS owns the gesture on mobile.
+    #[serde(default)]
+    #[cfg_attr(feature = "mobile", allow(dead_code))]
+    pub(crate) frac: f64,
     // True while `pct` is the glue's coarse spine-derived approximation —
     // the whole-book locations map hasn't resolved yet (generation runs in
     // the background after first paint; issue #1896). The formatters render
@@ -57,6 +63,14 @@ pub(crate) struct RelocateData {
     pub(crate) chapter: u32,
     pub(crate) total_chapters: u32,
     pub(crate) chapter_title: String,
+    /// True when the glue re-states a position the host already knows (the
+    /// restore settle, the locations-resolved re-emit) rather than reporting
+    /// movement. Rendered like any relocate, but never persisted: an echo
+    /// write stamps a fresh clock on an unmoved position, which out-orders a
+    /// newer counterpart-format position at the cross-format clock gate.
+    #[serde(default)]
+    #[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
+    pub(crate) echo: bool,
 }
 
 /// The percent readout: "N%" once the whole-book locations map has
@@ -220,11 +234,13 @@ mod tests {
             page: 42,
             total_pages: 300,
             pct: 14,
+            frac: 0.14,
             pct_approx: false,
             at_end: false,
             chapter: 3,
             total_chapters: 24,
             chapter_title: String::new(),
+            echo: false,
         };
         let (page, chapter) = format_progress_labels(&data);
         assert!(page.contains("p."));
@@ -372,11 +388,13 @@ mod tests {
             page: 0,
             total_pages: 0,
             pct: 7,
+            frac: 0.07,
             pct_approx: false,
             at_end: false,
             chapter: 0,
             total_chapters: 0,
             chapter_title: String::new(),
+            echo: false,
         };
         let (page, chapter) = format_progress_labels(&data);
         assert_eq!(page, "7%");

@@ -830,3 +830,62 @@ enum UserDataService {
         }
     }
 }
+
+// MARK: - Cross-format sync (rule 08: configuration-shaped — never queued)
+
+extension UserDataService {
+    /// The mapped "resume in the other format" candidate. A plain network
+    /// read — no cache, no offline fallback: a prompt that can't be
+    /// fetched is a prompt that doesn't appear.
+    static func crossFormatResume(
+        uuid: String,
+        target: ProgressFormat
+    ) async throws -> CrossFormatResume {
+        try await APIClient.shared.get(
+            "/api/books/\(uuid)/cross-format-resume",
+            query: ["target": target.rawValue]
+        )
+    }
+
+    /// Alignment payload for the sheet — network-only, like the resume read.
+    static func alignment(uuid: String) async throws -> AlignmentView {
+        try await APIClient.shared.get("/api/books/\(uuid)/alignment")
+    }
+
+    /// Confirm (or re-confirm) the cross-format link. Rule 08 test 1: this
+    /// is per-user configuration — a deliberate declaration versioned by
+    /// the server-side audio snapshot — so it calls the API directly and
+    /// fails visibly offline; it must never queue.
+    static func confirmCrossFormatLink(
+        uuid: String,
+        mode: CrossFormatLinkMode,
+        primaryBookFileID: Int64?
+    ) async throws {
+        let body = ConfirmCrossFormatLink(
+            bookUUID: uuid,
+            mode: mode,
+            primaryBookFileID: primaryBookFileID,
+            audioOrder: nil
+        )
+        let _: Empty = try await APIClient.shared.post(
+            "/api/books/\(uuid)/cross-format-link",
+            body: body
+        )
+    }
+
+    /// Turn sync off. Same never-queued contract as the confirm.
+    static func unlinkCrossFormat(uuid: String) async throws {
+        let _: Empty = try await APIClient.shared.delete("/api/books/\(uuid)/cross-format-link")
+    }
+
+    /// A "synced here" declaration: records the declaring surface's own
+    /// position as a user anchor and turns follow mode on. Rule 08: a
+    /// deferred declaration would calibrate positions that no longer
+    /// correspond — direct call only, disabled offline at the control.
+    static func declareSyncPoint(_ decl: DeclareSyncPoint) async throws {
+        let _: Empty = try await APIClient.shared.post(
+            "/api/books/\(decl.bookUUID)/sync-point",
+            body: decl
+        )
+    }
+}
