@@ -1,13 +1,7 @@
 //! Date formatting shared by the book-detail sections that stamp a
-//! unix-seconds timestamp (journal entries, saved passages). [`fmt_long_date`]
-//! itself stays dependency-free and deterministic; [`use_local_dates_ready`]
-//! is hoisted once per list (not once per row — a heavily-annotated book runs
-//! to hundreds) and starts `false` so SSR and the first client paint render
-//! the same UTC day (rule 07), flipping to `true` in a post-mount effect on
-//! web. [`local_date_offset`] then resolves each row's *own* offset from its
-//! *own* timestamp via [`crate::time::local_utc_offset_secs`] — never a
-//! single cached "today" value shared across rows, because DST means two
-//! entries on either side of a clock change carry different offsets.
+//! unix-seconds timestamp (journal entries, saved passages). Renders in the
+//! viewer's local calendar day rather than UTC, staying SSR/hydration-safe
+//! per rule 07 — see the function docs below for how.
 
 use dioxus::prelude::*;
 
