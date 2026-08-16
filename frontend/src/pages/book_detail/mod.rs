@@ -22,6 +22,7 @@ mod journal_editor;
 mod merge;
 mod rating;
 mod read_status;
+#[cfg(not(feature = "mobile"))]
 mod sync_link;
 mod view;
 
@@ -43,6 +44,11 @@ mod offline;
 #[cfg(not(feature = "mobile"))]
 mod physical;
 
+// The landing Continue hero's Immersive pill shares the book-detail CTA's
+// retarget-and-navigate handler; the hero is web-only, so the re-export is
+// gated with it (the mobile CTA calls the fn inside `immersive` directly).
+#[cfg(not(feature = "mobile"))]
+pub(crate) use immersive::retarget_and_open_immersive;
 use view::{render_loaded, LoadedCtx, RailButtons};
 // Only `mobile.rs` (compiled solely under this feature) re-derives the loaded
 // view itself; the web branch calls `derive_loaded_view` directly inside

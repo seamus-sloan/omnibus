@@ -7093,6 +7093,11 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   box-shadow: 0 8px 18px color-mix(in oklch, black 35%, transparent);
   overflow: hidden;
 }
+/* Two cards per page at wide widths (track gap is 16px, so each card
+   cedes half of it). The snap/dot logic stays per-card. */
+@media (min-width: 1100px) {
+  .ch-card { flex: 0 0 calc(50% - 8px); }
+}
 .ch-cover {
   flex: 0 0 96px;
   width: 96px;
@@ -7170,13 +7175,16 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   align-items: center;
   gap: 5px;
   padding: 7px 13px;
+  border: 0;
   border-radius: 999px;
   background: var(--accent);
   color: var(--accent-ink);
+  font-family: inherit;
   font-size: 12px;
   font-weight: 600;
   text-decoration: none;
   transition: filter 0.15s;
+  cursor: pointer;
 }
 .ch-cta svg { display: block; flex-shrink: 0; }
 @media (hover: hover) { .ch-cta:hover { filter: brightness(1.08); } }
@@ -9333,9 +9341,18 @@ html {
   border-top: 1px solid var(--line, rgba(127, 127, 127, 0.25));
 }
 .al-foot-spacer { flex: 1; }
-/* Contained per the Format Sync design: the entry is a compact card in
-   the progress cluster, never a full-bleed strip. */
-.bd-sync-panel { margin: 14px 0 0; max-width: 560px; }
+/* Contained per the Format Sync design: the whole "Your progress" block
+   (bars + entry row) is a compact cluster in the hero's title column,
+   below the CTA row — never a full-bleed strip. */
+.bd-sync-panel { margin: 26px 0 0; max-width: 560px; }
+.bd-prog-head { margin-bottom: 10px; }
+.bd-prog-rows { display: flex; flex-direction: column; gap: 10px; }
+.bd-prog-row { display: flex; align-items: center; gap: 12px; }
+.bd-prog-row .pbar { flex: 1; }
+.bd-prog-glyph { color: var(--ink-2); display: inline-flex; }
+.bd-prog-cap { font-size: 10.5px; color: var(--ink-2); white-space: nowrap; }
+.bd-prog-foot { font-size: 10px; color: var(--ink-3); margin-top: 6px; padding-left: 25px; }
+.bd-sync-panel .al-entry { margin-top: 14px; }
 .al-entry {
   display: flex;
   align-items: center;
@@ -9397,7 +9414,14 @@ html {
   font-size: 12.5px;
 }
 .rd-sync-copy { flex: 1; }
-.ch-cta-alt { opacity: 0.85; }
+/* Secondary CTA pill (counterpart-format link + the Immersive button),
+   per the Format Sync design's chCtaSecondary treatment. Scoped like
+   `.ch-hero .ch-cta` so it outranks the base pill's fill. */
+.ch-hero .ch-cta-alt {
+  background: color-mix(in oklch, var(--accent) 16%, var(--bg-1));
+  border: 1px solid color-mix(in oklch, var(--accent) 45%, transparent);
+  color: var(--ink-0);
+}
 
 /* ── Cross-format sync: design-fidelity additions (Format Sync design) ── */
 .al-modal { width: min(880px, calc(100vw - 48px)); }
@@ -9508,7 +9532,15 @@ html {
   color: var(--accent, #6a8bd7);
 }
 .lp-sync-kicker-spacer { flex: 1; }
-.ch-eyebrow-glyph { display: inline-flex; margin-left: 6px; vertical-align: -2px; color: var(--accent, #6a8bd7); opacity: 0.9; }
+/* Linked-card sync mark, pinned to the card's top-right corner. */
+.ch-sync-corner {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: inline-flex;
+  color: var(--accent, #6a8bd7);
+  opacity: 0.9;
+}
 .ch-link-invite {
   display: flex;
   align-items: center;

@@ -40,6 +40,8 @@ pub use admin_health::AdminHealthPage;
 pub use auth::{LoginPage, RegisterPage};
 pub use author::AuthorPage;
 pub use authors_index::AuthorsIndexPage;
+#[cfg(not(feature = "mobile"))]
+pub(crate) use book_detail::retarget_and_open_immersive;
 pub use book_detail::BookDetailPage;
 pub use check_in::{CheckInOpen, CheckInOverlay, CheckInPage};
 pub use comic_reader::ComicReadPage;

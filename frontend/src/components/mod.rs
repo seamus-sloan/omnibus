@@ -133,8 +133,9 @@ pub mod search_palette;
 #[cfg(not(feature = "mobile"))]
 pub mod worker_status;
 
-// Play / open-book marks shared by the two web "continue reading" surfaces:
-// the user-menu resume row and the landing hero CTA.
+// Play / open-book / headphones marks shared by the two web "continue
+// reading" surfaces (user-menu resume row, landing hero CTA) and the
+// book-detail "Your progress" rows.
 #[cfg(not(feature = "mobile"))]
 pub mod glyphs;
 

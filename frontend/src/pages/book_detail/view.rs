@@ -250,6 +250,19 @@ pub(super) fn render_loaded(
     // Extract the physical-panel inputs before `b` is moved into the rail.
     let is_fileless = b.formats.is_empty();
     let accent = b.accent.clone();
+    // The "Your progress" block lives inside the hero's title column (below
+    // the CTA row); it only exists for dual-format books.
+    let sync_panel = if has_ebook && has_audio {
+        rsx! {
+            sync_link::BdSyncPanel {
+                uuid: uuid.clone(),
+                refresh,
+                after_merge,
+            }
+        }
+    } else {
+        rsx! {}
+    };
     rsx! {
         div { class: "bd-root", style: "{accent_style}",
             BdHeroSection {
@@ -262,13 +275,7 @@ pub(super) fn render_loaded(
                     has_comic,
                 },
                 phys,
-            }
-            if has_ebook && has_audio {
-                sync_link::BdSyncPanel {
-                    uuid: uuid.clone(),
-                    refresh,
-                    after_merge,
-                }
+                sync_panel,
             }
             physical::BdPhysicalPanel {
                 uuid: uuid.clone(),

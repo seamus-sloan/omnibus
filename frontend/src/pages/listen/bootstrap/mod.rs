@@ -37,10 +37,17 @@ type JsCallbackHolder = std::rc::Rc<std::cell::RefCell<Vec<Box<dyn std::any::Any
 /// picker switches parts, while the mini-dock (which relinks with no
 /// `file_id`) resumes the current part instead of restarting from the first
 /// file. Mirrors `pages::listen::mobile::host::needs_reload`.
-fn needs_reload(loaded: &Option<(String, Option<i64>)>, uuid: &str, file_id: Option<i64>) -> bool {
+fn needs_reload(
+    loaded: &Option<(String, Option<i64>, u32)>,
+    uuid: &str,
+    file_id: Option<i64>,
+    epoch: u32,
+) -> bool {
     match loaded {
-        Some((loaded_uuid, loaded_file)) if loaded_uuid == uuid => {
-            file_id.is_some() && file_id != *loaded_file
+        Some((loaded_uuid, loaded_file, loaded_epoch)) if loaded_uuid == uuid => {
+            // A bumped epoch forces a same-book re-boot (resume + follow
+            // re-resolution) without the dock ever unmounting.
+            *loaded_epoch != epoch || (file_id.is_some() && file_id != *loaded_file)
         }
         _ => true,
     }
@@ -79,7 +86,7 @@ pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
     // What's currently booted: (book uuid, the file_id it was booted with).
     // Gates re-boot so a same-book file-pick reloads but a bare mini-dock
     // relink resumes the current part. Held across renders via `use_hook`.
-    let mut loaded_key = use_hook(|| Signal::new(None::<(String, Option<i64>)>));
+    let mut loaded_key = use_hook(|| Signal::new(None::<(String, Option<i64>, u32)>));
 
     use_effect(move || {
         let resolved_user = current_user();
@@ -99,9 +106,13 @@ pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
             return;
         }
         // Reactive dependencies — re-run when the active book *or* the selected
-        // file changes (the picker retargets `file_id` without changing uuid).
+        // file changes (the picker retargets `file_id` without changing uuid),
+        // or when a surface bumps `reload_epoch` to force a same-book re-boot
+        // (Immersive Read re-resolving resume + follow without unmounting the
+        // dock).
         let requested_uuid = playback.uuid.read().clone();
         let requested_file = *playback.file_id.read();
+        let requested_epoch = *playback.reload_epoch.read();
         let Some(uuid) = requested_uuid else {
             // Dismissed via the dock × button. The handler already stopped
             // the element; clear the book so the dock hides everywhere, and
@@ -111,10 +122,15 @@ pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
             loaded_key.set(None);
             return;
         };
-        if !needs_reload(&loaded_key.peek().clone(), &uuid, requested_file) {
+        if !needs_reload(
+            &loaded_key.peek().clone(),
+            &uuid,
+            requested_file,
+            requested_epoch,
+        ) {
             return;
         }
-        loaded_key.set(Some((uuid.clone(), requested_file)));
+        loaded_key.set(Some((uuid.clone(), requested_file, requested_epoch)));
         let user_id = resolved_user.flatten().map(|user| user.id);
         boot_new_book(
             &cb_holder,
@@ -809,23 +825,32 @@ mod tests {
 
     #[test]
     fn needs_reload_when_nothing_booted_or_book_changed() {
-        assert!(needs_reload(&None, "book-a", None));
-        let booted = Some(("book-a".to_string(), Some(917)));
-        assert!(needs_reload(&booted, "book-b", Some(940)));
+        assert!(needs_reload(&None, "book-a", None, 0));
+        let booted = Some(("book-a".to_string(), Some(917), 0));
+        assert!(needs_reload(&booted, "book-b", Some(940), 0));
     }
 
     #[test]
     fn needs_reload_on_explicit_different_part_of_same_book() {
-        let booted = Some(("book-a".to_string(), Some(917)));
-        assert!(needs_reload(&booted, "book-a", Some(918)));
+        let booted = Some(("book-a".to_string(), Some(917), 0));
+        assert!(needs_reload(&booted, "book-a", Some(918), 0));
+    }
+
+    #[test]
+    fn needs_reload_when_the_reload_epoch_was_bumped() {
+        // Immersive Read forces a same-book re-boot without unmounting the
+        // dock — the epoch is the only thing that moved.
+        let booted = Some(("book-a".to_string(), Some(917), 0));
+        assert!(needs_reload(&booted, "book-a", None, 1));
+        assert!(needs_reload(&booted, "book-a", Some(917), 1));
     }
 
     #[test]
     fn no_reload_for_same_part_or_bare_relink_of_same_book() {
-        let booted = Some(("book-a".to_string(), Some(917)));
+        let booted = Some(("book-a".to_string(), Some(917), 0));
         // Same part re-selected → no restart.
-        assert!(!needs_reload(&booted, "book-a", Some(917)));
+        assert!(!needs_reload(&booted, "book-a", Some(917), 0));
         // Mini-dock relinks with no file_id → keep the current part.
-        assert!(!needs_reload(&booted, "book-a", None));
+        assert!(!needs_reload(&booted, "book-a", None, 0));
     }
 }

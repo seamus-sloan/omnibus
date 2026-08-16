@@ -176,6 +176,32 @@ test("the hero shows one synced card with the counterpart affordance", async ({
   await expect(cards).toHaveCount(1);
   await expect(cards).toContainText("synced");
   await expect(page.getByTestId(`hero-crossformat-${uuid}`)).toBeVisible();
+
+  // The linked dual-format card also carries the Immersive pill, which
+  // opens the reader with the audiobook docked (same handler as the
+  // book-detail CTA — immersive.spec.ts covers the dock itself).
+  const immersive = page.getByTestId(`hero-immersive-${uuid}`);
+  await expect(immersive).toBeVisible();
+  await immersive.click();
+  await expect(page).toHaveURL(new RegExp(`/read/${uuid}$`));
+});
+
+test("the book detail shows the newest-format progress row above the sync chip", async ({
+  page,
+}) => {
+  // Linked and fresh: the "Your progress" block collapses to ONE row for
+  // the newest format (either side may be newest here — earlier tests
+  // leave wall-clock reader/player writes on both), with the per-format
+  // bars absent and the linked chip beneath.
+  await gotoReady(page, `/books/${uuid}`);
+  const row = page.getByTestId("sync-link-row");
+  await expect(row.getByText("Your progress")).toBeVisible();
+  await expect(page.getByTestId("bd-progress-newest")).toBeVisible();
+  await expect(page.getByTestId("bd-progress-ebook")).toHaveCount(0);
+  await expect(page.getByTestId("bd-progress-audio")).toHaveCount(0);
+  await expect(page.getByTestId("sync-link-manage")).toBeVisible();
+  // The one-spot footnote explains the mapped hand-off.
+  await expect(row.getByText("one spot, both formats")).toBeVisible();
 });
 
 test("declaring a sync point turns on follow and the reader auto-applies", async ({
