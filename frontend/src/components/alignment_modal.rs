@@ -49,7 +49,7 @@ pub(crate) fn recency(clock_epoch_secs: i64) -> String {
 /// Piecewise-linear map of a text fraction through the served anchor pairs
 /// (implicit `(0,0)`/`(1,1)` endpoints) — the same interpolation the jump
 /// runs server-side, so the preview cannot disagree with it.
-fn interpolate_pairs(pairs: &[(f64, f64)], frac: f64) -> f64 {
+pub(crate) fn interpolate_pairs(pairs: &[(f64, f64)], frac: f64) -> f64 {
     let frac = frac.clamp(0.0, 1.0);
     let mut prev = (0.0f64, 0.0f64);
     for (t, a) in pairs.iter().copied().chain(std::iter::once((1.0, 1.0))) {
@@ -114,7 +114,7 @@ fn ordered<'v>(view: &'v AlignmentView, order: &[i64]) -> Vec<&'v AlignmentAudio
 
 /// Whole-timeline fraction of the current listening position, given the
 /// working order; `None` when the position's file isn't on the timeline.
-fn listening_frac(view: &AlignmentView, files: &[&AlignmentAudioFile]) -> Option<f64> {
+pub(crate) fn listening_frac(view: &AlignmentView, files: &[&AlignmentAudioFile]) -> Option<f64> {
     let pos = view.listening.as_ref()?;
     let total: f64 = files.iter().map(|f| f.duration_seconds).sum();
     if total <= 0.0 {

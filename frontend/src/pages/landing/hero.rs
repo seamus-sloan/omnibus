@@ -12,6 +12,33 @@ use super::resume_meta::resume_meta;
 use crate::components::glyphs::{book_glyph, play_glyph};
 use crate::Route;
 
+/// Whether the book carries both an ebook and an audiobook — the
+/// dual-format gate for the link invitation (unlinked) and the Immersive
+/// pill (linked).
+fn has_both_formats(book: &omnibus_shared::EbookMetadata) -> bool {
+    book.formats.iter().any(|f| f.eq_ignore_ascii_case("epub"))
+        && book.formats.iter().any(|f| {
+            matches!(
+                f.to_ascii_lowercase().as_str(),
+                "m4b" | "m4a" | "mp3" | "aac" | "flac" | "ogg" | "opus" | "wav"
+            )
+        })
+}
+
+/// The book+soundwave Immersive mark on the linked card's pill, accent
+/// stroked to read as the sync feature's color.
+fn immersive_mark() -> Element {
+    rsx! {
+        svg {
+            width: "12", height: "12", view_box: "0 0 24 24", fill: "none",
+            stroke: "var(--accent)", stroke_width: "1.9", stroke_linecap: "round",
+            stroke_linejoin: "round", "aria-hidden": "true",
+            path { d: "M4 5.2A2 2 0 0 1 6 4h4.2a1.8 1.8 0 0 1 1.8 1.8V18a1.6 1.6 0 0 0-1.6-1.6H6A2 2 0 0 1 4 14.4V5.2z" }
+            path { d: "M15.5 8v8M18.5 6v12M21 9.5v5" }
+        }
+    }
+}
+
 /// Watch the hero cards and report the index of the mostly-visible one, so
 /// the dots track manual swipes/scrolls. Waits briefly for the track to exist
 /// (the eval can run before the DOM patch lands), then observes each card.
@@ -168,15 +195,10 @@ fn HeroCard(point: ResumePoint, server_url: String) -> Element {
         }
     };
     // Dual-format but unlinked: the hero carries the link invitation the
-    // design draws under the two-card state.
-    let dual_unlinked = !point.linked
-        && book.formats.iter().any(|f| f.eq_ignore_ascii_case("epub"))
-        && book.formats.iter().any(|f| {
-            matches!(
-                f.to_ascii_lowercase().as_str(),
-                "m4b" | "m4a" | "mp3" | "aac" | "flac" | "ogg" | "opus" | "wav"
-            )
-        });
+    // design draws under the two-card state. Linked dual-format cards get
+    // the Immersive pill instead.
+    let dual_unlinked = !point.linked && has_both_formats(&book);
+    let dual_linked = point.linked && has_both_formats(&book);
     // Linked books carry the mapped "resume in the other format" candidate;
     // the CTA routes to that surface, whose own prompt offers the precise
     // jump once loaded.
@@ -214,6 +236,13 @@ fn HeroCard(point: ResumePoint, server_url: String) -> Element {
 
     rsx! {
         article { class: "ch-card", "data-testid": "hero-card-{uuid}",
+            if point.linked {
+                span {
+                    class: "ch-sync-corner",
+                    title: "Positions synced across formats",
+                    crate::components::sync_glyph::SyncGlyph { size: 20 }
+                }
+            }
             Link {
                 to: Route::BookDetail { uuid: uuid.clone() },
                 class: "ch-cover",
@@ -226,14 +255,7 @@ fn HeroCard(point: ResumePoint, server_url: String) -> Element {
                 }
             }
             div { class: "ch-body",
-                span { class: "ch-eyebrow",
-                    "{eyebrow}"
-                    if point.linked {
-                        span { class: "ch-eyebrow-glyph",
-                            crate::components::sync_glyph::SyncGlyph { size: 11 }
-                        }
-                    }
-                }
+                span { class: "ch-eyebrow", "{eyebrow}" }
                 Link {
                     to: Route::BookDetail { uuid: uuid.clone() },
                     class: "ch-title-link",
@@ -261,6 +283,20 @@ fn HeroCard(point: ResumePoint, server_url: String) -> Element {
                             if is_audio { "audiobook \u{00b7} " } else { "ebook \u{00b7} " }
                         }
                         "{meta}"
+                    }
+                    if dual_linked {
+                        button {
+                            r#type: "button",
+                            class: "ch-cta ch-cta-alt",
+                            "data-testid": "hero-immersive-{uuid}",
+                            title: "Open the ereader and audiobook together, kept in sync",
+                            onclick: {
+                                let uuid = uuid.clone();
+                                move |_| crate::pages::retarget_and_open_immersive(uuid.clone())
+                            },
+                            {immersive_mark()}
+                            span { "Immersive" }
+                        }
                     }
                     if let Some((route, label)) = counterpart {
                         Link {
