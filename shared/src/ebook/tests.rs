@@ -58,9 +58,11 @@ fn validate_accepts_well_formed_override() {
         series: Some("Some Series".into()),
         series_index: Some("1".into()),
         isbn13: Some("9780134685991".into()),
+        isbn10: Some("0134685997".into()),
         creators: Some(vec![contributor("Ada Lovelace")]),
         subjects: Some(vec!["fiction".into(), "history".into()]),
         genres: Some(vec!["Historical Fiction".into()]),
+        print_pages: Some(350),
     };
     assert_eq!(ov.validate(), Ok(()));
 }
@@ -342,6 +344,141 @@ fn validate_rejects_isbn13_with_whitespace() {
     );
 }
 
+#[test]
+fn validate_accepts_a_well_formed_isbn10_with_digit_check_digit() {
+    let ov = MetadataOverrides {
+        isbn10: Some("0134685997".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(ov.validate(), Ok(()));
+}
+
+#[test]
+fn validate_accepts_an_isbn10_with_x_check_digit() {
+    let ov = MetadataOverrides {
+        isbn10: Some("020163361X".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(ov.validate(), Ok(()));
+}
+
+#[test]
+fn validate_accepts_empty_isbn10_as_a_clear() {
+    // AC2: an empty string is the "clear the override" sentinel, mirroring
+    // isbn13, not an invalid value.
+    let ov = MetadataOverrides {
+        isbn10: Some(String::new()),
+        ..Default::default()
+    };
+    assert_eq!(ov.validate(), Ok(()));
+}
+
+#[test]
+fn validate_accepts_missing_isbn10_field() {
+    assert_eq!(MetadataOverrides::default().validate(), Ok(()));
+}
+
+#[test]
+fn validate_rejects_isbn10_with_nine_characters() {
+    let ov = MetadataOverrides {
+        isbn10: Some("013468599".to_string()),
+        ..Default::default()
+    };
+    let err = ov
+        .validate()
+        .expect_err("9-char ISBN-10 should be rejected");
+    assert!(err.contains("ISBN-10"), "unexpected message: {err}");
+}
+
+#[test]
+fn validate_rejects_isbn10_with_a_check_digit_x_in_a_non_final_position() {
+    let ov = MetadataOverrides {
+        isbn10: Some("X134685997".to_string()),
+        ..Default::default()
+    };
+    assert!(
+        ov.validate().is_err(),
+        "X is only a legal character in the final position"
+    );
+}
+
+#[test]
+fn validate_rejects_isbn10_containing_non_digit_characters() {
+    let ov = MetadataOverrides {
+        isbn10: Some("01346-8599".to_string()),
+        ..Default::default()
+    };
+    assert!(
+        ov.validate().is_err(),
+        "a hyphen is not a valid ISBN-10 character"
+    );
+}
+
+#[test]
+fn validate_accepts_print_pages_within_range() {
+    let ov = MetadataOverrides {
+        print_pages: Some(320),
+        ..Default::default()
+    };
+    assert_eq!(ov.validate(), Ok(()));
+}
+
+#[test]
+fn validate_accepts_missing_print_pages_field() {
+    assert_eq!(MetadataOverrides::default().validate(), Ok(()));
+}
+
+#[test]
+fn validate_rejects_print_pages_above_the_max() {
+    let ov = MetadataOverrides {
+        print_pages: Some(MetadataOverrides::PRINT_PAGES_MAX + 1),
+        ..Default::default()
+    };
+    let err = ov
+        .validate()
+        .expect_err("over-max page count should be rejected");
+    assert!(
+        err.contains("print page count"),
+        "unexpected message: {err}"
+    );
+}
+
+#[test]
+fn validate_accepts_print_pages_at_the_max() {
+    let ov = MetadataOverrides {
+        print_pages: Some(MetadataOverrides::PRINT_PAGES_MAX),
+        ..Default::default()
+    };
+    assert_eq!(ov.validate(), Ok(()));
+}
+
+#[test]
+fn validate_rejects_print_pages_at_zero() {
+    let ov = MetadataOverrides {
+        print_pages: Some(0),
+        ..Default::default()
+    };
+    let err = ov
+        .validate()
+        .expect_err("zero page count should be rejected");
+    assert!(
+        err.contains("print page count"),
+        "unexpected message: {err}"
+    );
+}
+
+#[test]
+fn validate_rejects_negative_print_pages() {
+    let ov = MetadataOverrides {
+        print_pages: Some(-1),
+        ..Default::default()
+    };
+    assert!(
+        ov.validate().is_err(),
+        "a negative page count should be rejected"
+    );
+}
+
 // --- merge() -----------------------------------------------------------
 //
 // NOTE on contract: the issue describes `merge` as "applies an override
@@ -459,6 +596,77 @@ fn merge_none_isbn13_preserves_base_isbn13() {
     let incoming = MetadataOverrides::default();
     let merged = base.merge(&incoming);
     assert_eq!(merged.isbn13, Some("9780134685991".into()));
+}
+
+#[test]
+fn merge_incoming_isbn10_wins_over_base_isbn10() {
+    let base = MetadataOverrides {
+        isbn10: Some("0134685997".into()),
+        ..Default::default()
+    };
+    let incoming = MetadataOverrides {
+        isbn10: Some("020163361X".into()),
+        ..Default::default()
+    };
+    let merged = base.merge(&incoming);
+    assert_eq!(merged.isbn10, Some("020163361X".into()));
+}
+
+#[test]
+fn merge_none_isbn10_preserves_base_isbn10() {
+    let base = MetadataOverrides {
+        isbn10: Some("0134685997".into()),
+        ..Default::default()
+    };
+    let incoming = MetadataOverrides::default();
+    let merged = base.merge(&incoming);
+    assert_eq!(merged.isbn10, Some("0134685997".into()));
+}
+
+#[test]
+fn merge_incoming_print_pages_wins_over_base_print_pages() {
+    let base = MetadataOverrides {
+        print_pages: Some(320),
+        ..Default::default()
+    };
+    let incoming = MetadataOverrides {
+        print_pages: Some(512),
+        ..Default::default()
+    };
+    let merged = base.merge(&incoming);
+    assert_eq!(merged.print_pages, Some(512));
+}
+
+#[test]
+fn merge_none_print_pages_preserves_base_print_pages() {
+    let base = MetadataOverrides {
+        print_pages: Some(320),
+        ..Default::default()
+    };
+    let incoming = MetadataOverrides::default();
+    let merged = base.merge(&incoming);
+    assert_eq!(merged.print_pages, Some(320));
+}
+
+#[test]
+fn merge_a_payload_that_omits_all_three_new_fields_preserves_them() {
+    // AC2: a client that predates these fields (notably iOS) must not
+    // clobber them by omission — the whole point `merge` exists for.
+    let base = MetadataOverrides {
+        genres: Some(vec!["Historical Fiction".into()]),
+        isbn10: Some("0134685997".into()),
+        print_pages: Some(320),
+        ..Default::default()
+    };
+    let incoming = MetadataOverrides {
+        title: Some("New Title".into()),
+        ..Default::default()
+    };
+    let merged = base.merge(&incoming);
+    assert_eq!(merged.title, Some("New Title".into()));
+    assert_eq!(merged.genres, Some(vec!["Historical Fiction".into()]));
+    assert_eq!(merged.isbn10, Some("0134685997".into()));
+    assert_eq!(merged.print_pages, Some(320));
 }
 
 // --- BulkMetadataEdit ---

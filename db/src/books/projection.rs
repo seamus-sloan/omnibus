@@ -253,6 +253,9 @@ pub(crate) fn row_to_ebook(r: &sqlx::sqlite::SqliteRow) -> Result<EbookMetadata,
         genres: Vec::new(),
         identifiers,
         isbn13,
+        // No scanned baseline — a book's ISBN-10 arrives only via
+        // `apply_overrides`, same as `genres` above.
+        isbn10: None,
         series: series_name,
         series_index: series_index.map(format_series_index),
         series_id: series_link_id,
@@ -272,6 +275,9 @@ pub(crate) fn row_to_ebook(r: &sqlx::sqlite::SqliteRow) -> Result<EbookMetadata,
         // The CBZ page count, straight off `books.page_count` (#1593) —
         // `NULL` for an EPUB, an unparsed archive, or a pre-migration row.
         page_count: r.get("page_count"),
+        // No scanned baseline — a book's print page count arrives only via
+        // `apply_overrides`, same as `isbn10` above.
+        print_pages: None,
     })
 }
 

@@ -37,6 +37,11 @@ pub struct MetadataOverrides {
     /// by `validate`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isbn13: Option<String>,
+    /// ISBN-10 override. Same empty-string-clears convention as `isbn13`; a
+    /// non-empty value must be exactly 10 characters — 9 digits plus a
+    /// check-digit position that is a digit or `X` — enforced by `validate`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isbn10: Option<String>,
     /// Replaces the entire creators list when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub creators: Option<Vec<Contributor>>,
@@ -48,6 +53,13 @@ pub struct MetadataOverrides {
     /// scans a genre — so this key is the sole storage for a book's genres.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub genres: Option<Vec<String>>,
+    /// Print page count override. Like `genres`, nothing Omnibus scans
+    /// carries a print page count — `books.page_count` is a different thing
+    /// entirely (the CBZ image count, migration `0063`) — so this field is
+    /// named `print_pages` rather than `page_count` to keep the two
+    /// unambiguous on `EbookMetadata`, where both eventually land.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub print_pages: Option<i64>,
 }
 
 impl MetadataOverrides {
@@ -74,6 +86,11 @@ impl MetadataOverrides {
     pub const MAX_GENRES: usize = 64;
     /// Maximum number of creators.
     pub(crate) const MAX_CREATORS: usize = 32;
+    /// Upper bound for `print_pages`. 20,000 comfortably covers any real
+    /// print edition (the longest published novels sit well under 5,000
+    /// pages) while still rejecting an obviously fat-fingered or garbage
+    /// value rather than accepting an unbounded `i64`.
+    pub const PRINT_PAGES_MAX: i64 = 20_000;
 
     /// Validate field lengths. Returns `Err` with a human-readable message if
     /// any field exceeds its cap. Call at the handler level before persisting.
@@ -98,6 +115,8 @@ impl MetadataOverrides {
         check("series_index", &self.series_index, Self::NAME_MAX_LEN)?;
         check("description", &self.description, Self::DESCRIPTION_MAX_LEN)?;
         self.validate_isbn13()?;
+        self.validate_isbn10()?;
+        self.validate_print_pages()?;
         self.validate_creators()?;
         validate_name_list(
             self.subjects.as_deref(),
@@ -130,6 +149,49 @@ impl MetadataOverrides {
         }
         if v.chars().count() != 13 || !v.chars().all(|c| c.is_ascii_digit()) {
             return Err("ISBN-13 must be exactly 13 digits".to_string());
+        }
+        Ok(())
+    }
+
+    /// ISBN-10 input rule: empty (clears the override) or exactly 10
+    /// characters — 9 ASCII digits plus a check-digit position that is a
+    /// digit or `X`/`x`. Deliberately does **not** delegate to
+    /// [`crate::validate_isbn10`] (which enforces the mod-11 check digit for
+    /// barcode-scanned input): this field is user-typed free-text metadata,
+    /// so it follows [`Self::validate_isbn13`]'s format-only convention
+    /// instead — a malformed-but-shaped entry just renders as an incorrect
+    /// ISBN, not a corrupted one.
+    fn validate_isbn10(&self) -> Result<(), String> {
+        let Some(ref v) = self.isbn10 else {
+            return Ok(());
+        };
+        if v.is_empty() {
+            return Ok(());
+        }
+        let shape_ok = v.chars().count() == 10
+            && v.chars().take(9).all(|c| c.is_ascii_digit())
+            && v.chars()
+                .nth(9)
+                .is_some_and(|c| c.is_ascii_digit() || c == 'X' || c == 'x');
+        if !shape_ok {
+            return Err(
+                "ISBN-10 must be 10 characters: 9 digits plus a digit or X check digit".to_string(),
+            );
+        }
+        Ok(())
+    }
+
+    /// `print_pages` bound: `None` (don't touch) or an integer in
+    /// `1..=PRINT_PAGES_MAX`.
+    fn validate_print_pages(&self) -> Result<(), String> {
+        let Some(pages) = self.print_pages else {
+            return Ok(());
+        };
+        if !(1..=Self::PRINT_PAGES_MAX).contains(&pages) {
+            return Err(format!(
+                "print page count must be between 1 and {}",
+                Self::PRINT_PAGES_MAX
+            ));
         }
         Ok(())
     }
@@ -184,9 +246,11 @@ impl MetadataOverrides {
             series: incoming.series.clone().or(self.series.clone()),
             series_index: incoming.series_index.clone().or(self.series_index.clone()),
             isbn13: incoming.isbn13.clone().or(self.isbn13.clone()),
+            isbn10: incoming.isbn10.clone().or(self.isbn10.clone()),
             creators: incoming.creators.clone().or(self.creators.clone()),
             subjects: incoming.subjects.clone().or(self.subjects.clone()),
             genres: incoming.genres.clone().or(self.genres.clone()),
+            print_pages: incoming.print_pages.or(self.print_pages),
         }
     }
 }

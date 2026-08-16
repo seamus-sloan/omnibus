@@ -86,6 +86,8 @@ fn use_field_signals(book: &EbookMetadata) -> FormFields {
     let series = use_signal(|| book.series.clone().unwrap_or_default());
     let series_index = use_signal(|| book.series_index.clone().unwrap_or_default());
     let isbn13 = use_signal(|| book.isbn13.clone().unwrap_or_default());
+    let isbn10 = use_signal(|| book.isbn10.clone().unwrap_or_default());
+    let print_pages = use_signal(|| book.print_pages.map(|p| p.to_string()).unwrap_or_default());
 
     // Authors as a signal of Vec<String> (names only for v1).
     let authors = use_signal(|| {
@@ -121,6 +123,8 @@ fn use_field_signals(book: &EbookMetadata) -> FormFields {
         series,
         series_index,
         isbn13,
+        isbn10,
+        print_pages,
         authors,
         tags,
         genres,
@@ -211,6 +215,8 @@ fn use_dirty_fields(orig: Signal<EbookMetadata>, fields: FormFields) -> Memo<Vec
         series,
         series_index,
         isbn13,
+        isbn10,
+        print_pages,
         authors,
         tags,
         genres,
@@ -243,6 +249,12 @@ fn use_dirty_fields(orig: Signal<EbookMetadata>, fields: FormFields) -> Memo<Vec
         }
         if isbn13() != o.isbn13.clone().unwrap_or_default() {
             dirty.push("ISBN-13");
+        }
+        if isbn10() != o.isbn10.clone().unwrap_or_default() {
+            dirty.push("ISBN-10");
+        }
+        if print_pages() != o.print_pages.map(|p| p.to_string()).unwrap_or_default() {
+            dirty.push("Print Pages");
         }
         let orig_authors: Vec<String> = o.creators.iter().map(|c| c.name.clone()).collect();
         if authors() != orig_authors {
@@ -307,6 +319,8 @@ fn build_on_save(
         series,
         series_index,
         isbn13,
+        isbn10,
+        print_pages,
         authors,
         tags,
         genres,
@@ -316,6 +330,25 @@ fn build_on_save(
     EventHandler::new(move |()| {
         let url = url.clone();
         let uuid = uuid.clone();
+
+        // Parsed client-side so a non-numeric entry gets an immediate,
+        // specific message instead of a generic save failure (mirrors
+        // `ScanIntervalField`'s handler in settings/library.rs); an in-range
+        // numeric value still round-trips through `MetadataOverrides::validate`
+        // server-side (e.g. the `PRINT_PAGES_MAX` ceiling).
+        let print_pages_input = print_pages().trim().to_string();
+        let print_pages_val: Option<i64> = if print_pages_input.is_empty() {
+            None
+        } else {
+            match print_pages_input.parse::<i64>() {
+                Ok(n) => Some(n),
+                Err(_) => {
+                    save_error.set(Some("Print page count must be a whole number.".to_string()));
+                    return;
+                }
+            }
+        };
+
         spawn(async move {
             saving.set(true);
             save_error.set(None);
@@ -332,6 +365,8 @@ fn build_on_save(
                     series: &series(),
                     series_index: &series_index(),
                     isbn13: &isbn13(),
+                    isbn10: &isbn10(),
+                    print_pages: print_pages_val,
                     authors: &authors(),
                     tags: &tags(),
                     genres: &genres(),

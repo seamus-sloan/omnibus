@@ -192,6 +192,51 @@ test.describe
     });
 
     // ---------------------------------------------------------------------------
+    // ISBN-10 + print page count overrides (#1658)
+    // ---------------------------------------------------------------------------
+
+    test("edits ISBN-10 and print page count and persists them", async ({
+      page,
+      request,
+    }) => {
+      const id = await fetchBookIdByTitle(request, TARGET.title);
+      await gotoReady(page, `/books/${id}/edit`);
+
+      const isbn10Input = page.getByLabel("ISBN-10");
+      await expect(isbn10Input).toBeVisible();
+      await isbn10Input.fill("0134685997");
+
+      const printPagesInput = page.getByLabel("Print Pages");
+      await printPagesInput.fill("412");
+
+      await expect(page.getByTestId("me-save")).toBeEnabled();
+      await expect(page.getByText("2 fields edited")).toBeVisible();
+
+      await expectMutation(
+        page,
+        {
+          method: "POST",
+          url: /\/api\/rpc\/ebook\/overrides/,
+          expectedStatus: 200,
+        },
+        async () => page.getByTestId("me-save").click(),
+      );
+
+      await expect(page).toHaveURL(new RegExp(`/books/${id}$`));
+
+      // Re-open the edit form and confirm both fields persisted.
+      await gotoReady(page, `/books/${id}/edit`);
+      await expect(page.getByLabel("ISBN-10")).toHaveValue("0134685997");
+      await expect(page.getByLabel("Print Pages")).toHaveValue("412");
+
+      // Clean up: revert so other tests are not affected.
+      const revertBtn = page.getByTestId("revert-overrides");
+      await expect(revertBtn).toBeVisible();
+      await revertBtn.click();
+      await expect(page).toHaveURL(new RegExp(`/books/${id}$`));
+    });
+
+    // ---------------------------------------------------------------------------
     // Discard reverts unsaved changes
     // ---------------------------------------------------------------------------
 

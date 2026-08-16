@@ -166,6 +166,99 @@ async fn api_post_overrides_saves_and_returns_merged_book() {
 }
 
 #[tokio::test]
+async fn api_post_overrides_round_trips_isbn10_and_print_pages() {
+    // AC1: genres, print_pages, and isbn10 round-trip through the same POST
+    // /api/ebooks/{uuid}/overrides path and read back on the merged book.
+    let (app, _state, pool) = fixture().await;
+    let (id, uuid) = seed_book_with_uuid(&pool, "/lib", "Original").await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    let body = serde_json::json!({
+        "isbn10": "0134685997",
+        "print_pages": 412,
+        "genres": ["Science Fiction"],
+    });
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/ebooks/{uuid}/overrides"))
+                .method("POST")
+                .header("content-type", "application/json")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let book: omnibus_shared::EbookMetadata = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(book.id, id);
+    assert_eq!(book.isbn10.as_deref(), Some("0134685997"));
+    assert_eq!(book.print_pages, Some(412));
+    assert_eq!(book.genres, vec!["Science Fiction".to_string()]);
+
+    let (saved, _) = db::get_metadata_overrides(&pool, &uuid)
+        .await
+        .unwrap()
+        .expect("override row should exist after POST");
+    assert_eq!(saved.isbn10.as_deref(), Some("0134685997"));
+    assert_eq!(saved.print_pages, Some(412));
+}
+
+#[tokio::test]
+async fn api_post_overrides_rejects_malformed_isbn10_and_out_of_range_print_pages_with_400() {
+    // AC3: a malformed ISBN-10 and an out-of-range print page count each
+    // return 400 with no override row written.
+    let (app, _state, pool) = fixture().await;
+    let (_id, uuid) = seed_book_with_uuid(&pool, "/lib", "Original").await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    let body = serde_json::json!({ "isbn10": "not-an-isbn" });
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/ebooks/{uuid}/overrides"))
+                .method("POST")
+                .header("content-type", "application/json")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    let over_max = omnibus_shared::MetadataOverrides::PRINT_PAGES_MAX + 1;
+    let body = serde_json::json!({ "print_pages": over_max });
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/ebooks/{uuid}/overrides"))
+                .method("POST")
+                .header("content-type", "application/json")
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .expect("request should succeed");
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    assert!(
+        db::get_metadata_overrides(&pool, &uuid)
+            .await
+            .unwrap()
+            .is_none(),
+        "neither validation failure should have persisted an override row"
+    );
+}
+
+#[tokio::test]
 async fn api_delete_overrides_reverts() {
     // Persist an override via the same REST path the client uses, then
     // delete it and assert the response reflects the canonical scanned

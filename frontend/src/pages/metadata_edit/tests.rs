@@ -37,6 +37,8 @@ fn edited<'a>(
         series: "",
         series_index: "",
         isbn13: "",
+        isbn10: "",
+        print_pages: None,
         authors,
         tags,
         genres: &[],
@@ -137,6 +139,89 @@ fn build_overrides_leaves_isbn13_none_when_unchanged() {
         },
     );
     assert!(ov.isbn13.is_none());
+}
+
+#[test]
+fn build_overrides_sets_isbn10_when_changed() {
+    let orig = book_with(Some("Dune"), &[], &[]);
+    let ov = build_overrides(
+        &orig,
+        EditedFields {
+            isbn10: "0134685997",
+            ..edited("Dune", "", &[], &[])
+        },
+    );
+    assert_eq!(ov.isbn10.as_deref(), Some("0134685997"));
+}
+
+#[test]
+fn build_overrides_clearing_a_populated_isbn10_emits_empty_string() {
+    // AC2: orig.isbn10 = Some(..), edited to "" -> the override must carry
+    // the empty string so the merge/apply path clears it, mirroring isbn13.
+    let orig = EbookMetadata {
+        isbn10: Some("0134685997".into()),
+        ..book_with(Some("Dune"), &[], &[])
+    };
+    let ov = build_overrides(&orig, edited("Dune", "", &[], &[]));
+    assert_eq!(ov.isbn10.as_deref(), Some(""));
+}
+
+#[test]
+fn build_overrides_leaves_isbn10_none_when_unchanged() {
+    let orig = EbookMetadata {
+        isbn10: Some("0134685997".into()),
+        ..book_with(Some("Dune"), &[], &[])
+    };
+    let ov = build_overrides(
+        &orig,
+        EditedFields {
+            isbn10: "0134685997",
+            ..edited("Dune", "", &[], &[])
+        },
+    );
+    assert!(ov.isbn10.is_none());
+}
+
+#[test]
+fn build_overrides_sets_print_pages_when_changed() {
+    let orig = book_with(Some("Dune"), &[], &[]);
+    let ov = build_overrides(
+        &orig,
+        EditedFields {
+            print_pages: Some(412),
+            ..edited("Dune", "", &[], &[])
+        },
+    );
+    assert_eq!(ov.print_pages, Some(412));
+}
+
+#[test]
+fn build_overrides_leaves_print_pages_none_when_unchanged() {
+    let orig = EbookMetadata {
+        print_pages: Some(412),
+        ..book_with(Some("Dune"), &[], &[])
+    };
+    let ov = build_overrides(
+        &orig,
+        EditedFields {
+            print_pages: Some(412),
+            ..edited("Dune", "", &[], &[])
+        },
+    );
+    assert!(ov.print_pages.is_none());
+}
+
+#[test]
+fn build_overrides_leaves_print_pages_none_when_field_left_blank() {
+    // The caller (`state::build_on_save`) passes `None` for a blank text
+    // field; `print_pages` has no empty-clears sentinel (unlike the string
+    // fields), so a blank field must never clear a previously-saved value.
+    let orig = EbookMetadata {
+        print_pages: Some(412),
+        ..book_with(Some("Dune"), &[], &[])
+    };
+    let ov = build_overrides(&orig, edited("Dune", "", &[], &[]));
+    assert!(ov.print_pages.is_none());
 }
 
 #[test]

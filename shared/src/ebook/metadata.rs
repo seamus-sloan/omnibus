@@ -72,6 +72,13 @@ pub struct EbookMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isbn13: Option<String>,
 
+    /// Secondary ISBN-10, sourced entirely from `metadata_overrides` — no
+    /// file format Omnibus reads carries a distinct ISBN-10 alongside its
+    /// ISBN-13, so unlike `isbn13` there is no scanned baseline underneath
+    /// this one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isbn10: Option<String>,
+
     // Series / collection (Calibre + EPUB3 belongs-to-collection).
     pub series: Option<String>,
     pub series_index: Option<String>,
@@ -143,6 +150,15 @@ pub struct EbookMetadata {
     /// a row not yet backfilled since being indexed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_count: Option<i64>,
+
+    /// User-supplied print edition page count, sourced entirely from
+    /// `metadata_overrides` — distinct from `page_count`, which is the CBZ
+    /// archive's *image* count (migration `0063`). Kept apart deliberately:
+    /// a comic book's `page_count` drives the reader's page slider, while
+    /// `print_pages` is bibliographic metadata about a print edition and
+    /// means something different even on a book that has both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub print_pages: Option<i64>,
 }
 
 impl EbookMetadata {
