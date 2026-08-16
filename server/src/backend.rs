@@ -39,6 +39,7 @@ mod image_upload;
 mod journals;
 mod kindle;
 mod kobo;
+mod metadata;
 mod opds;
 mod overrides;
 mod physical;
