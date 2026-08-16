@@ -19,7 +19,10 @@ use js::{control_surface_js, eval_hls_init, inject_hls_script};
 /// Owns the `Closure`s wired into `window.__omnibusOn*` callbacks. Held
 /// across re-renders by `use_hook` so the closures outlive the effect
 /// closure that registers them.
-type JsCallbackHolder = std::rc::Rc<std::cell::RefCell<Vec<Closure<dyn FnMut(f64)>>>>;
+// Boxed as `Any`: the held closures now span two arities (`FnMut(f64)` and
+// the persist-gated `FnMut(f64, bool)`), and the holder only exists to keep
+// them alive for the surface's lifetime — nothing ever downcasts.
+type JsCallbackHolder = std::rc::Rc<std::cell::RefCell<Vec<Box<dyn std::any::Any>>>>;
 
 // The pure resume-decision helpers (`resolve_boot_file`,
 // `resolve_boot_position`) live in `super::helpers` — this module is
@@ -303,16 +306,45 @@ fn register_js_callbacks(
         return;
     };
     let uuid_for_save = uuid_cb.clone();
-    let mut last_saved = 0.0_f64;
-    let on_time = Closure::<dyn FnMut(f64)>::new(move |secs: f64| {
-        elapsed.set(secs);
-        if (secs - last_saved).abs() < 5.0 {
-            return;
-        }
-        last_saved = secs;
-        crate::audiobook_progress::save(&uuid_for_save, secs);
-        post_audio_progress(uuid_for_save.clone(), *loaded_file_id.peek(), secs);
-    });
+    // Shared between the heartbeat and the seek path so a seek resets the
+    // heartbeat's 5s window rather than double-writing moments later.
+    let last_saved = std::rc::Rc::new(std::cell::Cell::new(0.0_f64));
+    let on_time = {
+        let last_saved = last_saved.clone();
+        let uuid_for_save = uuid_for_save.clone();
+        // `user_acted` is the shim's `_userActed`: false until a real play
+        // or user seek this boot. The boot restore sets `currentTime`,
+        // which fires a `timeupdate` — persisting that write re-clocked an
+        // unmoved row on every visit and shadowed the counterpart at the
+        // cross-format clock gate (#1972). Render the time; persist only
+        // positions a human produced.
+        Closure::<dyn FnMut(f64, bool)>::new(move |secs: f64, user_acted: bool| {
+            elapsed.set(secs);
+            if !user_acted {
+                return;
+            }
+            if (secs - last_saved.get()).abs() < 5.0 {
+                return;
+            }
+            last_saved.set(secs);
+            crate::audiobook_progress::save(&uuid_for_save, secs);
+            post_audio_progress(uuid_for_save.clone(), *loaded_file_id.peek(), secs);
+        })
+    };
+    // A seek is discrete user intent — persist it immediately, bypassing
+    // the heartbeat throttle. A paused element fires no further events, so
+    // waiting on the next timeupdate loses the seek if the page exits
+    // first (#1972).
+    let on_seeked = {
+        let last_saved = last_saved.clone();
+        let uuid_for_seek = uuid_for_save.clone();
+        Closure::<dyn FnMut(f64)>::new(move |secs: f64| {
+            elapsed.set(secs);
+            last_saved.set(secs);
+            crate::audiobook_progress::save(&uuid_for_seek, secs);
+            post_audio_progress(uuid_for_seek.clone(), *loaded_file_id.peek(), secs);
+        })
+    };
     let on_duration = Closure::<dyn FnMut(f64)>::new(move |d: f64| {
         duration.set(d);
     });
@@ -361,8 +393,15 @@ fn register_js_callbacks(
         });
     });
     let uuid_for_pause = uuid_cb;
-    let on_pause = Closure::<dyn FnMut(f64)>::new(move |secs: f64| {
+    // The playing flag flips on every pause (src swaps and teardown fire
+    // them too), but only a session the user actually drove persists its
+    // position — a programmatic pause on an untouched boot re-states the
+    // seeded spot with a fresh clock (#1972).
+    let on_pause = Closure::<dyn FnMut(f64, bool)>::new(move |secs: f64, user_acted: bool| {
         playing.set(false);
+        if !user_acted {
+            return;
+        }
         crate::audiobook_progress::save(&uuid_for_pause, secs);
         post_audio_progress(uuid_for_pause.clone(), *loaded_file_id.peek(), secs);
     });
@@ -380,6 +419,11 @@ fn register_js_callbacks(
         &window,
         &JsValue::from_str("__omnibusOnAudioTime"),
         on_time.as_ref().unchecked_ref(),
+    );
+    let _ = js_sys::Reflect::set(
+        &window,
+        &JsValue::from_str("__omnibusOnAudioSeeked"),
+        on_seeked.as_ref().unchecked_ref(),
     );
     let _ = js_sys::Reflect::set(
         &window,
@@ -407,12 +451,13 @@ fn register_js_callbacks(
         on_init_timeout.as_ref().unchecked_ref(),
     );
     *cb_holder.borrow_mut() = vec![
-        on_time,
-        on_duration,
-        on_play,
-        on_pause,
-        on_ended,
-        on_init_timeout,
+        Box::new(on_time),
+        Box::new(on_seeked),
+        Box::new(on_duration),
+        Box::new(on_play),
+        Box::new(on_pause),
+        Box::new(on_ended),
+        Box::new(on_init_timeout),
     ];
 }
 
@@ -460,9 +505,11 @@ fn register_readiness_callbacks(
         &JsValue::from_str("__omnibusOnAudioStalled"),
         on_stalled.as_ref().unchecked_ref(),
     );
-    cb_holder
-        .borrow_mut()
-        .extend([on_booted, on_buffering, on_stalled]);
+    cb_holder.borrow_mut().extend([
+        Box::new(on_booted) as Box<dyn std::any::Any>,
+        Box::new(on_buffering),
+        Box::new(on_stalled),
+    ]);
 }
 
 /// Install the `window.OmnibusAudio` control surface immediately so
@@ -566,13 +613,12 @@ async fn run_manifest_init(
     // Resolve follow at boot: when the link follows the counterpart and the
     // reading position maps newer, seed playback with the mapped spot
     // instead of the stored row — a post-boot corrective seek would race
-    // `initDirect`'s one-shot restore seek and lose. Skipped entirely for an
-    // explicit picker `?file_id=` (see `resolve_follow_boot`).
-    let follow_resume = if file_id.is_none() {
-        super::sync_prompt::fetch_resume_with(&uuid_for_fetch, "audio", false).await
-    } else {
-        None
-    };
+    // `initDirect`'s one-shot restore seek and lose. Fetched even for an
+    // explicit `?file_id=` — every Continue card carries the row's file id,
+    // and skipping follow there reopened books at the stale spot (#1972);
+    // `resolve_follow_boot` still stands aside when the pick names a
+    // *different* file than the candidate maps to.
+    let follow_resume = super::sync_prompt::fetch_resume_with(&uuid_for_fetch, "audio", false).await;
     if !is_current() {
         return;
     }
