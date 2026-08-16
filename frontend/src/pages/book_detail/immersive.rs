@@ -60,26 +60,23 @@ pub(crate) fn retarget_and_open_immersive(uuid: String) {
     let same_book = uuid_sig.peek().as_deref() == Some(uuid.as_str());
     let live = same_book && *playback.playing.peek();
     if !live {
-        let mut book_sig = playback.book;
         let mut error_sig = playback.error;
         let mut loading_sig = playback.loading;
-        book_sig.set(None);
         error_sig.set(None);
         loading_sig.set(true);
         if same_book {
-            // Same uuid: the driver keys on the value CHANGING, and a
-            // None→Some pair inside one handler collapses to
-            // no-change — which left the dock cleared but never
-            // rebooted (the "Immersive Read doesn't open the player"
-            // regression). Commit the None now; the Some lands from a
-            // spawned task after this render.
-            uuid_sig.set(None);
-            let uuid_next = uuid.clone();
-            let mut uuid_sig_next = uuid_sig;
-            spawn(async move {
-                uuid_sig_next.set(Some(uuid_next));
-            });
+            // Same uuid, idle: force the driver to re-run its boot (resume
+            // + follow resolution against the stored rows, #1954) WITHOUT
+            // tearing the dock down. The old uuid None→Some nudge unmounted
+            // the dock for a frame and raced the reader's own mount — when
+            // the respawned Some lost that race the player stayed closed,
+            // or the reader wedged mid-load (#1972 QA).
+            let mut epoch = playback.reload_epoch;
+            let next = epoch.peek().wrapping_add(1);
+            epoch.set(next);
         } else {
+            let mut book_sig = playback.book;
+            book_sig.set(None);
             uuid_sig.set(Some(uuid.clone()));
         }
     }
