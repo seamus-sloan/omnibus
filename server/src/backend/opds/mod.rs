@@ -37,7 +37,7 @@
 //! that count without ever appearing as an entry.
 
 use axum::{
-    http::header,
+    http::{header, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
     Extension, Router,
@@ -273,4 +273,17 @@ async fn is_shelf_hidden(
     .await
     .map_err(|e| internal("check shelf-exclusive visibility", e))?;
     Ok(hidden.contains(&canonical))
+}
+
+/// Shared guard for the byte-serving [`delegate`] routes: collapses the
+/// `is_shelf_hidden` match block duplicated across all five of them into
+/// one call. Returns `Some(response)` to short-circuit the caller (a 404
+/// for a hidden book, or the propagated error), `None` to continue past
+/// the guard into the `/api` handler body.
+async fn guard_shelf_hidden(state: &AppState, user: &OpdsAuthUser, uuid: &str) -> Option<Response> {
+    match is_shelf_hidden(state, user, uuid).await {
+        Ok(true) => Some(StatusCode::NOT_FOUND.into_response()),
+        Ok(false) => None,
+        Err(resp) => Some(resp),
+    }
 }
