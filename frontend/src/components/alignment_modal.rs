@@ -449,8 +449,7 @@ pub fn AlignmentModal(uuid: String, open: Signal<bool>, on_changed: EventHandler
                     onclick: move |_| open.set(false),
                     "Cancel"
                 }
-                // Full-size primary per the design: the confirm carries the
-                // book's accent, not the grey neutral.
+                // Full-size accent primary per the design.
                 button {
                     class: "btn primary",
                     "data-testid": "alignment-confirm",
