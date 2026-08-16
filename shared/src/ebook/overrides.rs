@@ -156,7 +156,7 @@ impl MetadataOverrides {
     /// ISBN-10 input rule: empty (clears the override) or exactly 10
     /// characters — 9 ASCII digits plus a check-digit position that is a
     /// digit or `X`/`x`. Deliberately does **not** delegate to
-    /// [`crate::validate_isbn10`] (which enforces the mod-11 check digit for
+    /// [`crate::isbn::validate_isbn10`] (which enforces the mod-11 check digit for
     /// barcode-scanned input): this field is user-typed free-text metadata,
     /// so it follows [`Self::validate_isbn13`]'s format-only convention
     /// instead — a malformed-but-shaped entry just renders as an incorrect

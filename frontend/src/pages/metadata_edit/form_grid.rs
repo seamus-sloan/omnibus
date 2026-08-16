@@ -166,7 +166,7 @@ fn field_grid_identity_rows(orig: Signal<EbookMetadata>, fields: FormFields) -> 
             value: print_pages,
             on_change: move |v: String| print_pages.set(v),
             mono: true,
-            edited: print_pages() != orig().print_pages.map(|p| p.to_string()).unwrap_or_default(),
+            edited: print_pages().trim() != orig().print_pages.map(|p| p.to_string()).unwrap_or_default(),
             hint: "whole number",
             placeholder: "e.g. 320",
         }

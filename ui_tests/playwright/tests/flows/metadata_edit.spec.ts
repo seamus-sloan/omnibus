@@ -232,7 +232,15 @@ test.describe
       // Clean up: revert so other tests are not affected.
       const revertBtn = page.getByTestId("revert-overrides");
       await expect(revertBtn).toBeVisible();
-      await revertBtn.click();
+      await expectMutation(
+        page,
+        {
+          method: "POST",
+          url: /\/api\/rpc\/ebook\/overrides\/delete/,
+          expectedStatus: 200,
+        },
+        async () => revertBtn.click(),
+      );
       await expect(page).toHaveURL(new RegExp(`/books/${id}$`));
     });
 

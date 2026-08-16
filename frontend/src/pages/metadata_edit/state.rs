@@ -253,7 +253,7 @@ fn use_dirty_fields(orig: Signal<EbookMetadata>, fields: FormFields) -> Memo<Vec
         if isbn10() != o.isbn10.clone().unwrap_or_default() {
             dirty.push("ISBN-10");
         }
-        if print_pages() != o.print_pages.map(|p| p.to_string()).unwrap_or_default() {
+        if print_pages().trim() != o.print_pages.map(|p| p.to_string()).unwrap_or_default() {
             dirty.push("Print Pages");
         }
         let orig_authors: Vec<String> = o.creators.iter().map(|c| c.name.clone()).collect();
