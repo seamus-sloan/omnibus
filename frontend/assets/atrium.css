@@ -7093,11 +7093,6 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   box-shadow: 0 8px 18px color-mix(in oklch, black 35%, transparent);
   overflow: hidden;
 }
-/* Two cards per page at wide widths (track gap is 16px, so each card
-   cedes half of it). The snap/dot logic stays per-card. */
-@media (min-width: 1100px) {
-  .ch-card { flex: 0 0 calc(50% - 8px); }
-}
 .ch-cover {
   flex: 0 0 96px;
   width: 96px;
