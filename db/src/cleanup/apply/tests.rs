@@ -642,8 +642,10 @@ async fn undo_returns_missing_actor_for_a_rename_log_row_with_no_applied_by() {
     };
     let log_id: i64 = sqlx::query_scalar(
         "INSERT INTO cleanup_log (suggestion_id, kind, action, snapshot_json, applied_by)
-         VALUES (NULL, 'book_title', 'rename', ?, NULL) RETURNING id",
+         VALUES (NULL, ?, ?, ?, NULL) RETURNING id",
     )
+    .bind(omnibus_shared::CleanupKind::BookTitle.as_str())
+    .bind(omnibus_shared::CleanupAction::Rename.as_str())
     .bind(serde_json::to_string(&snapshot).unwrap())
     .fetch_one(&pool)
     .await

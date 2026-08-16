@@ -186,8 +186,8 @@ async fn apply_merge(
 }
 
 /// Read the canonical entity's pre-merge sort, linked book ids, and (for
-/// authors) photo — the "before" state [`undo_merge`](super::undo) needs to
-/// restore it exactly.
+/// authors) photo — the "before" state
+/// [`undo_merge`](super::undo::undo_merge) needs to restore it exactly.
 async fn snapshot_canonical(
     tx: &mut Transaction<'_, Sqlite>,
     entity: MergeEntity,
