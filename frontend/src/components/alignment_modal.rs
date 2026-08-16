@@ -105,23 +105,39 @@ fn ebook_chapter_count(view: &AlignmentView) -> Option<usize> {
 const SUB_DEFAULT: &str =
     "Check that the mapped position lands about where it should, then confirm.";
 
+/// Singular/plural noun for a count, so one mark never reads "1 marks".
+fn plural(n: i64, one: &str, many: &str) -> String {
+    if n == 1 {
+        format!("{n} {one}")
+    } else {
+        format!("{n} {many}")
+    }
+}
+
 /// The intro line under the title: the default prompt, or the honest
 /// explanation of why the mapping is percentage-based.
 fn sub_header(mode: AlignMode, marks: i64, ebook_chapters: Option<usize>) -> String {
+    let marks_n = plural(marks, "chapter mark", "chapter marks");
     match mode {
         AlignMode::Stale | AlignMode::Anchored => SUB_DEFAULT.into(),
         AlignMode::NoMarks => "This audiobook carries no chapter markers, so there\u{2019}s \
              nothing to anchor the mapping to."
             .into(),
         AlignMode::Mismatch => match ebook_chapters {
-            Some(m) => format!(
-                "The audio carries {marks} chapter marks but the book has {m} chapters, \
-                 so the chapters can\u{2019}t be paired up exactly."
-            ),
-            None => format!(
-                "The audio carries {marks} chapter marks, but they can\u{2019}t be \
-                 paired up with the book\u{2019}s chapters exactly."
-            ),
+            Some(m) => {
+                let chapters_n = plural(m as i64, "chapter", "chapters");
+                format!(
+                    "The audio carries {marks_n} but the book has {chapters_n}, \
+                     so the chapters can\u{2019}t be paired up exactly."
+                )
+            }
+            None => {
+                let pronoun = if marks == 1 { "it" } else { "they" };
+                format!(
+                    "The audio carries {marks_n}, but {pronoun} can\u{2019}t be \
+                     paired up with the book\u{2019}s chapters exactly."
+                )
+            }
         },
     }
 }
@@ -133,9 +149,13 @@ fn linear_pill(marks: i64, ebook_chapters: Option<usize>) -> String {
     if marks == 0 {
         "no chapter marks in the audio — linear estimate".into()
     } else {
+        let marks_n = plural(marks, "audio mark", "audio marks");
         match ebook_chapters {
-            Some(m) => format!("{marks} audio marks vs {m} chapters — no 1:1 match"),
-            None => format!("{marks} audio marks — no 1:1 match"),
+            Some(m) => {
+                let chapters_n = plural(m as i64, "chapter", "chapters");
+                format!("{marks_n} vs {chapters_n} — no 1:1 match")
+            }
+            None => format!("{marks_n} — no 1:1 match"),
         }
     }
 }
@@ -900,6 +920,16 @@ mod tests {
         assert_eq!(
             linear_pill(0, Some(14)),
             "no chapter marks in the audio — linear estimate"
+        );
+        // One of anything reads singular — "1 audio marks" shipped once.
+        assert_eq!(
+            linear_pill(1, Some(1)),
+            "1 audio mark vs 1 chapter — no 1:1 match"
+        );
+        assert_eq!(
+            sub_header(AlignMode::Mismatch, 1, None),
+            "The audio carries 1 chapter mark, but it can\u{2019}t be \
+             paired up with the book\u{2019}s chapters exactly."
         );
     }
 
