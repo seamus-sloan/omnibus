@@ -121,13 +121,36 @@ pub async fn upsert_link(
     mode: CrossFormatLinkMode,
     primary_book_file_id: Option<i64>,
 ) -> Result<CrossFormatLink, CrossFormatError> {
+    confirm_link(pool, user_id, book_uuid, mode, primary_book_file_id, None).await
+}
+
+/// Confirm a link, atomically applying an audio re-order when one rides
+/// along. One transaction on purpose: the re-order is a library-wide
+/// `book_files.ordinal` mutation, and committing it without the link (or
+/// the link against a half-applied order) leaves state no confirm ever
+/// described — the snapshot must also be taken from the ordinals the same
+/// transaction just wrote.
+pub async fn confirm_link(
+    pool: &SqlitePool,
+    user_id: i64,
+    book_uuid: &str,
+    mode: CrossFormatLinkMode,
+    primary_book_file_id: Option<i64>,
+    audio_order: Option<&[i64]>,
+) -> Result<CrossFormatLink, CrossFormatError> {
     let book_uuid = resolve_canonical_book_uuid(pool, book_uuid)
         .await?
         .ok_or(CrossFormatError::BookNotFound)?;
     let book_id = resolve_book_id_by_uuid(pool, &book_uuid)
         .await?
         .ok_or(CrossFormatError::BookNotFound)?;
-    let snapshot = snapshot_json(&audio_files(pool, book_id).await?);
+    // BEGIN IMMEDIATE mirrors `upsert_progress` — take the write lock up
+    // front so a concurrent writer can't stale this snapshot mid-confirm.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    if let Some(order) = audio_order {
+        apply_audio_order_tx(&mut tx, book_id, order).await?;
+    }
+    let snapshot = snapshot_json(&audio_files(&mut *tx, book_id).await?);
     // Confirming the alignment IS turning sync on — the modal's confirm
     // button says exactly that, and a linked book that still prompts on
     // every surface switch reads as broken (live QA on #1944). The follow
@@ -158,8 +181,9 @@ pub async fn upsert_link(
     .bind(mode_str(mode))
     .bind(primary_book_file_id)
     .bind(&snapshot)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     get_link(pool, user_id, &book_uuid)
         .await?
         .ok_or(CrossFormatError::BookNotFound)
@@ -243,26 +267,50 @@ pub async fn declare_sync_point(
         .await?
         .ok_or(CrossFormatError::BookNotFound)?;
 
-    let link = match get_link(pool, user_id, &book_uuid).await? {
-        Some(link) => link,
+    let (link, created_here) = match get_link(pool, user_id, &book_uuid).await? {
+        Some(link) => (link, false),
         None => {
             if audio_files(pool, book_id).await?.len() != 1 {
                 return Err(CrossFormatError::LinkRequired);
             }
-            upsert_link(
+            let link = upsert_link(
                 pool,
                 user_id,
                 &book_uuid,
                 CrossFormatLinkMode::Sequence,
                 None,
             )
-            .await?
+            .await?;
+            (link, true)
         }
     };
-    if link_is_stale(pool, book_id, &link).await? {
+    // A declaration that fails past this point must not leave behind the
+    // link this call just auto-created — the UI reported failure, and a
+    // silently-confirmed follow link would start moving positions the
+    // user never agreed to sync. Best-effort compensation, not a
+    // transaction: the link insert has value only alongside its anchor.
+    let result = declare_against_link(pool, user_id, book_id, &book_uuid, &link, decl).await;
+    if created_here && result.is_err() {
+        let _ = delete_link(pool, user_id, &book_uuid).await;
+    }
+    result
+}
+
+/// The declaration proper, against an existing (or just-created) link —
+/// split from [`declare_sync_point`] so a failure there can compensate by
+/// removing a link it auto-created.
+async fn declare_against_link(
+    pool: &SqlitePool,
+    user_id: i64,
+    book_id: i64,
+    book_uuid: &str,
+    link: &CrossFormatLink,
+    decl: &omnibus_shared::cross_format::DeclareSyncPoint,
+) -> Result<CrossFormatLink, CrossFormatError> {
+    if link_is_stale(pool, book_id, link).await? {
         return Err(CrossFormatError::AudioSetMismatch);
     }
-    let timeline = audio_timeline(pool, book_id, &link)
+    let timeline = audio_timeline(pool, book_id, link)
         .await?
         .ok_or(CrossFormatError::LinkRequired)?;
 
@@ -278,7 +326,7 @@ pub async fn declare_sync_point(
             let frac = cfi_frac
                 .or_else(|| decl.ebook_fraction.filter(|f| (0.0..=1.0).contains(f)))
                 .ok_or(CrossFormatError::CounterpartMissing)?;
-            let row = progress::get_progress(pool, user_id, &book_uuid, ProgressFormat::Audio)
+            let row = progress::get_progress(pool, user_id, book_uuid, ProgressFormat::Audio)
                 .await?
                 .ok_or(CrossFormatError::CounterpartMissing)?;
             let seconds = row
@@ -305,7 +353,7 @@ pub async fn declare_sync_point(
             let global = audio_fraction(&timeline, file_id, seconds)
                 .ok_or(CrossFormatError::CounterpartMissing)?
                 * timeline.total_seconds;
-            let row = progress::get_progress(pool, user_id, &book_uuid, ProgressFormat::Epub)
+            let row = progress::get_progress(pool, user_id, book_uuid, ProgressFormat::Epub)
                 .await?
                 .ok_or(CrossFormatError::CounterpartMissing)?;
             let frac = epub_source_fraction(pool, book_id, &row)
@@ -331,10 +379,10 @@ pub async fn declare_sync_point(
     )
     .bind(&json)
     .bind(user_id)
-    .bind(&book_uuid)
+    .bind(book_uuid)
     .execute(pool)
     .await?;
-    get_link(pool, user_id, &book_uuid)
+    get_link(pool, user_id, book_uuid)
         .await?
         .ok_or(CrossFormatError::BookNotFound)
 }
@@ -367,7 +415,10 @@ struct AudioFile {
     duration_seconds: f64,
 }
 
-async fn audio_files(pool: &SqlitePool, book_id: i64) -> Result<Vec<AudioFile>, sqlx::Error> {
+async fn audio_files<'e, E>(exec: E, book_id: i64) -> Result<Vec<AudioFile>, sqlx::Error>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     let rows: Vec<(i64, String, i64, i64, f64)> = sqlx::query_as(
         "SELECT bf.id, COALESCE(bf.scan_key, ''), bf.size_bytes, bf.mtime_epoch,
                 COALESCE(SUM(bfp.duration_seconds), 0)
@@ -378,7 +429,7 @@ async fn audio_files(pool: &SqlitePool, book_id: i64) -> Result<Vec<AudioFile>, 
          ORDER BY bf.ordinal, bf.id",
     )
     .bind(book_id)
-    .fetch_all(pool)
+    .fetch_all(exec)
     .await?;
     Ok(rows
         .into_iter()
@@ -1060,7 +1111,21 @@ pub async fn set_audio_order(
     let book_id = resolve_book_id_by_uuid(pool, &book_uuid)
         .await?
         .ok_or(CrossFormatError::BookNotFound)?;
-    let current: std::collections::HashSet<i64> = audio_files(pool, book_id)
+    let mut tx = pool.begin().await?;
+    apply_audio_order_tx(&mut tx, book_id, order).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// The validated two-phase ordinal write, inside the caller's transaction —
+/// [`confirm_link`] runs it in the same transaction as the link upsert so a
+/// confirm can never commit a re-order without its link (or vice versa).
+async fn apply_audio_order_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    book_id: i64,
+    order: &[i64],
+) -> Result<(), CrossFormatError> {
+    let current: std::collections::HashSet<i64> = audio_files(&mut **tx, book_id)
         .await?
         .into_iter()
         .map(|f| f.book_file_id)
@@ -1069,13 +1134,12 @@ pub async fn set_audio_order(
     if proposed.len() != order.len() || proposed != current {
         return Err(CrossFormatError::AudioSetMismatch);
     }
-    let mut tx = pool.begin().await?;
     for (i, id) in order.iter().enumerate() {
         sqlx::query("UPDATE book_files SET ordinal = ? WHERE id = ? AND book_id = ?")
             .bind(-(i as i64) - 1)
             .bind(id)
             .bind(book_id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
     }
     sqlx::query(
@@ -1083,8 +1147,7 @@ pub async fn set_audio_order(
          WHERE book_id = ? AND format IN ('M4B', 'M4A', 'MP3') AND ordinal < 0",
     )
     .bind(book_id)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
-    tx.commit().await?;
     Ok(())
 }

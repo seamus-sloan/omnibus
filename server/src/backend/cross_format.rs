@@ -102,25 +102,22 @@ pub(super) async fn post_cross_format_link(
     if let Err(msg) = update.validate() {
         return (axum::http::StatusCode::UNPROCESSABLE_ENTITY, msg).into_response();
     }
-    if let Some(order) = &update.audio_order {
-        if !user.can_edit {
-            return (
-                axum::http::StatusCode::FORBIDDEN,
-                "reordering audio files requires edit permission",
-            )
-                .into_response();
-        }
-        match db::cross_format::set_audio_order(&state.pool, &update.book_uuid, order).await {
-            Ok(()) => {}
-            Err(e) => return error_response("set_audio_order", e),
-        }
+    if update.audio_order.is_some() && !user.can_edit {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            "reordering audio files requires edit permission",
+        )
+            .into_response();
     }
-    match db::cross_format::upsert_link(
+    // One transactional confirm: a riding re-order is a library-wide
+    // mutation and must never commit without its link (or vice versa).
+    match db::cross_format::confirm_link(
         &state.pool,
         user.id,
         &update.book_uuid,
         update.mode,
         update.primary_book_file_id,
+        update.audio_order.as_deref(),
     )
     .await
     {
