@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use omnibus_shared::{ProgressState, TaskProgress};
+use sqlx::SqlitePool;
 use tokio::sync::watch;
 
 use super::types::{
@@ -71,6 +72,82 @@ impl Drop for ProgressTerminalGuard {
     }
 }
 
+/// Seed `progress` with a `Running { 0, None }` entry for `id` before
+/// [`Worker::post`] spawns `task`, so a caller polling `progress_snapshot()`
+/// immediately after `post` returns always observes the task — including
+/// while it still queues behind a same-resource or scan-capped peer.
+fn seed_progress_entry(
+    progress: &StdMutex<BTreeMap<TaskId, ProgressEntry>>,
+    id: TaskId,
+    task: &Task,
+) {
+    let now_ms = wall_clock_ms();
+    let entry = ProgressEntry {
+        progress: TaskProgress {
+            task_id: id,
+            kind: task.kind(),
+            state: ProgressState::Running {
+                processed: 0,
+                total: None,
+            },
+            resource_key: task.resource_key(),
+            detail: None,
+            started_at_ms: now_ms,
+            last_update_ms: now_ms,
+        },
+        terminal_at: None,
+        owner: None,
+    };
+    lock_unpoison(progress).insert(id, entry);
+}
+
+/// Insert the durable `background_tasks` "running" row for a task that just
+/// started (issue #941), returning its row id for the matching
+/// [`persist_task_finish`] call. Best-effort: a DB hiccup here is logged and
+/// returns `None` rather than failing the task itself.
+async fn persist_task_start(pool: &SqlitePool, persistence_kind: &'static str) -> Option<i64> {
+    match crate::background_tasks::start_task(pool, persistence_kind, wall_clock_secs()).await {
+        Ok(row_id) => Some(row_id),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                task_kind = persistence_kind,
+                "worker: failed to persist task start"
+            );
+            None
+        }
+    }
+}
+
+/// Update the durable `background_tasks` row `row_id` to its terminal state
+/// (issue #941), matching the row [`persist_task_start`] inserted.
+/// Best-effort: a DB hiccup here is logged rather than propagated, since this
+/// row is observability, not a write the worker's own success depends on.
+async fn persist_task_finish(
+    pool: &SqlitePool,
+    row_id: i64,
+    task_id: TaskId,
+    persistence_kind: &'static str,
+    outcome: &TaskOutcome,
+) {
+    let persisted_outcome = match outcome {
+        TaskOutcome::Ok(_) => Ok(()),
+        TaskOutcome::Err(msg) => Err(msg.as_str()),
+    };
+    if let Err(e) =
+        crate::background_tasks::finish_task(pool, row_id, wall_clock_secs(), persisted_outcome)
+            .await
+    {
+        tracing::warn!(
+            error = %e,
+            task_id = task_id,
+            task_kind = persistence_kind,
+            db_row_id = row_id,
+            "worker: failed to persist task completion"
+        );
+    }
+}
+
 impl Worker {
     /// Spawn `task` and return its [`TaskId`] immediately, without waiting
     /// for it to run. The id can later be passed to
@@ -92,30 +169,9 @@ impl Worker {
 
         // Seed the progress map *before* spawning so a caller polling
         // `progress_snapshot()` immediately after `post` returns always
-        // observes the task. The entry stays `Running { 0, None }` while
-        // the task queues behind the resource lock or scan semaphore,
-        // which is exactly the "queued behind another scan" state the UI
-        // wants to surface.
-        {
-            let now_ms = wall_clock_ms();
-            let entry = ProgressEntry {
-                progress: TaskProgress {
-                    task_id: id,
-                    kind: task.kind(),
-                    state: ProgressState::Running {
-                        processed: 0,
-                        total: None,
-                    },
-                    resource_key: task.resource_key(),
-                    detail: None,
-                    started_at_ms: now_ms,
-                    last_update_ms: now_ms,
-                },
-                terminal_at: None,
-                owner: None,
-            };
-            lock_unpoison(&self.progress).insert(id, entry);
-        }
+        // observes the task — including while it still queues behind a
+        // same-resource or scan-capped peer.
+        seed_progress_entry(&self.progress, id, &task);
 
         let this = self.clone();
         let completions = self.completions.clone();
@@ -145,30 +201,13 @@ impl Worker {
 
             // Durable history (issue #941): a best-effort row in
             // `background_tasks`, sibling to the in-memory `progress` entry
-            // above but surviving a restart. Never fails the task itself —
-            // a DB hiccup here is logged and the task proceeds. A task that
-            // panics between this insert and the matching `finish_task`
-            // below (no synchronous `Drop` can await a DB write, unlike the
+            // above but surviving a restart — see `persist_task_start` /
+            // `persist_task_finish`. A task that panics between the two
+            // calls (no synchronous `Drop` can await a DB write, unlike the
             // two guards above) simply leaves its row `running` forever,
             // which is itself a legitimate signal on the dashboard rather
             // than something worth hiding.
-            let db_row_id = match crate::background_tasks::start_task(
-                &this.pool,
-                persistence_kind,
-                wall_clock_secs(),
-            )
-            .await
-            {
-                Ok(row_id) => Some(row_id),
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        task_kind = persistence_kind,
-                        "worker: failed to persist task start"
-                    );
-                    None
-                }
-            };
+            let db_row_id = persist_task_start(&this.pool, persistence_kind).await;
 
             let outcome = this.run(task, id).await;
             if let TaskOutcome::Err(ref msg) = outcome {
@@ -180,26 +219,7 @@ impl Worker {
             }
 
             if let Some(row_id) = db_row_id {
-                let persisted_outcome = match &outcome {
-                    TaskOutcome::Ok(_) => Ok(()),
-                    TaskOutcome::Err(msg) => Err(msg.as_str()),
-                };
-                if let Err(e) = crate::background_tasks::finish_task(
-                    &this.pool,
-                    row_id,
-                    wall_clock_secs(),
-                    persisted_outcome,
-                )
-                .await
-                {
-                    tracing::warn!(
-                        error = %e,
-                        task_id = id,
-                        task_kind = persistence_kind,
-                        db_row_id = row_id,
-                        "worker: failed to persist task completion"
-                    );
-                }
+                persist_task_finish(&this.pool, row_id, id, persistence_kind, &outcome).await;
             }
 
             // Publish the terminal outcome, then let `_prune` drop the map

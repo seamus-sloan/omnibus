@@ -5,13 +5,15 @@
 
 use axum::http::StatusCode;
 use omnibus_db::{self as db, test_support::seed_synced_ebook};
+use omnibus_shared::EbookMetadata;
 use tower::ServiceExt;
 
 use crate::auth::test_support as auth_test_support;
-use crate::backend::test_support::get_with_bearer;
+use crate::backend::test_support::{get_with_bearer, CoversDirGuard, ThumbsDirGuard, TINY_PNG};
 
 use super::{
-    author_id_by_name, body_string, fixture, seed_synced_ebook_with_series, series_id_by_name,
+    author_id_by_name, body_string, fake_opds_user, fixture, retain_shelf_visible,
+    seed_synced_ebook_with_series, series_id_by_name, AppState,
 };
 
 /// Seed one book with a *real* on-disk EPUB file — unlike `seed_synced_ebook`,
@@ -47,6 +49,55 @@ async fn seed_downloadable_book(
          VALUES (?, 'EPUB', 'alpha', 0)",
     )
     .bind(book_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    tmp
+}
+
+/// Audiobook counterpart to [`seed_downloadable_book`]: a real on-disk MP3
+/// part plus the `book_file_parts` row `hls::resolve_audiobook_file` and
+/// `get_parts` need, so the audiobook download delegate's 200-vs-404 split
+/// proves the shelf gate rather than a missing-file 404 either way.
+async fn seed_downloadable_audiobook(
+    pool: &sqlx::SqlitePool,
+    uuid: &str,
+    title: &str,
+) -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("ch01.mp3"), b"ID3 fake-mp3").unwrap();
+
+    let lib_id = sqlx::query("INSERT INTO scan_roots (path, display_name) VALUES (?, 'audiolib')")
+        .bind(tmp.path().to_str().unwrap())
+        .execute(pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+    let book_id =
+        sqlx::query("INSERT INTO books (uuid, library_id, path, title) VALUES (?, ?, ?, ?)")
+            .bind(uuid)
+            .bind(lib_id)
+            .bind(tmp.path().to_str().unwrap())
+            .bind(title)
+            .execute(pool)
+            .await
+            .unwrap()
+            .last_insert_rowid();
+    let file_id = sqlx::query(
+        "INSERT INTO book_files (book_id, format, filename, size_bytes) \
+         VALUES (?, 'MP3', 'audiobook', 0)",
+    )
+    .bind(book_id)
+    .execute(pool)
+    .await
+    .unwrap()
+    .last_insert_rowid();
+    sqlx::query(
+        "INSERT INTO book_file_parts \
+         (book_file_id, ordinal, filename, size_bytes, mtime_epoch, duration_seconds) \
+         VALUES (?, 0, 'ch01.mp3', 0, 0, 60.0)",
+    )
+    .bind(file_id)
     .execute(pool)
     .await
     .unwrap();
@@ -370,4 +421,132 @@ async fn delegate_routes_404_a_shelf_hidden_book_requested_by_its_old_merged_uui
             "old uuid must not bypass the shelf gate via merged_uuids: {uri}"
         );
     }
+}
+
+#[tokio::test]
+async fn delegate_cover_route_404s_a_shelf_hidden_book_for_a_non_owner_and_serves_it_for_the_owner()
+{
+    // Same shape as the ebook_file/ebook_download coverage above, for the
+    // two delegate routes that were untested for the shelf gate (#1969).
+    let (app, pool, token) = fixture().await;
+    let owner = auth_test_support::create_user(&pool, "shelf-owner-cover").await;
+    let owner_token = auth_test_support::bearer_token(&pool, owner.id).await;
+
+    let uuid = "99999999-9999-9999-9999-999999999999";
+    let _tmp = seed_downloadable_book(&pool, uuid, "Delta").await;
+    sqlx::query("UPDATE books SET has_cover = 1 WHERE uuid = ?")
+        .bind(uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let _covers_guard = CoversDirGuard::new("opds_delegate_cover_shelf_hidden");
+    std::fs::write(db::covers_dir().join(format!("{uuid}.png")), TINY_PNG).unwrap();
+    seed_private_manual_shelf(&pool, owner.id, uuid.to_string()).await;
+
+    let res = app
+        .clone()
+        .oneshot(get_with_bearer(&format!("/opds/covers/{uuid}"), &token))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND, "other must 404");
+
+    let res = app
+        .clone()
+        .oneshot(get_with_bearer(
+            &format!("/opds/covers/{uuid}"),
+            &owner_token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "owner must still fetch it");
+}
+
+#[tokio::test]
+async fn delegate_thumb_route_404s_a_shelf_hidden_book_for_a_non_owner_and_serves_it_for_the_owner()
+{
+    let (app, pool, token) = fixture().await;
+    let owner = auth_test_support::create_user(&pool, "shelf-owner-thumb").await;
+    let owner_token = auth_test_support::bearer_token(&pool, owner.id).await;
+
+    let uuid = "aaaaaaaa-1111-1111-1111-111111111111";
+    let _tmp = seed_downloadable_book(&pool, uuid, "Epsilon").await;
+    sqlx::query("UPDATE books SET has_cover = 1 WHERE uuid = ?")
+        .bind(uuid)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let _covers_guard = CoversDirGuard::new("opds_delegate_thumb_shelf_hidden");
+    let _thumbs_guard = ThumbsDirGuard::new("opds_delegate_thumb_shelf_hidden");
+    std::fs::write(db::covers_dir().join(format!("{uuid}.png")), TINY_PNG).unwrap();
+    seed_private_manual_shelf(&pool, owner.id, uuid.to_string()).await;
+
+    let res = app
+        .clone()
+        .oneshot(get_with_bearer(&format!("/opds/thumbs/{uuid}/sm"), &token))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND, "other must 404");
+
+    let res = app
+        .clone()
+        .oneshot(get_with_bearer(
+            &format!("/opds/thumbs/{uuid}/sm"),
+            &owner_token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "owner must still fetch it");
+}
+
+#[tokio::test]
+async fn delegate_audiobook_download_route_404s_a_shelf_hidden_book_for_a_non_owner_and_serves_it_for_the_owner(
+) {
+    let (app, pool, token) = fixture().await;
+    let owner = auth_test_support::create_user(&pool, "shelf-owner-audiobook").await;
+    let owner_token = auth_test_support::bearer_token(&pool, owner.id).await;
+
+    let uuid = "88888888-8888-8888-8888-888888888888";
+    let _tmp = seed_downloadable_audiobook(&pool, uuid, "Gamma").await;
+    seed_private_manual_shelf(&pool, owner.id, uuid.to_string()).await;
+
+    let res = app
+        .clone()
+        .oneshot(get_with_bearer(
+            &format!("/opds/audiobooks/{uuid}/download"),
+            &token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND, "other must 404");
+
+    let res = app
+        .clone()
+        .oneshot(get_with_bearer(
+            &format!("/opds/audiobooks/{uuid}/download"),
+            &owner_token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "owner must still fetch it");
+}
+
+#[tokio::test]
+async fn retain_shelf_visible_returns_500_when_the_pool_is_closed() {
+    // Isolates `retain_shelf_visible`'s own `internal(...)` 500 branch
+    // directly, rather than relying on an earlier-failing handler step to
+    // exercise it indirectly — every existing "returns_500_when_the_pool_is_
+    // closed" handler test actually fails earlier in the same request, at
+    // an upstream lookup, and never reaches this call.
+    let (_app, pool, _token) = fixture().await;
+    let state = AppState::new(pool.clone());
+    pool.close().await;
+
+    let mut books = vec![EbookMetadata {
+        unique_identifier: Some("some-uuid".to_string()),
+        ..Default::default()
+    }];
+    let err = retain_shelf_visible(&state, &fake_opds_user(), &mut books)
+        .await
+        .expect_err("closed pool must surface as an Err response");
+    assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }

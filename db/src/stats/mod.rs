@@ -1,12 +1,8 @@
 //! Reading-stats aggregation over the `reading_sessions` /
 //! `listening_sessions` tables plus `journal_entries` / `book_read_status`
-//! for completion; no new query-time schema. Every metric is computed in SQL
-//! and cached process-wide per user for 60s. The Pages tile ([`pages`]) sums
-//! the `books.word_count` estimate persisted at index time — see that
-//! module's doc comment for the sourcing model. [`book`] holds the
-//! book-scoped counterpart ([`book::book_insights`]) for the book-detail
-//! page's Insights card. [`compute`] holds the SQL-heavy aggregation body
-//! this module's cache wraps.
+//! for completion; no new query-time schema. See the `book`, `compute`, and
+//! `pages` submodules for the per-scope aggregation bodies this module's
+//! cache wraps.
 
 mod book;
 mod compute;
@@ -64,6 +60,9 @@ impl From<crate::books::BooksError> for StatsError {
 
 type Cache = Mutex<HashMap<(i64, StatsRange), (i64, StatsSummary)>>;
 
+/// Process-wide cache shared by every request for every user — keyed by
+/// `(user_id, range)` so no cached aggregate leaks between users, and read
+/// through by [`user_stats_at`] before any SQL runs.
 fn cache() -> &'static Cache {
     static CACHE: OnceLock<Cache> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))

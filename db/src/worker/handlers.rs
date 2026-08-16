@@ -114,6 +114,11 @@ async fn run_cleanup_detection(
         Some(CleanupKind::BookTitle) => crate::cleanup::detect_book_titles(pool).await?,
         None => crate::cleanup::detect_all(pool).await?,
     };
+    // Per-row rather than batched: a detection pass is a background task
+    // running at most a few hundred rows, `INSERT OR IGNORE` makes each
+    // iteration idempotent on its own, and a single bad payload can't
+    // poison a whole batch — the simplicity is worth more here than the
+    // query-count win.
     let mut inserted = 0usize;
     for suggestion in &suggestions {
         let payload_json = serde_json::to_string(&suggestion.payload)?;

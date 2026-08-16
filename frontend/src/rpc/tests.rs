@@ -155,3 +155,40 @@ async fn admin_user_from_request_parts_accepts_admin_for_last_errors_route() {
         .unwrap();
     assert!(admin_user.0.is_admin);
 }
+
+// ── #1968: `rpc_get_background_tasks` (`/api/rpc/background-tasks`) admin gate ──
+
+#[tokio::test]
+async fn admin_user_from_request_parts_rejects_non_admin_for_background_tasks_route() {
+    let p = pool().await;
+    // alice is the first user (auto-admin); bob is created second and is
+    // never granted admin.
+    seed_session(&p, "alice", SessionKind::Cookie).await;
+    let token = seed_session(&p, "bob", SessionKind::Bearer).await;
+    let bearer = format!("Bearer {token}");
+    let mut parts = parts_with_uri(
+        "/api/rpc/background-tasks",
+        p,
+        &[(header::AUTHORIZATION, &bearer)],
+    );
+    let res = AdminUser::from_request_parts(&mut parts, &())
+        .await
+        .unwrap_err();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn admin_user_from_request_parts_accepts_admin_for_background_tasks_route() {
+    let p = pool().await;
+    let token = seed_session(&p, "alice", SessionKind::Bearer).await;
+    let bearer = format!("Bearer {token}");
+    let mut parts = parts_with_uri(
+        "/api/rpc/background-tasks",
+        p,
+        &[(header::AUTHORIZATION, &bearer)],
+    );
+    let admin_user = AdminUser::from_request_parts(&mut parts, &())
+        .await
+        .unwrap();
+    assert!(admin_user.0.is_admin);
+}

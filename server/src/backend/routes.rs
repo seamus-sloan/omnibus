@@ -12,9 +12,9 @@ use axum::{
 
 use super::{
     account, admin_health, admin_sessions, audiobooks, author_photos, authors, bookmarks, covers,
-    cross_format, ebooks, genres, highlights, journals, kindle, overrides, physical, profile,
-    progress, ratings, read_status, scan, search, series, settings, shelves, stats, suggestions,
-    summary, tags, uploads, users, AppState,
+    cross_format, ebooks, genres, highlights, journals, kindle, metadata, overrides, physical,
+    profile, progress, ratings, read_status, scan, search, series, settings, shelves, stats,
+    suggestions, summary, tags, uploads, users, AppState,
 };
 use crate::rate_limit::{rate_limit_by_ip, RateLimiter};
 
@@ -131,6 +131,7 @@ pub(super) fn data_routes(search_limiter: Arc<RateLimiter>) -> Router<AppState> 
         .merge(discovery_routes())
         .merge(suggestion_routes())
         .merge(summary_routes())
+        .merge(metadata_routes())
         .merge(kindle_routes())
 }
 
@@ -400,6 +401,12 @@ fn summary_routes() -> Router<AppState> {
             post(summary::post_ebook_summary_fetch),
         )
         .route("/api/summary/sources", get(summary::get_summary_sources))
+}
+
+/// The metadata-provider catalog — mobile- and web-facing REST, no RPC
+/// analogue yet. Read-only, any authenticated user.
+fn metadata_routes() -> Router<AppState> {
+    Router::new().route("/api/metadata/providers", get(metadata::get_providers))
 }
 
 /// F4.3 Send-to-Kindle — mobile-facing REST. Web hits the analogous
