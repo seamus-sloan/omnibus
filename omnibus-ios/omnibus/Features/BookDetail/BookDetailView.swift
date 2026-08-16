@@ -116,7 +116,6 @@ struct BookDetailView: View {
     }
 
     @Environment(\.palette) private var palette
-    @Environment(\.openURL) private var openURL
     @Environment(AppState.self) private var app
     @Environment(AudioPlayer.self) private var player
     @Environment(\.bookZoomNamespace) private var bookZoom
@@ -249,10 +248,11 @@ struct BookDetailView: View {
                         // page, so the two rating surfaces read as one topic.
                         if !model.otherRatings.isEmpty { otherRatingsSection }
                         statusSection(book)
-                        if isWishlistOnly(book) {
-                            findAStoreSection(book)
-                        } else {
-                            librarySection(book)
+                        if !isWishlistOnly(book) { librarySection(book) }
+                        if let entry = model.wishlistEntry {
+                            WishlistSection(book: book, entry: entry) {
+                                model.wishlistEntry = nil
+                            }
                         }
                         metadataSection(book)
                         if !model.highlights.isEmpty { highlightsSection(book) }
@@ -489,49 +489,12 @@ struct BookDetailView: View {
     }
 
     /// A wishlisted book the library holds no files for: the shelving and
-    /// offline rows would describe files that don't exist, so the library
-    /// section gives way to a store link. A wishlisted book that *does* have
-    /// files keeps the library section — its downloads are still real.
+    /// offline rows would describe files that don't exist, so `WishlistSection`
+    /// stands in their place. A wishlisted book that *does* have files keeps
+    /// the library section — its downloads are still real — and carries the
+    /// wishlist card underneath, the way the web page's rail does.
     private func isWishlistOnly(_ book: Book) -> Bool {
         model.wishlistEntry != nil && !book.hasEbook && !book.hasAudiobook
-    }
-
-    /// Store link shown in place of the library section for a wishlist-only
-    /// book — an Amazon search like the web page's "Find a copy".
-    private func findAStoreSection(_ book: Book) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            SectionLabel("Wishlist")
-
-            Button {
-                Haptics.tap()
-                openStore(for: book)
-            } label: {
-                Label("Find a store", systemImage: "storefront")
-            }
-            .buttonStyle(FilledButtonStyle(prominent: false))
-
-            Text("Opens an Amazon search for this book.")
-                .font(.ui(12.5))
-                .foregroundStyle(palette.ink3Color)
-        }
-    }
-
-    /// Open the store search in the Amazon app when it's installed, else the
-    /// browser. The app's URL scheme is tried first because an https link only
-    /// reaches the app when Amazon's universal-link registration covers the
-    /// path — the scheme is the deterministic door.
-    private func openStore(for book: Book) {
-        guard let web = StoreLink.searchURL(
-            isbn: book.isbn13, title: book.displayTitle, author: book.authorDisplay
-        ) else { return }
-
-        guard let app = StoreLink.appURL(for: web) else {
-            openURL(web)
-            return
-        }
-        openURL(app) { accepted in
-            if !accepted { openURL(web) }
-        }
     }
 
     /// Shelving and offline state.

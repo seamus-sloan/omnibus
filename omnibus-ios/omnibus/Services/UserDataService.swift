@@ -787,11 +787,44 @@ enum UserDataService {
     // MARK: - Wishlist
 
     /// The caller's wishlist entry for a book, or `nil` when not tracked.
-    /// Read-only here: wishlist writes fail rule 08's test 3 (the payload
-    /// comes from the server's lookup), so they never queue offline.
+    /// Adds happen elsewhere (the scan flow) and fail rule 08's test 3 — the
+    /// payload comes from the server's lookup — so they never queue offline.
     static func wishlistEntry(uuid: String) -> AsyncThrowingStream<CacheRead<WishlistEntry?>, Error> {
         Cache.live(CacheKey.wishlistEntry(uuid)) {
             try await APIClient.shared.get("/api/physical/\(uuid)/wishlist")
+        }
+    }
+
+    /// Stop tracking a book on the caller's wishlist. Direct call, never
+    /// queued — the caller surfaces the failure.
+    ///
+    /// A removal names its target with a uuid it already holds, so on its own
+    /// it would pass rule 08's four tests. Its other half wouldn't: the add is
+    /// what fails test 3, and a queue that accepts one direction of a toggle
+    /// but not the other is a worse contract than an online-only pair — you
+    /// could clear the wishlist on a plane and not put anything back. The
+    /// control is disabled while offline, per the rule's corollary.
+    static func removeWishlistEntry(uuid: String) async throws {
+        let _: Empty = try await APIClient.shared.delete("/api/physical/\(uuid)/wishlist")
+        // Record "not tracked" rather than dropping the key: an absent replica
+        // makes the next read throw offline, and the answer is now known.
+        await Cache.write(CacheKey.wishlistEntry(uuid), WishlistEntry?.none)
+        // The wishlist is a real shelf whose membership derives from these
+        // entries, so its page still lists the book and the shelf lists still
+        // count it. Drop the page before invalidating the lists — the shelf id
+        // this route doesn't carry is read off the cached list.
+        await dropCachedWishlistPages()
+        await invalidateShelves()
+    }
+
+    /// Forget any cached wishlist shelf page, so the shelf doesn't keep showing
+    /// a book that is no longer on it. Deliberately over-broad on an admin's
+    /// device, whose cached list carries other accounts' wishlist shelves too:
+    /// a needless drop there costs one refetch, and this only ever runs online.
+    private static func dropCachedWishlistPages() async {
+        guard let shelves: [ShelfSummary] = await Cache.cachedOnly(CacheKey.shelves) else { return }
+        for shelf in shelves where shelf.kind == .wishlist {
+            await OfflineStore.shared.cacheDelete(CacheKey.shelfPage(shelf.id))
         }
     }
 
