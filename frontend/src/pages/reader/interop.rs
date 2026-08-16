@@ -127,11 +127,13 @@ fn register_window_callbacks(
     } = sigs;
 
     let uuid_for_save = uuid_cb;
-    // Last SEEN position (echoes included), mirroring the mobile reader:
-    // a later non-echo re-emit of the same CFI (a layout re-render) stays
-    // deduped rather than re-posting — and re-clocking — the unmoved
-    // position.
-    let mut last_seen_cfi: Option<String> = None;
+    // Last POSTED position — deliberately NOT last-seen (the mobile
+    // variant's rule): the web glue's locations-ready re-emit is an echo
+    // that races a turn's debounced relocate and reads epub.js's already-
+    // updated location, so a last-seen key would swallow the turn's own
+    // write. Echoes never advance this key; a layout re-emission at the
+    // last POSTED spot still dedups, which is the bug this exists for.
+    let mut last_posted_cfi: Option<String> = None;
     let relocate = Closure::<dyn FnMut(String)>::new(move |json: String| {
         if let Ok(mut data) = serde_json::from_str::<super::RelocateData>(&json) {
             // Re-derive chapter/total from the TOC's own order rather than
@@ -151,15 +153,13 @@ fn register_window_callbacks(
             // dedup mirrors the mobile reader: layout re-emissions (window
             // resize, Aa panel changes) re-fire `relocated` at the current
             // CFI, and a re-post would re-clock the unmoved position too.
-            let moved = match (&data.cfi, &last_seen_cfi) {
-                (Some(new), Some(seen)) => new != seen,
+            let moved = match (&data.cfi, &last_posted_cfi) {
+                (Some(new), Some(posted)) => new != posted,
                 (Some(_), None) => true,
                 (None, _) => false,
             };
-            if data.cfi.is_some() {
-                last_seen_cfi = data.cfi.clone();
-            }
             if let Some(cfi) = data.cfi.clone().filter(|_| !data.echo && moved) {
+                last_posted_cfi = Some(cfi.clone());
                 crate::reader_progress::save(&uuid_for_save, &cfi);
                 let uuid_for_post = uuid_for_save.clone();
                 let cfi_for_post = cfi;
