@@ -187,9 +187,11 @@ pub(super) fn resolve_follow_boot(
         if picked != mapped {
             return None;
         }
-    } else if explicit_file.is_some() {
-        // Candidate names no file (shouldn't happen for an audio target,
-        // but a malformed payload must not hijack an explicit pick).
+    } else if explicit_file.is_some() || c.book_file_id.is_none() {
+        // Candidate names no file: the server always sets one for an
+        // audio target, so a file-less candidate is malformed — it must
+        // neither hijack an explicit pick nor seed seconds into whatever
+        // file the stored row resolves (the #1888 splice).
         return None;
     }
     Some((c.book_file_id, c.audio_position_seconds?))

@@ -3217,3 +3217,32 @@ async fn upsert_progress_refuses_near_zero_audio_write_against_far_advanced_row(
         .unwrap();
     assert!(rec.audio_position_seconds.unwrap() < f64::EPSILON);
 }
+
+#[tokio::test]
+async fn upsert_progress_teardown_refusal_exempts_a_write_in_a_different_file() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid) = seed(&pool, "/lib", "Switched").await;
+    upsert_progress(&pool, user, &audio_update(&uuid, 10_000.0, Some(7), 1_000))
+        .await
+        .unwrap();
+
+    // Near-zero, fresh clock — but naming a DIFFERENT file than the
+    // stored row: that is a real file switch (picker, mapped offer), not
+    // a dying element's flush, and refusing it would lose the switch.
+    let rec = upsert_progress(&pool, user, &audio_update(&uuid, 0.5, Some(8), 2_000))
+        .await
+        .unwrap();
+    assert_eq!(rec.book_file_id, Some(8));
+    assert!((rec.audio_position_seconds.unwrap() - 0.5).abs() < f64::EPSILON);
+
+    // Same-file near-zero stays refused.
+    let rec = upsert_progress(&pool, user, &audio_update(&uuid, 10_000.0, Some(8), 3_000))
+        .await
+        .unwrap();
+    assert!((rec.audio_position_seconds.unwrap() - 10_000.0).abs() < f64::EPSILON);
+    let rec = upsert_progress(&pool, user, &audio_update(&uuid, 0.0, Some(8), 4_000))
+        .await
+        .unwrap();
+    assert!((rec.audio_position_seconds.unwrap() - 10_000.0).abs() < f64::EPSILON);
+}

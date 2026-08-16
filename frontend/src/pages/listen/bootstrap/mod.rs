@@ -674,7 +674,16 @@ async fn run_manifest_init(
     };
 
     let (loaded_file, audio_file_count) = manifest.file_identity();
-    NEXT_SEQUENCE_FILE.with(|c| c.set(manifest.next_file_id()));
+    // Sequence auto-advance is a DIRECT-mode contract only: the HLS
+    // playlist is book-level and file-blind (`get_audiobook_playlist`
+    // takes no file id), so "advancing" an HLS book reboots the same
+    // stream at 0:00 forever instead of finishing it. HLS keeps the
+    // ended-means-finished behavior.
+    let next_file = match &manifest {
+        omnibus_shared::AudiobookManifest::Direct { .. } => manifest.next_file_id(),
+        omnibus_shared::AudiobookManifest::Hls { .. } => None,
+    };
+    NEXT_SEQUENCE_FILE.with(|c| c.set(next_file));
     // `0` = a server predating the identity fields; keep posting no file id
     // rather than inventing one (`resolve_boot_position` degrades the same
     // way via `audio_file_count == 0`).

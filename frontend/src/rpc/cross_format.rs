@@ -45,35 +45,27 @@ pub async fn rpc_confirm_cross_format_link(update: ConfirmCrossFormatLink) -> Re
     if let Err(msg) = update.validate() {
         return Err(ServerFnError::new(msg).into());
     }
-    if let Some(order) = &update.audio_order {
-        if !user.can_edit {
-            return Err(
-                ServerFnError::new("reordering audio files requires edit permission").into(),
-            );
-        }
-        if let Err(e) = db::cross_format::set_audio_order(&pool.0, &update.book_uuid, order).await {
-            let msg = match &e {
-                db::cross_format::CrossFormatError::AudioSetMismatch => {
-                    Some(format!("{e} — reopen and retry"))
-                }
-                _ => None,
-            };
-            return Err(match msg {
-                Some(msg) => ServerFnError::new(msg).into(),
-                None => rpc_error("set audio order", e).into(),
-            });
-        }
+    if update.audio_order.is_some() && !user.can_edit {
+        return Err(ServerFnError::new("reordering audio files requires edit permission").into());
     }
-    db::cross_format::upsert_link(
+    // One transactional confirm: a riding re-order is a library-wide
+    // mutation and must never commit without its link (or vice versa).
+    db::cross_format::confirm_link(
         &pool.0,
         user.id,
         &update.book_uuid,
         update.mode,
         update.primary_book_file_id,
+        update.audio_order.as_deref(),
     )
     .await
     .map(|_| ())
-    .map_err(|e| rpc_error("confirm cross-format link", e).into())
+    .map_err(|e| match &e {
+        db::cross_format::CrossFormatError::AudioSetMismatch => {
+            ServerFnError::new(format!("{e} — reopen and retry")).into()
+        }
+        _ => rpc_error("confirm cross-format link", e).into(),
+    })
 }
 
 /// Turn sync off for one book; returns whether a link existed.

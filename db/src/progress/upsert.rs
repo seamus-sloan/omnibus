@@ -126,9 +126,19 @@ pub async fn upsert_progress_tx(
     // audio write against a row that sits far into the book: the write is
     // dropped, the stored row returned. A genuine restart-from-the-start
     // persists within one heartbeat anyway — its next report is already
-    // past the cutoff.
+    // past the cutoff. Scoped to the SAME file as the stored row: a dying
+    // element flushes the file it was playing, while a near-zero write in
+    // a *different* file is a real file switch (picker, mapped offer) and
+    // refusing it would lose the switch itself.
     if update.format == ProgressFormat::Audio {
-        if let (Some(new), Some(old)) = (update.audio_position_seconds, existing.1) {
+        let same_file = match (update.book_file_id, existing.2) {
+            (Some(new_file), Some(old_file)) => new_file == old_file,
+            // A file-less write can't prove it's a switch — treat as the
+            // stored file, keeping the guard for single-file books.
+            _ => true,
+        };
+        if let (true, Some(new), Some(old)) = (same_file, update.audio_position_seconds, existing.1)
+        {
             if new < AUDIO_TEARDOWN_ZERO_CUTOFF_SECONDS
                 && old > AUDIO_TEARDOWN_ZERO_MIN_STORED_SECONDS
             {
@@ -218,10 +228,10 @@ async fn existing_progress_snapshot(
     user_id: i64,
     book_uuid: &str,
     fmt: &str,
-) -> Result<(Option<i64>, Option<f64>), ProgressError> {
+) -> Result<(Option<i64>, Option<f64>, Option<i64>), ProgressError> {
     let Some(row) = sqlx::query(
         "SELECT COALESCE(client_updated_at, updated_at) AS client_updated_at,
-                audio_position_seconds
+                audio_position_seconds, book_file_id
          FROM reading_progress
          WHERE user_id = ? AND book_uuid = ? AND format = ?",
     )
@@ -231,11 +241,12 @@ async fn existing_progress_snapshot(
     .fetch_optional(&mut **tx)
     .await?
     else {
-        return Ok((None, None));
+        return Ok((None, None, None));
     };
     Ok((
         Some(row.try_get::<i64, _>("client_updated_at")?),
         row.try_get::<Option<f64>, _>("audio_position_seconds")?,
+        row.try_get::<Option<i64>, _>("book_file_id")?,
     ))
 }
 

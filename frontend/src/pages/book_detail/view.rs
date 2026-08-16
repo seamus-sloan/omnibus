@@ -125,10 +125,14 @@ pub(super) fn derive_loaded_view(b: &EbookMetadata) -> LoadedBookView {
         .as_deref()
         .map(|a| format!("--accent: {a};"))
         .unwrap_or_default();
-    let has_audio = b
-        .formats
-        .iter()
-        .any(|f| f.eq_ignore_ascii_case("m4b") || f.eq_ignore_ascii_case("mp3"));
+    // M4A is a first-class indexed audio format (`db::audiobook`); leaving
+    // it out here made the landing hero's link invite dead-end on a detail
+    // page with no sync affordance for EPUB+M4A books.
+    let has_audio = b.formats.iter().any(|f| {
+        f.eq_ignore_ascii_case("m4b")
+            || f.eq_ignore_ascii_case("m4a")
+            || f.eq_ignore_ascii_case("mp3")
+    });
     let has_ebook = b
         .formats
         .iter()

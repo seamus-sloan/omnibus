@@ -135,7 +135,12 @@ test("a linked book resolves silently on the player — no prompt, mapped seek",
 
   await gotoReady(page, `/listen/${uuid}`);
   await page.waitForLoadState("networkidle");
-  await expect(page.getByTestId("sync-prompt")).toHaveCount(0);
+  // "No prompt card": the declare pill is the only sync affordance, and
+  // the removed offer card's user-facing copy ("Jump ahead?" / "Sync to")
+  // appears nowhere — pinned to the historical strings so a resurrected
+  // prompt would fail this, unlike a role/testid that never existed.
+  await expect(page.getByTestId("listen-sync-here")).toBeVisible();
+  await expect(page.getByText(/Jump ahead|Sync to \d/)).toHaveCount(0);
   const seek = page.getByRole("slider", { name: "Seek" });
   await expect
     .poll(async () => Number(await seek.inputValue()), {
@@ -153,6 +158,12 @@ test("the hero shows one synced card with the counterpart affordance", async ({
   // and the 2-second fixture MP3 finishes on any playback, which flips
   // read status to `finished`. Reset to `reading`, re-stamp, and reload
   // until the card lands (the established hero-spec pattern).
+  //
+  // Re-anchor the synthetic clock to wall time first (test 4's pattern):
+  // the file-level clock starts at wall−60 and gains one second per
+  // write, while parallel specs stamp wall-clock positions — without the
+  // re-anchor this card can be out-ranked for the entire retry window.
+  clock = Math.floor(Date.now() / 1000) - 3;
   await expect
     .poll(
       async () => {

@@ -1584,6 +1584,95 @@ async fn reconfirm_keeps_follow_and_clears_anchors_only_when_the_audio_set_chang
 }
 
 #[tokio::test]
+async fn reordering_audio_files_reads_as_a_different_set_and_clears_anchors() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, audio) = seed_dual_book(&pool, &[600.0, 300.0]).await;
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 40, 1_000))
+        .await
+        .unwrap();
+    declare_sync_point(&pool, user, &declare_audio(&uuid, Some(audio[0]), 500.0))
+        .await
+        .unwrap();
+
+    // Swap the two files' ordinals — the concatenated timeline changes,
+    // so every stored global second now means a different spot. The
+    // snapshot must read as a different set: the link goes stale for
+    // everyone, and a re-confirm clears the old-ruler anchors.
+    // Three steps through a parking ordinal: the UNIQUE(book_id, format,
+    // ordinal) constraint is enforced per-row, so a single-statement swap
+    // trips it mid-UPDATE.
+    for (id, ordinal) in [(audio[0], 99), (audio[1], 0), (audio[0], 1)] {
+        sqlx::query("UPDATE book_files SET ordinal = ? WHERE id = ?")
+            .bind(ordinal)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    let book_id = crate::resolve_book_id_by_uuid(&pool, &uuid)
+        .await
+        .unwrap()
+        .unwrap();
+    let link = get_link(&pool, user, &uuid).await.unwrap().unwrap();
+    assert!(link_is_stale(&pool, book_id, &link).await.unwrap());
+
+    let link = upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    assert!(link.user_anchors.is_empty());
+}
+
+#[tokio::test]
+async fn reconfirm_with_a_different_mode_or_primary_clears_anchors() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    let (_, uuid, audio) = seed_dual_book(&pool, &[600.0, 300.0]).await;
+    upsert_link(&pool, user, &uuid, CrossFormatLinkMode::Sequence, None)
+        .await
+        .unwrap();
+    progress::upsert_progress(&pool, user, &epub_percent_update(&uuid, 40, 1_000))
+        .await
+        .unwrap();
+    declare_sync_point(&pool, user, &declare_audio(&uuid, Some(audio[0]), 500.0))
+        .await
+        .unwrap();
+
+    // Same files, different mode: the anchors' global seconds were
+    // measured on the sequence concatenation — meaningless against a
+    // narrations primary. Cleared.
+    let link = upsert_link(
+        &pool,
+        user,
+        &uuid,
+        CrossFormatLinkMode::Narrations,
+        Some(audio[0]),
+    )
+    .await
+    .unwrap();
+    assert!(link.user_anchors.is_empty());
+
+    // Re-anchor on the narrations primary, then switch primaries: a
+    // different recording is a different ruler too. Cleared again.
+    declare_sync_point(&pool, user, &declare_audio(&uuid, Some(audio[0]), 100.0))
+        .await
+        .unwrap();
+    let link = upsert_link(
+        &pool,
+        user,
+        &uuid,
+        CrossFormatLinkMode::Narrations,
+        Some(audio[1]),
+    )
+    .await
+    .unwrap();
+    assert!(link.user_anchors.is_empty());
+}
+
+#[tokio::test]
 async fn set_follow_flips_only_existing_links() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;

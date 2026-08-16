@@ -200,7 +200,14 @@ struct ReaderView: View {
                 if !chromeVisible { showMenu = false }
             }
         }
-        .onChange(of: controller.location?.cfi) { _, _ in
+        .onChange(of: controller.location?.cfi) { old, _ in
+            // The boot restore's nil→CFI transition is an echo of the
+            // position the server already holds — persisting it stamps a
+            // fresh clock on an unmoved row and shadows a newer audiobook
+            // spot at the cross-format clock gate (the same #1972 class
+            // the web reader suppresses via echo-tagged relocates). Only
+            // CFI→CFI transitions are movement worth recording.
+            guard old != nil else { return }
             Task { await persist(force: false) }
         }
         .onChange(of: controller.location?.atEnd) { _, atEnd in

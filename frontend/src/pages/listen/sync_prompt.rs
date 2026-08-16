@@ -61,7 +61,11 @@ pub(super) fn SyncHereButton() -> Element {
                     format: omnibus_shared::ProgressFormat::Audio,
                     ebook_fraction: None,
                     epub_cfi: None,
-                    audio_book_file_id: (playback.file_id)(),
+                    // The RESOLVED file, not the picker request: `file_id`
+                    // is `None` on every ordinary resume path, and a
+                    // file-less audio declaration on a multi-file timeline
+                    // is (correctly) rejected server-side.
+                    audio_book_file_id: (playback.loaded_file_id)(),
                     audio_seconds: Some((playback.elapsed)()),
                 };
                 spawn(async move {
