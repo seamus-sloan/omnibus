@@ -8,7 +8,7 @@ use crate::auth::test_support as auth_test_support;
 use crate::backend::test_support::*;
 
 async fn body_string(res: axum::response::Response) -> String {
-    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    let bytes = to_bytes(res.into_body(), 1024 * 1024).await.unwrap();
     String::from_utf8(bytes.to_vec()).unwrap()
 }
 

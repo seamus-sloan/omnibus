@@ -16,9 +16,7 @@ pub enum MetadataProvider {
 }
 
 impl MetadataProvider {
-    /// Human-readable provider name, for the check-in note, the settings
-    /// panel, and the provider catalog — one string, one place, rather than a
-    /// `match` re-written at every render site.
+    /// Human-readable provider name for display (check-in note, settings panel, provider catalog).
     pub fn display_name(self) -> &'static str {
         match self {
             MetadataProvider::OpenLibrary => "Open Library",
@@ -29,14 +27,10 @@ impl MetadataProvider {
 }
 
 /// What one provider can be asked and what it can return, independent of
-/// whether it is currently configured. Lets a caller (the eventual
-/// provider-filter UI) skip asking a provider a question it can never
-/// answer, and skip rendering a column no provider actually fills.
+/// whether it is currently configured.
 ///
-/// `carries_ratings` and `carries_genres` are `false` for every provider
-/// today: [`ExternalBookMeta`] has no field for either yet, so claiming
-/// either capability would be a promise no provider can keep. Flip a
-/// provider's flag to `true` in the same change that adds the field.
+/// `carries_ratings`/`carries_genres` are `false` for every provider today —
+/// flip one only in the same change that adds the field to [`ExternalBookMeta`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderCapabilities {
     pub search_by_title: bool,
@@ -46,15 +40,11 @@ pub struct ProviderCapabilities {
     pub carries_genres: bool,
 }
 
-/// One entry in the provider catalog: identity, whether it is usable right
-/// now, and what it can answer. Built by `providers::catalog` in `omnibus-db`
-/// and served by `GET /api/metadata/providers`.
+/// One entry in the provider catalog, built by `providers::catalog` in
+/// `omnibus-db` and served by `GET /api/metadata/providers`.
 ///
-/// **Never carries key material.** `configured` is a bool, not a masked
-/// preview — unlike [`GoogleBooksKeyStatus`] and
-/// `omnibus_db::HardcoverKeyStatus`, this type has no `masked` field at all,
-/// because this endpoint is reachable by any authenticated user, not just an
-/// admin.
+/// **Never carries key material** — `configured` is a bool, not a masked
+/// preview, because this endpoint is reachable by any authenticated user.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderInfo {
     pub id: MetadataProvider,
