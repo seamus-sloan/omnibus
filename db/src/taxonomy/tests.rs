@@ -80,6 +80,41 @@ async fn resolve_or_insert_series_collapses_case_variants_to_one_row() {
 }
 
 #[tokio::test]
+async fn resolve_or_insert_series_returns_the_canonical_id_for_a_merged_away_name() {
+    // #964: a name a completed library-cleanup merge absorbed must resolve
+    // straight to the surviving canonical id, not mint a fresh row.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    let canonical_id = resolve_or_insert_series(&mut tx, "Wheel of Time")
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    sqlx::query(
+        "INSERT INTO entity_aliases (kind, alias_name, canonical_id) VALUES ('series', ?, ?)",
+    )
+    .bind("The Wheel of Time")
+    .bind(canonical_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let mut tx = pool.begin().await.unwrap();
+    let resolved = resolve_or_insert_series(&mut tx, "The Wheel of Time")
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    assert_eq!(resolved, canonical_id);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM series WHERE name = ?")
+        .bind("The Wheel of Time")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0, "the merged-away name must not be recreated");
+}
+
+#[tokio::test]
 async fn resolve_or_insert_publisher_inserts_and_is_idempotent() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let mut tx = pool.begin().await.unwrap();

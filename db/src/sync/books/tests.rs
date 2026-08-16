@@ -9,10 +9,13 @@ use sqlx::SqlitePool;
 
 use super::shared::{insert_book_row, insert_metadata_links};
 use super::{sync_books, sync_changed, sync_new, sync_removed, wipe_per_book_link_rows, SyncPlan};
+use crate::cleanup::{apply_merge_authors, apply_merge_series, apply_merge_tags};
 use crate::ebook::IndexedBook;
 use crate::indexer::diff_library;
 use crate::pool::init_db;
-use crate::test_support::{count_rows, indexed, CoversTempDir};
+use crate::test_support::{
+    author_id_by_name, count_rows, indexed, series_id_by_name, CoversTempDir,
+};
 
 /// Insert a `scan_roots` row for `/lib` and return its id — the
 /// `library_id` every bucket helper needs.
@@ -447,6 +450,240 @@ async fn sync_changed_is_a_noop_for_empty_batch() {
         .unwrap();
     tx.commit().await.unwrap();
     assert!(covers.is_empty());
+}
+
+/// Look up a `tags.id` by name. Panics on miss — test helper only.
+async fn tag_id_by_name(pool: &SqlitePool, name: &str) -> i64 {
+    sqlx::query_scalar::<_, i64>("SELECT id FROM tags WHERE name = ?")
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// `true` when `table.name = ? table` has no row for the given name.
+async fn taxonomy_row_missing(pool: &SqlitePool, table: &str, name: &str) -> bool {
+    let sql = format!("SELECT COUNT(*) FROM {table} WHERE name = ?");
+    count_rows_bound(pool, &sql, name).await == 0
+}
+
+async fn count_rows_bound(pool: &SqlitePool, sql: &str, bind: &str) -> i64 {
+    sqlx::query_scalar(sql)
+        .bind(bind)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+/// `true` when `book_id` is linked to `entity_id` in `link_table` via `col`.
+async fn is_linked(
+    pool: &SqlitePool,
+    link_table: &str,
+    col: &str,
+    book_id: i64,
+    entity_id: i64,
+) -> bool {
+    let sql = format!("SELECT COUNT(*) FROM {link_table} WHERE book = ? AND {col} = ?");
+    let n: i64 = sqlx::query_scalar(&sql)
+        .bind(book_id)
+        .bind(entity_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    n == 1
+}
+
+/// #964 AC2: merging an author, series, and tag away, then reindexing the
+/// book whose file still names the merged-away entities (`sync_changed`,
+/// the real `Task::Scan` write path for an unchanged-on-disk-but-reparsed
+/// file), must resolve every one of them to the surviving canonical row —
+/// never mint a fresh `authors`/`series`/`tags` row for a name a completed
+/// merge already absorbed.
+#[tokio::test]
+async fn sync_changed_reindex_does_not_resurrect_a_merged_away_author_series_or_tag() {
+    let _covers = CoversTempDir::new("resurrection_guard");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let library_id = seed_scan_root(&pool).await;
+
+    let source = indexed(
+        "source.epub",
+        Some("Source Book"),
+        &["John Smith"],
+        &["Sci-Fi"],
+        Some(("The Wheel of Time", "1")),
+        None,
+    );
+    let canonical = indexed(
+        "canonical.epub",
+        Some("Canonical Book"),
+        &["J. Smith"],
+        &["Science Fiction"],
+        Some(("Wheel of Time", "1")),
+        None,
+    );
+    let mut tx = pool.begin().await.unwrap();
+    sync_new(
+        &mut tx,
+        library_id,
+        "/lib",
+        &[source, canonical],
+        &[],
+        |_| {},
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    let source_book_id: i64 =
+        sqlx::query_scalar("SELECT id FROM books WHERE scan_key = 'source.epub'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+    let author_source_id = author_id_by_name(&pool, "John Smith").await;
+    let author_canonical_id = author_id_by_name(&pool, "J. Smith").await;
+    let series_source_id = series_id_by_name(&pool, "The Wheel of Time").await;
+    let series_canonical_id = series_id_by_name(&pool, "Wheel of Time").await;
+    let tag_source_id = tag_id_by_name(&pool, "Sci-Fi").await;
+    let tag_canonical_id = tag_id_by_name(&pool, "Science Fiction").await;
+
+    apply_merge_authors(&pool, &[author_source_id], author_canonical_id, None, None)
+        .await
+        .unwrap();
+    apply_merge_series(&pool, &[series_source_id], series_canonical_id, None, None)
+        .await
+        .unwrap();
+    apply_merge_tags(&pool, &[tag_source_id], tag_canonical_id, None, None)
+        .await
+        .unwrap();
+
+    // A second reindex of the source book: its file on disk never changed,
+    // so the parser still reports the names the merges just absorbed.
+    let reparsed = indexed(
+        "source.epub",
+        Some("Source Book"),
+        &["John Smith"],
+        &["Sci-Fi"],
+        Some(("The Wheel of Time", "1")),
+        None,
+    );
+    let mut tx = pool.begin().await.unwrap();
+    sync_changed(&mut tx, library_id, "/lib", &[reparsed], |_| {})
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    assert!(
+        taxonomy_row_missing(&pool, "authors", "John Smith").await,
+        "AC2: the merged-away author must not be recreated"
+    );
+    assert!(
+        taxonomy_row_missing(&pool, "series", "The Wheel of Time").await,
+        "AC2: the merged-away series must not be recreated"
+    );
+    assert!(
+        taxonomy_row_missing(&pool, "tags", "Sci-Fi").await,
+        "AC2: the merged-away tag must not be recreated"
+    );
+
+    assert!(
+        is_linked(
+            &pool,
+            "books_authors_link",
+            "author",
+            source_book_id,
+            author_canonical_id
+        )
+        .await,
+        "AC1: reindexed book resolves to the canonical author"
+    );
+    assert!(
+        is_linked(
+            &pool,
+            "books_series_link",
+            "series",
+            source_book_id,
+            series_canonical_id
+        )
+        .await,
+        "AC1: reindexed book resolves to the canonical series"
+    );
+    assert!(
+        is_linked(
+            &pool,
+            "books_tags_link",
+            "tag",
+            source_book_id,
+            tag_canonical_id
+        )
+        .await,
+        "AC1: reindexed book resolves to the canonical tag"
+    );
+}
+
+/// AC3: with no alias recorded, `sync_changed` behaves exactly as before —
+/// the reindexed name resolves to its own (unmerged) row, not some other
+/// entity's.
+#[tokio::test]
+async fn sync_changed_reindex_leaves_unmerged_entities_unaffected() {
+    let _covers = CoversTempDir::new("resurrection_guard_unaffected");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let library_id = seed_scan_root(&pool).await;
+
+    let book = indexed(
+        "plain.epub",
+        Some("Plain Book"),
+        &["Ordinary Author"],
+        &["Ordinary Tag"],
+        Some(("Ordinary Series", "1")),
+        None,
+    );
+    let mut tx = pool.begin().await.unwrap();
+    sync_new(&mut tx, library_id, "/lib", &[book], &[], |_| {})
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let book_id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE scan_key = 'plain.epub'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let author_id = author_id_by_name(&pool, "Ordinary Author").await;
+    let series_id = series_id_by_name(&pool, "Ordinary Series").await;
+    let tag_id = tag_id_by_name(&pool, "Ordinary Tag").await;
+
+    let reparsed = indexed(
+        "plain.epub",
+        Some("Plain Book"),
+        &["Ordinary Author"],
+        &["Ordinary Tag"],
+        Some(("Ordinary Series", "1")),
+        None,
+    );
+    let mut tx = pool.begin().await.unwrap();
+    sync_changed(&mut tx, library_id, "/lib", &[reparsed], |_| {})
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    assert_eq!(
+        count_rows(&pool, "SELECT COUNT(*) FROM authors").await,
+        1,
+        "no extra author row minted"
+    );
+    assert_eq!(
+        count_rows(&pool, "SELECT COUNT(*) FROM series").await,
+        1,
+        "no extra series row minted"
+    );
+    assert_eq!(
+        count_rows(&pool, "SELECT COUNT(*) FROM tags").await,
+        1,
+        "no extra tag row minted"
+    );
+    assert!(is_linked(&pool, "books_authors_link", "author", book_id, author_id).await);
+    assert!(is_linked(&pool, "books_series_link", "series", book_id, series_id).await);
+    assert!(is_linked(&pool, "books_tags_link", "tag", book_id, tag_id).await);
 }
 
 /// A helper on the `IndexedBook` boundary: `insert_book_row` returns the
