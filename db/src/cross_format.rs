@@ -132,8 +132,10 @@ pub async fn upsert_link(
     // button says exactly that, and a linked book that still prompts on
     // every surface switch reads as broken (live QA on #1944). The follow
     // toggle can still switch it off afterward; user anchors survive only
-    // when the audio set is unchanged — a new set is a new timeline, and
-    // the stored global seconds no longer mean anything on it.
+    // when the audio set (ordinal order included), mode, AND narrations
+    // primary are all unchanged — anchors store global seconds on one
+    // concrete timeline, and any of those three changing makes that
+    // timeline a different ruler the stored pairs no longer measure.
     sqlx::query(
         "INSERT INTO cross_format_links
             (user_id, book_uuid, mode, primary_book_file_id, audio_snapshot, confirmed_at, follow)
@@ -144,6 +146,9 @@ pub async fn upsert_link(
             primary_book_file_id = excluded.primary_book_file_id,
             user_anchors = CASE
                 WHEN cross_format_links.audio_snapshot = excluded.audio_snapshot
+                 AND cross_format_links.mode = excluded.mode
+                 AND COALESCE(cross_format_links.primary_book_file_id, -1)
+                     = COALESCE(excluded.primary_book_file_id, -1)
                 THEN cross_format_links.user_anchors ELSE '[]' END,
             audio_snapshot = excluded.audio_snapshot,
             confirmed_at = excluded.confirmed_at",
@@ -395,18 +400,22 @@ struct SnapshotEntry {
     etag: Option<String>,
 }
 
-/// Canonical JSON of an audio file set: `(scan_key, wire etag)` pairs
-/// sorted by scan_key, so comparison is order- and id-independent —
-/// `book_files.id` changes on every Changed re-index, scan_key doesn't.
+/// Canonical JSON of an audio file set: `(scan_key, wire etag)` pairs in
+/// **ordinal order**. Keyed on scan_key + etag so comparison is
+/// id-independent (`book_files.id` changes on every Changed re-index,
+/// scan_key doesn't) — but deliberately order-DEPENDENT: the sequence
+/// timeline concatenates by ordinal, so a re-order changes what every
+/// stored global second means and must read as a different set (stale
+/// links, cleared anchors). A sorted snapshot let `set_audio_order`
+/// permute the timeline under every user's live mapping undetected.
 fn snapshot_json(files: &[AudioFile]) -> String {
-    let mut entries: Vec<SnapshotEntry> = files
+    let entries: Vec<SnapshotEntry> = files
         .iter()
         .map(|f| SnapshotEntry {
             scan_key: f.scan_key.clone(),
             etag: omnibus_shared::file_etag(f.size_bytes, f.mtime_epoch),
         })
         .collect();
-    entries.sort();
     serde_json::to_string(&entries).unwrap_or_else(|_| "[]".to_string())
 }
 

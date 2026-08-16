@@ -1638,7 +1638,10 @@ struct AlignmentView: Codable, Hashable, Sendable {
     /// marks" and nonzero means "marks exist but couldn't be aligned".
     var audioChapterMarks: Int64?
     /// Matched anchor pairs (text_frac, audio_frac) — the mapped-preview
-    /// interpolation, identical to the pairs the jump uses.
+    /// interpolation, identical to the pairs the jump uses. Decoded via
+    /// `decodeIfPresent`: synthesized Codable ignores the `= []` default
+    /// and throws `keyNotFound` on an absent key, and older servers omit
+    /// the key for linear-tier books.
     var anchorPairs: [[Double]] = []
 
     enum CodingKeys: String, CodingKey {
@@ -1650,6 +1653,18 @@ struct AlignmentView: Codable, Hashable, Sendable {
         case listening
         case audioChapterMarks = "audio_chapter_marks"
         case anchorPairs = "anchor_pairs"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        link = try c.decodeIfPresent(AlignmentLink.self, forKey: .link)
+        anchorMatch = try c.decodeIfPresent(AlignmentMatch.self, forKey: .anchorMatch)
+        ebook = try c.decodeIfPresent(AlignmentEbook.self, forKey: .ebook)
+        audioFiles = try c.decode([AlignmentAudioFile].self, forKey: .audioFiles)
+        reading = try c.decodeIfPresent(AlignmentPosition.self, forKey: .reading)
+        listening = try c.decodeIfPresent(AlignmentAudioPosition.self, forKey: .listening)
+        audioChapterMarks = try c.decodeIfPresent(Int64.self, forKey: .audioChapterMarks)
+        anchorPairs = try c.decodeIfPresent([[Double]].self, forKey: .anchorPairs) ?? []
     }
 }
 

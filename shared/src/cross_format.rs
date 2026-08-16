@@ -144,8 +144,11 @@ pub struct AlignmentView {
     /// Matched anchor pairs `(text_frac, audio_frac)` in `0.0..=1.0`, in
     /// text order — the modal's connector threads and its anchored
     /// mapped-preview interpolation (the same pairs the jump uses, so the
-    /// preview cannot lie). Empty when anchoring is off.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// preview cannot lie). Empty when anchoring is off. Always serialized
+    /// (no `skip_serializing_if`): the iOS `Codable` decode requires the
+    /// key, and omitting it broke the alignment sheet for exactly the
+    /// linear-tier books that most need linking.
+    #[serde(default)]
     pub anchor_pairs: Vec<(f64, f64)>,
     /// Usable (titled, non-synthetic) audio chapter marks on the preview
     /// timeline. With `anchor_match` absent on a *non-stale* view, zero

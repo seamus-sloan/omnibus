@@ -93,7 +93,7 @@ pub enum Task {
     /// scan on the same library); does not consume the scan semaphore
     /// (light per-file IO, mirrors [`Task::BackfillWordCounts`]).
     BackfillPageCounts { library_path: String },
-    /// Backfill `epub_spine_stats` + `ebook_chapters` (migration `0071`)
+    /// Backfill `epub_spine_stats` + `ebook_chapters` (migration `0074`)
     /// for EPUB files with no extracted structure yet. Posted by the
     /// [`Task::Scan`] handler on success like its sibling backfills; the
     /// Changed sync path re-creates a file's `book_files` row, so cascade

@@ -2105,10 +2105,12 @@
   function displayPercentage(pct) {
     // A percentage jump that actually moves the view is real movement and
     // must persist — `applyPercentage` clears the pending echo tag once
-    // its same-position guard passes (#1972).
+    // its same-position guard passes (#1972). Parking must NOT clear it:
+    // on a locations cache miss the pct path always parks (generation
+    // waits on first paint), and an eagerly-cleared tag let the restore's
+    // own settle emission post the unmoved position with a fresh clock.
     pendingJumpCfi = null;
     if (!book || !book.locations || !book.locations.length()) {
-      restoreEchoPending = false;
       pendingJumpPct = pct;
       return;
     }

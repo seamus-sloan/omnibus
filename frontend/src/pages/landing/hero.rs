@@ -16,13 +16,14 @@ use crate::Route;
 /// dual-format gate for the link invitation (unlinked) and the Immersive
 /// pill (linked).
 fn has_both_formats(book: &omnibus_shared::EbookMetadata) -> bool {
+    // Only the formats the indexer actually attaches (`db::audiobook`) —
+    // matching the detail page's `has_audio`, so an invite here can never
+    // point at a detail page with no sync affordance.
     book.formats.iter().any(|f| f.eq_ignore_ascii_case("epub"))
-        && book.formats.iter().any(|f| {
-            matches!(
-                f.to_ascii_lowercase().as_str(),
-                "m4b" | "m4a" | "mp3" | "aac" | "flac" | "ogg" | "opus" | "wav"
-            )
-        })
+        && book
+            .formats
+            .iter()
+            .any(|f| matches!(f.to_ascii_lowercase().as_str(), "m4b" | "m4a" | "mp3"))
 }
 
 /// The book+soundwave Immersive mark on the linked card's pill, accent

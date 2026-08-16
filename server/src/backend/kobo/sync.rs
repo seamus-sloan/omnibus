@@ -163,14 +163,29 @@ async fn enrich_states_with_derived_spans(
         // older CFI. Response-only — the progress row keeps its real
         // provenance; the device's own PUT makes the position real once
         // the reader picks it up there.
-        if let Ok(resume) = db::cross_format::resume_candidate(
-            state.pool(),
-            user_id,
-            &book.uuid,
-            omnibus_shared::ProgressFormat::Epub,
-        )
-        .await
-        {
+        //
+        // Cheap pre-filter before the multi-query mapping composition:
+        // most changed books have no follow link, and one indexed
+        // `get_link` read skips the timeline/progress/structure reads for
+        // all of them (a large first sync touches every book). Falls
+        // through to the normal derivation lane below either way.
+        let follow_linked = matches!(
+            db::cross_format::get_link(state.pool(), user_id, &book.uuid).await,
+            Ok(Some(link)) if link.follow
+        );
+        let resume = if follow_linked {
+            db::cross_format::resume_candidate(
+                state.pool(),
+                user_id,
+                &book.uuid,
+                omnibus_shared::ProgressFormat::Epub,
+            )
+            .await
+            .ok()
+        } else {
+            None
+        };
+        if let Some(resume) = resume {
             if resume.follow
                 && resume.state == omnibus_shared::cross_format::CrossFormatResumeState::Candidate
             {

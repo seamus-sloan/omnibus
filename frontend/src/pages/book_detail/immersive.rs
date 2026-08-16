@@ -45,12 +45,6 @@ pub(crate) fn retarget_and_open_immersive(uuid: String) {
     // can't flash the old book under the new reader before the driver reloads.
     let mut uuid_sig = playback.uuid;
     let mut file_sig = playback.file_id;
-    // Default file selection, published before the uuid so the driver
-    // reads it when the load kicks off (mirrors the mobile variant and
-    // `use_retarget_playback`). Without this a stale picker selection
-    // from a previously-played book would override the bootstrap's
-    // progress-row file resolution — or 404 the new book's manifest.
-    file_sig.set(None);
     // Re-resolve unless the SAME book is actively playing: the old
     // same-uuid short-circuit kept whatever in-memory state the dock
     // held, which on an idle target can be stale against the stored
@@ -59,6 +53,16 @@ pub(crate) fn retarget_and_open_immersive(uuid: String) {
     // + follow resolution.
     let same_book = uuid_sig.peek().as_deref() == Some(uuid.as_str());
     let live = same_book && *playback.playing.peek();
+    // Default file selection, published before the uuid so the driver
+    // reads it when the load kicks off (mirrors the mobile variant and
+    // `use_retarget_playback`). Without this a stale picker selection
+    // from a previously-played book would override the bootstrap's
+    // progress-row file resolution — or 404 the new book's manifest.
+    // Left untouched for a LIVE same-book session: clearing it there
+    // degrades a picker-launched part mid-playback for no reason.
+    if !live {
+        file_sig.set(None);
+    }
     if !live {
         let mut error_sig = playback.error;
         let mut loading_sig = playback.loading;
