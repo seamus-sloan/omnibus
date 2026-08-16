@@ -130,6 +130,10 @@ pub(crate) fn apply_overrides(
         // as "no ISBN", not as a literal empty string.
         book.isbn13 = if i.is_empty() { None } else { Some(i.clone()) };
     }
+    if let Some(ref i) = ov.isbn10 {
+        // Same empty-string-clears convention as `isbn13` above.
+        book.isbn10 = if i.is_empty() { None } else { Some(i.clone()) };
+    }
     if let Some(ref c) = ov.creators {
         book.creators = c.clone();
     }
@@ -138,6 +142,9 @@ pub(crate) fn apply_overrides(
     }
     if let Some(ref g) = ov.genres {
         book.genres = g.clone();
+    }
+    if let Some(p) = ov.print_pages {
+        book.print_pages = Some(p);
     }
     book.has_cover_override = has_cover_override;
     if has_cover_override {

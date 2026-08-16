@@ -158,6 +158,9 @@ fn build_opf_metadata<R: std::io::Read + std::io::Seek>(
         // written into the normalized tables before that derivation
         // ever runs.
         isbn13: None,
+        // Same as `isbn13` above — user-assigned only, layered on at read
+        // time by `apply_overrides`.
+        isbn10: None,
 
         series,
         series_index,
@@ -178,6 +181,9 @@ fn build_opf_metadata<R: std::io::Read + std::io::Seek>(
         book_files: Vec::new(),
         epub_size_bytes: None,
         page_count: None,
+        // Same as `genres` above — user-assigned only, layered on at read
+        // time by `apply_overrides`.
+        print_pages: None,
     }
 }
 
