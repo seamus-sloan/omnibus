@@ -1,15 +1,8 @@
 //! Transactional apply primitives for the library-cleanup surface: execute
-//! an accepted `dedup_suggestions` row (or a direct on-page action, no
-//! suggestion involved) against the schema, snapshotting enough state into
-//! `cleanup_log` for [`super::undo::undo`] to reverse it exactly.
-//!
-//! Every primitive but [`apply_book_title_override`] runs in one
-//! `BEGIN IMMEDIATE` transaction: snapshot the affected rows, mutate, write
-//! the `cleanup_log` row, commit. `apply_book_title_override` is the
-//! documented exception — see its doc comment. The raw link-row/photo/alias
-//! CRUD both this module and `super::undo` replay lives in
-//! [`super::entity_ops`]; this file owns only the primitives' orchestration
-//! and the merge-specific photo-priority policy.
+//! an accepted `dedup_suggestions` row (or a direct on-page action) against
+//! the schema, snapshotting enough state into `cleanup_log` for
+//! [`super::undo::undo`] to reverse it exactly. Every primitive but
+//! [`apply_book_title_override`] runs in one `BEGIN IMMEDIATE` transaction.
 
 use std::collections::HashSet;
 
@@ -129,7 +122,11 @@ pub async fn apply_merge_tags(
 /// Shared merge body for authors/series/tags. Snapshots every source's
 /// name/sort/links(/photo), moves links onto the canonical id with
 /// `INSERT OR IGNORE` (survives a book already linked to both), records
-/// each source's name in `entity_aliases`, then deletes the source rows.
+/// each source's name in `entity_aliases`, then deletes the source rows —
+/// staged across [`snapshot_canonical`], [`move_source_links`],
+/// [`reconcile_photos_and_sort`], [`delete_sources_and_reap_taxonomy`], and
+/// [`rederive_fts_and_log`], all inside the one transaction this function
+/// owns.
 async fn apply_merge(
     pool: &SqlitePool,
     entity: MergeEntity,
@@ -147,26 +144,93 @@ async fn apply_merge(
 
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
-    let (_, canonical_sort_before) = fetch_name_sort(&mut tx, entity, canonical_id)
+    let (canonical_sort_before, canonical_book_ids_before, canonical_photo_before) =
+        snapshot_canonical(&mut tx, entity, canonical_id).await?;
+
+    let mut affected: HashSet<i64> = canonical_book_ids_before.iter().copied().collect();
+    let sources =
+        move_source_links(&mut tx, entity, source_ids, canonical_id, &mut affected).await?;
+
+    let canonical_sort_was_backfilled = reconcile_photos_and_sort(
+        &mut tx,
+        entity,
+        canonical_id,
+        canonical_sort_before.as_deref(),
+        canonical_photo_before.as_ref(),
+        &sources,
+    )
+    .await?;
+
+    delete_sources_and_reap_taxonomy(&mut tx, entity, source_ids).await?;
+
+    let snapshot = MergeSnapshot {
+        canonical_id,
+        canonical_sort_before,
+        canonical_sort_was_backfilled,
+        canonical_photo_before,
+        canonical_book_ids_before,
+        sources,
+    };
+    let log_id = rederive_fts_and_log(
+        &mut tx,
+        &affected,
+        suggestion_id,
+        entity.kind(),
+        &snapshot,
+        applied_by,
+    )
+    .await?;
+
+    tx.commit().await?;
+    Ok(log_id)
+}
+
+/// Read the canonical entity's pre-merge sort, linked book ids, and (for
+/// authors) photo — the "before" state [`undo_merge`](super::undo) needs to
+/// restore it exactly.
+async fn snapshot_canonical(
+    tx: &mut Transaction<'_, Sqlite>,
+    entity: MergeEntity,
+    canonical_id: i64,
+) -> Result<(Option<String>, Vec<i64>, Option<PhotoSnapshot>), CleanupApplyError> {
+    let (_, canonical_sort_before) = fetch_name_sort(tx, entity, canonical_id)
         .await?
         .ok_or(CleanupApplyError::NotFound(canonical_id))?;
-    let canonical_book_ids_before = fetch_linked_book_ids(&mut tx, entity, canonical_id).await?;
+    let canonical_book_ids_before = fetch_linked_book_ids(tx, entity, canonical_id).await?;
     let canonical_photo_before = if entity == MergeEntity::Author {
-        load_photo_snapshot(&mut tx, canonical_id).await?
+        load_photo_snapshot(tx, canonical_id).await?
     } else {
         None
     };
+    Ok((
+        canonical_sort_before,
+        canonical_book_ids_before,
+        canonical_photo_before,
+    ))
+}
 
-    let mut affected: HashSet<i64> = canonical_book_ids_before.iter().copied().collect();
+/// For each source id: snapshot its name/sort/links(/photo) and whatever it
+/// already aliased, move its links onto `canonical_id`, drop its own links,
+/// and record its name in `entity_aliases`. Every touched book id — from
+/// both the canonical's pre-merge links (via the caller-seeded `affected`)
+/// and each source's — accumulates into `affected` for the FTS rebuild
+/// pass. Returns one [`MergedSource`] per source id, in `source_ids` order.
+async fn move_source_links(
+    tx: &mut Transaction<'_, Sqlite>,
+    entity: MergeEntity,
+    source_ids: &[i64],
+    canonical_id: i64,
+    affected: &mut HashSet<i64>,
+) -> Result<Vec<MergedSource>, CleanupApplyError> {
     let mut sources = Vec::with_capacity(source_ids.len());
     for &source_id in source_ids {
-        let (name, sort) = fetch_name_sort(&mut tx, entity, source_id)
+        let (name, sort) = fetch_name_sort(tx, entity, source_id)
             .await?
             .ok_or(CleanupApplyError::NotFound(source_id))?;
-        let links = fetch_links(&mut tx, entity, source_id).await?;
+        let links = fetch_links(tx, entity, source_id).await?;
         affected.extend(links.iter().map(|l| l.book_id));
         let photo = if entity == MergeEntity::Author {
-            load_photo_snapshot(&mut tx, source_id).await?
+            load_photo_snapshot(tx, source_id).await?
         } else {
             None
         };
@@ -174,16 +238,16 @@ async fn apply_merge(
         // Snapshot whatever this name already aliased — possibly nothing,
         // possibly an earlier merge's mapping — *before* the write below
         // overwrites it, so undo knows whether to restore or delete.
-        let previous_alias = fetch_entity_alias(&mut tx, entity.kind(), &name)
-            .await?
-            .map(|(alias_canonical_id, created_at)| AliasSnapshot {
+        let previous_alias = fetch_entity_alias(tx, entity.kind(), &name).await?.map(
+            |(alias_canonical_id, created_at)| AliasSnapshot {
                 canonical_id: alias_canonical_id,
                 created_at,
-            });
+            },
+        );
 
-        move_links(&mut tx, entity, source_id, canonical_id).await?;
-        delete_links(&mut tx, entity, source_id).await?;
-        write_entity_alias(&mut tx, entity.kind(), &name, canonical_id).await?;
+        move_links(tx, entity, source_id, canonical_id).await?;
+        delete_links(tx, entity, source_id).await?;
+        write_entity_alias(tx, entity.kind(), &name, canonical_id).await?;
 
         sources.push(MergedSource {
             id: source_id,
@@ -194,54 +258,72 @@ async fn apply_merge(
             previous_alias,
         });
     }
+    Ok(sources)
+}
 
+/// Backfill a NULL canonical sort from the first source that has one, and
+/// (for authors) reconcile the canonical's photo against every merged
+/// source's by priority. Returns whether the sort was backfilled, for the
+/// snapshot's `canonical_sort_was_backfilled` field.
+async fn reconcile_photos_and_sort(
+    tx: &mut Transaction<'_, Sqlite>,
+    entity: MergeEntity,
+    canonical_id: i64,
+    canonical_sort_before: Option<&str>,
+    canonical_photo_before: Option<&PhotoSnapshot>,
+    sources: &[MergedSource],
+) -> Result<bool, sqlx::Error> {
     let mut canonical_sort_was_backfilled = false;
     if entity.has_sort() && canonical_sort_before.is_none() {
         if let Some(sort) = sources.iter().find_map(|s| s.sort.clone()) {
-            set_sort(&mut tx, entity, canonical_id, &sort).await?;
+            set_sort(tx, entity, canonical_id, &sort).await?;
             canonical_sort_was_backfilled = true;
         }
     }
-
     if entity == MergeEntity::Author {
-        reconcile_author_photos(
-            &mut tx,
-            canonical_id,
-            canonical_photo_before.as_ref(),
-            &sources,
-        )
-        .await?;
+        reconcile_author_photos(tx, canonical_id, canonical_photo_before, sources).await?;
     }
+    Ok(canonical_sort_was_backfilled)
+}
 
+/// Delete every source entity row now that their links have moved, then
+/// reap any taxonomy row (tag/series/author) left with zero links as a
+/// result.
+async fn delete_sources_and_reap_taxonomy(
+    tx: &mut Transaction<'_, Sqlite>,
+    entity: MergeEntity,
+    source_ids: &[i64],
+) -> Result<(), sqlx::Error> {
     for &source_id in source_ids {
-        delete_entity_row(&mut tx, entity, source_id).await?;
+        delete_entity_row(tx, entity, source_id).await?;
     }
-    delete_orphan_taxonomy(&mut tx).await?;
+    delete_orphan_taxonomy(tx).await?;
+    Ok(())
+}
 
-    for &book_id in &affected {
-        upsert_fts(&mut tx, book_id).await?;
+/// Rebuild `books_fts` for every book the merge touched, then write the
+/// `cleanup_log` row recording `snapshot` so [`super::undo::undo`] can
+/// reverse it. Returns the new log row's id.
+async fn rederive_fts_and_log(
+    tx: &mut Transaction<'_, Sqlite>,
+    affected: &HashSet<i64>,
+    suggestion_id: Option<i64>,
+    kind: CleanupKind,
+    snapshot: &MergeSnapshot,
+    applied_by: Option<i64>,
+) -> Result<i64, CleanupApplyError> {
+    for &book_id in affected {
+        upsert_fts(tx, book_id).await?;
     }
-
-    let snapshot = MergeSnapshot {
-        canonical_id,
-        canonical_sort_before,
-        canonical_sort_was_backfilled,
-        canonical_photo_before,
-        canonical_book_ids_before,
-        sources,
-    };
-    let log_id = write_cleanup_log(
-        &mut tx,
+    write_cleanup_log(
+        tx,
         suggestion_id,
-        entity.kind(),
+        kind,
         CleanupAction::Merge,
-        &snapshot,
+        snapshot,
         applied_by,
     )
-    .await?;
-
-    tx.commit().await?;
-    Ok(log_id)
+    .await
 }
 
 /// Priority rank for [`reconcile_author_photos`]: lower wins. No photo at

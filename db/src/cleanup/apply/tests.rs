@@ -620,6 +620,39 @@ async fn undo_returns_already_undone_on_a_second_call() {
     assert!(matches!(err, CleanupApplyError::AlreadyUndone));
 }
 
+#[tokio::test]
+async fn undo_returns_missing_actor_for_a_rename_log_row_with_no_applied_by() {
+    // `apply_book_title_override` always writes a real `applied_by` (it
+    // takes `i64`, not `Option<i64>`), so a `Rename` row with a restorable
+    // `previous_overrides` blob and no actor is unreachable through any
+    // existing caller — construct it directly to prove `undo` still fails
+    // this case safely rather than losing whom to attribute the restore to.
+    let pool = new_pool().await;
+    let lib = seed_root(&pool).await;
+    let book = insert_book(&pool, lib, "book-1", "Some Title").await;
+    let uuid: String = sqlx::query_scalar("SELECT uuid FROM books WHERE id = ?")
+        .bind(book)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let snapshot = RenameSnapshot {
+        book_uuid: uuid,
+        previous_overrides: Some(serde_json::to_string(&MetadataOverrides::default()).unwrap()),
+        previous_has_cover_override: false,
+    };
+    let log_id: i64 = sqlx::query_scalar(
+        "INSERT INTO cleanup_log (suggestion_id, kind, action, snapshot_json, applied_by)
+         VALUES (NULL, 'book_title', 'rename', ?, NULL) RETURNING id",
+    )
+    .bind(serde_json::to_string(&snapshot).unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let err = undo(&pool, log_id).await.unwrap_err();
+    assert!(matches!(err, CleanupApplyError::MissingActor));
+}
+
 // ---------------------------------------------------------------------------
 // undo concurrency — the claim-then-mutate ordering fix
 // ---------------------------------------------------------------------------

@@ -1,12 +1,8 @@
 //! Library-cleanup detection plus the transactional apply/undo primitives
-//! that act on a detected (or on-page) suggestion: five domain-specific
-//! detectors surface near-duplicate authors/series/tags, semicolon-soup
-//! tags, filename cruft in book titles, and junk-author rows left behind
-//! by a third-party import; [`apply`] and [`undo`] execute or reverse one
-//! against the `dedup_suggestions` / `cleanup_log` / `entity_aliases`
-//! tables from migration `0069`. Detection lives here; apply/undo live in
-//! the sibling `apply`/`entity_ops`/`snapshot`/`undo` submodules so this
-//! file stays under the file-shape soft cap.
+//! that act on a detected (or on-page) suggestion: detectors surface
+//! near-duplicate authors/series/tags, tag soup, title cruft, and junk
+//! authors; [`apply`]/[`undo`] execute or reverse one. Detection lives
+//! here; apply/undo live in the sibling submodules (file-shape cap).
 
 use std::collections::{HashMap, HashSet};
 
