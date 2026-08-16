@@ -22,6 +22,7 @@ pub mod covers;
 pub mod deletion;
 pub mod discovery;
 pub mod ebook;
+mod entity_alias;
 pub mod epub_rewrite;
 pub mod error_ring;
 pub mod helpers;

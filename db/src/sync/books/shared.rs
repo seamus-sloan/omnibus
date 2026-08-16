@@ -6,10 +6,11 @@
 
 use std::collections::HashSet;
 
-use omnibus_shared::EbookMetadata;
+use omnibus_shared::{CleanupKind, EbookMetadata};
 use sqlx::Transaction;
 
 use crate::covers::write_cover_file;
+use crate::entity_alias::resolve_entity_aliases;
 use crate::helpers::{
     cleaned_series_name, mint_uuid, resolved_series_index, sanitize_accent_color, scan_key_for,
     split_filename, stable_uuid,
@@ -431,7 +432,10 @@ pub(super) async fn insert_metadata_links(
 
 /// Batch-insert the book's tag (subject) join rows: one `INSERT OR IGNORE`
 /// into `tags` for all distinct non-empty subjects, then one link insert that
-/// resolves ids via a NOCASE join.
+/// resolves ids via a NOCASE join. A subject a completed library-cleanup
+/// merge already absorbed (#964) skips the `tags` insert and links straight
+/// to its `entity_aliases` canonical id instead, so reindexing a file that
+/// still names the merged-away tag can't resurrect it.
 async fn insert_tag_links(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
@@ -448,10 +452,18 @@ async fn insert_tag_links(
     if tags.is_empty() {
         return Ok(());
     }
+
+    let aliased = resolve_entity_aliases(tx, CleanupKind::Tag, &tags).await?;
+    let to_insert: Vec<&str> = tags
+        .iter()
+        .copied()
+        .filter(|t| !aliased.contains_key(*t))
+        .collect();
+
     // Both statements bind ~1 param per tag; chunk so a tag-heavy book can't
     // exceed SQLite's bound-parameter cap (999 by default). 500 keeps the link
     // statement (book_id + one per tag) safely under the limit.
-    for chunk in tags.chunks(500) {
+    for chunk in to_insert.chunks(500) {
         let rows = std::iter::repeat_n("(?)", chunk.len())
             .collect::<Vec<_>>()
             .join(", ");
@@ -471,6 +483,34 @@ async fn insert_tag_links(
             link_q = link_q.bind(*t);
         }
         link_q.execute(&mut **tx).await?;
+    }
+
+    link_aliased_tags(tx, book_id, &aliased).await
+}
+
+/// Link the book straight to each already-known canonical tag id, for
+/// subjects [`insert_tag_links`] found in `entity_aliases`.
+async fn link_aliased_tags(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    book_id: i64,
+    aliased: &std::collections::HashMap<String, i64>,
+) -> Result<(), sqlx::Error> {
+    if aliased.is_empty() {
+        return Ok(());
+    }
+    // Each row binds 2 params (book_id, tag_id), so chunk at 499 to stay
+    // under SQLite's 999-parameter cap (499 * 2 = 998).
+    let canonical_ids: Vec<i64> = aliased.values().copied().collect();
+    for chunk in canonical_ids.chunks(499) {
+        let rows = std::iter::repeat_n("(?, ?)", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!("INSERT OR IGNORE INTO books_tags_link (book, tag) VALUES {rows}");
+        let mut q = sqlx::query(&sql);
+        for tag_id in chunk {
+            q = q.bind(book_id).bind(*tag_id);
+        }
+        q.execute(&mut **tx).await?;
     }
     Ok(())
 }
