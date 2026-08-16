@@ -14,7 +14,7 @@ mod providers;
 mod tests;
 
 pub use config::{MetadataLookupConfig, ProviderKeys};
-pub use providers::{openlibrary_enrich, OlEnrichment};
+pub use providers::{catalog, openlibrary_enrich, OlEnrichment};
 
 use omnibus_shared::isbn::{normalize_isbn, IsbnError};
 use omnibus_shared::metadata_lookup::ExternalBookMeta;

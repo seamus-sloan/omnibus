@@ -15,6 +15,51 @@ pub enum MetadataProvider {
     Hardcover,
 }
 
+impl MetadataProvider {
+    /// Human-readable provider name for display (check-in note, settings panel, provider catalog).
+    pub fn display_name(self) -> &'static str {
+        match self {
+            MetadataProvider::OpenLibrary => "Open Library",
+            MetadataProvider::GoogleBooks => "Google Books",
+            MetadataProvider::Hardcover => "Hardcover",
+        }
+    }
+}
+
+/// What one provider can be asked and what it can return, independent of
+/// whether it is currently configured.
+///
+/// `carries_ratings`/`carries_genres` are `false` for every provider today —
+/// flip one only in the same change that adds the field to [`ExternalBookMeta`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderCapabilities {
+    pub search_by_title: bool,
+    pub search_by_isbn: bool,
+    pub carries_cover: bool,
+    pub carries_ratings: bool,
+    pub carries_genres: bool,
+}
+
+/// One entry in the provider catalog, built by `providers::catalog` in
+/// `omnibus-db` and served by `GET /api/metadata/providers`.
+///
+/// **Never carries key material** — `configured` is a bool, not a masked
+/// preview, because this endpoint is reachable by any authenticated user.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderInfo {
+    pub id: MetadataProvider,
+    pub display_name: String,
+    /// Whether the ladder would actually invoke this provider right now —
+    /// always `true` for a keyless-capable provider, key-gated otherwise.
+    /// Mirrors the same check `providers::ladder` uses, so the two can never
+    /// disagree about what "configured" means.
+    pub configured: bool,
+    /// Whether an API key is required to reach this provider at all (as
+    /// opposed to optional — present or not, the provider still answers).
+    pub requires_key: bool,
+    pub capabilities: ProviderCapabilities,
+}
+
 /// Maximum byte length of a stored Google Books API key. Google keys are short
 /// (~39 chars), so this is a generous guard against an unbounded blob.
 pub const GOOGLE_BOOKS_API_KEY_MAX_LEN: usize = 512;

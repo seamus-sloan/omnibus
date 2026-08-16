@@ -30,9 +30,14 @@ pub(super) mod openlibrary;
 pub(super) use http::publication_year;
 pub use openlibrary::{enrich as openlibrary_enrich, OlEnrichment};
 
-use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider};
+use omnibus_shared::metadata_lookup::{
+    ExternalBookMeta, MetadataProvider, ProviderCapabilities, ProviderInfo,
+};
 
 use super::MetadataLookupConfig;
+
+#[cfg(test)]
+mod tests;
 
 /// The two things a rung can be asked. Carrying the operation as data (rather
 /// than passing an async closure) keeps the ladder a single non-generic
@@ -128,4 +133,50 @@ pub fn ladder(config: &MetadataLookupConfig) -> Vec<Rung> {
         });
     }
     rungs
+}
+
+/// Every provider a search *can* be run against, `by_isbn`/`by_title`,
+/// carrying a cover image. Common to all three providers today.
+const SEARCH_AND_COVER_CAPABILITIES: ProviderCapabilities = ProviderCapabilities {
+    search_by_title: true,
+    search_by_isbn: true,
+    carries_cover: true,
+    carries_ratings: false,
+    carries_genres: false,
+};
+
+/// The full provider catalog: identity, usability, and capabilities for
+/// every provider this instance knows about — display surface for the
+/// eventual provider-filter UI, and the one place a caller can ask "which
+/// sources exist" without matching on [`MetadataProvider`] itself.
+///
+/// `configured` reuses the exact key-presence check [`ladder`] uses for each
+/// provider, so the two can never disagree about what "configured" means:
+/// Open Library and Google Books are always usable (Google Books is tried
+/// keyless too, just not as the ladder's primary rung — see [`ladder`]'s
+/// docs), and Hardcover only when `config.keys.hardcover` is set.
+pub fn catalog(config: &MetadataLookupConfig) -> Vec<ProviderInfo> {
+    vec![
+        ProviderInfo {
+            id: MetadataProvider::OpenLibrary,
+            display_name: MetadataProvider::OpenLibrary.display_name().to_string(),
+            configured: true,
+            requires_key: false,
+            capabilities: SEARCH_AND_COVER_CAPABILITIES,
+        },
+        ProviderInfo {
+            id: MetadataProvider::GoogleBooks,
+            display_name: MetadataProvider::GoogleBooks.display_name().to_string(),
+            configured: true,
+            requires_key: false,
+            capabilities: SEARCH_AND_COVER_CAPABILITIES,
+        },
+        ProviderInfo {
+            id: MetadataProvider::Hardcover,
+            display_name: MetadataProvider::Hardcover.display_name().to_string(),
+            configured: config.keys.hardcover.is_some(),
+            requires_key: true,
+            capabilities: SEARCH_AND_COVER_CAPABILITIES,
+        },
+    ]
 }
