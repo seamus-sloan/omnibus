@@ -289,7 +289,11 @@ Features/           — one directory per surface: Account, AddBooks, Auth,
                       account configuration, so it writes straight through
                       `AuthService` and never queues (rule 08), Save is disabled
                       while offline, and `ProfileDraft` holds the testable
-                      "what does Save actually send" rules
+                      "what does Save actually send" rules. BookDetail's
+                      `WishlistSection` is the native twin of the web page's
+                      rail tracking card (tracked-since line, store search,
+                      remove): same never-queued contract, plus a confirmation
+                      the web button doesn't ask for
 Models/             — Codable mirrors of the `shared/` wire DTOs
 Networking/         — APIClient, keychain-backed TokenStore
 Offline/            — Cache (read-through policies), OfflineStore (SQLite
