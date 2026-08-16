@@ -359,13 +359,7 @@ pub fn AlignmentModal(uuid: String, open: Signal<bool>, on_changed: EventHandler
                     span { class: "al-kicker-glyph", SyncGlyph { size: 13 } }
                     "Cross-format sync"
                 }
-                h3 {
-                    if multi {
-                        "Several audio files — what are they?"
-                    } else {
-                        "Do these line up?"
-                    }
-                }
+                h3 { "Link formats" }
                 {render_identity(&book())}
                 p { class: "al-sub", "{sub_text}" }
             }
@@ -449,14 +443,16 @@ pub fn AlignmentModal(uuid: String, open: Signal<bool>, on_changed: EventHandler
                 }
                 span { class: "al-foot-spacer" }
                 button {
-                    class: "btn ghost sm",
+                    class: "btn ghost",
                     "data-testid": "alignment-cancel",
                     disabled: busy(),
                     onclick: move |_| open.set(false),
                     "Cancel"
                 }
+                // Full-size primary per the design: the confirm carries the
+                // book's accent, not the grey neutral.
                 button {
-                    class: "btn sm",
+                    class: "btn primary",
                     "data-testid": "alignment-confirm",
                     disabled: busy() || view().is_none(),
                     onclick: move |_| {
