@@ -5,15 +5,38 @@
 
 use axum::{
     body::{to_bytes, Body},
+    extract::State,
     http::{header::AUTHORIZATION, Request, StatusCode},
 };
-use omnibus_db::test_support::EnvVarGuard;
+use omnibus_db::{auth::SessionKind, test_support::EnvVarGuard};
 use omnibus_shared::physical::WishlistSource;
 use omnibus_shared::{BookRef, ScanOutcome};
 use tower::ServiceExt;
 
+use super::get_google_books_configured;
 use crate::auth::test_support as auth_test_support;
+use crate::auth::AuthUser;
 use crate::backend::test_support::*;
+
+/// A minimal `AuthUser` for driving the handler directly (bypassing the
+/// `AuthUser` extractor), so a closed pool exercises the handler's own
+/// `Err(...) => internal(...)` branch rather than session extraction.
+fn fake_user(id: i64) -> AuthUser {
+    AuthUser {
+        id,
+        username: "reader".to_string(),
+        is_admin: false,
+        can_upload: false,
+        can_edit: false,
+        can_download: true,
+        kindle_email: None,
+        display_name: None,
+        has_avatar: false,
+        hidden_formats: Vec::new(),
+        session_id: 1,
+        session_kind: SessionKind::Bearer,
+    }
+}
 
 const ISBN: &str = "9780134685991";
 
@@ -792,6 +815,14 @@ async fn api_google_books_configured_requires_auth() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn api_google_books_configured_returns_500_when_db_unavailable() {
+    let (_app, state, pool) = fixture().await;
+    pool.close().await;
+    let res = get_google_books_configured(fake_user(1), State(state)).await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 #[test]
