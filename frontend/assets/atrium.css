@@ -1629,6 +1629,10 @@ button.spoiler {
 .disc-avatar--photo {
   width: 100%;
   height: 100%;
+  /* Same grid-row percentage collapse as the user-avatar photos: without a
+     pinned ratio the img box goes natural-aspect and the crop over-zooms
+     (the parent's overflow clip hides the spill but not the zoom). */
+  aspect-ratio: 1 / 1;
   object-fit: cover;
   display: block;
   background: var(--bg-2);
@@ -1968,6 +1972,8 @@ a.idx-letter-on:focus-visible {
 .idx-card-avatar--photo {
   width: 100%;
   height: 100%;
+  /* Same grid-row percentage collapse as `.disc-avatar--photo`. */
+  aspect-ratio: 1 / 1;
   object-fit: cover;
   display: block;
 }
@@ -9141,6 +9147,11 @@ html {
 .m-account-initials-photo,
 .profile-initials-photo {
   width: 100%; height: 100%;
+  /* The monogram spans are grids with an auto implicit row, so `height:
+     100%` can collapse to auto and the photo reverts to its natural
+     aspect ratio — an ellipse once the 50% radius applies. Pinning the
+     ratio keeps the box square wherever the percentage fails. */
+  aspect-ratio: 1 / 1;
   border-radius: 50%;
   object-fit: cover;
   display: block;
