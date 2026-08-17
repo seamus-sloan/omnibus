@@ -60,12 +60,18 @@ impl BasicAuthState {
 
     /// Look up a still-fresh cache entry for `key`, expiring it if stale.
     async fn cached_user_id(&self, key: &[u8; 32]) -> Option<i64> {
+        self.cached_user_id_at(key, Instant::now()).await
+    }
+
+    /// [`Self::cached_user_id`] against an explicit `now`, so the TTL and the
+    /// full-cache sweep are exercisable without waiting out a real minute.
+    async fn cached_user_id_at(&self, key: &[u8; 32], now: Instant) -> Option<i64> {
         let mut map = self.verified.lock().await;
         if map.len() >= MAX_VERIFIED_ENTRIES {
-            map.retain(|_, c| c.verified_at.elapsed() < VERIFIED_TTL);
+            map.retain(|_, c| is_fresh(c.verified_at, now));
         }
         match map.get(key) {
-            Some(c) if c.verified_at.elapsed() < VERIFIED_TTL => Some(c.user_id),
+            Some(c) if is_fresh(c.verified_at, now) => Some(c.user_id),
             Some(_) => {
                 map.remove(key);
                 None
@@ -75,14 +81,25 @@ impl BasicAuthState {
     }
 
     async fn store(&self, key: [u8; 32], user_id: i64) {
+        self.store_at(key, user_id, Instant::now()).await;
+    }
+
+    /// [`Self::store`] with an explicit verification instant.
+    async fn store_at(&self, key: [u8; 32], user_id: i64, verified_at: Instant) {
         self.verified.lock().await.insert(
             key,
             VerifiedCred {
                 user_id,
-                verified_at: Instant::now(),
+                verified_at,
             },
         );
     }
+}
+
+/// Whether a credential verified at `verified_at` is still inside the TTL
+/// as of `now`.
+fn is_fresh(verified_at: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(verified_at) < VERIFIED_TTL
 }
 
 /// Cache key: SHA-256 over the credentials, never the plaintext pair.
@@ -201,3 +218,6 @@ fn basic_auth_user(user: auth_db::User) -> AuthUser {
         session_kind: SessionKind::Basic,
     }
 }
+
+#[cfg(test)]
+mod tests;
