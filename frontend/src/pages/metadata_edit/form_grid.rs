@@ -73,8 +73,6 @@ fn field_grid_identity_rows(orig: Signal<EbookMetadata>, fields: FormFields) -> 
     let mut published = fields.published;
     let mut language = fields.language;
     let mut isbn13 = fields.isbn13;
-    let mut isbn10 = fields.isbn10;
-    let mut print_pages = fields.print_pages;
     let sort_by = fields.sort_by;
     let filename = fields.filename;
 
@@ -146,7 +144,18 @@ fn field_grid_identity_rows(orig: Signal<EbookMetadata>, fields: FormFields) -> 
             hint: "13 digits",
             placeholder: "e.g. 9780134685991",
         }
+        {identity_row_isbn_and_pages(orig, fields)}
+    }
+}
 
+/// ISBN-10 and print-page-count rows, the tail of the identity/publication
+/// half of [`FieldGrid`]. Split out of [`field_grid_identity_rows`] to keep
+/// that function under the soft line cap.
+fn identity_row_isbn_and_pages(orig: Signal<EbookMetadata>, fields: FormFields) -> Element {
+    let mut isbn10 = fields.isbn10;
+    let mut print_pages = fields.print_pages;
+
+    rsx! {
         // ISBN-10 — 10 characters (digits + optional trailing X), enforced
         // server-side on save; an empty value clears it, same as ISBN-13.
         MeField {
