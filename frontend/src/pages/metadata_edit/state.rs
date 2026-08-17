@@ -298,6 +298,23 @@ fn build_on_revert(
     })
 }
 
+/// Parses the print-pages form field into a validated `i64`, mirroring
+/// `ScanIntervalField`'s handler in settings/library.rs: an empty field
+/// clears the override, a non-numeric entry is rejected with a specific
+/// message so the client gives feedback before the round trip. An in-range
+/// numeric value still passes through `MetadataOverrides::validate`
+/// server-side (e.g. the `PRINT_PAGES_MAX` ceiling).
+fn parse_print_pages_field(input: &str) -> Result<Option<i64>, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    trimmed
+        .parse::<i64>()
+        .map(Some)
+        .map_err(|_| "Print page count must be a whole number.".to_string())
+}
+
 /// Save handler — builds the diff and POSTs to the overrides endpoint,
 /// then navigates back to the book detail page on success.
 fn build_on_save(
@@ -331,21 +348,11 @@ fn build_on_save(
         let url = url.clone();
         let uuid = uuid.clone();
 
-        // Parsed client-side so a non-numeric entry gets an immediate,
-        // specific message instead of a generic save failure (mirrors
-        // `ScanIntervalField`'s handler in settings/library.rs); an in-range
-        // numeric value still round-trips through `MetadataOverrides::validate`
-        // server-side (e.g. the `PRINT_PAGES_MAX` ceiling).
-        let print_pages_input = print_pages().trim().to_string();
-        let print_pages_val: Option<i64> = if print_pages_input.is_empty() {
-            None
-        } else {
-            match print_pages_input.parse::<i64>() {
-                Ok(n) => Some(n),
-                Err(_) => {
-                    save_error.set(Some("Print page count must be a whole number.".to_string()));
-                    return;
-                }
+        let print_pages_val = match parse_print_pages_field(&print_pages()) {
+            Ok(v) => v,
+            Err(msg) => {
+                save_error.set(Some(msg));
+                return;
             }
         };
 
