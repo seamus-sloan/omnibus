@@ -163,8 +163,13 @@ test("surfaces a failed tag save by not persisting the chip", async ({
     async () => input.press("Enter"),
   );
 
-  // The canonical list is only replaced on a successful response, so a
-  // rejected save must not survive a reload.
+  // A rejected save resyncs the editor from the canonical book, so the
+  // optimistic chip clears in place — no reload required.
+  await expect(page.getByTestId("bd-tags-editor")).not.toContainText(
+    "Never Saved",
+  );
+
+  // And nothing was persisted server-side.
   await page.unroute(OVERRIDES_RPC);
   await gotoReady(page, `/books/${uuid}`);
   await expect(page.getByTestId("bd-tag-list")).not.toContainText(

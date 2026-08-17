@@ -174,12 +174,25 @@ pub(super) fn BdChipListEditor(uuid: String, kind: BdChipKind, values: Vec<Strin
         let uuid = save_uuid.clone();
         let url = server_url.clone();
         spawn(async move {
+            // `ChipEditor` has already applied the change optimistically, so
+            // every non-success path must resync from the server — otherwise
+            // a rejected save leaves a phantom chip until a manual reload.
             let overrides = kind.overrides(new_values);
-            if overrides.validate().is_err() {
-                return;
-            }
-            if let Ok(Some(merged)) = data::save_overrides(&url, &uuid, &overrides).await {
-                chips.set(kind.merged_values(merged));
+            let merged = if overrides.validate().is_ok() {
+                data::save_overrides(&url, &uuid, &overrides)
+                    .await
+                    .ok()
+                    .flatten()
+            } else {
+                None
+            };
+            match merged {
+                Some(merged) => chips.set(kind.merged_values(merged)),
+                None => {
+                    if let Ok(Some(book)) = data::get_ebook(&url, &uuid).await {
+                        chips.set(kind.merged_values(book));
+                    }
+                }
             }
         });
     };
