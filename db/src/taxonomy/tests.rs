@@ -3,9 +3,6 @@
 //! `publishers`, `languages`. `delete_orphan_taxonomy`, `delete_orphan_tags`,
 //! and `delete_orphan_genres` each get drop/keep/override-aware/case-fold
 //! tests, plus a purge-path regression test for genres.
-//! `resolve_or_insert_series_with_aliases` gets its own mint/hit pair,
-//! mirroring `resolve_or_insert_series`'s but against a caller-supplied map
-//! instead of its own internal lookup (#1985).
 
 use std::collections::HashMap;
 

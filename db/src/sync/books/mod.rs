@@ -3,11 +3,9 @@
 //! / `sync_new`), `replace_books`, and post-commit cover materialization.
 //! All `books_fts` maintenance is delegated to the [`super::fts`]
 //! choke-point (`upsert_fts` / `delete_fts`) rather than written inline.
-//!
-//! Also owns [`EntityAliasMaps`] and [`collect_entity_alias_maps`]: the
-//! reindex-resurrection guard (#964) lookups are resolved once for the
-//! whole New+Changed batch here, before either per-book loop starts, and
-//! threaded down through `insert_metadata_links` (#1985).
+//! Also owns [`EntityAliasMaps`] and [`collect_entity_alias_maps`], which
+//! resolve the reindex-resurrection guard's alias lookups once for the
+//! whole New+Changed batch, before either per-book loop starts.
 
 use std::collections::{HashMap, HashSet};
 
