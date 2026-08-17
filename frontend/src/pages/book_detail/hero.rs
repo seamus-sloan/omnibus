@@ -11,6 +11,7 @@ use crate::components::atrium::Cover;
 use crate::components::{BookActionMeta, FetchSummaryButton};
 use crate::{data, use_server_url, Route};
 
+use super::chips::{BdChipKind, BdChipListEditor};
 use super::export_menu::{BdExportContext, BdExportMenu};
 use super::file_picker::{is_audio_book_file, BdFilePickerMenu, FilePickerKind};
 use super::immersive::BdImmersiveButton;
@@ -99,19 +100,15 @@ pub(super) fn BdHeroSection(
                             }
                         }
                     }
-                    if !b.genres.is_empty() {
-                        ul { class: "bd-tag-list bd-genre-list", "data-testid": "bd-genre-list",
-                            for genre in b.genres.iter() {
-                                li { key: "{genre}", class: "chip chip-genre", "{genre}" }
-                            }
-                        }
+                    BdChipListEditor {
+                        uuid: uuid.clone(),
+                        kind: BdChipKind::Genres,
+                        values: b.genres.clone(),
                     }
-                    if !b.subjects.is_empty() {
-                        ul { class: "bd-tag-list",
-                            for tag in b.subjects.iter() {
-                                li { key: "{tag}", class: "chip", "{tag}" }
-                            }
-                        }
+                    BdChipListEditor {
+                        uuid: uuid.clone(),
+                        kind: BdChipKind::Tags,
+                        values: b.subjects.clone(),
                     }
                 }
                 BdTitleCol {
