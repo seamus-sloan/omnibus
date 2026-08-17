@@ -115,9 +115,7 @@ fn declare_sync_point_validate_rejects_listening_declaration_without_seconds() {
 
 #[test]
 fn declare_sync_point_validate_checks_only_the_declaring_surfaces_half() {
-    // The counterpart half comes from the server's stored row, so an
-    // out-of-range value in the other format's field is not this
-    // declaration's business.
+    // The counterpart half comes from the server's stored row, not this declaration.
     let mut d = listening_declaration(Some(10.0));
     d.ebook_fraction = Some(99.0);
     assert!(d.validate().is_ok());
