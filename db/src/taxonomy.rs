@@ -4,6 +4,8 @@
 //! exposed to siblings via `pub(crate)`. The multi-valued relations
 //! (authors, tags, identifiers) are inserted in batches directly in `sync`.
 
+use std::collections::HashMap;
+
 use omnibus_shared::CleanupKind;
 use sqlx::Transaction;
 
@@ -50,6 +52,13 @@ resolve_or_insert_simple!(resolve_or_insert_language, "languages", "code");
 /// instead of minting a fresh row for the merged-away name. On a miss,
 /// falls through to the same `INSERT OR IGNORE` / `SELECT` shape the other
 /// taxonomy resolvers use.
+///
+/// Issues its own single-name `resolve_entity_aliases` lookup — the right
+/// shape for its callers (`series_normalize`'s boot backfill, `merge::undo`'s
+/// rare admin restore), each resolving a handful of names outside the
+/// reindex hot path. The reindex write loop instead calls
+/// [`resolve_or_insert_series_with_aliases`] with a lookup pre-resolved once
+/// for the whole batch (#1985).
 pub(crate) async fn resolve_or_insert_series(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     value: &str,
@@ -60,6 +69,30 @@ pub(crate) async fn resolve_or_insert_series(
     {
         return Ok(canonical_id);
     }
+    insert_or_select_series(tx, value).await
+}
+
+/// Batch-aware sibling of [`resolve_or_insert_series`] for the reindex write
+/// loop: consults `aliases`, a lookup resolved once for the whole sync batch
+/// (`sync::books::collect_entity_alias_maps`), instead of issuing its own
+/// per-call `resolve_entity_aliases` query — the per-book fan-out #1985
+/// eliminates.
+pub(crate) async fn resolve_or_insert_series_with_aliases(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    value: &str,
+    aliases: &HashMap<String, i64>,
+) -> Result<i64, sqlx::Error> {
+    if let Some(canonical_id) = aliases.get(value) {
+        return Ok(*canonical_id);
+    }
+    insert_or_select_series(tx, value).await
+}
+
+/// Shared `INSERT OR IGNORE` / `SELECT` tail for both series resolvers above.
+async fn insert_or_select_series(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    value: &str,
+) -> Result<i64, sqlx::Error> {
     sqlx::query("INSERT OR IGNORE INTO series (name) VALUES (?)")
         .bind(value)
         .execute(&mut **tx)

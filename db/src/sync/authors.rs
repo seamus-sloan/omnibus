@@ -6,10 +6,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use omnibus_shared::{CleanupKind, EbookMetadata};
+use omnibus_shared::EbookMetadata;
 use sqlx::Transaction;
-
-use crate::entity_alias::resolve_entity_aliases;
 
 #[cfg(test)]
 mod tests;
@@ -21,10 +19,15 @@ mod tests;
 /// skipped — leaving a gap in `position` rather than renumbering — identical
 /// to the previous per-author loop, but resolved in a constant handful of
 /// statements instead of ~4 per author.
+///
+/// `author_aliases` is the whole-batch reindex-resurrection guard (#964)
+/// lookup built once by `super::books::collect_entity_alias_maps` before the
+/// per-book write loop starts, not re-resolved here (#1985).
 pub(super) async fn insert_author_links(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
     m: &EbookMetadata,
+    author_aliases: &HashMap<String, i64>,
 ) -> Result<(), sqlx::Error> {
     // (name, sort, position) in OPF order: creators + contributors are
     // already merged into `m.creators` by the parser.
@@ -59,8 +62,12 @@ pub(super) async fn insert_author_links(
     // #964: a name a completed library-cleanup merge absorbed must resolve
     // to the surviving canonical id rather than mint a fresh `authors` row
     // when the same file is reindexed. Only the unmerged remainder goes
-    // through the normal upsert.
-    let aliased = resolve_entity_aliases(tx, CleanupKind::Author, &kept).await?;
+    // through the normal upsert. #1985: filtered from the whole-batch map
+    // rather than re-queried per book.
+    let aliased: HashMap<String, i64> = kept
+        .iter()
+        .filter_map(|n| author_aliases.get(*n).map(|id| ((*n).to_string(), *id)))
+        .collect();
     let to_upsert: Vec<&str> = kept
         .iter()
         .copied()

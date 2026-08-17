@@ -8,7 +8,10 @@ use omnibus_shared::{Contributor, EbookMetadata, Identifier};
 use sqlx::SqlitePool;
 
 use super::shared::{insert_book_row, insert_metadata_links};
-use super::{sync_books, sync_changed, sync_new, sync_removed, wipe_per_book_link_rows, SyncPlan};
+use super::{
+    collect_entity_alias_maps, sync_books, sync_changed, sync_new, sync_removed,
+    wipe_per_book_link_rows, EntityAliasMaps, SyncPlan,
+};
 use crate::cleanup::{apply_merge_authors, apply_merge_series, apply_merge_tags};
 use crate::ebook::IndexedBook;
 use crate::indexer::diff_library;
@@ -67,9 +70,14 @@ async fn seed_book_with_file(pool: &SqlitePool, library_id: i64, filename: &str)
     let inserted = insert_book_row(&mut tx, library_id, "/lib", &b)
         .await
         .unwrap();
-    insert_metadata_links(&mut tx, inserted.book_id, &b.metadata)
-        .await
-        .unwrap();
+    insert_metadata_links(
+        &mut tx,
+        inserted.book_id,
+        &b.metadata,
+        &EntityAliasMaps::default(),
+    )
+    .await
+    .unwrap();
     tx.commit().await.unwrap();
     inserted.book_id
 }
@@ -326,9 +334,17 @@ async fn sync_new_inserts_a_new_book_and_its_link_rows() {
 
     let new_books = vec![book_with_all_links("fresh.epub", "Fresh")];
     let mut tx = pool.begin().await.unwrap();
-    let covers = sync_new(&mut tx, library_id, "/lib", &new_books, &[], |_| {})
-        .await
-        .unwrap();
+    let covers = sync_new(
+        &mut tx,
+        library_id,
+        "/lib",
+        &new_books,
+        &[],
+        &EntityAliasMaps::default(),
+        |_| {},
+    )
+    .await
+    .unwrap();
     tx.commit().await.unwrap();
 
     assert!(covers.is_empty(), "no cover was supplied");
@@ -402,9 +418,16 @@ async fn sync_changed_updates_an_existing_book_row_in_place() {
         None,
     )];
     let mut tx = pool.begin().await.unwrap();
-    sync_changed(&mut tx, library_id, "/lib", &changed, |_| {})
-        .await
-        .unwrap();
+    sync_changed(
+        &mut tx,
+        library_id,
+        "/lib",
+        &changed,
+        &EntityAliasMaps::default(),
+        |_| {},
+    )
+    .await
+    .unwrap();
     tx.commit().await.unwrap();
 
     // Exactly one row, same id + uuid, refreshed scalars.
@@ -445,9 +468,16 @@ async fn sync_changed_is_a_noop_for_empty_batch() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let library_id = seed_scan_root(&pool).await;
     let mut tx = pool.begin().await.unwrap();
-    let covers = sync_changed(&mut tx, library_id, "/lib", &[], |_| {})
-        .await
-        .unwrap();
+    let covers = sync_changed(
+        &mut tx,
+        library_id,
+        "/lib",
+        &[],
+        &EntityAliasMaps::default(),
+        |_| {},
+    )
+    .await
+    .unwrap();
     tx.commit().await.unwrap();
     assert!(covers.is_empty());
 }
@@ -528,6 +558,7 @@ async fn sync_changed_reindex_does_not_resurrect_a_merged_away_author_series_or_
         "/lib",
         &[source, canonical],
         &[],
+        &EntityAliasMaps::default(),
         |_| {},
     )
     .await
@@ -559,16 +590,22 @@ async fn sync_changed_reindex_does_not_resurrect_a_merged_away_author_series_or_
 
     // A second reindex of the source book: its file on disk never changed,
     // so the parser still reports the names the merges just absorbed.
-    let reparsed = indexed(
+    let reparsed = [indexed(
         "source.epub",
         Some("Source Book"),
         &["John Smith"],
         &["Sci-Fi"],
         Some(("The Wheel of Time", "1")),
         None,
-    );
+    )];
     let mut tx = pool.begin().await.unwrap();
-    sync_changed(&mut tx, library_id, "/lib", &[reparsed], |_| {})
+    // #1985: the caller now pre-resolves the batch's alias map itself,
+    // reflecting the merges just applied above, instead of `sync_changed`
+    // resolving it per book internally.
+    let alias_maps = collect_entity_alias_maps(&mut tx, &reparsed, &[])
+        .await
+        .unwrap();
+    sync_changed(&mut tx, library_id, "/lib", &reparsed, &alias_maps, |_| {})
         .await
         .unwrap();
     tx.commit().await.unwrap();
@@ -639,9 +676,17 @@ async fn sync_changed_reindex_leaves_unmerged_entities_unaffected() {
         None,
     );
     let mut tx = pool.begin().await.unwrap();
-    sync_new(&mut tx, library_id, "/lib", &[book], &[], |_| {})
-        .await
-        .unwrap();
+    sync_new(
+        &mut tx,
+        library_id,
+        "/lib",
+        &[book],
+        &[],
+        &EntityAliasMaps::default(),
+        |_| {},
+    )
+    .await
+    .unwrap();
     tx.commit().await.unwrap();
 
     let book_id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE scan_key = 'plain.epub'")
@@ -661,9 +706,16 @@ async fn sync_changed_reindex_leaves_unmerged_entities_unaffected() {
         None,
     );
     let mut tx = pool.begin().await.unwrap();
-    sync_changed(&mut tx, library_id, "/lib", &[reparsed], |_| {})
-        .await
-        .unwrap();
+    sync_changed(
+        &mut tx,
+        library_id,
+        "/lib",
+        &[reparsed],
+        &EntityAliasMaps::default(),
+        |_| {},
+    )
+    .await
+    .unwrap();
     tx.commit().await.unwrap();
 
     assert_eq!(
@@ -757,9 +809,16 @@ async fn word_count_persists_on_insert_and_refreshes_on_change() {
     let mut changed = indexed("wc.epub", Some("Counted"), &[], &[], None, None);
     changed.word_count = Some(2500);
     let mut tx = pool.begin().await.unwrap();
-    sync_changed(&mut tx, library_id, "/lib", &[changed], |_| {})
-        .await
-        .unwrap();
+    sync_changed(
+        &mut tx,
+        library_id,
+        "/lib",
+        &[changed],
+        &EntityAliasMaps::default(),
+        |_| {},
+    )
+    .await
+    .unwrap();
     tx.commit().await.unwrap();
 
     let refreshed: Option<i64> = sqlx::query_scalar("SELECT word_count FROM books WHERE id = ?")
@@ -798,9 +857,16 @@ async fn page_count_persists_on_insert_and_refreshes_on_change() {
     let mut changed = indexed("pc.cbz", Some("Paged"), &[], &[], None, None);
     changed.metadata.page_count = Some(20);
     let mut tx = pool.begin().await.unwrap();
-    sync_changed(&mut tx, library_id, "/lib", &[changed], |_| {})
-        .await
-        .unwrap();
+    sync_changed(
+        &mut tx,
+        library_id,
+        "/lib",
+        &[changed],
+        &EntityAliasMaps::default(),
+        |_| {},
+    )
+    .await
+    .unwrap();
     tx.commit().await.unwrap();
 
     let refreshed: Option<i64> = sqlx::query_scalar("SELECT page_count FROM books WHERE id = ?")
@@ -1862,5 +1928,128 @@ async fn sync_new_keeps_explicit_series_index_and_only_fills_the_gap_from_the_em
     assert_eq!(
         embedded_index, 3.0,
         "the embedded index fills the gap when no explicit value was scanned"
+    );
+}
+
+// ── #1985: alias-lookup query count is batch-bounded, not per-book ────────
+
+/// Counts `tracing` events sqlx emits (target `"sqlx::query"`, one per
+/// executed statement) whose `db.statement` field mentions `entity_aliases` —
+/// i.e. a `resolve_entity_aliases` lookup specifically, not every query the
+/// sync writes. Mirrors the `QueryCounter` pattern in
+/// `db/src/epub_rewrite/tests.rs`, narrowed to the one table this test cares
+/// about so the assertion isn't swamped by the per-book `books`/link-table
+/// writes a reindex batch also issues.
+///
+/// Installed as the **global** default (not `tracing::subscriber::set_default`,
+/// which is thread-local): `sqlx-sqlite` runs every statement — including
+/// each one this counts — on a dedicated per-connection worker thread (see
+/// `sqlx_sqlite::connection::worker`), so a thread-local override on the
+/// test's own async task never sees them. A global default is process-wide
+/// and permanent for the rest of the test binary, which is why the
+/// assertion below uses a loose upper bound rather than an exact count — a
+/// concurrently-running unrelated test's own `entity_aliases` query could
+/// add a stray hit to this counter too.
+struct EntityAliasQueryCounter(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl tracing::Subscriber for EntityAliasQueryCounter {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        metadata.target() == "sqlx::query"
+    }
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        struct MentionsEntityAliases(bool);
+        impl tracing::field::Visit for MentionsEntityAliases {
+            fn record_debug(
+                &mut self,
+                _field: &tracing::field::Field,
+                _value: &dyn std::fmt::Debug,
+            ) {
+            }
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                if field.name().ends_with("statement") && value.contains("entity_aliases") {
+                    self.0 = true;
+                }
+            }
+        }
+        let mut visitor = MentionsEntityAliases(false);
+        event.record(&mut visitor);
+        if visitor.0 {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    fn enter(&self, _span: &tracing::span::Id) {}
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+
+/// #1985 AC3: a multi-book reindex batch issues an `entity_aliases` lookup
+/// count bounded by the touched `CleanupKind`s (author, series, tag — a
+/// small constant), not by book count. The old per-book shape issued
+/// `3 * BOOK_COUNT` such queries (`insert_author_links`/`insert_tag_links`/
+/// `resolve_or_insert_series` each called `resolve_entity_aliases` once per
+/// book); the batched shape issues 3 total regardless of `BOOK_COUNT`. The
+/// assertion checks `< BOOK_COUNT` rather than `== 3` — see
+/// `EntityAliasQueryCounter`'s doc for why an exact count isn't safe to
+/// assert against a process-wide subscriber — but `BOOK_COUNT` is picked
+/// large enough that the old shape would fail this bound by a wide margin
+/// while the new shape passes with room to spare.
+#[tokio::test]
+async fn sync_books_issues_one_entity_alias_query_per_kind_not_per_book() {
+    let _covers = CoversTempDir::new("sync_books_alias_query_count");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+
+    const BOOK_COUNT: usize = 20;
+    let new_books: Vec<IndexedBook> = (0..BOOK_COUNT)
+        .map(|i| {
+            let filename = format!("book-{i}.epub");
+            let title = format!("Book {i}");
+            let author = format!("Author {i}");
+            let tag = format!("Tag {i}");
+            let series = format!("Series {i}");
+            indexed(
+                &filename,
+                Some(&title),
+                &[&author],
+                &[&tag],
+                Some((&series, "1")),
+                None,
+            )
+        })
+        .collect();
+
+    let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    // Best-effort: a prior test in this binary may have already claimed the
+    // global default (it can only be set once per process). If so, this
+    // counter simply stays at 0 and the loose bound below still holds —
+    // it just stops being a meaningful check for this particular run.
+    let _ = tracing::subscriber::set_global_default(EntityAliasQueryCounter(count.clone()));
+    // Interest in the `sqlx::query` callsite is cached process-wide the
+    // first time it fires and is *not* refreshed by installing a new
+    // default alone — `init_db`'s migrations above already fired it under
+    // whatever (no-op) dispatcher preceded this one, which would otherwise
+    // leave it permanently cached "never interested".
+    tracing::callsite::rebuild_interest_cache();
+
+    sync_books(
+        &pool,
+        "/lib",
+        SyncPlan {
+            new_books,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let queries = count.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(
+        queries < BOOK_COUNT,
+        "expected an entity_aliases query count bounded by the touched \
+         CleanupKinds (author, series, tag — 3, not {BOOK_COUNT}), got \
+         {queries} for a {BOOK_COUNT}-book batch"
     );
 }
