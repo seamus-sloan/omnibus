@@ -13,8 +13,9 @@ struct ContinueHero: View {
     /// Runs after the long-press editor saves, so the card can pick up a title
     /// or cover that it is still drawing from the old metadata.
     var onEdited: () -> Void = {}
-    /// Pushes the book's detail screen. A tap resumes the book, so this is the
-    /// card's only way through to everything else about it.
+    /// Pushes the book's detail screen — reached by tapping the cover or the
+    /// title (matching the web hero) or via the long-press menu; the card's
+    /// main tap resumes the book.
     var onOpenDetail: (Book) -> Void = { _ in }
 
     @Environment(\.palette) private var palette
@@ -133,19 +134,23 @@ private struct HeroCard: View {
 
     var body: some View {
         Button {
-            Haptics.tap()
-            if isAudio {
-                // Reopen the file the position was taken in, not the book's
-                // first one — two narrations don't share a timeline.
-                Presentation.shared.openPlayer(book, fileID: point.record.bookFileID)
-            } else {
-                Presentation.shared.openReader(book)
-            }
+            resume()
         } label: {
             HStack(alignment: .top, spacing: 16) {
-                BookCover(identity: CoverIdentity(book), size: .md, cornerRadius: 6)
-                    .frame(width: 96)
-                    .coverShadow(1.2)
+                // The cover and the title each open the detail screen —
+                // matching the web hero, where both are links and only the
+                // Play/Read pill resumes. They nest inside the resume button,
+                // and the inner button wins the tap.
+                Button {
+                    Haptics.tap()
+                    onOpenDetail(book)
+                } label: {
+                    BookCover(identity: CoverIdentity(book), size: .md, cornerRadius: 6)
+                        .frame(width: 96)
+                        .coverShadow(1.2)
+                }
+                .buttonStyle(BookPressStyle())
+                .accessibilityLabel("Open details for \(book.displayTitle)")
 
                 VStack(alignment: .leading, spacing: 5) {
                     Text(isAudio ? "Continue listening" : "Continue reading")
@@ -154,11 +159,18 @@ private struct HeroCard: View {
                         .textCase(.uppercase)
                         .foregroundStyle(rule)
 
-                    Text(book.displayTitle)
-                        .font(.display(21))
-                        .foregroundStyle(palette.ink0Color)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
+                    Button {
+                        Haptics.tap()
+                        onOpenDetail(book)
+                    } label: {
+                        Text(book.displayTitle)
+                            .font(.display(21))
+                            .foregroundStyle(palette.ink0Color)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open details for \(book.displayTitle)")
 
                     Text(book.authorDisplay)
                         .font(.ui(12.5))
@@ -224,8 +236,22 @@ private struct HeroCard: View {
         }
         .buttonStyle(BookPressStyle())
         // The same held-down menu as a grid cell, plus the way through to the
-        // detail screen the tap spends on resuming the book.
+        // detail screen the card's main tap spends on resuming the book —
+        // kept even though the cover and title now go there, so the menu
+        // behaves the same on every card.
         .bookContextMenu(book, onEdited: onEdited, onOpenDetail: { onOpenDetail(book) })
+    }
+
+    /// The card's main tap: back into the book where you left off.
+    private func resume() {
+        Haptics.tap()
+        if isAudio {
+            // Reopen the file the position was taken in, not the book's
+            // first one — two narrations don't share a timeline.
+            Presentation.shared.openPlayer(book, fileID: point.record.bookFileID)
+        } else {
+            Presentation.shared.openReader(book)
+        }
     }
 
     /// A lit alcove rather than a filled rectangle: the wash graded top-to-
