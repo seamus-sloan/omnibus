@@ -548,6 +548,10 @@ struct BookGridCell: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // Without an explicit content shape the tappable region is only the
+        // union of the subviews' own shapes — the gap under the cover and the
+        // strip beside a short caption are dead to taps.
+        .contentShape(Rectangle())
     }
 
     /// Offline state rides on the art rather than the caption, which keeps the

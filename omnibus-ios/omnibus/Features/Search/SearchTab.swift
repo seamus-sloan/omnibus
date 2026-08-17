@@ -157,6 +157,8 @@ struct BrowseDirectory: View {
             }
         }
         .frame(width: 100)
+        // Fill the tap gaps between cover and caption; see BookGridCell.
+        .contentShape(Rectangle())
     }
 
     private func loadFinished() async {
