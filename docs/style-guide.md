@@ -183,7 +183,7 @@ differently. `AuthError` was once over-granular but has since been
 coarsened to the shape below — see "Coarse variants".
 
 **Pattern (unpredictable).** `reindex` in
-[db/src/indexer.rs](../db/src/indexer.rs):
+[db/src/indexer/ebooks.rs](../db/src/indexer/ebooks.rs):
 
 ```rust
 pub async fn reindex(pool: &SqlitePool, library_path: &str) -> anyhow::Result<ReindexStats> {
