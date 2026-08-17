@@ -156,10 +156,11 @@ fn dom_reset_js() -> &'static str {
     el.preload = 'auto';"#
 }
 
-/// The audio-element listeners, composed from the four per-concern
-/// segments below. Each is pure JS with no Rust interpolation, so it lives
-/// as a raw `&'static str` (literal braces, no escaping); concatenated in
-/// order they are byte-for-byte the block this used to be one string of.
+/// The audio-element listeners, concatenated into an owned `String` from
+/// the four per-concern segments below. Each segment is pure JS with no
+/// Rust interpolation, so each stays a raw `&'static str` (literal braces,
+/// no escaping); in order they are byte-for-byte the block this used to be
+/// one string of.
 fn listeners_js() -> String {
     format!(
         "{}{}{}{}",

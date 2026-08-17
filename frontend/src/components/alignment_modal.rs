@@ -19,7 +19,11 @@ mod choice;
 mod copy;
 mod lanes;
 
+// Consumed only by the web-only `book_detail::sync_link` / `landing::hero`,
+// which carry the same gate — so the mobile build has no user for these.
+#[cfg(not(feature = "mobile"))]
 pub(crate) use copy::{fmt_hm, recency};
+#[cfg(not(feature = "mobile"))]
 pub(crate) use lanes::{interpolate_pairs, listening_frac};
 
 use choice::render_choice;
