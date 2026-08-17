@@ -13,7 +13,7 @@ use omnibus_shared::physical::WishlistSource;
 use omnibus_shared::{BookRef, ScanOutcome};
 use tower::ServiceExt;
 
-use super::{get_google_books_configured, AppState};
+use super::get_google_books_configured;
 use crate::auth::test_support as auth_test_support;
 use crate::auth::AuthUser;
 use crate::backend::test_support::*;
@@ -819,9 +819,9 @@ async fn api_google_books_configured_requires_auth() {
 
 #[tokio::test]
 async fn api_google_books_configured_returns_500_when_db_unavailable() {
-    let (_app, _state, pool) = fixture().await;
+    let (_app, state, pool) = fixture().await;
     pool.close().await;
-    let res = get_google_books_configured(fake_user(1), State(AppState::new(pool))).await;
+    let res = get_google_books_configured(fake_user(1), State(state)).await;
     assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 

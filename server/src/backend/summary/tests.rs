@@ -8,7 +8,7 @@ use axum::{
 use omnibus_db::{auth::SessionKind, test_support::EnvVarGuard};
 use tower::ServiceExt;
 
-use super::{get_summary_sources, AppState};
+use super::get_summary_sources;
 use crate::auth::test_support as auth_test_support;
 use crate::auth::AuthUser;
 use crate::backend::test_support::*;
@@ -173,8 +173,8 @@ async fn api_summary_sources_requires_auth() {
 
 #[tokio::test]
 async fn api_summary_sources_returns_500_when_db_unavailable() {
-    let (_app, _state, pool) = fixture().await;
+    let (_app, state, pool) = fixture().await;
     pool.close().await;
-    let res = get_summary_sources(fake_user(1), State(AppState::new(pool))).await;
+    let res = get_summary_sources(fake_user(1), State(state)).await;
     assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
