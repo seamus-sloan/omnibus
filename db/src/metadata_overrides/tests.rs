@@ -2547,3 +2547,117 @@ async fn bulk_merge_metadata_overrides_rejects_a_genre_delta_past_the_per_book_c
             if u == uuid && max == MetadataOverrides::MAX_GENRES
     ));
 }
+
+// -----------------------------------------------------------------
+// Batched tag / genre vocabulary materialization
+// -----------------------------------------------------------------
+
+/// A name list deliberately past SQLite's 999 bound-parameter cap, so an
+/// unchunked single-statement insert would error instead of inserting.
+fn oversized_name_list(prefix: &str) -> Vec<String> {
+    (0..1_500).map(|i| format!("{prefix}-{i}")).collect()
+}
+
+#[tokio::test]
+async fn materialize_tag_rows_inserts_every_name_when_the_list_exceeds_the_sqlite_bind_cap() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let names = oversized_name_list("tag");
+    let ov = MetadataOverrides {
+        subjects: Some(names.clone()),
+        ..Default::default()
+    };
+    let mut conn = pool.acquire().await.unwrap();
+
+    super::links::materialize_tag_rows(&mut conn, &ov)
+        .await
+        .unwrap();
+    // Re-running must stay a no-op: `INSERT OR IGNORE` survives batching.
+    super::links::materialize_tag_rows(&mut conn, &ov)
+        .await
+        .unwrap();
+    drop(conn);
+
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tags")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        count,
+        names.len() as i64,
+        "every name in an over-the-cap list should be materialized exactly once"
+    );
+    assert_eq!(tag_row_count(&pool, "tag-1499").await, 1);
+}
+
+#[tokio::test]
+async fn materialize_genre_rows_inserts_every_name_when_the_list_exceeds_the_sqlite_bind_cap() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let names = oversized_name_list("genre");
+    let ov = MetadataOverrides {
+        genres: Some(names.clone()),
+        ..Default::default()
+    };
+    let mut conn = pool.acquire().await.unwrap();
+
+    super::links::materialize_genre_rows(&mut conn, &ov)
+        .await
+        .unwrap();
+    super::links::materialize_genre_rows(&mut conn, &ov)
+        .await
+        .unwrap();
+    drop(conn);
+
+    assert_eq!(genre_row_names(&pool).await.len(), names.len());
+}
+
+#[tokio::test]
+async fn upsert_metadata_overrides_materializes_each_tag_and_genre_once_when_names_repeat() {
+    let _covers = CoversTempDir::new("batched_vocab");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let (uuid, _) = seed_one_book_with_tags(&pool, &[]).await;
+
+    // Repeats, casing variants, padding and blanks in one save — the batch
+    // must collapse them exactly as the old per-name statements did.
+    let ov = MetadataOverrides {
+        subjects: Some(vec![
+            "Space Opera".into(),
+            " Space Opera ".into(),
+            "space opera".into(),
+            "  ".into(),
+            "Hard SF".into(),
+        ]),
+        genres: Some(vec![
+            "Horror".into(),
+            "horror".into(),
+            "Noir".into(),
+            "".into(),
+        ]),
+        ..Default::default()
+    };
+    upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+        .await
+        .unwrap();
+
+    assert_eq!(tag_row_count(&pool, "Space Opera").await, 1);
+    assert_eq!(tag_row_count(&pool, "Hard SF").await, 1);
+    let tag_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tags")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        tag_count, 2,
+        "blank and duplicate subjects never materialize"
+    );
+    assert_eq!(genre_row_names(&pool).await, vec!["Horror", "Noir"]);
+
+    // Re-saving the same lists changes nothing.
+    upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+        .await
+        .unwrap();
+    assert_eq!(tag_row_count(&pool, "Space Opera").await, 1);
+    assert_eq!(genre_row_names(&pool).await, vec!["Horror", "Noir"]);
+}
