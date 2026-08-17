@@ -1,28 +1,20 @@
 //! `MetadataOverrides::merge()` tests: override-layer composition
 //! semantics — empty-vec-wins, `None` preserves the base layer, scalar
 //! passthrough — across creators/subjects/isbn/print_pages/genres.
-//!
-//! NOTE on contract: the issue describes `merge` as "applies an override
-//! layer onto a base `EbookMetadata`, with empty-array meaning clear-all".
-//! The actual `MetadataOverrides::merge` merges two `MetadataOverrides`
-//! layers (a prior stored override + an incoming edit), not an
-//! `EbookMetadata`, and uses `incoming.field.or(self.field)`. The
-//! empty-array-clears-the-base-book behaviour lives in
-//! `db::metadata_overrides::apply_overrides`, where `Some(vec![])`
-//! overwrites the book's list with an empty vec. The tests below assert the
-//! ACTUAL `merge` semantics; case (4) documents that for `merge` itself an
-//! empty `Some(vec![])` is an *override layer value* that wins over the
-//! base layer (it does not collapse to "don't touch"), which is consistent
-//! with — and feeds into — the clear-all behaviour at apply time.
 
 use super::super::*;
 use super::{contributor, tags};
 
 #[test]
 fn merge_empty_creators_layer_wins_over_base_creators() {
-    // Issue case (4): incoming `creators: Some(vec![])` is preserved on the
-    // merged override (it does NOT fall back to the base layer's creators).
-    // Downstream `apply_overrides` then clears the book's creators.
+    // NOTE: `merge` composes two `MetadataOverrides` layers (a prior stored
+    // override + an incoming edit), not an `EbookMetadata` — it uses
+    // `incoming.field.or(self.field)`. So an empty `Some(vec![])` here is an
+    // *override layer value* that wins over the base layer rather than
+    // collapsing to "don't touch"; the base-book clear-all behaviour this
+    // feeds into lives downstream in `db::metadata_overrides::apply_overrides`.
+    // Case: incoming `creators: Some(vec![])` is preserved on the merged
+    // override (it does NOT fall back to the base layer's creators).
     let base = MetadataOverrides {
         creators: Some(vec![contributor("Stale Author")]),
         ..Default::default()

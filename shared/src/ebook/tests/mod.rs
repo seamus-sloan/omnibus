@@ -1,11 +1,9 @@
-//! Tests for `EbookMetadata` and `MetadataOverrides`: title/description
-//! display fallbacks, override validation (length caps measured in chars,
-//! ISBN-13 shape, subject/creator/tag limits), and override-merge layering.
+//! Tests for `EbookMetadata` and `MetadataOverrides`: display fallbacks,
+//! override validation, and override-merge layering.
 //!
-//! Split by sub-topic (mirrors `server/src/backend/opds/tests/`): the
-//! `validate()`, `merge()`, and `BulkMetadataEdit` tests live in the
-//! sibling modules below; the shared `contributor`/`tags` fixture builders
-//! and the small `display_title` tests stay here.
+//! Split by sub-topic (mirrors `opds/tests/`): `validate()`/`merge()`/
+//! `BulkMetadataEdit` tests live in sibling modules; shared fixture
+//! builders and `display_title` tests stay here.
 
 mod bulk;
 mod merge;

@@ -1,11 +1,8 @@
-//! `POST /api/admin/rewrite-all-epubs` (#959, #1718) — the fleet-wide
-//! bulk admin action. Dispatches `Task::RewriteAllEpubs` to the shared
-//! worker and returns as soon as it's queued (#1718) rather than
-//! awaiting the whole pass inline, so these just prove the route is
-//! wired up, admin-gated, and returns immediately with no body.
-//! Count-accuracy over a mixed seed (override/no-override/no-EPUB) and
-//! the batched DB resolution are covered at the db layer
-//! (`epub_rewrite::tests`).
+//! `POST /api/admin/rewrite-all-epubs` — the fleet-wide bulk admin action.
+//! Dispatches `Task::RewriteAllEpubs` to the shared worker and returns as
+//! soon as it's queued, so these just prove the route is wired up,
+//! admin-gated, and returns immediately with no body. Count-accuracy and
+//! the batched DB resolution are covered at the db layer (`epub_rewrite::tests`).
 
 use axum::{
     body::{to_bytes, Body},
