@@ -2,12 +2,13 @@
 //! snapshot staleness, sequence/narrations timelines, percent ↔ seconds
 //! mapping with inverse consistency, and the resume-candidate state machine.
 
-use omnibus_shared::cross_format::DeclareSyncPoint;
-use omnibus_shared::ProgressUpdate;
+use omnibus_shared::cross_format::{CrossFormatLinkMode, CrossFormatResumeState, DeclareSyncPoint};
+use omnibus_shared::{ProgressFormat, ProgressUpdate};
 use sqlx::SqlitePool;
 
 use crate::init_db;
 
+use super::resume::{audio_equivalence_floor, equivalence_fraction};
 use super::*;
 
 async fn seed_user(pool: &SqlitePool, name: &str) -> i64 {
