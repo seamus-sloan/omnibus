@@ -1,7 +1,8 @@
 //! Wire types for ISBN → book-metadata resolution. A scan that misses the
 //! library is resolved server-side against external providers (Open Library,
 //! then Google Books) into one normalized [`ExternalBookMeta`] the client uses
-//! to prefill the check-in / manual-entry screens.
+//! to prefill the check-in / manual-entry screens. The fan-out edition search
+//! shares the providers but has its own types, so that contract stays frozen.
 
 use serde::{Deserialize, Serialize};
 
@@ -167,6 +168,157 @@ impl ExternalBookMeta {
         }
         Ok(())
     }
+}
+
+/// Maximum candidate editions one provider may contribute to a fan-out
+/// search. Per-provider rather than overall so a chatty source cannot crowd
+/// the quieter ones out of the picker.
+pub const EDITIONS_PER_PROVIDER: usize = 10;
+
+/// Maximum length (in chars) for an edition-search `query`. Mirrors the
+/// check-in title search's cap so the two front doors bound provider requests
+/// identically.
+pub const EDITION_SEARCH_QUERY_MAX_LEN: usize = crate::scan::SEARCH_QUERY_MAX_LEN;
+
+/// Maximum number of entries an explicit `providers` filter may carry — a
+/// generous multiple of the catalog's size, so a malformed client can't post
+/// an unbounded list.
+pub const EDITION_SEARCH_MAX_PROVIDERS: usize = 16;
+
+/// One candidate edition from one provider, kept attributed and
+/// un-collapsed for the edition picker.
+///
+/// Deliberately **not** an extension of [`ExternalBookMeta`]: that type is the
+/// check-in wire payload, validated and round-tripped back from the client,
+/// and keeping its contract frozen is worth more than the reuse. Use
+/// [`From<ProviderEdition>`] where a check-in-shaped value is needed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderEdition {
+    /// Which provider answered with this candidate.
+    pub source: MetadataProvider,
+    /// Opaque handle the server can re-fetch this candidate by. Clients must
+    /// treat it as a token to hand back, never parse it.
+    pub provider_ref: String,
+    pub isbn13: String,
+    pub title: String,
+    pub authors: Vec<String>,
+    pub year: Option<String>,
+    pub pages: Option<i64>,
+    pub publisher: Option<String>,
+    pub description: Option<String>,
+    pub cover_url: Option<String>,
+    pub series: Option<String>,
+    pub first_publish_year: Option<i64>,
+}
+
+impl ProviderEdition {
+    /// Attribute an already-normalized provider result with the handle it can
+    /// be re-fetched by. `source` comes from the meta, so a candidate can
+    /// never claim a provider that didn't produce it.
+    pub fn from_meta(meta: ExternalBookMeta, provider_ref: String) -> Self {
+        Self {
+            source: meta.source,
+            provider_ref,
+            isbn13: meta.isbn13,
+            title: meta.title,
+            authors: meta.authors,
+            year: meta.year,
+            pages: meta.pages,
+            publisher: meta.publisher,
+            description: meta.description,
+            cover_url: meta.cover_url,
+            series: meta.series,
+            first_publish_year: meta.first_publish_year,
+        }
+    }
+}
+
+impl From<ProviderEdition> for ExternalBookMeta {
+    fn from(edition: ProviderEdition) -> Self {
+        Self {
+            isbn13: edition.isbn13,
+            title: edition.title,
+            authors: edition.authors,
+            year: edition.year,
+            pages: edition.pages,
+            publisher: edition.publisher,
+            description: edition.description,
+            cover_url: edition.cover_url,
+            series: edition.series,
+            first_publish_year: edition.first_publish_year,
+            source: edition.source,
+        }
+    }
+}
+
+/// What one provider did with a fan-out search.
+///
+/// The three cases are the point of the response: silently dropping a failed
+/// provider makes "we couldn't reach Hardcover" indistinguishable from
+/// "Hardcover doesn't have it".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ProviderSearchStatus {
+    /// The provider answered; `count` is how many of its candidates survived
+    /// the per-provider cap.
+    Answered { count: usize },
+    /// The provider is not usable on this instance (no key), so it was never
+    /// sent a request.
+    NotConfigured,
+    /// The provider was asked and could not answer. `message` never carries
+    /// key material.
+    Failed { message: String },
+}
+
+/// One provider's line in the per-source report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderSourceStatus {
+    pub provider: MetadataProvider,
+    pub display_name: String,
+    #[serde(flatten)]
+    pub status: ProviderSearchStatus,
+}
+
+/// A fan-out edition search: every configured provider asked, or only those
+/// named in `providers`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditionSearchRequest {
+    pub query: String,
+    /// `None` means every configured provider — the filter hook the picker's
+    /// provider chips plug into.
+    #[serde(default)]
+    pub providers: Option<Vec<MetadataProvider>>,
+}
+
+impl EditionSearchRequest {
+    /// Reject a blank or oversized `query` and an oversized provider filter.
+    /// Handlers translate `Err(_)` into 400.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.query.trim().is_empty() {
+            return Err("query is required".into());
+        }
+        if self.query.chars().count() > EDITION_SEARCH_QUERY_MAX_LEN {
+            return Err(format!(
+                "query exceeds {EDITION_SEARCH_QUERY_MAX_LEN} characters"
+            ));
+        }
+        if let Some(providers) = &self.providers {
+            if providers.len() > EDITION_SEARCH_MAX_PROVIDERS {
+                return Err(format!(
+                    "too many providers (max {EDITION_SEARCH_MAX_PROVIDERS})"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Fan-out search results: every candidate, attributed and un-collapsed, plus
+/// what each source did.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditionSearchResponse {
+    pub editions: Vec<ProviderEdition>,
+    pub sources: Vec<ProviderSourceStatus>,
 }
 
 #[cfg(test)]

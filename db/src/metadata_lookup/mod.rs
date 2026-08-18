@@ -5,15 +5,18 @@
 //! same ladder of providers (Open Library, Google Books, Hardcover) so callers
 //! never name a provider or know which are configured; see
 //! [`providers`][self::providers] for the per-provider contract and
-//! [`providers::ladder`] for the order.
+//! [`providers::ladder`] for the order. [`search_all_providers`] is the
+//! ladder's fan-out sibling, for callers that want every source at once.
 
 mod config;
+mod fanout;
 mod providers;
 
 #[cfg(test)]
 mod tests;
 
 pub use config::{MetadataLookupConfig, ProviderKeys};
+pub use fanout::search_all_providers;
 pub use providers::{catalog, openlibrary_enrich, OlEnrichment};
 
 use omnibus_shared::isbn::{normalize_isbn, IsbnError};

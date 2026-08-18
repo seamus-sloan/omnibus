@@ -121,3 +121,102 @@ fn external_book_meta_validate_rejects_a_cover_url_over_the_byte_cap_even_with_f
         .expect_err("a cover_url over the byte cap must be rejected");
     assert!(err.contains("cover_url"), "got: {err}");
 }
+
+// ── fan-out edition search ───────────────────────────────────────
+
+fn edition() -> ProviderEdition {
+    ProviderEdition::from_meta(valid_meta(), "9780141439518".into())
+}
+
+#[test]
+fn provider_edition_from_meta_carries_the_source_and_ref() {
+    let e = edition();
+    assert_eq!(e.source, MetadataProvider::OpenLibrary);
+    assert_eq!(e.provider_ref, "9780141439518");
+    assert_eq!(e.title, "Pride and Prejudice");
+}
+
+#[test]
+fn external_book_meta_from_provider_edition_round_trips_every_field() {
+    let meta = valid_meta();
+    let back: ExternalBookMeta = ProviderEdition::from_meta(meta.clone(), "ref".into()).into();
+    assert_eq!(back, meta);
+}
+
+#[test]
+fn edition_search_request_validate_accepts_a_plain_query() {
+    let req = EditionSearchRequest {
+        query: "dune".into(),
+        providers: None,
+    };
+    assert!(req.validate().is_ok());
+}
+
+#[test]
+fn edition_search_request_validate_rejects_a_blank_query() {
+    let req = EditionSearchRequest {
+        query: "   ".into(),
+        providers: None,
+    };
+    assert!(req
+        .validate()
+        .expect_err("blank must fail")
+        .contains("query"));
+}
+
+#[test]
+fn edition_search_request_validate_rejects_an_oversized_query() {
+    let req = EditionSearchRequest {
+        query: "x".repeat(EDITION_SEARCH_QUERY_MAX_LEN + 1),
+        providers: None,
+    };
+    let err = req.validate().expect_err("oversized must fail");
+    assert!(err.contains("exceeds"), "got: {err}");
+}
+
+#[test]
+fn edition_search_request_validate_rejects_an_oversized_provider_filter() {
+    let req = EditionSearchRequest {
+        query: "dune".into(),
+        providers: Some(vec![
+            MetadataProvider::OpenLibrary;
+            EDITION_SEARCH_MAX_PROVIDERS + 1
+        ]),
+    };
+    let err = req.validate().expect_err("oversized filter must fail");
+    assert!(err.contains("providers"), "got: {err}");
+}
+
+#[test]
+fn provider_search_status_serializes_as_a_tagged_status_field() {
+    let answered = serde_json::to_value(ProviderSearchStatus::Answered { count: 2 }).unwrap();
+    assert_eq!(answered["status"], "answered");
+    assert_eq!(answered["count"], 2);
+    let missing = serde_json::to_value(ProviderSearchStatus::NotConfigured).unwrap();
+    assert_eq!(missing["status"], "not_configured");
+    let failed = serde_json::to_value(ProviderSearchStatus::Failed {
+        message: "timed out".into(),
+    })
+    .unwrap();
+    assert_eq!(failed["status"], "failed");
+    assert_eq!(failed["message"], "timed out");
+}
+
+#[test]
+fn edition_search_response_flattens_each_source_status_onto_its_row() {
+    let response = EditionSearchResponse {
+        editions: vec![edition()],
+        sources: vec![ProviderSourceStatus {
+            provider: MetadataProvider::OpenLibrary,
+            display_name: MetadataProvider::OpenLibrary.display_name().into(),
+            status: ProviderSearchStatus::Answered { count: 1 },
+        }],
+    };
+    let json = serde_json::to_value(&response).unwrap();
+    assert_eq!(json["sources"][0]["provider"], "open_library");
+    assert_eq!(json["sources"][0]["status"], "answered");
+    assert_eq!(json["sources"][0]["count"], 1);
+    assert_eq!(json["editions"][0]["source"], "open_library");
+    let back: EditionSearchResponse = serde_json::from_value(json).unwrap();
+    assert_eq!(back, response);
+}

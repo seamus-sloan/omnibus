@@ -12,9 +12,9 @@ use axum::{
 
 use super::{
     account, admin_health, admin_sessions, audiobooks, author_photos, authors, bookmarks, covers,
-    cross_format, ebooks, genres, highlights, journals, kindle, metadata, overrides, physical,
-    profile, progress, ratings, read_status, scan, search, series, settings, shelves, stats,
-    suggestions, summary, tags, uploads, users, AppState,
+    cross_format, ebooks, edition_search, genres, highlights, journals, kindle, metadata,
+    overrides, physical, profile, progress, ratings, read_status, scan, search, series, settings,
+    shelves, stats, suggestions, summary, tags, uploads, users, AppState,
 };
 use crate::rate_limit::{rate_limit_by_ip, RateLimiter};
 
@@ -132,6 +132,7 @@ pub(super) fn data_routes(search_limiter: Arc<RateLimiter>) -> Router<AppState> 
         .merge(suggestion_routes())
         .merge(summary_routes())
         .merge(metadata_routes())
+        .merge(edition_search_routes())
         .merge(kindle_routes())
 }
 
@@ -407,6 +408,15 @@ fn summary_routes() -> Router<AppState> {
 /// analogue yet. Read-only, any authenticated user.
 fn metadata_routes() -> Router<AppState> {
     Router::new().route("/api/metadata/providers", get(metadata::get_providers))
+}
+
+/// Fan-out edition search across the metadata providers. Edit-gated (it makes
+/// outbound provider calls), unlike the read-only catalog above.
+fn edition_search_routes() -> Router<AppState> {
+    Router::new().route(
+        "/api/metadata/editions/search",
+        post(edition_search::post_edition_search),
+    )
 }
 
 /// F4.3 Send-to-Kindle — mobile-facing REST. Web hits the analogous
