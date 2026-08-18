@@ -59,7 +59,16 @@ async function mockQueue(page: Page, cards: SuggestionCard[]): Promise<void> {
 /** Open the author review queue through the Settings section's Review link. */
 async function openAuthorReview(page: Page): Promise<void> {
   await gotoReady(page, SETTINGS_CLEANUP);
-  await page.getByTestId("cleanup-review-author").click();
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/cleanup/queue",
+      expectedBody: { kind: "author", limit: 50 },
+      expectedStatus: 200,
+    },
+    async () => page.getByTestId("cleanup-review-author").click(),
+  );
   await expect(page.getByTestId("cleanup-review")).toBeVisible();
 }
 
@@ -91,7 +100,12 @@ test("renders the library cleanup section and the review layout", async ({
   // The Review link is the only affordance pointing at the review route.
   await expectMutation(
     page,
-    { method: "POST", url: "/api/rpc/cleanup/queue", expectedStatus: 200 },
+    {
+      method: "POST",
+      url: "/api/rpc/cleanup/queue",
+      expectedBody: { kind: "author", limit: 50 },
+      expectedStatus: 200,
+    },
     async () => page.getByTestId("cleanup-review-author").click(),
   );
 

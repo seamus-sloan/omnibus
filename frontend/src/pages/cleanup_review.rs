@@ -38,7 +38,7 @@ pub fn CleanupReviewPage(kind: String) -> Element {
         in_flight: use_signal(|| false),
     };
 
-    spawn_queue_fetch(server_url.clone(), parsed, state);
+    spawn_queue_fetch(is_admin, server_url.clone(), parsed, state);
 
     rsx! {
         section {
@@ -64,14 +64,26 @@ pub fn CleanupReviewPage(kind: String) -> Element {
     }
 }
 
-/// Load the pending queue on mount. An unknown kind slug resolves to an empty
-/// queue so the page still renders its not-found notice rather than hanging on
-/// the loading state.
-fn spawn_queue_fetch(server_url: String, kind: Option<CleanupKind>, state: QueueState) {
+/// Load the pending queue once the visitor is known to be an admin. An unknown
+/// kind slug resolves to an empty queue so the page still renders its not-found
+/// notice rather than hanging on the loading state.
+fn spawn_queue_fetch(
+    is_admin: ReadSignal<bool>,
+    server_url: String,
+    kind: Option<CleanupKind>,
+    state: QueueState,
+) {
     let mut cards = state.cards;
     let mut cursor = state.cursor;
     let mut error = state.error;
     use_effect(move || {
+        // Read inside the effect so it re-subscribes and re-runs when
+        // `CurrentUser` resolves. It is `false` on the first paint — firing
+        // then is a guaranteed 401/403 against the admin-gated route, and the
+        // non-admin branch never renders the body these signals feed.
+        if !is_admin() {
+            return;
+        }
         let server_url = server_url.clone();
         error.set(None);
         cursor.set(0);

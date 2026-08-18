@@ -532,6 +532,45 @@ async fn count_linked_books_counts_a_book_once_even_when_two_group_members_share
 }
 
 #[tokio::test]
+async fn count_linked_books_counts_a_group_larger_than_the_sqlite_bind_limit() {
+    let pool = new_pool().await;
+    let authors = seed_authors_with_books(&pool, 2).await;
+    // Past SQLITE_MAX_VARIABLE_NUMBER on the SQLite this links (32766), so a
+    // generated `IN (?, ?, …)` list fails to bind outright. Nothing caps a
+    // merge group's size, so the id set has to survive being arbitrarily large.
+    let mut ids: Vec<i64> = (100_000..133_000).collect();
+    ids.extend(&authors);
+    assert!(ids.len() > 32_766);
+
+    let count = count_linked_books(&pool, "books_authors_link", "author", &ids)
+        .await
+        .unwrap();
+    assert_eq!(count, 2);
+}
+
+#[tokio::test]
+async fn review_queue_hydrates_a_merge_group_larger_than_the_sqlite_bind_limit() {
+    let pool = new_pool().await;
+    let authors = seed_authors_with_books(&pool, 2).await;
+    let mut source_ids: Vec<i64> = (100_000..133_000).collect();
+    source_ids.push(authors[0]);
+    seed_suggestion(
+        &pool,
+        CleanupKind::Author,
+        CleanupAction::Merge,
+        &merge_payload(&source_ids, authors[1]),
+        Decision::Pending,
+    )
+    .await;
+
+    // The whole page must still hydrate — the symptom of a bind overflow is a
+    // review queue that errors out rather than one card that reads wrong.
+    let cards = review_queue(&pool, CleanupKind::Author, 50).await.unwrap();
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].book_count, 2);
+}
+
+#[tokio::test]
 async fn count_linked_books_returns_zero_for_an_empty_id_set() {
     let pool = new_pool().await;
     let count = count_linked_books(&pool, "books_authors_link", "author", &[])

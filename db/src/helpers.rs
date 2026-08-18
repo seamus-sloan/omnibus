@@ -35,6 +35,23 @@ pub(crate) fn library_paths_json(library_paths: &[&str]) -> String {
     .to_string()
 }
 
+/// Encode row ids for binding through SQLite's `json_each`.
+///
+/// The `IN (…)` alternative is one bound parameter per id, and SQLite caps
+/// those at `SQLITE_MAX_VARIABLE_NUMBER` — a build-time constant, historically
+/// 999 and 32766 since 3.32, so the ceiling moves with whichever SQLite the
+/// binary links. A set that comes from library data rather than from a caller
+/// — a duplicate-merge group, say — is unbounded by construction, so it must
+/// go through a single JSON array instead of a generated placeholder list.
+pub(crate) fn ids_json(ids: &[i64]) -> String {
+    serde_json::Value::Array(
+        ids.iter()
+            .map(|id| serde_json::Value::Number((*id).into()))
+            .collect(),
+    )
+    .to_string()
+}
+
 /// SQL fragment for "search may surface this book": it sits under one of the
 /// configured scan roots, or it holds at least one physical copy.
 ///

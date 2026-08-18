@@ -6,6 +6,8 @@
 use omnibus_shared::{CleanupAction, CleanupCounts, CleanupKind, Decision, SuggestionCard};
 use sqlx::SqlitePool;
 
+use crate::helpers::ids_json;
+
 use super::{
     apply_book_title_override, apply_delete_author, apply_merge_authors, apply_merge_series,
     apply_merge_tags, apply_tag_split, CleanupApplyError, CleanupPayload,
@@ -258,8 +260,13 @@ async fn affected_book_count(pool: &SqlitePool, row: &SuggestionRow) -> Result<i
 }
 
 /// `COUNT(DISTINCT book)` over a taxonomy link table for a set of entity ids.
-/// The placeholder list is generated from the id count, never interpolated
-/// from caller text, so this stays a bound-parameter query.
+///
+/// The ids arrive as a single JSON array bound to one placeholder rather than
+/// a generated `IN (?, ?, …)` list: nothing caps a merge group's size (see
+/// `merge_suggestion`), so a large duplicate cluster would otherwise blow
+/// `SQLITE_MAX_VARIABLE_NUMBER` and fail the *whole* queue hydration, not just
+/// that one card. `table` and `column` are module constants chosen by
+/// [`CleanupKind`], never caller text.
 async fn count_linked_books(
     pool: &SqlitePool,
     table: &str,
@@ -269,14 +276,14 @@ async fn count_linked_books(
     if ids.is_empty() {
         return Ok(0);
     }
-    let placeholders = vec!["?"; ids.len()].join(",");
-    let sql =
-        format!("SELECT COUNT(DISTINCT book) FROM {table} WHERE {column} IN ({placeholders})");
-    let mut query = sqlx::query_scalar::<_, i64>(&sql);
-    for id in ids {
-        query = query.bind(*id);
-    }
-    query.fetch_one(pool).await
+    let sql = format!(
+        "SELECT COUNT(DISTINCT book) FROM {table} \
+          WHERE {column} IN (SELECT value FROM json_each(?))"
+    );
+    sqlx::query_scalar(&sql)
+        .bind(ids_json(ids))
+        .fetch_one(pool)
+        .await
 }
 
 /// The card's photo, when the kind has one. Only authors carry a cached image

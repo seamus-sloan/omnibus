@@ -26,7 +26,7 @@ pub fn CleanupSection() -> Element {
     // Bumped after a detection pass is queued so the counts effect re-runs.
     let generation = use_signal(|| 0u32);
 
-    spawn_counts_fetch(server_url.clone(), counts, error, generation);
+    spawn_counts_fetch(is_admin, server_url.clone(), counts, error, generation);
     let on_detect = detect_handler(server_url, status, in_flight, generation);
 
     rsx! {
@@ -60,17 +60,24 @@ pub fn CleanupSection() -> Element {
     }
 }
 
-/// Refresh the per-kind counts on mount and whenever `generation` moves.
+/// Refresh the per-kind counts once the visitor is known to be an admin, and
+/// again whenever `generation` moves.
 fn spawn_counts_fetch(
+    is_admin: ReadSignal<bool>,
     server_url: String,
     mut counts: Signal<Option<Vec<(CleanupKind, CleanupCounts)>>>,
     mut error: Signal<bool>,
     generation: Signal<u32>,
 ) {
     use_effect(move || {
-        // Read the generation inside the effect so a queued detection pass
-        // re-subscribes this fetch rather than needing its own call site.
+        // Both reads happen inside the effect so it re-subscribes to each: the
+        // generation so a queued detection pass refreshes the counts, and
+        // `is_admin` so the fetch waits for `CurrentUser` to resolve instead of
+        // 403ing against the admin-gated route on the first paint.
         let _ = generation();
+        if !is_admin() {
+            return;
+        }
         let server_url = server_url.clone();
         error.set(false);
         spawn(async move {
