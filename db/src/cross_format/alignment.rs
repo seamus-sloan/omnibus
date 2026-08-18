@@ -106,8 +106,11 @@ async fn anchor_preview(
     let Some(timeline) = audio_timeline(pool, book_id, &preview).await? else {
         return Ok(AnchorPreview::default());
     };
+    // Computed once and threaded into `anchor_map_from_marks` below, rather
+    // than letting `anchor_map` recompute the same batched fetch.
+    let audio = anchors::audio_marks(pool, &timeline).await?;
     let mut out = AnchorPreview {
-        audio_chapter_marks: anchors::usable_audio_marks(pool, &timeline).await?,
+        audio_chapter_marks: anchors::usable_audio_mark_count(&audio),
         ..AnchorPreview::default()
     };
     let Some((ebook_file_id, _)) = crate::book_file_with_id(pool, book_id, "EPUB").await? else {
@@ -115,7 +118,8 @@ async fn anchor_preview(
     };
     // User anchors fold in exactly as the jump path does, so the preview's
     // threads and interpolation are the pairs the mapping will really use.
-    let chapter_map = anchors::anchor_map(pool, ebook_file_id, &timeline).await?;
+    let chapter_map =
+        anchors::anchor_map_from_marks(pool, ebook_file_id, &timeline, &audio).await?;
     let user = preview_user_anchors(raw_link, &timeline);
     let stats = chapter_map.as_ref().map(|m| (m.matched, m.ebook_chapters));
     if let Some(merged) = anchors::merge_user_anchors(&user, chapter_map) {
