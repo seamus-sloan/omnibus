@@ -4,7 +4,7 @@
 //! the rewrite-in-place and cross-format attach paths, and the
 //! post-commit cover materialization + missing-files marker helper.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use omnibus_shared::{CleanupKind, EbookMetadata};
 use sqlx::Transaction;
@@ -493,7 +493,7 @@ async fn insert_tag_links(
 async fn link_aliased_tags(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
-    aliased: &std::collections::HashMap<String, i64>,
+    aliased: &HashMap<String, i64>,
 ) -> Result<(), sqlx::Error> {
     if aliased.is_empty() {
         return Ok(());
