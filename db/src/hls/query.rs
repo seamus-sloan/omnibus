@@ -3,9 +3,15 @@
 //! the per-file `book_file_parts` + `file_chapters` lookups the manifest
 //! builder and status handler depend on.
 
+use std::collections::HashMap;
+
 use sqlx::SqlitePool;
 
 use super::{HlsError, HlsPart, ResolvedAudiobook};
+
+/// SQLite's default bound-parameter cap is 999; chunking well under it
+/// keeps a single `IN (...)` query safe regardless of build-time overrides.
+const BULK_CHUNK_SIZE: usize = 500;
 
 /// Resolve a book `uuid` to the ids and library path needed by the HLS
 /// handlers. When `file_id` is `Some`, resolve that specific `book_files`
@@ -128,4 +134,76 @@ pub async fn get_chapters(
             },
         )
         .collect())
+}
+
+/// Fetch ordered `book_file_parts` for every id in `book_file_ids` in one
+/// round trip (chunked under SQLite's bind cap), grouped by `book_file_id`.
+/// A file with no rows in the map has no parts.
+pub async fn get_parts_bulk(
+    pool: &SqlitePool,
+    book_file_ids: &[i64],
+) -> Result<HashMap<i64, Vec<HlsPart>>, HlsError> {
+    let mut map: HashMap<i64, Vec<HlsPart>> = HashMap::new();
+    for chunk in book_file_ids.chunks(BULK_CHUNK_SIZE) {
+        let placeholders = vec!["?"; chunk.len()].join(", ");
+        let sql = format!(
+            "SELECT book_file_id, ordinal, filename, duration_seconds \
+             FROM book_file_parts \
+             WHERE book_file_id IN ({placeholders}) \
+             ORDER BY book_file_id, ordinal"
+        );
+        let mut q = sqlx::query_as::<_, (i64, i64, String, f64)>(&sql);
+        for id in chunk {
+            q = q.bind(id);
+        }
+        for (book_file_id, ordinal, filename, duration_seconds) in q.fetch_all(pool).await? {
+            map.entry(book_file_id).or_default().push(HlsPart {
+                ordinal,
+                filename,
+                duration_seconds,
+            });
+        }
+    }
+    Ok(map)
+}
+
+/// Fetch chapter markers for every id in `book_file_ids` in one round trip
+/// (chunked under SQLite's bind cap), grouped by `book_file_id`. Returns
+/// only rows actually found in `file_chapters` — an id with no chapters (or
+/// not present in `book_files` at all) is simply absent from the returned
+/// map. Unlike [`get_chapters`]'s single-id query, which always returns a
+/// `Vec` (possibly empty) for the one id it's given, a caller here must
+/// treat a missing key as "no chapters", not panic or assume the id was
+/// invalid.
+pub async fn get_chapters_bulk(
+    pool: &SqlitePool,
+    book_file_ids: &[i64],
+) -> Result<HashMap<i64, Vec<omnibus_shared::ChapterInfo>>, HlsError> {
+    let mut map: HashMap<i64, Vec<omnibus_shared::ChapterInfo>> = HashMap::new();
+    for chunk in book_file_ids.chunks(BULK_CHUNK_SIZE) {
+        let placeholders = vec!["?"; chunk.len()].join(", ");
+        let sql = format!(
+            "SELECT book_file_id, ordinal, title, start_seconds, duration_seconds \
+             FROM file_chapters \
+             WHERE book_file_id IN ({placeholders}) \
+             ORDER BY book_file_id, ordinal"
+        );
+        let mut q = sqlx::query_as::<_, (i64, i64, String, f64, f64)>(&sql);
+        for id in chunk {
+            q = q.bind(id);
+        }
+        for (book_file_id, ordinal, title, start_seconds, duration_seconds) in
+            q.fetch_all(pool).await?
+        {
+            map.entry(book_file_id)
+                .or_default()
+                .push(omnibus_shared::ChapterInfo {
+                    ordinal,
+                    title,
+                    start_seconds,
+                    duration_seconds,
+                });
+        }
+    }
+    Ok(map)
 }

@@ -6,7 +6,7 @@
 
 use sqlx::SqlitePool;
 
-use super::{AudioTimeline, CrossFormatError};
+use super::{AudioTimeline, CrossFormatError, TimelineFile};
 
 /// One matched anchor: the same narrative point as a fraction through the
 /// ebook text and through the audio timeline. `(0,0)` and `(1,1)` endpoints
@@ -60,7 +60,7 @@ fn strip_track_prefix(raw: &str) -> &str {
 /// An audio-side anchor candidate: a title-ish label plus its start as a
 /// fraction of the timeline.
 #[derive(Debug, Clone)]
-struct AudioMark {
+pub(super) struct AudioMark {
     key: Option<String>,
     chapter_no: Option<u32>,
     synthetic: bool,
@@ -175,11 +175,26 @@ fn word_number(word: &str) -> Option<u32> {
 
 /// Build the anchor map for a linked book, or `None` when no trustworthy
 /// anchoring exists. `ebook_file_id` is the served EPUB's `book_files` row
-/// (spine stats + chapters live under it).
+/// (spine stats + chapters live under it). Computes the audio marks itself —
+/// callers that already hold them (because they also need
+/// [`usable_audio_mark_count`]) should call [`anchor_map_from_marks`]
+/// instead, to avoid a redundant `audio_marks` fetch.
 pub(super) async fn anchor_map(
     pool: &SqlitePool,
     ebook_file_id: i64,
     timeline: &AudioTimeline,
+) -> Result<Option<AnchorMap>, CrossFormatError> {
+    let audio = audio_marks(pool, timeline).await?;
+    anchor_map_from_marks(pool, ebook_file_id, timeline, &audio).await
+}
+
+/// Same as [`anchor_map`], but takes pre-computed audio marks rather than
+/// fetching them again.
+pub(super) async fn anchor_map_from_marks(
+    pool: &SqlitePool,
+    ebook_file_id: i64,
+    timeline: &AudioTimeline,
+    audio: &[AudioMark],
 ) -> Result<Option<AnchorMap>, CrossFormatError> {
     let stats = crate::epub_structure::get_spine_stats(pool, ebook_file_id).await?;
     let total_chars: i64 = stats
@@ -201,7 +216,6 @@ pub(super) async fn anchor_map(
         return Ok(None);
     }
 
-    let audio = audio_marks(pool, timeline).await?;
     if audio.is_empty() {
         return Ok(None);
     }
@@ -224,9 +238,9 @@ pub(super) async fn anchor_map(
     // clear none of them and fall through to an honest refusal.
     let mut chosen: Option<Vec<Anchor>> = None;
     for rung in [
-        match_by_title(&text, &audio),
-        match_by_chapter_number(&text, &audio),
-        match_by_title_prefix(&text, &audio),
+        match_by_title(&text, audio),
+        match_by_chapter_number(&text, audio),
+        match_by_title_prefix(&text, audio),
     ] {
         let m = monotonic(rung);
         if passes(&m) {
@@ -334,64 +348,101 @@ fn match_by_title_prefix(text: &[TextMark], audio: &[AudioMark]) -> Vec<Anchor> 
     anchors
 }
 
-/// How many usable (titled, non-synthetic) audio marks the timeline
-/// carries — lets the modal distinguish "no marks in the audio" from
-/// "marks exist but couldn't be aligned".
-pub(super) async fn usable_audio_marks(
-    pool: &SqlitePool,
-    timeline: &AudioTimeline,
-) -> Result<i64, CrossFormatError> {
-    Ok(audio_marks(pool, timeline)
-        .await?
+/// How many usable (titled, non-synthetic) audio marks a mark set carries —
+/// lets the modal distinguish "no marks in the audio" from "marks exist but
+/// couldn't be aligned". Pure and synchronous: callers that already hold the
+/// marks (they came from [`audio_marks`]) don't pay for another fetch.
+pub(super) fn usable_audio_mark_count(audio: &[AudioMark]) -> i64 {
+    audio
         .iter()
         .filter(|a| !a.synthetic && a.key.is_some())
-        .count() as i64)
+        .count() as i64
 }
 
-/// Audio anchor candidates across the timeline: real chapter marks carry
-/// their titles; a file whose chapters are all synthetic falls back to its
-/// parts' filename stems (the per-chapter MP3 folder shape), which carry
-/// the real chapter names when anything does.
-async fn audio_marks(
+/// Audio anchor candidates across the whole timeline, in one batched round
+/// trip per lookup kind: real chapter marks carry their titles; a file whose
+/// chapters are all synthetic falls back to its parts' filename stems (the
+/// per-chapter MP3 folder shape), which carry the real chapter names when
+/// anything does.
+pub(super) async fn audio_marks(
     pool: &SqlitePool,
     timeline: &AudioTimeline,
 ) -> Result<Vec<AudioMark>, CrossFormatError> {
+    let ids: Vec<i64> = timeline.files.iter().map(|f| f.book_file_id).collect();
+    let chapters_by_file = crate::hls::get_chapters_bulk(pool, &ids).await?;
+
+    let fallback_ids: Vec<i64> = timeline
+        .files
+        .iter()
+        .filter(|f| synthetic_only(chapters_by_file.get(&f.book_file_id)))
+        .map(|f| f.book_file_id)
+        .collect();
+    let parts_by_file = crate::hls::get_parts_bulk(pool, &fallback_ids).await?;
+
     let mut marks = Vec::new();
     for file in &timeline.files {
-        let chapters = crate::hls::get_chapters(pool, file.book_file_id).await?;
-        let all_synthetic =
-            !chapters.is_empty() && chapters.iter().all(|c| is_synthetic_title(&c.title));
-        if all_synthetic {
-            let parts = crate::hls::get_parts(pool, file.book_file_id).await?;
-            let mut start = 0.0f64;
-            for part in &parts {
-                let stem = part
-                    .filename
-                    .rsplit('/')
-                    .next()
-                    .and_then(|name| name.rsplit_once('.').map(|(s, _)| s).or(Some(name)))
-                    .unwrap_or(&part.filename);
-                marks.push(AudioMark {
-                    key: title_key(stem),
-                    chapter_no: chapter_number(stem),
-                    synthetic: false,
-                    frac: ((file.start_seconds + start) / timeline.total_seconds).clamp(0.0, 1.0),
-                });
-                start += part.duration_seconds.max(0.0);
-            }
+        let chapters = chapters_by_file.get(&file.book_file_id);
+        if synthetic_only(chapters) {
+            let parts = parts_by_file
+                .get(&file.book_file_id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            marks.extend(part_marks(file, parts, timeline.total_seconds));
         } else {
-            for c in &chapters {
-                marks.push(AudioMark {
-                    key: title_key(&c.title),
-                    chapter_no: chapter_number(&c.title),
-                    synthetic: is_synthetic_title(&c.title),
-                    frac: ((file.start_seconds + c.start_seconds) / timeline.total_seconds)
-                        .clamp(0.0, 1.0),
-                });
-            }
+            let chapters = chapters.map(Vec::as_slice).unwrap_or(&[]);
+            marks.extend(chapter_marks(file, chapters, timeline.total_seconds));
         }
     }
     Ok(marks)
+}
+
+/// Whether a file's chapters are all synthetic ("Part 1", "Part 2", …) —
+/// the signal to fall back to filename-stem marks instead.
+fn synthetic_only(chapters: Option<&Vec<omnibus_shared::ChapterInfo>>) -> bool {
+    chapters.is_some_and(|c| !c.is_empty() && c.iter().all(|c| is_synthetic_title(&c.title)))
+}
+
+/// Marks built from a file's real chapter titles.
+fn chapter_marks(
+    file: &TimelineFile,
+    chapters: &[omnibus_shared::ChapterInfo],
+    total_seconds: f64,
+) -> Vec<AudioMark> {
+    chapters
+        .iter()
+        .map(|c| AudioMark {
+            key: title_key(&c.title),
+            chapter_no: chapter_number(&c.title),
+            synthetic: is_synthetic_title(&c.title),
+            frac: ((file.start_seconds + c.start_seconds) / total_seconds).clamp(0.0, 1.0),
+        })
+        .collect()
+}
+
+/// Marks built from a synthetic-only file's part filename stems.
+fn part_marks(
+    file: &TimelineFile,
+    parts: &[crate::hls::HlsPart],
+    total_seconds: f64,
+) -> Vec<AudioMark> {
+    let mut out = Vec::with_capacity(parts.len());
+    let mut start = 0.0f64;
+    for part in parts {
+        let stem = part
+            .filename
+            .rsplit('/')
+            .next()
+            .and_then(|name| name.rsplit_once('.').map(|(s, _)| s).or(Some(name)))
+            .unwrap_or(&part.filename);
+        out.push(AudioMark {
+            key: title_key(stem),
+            chapter_no: chapter_number(stem),
+            synthetic: false,
+            frac: ((file.start_seconds + start) / total_seconds).clamp(0.0, 1.0),
+        });
+        start += part.duration_seconds.max(0.0);
+    }
+    out
 }
 
 /// Ordered title matching: walk both mark lists front to back, pairing

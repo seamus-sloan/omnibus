@@ -1794,6 +1794,67 @@ async fn alignment_view_serves_the_anchor_pairs_the_jump_uses() {
     );
 }
 
+// --- #2019: audio_marks batching + alignment_view's single audio_marks fetch ---
+
+/// Counts `tracing` events sqlx emits (target `"sqlx::query"`, one per
+/// executed statement) while installed as the default subscriber. Mirrors
+/// the `QueryCounter` pattern in `db/src/epub_rewrite/tests.rs`; every
+/// `Subscriber` method besides `event` is a no-op.
+struct QueryCounter(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl tracing::Subscriber for QueryCounter {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        metadata.target() == "sqlx::query"
+    }
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        if event.metadata().target() == "sqlx::query" {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    fn enter(&self, _span: &tracing::span::Id) {}
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+
+/// The query count `alignment_view` issues against a fresh in-memory pool
+/// seeded with `file_count` sequence-mode audio files (no per-file
+/// chapters — the old per-file `hls::get_chapters`/`get_parts` loop still
+/// issued one round trip per file even when every result came back empty).
+async fn alignment_view_query_count(file_count: usize) -> usize {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "reader").await;
+    let durations: Vec<f64> = vec![300.0; file_count];
+    let (_, uuid, _) = seed_dual_book(&pool, &durations).await;
+
+    let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let guard = tracing::subscriber::set_default(QueryCounter(count.clone()));
+    alignment_view(&pool, user, &uuid).await.unwrap();
+    drop(guard);
+    count.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+#[tokio::test]
+async fn alignment_view_issues_a_query_count_independent_of_audio_file_count() {
+    // `audio_marks` used to issue one (or two) `hls` queries per timeline
+    // file, and `alignment_view` computed it twice over (once via
+    // `usable_audio_marks`, once inside `anchor_map`) — a sequence-mode
+    // book laid out as one file per chapter meant dozens of round trips
+    // per modal open. Both are batched and deduped now, so the query count
+    // must not grow with the file count.
+    let few = alignment_view_query_count(2).await;
+    let many = alignment_view_query_count(40).await;
+    assert_eq!(
+        few, many,
+        "alignment_view's query count must not grow with the number of \
+         audio files in the timeline: {few} queries for 2 files vs {many} \
+         for 40"
+    );
+}
+
 #[test]
 fn interpolate_extends_the_measured_slope_past_two_or_more_anchors() {
     use super::anchors::{interpolate, Anchor};
