@@ -118,7 +118,6 @@ pub(super) fn BdHeroSection(
                     b: b.clone(),
                     title: title.clone(),
                     kicker: kicker.clone(),
-                    uuid: uuid.clone(),
                     avail,
                     sync_panel,
                 }
@@ -155,7 +154,6 @@ fn BdTitleCol(
     b: EbookMetadata,
     title: String,
     kicker: String,
-    uuid: String,
     avail: Availability,
     sync_panel: Element,
 ) -> Element {
@@ -164,6 +162,9 @@ fn BdTitleCol(
         has_audio,
         has_comic,
     } = avail;
+    // Re-derived from `b` rather than threaded as a prop — identical to how
+    // the caller (`BdHeroSection`) computes it, so no behavior changes.
+    let uuid = b.unique_identifier.clone().unwrap_or_default();
 
     // Local copy of the effective summary so a fetch-and-save can refresh the
     // shown description in place. Seeded identically on SSR and first WASM

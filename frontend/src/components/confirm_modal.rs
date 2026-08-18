@@ -45,6 +45,9 @@ fn dismiss_unless_busy(busy: bool, on_dismiss: EventHandler<()>) {
 /// plus a leading grabber bar) — forcing one shape would change either
 /// caller's rendered markup, which is the one thing this refactor must not
 /// do.
+///
+/// 8 heterogeneous props left ungrouped: 16 call sites make a chrome struct
+/// not worth the churn.
 #[component]
 pub fn ConfirmModal(
     testid: String,
