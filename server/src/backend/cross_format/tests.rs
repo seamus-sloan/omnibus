@@ -151,9 +151,8 @@ async fn api_cross_format_resume_500s_when_the_db_is_gone() {
     assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
-/// An authed user plus a seeded dual-format book, with the link table
-/// dropped so every cross-format query fails at the DB layer; returns
-/// `(app, token, book uuid)`.
+/// Authed user + dual-format book with `cross_format_links` dropped, so every
+/// cross-format query fails at the DB layer.
 async fn fixture_with_no_link_table() -> (axum::Router, String, String) {
     let (app, _state, pool) = fixture().await;
     let user = auth_test_support::create_user(&pool, "alice").await;
@@ -215,8 +214,7 @@ async fn api_delete_cross_format_link_500s_when_the_db_is_gone() {
 #[tokio::test]
 async fn api_post_sync_point_500s_when_the_db_is_gone() {
     let (app, token, uuid) = fixture_with_no_link_table().await;
-    // Audio-with-seconds clears `validate()`, so the declaration reaches
-    // the link read rather than short-circuiting on a 422.
+    // Audio-with-seconds clears `validate()`, so this reaches the link read.
     let res = app
         .oneshot(post_json_with_bearer(
             &format!("/api/books/{uuid}/sync-point"),
