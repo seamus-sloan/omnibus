@@ -1,10 +1,8 @@
-//! Reindex-resurrection guard (#964): shared read-side of the
-//! `entity_aliases` ledger that `cleanup::entity_ops::write_entity_alias`
-//! writes when a library-cleanup merge absorbs an author, series, or tag.
-//! Consulted by every taxonomy resolver *before* it mints a new row, so a
-//! later reindex re-parsing a file that still names the merged-away entity
-//! resolves back to the surviving canonical id instead of recreating the
-//! row the merge just removed.
+//! Shared read-side of the `entity_aliases` ledger that
+//! `cleanup::entity_ops::write_entity_alias` writes when a library-cleanup
+//! merge absorbs an author, series, or tag. Consulted by every taxonomy
+//! resolver before it mints a new row, so a later reindex resolves a
+//! merged-away entity back to its surviving canonical id.
 
 use std::collections::HashMap;
 

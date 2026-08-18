@@ -188,14 +188,22 @@ async fn insert_direct_author_links(
     entries: &[(&str, i64)],
     aliased: &HashMap<String, i64>,
 ) -> Result<(), sqlx::Error> {
-    let rows = std::iter::repeat_n("(?, ?, ?)", entries.len())
+    // `.get()`, not indexing, so a name the caller's filter missed is dropped rather than panicking.
+    let resolved: Vec<(i64, i64)> = entries
+        .iter()
+        .filter_map(|(name, pos)| aliased.get(*name).map(|&author_id| (author_id, *pos)))
+        .collect();
+    if resolved.is_empty() {
+        return Ok(());
+    }
+    let rows = std::iter::repeat_n("(?, ?, ?)", resolved.len())
         .collect::<Vec<_>>()
         .join(", ");
     let sql =
         format!("INSERT OR IGNORE INTO books_authors_link (book, author, position) VALUES {rows}");
     let mut q = sqlx::query(&sql);
-    for (name, pos) in entries {
-        q = q.bind(book_id).bind(aliased[*name]).bind(*pos);
+    for (author_id, pos) in resolved {
+        q = q.bind(book_id).bind(author_id).bind(pos);
     }
     q.execute(&mut **tx).await?;
     Ok(())
