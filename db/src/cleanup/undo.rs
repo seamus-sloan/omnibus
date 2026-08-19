@@ -8,13 +8,14 @@ use std::collections::HashSet;
 use omnibus_shared::{CleanupAction, CleanupKind};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
-use crate::sync::upsert_fts;
+use crate::sync::upsert_fts_batch;
 use crate::taxonomy::delete_orphan_taxonomy;
 
 use super::apply::CleanupApplyError;
 use super::entity_ops::{
-    clear_sort, delete_entity_alias, delete_link, insert_link, lookup_tag_id, recreate_entity,
-    restore_canonical_photo, restore_entity_alias, write_photo,
+    clear_sort, delete_entity_alias, delete_link, delete_links_bulk, insert_link,
+    insert_links_bulk, lookup_tag_ids, recreate_entity, restore_canonical_photo,
+    restore_entity_alias, write_photo,
 };
 use super::snapshot::{DeleteAuthorSnapshot, MergeSnapshot, RenameSnapshot, SplitSnapshot};
 use super::MergeEntity;
@@ -219,9 +220,8 @@ async fn undo_merge(
             .await?;
     }
 
-    for book_id in touched {
-        upsert_fts(tx, book_id).await?;
-    }
+    let touched: Vec<i64> = touched.into_iter().collect();
+    upsert_fts_batch(tx, &touched).await?;
     Ok(())
 }
 
@@ -230,6 +230,14 @@ async fn undo_merge(
 /// that pre-existed independently, or gained other links since, is left
 /// alone — only [`crate::taxonomy::delete_orphan_taxonomy`] can still reap
 /// it if it's now unreferenced).
+///
+/// Batched, not one query per `(book, atom)` pair: [`lookup_tag_ids`]
+/// resolves every atom name to an id in one pass, [`insert_links_bulk`]
+/// restores every book's link to the recreated source tag in one pass, and
+/// [`delete_links_bulk`] removes every atom link the split added in one
+/// pass — O(books + atoms) round trips instead of the O(books × atoms) the
+/// naive per-pair replay ran (mirrors `apply_tag_split`'s own set-based
+/// shape in `apply.rs`).
 async fn undo_split(
     tx: &mut Transaction<'_, Sqlite>,
     snapshot_json: &str,
@@ -237,19 +245,14 @@ async fn undo_split(
     let snap: SplitSnapshot = serde_json::from_str(snapshot_json)?;
 
     let new_id = recreate_entity(tx, MergeEntity::Tag, &snap.source_name, None).await?;
-    for &book_id in &snap.links {
-        insert_link(tx, MergeEntity::Tag, book_id, new_id, None).await?;
-        for atom in &snap.atoms {
-            if let Some(atom_id) = lookup_tag_id(tx, atom).await? {
-                delete_link(tx, MergeEntity::Tag, book_id, atom_id).await?;
-            }
-        }
-    }
+    insert_links_bulk(tx, MergeEntity::Tag, new_id, &snap.links).await?;
+
+    let atom_ids = lookup_tag_ids(tx, &snap.atoms).await?;
+    delete_links_bulk(tx, MergeEntity::Tag, &snap.links, &atom_ids).await?;
+
     delete_orphan_taxonomy(tx).await?;
 
-    for &book_id in &snap.links {
-        upsert_fts(tx, book_id).await?;
-    }
+    upsert_fts_batch(tx, &snap.links).await?;
     Ok(())
 }
 
@@ -274,8 +277,7 @@ async fn undo_delete_author(
         .execute(&mut **tx)
         .await?;
 
-    for link in &snap.links {
-        upsert_fts(tx, link.book_id).await?;
-    }
+    let book_ids: Vec<i64> = snap.links.iter().map(|link| link.book_id).collect();
+    upsert_fts_batch(tx, &book_ids).await?;
     Ok(())
 }
