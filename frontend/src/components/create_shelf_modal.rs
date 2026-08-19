@@ -1,8 +1,7 @@
 //! Create-shelf modal — the two-body form for smart and hand-picked shelves.
-//!
-//! Smart: a `match [any|all]` + condition-row editor with a live preview pane.
-//! Hand-picked: a searchable cover grid whose selection becomes the shelf's
-//! initial book list. Both bodies share the header (name + kind + visibility)
+//! Smart is a `match [any|all]` plus condition-row editor with a live preview
+//! pane; hand-picked is a searchable cover grid whose selection becomes the
+//! shelf's initial book list. Both share the header (name, kind, visibility)
 //! and submit through [`crate::data::create_shelf`].
 
 use dioxus::prelude::*;

@@ -1,14 +1,8 @@
-//! Bake a book's effective metadata + cover override *into* a copy of its
-//! EPUB, so exports (Send-to-Kobo KEPUB, plain download) carry the user's
-//! edits instead of shipping the untouched source file. This writes
-//! inside the `.epub` container, which is the only metadata a Kobo / kepubify
-//! actually reads.
-//!
-//! One-shot and cache-backed: the rewritten EPUB is cached at
-//! `<export dir>/<book_id>.epub`, invalidated on `books.last_modified` (bumped
-//! whenever an override is saved), exactly like the thumbnail / KEPUB caches.
-//! A book with no active overrides yields `None` — callers serve the source
-//! file byte-for-byte.
+//! Bake a book's effective metadata + cover override into a copy of its EPUB so
+//! exports (Send-to-Kobo KEPUB, plain download) carry the user's edits — the
+//! container is the only metadata a Kobo or kepubify reads. Cache-backed at
+//! `<export dir>/<book_id>.epub` and invalidated on `books.last_modified`. A
+//! book with no active overrides yields `None`; callers serve the source file.
 
 mod archive;
 mod cover;

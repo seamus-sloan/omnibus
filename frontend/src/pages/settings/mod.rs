@@ -1,12 +1,8 @@
-//! Settings page (`/settings`) — permission-gated sidebar over configuration
-//! sections.
-//!
-//! Web/server render a left sidebar (Account / Library / Administration) whose
-//! active section is driven by the `?section=` query param; non-admins see the
-//! per-user sections (Account, Kindle, Kobo), admins additionally see Library
-//! Location, Metadata Lookup, Email delivery, Users, and Logs. The mobile shell
-//! has no sidebar — it renders the library form plus the admin key/SMTP cards
-//! flat, unchanged.
+//! Settings page (`/settings`) — a permission-gated sidebar over configuration
+//! sections, with the active section driven by the `?section=` query param.
+//! Non-admins see the per-user sections (Account, Kindle, Kobo); admins also see
+//! Library Location, Metadata Lookup, Email delivery, Users, and Logs. The
+//! mobile shell has no sidebar — it renders those cards flat.
 
 // Web/server only: the Background Tasks dashboard calls the web-only
 // `data::get_background_tasks` (no mobile RPC route yet), same shape as

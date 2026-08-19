@@ -1,9 +1,8 @@
-//! Shelf read paths: visibility-scoped listing, single-shelf detail, the
-//! member book page, and the create-modal rule preview. Split by read-shape:
-//! [`summary`] covers the multi-shelf rail ([`list_visible_shelves`] and its
-//! per-kind batch-loaders); [`detail`] covers single-shelf fetches (a shelf's
-//! own page, the rule preview, Kobo sync membership). Shared constants and
-//! small cross-cutting helpers (rule parsing, sort SQL) live here.
+//! Shelf read paths, split by read shape: [`summary`] covers the multi-shelf
+//! rail ([`list_visible_shelves`] and its per-kind batch loaders) and
+//! [`detail`] covers single-shelf fetches — a shelf's own page, the rule
+//! preview, Kobo sync membership. Shared constants and small cross-cutting
+//! helpers (rule parsing, sort SQL) live here.
 
 use omnibus_shared::{
     MatchMode, RuleField, RuleOp, ShelfKind, ShelfRule, SortDir, SortKey, Visibility,

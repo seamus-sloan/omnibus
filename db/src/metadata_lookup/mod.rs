@@ -1,11 +1,8 @@
-//! Server-side book-metadata resolution for scans that miss the library.
-//!
-//! Two entry points, one per question a caller can ask —
-//! [`search_provider_by_isbn`] and [`search_provider_by_title`]. Each walks the
-//! same ladder of providers (Open Library, Google Books, Hardcover) so callers
-//! never name a provider or know which are configured; see
-//! [`providers`][self::providers] for the per-provider contract and
-//! [`providers::ladder`] for the order.
+//! Server-side book-metadata resolution for scans that miss the library. Two
+//! entry points, one per question a caller can ask —
+//! [`search_provider_by_isbn`] and [`search_provider_by_title`] — each walking
+//! the same provider ladder, so callers never name a provider or know which are
+//! configured. See [`providers`][self::providers] for the per-provider contract.
 
 mod config;
 mod providers;

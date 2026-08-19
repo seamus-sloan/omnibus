@@ -1,9 +1,7 @@
-//! Mobile bottom tab bar.
-//!
-//! Four icon tabs (Library, Authors, Stats, You) split around a raised center
-//! action that opens the add-books chooser. The native shell's primary `Nav`;
-//! also mounts on web via `ScreenLayout`, hidden by CSS above the phone
-//! breakpoint so desktop keeps its top-bar links.
+//! Mobile bottom tab bar: four icon tabs (Library, Authors, Stats, You) split
+//! around a raised center action that opens the add-books chooser. The native
+//! shell's primary `Nav`; also mounts on web via `ScreenLayout`, hidden by CSS
+//! above the phone breakpoint so desktop keeps its top-bar links.
 
 use dioxus::prelude::*;
 use dioxus_router::{use_route, Link};

@@ -1,10 +1,8 @@
-//! Pure view-derivation + time/chapter arithmetic for the mobile player.
-//!
+//! Pure view-derivation plus time and chapter arithmetic for the mobile player.
 //! Everything here is renderer- and browser-free so it can be unit-tested:
-//! `H:MM:SS` / `M:SS` formatting, manifest → [`PlayerView`] derivation,
-//! chapter-from-position math, previous-chapter seek targets, part
-//! auto-advance selection, the playback-rate cycle, and the tokened part
-//! URL builder consumed by the audio control surface.
+//! `H:MM:SS` / `M:SS` formatting, manifest to [`PlayerView`] derivation,
+//! chapter-from-position math, previous-chapter seek targets, part auto-advance
+//! selection, the playback-rate cycle, and the tokened part URL builder.
 
 use omnibus_shared::{ChapterInfo, EbookMetadata, ManifestPart};
 

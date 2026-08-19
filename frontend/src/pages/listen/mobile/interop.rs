@@ -1,15 +1,8 @@
-//! Mobile `<audio>` control surface via `dioxus::document::eval`.
-//!
-//! Mobile is a wry WebView, so an HTML `<audio>` element plays natively. We
-//! install a `window.OmnibusMobileAudio` object once (part list, cumulative
-//! offsets, transport methods, cross-part `ended` auto-advance) and push
-//! `timeupdate` / `play` / `pause` events back to Rust over the Dioxus
-//! `eval` channel (`dioxus.send(...)` → `Eval::recv().await`). Control
-//! commands (toggle / seek / skip / setRate) are fire-and-forget evals.
-//!
-//! Everything here is a JS-interop seam; the testable arithmetic lives in
-//! [`super::view`]. The pure part-URL builder ([`super::view::part_token_url`])
-//! is exercised by that module's tests.
+//! Mobile `<audio>` control surface via `dioxus::document::eval`. Mobile is a
+//! wry WebView, so an HTML `<audio>` element plays natively: a
+//! `window.OmnibusMobileAudio` object is installed once and pushes `timeupdate`
+//! / `play` / `pause` back to Rust over the Dioxus eval channel. Everything
+//! here is a JS-interop seam; the testable arithmetic lives in [`super::view`].
 
 use dioxus::document::Eval;
 use omnibus_shared::ManifestPart;

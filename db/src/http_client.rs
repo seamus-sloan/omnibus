@@ -1,11 +1,8 @@
-//! Shared `reqwest::Client` builder for the crate's outbound HTTP
-//! integrations (OpenLibrary, Hardcover, Google Books, author-photo search).
-//! Each caller owns its own process-wide `OnceLock<Client>` instance — this
-//! module only shares the construction boilerplate, not the client itself.
-//!
-//! Not used by the admin "paste image URL" path (`author_photos::remote`),
-//! which builds a per-call client pinned to pre-validated socket addresses
-//! for SSRF protection.
+//! Shared `reqwest::Client` builder for the crate's outbound HTTP integrations
+//! (OpenLibrary, Hardcover, Google Books, author-photo search). Each caller
+//! owns its own process-wide `OnceLock<Client>`; this module shares the
+//! construction boilerplate only. Not used by `author_photos::remote`, which
+//! builds a per-call client pinned to pre-validated addresses for SSRF safety.
 
 /// Build a `reqwest::Client` with the given `User-Agent` header. Fallible
 /// (TLS backend init); callers cache the result behind their own

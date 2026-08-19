@@ -13,6 +13,8 @@ use crate::resolve_canonical_book_uuid;
 /// produce an unbounded REST response.
 pub const LIST_BOOKMARKS_LIMIT: i64 = 1_000;
 
+/// Failure space for bookmark CRUD: unknown book, missing (or non-owned)
+/// bookmark, or the underlying SQL.
 #[derive(Debug, thiserror::Error)]
 pub enum BookmarkError {
     #[error("book not found")]

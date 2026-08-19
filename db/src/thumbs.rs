@@ -54,6 +54,8 @@ impl std::str::FromStr for ThumbSize {
     }
 }
 
+/// Failure space for thumbnail generation: a pipeline step failed, the book
+/// has no cover to resize, or the DB read failed.
 #[derive(Debug, thiserror::Error)]
 pub enum ThumbError {
     /// Decode, encode, or I/O failure in the pipeline; the message names the step.

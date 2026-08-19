@@ -1,11 +1,8 @@
-//! `/api/ebooks/*` handlers.
-//!
-//! Session-gated reads that list the configured library, look up a single
-//! book by uuid, and stream the raw EPUB bytes for the in-app reader.
-//! Mounted on the mobile REST router in [`super::rest_router`]. The
-//! `/file` stream additionally accepts a `?token=` query param
-//! ([`MediaAuthUser`]) so epub.js can fetch the book from the mobile WebView,
-//! which carries neither a cookie nor an `Authorization` header.
+//! `/api/ebooks/*` handlers: session-gated reads that list the configured
+//! library, look up a single book by uuid, and stream the raw EPUB bytes for
+//! the in-app reader. Mounted on the mobile REST router in
+//! [`super::rest_router`]. The `/file` stream additionally accepts a `?token=`
+//! query param so epub.js can fetch the book from the mobile WebView.
 
 use axum::{
     extract::{Path, Query, Request, State},
@@ -24,13 +21,12 @@ use super::conditional::{self, MEDIA_CACHE_CONTROL, MEDIA_VARY};
 use super::{internal, with_pagination_headers, AppState};
 use crate::auth::{AuthUser, MediaAuthUser};
 
-/// Default keyset page size for the paginated `GET /api/ebooks` form (F5b
-/// open question #1). A grid renders ~30–60 cards above the fold and the table
-/// more; 100 covers both without an oversized first paint. An explicit
+/// Default keyset page size for the paginated `GET /api/ebooks` form. A grid
+/// renders ~30–60 cards above the fold and the table more; 100 covers both without an oversized first paint. An explicit
 /// `?limit=` overrides it (the db layer caps it at `MAX_BOOKS_RETURNED`).
 const DEFAULT_PAGE_LIMIT: i64 = 100;
 
-/// Query params for the F5b paginated form of `GET /api/ebooks`. When none are
+/// Query params for the paginated form of `GET /api/ebooks`. When none are
 /// present the handler returns the full (capped) library exactly as before, so
 /// existing mobile clients are unaffected; any of `sort`/`dir`/`cursor`/`limit`
 /// switches it to a keyset page that also emits `X-Next-Cursor`. `sort`/`dir`
@@ -100,7 +96,7 @@ pub(super) async fn get_ebooks(
 }
 
 /// Full (capped) combined library, with `X-Total-Count` / `X-Total-Cap`
-/// headers — the pre-F5b response shape for clients that send no pagination.
+/// headers — the unpaginated response shape for clients that send no cursor.
 async fn respond_full_library(
     state: &AppState,
     ebook: Option<&str>,

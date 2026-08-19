@@ -1,9 +1,7 @@
-//! Author-photo serve + admin override handlers.
-//!
-//! Cookie-gated `GET` returns the cached author photo bytes (404 on miss
-//! kicks off background Open Library resolution); admin-only `PUT` /
-//! `DELETE` accepts an uploaded photo or a remote URL via the SSRF-guarded
-//! `fetch_remote_image` helper.
+//! Author-photo serve and admin override handlers. Cookie-gated `GET` returns
+//! the cached photo bytes, with a 404 kicking off background Open Library
+//! resolution; admin-only `PUT` / `DELETE` accepts an uploaded photo or a
+//! remote URL via the SSRF-guarded `fetch_remote_image` helper.
 
 use axum::{
     extract::{Path, State},

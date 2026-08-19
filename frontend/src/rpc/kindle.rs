@@ -1,10 +1,8 @@
 //! Send-to-Kindle server functions. `rpc_send_to_kindle` enqueues a
 //! `SendToKindle` job on the shared worker and returns its `task_id`
-//! immediately; the client then polls `rpc_kindle_send_status` for the
-//! terminal result. Returning right away keeps the request well under the
-//! server's 30s timeout guard, so a slow/hung SMTP relay never leaves the
-//! request open (and thus never produces the retryable 408 that stalled the
-//! button on "Sending…").
+//! immediately; the client then polls `rpc_kindle_send_status` for the terminal
+//! result. Returning right away keeps the request well under the server's 30s
+//! timeout guard, so a hung SMTP relay never leaves the request open.
 
 use dioxus::fullstack::post;
 use dioxus::prelude::*;

@@ -1,10 +1,8 @@
-//! Omnibus mobile — thin native shell hosting a wry WebView.
-//!
-//! Dioxus `features = ["mobile"]` renders the shared `omnibus_frontend` rsx into
-//! a system WebView (WKWebView on iOS, Android System WebView) via wry — not a
-//! Blitz/native renderer. This binary only wires platform launch: seed the
-//! persisted server-URL context, hydrate the bearer token from disk, and
-//! delegate to the shared `App`.
+//! Omnibus mobile — thin native shell hosting a wry WebView. Dioxus
+//! `features = ["mobile"]` renders the shared `omnibus_frontend` rsx into a
+//! system WebView (WKWebView on iOS, Android System WebView) rather than a
+//! native renderer. This binary only wires platform launch: seed the persisted
+//! server-URL context, hydrate the bearer token from disk, delegate to `App`.
 
 use dioxus::prelude::*;
 use omnibus_frontend::{

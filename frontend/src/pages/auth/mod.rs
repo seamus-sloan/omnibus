@@ -128,7 +128,7 @@ async fn fetch_registration_open(server_url: &str) -> Result<bool, String> {
 /// splices the server's diagnostic body back into an HTTP failure —
 /// `DataError`'s own `Display` deliberately omits it, but the register-error
 /// classifier keys on "username"/"password" substrings, so the mobile path
-/// must keep the body to route field errors correctly (mirrors the pre-#96
+/// must keep the body to route field errors correctly (the historical
 /// `"{status}: {body}"` string).
 #[cfg(feature = "mobile")]
 fn data_error_message(err: crate::data::DataError) -> String {

@@ -1,16 +1,8 @@
 //! OPDS 2.0 (Readium Web Publication Manifest) wire types, serialized as
 //! `application/opds+json` by the `json_*` handlers under
-//! `server/src/backend/opds/` (`json_nav.rs`, `json_search.rs`, etc). A parallel
-//! presentation of the same navigation/acquisition data the OPDS 1.2 Atom
-//! catalog at `/opds/*` exposes (hand-rolled XML in
-//! `server/src/backend/opds/atom.rs`) for OPDS clients that speak JSON
-//! instead. Unlike Atom, one media type covers both navigation and
-//! publication feeds — the populated array (`navigation` vs `publications`)
-//! already tells a client which kind it got.
-//!
-//! Deliberately *not* re-exported flat from the crate root — `Contributor`
-//! collides with `ebook::Contributor` — so callers reach these types via
-//! `omnibus_shared::opds::*`, matching the `http_range` precedent.
+//! `server/src/backend/opds/` — a parallel presentation of the data the OPDS
+//! 1.2 Atom catalog exposes. Not re-exported flat from the crate root, since
+//! `Contributor` collides with `ebook::Contributor`; reach them via `opds::*`.
 
 use serde::{Deserialize, Serialize};
 
@@ -49,21 +41,26 @@ impl Link {
         }
     }
 
+    /// Builder: attach a relation type and return the link.
     pub fn with_rel(mut self, rel: impl Into<String>) -> Self {
         self.rel = Some(rel.into());
         self
     }
 
+    /// Builder: attach a media type and return the link.
     pub fn with_type(mut self, type_: impl Into<String>) -> Self {
         self.type_ = Some(type_.into());
         self
     }
 
+    /// Builder: attach a title and return the link.
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
         self
     }
 
+    /// Builder: flag the href as a URI template (it carries `{...}` slots the
+    /// client fills in) and return the link.
     pub fn templated(mut self) -> Self {
         self.templated = true;
         self

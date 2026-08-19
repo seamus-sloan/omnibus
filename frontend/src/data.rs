@@ -1,10 +1,8 @@
-//! Feature-gated data-fetching layer: mobile calls the server's
-//! hand-written `/api/*` REST routes via `reqwest`; web and server-only
-//! compiles call the `#[get]`/`#[post]` functions in [`crate::rpc`].
-//! Per-domain wrappers live in the [`auth`], [`authors`], [`books`], and
-//! sibling submodules, re-exported here; [`error`], [`transport`], and the
-//! mobile-only `stores` carry the shared error type, HTTP plumbing, and
-//! on-device persistence they build on.
+//! Feature-gated data-fetching layer: mobile calls the server's hand-written
+//! `/api/*` REST routes via `reqwest`, while web and server-only compiles call
+//! the `#[get]`/`#[post]` functions in [`crate::rpc`]. Per-domain wrappers live
+//! in the sibling submodules re-exported here; [`error`], [`transport`], and
+//! the mobile-only `stores` carry the plumbing they build on.
 
 mod account;
 // Admin server-health report (F5, #952) — web (server-fn) + SSR stubs; not

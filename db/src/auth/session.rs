@@ -26,7 +26,7 @@ pub const LIST_SESSIONS_LIMIT: i64 = 500;
 /// Accepts any `sqlx::Executor` so callers can pass either a `&SqlitePool` for
 /// a standalone insert or `&mut *tx` from within a transaction — the login
 /// path in `server::auth::handlers::issue_session` uses the latter to keep the
-/// device + session inserts atomic (see #627).
+/// device + session inserts atomic.
 pub async fn create_session<'e, E>(
     executor: E,
     user_id: i64,

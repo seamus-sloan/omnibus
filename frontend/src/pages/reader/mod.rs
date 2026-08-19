@@ -1,10 +1,8 @@
-//! Immersive full-screen EPUB reader. Loads the vendored epub.js +
-//! JSZip glue (`window.OmnibusReader`) via `dioxus::document::eval`, streams
-//! bytes from `GET /api/ebooks/:uuid/file`, and persists position via
+//! Immersive full-screen EPUB reader. Loads the vendored epub.js + JSZip glue
+//! (`window.OmnibusReader`) via `dioxus::document::eval`, streams bytes from
+//! `GET /api/ebooks/:uuid/file`, and persists position via
 //! [`crate::reader_progress`]. Chrome compiles on every target; the JS interop
-//! that mounts a book has a per-target seam — `interop` (web, `wasm_bindgen`
-//! callbacks + same-origin cookie fetch) and `mobile` (wry WebView,
-//! `dioxus.send` event channel + tokened cross-origin fetch).
+//! that mounts a book has a per-target seam — `interop` (web) and `mobile`.
 
 mod aa_panel;
 mod annotations_sheet;

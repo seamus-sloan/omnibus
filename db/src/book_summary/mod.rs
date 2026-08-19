@@ -1,9 +1,8 @@
-//! "Fetch book summary" — pull a description from an external provider on
-//! demand (an explicit user action, not the background worker). The cascade is
-//! Hardcover (when a key is configured) → Google Books (always) → Open Library
-//! (only when no keys are configured). [`summary_source_plan`] computes that
-//! ordered list for the current settings; the caller drives it one source at a
-//! time (via [`fetch_summary`]) so the UI can show a per-source status message.
+//! "Fetch book summary" — pull a description from an external provider on an
+//! explicit user action, not the background worker. [`summary_source_plan`]
+//! computes the ordered cascade (Hardcover when keyed, Google Books, then Open
+//! Library only when unkeyed); the caller drives it one source at a time via
+//! [`fetch_summary`] so the UI can show a per-source status message.
 
 pub mod googlebooks;
 pub mod openlibrary;

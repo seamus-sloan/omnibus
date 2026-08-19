@@ -26,7 +26,7 @@ fn sanitized_err(label: &str, e: impl std::fmt::Display) -> TaskOutcome {
 /// has no enumerable variants to bucket. The `Ok` payload is discarded
 /// (some handlers return a path/id), so `Ok(())` and `Ok(value)` collapse
 /// to [`TaskOutcome::Ok(None)`] identically. Scan tasks that need to
-/// surface a ghost-count warning (issue #1057) build their `TaskOutcome`
+/// surface a ghost-count warning build their `TaskOutcome`
 /// directly instead of going through this helper.
 fn anyhow_outcome<T>(label: &str, result: anyhow::Result<T>) -> TaskOutcome {
     match result {
@@ -71,7 +71,7 @@ fn kepub_outcome(result: Result<std::path::PathBuf, crate::kepub::KepubError>) -
 
 /// Variant-aware mapping for [`crate::convert::ConvertError`]: a missing
 /// source file, an unavailable `ebook-convert` binary, a timeout, and an
-/// invalid format token are safe, specific messages (#948); the collapsed
+/// invalid format token are safe, specific messages; the collapsed
 /// `Failed` variant (DB lookups, I/O, a non-zero `ebook-convert` exit)
 /// carries subprocess stderr / lower-level internals, so it goes through
 /// [`sanitized_err`].
@@ -369,9 +369,9 @@ impl Worker {
     }
 
     /// Reindex an ebook library, then (on success) post the follow-up
-    /// word-count, page-count, and thumbnail-warm-up (#1752) backfill tasks
+    /// word-count, page-count, and thumbnail-warm-up backfill tasks
     /// for any rows this library still needs them for, plus a library-cleanup
-    /// detection pass (#965) so fresh dedup suggestions appear after an
+    /// detection pass so fresh dedup suggestions appear after an
     /// import without any admin action. All four share the scan's resource
     /// key except `DetectCleanup`, which runs under its own `cleanup` key so
     /// it doesn't wait behind (or block) a same-library rescan; the posts
@@ -404,13 +404,13 @@ impl Worker {
         }
     }
 
-    /// Bake every book's active override into its EPUB export cache
-    /// (#959, #1718). Per-book failures are recorded in
+    /// Bake every book's active override into its EPUB export cache.
+    /// Per-book failures are recorded in
     /// [`omnibus_shared::BulkRewriteSummary::errors`] by
     /// `rewrite_all_epubs_with_overrides` itself and never fail the task —
     /// only a failure resolving the batch (DB down, etc.) reaches this
     /// match's `Err` arm. A non-empty error list rides onto the terminal
-    /// `TaskOutcome` as [`TaskSuccessDetail::BakeErrors`] (#1739) so the
+    /// `TaskOutcome` as [`TaskSuccessDetail::BakeErrors`] so the
     /// poller can surface it, in addition to the summary counts always
     /// being logged. Only the failed `book_uuid`s cross that boundary —
     /// each per-book `message` (from `db::epub_rewrite`, which can carry a

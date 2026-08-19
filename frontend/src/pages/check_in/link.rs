@@ -1,10 +1,8 @@
-//! Link a scanned copy to a book the library already holds.
-//!
-//! The escape hatch for the copies no rung of the matching ladder can bridge:
-//! a print edition whose barcode the library book doesn't publish, under a
-//! provider title that shares nothing with it (pre-release placeholders are
-//! the usual culprit). The reader names the book instead of the matcher
-//! guessing it. Visible text is the E2E selector contract (rule 04).
+//! Link a scanned copy to a book the library already holds — the escape hatch
+//! for copies no rung of the matching ladder can bridge: a print edition whose
+//! barcode the library book doesn't publish, under a provider title that shares
+//! nothing with it. The reader names the book instead of the matcher guessing.
+//! Visible text here is the E2E selector contract.
 
 use dioxus::prelude::*;
 use omnibus_shared::{PaletteBookHit, ScanBook};

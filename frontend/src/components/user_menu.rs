@@ -1,9 +1,8 @@
-//! User-menu dropdown mounted in the top nav. Real wiring: recent progress,
-//! Settings, Sign out, Dark/Light theme, app version, and (#1913) the
-//! Shelves stat tile. Journal/Highlights/Goals have no aggregate web page
-//! yet, so their tiles render as non-interactive stats rather than dead
-//! links — see [`UmStat`]. See [`UserMenu`] for the SSR/hydration handling
-//! of the pre-auth trigger state.
+//! User-menu dropdown mounted in the top nav: recent progress, Settings, Sign
+//! out, Dark/Light theme, app version, and the Shelves stat tile.
+//! Journal/Highlights/Goals have no aggregate web page yet, so their tiles
+//! render as non-interactive stats rather than dead links — see [`UmStat`]. See
+//! [`UserMenu`] for the SSR/hydration handling of the pre-auth trigger state.
 
 use dioxus::prelude::*;
 use dioxus_router::{use_navigator, Link};
@@ -77,6 +76,8 @@ pub fn UserMenu() -> Element {
     }
 }
 
+/// No-feature stub: neither the web nor the SSR menu is compiled in, so this
+/// renders nothing.
 #[cfg(not(any(feature = "web", feature = "server")))]
 #[component]
 pub fn UserMenu() -> Element {

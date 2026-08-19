@@ -1,6 +1,6 @@
 //! Batched author-link writer for the indexer sync path. Resolves the
 //! merged `creators + contributors` list against the `ignored_authors`
-//! blocklist and the `entity_aliases` reindex-resurrection guard (#964),
+//! blocklist and the `entity_aliases` reindex-resurrection guard,
 //! upserts surviving unmerged names into `authors`, and writes the
 //! per-book join rows in a constant handful of statements.
 

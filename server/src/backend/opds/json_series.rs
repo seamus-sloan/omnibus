@@ -1,9 +1,8 @@
-//! Series browse (AC2) — the JSON catalog's series parity, which the Atom
-//! feed doesn't implement (see the `opds` module doc): `/opds/v2/series`
-//! (every series with ≥1 visible book) and `/opds/v2/series/{id}` (one
-//! series' publication feed). Reuses `db::list_series` / `db::get_series` —
-//! the same reads the web series index and detail pages use — so this
-//! browse can't drift from what a user sees browsing the app itself.
+//! Series browse for the JSON catalog, which the Atom feed doesn't implement:
+//! `/opds/v2/series` (every series with at least one visible book) and
+//! `/opds/v2/series/{id}` (one series' publication feed). Reuses
+//! `db::list_series` / `db::get_series` — the same reads the web series index
+//! and detail pages use — so this browse can't drift from the app itself.
 
 use axum::{
     extract::{Path, State},

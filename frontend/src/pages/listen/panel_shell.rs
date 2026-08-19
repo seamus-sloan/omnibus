@@ -1,9 +1,8 @@
-//! Shared scrim + shell chrome for the listen page's drawers and overlay
-//! panels — [`ListenDrawerShell`] backs the bookmarks/chapters drawers
-//! (`lp-drawer`: head with kicker/title, grouped actions, body),
-//! [`ListenPanelShell`] backs the sleep/speed overlay panels (the thinner
-//! `lp-panel` wrapper). They differ only in outer class and close-button
-//! ownership, so this stays two small components rather than one shape.
+//! Shared scrim and shell chrome for the listen page's drawers and overlay
+//! panels. [`ListenDrawerShell`] backs the bookmarks/chapters drawers
+//! (`lp-drawer`: head with kicker and title, grouped actions, body);
+//! [`ListenPanelShell`] backs the sleep/speed panels (the thinner `lp-panel`).
+//! They differ only in outer class and close-button ownership.
 
 #![cfg(not(feature = "mobile"))]
 

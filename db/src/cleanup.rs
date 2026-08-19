@@ -1,9 +1,7 @@
-//! Library-cleanup detection plus the transactional apply/undo primitives
-//! that act on a detected (or on-page) suggestion: detectors surface
-//! near-duplicate authors/series/tags, tag soup, title cruft, and junk
-//! authors; [`apply`]/[`undo`] execute or reverse one, and [`review`] serves
-//! the `dedup_suggestions` queue those decisions come from. Detection lives
-//! here; the rest live in the sibling submodules (file-shape cap).
+//! Library-cleanup detection: near-duplicate authors/series/tags, tag soup,
+//! title cruft, and junk authors. Detection lives here; the transactional
+//! [`apply`]/[`undo`] primitives and the [`review`] queue their decisions come
+//! from live in the sibling submodules (file-shape cap).
 
 use std::collections::{HashMap, HashSet};
 

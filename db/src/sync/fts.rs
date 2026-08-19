@@ -1,12 +1,8 @@
-//! The single door for maintaining the standalone `books_fts` index.
-//!
-//! `books_fts` is a standalone FTS5 vtable (no `content=`) with only
-//! rename triggers, so every book mutation must mirror its row by hand.
-//! Rather than open-code a DELETE/INSERT at each write site, all paths
-//! route through [`upsert_fts`] / [`delete_fts`] here. Both take a
-//! `&mut SqliteConnection` so they work inside a transaction
-//! (`&mut **tx`) and on a pooled connection alike. The full-index repair
-//! job [`rebuild_all_fts`] is built on the same door.
+//! The single door for maintaining the standalone `books_fts` index. It is a
+//! standalone FTS5 vtable (no `content=`) with only rename triggers, so every
+//! book mutation mirrors its row by hand through [`upsert_fts`] /
+//! [`delete_fts`] rather than an open-coded DELETE/INSERT per write site. Both
+//! take a `&mut SqliteConnection`, so they work in a transaction or on a pool.
 
 use std::sync::OnceLock;
 

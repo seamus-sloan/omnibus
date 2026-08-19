@@ -1,6 +1,5 @@
-//! Reader over the on-disk rolling JSON logs for the admin log viewer.
-//!
-//! Parses the `tracing-subscriber` JSON records the server writes, applies the
+//! Reader over the on-disk rolling JSON logs for the admin log viewer. Parses
+//! the `tracing-subscriber` JSON records the server writes, applies the
 //! level/module/time-range filters, and returns one newest-first page. The
 //! writer lives in `server::logging`; both resolve the directory through
 //! [`log_dir`] so reader and writer always agree.

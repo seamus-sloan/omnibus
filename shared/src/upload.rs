@@ -1,9 +1,7 @@
-//! Wire types for the "add your own books" upload flow + magic-byte format
-//! detection.
-//!
-//! The web client uploads a file, the server parses it and returns an
-//! [`UploadInspection`] for an editable confirm step, then the client commits
-//! and gets back an [`UploadCommitResult`]. Shared here so the REST handler
+//! Wire types for the "add your own books" upload flow. The web client uploads
+//! a file, the server parses it and returns an [`UploadInspection`] for an
+//! editable confirm step, then the client commits and gets back an
+//! [`UploadCommitResult`]. Shared so the REST handler
 //! (`server::backend::uploads`) and the frontend data layer agree on the shape.
 
 use serde::{Deserialize, Serialize};

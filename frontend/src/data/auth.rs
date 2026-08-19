@@ -169,7 +169,7 @@ pub async fn check_server(server_url: &str) -> Result<(), DataError> {
 
 /// GET `{server_url}/api/_health` (mobile) — resolve the running server's
 /// release version so the account "You" screen can show it alongside the
-/// app's own compile-time version (#1055). Distinct from [`check_server`],
+/// app's own compile-time version. Distinct from [`check_server`],
 /// which only probes reachability and discards the body.
 #[cfg(feature = "mobile")]
 pub async fn get_server_version(server_url: &str) -> Result<String, DataError> {
@@ -357,6 +357,7 @@ pub async fn registration_status() -> Result<bool, String> {
     Ok(true)
 }
 
+/// SSR stub — the Users section mutates only after the WASM client mounts.
 #[cfg(all(feature = "server", not(feature = "web")))]
 pub async fn set_registration_enabled(_enabled: bool) -> Result<(), String> {
     Ok(())

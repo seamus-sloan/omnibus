@@ -1,11 +1,8 @@
-//! `require_auth` — top-level middleware, applied in `server/src/main.rs`,
-//! that gates `/api/*` routes behind a live session. Everything under
-//! `/api/*` other than `/api/auth/*` and `/api/_health` requires a valid
-//! session or gets `401 Unauthorized`; everything else (SSR HTML, WASM
-//! bundle, static assets) passes through untouched. Media read endpoints
-//! (covers, thumbs, author-photo / suggestion-cover GETs, and direct-play
-//! audiobook part streams) additionally accept the session as a `?token=`
-//! query param — see [`is_media_read_path`].
+//! `require_auth` — top-level middleware, applied in `server/src/main.rs`, that
+//! gates `/api/*` behind a live session: everything other than `/api/auth/*`
+//! and `/api/_health` needs one or gets `401`, while SSR HTML, the WASM bundle,
+//! and static assets pass through. Media read endpoints additionally accept the
+//! session as a `?token=` query param — see [`is_media_read_path`].
 
 use axum::{
     extract::{Request, State},

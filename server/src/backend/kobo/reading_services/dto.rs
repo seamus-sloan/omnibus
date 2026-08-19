@@ -35,6 +35,8 @@ pub struct AnnotationOut {
 }
 
 impl AnnotationOut {
+    /// Project a stored annotation into the device's wire shape, typing it as a
+    /// note when a note body is present and a highlight otherwise.
     pub fn from_served(row: &omnibus_db::annotations::ServedKoboAnnotation) -> Self {
         Self {
             attachments: serde_json::Map::new(),

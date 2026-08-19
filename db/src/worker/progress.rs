@@ -1,9 +1,8 @@
-//! Progress tracking + eviction. Hosts `Worker::progress_snapshot` and
-//! its owner-scoped sibling, the test-only retention seam, the internal
-//! `write_terminal_progress` invoked from both [`super::exec`] and the
-//! panic guard in [`super::queue`], and the mid-task report seams —
-//! `report_progress_update` (counted state + verbose detail) and
-//! `report_detail` (detail only).
+//! Progress tracking and eviction: `Worker::progress_snapshot` and its
+//! owner-scoped sibling, the test-only retention seam, the internal
+//! `write_terminal_progress` invoked from both [`super::exec`] and the panic
+//! guard in [`super::queue`], and the mid-task report seams —
+//! `report_progress_update` (counted state + detail) and `report_detail`.
 
 use std::time::{Duration, Instant};
 

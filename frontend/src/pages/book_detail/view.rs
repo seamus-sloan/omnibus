@@ -1,9 +1,8 @@
-//! Loaded-book view composition for [`super::BookDetailPage`].
-//!
-//! Derives display fields from the fetched [`EbookMetadata`] (breadcrumbs,
-//! kicker, series label, format flags) and renders the platform body: web's
-//! hero + rail + physical panel + suggestions grid, or mobile's single-column
-//! re-flow via [`super::mobile`].
+//! Loaded-book view composition for [`super::BookDetailPage`]. Derives display
+//! fields from the fetched [`EbookMetadata`] (breadcrumbs, kicker, series label,
+//! format flags) and renders the platform body: web's hero, rail, physical
+//! panel, and suggestions grid, or mobile's single-column re-flow via
+//! [`super::mobile`].
 
 use dioxus::prelude::*;
 // Only the web branch of `render_loaded` renders the "Back to library" Link;

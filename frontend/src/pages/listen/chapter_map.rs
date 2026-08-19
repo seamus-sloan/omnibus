@@ -1,8 +1,7 @@
-//! Segmented chapter progress bar doubling as a draggable seek scrubber.
-//!
-//! Each chapter is a flex segment sized by `flex: {duration_seconds}`; a
-//! transparent `<input type="range">` layered on top captures click / drag /
-//! keyboard seeking. See [`helpers::effective_scrub_position`] for the
+//! Segmented chapter progress bar doubling as a draggable seek scrubber. Each
+//! chapter is a flex segment sized by `flex: {duration_seconds}`, with a
+//! transparent `<input type="range">` layered on top to capture click, drag,
+//! and keyboard seeking. See [`helpers::effective_scrub_position`] for the
 //! drag-preview contract.
 
 #![cfg(not(feature = "mobile"))]

@@ -1,9 +1,8 @@
-//! Hand-rolled Atom/OPDS 1.2 XML serialization.
-//!
-//! The shapes this module emits (one `<feed>` of `<entry>` elements, each
-//! with a handful of `<link>`s) are simple enough that a small
-//! escaping-safe writer is easier to audit than wiring up a generic XML
-//! crate for it — see the module doc on `opds` for the fuller rationale.
+//! Hand-rolled Atom/OPDS 1.2 XML serialization. The shapes this module emits
+//! (one `<feed>` of `<entry>` elements, each with a handful of `<link>`s) are
+//! simple enough that a small escaping-safe writer is easier to audit than
+//! wiring up a generic XML crate — see the [`super`] module doc for the fuller
+//! rationale.
 
 /// MIME type for an OPDS navigation feed (links to other feeds).
 pub const NAVIGATION_TYPE: &str =

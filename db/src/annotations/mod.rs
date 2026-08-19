@@ -24,6 +24,8 @@ pub use downsync::{
 /// produce an unbounded REST response.
 pub const LIST_HIGHLIGHTS_LIMIT: i64 = 1_000;
 
+/// Failure space for highlight CRUD: unknown book, missing (or non-owned)
+/// highlight, or the underlying SQL.
 #[derive(Debug, thiserror::Error)]
 pub enum HighlightError {
     #[error("book not found")]

@@ -1,10 +1,8 @@
-//! Shelf REST handlers for the mobile client (`/api/shelves*`).
-//!
-//! List the caller's visible shelves, create/update/delete a shelf, edit
-//! hand-picked membership, and preview an unsaved smart rule. Visibility is
-//! enforced per request: a shelf is visible to its owner, any admin, or —
-//! when public — everyone; mutations require owner-or-admin. Web clients use
-//! the parallel `/api/rpc/shelves*` server functions.
+//! Shelf REST handlers for the mobile client (`/api/shelves*`): list the
+//! caller's visible shelves, create/update/delete a shelf, edit hand-picked
+//! membership, and preview an unsaved smart rule. A shelf is visible to its
+//! owner, any admin, or — when public — everyone; mutations require
+//! owner-or-admin. Web clients use the parallel `/api/rpc/shelves*` RPCs.
 
 use axum::{
     extract::{Path, Query, State},

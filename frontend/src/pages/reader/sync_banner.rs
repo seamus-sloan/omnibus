@@ -1,9 +1,8 @@
-//! Cross-format follow resolution on the web reader, plus the "Synced
-//! here" footer pill. Follow-only: opening a linked book whose listening
-//! position is newer silently moves the text to the mapped spot (the
-//! server-derived CFI when available). The old "jump ahead?" banner is
-//! gone — linking IS turning sync on, and a linked book that still
-//! prompts on every surface switch reads as broken. Web-only surface.
+//! Cross-format follow resolution on the web reader, plus the "Synced here"
+//! footer pill. Follow-only: opening a linked book whose listening position is
+//! newer silently moves the text to the mapped spot (the server-derived CFI
+//! when available). There is no "jump ahead?" prompt — linking *is* turning
+//! sync on, and a linked book that still prompts reads as broken. Web-only.
 #![cfg(not(feature = "mobile"))]
 
 use dioxus::prelude::*;

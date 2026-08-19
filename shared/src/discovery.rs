@@ -1,9 +1,8 @@
-//! Discovery / browse / search-palette wire types.
-//!
-//! Covers the author / series / tag detail pages, the author and series
-//! browse indexes, the library landing payload, and the command-palette
-//! grouped result shape. Each card-level type stays slim so list endpoints
-//! avoid the N+1 cost of returning a full `EbookMetadata`.
+//! Discovery, browse, and search-palette wire types: the author / series / tag
+//! detail pages, the author and series browse indexes, the library landing
+//! payload, and the command-palette grouped result shape. Each card-level type
+//! stays slim so list endpoints avoid the N+1 cost of returning a full
+//! `EbookMetadata`.
 
 use serde::{Deserialize, Serialize};
 

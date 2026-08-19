@@ -1,15 +1,8 @@
-//! "Fetch from Hardcover" panel: an on-demand lookup that previews
-//! Hardcover's canonical title/author/description/series/ISBN-13 next to
-//! the current form values, with per-field and select-all controls. Applying
-//! only stages the chosen values into the form's existing signals — the
-//! page's already-tested `SaveBar`/`on_save` path is what actually writes
-//! them through as metadata overrides, so this module never talks to the
-//! overrides endpoint itself.
-//!
-//! Hidden entirely when no Hardcover key is configured
-//! (`data::hardcover_fetch_available`), mirroring the suggestions strip's
-//! disablement rule. Cover art is out of scope: applying an overridden
-//! cover (#983) hasn't landed in this codebase yet.
+//! "Fetch from Hardcover" panel: an on-demand lookup previewing Hardcover's
+//! canonical title/author/description/series/ISBN-13 next to the current form
+//! values, with per-field and select-all controls. Applying only stages values
+//! into the form's signals — the page's `SaveBar`/`on_save` path does the write.
+//! Hidden entirely when no Hardcover key is configured; cover art is out of scope.
 
 use dioxus::prelude::*;
 use omnibus_shared::metadata_fetch::{FetchedBookMetadata, HardcoverFetchResult};

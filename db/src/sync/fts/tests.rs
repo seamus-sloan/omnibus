@@ -1,9 +1,7 @@
-//! Acceptance tests for the `books_fts` choke-point: the no-orphan
-//! invariant after every public write path, the cross-format attach gap
-//! regression (a newly-attached format's ISBN must become searchable),
-//! `rebuild_all_fts` reconstructing a corrupted or fully-emptied index,
-//! and its batched `INSERT ... SELECT` matching the per-book `upsert_fts`
-//! path row-for-row.
+//! Acceptance tests for the `books_fts` choke-point: the no-orphan invariant
+//! after every public write path, the cross-format attach gap regression,
+//! `rebuild_all_fts` reconstructing a corrupted or fully-emptied index, and its
+//! batched `INSERT ... SELECT` matching the per-book `upsert_fts` path.
 
 use omnibus_shared::{Contributor, EbookMetadata, Identifier};
 use sqlx::Row;

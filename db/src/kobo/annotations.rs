@@ -9,6 +9,8 @@ use sqlx::{Row, SqlitePool};
 
 use crate::annotations::{served_kobo_annotations_batch, HighlightError, ServedKoboAnnotation};
 
+/// Failure space for the Kobo annotation sync: an underlying highlight
+/// operation, or SQL.
 #[derive(Debug, thiserror::Error)]
 pub enum KoboAnnotationSyncError {
     #[error(transparent)]

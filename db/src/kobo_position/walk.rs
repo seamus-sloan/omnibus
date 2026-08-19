@@ -1,29 +1,8 @@
 //! Single-pass XHTML walker backing the span↔CFI translation. One
-//! `FileIndex` build per content document answers every query the module
-//! needs; the invariants below are the correctness argument for the whole
-//! translation, so a change to any of them must hold on *both* the kepub
-//! and the source walks or aligned offsets silently diverge.
-//!
-//! Invariants:
-//! - **Normalized text stream.** All character data under `<body>`,
-//!   entity-decoded, with every whitespace run collapsed to one space and
-//!   leading whitespace dropped. Offsets count Unicode scalars in this
-//!   stream. kepubify's injected markup (`koboSpan` wrappers, the
-//!   `book-columns` divs) contributes no characters, so the kepub and
-//!   source streams are identical whenever the underlying text is.
-//! - **CFI step accounting** mirrors epub.js, the only consumer: element
-//!   child k (1-based) is even step `2k`; consecutive character-data nodes
-//!   coalesce into one text cluster whose odd index is `2t+1` after t
-//!   *earlier text clusters in the same parent* — epub.js numbers text
-//!   nodes among text siblings only, which diverges from the CFI spec's
-//!   interleaved numbering whenever an element precedes the cluster
-//!   (comments/PIs neither count nor split a cluster). Terminal offsets
-//!   are UTF-16 code units into the cluster's raw (uncollapsed) text.
-//! - **Anchors land on visible characters.** A span's position is the first
-//!   non-space normalized character at/after its start tag; a normalized
-//!   offset falling in collapsed whitespace resolves to the next visible
-//!   character. Every anchor carries a snippet of the following normalized
-//!   text so the two walks can prove they aligned.
+//! [`FileIndex`] build per content document answers every query the module
+//! needs; its documented invariants are the correctness argument for the whole
+//! translation, so a change to any of them must hold on *both* the kepub and
+//! the source walks or aligned offsets silently diverge.
 
 use anyhow::Context;
 use quick_xml::events::Event;
@@ -61,6 +40,29 @@ struct SpanMark {
 }
 
 /// Everything the four queries need from one content document.
+///
+/// Three invariants hold over every field, and both the kepub and the source
+/// walk must satisfy them or aligned offsets silently diverge:
+///
+/// - **Normalized text stream.** All character data under `<body>`,
+///   entity-decoded, with every whitespace run collapsed to one space and
+///   leading whitespace dropped. Offsets count Unicode scalars in this stream.
+///   kepubify's injected markup (`koboSpan` wrappers, the `book-columns` divs)
+///   contributes no characters, so the kepub and source streams are identical
+///   whenever the underlying text is.
+/// - **CFI step accounting** mirrors epub.js, the only consumer: element child
+///   k (1-based) is even step `2k`; consecutive character-data nodes coalesce
+///   into one text cluster whose odd index is `2t+1` after t *earlier text
+///   clusters in the same parent* — epub.js numbers text nodes among text
+///   siblings only, which diverges from the CFI spec's interleaved numbering
+///   whenever an element precedes the cluster (comments/PIs neither count nor
+///   split a cluster). Terminal offsets are UTF-16 code units into the
+///   cluster's raw (uncollapsed) text.
+/// - **Anchors land on visible characters.** A span's position is the first
+///   non-space normalized character at/after its start tag; a normalized offset
+///   falling in collapsed whitespace resolves to the next visible character.
+///   Every anchor carries a snippet of the following normalized text so the two
+///   walks can prove they aligned.
 pub(super) struct FileIndex {
     norm: String,
     clusters: Vec<Cluster>,

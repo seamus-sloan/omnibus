@@ -1,11 +1,8 @@
 //! One component per screen of the check-in flow, from the resolve spinner
-//! onwards. The two input screens are big enough to own their files: `scan`
-//! (camera) and `entry` (keypad).
-//!
-//! These are presentational: every write goes back out through an
-//! [`EventHandler`] so [`super::CheckInPage`] owns the transport and the
-//! [`super::Stage`] transitions. Visible text here is the E2E selector
-//! contract — keep it stable (rule 04).
+//! onwards; the two input screens own their own files (`scan` for the camera,
+//! `entry` for the keypad). These are presentational — every write goes back
+//! out through an [`EventHandler`] so [`super::CheckInPage`] owns transport and
+//! [`super::Stage`] transitions. Visible text is the E2E selector contract.
 
 use dioxus::prelude::*;
 use dioxus_router::Link;

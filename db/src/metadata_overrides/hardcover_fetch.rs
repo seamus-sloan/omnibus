@@ -1,12 +1,8 @@
-//! "Fetch from Hardcover" — pull a book's canonical title/author/
-//! description/series/ISBN-13 from Hardcover for the metadata-edit page's
-//! preview panel, without writing anything. Applying the previewed fields
-//! is the caller's job, through the existing [`super::upsert_metadata_overrides`]
-//! / [`super::merge_metadata_overrides`] path — this module only reads.
-//!
-//! Cover art is deliberately out of scope: applying an overridden cover
-//! image (#983) hasn't landed in this codebase yet, so there is nothing for
-//! a fetched cover URL to feed into.
+//! "Fetch from Hardcover" — read a book's canonical title / author /
+//! description / series / ISBN-13 for the metadata-edit page's preview panel
+//! without writing anything. Applying the previewed fields is the caller's job,
+//! via [`super::upsert_metadata_overrides`] / [`super::merge_metadata_overrides`].
+//! Cover art is out of scope: nothing here can apply an overridden cover image.
 
 #[cfg(test)]
 mod tests;

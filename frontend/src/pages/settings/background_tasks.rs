@@ -1,9 +1,8 @@
 //! Background Tasks settings section — the admin dashboard over the durable
-//! `background_tasks` history table (migration `0072`, issue #941). Mirrors
-//! `health::LastErrorsSection`'s shape: web/SSR-only, the real authorization
-//! boundary is the `AdminUser` extractor on `rpc_get_background_tasks`, and
-//! the in-page `use_is_admin` gate just keeps the chrome off a non-admin
-//! screen.
+//! `background_tasks` history table. Mirrors `health::LastErrorsSection`'s
+//! shape: web/SSR-only, with the real authorization boundary being the
+//! `AdminUser` extractor on `rpc_get_background_tasks`; the in-page
+//! `use_is_admin` gate just keeps the chrome off a non-admin screen.
 #![cfg(not(feature = "mobile"))]
 
 use dioxus::prelude::*;

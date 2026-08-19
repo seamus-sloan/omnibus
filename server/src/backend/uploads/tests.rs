@@ -1,9 +1,8 @@
-//! Integration tests for the "add your own books" upload endpoints.
-//!
-//! Inspect/commit are driven through `rest_router(...).oneshot(...)` against an
-//! in-memory DB. The commit happy-path drives a real worker scan (the same
-//! pattern the settings reindex test uses) so the indexer actually inserts the
-//! book before the override is layered on top.
+//! Integration tests for the "add your own books" upload endpoints, driving
+//! inspect/commit through `rest_router(...).oneshot(...)` against an in-memory
+//! DB. The commit happy path runs a real worker scan (the same pattern the
+//! settings reindex test uses) so the indexer actually inserts the book before
+//! the override is layered on top.
 
 use axum::{
     body::{to_bytes, Body},

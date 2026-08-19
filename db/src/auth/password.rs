@@ -77,6 +77,9 @@ const COMMON_PASSWORDS: &[&str] = &[
     "internet1",
 ];
 
+/// Build the Argon2 hasher from this module's tuning constants. Fallible
+/// because argon2 validates them at runtime, so a future constants tweak
+/// surfaces as an error rather than a panic in every auth call.
 pub(crate) fn argon2_hasher() -> AuthResult<Argon2<'static>> {
     // `Params::new` is fallible because it validates the supplied tuning
     // values at runtime. Our parameters are module-level `const`s and

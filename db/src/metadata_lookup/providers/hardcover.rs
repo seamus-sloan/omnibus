@@ -1,17 +1,8 @@
 //! Hardcover provider: the `by_isbn` / `by_title` pair every provider in this
-//! directory implements, over the same GraphQL API the suggestions ranking
-//! path uses.
-//!
-//! **Key-gated.** Hardcover authenticates every request, so without a
-//! configured key this provider is not a reachable rung at all and the ladder
-//! skips it.
-//!
-//! It sits *last* on the ladder for two reasons: a lookup here costs two
-//! round trips where the catalogs cost one, and its title search is exact-match
-//! only (`_ilike` is blocked server-side), so it earns its place as the rung
-//! that answers when the big catalogs have already come up empty — not as one
-//! that slows down the common case. In exchange it is the one provider that
-//! carries a series statement natively.
+//! directory implements, over the same GraphQL API the suggestions ranking path
+//! uses. Key-gated — without a configured key it is not a reachable rung and
+//! the ladder skips it. It sits last because a lookup costs two round trips and
+//! its title search is exact-match only; in exchange it alone carries series.
 
 use omnibus_shared::isbn::normalize_isbn;
 use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider};

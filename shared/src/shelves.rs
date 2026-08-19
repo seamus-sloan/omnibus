@@ -1,9 +1,8 @@
-//! Shelf wire types shared between web (`#[server]`) and mobile (`reqwest`).
-//!
-//! A shelf is a named library subset: **smart** (membership from a `field op
+//! Shelf wire types shared between web (`#[server]`) and mobile (`reqwest`). A
+//! shelf is a named library subset: **smart** (membership from a `field op
 //! value` rule over normalized metadata) or **manual** (an explicit, ordered
-//! book list). The condition shape (`RuleField`/`RuleOp`/`ShelfRule`) is defined
-//! once here so advanced search can reuse it.
+//! book list). The condition shape (`RuleField` / `RuleOp` / `ShelfRule`) is
+//! defined once here so advanced search can reuse it.
 
 use serde::{Deserialize, Serialize};
 

@@ -73,7 +73,9 @@ pub fn list_files(path: Option<&str>, extensions: &[&str]) -> LibrarySection {
     }
 }
 
+/// File extensions the ebook library walk accepts.
 pub const EBOOK_EXTENSIONS: &[&str] = &["epub", "pdf", "cbz"];
+/// File extensions the audiobook library walk accepts.
 pub const AUDIOBOOK_EXTENSIONS: &[&str] = &["m4b", "mp3"];
 
 /// Scan all configured library directories and return a combined `LibraryContents` with ebook and audiobook stat entries.

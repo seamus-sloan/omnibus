@@ -1,9 +1,8 @@
-//! Per-cell components for the landing table's inline-editable rows.
-//!
-//! Each helper wraps an [`EditableCell`] (or, for authors/tags/genres, hosts a
-//! [`ChipEditor`] directly via [`ChipCell`]) and is composed by
-//! `EbookRowCells` in [`super::row`]. `build_save_*` produce the row's
-//! per-field save callbacks.
+//! Per-cell components for the landing table's inline-editable rows. Each
+//! helper wraps an [`EditableCell`] — or, for authors/tags/genres, hosts a
+//! [`ChipEditor`] directly via [`ChipCell`] — and is composed by `EbookRowCells`
+//! in [`super::row`]. The `build_save_*` helpers produce the row's per-field
+//! save callbacks.
 
 use dioxus::prelude::*;
 use omnibus_shared::{Contributor, EbookMetadata, MetadataOverrides};
