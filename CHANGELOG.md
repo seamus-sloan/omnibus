@@ -8,7 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **How this file is maintained:** [`.github/workflows/release.yml`](.github/workflows/release.yml)
 cuts an automated GitHub release (and version tag) on every merge to `main` —
 a patch bump by default, a minor bump with the `minor version` label, and no
-release at all for a docs/CI-only PR or one labeled `no release`. That gives
+release for a PR labeled `no release`. An unlabeled PR that only touches
+docs/CI files also skips the release — but an explicit `patch version` or
+`minor version` label always wins and still cuts one, even for a docs/CI-only
+PR. That gives
 every release a tag and generated release notes, but not every one of those
 automated releases is worth a line here. This file is a curated, human-written
 summary of user-facing changes, updated as part of notable PRs rather than
