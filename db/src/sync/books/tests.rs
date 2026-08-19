@@ -1945,11 +1945,16 @@ async fn sync_new_keeps_explicit_series_index_and_only_fills_the_gap_from_the_em
 /// which is thread-local): `sqlx-sqlite` runs every statement — including
 /// each one this counts — on a dedicated per-connection worker thread (see
 /// `sqlx_sqlite::connection::worker`), so a thread-local override on the
-/// test's own async task never sees them. A global default is process-wide
-/// and permanent for the rest of the test binary, which is why the
-/// assertion below uses a loose upper bound rather than an exact count — a
-/// concurrently-running unrelated test's own `entity_aliases` query could
-/// add a stray hit to this counter too.
+/// test's own async task never sees them. Measured, not assumed: the scoped
+/// form counts 0 here and the assertion below then passes vacuously, which
+/// is the failure mode the lower bound exists to catch.
+///
+/// A global default is process-wide and permanent for the rest of the test
+/// binary. That is safe because this is the only `set_global_default` in the
+/// crate, so nothing races it for the slot — and the workspace runs on
+/// nextest, which gives each test its own process anyway. It is still why
+/// the upper bound is loose rather than exact: a concurrently-running
+/// unrelated test's own `entity_aliases` query could add a stray hit.
 struct EntityAliasQueryCounter(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 
 impl tracing::Subscriber for EntityAliasQueryCounter {
@@ -1992,11 +1997,14 @@ impl tracing::Subscriber for EntityAliasQueryCounter {
 /// `3 * BOOK_COUNT` such queries (`insert_author_links`/`insert_tag_links`/
 /// `resolve_or_insert_series` each called `resolve_entity_aliases` once per
 /// book); the batched shape issues 3 total regardless of `BOOK_COUNT`. The
-/// assertion checks `< BOOK_COUNT` rather than `== 3` — see
+/// upper bound checks `< BOOK_COUNT` rather than `== 3` — see
 /// `EntityAliasQueryCounter`'s doc for why an exact count isn't safe to
 /// assert against a process-wide subscriber — but `BOOK_COUNT` is picked
 /// large enough that the old shape would fail this bound by a wide margin
-/// while the new shape passes with room to spare.
+/// while the new shape passes with room to spare. The lower bound is what
+/// keeps that upper bound honest: a subscriber that never sees an event
+/// counts 0, and `0 < BOOK_COUNT` would pass no matter how the batching
+/// regressed.
 #[tokio::test]
 async fn sync_books_issues_one_entity_alias_query_per_kind_not_per_book() {
     let _covers = CoversTempDir::new("sync_books_alias_query_count");
@@ -2046,6 +2054,12 @@ async fn sync_books_issues_one_entity_alias_query_per_kind_not_per_book() {
     .unwrap();
 
     let queries = count.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(
+        queries > 0,
+        "counted no entity_aliases queries at all — the subscriber never saw \
+         sqlx's events, so the bound below would pass vacuously however the \
+         batching regressed"
+    );
     assert!(
         queries < BOOK_COUNT,
         "expected an entity_aliases query count bounded by the touched \
