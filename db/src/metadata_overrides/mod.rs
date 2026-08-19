@@ -24,7 +24,7 @@ pub(crate) use upsert::{
 };
 pub use upsert::{
     bulk_merge_metadata_overrides, clear_cover_override, delete_metadata_overrides,
-    delete_override_cover, get_book_uuid, get_metadata_overrides, merge_metadata_overrides,
+    delete_override_cover, get_metadata_overrides, merge_metadata_overrides,
     upsert_metadata_overrides, write_override_cover, MetadataOverridesError,
 };
 

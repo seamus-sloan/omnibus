@@ -20,7 +20,7 @@ mod cover;
 mod merge;
 
 pub(crate) use cover::apply_overrides;
-pub use cover::{clear_cover_override, delete_override_cover, get_book_uuid, write_override_cover};
+pub use cover::{clear_cover_override, delete_override_cover, write_override_cover};
 pub use merge::{bulk_merge_metadata_overrides, merge_metadata_overrides};
 
 /// Errors returned by the metadata overrides data layer.
