@@ -9,6 +9,7 @@ use omnibus_shared::MetadataOverrides;
 
 use super::super::undo::undo;
 use super::*;
+use crate::metadata_overrides::{get_metadata_overrides, upsert_metadata_overrides};
 use crate::pool::init_db;
 
 // ---------------------------------------------------------------------------
@@ -557,6 +558,54 @@ async fn apply_book_title_override_preserves_other_override_fields_and_undo_rest
     assert_eq!(
         restored.description.as_deref(),
         Some("An existing description.")
+    );
+}
+
+/// Composed-transaction proof: force the `cleanup_log` INSERT to fail
+/// *after* the override write has already run, by naming a `suggestion_id`
+/// with no matching `dedup_suggestions` row (`cleanup_log.suggestion_id`
+/// carries an FK, and the pool enables `PRAGMA foreign_keys = ON`). Before
+/// this fix, the override write committed on its own `BEGIN IMMEDIATE` and
+/// only the log INSERT failed, leaving an unloggable rename in place. Now
+/// both writes share one transaction, so the FK failure rolls the override
+/// write back too — the book keeps its pre-call state and nothing is
+/// left half-applied.
+#[tokio::test]
+async fn apply_book_title_override_rolls_back_the_override_write_when_the_log_insert_fails() {
+    let pool = new_pool().await;
+    let lib = seed_root(&pool).await;
+    let user = seed_user(&pool).await;
+    let book = insert_book(&pool, lib, "book-1", "Maas, Sarah J - Throne of Glass").await;
+    let uuid: String = sqlx::query_scalar("SELECT uuid FROM books WHERE id = ?")
+        .bind(book)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let bogus_suggestion_id = 999_999;
+    let err = apply_book_title_override(
+        &pool,
+        &uuid,
+        "Throne of Glass",
+        Some(bogus_suggestion_id),
+        user,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, CleanupApplyError::Db(_)));
+
+    assert!(
+        get_metadata_overrides(&pool, &uuid)
+            .await
+            .unwrap()
+            .is_none(),
+        "the override write must not survive a failed cleanup_log INSERT \
+         in the same transaction"
+    );
+    assert_eq!(
+        count_rows(&pool, "SELECT COUNT(*) FROM cleanup_log").await,
+        0,
+        "the failed INSERT itself must leave no row behind either"
     );
 }
 

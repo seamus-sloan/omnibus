@@ -299,11 +299,26 @@ pub async fn get_metadata_overrides(
     pool: &SqlitePool,
     book_uuid: &str,
 ) -> Result<Option<(MetadataOverrides, bool)>, MetadataOverridesError> {
+    get_metadata_overrides_exec(pool, book_uuid).await
+}
+
+/// Executor-generic body of [`get_metadata_overrides`], so a caller that
+/// already holds an open transaction (e.g. [`crate::cleanup::apply::apply_book_title_override`])
+/// can read the current overrides through that same transaction instead of
+/// racing it against a separate pool-level read taken before the
+/// transaction started.
+pub(crate) async fn get_metadata_overrides_exec<'e, E>(
+    executor: E,
+    book_uuid: &str,
+) -> Result<Option<(MetadataOverrides, bool)>, MetadataOverridesError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     let row: Option<(String, i64)> = sqlx::query_as(
         "SELECT overrides, has_cover_override FROM metadata_overrides WHERE book_uuid = ?",
     )
     .bind(book_uuid)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
 
     match row {

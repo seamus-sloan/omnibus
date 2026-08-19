@@ -1,8 +1,8 @@
 //! Transactional apply primitives for the library-cleanup surface: execute
 //! an accepted `dedup_suggestions` row (or a direct on-page action) against
 //! the schema, snapshotting enough state into `cleanup_log` for
-//! [`super::undo::undo`] to reverse it exactly. Every primitive but
-//! [`apply_book_title_override`] runs in one `BEGIN IMMEDIATE` transaction.
+//! [`super::undo::undo`] to reverse it exactly. Every primitive runs in one
+//! `BEGIN IMMEDIATE` transaction.
 
 use std::collections::HashSet;
 
@@ -10,7 +10,7 @@ use omnibus_shared::{CleanupAction, CleanupKind, MetadataOverrides};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::metadata_overrides::{
-    get_metadata_overrides, upsert_metadata_overrides, MetadataOverridesError,
+    get_metadata_overrides_exec, rebuild_fts_for_book, upsert_one_in_tx, MetadataOverridesError,
 };
 use crate::sync::upsert_fts;
 use crate::taxonomy::{delete_orphan_taxonomy, resolve_or_insert_tag};
@@ -433,22 +433,22 @@ pub async fn apply_tag_split(
 // ---------------------------------------------------------------------------
 
 /// Adopt `proposed_title` for `book_uuid` by routing through the existing
-/// [`upsert_metadata_overrides`] door — never touching `books.title`
-/// directly, so the rename composes with every other override field and
-/// reverts cleanly.
+/// metadata-overrides door — never touching `books.title` directly, so the
+/// rename composes with every other override field and reverts cleanly.
 ///
-/// Unlike the other primitives, this is **not** a single all-or-nothing
-/// transaction: `upsert_metadata_overrides` owns its own `BEGIN IMMEDIATE`
-/// transaction and can't be composed into ours. The pre-rename overrides
-/// blob is still read strictly before the mutating call (which is what
-/// undo needs), and the `cleanup_log` row is written only *after* the
-/// mutation commits — so a crash between the read and the mutate leaves no
-/// log row (nothing to undo, matching reality), and the only residual gap
-/// is a crash between a successful mutate and the log INSERT, which loses
-/// undo-ability for that one rename without corrupting any state.
+/// Like the other primitives, this runs in one `BEGIN IMMEDIATE`
+/// transaction: the previous-overrides snapshot is read through that same
+/// transaction (not the pool), then it composes [`upsert_one_in_tx`] (the
+/// tx-scoped body behind the pool-level
+/// [`crate::metadata_overrides::upsert_metadata_overrides`]) with the
+/// `cleanup_log` INSERT — so the snapshot read, the override write, and the
+/// log row all agree with each other and land together or not at all. The
+/// `books_fts` rebuild still runs best-effort after commit, matching every
+/// other override-write caller: a stale FTS row is recoverable and far less
+/// consequential than a stale series/tag link.
 ///
 /// Takes a required `applied_by` (unlike the other primitives'
-/// `Option<i64>`) because `upsert_metadata_overrides` requires a real user
+/// `Option<i64>`) because the metadata-overrides write requires a real user
 /// id to attribute the write to, and [`super::undo::undo`] reuses that same
 /// id to attribute the restore.
 pub async fn apply_book_title_override(
@@ -458,8 +458,14 @@ pub async fn apply_book_title_override(
     suggestion_id: Option<i64>,
     applied_by: i64,
 ) -> Result<i64, CleanupApplyError> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+
+    // Read the snapshot through this same transaction, not the pool, so a
+    // concurrent writer can't commit an override change between the read
+    // and this transaction's start — which would log a stale snapshot and
+    // make undo restore the wrong prior state.
     let (previous_overrides, previous_has_cover_override) =
-        match get_metadata_overrides(pool, book_uuid).await? {
+        match get_metadata_overrides_exec(&mut *tx, book_uuid).await? {
             Some((ov, has_cover)) => (Some(serde_json::to_string(&ov)?), has_cover),
             None => (None, false),
         };
@@ -470,8 +476,8 @@ pub async fn apply_book_title_override(
     };
     new_overrides.title = Some(proposed_title.to_string());
 
-    upsert_metadata_overrides(
-        pool,
+    upsert_one_in_tx(
+        &mut tx,
         book_uuid,
         &new_overrides,
         previous_has_cover_override,
@@ -484,17 +490,22 @@ pub async fn apply_book_title_override(
         previous_overrides,
         previous_has_cover_override,
     };
-    let log_id: i64 = sqlx::query_scalar(
-        "INSERT INTO cleanup_log (suggestion_id, kind, action, snapshot_json, applied_by)
-         VALUES (?, ?, ?, ?, ?) RETURNING id",
+    let log_id = write_cleanup_log(
+        &mut tx,
+        suggestion_id,
+        CleanupKind::BookTitle,
+        CleanupAction::Rename,
+        &snapshot,
+        Some(applied_by),
     )
-    .bind(suggestion_id)
-    .bind(CleanupKind::BookTitle.as_str())
-    .bind(CleanupAction::Rename.as_str())
-    .bind(serde_json::to_string(&snapshot)?)
-    .bind(applied_by)
-    .fetch_one(pool)
     .await?;
+
+    tx.commit().await?;
+
+    if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
+        tracing::warn!(book_uuid, error = %e, "books_fts rebuild after title override apply failed");
+    }
+
     Ok(log_id)
 }
 
