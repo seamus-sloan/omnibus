@@ -14,7 +14,7 @@
 //! carries a series statement natively.
 
 use omnibus_shared::isbn::normalize_isbn;
-use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider};
+use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider, ProviderEdition};
 use serde::Deserialize;
 
 use super::super::{MetadataLookupConfig, SEARCH_LIMIT};
@@ -37,8 +37,12 @@ struct BooksData {
     books: Vec<BookRow>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct BookRow {
+    /// Hardcover's book id — the handle a selected candidate is re-fetched
+    /// by; already requested by [`BOOK_FIELDS`].
+    #[serde(default)]
+    id: Option<i64>,
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
@@ -114,7 +118,7 @@ fn client_config(config: &MetadataLookupConfig) -> Option<HardcoverConfig> {
 pub async fn by_isbn(
     config: &MetadataLookupConfig,
     isbn13: &str,
-) -> anyhow::Result<Option<ExternalBookMeta>> {
+) -> anyhow::Result<Option<ProviderEdition>> {
     let Some(hc) = client_config(config) else {
         return Ok(None);
     };
@@ -149,7 +153,7 @@ pub async fn by_isbn(
 pub async fn by_title(
     config: &MetadataLookupConfig,
     query: &str,
-) -> anyhow::Result<Vec<ExternalBookMeta>> {
+) -> anyhow::Result<Vec<ProviderEdition>> {
     let Some(hc) = client_config(config) else {
         return Ok(Vec::new());
     };
@@ -171,12 +175,13 @@ pub async fn by_title(
         .collect())
 }
 
-/// Map a book row into `ExternalBookMeta`. `isbn13` overrides the row's own
+/// Map a book row into `ProviderEdition`. `isbn13` overrides the row's own
 /// when the caller has an authoritative one (the ISBN path). A row with no
 /// title, or no ISBN to fall back on, maps to `None` — the check-in flow keys
 /// on the ISBN downstream, so a candidate without one isn't actionable.
-fn map_book(b: BookRow, isbn13: Option<&str>) -> Option<ExternalBookMeta> {
+fn map_book(b: BookRow, isbn13: Option<&str>) -> Option<ProviderEdition> {
     let title = b.title.filter(|t| !t.trim().is_empty())?;
+    let book_id = b.id;
     let isbn13 = match isbn13 {
         Some(scanned) => scanned.to_string(),
         None => b
@@ -184,7 +189,11 @@ fn map_book(b: BookRow, isbn13: Option<&str>) -> Option<ExternalBookMeta> {
             .into_iter()
             .find_map(|e| e.isbn_13.and_then(|v| normalize_isbn(&v).ok()))?,
     };
-    Some(ExternalBookMeta {
+    Some(ProviderEdition {
+        source: MetadataProvider::Hardcover,
+        provider_ref: book_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| format!("isbn:{isbn13}")),
         isbn13,
         title,
         authors: b
@@ -211,7 +220,6 @@ fn map_book(b: BookRow, isbn13: Option<&str>) -> Option<ExternalBookMeta> {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty() && s.chars().count() <= ExternalBookMeta::NAME_MAX_LEN),
         first_publish_year: None,
-        source: MetadataProvider::Hardcover,
     })
 }
 

@@ -10,13 +10,10 @@ use super::*;
 fn book_row(title: &str, edition_isbn_13: Option<&str>) -> BookRow {
     BookRow {
         title: Some(title.to_string()),
-        description: None,
-        contributions: Vec::new(),
-        book_series: Vec::new(),
-        image: None,
         editions: vec![Edition {
             isbn_13: edition_isbn_13.map(|s| s.to_string()),
         }],
+        ..BookRow::default()
     }
 }
 

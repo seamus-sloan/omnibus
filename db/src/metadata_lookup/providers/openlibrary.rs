@@ -6,7 +6,7 @@
 
 use anyhow::Context;
 use omnibus_shared::isbn::normalize_isbn;
-use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider};
+use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider, ProviderEdition};
 use serde::Deserialize;
 
 use super::super::{MetadataLookupConfig, SEARCH_LIMIT};
@@ -16,6 +16,10 @@ use super::http::{base_url, client, get_json_best_effort};
 /// the ISBN isn't known.
 #[derive(Debug, Deserialize)]
 struct OlBook {
+    /// The edition's own record key (`/books/OL…M`) — the handle a selected
+    /// candidate is re-fetched by.
+    #[serde(default)]
+    key: Option<String>,
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
@@ -51,7 +55,7 @@ struct OlCover {
 pub async fn by_isbn(
     config: &MetadataLookupConfig,
     isbn13: &str,
-) -> anyhow::Result<Option<ExternalBookMeta>> {
+) -> anyhow::Result<Option<ProviderEdition>> {
     let key = format!("ISBN:{isbn13}");
     // isbn13 is digit-only (post-normalization), so no query-value encoding is
     // needed; the `:` in the bibkey is a legal query char.
@@ -82,7 +86,9 @@ pub async fn by_isbn(
     };
     let cover_url = book.cover.and_then(|c| c.large.or(c.medium).or(c.small));
 
-    Ok(Some(ExternalBookMeta {
+    Ok(Some(ProviderEdition {
+        source: MetadataProvider::OpenLibrary,
+        provider_ref: provider_ref(book.key, isbn13),
         isbn13: isbn13.to_string(),
         title,
         authors: book.authors.into_iter().filter_map(|a| a.name).collect(),
@@ -93,8 +99,15 @@ pub async fn by_isbn(
         cover_url,
         series: None,
         first_publish_year: None,
-        source: MetadataProvider::OpenLibrary,
     }))
+}
+
+/// The provider handle for one candidate: Open Library's own record key when
+/// the row carries one, else the uniform `isbn:` fallback every provider
+/// shares.
+fn provider_ref(key: Option<String>, isbn13: &str) -> String {
+    key.filter(|k| !k.trim().is_empty())
+        .unwrap_or_else(|| format!("isbn:{isbn13}"))
 }
 
 // ── Title search ─────────────────────────────────────────────────
@@ -109,6 +122,10 @@ struct OlSearchResponse {
 
 #[derive(Debug, Deserialize)]
 struct OlSearchDoc {
+    /// The work key (`/works/OL…W`) — `search.json` answers works, so this is
+    /// the coarsest handle of the three providers'.
+    #[serde(default)]
+    key: Option<String>,
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
@@ -134,7 +151,7 @@ pub(in crate::metadata_lookup) fn search_url(
         .append_pair("title", query)
         .append_pair(
             "fields",
-            "title,author_name,first_publish_year,isbn,cover_i,number_of_pages_median",
+            "key,title,author_name,first_publish_year,isbn,cover_i,number_of_pages_median",
         )
         .append_pair("limit", &SEARCH_LIMIT.to_string());
     Ok(url.into())
@@ -145,7 +162,7 @@ pub(in crate::metadata_lookup) fn search_url(
 pub async fn by_title(
     config: &MetadataLookupConfig,
     query: &str,
-) -> anyhow::Result<Vec<ExternalBookMeta>> {
+) -> anyhow::Result<Vec<ProviderEdition>> {
     let url = search_url(config, query)?;
     let resp = client()?
         .get(&url)
@@ -162,14 +179,16 @@ pub async fn by_title(
     Ok(body.docs.into_iter().filter_map(map_search_doc).collect())
 }
 
-/// Map one search doc into `ExternalBookMeta`. A doc without a title or a
+/// Map one search doc into `ProviderEdition`. A doc without a title or a
 /// valid ISBN maps to `None` — the whole check-in flow keys on the ISBN
 /// downstream (stored per copy, printed on the confirm screens), so a
 /// candidate that can't supply one isn't actionable.
-fn map_search_doc(doc: OlSearchDoc) -> Option<ExternalBookMeta> {
+fn map_search_doc(doc: OlSearchDoc) -> Option<ProviderEdition> {
     let title = doc.title.filter(|t| !t.trim().is_empty())?;
     let isbn13 = doc.isbn.iter().find_map(|v| normalize_isbn(v).ok())?;
-    Some(ExternalBookMeta {
+    Some(ProviderEdition {
+        source: MetadataProvider::OpenLibrary,
+        provider_ref: provider_ref(doc.key, &isbn13),
         isbn13,
         title,
         authors: doc.author_name,
@@ -184,7 +203,6 @@ fn map_search_doc(doc: OlSearchDoc) -> Option<ExternalBookMeta> {
             .map(|id| format!("https://covers.openlibrary.org/b/id/{id}-L.jpg")),
         series: None,
         first_publish_year: doc.first_publish_year,
-        source: MetadataProvider::OpenLibrary,
     })
 }
 

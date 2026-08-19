@@ -1,9 +1,11 @@
-//! Wire types for ISBN → book-metadata resolution. A scan that misses the
-//! library is resolved server-side against external providers (Open Library,
-//! then Google Books) into one normalized [`ExternalBookMeta`] the client uses
-//! to prefill the check-in / manual-entry screens.
+//! Wire types for book-metadata resolution against external providers. The
+//! check-in ladder answers with one normalized [`ExternalBookMeta`]; the
+//! metadata editor's fan-out search answers with an attributed, un-collapsed
+//! list of [`ProviderEdition`] plus a per-source [`ProviderSearchStatus`].
 
 use serde::{Deserialize, Serialize};
+
+use crate::scan::SEARCH_QUERY_MAX_LEN;
 
 /// Which external provider a lookup resolved against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,6 +169,129 @@ impl ExternalBookMeta {
         }
         Ok(())
     }
+}
+
+/// One candidate from one provider in a fan-out edition search, kept
+/// **attributed and un-collapsed**: two editions sharing an ISBN across two
+/// sources stay two entries, and so do two printings one source reports
+/// separately, because telling editions apart is what the picker is for.
+///
+/// Deliberately a new type rather than an extension of [`ExternalBookMeta`] —
+/// that one is the check-in wire payload, validated and round-tripped back
+/// from the client, and keeping its contract frozen is worth more than the
+/// reuse. Convert with `From` where a check-in-shaped value is wanted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderEdition {
+    pub source: MetadataProvider,
+    /// Opaque, provider-scoped handle for re-fetching this candidate in full
+    /// once it is selected — a thin search hit carries less than the
+    /// provider's own record does (Open Library's search docs have no
+    /// description, Google Books' do). Omnibus never parses it: it is the
+    /// provider's own id where one exists, and `isbn:<isbn13>` on the rare row
+    /// that carries none, which every provider can also be re-queried by.
+    pub provider_ref: String,
+    /// The normalized ISBN-13 that identifies this edition (13 digits, no
+    /// hyphens). Required, exactly as on the check-in path: a candidate a
+    /// provider can't put an ISBN on isn't an edition anyone can act on.
+    pub isbn13: String,
+    pub title: String,
+    pub authors: Vec<String>,
+    /// Publication year or date as the provider reports it (free text).
+    pub year: Option<String>,
+    pub pages: Option<i64>,
+    pub publisher: Option<String>,
+    pub description: Option<String>,
+    pub cover_url: Option<String>,
+    pub series: Option<String>,
+    /// Year the *work* was first published, across all editions — distinct
+    /// from `year`, which is this edition's own date.
+    pub first_publish_year: Option<i64>,
+}
+
+impl From<ProviderEdition> for ExternalBookMeta {
+    /// Narrow a search candidate to the check-in payload, dropping the
+    /// `provider_ref` the scan flow has no use for.
+    fn from(e: ProviderEdition) -> Self {
+        Self {
+            isbn13: e.isbn13,
+            title: e.title,
+            authors: e.authors,
+            year: e.year,
+            pages: e.pages,
+            publisher: e.publisher,
+            description: e.description,
+            cover_url: e.cover_url,
+            series: e.series,
+            first_publish_year: e.first_publish_year,
+            source: e.source,
+        }
+    }
+}
+
+/// What one provider contributed to a fan-out search.
+///
+/// The three cases are the point of the type: "it has nothing", "we never
+/// asked it", and "we asked and never got an answer" are different facts, and
+/// collapsing them makes an outage read as a miss.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ProviderSearchStatus {
+    /// The provider answered. `count` is how many of its candidates reached
+    /// the returned list — post-cap, so it never overstates what is there.
+    Answered { count: usize },
+    /// Not usable on this instance (no API key). No request was sent.
+    NotConfigured,
+    /// Asked, but no answer came back. `message` is the provider call's own
+    /// top-level context, never the error chain below it — which is where a
+    /// request URL, and so a `?key=`, would render.
+    Failed { message: String },
+}
+
+/// One row of the per-source status table returned alongside the candidates.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderSearchSource {
+    pub provider: MetadataProvider,
+    pub display_name: String,
+    pub status: ProviderSearchStatus,
+}
+
+/// Body for `POST /api/metadata/editions/search`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditionSearchRequest {
+    pub query: String,
+    /// Which providers to ask. Absent means every configured one; this is the
+    /// hook a provider-filter UI plugs into without a wire change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub providers: Option<Vec<MetadataProvider>>,
+}
+
+impl EditionSearchRequest {
+    /// Reject a blank or oversized `query`, and an explicitly-empty provider
+    /// list — which would otherwise search nothing and look like an outage.
+    /// Handlers translate `Err(_)` into 400. Mirrors
+    /// [`crate::scan::ScanSearchRequest::validate`], including its cap.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.query.trim().is_empty() {
+            return Err("query is required".into());
+        }
+        if self.query.chars().count() > SEARCH_QUERY_MAX_LEN {
+            return Err(format!("query exceeds {SEARCH_QUERY_MAX_LEN} characters"));
+        }
+        if self.providers.as_ref().is_some_and(|p| p.is_empty()) {
+            return Err("providers must name at least one provider when supplied".into());
+        }
+        Ok(())
+    }
+}
+
+/// Fan-out search results: the candidates every asked provider returned, plus
+/// one status row per provider considered — including the ones that were
+/// skipped or failed, which is why a caller can render "Hardcover: couldn't
+/// reach it" instead of quietly showing a shorter list.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditionSearchResponse {
+    pub editions: Vec<ProviderEdition>,
+    pub sources: Vec<ProviderSearchSource>,
 }
 
 #[cfg(test)]

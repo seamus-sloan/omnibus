@@ -403,10 +403,16 @@ fn summary_routes() -> Router<AppState> {
         .route("/api/summary/sources", get(summary::get_summary_sources))
 }
 
-/// The metadata-provider catalog — mobile- and web-facing REST, no RPC
-/// analogue yet. Read-only, any authenticated user.
+/// The metadata-provider surface — mobile- and web-facing REST, no RPC
+/// analogue yet. The catalog is read-only for any authenticated user; the
+/// edition search is `can_edit`-gated inside its handler.
 fn metadata_routes() -> Router<AppState> {
-    Router::new().route("/api/metadata/providers", get(metadata::get_providers))
+    Router::new()
+        .route("/api/metadata/providers", get(metadata::get_providers))
+        .route(
+            "/api/metadata/editions/search",
+            post(metadata::post_edition_search),
+        )
 }
 
 /// F4.3 Send-to-Kindle — mobile-facing REST. Web hits the analogous
