@@ -119,45 +119,74 @@ pub async fn upsert_progress_tx(
     let existing = existing_progress_snapshot(tx, user_id, &book_uuid, fmt).await?;
     warn_if_rejected_by_timestamp_guard(&book_uuid, update.client_updated_at, existing.0);
 
-    // Teardown signature, last line of defense (#1954): a dying page's
-    // media element flushes its reset clock — audio position ~0 — with a
-    // perfectly fresh event time, and the client-side gates cannot cover
-    // every event ordering every browser invents. Refuse a near-zero
-    // audio write against a row that sits far into the book: the write is
-    // dropped, the stored row returned. A genuine restart-from-the-start
-    // persists within one heartbeat anyway — its next report is already
-    // past the cutoff. Scoped to the SAME file as the stored row: a dying
-    // element flushes the file it was playing, while a near-zero write in
-    // a *different* file is a real file switch (picker, mapped offer) and
-    // refusing it would lose the switch itself.
-    if update.format == ProgressFormat::Audio {
-        let same_file = match (update.book_file_id, existing.2) {
-            (Some(new_file), Some(old_file)) => new_file == old_file,
-            // A file-less write can't prove it's a switch — treat as the
-            // stored file, keeping the guard for single-file books.
-            _ => true,
-        };
-        if let (true, Some(new), Some(old)) = (same_file, update.audio_position_seconds, existing.1)
-        {
-            if new < AUDIO_TEARDOWN_ZERO_CUTOFF_SECONDS
-                && old > AUDIO_TEARDOWN_ZERO_MIN_STORED_SECONDS
-            {
-                tracing::warn!(
-                    book_uuid = %book_uuid,
-                    old_position_seconds = old,
-                    new_position_seconds = new,
-                    client_updated_at = update.client_updated_at,
-                    "refused near-zero audio write against a far-advanced row (teardown signature)"
-                );
-                return read_progress_row(tx, user_id, book_uuid, update.format, fmt).await;
-            }
-        }
+    if update.format == ProgressFormat::Audio
+        && is_audio_teardown_zero_write(update, existing.1, existing.2)
+    {
+        tracing::warn!(
+            book_uuid = %book_uuid,
+            old_position_seconds = existing.1,
+            new_position_seconds = update.audio_position_seconds,
+            client_updated_at = update.client_updated_at,
+            "refused near-zero audio write against a far-advanced row (teardown signature)"
+        );
+        return read_progress_row(tx, user_id, book_uuid, update.format, fmt).await;
     }
 
-    // `strftime('%s','now')` returns TEXT; SQLite's default storage-class
-    // sort order ranks every INTEGER below every TEXT value regardless of
-    // magnitude, so `MIN(<int param>, <text now>)` would always pick the
-    // (unclamped) integer side without an explicit CAST here.
+    execute_upsert_query(tx, user_id, &book_uuid, fmt, update).await?;
+    let record = read_progress_row(tx, user_id, book_uuid, update.format, fmt).await?;
+
+    // If this write was rejected (by either guard above), the row is
+    // unchanged, so `new` equals the pre-write snapshot and this can't
+    // fire — only a genuinely *accepted* jump ever crosses the threshold.
+    if update.format == ProgressFormat::Audio {
+        warn_if_audio_jumped_backward(&record, existing.1);
+    }
+
+    Ok(record)
+}
+
+/// Teardown signature, last line of defense (#1954): a dying page's media
+/// element flushes its reset clock — audio position ~0 — with a perfectly
+/// fresh event time, and the client-side gates cannot cover every event
+/// ordering every browser invents. Scoped to the SAME file as the stored
+/// row: a dying element flushes the file it was playing, while a
+/// near-zero write in a *different* file is a real file switch (picker,
+/// mapped offer) that must not be refused.
+fn is_audio_teardown_zero_write(
+    update: &ProgressUpdate,
+    stored_position: Option<f64>,
+    stored_file: Option<i64>,
+) -> bool {
+    let same_file = match (update.book_file_id, stored_file) {
+        (Some(new_file), Some(old_file)) => new_file == old_file,
+        // A file-less write can't prove it's a switch — treat as the
+        // stored file, keeping the guard for single-file books.
+        _ => true,
+    };
+    let (Some(new), Some(old)) = (update.audio_position_seconds, stored_position) else {
+        return false;
+    };
+    same_file
+        && new < AUDIO_TEARDOWN_ZERO_CUTOFF_SECONDS
+        && old > AUDIO_TEARDOWN_ZERO_MIN_STORED_SECONDS
+}
+
+/// Run the `INSERT ... ON CONFLICT` upsert. Most-recent-wins conflict
+/// resolution and the audio multi-file guard both live in the `WHERE`
+/// clause, so a rejected write is simply a no-op `DO UPDATE` — the caller
+/// always re-reads the row afterward to learn which write survived.
+///
+/// `strftime('%s','now')` returns TEXT; SQLite's default storage-class
+/// sort order ranks every INTEGER below every TEXT value regardless of
+/// magnitude, so `MIN(<int param>, <text now>)` would always pick the
+/// (unclamped) integer side without an explicit CAST here.
+async fn execute_upsert_query(
+    tx: &mut Transaction<'_, Sqlite>,
+    user_id: i64,
+    book_uuid: &str,
+    fmt: &str,
+    update: &ProgressUpdate,
+) -> Result<(), ProgressError> {
     sqlx::query(
         "INSERT INTO reading_progress
             (user_id, book_uuid, format, epub_cfi, audio_position_seconds,
@@ -189,7 +218,7 @@ pub async fn upsert_progress_tx(
            )",
     )
     .bind(user_id)
-    .bind(&book_uuid)
+    .bind(book_uuid)
     .bind(fmt)
     // Blank-to-NULL at the bind, not just at `validate` — the row CHECK
     // treats any non-NULL as a real position, so a whitespace CFI reaching
@@ -207,17 +236,7 @@ pub async fn upsert_progress_tx(
     .bind(update.client_updated_at)
     .execute(&mut **tx)
     .await?;
-
-    let record = read_progress_row(tx, user_id, book_uuid, update.format, fmt).await?;
-
-    // If this write was rejected (by either guard above), the row is
-    // unchanged, so `new` equals the pre-write snapshot and this can't
-    // fire — only a genuinely *accepted* jump ever crosses the threshold.
-    if update.format == ProgressFormat::Audio {
-        warn_if_audio_jumped_backward(&record, existing.1);
-    }
-
-    Ok(record)
+    Ok(())
 }
 
 /// The `(client_updated_at, audio_position_seconds)` a `(user, book, format)`
