@@ -10,7 +10,7 @@ use omnibus_shared::{CleanupAction, CleanupKind, MetadataOverrides};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::metadata_overrides::{
-    get_metadata_overrides, rebuild_fts_for_book, upsert_one_in_tx, MetadataOverridesError,
+    get_metadata_overrides_exec, rebuild_fts_for_book, upsert_one_in_tx, MetadataOverridesError,
 };
 use crate::sync::upsert_fts;
 use crate::taxonomy::{delete_orphan_taxonomy, resolve_or_insert_tag};
@@ -437,13 +437,15 @@ pub async fn apply_tag_split(
 /// rename composes with every other override field and reverts cleanly.
 ///
 /// Like the other primitives, this runs in one `BEGIN IMMEDIATE`
-/// transaction: it composes [`upsert_one_in_tx`] (the tx-scoped body behind
-/// the pool-level [`crate::metadata_overrides::upsert_metadata_overrides`])
-/// with the `cleanup_log` INSERT, so the override write and the log row
-/// land together or not at all — no window where a successful rename has
-/// no undo record. The `books_fts` rebuild still runs best-effort after
-/// commit, matching every other override-write caller: a stale FTS row is
-/// recoverable and far less consequential than a stale series/tag link.
+/// transaction: the previous-overrides snapshot is read through that same
+/// transaction (not the pool), then it composes [`upsert_one_in_tx`] (the
+/// tx-scoped body behind the pool-level
+/// [`crate::metadata_overrides::upsert_metadata_overrides`]) with the
+/// `cleanup_log` INSERT — so the snapshot read, the override write, and the
+/// log row all agree with each other and land together or not at all. The
+/// `books_fts` rebuild still runs best-effort after commit, matching every
+/// other override-write caller: a stale FTS row is recoverable and far less
+/// consequential than a stale series/tag link.
 ///
 /// Takes a required `applied_by` (unlike the other primitives'
 /// `Option<i64>`) because the metadata-overrides write requires a real user
@@ -456,8 +458,14 @@ pub async fn apply_book_title_override(
     suggestion_id: Option<i64>,
     applied_by: i64,
 ) -> Result<i64, CleanupApplyError> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+
+    // Read the snapshot through this same transaction, not the pool, so a
+    // concurrent writer can't commit an override change between the read
+    // and this transaction's start — which would log a stale snapshot and
+    // make undo restore the wrong prior state.
     let (previous_overrides, previous_has_cover_override) =
-        match get_metadata_overrides(pool, book_uuid).await? {
+        match get_metadata_overrides_exec(&mut *tx, book_uuid).await? {
             Some((ov, has_cover)) => (Some(serde_json::to_string(&ov)?), has_cover),
             None => (None, false),
         };
@@ -468,7 +476,6 @@ pub async fn apply_book_title_override(
     };
     new_overrides.title = Some(proposed_title.to_string());
 
-    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     upsert_one_in_tx(
         &mut tx,
         book_uuid,

@@ -9,7 +9,7 @@ use omnibus_shared::MetadataOverrides;
 
 use super::super::undo::undo;
 use super::*;
-use crate::metadata_overrides::upsert_metadata_overrides;
+use crate::metadata_overrides::{get_metadata_overrides, upsert_metadata_overrides};
 use crate::pool::init_db;
 
 // ---------------------------------------------------------------------------
