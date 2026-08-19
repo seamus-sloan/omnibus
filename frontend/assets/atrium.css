@@ -9561,3 +9561,49 @@ html {
   border-radius: 10px;
   font-size: 12px;
 }
+
+/* ── Library cleanup (settings section + review page) ────────────── */
+.cleanup-kinds { list-style: none; margin: 12px 0 0; padding: 0; }
+.cleanup-kind-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line-2);
+}
+.cleanup-kind-row:last-child { border-bottom: none; }
+.cleanup-kind-label { flex: 1; font-weight: 500; }
+.cleanup-kind-count { font-size: 12px; color: var(--ink-1); }
+.cleanup-actions { display: flex; gap: 10px; margin-top: 14px; }
+
+.cleanup-review { max-width: 560px; }
+/* The review surface is focusable so Y / N / Space reach its keydown handler;
+   the focus ring would otherwise frame the whole card on every keypress. */
+.cleanup-review:focus { outline: none; }
+.cleanup-review:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cleanup-review-actions { display: flex; gap: 10px; margin-top: 16px; }
+.cleanup-card {
+  margin-top: 16px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  text-align: center;
+}
+.cleanup-card-photo {
+  width: 84px;
+  height: 84px;
+  object-fit: cover;
+  border-radius: 999px;
+  margin: 0 auto 12px;
+  display: block;
+}
+.cleanup-card-action {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 8px;
+}
+.cleanup-card-primary { font-size: 20px; font-weight: 600; margin: 0; }
+.cleanup-card-secondary { font-size: 13px; color: var(--ink-1); margin: 6px 0 0; }
+.cleanup-card-books { font-size: 12px; color: var(--ink-1); margin: 12px 0 0; }

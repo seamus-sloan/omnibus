@@ -1,20 +1,22 @@
 //! Library-cleanup detection plus the transactional apply/undo primitives
 //! that act on a detected (or on-page) suggestion: detectors surface
 //! near-duplicate authors/series/tags, tag soup, title cruft, and junk
-//! authors; [`apply`]/[`undo`] execute or reverse one. Detection lives
-//! here; apply/undo live in the sibling submodules (file-shape cap).
+//! authors; [`apply`]/[`undo`] execute or reverse one, and [`review`] serves
+//! the `dedup_suggestions` queue those decisions come from. Detection lives
+//! here; the rest live in the sibling submodules (file-shape cap).
 
 use std::collections::{HashMap, HashSet};
 
 use omnibus_shared::{CleanupAction, CleanupKind};
 use regex::Regex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 use crate::normalize::normalize_author;
 
 mod apply;
 mod entity_ops;
+mod review;
 mod snapshot;
 mod undo;
 
@@ -24,6 +26,9 @@ mod tests;
 pub use apply::{
     apply_book_title_override, apply_delete_author, apply_merge_authors, apply_merge_series,
     apply_merge_tags, apply_tag_split, CleanupApplyError,
+};
+pub use review::{
+    decide_suggestion, review_counts, review_queue, CleanupStoreError, REVIEW_QUEUE_MAX,
 };
 pub use undo::undo;
 
@@ -47,8 +52,9 @@ pub enum Tier {
 }
 
 /// Enough information to act on a detected suggestion later: what the apply
-/// primitive would do, keyed by [`CleanupAction`].
-#[derive(Debug, Clone, PartialEq, Serialize)]
+/// primitive would do, keyed by [`CleanupAction`]. `Deserialize` is the read
+/// side of the same `payload_json` the detector wrote, used by [`review`].
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CleanupPayload {
     /// Combine `source_ids` into `canonical_id` (author/series/tag merges).

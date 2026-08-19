@@ -17,6 +17,8 @@ pub enum Route {
     Landing {},
     #[route("/settings?:section")]
     Settings { section: Option<String> },
+    #[route("/settings/cleanup/:kind")]
+    CleanupReview { kind: String },
     #[route("/logs")]
     Logs {},
     #[route("/admin/health")]
@@ -83,6 +85,33 @@ pub fn Settings(section: Option<String>) -> Element {
     rsx! {
         ScreenLayout { SettingsPage { section } }
     }
+}
+
+/// Route target for `/settings/cleanup/:kind` — the one-card-at-a-time
+/// library-cleanup review queue, wrapped in the platform screen layout.
+/// Web/server only; the in-page `use_is_admin` gate (backed by the
+/// `AdminUser`-gated `cleanup/*` server functions) keeps the chrome off a
+/// non-admin screen.
+#[cfg(not(feature = "mobile"))]
+#[component]
+pub fn CleanupReview(kind: String) -> Element {
+    use_page_title(|| Some("Library cleanup".into()));
+    rsx! {
+        ScreenLayout { CleanupReviewPage { kind } }
+    }
+}
+
+/// Mobile stub for `/settings/cleanup/:kind`: redirect to the landing page —
+/// there is no cleanup review surface on mobile.
+#[cfg(feature = "mobile")]
+#[component]
+pub fn CleanupReview(kind: String) -> Element {
+    let _ = kind;
+    let nav = dioxus_router::use_navigator();
+    use_effect(move || {
+        nav.replace(Route::Landing {});
+    });
+    rsx! {}
 }
 
 /// Route target for `/logs` — the server log viewer now lives inside Settings

@@ -23,6 +23,10 @@ mod authors;
 mod background_tasks;
 mod bookmarks;
 mod books;
+// Admin library-cleanup review (#966). Web/SSR call the server functions;
+// mobile posts the same `/api/rpc/cleanup/*` routes, so the wrappers compile
+// under both gates even though no mobile UI ships yet.
+mod cleanup;
 // Admin "last errors" ring buffer read (#954) — web (server-fn) + SSR stubs;
 // not a mobile surface, same shape as `logs`.
 #[cfg(not(feature = "mobile"))]
@@ -84,6 +88,7 @@ pub use authors::*;
 pub use background_tasks::*;
 pub use bookmarks::*;
 pub use books::*;
+pub use cleanup::*;
 pub use cross_format::*;
 #[cfg(not(feature = "mobile"))]
 pub use errors::*;
