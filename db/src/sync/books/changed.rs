@@ -15,6 +15,7 @@ use super::super::fts::upsert_fts;
 use super::shared::{
     attach_ebook_file, insert_book_row, insert_metadata_links, rewrite_book_in_place,
 };
+use super::EntityAliasMaps;
 
 /// Apply Changed entries: wipe-and-rewrite the per-book link rows for each,
 /// UPDATE the `books` row in place (preserving id), and re-insert the FTS
@@ -24,11 +25,15 @@ use super::shared::{
 /// If the diff said this uuid existed but a concurrent process removed it
 /// between Phase A and the write, fall back to inserting it as a new book
 /// rather than failing the whole sync over a TOCTOU.
+///
+/// `alias_maps` is the whole New+Changed batch's reindex-resurrection guard
+/// lookup (#1985), pre-resolved by `super::collect_entity_alias_maps`.
 pub(super) async fn sync_changed(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     library_id: i64,
     library_path: &str,
     changed_books: &[crate::ebook::IndexedBook],
+    alias_maps: &EntityAliasMaps,
     mut on_book_written: impl FnMut(&str),
 ) -> Result<Vec<(String, String, Vec<u8>)>, sqlx::Error> {
     if changed_books.is_empty() {
@@ -75,6 +80,7 @@ pub(super) async fn sync_changed(
             b,
             scan_key,
             &id_map,
+            alias_maps,
             &mut changed_covers,
         )
         .await?;
@@ -85,6 +91,7 @@ pub(super) async fn sync_changed(
 
 /// Apply a single Changed entry — extracted so `sync_changed`'s outer
 /// loop stays a clean per-book progress tick.
+#[allow(clippy::too_many_arguments)]
 async fn sync_changed_one(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     library_id: i64,
@@ -92,6 +99,7 @@ async fn sync_changed_one(
     b: &crate::ebook::IndexedBook,
     scan_key: &str,
     id_map: &HashMap<String, (i64, String)>,
+    alias_maps: &EntityAliasMaps,
     changed_covers: &mut Vec<(String, String, Vec<u8>)>,
 ) -> Result<(), sqlx::Error> {
     let Some((book_id, uuid)) = id_map.get(scan_key).map(|(id, u)| (*id, u.clone())) else {
@@ -125,7 +133,7 @@ async fn sync_changed_one(
         // the write. Promote to a New insert so the file still gets
         // indexed.
         let inserted = insert_book_row(tx, library_id, library_path, b).await?;
-        insert_metadata_links(tx, inserted.book_id, &b.metadata).await?;
+        insert_metadata_links(tx, inserted.book_id, &b.metadata, alias_maps).await?;
         // Source the FTS row from the rows we just wrote via the door.
         upsert_fts(tx, inserted.book_id).await?;
         super::super::push_cover(changed_covers, &inserted.uuid, &b.cover);
@@ -135,6 +143,6 @@ async fn sync_changed_one(
     // Rewrites in place, re-creating the `book_files` row whether the book
     // had one (a real content change) or not (a fileless book whose file
     // returned — the re-attach path, F2). `books.uuid` is preserved.
-    rewrite_book_in_place(tx, book_id, &uuid, b, changed_covers).await?;
+    rewrite_book_in_place(tx, book_id, &uuid, b, alias_maps, changed_covers).await?;
     Ok(())
 }

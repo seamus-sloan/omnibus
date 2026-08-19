@@ -3,6 +3,8 @@
 //! minting a new `authors` row, while an unaliased name still goes through
 //! the normal upsert-and-join path unchanged.
 
+use std::collections::HashMap;
+
 use omnibus_shared::{Contributor, EbookMetadata};
 
 use super::*;
@@ -58,7 +60,9 @@ async fn insert_author_links_upserts_and_links_an_unaliased_name() {
     let m = metadata_with_creator("Ada Lovelace");
 
     let mut tx = pool.begin().await.unwrap();
-    insert_author_links(&mut tx, book_id, &m).await.unwrap();
+    insert_author_links(&mut tx, book_id, &m, &HashMap::new())
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
 
     let id = author_id(&pool, "Ada Lovelace")
@@ -88,9 +92,15 @@ async fn insert_author_links_resolves_a_merged_away_name_to_its_canonical_id() {
 
     // Simulates a reindex of a file the parser still reports as "John
     // Smith" — the on-disk metadata a completed merge doesn't rewrite.
+    // #1985: the alias map is now pre-resolved by the caller (here, built
+    // directly from the row just inserted) rather than looked up inside
+    // `insert_author_links` itself.
     let m = metadata_with_creator("John Smith");
+    let author_aliases = HashMap::from([("John Smith".to_string(), canonical_id)]);
     let mut tx = pool.begin().await.unwrap();
-    insert_author_links(&mut tx, book_id, &m).await.unwrap();
+    insert_author_links(&mut tx, book_id, &m, &author_aliases)
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
 
     assert!(

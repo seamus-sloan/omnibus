@@ -3,10 +3,18 @@
 //! / `sync_new`), `replace_books`, and post-commit cover materialization.
 //! All `books_fts` maintenance is delegated to the [`super::fts`]
 //! choke-point (`upsert_fts` / `delete_fts`) rather than written inline.
+//! Also owns [`EntityAliasMaps`] and [`collect_entity_alias_maps`], which
+//! resolve the reindex-resurrection guard's alias lookups once for the
+//! whole New+Changed batch, before either per-book loop starts.
 
+use std::collections::{HashMap, HashSet};
+
+use omnibus_shared::CleanupKind;
 use sqlx::{SqlitePool, Transaction};
 
 use crate::covers::delete_cover_files_for;
+use crate::entity_alias::resolve_entity_aliases;
+use crate::helpers::cleaned_series_name;
 use crate::settings::upsert_library;
 
 use super::attach;
@@ -70,6 +78,61 @@ pub struct MovedFile {
     /// The file's new library-relative path — its new `scan_key`, and the
     /// source of the new `books.path` / `book_files.filename`.
     pub filename: String,
+}
+
+/// Pre-resolved reindex-resurrection guard (#964) lookups for one whole
+/// sync batch: the canonical id every distinct author/series/tag name
+/// across the batch resolves to, if a prior library-cleanup merge absorbed
+/// it. Built once per [`CleanupKind`] by [`collect_entity_alias_maps`]
+/// before the per-book write loop starts, then threaded down through
+/// `insert_metadata_links` — replacing what used to be a
+/// `resolve_entity_aliases` call issued once per book (#1985).
+#[derive(Debug, Default)]
+pub(super) struct EntityAliasMaps {
+    pub(super) authors: HashMap<String, i64>,
+    pub(super) series: HashMap<String, i64>,
+    pub(super) tags: HashMap<String, i64>,
+}
+
+/// Collect the distinct author, series, and tag names appearing anywhere in
+/// `changed_books` or `new_books` — the whole New+Changed batch one
+/// [`sync_books_with_progress`] call writes — and resolve each
+/// [`CleanupKind`]'s alias guard once for the union, rather than once per
+/// book inside the per-bucket write loops.
+pub(super) async fn collect_entity_alias_maps(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    changed_books: &[crate::ebook::IndexedBook],
+    new_books: &[crate::ebook::IndexedBook],
+) -> Result<EntityAliasMaps, sqlx::Error> {
+    let mut author_names: HashSet<&str> = HashSet::new();
+    let mut series_names: HashSet<String> = HashSet::new();
+    let mut tag_names: HashSet<&str> = HashSet::new();
+
+    for b in changed_books.iter().chain(new_books.iter()) {
+        let m = &b.metadata;
+        author_names.extend(m.creators.iter().map(|c| c.name.as_str()));
+        // `cleaned_series_name` returns an owned String (embedded-index
+        // stripped, #1912), so the dedup set holds owned values too.
+        if let Some(series) = cleaned_series_name(m) {
+            series_names.insert(series);
+        }
+        tag_names.extend(
+            m.subjects
+                .iter()
+                .map(String::as_str)
+                .filter(|s| !s.is_empty()),
+        );
+    }
+
+    let author_list: Vec<&str> = author_names.into_iter().collect();
+    let series_list: Vec<&str> = series_names.iter().map(String::as_str).collect();
+    let tag_list: Vec<&str> = tag_names.into_iter().collect();
+
+    Ok(EntityAliasMaps {
+        authors: resolve_entity_aliases(tx, CleanupKind::Author, &author_list).await?,
+        series: resolve_entity_aliases(tx, CleanupKind::Series, &series_list).await?,
+        tags: resolve_entity_aliases(tx, CleanupKind::Tag, &tag_list).await?,
+    })
 }
 
 /// Per-bucket payload for [`sync_books`]. Built by
@@ -165,12 +228,20 @@ pub async fn sync_books_with_progress(
     // could claim a book by title+author and the moved file would then find
     // its own format slot occupied.
     sync_moved(&mut tx, library_id, library_path, &plan.moved).await?;
+
+    // #1985: resolve the reindex-resurrection guard once for the whole
+    // New+Changed batch, before either per-book loop starts, instead of
+    // once per book inside them.
+    let alias_maps =
+        collect_entity_alias_maps(&mut tx, &plan.changed_books, &plan.new_books).await?;
+
     let mut processed: u32 = 0;
     let changed_covers = sync_changed(
         &mut tx,
         library_id,
         library_path,
         &plan.changed_books,
+        &alias_maps,
         |filename| {
             processed = processed.saturating_add(1);
             on_progress(processed, total, Some(filename));
@@ -183,6 +254,7 @@ pub async fn sync_books_with_progress(
         library_path,
         &plan.new_books,
         &plan.removed_uuids,
+        &alias_maps,
         |filename| {
             processed = processed.saturating_add(1);
             on_progress(processed, total, Some(filename));
