@@ -191,7 +191,10 @@ async fn api_post_edition_search_rejects_an_oversized_query() {
     let admin = auth_test_support::create_admin(&pool, "editor").await;
     let token = auth_test_support::bearer_token(&pool, admin.id).await;
 
-    let long = "x".repeat(omnibus_shared::SEARCH_QUERY_MAX_LEN + 1);
+    // The scan cap (200 chars), which `EditionSearchRequest::validate`
+    // mirrors — not the crate-root `SEARCH_QUERY_MAX_LEN` (1024), which is the
+    // FTS/palette cap and shadows this name at the root.
+    let long = "x".repeat(omnibus_shared::scan::SEARCH_QUERY_MAX_LEN + 1);
     let res = app
         .oneshot(post(SEARCH_PATH, &token, hardcover_only_search(&long)))
         .await
