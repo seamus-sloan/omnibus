@@ -4,9 +4,9 @@
 //!
 //! ```ignore
 //! pub async fn by_isbn(&MetadataLookupConfig, isbn13: &str)
-//!     -> anyhow::Result<Option<ExternalBookMeta>>;
+//!     -> anyhow::Result<Option<ProviderEdition>>;
 //! pub async fn by_title(&MetadataLookupConfig, query: &str)
-//!     -> anyhow::Result<Vec<ExternalBookMeta>>;
+//!     -> anyhow::Result<Vec<ProviderEdition>>;
 //! ```
 //!
 //! A clean miss is an empty answer (`None` / `vec![]`); an `Err` means the
@@ -31,7 +31,7 @@ pub(super) use http::publication_year;
 pub use openlibrary::{enrich as openlibrary_enrich, OlEnrichment};
 
 use omnibus_shared::metadata_lookup::{
-    ExternalBookMeta, MetadataProvider, ProviderCapabilities, ProviderInfo,
+    MetadataProvider, ProviderCapabilities, ProviderEdition, ProviderInfo,
 };
 
 use super::MetadataLookupConfig;
@@ -54,14 +54,20 @@ pub enum Query<'a> {
 
 /// Ask one provider one question.
 ///
-/// Both operations answer with a `Vec` so the ladder needs only one shape: an
+/// Both operations answer with a `Vec` so callers need only one shape: an
 /// ISBN lookup returns at most one entry, and empty means a clean miss either
-/// way.
+/// way. This is the **single** dispatch point — the check-in ladder
+/// ([`super::climb`]) and the editor's fan-out
+/// ([`super::search_all_providers`]) both come through here, so adding a
+/// provider stays one arm rather than two.
+///
+/// [`ProviderEdition`] is the richer shape; the ladder narrows it to
+/// `ExternalBookMeta` on its way out.
 pub async fn run(
     provider: MetadataProvider,
     config: &MetadataLookupConfig,
     query: Query<'_>,
-) -> anyhow::Result<Vec<ExternalBookMeta>> {
+) -> anyhow::Result<Vec<ProviderEdition>> {
     match (provider, query) {
         (MetadataProvider::OpenLibrary, Query::Isbn(isbn)) => {
             Ok(openlibrary::by_isbn(config, isbn)

@@ -4,6 +4,7 @@
 //! `providers/`. Normalization itself is tested in `omnibus_shared::isbn`,
 //! which owns it.
 
+mod fanout;
 mod googlebooks_provider;
 mod hardcover_provider;
 mod openlibrary_provider;
