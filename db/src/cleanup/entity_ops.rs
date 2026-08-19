@@ -271,15 +271,107 @@ pub(super) async fn recreate_entity(
         .await
 }
 
-/// Look up a tag's current id by name, for undoing a split's per-atom links.
-pub(super) async fn lookup_tag_id(
+/// Bind-parameter budget shared by the batched split-undo helpers below.
+/// [`delete_links_bulk`] chunks *two* `IN (...)` lists in the same
+/// statement, so this is sized to leave headroom for both — a chunk of
+/// each stays comfortably under SQLite's ~999-parameter cap even when both
+/// lists are large.
+const SPLIT_UNDO_CHUNK: usize = 450;
+
+/// Resolve every name in `names` to its current `tags.id` in chunked `IN
+/// (...)` queries — the batched replacement for a per-atom lookup-then-
+/// delete loop, used by [`super::undo::undo_split`] to resolve every split
+/// atom to an id in a handful of round trips instead of one per atom. A
+/// name with no live row (e.g. already reaped by an intervening
+/// [`crate::taxonomy::delete_orphan_taxonomy`]) is silently absent from the
+/// result, matching the original per-name `Option` guard it replaces.
+pub(super) async fn lookup_tag_ids(
     tx: &mut Transaction<'_, Sqlite>,
-    name: &str,
-) -> Result<Option<i64>, sqlx::Error> {
-    sqlx::query_scalar("SELECT id FROM tags WHERE name = ? COLLATE NOCASE")
-        .bind(name)
-        .fetch_optional(&mut **tx)
-        .await
+    names: &[String],
+) -> Result<Vec<i64>, sqlx::Error> {
+    let mut ids = Vec::with_capacity(names.len());
+    for chunk in names.chunks(SPLIT_UNDO_CHUNK) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!("SELECT id FROM tags WHERE name COLLATE NOCASE IN ({placeholders})");
+        let mut q = sqlx::query_scalar::<_, i64>(&sql);
+        for name in chunk {
+            q = q.bind(name);
+        }
+        ids.extend(q.fetch_all(&mut **tx).await?);
+    }
+    Ok(ids)
+}
+
+/// Bulk counterpart of [`insert_link`] for entities with no `position`
+/// column (tags): one `(book, entity_id)` row per id in `book_ids`, as
+/// chunked multi-row `INSERT OR IGNORE` statements rather than one query
+/// per book.
+pub(super) async fn insert_links_bulk(
+    tx: &mut Transaction<'_, Sqlite>,
+    entity: MergeEntity,
+    entity_id: i64,
+    book_ids: &[i64],
+) -> Result<(), sqlx::Error> {
+    debug_assert!(
+        !entity.has_position(),
+        "insert_links_bulk has no position-column support"
+    );
+    for chunk in book_ids.chunks(SPLIT_UNDO_CHUNK / 2) {
+        let placeholders = vec!["(?, ?)"; chunk.len()].join(", ");
+        let sql = format!(
+            "INSERT OR IGNORE INTO {} (book, {}) VALUES {placeholders}",
+            entity.link_table(),
+            entity.link_col()
+        );
+        let mut q = sqlx::query(&sql);
+        for &book_id in chunk {
+            q = q.bind(book_id).bind(entity_id);
+        }
+        q.execute(&mut **tx).await?;
+    }
+    Ok(())
+}
+
+/// Bulk counterpart of [`delete_link`]: delete every `(book, entity_id)`
+/// link row where `book` is in `book_ids` and `entity_id` is in
+/// `entity_ids` — used by [`super::undo::undo_split`] to remove exactly the
+/// per-book atom links a split added, without the O(books × atoms)
+/// lookup-then-delete the naive replay used. Both lists are chunked (not
+/// just `book_ids`) so the statement stays bounded even in the pathological
+/// case of a split with many atoms, though in practice `entity_ids` is a
+/// handful and this degenerates to one outer iteration.
+pub(super) async fn delete_links_bulk(
+    tx: &mut Transaction<'_, Sqlite>,
+    entity: MergeEntity,
+    book_ids: &[i64],
+    entity_ids: &[i64],
+) -> Result<(), sqlx::Error> {
+    for entity_chunk in entity_ids.chunks(SPLIT_UNDO_CHUNK) {
+        let entity_placeholders = std::iter::repeat_n("?", entity_chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        for book_chunk in book_ids.chunks(SPLIT_UNDO_CHUNK) {
+            let book_placeholders = std::iter::repeat_n("?", book_chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                "DELETE FROM {t} WHERE book IN ({book_placeholders}) AND {c} IN ({entity_placeholders})",
+                t = entity.link_table(),
+                c = entity.link_col()
+            );
+            let mut q = sqlx::query(&sql);
+            for &book_id in book_chunk {
+                q = q.bind(book_id);
+            }
+            for &entity_id in entity_chunk {
+                q = q.bind(entity_id);
+            }
+            q.execute(&mut **tx).await?;
+        }
+    }
+    Ok(())
 }
 
 /// Record that `alias_name` (a name a merge just absorbed) now resolves to
