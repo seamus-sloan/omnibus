@@ -216,6 +216,7 @@ pub(super) fn render_lanes(
                 for (i, ch) in ebook_chapters.iter().enumerate() {
                     if i % text_step == 0 {
                         div {
+                            key: "{ch.title}-{ch.percent}",
                             class: "al-tick",
                             title: "{ch.title}",
                             style: "left: {ch.percent}%",
@@ -239,6 +240,7 @@ pub(super) fn render_lanes(
                     preserve_aspect_ratio: "none",
                     for (t, a) in view.anchor_pairs.iter() {
                         line {
+                            key: "{t}-{a}",
                             x1: "{t * 1000.0}",
                             y1: "0",
                             x2: "{a * 1000.0}",
@@ -260,6 +262,7 @@ pub(super) fn render_lanes(
             div { class: "al-lane al-lane-audio",
                 for f in files.iter() {
                     div {
+                        key: "{f.book_file_id}",
                         class: "al-seg",
                         style: format!(
                             "flex-grow: {}",
@@ -275,7 +278,7 @@ pub(super) fn render_lanes(
                     }
                     for (i, t) in audio_ticks.iter().enumerate() {
                         if i % audio_step == 0 {
-                            div { class: "al-tick", style: "left: {t * 100.0}%" }
+                            div { key: "{i}", class: "al-tick", style: "left: {t * 100.0}%" }
                         }
                     }
                     if let Some(f) = listen_frac {
