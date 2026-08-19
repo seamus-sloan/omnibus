@@ -235,50 +235,59 @@ mod server {
         });
     }
 
-    /// Assemble the full Axum router: RPC search rate-limit, REST router,
-    /// auth router (with its own credential-handling rate-limit), then the
-    /// auth / origin-check / extensions / timeout / body-limit middleware
-    /// stack. Returns the router; security headers and the trace layer are
-    /// added by `apply_security_headers`.
-    fn build_router(state: backend::AppState, pool: SqlitePool, worker: Arc<Worker>) -> Router {
-        let auth_limiter = Arc::new(rate_limit::RateLimiter::new());
-        // Prefix-scope the auth limiter to credential-handling endpoints
-        // only. `/api/auth/me` is an authenticated read of the caller's
-        // own row — it's hit on every web App boot (and historically
-        // on every page mount) but presents no brute-force surface, so
-        // sharing the same 10-req/60s bucket as `/login`/`/register`
-        // just throttled legitimate UI rendering (and parallel
-        // Playwright workers from the same loopback IP). Logout stays
-        // limited because a stolen token could otherwise be used to
-        // DoS revoke endpoints.
-        let auth_limiter_prefixes: Arc<Vec<&'static str>> = Arc::new(vec![
-            "/api/auth/login",
-            "/api/auth/register",
-            "/api/auth/logout",
-        ]);
-        // One per-IP budget shared by the REST `/api/search/*` and RPC
-        // `/api/rpc/search-*` layers (same Arc), so neither reaches 2× (#249).
-        let search_limiter = Arc::new(rate_limit::RateLimiter::with_policy(
-            backend::SEARCH_RATE_LIMIT_WINDOW,
-            backend::SEARCH_RATE_LIMIT_MAX,
-        ));
-        // `starts_with` prefix covers both `/api/rpc/search` and
-        // `/api/rpc/search-palette` so neither bypasses the budget (#249).
-        let search_rpc_prefixes: Arc<Vec<&'static str>> = Arc::new(vec!["/api/rpc/search"]);
+    /// Per-IP rate limiters `build_router` wires onto the auth and search
+    /// route surfaces, bundled so the constructor and the merge step each
+    /// take one named argument instead of four positional `Arc`s.
+    struct RouterLimiters {
+        auth: Arc<rate_limit::RateLimiter>,
+        /// Prefix-scope the auth limiter to credential-handling endpoints
+        /// only. `/api/auth/me` is an authenticated read of the caller's
+        /// own row — it's hit on every web App boot (and historically on
+        /// every page mount) but presents no brute-force surface, so
+        /// sharing the same 10-req/60s bucket as `/login`/`/register`
+        /// just throttled legitimate UI rendering (and parallel
+        /// Playwright workers from the same loopback IP). Logout stays
+        /// limited because a stolen token could otherwise be used to DoS
+        /// revoke endpoints.
+        auth_prefixes: Arc<Vec<&'static str>>,
+        /// One per-IP budget shared by the REST `/api/search/*` and RPC
+        /// `/api/rpc/search-*` layers (same `Arc`), so neither reaches 2×
+        /// the intended budget (#249).
+        search: Arc<rate_limit::RateLimiter>,
+        /// `starts_with` prefix covers both `/api/rpc/search` and
+        /// `/api/rpc/search-palette` so neither bypasses the budget (#249).
+        search_prefixes: Arc<Vec<&'static str>>,
+    }
 
-        // Prometheus HTTP metrics: middleware + `/metrics` scrape route. The
-        // layer goes on outermost (see below); the route merges in here.
-        let (prometheus_layer, metrics_route) = metrics::layer_and_route();
+    fn build_router_limiters() -> RouterLimiters {
+        RouterLimiters {
+            auth: Arc::new(rate_limit::RateLimiter::new()),
+            auth_prefixes: Arc::new(vec![
+                "/api/auth/login",
+                "/api/auth/register",
+                "/api/auth/logout",
+            ]),
+            search: Arc::new(rate_limit::RateLimiter::with_policy(
+                backend::SEARCH_RATE_LIMIT_WINDOW,
+                backend::SEARCH_RATE_LIMIT_MAX,
+            )),
+            search_prefixes: Arc::new(vec!["/api/rpc/search"]),
+        }
+    }
 
-        dioxus::server::router(App)
-            .merge(metrics_route)
-            .layer(axum::middleware::from_fn_with_state(
-                (search_limiter.clone(), search_rpc_prefixes),
-                rate_limit::rate_limit_paths,
-            ))
+    /// Merge every remaining route surface onto `router` (the Dioxus/RPC +
+    /// metrics base, already carrying the search rate-limit layer): REST
+    /// `/api/*`, Kobo wireless sync + Reading Services, OPDS, and auth (with
+    /// its own credential-handling rate limit layered on just that surface).
+    fn merge_route_surfaces(
+        router: Router,
+        state: backend::AppState,
+        limiters: &RouterLimiters,
+    ) -> Router {
+        router
             .merge(backend::rest_router_with_search_limiter(
                 state.clone(),
-                search_limiter,
+                limiters.search.clone(),
             ))
             // Native Kobo wireless sync. Sits outside the `/api/*` auth gate
             // (require_auth passes through non-`/api/` paths); each route
@@ -295,11 +304,32 @@ mod server {
             // unauthenticated request the same way an `/api/*` route does.
             .merge(backend::opds_router(state.clone()))
             .merge(
-                auth::auth_router(state.clone()).layer(axum::middleware::from_fn_with_state(
-                    (auth_limiter, auth_limiter_prefixes),
+                auth::auth_router(state).layer(axum::middleware::from_fn_with_state(
+                    (limiters.auth.clone(), limiters.auth_prefixes.clone()),
                     rate_limit::rate_limit_paths,
                 )),
             )
+    }
+
+    /// Assemble the full Axum router: RPC search rate-limit, REST router,
+    /// auth router (with its own credential-handling rate-limit), then the
+    /// auth / origin-check / extensions / timeout / body-limit middleware
+    /// stack. Returns the router; security headers and the trace layer are
+    /// added by `apply_security_headers`.
+    fn build_router(state: backend::AppState, pool: SqlitePool, worker: Arc<Worker>) -> Router {
+        let limiters = build_router_limiters();
+        // Prometheus HTTP metrics: middleware + `/metrics` scrape route. The
+        // layer goes on outermost (see below); the route merges in here.
+        let (prometheus_layer, metrics_route) = metrics::layer_and_route();
+
+        let base = dioxus::server::router(App).merge(metrics_route).layer(
+            axum::middleware::from_fn_with_state(
+                (limiters.search.clone(), limiters.search_prefixes.clone()),
+                rate_limit::rate_limit_paths,
+            ),
+        );
+
+        merge_route_surfaces(base, state.clone(), &limiters)
             // Apply require_auth and origin_check at the top level so
             // every cookie-authed /api/* request — not just /api/auth/* —
             // is origin-checked. Bearer requests and safe methods are

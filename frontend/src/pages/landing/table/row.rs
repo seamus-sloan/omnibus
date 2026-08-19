@@ -280,7 +280,12 @@ fn EbookRowMarkup(display: RowDisplay, uuid: String, ctx: RowContext) -> Element
 
 /// Flat list of `<td>` cells inside an [`EbookRow`]. Split out of
 /// [`EbookRowMarkup`] so the row-level event handlers and the per-cell
-/// wiring live in separate functions.
+/// wiring live in separate functions; the chip/scalar cell groups below are
+/// further split out of *this* function for the same reason.
+// allow: still ~5 lines over the cap — the two `RowContext`/`RowDisplay`
+// destructures name every field the cells below need, and further grouping
+// than the `EbookRow*Cells` split above would hide the field wiring rather
+// than shorten it (prior component-length issues, #1721/#1613/#1485).
 #[component]
 fn EbookRowCells(display: RowDisplay, ctx: RowContext) -> Element {
     let RowContext {
@@ -296,7 +301,7 @@ fn EbookRowCells(display: RowDisplay, ctx: RowContext) -> Element {
         save_authors,
         save_tags,
         save_genres,
-        mut selected,
+        selected,
     } = ctx;
     // Cloned per scalar cell so each wrapper owns its own copy of the shared
     // admin/editing/save context.
@@ -330,27 +335,57 @@ fn EbookRowCells(display: RowDisplay, ctx: RowContext) -> Element {
 
     rsx! {
         if is_admin {
-            // `stop_propagation` on the whole cell (not just the checkbox) so a
-            // near-miss click can't fire the row's navigate handler.
-            td {
-                class: "ebook-col-select",
-                onclick: move |evt| evt.stop_propagation(),
-                input {
-                    r#type: "checkbox",
-                    "data-testid": "ebook-select",
-                    aria_label: "{select_aria}",
-                    checked: is_selected,
-                    onchange: move |_| {
-                        let mut set = selected.write();
-                        if !set.remove(&select_uuid) {
-                            set.insert(select_uuid.clone());
-                        }
-                    },
-                }
-            }
+            EbookRowSelectCell { select_uuid, select_aria, is_selected, selected }
         }
         EbookRowCoverCell { thumb_src, thumb_srcset, has_cover, alt_title: cover_alt }
         RowTitleCell { title, error: book.error, ctx: cell_ctx.clone() }
+        EbookRowAuthorsCell {
+            is_admin,
+            editing,
+            authors_text,
+            authors_draft,
+            author_suggestions,
+            save_authors,
+        }
+        RowSeriesCell { series_line, series_text, ctx: cell_ctx.clone() }
+        EbookRowTagGenreCells {
+            is_admin,
+            editing,
+            tags_text,
+            tags_draft,
+            tag_suggestions,
+            save_tags,
+            genres_text,
+            genres_draft,
+            genre_suggestions,
+            save_genres,
+        }
+        EbookRowTrailingCells {
+            published,
+            published_display,
+            formats: book.formats,
+            has_physical: book.has_physical,
+            updated,
+            added,
+            language,
+            ctx: cell_ctx,
+        }
+    }
+}
+
+/// The row's authors chip cell: renders the author names as editable chips
+/// when `is_admin`, wired to the shared `ChipCell` display/draft/suggestions
+/// contract.
+#[component]
+fn EbookRowAuthorsCell(
+    is_admin: bool,
+    editing: Signal<Option<EditField>>,
+    authors_text: String,
+    authors_draft: Signal<Vec<String>>,
+    author_suggestions: ReadSignal<Vec<crate::components::chip_editor::SuggestionItem>>,
+    save_authors: EventHandler<Vec<String>>,
+) -> Element {
+    rsx! {
         ChipCell {
             display: ChipCellDisplay::authors(authors_text),
             is_admin,
@@ -359,7 +394,26 @@ fn EbookRowCells(display: RowDisplay, ctx: RowContext) -> Element {
             suggestions: author_suggestions,
             on_change: move |names: Vec<String>| save_authors.call(names),
         }
-        RowSeriesCell { series_line, series_text, ctx: cell_ctx.clone() }
+    }
+}
+
+/// The tags + genres chip cells — grouped since both are `ChipCell`
+/// instances differing only in their display/draft/suggestions/save wiring.
+#[component]
+#[allow(clippy::too_many_arguments)]
+fn EbookRowTagGenreCells(
+    is_admin: bool,
+    editing: Signal<Option<EditField>>,
+    tags_text: String,
+    tags_draft: Signal<Vec<String>>,
+    tag_suggestions: ReadSignal<Vec<crate::components::chip_editor::SuggestionItem>>,
+    save_tags: EventHandler<Vec<String>>,
+    genres_text: String,
+    genres_draft: Signal<Vec<String>>,
+    genre_suggestions: ReadSignal<Vec<crate::components::chip_editor::SuggestionItem>>,
+    save_genres: EventHandler<Vec<String>>,
+) -> Element {
+    rsx! {
         ChipCell {
             display: ChipCellDisplay::tags(tags_text),
             is_admin,
@@ -376,6 +430,25 @@ fn EbookRowCells(display: RowDisplay, ctx: RowContext) -> Element {
             suggestions: genre_suggestions,
             on_change: move |genres: Vec<String>| save_genres.call(genres),
         }
+    }
+}
+
+/// The trailing scalar cells: published date, formats, updated/added dates,
+/// and language — grouped since none of them interleave with the chip
+/// editors above.
+#[component]
+#[allow(clippy::too_many_arguments)]
+fn EbookRowTrailingCells(
+    published: String,
+    published_display: String,
+    formats: Vec<String>,
+    has_physical: bool,
+    updated: String,
+    added: String,
+    language: String,
+    ctx: CellEditCtx,
+) -> Element {
+    rsx! {
         RowScalarCell {
             display: RowScalarCellDisplay {
                 col_class: "ebook-col-published".to_string(),
@@ -385,9 +458,9 @@ fn EbookRowCells(display: RowDisplay, ctx: RowContext) -> Element {
                 placeholder: "YYYY-MM-DD".to_string(),
             },
             field: EditField::Published,
-            ctx: cell_ctx.clone(),
+            ctx: ctx.clone(),
         }
-        EbookRowFormatsCell { formats: book.formats, has_physical: book.has_physical }
+        EbookRowFormatsCell { formats, has_physical }
         td { class: "ebook-col-updated", "data-testid": "ebook-cell-updated", "{updated}" }
         td { class: "ebook-col-added", "data-testid": "ebook-cell-added", "{added}" }
         RowScalarCell {
@@ -399,7 +472,37 @@ fn EbookRowCells(display: RowDisplay, ctx: RowContext) -> Element {
                 ..Default::default()
             },
             field: EditField::Language,
-            ctx: cell_ctx,
+            ctx,
+        }
+    }
+}
+
+/// The admin-only bulk-select checkbox cell. `stop_propagation` on the
+/// whole cell (not just the checkbox) so a near-miss click can't fire the
+/// row's navigate handler.
+#[component]
+fn EbookRowSelectCell(
+    select_uuid: String,
+    select_aria: String,
+    is_selected: bool,
+    mut selected: Signal<std::collections::BTreeSet<String>>,
+) -> Element {
+    rsx! {
+        td {
+            class: "ebook-col-select",
+            onclick: move |evt| evt.stop_propagation(),
+            input {
+                r#type: "checkbox",
+                "data-testid": "ebook-select",
+                aria_label: "{select_aria}",
+                checked: is_selected,
+                onchange: move |_| {
+                    let mut set = selected.write();
+                    if !set.remove(&select_uuid) {
+                        set.insert(select_uuid.clone());
+                    }
+                },
+            }
         }
     }
 }
