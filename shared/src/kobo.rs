@@ -6,6 +6,9 @@
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+mod tests;
+
 /// Maximum byte length of a user-supplied Kobo device label.
 pub const KOBO_DEVICE_NAME_MAX_LEN: usize = 100;
 

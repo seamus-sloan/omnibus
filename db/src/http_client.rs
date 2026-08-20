@@ -7,6 +7,9 @@
 //! which builds a per-call client pinned to pre-validated socket addresses
 //! for SSRF protection.
 
+#[cfg(test)]
+mod tests;
+
 /// Build a `reqwest::Client` with the given `User-Agent` header. Fallible
 /// (TLS backend init); callers cache the result behind their own
 /// `OnceLock` and propagate a build failure via `?`.

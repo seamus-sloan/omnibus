@@ -7,6 +7,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
+#[cfg(test)]
+mod tests;
+
 /// Generic 500 response that logs `e` under `context` but never leaks it to the wire.
 pub(crate) fn internal<E: std::fmt::Display>(context: &'static str, e: E) -> Response {
     tracing::error!(error = %e, context = context, "internal server error");

@@ -1955,3 +1955,11 @@ fn chapter_number_parses_bare_ordinals_and_noisy_audio_marks() {
     assert_eq!(chapter_number("Acknowledgements"), None);
     assert_eq!(chapter_number("Table of Contents"), None);
 }
+
+#[tokio::test]
+async fn get_link_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = get_link(&pool, 1, "book-uuid-1").await.unwrap_err();
+    assert!(matches!(err, CrossFormatError::Sqlx(_)));
+}
