@@ -17,7 +17,13 @@ use super::super::form_grid::FormFields;
 /// Adding a field is: a variant here, its entry in [`Self::ALL`], and the arms
 /// the compiler then demands in [`Self::label`], [`Self::current`],
 /// [`Self::source_value`], and [`Self::apply`]. Nothing in the compare view
-/// itself changes.
+/// itself changes — it renders [`Self::ALL`] and nothing else.
+///
+/// Four of those five steps are compiler-enforced: each accessor is an
+/// exhaustive `match`, so a new variant fails to build until every one has an
+/// arm. Adding it to [`Self::ALL`] is the single manual step, which is why
+/// the completeness test drives every entry through all four accessors rather
+/// than only reading its label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum MetadataField {
     Title,
@@ -97,9 +103,19 @@ impl MetadataField {
     /// a value the reader already has.
     pub(super) fn source_value(self, edition: &ProviderEdition) -> String {
         let text = |v: &Option<String>| v.as_deref().unwrap_or_default().trim().to_string();
+        // Blank entries are dropped before joining, so a list of them reads
+        // as absent rather than as the separator string — `["", ""]` would
+        // otherwise render and stage as ", ".
+        let list = |v: &[String]| {
+            v.iter()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         match self {
             MetadataField::Title => edition.title.trim().to_string(),
-            MetadataField::Authors => edition.authors.join(", "),
+            MetadataField::Authors => list(&edition.authors),
             MetadataField::Publisher => text(&edition.publisher),
             MetadataField::Published => text(&edition.year),
             MetadataField::Series => text(&edition.series),
@@ -108,7 +124,7 @@ impl MetadataField {
             // A provider reporting 0 pages is normalized to `None` upstream,
             // so anything here is a real count.
             MetadataField::PrintPages => edition.pages.map(|p| p.to_string()).unwrap_or_default(),
-            MetadataField::Genres => edition.genres.join(", "),
+            MetadataField::Genres => list(&edition.genres),
             MetadataField::Description => text(&edition.description),
         }
     }
@@ -133,14 +149,14 @@ impl MetadataField {
             MetadataField::Title => fields.title.set(self.source_value(edition)),
             // The list fields write the source's own vector rather than the
             // joined string the row displays.
-            MetadataField::Authors => fields.authors.set(edition.authors.clone()),
+            MetadataField::Authors => fields.authors.set(non_blank(&edition.authors)),
             MetadataField::Publisher => fields.publisher.set(self.source_value(edition)),
             MetadataField::Published => fields.published.set(self.source_value(edition)),
             MetadataField::Series => fields.series.set(self.source_value(edition)),
             MetadataField::Isbn13 => fields.isbn13.set(self.source_value(edition)),
             MetadataField::Isbn10 => fields.isbn10.set(self.source_value(edition)),
             MetadataField::PrintPages => fields.print_pages.set(self.source_value(edition)),
-            MetadataField::Genres => fields.genres.set(edition.genres.clone()),
+            MetadataField::Genres => fields.genres.set(non_blank(&edition.genres)),
             MetadataField::Description => fields.description.set(self.source_value(edition)),
         }
     }
@@ -150,6 +166,16 @@ impl MetadataField {
     pub(super) fn slug(self) -> String {
         super::field_slug(self.label())
     }
+}
+
+/// The list a list-valued field actually stages: trimmed, with blank entries
+/// dropped, so what is written matches what the row displayed.
+fn non_blank(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .collect()
 }
 
 #[cfg(test)]

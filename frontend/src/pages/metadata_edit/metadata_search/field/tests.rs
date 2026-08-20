@@ -67,6 +67,32 @@ fn every_field_in_all_reads_a_value_from_a_source_that_answers_for_everything() 
 }
 
 #[test]
+fn every_field_in_all_stages_into_a_form_signal_that_actually_changes() {
+    // Adding a variant to `ALL` is the one step the compiler can't demand, so
+    // this drives each entry through the two accessors a mis-wired arm would
+    // otherwise hide: `apply` writing to the wrong signal, or `current`
+    // reading from one. Both render a row that looks right and copies the
+    // wrong value.
+    let edition = full_edition();
+    for field in MetadataField::ALL {
+        let (_dom, fields) = mounted_fields();
+        let before = field.current(fields);
+        field.apply(fields, &edition);
+        let after = field.current(fields);
+
+        assert_eq!(
+            after,
+            field.source_value(&edition),
+            "{field:?}: `current` does not read back what `apply` wrote"
+        );
+        assert_ne!(
+            before, after,
+            "{field:?}: applying changed nothing, so its arm writes a signal `current` never reads"
+        );
+    }
+}
+
+#[test]
 fn all_lists_each_field_exactly_once_and_slugs_are_distinct() {
     let mut slugs: Vec<String> = MetadataField::ALL.iter().map(|f| f.slug()).collect();
     let before = slugs.len();
@@ -262,4 +288,42 @@ fn current_reads_the_staged_form_value_so_a_row_reflects_an_apply_immediately() 
 
     MetadataField::Title.apply(fields, &full_edition());
     assert_eq!(MetadataField::Title.current(fields), "Effective Java");
+}
+
+#[test]
+fn a_list_of_blank_entries_reads_as_absent_rather_than_as_the_separator() {
+    // Joining first would make `["", ""]` render — and stage — as ", ",
+    // which is a real value overwriting a real value.
+    let edition = ProviderEdition {
+        authors: vec!["  ".into(), String::new()],
+        genres: vec![String::new()],
+        ..full_edition()
+    };
+    assert_eq!(MetadataField::Authors.source_value(&edition), "");
+    assert!(!MetadataField::Authors.is_available(&edition));
+    assert!(!MetadataField::Genres.is_available(&edition));
+
+    let (_dom, fields) = mounted_fields();
+    MetadataField::Authors.apply(fields, &edition);
+    assert_eq!(*fields.authors.read(), vec!["Old Author".to_string()]);
+}
+
+#[test]
+fn apply_stages_the_trimmed_list_the_row_displayed_not_the_raw_one() {
+    let edition = ProviderEdition {
+        genres: vec!["  Computers  ".into(), "   ".into(), "Java".into()],
+        ..full_edition()
+    };
+    assert_eq!(
+        MetadataField::Genres.source_value(&edition),
+        "Computers, Java"
+    );
+
+    let (_dom, fields) = mounted_fields();
+    MetadataField::Genres.apply(fields, &edition);
+    assert_eq!(
+        *fields.genres.read(),
+        vec!["Computers".to_string(), "Java".to_string()],
+        "what is staged must match what the row showed"
+    );
 }

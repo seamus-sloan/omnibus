@@ -20,11 +20,26 @@ import { fixturesDir, seedLibrary } from "../utils/seed";
 //
 // `mathematica-minor-2` ("Minor Lemmas II", Sophie Germain) is read by no
 // other spec — see the fixture-isolation note in
-// `.claude/rules/04-playwright.md`. Nothing here saves, so the book's
-// override state is never touched either way.
+// `.claude/rules/04-playwright.md`. That reservation is load-bearing here:
+// one test below saves a real override on it and reverts it, and an
+// `afterAll` clears any override a failure left behind, so a red run can't
+// hand the next one — or the developer's own library — a mutated fixture.
+// (`author_delete.spec.ts` opens a modal on this book's author, but only
+// regex-matches a book count and cancels, so a publisher override can't
+// disturb it.)
 
 test.beforeAll(async ({ request }) => {
   await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
+});
+
+// Unconditional: the save test reverts on its happy path, but a failure
+// between the save and the revert would otherwise leave a persistent
+// override on a shared fixture for every later run.
+test.afterAll(async ({ request }) => {
+  const uuid = await fetchBookIdByTitle(request, TARGET.title);
+  await request.post("/api/rpc/ebook/overrides/delete", {
+    data: { uuid },
+  });
 });
 
 const TARGET = FIXTURE_BOOKS.find((b) => b.slug === "mathematica-minor-2")!;
@@ -638,5 +653,66 @@ test.describe
         async () => page.getByTestId("revert-overrides").click(),
       );
       await expect(page).toHaveURL(new RegExp(`/books/${uuid}$`));
+    });
+
+    // ---------------------------------------------------------------------------
+    // #1662 — nothing is actionable while the record is still being replaced
+    // ---------------------------------------------------------------------------
+
+    test("holds the apply controls inert until the detail re-fetch lands", async ({
+      page,
+      request,
+    }) => {
+      const uuid = await fetchBookIdByTitle(request, TARGET.title);
+      await mockProviders(page, ALL_CONFIGURED);
+
+      // A hydrate that never answers until we let it: the compare view is open
+      // and painted against the thin search hit for the whole of this window.
+      let releaseHydrate: (() => void) | undefined;
+      const hydrateHeld = new Promise<void>((resolve) => {
+        releaseHydrate = resolve;
+      });
+      await page.route(HYDRATE_URL, async (route) => {
+        if (route.request().method() !== "POST") return route.continue();
+        await hydrateHeld;
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ...OL_CANDIDATE,
+            description: "Only the detail record has this.",
+          }),
+        });
+      });
+
+      await gotoReady(page, `/books/${uuid}/edit`);
+      await page.getByTestId("metadata-search-btn").click();
+      await mockSearch(page, FOUND);
+      await runSearch(page);
+      await page.getByTestId("mes-candidate-0").click();
+
+      // In flight: the busy line is up and nothing can be taken. Otherwise
+      // "take everything" would mean a different set of fields depending on how
+      // fast the network answered — the Open Library search hit has no
+      // description, its record does.
+      await expect(page.getByTestId("mes-compare-busy")).toBeVisible();
+      await expect(page.getByTestId("mes-take-all")).toBeDisabled();
+      await expect(page.getByTestId("mes-row-title-apply")).toBeDisabled();
+
+      releaseHydrate?.();
+
+      // Settled: the description arrived and every control is live again.
+      await expect(page.getByTestId("mes-compare-busy")).toHaveCount(0);
+      await expect(page.getByTestId("mes-row-description-source")).toHaveText(
+        "Only the detail record has this.",
+      );
+      await expect(page.getByTestId("mes-take-all")).toBeEnabled();
+
+      await page.getByTestId("mes-take-all").click();
+      await expect(page.locator("#me-description")).toHaveValue(
+        "Only the detail record has this.",
+      );
+
+      await page.getByTestId("me-discard").click();
     });
   }); // test.describe.serial

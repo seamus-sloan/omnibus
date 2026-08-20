@@ -48,16 +48,22 @@ pub(super) fn ComparePanel(
                     }
                 }
             }
-            TakeAll { edition: edition.clone(), fields }
-            CompareRows { edition: edition.clone(), fields }
+            TakeAll { edition: edition.clone(), fields, hydrating }
+            CompareRows { edition: edition.clone(), fields, hydrating }
         }
     }
 }
 
 /// "Take everything from this source" — every field the source answers for,
 /// in one action. Fields it has no value for are skipped, not blanked.
+///
+/// Held inert until the detail re-fetch lands. Otherwise "everything" means a
+/// different set of fields depending on how fast the network answered: an
+/// Open Library search hit carries no description, its record does, and a
+/// reader who pressed this during the round trip would silently save one
+/// field short.
 #[component]
-fn TakeAll(edition: ProviderEdition, fields: FormFields) -> Element {
+fn TakeAll(edition: ProviderEdition, fields: FormFields, hydrating: bool) -> Element {
     let available = MetadataField::ALL
         .iter()
         .filter(|f| f.is_available(&edition))
@@ -73,7 +79,7 @@ fn TakeAll(edition: ProviderEdition, fields: FormFields) -> Element {
                 r#type: "button",
                 class: "btn primary sm",
                 "data-testid": "mes-take-all",
-                disabled: available == 0,
+                disabled: hydrating || available == 0,
                 onclick: take_all,
                 "Take everything from this source"
             }
@@ -86,7 +92,7 @@ fn TakeAll(edition: ProviderEdition, fields: FormFields) -> Element {
 
 /// The header row plus one [`CompareRow`] per field.
 #[component]
-fn CompareRows(edition: ProviderEdition, fields: FormFields) -> Element {
+fn CompareRows(edition: ProviderEdition, fields: FormFields, hydrating: bool) -> Element {
     let source_name = edition.source.display_name();
     rsx! {
         div { class: "mes-compare-grid", "data-testid": "mes-compare-grid",
@@ -103,6 +109,7 @@ fn CompareRows(edition: ProviderEdition, fields: FormFields) -> Element {
                     edition: edition.clone(),
                     fields,
                     source_name,
+                    hydrating,
                 }
             }
         }
@@ -122,6 +129,7 @@ fn CompareRow(
     edition: ProviderEdition,
     fields: FormFields,
     source_name: &'static str,
+    hydrating: bool,
 ) -> Element {
     let label = field.label();
     let slug = field.slug();
@@ -155,9 +163,11 @@ fn CompareRow(
                 // Named rather than inheriting the arrow glyph: ten rows
                 // whose accessible name is "→" are ten identical controls.
                 aria_label: "Copy {label} from {source_name}",
-                // The guard that matters on this screen: a provider not
-                // knowing a field must never blank out a value you have.
-                disabled: !available,
+                // Two guards. A provider not knowing a field must never
+                // blank out a value you have — and neither must a row that is
+                // about to be replaced: while the detail re-fetch is in
+                // flight this record is the thin search hit, not the answer.
+                disabled: !available || hydrating,
                 onclick: apply,
                 "\u{2192}"
             }
