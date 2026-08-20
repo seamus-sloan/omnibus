@@ -19,33 +19,22 @@ use serde::Deserialize;
 
 use super::super::{MetadataLookupConfig, SEARCH_LIMIT};
 use super::http::{paired_isbn10, sanitize_genres};
-use crate::suggestions::hardcover::{post_graphql, HardcoverConfig, HardcoverError};
+use crate::suggestions::hardcover::{post_graphql, HardcoverConfig};
 
 /// One query's worth of fields — the book plus a representative edition,
 /// nested so a candidate list costs one round trip rather than one per row.
 /// Ordering editions by `users_count` mirrors `resolve_book`'s preference for
 /// the canonical edition over knockoffs.
 ///
-/// `enriched` adds the fields only the picker wants: `cached_tags` (whose
-/// `Genre` bucket is the closest thing Hardcover publishes to a genre list)
-/// and the edition's `isbn_10` / `pages`. They are separable because
-/// [`fetch_books`] falls back to the base selection when Hardcover rejects
-/// the query — see there for why.
-fn book_fields(enriched: bool) -> String {
-    let (book_extra, edition_extra) = if enriched {
-        (" cached_tags", " isbn_10 pages")
-    } else {
-        ("", "")
-    };
-    format!(
-        "id title description{book_extra} \
-         contributions {{ author {{ name }} }} \
-         book_series {{ series {{ name }} }} \
-         image {{ url }} \
-         editions(where: {{isbn_13: {{_is_null: false}}}}, order_by: {{users_count: desc}}, limit: 1) \
-           {{ isbn_13{edition_extra} }}"
-    )
-}
+/// `cached_tags` is Hardcover's denormalized tag bag, whose `Genre` bucket is
+/// the closest thing it publishes to a genre list; `pages` and `isbn_10` are
+/// edition-level, which is where Hardcover models publication.
+const BOOK_FIELDS: &str = "id title description cached_tags \
+     contributions { author { name } } \
+     book_series { series { name } } \
+     image { url } \
+     editions(where: {isbn_13: {_is_null: false}}, order_by: {users_count: desc}, limit: 1) \
+       { isbn_13 isbn_10 pages }";
 
 #[derive(Debug, Deserialize)]
 struct BooksData {
@@ -56,7 +45,7 @@ struct BooksData {
 #[derive(Debug, Default, Deserialize)]
 struct BookRow {
     /// Hardcover's book id — the handle a selected candidate is re-fetched
-    /// by; already requested by [`book_fields`].
+    /// by; already requested by [`BOOK_FIELDS`].
     #[serde(default)]
     id: Option<i64>,
     /// Hardcover's denormalized tag bag, kept untyped: it is a jsonb column
@@ -159,20 +148,15 @@ pub async fn by_isbn(
         return Ok(None);
     };
 
-    let books = fetch_books(
-        &hc,
-        |fields| {
-            format!(
-                "query ($id: Int!) {{ books(where: {{id: {{_eq: $id}}}}, limit: 1) {{ {fields} }} }}"
-            )
-        },
-        serde_json::json!({ "id": book_id }),
-    )
-    .await?;
+    let query = format!(
+        "query ($id: Int!) {{ books(where: {{id: {{_eq: $id}}}}, limit: 1) {{ {BOOK_FIELDS} }} }}"
+    );
+    let data: BooksData = post_graphql(&hc, &query, serde_json::json!({ "id": book_id })).await?;
     // The scanned barcode is authoritative here, exactly as on the other
     // providers' ISBN path — Hardcover resolves to a *work*, whose
     // representative edition is very often a different printing.
-    Ok(books
+    Ok(data
+        .books
         .into_iter()
         .next()
         .and_then(|b| map_book(b, Some(isbn13))))
@@ -189,60 +173,32 @@ pub async fn by_title(
     let Some(hc) = client_config(config) else {
         return Ok(Vec::new());
     };
-    let books = fetch_books(
+    let gql = format!(
+        "query ($title: String!, $limit: Int!) {{ \
+           books(where: {{title: {{_eq: $title}}}}, order_by: {{users_count: desc}}, limit: $limit) \
+           {{ {BOOK_FIELDS} }} }}"
+    );
+    let data: BooksData = post_graphql(
         &hc,
-        |fields| {
-            format!(
-                "query ($title: String!, $limit: Int!) {{ \
-                   books(where: {{title: {{_eq: $title}}}}, order_by: {{users_count: desc}}, limit: $limit) \
-                   {{ {fields} }} }}"
-            )
-        },
+        &gql,
         serde_json::json!({ "title": query, "limit": SEARCH_LIMIT }),
     )
     .await?;
-    Ok(books
+    Ok(data
+        .books
         .into_iter()
         .filter_map(|b| map_book(b, None))
         .collect())
 }
 
-/// Run a `books` query with the enriched selection, falling back to the base
-/// one if Hardcover rejects it.
-///
-/// A `HardcoverError::Graphql` on a 200 is Hasura refusing the *query* — which
-/// is what an unknown field in the selection set looks like, and the enriched
-/// fields are the ones this instance cannot verify against a live schema. The
-/// retry keeps a schema drift costing the three new fields rather than the
-/// whole provider: without it, a renamed `cached_tags` would take every
-/// Hardcover lookup down with it, including the check-in ladder's. Transport
-/// failures are not retried — they say nothing about the selection.
-async fn fetch_books(
-    hc: &HardcoverConfig,
-    query_for: impl Fn(&str) -> String,
-    variables: serde_json::Value,
-) -> anyhow::Result<Vec<BookRow>> {
-    match post_graphql::<BooksData>(hc, &query_for(&book_fields(true)), variables.clone()).await {
-        Ok(data) => Ok(data.books),
-        Err(HardcoverError::Graphql(msg)) => {
-            tracing::warn!(
-                "hardcover rejected the enriched selection ({msg}); retrying without it"
-            );
-            let data: BooksData =
-                post_graphql(hc, &query_for(&book_fields(false)), variables).await?;
-            Ok(data.books)
-        }
-        Err(e) => Err(e.into()),
-    }
-}
-
 /// Read the `Genre` bucket out of Hardcover's `cached_tags` blob.
 ///
 /// The column is jsonb and its buckets are data, so this reads defensively
-/// rather than deriving a type: the observed shape is
-/// `{"Genre": [{"tag": "Fantasy", …}], "Mood": [...]}`, and a bare array of
-/// tags (or of strings) is accepted too. Anything else yields no genres
-/// instead of an error — a tag bag is never worth failing a lookup over.
+/// rather than deriving a type. The live shape is
+/// `{"Tag": [...], "Mood": [...], "Genre": [{"tag": "Programming", "count": 1,
+/// "tagSlug": …}], "Content Warning": [...]}`; a bare array of tags (or of
+/// strings) is accepted too, and anything else yields no genres instead of an
+/// error — a tag bag is never worth failing a lookup over.
 fn genre_tags(cached: Option<serde_json::Value>) -> Vec<String> {
     let bucket = match cached {
         Some(serde_json::Value::Object(mut map)) => map.remove("Genre").unwrap_or_default(),
