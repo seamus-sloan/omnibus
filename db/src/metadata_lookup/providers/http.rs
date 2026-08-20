@@ -87,17 +87,13 @@ pub(crate) fn publication_year(raw: &str) -> Option<String> {
     Some(trimmed.to_string())
 }
 
-/// Clean one provider's genre labels into what a chip editor can show.
+/// Clean one provider's genre labels into what a chip editor can show, capped
+/// at [`ProviderEdition::MAX_GENRES`].
 ///
-/// Trims, drops blanks and any label longer than a stored genre may be (over-long
-/// entries are dropped rather than truncated, matching the series statement in
-/// `openlibrary::edition_series` — the value is posted back to a write path
-/// where `validate` would reject a mangled one), folds case-insensitive
-/// duplicates, and caps the list at [`ProviderEdition::MAX_GENRES`].
-///
-/// Order is preserved throughout: Open Library returns its subjects roughly
-/// most-relevant first, so the cap keeps the useful head rather than an
-/// arbitrary slice.
+/// Two rules callers rely on: an over-long label is **dropped, not
+/// truncated** — it is posted back to a write path where `validate` would
+/// reject a mangled one — and order is preserved, since Open Library returns
+/// its subjects roughly most-relevant first, so the cap keeps the useful head.
 pub(super) fn sanitize_genres<I>(raw: I) -> Vec<String>
 where
     I: IntoIterator,
@@ -124,18 +120,13 @@ where
 }
 
 /// The ISBN-10 among `candidates` that names the **same printing** as
-/// `isbn13`, or `None`.
+/// `isbn13`, canonicalized (separators stripped, `x` check digit upper-cased)
+/// so it satisfies `MetadataOverrides::validate` as-is.
 ///
-/// Providers hand back identifiers per work as readily as per edition — Open
-/// Library's search docs list every edition's ISBN under one work, and
-/// Hardcover answers an ISBN lookup with a representative edition that is
-/// often a different printing than the barcode that was scanned. Pairing the
-/// two by re-deriving the ISBN-13 is what keeps a candidate's two identifiers
-/// from describing two different books; a 979-prefixed ISBN-13 legitimately
-/// pairs with nothing, since it has no ISBN-10 form.
-///
-/// The returned value is canonical: separators stripped and an `x` check digit
-/// upper-cased, so it satisfies `MetadataOverrides::validate` as-is.
+/// Surprising on purpose: a perfectly valid ISBN-10 yields `None` unless it
+/// re-derives `isbn13`. Providers list identifiers per *work* as readily as
+/// per edition, so an unpaired one names a different printing. A 979-prefixed
+/// ISBN-13 pairs with nothing — it has no ISBN-10 form.
 pub(super) fn paired_isbn10<I>(candidates: I, isbn13: &str) -> Option<String>
 where
     I: IntoIterator,
