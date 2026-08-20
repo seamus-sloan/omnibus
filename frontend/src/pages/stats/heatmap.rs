@@ -189,13 +189,13 @@ pub(super) fn HeatmapCard(summary: StatsSummary) -> Element {
             }
             div { class: "st-hm-months", aria_hidden: "true",
                 for m in months {
-                    span { {m} }
+                    span { key: "{m}", {m} }
                 }
             }
             div { class: "st-hm-legend", aria_hidden: "true",
                 span { class: "mono", "less" }
                 for level in 0..5 {
-                    div { class: "st-hm-cell st-hm-{level}" }
+                    div { key: "{level}", class: "st-hm-cell st-hm-{level}" }
                 }
                 span { class: "mono", "more" }
             }
