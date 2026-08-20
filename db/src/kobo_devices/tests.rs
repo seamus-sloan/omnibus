@@ -44,6 +44,26 @@ async fn create_device_propagates_db_error_when_pool_is_closed() {
 }
 
 #[tokio::test]
+async fn create_device_surfaces_a_token_error_when_generation_fails() {
+    // generate_token()'s real failure mode is a CSPRNG error, which isn't
+    // forceable from a test — inject a failing generator through the
+    // private seam instead to exercise the `.map_err` branch.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "reader").await;
+
+    let err = create_device_with_token(&pool, user, "Kobo", || {
+        Err(crate::auth::AuthError::Crypto(
+            "forced CSPRNG failure for test".to_string(),
+        ))
+    })
+    .await;
+    assert!(
+        matches!(err, Err(KoboDeviceError::Token(msg)) if msg.contains("forced CSPRNG failure"))
+    );
+    assert!(list_devices(&pool, user).await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn create_device_mints_unique_tokens_per_device() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "reader").await;
