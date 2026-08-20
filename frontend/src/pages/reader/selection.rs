@@ -133,7 +133,7 @@ fn SelectionSwatches(
 }
 
 /// One of the popover's four non-highlight actions, carrying exactly the
-/// payload [`SelectionActions`]' matching handler takes.
+/// payload the matching handler on [`SelectionActions`] takes.
 #[derive(Clone, PartialEq)]
 enum SelectionButtonAction {
     Note { cfi: String, text: String },
