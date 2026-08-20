@@ -377,3 +377,65 @@ async fn googlebooks_drops_an_isbn10_that_names_a_different_printing() {
     assert_eq!(edition.isbn13, ISBN13);
     assert_eq!(edition.isbn10, None);
 }
+
+// ── Community ratings ────────────────────────────────────────────
+
+#[tokio::test]
+async fn googlebooks_ratings_reads_the_volume_score_and_links_to_the_volume() {
+    let server = MockServer::start().await;
+    mount_gb(
+        &server,
+        json!({ "items": [{ "volumeInfo": {
+            "title": "Effective Java",
+            "averageRating": 4.5,
+            "ratingsCount": 1840,
+            "infoLink": "https://books.google.com/books?id=gbvol",
+        }}]}),
+    )
+    .await;
+
+    let rating = googlebooks::ratings(&config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .expect("a rated volume should answer");
+
+    assert_eq!(rating.rating, 4.5);
+    assert_eq!(rating.rating_max, 5.0);
+    assert_eq!(rating.ratings_count, Some(1840));
+    assert_eq!(
+        rating.source_url.as_deref(),
+        Some("https://books.google.com/books?id=gbvol")
+    );
+}
+
+#[tokio::test]
+async fn googlebooks_ratings_is_none_for_an_unrated_volume() {
+    // Google omits `averageRating` entirely rather than reporting zero.
+    let server = MockServer::start().await;
+    mount_gb(
+        &server,
+        json!({ "items": [{ "volumeInfo": { "title": "Effective Java" } }] }),
+    )
+    .await;
+
+    assert!(googlebooks::ratings(&config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn googlebooks_ratings_errors_when_the_provider_cannot_be_reached() {
+    // Unlike Open Library's best-effort side lookup, this rides the same
+    // request the metadata lookup makes, so a failure is a real failure.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(GB_PATH))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    assert!(googlebooks::ratings(&config_for(&server), ISBN13)
+        .await
+        .is_err());
+}

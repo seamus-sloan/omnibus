@@ -9,11 +9,19 @@
 //!     -> anyhow::Result<Vec<ProviderEdition>>;
 //! ```
 //!
+//! plus a third for the community rating it publishes:
+//!
+//! ```ignore
+//! pub async fn ratings(&MetadataLookupConfig, isbn13: &str)
+//!     -> anyhow::Result<Option<ProviderRating>>;
+//! ```
+//!
 //! A clean miss is an empty answer (`None` / `vec![]`); an `Err` means the
 //! provider could not be asked, which is a different thing and is what lets
 //! the ladder in [`super`] tell "this book isn't out there" apart from "we
-//! never got an answer". Adding a provider is: a module implementing the pair,
-//! a [`MetadataProvider`] variant, and an arm in [`run`].
+//! never got an answer". Adding a provider is: a module implementing the
+//! trio, a [`MetadataProvider`] variant, and an arm in [`run`] and
+//! [`ratings`].
 
 // `pub(super)` rather than private so the sibling test module can drive one
 // provider in isolation — the bare-text fallback, the key-leak guard, and the
@@ -30,6 +38,7 @@ pub(super) mod openlibrary;
 pub(super) use http::publication_year;
 pub use openlibrary::{enrich as openlibrary_enrich, OlEnrichment};
 
+use omnibus_shared::external_ratings::ProviderRating;
 use omnibus_shared::metadata_lookup::{
     MetadataProvider, ProviderCapabilities, ProviderEdition, ProviderInfo,
 };
@@ -91,6 +100,24 @@ pub async fn run(
     }
 }
 
+/// Ask one provider for the community rating it publishes for an ISBN.
+///
+/// The second dispatch point, kept apart from [`run`] because a rating is not
+/// an edition field: it is a per-provider fact about the *book*, several of
+/// which coexist, and it is fetched when a candidate is applied rather than
+/// when one is searched for.
+pub async fn ratings(
+    provider: MetadataProvider,
+    config: &MetadataLookupConfig,
+    isbn13: &str,
+) -> anyhow::Result<Option<ProviderRating>> {
+    match provider {
+        MetadataProvider::OpenLibrary => openlibrary::ratings(config, isbn13).await,
+        MetadataProvider::GoogleBooks => googlebooks::ratings(config, isbn13).await,
+        MetadataProvider::Hardcover => hardcover::ratings(config, isbn13).await,
+    }
+}
+
 /// One rung of the ladder.
 pub struct Rung {
     pub provider: MetadataProvider,
@@ -141,9 +168,9 @@ pub fn ladder(config: &MetadataLookupConfig) -> Vec<Rung> {
     rungs
 }
 
-/// What all three providers can do today: both searches, a cover image, and a
+/// What all three providers can do today: both searches, a cover image, a
 /// genre list — Google Books' `categories`, Open Library's `subjects`, and
-/// Hardcover's `cached_tags`. Ratings are nobody's yet.
+/// Hardcover's `cached_tags` — and a community rating out of five.
 ///
 /// One shared constant only holds while the catalog agrees; the moment a
 /// provider differs, give it its own value rather than widening this one.
@@ -151,7 +178,7 @@ const COMMON_CAPABILITIES: ProviderCapabilities = ProviderCapabilities {
     search_by_title: true,
     search_by_isbn: true,
     carries_cover: true,
-    carries_ratings: false,
+    carries_ratings: true,
     carries_genres: true,
 };
 

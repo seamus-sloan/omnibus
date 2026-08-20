@@ -274,3 +274,87 @@ async fn hardcover_isbn_lookup_drops_edition_fields_from_a_different_printing() 
     // Work-level fields are unaffected — they were never edition-scoped.
     assert_eq!(edition.genres, vec!["Programming", "Reference"]);
 }
+
+// ── Community ratings ────────────────────────────────────────────
+
+#[tokio::test]
+async fn hardcover_ratings_reads_the_book_score_and_links_by_slug() {
+    let server = MockServer::start().await;
+    mount_hc_edition(&server, Some(42)).await;
+    mount_hc_books(
+        &server,
+        ID_QUERY_MARKER,
+        json!([{ "id": 42, "slug": "effective-java", "rating": 4.1, "ratings_count": 12 }]),
+    )
+    .await;
+
+    let rating = hardcover::ratings(&hardcover_config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .expect("a rated book should answer");
+
+    assert_eq!(rating.rating, 4.1);
+    assert_eq!(rating.rating_max, 5.0);
+    assert_eq!(rating.ratings_count, Some(12));
+    assert_eq!(
+        rating.source_url.as_deref(),
+        Some("https://hardcover.app/books/effective-java")
+    );
+}
+
+#[tokio::test]
+async fn hardcover_ratings_links_by_id_when_the_row_carries_no_slug() {
+    let server = MockServer::start().await;
+    mount_hc_edition(&server, Some(42)).await;
+    mount_hc_books(
+        &server,
+        ID_QUERY_MARKER,
+        json!([{ "id": 42, "rating": 4.1 }]),
+    )
+    .await;
+
+    let rating = hardcover::ratings(&hardcover_config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .expect("a rated book should answer");
+
+    assert_eq!(
+        rating.source_url.as_deref(),
+        Some("https://hardcover.app/books/42")
+    );
+}
+
+#[tokio::test]
+async fn hardcover_ratings_is_none_for_an_unrated_book() {
+    let server = MockServer::start().await;
+    mount_hc_edition(&server, Some(42)).await;
+    mount_hc_books(&server, ID_QUERY_MARKER, json!([{ "id": 42 }])).await;
+
+    assert!(hardcover::ratings(&hardcover_config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn hardcover_ratings_is_none_without_a_key_and_issues_no_request() {
+    // Key-gated: an unconfigured instance is a clean miss, never an error.
+    let server = MockServer::start().await;
+
+    assert!(hardcover::ratings(&config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn hardcover_ratings_is_none_when_the_isbn_is_unknown() {
+    let server = MockServer::start().await;
+    mount_hc_edition(&server, None).await;
+
+    assert!(hardcover::ratings(&hardcover_config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .is_none());
+}

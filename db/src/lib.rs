@@ -27,6 +27,7 @@ mod entity_alias;
 pub mod epub_rewrite;
 pub mod epub_structure;
 pub mod error_ring;
+pub mod external_ratings;
 pub mod helpers;
 pub mod hls;
 mod http_client;
@@ -97,12 +98,13 @@ pub use epub_rewrite::{
     export_epub_dir, rewrite_all_epubs_with_overrides, rewrite_all_epubs_with_progress,
     rewritten_epub_path,
 };
+pub use external_ratings::{list_ratings, refresh_ratings, upsert_rating, ExternalRatingsError};
 pub use helpers::{build_fts_match, sanitize_fts_query};
 pub use kepub::{convert_book, kepub_path, kepubify_available, warn_if_unavailable, KepubError};
 pub use merge::{merge_books, undo_merge, MergeError, MergeOutcome};
 pub use metadata_lookup::{
-    catalog, search_all_providers, search_provider_by_isbn, search_provider_by_title,
-    MetadataLookupConfig, MetadataLookupError, ProviderKeys,
+    catalog, fetch_all_ratings, search_all_providers, search_provider_by_isbn,
+    search_provider_by_title, MetadataLookupConfig, MetadataLookupError, ProviderKeys,
 };
 pub use metadata_overrides::*;
 pub use missing_files::{

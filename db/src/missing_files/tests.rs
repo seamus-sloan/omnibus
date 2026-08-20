@@ -902,3 +902,35 @@ async fn gc_deletes_the_purged_books_kobo_annotation_sync_state() {
         "orphaned watermark rows must purge with the book"
     );
 }
+
+#[tokio::test]
+async fn gc_deletes_the_purged_books_external_ratings() {
+    // Community ratings are cached provider facts, regenerable from a later
+    // apply — so they must not guard a victim, and must not outlive it.
+    let _covers = CoversTempDir::new("gc_external_ratings");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let uuid = seed_and_make_missing(&pool, "gone-rated.epub").await;
+    backdate_missing_since(&pool, &uuid, 40).await;
+    crate::external_ratings::upsert_rating(
+        &pool,
+        &uuid,
+        MetadataProvider::OpenLibrary,
+        &omnibus_shared::external_ratings::ProviderRating::new(Some(3.5), 5.0, Some(4), None)
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let purged = gc_books_missing_files(&pool, MISSING_FILES_RETENTION_DAYS)
+        .await
+        .unwrap();
+    assert_eq!(purged, 1, "a cached rating alone must not guard a victim");
+
+    let rows: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM book_external_ratings WHERE book_uuid = ?")
+            .bind(&uuid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(rows, 0, "orphaned rating rows must purge with the book");
+}

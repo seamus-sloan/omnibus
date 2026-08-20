@@ -231,3 +231,100 @@ async fn openlibrary_search_drops_an_isbn10_from_another_edition_of_the_work() {
     assert_eq!(first.isbn13, ISBN13);
     assert_eq!(first.isbn10, None);
 }
+
+// ── Community ratings ────────────────────────────────────────────
+
+/// Mount the `isbn:` work-key search every ratings lookup starts with.
+async fn mount_ol_work_key(server: &MockServer, key: serde_json::Value) {
+    Mock::given(method("GET"))
+        .and(path("/search.json"))
+        .and(query_param("q", format!("isbn:{ISBN13}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "docs": [{ "key": key }] })))
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn openlibrary_ratings_reads_the_works_summary_and_links_to_the_work() {
+    let server = MockServer::start().await;
+    mount_ol_work_key(&server, json!("/works/OL1W")).await;
+    Mock::given(method("GET"))
+        .and(path("/works/OL1W/ratings.json"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({ "summary": { "average": 3.75, "count": 42 } })),
+        )
+        .mount(&server)
+        .await;
+    let config = config_for(&server);
+
+    let rating = openlibrary::ratings(&config, ISBN13)
+        .await
+        .unwrap()
+        .expect("a rated work should answer");
+
+    assert_eq!(rating.rating, 3.75);
+    assert_eq!(rating.rating_max, 5.0);
+    assert_eq!(rating.ratings_count, Some(42));
+    assert_eq!(
+        rating.source_url,
+        Some(format!("{}/works/OL1W", server.uri()))
+    );
+}
+
+#[tokio::test]
+async fn openlibrary_ratings_accepts_the_flattened_search_index_spelling() {
+    // `ratings.json` answers `summary.{average,count}`; the search index
+    // publishes the same numbers as `ratings_average` / `ratings_count`.
+    let server = MockServer::start().await;
+    mount_ol_work_key(&server, json!("/works/OL1W")).await;
+    Mock::given(method("GET"))
+        .and(path("/works/OL1W/ratings.json"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({ "ratings_average": 4.25, "ratings_count": 8 })),
+        )
+        .mount(&server)
+        .await;
+
+    let rating = openlibrary::ratings(&config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .expect("the flattened spelling should parse");
+
+    assert_eq!(rating.rating, 4.25);
+    assert_eq!(rating.ratings_count, Some(8));
+}
+
+#[tokio::test]
+async fn openlibrary_ratings_is_none_when_the_isbn_resolves_to_no_work() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/search.json"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "docs": [] })))
+        .mount(&server)
+        .await;
+
+    assert!(openlibrary::ratings(&config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn openlibrary_ratings_degrades_a_provider_failure_to_no_rating() {
+    // Best-effort like `enrich`: a hiccup costs a line on the detail page, and
+    // must never fail the apply that asked for it.
+    let server = MockServer::start().await;
+    mount_ol_work_key(&server, json!("/works/OL1W")).await;
+    Mock::given(method("GET"))
+        .and(path("/works/OL1W/ratings.json"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&server)
+        .await;
+
+    assert!(openlibrary::ratings(&config_for(&server), ISBN13)
+        .await
+        .unwrap()
+        .is_none());
+}

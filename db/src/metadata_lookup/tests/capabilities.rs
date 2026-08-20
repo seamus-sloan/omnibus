@@ -1,15 +1,16 @@
 //! The catalog's capability flags checked against what the parsers actually
 //! do, both directions: a flag that outruns its parser renders a permanently
 //! blank column in the picker, and a parser that outruns its flag has its
-//! column hidden. Asserted per provider, off one fan-out against fixtures
-//! that carry every field.
+//! column hidden. Asserted per provider against fixtures that carry every
+//! field — genres off one fan-out, ratings off the ISBN-keyed lookup they are
+//! fetched by.
 
 use omnibus_shared::metadata_lookup::MetadataProvider;
 use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use super::super::providers::catalog;
+use super::super::providers::{catalog, ratings as provider_ratings};
 use super::super::*;
 use super::{all_keyed_config_for, GB_PATH, HC_PATH, ISBN13, OL_SEARCH_PATH, QUERY};
 
@@ -76,19 +77,91 @@ async fn every_provider_carrying_genres_actually_returns_them() {
     }
 }
 
+/// Every provider answering with a community rating, so the ratings flag can
+/// be held against a real parse the same way the genre one is. Ratings are a
+/// per-book fact rather than an edition field, so they come off the
+/// ISBN-keyed lookup, not the search.
+async fn mount_rating_bearing(server: &MockServer) {
+    let bodies = [
+        (
+            "GET",
+            OL_SEARCH_PATH,
+            json!({ "docs": [{ "key": "/works/OL1W" }] }),
+        ),
+        (
+            "GET",
+            "/works/OL1W/ratings.json",
+            json!({ "summary": { "average": 3.75, "count": 42 } }),
+        ),
+        (
+            "GET",
+            GB_PATH,
+            json!({ "items": [{ "volumeInfo": { "averageRating": 4.5, "ratingsCount": 1840 } }] }),
+        ),
+        (
+            "POST",
+            HC_PATH,
+            json!({ "data": {
+                "editions": [{ "book_id": 7 }],
+                "books": [{ "id": 7, "rating": 4.1, "ratings_count": 12 }],
+            }}),
+        ),
+    ];
+    for (verb, at, body) in bodies {
+        Mock::given(method(verb))
+            .and(path(at))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(server)
+            .await;
+    }
+}
+
 #[tokio::test]
-async fn no_provider_advertises_ratings_it_cannot_answer_with() {
-    // Community ratings are a separate, per-provider cached fact rather than
-    // an edition field, so nothing parses them yet — the flag must stay false
-    // until something does.
+async fn every_provider_carrying_ratings_actually_returns_one() {
     let server = MockServer::start().await;
-    for info in catalog(&all_keyed_config_for(&server)) {
-        assert!(
-            !info.capabilities.carries_ratings,
-            "{:?} advertises ratings no parser fills",
-            info.id
+    mount_rating_bearing(&server).await;
+    let config = all_keyed_config_for(&server);
+
+    for info in catalog(&config) {
+        let returned = provider_ratings(info.id, &config, ISBN13)
+            .await
+            .unwrap_or_else(|e| panic!("{:?} rating lookup failed: {e:#}", info.id))
+            .is_some();
+        assert_eq!(
+            info.capabilities.carries_ratings, returned,
+            "{:?} advertises carries_ratings={} but returned a rating={returned}",
+            info.id, info.capabilities.carries_ratings,
         );
     }
+}
+
+#[tokio::test]
+async fn a_provider_with_no_rating_for_a_book_still_advertises_the_capability() {
+    // Same rule as genres: the flag describes the provider's API, not one
+    // book. An unrated volume must not read as "this source can't rate".
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(GB_PATH))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(
+                json!({ "items": [{ "volumeInfo": { "title": "Effective Java" } }] }),
+            ),
+        )
+        .mount(&server)
+        .await;
+    let config = all_keyed_config_for(&server);
+
+    assert!(
+        provider_ratings(MetadataProvider::GoogleBooks, &config, ISBN13)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let info = catalog(&config)
+        .into_iter()
+        .find(|p| p.id == MetadataProvider::GoogleBooks)
+        .expect("catalog should list Google Books");
+    assert!(info.capabilities.carries_ratings);
 }
 
 #[tokio::test]

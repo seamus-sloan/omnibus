@@ -5,6 +5,7 @@
 //! Needs no API key, so it is always a reachable rung.
 
 use anyhow::Context;
+use omnibus_shared::external_ratings::ProviderRating;
 use omnibus_shared::isbn::normalize_isbn;
 use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider, ProviderEdition};
 use serde::Deserialize;
@@ -312,4 +313,91 @@ async fn work_first_publish_year(config: &MetadataLookupConfig, isbn13: &str) ->
         .into_iter()
         .next()
         .and_then(|d| d.first_publish_year)
+}
+
+// ── Community ratings ────────────────────────────────────────────
+
+/// Open Library scores works out of five.
+const RATING_MAX: f64 = 5.0;
+
+/// `ratings.json` answers `{"summary": {"average": …, "count": …}, …}`; the
+/// search index publishes the same two numbers flattened as
+/// `ratings_average` / `ratings_count`. Both spellings are accepted so a
+/// caller reading either surface gets the same value.
+#[derive(Debug, Default, Deserialize)]
+struct OlRatings {
+    #[serde(default)]
+    summary: Option<OlRatingsSummary>,
+    #[serde(default)]
+    ratings_average: Option<f64>,
+    #[serde(default)]
+    ratings_count: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OlRatingsSummary {
+    #[serde(default)]
+    average: Option<f64>,
+    #[serde(default)]
+    count: Option<i64>,
+}
+
+/// The community rating Open Library publishes for an ISBN.
+///
+/// Ratings live on the **work**, not the edition, so this resolves the work
+/// key first and then reads its `ratings.json` — the same best-effort two-call
+/// shape as [`enrich`], and never an error: a hiccup at either step is one
+/// fewer source on the book, which is what a missing rating already means.
+///
+/// `isbn13` is interpolated into a query value, so callers must pass a
+/// **canonicalized** ISBN.
+pub async fn ratings(
+    config: &MetadataLookupConfig,
+    isbn13: &str,
+) -> anyhow::Result<Option<ProviderRating>> {
+    let Some(work_key) = work_key(config, isbn13).await else {
+        return Ok(None);
+    };
+    // `work_key` is Open Library's own `/works/OL…W`, so it composes with the
+    // base directly rather than through `path_segments_mut`.
+    let url = format!("{}{work_key}/ratings.json", config.openlibrary_base);
+    let body: OlRatings = get_json_best_effort(config, &url).await.unwrap_or_default();
+    let summary = body.summary;
+    Ok(ProviderRating::new(
+        summary
+            .as_ref()
+            .and_then(|s| s.average)
+            .or(body.ratings_average),
+        RATING_MAX,
+        summary
+            .as_ref()
+            .and_then(|s| s.count)
+            .or(body.ratings_count),
+        Some(format!("{}{work_key}", config.openlibrary_base)),
+    ))
+}
+
+/// The `/works/OL…W` key for an ISBN, via the search index's `isbn:` field
+/// query — the same lookup [`work_first_publish_year`] makes.
+async fn work_key(config: &MetadataLookupConfig, isbn13: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Docs {
+        #[serde(default)]
+        docs: Vec<Doc>,
+    }
+    #[derive(Deserialize)]
+    struct Doc {
+        #[serde(default)]
+        key: Option<String>,
+    }
+    let mut url = base_url(&config.openlibrary_base, "/search.json", "open library").ok()?;
+    url.query_pairs_mut()
+        .append_pair("q", &format!("isbn:{isbn13}"))
+        .append_pair("fields", "key")
+        .append_pair("limit", "1");
+    let body: Docs = get_json_best_effort(config, url.as_str()).await?;
+    body.docs
+        .into_iter()
+        .find_map(|d| d.key)
+        .filter(|k| k.starts_with("/works/"))
 }

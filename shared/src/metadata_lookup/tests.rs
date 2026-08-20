@@ -248,3 +248,32 @@ fn provider_search_status_serializes_its_three_cases_distinguishably() {
         })
     );
 }
+
+#[test]
+fn provider_as_str_matches_the_serde_tag_it_is_stored_alongside() {
+    // `book_external_ratings.provider` stores `as_str` while every wire
+    // payload carries the serde tag; a drift between them would orphan rows.
+    for provider in MetadataProvider::ALL {
+        assert_eq!(
+            serde_json::to_value(provider).unwrap(),
+            serde_json::Value::String(provider.as_str().to_string()),
+            "{provider:?} serializes differently from its stored token"
+        );
+    }
+}
+
+#[test]
+fn provider_from_str_round_trips_every_variant() {
+    for provider in MetadataProvider::ALL {
+        assert_eq!(
+            MetadataProvider::from_str(provider.as_str()),
+            Some(provider)
+        );
+    }
+}
+
+#[test]
+fn provider_from_str_returns_none_for_an_unknown_token() {
+    // A row written by a build that knew a source this one doesn't.
+    assert_eq!(MetadataProvider::from_str("goodreads"), None);
+}

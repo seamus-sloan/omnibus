@@ -13,8 +13,10 @@
 //! that slows down the common case. In exchange it is the one provider that
 //! carries a series statement natively.
 
+use omnibus_shared::external_ratings::ProviderRating;
 use omnibus_shared::isbn::normalize_isbn;
 use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider, ProviderEdition};
+use omnibus_shared::suggestion::hardcover_book_url;
 use serde::Deserialize;
 
 use super::super::{MetadataLookupConfig, SEARCH_LIMIT};
@@ -103,6 +105,31 @@ struct Edition {
     pages: Option<i64>,
 }
 
+/// Hardcover scores books out of five.
+const RATING_MAX: f64 = 5.0;
+
+/// The rating fields, kept out of [`BOOK_FIELDS`] so the metadata lookup
+/// doesn't pay for columns it never reads.
+const RATING_FIELDS: &str = "id slug rating ratings_count";
+
+#[derive(Debug, Default, Deserialize)]
+struct RatedBook {
+    #[serde(default)]
+    id: Option<i64>,
+    #[serde(default)]
+    slug: Option<String>,
+    #[serde(default)]
+    rating: Option<f64>,
+    #[serde(default)]
+    ratings_count: Option<i64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RatedBooksData {
+    #[serde(default)]
+    books: Vec<RatedBook>,
+}
+
 #[derive(Debug, Deserialize)]
 struct EditionsData {
     #[serde(default)]
@@ -138,13 +165,7 @@ pub async fn by_isbn(
     let Some(hc) = client_config(config) else {
         return Ok(None);
     };
-    // Untrusted values ride in `variables`, never interpolated into the query.
-    let query = "query ($isbn: String!) { \
-         editions(where: {_or: [{isbn_13: {_eq: $isbn}}, {isbn_10: {_eq: $isbn}}]}, limit: 1) \
-         { book_id } }";
-    let data: EditionsData =
-        post_graphql(&hc, query, serde_json::json!({ "isbn": isbn13 })).await?;
-    let Some(book_id) = data.editions.into_iter().find_map(|e| e.book_id) else {
+    let Some(book_id) = resolve_book_id(&hc, isbn13).await? else {
         return Ok(None);
     };
 
@@ -160,6 +181,18 @@ pub async fn by_isbn(
         .into_iter()
         .next()
         .and_then(|b| map_book(b, Some(isbn13))))
+}
+
+/// Resolve an ISBN to Hardcover's `book_id` — the first of the two round
+/// trips every ISBN-keyed lookup here makes. `Ok(None)` when Hardcover
+/// doesn't know the ISBN.
+async fn resolve_book_id(hc: &HardcoverConfig, isbn13: &str) -> anyhow::Result<Option<i64>> {
+    // Untrusted values ride in `variables`, never interpolated into the query.
+    let query = "query ($isbn: String!) { \
+         editions(where: {_or: [{isbn_13: {_eq: $isbn}}, {isbn_10: {_eq: $isbn}}]}, limit: 1) \
+         { book_id } }";
+    let data: EditionsData = post_graphql(hc, query, serde_json::json!({ "isbn": isbn13 })).await?;
+    Ok(data.editions.into_iter().find_map(|e| e.book_id))
 }
 
 /// Search by exact title. `_ilike` is blocked server-side, so this only
@@ -189,6 +222,39 @@ pub async fn by_title(
         .into_iter()
         .filter_map(|b| map_book(b, None))
         .collect())
+}
+
+/// The community rating Hardcover publishes for an ISBN. Two round trips, the
+/// same shape as [`by_isbn`]: an edition resolves to a `book_id`, and ratings
+/// live on the book. `Ok(None)` when no key is configured, when Hardcover
+/// doesn't know the ISBN, or when nobody has rated the book.
+pub async fn ratings(
+    config: &MetadataLookupConfig,
+    isbn13: &str,
+) -> anyhow::Result<Option<ProviderRating>> {
+    let Some(hc) = client_config(config) else {
+        return Ok(None);
+    };
+    let Some(book_id) = resolve_book_id(&hc, isbn13).await? else {
+        return Ok(None);
+    };
+    let query = format!(
+        "query ($id: Int!) {{ books(where: {{id: {{_eq: $id}}}}, limit: 1) {{ {RATING_FIELDS} }} }}"
+    );
+    let data: RatedBooksData =
+        post_graphql(&hc, &query, serde_json::json!({ "id": book_id })).await?;
+    let Some(book) = data.books.into_iter().next() else {
+        return Ok(None);
+    };
+    Ok(ProviderRating::new(
+        book.rating,
+        RATING_MAX,
+        book.ratings_count,
+        Some(hardcover_book_url(
+            book.id.unwrap_or(book_id),
+            book.slug.as_deref(),
+        )),
+    ))
 }
 
 /// Read the `Genre` bucket out of Hardcover's `cached_tags` blob.

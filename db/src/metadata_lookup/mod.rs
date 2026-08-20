@@ -1,14 +1,14 @@
 //! Server-side book-metadata resolution against the external providers.
 //!
-//! Two shapes, for two different questions. The **ladder**
-//! ([`search_provider_by_isbn`], [`search_provider_by_title`]) walks providers
-//! in order and returns the first good answer — right for a check-in scan
-//! resolving one physical book. The **fan-out** ([`search_all_providers`])
-//! asks every configured provider at once and keeps the answers attributed and
-//! un-collapsed — right for the metadata editor's edition picker.
+//! Three shapes for three questions: the **ladder** ([`search_provider_by_isbn`])
+//! answers a check-in scan with the first good match, the **fan-out**
+//! ([`search_all_providers`]) keeps every provider's candidates attributed for
+//! the editor's picker, and [`fetch_all_ratings`] collects the community score
+//! each one publishes about a book.
 
 mod config;
 mod providers;
+mod ratings;
 mod search;
 
 #[cfg(test)]
@@ -16,6 +16,7 @@ mod tests;
 
 pub use config::{MetadataLookupConfig, ProviderKeys};
 pub use providers::{catalog, openlibrary_enrich, OlEnrichment};
+pub use ratings::fetch_all_ratings;
 pub use search::{search_all_providers, FANOUT_PROVIDER_LIMIT};
 
 use omnibus_shared::isbn::{normalize_isbn, IsbnError};

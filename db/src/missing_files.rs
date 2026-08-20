@@ -80,8 +80,8 @@ pub async fn gc_books_missing_files(
 }
 
 /// Hard-delete the `(id, uuid)` victims in one transaction: their
-/// `metadata_overrides`, `kobo_annotations_sync`, `books`, and `books_fts`
-/// rows (chunked at 500 to stay under SQLite's 999-bind cap), then any
+/// `metadata_overrides`, `book_external_ratings`, `kobo_annotations_sync`,
+/// `books`, and `books_fts` rows (chunked at 500 to stay under SQLite's 999-bind cap), then any
 /// taxonomy the purge orphaned.
 async fn delete_victim_rows(
     pool: &SqlitePool,
@@ -106,6 +106,16 @@ async fn delete_victim_rows(
         // data, so they don't guard a victim — but an orphaned row would make
         // Reading Services `checkforchanges` re-report the purged uuid
         // forever (its GET can only 404, so it never acks).
+        // Cached provider facts, regenerable from a later apply — dropped
+        // with the book like `metadata_overrides`, never a purge guard.
+        let del_external_ratings =
+            format!("DELETE FROM book_external_ratings WHERE book_uuid IN ({placeholders})");
+        let mut q = sqlx::query(&del_external_ratings);
+        for (_, uuid) in chunk {
+            q = q.bind(uuid);
+        }
+        q.execute(&mut *tx).await?;
+
         let del_kobo_sync =
             format!("DELETE FROM kobo_annotations_sync WHERE book_uuid IN ({placeholders})");
         let mut q = sqlx::query(&del_kobo_sync);

@@ -5,6 +5,16 @@ use serde::{Deserialize, Serialize};
 /// Base URL for outbound Hardcover book links (new tab).
 const HARDCOVER_BOOK_BASE: &str = "https://hardcover.app/books/";
 
+/// Outbound Hardcover book page — slug-based when the row carries one, id
+/// otherwise. Shared with the community-ratings attribution link so the two
+/// surfaces can't drift apart on how a Hardcover book is addressed.
+pub fn hardcover_book_url(id: i64, slug: Option<&str>) -> String {
+    match slug.filter(|s| !s.is_empty()) {
+        Some(slug) => format!("{HARDCOVER_BOOK_BASE}{slug}"),
+        None => format!("{HARDCOVER_BOOK_BASE}{id}"),
+    }
+}
+
 /// One suggested read-alike from Hardcover. External to the library — clicking
 /// opens `hardcover_url` in a new tab.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -45,10 +55,7 @@ impl BookSuggestion {
             author,
             list_count,
         } = raw;
-        let hardcover_url = match hardcover_slug {
-            Some(slug) if !slug.is_empty() => format!("{HARDCOVER_BOOK_BASE}{slug}"),
-            _ => format!("{HARDCOVER_BOOK_BASE}{hardcover_id}"),
-        };
+        let hardcover_url = hardcover_book_url(hardcover_id, hardcover_slug.as_deref());
         let cover_url = has_cover.then(|| format!("/api/suggestions/{book_uuid}/{rank}/cover"));
         Self {
             hardcover_id,

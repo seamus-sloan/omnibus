@@ -17,8 +17,9 @@ use super::MetadataLookupConfig;
 /// Max provider calls in flight at once, mirroring the bounded-concurrency
 /// shape of `author_photos::cascade::refetch_all`. Above today's catalog size
 /// on purpose: it is the ceiling a growing catalog will meet, not a limit that
-/// binds on three providers.
-const FANOUT_CONCURRENCY: usize = 6;
+/// binds on three providers. Shared with the ratings fan-out, which asks the
+/// same catalog the same way.
+pub(super) const FANOUT_CONCURRENCY: usize = 6;
 
 /// Max candidates one provider may contribute, so a chatty source can't
 /// crowd the others out of the picker.

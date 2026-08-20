@@ -26,6 +26,34 @@ impl MetadataProvider {
             MetadataProvider::Hardcover => "Hardcover",
         }
     }
+
+    /// The snake_case token this enum serializes to — also the form persisted
+    /// in `book_external_ratings.provider`, so a stored row and a JSON payload
+    /// can never name a provider differently.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MetadataProvider::OpenLibrary => "open_library",
+            MetadataProvider::GoogleBooks => "google_books",
+            MetadataProvider::Hardcover => "hardcover",
+        }
+    }
+
+    /// Parse a persisted/wire token; `None` if unrecognized — a row written by
+    /// a build that knew a source this one doesn't is stale data, not an
+    /// error. Named `from_str` for symmetry with [`Self::as_str`], not the
+    /// fallible `FromStr` trait.
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Option<Self> {
+        Some(match s {
+            "open_library" => Self::OpenLibrary,
+            "google_books" => Self::GoogleBooks,
+            "hardcover" => Self::Hardcover,
+            _ => return None,
+        })
+    }
+
+    /// Every provider this build knows, in catalog order.
+    pub const ALL: [Self; 3] = [Self::OpenLibrary, Self::GoogleBooks, Self::Hardcover];
 }
 
 /// What one provider can be asked and what it can return, independent of

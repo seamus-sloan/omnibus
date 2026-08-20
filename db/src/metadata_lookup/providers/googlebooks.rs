@@ -9,6 +9,7 @@
 use std::time::Duration;
 
 use anyhow::Context;
+use omnibus_shared::external_ratings::ProviderRating;
 use omnibus_shared::isbn::normalize_isbn;
 use omnibus_shared::metadata_lookup::{MetadataProvider, ProviderEdition};
 use serde::Deserialize;
@@ -22,6 +23,9 @@ use super::http::{
 /// short: a check-in scan is waiting on a spinner, and the failures this
 /// covers come back fast.
 const RETRY_BACKOFF: [Duration; 2] = [Duration::from_millis(200), Duration::from_millis(600)];
+
+/// Google publishes `averageRating` out of five.
+const RATING_MAX: f64 = 5.0;
 
 #[derive(Debug, Deserialize)]
 struct GbResponse {
@@ -60,6 +64,14 @@ struct GbVolumeInfo {
     /// thing it publishes to a genre list.
     #[serde(default)]
     categories: Vec<String>,
+    /// Community score out of five, omitted entirely for an unrated volume.
+    #[serde(rename = "averageRating", default)]
+    average_rating: Option<f64>,
+    #[serde(rename = "ratingsCount", default)]
+    ratings_count: Option<i64>,
+    /// Google's reader-facing page for the volume — the attribution link.
+    #[serde(rename = "infoLink", default)]
+    info_link: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -209,6 +221,33 @@ async fn query_one(
         return Ok(None);
     };
     Ok(map_volume(id, info, Some(isbn13)))
+}
+
+/// The community rating Google publishes for an ISBN, read off the same
+/// `volumes?q=isbn:` record the metadata lookup uses — so it costs one request
+/// and describes the same volume. `Ok(None)` when the volume is unknown or
+/// nobody has rated it.
+pub async fn ratings(
+    config: &MetadataLookupConfig,
+    isbn13: &str,
+) -> anyhow::Result<Option<ProviderRating>> {
+    let resp = get(config, &isbn_url(config, isbn13)).await?;
+    let body: GbResponse = resp
+        .json()
+        .await
+        .context("google books response was not valid json")?;
+    Ok(body
+        .items
+        .into_iter()
+        .find_map(volume)
+        .and_then(|(_, info)| {
+            ProviderRating::new(
+                info.average_rating,
+                RATING_MAX,
+                info.ratings_count,
+                info.info_link,
+            )
+        }))
 }
 
 /// Split an item into its id and volume info, dropping items that carry no
