@@ -34,17 +34,29 @@ pub(super) struct BdAuthorCluster {
     pub author_books: Vec<EbookMetadata>,
 }
 
+/// The book this body renders: durable uuid, effective title, and the accent
+/// color its saved-passage cards inherit.
+#[derive(Clone, PartialEq, Props)]
+pub(super) struct BdBodyBook {
+    pub uuid: String,
+    pub title: String,
+    pub accent: Option<String>,
+}
+
 /// Main column: public journal feed, saved passages, from-the-same-hand fan,
 /// and the "Readers also enjoyed" suggestions strip.
 #[component]
 pub(super) fn BdBodyMain(
-    uuid: String,
-    title: String,
+    book: BdBodyBook,
     author: BdAuthorCluster,
-    accent: Option<String>,
     suggestions: Option<SuggestionsResponse>,
     ctx: BdPageCtx,
 ) -> Element {
+    let BdBodyBook {
+        uuid,
+        title,
+        accent,
+    } = book;
     rsx! {
         div { class: "bd-body-main",
             BdJournalSection { uuid: uuid.clone() }
@@ -315,16 +327,28 @@ fn SuggestionsConnectCard(is_admin: bool) -> Element {
     }
 }
 
+/// The rail's file-details facts: effective title, the joined authors line, and
+/// the series name (`None` for a standalone).
+#[derive(Clone, PartialEq, Props)]
+pub(super) struct BdRailFacts {
+    pub title: String,
+    pub authors_line: String,
+    pub series: Option<String>,
+}
+
 /// Sticky rail: file-details card, series/standalone card, reading-insights card.
 #[component]
 pub(super) fn BdRailSection(
     b: EbookMetadata,
-    title: String,
-    authors_line: String,
-    series: Option<String>,
+    facts: BdRailFacts,
     merge_button: Option<Element>,
     delete_button: Option<Element>,
 ) -> Element {
+    let BdRailFacts {
+        title,
+        authors_line,
+        series,
+    } = facts;
     let uuid = b.unique_identifier.clone().unwrap_or_default();
     rsx! {
         aside { class: "bd-rail",
