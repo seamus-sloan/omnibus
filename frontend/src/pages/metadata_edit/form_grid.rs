@@ -21,6 +21,8 @@ pub(super) struct FormFields {
     pub series: Signal<String>,
     pub series_index: Signal<String>,
     pub isbn13: Signal<String>,
+    pub isbn10: Signal<String>,
+    pub print_pages: Signal<String>,
     pub authors: Signal<Vec<String>>,
     pub tags: Signal<Vec<String>>,
     pub genres: Signal<Vec<String>>,
@@ -141,6 +143,41 @@ fn field_grid_identity_rows(orig: Signal<EbookMetadata>, fields: FormFields) -> 
             edited: isbn13() != orig().isbn13.clone().unwrap_or_default(),
             hint: "13 digits",
             placeholder: "e.g. 9780134685991",
+        }
+        {identity_row_isbn_and_pages(orig, fields)}
+    }
+}
+
+/// ISBN-10 and print-page-count rows, the tail of the identity/publication
+/// half of [`FieldGrid`]. Split out of [`field_grid_identity_rows`] to keep
+/// that function under the soft line cap.
+fn identity_row_isbn_and_pages(orig: Signal<EbookMetadata>, fields: FormFields) -> Element {
+    let mut isbn10 = fields.isbn10;
+    let mut print_pages = fields.print_pages;
+
+    rsx! {
+        // ISBN-10 — 10 characters (digits + optional trailing X), enforced
+        // server-side on save; an empty value clears it, same as ISBN-13.
+        MeField {
+            label: "ISBN-10",
+            value: isbn10,
+            on_change: move |v: String| isbn10.set(v),
+            mono: true,
+            edited: isbn10() != orig().isbn10.clone().unwrap_or_default(),
+            hint: "10 characters",
+            placeholder: "e.g. 0134685997",
+        }
+
+        // Print page count — plain integer text entry; parsed and bound-
+        // checked (`MetadataOverrides::validate`) when the form saves.
+        MeField {
+            label: "Print Pages",
+            value: print_pages,
+            on_change: move |v: String| print_pages.set(v),
+            mono: true,
+            edited: print_pages().trim() != orig().print_pages.map(|p| p.to_string()).unwrap_or_default(),
+            hint: "whole number",
+            placeholder: "e.g. 320",
         }
     }
 }

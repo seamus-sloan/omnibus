@@ -44,6 +44,7 @@ mod sleep_panel;
 mod speed_panel;
 #[cfg(not(feature = "mobile"))]
 mod stage;
+pub(crate) mod sync_prompt;
 
 #[cfg(not(feature = "mobile"))]
 use ready_player::{PlaybackSignals, ReadyPlayer};
@@ -170,6 +171,7 @@ fn active_listen_view(playback: crate::PlaybackState, uuid: &str) -> Option<Elem
                     rate_error: playback.rate_error,
                     volume: playback.volume,
                     hls_ready: playback.hls_ready,
+                    buffering: playback.buffering,
                 },
                 playback_failed: playback.playback_failed,
                 chapters: playback.chapters,

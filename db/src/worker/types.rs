@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use omnibus_shared::{TaskKind, TaskProgress};
+use omnibus_shared::{CleanupKind, TaskKind, TaskProgress};
 use sqlx::SqlitePool;
 use tokio::sync::{watch, Mutex, Semaphore};
 
@@ -93,6 +93,13 @@ pub enum Task {
     /// scan on the same library); does not consume the scan semaphore
     /// (light per-file IO, mirrors [`Task::BackfillWordCounts`]).
     BackfillPageCounts { library_path: String },
+    /// Backfill `epub_spine_stats` + `ebook_chapters` (migration `0074`)
+    /// for EPUB files with no extracted structure yet. Posted by the
+    /// [`Task::Scan`] handler on success like its sibling backfills; the
+    /// Changed sync path re-creates a file's `book_files` row, so cascade
+    /// clears stale structure and this task re-extracts it. Keyed on
+    /// `library_path`; does not consume the scan semaphore.
+    BackfillEpubStructure { library_path: String },
     /// Pre-generate WebP thumbnails (all three sizes) for every covered book
     /// under `library_path` (#1752). Posted by the [`Task::Scan`] handler on
     /// success, alongside [`Task::BackfillWordCounts`] /
@@ -150,6 +157,18 @@ pub enum Task {
     /// scan semaphore (its DB work is a handful of bulk-fetched queries, not
     /// per-book round trips).
     RewriteAllEpubs,
+    /// Run the library-cleanup dedup detectors (#960/#965) and persist any
+    /// newly-found suggestions into `dedup_suggestions` (migration `0069`).
+    /// `kind = None` runs every detector via `cleanup::detect_all`; `Some(k)`
+    /// scopes to just that domain — the admin-triggered "run detection now"
+    /// shape a future settings action will want, even though the only
+    /// current poster ([`crate::indexer::reindex`]'s success path) always
+    /// passes `None`. Keyed on a fixed `cleanup` resource so concurrent
+    /// detection runs serialize against each other rather than racing
+    /// `INSERT OR IGNORE`s; does not consume the scan semaphore (detection
+    /// reads a handful of already-indexed tables, it doesn't walk the
+    /// filesystem).
+    DetectCleanup { kind: Option<CleanupKind> },
     /// Test-only synthetic task: sleeps `latency_ms` and invokes the
     /// optional `on_run` / `on_done` hooks, with `resource` and
     /// `route_through_scan_sem` letting a test exercise the keyed mutex and
@@ -179,6 +198,7 @@ impl Task {
             Task::BackfillChapters { library_path } => Some(format!("audiobooks:{library_path}")),
             Task::BackfillWordCounts { library_path } => Some(library_path.clone()),
             Task::BackfillPageCounts { library_path } => Some(library_path.clone()),
+            Task::BackfillEpubStructure { library_path } => Some(library_path.clone()),
             Task::BackfillThumbs { library_path } => Some(library_path.clone()),
             Task::RebuildFtsIndex => Some("rebuild-fts".into()),
             Task::ResolveSuggestions { book_uuid } => Some(format!("suggestions:{book_uuid}")),
@@ -190,6 +210,7 @@ impl Task {
             } => Some(format!("convert:{book_id}:{source_format}:{target_format}")),
             Task::SendToKindle { .. } => Some("smtp".into()),
             Task::RewriteAllEpubs => Some("rewrite-all-epubs".into()),
+            Task::DetectCleanup { .. } => Some("cleanup".into()),
             #[cfg(test)]
             Task::Test { resource, .. } => resource.clone(),
         }
@@ -206,6 +227,7 @@ impl Task {
             Task::BackfillChapters { .. } => false,
             Task::BackfillWordCounts { .. } => false,
             Task::BackfillPageCounts { .. } => false,
+            Task::BackfillEpubStructure { .. } => false,
             Task::BackfillThumbs { .. } => false,
             Task::RebuildFtsIndex => false,
             Task::ResolveSuggestions { .. } => false,
@@ -213,6 +235,7 @@ impl Task {
             Task::ConvertFormat { .. } => false,
             Task::SendToKindle { .. } => false,
             Task::RewriteAllEpubs => false,
+            Task::DetectCleanup { .. } => false,
             #[cfg(test)]
             Task::Test {
                 route_through_scan_sem,
@@ -232,6 +255,37 @@ impl Task {
         matches!(self, Task::ConvertFormat { .. })
     }
 
+    /// Free-text label persisted to the `background_tasks` table (issue
+    /// #941, migration `0072`). Deliberately finer-grained than
+    /// [`Task::kind`]'s wire-facing [`TaskKind`] — several `Task` variants
+    /// share one `TaskKind` for the live progress UI (see that method's
+    /// per-arm comments), but the admin history view wants to tell e.g. a
+    /// KEPUB conversion apart from a full library scan.
+    pub(super) fn persistence_kind(&self) -> &'static str {
+        match self {
+            Task::Scan { .. } => "scan",
+            Task::ScanAudiobooks { .. } => "scan_audiobooks",
+            Task::GenerateThumbs { .. } => "generate_thumbs",
+            Task::ResolveAuthorPhoto { .. } => "resolve_author_photo",
+            Task::HlsTranscode { .. } => "hls_transcode",
+            Task::RefetchAuthorPhotos => "refetch_author_photos",
+            Task::BackfillChapters { .. } => "backfill_chapters",
+            Task::BackfillWordCounts { .. } => "backfill_word_counts",
+            Task::BackfillPageCounts { .. } => "backfill_page_counts",
+            Task::BackfillEpubStructure { .. } => "backfill_epub_structure",
+            Task::BackfillThumbs { .. } => "backfill_thumbs",
+            Task::RebuildFtsIndex => "rebuild_fts_index",
+            Task::ResolveSuggestions { .. } => "resolve_suggestions",
+            Task::KepubConvert { .. } => "kepub_convert",
+            Task::ConvertFormat { .. } => "convert_format",
+            Task::SendToKindle { .. } => "send_to_kindle",
+            Task::RewriteAllEpubs => "rewrite_all_epubs",
+            Task::DetectCleanup { .. } => "detect_cleanup",
+            #[cfg(test)]
+            Task::Test { .. } => "test",
+        }
+    }
+
     /// Wire-protocol discriminant exposed to the UI via
     /// [`Worker::progress_snapshot`]. Tests deliberately collapse onto an
     /// existing variant so the [`TaskKind`] enum doesn't grow a `Test` arm
@@ -249,6 +303,8 @@ impl Task {
             Task::BackfillWordCounts { .. } => TaskKind::Scan,
             // Same reuse as BackfillWordCounts, its sibling scan-follow-up.
             Task::BackfillPageCounts { .. } => TaskKind::Scan,
+            // Same reuse again — a scan-follow-up with no dedicated widget.
+            Task::BackfillEpubStructure { .. } => TaskKind::Scan,
             // Reuse the per-book GenerateThumbs kind rather than Scan: unlike
             // its sibling backfills, this one has an existing, sensible
             // "Generating thumbnail" / "Thumbnail generation" label already
@@ -273,6 +329,10 @@ impl Task {
             // Reuse Scan kind for UI display — a rare admin job with no
             // dedicated progress widget, mirroring RebuildFtsIndex/KepubConvert.
             Task::RewriteAllEpubs => TaskKind::Scan,
+            // Reuse Scan kind for UI display — a scan-follow-up with no
+            // dedicated progress widget, mirroring BackfillWordCounts/
+            // BackfillPageCounts above.
+            Task::DetectCleanup { .. } => TaskKind::Scan,
             #[cfg(test)]
             Task::Test { .. } => TaskKind::Scan,
         }
@@ -446,6 +506,14 @@ pub(super) fn wall_clock_ms() -> i64 {
         .ok()
         .and_then(|d| i64::try_from(d.as_millis()).ok())
         .unwrap_or(0)
+}
+
+/// Current wall-clock time in whole seconds since the UNIX epoch — the
+/// granularity `background_tasks.started_at`/`finished_at` (migration
+/// `0072`) store. Derived from [`wall_clock_ms`] rather than an independent
+/// `SystemTime` read, so the two can never disagree.
+pub(super) fn wall_clock_secs() -> i64 {
+    wall_clock_ms() / 1000
 }
 
 impl Worker {

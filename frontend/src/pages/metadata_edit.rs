@@ -133,6 +133,13 @@ struct EditedFields<'a> {
     series: &'a str,
     series_index: &'a str,
     isbn13: &'a str,
+    isbn10: &'a str,
+    /// Pre-parsed by the caller (`state::build_on_save`), which rejects a
+    /// non-numeric entry client-side before this function ever runs — unlike
+    /// every other field here, this one can't be diffed as a raw string
+    /// since `MetadataOverrides::print_pages` is `Option<i64>`, not
+    /// `Option<String>`.
+    print_pages: Option<i64>,
     authors: &'a [String],
     tags: &'a [String],
     genres: &'a [String],
@@ -179,6 +186,12 @@ fn build_overrides(orig: &EbookMetadata, edited: EditedFields<'_>) -> MetadataOv
         None
     };
 
+    // Unlike the string fields above, `print_pages` has no empty-clears
+    // sentinel to fall back on (there is no "empty" `i64`) — a blank form
+    // field is `None` from the caller and is treated as "leave the override
+    // untouched", not "clear it". Only an actually-changed value is sent.
+    let print_pages = edited.print_pages.filter(|&v| Some(v) != orig.print_pages);
+
     MetadataOverrides {
         title: opt(edited.title, orig.title.as_deref()),
         description: opt(edited.description, orig.description.as_deref()),
@@ -188,9 +201,11 @@ fn build_overrides(orig: &EbookMetadata, edited: EditedFields<'_>) -> MetadataOv
         series: opt(edited.series, orig.series.as_deref()),
         series_index: opt(edited.series_index, orig.series_index.as_deref()),
         isbn13: opt(edited.isbn13, orig.isbn13.as_deref()),
+        isbn10: opt(edited.isbn10, orig.isbn10.as_deref()),
         creators,
         subjects,
         genres,
+        print_pages,
     }
 }
 

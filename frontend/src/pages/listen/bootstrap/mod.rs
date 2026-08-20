@@ -2,24 +2,31 @@
 //! `window`, wires Rust callbacks for time / duration / play / pause, then
 //! fetches the manifest and branches on `mode` (direct vs hls) to seed
 //! playback. Extracted from `BookListenPage` so the parent stays under the
-//! 150-line component cap; everything here is web-feature gated.
+//! 150-line component cap; everything here is web-feature gated. The
+//! callback closures live in [`callbacks`], the manifest branch in
+//! [`manifest`], and the JS strings in [`js`].
 
 #![cfg(feature = "web")]
 
 use dioxus::prelude::*;
-use wasm_bindgen::prelude::*;
 
-use super::helpers::{post_audio_progress, resolve_boot_file, resolve_boot_position};
 use crate::data;
 
+mod callbacks;
 mod js;
+mod manifest;
 
-use js::{control_surface_js, eval_hls_init, inject_hls_script};
+use callbacks::{register_js_callbacks, register_readiness_callbacks};
+use js::{control_surface_js, inject_hls_script};
+use manifest::run_manifest_init;
 
 /// Owns the `Closure`s wired into `window.__omnibusOn*` callbacks. Held
 /// across re-renders by `use_hook` so the closures outlive the effect
 /// closure that registers them.
-type JsCallbackHolder = std::rc::Rc<std::cell::RefCell<Vec<Closure<dyn FnMut(f64)>>>>;
+// Boxed as `Any`: the held closures now span two arities (`FnMut(f64)` and
+// the persist-gated `FnMut(f64, bool)`), and the holder only exists to keep
+// them alive for the surface's lifetime — nothing ever downcasts.
+type JsCallbackHolder = std::rc::Rc<std::cell::RefCell<Vec<Box<dyn std::any::Any>>>>;
 
 // The pure resume-decision helpers (`resolve_boot_file`,
 // `resolve_boot_position`) live in `super::helpers` — this module is
@@ -34,10 +41,17 @@ type JsCallbackHolder = std::rc::Rc<std::cell::RefCell<Vec<Closure<dyn FnMut(f64
 /// picker switches parts, while the mini-dock (which relinks with no
 /// `file_id`) resumes the current part instead of restarting from the first
 /// file. Mirrors `pages::listen::mobile::host::needs_reload`.
-fn needs_reload(loaded: &Option<(String, Option<i64>)>, uuid: &str, file_id: Option<i64>) -> bool {
+fn needs_reload(
+    loaded: &Option<(String, Option<i64>, u32)>,
+    uuid: &str,
+    file_id: Option<i64>,
+    epoch: u32,
+) -> bool {
     match loaded {
-        Some((loaded_uuid, loaded_file)) if loaded_uuid == uuid => {
-            file_id.is_some() && file_id != *loaded_file
+        Some((loaded_uuid, loaded_file, loaded_epoch)) if loaded_uuid == uuid => {
+            // A bumped epoch forces a same-book re-boot (resume + follow
+            // re-resolution) without the dock ever unmounting.
+            *loaded_epoch != epoch || (file_id.is_some() && file_id != *loaded_file)
         }
         _ => true,
     }
@@ -76,7 +90,7 @@ pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
     // What's currently booted: (book uuid, the file_id it was booted with).
     // Gates re-boot so a same-book file-pick reloads but a bare mini-dock
     // relink resumes the current part. Held across renders via `use_hook`.
-    let mut loaded_key = use_hook(|| Signal::new(None::<(String, Option<i64>)>));
+    let mut loaded_key = use_hook(|| Signal::new(None::<(String, Option<i64>, u32)>));
 
     use_effect(move || {
         let resolved_user = current_user();
@@ -96,9 +110,13 @@ pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
             return;
         }
         // Reactive dependencies — re-run when the active book *or* the selected
-        // file changes (the picker retargets `file_id` without changing uuid).
+        // file changes (the picker retargets `file_id` without changing uuid),
+        // or when a surface bumps `reload_epoch` to force a same-book re-boot
+        // (Immersive Read re-resolving resume + follow without unmounting the
+        // dock).
         let requested_uuid = playback.uuid.read().clone();
         let requested_file = *playback.file_id.read();
+        let requested_epoch = *playback.reload_epoch.read();
         let Some(uuid) = requested_uuid else {
             // Dismissed via the dock × button. The handler already stopped
             // the element; clear the book so the dock hides everywhere, and
@@ -108,10 +126,15 @@ pub(crate) fn install_audio_bootstrap(playback: crate::PlaybackState) {
             loaded_key.set(None);
             return;
         };
-        if !needs_reload(&loaded_key.peek().clone(), &uuid, requested_file) {
+        if !needs_reload(
+            &loaded_key.peek().clone(),
+            &uuid,
+            requested_file,
+            requested_epoch,
+        ) {
             return;
         }
-        loaded_key.set(Some((uuid.clone(), requested_file)));
+        loaded_key.set(Some((uuid.clone(), requested_file, requested_epoch)));
         let user_id = resolved_user.flatten().map(|user| user.id);
         boot_new_book(
             &cb_holder,
@@ -160,6 +183,14 @@ fn boot_new_book(
         playback.elapsed,
         playback.playing,
         playback.playback_failed,
+        playback.file_id,
+        playback.uuid,
+    );
+    register_readiness_callbacks(
+        cb_holder,
+        playback.hls_ready,
+        playback.buffering,
+        playback.playback_failed,
     );
     inject_hls_script();
     install_control_surface(uuid, initial_rate, initial_volume);
@@ -188,7 +219,9 @@ fn reset_per_book_signals(playback: &crate::PlaybackState, user_id: Option<i64>,
     let mut elapsed = playback.elapsed;
     let mut playing = playback.playing;
     let mut hls_ready = playback.hls_ready;
+    let mut buffering = playback.buffering;
     let mut playback_failed = playback.playback_failed;
+    NEXT_SEQUENCE_FILE.with(|c| c.set(None));
     let mut rate = playback.rate;
     let mut rate_error = playback.rate_error;
     let mut book = playback.book;
@@ -201,6 +234,7 @@ fn reset_per_book_signals(playback: &crate::PlaybackState, user_id: Option<i64>,
     elapsed.set(0.0_f64);
     playing.set(false);
     hls_ready.set(false);
+    buffering.set(false);
     playback_failed.set(false);
     book.set(None);
     error.set(None);
@@ -264,127 +298,6 @@ fn spawn_manifest_init(
     });
 }
 
-/// Wire the six Rust-side closures that JS calls back into:
-/// `__omnibusOnAudioTime`, `__omnibusOnAudioDuration`, `__omnibusOnAudioPlay`,
-/// `__omnibusOnAudioPause`, `__omnibusOnAudioEnded`, `__omnibusOnInitTimeout`.
-/// Registered before the JS bootstrap so a fast `loadedmetadata` always finds
-/// them.
-///
-/// `loaded_file_id` is the shared signal `run_manifest_init` fills once the
-/// manifest names the file it resolved; every position POST reads it live,
-/// so writes name the file playback is actually in even though these
-/// closures are registered before the manifest lands (#1888). A file switch
-/// always re-boots (see [`needs_reload`]), which resets the signal before
-/// the next manifest fills it again.
-fn register_js_callbacks(
-    cb_holder: &JsCallbackHolder,
-    uuid_cb: String,
-    loaded_file_id: Signal<Option<i64>>,
-    mut duration: Signal<f64>,
-    mut elapsed: Signal<f64>,
-    mut playing: Signal<bool>,
-    mut playback_failed: Signal<bool>,
-) {
-    let Some(window) = web_sys::window() else {
-        return;
-    };
-    let uuid_for_save = uuid_cb.clone();
-    let mut last_saved = 0.0_f64;
-    let on_time = Closure::<dyn FnMut(f64)>::new(move |secs: f64| {
-        elapsed.set(secs);
-        if (secs - last_saved).abs() < 5.0 {
-            return;
-        }
-        last_saved = secs;
-        crate::audiobook_progress::save(&uuid_for_save, secs);
-        post_audio_progress(uuid_for_save.clone(), *loaded_file_id.peek(), secs);
-    });
-    let on_duration = Closure::<dyn FnMut(f64)>::new(move |d: f64| {
-        duration.set(d);
-    });
-    // Starting an `Unread` book marks it `Reading`, the audio counterpart of
-    // the readers' mark-on-open. Fired from the first play of this boot only
-    // — `play` also fires on every resume from pause, and a file switch
-    // re-registers these callbacks, so the flag scopes it to one write per
-    // book opened.
-    let uuid_for_start = uuid_cb.clone();
-    let mut marked_reading = false;
-    let on_play = Closure::<dyn FnMut(f64)>::new(move |_: f64| {
-        playing.set(true);
-        if marked_reading {
-            return;
-        }
-        marked_reading = true;
-        let uuid = uuid_for_start.clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            crate::read_status_auto::apply_auto_read_status("", &uuid, false).await;
-        });
-    });
-    // Every file played through — see the `ended` handler in `js.rs`, which
-    // only calls this once there is no next part to advance to.
-    let uuid_for_end = uuid_cb.clone();
-    let on_ended = Closure::<dyn FnMut(f64)>::new(move |_: f64| {
-        let uuid = uuid_for_end.clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            crate::read_status_auto::apply_auto_read_status("", &uuid, true).await;
-        });
-    });
-    let uuid_for_pause = uuid_cb;
-    let on_pause = Closure::<dyn FnMut(f64)>::new(move |secs: f64| {
-        playing.set(false);
-        crate::audiobook_progress::save(&uuid_for_pause, secs);
-        post_audio_progress(uuid_for_pause.clone(), *loaded_file_id.peek(), secs);
-    });
-    // Fired from the init-poll's `n >= 200` branch when
-    // `window.OmnibusAudio` never appears (mount loop gave
-    // up, JS eval failed, vendored asset 404'd, …). Mirrors
-    // the `reader.rs::__omnibusOnStatus("error")` shape so
-    // the UI surfaces a real failure instead of stalling
-    // on a perpetually-not-ready state.
-    let on_init_timeout = Closure::<dyn FnMut(f64)>::new(move |_: f64| {
-        playback_failed.set(true);
-    });
-
-    let _ = js_sys::Reflect::set(
-        &window,
-        &JsValue::from_str("__omnibusOnAudioTime"),
-        on_time.as_ref().unchecked_ref(),
-    );
-    let _ = js_sys::Reflect::set(
-        &window,
-        &JsValue::from_str("__omnibusOnAudioDuration"),
-        on_duration.as_ref().unchecked_ref(),
-    );
-    let _ = js_sys::Reflect::set(
-        &window,
-        &JsValue::from_str("__omnibusOnAudioPlay"),
-        on_play.as_ref().unchecked_ref(),
-    );
-    let _ = js_sys::Reflect::set(
-        &window,
-        &JsValue::from_str("__omnibusOnAudioPause"),
-        on_pause.as_ref().unchecked_ref(),
-    );
-    let _ = js_sys::Reflect::set(
-        &window,
-        &JsValue::from_str("__omnibusOnAudioEnded"),
-        on_ended.as_ref().unchecked_ref(),
-    );
-    let _ = js_sys::Reflect::set(
-        &window,
-        &JsValue::from_str("__omnibusOnInitTimeout"),
-        on_init_timeout.as_ref().unchecked_ref(),
-    );
-    *cb_holder.borrow_mut() = vec![
-        on_time,
-        on_duration,
-        on_play,
-        on_pause,
-        on_ended,
-        on_init_timeout,
-    ];
-}
-
 /// Install the `window.OmnibusAudio` control surface immediately so
 /// the transport buttons are wired even before `initDirect` / `initHls`
 /// attaches. The two init paths are responsible for setting their own
@@ -397,237 +310,12 @@ fn install_control_surface(uuid: &str, initial_rate: f64, initial_volume: f64) {
     let _ = dioxus::document::eval(&control_surface_js(&rate_lit, &vol_lit, &uuid_lit));
 }
 
-/// Fetch `/api/audiobooks/{uuid}/manifest` — targeting the picker's
-/// `file_id` when one was selected, else the progress row's stored
-/// `book_file_id` so multi-file books resume in the file the seconds were
-/// recorded in (#1888) — then either:
-/// * **Direct mode** — call `initDirect` with the parts list and flip
-///   `hls_ready` true (instant playback for m4b/m4a/mp3/aac).
-/// * **HLS mode** — poll `/status` until `ready` (call `initHls` + flip
-///   `hls_ready`) or `failed` (flip `playback_failed`).
-/// * **No manifest** — show the same failure overlay as a terminal HLS
-///   transcode failure.
-async fn run_manifest_init(
-    uuid_for_fetch: String,
-    file_id: Option<i64>,
-    user_id: Option<i64>,
-    initial_position: f64,
-    playback: crate::PlaybackState,
-    current_user: Signal<Option<Option<omnibus_shared::UserSummary>>>,
-) {
-    let mut rate = playback.rate;
-    let mut rate_error = playback.rate_error;
-    let hls_ready = playback.hls_ready;
-    let mut playback_failed = playback.playback_failed;
-    let chapters_sig = playback.chapters;
-    let uuid_guard = playback.uuid;
-    // True only while `uuid_for_fetch` is still the active book. Checked before
-    // every shared-signal write so a stale task (user switched books mid-fetch
-    // or mid-`/status`-poll) can't clobber the new book's state.
-    let is_current = || {
-        let active_user_id = current_user
-            .peek()
-            .as_ref()
-            .and_then(|user| user.as_ref())
-            .map(|user| user.id);
-        crate::audiobook_progress::playback_load_matches(
-            uuid_guard.peek().as_deref(),
-            active_user_id,
-            &uuid_for_fetch,
-            user_id,
-        )
-    };
-    // Reconcile resume state with the server upfront: the row carries both
-    // the seconds and the `book_files` row they were recorded in, and the
-    // file decides which manifest to fetch before any position applies.
-    let server_row = data::get_progress("", &uuid_for_fetch, omnibus_shared::ProgressFormat::Audio)
-        .await
-        .ok()
-        .flatten();
-
-    let server_rate = data::get_playback_rate("", &uuid_for_fetch).await;
-    if !is_current() {
-        return;
-    }
-    if let (Some(user_id), Ok(Some(record))) = (user_id, server_rate.as_ref()) {
-        crate::audiobook_progress::save_rate(user_id, &uuid_for_fetch, record.playback_rate);
-    }
-    let local_rate =
-        user_id.and_then(|id| crate::audiobook_progress::load_rate(id, &uuid_for_fetch));
-    let resolution = crate::audiobook_progress::resolve_rate(
-        server_rate
-            .as_ref()
-            .map(|record| record.as_ref().map(|record| record.playback_rate))
-            .map_err(|_| ()),
-        local_rate,
-    );
-    rate.set(resolution.playback_rate);
-    super::helpers::audio_call("setRate", &resolution.playback_rate.to_string());
-    if resolution.seed_server {
-        let update = omnibus_shared::AudiobookPlaybackRateUpdate {
-            playback_rate: resolution.playback_rate,
-        };
-        if let Err(error) = data::set_playback_rate("", &uuid_for_fetch, update).await {
-            if is_current() {
-                rate_error.set(Some(format!("Could not save playback speed: {error}")));
-            }
-        }
-    }
-
-    let row_file = server_row.as_ref().and_then(|r| r.book_file_id);
-    let boot_file = resolve_boot_file(file_id, row_file);
-    let mut manifest = fetch_manifest(&uuid_for_fetch, boot_file).await;
-    // The row's stored id is a soft reference — a reindex may have replaced
-    // the `book_files` row since the position was saved. Fall back to the
-    // server's default file rather than a failure overlay, mirroring
-    // `db::progress::resume_points`. Never applied to an explicit picker
-    // selection: a dead `?file_id=` should fail loudly, not play another file.
-    if manifest.is_none() && file_id.is_none() && boot_file.is_some() {
-        manifest = fetch_manifest(&uuid_for_fetch, None).await;
-    }
-
-    // A newer book may have been selected while the manifest was in flight.
-    // The Direct + None arms below are synchronous, so this single guard covers
-    // them; the HLS arm re-checks each poll iteration.
-    if !is_current() {
-        return;
-    }
-
-    let Some(manifest) = manifest else {
-        // Manifest unreachable (network failure, 5xx,
-        // 404 between settings save and reindex). Show
-        // the same failure overlay as a terminal HLS
-        // transcode failure — a manual refresh is the
-        // recovery path either way.
-        playback_failed.set(true);
-        return;
-    };
-
-    let (loaded_file, audio_file_count) = manifest.file_identity();
-    // `0` = a server predating the identity fields; keep posting no file id
-    // rather than inventing one (`resolve_boot_position` degrades the same
-    // way via `audio_file_count == 0`).
-    let mut loaded_file_sig = playback.loaded_file_id;
-    loaded_file_sig.set((loaded_file > 0).then_some(loaded_file));
-    let resume_pos = resolve_boot_position(
-        server_row
-            .as_ref()
-            .map(|r| (r.book_file_id, r.audio_position_seconds)),
-        initial_position,
-        loaded_file,
-        audio_file_count,
-    );
-    let pos_lit = serde_json::to_string(&resume_pos).unwrap_or_else(|_| "0".into());
-
-    match manifest {
-        omnibus_shared::AudiobookManifest::Direct {
-            parts, chapters, ..
-        } => init_direct_play(parts, chapters, &pos_lit, chapters_sig, hls_ready),
-        omnibus_shared::AudiobookManifest::Hls { playlist_url, .. } => {
-            init_hls(
-                &uuid_for_fetch,
-                &playlist_url,
-                &pos_lit,
-                is_current,
-                hls_ready,
-                playback_failed,
-            )
-            .await;
-        }
-    }
-}
-
-/// GET the audiobook manifest (`?file_id=N` for multi-file books) and
-/// decode it. Returns `None` on network error or non-200.
-async fn fetch_manifest(
-    uuid: &str,
-    file_id: Option<i64>,
-) -> Option<omnibus_shared::AudiobookManifest> {
-    let manifest_url = match file_id {
-        Some(fid) => format!("/api/audiobooks/{uuid}/manifest?file_id={fid}"),
-        None => format!("/api/audiobooks/{uuid}/manifest"),
-    };
-    match gloo_net::http::Request::get(&manifest_url).send().await {
-        Ok(resp) if resp.status() == 200 => resp.json().await.ok(),
-        _ => None,
-    }
-}
-
-/// Direct-mode arm: hand the part list to the JS `initDirect` shim,
-/// publish the chapter map, and flip `hls_ready` true. Synchronous —
-/// the caller's `is_current` guard covered the only `await`.
-fn init_direct_play(
-    parts: Vec<omnibus_shared::ManifestPart>,
-    chapters: Vec<omnibus_shared::ChapterInfo>,
-    pos_lit: &str,
-    mut chapters_sig: Signal<Vec<omnibus_shared::ChapterInfo>>,
-    mut hls_ready: Signal<bool>,
-) {
-    // Populate chapter signal from manifest data.
-    chapters_sig.set(chapters);
-
-    // Hand the part list to JS; initDirect picks
-    // the right starting part by cumulative offset.
-    let parts_json = serde_json::to_string(&parts).unwrap_or_else(|_| "[]".into());
-    let init_js = format!(
-        r#"(function(){{ var n=0; (function go(){{ if (window.OmnibusAudio) {{ window.OmnibusAudio.initDirect({parts_json}, {pos_lit}); }} else if (n++ < 200) {{ setTimeout(go, 50); }} else {{ console.error('OmnibusAudio never installed; init timed out'); if (typeof window.__omnibusOnInitTimeout === 'function') {{ window.__omnibusOnInitTimeout(0); }} }} }})(); }})();"#
-    );
-    let _ = dioxus::document::eval(&init_js);
-    hls_ready.set(true);
-}
-
-/// HLS arm: poll `/api/audiobooks/{uuid}/status` until `ready` (call
-/// `initHls` + flip `hls_ready`) or `failed` (flip `playback_failed`).
-/// Re-checks `is_current` every iteration so a stale poll can't clobber
-/// the newly-active book's signals.
-async fn init_hls(
-    uuid: &str,
-    playlist_url: &str,
-    pos_lit: &str,
-    is_current: impl Fn() -> bool,
-    mut hls_ready: Signal<bool>,
-    mut playback_failed: Signal<bool>,
-) {
-    let playlist_lit = serde_json::to_string(playlist_url).unwrap_or_else(|_| "\"\"".into());
-    loop {
-        // Stop polling the moment the user switches away from this book,
-        // so a stale `/status` loop can't flip the new book's signals.
-        if !is_current() {
-            return;
-        }
-        match fetch_hls_status(uuid).await.as_deref() {
-            // Bug 4 from #338: surface failed transcodes instead of
-            // polling forever.
-            Some("failed") => {
-                playback_failed.set(true);
-                return;
-            }
-            Some("ready") => {
-                eval_hls_init(&playlist_lit, pos_lit);
-                hls_ready.set(true);
-                return;
-            }
-            _ => {}
-        }
-        gloo_timers::future::TimeoutFuture::new(1_000).await;
-    }
-}
-
-/// One HLS `/status` poll: fetch + decode the JSON body and return the
-/// `state` field, or `None` on network / decode failure (the caller
-/// just keeps polling).
-async fn fetch_hls_status(uuid: &str) -> Option<String> {
-    let resp = gloo_net::http::Request::get(&format!("/api/audiobooks/{uuid}/status"))
-        .send()
-        .await
-        .ok()?;
-    if resp.status() != 200 {
-        return None;
-    }
-    let json: serde_json::Value = resp.json().await.ok()?;
-    json.get("state")
-        .and_then(|v| v.as_str())
-        .map(str::to_owned)
+thread_local! {
+    /// The manifest's next-file pointer for the CURRENT boot — read by the
+    /// `ended` callback (registered before any manifest exists) to decide
+    /// between sequence-advance and marking the book finished. Reset at
+    /// every boot entry so a failed load can't leave a stale advance.
+    static NEXT_SEQUENCE_FILE: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
 }
 
 // Tests for the pure Rust-side logic only. The JS interop seams
@@ -640,23 +328,32 @@ mod tests {
 
     #[test]
     fn needs_reload_when_nothing_booted_or_book_changed() {
-        assert!(needs_reload(&None, "book-a", None));
-        let booted = Some(("book-a".to_string(), Some(917)));
-        assert!(needs_reload(&booted, "book-b", Some(940)));
+        assert!(needs_reload(&None, "book-a", None, 0));
+        let booted = Some(("book-a".to_string(), Some(917), 0));
+        assert!(needs_reload(&booted, "book-b", Some(940), 0));
     }
 
     #[test]
     fn needs_reload_on_explicit_different_part_of_same_book() {
-        let booted = Some(("book-a".to_string(), Some(917)));
-        assert!(needs_reload(&booted, "book-a", Some(918)));
+        let booted = Some(("book-a".to_string(), Some(917), 0));
+        assert!(needs_reload(&booted, "book-a", Some(918), 0));
+    }
+
+    #[test]
+    fn needs_reload_when_the_reload_epoch_was_bumped() {
+        // Immersive Read forces a same-book re-boot without unmounting the
+        // dock — the epoch is the only thing that moved.
+        let booted = Some(("book-a".to_string(), Some(917), 0));
+        assert!(needs_reload(&booted, "book-a", None, 1));
+        assert!(needs_reload(&booted, "book-a", Some(917), 1));
     }
 
     #[test]
     fn no_reload_for_same_part_or_bare_relink_of_same_book() {
-        let booted = Some(("book-a".to_string(), Some(917)));
+        let booted = Some(("book-a".to_string(), Some(917), 0));
         // Same part re-selected → no restart.
-        assert!(!needs_reload(&booted, "book-a", Some(917)));
+        assert!(!needs_reload(&booted, "book-a", Some(917), 0));
         // Mini-dock relinks with no file_id → keep the current part.
-        assert!(!needs_reload(&booted, "book-a", None));
+        assert!(!needs_reload(&booted, "book-a", None, 0));
     }
 }

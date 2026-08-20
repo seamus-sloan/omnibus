@@ -20,16 +20,14 @@ pub enum SortKeysError {
     Db(#[from] sqlx::Error),
 }
 
-/// The `series_sort` value to store for a book: its primary series name, or
-/// `None` when the book has no (non-empty) series. The sync writers bind this
-/// alongside the `books_series_link` write so the denormalized column and the
-/// link stay in lockstep.
+/// The `series_sort` value to store for a book: its primary series name
+/// (trimmed, with any embedded `#N` / ", Book N" index stripped — #1912),
+/// or `None` when the book has no (non-empty) series. Delegates to
+/// [`crate::helpers::cleaned_series_name`] so this column and the
+/// `books_series_link` write it sits alongside always agree on the same
+/// cleaned name.
 pub fn series_sort_value(m: &EbookMetadata) -> Option<String> {
-    m.series
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
+    crate::helpers::cleaned_series_name(m)
 }
 
 /// One-time backfill of `books.series_sort` for rows indexed before migration

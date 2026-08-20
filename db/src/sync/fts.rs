@@ -13,6 +13,10 @@ use std::sync::OnceLock;
 use anyhow::Context;
 use sqlx::{SqliteConnection, SqlitePool};
 
+/// Rows per chunk for [`upsert_fts_batch`]'s two `IN (...)` lists — one bind
+/// per book id per list, comfortably under SQLite's ~999-parameter cap.
+const UPSERT_BATCH_CHUNK: usize = 450;
+
 /// The `SELECT` projection shared by the per-book upsert and the
 /// whole-table rebuild: same columns, same correlated subqueries for the
 /// taxonomy joins and the ISBN lookup. Kept as one constant so the two
@@ -68,6 +72,44 @@ pub(crate) async fn upsert_fts(
         )
     });
     sqlx::query(sql).bind(book_id).execute(&mut *conn).await?;
+    Ok(())
+}
+
+/// The many-books counterpart of [`upsert_fts`]: delete-then-insert the
+/// `books_fts` rows for every id in `book_ids`, two DML statements per
+/// chunk of [`UPSERT_BATCH_CHUNK`] rather than 2N statements for N books.
+/// For a caller that already knows its whole affected-book set up front
+/// (a merge/split undo replaying a snapshot) this replaces a per-book
+/// `upsert_fts` loop; duplicate ids in `book_ids` are harmless — the
+/// `INSERT ... SELECT ... WHERE b.id IN (...)` reads one row per distinct
+/// book regardless of how many times its id appears in the bound list.
+pub(crate) async fn upsert_fts_batch(
+    conn: &mut SqliteConnection,
+    book_ids: &[i64],
+) -> Result<(), sqlx::Error> {
+    for chunk in book_ids.chunks(UPSERT_BATCH_CHUNK) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let del_sql = format!("DELETE FROM books_fts WHERE rowid IN ({placeholders})");
+        let mut del_q = sqlx::query(&del_sql);
+        for &id in chunk {
+            del_q = del_q.bind(id);
+        }
+        del_q.execute(&mut *conn).await?;
+
+        let ins_sql = format!(
+            "INSERT INTO books_fts(rowid, title, authors, series, tags, description, isbn)
+             {FTS_SELECT_FROM_BOOKS}
+             WHERE b.id IN ({placeholders})"
+        );
+        let mut ins_q = sqlx::query(&ins_sql);
+        for &id in chunk {
+            ins_q = ins_q.bind(id);
+        }
+        ins_q.execute(&mut *conn).await?;
+    }
     Ok(())
 }
 

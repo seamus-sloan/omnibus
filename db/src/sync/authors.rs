@@ -1,10 +1,16 @@
 //! Batched author-link writer for the indexer sync path. Resolves the
 //! merged `creators + contributors` list against the `ignored_authors`
-//! blocklist, upserts surviving names into `authors`, and writes the
+//! blocklist and the `entity_aliases` reindex-resurrection guard (#964),
+//! upserts surviving unmerged names into `authors`, and writes the
 //! per-book join rows in a constant handful of statements.
+
+use std::collections::{HashMap, HashSet};
 
 use omnibus_shared::EbookMetadata;
 use sqlx::Transaction;
+
+#[cfg(test)]
+mod tests;
 
 /// Batch-insert author join rows from the merged `creators` list. The OPF
 /// parser appends `<dc:contributor>` entries onto `creators` in source
@@ -13,10 +19,15 @@ use sqlx::Transaction;
 /// skipped — leaving a gap in `position` rather than renumbering — identical
 /// to the previous per-author loop, but resolved in a constant handful of
 /// statements instead of ~4 per author.
+///
+/// `author_aliases` is the whole-batch reindex-resurrection guard (#964)
+/// lookup built once by `super::books::collect_entity_alias_maps` before the
+/// per-book write loop starts, not re-resolved here (#1985).
 pub(super) async fn insert_author_links(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
     m: &EbookMetadata,
+    author_aliases: &HashMap<String, i64>,
 ) -> Result<(), sqlx::Error> {
     // (name, sort, position) in OPF order: creators + contributors are
     // already merged into `m.creators` by the parser.
@@ -48,8 +59,25 @@ pub(super) async fn insert_author_links(
         return Ok(());
     }
 
-    upsert_authors(tx, &kept, &sort_for).await?;
-    insert_books_authors_link(tx, book_id, &entries, &ignored).await?;
+    // #964: a name a completed library-cleanup merge absorbed must resolve
+    // to the surviving canonical id rather than mint a fresh `authors` row
+    // when the same file is reindexed. Only the unmerged remainder goes
+    // through the normal upsert. #1985: filtered from the whole-batch map
+    // rather than re-queried per book.
+    let aliased: HashMap<String, i64> = kept
+        .iter()
+        .filter_map(|n| author_aliases.get(*n).map(|id| ((*n).to_string(), *id)))
+        .collect();
+    let to_upsert: Vec<&str> = kept
+        .iter()
+        .copied()
+        .filter(|n| !aliased.contains_key(*n))
+        .collect();
+    if !to_upsert.is_empty() {
+        upsert_authors(tx, &to_upsert, &sort_for).await?;
+    }
+
+    insert_books_authors_link(tx, book_id, &entries, &ignored, &aliased).await?;
     Ok(())
 }
 
@@ -124,18 +152,19 @@ async fn upsert_authors(
     Ok(())
 }
 
-/// Insert the per-book link rows in one statement. Dedupes by name, keeping
-/// the first (lowest) position so a name repeated in the merged
-/// creators+contributors list keeps its first position — matching the old
-/// `INSERT OR IGNORE` loop. The id is resolved in SQL via the NOCASE join,
-/// so casing differences don't need handling in Rust.
+/// Insert the per-book link rows. Dedupes by name, keeping the first
+/// (lowest) position so a name repeated in the merged creators+contributors
+/// list keeps its first position — matching the old `INSERT OR IGNORE`
+/// loop. Splits on whether `aliased` already knows the target id (#964: a
+/// merged-away name) or needs the usual NOCASE join against `authors`.
 async fn insert_books_authors_link(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
     entries: &[(&str, Option<&str>, i64)],
-    ignored: &std::collections::HashSet<String>,
+    ignored: &HashSet<String>,
+    aliased: &HashMap<String, i64>,
 ) -> Result<(), sqlx::Error> {
-    let mut linked: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut linked: HashSet<&str> = HashSet::new();
     let link_entries: Vec<(&str, i64)> = entries
         .iter()
         .filter(|(name, _, _)| !ignored.contains(*name))
@@ -145,7 +174,56 @@ async fn insert_books_authors_link(
     if link_entries.is_empty() {
         return Ok(());
     }
-    let link_rows = std::iter::repeat_n("(?, ?)", link_entries.len())
+    let (direct, by_name): (Vec<_>, Vec<_>) = link_entries
+        .into_iter()
+        .partition(|(name, _)| aliased.contains_key(*name));
+
+    if !direct.is_empty() {
+        insert_direct_author_links(tx, book_id, &direct, aliased).await?;
+    }
+    if !by_name.is_empty() {
+        insert_named_author_links(tx, book_id, &by_name).await?;
+    }
+    Ok(())
+}
+
+/// Link rows whose author id is already known (a merged-away name resolved
+/// via `entity_aliases`) — a plain `VALUES` insert, no join needed.
+async fn insert_direct_author_links(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    book_id: i64,
+    entries: &[(&str, i64)],
+    aliased: &HashMap<String, i64>,
+) -> Result<(), sqlx::Error> {
+    // `.get()`, not indexing, so a name the caller's filter missed is dropped rather than panicking.
+    let resolved: Vec<(i64, i64)> = entries
+        .iter()
+        .filter_map(|(name, pos)| aliased.get(*name).map(|&author_id| (author_id, *pos)))
+        .collect();
+    if resolved.is_empty() {
+        return Ok(());
+    }
+    let rows = std::iter::repeat_n("(?, ?, ?)", resolved.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql =
+        format!("INSERT OR IGNORE INTO books_authors_link (book, author, position) VALUES {rows}");
+    let mut q = sqlx::query(&sql);
+    for (author_id, pos) in resolved {
+        q = q.bind(book_id).bind(author_id).bind(pos);
+    }
+    q.execute(&mut **tx).await?;
+    Ok(())
+}
+
+/// Link rows resolved by name via the NOCASE join against `authors`, for
+/// the (common) case of a name with no alias — unchanged from before #964.
+async fn insert_named_author_links(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    book_id: i64,
+    entries: &[(&str, i64)],
+) -> Result<(), sqlx::Error> {
+    let link_rows = std::iter::repeat_n("(?, ?)", entries.len())
         .collect::<Vec<_>>()
         .join(", ");
     let link_sql = format!(
@@ -155,7 +233,7 @@ async fn insert_books_authors_link(
          JOIN authors a ON a.name = v.column1"
     );
     let mut q = sqlx::query(&link_sql).bind(book_id);
-    for (name, pos) in &link_entries {
+    for (name, pos) in entries {
         q = q.bind(*name).bind(*pos);
     }
     q.execute(&mut **tx).await?;

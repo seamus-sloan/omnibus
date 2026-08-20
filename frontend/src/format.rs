@@ -1,11 +1,8 @@
-//! Small display formatters shared across surfaces that render `book_files`
-//! — the hero's file picker and the admin delete dialog — [`plural`], a
-//! trivial pluralizer reused by the desktop and mobile search result
-//! summaries, and the [`format_date_short`]/[`format_date_month_year`] pair
-//! that turns a stored date string into a human one for the landing table
-//! and series pages. Pure functions, no Dioxus, so they unit-test without a
-//! renderer, and — per `.claude/rules/07-hydration.md` — compute identically
-//! on SSR and the WASM client since neither reads any target-specific state.
+//! Small display formatters shared across surfaces: file size/label for
+//! `book_files` pickers, [`plural`] for search-result summaries, and the
+//! [`format_date_short`]/[`format_date_month_year`] pair for table and
+//! series-card dates. Pure functions with no Dioxus/renderer state, so
+//! they unit-test easily and render identically on SSR and WASM (rule 07).
 
 use omnibus_shared::BookFileInfo;
 

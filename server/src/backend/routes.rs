@@ -12,9 +12,9 @@ use axum::{
 
 use super::{
     account, admin_health, admin_sessions, audiobooks, author_photos, authors, bookmarks, covers,
-    ebooks, genres, highlights, journals, kindle, overrides, physical, profile, progress, ratings,
-    read_status, scan, search, series, settings, shelves, stats, suggestions, summary, tags,
-    uploads, users, AppState,
+    cross_format, ebooks, genres, highlights, journals, kindle, metadata, overrides, physical,
+    profile, progress, ratings, read_status, scan, search, series, settings, shelves, stats,
+    suggestions, summary, tags, uploads, users, AppState,
 };
 use crate::rate_limit::{rate_limit_by_ip, RateLimiter};
 
@@ -131,6 +131,7 @@ pub(super) fn data_routes(search_limiter: Arc<RateLimiter>) -> Router<AppState> 
         .merge(discovery_routes())
         .merge(suggestion_routes())
         .merge(summary_routes())
+        .merge(metadata_routes())
         .merge(kindle_routes())
 }
 
@@ -164,6 +165,27 @@ fn progress_routes() -> Router<AppState> {
         .route("/api/progress/sessions", post(progress::post_sessions))
         .route("/api/progress/recent", get(progress::get_recent_progress))
         .route("/api/progress/{uuid}", get(progress::get_progress))
+        .route(
+            "/api/books/{uuid}/cross-format-resume",
+            get(cross_format::get_cross_format_resume),
+        )
+        .route(
+            "/api/books/{uuid}/alignment",
+            get(cross_format::get_alignment),
+        )
+        .route(
+            "/api/books/{uuid}/cross-format-link",
+            post(cross_format::post_cross_format_link)
+                .delete(cross_format::delete_cross_format_link),
+        )
+        .route(
+            "/api/books/{uuid}/sync-point",
+            post(cross_format::post_sync_point),
+        )
+        .route(
+            "/api/books/{uuid}/cross-format-follow",
+            post(cross_format::post_cross_format_follow),
+        )
 }
 
 /// F2.4b highlight annotations — mobile-facing REST. Web hits the analogous
@@ -379,6 +401,18 @@ fn summary_routes() -> Router<AppState> {
             post(summary::post_ebook_summary_fetch),
         )
         .route("/api/summary/sources", get(summary::get_summary_sources))
+}
+
+/// The metadata-provider surface — mobile- and web-facing REST, no RPC
+/// analogue yet. The catalog is read-only for any authenticated user; the
+/// edition search is `can_edit`-gated inside its handler.
+fn metadata_routes() -> Router<AppState> {
+    Router::new()
+        .route("/api/metadata/providers", get(metadata::get_providers))
+        .route(
+            "/api/metadata/editions/search",
+            post(metadata::post_edition_search),
+        )
 }
 
 /// F4.3 Send-to-Kindle — mobile-facing REST. Web hits the analogous

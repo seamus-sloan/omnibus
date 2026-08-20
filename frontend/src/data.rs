@@ -17,8 +17,16 @@ mod admin_health;
 mod admin_sessions;
 mod auth;
 mod authors;
+// Admin background-task history read (#941) — web (server-fn) + SSR stubs;
+// not a mobile surface, same shape as `errors`.
+#[cfg(not(feature = "mobile"))]
+mod background_tasks;
 mod bookmarks;
 mod books;
+// Admin library-cleanup review (#966). Web/SSR call the server functions;
+// mobile posts the same `/api/rpc/cleanup/*` routes, so the wrappers compile
+// under both gates even though no mobile UI ships yet.
+mod cleanup;
 // Admin "last errors" ring buffer read (#954) — web (server-fn) + SSR stubs;
 // not a mobile surface, same shape as `logs`.
 #[cfg(not(feature = "mobile"))]
@@ -35,6 +43,7 @@ mod journals;
 mod kindle;
 // Per-user Kobo device tokens (#923) — web (server-fn) + SSR stubs; the Account
 // settings card is web-only, so there's no mobile transport.
+mod cross_format;
 #[cfg(not(feature = "mobile"))]
 mod kobo;
 #[cfg(not(feature = "mobile"))]
@@ -75,8 +84,12 @@ pub use admin_sessions::*;
 #[cfg(any(feature = "web", feature = "mobile", feature = "server"))]
 pub use auth::*;
 pub use authors::*;
+#[cfg(not(feature = "mobile"))]
+pub use background_tasks::*;
 pub use bookmarks::*;
 pub use books::*;
+pub use cleanup::*;
+pub use cross_format::*;
 #[cfg(not(feature = "mobile"))]
 pub use errors::*;
 pub use genres::*;

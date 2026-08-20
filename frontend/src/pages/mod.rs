@@ -13,6 +13,10 @@ mod author;
 mod authors_index;
 mod book_detail;
 mod check_in;
+// Web/server only: the review page drives the admin-gated `cleanup/*` server
+// functions; no mobile cleanup surface ships, same shape as `admin_health`.
+#[cfg(not(feature = "mobile"))]
+mod cleanup_review;
 mod comic_reader;
 mod index_shell;
 mod landing;
@@ -40,8 +44,12 @@ pub use admin_health::AdminHealthPage;
 pub use auth::{LoginPage, RegisterPage};
 pub use author::AuthorPage;
 pub use authors_index::AuthorsIndexPage;
+#[cfg(not(feature = "mobile"))]
+pub(crate) use book_detail::retarget_and_open_immersive;
 pub use book_detail::BookDetailPage;
 pub use check_in::{CheckInOpen, CheckInOverlay, CheckInPage};
+#[cfg(not(feature = "mobile"))]
+pub use cleanup_review::CleanupReviewPage;
 pub use comic_reader::ComicReadPage;
 pub use landing::LandingPage;
 #[cfg(feature = "web")]

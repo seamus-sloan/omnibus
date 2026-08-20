@@ -4,9 +4,9 @@
 //!
 //! ```ignore
 //! pub async fn by_isbn(&MetadataLookupConfig, isbn13: &str)
-//!     -> anyhow::Result<Option<ExternalBookMeta>>;
+//!     -> anyhow::Result<Option<ProviderEdition>>;
 //! pub async fn by_title(&MetadataLookupConfig, query: &str)
-//!     -> anyhow::Result<Vec<ExternalBookMeta>>;
+//!     -> anyhow::Result<Vec<ProviderEdition>>;
 //! ```
 //!
 //! A clean miss is an empty answer (`None` / `vec![]`); an `Err` means the
@@ -30,9 +30,14 @@ pub(super) mod openlibrary;
 pub(super) use http::publication_year;
 pub use openlibrary::{enrich as openlibrary_enrich, OlEnrichment};
 
-use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider};
+use omnibus_shared::metadata_lookup::{
+    MetadataProvider, ProviderCapabilities, ProviderEdition, ProviderInfo,
+};
 
 use super::MetadataLookupConfig;
+
+#[cfg(test)]
+mod tests;
 
 /// The two things a rung can be asked. Carrying the operation as data (rather
 /// than passing an async closure) keeps the ladder a single non-generic
@@ -49,14 +54,20 @@ pub enum Query<'a> {
 
 /// Ask one provider one question.
 ///
-/// Both operations answer with a `Vec` so the ladder needs only one shape: an
+/// Both operations answer with a `Vec` so callers need only one shape: an
 /// ISBN lookup returns at most one entry, and empty means a clean miss either
-/// way.
+/// way. This is the **single** dispatch point — the check-in ladder
+/// ([`super::climb`]) and the editor's fan-out
+/// ([`super::search_all_providers`]) both come through here, so adding a
+/// provider stays one arm rather than two.
+///
+/// [`ProviderEdition`] is the richer shape; the ladder narrows it to
+/// `ExternalBookMeta` on its way out.
 pub async fn run(
     provider: MetadataProvider,
     config: &MetadataLookupConfig,
     query: Query<'_>,
-) -> anyhow::Result<Vec<ExternalBookMeta>> {
+) -> anyhow::Result<Vec<ProviderEdition>> {
     match (provider, query) {
         (MetadataProvider::OpenLibrary, Query::Isbn(isbn)) => {
             Ok(openlibrary::by_isbn(config, isbn)
@@ -128,4 +139,54 @@ pub fn ladder(config: &MetadataLookupConfig) -> Vec<Rung> {
         });
     }
     rungs
+}
+
+/// What all three providers can do today: both searches, a cover image, and a
+/// genre list — Google Books' `categories`, Open Library's `subjects`, and
+/// Hardcover's `cached_tags`. Ratings are nobody's yet.
+///
+/// One shared constant only holds while the catalog agrees; the moment a
+/// provider differs, give it its own value rather than widening this one.
+const COMMON_CAPABILITIES: ProviderCapabilities = ProviderCapabilities {
+    search_by_title: true,
+    search_by_isbn: true,
+    carries_cover: true,
+    carries_ratings: false,
+    carries_genres: true,
+};
+
+/// The full provider catalog: identity, usability, and capabilities for
+/// every provider this instance knows about — display surface for the
+/// eventual provider-filter UI, and the one place a caller can ask "which
+/// sources exist" without matching on [`MetadataProvider`] itself.
+///
+/// `configured` reuses the exact key-presence check [`ladder`] uses for each
+/// provider, so the two can never disagree about what "configured" means:
+/// Open Library and Google Books are always usable (Google Books is tried
+/// keyless too, just not as the ladder's primary rung — see [`ladder`]'s
+/// docs), and Hardcover only when `config.keys.hardcover` is set.
+pub fn catalog(config: &MetadataLookupConfig) -> Vec<ProviderInfo> {
+    vec![
+        ProviderInfo {
+            id: MetadataProvider::OpenLibrary,
+            display_name: MetadataProvider::OpenLibrary.display_name().to_string(),
+            configured: true,
+            requires_key: false,
+            capabilities: COMMON_CAPABILITIES,
+        },
+        ProviderInfo {
+            id: MetadataProvider::GoogleBooks,
+            display_name: MetadataProvider::GoogleBooks.display_name().to_string(),
+            configured: true,
+            requires_key: false,
+            capabilities: COMMON_CAPABILITIES,
+        },
+        ProviderInfo {
+            id: MetadataProvider::Hardcover,
+            display_name: MetadataProvider::Hardcover.display_name().to_string(),
+            configured: config.keys.hardcover.is_some(),
+            requires_key: true,
+            capabilities: COMMON_CAPABILITIES,
+        },
+    ]
 }

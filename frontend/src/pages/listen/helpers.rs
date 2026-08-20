@@ -108,16 +108,14 @@ pub(super) fn seek_to(secs: f64) {
     let _ = secs;
 }
 
-// The resume-decision trio below is only *called* from the web bootstrap
-// (`bootstrap::run_manifest_init`), but lives here un-gated-on-web so its
-// tests run under the crate's test matrix (`server` feature) — the
-// bootstrap module itself is `#![cfg(feature = "web")]` and its tests
-// never execute there.
+// The resume-decision trio below is called from both the web bootstrap
+// (`bootstrap::run_manifest_init`) and the mobile host driver
+// (`mobile::host::load_manifest`/`init_direct_and_drain`) — un-gated on
+// either target so it can't drift between the two (#1888, #1923).
 
 /// Select the resume position: prefer the server-authoritative value when
 /// available, fall back to the locally cached initial position.
-#[cfg(not(feature = "mobile"))]
-#[cfg_attr(not(feature = "web"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 fn resolve_resume_pos(server_pos: Option<f64>, local_pos: f64) -> f64 {
     server_pos.unwrap_or(local_pos)
 }
@@ -126,8 +124,7 @@ fn resolve_resume_pos(server_pos: Option<f64>, local_pos: f64) -> f64 {
 /// otherwise the progress row's stored `book_file_id`, so resume lands in
 /// the file the seconds were recorded in (#1888); `None` (the server's
 /// lowest-ordinal default) only when neither names one.
-#[cfg(not(feature = "mobile"))]
-#[cfg_attr(not(feature = "web"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 pub(super) fn resolve_boot_file(requested: Option<i64>, row_file: Option<i64>) -> Option<i64> {
     requested.or(row_file)
 }
@@ -140,21 +137,64 @@ pub(super) fn resolve_boot_file(requested: Option<i64>, row_file: Option<i64>) -
 /// seconds recorded in another file, or in no named file at all (the local
 /// cache never names one), start playback at zero rather than splicing one
 /// file's offset into another (#1888).
-#[cfg(not(feature = "mobile"))]
-#[cfg_attr(not(feature = "web"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "web", feature = "mobile")), allow(dead_code))]
 pub(super) fn resolve_boot_position(
     row: Option<(Option<i64>, Option<f64>)>,
     local_pos: f64,
     loaded_file_id: i64,
     audio_file_count: i64,
-) -> f64 {
+) -> Option<f64> {
     if audio_file_count <= 1 {
-        return resolve_resume_pos(row.and_then(|(_, seconds)| seconds), local_pos);
+        return Some(resolve_resume_pos(
+            row.and_then(|(_, seconds)| seconds),
+            local_pos,
+        ));
     }
     match row {
-        Some((Some(row_file), Some(seconds))) if row_file == loaded_file_id => seconds,
-        _ => 0.0,
+        Some((Some(row_file), Some(seconds))) if row_file == loaded_file_id => Some(seconds),
+        // Seconds recorded in another file (or in none) can't be spliced
+        // into this one (#1888) — and `None` here means UNSEEDED, not
+        // "position 0": a zero seed marks the element's 0 as a real
+        // position, which the transport then persists over the row the
+        // seconds actually live in (#1954's data-loss arm).
+        _ => None,
     }
+}
+
+/// Follow-at-boot override: with follow on and a mapped Candidate, the
+/// boot seeds the mapped `(file, seconds)` instead of the stored row — a
+/// post-boot corrective seek would race `initDirect`'s one-shot restore
+/// seek and lose. An explicit picker `?file_id=` outranks follow only
+/// when it names a *different* file than the candidate maps to: picking
+/// the file the mapping already lands in (which every Continue card does
+/// — it always carries the row's file id) is a resume, not a divergent
+/// navigation, and skipping follow there reopened books at the stale spot
+/// (issue #1972).
+#[cfg(not(feature = "mobile"))]
+#[cfg_attr(not(feature = "web"), allow(dead_code))]
+pub(super) fn resolve_follow_boot(
+    explicit_file: Option<i64>,
+    resume: Option<&omnibus_shared::cross_format::CrossFormatResume>,
+) -> Option<(Option<i64>, f64)> {
+    let resume = resume?;
+    if !resume.follow
+        || resume.state != omnibus_shared::cross_format::CrossFormatResumeState::Candidate
+    {
+        return None;
+    }
+    let c = resume.candidate.as_ref()?;
+    if let (Some(picked), Some(mapped)) = (explicit_file, c.book_file_id) {
+        if picked != mapped {
+            return None;
+        }
+    } else if explicit_file.is_some() || c.book_file_id.is_none() {
+        // Candidate names no file: the server always sets one for an
+        // audio target, so a file-less candidate is malformed — it must
+        // neither hijack an explicit pick nor seed seconds into whatever
+        // file the stored row resolves (the #1888 splice).
+        return None;
+    }
+    Some((c.book_file_id, c.audio_position_seconds?))
 }
 
 /// localStorage key for the persisted session volume preference.
@@ -447,11 +487,84 @@ mod tests {
     }
 }
 
-// The resume-decision helpers don't exist on mobile (the web bootstrap is
-// their only caller), so their tests live in a separately-gated module.
-#[cfg(all(test, not(feature = "mobile")))]
+// The resume-decision helpers are shared by both the web bootstrap and the
+// mobile host driver, so their tests run under every feature combination.
+#[cfg(test)]
 mod boot_resume_tests {
+    use omnibus_shared::cross_format::{
+        CrossFormatCandidate, CrossFormatResume, CrossFormatResumeState, MappingConfidence,
+    };
+    use omnibus_shared::ProgressFormat;
+
+    #[cfg(not(feature = "mobile"))]
+    use super::resolve_follow_boot;
     use super::{resolve_boot_file, resolve_boot_position, resolve_resume_pos};
+
+    // Only read by the `resolve_follow_boot` tests, which share its
+    // `not(mobile)` gate.
+    #[cfg_attr(feature = "mobile", allow(dead_code))]
+    fn follow_resume(follow: bool, state: CrossFormatResumeState) -> CrossFormatResume {
+        CrossFormatResume {
+            state,
+            candidate: Some(CrossFormatCandidate {
+                target: ProgressFormat::Audio,
+                source_format: ProgressFormat::Epub,
+                source_client_updated_at: 1,
+                confidence: MappingConfidence::UserAnchored,
+                book_file_id: Some(917),
+                audio_position_seconds: Some(21_822.0),
+                total_duration_seconds: Some(35_760.0),
+                percent: None,
+                fraction: None,
+                epub_cfi: None,
+                source_position_seconds: None,
+                source_ahead: Some(true),
+            }),
+            follow,
+        }
+    }
+
+    #[cfg(not(feature = "mobile"))]
+    #[test]
+    fn resolve_follow_boot_seeds_the_mapped_file_and_seconds() {
+        let resume = follow_resume(true, CrossFormatResumeState::Candidate);
+        assert_eq!(
+            resolve_follow_boot(None, Some(&resume)),
+            Some((Some(917), 21_822.0))
+        );
+    }
+
+    #[cfg(not(feature = "mobile"))]
+    #[test]
+    fn resolve_follow_boot_stands_aside_for_an_explicit_picker_file() {
+        // 919 names a different file than the candidate maps to (917) — a
+        // deliberate divergent navigation, so follow yields.
+        let resume = follow_resume(true, CrossFormatResumeState::Candidate);
+        assert_eq!(resolve_follow_boot(Some(919), Some(&resume)), None);
+    }
+
+    #[cfg(not(feature = "mobile"))]
+    #[test]
+    fn resolve_follow_boot_engages_when_the_explicit_file_matches_the_candidate() {
+        // Every Continue card carries the row's file id, which is the same
+        // file the mapping lands in — that is a resume, not a divergent
+        // pick, and follow must still seed the mapped position (#1972).
+        let resume = follow_resume(true, CrossFormatResumeState::Candidate);
+        assert_eq!(
+            resolve_follow_boot(Some(917), Some(&resume)),
+            Some((Some(917), 21_822.0))
+        );
+    }
+
+    #[cfg(not(feature = "mobile"))]
+    #[test]
+    fn resolve_follow_boot_requires_follow_and_a_candidate_state() {
+        let no_follow = follow_resume(false, CrossFormatResumeState::Candidate);
+        assert_eq!(resolve_follow_boot(None, Some(&no_follow)), None);
+        let aligned = follow_resume(true, CrossFormatResumeState::Aligned);
+        assert_eq!(resolve_follow_boot(None, Some(&aligned)), None);
+        assert_eq!(resolve_follow_boot(None, None), None);
+    }
 
     #[test]
     fn resolve_resume_pos_prefers_server_position_when_present() {
@@ -482,19 +595,20 @@ mod boot_resume_tests {
     #[test]
     fn resolve_boot_position_applies_row_seconds_when_the_row_names_the_loaded_file() {
         let row = Some((Some(919), Some(23_718.0)));
-        assert!((resolve_boot_position(row, 5.0, 919, 5) - 23_718.0).abs() < f64::EPSILON);
+        assert!((resolve_boot_position(row, 5.0, 919, 5).unwrap() - 23_718.0).abs() < f64::EPSILON);
     }
 
     #[test]
-    fn resolve_boot_position_starts_at_zero_when_multi_file_seconds_are_unattributable() {
-        // Row names a different file than the one loaded.
+    fn resolve_boot_position_stays_unseeded_when_multi_file_seconds_are_unattributable() {
+        // Row names a different file than the one loaded: `None` (unseeded),
+        // never a zero seed the transport could persist (#1954).
         let other_file = Some((Some(919), Some(23_718.0)));
-        assert_eq!(resolve_boot_position(other_file, 5.0, 917, 5), 0.0);
+        assert_eq!(resolve_boot_position(other_file, 5.0, 917, 5), None);
         // Row names no file at all — seconds can't be attributed.
         let fileless = Some((None, Some(23_718.0)));
-        assert_eq!(resolve_boot_position(fileless, 5.0, 917, 5), 0.0);
+        assert_eq!(resolve_boot_position(fileless, 5.0, 917, 5), None);
         // No row; the local cache never names a file either.
-        assert_eq!(resolve_boot_position(None, 5.0, 917, 5), 0.0);
+        assert_eq!(resolve_boot_position(None, 5.0, 917, 5), None);
     }
 
     #[test]
@@ -502,9 +616,9 @@ mod boot_resume_tests {
         // Server seconds win; the stored file id (even a stale one from a
         // replaced `book_files` row) doesn't gate a single-file book.
         let row = Some((Some(1), Some(120.0)));
-        assert!((resolve_boot_position(row, 5.0, 2, 1) - 120.0).abs() < f64::EPSILON);
+        assert!((resolve_boot_position(row, 5.0, 2, 1).unwrap() - 120.0).abs() < f64::EPSILON);
         // No server row → locally cached position, as before.
-        assert!((resolve_boot_position(None, 42.5, 2, 1) - 42.5).abs() < f64::EPSILON);
+        assert!((resolve_boot_position(None, 42.5, 2, 1).unwrap() - 42.5).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -512,7 +626,7 @@ mod boot_resume_tests {
         // `audio_file_count == 0` = a server predating the identity fields;
         // degrade to the historic resume behavior rather than zeroing.
         let row = Some((None, Some(300.0)));
-        assert!((resolve_boot_position(row, 5.0, 0, 0) - 300.0).abs() < f64::EPSILON);
+        assert!((resolve_boot_position(row, 5.0, 0, 0).unwrap() - 300.0).abs() < f64::EPSILON);
     }
 }
 

@@ -19,6 +19,30 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import JSZip from "jszip";
 
+/**
+ * A full-page image front-matter section — the markup shape real publisher
+ * title/copyright pages use (issue #1895, AC2/AC4): a single raster filling
+ * the whole page, either a plain `<img>` or wrapped in an SVG `<image>`
+ * (`svgWrapped`), which is the pattern that renders blank on a real book.
+ */
+interface ImageSection {
+  kind: "image";
+  /** Manifest id and stem for the section + its embedded PNG. */
+  id: string;
+  label: string;
+  svgWrapped?: boolean;
+}
+
+/** A short one-paragraph, one-page text section (contents, dedication, …). */
+interface TextSection {
+  kind: "text";
+  id: string;
+  label: string;
+  paragraph: string;
+}
+
+type BookSection = ImageSection | TextSection;
+
 interface EpubInput {
   /** Output filename (no path). */
   filename: string;
@@ -37,6 +61,21 @@ interface EpubInput {
   id: string;
   /** Optional publisher colour applied through a class on the chapter body. */
   publisherBodyColor?: string;
+  /**
+   * When true, fill the chapter with ~32KB of deterministic prose (~32
+   * epub.js 1024-char locations) instead of one short paragraph. The
+   * cross-format specs need a jump target that is *visually* distinct: a
+   * one-location book maps every percentage to the start of the book, so a
+   * correct auto-jump and a silently-dropped one render identically.
+   */
+  longBody?: boolean;
+  /**
+   * Extra spine sections rendered BEFORE the default chapter1 — each its own
+   * one-page section, so paging through them crosses a section boundary per
+   * click. Absent for every existing fixture (backward-compatible: omitting
+   * it reproduces today's single-chapter spine byte-for-byte).
+   */
+  sections?: BookSection[];
 }
 
 const FIXTURES: EpubInput[] = [
@@ -400,6 +439,26 @@ const FIXTURES: EpubInput[] = [
     withCover: true,
   },
 
+  // --- Second dual-format pair, RESERVED for cross_format_prompts.spec.ts:
+  // that spec links the formats and writes reading/listening progress, all
+  // globally visible server state — no other spec may touch this book. Same
+  // byte-identical (title, author) rule as "Immersive Voyage"; the author
+  // appears nowhere else in either generator, and the title sorts before
+  // "The Isle of Functions" so the landing sort test is undisturbed.
+  {
+    filename: "parallel-latitudes.epub",
+    id: "urn:omnibus-test:parallel-latitudes",
+    title: "Parallel Latitudes",
+    authors: ["Vera Molnar"],
+    publisher: "Omnibus Test Press",
+    published: "1968-05-01",
+    language: "en",
+    withCover: true,
+    // Cross-format jump assertions need real location granularity — see
+    // the `longBody` doc on EpubInput.
+    longBody: true,
+  },
+
   // --- Bulk-edit targets (2 books) ---
   // Reserved for landing_bulk_edit.spec.ts, which bulk-writes publisher/tag
   // overrides to BOTH books (reverted at test end, but the suite is
@@ -425,6 +484,46 @@ const FIXTURES: EpubInput[] = [
     published: "1974-03-03",
     language: "en",
     withCover: true,
+  },
+
+  // Reserved for the paging-race / blank-front-matter regression in
+  // reader.spec.ts (issue #1895). Five one-page sections ahead of chapter1 —
+  // two full-page images (a plain <img> and an SVG-wrapped <image>, the
+  // shape real publisher title/copyright pages use) plus three one-paragraph
+  // text pages — so paging through it crosses five section boundaries in a
+  // row, the condition rapid clicking wedged on a real book. Author is
+  // unique across all fixtures.
+  {
+    filename: "frontmatter-relay.epub",
+    id: "urn:omnibus-test:frontmatter-relay",
+    title: "Frontmatter Relay",
+    authors: ["Rozsa Peter"],
+    publisher: "Omnibus Test Press",
+    published: "1951-01-01",
+    language: "en",
+    withCover: true,
+    sections: [
+      { kind: "image", id: "titlepage", label: "Title Page" },
+      { kind: "image", id: "copyright", label: "Copyright", svgWrapped: true },
+      {
+        kind: "text",
+        id: "contents",
+        label: "Contents",
+        paragraph: "I. Relay \u{2014} 1",
+      },
+      {
+        kind: "text",
+        id: "dedication",
+        label: "Dedication",
+        paragraph: "For the reader.",
+      },
+      {
+        kind: "text",
+        id: "epigraph",
+        label: "Epigraph",
+        paragraph: "One line, one page.",
+      },
+    ],
   },
 ];
 
@@ -483,6 +582,23 @@ function buildOpf(input: EpubInput): string {
   const styleManifestItem = input.publisherBodyColor
     ? `\n    <item id="publisher-style" href="publisher.css" media-type="text/css"/>`
     : "";
+  const sections = input.sections ?? [];
+  // Each front-matter section contributes an XHTML manifest item (and, for
+  // an image section, a second item for its embedded PNG) plus a matching
+  // spine `itemref` ahead of chapter1 — see `buildSection`/`buildEpub` below.
+  const sectionManifestItems = sections
+    .map((s) => {
+      const xhtml = `\n    <item id="${s.id}" href="${s.id}.xhtml" media-type="application/xhtml+xml"/>`;
+      const image =
+        s.kind === "image"
+          ? `\n    <item id="${s.id}-image" href="${s.id}.png" media-type="image/png"/>`
+          : "";
+      return xhtml + image;
+    })
+    .join("");
+  const sectionSpineItems = sections
+    .map((s) => `\n    <itemref idref="${s.id}"/>`)
+    .join("");
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid">
@@ -495,9 +611,9 @@ ${creators}${series}
   </metadata>
   <manifest>
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
-    <item id="chap1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>${coverManifestItem}${styleManifestItem}
+    <item id="chap1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>${coverManifestItem}${styleManifestItem}${sectionManifestItems}
   </manifest>
-  <spine>
+  <spine>${sectionSpineItems}
     <itemref idref="chap1"/>
   </spine>
 </package>
@@ -512,24 +628,81 @@ const CONTAINER_XML = `<?xml version="1.0" encoding="UTF-8"?>
 </container>
 `;
 
-const NAV_XHTML = `<?xml version="1.0" encoding="UTF-8"?>
+/**
+ * Nav doc TOC: one entry per front-matter section (in spine order), then
+ * chapter1. Identical byte-for-byte to the previous fixed `NAV_XHTML`
+ * constant when `input.sections` is absent — every existing fixture is
+ * unaffected.
+ */
+function buildNav(input: EpubInput): string {
+  const sectionEntries = (input.sections ?? [])
+    .map((s) => `<li><a href="${s.id}.xhtml">${escapeXml(s.label)}</a></li>`)
+    .join("");
+  return `<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
 <head><title>Nav</title></head>
 <body>
-<nav epub:type="toc"><ol><li><a href="chapter1.xhtml">Chapter 1</a></li></ol></nav>
+<nav epub:type="toc"><ol>${sectionEntries}<li><a href="chapter1.xhtml">Chapter 1</a></li></ol></nav>
 </body>
 </html>
 `;
+}
 
 function buildChapter(input: EpubInput): string {
   const stylesheet = input.publisherBodyColor
     ? `<link href="publisher.css" rel="stylesheet" type="text/css"/>`
     : "";
   const bodyClass = input.publisherBodyColor ? ` class="calibre"` : "";
+  // Deterministic (no randomness) so the generated zip stays byte-stable.
+  const prose = input.longBody
+    ? Array.from({ length: 40 }, (_, i) => {
+        const sentence =
+          `Paragraph ${i + 1} of the long-body fixture. ` +
+          "The expedition charted latitude after latitude, logging each " +
+          "reading twice and comparing the drift against the morning's " +
+          "sightings before the fog closed over the instruments again. ".repeat(
+            4,
+          );
+        return `<p>${sentence.trim()}</p>`;
+      }).join("\n")
+    : "<p>Synthetic test content.</p>";
   return `<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head><title>${escapeXml(input.title)}</title>${stylesheet}</head>
-<body${bodyClass}><h1>${escapeXml(input.title)}</h1><p>Synthetic test content.</p></body>
+<body${bodyClass}><h1>${escapeXml(input.title)}</h1>${prose}</body>
+</html>
+`;
+}
+
+/**
+ * XHTML for one front-matter/text section. An image section fills the whole
+ * page with its embedded PNG — a plain `<img>`, or (`svgWrapped`) an SVG
+ * `<image>` referencing it via `xlink:href`, the shape a real publisher
+ * title/copyright scan uses and the one that rendered blank (issue #1895,
+ * AC2). `height:100%` on html/body plus the SVG's own percentage sizing is
+ * exactly the chain that collapses to nothing without the reader's sizing
+ * fix, so this fixture exercises that path rather than sidestepping it.
+ */
+function buildSection(s: BookSection): string {
+  if (s.kind === "text") {
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>${escapeXml(s.label)}</title></head>
+<body><h1>${escapeXml(s.label)}</h1><p>${escapeXml(s.paragraph)}</p></body>
+</html>
+`;
+  }
+  const body = s.svgWrapped
+    ? `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" ` +
+      `viewBox="0 0 600 800" preserveAspectRatio="xMidYMid meet" width="100%" height="100%">` +
+      `<image width="600" height="800" xlink:href="${s.id}.png"/></svg>`
+    : `<img src="${s.id}.png" alt="${escapeXml(s.label)}"/>`;
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>${escapeXml(s.label)}</title>
+<style>html,body{margin:0;padding:0;height:100%;}img,svg{display:block;width:100%;height:100%;}</style>
+</head>
+<body>${body}</body>
 </html>
 `;
 }
@@ -547,8 +720,14 @@ async function buildEpub(input: EpubInput): Promise<Buffer> {
   });
   zip.file("META-INF/container.xml", CONTAINER_XML, { date: FIXED_DATE });
   zip.file("OEBPS/content.opf", buildOpf(input), { date: FIXED_DATE });
-  zip.file("OEBPS/nav.xhtml", NAV_XHTML, { date: FIXED_DATE });
+  zip.file("OEBPS/nav.xhtml", buildNav(input), { date: FIXED_DATE });
   zip.file("OEBPS/chapter1.xhtml", buildChapter(input), { date: FIXED_DATE });
+  for (const s of input.sections ?? []) {
+    zip.file(`OEBPS/${s.id}.xhtml`, buildSection(s), { date: FIXED_DATE });
+    if (s.kind === "image") {
+      zip.file(`OEBPS/${s.id}.png`, TINY_PNG, { date: FIXED_DATE });
+    }
+  }
   if (input.publisherBodyColor) {
     zip.file(
       "OEBPS/publisher.css",

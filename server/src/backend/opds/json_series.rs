@@ -13,8 +13,8 @@ use axum::{
 use omnibus_db as db;
 use omnibus_shared::opds::{Feed, FeedMetadata, Link, MEDIA_TYPE};
 
-use super::entries::retain_ereader_books;
 use super::json_entries::book_publication;
+use super::series::load_series;
 use super::{internal, json_nav_link, json_response};
 use crate::auth::OpdsAuthUser;
 use crate::backend::AppState;
@@ -62,37 +62,32 @@ pub(super) async fn index(_user: OpdsAuthUser, State(state): State<AppState>) ->
 /// `GET /opds/v2/series/{id}` — publication feed of one series' books, in
 /// series-index order (`db::get_series`'s ordering).
 pub(super) async fn acquisition_feed(
-    _user: OpdsAuthUser,
+    user: OpdsAuthUser,
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Response {
-    match db::get_series(&state.pool, id).await {
-        Ok(Some(mut series)) => {
-            // Ebook-scoped like the author acquisition feed — an
-            // audiobook/physical-only book in the same series would carry
-            // no working acquisition link here.
-            retain_ereader_books(&mut series.books);
-            let publications: Vec<_> = series.books.iter().map(book_publication).collect();
-            let feed = Feed {
-                metadata: FeedMetadata {
-                    title: series.name.clone(),
-                    number_of_items: Some(publications.len() as i64),
-                    ..Default::default()
-                },
-                links: vec![
-                    Link::new(format!("/opds/v2/series/{id}"))
-                        .with_rel("self")
-                        .with_type(MEDIA_TYPE),
-                    Link::new("/opds/v2")
-                        .with_rel("start")
-                        .with_type(MEDIA_TYPE),
-                ],
-                navigation: Vec::new(),
-                publications,
-            };
-            json_response(&feed)
-        }
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => internal("read series", e),
-    }
+    let series = match load_series(&state, &user, id).await {
+        Ok(Some(s)) => s,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(resp) => return resp,
+    };
+    let publications: Vec<_> = series.books.iter().map(book_publication).collect();
+    let feed = Feed {
+        metadata: FeedMetadata {
+            title: series.name.clone(),
+            number_of_items: Some(publications.len() as i64),
+            ..Default::default()
+        },
+        links: vec![
+            Link::new(format!("/opds/v2/series/{id}"))
+                .with_rel("self")
+                .with_type(MEDIA_TYPE),
+            Link::new("/opds/v2")
+                .with_rel("start")
+                .with_type(MEDIA_TYPE),
+        ],
+        navigation: Vec::new(),
+        publications,
+    };
+    json_response(&feed)
 }

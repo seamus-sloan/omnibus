@@ -79,6 +79,12 @@ pub enum AudiobookManifest {
         book_file_id: i64,
         #[serde(default)]
         audio_file_count: i64,
+        /// The next `book_files` row in ordinal order, absent on the last
+        /// file (and for narrations-linked books, where each file is the
+        /// whole book): the player advances here when this file ends
+        /// instead of marking the book finished.
+        #[serde(default)]
+        next_file_id: Option<i64>,
         parts: Vec<ManifestPart>,
         total_duration_seconds: f64,
         #[serde(default)]
@@ -89,6 +95,12 @@ pub enum AudiobookManifest {
         book_file_id: i64,
         #[serde(default)]
         audio_file_count: i64,
+        /// The next `book_files` row in ordinal order, absent on the last
+        /// file (and for narrations-linked books, where each file is the
+        /// whole book): the player advances here when this file ends
+        /// instead of marking the book finished.
+        #[serde(default)]
+        next_file_id: Option<i64>,
         playlist_url: String,
     },
 }
@@ -108,6 +120,14 @@ impl AudiobookManifest {
                 audio_file_count,
                 ..
             } => (*book_file_id, *audio_file_count),
+        }
+    }
+
+    /// The next file in ordinal order, when one exists (see the field doc).
+    pub fn next_file_id(&self) -> Option<i64> {
+        match self {
+            AudiobookManifest::Direct { next_file_id, .. }
+            | AudiobookManifest::Hls { next_file_id, .. } => *next_file_id,
         }
     }
 }
@@ -152,6 +172,7 @@ mod tests {
         let direct = AudiobookManifest::Direct {
             book_file_id: 919,
             audio_file_count: 5,
+            next_file_id: Some(922),
             parts: vec![],
             total_duration_seconds: 1.0,
             chapters: vec![],
@@ -159,10 +180,13 @@ mod tests {
         let hls = AudiobookManifest::Hls {
             book_file_id: 7,
             audio_file_count: 2,
+            next_file_id: None,
             playlist_url: "/x.m3u8".into(),
         };
         assert_eq!(direct.file_identity(), (919, 5));
         assert_eq!(hls.file_identity(), (7, 2));
+        assert_eq!(direct.next_file_id(), Some(922));
+        assert_eq!(hls.next_file_id(), None);
     }
 
     #[test]

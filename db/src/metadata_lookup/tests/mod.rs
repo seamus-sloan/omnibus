@@ -4,6 +4,8 @@
 //! `providers/`. Normalization itself is tested in `omnibus_shared::isbn`,
 //! which owns it.
 
+mod capabilities;
+mod fanout;
 mod googlebooks_provider;
 mod hardcover_provider;
 mod openlibrary_provider;
@@ -26,6 +28,10 @@ const GB_PATH: &str = "/books/v1/volumes";
 // Effective Java: valid ISBN-13, its ISBN-10 (0134685997), and a bad check digit.
 const ISBN13: &str = "9780134685991";
 
+/// The same printing's ISBN-10 — the pairing every provider's `isbn10` is
+/// held to.
+const ISBN10: &str = "0134685997";
+
 fn config_for(server: &MockServer) -> MetadataLookupConfig {
     MetadataLookupConfig {
         openlibrary_base: server.uri(),
@@ -46,6 +52,22 @@ fn keyed_config_for(server: &MockServer) -> MetadataLookupConfig {
         keys: ProviderKeys {
             googlebooks: Some("k".into()),
             ..ProviderKeys::default()
+        },
+        ..config_for(server)
+    }
+}
+
+/// Hardcover's GraphQL endpoint is the config's base URL itself, so it lands
+/// on the mock server's root path.
+const HC_PATH: &str = "/";
+
+/// Both optional keys set, so every provider in the catalog is `configured`
+/// and the fan-out asks all three.
+fn all_keyed_config_for(server: &MockServer) -> MetadataLookupConfig {
+    MetadataLookupConfig {
+        keys: ProviderKeys {
+            googlebooks: Some("gb-key".into()),
+            hardcover: Some("hc-key".into()),
         },
         ..config_for(server)
     }
@@ -75,7 +97,9 @@ fn ol_hit() -> serde_json::Value {
             "publish_date": "2018",
             "number_of_pages": 416,
             "publishers": [{ "name": "Addison-Wesley" }],
-            "cover": { "large": "https://covers.openlibrary.org/b/id/1-L.jpg" }
+            "cover": { "large": "https://covers.openlibrary.org/b/id/1-L.jpg" },
+            "identifiers": { "isbn_10": [ISBN10], "isbn_13": [ISBN13] },
+            "subjects": [{ "name": "Java (Computer program language)" }, { "name": "Programming" }]
         }
     })
 }
@@ -90,7 +114,12 @@ fn gb_hit() -> serde_json::Value {
             "pageCount": 416,
             "publisher": "Addison-Wesley",
             "description": "The definitive guide.",
-            "imageLinks": { "thumbnail": "http://books.google.com/x.jpg" }
+            "imageLinks": { "thumbnail": "http://books.google.com/x.jpg" },
+            "industryIdentifiers": [
+                { "type": "ISBN_10", "identifier": ISBN10 },
+                { "type": "ISBN_13", "identifier": ISBN13 },
+            ],
+            "categories": ["Computers", "Java"]
         }}]
     })
 }
@@ -316,9 +345,10 @@ fn ol_search_hit() -> serde_json::Value {
                 "title": "Effective Java",
                 "author_name": ["Joshua Bloch"],
                 "first_publish_year": 2001,
-                "isbn": ["not-an-isbn", "0134685997", "9780134685991"],
+                "isbn": ["not-an-isbn", ISBN10, ISBN13],
                 "cover_i": 8511809,
                 "number_of_pages_median": 416,
+                "subject": ["Java (Computer program language)", "Programming"],
             },
             // No usable ISBN in any edition: not actionable, must be skipped.
             {
@@ -339,9 +369,10 @@ fn gb_search_hit() -> serde_json::Value {
                 "authors": ["Joshua Bloch"],
                 "publishedDate": "2018-01-01",
                 "industryIdentifiers": [
-                    { "type": "ISBN_10", "identifier": "0134685997" },
-                    { "type": "ISBN_13", "identifier": "9780134685991" },
+                    { "type": "ISBN_10", "identifier": ISBN10 },
+                    { "type": "ISBN_13", "identifier": ISBN13 },
                 ],
+                "categories": ["Computers", "Java"],
             }},
             // The same ISBN again (Google Books answers repeat editions):
             // deduped away by `search_provider_by_title`.

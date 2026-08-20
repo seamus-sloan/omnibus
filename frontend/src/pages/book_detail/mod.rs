@@ -22,6 +22,8 @@ mod journal_editor;
 mod merge;
 mod rating;
 mod read_status;
+#[cfg(not(feature = "mobile"))]
+mod sync_link;
 mod view;
 
 // Web renders the split hero + body-grid; mobile re-flows the same loaded-book
@@ -42,6 +44,11 @@ mod offline;
 #[cfg(not(feature = "mobile"))]
 mod physical;
 
+// The landing Continue hero's Immersive pill shares the book-detail CTA's
+// retarget-and-navigate handler; the hero is web-only, so the re-export is
+// gated with it (the mobile CTA calls the fn inside `immersive` directly).
+#[cfg(not(feature = "mobile"))]
+pub(crate) use immersive::retarget_and_open_immersive;
 use view::{render_loaded, LoadedCtx, RailButtons};
 // Only `mobile.rs` (compiled solely under this feature) re-derives the loaded
 // view itself; the web branch calls `derive_loaded_view` directly inside
@@ -154,6 +161,7 @@ fn use_book_detail_signals() -> BookDetailSignals {
             result: use_signal(|| None),
             undo_error: use_signal(|| None),
             refresh,
+            after_merge: use_signal(|| false),
         },
         delete_open: use_signal(|| false),
         phys: PhysSignals {
@@ -262,6 +270,9 @@ struct MergeSignals {
     result: Signal<Option<MergeBooksResult>>,
     undo_error: Signal<Option<String>>,
     refresh: Signal<u32>,
+    /// One-shot: set by a successful merge so the alignment panel can
+    /// offer linking the freshly dual-format book.
+    after_merge: Signal<bool>,
 }
 
 /// Assemble the loaded-book view: derive the admin flag, build the (web-only)
@@ -306,6 +317,7 @@ fn render_book_shell(
             is_admin: is_admin_flag,
             refresh: merge.refresh,
             phys,
+            after_merge: merge.after_merge,
         },
     );
     rsx! {
@@ -334,6 +346,7 @@ fn build_merge_pieces(
         merge.result,
         merge.undo_error,
         merge.refresh,
+        merge.after_merge,
         server_url.to_string(),
         b.clone(),
     );
@@ -348,8 +361,17 @@ fn build_merge_pieces(
             result,
             undo_error,
             refresh,
+            after_merge,
         } = merge;
-        let _ = (open, result, undo_error, refresh, server_url, b);
+        let _ = (
+            open,
+            result,
+            undo_error,
+            refresh,
+            after_merge,
+            server_url,
+            b,
+        );
         merge::build_merge_ui()
     };
 

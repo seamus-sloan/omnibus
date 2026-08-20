@@ -112,8 +112,18 @@ Not queued, by test:
 | Reindex, scan, FTS rebuild | 2 — commands |
 | Send to Kindle / Kobo | 2 — commands |
 | Shelf create (iOS) | 3 — no client-minted handle |
-| Check-in, physical-only, wishlist | 3 — payload comes from the server's lookup |
+| Check-in, physical-only, wishlist **add** | 3 — payload comes from the server's lookup |
+| Wishlist **remove** | none, on its own — held back to match its add (below) |
 | `POST /api/shelves/preview` | not a mutation; a read wearing POST |
+
+The wishlist remove is the one entry here that passes all four tests: it names
+its target with a uuid the device already holds and carries no payload. It
+stays direct anyway, because its *add* fails test 3 — and a queue that takes
+one direction of a toggle but not the other is a worse contract than an
+online-only pair, since a reader could empty a wishlist on a plane with no way
+to put anything back. `removeWishlistEntry` in
+[omnibus-ios/omnibus/Services/UserDataService.swift](../../omnibus-ios/omnibus/Services/UserDataService.swift)
+is the shape: direct call, `throws`, control disabled offline.
 
 ## Adding a write path
 

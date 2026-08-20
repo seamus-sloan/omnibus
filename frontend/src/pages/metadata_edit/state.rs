@@ -86,6 +86,8 @@ fn use_field_signals(book: &EbookMetadata) -> FormFields {
     let series = use_signal(|| book.series.clone().unwrap_or_default());
     let series_index = use_signal(|| book.series_index.clone().unwrap_or_default());
     let isbn13 = use_signal(|| book.isbn13.clone().unwrap_or_default());
+    let isbn10 = use_signal(|| book.isbn10.clone().unwrap_or_default());
+    let print_pages = use_signal(|| book.print_pages.map(|p| p.to_string()).unwrap_or_default());
 
     // Authors as a signal of Vec<String> (names only for v1).
     let authors = use_signal(|| {
@@ -121,6 +123,8 @@ fn use_field_signals(book: &EbookMetadata) -> FormFields {
         series,
         series_index,
         isbn13,
+        isbn10,
+        print_pages,
         authors,
         tags,
         genres,
@@ -211,6 +215,8 @@ fn use_dirty_fields(orig: Signal<EbookMetadata>, fields: FormFields) -> Memo<Vec
         series,
         series_index,
         isbn13,
+        isbn10,
+        print_pages,
         authors,
         tags,
         genres,
@@ -243,6 +249,12 @@ fn use_dirty_fields(orig: Signal<EbookMetadata>, fields: FormFields) -> Memo<Vec
         }
         if isbn13() != o.isbn13.clone().unwrap_or_default() {
             dirty.push("ISBN-13");
+        }
+        if isbn10() != o.isbn10.clone().unwrap_or_default() {
+            dirty.push("ISBN-10");
+        }
+        if print_pages().trim() != o.print_pages.map(|p| p.to_string()).unwrap_or_default() {
+            dirty.push("Print Pages");
         }
         let orig_authors: Vec<String> = o.creators.iter().map(|c| c.name.clone()).collect();
         if authors() != orig_authors {
@@ -286,6 +298,23 @@ fn build_on_revert(
     })
 }
 
+/// Parses the print-pages form field into a validated `i64`, mirroring
+/// `ScanIntervalField`'s handler in settings/library.rs: an empty field
+/// clears the override, a non-numeric entry is rejected with a specific
+/// message so the client gives feedback before the round trip. An in-range
+/// numeric value still passes through `MetadataOverrides::validate`
+/// server-side (e.g. the `PRINT_PAGES_MAX` ceiling).
+fn parse_print_pages_field(input: &str) -> Result<Option<i64>, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    trimmed
+        .parse::<i64>()
+        .map(Some)
+        .map_err(|_| "Print page count must be a whole number.".to_string())
+}
+
 /// Save handler — builds the diff and POSTs to the overrides endpoint,
 /// then navigates back to the book detail page on success.
 fn build_on_save(
@@ -307,6 +336,8 @@ fn build_on_save(
         series,
         series_index,
         isbn13,
+        isbn10,
+        print_pages,
         authors,
         tags,
         genres,
@@ -316,6 +347,15 @@ fn build_on_save(
     EventHandler::new(move |()| {
         let url = url.clone();
         let uuid = uuid.clone();
+
+        let print_pages_val = match parse_print_pages_field(&print_pages()) {
+            Ok(v) => v,
+            Err(msg) => {
+                save_error.set(Some(msg));
+                return;
+            }
+        };
+
         spawn(async move {
             saving.set(true);
             save_error.set(None);
@@ -332,6 +372,8 @@ fn build_on_save(
                     series: &series(),
                     series_index: &series_index(),
                     isbn13: &isbn13(),
+                    isbn10: &isbn10(),
+                    print_pages: print_pages_val,
                     authors: &authors(),
                     tags: &tags(),
                     genres: &genres(),

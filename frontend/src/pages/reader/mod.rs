@@ -26,6 +26,7 @@ mod reader_bookmarks;
 mod search_panel;
 mod selection;
 mod signals;
+mod sync_banner;
 mod toc_drawer;
 mod typography;
 
@@ -110,9 +111,16 @@ pub fn BookReadPage(uuid: String) -> Element {
         book_meta,
         chrome_hidden,
     } = use_reader_signals(&uuid, theme);
-    let (on_back, on_prev, on_next, on_keydown) = chrome_handlers::install_chrome_handlers(
+    let chrome_handlers::ChromeHandlers {
+        on_back,
+        on_prev,
+        on_next,
+        on_retry,
+        on_keydown,
+    } = chrome_handlers::install_chrome_handlers(
         uuid.clone(),
         selection,
+        status,
         chrome_handlers::OverlaySignals {
             show_aa,
             show_toc,
@@ -156,6 +164,7 @@ pub fn BookReadPage(uuid: String) -> Element {
                 title_sub,
                 pct,
                 status: status(),
+                loc,
             },
             panels: ReaderPanelSignals {
                 show_aa,
@@ -177,6 +186,7 @@ pub fn BookReadPage(uuid: String) -> Element {
                 on_back,
                 on_prev,
                 on_next,
+                on_retry,
             },
             chrome_hidden,
         }
@@ -469,6 +479,9 @@ pub(super) struct ReaderProgress {
     /// shown only by the phone breakpoint.
     pub title_sub: String,
     pub pct: u32,
+    /// The live relocation signal itself — the "synced here" pill reads
+    /// the full-precision fraction at click time.
+    pub loc: Signal<RelocateData>,
     pub status: ReaderStatus,
 }
 
@@ -499,6 +512,8 @@ pub(super) struct ReaderNavHandlers {
     pub on_back: EventHandler<MouseEvent>,
     pub on_prev: EventHandler<MouseEvent>,
     pub on_next: EventHandler<MouseEvent>,
+    /// The error overlay's "Retry" action (issue #1895, AC3).
+    pub on_retry: EventHandler<MouseEvent>,
 }
 
 /// Reader chrome + panels (top bar, viewer stage, gutters, status bar, Aa panel, selection popover).
@@ -526,12 +541,14 @@ fn ReaderLayout(
         title_sub,
         pct,
         status,
+        loc,
     } = progress;
     let ReaderNavHandlers {
         on_keydown,
         on_back,
         on_prev,
         on_next,
+        on_retry,
     } = nav;
 
     let show_aa = panels.show_aa;
@@ -579,7 +596,9 @@ fn ReaderLayout(
                 on_back,
             }
 
-            ReaderViewerStage { status }
+            {sync_banner_slot(&uuid)}
+
+            ReaderViewerStage { status, on_retry }
 
             ReaderPageTurnButtons { on_prev, on_next }
 
@@ -587,6 +606,7 @@ fn ReaderLayout(
                 class: "rd-bottom",
                 "data-testid": "reader-footer",
                 span { class: "rd-bottom-page", style: "color:var(--ink-2);", "{page_str}" }
+                {sync_here_slot(&uuid, loc)}
                 div { style: "flex:1; text-align:center; letter-spacing:.08em;", "{chapter_str}" }
                 // The phone footer moves the chapter position to the right
                 // edge (the centred div above is hidden there) — rendered on
@@ -630,6 +650,34 @@ fn ReaderLayout(
             }
         }
     }
+}
+
+/// Web-only slot for the cross-format jump banner; the hybrid mobile
+/// shell renders nothing here.
+#[cfg(not(feature = "mobile"))]
+fn sync_banner_slot(uuid: &str) -> Element {
+    rsx! {
+        sync_banner::SyncJumpBanner { uuid: uuid.to_string() }
+    }
+}
+
+#[cfg(feature = "mobile")]
+fn sync_banner_slot(_uuid: &str) -> Element {
+    rsx! {}
+}
+
+/// Web-only slot for the "synced here" footer pill (same split as
+/// [`sync_banner_slot`] — native iOS owns the gesture on mobile).
+#[cfg(not(feature = "mobile"))]
+fn sync_here_slot(uuid: &str, loc: Signal<RelocateData>) -> Element {
+    rsx! {
+        sync_banner::SyncHerePill { uuid: uuid.to_string(), loc }
+    }
+}
+
+#[cfg(feature = "mobile")]
+fn sync_here_slot(_uuid: &str, _loc: Signal<RelocateData>) -> Element {
+    rsx! {}
 }
 
 #[cfg(test)]

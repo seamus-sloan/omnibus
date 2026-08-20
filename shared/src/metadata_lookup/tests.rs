@@ -1,4 +1,5 @@
-//! Length-cap validation tests for `ExternalBookMeta`.
+//! Length-cap validation tests for `ExternalBookMeta`, plus the fan-out
+//! search's request validation and its narrowing conversion.
 
 use super::*;
 
@@ -120,4 +121,130 @@ fn external_book_meta_validate_rejects_a_cover_url_over_the_byte_cap_even_with_f
         .validate()
         .expect_err("a cover_url over the byte cap must be rejected");
     assert!(err.contains("cover_url"), "got: {err}");
+}
+
+// ── fan-out edition search ───────────────────────────────────────
+
+fn edition() -> ProviderEdition {
+    ProviderEdition {
+        source: MetadataProvider::GoogleBooks,
+        provider_ref: "gb-volume-1".into(),
+        isbn13: "9780141439518".into(),
+        isbn10: Some("0141439513".into()),
+        title: "Pride and Prejudice".into(),
+        authors: vec!["Jane Austen".into()],
+        year: Some("1813".into()),
+        pages: Some(432),
+        publisher: Some("Penguin Classics".into()),
+        description: Some("A classic novel.".into()),
+        cover_url: Some("https://example.com/cover.jpg".into()),
+        series: Some("Penguin English Library".into()),
+        first_publish_year: Some(1813),
+        genres: vec!["Fiction".into(), "Classics".into()],
+    }
+}
+
+#[test]
+fn provider_edition_narrows_to_external_book_meta_carrying_every_shared_field() {
+    let meta = ExternalBookMeta::from(edition());
+    // The check-in payload is the same record — attribution included — minus
+    // the handle only the picker needs.
+    assert_eq!(
+        meta,
+        ExternalBookMeta {
+            source: MetadataProvider::GoogleBooks,
+            ..valid_meta()
+        }
+    );
+}
+
+#[test]
+fn provider_edition_deserializes_without_the_picker_only_fields() {
+    // Both are `#[serde(default)]`, so a candidate serialized before they
+    // existed — or by a provider that carries neither — still parses.
+    let json = serde_json::json!({
+        "source": "google_books",
+        "provider_ref": "gb-volume-1",
+        "isbn13": "9780141439518",
+        "title": "Pride and Prejudice",
+        "authors": ["Jane Austen"],
+        "year": null,
+        "pages": null,
+        "publisher": null,
+        "description": null,
+        "cover_url": null,
+        "series": null,
+        "first_publish_year": null,
+    });
+    let parsed: ProviderEdition =
+        serde_json::from_value(json).expect("the new fields must be optional on the wire");
+    assert_eq!(parsed.isbn10, None);
+    assert!(parsed.genres.is_empty());
+}
+
+#[test]
+fn edition_search_request_validate_accepts_a_query_with_no_provider_filter() {
+    let req = EditionSearchRequest {
+        query: "pride and prejudice".into(),
+        providers: None,
+    };
+    assert!(req.validate().is_ok());
+}
+
+#[test]
+fn edition_search_request_validate_rejects_a_blank_query() {
+    let req = EditionSearchRequest {
+        query: "   ".into(),
+        providers: None,
+    };
+    let err = req.validate().expect_err("a blank query must be rejected");
+    assert!(err.contains("query is required"), "got: {err}");
+}
+
+#[test]
+fn edition_search_request_validate_rejects_an_oversized_query() {
+    let req = EditionSearchRequest {
+        query: "x".repeat(SEARCH_QUERY_MAX_LEN + 1),
+        providers: None,
+    };
+    let err = req
+        .validate()
+        .expect_err("an oversized query must be rejected");
+    assert!(err.contains("exceeds"), "got: {err}");
+}
+
+#[test]
+fn edition_search_request_validate_rejects_an_explicitly_empty_provider_list() {
+    let req = EditionSearchRequest {
+        query: "pride and prejudice".into(),
+        providers: Some(Vec::new()),
+    };
+    let err = req
+        .validate()
+        .expect_err("an empty provider list must be rejected");
+    assert!(err.contains("at least one provider"), "got: {err}");
+}
+
+#[test]
+fn provider_search_status_serializes_its_three_cases_distinguishably() {
+    // A client has to tell these apart to say "couldn't reach it" rather than
+    // "nothing found", so the tag is part of the wire contract.
+    let json = |s: &ProviderSearchStatus| serde_json::to_value(s).unwrap();
+    assert_eq!(
+        json(&ProviderSearchStatus::Answered { count: 2 }),
+        serde_json::json!({ "kind": "answered", "count": 2 })
+    );
+    assert_eq!(
+        json(&ProviderSearchStatus::NotConfigured),
+        serde_json::json!({ "kind": "not_configured" })
+    );
+    assert_eq!(
+        json(&ProviderSearchStatus::Failed {
+            message: "open library returned an error status".into()
+        }),
+        serde_json::json!({
+            "kind": "failed",
+            "message": "open library returned an error status"
+        })
+    );
 }

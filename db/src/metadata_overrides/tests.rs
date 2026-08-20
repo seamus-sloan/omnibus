@@ -107,6 +107,139 @@ async fn merge_metadata_overrides_creates_row_when_absent() {
     assert!(!has_cover, "a brand-new merged row has no cover override");
 }
 
+// -----------------------------------------------------------------
+// #1658 isbn10 / print_pages override fields
+// -----------------------------------------------------------------
+
+#[tokio::test]
+async fn upsert_and_get_metadata_overrides_roundtrips_isbn10_and_print_pages() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+
+    let ov = MetadataOverrides {
+        isbn10: Some("0134685997".into()),
+        print_pages: Some(412),
+        ..Default::default()
+    };
+    upsert_metadata_overrides(&pool, "isbn10-uuid", &ov, false, user_id)
+        .await
+        .unwrap();
+
+    let (loaded, _) = get_metadata_overrides(&pool, "isbn10-uuid")
+        .await
+        .unwrap()
+        .expect("overrides should exist");
+    assert_eq!(loaded.isbn10, Some("0134685997".into()));
+    assert_eq!(loaded.print_pages, Some(412));
+}
+
+#[tokio::test]
+async fn merge_metadata_overrides_preserves_isbn10_and_print_pages_when_a_later_edit_omits_them() {
+    // AC2: a client that predates these fields must not clobber them by
+    // omission — mirrors `merge_metadata_overrides_accumulates_fields_and_preserves_cover_flag`.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+
+    let initial = MetadataOverrides {
+        isbn10: Some("0134685997".into()),
+        print_pages: Some(412),
+        ..Default::default()
+    };
+    upsert_metadata_overrides(&pool, "preserve-uuid", &initial, false, user_id)
+        .await
+        .unwrap();
+
+    let edit = MetadataOverrides {
+        description: Some("Added later".into()),
+        ..Default::default()
+    };
+    merge_metadata_overrides(&pool, "preserve-uuid", &edit, user_id)
+        .await
+        .unwrap();
+
+    let (loaded, _) = get_metadata_overrides(&pool, "preserve-uuid")
+        .await
+        .unwrap()
+        .expect("overrides should exist");
+    assert_eq!(
+        loaded.isbn10,
+        Some("0134685997".into()),
+        "isbn10 must survive a description-only merge"
+    );
+    assert_eq!(
+        loaded.print_pages,
+        Some(412),
+        "print_pages must survive a description-only merge"
+    );
+    assert_eq!(loaded.description, Some("Added later".into()));
+}
+
+#[tokio::test]
+async fn merge_metadata_overrides_clears_isbn10_with_an_empty_string() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+
+    let initial = MetadataOverrides {
+        isbn10: Some("0134685997".into()),
+        ..Default::default()
+    };
+    upsert_metadata_overrides(&pool, "clear-isbn10-uuid", &initial, false, user_id)
+        .await
+        .unwrap();
+
+    let clear = MetadataOverrides {
+        isbn10: Some(String::new()),
+        ..Default::default()
+    };
+    merge_metadata_overrides(&pool, "clear-isbn10-uuid", &clear, user_id)
+        .await
+        .unwrap();
+
+    let (loaded, _) = get_metadata_overrides(&pool, "clear-isbn10-uuid")
+        .await
+        .unwrap()
+        .expect("overrides should exist");
+    assert_eq!(loaded.isbn10, Some(String::new()));
+}
+
+#[tokio::test]
+async fn get_book_returns_effective_isbn10_and_print_pages_from_the_override_layer() {
+    // AC1: the round-trip endpoint reads this same merged book back.
+    let _covers = CoversTempDir::new("isbn10_print_pages_read");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let uuid = crate::test_support::seed_synced_ebook(&pool, "b.epub", "T", "A").await;
+
+    let before = get_book_by_uuid(&pool, &uuid).await.unwrap().unwrap();
+    assert_eq!(before.isbn10, None);
+    assert_eq!(before.print_pages, None);
+
+    let ov = MetadataOverrides {
+        isbn10: Some("0134685997".into()),
+        print_pages: Some(412),
+        ..Default::default()
+    };
+    merge_metadata_overrides(&pool, &uuid, &ov, user_id)
+        .await
+        .unwrap();
+
+    let after = get_book_by_uuid(&pool, &uuid).await.unwrap().unwrap();
+    assert_eq!(after.isbn10.as_deref(), Some("0134685997"));
+    assert_eq!(after.print_pages, Some(412));
+}
+
 /// A grid quick-edit "clear this field" save must land as a real clear,
 /// not a silent no-op. `merge_metadata_overrides` reads an incoming
 /// `None` as "untouched — keep whatever override already exists" (that's
@@ -2413,4 +2546,118 @@ async fn bulk_merge_metadata_overrides_rejects_a_genre_delta_past_the_per_book_c
         MetadataOverridesError::TooManyValues { uuid: u, field: "genre", max }
             if u == uuid && max == MetadataOverrides::MAX_GENRES
     ));
+}
+
+// -----------------------------------------------------------------
+// Batched tag / genre vocabulary materialization
+// -----------------------------------------------------------------
+
+/// A name list deliberately past SQLite's 999 bound-parameter cap, so an
+/// unchunked single-statement insert would error instead of inserting.
+fn oversized_name_list(prefix: &str) -> Vec<String> {
+    (0..1_500).map(|i| format!("{prefix}-{i}")).collect()
+}
+
+#[tokio::test]
+async fn materialize_tag_rows_inserts_every_name_when_the_list_exceeds_the_sqlite_bind_cap() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let names = oversized_name_list("tag");
+    let ov = MetadataOverrides {
+        subjects: Some(names.clone()),
+        ..Default::default()
+    };
+    let mut conn = pool.acquire().await.unwrap();
+
+    super::links::materialize_tag_rows(&mut conn, &ov)
+        .await
+        .unwrap();
+    // Re-running must stay a no-op: `INSERT OR IGNORE` survives batching.
+    super::links::materialize_tag_rows(&mut conn, &ov)
+        .await
+        .unwrap();
+    drop(conn);
+
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tags")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        count,
+        names.len() as i64,
+        "every name in an over-the-cap list should be materialized exactly once"
+    );
+    assert_eq!(tag_row_count(&pool, "tag-1499").await, 1);
+}
+
+#[tokio::test]
+async fn materialize_genre_rows_inserts_every_name_when_the_list_exceeds_the_sqlite_bind_cap() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let names = oversized_name_list("genre");
+    let ov = MetadataOverrides {
+        genres: Some(names.clone()),
+        ..Default::default()
+    };
+    let mut conn = pool.acquire().await.unwrap();
+
+    super::links::materialize_genre_rows(&mut conn, &ov)
+        .await
+        .unwrap();
+    super::links::materialize_genre_rows(&mut conn, &ov)
+        .await
+        .unwrap();
+    drop(conn);
+
+    assert_eq!(genre_row_names(&pool).await.len(), names.len());
+}
+
+#[tokio::test]
+async fn upsert_metadata_overrides_materializes_each_tag_and_genre_once_when_names_repeat() {
+    let _covers = CoversTempDir::new("batched_vocab");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user_id = crate::auth::create_user(&pool, "admin", "securepassword1")
+        .await
+        .unwrap()
+        .id;
+    let (uuid, _) = seed_one_book_with_tags(&pool, &[]).await;
+
+    // Repeats, casing variants, padding and blanks in one save — the batch
+    // must collapse them exactly as the old per-name statements did.
+    let ov = MetadataOverrides {
+        subjects: Some(vec![
+            "Space Opera".into(),
+            " Space Opera ".into(),
+            "space opera".into(),
+            "  ".into(),
+            "Hard SF".into(),
+        ]),
+        genres: Some(vec![
+            "Horror".into(),
+            "horror".into(),
+            "Noir".into(),
+            "".into(),
+        ]),
+        ..Default::default()
+    };
+    upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+        .await
+        .unwrap();
+
+    assert_eq!(tag_row_count(&pool, "Space Opera").await, 1);
+    assert_eq!(tag_row_count(&pool, "Hard SF").await, 1);
+    let tag_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tags")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        tag_count, 2,
+        "blank and duplicate subjects never materialize"
+    );
+    assert_eq!(genre_row_names(&pool).await, vec!["Horror", "Noir"]);
+
+    // Re-saving the same lists changes nothing.
+    upsert_metadata_overrides(&pool, &uuid, &ov, false, user_id)
+        .await
+        .unwrap();
+    assert_eq!(tag_row_count(&pool, "Space Opera").await, 1);
+    assert_eq!(genre_row_names(&pool).await, vec!["Horror", "Noir"]);
 }

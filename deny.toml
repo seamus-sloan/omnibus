@@ -13,6 +13,18 @@
 [advisories]
 version = 2
 db-urls = ["https://github.com/rustsec/advisory-db"]
+# cargo-deny's own default for "unsound" (informational) advisories is
+# `Scope::Workspace` — it only evaluates them against our own workspace
+# crates, never their transitive dependencies. `unmaintained` already
+# defaults to `Scope::All`; without this override every `informational =
+# "unsound"` advisory below (glib, rand, lru) is silently never matched
+# against anything, so its `ignore` entry perpetually warns
+# `advisory-not-detected` regardless of whether the crate/version is
+# actually present. Verified via `cargo deny -L debug check advisories`:
+# with the default Workspace scope none of the three even get a
+# match/ignore trace; with `unsound = "all"` all three resolve and are
+# correctly suppressed by their `ignore` entries below (issue #2054).
+unsound = "all"
 # Yanked crates surface as warnings, not errors. Currently accepted:
 # `spin 0.9.8` (yanked, no advisory) — transitive via `flume` (sqlx-sqlite)
 # and `multer` (axum); collapses when either upstream drops it. See
@@ -21,12 +33,21 @@ yanked = "warn"
 # "sound" = no known exploitable vulnerability; "best-effort" also pulls in
 # unmaintained / notice advisories.
 ignore = [
-    # rsa "Marvin Attack" timing sidechannel. `rsa` enters Cargo.lock only via
-    # `sqlx-mysql`; this project uses sqlx with the sqlite backend only, so
-    # `rsa` is never compiled into any target (`cargo tree -i rsa --target all`
-    # is empty). No fixed `rsa` release exists yet — revisit when one ships.
-    # Keep in sync with the `--ignore` flag on the cargo-audit step in rust.yml.
-    { id = "RUSTSEC-2023-0071", reason = "rsa is lock-only via the unused sqlx-mysql backend; never compiled (sqlite-only), so not reachable" },
+    # ---- rsa "Marvin Attack" timing sidechannel (RUSTSEC-2023-0071) is
+    # deliberately NOT listed here, unlike every other entry in this block.
+    # `rsa` enters Cargo.lock only via `sqlx-mysql` (this project uses sqlx
+    # with the sqlite backend only), and unlike the informational advisories
+    # above, "vulnerability"-category advisories have no configurable scope
+    # to relax — the gap here is cargo-deny's own crate-graph resolution,
+    # which prunes `rsa` as genuinely unreachable for any built target
+    # (`cargo deny -L debug check advisories` logs `filtered rsa 0.9.10`;
+    # confirmed independently with `cargo tree -i rsa --target all`, which
+    # is empty even with `--workspace`). An `ignore` entry here can never
+    # match, so it would sit as permanent `advisory-not-detected` noise. The
+    # real exemption lives on the `--ignore RUSTSEC-2023-0071` flag on the
+    # cargo-audit step in rust.yml, which scans the raw Cargo.lock and does
+    # find it. No fixed `rsa` release exists yet — revisit when one ships,
+    # and keep the two tools' exemptions in sync until then.
 
     # ---- Unmaintained (informational) advisories pulled in by the Dioxus
     # desktop/mobile native shell tree (wry/tao → gtk-rs/webkit2gtk on Linux,
@@ -69,7 +90,7 @@ ignore = [
     # (`cargo update -p memmap2`; patched in >= 0.9.11), which needs no change
     # to the Dioxus pin. See Cargo.lock.
     { id = "RUSTSEC-2024-0429", reason = "glib 0.18.5 VariantStrIter unsoundness — mobile/desktop only via wry→gtk→glib (patched in glib 0.20, forced by upstream gtk-rs 0.18 pin under wry); not reachable in the server build" },
-    { id = "RUSTSEC-2026-0097", reason = "rand 0.7.3 unsoundness — aliased mutable reference when a custom `log` logger calls rand::rng()/thread_rng() and ThreadRng reseeds mid-log; build-dependency only via phf_generator 0.8 (ammonia/html5ever codegen under wry), never links into any runtime binary and that logger-reseed path is not exercised in a build script" },
+    { id = "RUSTSEC-2026-0097", reason = "rand 0.7.3 unsoundness — aliased mutable reference when a custom `log` logger calls rand::rng()/thread_rng() and ThreadRng reseeds mid-log; build-dependency only via phf_generator 0.8, pulled in by kuchikiki (wry's bundled HTML/CSS engine, an old html5ever/cssparser codegen path), not ammonia — ammonia is a direct omnibus-db dependency but sits on a separate, newer markup5ever lineage that uses phf_generator 0.13 (fastrand-backed, no rand at all); never links into any runtime binary and that logger-reseed path is not exercised in a build script" },
 
     # ---- Unsound (informational) advisory reachable in the DEFAULT (server)
     # build — unlike the two mobile/desktop-confined entries just above, `lru`
@@ -242,14 +263,69 @@ skip = [
     { name = "convert_case", version = "0.8.0" },
 
     # --- rand 0.7 / 0.8 (build-dep only) + 0.9 (websocket) ---
-    # phf_generator (build dep of ammonia→html5ever) uses rand 0.7 and 0.8
-    # via two separate phf_generator versions on the codegen path — never
-    # links into the runtime binary. rand 0.9 is the runtime copy pulled by
+    # phf_generator uses rand 0.7 and 0.8 via two separate phf_generator
+    # versions on the codegen path, both pulled in transitively by kuchikiki
+    # (wry's bundled HTML/CSS engine, on an old html5ever/cssparser
+    # lineage) — NOT by `ammonia` (a direct omnibus-db dependency), which
+    # sits on its own newer markup5ever chain using phf_generator 0.13
+    # (fastrand-backed, no rand at all; verified with `cargo tree -i
+    # rand@0.7.3`/`@0.8.6` and `cargo tree -p omnibus-db`, issue #2054).
+    # Never links into the runtime binary. rand 0.9 is the runtime copy pulled by
     # tungstenite (masking-key RNG) across all three websocket versions;
     # blocked by the same Dioxus/Axum websocket split as tungstenite above.
     { name = "rand", version = "0.7.3" },
     { name = "rand", version = "0.8.6" },
     { name = "rand", version = "0.9.4" },
+
+    # --- libloading (native shell vs Dioxus hot-patch machinery) ---
+    # 0.7.4 from libappindicator-sys (→ libappindicator → tray-icon →
+    # dioxus-desktop, native shell only, Linux tray icon support). 0.8.9 from
+    # `subsecond` (→ dioxus-core → dioxus), which IS in the default build —
+    # not purely a wry/tao-tree duplicate, so the skip-tree below doesn't
+    # collapse it. Internal impl detail either way (issue #2054).
+    { name = "libloading", version = "0.7.4" },
+    { name = "libloading", version = "0.8.9" },
+
+    # --- png (native shell tray icon vs cover/thumbnail decoding) ---
+    # 0.17.16 from muda/tray-icon (→ dioxus-desktop, native shell only).
+    # 0.18.1 from `image` (→ omnibus-db directly, default build — cover art
+    # and thumbnail decoding). Same "listed as a skip-tree example but not
+    # actually collapsed" gap as libloading: the default-build copy reaches
+    # the tree through `image`, not through wry/tao (issue #2054).
+    { name = "png", version = "0.17.16" },
+    { name = "png", version = "0.18.1" },
+
+    # --- rustc-hash (both versions reach the default build) ---
+    # 1.1.0 from sledgehammer_utils (→ dioxus-interpreter-js → BOTH
+    # dioxus-desktop and dioxus-server — the latter IS the default server
+    # build). 2.1.2 from dioxus-core directly. Neither copy is confined to
+    # the wry/tao native-shell subtree, so the skip-tree below deliberately
+    # excludes this crate (see docs/dependency-audit.md's rustc-hash row);
+    # explicit skip is the correct mechanism here (issue #2054).
+    { name = "rustc-hash", version = "1.1.0" },
+    { name = "rustc-hash", version = "2.1.2" },
+
+    # --- windows-sys (four-way split, all windows-target-conditional) ---
+    # `cargo deny` resolves the crate graph across every target (like
+    # `cargo tree --target all`), so these Windows-only (`cfg(windows)`)
+    # copies show up even though this project ships Linux/container-only.
+    # Each version straddles BOTH the native shell and the default build,
+    # so none can be absorbed by the wry/tao skip-tree alone:
+    #   0.52.0 — errno→rustix (native shell: x11rb/global-hotkey; dev-only:
+    #            tempfile) AND ring/rustls-webpki + signal-hook-registry→
+    #            tokio (default build, TLS + async runtime).
+    #   0.59.0 — dirs-sys + global-hotkey (native shell) AND nu-ansi-term→
+    #            tracing-subscriber (default build, Windows console color).
+    #   0.60.2 — muda/tray-icon (native shell) AND socket2→hyper-util/
+    #            lettre/tokio (default build).
+    #   0.61.2 — mio→tokio (default build) AND rfd + schannel→native-tls→
+    #            tungstenite (native shell) AND rustls-native-certs→
+    #            rustls-platform-verifier→reqwest (default build).
+    # Confirmed via `cargo deny -L debug check bans` (issue #2054).
+    { name = "windows-sys", version = "0.52.0" },
+    { name = "windows-sys", version = "0.59.0" },
+    { name = "windows-sys", version = "0.60.2" },
+    { name = "windows-sys", version = "0.61.2" },
 
     # --- webpki-roots ---
     # 0.26 from sqlx-core; 1.0 from hyper-rustls (reqwest).
@@ -293,15 +369,21 @@ skip = [
 # on Linux, muda/tray-icon, plus the windows-* and core-foundation/core-graphics
 # platform crates). These are old pinned versions carried by the native webview
 # stack (e.g. bitflags 1, derive_more 0.99, heck 0.4, html5ever/markup5ever,
-# string_cache, jni, png, raw-window-handle, siphasher, the
-# windows-sys/windows-targets family). Spot-checked against the default-build
-# packages with `cargo tree -p omnibus` and `cargo tree -p omnibus-frontend`
-# (see #1276). None of these link into the shipped `omnibus` server binary —
-# they exist only under the native shell.
-# Exception: `rustc-hash` also duplicates via `dioxus-core` in the default
-# (non-mobile) build, so it's deliberately left off this list — see
-# docs/dependency-audit.md's rustc-hash row. Collapsing the rest requires
-# upstream wry/tao to migrate off gtk-rs 0.18 / bitflags 1 etc., which is
+# string_cache, jni, raw-window-handle, siphasher). Spot-checked against the
+# default-build packages with `cargo tree -p omnibus` and
+# `cargo tree -p omnibus-frontend` (see #1276). None of these link into the
+# shipped `omnibus` server binary — they exist only under the native shell.
+# Exceptions: `rustc-hash`, `libloading`, `png`, and `windows-sys` also
+# duplicate via a path that reaches the default (non-mobile) build directly
+# — not through wry or tao — so skip-tree alone doesn't collapse them;
+# they're each an explicit `skip` entry above instead (see
+# docs/dependency-audit.md's rustc-hash row for the original case, issue
+# #2054 for the other three). `windows-targets` (windows-sys's own
+# dependency) has no matching `skip` entry because `cargo deny check bans`
+# does not flag it at all — its several Cargo.lock versions never surface as
+# a duplicate, presumably pruned by cargo-deny's own graph resolution the
+# same way `rsa` is (see the advisories section above). Collapsing the rest
+# requires upstream wry/tao to migrate off gtk-rs 0.18 / bitflags 1 etc., which is
 # gated on the Dioxus pin (see [patch.crates-io] in root Cargo.toml). We skip
 # the whole subtree rather than enumerate ~40 leaf crates that all share this
 # single root cause. Revisit when Dioxus upgrades wry/tao.

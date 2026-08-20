@@ -450,6 +450,21 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     hasCover: true,
   },
 
+  // Second dual-format pair, RESERVED for cross_format_prompts.spec.ts —
+  // that spec confirms a cross-format link and writes progress on this
+  // book (globally visible server state), so no other spec may read it.
+  {
+    slug: "parallel-latitudes",
+    filename: "parallel-latitudes.epub",
+    title: "Parallel Latitudes",
+    authors: ["Vera Molnar"],
+    publisher: "Omnibus Test Press",
+    published: "1968-05-01",
+    tags: [],
+    language: "en",
+    hasCover: true,
+  },
+
   // Reserved for landing_bulk_edit.spec.ts — it bulk-writes publisher/tag
   // overrides to BOTH books (reverted at test end, but the suite is
   // fullyParallel, so no other spec may read them). `tags` is deliberately
@@ -474,6 +489,22 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     authors: ["Katherine Johnson"],
     publisher: "Bulk Test House",
     published: "1974-03-03",
+    language: "en",
+    hasCover: true,
+  },
+
+  // Reserved for the paging-race / blank-front-matter regression in
+  // reader.spec.ts (issue #1895) — five one-page sections (two full-page
+  // images, three text) ahead of chapter1, so paging through it crosses
+  // section boundaries repeatedly. No other spec may page through this book.
+  {
+    slug: "frontmatter-relay",
+    filename: "frontmatter-relay.epub",
+    title: "Frontmatter Relay",
+    authors: ["Rozsa Peter"],
+    publisher: "Omnibus Test Press",
+    published: "1951-01-01",
+    tags: [],
     language: "en",
     hasCover: true,
   },

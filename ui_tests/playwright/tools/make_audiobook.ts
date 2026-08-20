@@ -88,6 +88,17 @@ const FIXTURES: AudiobookInput[] = [
     frames: 80,
   },
 
+  // Second dual-format pair — RESERVED for cross_format_prompts.spec.ts
+  // (see the matching entry in make_epub.ts and fixtures/dual_format.ts).
+  {
+    filename: "vera_molnar_solo/parallel_latitudes.mp3",
+    title: "Parallel Latitudes",
+    artist: "Vera Molnar",
+    album: "Parallel Latitudes",
+    track: 1,
+    frames: 80,
+  },
+
   // Merge-only pair. Specs that MUTATE a book via /api/rpc/merge-books own
   // these two and nothing else reads them, so a merge in flight can never
   // change a book another spec is asserting against. Both authors are absent

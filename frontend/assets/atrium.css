@@ -1629,6 +1629,10 @@ button.spoiler {
 .disc-avatar--photo {
   width: 100%;
   height: 100%;
+  /* Same grid-row percentage collapse as the user-avatar photos: without a
+     pinned ratio the img box goes natural-aspect and the crop over-zooms
+     (the parent's overflow clip hides the spill but not the zoom). */
+  aspect-ratio: 1 / 1;
   object-fit: cover;
   display: block;
   background: var(--bg-2);
@@ -1968,6 +1972,8 @@ a.idx-letter-on:focus-visible {
 .idx-card-avatar--photo {
   width: 100%;
   height: 100%;
+  /* Same grid-row percentage collapse as `.disc-avatar--photo`. */
+  aspect-ratio: 1 / 1;
   object-fit: cover;
   display: block;
 }
@@ -3089,6 +3095,26 @@ a.idx-letter-on:focus-visible {
   font-size: 12px; color: var(--ink-2);
 }
 .lp-scrub-remaining { color: var(--ink-3); }
+
+/* Buffering badge — shown below the scrub times while playing but
+   still waiting on network data, so a slow fetch reads as "loading"
+   instead of a clock frozen at 0:00. */
+.lp-buffering {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 6px; font-family: var(--mono);
+  font-size: 11px; color: var(--ink-3);
+}
+.lp-buffering::before {
+  content: ''; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent); animation: lp-buffering-pulse 1s ease-in-out infinite;
+}
+@keyframes lp-buffering-pulse {
+  0%, 100% { opacity: .3; }
+  50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lp-buffering::before { animation: none; }
+}
 
 /* Chapter map / seek scrubber */
 .lp-chapter-map { margin-top: 32px; }
@@ -5832,6 +5858,10 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .rd-ribbon > i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
 .rd-overlay { position: absolute; inset: 0; z-index: 8; display: flex;
   align-items: center; justify-content: center; color: var(--ink-2); background: var(--rd-page); }
+/* The error overlay adds a Retry action below the message (issue #1895,
+   AC3), so it needs a column stack instead of the base overlay's single
+   centred row. */
+.rd-overlay-error { flex-direction: column; gap: 14px; text-align: center; padding: 0 24px; }
 /* The accent wash rides with the chrome: hidden-chrome mode is pure page
    color edge to edge, so the tint fades out alongside the bars (the fade
    rule lives in the tap-to-hide media block above). */
@@ -7146,13 +7176,16 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   align-items: center;
   gap: 5px;
   padding: 7px 13px;
+  border: 0;
   border-radius: 999px;
   background: var(--accent);
   color: var(--accent-ink);
+  font-family: inherit;
   font-size: 12px;
   font-weight: 600;
   text-decoration: none;
   transition: filter 0.15s;
+  cursor: pointer;
 }
 .ch-cta svg { display: block; flex-shrink: 0; }
 @media (hover: hover) { .ch-cta:hover { filter: brightness(1.08); } }
@@ -9114,6 +9147,11 @@ html {
 .m-account-initials-photo,
 .profile-initials-photo {
   width: 100%; height: 100%;
+  /* The monogram spans are grids with an auto implicit row, so `height:
+     100%` can collapse to auto and the photo reverts to its natural
+     aspect ratio — an ellipse once the 50% radius applies. Pinning the
+     ratio keeps the box square wherever the percentage fails. */
+  aspect-ratio: 1 / 1;
   border-radius: 50%;
   object-fit: cover;
   display: block;
@@ -9154,3 +9192,418 @@ html {
 .profile-avatar-buttons { display: flex; align-items: center; gap: 8px; }
 .profile-avatar-actions .subtitle { margin: 0; }
 .profile-avatar-input { display: none; }
+
+/* ── Cross-format alignment (modal + book-detail entry row) ─────────── */
+.al-modal {
+  width: min(720px, 92vw);
+  max-height: 84vh;
+  overflow-y: auto;
+  padding: 26px 32px 22px;
+}
+/* Book-accent cascade + the frame's tinted wash (Format Sync design:
+   the modal sits in a radial glow of the book's accent). */
+.al-body { position: relative; }
+.al-body::before {
+  content: "";
+  position: absolute;
+  inset: -26px -32px auto;
+  height: 180px;
+  border-radius: 20px 20px 0 0;
+  background: radial-gradient(
+    70% 130% at 30% 0%,
+    color-mix(in oklch, var(--accent, #6a8bd7) 14%, transparent),
+    transparent 65%
+  );
+  pointer-events: none;
+}
+.al-body > * { position: relative; }
+.al-head h3 {
+  margin: 4px 0 6px;
+  font-family: var(--serif);
+  font-style: italic;
+  font-weight: 400;
+  font-size: 38px;
+  line-height: 1;
+}
+.al-kicker {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent, #6a8bd7);
+  margin: 0;
+}
+.al-sub {
+  font-size: 13.5px;
+  color: var(--ink-2, inherit);
+  opacity: 0.9;
+  margin: 12px 0 14px;
+  max-width: 660px;
+  line-height: 1.55;
+}
+.al-lanes { margin: 10px 0 4px; }
+.al-lane-label { font-size: 11.5px; opacity: 0.7; margin: 12px 0 5px; }
+.al-lane {
+  position: relative;
+  height: 34px;
+  border: 1px solid var(--line, rgba(127, 127, 127, 0.35));
+  border-radius: 8px;
+  overflow: visible;
+  background: rgba(127, 127, 127, 0.08);
+}
+.al-lane-audio { display: flex; gap: 3px; background: none; border: 0; height: 46px; }
+.al-seg {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 9px;
+  border: 1px solid var(--line, rgba(127, 127, 127, 0.35));
+  border-radius: 8px;
+  background: rgba(127, 127, 127, 0.08);
+  overflow: hidden;
+}
+.al-seg-label {
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.al-seg-dur { font-size: 10px; opacity: 0.6; white-space: nowrap; }
+.al-tick {
+  position: absolute;
+  top: 24%;
+  bottom: 24%;
+  width: 1px;
+  background: var(--line-2, rgba(127, 127, 127, 0.45));
+}
+.al-marker {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  background: var(--accent, #6a8bd7);
+  border-radius: 1px;
+}
+.al-marker-mapped { width: 0; background: none; border-left: 2px dashed var(--accent, #6a8bd7); }
+.al-mapped-note { font-size: 11.5px; opacity: 0.75; margin: 6px 0 0; }
+.al-lowconf {
+  font-size: 12.5px;
+  border: 1px solid rgba(214, 158, 46, 0.5);
+  background: rgba(214, 158, 46, 0.08);
+  border-radius: 8px;
+  padding: 9px 12px;
+  margin: 14px 0 0;
+}
+.al-loading { font-size: 13px; opacity: 0.7; margin: 18px 0; }
+.al-choice { margin-top: 16px; }
+.al-choice-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.al-choice-card {
+  text-align: left;
+  padding: 11px 13px;
+  border: 1px solid var(--line, rgba(127, 127, 127, 0.35));
+  border-radius: 10px;
+  background: none;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font: inherit;
+  color: inherit;
+}
+.al-choice-card span { font-size: 12px; opacity: 0.7; }
+.al-choice-card.is-picked { border-color: var(--accent, #6a8bd7); }
+.al-file-rows { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.al-file-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.al-file-ord {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid var(--line, rgba(127, 127, 127, 0.4));
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+  flex: 0 0 18px;
+}
+.al-file-move { padding: 0 6px; min-width: 26px; }
+.al-file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.al-radio {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 1.5px solid var(--line, rgba(127, 127, 127, 0.5));
+  background: none;
+  cursor: pointer;
+  flex: 0 0 16px;
+  padding: 0;
+}
+.al-radio.is-picked { border-color: var(--accent, #6a8bd7); box-shadow: inset 0 0 0 3.5px var(--accent, #6a8bd7); }
+.al-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line, rgba(127, 127, 127, 0.25));
+}
+.al-foot-spacer { flex: 1; }
+/* Contained per the Format Sync design: the whole "Your progress" block
+   (bars + entry row) is a compact cluster in the hero's title column,
+   below the CTA row — never a full-bleed strip. */
+.bd-sync-panel { margin: 26px 0 0; max-width: 560px; }
+.bd-prog-head { margin-bottom: 10px; }
+.bd-prog-rows { display: flex; flex-direction: column; gap: 10px; }
+.bd-prog-row { display: flex; align-items: center; gap: 12px; }
+.bd-prog-row .pbar { flex: 1; }
+.bd-prog-glyph { color: var(--ink-2); display: inline-flex; }
+.bd-prog-cap { font-size: 10.5px; color: var(--ink-2); white-space: nowrap; }
+.bd-prog-foot { font-size: 10px; color: var(--ink-3); margin-top: 6px; padding-left: 25px; }
+.bd-sync-panel .al-entry { margin-top: 14px; }
+.al-entry {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 12.5px;
+}
+.al-entry-unlinked { border: 1px dashed var(--line, rgba(127, 127, 127, 0.4)); }
+.al-entry-stale { border: 1px solid rgba(214, 158, 46, 0.5); background: rgba(214, 158, 46, 0.08); }
+.al-entry-linked {
+  border: 1px solid var(--accent, #6a8bd7);
+  background: rgba(106, 139, 215, 0.08);
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  width: 100%;
+  text-align: left;
+}
+.al-entry-copy { flex: 1; }
+.al-entry-meta { font-size: 10.5px; opacity: 0.6; }
+.al-entry-chevron { opacity: 0.5; }
+
+.al-matched {
+  font-size: 12.5px;
+  border: 1px solid rgba(72, 160, 100, 0.45);
+  background: rgba(72, 160, 100, 0.08);
+  border-radius: 8px;
+  padding: 9px 12px;
+  margin: 14px 0 0;
+}
+.al-matched-warn {
+  border-color: rgba(214, 158, 46, 0.5);
+  background: rgba(214, 158, 46, 0.08);
+}
+/* ── Cross-format resume prompts (player card + reader banner) ──────── */
+.lp-sync-prompt {
+  position: absolute;
+  top: 86px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  max-width: min(560px, 92vw);
+  font-size: 12.5px;
+}
+.lp-sync-copy { flex: 1; }
+.lp-sync-alignment { font-size: 10.5px; opacity: 0.65; white-space: nowrap; }
+.rd-sync-banner {
+  position: absolute;
+  top: calc(64px + env(safe-area-inset-top, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  max-width: min(640px, 94vw);
+  font-size: 12.5px;
+}
+.rd-sync-copy { flex: 1; }
+/* Secondary CTA pill (counterpart-format link + the Immersive button),
+   per the Format Sync design's chCtaSecondary treatment. Scoped like
+   `.ch-hero .ch-cta` so it outranks the base pill's fill. */
+.ch-hero .ch-cta-alt {
+  background: color-mix(in oklch, var(--accent) 16%, var(--bg-1));
+  border: 1px solid color-mix(in oklch, var(--accent) 45%, transparent);
+  color: var(--ink-0);
+}
+
+/* ── Cross-format sync: design-fidelity additions (Format Sync design) ── */
+.al-modal { width: min(880px, calc(100vw - 48px)); }
+.al-kicker-glyph { display: inline-flex; margin-right: 6px; vertical-align: -2px; color: var(--accent, #6a8bd7); }
+.al-identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  font-size: 13px;
+}
+.al-identity-title { font-style: italic; }
+.al-identity-author { font-size: 11px; opacity: 0.6; }
+.al-identity-spacer { flex: 1; }
+.al-pair-mark { display: inline-flex; align-items: center; gap: 5px; opacity: 0.7; }
+.al-entry-glyph { display: inline-flex; opacity: 0.75; }
+.al-entry-linked .al-entry-glyph { color: var(--accent, #6a8bd7); opacity: 1; }
+.al-warn-badge {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
+  border-radius: 999px;
+  border: 1.5px solid rgba(214, 158, 46, 0.9);
+  color: rgba(214, 158, 46, 0.95);
+  display: grid;
+  place-items: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  margin-top: 1px;
+}
+.al-lowconf-callout {
+  display: flex;
+  gap: 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  border: 1px solid rgba(214, 158, 46, 0.5);
+  background: rgba(214, 158, 46, 0.08);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin: 20px 0 0;
+}
+.al-chip-row { position: relative; height: 27px; }
+.al-chip-row-tall { height: 60px; }
+.al-chip {
+  position: absolute;
+  top: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  border: 1px solid var(--line, rgba(127, 127, 127, 0.35));
+  background: var(--bg-1, rgba(127, 127, 127, 0.1));
+  z-index: 3;
+}
+.al-chip-accent {
+  color: var(--ink-0, inherit);
+  border-color: color-mix(in oklch, var(--accent, #6a8bd7) 55%, transparent);
+  background: color-mix(in oklch, var(--accent, #6a8bd7) 20%, var(--bg-1, transparent));
+}
+.al-chip-dashed { border-style: dashed; }
+.al-chip-staggered { top: 31px; }
+.al-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: color-mix(in oklch, var(--accent, #6a8bd7) 13%, transparent);
+  pointer-events: none;
+}
+.al-connector { height: 50px; margin: 0; }
+.al-connector svg { display: block; width: 100%; height: 100%; }
+.al-thread {
+  stroke: var(--line, rgba(127, 127, 127, 0.4));
+  stroke-opacity: 0.35;
+  vector-effect: non-scaling-stroke;
+}
+.al-thread-mapped {
+  stroke: var(--accent, #6a8bd7);
+  stroke-width: 1.6;
+  stroke-dasharray: 5 4;
+  vector-effect: non-scaling-stroke;
+}
+.al-lane-overlay { position: absolute; inset: 0; pointer-events: none; }
+.al-lane-audio { position: relative; }
+.al-foot-note { font-size: 10.5px; opacity: 0.6; }
+.al-file-row-dim { opacity: 0.55; }
+.al-primary-pill {
+  font-size: 9.5px;
+  color: var(--accent, #6a8bd7);
+  border: 1px solid color-mix(in oklch, var(--accent, #6a8bd7) 45%, transparent);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+.al-narr-note { font-size: 10.5px; opacity: 0.6; margin: 10px 0 0; }
+.rd-sync-here { font-size: 10.5px; }
+.lp-sync-kicker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent, #6a8bd7);
+}
+.lp-sync-kicker-spacer { flex: 1; }
+/* Linked-card sync mark, pinned to the card's top-right corner. */
+.ch-sync-corner {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  display: inline-flex;
+  color: var(--accent, #6a8bd7);
+  opacity: 0.9;
+}
+.ch-link-invite {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 8px 12px;
+  border: 1px dashed var(--line, rgba(127, 127, 127, 0.4));
+  border-radius: 10px;
+  font-size: 12px;
+}
+
+/* ── Library cleanup (settings section + review page) ────────────── */
+.cleanup-kinds { list-style: none; margin: 12px 0 0; padding: 0; }
+.cleanup-kind-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line-2);
+}
+.cleanup-kind-row:last-child { border-bottom: none; }
+.cleanup-kind-label { flex: 1; font-weight: 500; }
+.cleanup-kind-count { font-size: 12px; color: var(--ink-1); }
+.cleanup-actions { display: flex; gap: 10px; margin-top: 14px; }
+
+.cleanup-review { max-width: 560px; }
+/* The review surface is focusable so Y / N / Space reach its keydown handler;
+   the focus ring would otherwise frame the whole card on every keypress. */
+.cleanup-review:focus { outline: none; }
+.cleanup-review:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cleanup-review-actions { display: flex; gap: 10px; margin-top: 16px; }
+.cleanup-card {
+  margin-top: 16px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  text-align: center;
+}
+.cleanup-card-photo {
+  width: 84px;
+  height: 84px;
+  object-fit: cover;
+  border-radius: 999px;
+  margin: 0 auto 12px;
+  display: block;
+}
+.cleanup-card-action {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 8px;
+}
+.cleanup-card-primary { font-size: 20px; font-weight: 600; margin: 0; }
+.cleanup-card-secondary { font-size: 13px; color: var(--ink-1); margin: 6px 0 0; }
+.cleanup-card-books { font-size: 12px; color: var(--ink-1); margin: 12px 0 0; }

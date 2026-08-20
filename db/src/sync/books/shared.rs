@@ -4,25 +4,26 @@
 //! the rewrite-in-place and cross-format attach paths, and the
 //! post-commit cover materialization + missing-files marker helper.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use omnibus_shared::EbookMetadata;
 use sqlx::Transaction;
 
 use crate::covers::write_cover_file;
 use crate::helpers::{
-    mint_uuid, parse_series_index, sanitize_accent_color, scan_key_for, split_filename, stable_uuid,
+    cleaned_series_name, mint_uuid, resolved_series_index, sanitize_accent_color, scan_key_for,
+    split_filename, stable_uuid,
 };
 use crate::normalize::{normalize_author, normalize_title};
 use crate::sort_keys::series_sort_value;
 use crate::taxonomy::{
-    resolve_or_insert_language, resolve_or_insert_publisher, resolve_or_insert_series,
+    resolve_or_insert_language, resolve_or_insert_publisher, resolve_or_insert_series_with_aliases,
 };
 
 use super::super::attach;
 use super::super::authors::insert_author_links;
 use super::super::fts::upsert_fts;
-use super::wipe_per_book_link_rows;
+use super::{wipe_per_book_link_rows, EntityAliasMaps};
 
 /// Rewrite an existing book in place from a freshly-parsed entry: refresh
 /// the `books` scalars, wipe + re-insert this format's `book_files` and the
@@ -33,13 +34,14 @@ pub(super) async fn rewrite_book_in_place(
     book_id: i64,
     uuid: &str,
     b: &crate::ebook::IndexedBook,
+    alias_maps: &EntityAliasMaps,
     covers: &mut Vec<(String, String, Vec<u8>)>,
 ) -> Result<(), sqlx::Error> {
     update_book_row(tx, book_id, b).await?;
     let (_, _, file_ext) = split_filename(&b.metadata.filename);
     wipe_per_book_link_rows(tx, book_id, &file_ext).await?;
     insert_book_file_row(tx, book_id, b).await?;
-    insert_metadata_links(tx, book_id, &b.metadata).await?;
+    insert_metadata_links(tx, book_id, &b.metadata, alias_maps).await?;
     upsert_fts(tx, book_id).await?;
     super::super::push_cover(covers, uuid, &b.cover);
     Ok(())
@@ -66,6 +68,7 @@ pub(super) async fn try_attach_new_ebook(
     library_path: &str,
     b: &crate::ebook::IndexedBook,
     removed_this_scan: &HashSet<&str>,
+    alias_maps: &EntityAliasMaps,
     covers: &mut Vec<(String, String, Vec<u8>)>,
 ) -> Result<bool, sqlx::Error> {
     if b.metadata.error.is_some() {
@@ -113,7 +116,7 @@ pub(super) async fn try_attach_new_ebook(
         return Ok(false);
     };
     if removed_this_scan.contains(target_uuid.as_str()) {
-        rewrite_book_in_place(tx, target_id, &target_uuid, b, covers).await?;
+        rewrite_book_in_place(tx, target_id, &target_uuid, b, alias_maps, covers).await?;
         return Ok(true);
     }
     // A brand-new attachment: mint a stable handle for the ledger row (the
@@ -246,7 +249,7 @@ async fn update_book_row(
     let (book_path, _, _) = split_filename(&m.filename);
     let scan_key = scan_key_for(&m.filename);
     let title = m.display_title();
-    let series_index_num = m.series_index.as_deref().and_then(parse_series_index);
+    let series_index_num = resolved_series_index(m);
     let author_sort = m
         .creators
         .first()
@@ -310,7 +313,7 @@ pub(super) async fn insert_book_row(
     let scan_key = scan_key_for(&m.filename);
     let (book_path, file_stem, file_ext) = split_filename(&m.filename);
     let title = m.display_title();
-    let series_index_num = m.series_index.as_deref().and_then(parse_series_index);
+    let series_index_num = resolved_series_index(m);
     let author_sort = m
         .creators
         .first()
@@ -382,18 +385,26 @@ pub(super) async fn insert_book_row(
 /// constant handful per book, which keeps the SQLite write lock from being
 /// held for the whole of a bulk import. Series / publisher / language are
 /// single-valued per book, so they keep the simple resolve-then-link path.
+///
+/// `alias_maps` is the whole-batch reindex-resurrection guard (#964) lookup
+/// built once by `super::collect_entity_alias_maps` before the per-book
+/// write loop starts — not re-resolved here (#1985).
 pub(super) async fn insert_metadata_links(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
     m: &EbookMetadata,
+    alias_maps: &EntityAliasMaps,
 ) -> Result<(), sqlx::Error> {
-    insert_author_links(tx, book_id, m).await?;
+    insert_author_links(tx, book_id, m, &alias_maps.authors).await?;
 
-    // Trim before resolving so the linked `series.name` matches the trimmed
-    // `series_sort` denormalized onto the row (`series_sort_value`) — keeps the
-    // sort key and the link in lockstep, and dedups whitespace variants.
-    if let Some(series_name) = m.series.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        let series_id = resolve_or_insert_series(tx, series_name).await?;
+    // Cleaned (trimmed, embedded-index-stripped — #1912) so the linked
+    // `series.name` matches the `series_sort` denormalized onto the row
+    // (`series_sort_value`) — keeps the sort key and the link in lockstep,
+    // dedups whitespace variants, and collapses "Name #1"/"Name #2" onto one
+    // series row instead of fragmenting.
+    if let Some(series_name) = cleaned_series_name(m) {
+        let series_id =
+            resolve_or_insert_series_with_aliases(tx, &series_name, &alias_maps.series).await?;
         sqlx::query("INSERT OR IGNORE INTO books_series_link (book, series) VALUES (?, ?)")
             .bind(book_id)
             .bind(series_id)
@@ -401,7 +412,7 @@ pub(super) async fn insert_metadata_links(
             .await?;
     }
 
-    insert_tag_links(tx, book_id, m).await?;
+    insert_tag_links(tx, book_id, m, &alias_maps.tags).await?;
 
     if let Some(pub_name) = m.publisher.as_deref().filter(|s| !s.is_empty()) {
         let pub_id = resolve_or_insert_publisher(tx, pub_name).await?;
@@ -428,11 +439,20 @@ pub(super) async fn insert_metadata_links(
 
 /// Batch-insert the book's tag (subject) join rows: one `INSERT OR IGNORE`
 /// into `tags` for all distinct non-empty subjects, then one link insert that
-/// resolves ids via a NOCASE join.
+/// resolves ids via a NOCASE join. A subject a completed library-cleanup
+/// merge already absorbed (#964) skips the `tags` insert and links straight
+/// to its `entity_aliases` canonical id instead, so reindexing a file that
+/// still names the merged-away tag can't resurrect it.
+///
+/// `tag_aliases` is the whole-batch alias map (#1985) — filtered down here to
+/// just this book's own tags before being handed to [`link_aliased_tags`],
+/// which links straight to every id it's given; a batch-wide map would wrongly
+/// link this book to another book's aliased tags too.
 async fn insert_tag_links(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     book_id: i64,
     m: &EbookMetadata,
+    tag_aliases: &HashMap<String, i64>,
 ) -> Result<(), sqlx::Error> {
     let mut seen = std::collections::HashSet::new();
     let tags: Vec<&str> = m
@@ -445,10 +465,21 @@ async fn insert_tag_links(
     if tags.is_empty() {
         return Ok(());
     }
+
+    let aliased: HashMap<String, i64> = tags
+        .iter()
+        .filter_map(|t| tag_aliases.get(*t).map(|id| ((*t).to_string(), *id)))
+        .collect();
+    let to_insert: Vec<&str> = tags
+        .iter()
+        .copied()
+        .filter(|t| !aliased.contains_key(*t))
+        .collect();
+
     // Both statements bind ~1 param per tag; chunk so a tag-heavy book can't
     // exceed SQLite's bound-parameter cap (999 by default). 500 keeps the link
     // statement (book_id + one per tag) safely under the limit.
-    for chunk in tags.chunks(500) {
+    for chunk in to_insert.chunks(500) {
         let rows = std::iter::repeat_n("(?)", chunk.len())
             .collect::<Vec<_>>()
             .join(", ");
@@ -468,6 +499,34 @@ async fn insert_tag_links(
             link_q = link_q.bind(*t);
         }
         link_q.execute(&mut **tx).await?;
+    }
+
+    link_aliased_tags(tx, book_id, &aliased).await
+}
+
+/// Link the book straight to each already-known canonical tag id, for
+/// subjects [`insert_tag_links`] found in `entity_aliases`.
+async fn link_aliased_tags(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    book_id: i64,
+    aliased: &HashMap<String, i64>,
+) -> Result<(), sqlx::Error> {
+    if aliased.is_empty() {
+        return Ok(());
+    }
+    // Each row binds 2 params (book_id, tag_id), so chunk at 499 to stay
+    // under SQLite's 999-parameter cap (499 * 2 = 998).
+    let canonical_ids: Vec<i64> = aliased.values().copied().collect();
+    for chunk in canonical_ids.chunks(499) {
+        let rows = std::iter::repeat_n("(?, ?)", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!("INSERT OR IGNORE INTO books_tags_link (book, tag) VALUES {rows}");
+        let mut q = sqlx::query(&sql);
+        for tag_id in chunk {
+            q = q.bind(book_id).bind(*tag_id);
+        }
+        q.execute(&mut **tx).await?;
     }
     Ok(())
 }

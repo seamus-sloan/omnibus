@@ -411,12 +411,16 @@ test("persists listening progress when the audio element pauses", async ({
     async () => {
       await page.evaluate((secs) => {
         const cb = (
-          window as unknown as { __omnibusOnAudioPause?: (s: number) => void }
+          window as unknown as {
+            __omnibusOnAudioPause?: (s: number, userActed: boolean) => void;
+          }
         ).__omnibusOnAudioPause;
         if (typeof cb !== "function") {
           throw new Error("__omnibusOnAudioPause not installed");
         }
-        cb(secs);
+        // `true` mirrors the shim's user-acted gate: only a session the
+        // user actually drove persists its pause position (#1972).
+        cb(secs, true);
       }, PAUSE_AT_SEC);
     },
   );
@@ -466,12 +470,16 @@ test("surfaces a 5xx progress POST without crashing the player", async ({
     async () => {
       await page.evaluate((secs) => {
         const cb = (
-          window as unknown as { __omnibusOnAudioPause?: (s: number) => void }
+          window as unknown as {
+            __omnibusOnAudioPause?: (s: number, userActed: boolean) => void;
+          }
         ).__omnibusOnAudioPause;
         if (typeof cb !== "function") {
           throw new Error("__omnibusOnAudioPause not installed");
         }
-        cb(secs);
+        // `true` mirrors the shim's user-acted gate: only a session the
+        // user actually drove persists its pause position (#1972).
+        cb(secs, true);
       }, PAUSE_AT_SEC);
     },
   );
@@ -806,8 +814,99 @@ test("shows the target time immediately after a paused chapter-list seek (#1897)
 });
 
 // ---------------------------------------------------------------------------
+// 11. Buffering badge (#1903 AC2)
+// ---------------------------------------------------------------------------
+
+test("shows a buffering badge while playing and clears it when data arrives", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+
+  // The badge is gated on `playing && buffering`, so a paused book must
+  // never show it however loudly the watchdog reports — assert that first,
+  // otherwise the positive case below could pass on the wrong condition.
+  await fireAudioCallback(page, "__omnibusOnAudioBuffering", 1);
+  await expect(page.getByTestId("listen-buffering")).toHaveCount(0);
+
+  // Drive the JS watchdog's two callbacks directly rather than trying to
+  // provoke a real `readyState < HAVE_FUTURE_DATA` window: the point under
+  // test is the Rust wiring and the markup contract, and a genuine network
+  // stall is not reproducible without timing flake.
+  await fireAudioCallback(page, "__omnibusOnAudioPlay", 0);
+  await fireAudioCallback(page, "__omnibusOnAudioBuffering", 1);
+
+  const badge = page.getByTestId("listen-buffering");
+  await expect(badge).toBeVisible();
+  await expect(badge).toHaveText("Buffering…");
+  // Live region, so a screen reader announces the wait instead of leaving
+  // a clock that merely looks stuck.
+  await expect(badge).toHaveRole("status");
+
+  // Data arrives: the badge goes away and no failure is claimed.
+  await fireAudioCallback(page, "__omnibusOnAudioBuffering", 0);
+  await expect(page.getByTestId("listen-buffering")).toHaveCount(0);
+  await expect(page.getByTestId("listen-failed")).toHaveCount(0);
+});
+
+// ---------------------------------------------------------------------------
+// 12. Stall → failure overlay (#1903 AC3)
+// ---------------------------------------------------------------------------
+
+test("surfaces the failure overlay when playback stalls with no progress", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, MP3_BOOK.title);
+  await gotoReady(page, `/listen/${uuid}`);
+  await waitForPlayerReady(page);
+  await expect(page.getByTestId("listen-failed")).toHaveCount(0);
+
+  // The watchdog reports a stall after 15s without a `timeupdate`/`progress`
+  // — waiting that out for real would be a 15s sleep and a flake source, so
+  // fire the callback the watchdog would have fired.
+  await fireAudioCallback(page, "__omnibusOnAudioPlay", 0);
+  await fireAudioCallback(page, "__omnibusOnAudioStalled", 0);
+
+  // A stall reuses `playback_failed`: same terminal overlay as an init
+  // timeout, because neither recovers without a reload.
+  const failed = page.getByTestId("listen-failed");
+  await expect(failed).toBeVisible();
+  await expect(failed).toHaveRole("alert");
+  await expect(failed).toContainText("Playback failed.");
+});
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Invoke one of the JS→Rust audio callbacks the bootstrap installs on
+ * `window`, failing loudly if it was never wired. The buffering/stall UI is
+ * driven entirely by these, so calling them is how a spec reaches those
+ * states without a real network stall — the same technique the progress
+ * tests above use for `__omnibusOnAudioPause`.
+ */
+async function fireAudioCallback(
+  page: import("@playwright/test").Page,
+  name: string,
+  arg: number,
+): Promise<void> {
+  await page.evaluate(
+    ([cbName, value]) => {
+      const cb = (
+        window as unknown as Record<string, ((n: number) => void) | undefined>
+      )[cbName as string];
+      if (typeof cb !== "function") {
+        throw new Error(`${cbName} not installed`);
+      }
+      cb(value as number);
+    },
+    [name, arg] as const,
+  );
+}
 
 interface ProgressMutationOpts {
   uuid: string;

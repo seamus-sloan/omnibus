@@ -2,13 +2,36 @@
 
 use axum::{
     body::{to_bytes, Body},
+    extract::State,
     http::{header::AUTHORIZATION, Request, StatusCode},
 };
-use omnibus_db::test_support::EnvVarGuard;
+use omnibus_db::{auth::SessionKind, test_support::EnvVarGuard};
 use tower::ServiceExt;
 
+use super::get_summary_sources;
 use crate::auth::test_support as auth_test_support;
+use crate::auth::AuthUser;
 use crate::backend::test_support::*;
+
+/// A minimal `AuthUser` for driving the handler directly (bypassing the
+/// `AuthUser` extractor), so a closed pool exercises the handler's own
+/// `Err(...) => internal(...)` branch rather than session extraction.
+fn fake_user(id: i64) -> AuthUser {
+    AuthUser {
+        id,
+        username: "reader".to_string(),
+        is_admin: false,
+        can_upload: false,
+        can_edit: false,
+        can_download: true,
+        kindle_email: None,
+        display_name: None,
+        has_avatar: false,
+        hidden_formats: Vec::new(),
+        session_id: 1,
+        session_kind: SessionKind::Bearer,
+    }
+}
 
 fn post_fetch(uri: &str, token: &str, source: &str) -> Request<Body> {
     let body = serde_json::json!({ "source": source });
@@ -146,4 +169,12 @@ async fn api_summary_sources_requires_auth() {
         .await
         .expect("request should succeed");
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn api_summary_sources_returns_500_when_db_unavailable() {
+    let (_app, state, pool) = fixture().await;
+    pool.close().await;
+    let res = get_summary_sources(fake_user(1), State(state)).await;
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }

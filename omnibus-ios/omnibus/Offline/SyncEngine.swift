@@ -68,7 +68,8 @@ actor SyncEngine {
     /// the head of the queue forever, and because a non-empty queue also holds
     /// off replica revalidation, it freezes every server read in the app.
     /// Drains are triggered by lifecycle events, so six spans a good deal of
-    /// real time before anything is given up on.
+    /// real time before anything is given up on. [`isExemptFromReplayCap`]
+    /// carves out the kinds this bound must not apply to.
     private static let maxReplayAttempts: Int64 = 6
 
     /// Statuses that look like a client error but are really "ask again".
@@ -285,12 +286,33 @@ actor SyncEngine {
         guard op.kind.hasPrefix("progress:"),
               let record = try? JSONDecoder().decode(ProgressRecord.self, from: response)
         else { return }
+        // A drained answer can trail what the replica already holds: this
+        // reply was for a request sent minutes or hours ago, and a newer
+        // local write — or a newer answer another device's drain already
+        // folded in — may have landed in the meantime. Adopting it anyway
+        // would revert the replica to what this op said back when it was
+        // queued.
+        let held = await Cache.read(
+            CacheKey.progress(record.bookUUID, record.format), as: ProgressRecord.self
+        )
+        guard Self.responseSupersedesReplica(record, held: held) else { return }
         await Cache.write(CacheKey.progress(record.bookUUID, record.format), record)
         await UserDataService.noteResumePoint(record)
     }
 
+    /// Whether a drained position response may replace the replica's current
+    /// row. Equal clocks still adopt it — same position, but now carrying the
+    /// server's `updated_at`, which is the clock a later sync offer is judged
+    /// against.
+    static func responseSupersedesReplica(_ record: ProgressRecord, held: ProgressRecord?) -> Bool {
+        guard let held else { return true }
+        return record.orderingClock >= held.orderingClock
+    }
+
     /// Record one failed-but-retryable attempt, promoting the op to a held
-    /// failure once it has burned through [`maxReplayAttempts`].
+    /// failure once it has burned through [`maxReplayAttempts`] — except a
+    /// kind [`isExemptFromReplayCap`] excludes, which is left to retry
+    /// forever.
     private func noteRetryableFailure(_ op: PendingOp, _ error: Error) async {
         let message: String
         if case let APIError.http(status, detail) = error {
@@ -299,8 +321,20 @@ actor SyncEngine {
             message = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
         let attempts = await OfflineStore.shared.noteOpAttempt(op.id)
-        guard attempts >= Self.maxReplayAttempts else { return }
+        guard attempts >= Self.maxReplayAttempts, !Self.isExemptFromReplayCap(op.kind) else {
+            return
+        }
         await OfflineStore.shared.noteOpFailure(op.id, message: message)
+    }
+
+    /// Kinds [`maxReplayAttempts`] never parks. A position (and its playback
+    /// rate) is one coalesced, idempotent assertion of a value — it cannot
+    /// pile up in the queue the way a discrete event could, and parking it
+    /// trades away durable listening/reading progress for queue hygiene it
+    /// does not need. Everything else still parks: a poison op in any other
+    /// kind must not freeze every read in the app forever.
+    static func isExemptFromReplayCap(_ kind: String) -> Bool {
+        kind.hasPrefix("progress:") || kind.hasPrefix("playback_rate:")
     }
 
     /// The client-minted id a queued create carries, which every later op

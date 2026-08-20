@@ -104,34 +104,57 @@ pub(crate) fn install_reader_web_interop(uuid: String, prefs: ReaderPrefs, sigs:
     });
 }
 
-/// Register the `__omnibusOn*` window callbacks that stream epub.js events
-/// (relocate/status/selection/toc/search) back into the reader signals, and
-/// return the owning `Closure`s so the caller can keep them alive past this
-/// call. The relocate callback also persists progress locally and POSTs it.
+/// `true` when `new` names a position the caller hasn't already POSTed.
+/// Deliberately compares against the last **posted** CFI, not the last
+/// **seen** one (the mobile variant's rule): the web glue's
+/// locations-ready re-emit is an echo that races a turn's debounced
+/// relocate and reads epub.js's already-updated location, so a last-seen
+/// key would swallow the turn's own write.
 #[cfg(feature = "web")]
-fn register_window_callbacks(
-    window: &web_sys::Window,
-    uuid_cb: String,
-    sigs: InteropSignals,
-) -> Vec<wasm_bindgen::prelude::Closure<dyn FnMut(String)>> {
+fn relocate_moved(new: &Option<String>, last_posted: &Option<String>) -> bool {
+    match (new, last_posted) {
+        (Some(new), Some(posted)) => new != posted,
+        (Some(_), None) => true,
+        (None, _) => false,
+    }
+}
+
+/// POST one epub reading position to the server. `client_updated_at` is
+/// the event time the server's conditional upsert arbitrates on; without
+/// it a write degrades to receipt-time last-write-wins (#1864).
+#[cfg(feature = "web")]
+async fn post_epub_progress(uuid: String, cfi: String, percent_for_post: i64) {
+    let body = serde_json::json!({
+        "update": {
+            "book_uuid": uuid,
+            "format": "epub",
+            "epub_cfi": cfi,
+            "progress_percent": percent_for_post,
+            "client_updated_at": crate::time::now_unix(),
+        }
+    });
+    if let Ok(req) = gloo_net::http::Request::post("/api/rpc/progress").json(&body) {
+        let _ = req.send().await;
+    }
+}
+
+/// Build the `__omnibusOnRelocate` closure: re-derives chapter/total from
+/// the TOC's own order (`resolve_chapter_position`, issue #1909 AC1),
+/// persists + POSTs a real (non-echo, moved) position, and clears a
+/// TOC-jump `Loading` back to `Ready` once a position lands (AC3).
+#[cfg(feature = "web")]
+fn build_relocate_callback(
+    uuid_for_save: String,
+    mut status: Signal<ReaderStatus>,
+    mut loc: Signal<super::RelocateData>,
+    toc: Signal<Vec<TocEntry>>,
+) -> wasm_bindgen::prelude::Closure<dyn FnMut(String)> {
     use wasm_bindgen::prelude::*;
 
-    let InteropSignals {
-        mut status,
-        mut loc,
-        mut selection,
-        mut toc,
-        mut search_results,
-        mut chrome_hidden,
-        ..
-    } = sigs;
-
-    let uuid_for_save = uuid_cb;
-    let relocate = Closure::<dyn FnMut(String)>::new(move |json: String| {
+    // Last POSTED position, not last-seen — see `relocate_moved`.
+    let mut last_posted_cfi: Option<String> = None;
+    Closure::<dyn FnMut(String)>::new(move |json: String| {
         if let Ok(mut data) = serde_json::from_str::<super::RelocateData>(&json) {
-            // Re-derive chapter/total from the TOC's own order rather than
-            // trusting the glue's numbers verbatim — see
-            // `signals::resolve_chapter_position` (issue #1909, AC1).
             let toc_snapshot = toc.peek().clone();
             let previous_chapter = loc.peek().chapter;
             let (chapter, total_chapters) =
@@ -139,42 +162,54 @@ fn register_window_callbacks(
             data.chapter = chapter;
             data.total_chapters = total_chapters;
 
-            if let Some(ref cfi) = data.cfi {
-                crate::reader_progress::save(&uuid_for_save, cfi);
-                let uuid_for_post = uuid_for_save.clone();
-                let cfi_for_post = cfi.clone();
+            // Echo emissions re-state a position the server already holds —
+            // persisting one would stamp a fresh clock on an unmoved
+            // position and shadow a newer audiobook spot at the
+            // cross-format clock gate. Render, don't write.
+            let moved = relocate_moved(&data.cfi, &last_posted_cfi);
+            if let Some(cfi) = data.cfi.clone().filter(|_| !data.echo && moved) {
+                last_posted_cfi = Some(cfi.clone());
+                crate::reader_progress::save(&uuid_for_save, &cfi);
                 // `progress_percent` is the same whole-book figure the
                 // footer/ribbon render (`data.pct`) — sending it keeps the
                 // landing hero's stored percent in step with what the
                 // reader itself is showing (issue #1909, AC2).
                 let percent_for_post = i64::from(data.pct.min(100));
-                wasm_bindgen_futures::spawn_local(async move {
-                    let body = serde_json::json!({
-                        "update": {
-                            "book_uuid": uuid_for_post,
-                            "format": "epub",
-                            "epub_cfi": cfi_for_post,
-                            "progress_percent": percent_for_post,
-                        }
-                    });
-                    if let Ok(req) = gloo_net::http::Request::post("/api/rpc/progress").json(&body)
-                    {
-                        let _ = req.send().await;
-                    }
-                });
+                wasm_bindgen_futures::spawn_local(post_epub_progress(
+                    uuid_for_save.clone(),
+                    cfi,
+                    percent_for_post,
+                ));
             }
-            // A relocate always names the (corrected) current position, so
-            // it also signals that an in-flight chapter jump has finished
-            // rendering — flip a TOC-jump-triggered `Loading` back to
-            // `Ready` (issue #1909, AC3). Guarded so a relocate stray after
-            // a load `Failed` can't resurrect the overlay as if nothing
-            // went wrong.
             if *status.peek() == ReaderStatus::Loading {
                 status.set(ReaderStatus::Ready);
             }
             loc.set(data);
         }
-    });
+    })
+}
+
+/// Type of the boxed `__omnibusOn*` closures `register_window_callbacks`
+/// builds and returns to keep alive.
+#[cfg(feature = "web")]
+type WindowCallback = wasm_bindgen::prelude::Closure<dyn FnMut(String)>;
+
+/// Build the six non-relocate `__omnibusOn*` closures (status, selection,
+/// selection-cleared, toc, search, toggle-chrome) as one bundle so
+/// `register_window_callbacks` can build and register them in a loop.
+#[cfg(feature = "web")]
+fn build_simple_callbacks(sigs: InteropSignals) -> [(&'static str, WindowCallback); 6] {
+    use wasm_bindgen::prelude::*;
+
+    let InteropSignals {
+        mut status,
+        mut selection,
+        mut toc,
+        mut search_results,
+        mut chrome_hidden,
+        ..
+    } = sigs;
+
     let on_status = Closure::<dyn FnMut(String)>::new(move |state: String| {
         status.set(match state.as_str() {
             "ready" => ReaderStatus::Ready,
@@ -209,30 +244,47 @@ fn register_window_callbacks(
     let on_toggle_chrome = Closure::<dyn FnMut(String)>::new(move |_: String| {
         chrome_hidden.toggle();
     });
-    for (name, cb) in [
-        ("__omnibusOnRelocate", &relocate),
-        ("__omnibusOnStatus", &on_status),
-        ("__omnibusOnSelection", &on_selection),
-        ("__omnibusOnSelectionCleared", &on_selection_cleared),
-        ("__omnibusOnToc", &on_toc),
-        ("__omnibusOnSearchResults", &on_search),
-        ("__omnibusOnToggleChrome", &on_toggle_chrome),
-    ] {
+    [
+        ("__omnibusOnStatus", on_status),
+        ("__omnibusOnSelection", on_selection),
+        ("__omnibusOnSelectionCleared", on_selection_cleared),
+        ("__omnibusOnToc", on_toc),
+        ("__omnibusOnSearchResults", on_search),
+        ("__omnibusOnToggleChrome", on_toggle_chrome),
+    ]
+}
+
+/// Register the `__omnibusOn*` window callbacks that stream epub.js events
+/// (relocate/status/selection/toc/search) back into the reader signals, and
+/// return the owning `Closure`s so the caller can keep them alive past this
+/// call. The relocate callback also persists progress locally and POSTs it.
+#[cfg(feature = "web")]
+fn register_window_callbacks(
+    window: &web_sys::Window,
+    uuid_cb: String,
+    sigs: InteropSignals,
+) -> Vec<wasm_bindgen::prelude::Closure<dyn FnMut(String)>> {
+    use wasm_bindgen::prelude::*;
+
+    let relocate = build_relocate_callback(uuid_cb, sigs.status, sigs.loc, sigs.toc);
+    let simple = build_simple_callbacks(sigs);
+
+    let _ = js_sys::Reflect::set(
+        window,
+        &JsValue::from_str("__omnibusOnRelocate"),
+        relocate.as_ref().unchecked_ref(),
+    );
+    for (name, cb) in &simple {
         let _ = js_sys::Reflect::set(
             window,
             &JsValue::from_str(name),
             cb.as_ref().unchecked_ref(),
         );
     }
-    vec![
-        relocate,
-        on_status,
-        on_selection,
-        on_selection_cleared,
-        on_toc,
-        on_search,
-        on_toggle_chrome,
-    ]
+
+    let mut callbacks = vec![relocate];
+    callbacks.extend(simple.into_iter().map(|(_, cb)| cb));
+    callbacks
 }
 
 /// The pre-serialized JS literals + scalars the bootstrap IIFE needs, bundled

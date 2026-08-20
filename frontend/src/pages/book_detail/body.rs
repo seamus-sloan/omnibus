@@ -416,6 +416,8 @@ fn BdInsightsCard(uuid: String) -> Element {
             }
         });
     }));
+    // Hoisted once (rule 07): SSR and first paint render the UTC day, the
+    // post-mount flip re-renders the Started cell in the viewer's local day.
     let dates_ready = use_local_dates_ready();
     let [started, time_read, sessions, pace] = bd_insight_values(insights(), dates_ready());
 

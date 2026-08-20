@@ -28,6 +28,23 @@ pub fn book_glyph(size: u32) -> Element {
     }
 }
 
+/// Headphones outline for the audiobook progress row on the book detail
+/// "Your progress" block.
+pub fn headphones_glyph(size: u32) -> Element {
+    rsx! {
+        svg {
+            width: "{size}", height: "{size}", view_box: "0 0 16 16", fill: "none",
+            stroke: "currentColor", stroke_width: "1.35", stroke_linecap: "round", stroke_linejoin: "round",
+            "aria-hidden": "true",
+            path { d: "M3 10V8.5a5 5 0 0 1 10 0V10" }
+            path {
+                d: "M2.75 10h2.5v3.75h-1.5a1 1 0 0 1-1-1zM13.25 10h-2.5v3.75h1.5a1 1 0 0 0 1-1z",
+                fill: "currentColor",
+            }
+        }
+    }
+}
+
 /// Magnifying-glass search icon, reused by the search palette's trigger
 /// button and query input, and the book-detail merge dialog's search box.
 /// `class` carries the caller's own sizing/positioning hook; `aria_hidden`

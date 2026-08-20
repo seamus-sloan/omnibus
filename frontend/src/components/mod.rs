@@ -93,7 +93,9 @@ pub mod author_photo_edit;
 // Shared backdrop/panel modal shell (dismiss-on-click, click-through-safe)
 // used by the merge, delete, author-photo, and physical-copy dialogs, plus
 // a title/body/action-row body for the common single-confirm case.
+pub mod alignment_modal;
 pub mod confirm_modal;
+pub mod sync_glyph;
 pub use confirm_modal::{confirm_modal_body, ConfirmModal, ConfirmModalAction, ConfirmModalTone};
 
 // Shareable quote-card editor (preview + presets + PNG export), shared by
@@ -131,8 +133,9 @@ pub mod search_palette;
 #[cfg(not(feature = "mobile"))]
 pub mod worker_status;
 
-// Play / open-book marks shared by the two web "continue reading" surfaces:
-// the user-menu resume row and the landing hero CTA.
+// Play / open-book / headphones marks shared by the two web "continue
+// reading" surfaces (user-menu resume row, landing hero CTA) and the
+// book-detail "Your progress" rows.
 #[cfg(not(feature = "mobile"))]
 pub mod glyphs;
 

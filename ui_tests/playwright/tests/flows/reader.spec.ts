@@ -49,6 +49,12 @@ const DEEP_LINK_BOOK = FIXTURE_BOOKS.find(
 // comment on this fixture in fixtures/epubs.ts) — a real multi-chapter book,
 // so the contents drawer lists more than one row to jump between.
 const TOC_JUMP_BOOK = FIXTURE_BOOKS.find((b) => b.slug === "dracula")!;
+// Reserved for the paging-race / blank-front-matter regression (issue
+// #1895) — five one-page sections (two full-page images, three text) ahead
+// of chapter1, so paging through it repeatedly crosses section boundaries.
+const FRONTMATTER_BOOK = FIXTURE_BOOKS.find(
+  (b) => b.slug === "frontmatter-relay",
+)!;
 
 // The epub.js progress POST fires on the reader's relocate events; pin the
 // exact pathname so the sibling `/api/rpc/progress/get` reads never match.
@@ -555,28 +561,48 @@ test("restores the exact reading position when the reader is reopened", async ({
   // Leave the reader (explicit navigation — equivalent to the reader-back
   // button, which routes to the book's detail page), then
   // reopen: it must land on the exact page we left, not a page drifted by
-  // the first-pass display's pre-webfont layout. The restore POST is
-  // page-load triggered (hydration + epub render + settle + debounce), so
-  // give the mutation waiter more room than a click gets.
+  // the first-pass display's pre-webfont layout. The restore settle is an
+  // ECHO — it re-states a position the server already holds — so the
+  // reopen must issue NO progress write at all: an echo write stamps a
+  // fresh clock on an unmoved position, which shadows a newer audiobook
+  // position at the cross-format clock gate.
+  const progressPosts: string[] = [];
+  page.on("request", (req) => {
+    if (
+      req.method() === "POST" &&
+      /\/api\/rpc\/progress(?:\?|$)/.test(req.url())
+    ) {
+      progressPosts.push(req.postData() ?? "");
+    }
+  });
   await gotoReady(page, `/books/${uuid}`);
-  await expectMutation(page, { ...PROGRESS_POST, timeout: 20_000 }, async () =>
-    gotoReady(page, `/read/${uuid}`),
-  );
-  await expect.poll(storedCfi, { timeout: 10_000 }).toBe(leftCfi);
+  await gotoReady(page, `/read/${uuid}`);
   await expect
     .poll(async () => footerPageLabel(page), { timeout: 20_000 })
     .toBe(leftAt);
+  await expect.poll(storedCfi, { timeout: 10_000 }).toBe(leftCfi);
+  // Asserted last in the phase: the slower polls above outlast the glue's
+  // relocate debounce + async POST spawn, so a straggler echo write would
+  // have landed in the collector by now.
+  expect(progressPosts, "a reopen must not write progress").toEqual([]);
 
-  // And again: the first reopen must not have rewritten the stored position,
-  // so a second reopen still lands on the same page (no cumulative drift).
-  await gotoReady(page, `/books/${uuid}`);
-  await expectMutation(page, { ...PROGRESS_POST, timeout: 20_000 }, async () =>
-    gotoReady(page, `/read/${uuid}`),
+  // A real page turn after the restore still persists — the echo skip
+  // must not mute genuine movement.
+  const turned = await expectMutation(page, PROGRESS_POST, async () =>
+    page.getByTestId("reader-next").click(),
   );
-  await expect.poll(storedCfi, { timeout: 10_000 }).toBe(leftCfi);
+  const turnedCfi = turned.request.postDataJSON().update.epub_cfi as string;
+  const turnedAt = await footerPageLabel(page);
+  progressPosts.length = 0;
+
+  // And again: the reopen lands on the turned page, still without writing.
+  await gotoReady(page, `/books/${uuid}`);
+  await gotoReady(page, `/read/${uuid}`);
   await expect
     .poll(async () => footerPageLabel(page), { timeout: 20_000 })
-    .toBe(leftAt);
+    .toBe(turnedAt);
+  await expect.poll(storedCfi, { timeout: 10_000 }).toBe(turnedCfi);
+  expect(progressPosts, "a reopen must not write progress").toEqual([]);
 });
 
 test("a ?cfi= deep link opens the reader at that passage, not the resume point", async ({
@@ -675,6 +701,66 @@ test("keeps reading when the progress save POST fails", async ({
   );
   await expect(page.getByTestId("reader-viewer")).toBeVisible();
   await expect(page.getByTestId("reader-error")).toHaveCount(0);
+});
+
+// Regression for issue #1895: real publisher front matter is full-page image
+// markup (a plain <img> or an SVG-wrapped <image>), and paging through
+// several short sections in a row — at any speed — must never leave the
+// rendition blank or wedged.
+test("pages through image front matter without blanking the rendition, even at rapid clicks", async ({
+  page,
+  request,
+}) => {
+  const uuid = await fetchBookUuidByTitle(request, FRONTMATTER_BOOK.title);
+  await gotoReady(page, `/read/${uuid}`);
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
+
+  // Intentional exception: this regression must inspect rendered EPUB
+  // markup to confirm the front-matter images actually occupy real space,
+  // not collapse to nothing (AC2 — "render as completely empty spreads" is
+  // the issue's own description of the symptom). A rendered bounding box is
+  // the more robust signal here than a manual decode probe: it's what a
+  // reader actually sees, and it doesn't race the async blob->data URI
+  // repair the way polling `naturalWidth` on a throwaway Image() does —
+  // Playwright's own `boundingBox()` already waits for layout to settle.
+  const viewerFrame = page.frameLocator("#omnibus-viewer iframe");
+
+  // Title page: a full-page plain <img> — the most common real-world shape.
+  const titleImg = viewerFrame.locator("img").first();
+  await expect(titleImg).toBeVisible();
+  await expect
+    .poll(async () => (await titleImg.boundingBox())?.height ?? 0, {
+      timeout: 15_000,
+    })
+    .toBeGreaterThan(10);
+
+  // Copyright page: an SVG-wrapped <image> — the shape a real publisher
+  // scan uses, and the one that rendered blank while the plain <img> page
+  // worked.
+  await page.getByTestId("reader-next").click();
+  const svgImage = viewerFrame.locator("image").first();
+  await expect(svgImage).toBeVisible();
+  await expect
+    .poll(async () => (await svgImage.boundingBox())?.height ?? 0, {
+      timeout: 15_000,
+    })
+    .toBeGreaterThan(10);
+
+  // Rapid-fire the remaining turns with no waiting between clicks — the
+  // condition (~1 click/sec or faster) that wedged the rendition on a real
+  // book with no console error (AC1). Three text sections plus the final
+  // chapter: five more section-boundary crossings.
+  for (let i = 0; i < 5; i++) {
+    await page.getByTestId("reader-next").click();
+  }
+  await expect(page.getByTestId("reader-error")).toHaveCount(0);
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
+
+  // A wedged rendition never recovers going backwards either — the other
+  // reported symptom ("prev does not restore it").
+  await page.getByTestId("reader-prev").click();
+  await expect(page.getByTestId("reader-error")).toHaveCount(0);
+  await expect(page.getByTestId("reader-viewer")).toBeVisible();
 });
 
 // The reader is one shared component: the native mobile shell renders the
