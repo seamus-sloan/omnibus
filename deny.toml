@@ -90,7 +90,7 @@ ignore = [
     # (`cargo update -p memmap2`; patched in >= 0.9.11), which needs no change
     # to the Dioxus pin. See Cargo.lock.
     { id = "RUSTSEC-2024-0429", reason = "glib 0.18.5 VariantStrIter unsoundness — mobile/desktop only via wry→gtk→glib (patched in glib 0.20, forced by upstream gtk-rs 0.18 pin under wry); not reachable in the server build" },
-    { id = "RUSTSEC-2026-0097", reason = "rand 0.7.3 unsoundness — aliased mutable reference when a custom `log` logger calls rand::rng()/thread_rng() and ThreadRng reseeds mid-log; build-dependency only via phf_generator 0.8 (ammonia/html5ever codegen under wry), never links into any runtime binary and that logger-reseed path is not exercised in a build script" },
+    { id = "RUSTSEC-2026-0097", reason = "rand 0.7.3 unsoundness — aliased mutable reference when a custom `log` logger calls rand::rng()/thread_rng() and ThreadRng reseeds mid-log; build-dependency only via phf_generator 0.8, pulled in by kuchikiki (wry's bundled HTML/CSS engine, an old html5ever/cssparser codegen path), not ammonia — ammonia is a direct omnibus-db dependency but sits on a separate, newer markup5ever lineage that uses phf_generator 0.13 (fastrand-backed, no rand at all); never links into any runtime binary and that logger-reseed path is not exercised in a build script" },
 
     # ---- Unsound (informational) advisory reachable in the DEFAULT (server)
     # build — unlike the two mobile/desktop-confined entries just above, `lru`
@@ -263,9 +263,14 @@ skip = [
     { name = "convert_case", version = "0.8.0" },
 
     # --- rand 0.7 / 0.8 (build-dep only) + 0.9 (websocket) ---
-    # phf_generator (build dep of ammonia→html5ever) uses rand 0.7 and 0.8
-    # via two separate phf_generator versions on the codegen path — never
-    # links into the runtime binary. rand 0.9 is the runtime copy pulled by
+    # phf_generator uses rand 0.7 and 0.8 via two separate phf_generator
+    # versions on the codegen path, both pulled in transitively by kuchikiki
+    # (wry's bundled HTML/CSS engine, on an old html5ever/cssparser
+    # lineage) — NOT by `ammonia` (a direct omnibus-db dependency), which
+    # sits on its own newer markup5ever chain using phf_generator 0.13
+    # (fastrand-backed, no rand at all; verified with `cargo tree -i
+    # rand@0.7.3`/`@0.8.6` and `cargo tree -p omnibus-db`, issue #2054).
+    # Never links into the runtime binary. rand 0.9 is the runtime copy pulled by
     # tungstenite (masking-key RNG) across all three websocket versions;
     # blocked by the same Dioxus/Axum websocket split as tungstenite above.
     { name = "rand", version = "0.7.3" },
@@ -368,13 +373,17 @@ skip = [
 # default-build packages with `cargo tree -p omnibus` and
 # `cargo tree -p omnibus-frontend` (see #1276). None of these link into the
 # shipped `omnibus` server binary — they exist only under the native shell.
-# Exceptions: `rustc-hash`, `libloading`, `png`, and `windows-sys`/
-# `windows-targets` also duplicate via a path that reaches the default
-# (non-mobile) build directly — not through wry or tao — so skip-tree alone
-# doesn't collapse them; they're each an explicit `skip` entry above instead
-# (see docs/dependency-audit.md's rustc-hash row for the original case,
-# issue #2054 for the other three). Collapsing the rest requires
-# upstream wry/tao to migrate off gtk-rs 0.18 / bitflags 1 etc., which is
+# Exceptions: `rustc-hash`, `libloading`, `png`, and `windows-sys` also
+# duplicate via a path that reaches the default (non-mobile) build directly
+# — not through wry or tao — so skip-tree alone doesn't collapse them;
+# they're each an explicit `skip` entry above instead (see
+# docs/dependency-audit.md's rustc-hash row for the original case, issue
+# #2054 for the other three). `windows-targets` (windows-sys's own
+# dependency) has no matching `skip` entry because `cargo deny check bans`
+# does not flag it at all — its several Cargo.lock versions never surface as
+# a duplicate, presumably pruned by cargo-deny's own graph resolution the
+# same way `rsa` is (see the advisories section above). Collapsing the rest
+# requires upstream wry/tao to migrate off gtk-rs 0.18 / bitflags 1 etc., which is
 # gated on the Dioxus pin (see [patch.crates-io] in root Cargo.toml). We skip
 # the whole subtree rather than enumerate ~40 leaf crates that all share this
 # single root cause. Revisit when Dioxus upgrades wry/tao.

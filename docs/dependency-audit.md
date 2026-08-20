@@ -21,7 +21,7 @@ this list.
 | `foldhash` | 0.1.5, 0.2.0 | 0.1.5 via `hashbrown 0.15.5` (sqlx-core/hashlink path); 0.2.0 via `hashbrown 0.16.1` (dioxus-server's `lru`/`metrics-util` path) | **accepted intentionally** | One copy per `hashbrown` minor — both are internal impl details of `hashbrown`, same root cause as the `hashbrown` row above. Classified separately, though: the `deny.toml` skips for both `foldhash` versions are already in place, unlike `hashbrown`'s still-open four-way spread. Already carries a `deny.toml` skip + comment. |
 | `hashlink` | 0.9.1, 0.10.0 | 0.9.1 via `rusqlite 0.32.1` (`omnibus-frontend`'s mobile-offline SQLite store); 0.10.0 via `sqlx-core 0.8.6` | **blocked by upstream** | Downstream instance of the same `rusqlite`/`sqlx` `libsqlite3-sys` coupling already documented for issue #1529 (see Policy section below) — the two crates simply vendor different `hashlink` minors alongside their independent `libsqlite3-sys` pins. Collapses only when that coordinated `rusqlite`/`sqlx` bump happens. |
 | `convert_case` | 0.4.0, 0.8.0, 0.10.0 | 0.4 from `derive_more 0.99.20` (proc-macro path, transitive via Dioxus desktop/mobile shells); 0.8 from Dioxus proc-macro crates (`dioxus-core-macro`, `dioxus-html-internal-macro`, `dioxus-stores-macro`); 0.10 from `derive_more-impl` (pulled by `dioxus-fullstack`) | **blocked by upstream** | Pure proc-macro dependency; not in any runtime binary image. |
-| `rand` | 0.7.3, 0.8.6, 0.9.4 | 0.7 from `phf_generator 0.8.0` (build dep of `ammonia` → `html5ever` chain); 0.8 from a separate `phf_generator` path; 0.9 from `rand_core@0.9` (via tungstenite) | **blocked by upstream** | The 0.7 and 0.8 copies are build-only (`phf_codegen` / `string_cache_codegen`) and never link into the runtime binary. |
+| `rand` | 0.7.3, 0.8.6, 0.9.4 | 0.7 and 0.8 both from `phf_generator` build-dep chains rooted in `kuchikiki` (wry's bundled HTML/CSS engine, on an old html5ever/cssparser lineage) → `wry` — **not** `ammonia`, which is a direct `omnibus-db` dependency but sits on a separate, newer `markup5ever` lineage using `phf_generator 0.13` (fastrand-backed, no `rand` at all); 0.9 from `rand_core@0.9` (via tungstenite) | **blocked by upstream** | Verified with `cargo tree -i rand@0.7.3` / `@0.8.6` and `cargo tree -p omnibus-db` (issue #2054): both build-dep copies terminate at `wry`, confined to the native shell. The 0.7 and 0.8 copies are build-only (`phf_codegen` / `string_cache_codegen`) and never link into the runtime binary. |
 | `libloading` | 0.7.4, 0.8.9 | 0.7.4 via `libappindicator-sys` → `libappindicator` → `tray-icon` (native shell only); 0.8.9 via `subsecond` → `dioxus-core` → `dioxus` directly (default build) | **blocked by upstream** | Not confined to the `wry`/`tao` native-shell subtree — the 0.8.9 copy reaches `omnibus`/`omnibus-frontend` through `dioxus-core` regardless of platform, same shape as the `rustc-hash` row below. Collapses when `tray-icon`'s `libappindicator` pin catches up to `libloading 0.8`. |
 | `png` | 0.17.16, 0.18.1 | 0.17.16 via `muda`/`tray-icon` (native shell only, tray icon rendering); 0.18.1 via `image` → `omnibus-db` directly (default build, cover/thumbnail decoding) | **blocked by upstream** | Same "not confined to wry/tao" shape as `libloading` above. Collapses when `tray-icon`'s `muda` pin catches up to `png 0.18`. |
 | `webpki-roots` | 0.26.11, 1.0.7 | 0.26 from `sqlx-core`; 1.0.7 from `hyper-rustls` (reqwest) | **blocked by upstream** | sqlx-core pins 0.26; reqwest/hyper-rustls have moved to 1.x. Collapses when sqlx bumps its rustls deps. |
@@ -55,8 +55,12 @@ this list.
   `deny.toml` ignores it with a matching comment.
 - `rand 0.7.3` — RUSTSEC-2026-0097 (unsound: aliased mutable reference when
   a custom `log` logger calls `rand::rng()`/`thread_rng()` mid-log).
-  Build-dependency only, via `phf_generator 0.8` (`ammonia`/`html5ever`
-  codegen under `wry`) — never links into any runtime binary, and that
+  Build-dependency only, via `phf_generator 0.8` pulled in by `kuchikiki`
+  (wry's bundled HTML/CSS engine, an old html5ever/cssparser codegen path)
+  — genuinely confined to `wry`, but *not* via `ammonia`: `ammonia` is a
+  direct `omnibus-db` dependency, but sits on a separate, newer
+  `markup5ever` lineage that uses `phf_generator 0.13` (fastrand-backed, no
+  `rand` involved at all). Never links into any runtime binary, and that
   logger-reseed path isn't exercised in a build script. `deny.toml` ignores
   it with a matching comment.
 - **`unsound` scope gap (issue #2054):** all three entries above sat as
