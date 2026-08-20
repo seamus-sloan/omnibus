@@ -325,7 +325,10 @@ async fn apply_merge_authors_returns_empty_sources_for_an_empty_list() {
     let err = apply_merge_authors(&pool, &[], canonical, None, None)
         .await
         .unwrap_err();
-    assert!(matches!(err, CleanupApplyError::EmptySources));
+    assert!(
+        matches!(err, CleanupApplyError::InvalidRequest(ref m) if m == "merge requires at least one source entity"),
+        "unexpected error: {err}"
+    );
 }
 
 #[tokio::test]
@@ -335,7 +338,10 @@ async fn apply_merge_authors_returns_canonical_is_source_when_they_collide() {
     let err = apply_merge_authors(&pool, &[a], a, None, None)
         .await
         .unwrap_err();
-    assert!(matches!(err, CleanupApplyError::CanonicalIsSource(id) if id == a));
+    assert!(
+        matches!(err, CleanupApplyError::InvalidRequest(ref m) if m == &format!("merge source and canonical are the same entity: {a}")),
+        "unexpected error: {err}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -480,7 +486,10 @@ async fn apply_tag_split_returns_too_few_atoms_for_a_single_atom_list() {
     let err = apply_tag_split(&pool, source, ";", &["solo".to_string()], None, None)
         .await
         .unwrap_err();
-    assert!(matches!(err, CleanupApplyError::TooFewAtoms));
+    assert!(
+        matches!(err, CleanupApplyError::InvalidRequest(ref m) if m == "tag split requires at least two atoms"),
+        "unexpected error: {err}"
+    );
 }
 
 // ---------------------------------------------------------------------------
