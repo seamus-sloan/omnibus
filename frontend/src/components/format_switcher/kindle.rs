@@ -1,13 +1,17 @@
 //! "Send to Kindle" family: the interactive [`SendToKindleButton`], its
 //! per-row action helper, and the worker-poll that maps the enqueued job's
-//! terminal state to the in-place toast.
+//! terminal state to the in-place toast. The in-flight/toast state machine
+//! itself is [`super::async_action::AsyncActionToast`], shared with
+//! [`super::kobo::SendToKoboButton`].
 
 use dioxus::prelude::*;
 #[cfg(not(feature = "mobile"))]
 use omnibus_shared::KindleSendStatus;
 
-// Only the non-mobile `SendToKindleButton`/`poll_send_result` await the shared
-// sleeper; the mobile action is a disabled placeholder, so gate to match.
+#[cfg(not(feature = "mobile"))]
+use super::async_action::use_async_action_toast;
+// Only `poll_send_result`'s worker-poll interval awaits the shared sleeper
+// directly now — the toast auto-dismiss sleep moved into `async_action`.
 #[cfg(not(feature = "mobile"))]
 use crate::platform_sleep::async_sleep_ms;
 
@@ -75,9 +79,11 @@ pub fn SendToKindleButton(
     #[props(default = "action-kindle".to_string())] testid: String,
 ) -> Element {
     let server_url = crate::use_server_url();
-    let mut in_flight = use_signal(|| false);
-    // (is_error, message) — None until the first send completes / toast dismissed.
-    let mut result = use_signal(|| None::<(bool, String)>);
+    // Success toast auto-dismisses after 4s (Kobo's is 5s — each button kept
+    // its own pre-extraction timing).
+    let action_state = use_async_action_toast(4000);
+    let in_flight = action_state.in_flight;
+    let result = action_state.result;
 
     rsx! {
         button {
@@ -87,28 +93,14 @@ pub fn SendToKindleButton(
             onclick: move |_| {
                 let url = server_url.clone();
                 let uuid = uuid.clone();
-                in_flight.set(true);
-                result.set(None);
-                spawn(async move {
+                action_state.run(async move {
                     // Enqueue; a fast pre-check failure (no Kindle email, SMTP
                     // unconfigured, unknown book) comes back here immediately.
                     let task_id = match crate::data::enqueue_send_to_kindle(&url, &uuid, file_id).await {
                         Ok(id) => id,
-                        Err(e) => {
-                            result.set(Some((true, format!("Send failed: {e}"))));
-                            in_flight.set(false);
-                            return;
-                        }
+                        Err(e) => return Some((true, format!("Send failed: {e}"))),
                     };
-                    let (is_error, message) = poll_send_result(&url, task_id).await;
-                    result.set(Some((is_error, message)));
-                    in_flight.set(false);
-                    // Success is transient — auto-dismiss the toast. Errors stay
-                    // until the user dismisses them.
-                    if !is_error {
-                        async_sleep_ms(4000).await;
-                        result.set(None);
-                    }
+                    Some(poll_send_result(&url, task_id).await)
                 });
             },
             if in_flight() { "Sending\u{2026}" } else { "Send to Kindle" }

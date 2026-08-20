@@ -73,16 +73,17 @@ pub async fn rpc_cleanup_delete_entity(kind: CleanupKind, entity_id: i64) -> Res
     )
 }
 
-/// Map a `CleanupStoreError` to a client-facing error. The three internal
-/// faults (DB, an undecodable stored row) are logged and genericized; the
-/// review decisions already carry a safe, specific sentence.
+/// Map a `CleanupStoreError` to a client-facing error. The internal faults
+/// (`Db`, `Payload`, `UnknownToken`) are logged and genericized — an unknown
+/// token must not echo the token back; a refusal already carries a safe,
+/// specific sentence.
 #[cfg(feature = "server")]
 fn map_store_error(context: &'static str, e: db::cleanup::CleanupStoreError) -> ServerFnError {
     use db::cleanup::CleanupStoreError as E;
     match e {
         E::Db(_) | E::Payload(_) | E::UnknownToken(_) => internal_rpc_error(context, e),
         E::Apply(inner) => map_apply_error(context, inner),
-        other => ServerFnError::new(other.to_string()),
+        E::Refused(msg) => ServerFnError::new(msg),
     }
 }
 

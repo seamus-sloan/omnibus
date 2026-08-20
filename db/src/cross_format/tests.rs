@@ -152,6 +152,14 @@ async fn upsert_link_returns_book_not_found_for_unknown_uuid() {
 }
 
 #[tokio::test]
+async fn get_link_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = get_link(&pool, 1, "some-uuid").await;
+    assert!(matches!(err, Err(CrossFormatError::Sqlx(_))));
+}
+
+#[tokio::test]
 async fn link_is_stale_flips_when_the_audio_file_set_changes() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
@@ -1552,6 +1560,24 @@ async fn declare_sync_point_refuses_what_it_cannot_pair() {
 }
 
 #[tokio::test]
+async fn declare_sync_point_leaves_no_auto_created_link_when_the_pair_cannot_be_resolved() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    // Single audio file reaches the auto-confirm branch; nothing read yet
+    // leaves it with no counterpart to pair.
+    let (_, uuid, _) = seed_dual_book(&pool, &[1_000.0]).await;
+    assert!(get_link(&pool, user, &uuid).await.unwrap().is_none());
+
+    let err = declare_sync_point(&pool, user, &declare_audio(&uuid, None, 500.0))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CrossFormatError::CounterpartMissing));
+
+    // A link left behind would follow with no anchor the user declared.
+    assert!(get_link(&pool, user, &uuid).await.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn reconfirm_keeps_follow_and_clears_anchors_only_when_the_audio_set_changed() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;
@@ -1954,12 +1980,4 @@ fn chapter_number_parses_bare_ordinals_and_noisy_audio_marks() {
     // Front matter stays unnumbered.
     assert_eq!(chapter_number("Acknowledgements"), None);
     assert_eq!(chapter_number("Table of Contents"), None);
-}
-
-#[tokio::test]
-async fn get_link_propagates_db_error_when_pool_is_closed() {
-    let pool = init_db("sqlite::memory:").await.unwrap();
-    pool.close().await;
-    let err = get_link(&pool, 1, "book-uuid-1").await.unwrap_err();
-    assert!(matches!(err, CrossFormatError::Sqlx(_)));
 }

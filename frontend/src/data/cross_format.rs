@@ -102,6 +102,27 @@ pub async fn declare_sync_point(
         .map_err(|e| classify_sync_point_err(note_server_fn_err(e)))
 }
 
+/// Map a [`declare_sync_point`] outcome to the label text both
+/// `SyncHereButton` (listen) and `SyncHerePill` (reader) drive. Split out
+/// from [`declare_sync_and_label`] so the mapping is unit-testable without
+/// a network round trip.
+#[cfg(not(feature = "mobile"))]
+fn sync_point_label(result: Result<(), SyncPointError>) -> &'static str {
+    match result {
+        Ok(()) => "Synced \u{2713}",
+        Err(SyncPointError::LinkRequired) => "Link formats first",
+        Err(_) => "Sync failed",
+    }
+}
+
+/// Run one "synced here" declaration and map its outcome to a label.
+#[cfg(not(feature = "mobile"))]
+pub async fn declare_sync_and_label(
+    decl: omnibus_shared::cross_format::DeclareSyncPoint,
+) -> &'static str {
+    sync_point_label(declare_sync_point("", decl).await)
+}
+
 /// Flip follow mode on an existing link.
 #[cfg(not(feature = "mobile"))]
 pub async fn set_follow_mode(
@@ -160,5 +181,28 @@ mod tests {
             classify_sync_point_err(e),
             SyncPointError::Other(_)
         ));
+    }
+
+    #[test]
+    fn sync_point_label_reports_success() {
+        assert_eq!(sync_point_label(Ok(())), "Synced \u{2713}");
+    }
+
+    #[test]
+    fn sync_point_label_prompts_linking_when_link_required() {
+        assert_eq!(
+            sync_point_label(Err(SyncPointError::LinkRequired)),
+            "Link formats first"
+        );
+    }
+
+    #[test]
+    fn sync_point_label_reports_failure_for_other_errors() {
+        assert_eq!(
+            sync_point_label(Err(SyncPointError::Other(DataError::Other(
+                "connection reset".into()
+            )))),
+            "Sync failed"
+        );
     }
 }

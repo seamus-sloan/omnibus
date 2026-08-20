@@ -9,7 +9,7 @@
 //! sub-modules below; this file is the shell around them.
 
 use dioxus::prelude::*;
-use omnibus_shared::{AlignmentView, ConfirmCrossFormatLink, CrossFormatLinkMode, EbookMetadata};
+use omnibus_shared::{AlignmentView, CrossFormatLinkMode, EbookMetadata};
 
 use crate::components::confirm_modal::ConfirmModal;
 use crate::components::sync_glyph::SyncGlyph;
@@ -17,7 +17,9 @@ use crate::data;
 
 mod choice;
 mod copy;
+mod footer;
 mod lanes;
+mod notice;
 
 // Consumed only by the web-only `book_detail::sync_link` / `landing::hero`,
 // which carry the same gate — so the mobile build has no user for these.
@@ -27,10 +29,10 @@ pub(crate) use copy::{fmt_hm, recency};
 pub(crate) use lanes::{interpolate_pairs, listening_frac};
 
 use choice::render_choice;
-use copy::{
-    align_mode, confirm_label, ebook_chapter_count, foot_note, linear_pill, sub_header, SUB_DEFAULT,
-};
+use copy::{align_mode, confirm_label, ebook_chapter_count, foot_note, sub_header, SUB_DEFAULT};
+use footer::render_footer;
 use lanes::render_lanes;
+use notice::render_notice;
 
 /// The alignment modal. Fetches its view (and the book's identity) on
 /// open; `on_changed` fires after a confirmed link or unlink so the parent
@@ -39,7 +41,7 @@ use lanes::render_lanes;
 pub fn AlignmentModal(uuid: String, open: Signal<bool>, on_changed: EventHandler<()>) -> Element {
     let mut view = use_signal(|| None::<AlignmentView>);
     let mut book = use_signal(|| None::<EbookMetadata>);
-    let mut busy = use_signal(|| false);
+    let busy = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
     let mut mode = use_signal(|| CrossFormatLinkMode::Sequence);
     let mut primary = use_signal(|| None::<i64>);
@@ -85,7 +87,6 @@ pub fn AlignmentModal(uuid: String, open: Signal<bool>, on_changed: EventHandler
         return rsx! {};
     }
 
-    let confirm_uuid = uuid.clone();
     let has_link = view().as_ref().is_some_and(|v| v.link.is_some());
     let multi = view().as_ref().is_some_and(|v| v.audio_files.len() > 1);
     let align = view().as_ref().map(align_mode);
@@ -141,130 +142,27 @@ pub fn AlignmentModal(uuid: String, open: Signal<bool>, on_changed: EventHandler
                 if multi {
                     {render_choice(v.audio_files.clone(), mode, primary, order)}
                 }
-                if v.link.as_ref().is_some_and(|l| l.stale) {
-                    // Anchoring (and the marks count) is suppressed while
-                    // stale — say so instead of misreading the zeros.
-                    p { class: "al-lowconf", role: "note", "data-testid": "alignment-lowconf",
-                        "The audio files changed since you linked — sync is paused, and "
-                        "the alignment re-checks when you confirm again."
-                    }
-                } else if let Some(m) = v.anchor_match {
-                    p { class: "al-matched", role: "note", "data-testid": "alignment-match",
-                        "\u{2713} {m.matched} of {m.ebook_chapters} chapters matched — "
-                        "jumps land chapter-accurately."
-                    }
-                } else {
-                    p { class: "al-matched al-matched-warn", role: "note", "data-testid": "alignment-linear-pill",
-                        "~ {linear_pill(v.audio_chapter_marks, ebook_chapter_count(&v))}"
-                    }
-                    div { class: "al-lowconf-callout", role: "note", "data-testid": "alignment-lowconf",
-                        span { class: "al-warn-badge", "!" }
-                        if v.audio_chapter_marks > 0 {
-                            div {
-                                strong { "The chapter counts don\u{2019}t match, so sync will go by percentage instead. " }
-                                "Jumps will land close, but not exactly. Extra marks are usually "
-                                "opening notes, bonus scenes, credits, remarks, or part numbers."
-                            }
-                        } else {
-                            div {
-                                strong { "This mapping is a straight percent-for-percent estimate. " }
-                                "Jumps will land close, not exact — expect drift of several "
-                                "minutes, especially mid-book. Adding chapter marks to the audio "
-                                "file later will tighten it up."
-                            }
-                        }
-                    }
-                }
+                {render_notice(&v)}
             } else if error().is_none() {
                 p { class: "al-loading", "Measuring both formats…" }
             }
             if let Some(e) = error() {
                 p { role: "alert", class: "bd-merge-error", "{e}" }
             }
-            div { class: "al-foot",
-                if let Some(note) = foot {
-                    span { class: "al-foot-note", "{note}" }
-                }
-                if has_link {
-                    button {
-                        class: "btn ghost sm",
-                        "data-testid": "alignment-unlink",
-                        disabled: busy(),
-                        onclick: {
-                            let uuid = uuid.clone();
-                            move |_| {
-                                let uuid = uuid.clone();
-                                busy.set(true);
-                                error.set(None);
-                                spawn(async move {
-                                    match data::unlink_cross_format("", &uuid).await {
-                                        Ok(_) => {
-                                            busy.set(false);
-                                            open.set(false);
-                                            on_changed.call(());
-                                        }
-                                        Err(e) => {
-                                            busy.set(false);
-                                            error.set(Some(e.to_string()));
-                                        }
-                                    }
-                                });
-                            }
-                        },
-                        "Unlink"
-                    }
-                }
-                span { class: "al-foot-spacer" }
-                button {
-                    class: "btn ghost",
-                    "data-testid": "alignment-cancel",
-                    disabled: busy(),
-                    onclick: move |_| open.set(false),
-                    "Cancel"
-                }
-                // Full-size accent primary per the design.
-                button {
-                    class: "btn primary",
-                    "data-testid": "alignment-confirm",
-                    disabled: busy() || view().is_none(),
-                    onclick: move |_| {
-                        let Some(v) = view() else { return };
-                        let original: Vec<i64> =
-                            v.audio_files.iter().map(|f| f.book_file_id).collect();
-                        let reordered = order() != original;
-                        let update = ConfirmCrossFormatLink {
-                            book_uuid: confirm_uuid.clone(),
-                            mode: mode(),
-                            primary_book_file_id: if mode() == CrossFormatLinkMode::Narrations {
-                                primary()
-                            } else {
-                                None
-                            },
-                            audio_order: if reordered && mode() == CrossFormatLinkMode::Sequence {
-                                Some(order())
-                            } else {
-                                None
-                            },
-                        };
-                        busy.set(true);
-                        error.set(None);
-                        spawn(async move {
-                            match data::confirm_cross_format_link("", update).await {
-                                Ok(()) => {
-                                    busy.set(false);
-                                    open.set(false);
-                                    on_changed.call(());
-                                }
-                                Err(e) => {
-                                    busy.set(false);
-                                    error.set(Some(e.to_string()));
-                                }
-                            }
-                        });
-                    },
-                    "{confirm_text}"
-                }
-            }
+            {render_footer(
+                &uuid,
+                busy,
+                error,
+                open,
+                on_changed,
+                view,
+                mode,
+                primary,
+                order,
+                has_link,
+                foot,
+                confirm_text,
+            )}
             }
         }
     }

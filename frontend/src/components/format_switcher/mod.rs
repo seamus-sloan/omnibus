@@ -4,6 +4,7 @@
 //! renders sub-rows with a file picker so the user can choose which file
 //! to play or read.
 
+mod async_action;
 mod kindle;
 mod kobo;
 

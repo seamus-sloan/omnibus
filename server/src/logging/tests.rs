@@ -1,80 +1,65 @@
-//! Tests for the two pieces of [`super::init_tracing`] that carry logic: the
-//! `RUST_LOG` fallback and the log-directory failure branch.
-//!
-//! `init_tracing` itself is deliberately not called here. It installs a
-//! *process-global* subscriber — including [`super::ErrorRingLayer`], which
-//! writes into one static ring buffer — so a single call would leak into every
-//! other test in this binary (the `error_ring_layer` tests assert exact buffer
-//! contents, and `http_errors::internal` emits an ERROR event). Both branches
-//! are covered through the helpers instead, which is why they exist as
-//! standalone functions.
+//! Unit tests for `logging`'s two extracted-for-testability helpers:
+//! `resolve_env_filter` (the `RUST_LOG` fallback, unset and unparsable) and
+//! `build_file_writer` (the log-dir-creation failure branch). Neither helper
+//! touches the global tracing registry, so — unlike `init_tracing` itself —
+//! these tests can't race `error_ring_layer`'s tests over the process-wide
+//! subscriber slot and its shared ring buffer.
 
 use omnibus_db::test_support::EnvVarGuard;
 
-use super::{env_filter, rolling_writer, DEFAULT_FILTER};
+use super::*;
 
-/// `DEFAULT_FILTER` as `EnvFilter` renders it, so the assertions don't assume
-/// the directive string round-trips verbatim.
-fn default_filter_text() -> String {
-    tracing_subscriber::EnvFilter::new(DEFAULT_FILTER).to_string()
+/// `EnvFilter::to_string()` reorders directives, so assert on presence of
+/// each half rather than the exact joined string.
+fn is_the_default_filter(filter: &tracing_subscriber::EnvFilter) -> bool {
+    let s = filter.to_string();
+    s.contains("info") && s.contains("omnibus=debug")
 }
 
 #[test]
-fn env_filter_uses_rust_log_when_it_is_set_and_parsable() {
-    let _env = EnvVarGuard::set("RUST_LOG", Some("warn,omnibus=trace"));
-
-    let filter = env_filter().to_string();
-    assert!(
-        filter.contains("omnibus=trace"),
-        "unexpected filter: {filter}"
-    );
-    assert!(
-        !filter.contains("omnibus=debug"),
-        "default leaked into an explicit RUST_LOG: {filter}"
-    );
-}
-
-#[test]
-fn env_filter_falls_back_to_the_default_when_rust_log_is_unset() {
+fn resolve_env_filter_falls_back_to_the_default_directives_when_rust_log_is_unset() {
     let _env = EnvVarGuard::set("RUST_LOG", None);
+    let filter = resolve_env_filter();
+    assert!(is_the_default_filter(&filter));
+}
 
-    let filter = env_filter().to_string();
+#[test]
+fn resolve_env_filter_falls_back_to_the_default_directives_when_rust_log_is_unparsable() {
+    // A directive's level (after `=`) must be a known level keyword or a
+    // number — an arbitrary word there is what actually fails to parse
+    // (tracing's grammar otherwise treats a bare word as a target with an
+    // implicit TRACE level, so most "garbage" strings parse successfully).
+    let _env = EnvVarGuard::set("RUST_LOG", Some("omnibus=not_a_real_level"));
+    // Must not panic on the unparsable value — it falls back to the same
+    // default as the unset case.
+    let filter = resolve_env_filter();
+    assert!(is_the_default_filter(&filter));
+}
+
+#[test]
+fn resolve_env_filter_uses_rust_log_when_set_to_a_valid_directive() {
+    let _env = EnvVarGuard::set("RUST_LOG", Some("debug"));
+    let filter = resolve_env_filter();
+    assert_eq!(filter.to_string(), "debug");
+}
+
+#[test]
+fn build_file_writer_returns_some_when_the_dir_is_writable() {
+    let dir = tempfile::tempdir().unwrap();
+    assert!(build_file_writer(dir.path()).is_some());
+}
+
+#[test]
+fn build_file_writer_returns_none_when_the_dir_cannot_be_created() {
+    let parent = tempfile::tempdir().unwrap();
+    // A regular file where a directory component is expected: create_dir_all
+    // fails with ENOTDIR rather than silently succeeding.
+    let blocker = parent.path().join("blocker-file");
+    std::fs::write(&blocker, b"not a directory").unwrap();
+    let unusable_dir = blocker.join("logs");
+
     assert!(
-        filter.contains("omnibus=debug"),
-        "unexpected filter: {filter}"
+        build_file_writer(&unusable_dir).is_none(),
+        "an uncreatable log dir must disable file logging, not panic"
     );
-    assert_eq!(filter, default_filter_text());
-}
-
-#[test]
-fn env_filter_falls_back_to_the_default_when_rust_log_is_unparsable() {
-    let _env = EnvVarGuard::set("RUST_LOG", Some("omnibus=notalevel"));
-
-    let filter = env_filter().to_string();
-    assert_eq!(filter, default_filter_text());
-}
-
-#[test]
-fn rolling_writer_creates_the_log_directory_and_returns_a_guard() {
-    let tmp = tempfile::tempdir().unwrap();
-    let dir = tmp.path().join("nested/logs");
-
-    let writer = rolling_writer(&dir);
-
-    assert!(
-        writer.is_some(),
-        "writer should come up for a creatable dir"
-    );
-    assert!(dir.is_dir(), "the log dir should have been created");
-}
-
-#[test]
-fn rolling_writer_returns_none_when_the_log_directory_cannot_be_created() {
-    let tmp = tempfile::tempdir().unwrap();
-    // A regular file as the parent: `create_dir_all` fails on it for any user,
-    // including root, so this branch is reachable in every environment.
-    let blocker = tmp.path().join("not-a-dir");
-    std::fs::write(&blocker, b"x").unwrap();
-
-    assert!(rolling_writer(&blocker.join("logs")).is_none());
 }

@@ -9,46 +9,7 @@ mod error_ring_layer;
 #[cfg(test)]
 mod tests;
 
-use std::path::Path;
-
-use tracing_appender::non_blocking::{NonBlocking, WorkerGuard};
-use tracing_subscriber::EnvFilter;
-
 use error_ring_layer::ErrorRingLayer;
-
-/// Filter used when `RUST_LOG` is unset or unparsable: omnibus events stay
-/// visible without the dependency noise a bare `debug` would let through.
-const DEFAULT_FILTER: &str = "info,omnibus=debug";
-
-/// The one env-filter every layer shares. A set-and-parsable `RUST_LOG` wins;
-/// anything else falls back to [`DEFAULT_FILTER`].
-fn env_filter() -> EnvFilter {
-    EnvFilter::try_from_default_env().unwrap_or_else(|err| {
-        // try_from_default_env also errs when RUST_LOG is simply unset — only an
-        // actually-set-but-unparsable value deserves a warning. eprintln because
-        // no subscriber exists yet to carry the event.
-        if std::env::var_os("RUST_LOG").is_some() {
-            eprintln!("invalid RUST_LOG ({err}); falling back to default log filter");
-        }
-        EnvFilter::new(DEFAULT_FILTER)
-    })
-}
-
-/// Create `dir` and open the daily-rolling appender inside it, returning its
-/// non-blocking writer and flush guard. `None` when the directory can't be
-/// created, so stderr logging still comes up on a read-only volume.
-fn rolling_writer(dir: &Path) -> Option<(NonBlocking, WorkerGuard)> {
-    if let Err(err) = std::fs::create_dir_all(dir) {
-        eprintln!(
-            "could not create log dir {}: {err}; on-disk JSON logging disabled",
-            dir.display()
-        );
-        return None;
-    }
-    Some(tracing_appender::non_blocking(
-        tracing_appender::rolling::daily(dir, "omnibus.log"),
-    ))
-}
 
 /// Install the global tracing subscriber. Must run before `dioxus::serve`,
 /// which otherwise installs dioxus-logger's default subscriber with a fixed
@@ -62,15 +23,18 @@ fn rolling_writer(dir: &Path) -> Option<(NonBlocking, WorkerGuard)> {
 /// hold it for the process lifetime so buffered records flush on shutdown.
 /// `None` when the log directory can't be created — stderr logging still comes
 /// up so the server isn't blocked on a read-only volume.
-pub fn init_tracing() -> Option<WorkerGuard> {
+pub fn init_tracing() -> Option<tracing_appender::non_blocking::WorkerGuard> {
     use tracing_subscriber::{fmt, prelude::*};
+
+    let filter = resolve_env_filter();
 
     // Build the rolling-file JSON layer, or fall back to stderr-only if the
     // directory can't be created. `Option<Layer>` is itself a `Layer` (None =
     // no-op), so the registry wiring is identical either way. The directory is
     // owned by `omnibus_db::logs` so the log viewer reads exactly where we
     // write.
-    let (file_layer, guard) = match rolling_writer(&omnibus_db::logs::log_dir()) {
+    let dir = omnibus_db::logs::log_dir();
+    let (file_layer, guard) = match build_file_writer(&dir) {
         Some((writer, guard)) => (Some(fmt::layer().json().with_writer(writer)), Some(guard)),
         None => (None, None),
     };
@@ -81,7 +45,7 @@ pub fn init_tracing() -> Option<WorkerGuard> {
     // from the buffer just because the filter dropped them upstream, but nor
     // should the buffer see events the operator asked to suppress.
     tracing_subscriber::registry()
-        .with(env_filter())
+        .with(filter)
         .with(fmt::layer().with_writer(std::io::stderr).compact())
         .with(file_layer)
         .with(ErrorRingLayer)
@@ -89,4 +53,44 @@ pub fn init_tracing() -> Option<WorkerGuard> {
         .ok();
 
     guard
+}
+
+/// Resolve `RUST_LOG` into an `EnvFilter`, falling back to
+/// `"info,omnibus=debug"` when unset or unparsable (a warning is only
+/// printed for the unparsable case — an unset var is the expected default
+/// path). Split out from `init_tracing` so the fallback logic is testable
+/// without installing a global subscriber.
+fn resolve_env_filter() -> tracing_subscriber::EnvFilter {
+    tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|err| {
+        // eprintln because no subscriber exists yet to carry the event.
+        if std::env::var_os("RUST_LOG").is_some() {
+            eprintln!("invalid RUST_LOG ({err}); falling back to default log filter");
+        }
+        tracing_subscriber::EnvFilter::new("info,omnibus=debug")
+    })
+}
+
+/// Build the daily-rolling JSON file writer for `dir`, or `None` if the
+/// directory can't be created (e.g. a read-only volume). Split out from
+/// `init_tracing` so the dir-creation failure branch is testable without
+/// installing a global subscriber.
+fn build_file_writer(
+    dir: &std::path::Path,
+) -> Option<(
+    tracing_appender::non_blocking::NonBlocking,
+    tracing_appender::non_blocking::WorkerGuard,
+)> {
+    match std::fs::create_dir_all(dir) {
+        Ok(()) => {
+            let appender = tracing_appender::rolling::daily(dir, "omnibus.log");
+            Some(tracing_appender::non_blocking(appender))
+        }
+        Err(err) => {
+            eprintln!(
+                "could not create log dir {}: {err}; on-disk JSON logging disabled",
+                dir.display()
+            );
+            None
+        }
+    }
 }

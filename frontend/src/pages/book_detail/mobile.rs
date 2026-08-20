@@ -20,7 +20,7 @@ use super::discovery::{
     cover_src, list_count_label, same_hand_author_label, same_hand_title, same_hand_year,
     suggestion_cover_book, SuggestionsSpinner,
 };
-use super::file_picker::{is_audio_book_file, BdFilePickerMenu, FilePickerKind};
+use super::file_picker::{is_audio_book_file, BdFilePickerMenu, FilePickerChrome, FilePickerKind};
 use super::immersive::BdImmersiveButton;
 use super::journal::BdJournalSection;
 use super::rating::BdRatingWidget;
@@ -292,9 +292,11 @@ fn title_and_cta_section(
                     uuid: uuid.to_string(),
                     kind: FilePickerKind::Read,
                     files: epub_files.to_vec(),
-                    label: "Read",
-                    button_class: "btn primary lg",
-                    single_testid: "start-reading",
+                    chrome: FilePickerChrome {
+                        label: "Read".to_string(),
+                        button_class: "btn primary lg".to_string(),
+                        single_testid: "start-reading".to_string(),
+                    },
                 }
             } else if has_comic {
                 Link {
@@ -309,9 +311,11 @@ fn title_and_cta_section(
                     uuid: uuid.to_string(),
                     kind: FilePickerKind::Listen,
                     files: audio_files.to_vec(),
-                    label: "Listen",
-                    button_class: "btn lg",
-                    single_testid: "start-listening",
+                    chrome: FilePickerChrome {
+                        label: "Listen".to_string(),
+                        button_class: "btn lg".to_string(),
+                        single_testid: "start-listening".to_string(),
+                    },
                 }
             }
             // Immersive Read is a dual-format-only action, so gate it on both.

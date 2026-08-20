@@ -12,7 +12,7 @@ use crate::components::{BookActionMeta, FetchSummaryButton};
 use crate::{data, use_server_url, Route};
 
 use super::export_menu::{BdExportContext, BdExportMenu};
-use super::file_picker::{is_audio_book_file, BdFilePickerMenu, FilePickerKind};
+use super::file_picker::{is_audio_book_file, BdFilePickerMenu, FilePickerChrome, FilePickerKind};
 use super::immersive::BdImmersiveButton;
 use super::physical::{BdBookIdentity, BdWishlistRailSlot};
 use super::rating::BdRatingWidget;
@@ -57,11 +57,14 @@ fn BdWishlistBadge() -> Element {
     }
 }
 
-/// Breadcrumb trail + title-column kicker text, grouped to keep [`BdHeroSection`] under the 5-prop guideline.
+/// The hero's header text — breadcrumb trail, title-column kicker, and the
+/// effective (override-merged) title — grouped to keep [`BdHeroSection`] under
+/// the 5-prop guideline.
 #[derive(Clone, PartialEq)]
 pub(super) struct BdHeroChrome {
     pub kicker: String,
     pub crumbs: Vec<BdCrumbItem>,
+    pub title: String,
 }
 
 /// Hero section: breadcrumb, cover + format badges + tags, title + CTAs, and
@@ -69,7 +72,6 @@ pub(super) struct BdHeroChrome {
 #[component]
 pub(super) fn BdHeroSection(
     b: EbookMetadata,
-    title: String,
     chrome: BdHeroChrome,
     avail: Availability,
     phys: PhysSignals,
@@ -77,7 +79,11 @@ pub(super) fn BdHeroSection(
     /// below the CTA row — empty for single-format books.
     sync_panel: Element,
 ) -> Element {
-    let BdHeroChrome { kicker, crumbs } = chrome;
+    let BdHeroChrome {
+        kicker,
+        crumbs,
+        title,
+    } = chrome;
     let uuid = b.unique_identifier.clone().unwrap_or_default();
     let on_wishlist = phys.wishlist.read().is_some();
     rsx! {
@@ -292,9 +298,11 @@ fn BdCtaRow(has_ebook: bool, has_audio: bool, has_comic: bool, meta: BookActionM
                     uuid: uuid.clone(),
                     kind: FilePickerKind::Read,
                     files: epub_files.clone(),
-                    label: "Start reading",
-                    button_class: "btn primary lg",
-                    single_testid: "start-reading",
+                    chrome: FilePickerChrome {
+                        label: "Start reading".to_string(),
+                        button_class: "btn primary lg".to_string(),
+                        single_testid: "start-reading".to_string(),
+                    },
                 }
             } else if has_comic {
                 // CBZ books open the comic pager. A book carrying both an
@@ -314,9 +322,11 @@ fn BdCtaRow(has_ebook: bool, has_audio: bool, has_comic: bool, meta: BookActionM
                             uuid: uuid.clone(),
                             kind: FilePickerKind::Listen,
                             files: audio_files.clone(),
-                            label: "Start listening",
-                            button_class: "btn primary lg",
-                            single_testid: "start-listening",
+                            chrome: FilePickerChrome {
+                                label: "Start listening".to_string(),
+                                button_class: "btn primary lg".to_string(),
+                                single_testid: "start-listening".to_string(),
+                            },
                         }
                     };
                     #[cfg(feature = "mobile")]
@@ -334,9 +344,11 @@ fn BdCtaRow(has_ebook: bool, has_audio: bool, has_comic: bool, meta: BookActionM
                             uuid: uuid.clone(),
                             kind: FilePickerKind::Listen,
                             files: audio_files.clone(),
-                            label: "Listen",
-                            button_class: "btn lg",
-                            single_testid: "listen-secondary",
+                            chrome: FilePickerChrome {
+                                label: "Listen".to_string(),
+                                button_class: "btn lg".to_string(),
+                                single_testid: "listen-secondary".to_string(),
+                            },
                         }
                     };
                     #[cfg(feature = "mobile")]
