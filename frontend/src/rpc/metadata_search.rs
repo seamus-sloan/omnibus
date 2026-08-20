@@ -91,10 +91,17 @@ pub async fn rpc_hydrate_edition(
     .await
     // Both variants carry a caller-facing sentence — a bad ISBN names the
     // input, and the provider variant is deliberately worded for a reader
-    // rather than exposing the provider's own wording. The chain below it
-    // stays on the log.
+    // rather than exposing the provider's own wording.
+    //
+    // Logged with `?e`, not `{e:#}`: thiserror lowers a literal
+    // `#[error("…")]` to a `write_str`, which ignores the alternate flag, so
+    // `{e:#}` records the same fixed sentence the caller already got and the
+    // provider's own cause reaches nothing. `Debug` walks the chain. Mirrors
+    // `rpc::scan`'s handling of this same error type, and is safe to log in
+    // full because `providers::http::strip_url` has already removed the
+    // request URL — and so any `?key=` — from every provider error.
     .map_err(|e| {
-        tracing::warn!("hydrate edition failed: {e:#}");
+        tracing::warn!(error = ?e, "hydrate edition failed");
         ServerFnError::new(e.to_string())
     })?)
 }
