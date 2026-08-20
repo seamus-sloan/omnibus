@@ -1560,6 +1560,24 @@ async fn declare_sync_point_refuses_what_it_cannot_pair() {
 }
 
 #[tokio::test]
+async fn declare_sync_point_leaves_no_auto_created_link_when_the_pair_cannot_be_resolved() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "alice").await;
+    // Single audio file reaches the auto-confirm branch; nothing read yet
+    // leaves it with no counterpart to pair.
+    let (_, uuid, _) = seed_dual_book(&pool, &[1_000.0]).await;
+    assert!(get_link(&pool, user, &uuid).await.unwrap().is_none());
+
+    let err = declare_sync_point(&pool, user, &declare_audio(&uuid, None, 500.0))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, CrossFormatError::CounterpartMissing));
+
+    // A link left behind would follow with no anchor the user declared.
+    assert!(get_link(&pool, user, &uuid).await.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn reconfirm_keeps_follow_and_clears_anchors_only_when_the_audio_set_changed() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;

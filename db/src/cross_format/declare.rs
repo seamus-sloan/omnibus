@@ -8,10 +8,10 @@ use sqlx::SqlitePool;
 
 use crate::{progress, resolve_book_id_by_uuid, resolve_canonical_book_uuid};
 
-use super::link::{delete_link, get_link, upsert_link};
+use super::link::get_link;
 use super::mapping::{
     audio_files, audio_fraction, audio_timeline, epub_source_fraction, fraction_for_cfi,
-    link_is_stale, AudioTimeline,
+    link_is_stale, snapshot_json, AudioTimeline,
 };
 use super::{CrossFormatError, CrossFormatLink};
 
@@ -40,46 +40,85 @@ pub async fn declare_sync_point(
         .await?
         .ok_or(CrossFormatError::BookNotFound)?;
 
+    // Resolved in memory first, so every refusal below precedes any write.
     let (link, created_here) = match get_link(pool, user_id, &book_uuid).await? {
         Some(link) => (link, false),
-        None => {
-            if audio_files(pool, book_id).await?.len() != 1 {
-                return Err(CrossFormatError::LinkRequired);
-            }
-            let link = upsert_link(
-                pool,
-                user_id,
-                &book_uuid,
-                CrossFormatLinkMode::Sequence,
-                None,
-            )
-            .await?;
-            (link, true)
-        }
+        None => (auto_sequence_link(pool, book_id).await?, true),
     };
-    // A declaration that fails past this point must not leave behind the
-    // link this call just auto-created — the UI reported failure, and a
-    // silently-confirmed follow link would start moving positions the
-    // user never agreed to sync. Best-effort compensation, not a
-    // transaction: the link insert has value only alongside its anchor.
-    let result = declare_against_link(pool, user_id, book_id, &book_uuid, &link, decl).await;
-    if created_here && result.is_err() {
-        let _ = delete_link(pool, user_id, &book_uuid).await;
+    let (text_frac, audio_global) =
+        declared_pair(pool, user_id, book_id, &book_uuid, &link, decl).await?;
+
+    // One transaction, mirroring `confirm_link`: a link left behind without
+    // its anchor carries `follow = 1` and syncs positions the caller was
+    // told the declaration never recorded.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    if created_here {
+        insert_auto_link(&mut tx, user_id, &book_uuid, &link.audio_snapshot).await?;
     }
-    result
+    store_anchor(&mut tx, user_id, &book_uuid, &link, text_frac, audio_global).await?;
+    tx.commit().await?;
+
+    get_link(pool, user_id, &book_uuid)
+        .await?
+        .ok_or(CrossFormatError::BookNotFound)
 }
 
-/// The declaration proper, against an existing (or just-created) link —
-/// split from [`declare_sync_point`] so a failure there can compensate by
-/// removing a link it auto-created.
-async fn declare_against_link(
+/// The link a single-audio-file book is auto-confirmed with, built in
+/// memory so the declaration resolves against it before anything is
+/// written. A multi-file book refuses with [`CrossFormatError::LinkRequired`].
+async fn auto_sequence_link(
+    pool: &SqlitePool,
+    book_id: i64,
+) -> Result<CrossFormatLink, CrossFormatError> {
+    let files = audio_files(pool, book_id).await?;
+    if files.len() != 1 {
+        return Err(CrossFormatError::LinkRequired);
+    }
+    Ok(CrossFormatLink {
+        mode: CrossFormatLinkMode::Sequence,
+        primary_book_file_id: None,
+        audio_snapshot: snapshot_json(&files),
+        // Placeholder — the INSERT stamps the value the caller reads back.
+        confirmed_at: 0,
+        follow: true,
+        user_anchors: Vec::new(),
+    })
+}
+
+/// Write the auto-confirmed sequence link inside the declaration's
+/// transaction. Plain INSERT on purpose: a racing confirm trips the unique
+/// constraint and rolls the declaration back, rather than filing this
+/// anchor against an alignment it was never measured on.
+async fn insert_auto_link(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    user_id: i64,
+    book_uuid: &str,
+    audio_snapshot: &str,
+) -> Result<(), CrossFormatError> {
+    sqlx::query(
+        "INSERT INTO cross_format_links
+            (user_id, book_uuid, mode, primary_book_file_id, audio_snapshot, confirmed_at, follow)
+         VALUES (?, ?, 'sequence', NULL, ?, CAST(strftime('%s','now') AS INTEGER), 1)",
+    )
+    .bind(user_id)
+    .bind(book_uuid)
+    .bind(audio_snapshot)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Resolve the declared pair — `(text fraction, audio global seconds)` —
+/// against the link the anchor will be stored on. Read-only by design:
+/// [`declare_sync_point`] runs it before opening its write transaction.
+async fn declared_pair(
     pool: &SqlitePool,
     user_id: i64,
     book_id: i64,
     book_uuid: &str,
     link: &CrossFormatLink,
     decl: &omnibus_shared::cross_format::DeclareSyncPoint,
-) -> Result<CrossFormatLink, CrossFormatError> {
+) -> Result<(f64, f64), CrossFormatError> {
     if link_is_stale(pool, book_id, link).await? {
         return Err(CrossFormatError::AudioSetMismatch);
     }
@@ -87,16 +126,14 @@ async fn declare_against_link(
         .await?
         .ok_or(CrossFormatError::LinkRequired)?;
 
-    let (text_frac, audio_global) = match decl.format {
+    match decl.format {
         ProgressFormat::Epub => {
-            ebook_declared_pair(pool, user_id, book_id, book_uuid, &timeline, decl).await?
+            ebook_declared_pair(pool, user_id, book_id, book_uuid, &timeline, decl).await
         }
         ProgressFormat::Audio => {
-            audio_declared_pair(pool, user_id, book_id, book_uuid, &timeline, decl).await?
+            audio_declared_pair(pool, user_id, book_id, book_uuid, &timeline, decl).await
         }
-    };
-
-    store_anchor(pool, user_id, book_uuid, link, text_frac, audio_global).await
+    }
 }
 
 /// A declaration made from the reader: the CFI (or client fraction) names
@@ -166,15 +203,16 @@ async fn audio_declared_pair(
 }
 
 /// Fold the declared pair into the link's stored anchors (replacing a
-/// re-declaration of the same spot) and turn follow mode on.
+/// re-declaration of the same spot) and turn follow mode on, inside the
+/// caller's transaction.
 async fn store_anchor(
-    pool: &SqlitePool,
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     user_id: i64,
     book_uuid: &str,
     link: &CrossFormatLink,
     text_frac: f64,
     audio_global: f64,
-) -> Result<CrossFormatLink, CrossFormatError> {
+) -> Result<(), CrossFormatError> {
     let mut anchors: Vec<(f64, f64)> = link
         .user_anchors
         .iter()
@@ -192,9 +230,7 @@ async fn store_anchor(
     .bind(&json)
     .bind(user_id)
     .bind(book_uuid)
-    .execute(pool)
+    .execute(&mut **tx)
     .await?;
-    get_link(pool, user_id, book_uuid)
-        .await?
-        .ok_or(CrossFormatError::BookNotFound)
+    Ok(())
 }
