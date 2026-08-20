@@ -7,6 +7,35 @@ use omnibus_shared::{AlignmentView, ConfirmCrossFormatLink, CrossFormatLinkMode}
 
 use crate::data;
 
+/// Builds the `ConfirmCrossFormatLink` payload from the current mode and
+/// working order. A reorder only rides along in `Sequence` mode — the
+/// server has nothing to reorder in `Narrations`, where each file is its
+/// own complete book — and only when it actually differs from `original`,
+/// the order the view was served with.
+fn build_confirm_payload(
+    uuid: &str,
+    mode: CrossFormatLinkMode,
+    primary: Option<i64>,
+    order: Vec<i64>,
+    original: &[i64],
+) -> ConfirmCrossFormatLink {
+    let reordered = order != original;
+    ConfirmCrossFormatLink {
+        book_uuid: uuid.to_string(),
+        mode,
+        primary_book_file_id: if mode == CrossFormatLinkMode::Narrations {
+            primary
+        } else {
+            None
+        },
+        audio_order: if reordered && mode == CrossFormatLinkMode::Sequence {
+            Some(order)
+        } else {
+            None
+        },
+    }
+}
+
 /// Unlink / cancel / confirm. Reads `view`/`mode`/`primary`/`order` at
 /// click time rather than closing over a snapshot, so a reorder made
 /// after the last render still lands in the confirmed payload.
@@ -49,21 +78,7 @@ pub(super) fn render_footer(
     let handle_confirm = move |_| {
         let Some(v) = view() else { return };
         let original: Vec<i64> = v.audio_files.iter().map(|f| f.book_file_id).collect();
-        let reordered = order() != original;
-        let update = ConfirmCrossFormatLink {
-            book_uuid: confirm_uuid.clone(),
-            mode: mode(),
-            primary_book_file_id: if mode() == CrossFormatLinkMode::Narrations {
-                primary()
-            } else {
-                None
-            },
-            audio_order: if reordered && mode() == CrossFormatLinkMode::Sequence {
-                Some(order())
-            } else {
-                None
-            },
-        };
+        let update = build_confirm_payload(&confirm_uuid, mode(), primary(), order(), &original);
         busy.set(true);
         error.set(None);
         spawn(async move {
@@ -112,5 +127,58 @@ pub(super) fn render_footer(
                 "{confirm_text}"
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use omnibus_shared::CrossFormatLinkMode;
+
+    use super::build_confirm_payload;
+
+    #[test]
+    fn build_confirm_payload_carries_the_primary_and_drops_order_in_narrations_mode() {
+        let payload = build_confirm_payload(
+            "book-uuid",
+            CrossFormatLinkMode::Narrations,
+            Some(7),
+            vec![7, 8, 9],
+            &[9, 8, 7],
+        );
+        assert_eq!(payload.book_uuid, "book-uuid");
+        assert_eq!(payload.mode, CrossFormatLinkMode::Narrations);
+        assert_eq!(payload.primary_book_file_id, Some(7));
+        // Narrations has nothing to reorder server-side, even though the
+        // working order here does differ from `original`.
+        assert_eq!(payload.audio_order, None);
+    }
+
+    #[test]
+    fn build_confirm_payload_carries_a_changed_order_and_drops_primary_in_sequence_mode() {
+        let payload = build_confirm_payload(
+            "book-uuid",
+            CrossFormatLinkMode::Sequence,
+            Some(7),
+            vec![9, 8, 7],
+            &[7, 8, 9],
+        );
+        assert_eq!(payload.mode, CrossFormatLinkMode::Sequence);
+        // Narrations-only field; Sequence never sends a primary.
+        assert_eq!(payload.primary_book_file_id, None);
+        assert_eq!(payload.audio_order, Some(vec![9, 8, 7]));
+    }
+
+    #[test]
+    fn build_confirm_payload_omits_order_when_it_matches_the_served_original() {
+        let payload = build_confirm_payload(
+            "book-uuid",
+            CrossFormatLinkMode::Sequence,
+            None,
+            vec![1, 2, 3],
+            &[1, 2, 3],
+        );
+        // Nothing moved, so there is nothing to save — the confirm is a
+        // bare "turn sync on" with no order in the payload.
+        assert_eq!(payload.audio_order, None);
     }
 }
