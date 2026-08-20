@@ -317,9 +317,9 @@ like `search_books_finds_by_title_and_ranks_by_bm25`,
 **Anti-pattern.** A name like `strips_event_handler_attributes` elides
 the function-under-test convention entirely — it says what happened but
 not what did it. `render_strips_event_handler_attributes` is the same
-test named as a spec, and it is the shape every test in
+test named as a spec. Every test in
 [db/src/journals/markdown/tests.rs](../db/src/journals/markdown/tests.rs)
-now takes.
+now leads with the function it exercises.
 
 ---
 

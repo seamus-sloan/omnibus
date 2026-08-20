@@ -179,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn is_active_lights_authors_tab_on_author_details() {
+    fn is_active_lights_authors_tab_across_authors_section() {
         assert!(is_active(&Route::AuthorsIndex {}, TabKind::Authors));
         assert!(is_active(&Route::AuthorDetail { id: 1 }, TabKind::Authors));
     }
