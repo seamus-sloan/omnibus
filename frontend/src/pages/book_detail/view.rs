@@ -15,7 +15,7 @@ use omnibus_shared::{EbookMetadata, SuggestionsResponse};
 use crate::Route;
 
 #[cfg(not(feature = "mobile"))]
-use super::body::{BdAuthorCluster, BdBodyMain, BdPageCtx, BdRailSection};
+use super::body::{BdAuthorCluster, BdBodyBook, BdBodyMain, BdPageCtx, BdRailFacts, BdRailSection};
 #[cfg(not(feature = "mobile"))]
 use super::hero::{self, BdHeroSection};
 #[cfg(feature = "mobile")]
@@ -271,8 +271,7 @@ pub(super) fn render_loaded(
         div { class: "bd-root", style: "{accent_style}",
             BdHeroSection {
                 b: b.clone(),
-                title: title.clone(),
-                chrome: hero::BdHeroChrome { kicker, crumbs },
+                chrome: hero::BdHeroChrome { kicker, crumbs, title: title.clone() },
                 avail: hero::Availability {
                     has_ebook,
                     has_audio,
@@ -289,18 +288,14 @@ pub(super) fn render_loaded(
             }
             section { class: "bd-body-grid",
                 BdBodyMain {
-                    uuid: uuid.clone(),
-                    title: title.clone(),
+                    book: BdBodyBook { uuid: uuid.clone(), title: title.clone(), accent },
                     author: BdAuthorCluster { primary_author, author_id, author_books },
-                    accent,
                     suggestions,
                     ctx: BdPageCtx { server_url, is_admin },
                 }
                 BdRailSection {
                     b,
-                    title,
-                    authors_line,
-                    series,
+                    facts: BdRailFacts { title, authors_line, series },
                     merge_button,
                     delete_button,
                 }
