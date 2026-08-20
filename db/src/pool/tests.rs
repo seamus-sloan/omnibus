@@ -1038,6 +1038,72 @@ async fn boot_backfill_replants_multipart_guards_and_drops_resurrected_duplicate
     assert!(diff.new.is_empty());
 }
 
+/// The duplicate-book delete batches every dupe's id into one `IN (...)`
+/// chunk rather than one `DELETE` per row — seed three simultaneous
+/// unrated resurrected dupes (not just the single one the guard-repair test
+/// above exercises) so the multi-placeholder `IN (?, ?, ?)` shape is
+/// actually driven, not just the single-row `IN (?)` case.
+#[tokio::test]
+async fn boot_backfill_drops_multiple_resurrected_duplicates_in_one_batch() {
+    let _covers = crate::test_support::CoversTempDir::new("multi-dupe-repair");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let target_uuid = crate::test_support::seed_synced_ebook(
+        &pool,
+        "Sanderson/wt.epub",
+        "Wind and Truth",
+        "Sanderson",
+    )
+    .await;
+    let target_id: i64 = sqlx::query_scalar("SELECT id FROM books WHERE uuid = ?")
+        .bind(&target_uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let parts = [
+        "Sanderson/wt-1.m4b",
+        "Sanderson/wt-2.m4b",
+        "Sanderson/wt-3.m4b",
+        "Sanderson/wt-4.m4b",
+    ];
+    for gp in parts {
+        attach_m4b_part(&pool, target_id, gp).await;
+    }
+
+    // Corrupt every non-primary part to the pre-#1126 state: all three lose
+    // their guard and resurrect as standalone (unrated) books.
+    sqlx::query(
+        "DELETE FROM merged_uuids WHERE scan_key IN \
+         ('Sanderson/wt-2.m4b', 'Sanderson/wt-3.m4b', 'Sanderson/wt-4.m4b')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    for gp in &parts[1..] {
+        resurrect_standalone(&pool, gp).await;
+    }
+    // Precondition: 1 target + 3 standalone dupes.
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM books").await, 4);
+
+    run_boot_backfills(&pool).await.unwrap();
+
+    // All three unrated dupes are removed in the same batch, and the FTS
+    // rows deleted alongside them leave no orphans.
+    assert_eq!(
+        count(&pool, "SELECT COUNT(*) FROM books").await,
+        1,
+        "every unrated resurrected duplicate is removed"
+    );
+    assert_eq!(
+        count(
+            &pool,
+            &format!("SELECT COUNT(*) FROM merged_uuids WHERE book_id = {target_id}")
+        )
+        .await,
+        4
+    );
+    assert_eq!(count(&pool, "SELECT COUNT(*) FROM books_fts").await, 1);
+}
+
 #[tokio::test]
 async fn boot_repair_spares_a_same_scan_key_book_in_another_library() {
     // scan_key is only unique per (library_id, scan_key). A healthy book in

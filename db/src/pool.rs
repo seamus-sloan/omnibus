@@ -135,7 +135,7 @@ async fn repair_ghosted_audiobook_attachments(pool: &SqlitePool) -> Result<(), s
         return Ok(());
     }
 
-    for chunk in damaged_slots.chunks(GHOSTED_SLOT_REPAIR_CHUNK) {
+    for chunk in damaged_slots.chunks(BOOT_REPAIR_CHUNK) {
         let predicate =
             std::iter::repeat_n("(book_id = ? AND format = ? COLLATE NOCASE)", chunk.len())
                 .collect::<Vec<_>>()
@@ -236,10 +236,17 @@ async fn repair_multipart_audiobook_attachments(pool: &SqlitePool) -> Result<(),
     .await?;
     for id in &dupes {
         crate::sync::delete_fts(&mut tx, *id).await?;
-        sqlx::query("DELETE FROM books WHERE id = ?")
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
+    }
+    for chunk in dupes.chunks(BOOT_REPAIR_CHUNK) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!("DELETE FROM books WHERE id IN ({placeholders})");
+        let mut q = sqlx::query(&sql);
+        for id in chunk {
+            q = q.bind(id);
+        }
+        q.execute(&mut *tx).await?;
     }
     if !dupes.is_empty() {
         crate::taxonomy::delete_orphan_taxonomy(&mut tx).await?;
@@ -256,8 +263,10 @@ async fn repair_multipart_audiobook_attachments(pool: &SqlitePool) -> Result<(),
     Ok(())
 }
 
-/// Two binds per slot keeps each repair statement under SQLite's 999-bind cap.
-const GHOSTED_SLOT_REPAIR_CHUNK: usize = 400;
+/// Shared chunk size for the boot-repair `IN (...)` batches above: two binds
+/// per row in the ghosted-slot repair, one per row in the duplicate-book
+/// delete, so 400 keeps either comfortably under SQLite's 999-bind cap.
+const BOOT_REPAIR_CHUNK: usize = 400;
 
 /// Run the one-time legacy cover-cache purge on the blocking pool.
 ///

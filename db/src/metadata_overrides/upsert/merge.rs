@@ -10,7 +10,7 @@ use sqlx::SqlitePool;
 
 use crate::books::{get_books_by_ids, resolve_book_ids_bulk};
 
-use super::super::fts::rebuild_fts_for_book;
+use super::super::fts::{rebuild_fts_for_book, rebuild_fts_for_books_batch};
 use super::super::links::{materialize_genre_rows, materialize_series_link, materialize_tag_rows};
 use super::{touch_book_last_modified, upsert_overrides_row, MetadataOverridesError};
 
@@ -107,8 +107,9 @@ async fn merge_one_in_tx(
 /// Genre deltas need no such pre-tx fetch: genres exist only in the override
 /// row (migration `0066`), so the in-tx read *is* the complete base.
 ///
-/// FTS rebuilds run best-effort per book after commit, matching
-/// [`merge_metadata_overrides`].
+/// FTS rebuilds run best-effort for the whole batch after commit via
+/// [`rebuild_fts_for_books_batch`], one write-lock acquisition instead of
+/// one per book.
 pub async fn bulk_merge_metadata_overrides(
     pool: &SqlitePool,
     uuids: &[String],
@@ -164,10 +165,8 @@ pub async fn bulk_merge_metadata_overrides(
     crate::taxonomy::delete_orphan_genres(&mut tx).await?;
     tx.commit().await?;
 
-    for uuid in uuids {
-        if let Err(e) = rebuild_fts_for_book(pool, uuid).await {
-            tracing::warn!(book_uuid = %uuid, error = %e, "books_fts rebuild after bulk override merge failed");
-        }
+    if let Err(e) = rebuild_fts_for_books_batch(pool, uuids).await {
+        tracing::warn!(book_count = uuids.len(), error = %e, "books_fts batch rebuild after bulk override merge failed");
     }
     Ok(())
 }
