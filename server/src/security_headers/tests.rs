@@ -167,3 +167,33 @@ async fn hsts_layer_when_enabled_emits_one_year_include_subdomains() {
 fn hsts_layer_when_disabled_returns_none() {
     assert!(hsts_layer(false).is_none());
 }
+
+#[tokio::test]
+async fn the_provider_host_fallback_policy_is_strictly_stricter_than_the_default() {
+    // The fallback exists for a header value the catalog could never produce
+    // today, so nothing exercises it in production — which is exactly why it
+    // has to be checked here. Dropping to a shorter policy would give up the
+    // framing and base-uri guards along with the image hosts.
+    for directive in [
+        "default-src 'self'",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+        "connect-src 'self'",
+    ] {
+        assert!(
+            NO_PROVIDER_HOSTS_CSP.contains(directive),
+            "fallback policy must keep {directive}: {NO_PROVIDER_HOSTS_CSP}"
+        );
+    }
+    // And it must name no provider host at all — that is the whole point of
+    // falling back to it.
+    assert!(NO_PROVIDER_HOSTS_CSP.contains("img-src 'self' data: blob:;"));
+    for host in omnibus_db::all_cover_hosts() {
+        assert!(
+            !NO_PROVIDER_HOSTS_CSP.contains(host),
+            "fallback policy must not name {host}"
+        );
+    }
+}

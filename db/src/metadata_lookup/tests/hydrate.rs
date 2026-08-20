@@ -78,9 +78,20 @@ async fn hydrate_edition_reads_open_librarys_bare_string_description_form() {
 async fn hydrate_edition_skips_the_record_fetch_for_a_ref_that_is_not_a_record_path() {
     let server = MockServer::start().await;
     mount_ol(&server, ol_hit()).await;
-    // No `/works/…` mock is mounted, so a request for one would 404 into
-    // `None` anyway; the point is that the `isbn:` fallback ref never
-    // addresses a path at all.
+    // `.expect(0)` is the assertion: a record mock *is* mounted and must go
+    // unused, so this fails if the shape guard stops refusing the `isbn:`
+    // fallback ref — which asserting `description == None` alone would not,
+    // since a fetch that 404s produces the same `None`.
+    Mock::given(method("GET"))
+        .and(path(format!("{WORK_KEY}.json")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({ "description": "must never be read for a non-record ref" })),
+        )
+        .expect(0)
+        .mount(&server)
+        .await;
+
     let hydrated = hydrate_edition(
         &config_for(&server),
         MetadataProvider::OpenLibrary,
@@ -92,6 +103,46 @@ async fn hydrate_edition_skips_the_record_fetch_for_a_ref_that_is_not_a_record_p
     .unwrap();
     assert_eq!(hydrated.description, None);
     assert_eq!(hydrated.provider_ref, format!("isbn:{ISBN13}"));
+    // Explicit rather than left to drop: a mounted-but-unused expectation is
+    // only checked when the server is torn down.
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn hydrate_edition_never_fetches_a_record_for_a_ref_that_would_rewrite_the_host() {
+    let server = MockServer::start().await;
+    mount_ol(&server, ol_hit()).await;
+    // The base URL is *concatenated* with the ref, so `@host/x` would parse
+    // with the configured base as userinfo and `evil.example` as the host.
+    // Nothing must be requested for any of these.
+    for hostile in [
+        "@evil.example/x",
+        "https://evil.example/x",
+        "/works/../../../search",
+    ] {
+        let hydrated = hydrate_edition(
+            &config_for(&server),
+            MetadataProvider::OpenLibrary,
+            hostile,
+            ISBN13,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            hydrated.description, None,
+            "{hostile} must not resolve to a record"
+        );
+    }
+    // Only the ISBN lookups the hydrate itself makes; no record fetch.
+    let record_requests = server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|r| r.url.path().contains("/works/") || r.url.path().contains("/books/"))
+        .count();
+    assert_eq!(record_requests, 0);
 }
 
 #[tokio::test]

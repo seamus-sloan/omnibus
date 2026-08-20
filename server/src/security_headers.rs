@@ -61,6 +61,21 @@ use tower_http::set_header::SetResponseHeaderLayer;
 /// Tighten incrementally as the asset surface stabilizes.
 static DEFAULT_CSP: LazyLock<String> = LazyLock::new(build_csp);
 
+/// [`DEFAULT_CSP`] with no provider cover hosts — every other directive
+/// identical, so falling back to it can only ever tighten the policy. Serving
+/// a shorter policy instead would drop the framing and base-uri guards along
+/// with the image hosts.
+const NO_PROVIDER_HOSTS_CSP: &str = "default-src 'self'; \
+script-src 'self' 'unsafe-inline' 'unsafe-eval'; \
+style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
+img-src 'self' data: blob:; \
+font-src 'self' data: https://fonts.gstatic.com; \
+connect-src 'self'; \
+object-src 'none'; \
+base-uri 'self'; \
+form-action 'self'; \
+frame-ancestors 'none'";
+
 /// Assemble [`DEFAULT_CSP`], splicing the provider cover hosts into
 /// `img-src`. Built once behind a `LazyLock` because the host list is a
 /// runtime value; every other directive is fixed text.
@@ -98,11 +113,14 @@ pub fn baseline_layers() -> [SetResponseHeaderLayer<HeaderValue>; 4] {
         SetResponseHeaderLayer::overriding(
             header::CONTENT_SECURITY_POLICY,
             // Infallible in practice — every host in the catalog is ASCII —
-            // but a bad one must degrade to a *stricter* policy, never to a
-            // missing header.
+            // but a bad one must degrade to a *strictly stricter* policy, so
+            // the fallback is the same directive list minus the provider
+            // hosts. Dropping to `default-src 'self'` alone would silently
+            // give up `frame-ancestors 'none'`, `base-uri`, and
+            // `form-action`, which is looser, not tighter.
             HeaderValue::from_str(&DEFAULT_CSP).unwrap_or_else(|_| {
                 tracing::error!("provider cover hosts are not header-safe; serving img-src 'self'");
-                HeaderValue::from_static("default-src 'self'; img-src 'self' data: blob:")
+                HeaderValue::from_static(NO_PROVIDER_HOSTS_CSP)
             }),
         ),
         // Legacy clickjacking guard — `frame-ancestors 'none'` in the CSP

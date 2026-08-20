@@ -159,9 +159,9 @@ const COMMON_CAPABILITIES: ProviderCapabilities = ProviderCapabilities {
 ///
 /// Part of the catalog, not a detail of whoever fetches a cover: the picker
 /// renders these URLs in the page, so the `img-src` CSP has to name them, and
-/// applying one means the server fetching it, which needs the same list as an
-/// allowlist. Two copies of that list would drift, and the failure mode is
-/// silent — a cover that renders but can't be applied, or the reverse.
+/// applying one means the server fetching it, which will need the same list
+/// as an allowlist. Two copies of that list would drift, and the failure mode
+/// is silent — a cover that renders but can't be applied, or the reverse.
 ///
 /// The redirect targets are in it for the same reason the origins are, and
 /// they are the surprising part. `covers.openlibrary.org` 302s to

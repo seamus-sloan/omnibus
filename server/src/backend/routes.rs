@@ -404,9 +404,12 @@ fn summary_routes() -> Router<AppState> {
         .route("/api/summary/sources", get(summary::get_summary_sources))
 }
 
-/// The metadata-provider surface — mobile- and web-facing REST, no RPC
-/// analogue yet. The catalog is read-only for any authenticated user; the
-/// edition search is `can_edit`-gated inside its handler.
+/// The metadata-provider surface — mobile-facing REST. Web hits the analogous
+/// `/api/rpc/metadata/*` server fns in `omnibus_frontend::rpc::metadata_search`,
+/// which repeat these handlers' gates: the catalog is read-only for any
+/// authenticated user, and the edition search is `can_edit`-gated inside its
+/// handler. Change one side's gate or response shape and the other needs the
+/// same edit — there is no shared helper between the two crates.
 fn metadata_routes() -> Router<AppState> {
     Router::new()
         .route("/api/metadata/providers", get(metadata::get_providers))
