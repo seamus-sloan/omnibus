@@ -158,7 +158,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn library_tab_lights_across_library_section() {
+    fn is_active_lights_library_tab_across_library_section() {
         assert!(is_active(&Route::Landing {}, TabKind::Library));
         assert!(is_active(&Route::Shelves {}, TabKind::Library));
         assert!(is_active(&Route::ShelfDetail { id: 3 }, TabKind::Library));
@@ -179,13 +179,13 @@ mod tests {
     }
 
     #[test]
-    fn authors_tab_lights_on_its_details() {
+    fn is_active_lights_authors_tab_on_author_details() {
         assert!(is_active(&Route::AuthorsIndex {}, TabKind::Authors));
         assert!(is_active(&Route::AuthorDetail { id: 1 }, TabKind::Authors));
     }
 
     #[test]
-    fn series_routes_light_no_tab_since_series_left_the_bar() {
+    fn is_active_lights_no_tab_for_series_routes() {
         // Series is no longer a bottom tab; its routes must not light any tab.
         for tab in [
             TabKind::Library,
@@ -199,7 +199,7 @@ mod tests {
     }
 
     #[test]
-    fn you_tab_lights_across_account_section() {
+    fn is_active_lights_you_tab_across_account_section() {
         assert!(is_active(&Route::Account {}, TabKind::You));
         assert!(is_active(&Route::Settings { section: None }, TabKind::You));
         assert!(is_active(&Route::AddBooks {}, TabKind::You));
@@ -208,14 +208,14 @@ mod tests {
     }
 
     #[test]
-    fn stats_tab_lights_only_on_the_stats_route() {
+    fn is_active_lights_stats_tab_only_on_the_stats_route() {
         assert!(is_active(&Route::Stats {}, TabKind::Stats));
         assert!(!is_active(&Route::Landing {}, TabKind::Stats));
         assert!(!is_active(&Route::Stats {}, TabKind::Library));
     }
 
     #[test]
-    fn tabs_are_mutually_exclusive_on_landing() {
+    fn is_active_makes_tabs_mutually_exclusive_on_landing() {
         let here = Route::Landing {};
         assert!(is_active(&here, TabKind::Library));
         assert!(!is_active(&here, TabKind::Authors));
@@ -224,7 +224,7 @@ mod tests {
     }
 
     #[test]
-    fn account_route_lights_only_the_you_tab() {
+    fn is_active_lights_only_the_you_tab_on_the_account_route() {
         let here = Route::Account {};
         assert!(!is_active(&here, TabKind::Library));
         assert!(!is_active(&here, TabKind::Authors));
