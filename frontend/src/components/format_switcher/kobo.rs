@@ -1,9 +1,8 @@
 //! "Send to Kobo" family: the interactive [`SendToKoboButton`], its
 //! per-row action helper, the File System Access write flow, and the pure
 //! path-sanitizing helpers that nest the KEPUB under `<Author>/<Title>/`.
-//! The in-flight/toast state machine itself is
-//! [`super::async_action::AsyncActionToast`], shared with
-//! [`super::kindle::SendToKindleButton`] (#2046).
+//! The in-flight/toast state machine is the shared
+//! [`super::async_action::AsyncActionToast`].
 
 use dioxus::prelude::*;
 

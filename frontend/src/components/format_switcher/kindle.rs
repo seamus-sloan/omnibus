@@ -2,7 +2,7 @@
 //! per-row action helper, and the worker-poll that maps the enqueued job's
 //! terminal state to the in-place toast. The in-flight/toast state machine
 //! itself is [`super::async_action::AsyncActionToast`], shared with
-//! [`super::kobo::SendToKoboButton`] (#2046).
+//! [`super::kobo::SendToKoboButton`].
 
 use dioxus::prelude::*;
 #[cfg(not(feature = "mobile"))]

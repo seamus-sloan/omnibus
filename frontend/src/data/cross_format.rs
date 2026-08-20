@@ -103,9 +103,9 @@ pub async fn declare_sync_point(
 }
 
 /// Map a [`declare_sync_point`] outcome to the label text both
-/// `SyncHereButton` (listen) and `SyncHerePill` (reader) drove by hand
-/// before #2046. Split out from [`declare_sync_and_label`] so the mapping
-/// is unit-testable without a network round trip.
+/// `SyncHereButton` (listen) and `SyncHerePill` (reader) drive. Split out
+/// from [`declare_sync_and_label`] so the mapping is unit-testable without
+/// a network round trip.
 #[cfg(not(feature = "mobile"))]
 fn sync_point_label(result: Result<(), SyncPointError>) -> &'static str {
     match result {
@@ -115,10 +115,7 @@ fn sync_point_label(result: Result<(), SyncPointError>) -> &'static str {
     }
 }
 
-/// Run one "synced here" declaration and map its outcome to a label — the
-/// two call sites differ only in which `DeclareSyncPoint` fields they
-/// populate (audio position vs. ebook fraction/CFI). The caller sets the
-/// transient "Syncing…" label itself before awaiting this.
+/// Run one "synced here" declaration and map its outcome to a label.
 #[cfg(not(feature = "mobile"))]
 pub async fn declare_sync_and_label(
     decl: omnibus_shared::cross_format::DeclareSyncPoint,

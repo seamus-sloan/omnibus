@@ -1,5 +1,5 @@
-//! Shared "async action + toast" state machine (#2046): the in-flight
-//! guard, race-safe auto-dismiss, and toast plumbing common to
+//! Shared "async action + toast" state machine: the in-flight guard,
+//! race-safe auto-dismiss, and toast plumbing common to
 //! `kindle::SendToKindleButton` and `kobo::SendToKoboButton`. Each button
 //! still owns its own markup and its own action future — only the signals
 //! and the spawn/guard logic that drive them are shared.
@@ -37,6 +37,41 @@ pub(super) fn use_async_action_toast(success_dismiss_ms: u32) -> AsyncActionToas
     }
 }
 
+/// Apply one send's outcome once its action future resolves — the
+/// seq-guard-then-write step of [`AsyncActionToast::run`], split out so
+/// the race guard and the success/error split are unit-testable without
+/// spawning. Returns `true` when this send is still the latest *and* its
+/// outcome was a success, i.e. the caller should schedule the auto-dismiss
+/// sleep.
+fn apply_outcome(
+    seq: u64,
+    current_seq: u64,
+    outcome: Option<(bool, String)>,
+    in_flight: &mut Signal<bool>,
+    result: &mut Signal<Option<(bool, String)>>,
+) -> bool {
+    if current_seq != seq {
+        return false;
+    }
+    in_flight.set(false);
+    match outcome {
+        Some((is_error, message)) => {
+            result.set(Some((is_error, message)));
+            !is_error
+        }
+        None => false,
+    }
+}
+
+/// After the success auto-dismiss sleep, clear the toast only if this send
+/// is still the latest — split out so the race guard is unit-testable
+/// without spawning or sleeping.
+fn clear_after_dismiss(seq: u64, current_seq: u64, result: &mut Signal<Option<(bool, String)>>) {
+    if current_seq == seq {
+        result.set(None);
+    }
+}
+
 impl AsyncActionToast {
     /// Run one send: bump the sequence, flip in-flight and clear any
     /// standing toast, await `action`, then apply its outcome. `action`
@@ -58,43 +93,15 @@ impl AsyncActionToast {
         result.set(None);
         spawn(async move {
             let outcome = action.await;
-            if *seq_sig.peek() != seq {
-                return;
-            }
-            in_flight.set(false);
-            if let Some((is_error, message)) = outcome {
-                result.set(Some((is_error, message)));
-                if !is_error {
-                    async_sleep_ms(success_dismiss_ms).await;
-                    if *seq_sig.peek() == seq {
-                        result.set(None);
-                    }
-                }
+            let should_dismiss =
+                apply_outcome(seq, *seq_sig.peek(), outcome, &mut in_flight, &mut result);
+            if should_dismiss {
+                async_sleep_ms(success_dismiss_ms).await;
+                clear_after_dismiss(seq, *seq_sig.peek(), &mut result);
             }
         });
     }
 }
 
 #[cfg(all(test, feature = "server"))]
-mod tests {
-    use super::*;
-    use crate::test_support::render_in_vdom;
-
-    fn harness() -> Element {
-        let state = use_async_action_toast(1000);
-        let in_flight = state.in_flight;
-        let result = state.result;
-        let in_flight = in_flight();
-        let has_result = result().is_some();
-        rsx! {
-            div { "in_flight:{in_flight} has_result:{has_result}" }
-        }
-    }
-
-    #[test]
-    fn use_async_action_toast_starts_idle_with_no_result() {
-        let html = render_in_vdom(harness);
-        assert!(html.contains("in_flight:false"));
-        assert!(html.contains("has_result:false"));
-    }
-}
+mod tests;
