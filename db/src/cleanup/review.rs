@@ -21,9 +21,10 @@ mod tests;
 /// minutes of review while keeping the per-card hydration queries bounded.
 pub const REVIEW_QUEUE_MAX: i64 = 50;
 
-/// Errors from the review queue. The first three are internal faults (a DB
-/// failure, or a stored row this build can't decode); [`Self::Refused`] is the
-/// sentence a caller renders verbatim.
+/// Errors from the review queue. [`Self::Db`], [`Self::Payload`] and
+/// [`Self::UnknownToken`] are internal faults — a DB failure, a stored row this
+/// build can't decode, and a token that names no known suggestion;
+/// [`Self::Refused`] is the sentence a caller renders verbatim.
 #[derive(Debug, thiserror::Error)]
 pub enum CleanupStoreError {
     #[error(transparent)]
