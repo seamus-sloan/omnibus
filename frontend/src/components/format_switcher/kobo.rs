@@ -1,13 +1,14 @@
 //! "Send to Kobo" family: the interactive [`SendToKoboButton`], its
 //! per-row action helper, the File System Access write flow, and the pure
 //! path-sanitizing helpers that nest the KEPUB under `<Author>/<Title>/`.
+//! The in-flight/toast state machine itself is
+//! [`super::async_action::AsyncActionToast`], shared with
+//! [`super::kindle::SendToKindleButton`] (#2046).
 
 use dioxus::prelude::*;
 
-// Only the non-mobile `SendToKoboButton` awaits the shared sleeper; the mobile
-// action is a disabled placeholder, so gate the import to match.
 #[cfg(not(feature = "mobile"))]
-use crate::platform_sleep::async_sleep_ms;
+use super::async_action::use_async_action_toast;
 
 /// "Send to Kobo" CTA. Web/SSR renders the interactive
 /// [`SendToKoboButton`]; mobile renders a disabled placeholder (the copy-over-
@@ -59,13 +60,13 @@ pub fn SendToKoboButton(
     #[props(default = "btn".to_string())] class: String,
     #[props(default = "action-kobo".to_string())] testid: String,
 ) -> Element {
-    let mut in_flight = use_signal(|| false);
-    // (is_error, message) — None until a send completes / the toast is dismissed.
-    let mut result = use_signal(|| None::<(bool, String)>);
-    // Monotonic id of the latest send. A superseded task must not touch shared
-    // state — otherwise an earlier send's auto-dismiss sleep can clear (or hide
-    // the error of) a newer send's toast.
-    let mut send_seq = use_signal(|| 0u64);
+    // Success toast auto-dismisses after 5s (Kindle's is 4s — each button
+    // kept its own pre-extraction timing). The hook's sequence guard is what
+    // stops a superseded send's auto-dismiss from clearing (or hiding the
+    // error of) a newer send's toast.
+    let action_state = use_async_action_toast(5000);
+    let in_flight = action_state.in_flight;
+    let result = action_state.result;
 
     rsx! {
         button {
@@ -77,30 +78,8 @@ pub fn SendToKoboButton(
             onclick: move |_| {
                 let uuid = uuid.clone();
                 let subdir = kobo_subdir(&book_author, &book_title);
-                let seq = *send_seq.peek() + 1;
-                send_seq.set(seq);
-                in_flight.set(true);
-                result.set(None);
-                spawn(async move {
-                    let outcome = write_kepub_to_kobo(&uuid, subdir.as_deref()).await;
-                    // A newer send has superseded this one — leave all shared
-                    // state to it.
-                    if *send_seq.peek() != seq {
-                        return;
-                    }
-                    in_flight.set(false);
-                    // `None` = the user cancelled the directory picker; stay quiet.
-                    if let Some((is_error, message)) = outcome {
-                        result.set(Some((is_error, message)));
-                        if !is_error {
-                            async_sleep_ms(5000).await;
-                            // Only clear if we're still the latest send.
-                            if *send_seq.peek() == seq {
-                                result.set(None);
-                            }
-                        }
-                    }
-                });
+                // `None` = the user cancelled the directory picker; stay quiet.
+                action_state.run(async move { write_kepub_to_kobo(&uuid, subdir.as_deref()).await });
             },
             if in_flight() { "Sending\u{2026}" } else { "Send to Kobo" }
         }
