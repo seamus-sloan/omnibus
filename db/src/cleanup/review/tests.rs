@@ -347,7 +347,10 @@ async fn decide_suggestion_refuses_a_pending_decision() {
     let err = decide_suggestion(&pool, 1, Decision::Pending, 1)
         .await
         .unwrap_err();
-    assert!(matches!(err, CleanupStoreError::NotADecision));
+    assert!(
+        matches!(err, CleanupStoreError::Refused(ref m) if m == "decision must be accepted or rejected"),
+        "unexpected error: {err}"
+    );
 }
 
 #[tokio::test]
@@ -356,7 +359,10 @@ async fn decide_suggestion_reports_not_found_for_an_unknown_id() {
     let err = decide_suggestion(&pool, 4242, Decision::Accepted, 1)
         .await
         .unwrap_err();
-    assert!(matches!(err, CleanupStoreError::NotFound));
+    assert!(
+        matches!(err, CleanupStoreError::Refused(ref m) if m == "suggestion not found"),
+        "unexpected error: {err}"
+    );
 }
 
 #[tokio::test]
@@ -373,7 +379,10 @@ async fn decide_suggestion_refuses_a_row_that_was_already_reviewed() {
     let err = decide_suggestion(&pool, id, Decision::Accepted, 1)
         .await
         .unwrap_err();
-    assert!(matches!(err, CleanupStoreError::AlreadyReviewed));
+    assert!(
+        matches!(err, CleanupStoreError::Refused(ref m) if m == "suggestion has already been reviewed"),
+        "unexpected error: {err}"
+    );
 }
 
 #[tokio::test]
@@ -399,7 +408,10 @@ async fn decide_suggestion_reports_unsupported_for_a_kind_action_pair_with_no_pr
     let err = decide_suggestion(&pool, id, Decision::Accepted, 1)
         .await
         .unwrap_err();
-    assert!(matches!(err, CleanupStoreError::Unsupported));
+    assert!(
+        matches!(err, CleanupStoreError::Refused(ref m) if m == "this suggestion cannot be applied automatically"),
+        "unexpected error: {err}"
+    );
     // And the row stays pending, so the card comes back on the next pass.
     assert_eq!(stored_decision(&pool, id).await, "pending");
 }

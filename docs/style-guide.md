@@ -180,7 +180,7 @@ updating — `anyhow` with a `with_context(...)` message is honest.
 correctly chooses `thiserror`: login, registration, and session
 validation each have a finite set of outcomes a UI renders
 differently. `AuthError` was once over-granular but has since been
-coarsened to the shape below — see "Coarse variants".
+coarsened — see "Coarse variants".
 
 **Pattern (unpredictable).** `reindex` in
 [db/src/indexer/ebooks.rs](../db/src/indexer/ebooks.rs):
@@ -202,33 +202,65 @@ propagates. The format string carries the detail.
 `PasswordTooShort { min }` / `PasswordTooLong { max }` /
 `PasswordCommon` unless the caller actually branches on them.
 
-**Anti-pattern (since fixed).** `db/src/auth.rs`'s `AuthError` once had
-14 variants — three password rules, four username rules — even though
-the login UI renders the same "invalid username or password" for every
-credential failure and the registration form shows the `#[error]` text
-directly. It has since collapsed to ~8 coarse variants
-(`InvalidCredentials`, `Validation(String)`, `UsernameTaken`,
-`SessionNotFound`, `AccountLocked`, `RegistrationDisabled`, transparent
-`Db`, …), with the message doing the work — matching the Pattern below.
+**The test is a call-site audit, not a variant count.** `rg` the enum
+name, find every `match` / `if let` on it plus any `From` /
+`IntoResponse` mapping, and ask of each variant: does some caller give
+it its own HTTP status, its own user-facing sentence, or its own
+control flow? A variant that does earns its place however many
+neighbours it has. A variant that lands in the same catch-all arm as
+three others does not.
 
-**Pattern.** Three to five variants, each genuinely different in how
-the caller handles them:
+**Anti-pattern (since fixed).** `AuthError` in
+[db/src/auth.rs](../db/src/auth.rs) once had 14 variants — three
+password rules, four username rules — even though the login UI renders
+the same "invalid username or password" for every credential failure
+and the registration form shows the `#[error]` text directly. The seven
+input rules collapsed into one `Validation(String)`, with the message
+doing the work.
+
+**Pattern (growth that earns it).** `AuthError` has since grown back to
+11 variants, and the audit vindicates every one:
+`auth_error_to_response` in
+`server/src/auth/handlers.rs` matches all 11 exhaustively and hands out
+six distinct statuses (401 `InvalidCredentials`, 429 + `Retry-After`
+`AccountLocked`, 409 `UsernameTaken` / `LastAdmin`, 404 `UserNotFound` /
+`DeviceNotFound`, 400 `Validation`, 403 `RegistrationDisabled`, 401
+`SessionNotFound`), with `Internal` and `Crypto` the two 500s that
+differ in their log context and in the `From` impl each exists to carry.
+Growth is not the smell; an unbranched variant is.
+
+**Pattern (coarsening that pays).** `CleanupStoreError` in
+[db/src/cleanup/review.rs](../db/src/cleanup/review.rs) is the same rule
+applied in the other direction. Its callers are `map_store_error` /
+`map_apply_error` in `frontend/src/rpc/cleanup.rs`, which branch on
+exactly one thing — is this an internal fault to log and genericize, or
+a sentence safe to show the admin? So the four review refusals that used
+to be their own unit variants are one message-carrying variant, while
+the three internal faults stay split because that branch reads them:
 
 ```rust
 #[derive(Debug, thiserror::Error)]
-pub enum AuthError {
-    #[error("invalid credentials")]
-    InvalidCredentials,
-    #[error("account is temporarily locked")]
-    AccountLocked { until_unix: i64 },
-    #[error("{0}")]
-    Validation(String),          // password/username rules, etc.
-    #[error("session not found or expired")]
-    SessionNotFound,
+pub enum CleanupStoreError {
     #[error(transparent)]
     Db(#[from] sqlx::Error),
+    #[error("malformed cleanup suggestion payload: {0}")]
+    Payload(#[from] serde_json::Error),
+    #[error("unrecognized cleanup token: {0}")]
+    UnknownToken(String),
+    /// Not found / already reviewed / not a decision / unsupported —
+    /// every caller renders the sentence, so they are one variant.
+    #[error("{0}")]
+    Refused(String),
+    #[error(transparent)]
+    Apply(#[from] CleanupApplyError),
 }
 ```
+
+Note what is *not* coarsened: `NotFound(i64)` and `LogNotFound(i64)` in
+the sibling `CleanupApplyError` stay separate because each is raised
+from several primitives and names a different row, and `AlreadyUndone`
+stays because it is an idempotency outcome the concurrency tests assert
+on by variant, not an error message.
 
 ### Never leak `sqlx::Error`
 

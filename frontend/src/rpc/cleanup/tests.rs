@@ -21,21 +21,13 @@ fn map_store_error_genericizes_an_internal_fault() {
 
 #[test]
 fn map_store_error_passes_a_review_decision_through_verbatim() {
-    for (e, expected) in [
-        (CleanupStoreError::NotFound, "suggestion not found"),
-        (
-            CleanupStoreError::AlreadyReviewed,
-            "suggestion has already been reviewed",
-        ),
-        (
-            CleanupStoreError::NotADecision,
-            "decision must be accepted or rejected",
-        ),
-        (
-            CleanupStoreError::Unsupported,
-            "this suggestion cannot be applied automatically",
-        ),
+    for expected in [
+        "suggestion not found",
+        "suggestion has already been reviewed",
+        "decision must be accepted or rejected",
+        "this suggestion cannot be applied automatically",
     ] {
+        let e = CleanupStoreError::Refused(expected.to_string());
         assert!(map_store_error("ctx", e).to_string().contains(expected));
     }
 }
