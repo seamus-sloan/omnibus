@@ -15,6 +15,7 @@ mod fields;
 mod form_grid;
 mod hardcover_fetch;
 mod header;
+mod metadata_search;
 mod save_bar;
 mod sidebar;
 mod state;

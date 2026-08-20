@@ -32,7 +32,7 @@ async fn baseline_headers_present_on_every_response() {
         headers
             .get(header::CONTENT_SECURITY_POLICY)
             .and_then(|v| v.to_str().ok()),
-        Some(DEFAULT_CSP)
+        Some(DEFAULT_CSP.as_str())
     );
     assert_eq!(
         headers.get("x-frame-options").and_then(|v| v.to_str().ok()),
@@ -94,10 +94,23 @@ async fn csp_permits_dioxus_hydration_and_fonts() {
         "csp must allow the Google Fonts WOFF2 host: {csp}"
     );
     assert!(
-        csp.contains(
-            "img-src 'self' data: blob: https://covers.openlibrary.org https://books.google.com"
-        ),
-        "csp must allow data:/blob: images + the Open Library / Google Books cover CDNs so the scan result page can preview provider covers: {csp}"
+        csp.contains("img-src 'self' data: blob: https://"),
+        "csp must allow data:/blob: images plus provider cover hosts: {csp}"
+    );
+    // Derived from the catalog, so the assertion is too: a provider added
+    // without its cover host reaching the CSP fails here rather than in a
+    // browser console nobody is watching.
+    for host in omnibus_db::all_cover_hosts() {
+        assert!(
+            csp.contains(&format!("https://{host}")),
+            "csp img-src must name the provider cover host {host}: {csp}"
+        );
+    }
+    // The redirect target Open Library's cover CDN 302s to, which browsers
+    // check against `img-src` as well as the original request.
+    assert!(
+        csp.contains("https://archive.org"),
+        "csp must allow Open Library's cover redirect target: {csp}"
     );
     assert!(
         csp.contains("frame-ancestors 'none'"),
@@ -129,7 +142,7 @@ async fn baseline_layer_overrides_handler_supplied_value() {
         .iter()
         .collect();
     assert_eq!(all.len(), 1, "expected exactly one CSP header, got {all:?}");
-    assert_eq!(all[0].to_str().unwrap(), DEFAULT_CSP);
+    assert_eq!(all[0].to_str().unwrap(), DEFAULT_CSP.as_str());
 }
 
 #[tokio::test]

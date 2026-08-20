@@ -48,6 +48,7 @@ mod cross_format;
 mod kobo;
 #[cfg(not(feature = "mobile"))]
 mod logs;
+mod metadata_search;
 mod physical;
 mod profile;
 mod progress;
@@ -103,6 +104,7 @@ pub use kindle::*;
 pub use kobo::*;
 #[cfg(not(feature = "mobile"))]
 pub use logs::*;
+pub use metadata_search::*;
 pub use physical::*;
 pub use profile::*;
 pub use progress::*;

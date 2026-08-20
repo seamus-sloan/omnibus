@@ -248,3 +248,118 @@ fn provider_search_status_serializes_its_three_cases_distinguishably() {
         })
     );
 }
+
+// ── Hydrate request + candidate merge ────────────────────────────
+
+fn candidate() -> ProviderEdition {
+    ProviderEdition {
+        source: MetadataProvider::OpenLibrary,
+        provider_ref: "/works/OL1W".into(),
+        isbn13: "9780141439518".into(),
+        isbn10: None,
+        title: "Pride and Prejudice".into(),
+        authors: vec!["Jane Austen".into()],
+        year: None,
+        pages: Some(432),
+        publisher: None,
+        description: None,
+        cover_url: Some("https://covers.openlibrary.org/b/id/1-L.jpg".into()),
+        series: None,
+        first_publish_year: Some(1813),
+        genres: vec!["Fiction".into()],
+    }
+}
+
+fn hydrate_request() -> EditionHydrateRequest {
+    EditionHydrateRequest {
+        source: MetadataProvider::OpenLibrary,
+        provider_ref: "/works/OL1W".into(),
+        isbn13: "9780141439518".into(),
+    }
+}
+
+#[test]
+fn edition_hydrate_request_validate_accepts_a_well_formed_body() {
+    assert!(hydrate_request().validate().is_ok());
+}
+
+#[test]
+fn edition_hydrate_request_validate_rejects_a_blank_provider_ref() {
+    let mut req = hydrate_request();
+    req.provider_ref = "   ".into();
+    assert_eq!(req.validate(), Err("provider_ref is required".to_string()));
+}
+
+#[test]
+fn edition_hydrate_request_validate_rejects_an_oversized_provider_ref() {
+    let mut req = hydrate_request();
+    req.provider_ref = "x".repeat(EditionHydrateRequest::PROVIDER_REF_MAX_LEN + 1);
+    assert!(req
+        .validate()
+        .is_err_and(|m| m.starts_with("provider_ref exceeds")));
+}
+
+#[test]
+fn edition_hydrate_request_validate_rejects_a_blank_isbn13() {
+    let mut req = hydrate_request();
+    req.isbn13 = String::new();
+    assert_eq!(req.validate(), Err("isbn13 is required".to_string()));
+}
+
+#[test]
+fn fill_missing_from_takes_only_the_fields_the_detail_record_lacks() {
+    // The detail record's shape: publisher and the printing's own year, but
+    // no work-level subjects or first-publish year.
+    let mut detail = ProviderEdition {
+        title: "Pride and Prejudice: Penguin Classics".into(),
+        year: Some("2003".into()),
+        publisher: Some("Penguin".into()),
+        pages: Some(480),
+        first_publish_year: None,
+        genres: Vec::new(),
+        cover_url: None,
+        ..candidate()
+    };
+    detail.fill_missing_from(&candidate());
+
+    // Held: every field the detail record answered for.
+    assert_eq!(detail.title, "Pride and Prejudice: Penguin Classics");
+    assert_eq!(detail.year.as_deref(), Some("2003"));
+    assert_eq!(detail.pages, Some(480));
+    // Filled: the fields only the search hit had.
+    assert_eq!(detail.first_publish_year, Some(1813));
+    assert_eq!(detail.genres, vec!["Fiction".to_string()]);
+    assert_eq!(
+        detail.cover_url.as_deref(),
+        Some("https://covers.openlibrary.org/b/id/1-L.jpg")
+    );
+}
+
+#[test]
+fn fill_missing_from_treats_a_whitespace_only_value_as_absent() {
+    let mut detail = ProviderEdition {
+        publisher: Some("   ".into()),
+        ..candidate()
+    };
+    let richer = ProviderEdition {
+        publisher: Some("Penguin".into()),
+        ..candidate()
+    };
+    detail.fill_missing_from(&richer);
+    assert_eq!(detail.publisher.as_deref(), Some("Penguin"));
+}
+
+#[test]
+fn fill_missing_from_never_blanks_a_value_the_thinner_record_lacks() {
+    let mut detail = ProviderEdition {
+        description: Some("A detail-record description.".into()),
+        ..candidate()
+    };
+    // The search hit has no description at all — the merge must not reach
+    // into `detail` and clear one.
+    detail.fill_missing_from(&candidate());
+    assert_eq!(
+        detail.description.as_deref(),
+        Some("A detail-record description.")
+    );
+}

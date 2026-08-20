@@ -7,6 +7,7 @@ use omnibus_shared::EbookMetadata;
 
 use super::fields::{label_to_id, MeArea, MeField, MeLabel};
 use super::hardcover_fetch::HardcoverFetchPanel;
+use super::metadata_search::MetadataSearchPanel;
 use crate::components::chip_editor::{ChipEditor, ChipEditorOptions, SuggestionItem};
 use crate::components::{FetchSummaryButton, SuggestField, SuggestFieldOptions};
 
@@ -52,6 +53,7 @@ pub(super) fn FormGrid(
     rsx! {
         div { class: "me-form",
             HardcoverFetchPanel { uuid: uuid.clone(), fields }
+            MetadataSearchPanel { fields }
             FieldGrid { orig, fields, suggestions, uuid }
             TagsSection { tags: fields.tags, tag_suggestions: suggestions.tags }
             GenresSection { genres: fields.genres, genre_suggestions: suggestions.genres }

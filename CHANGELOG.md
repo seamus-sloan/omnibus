@@ -23,6 +23,22 @@ recent releases are recorded below; everything earlier is available via the
 
 ## [Unreleased]
 
+### Added
+
+- Edition search on the metadata edit page: one search asks every configured
+  provider at once and lists the editions each returned — cover, title,
+  authors, year, publisher, and which source it came from — with a per-source
+  status line so a provider being unreachable never reads as "no results".
+  Selecting an edition opens it in a compare view, re-fetched in full from the
+  source it came from (#1661)
+
+### Fixed
+
+- Provider cover images no longer fail to load behind the content-security
+  policy: the `img-src` allowlist is now derived from the provider catalog and
+  includes the redirect hops Open Library's cover CDN and Hardcover's asset
+  host actually serve bytes from (#1661)
+
 ## [0.22.10] - 2026-08-18
 
 ### Fixed

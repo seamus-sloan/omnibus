@@ -101,8 +101,9 @@ pub use helpers::{build_fts_match, sanitize_fts_query};
 pub use kepub::{convert_book, kepub_path, kepubify_available, warn_if_unavailable, KepubError};
 pub use merge::{merge_books, undo_merge, MergeError, MergeOutcome};
 pub use metadata_lookup::{
-    catalog, search_all_providers, search_provider_by_isbn, search_provider_by_title,
-    MetadataLookupConfig, MetadataLookupError, ProviderKeys,
+    all_cover_hosts, catalog, cover_hosts, hydrate_edition, search_all_providers,
+    search_provider_by_isbn, search_provider_by_title, MetadataLookupConfig, MetadataLookupError,
+    ProviderKeys,
 };
 pub use metadata_overrides::*;
 pub use missing_files::{

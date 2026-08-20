@@ -245,6 +245,48 @@ impl ProviderEdition {
     /// and character names mixed together — and a chip editor handed all of
     /// them is unusable.
     pub const MAX_GENRES: usize = 10;
+
+    /// Fill this record's empty fields from `thinner`, keeping every value
+    /// this one already carries.
+    ///
+    /// The merge behind hydrate-on-select: the detail record a provider
+    /// serves for one edition is richer in some fields and *poorer* in
+    /// others than the search hit that named it — Open Library's edition
+    /// record has the publisher and the printing's own page count but no
+    /// subjects or first-publish year, and its search doc is the mirror
+    /// image. Re-fetching would otherwise blank whatever the list row had
+    /// shown, which is the one thing a picker must never do.
+    ///
+    /// `self` wins every conflict: it is the record fetched *for this
+    /// edition*, where the search hit may describe the work.
+    pub fn fill_missing_from(&mut self, thinner: &ProviderEdition) {
+        let fill = |slot: &mut Option<String>, from: &Option<String>| {
+            if slot.as_ref().is_none_or(|v| v.trim().is_empty()) {
+                slot.clone_from(from);
+            }
+        };
+        fill(&mut self.isbn10, &thinner.isbn10);
+        fill(&mut self.year, &thinner.year);
+        fill(&mut self.publisher, &thinner.publisher);
+        fill(&mut self.description, &thinner.description);
+        fill(&mut self.cover_url, &thinner.cover_url);
+        fill(&mut self.series, &thinner.series);
+        if self.title.trim().is_empty() {
+            self.title.clone_from(&thinner.title);
+        }
+        if self.authors.is_empty() {
+            self.authors.clone_from(&thinner.authors);
+        }
+        if self.pages.is_none() {
+            self.pages = thinner.pages;
+        }
+        if self.first_publish_year.is_none() {
+            self.first_publish_year = thinner.first_publish_year;
+        }
+        if self.genres.is_empty() {
+            self.genres.clone_from(&thinner.genres);
+        }
+    }
 }
 
 impl From<ProviderEdition> for ExternalBookMeta {
@@ -319,6 +361,48 @@ impl EditionSearchRequest {
         }
         if self.providers.as_ref().is_some_and(|p| p.is_empty()) {
             return Err("providers must name at least one provider when supplied".into());
+        }
+        Ok(())
+    }
+}
+
+/// Body for `POST /api/metadata/editions/hydrate` — the second call the
+/// picker makes once a candidate is selected, naming one edition rather than
+/// a query.
+///
+/// `provider_ref` is echoed back exactly as the search handed it over;
+/// Omnibus never parses it, so it is capped rather than validated for shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditionHydrateRequest {
+    pub source: MetadataProvider,
+    pub provider_ref: String,
+    /// The candidate's ISBN-13, which is what every provider can be re-asked
+    /// by regardless of what its own handle looks like.
+    pub isbn13: String,
+}
+
+impl EditionHydrateRequest {
+    /// Maximum byte length of an accepted `provider_ref`. Generous against
+    /// the longest handle any provider mints (an Open Library work key runs
+    /// to a couple of dozen chars) and small enough that an unbounded blob
+    /// can't ride in on it.
+    pub const PROVIDER_REF_MAX_LEN: usize = 256;
+
+    /// Reject a blank or oversized handle. The ISBN itself is validated by
+    /// `normalize_isbn` further down, where a bad check digit reports the
+    /// specific failure. Handlers translate `Err(_)` into 400.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.provider_ref.trim().is_empty() {
+            return Err("provider_ref is required".into());
+        }
+        if self.provider_ref.len() > Self::PROVIDER_REF_MAX_LEN {
+            return Err(format!(
+                "provider_ref exceeds {} bytes",
+                Self::PROVIDER_REF_MAX_LEN
+            ));
+        }
+        if self.isbn13.trim().is_empty() {
+            return Err("isbn13 is required".into());
         }
         Ok(())
     }

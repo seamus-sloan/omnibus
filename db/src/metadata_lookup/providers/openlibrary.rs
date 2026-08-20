@@ -313,3 +313,74 @@ async fn work_first_publish_year(config: &MetadataLookupConfig, isbn13: &str) ->
         .next()
         .and_then(|d| d.first_publish_year)
 }
+
+// ── Detail record (hydrate-on-select) ────────────────────────────
+
+/// Open Library's description, which is `"text"` on some records and
+/// `{"type": "/type/text", "value": "text"}` on others. Untagged so both
+/// parse into one shape.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum OlDescription {
+    Text(String),
+    Typed { value: String },
+}
+
+impl OlDescription {
+    fn into_text(self) -> String {
+        match self {
+            OlDescription::Text(v) => v,
+            OlDescription::Typed { value } => value,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct OlRecord {
+    #[serde(default)]
+    description: Option<OlDescription>,
+}
+
+/// Whether `key` is shaped like an Open Library record path this crate is
+/// willing to address.
+///
+/// `key` reaches here from the client, which is echoing back a `provider_ref`
+/// the search handed out — but "echoing back" is a claim, not a guarantee, so
+/// the shape is checked rather than trusted. Anything else (a bare `isbn:`
+/// fallback ref, a path with a `..` segment, an absolute URL) is refused, so
+/// the request can only ever address a record under the configured base.
+fn is_record_key(key: &str) -> bool {
+    (key.starts_with("/works/") || key.starts_with("/books/"))
+        && key.len() <= 64
+        && !key.contains("..")
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-'))
+}
+
+/// The description behind one selected candidate, fetched best-effort from
+/// its own record.
+///
+/// This is the field hydrate-on-select exists for: neither `search.json` nor
+/// `api/books?jscmd=data` carries a description, so without this call Open
+/// Library can never fill the compare view's largest row.
+pub async fn describe(config: &MetadataLookupConfig, key: &str) -> Option<String> {
+    if !is_record_key(key) {
+        return None;
+    }
+    let url = base_url(
+        &config.openlibrary_base,
+        &format!("{key}.json"),
+        "open library",
+    )
+    .ok()?;
+    let record: OlRecord = get_json_best_effort(config, url.as_str()).await?;
+    // Dropped rather than truncated when oversized: this value is staged into
+    // the edit form and posted back to a write path, where
+    // `MetadataOverrides::validate` would reject a mangled one.
+    record
+        .description
+        .map(OlDescription::into_text)
+        .map(|d| d.trim().to_string())
+        .filter(|d| !d.is_empty() && d.chars().count() <= ExternalBookMeta::DESCRIPTION_MAX_LEN)
+}
