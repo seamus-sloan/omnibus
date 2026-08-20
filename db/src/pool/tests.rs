@@ -1038,11 +1038,7 @@ async fn boot_backfill_replants_multipart_guards_and_drops_resurrected_duplicate
     assert!(diff.new.is_empty());
 }
 
-/// The duplicate-book delete batches every dupe's id into one `IN (...)`
-/// chunk rather than one `DELETE` per row — seed three simultaneous
-/// unrated resurrected dupes (not just the single one the guard-repair test
-/// above exercises) so the multi-placeholder `IN (?, ?, ?)` shape is
-/// actually driven, not just the single-row `IN (?)` case.
+/// Drives the multi-placeholder `IN (?, ?, ?)` shape, not just the single-row case above.
 #[tokio::test]
 async fn boot_backfill_drops_multiple_resurrected_duplicates_in_one_batch() {
     let _covers = crate::test_support::CoversTempDir::new("multi-dupe-repair");

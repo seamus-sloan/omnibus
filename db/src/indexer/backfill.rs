@@ -15,17 +15,33 @@ use crate::{audiobook, covers, ebook, sync, thumbs};
 /// `db/src/merge/transaction.rs`.
 const BACKFILL_CHUNK: usize = 200;
 
+/// The `books` columns [`batch_update_books_column`] can write. A closed
+/// enum rather than a bare column-name `&str`, so the SQL-interpolation
+/// site can never be handed an arbitrary or user-controlled string.
+enum BooksColumn {
+    WordCount,
+    PageCount,
+}
+
+impl BooksColumn {
+    fn as_sql(&self) -> &'static str {
+        match self {
+            BooksColumn::WordCount => "word_count",
+            BooksColumn::PageCount => "page_count",
+        }
+    }
+}
+
 /// Write `updates` (`book id -> new value`) into `books.<column>` via one
 /// `CASE`-based UPDATE per chunk, replacing what would otherwise be one
-/// `UPDATE ... WHERE id = ?` per row. `column` is always a caller-supplied
-/// static string (`"word_count"` / `"page_count"`), never user input, so
-/// interpolating it into the SQL carries no injection risk. A no-op on an
-/// empty `updates` slice, so callers don't need their own guard.
+/// `UPDATE ... WHERE id = ?` per row. A no-op on an empty `updates` slice,
+/// so callers don't need their own guard.
 async fn batch_update_books_column(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
-    column: &str,
+    column: BooksColumn,
     updates: &[(i64, i64)],
 ) -> Result<(), sqlx::Error> {
+    let column = column.as_sql();
     for chunk in updates.chunks(BACKFILL_CHUNK) {
         let cases = std::iter::repeat_n("WHEN ? THEN ?", chunk.len())
             .collect::<Vec<_>>()
@@ -261,7 +277,7 @@ pub(crate) async fn backfill_word_counts(
         // One CASE-based UPDATE for the whole 250-row chunk instead of one
         // UPDATE per book, keeping the existing tx boundary that bounds WAL
         // flushes.
-        batch_update_books_column(&mut tx, "word_count", &updates).await?;
+        batch_update_books_column(&mut tx, BooksColumn::WordCount, &updates).await?;
         tx.commit().await?;
     }
 
@@ -356,7 +372,7 @@ pub(crate) async fn backfill_page_counts(
         // One CASE-based UPDATE for the whole 250-row chunk instead of one
         // UPDATE per book, keeping the existing tx boundary that bounds WAL
         // flushes.
-        batch_update_books_column(&mut tx, "page_count", &updates).await?;
+        batch_update_books_column(&mut tx, BooksColumn::PageCount, &updates).await?;
         tx.commit().await?;
     }
 
@@ -544,7 +560,7 @@ mod tests {
         seed_minimal_books(&pool, 1).await;
 
         let mut tx = pool.begin().await.unwrap();
-        batch_update_books_column(&mut tx, "word_count", &[])
+        batch_update_books_column(&mut tx, BooksColumn::WordCount, &[])
             .await
             .unwrap();
         tx.commit().await.unwrap();
@@ -565,7 +581,7 @@ mod tests {
         seed_minimal_books(&pool, 1).await;
 
         let mut tx = pool.begin().await.unwrap();
-        batch_update_books_column(&mut tx, "word_count", &[(1, 42)])
+        batch_update_books_column(&mut tx, BooksColumn::WordCount, &[(1, 42)])
             .await
             .unwrap();
         tx.commit().await.unwrap();
@@ -586,9 +602,13 @@ mod tests {
         seed_minimal_books(&pool, 3).await;
 
         let mut tx = pool.begin().await.unwrap();
-        batch_update_books_column(&mut tx, "page_count", &[(1, 10), (2, 20), (3, 30)])
-            .await
-            .unwrap();
+        batch_update_books_column(
+            &mut tx,
+            BooksColumn::PageCount,
+            &[(1, 10), (2, 20), (3, 30)],
+        )
+        .await
+        .unwrap();
         tx.commit().await.unwrap();
 
         for (id, expected) in [(1, 10), (2, 20), (3, 30)] {
