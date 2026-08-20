@@ -24,7 +24,7 @@ fn default_user_agent_carries_the_crate_version_and_project_url() {
         agent.starts_with(&format!("omnibus/{}", env!("CARGO_PKG_VERSION"))),
         "unexpected user agent: {agent}"
     );
-    assert!(agent.contains("https://github.com/sloansa/omnibus"));
+    assert!(agent.contains("https://github.com/seamus-sloan/omnibus"));
 }
 
 #[test]
