@@ -8,6 +8,7 @@
 //! un-collapsed — right for the metadata editor's edition picker.
 
 mod config;
+mod cover;
 mod hydrate;
 mod providers;
 mod search;
@@ -16,6 +17,7 @@ mod search;
 mod tests;
 
 pub use config::{MetadataLookupConfig, ProviderKeys};
+pub use cover::{provider_cover_image_config, MAX_COVER_REDIRECTS};
 pub use hydrate::hydrate_edition;
 pub use providers::{all_cover_hosts, catalog, cover_hosts, openlibrary_enrich, OlEnrichment};
 pub use search::{search_all_providers, FANOUT_PROVIDER_LIMIT};

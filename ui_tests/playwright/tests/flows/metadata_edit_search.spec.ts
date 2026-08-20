@@ -716,3 +716,141 @@ test.describe
       await page.getByTestId("me-discard").click();
     });
   }); // test.describe.serial
+
+// ---------------------------------------------------------------------------
+// #1663 — the cover row: the one field that writes immediately
+// ---------------------------------------------------------------------------
+//
+// The apply is stubbed at `/cover/from-url` rather than let through: the real
+// route fetches the provider URL server-side, and this suite must never reach
+// a live provider host. The gates it applies (host allowlist, https-only,
+// redirect re-checking, size cap, magic bytes) are covered where they live,
+// in `server/src/backend/overrides/tests/cover_from_url.rs`.
+
+const COVER_FROM_URL = "**/api/ebooks/*/cover/from-url";
+
+test.describe
+  .serial("metadata edit cover row", () => {
+    test("offers the source's cover with an arrow labelled as an immediate change", async ({
+      page,
+      request,
+    }) => {
+      const uuid = await fetchBookIdByTitle(request, TARGET.title);
+      await openPicker(page, uuid);
+      await mockSearch(page, FOUND);
+      await runSearch(page);
+      await page.getByTestId("mes-candidate-1").click();
+
+      const row = page.getByTestId("mes-row-cover");
+      await expect(row).toBeVisible();
+      await expect(
+        page.getByTestId("mes-row-cover-source").locator("img"),
+      ).toBeVisible();
+      // The row says so in words, not only in behaviour: this one doesn't wait
+      // for Save the way every other row does.
+      await expect(page.getByTestId("mes-row-cover-note")).toHaveText(
+        "applies immediately · not staged with the rest",
+      );
+      await expect(page.getByTestId("mes-row-cover-apply")).toHaveAttribute(
+        "aria-label",
+        /saves immediately/,
+      );
+    });
+
+    test("cannot apply a cover the source does not have", async ({
+      page,
+      request,
+    }) => {
+      const uuid = await fetchBookIdByTitle(request, TARGET.title);
+      await openPicker(page, uuid);
+      await mockSearch(page, {
+        ...FOUND,
+        editions: [{ ...OL_CANDIDATE, cover_url: null }],
+      });
+      await runSearch(page);
+      await page.getByTestId("mes-candidate-0").click();
+
+      await expect(page.getByTestId("mes-row-cover-source")).toHaveText("—");
+      await expect(page.getByTestId("mes-row-cover-apply")).toBeDisabled();
+    });
+
+    test("applying the source's cover writes immediately and reports it", async ({
+      page,
+      request,
+    }) => {
+      const uuid = await fetchBookIdByTitle(request, TARGET.title);
+      await openPicker(page, uuid);
+      await page.route(COVER_FROM_URL, async (route) => {
+        if (route.request().method() !== "POST") return route.continue();
+        // Echo the book back with the override flag the real handler sets.
+        const resp = await request.get(`/api/ebooks/${uuid}`);
+        const book = (await resp.json()) as Record<string, unknown>;
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ...book, has_cover_override: true }),
+        });
+      });
+      await mockSearch(page, FOUND);
+      await runSearch(page);
+      await page.getByTestId("mes-candidate-1").click();
+
+      await expectMutation(
+        page,
+        {
+          method: "POST",
+          url: new RegExp(`/api/ebooks/${uuid}/cover/from-url$`),
+          expectedBody: { url: PIXEL },
+          expectedStatus: 200,
+        },
+        async () => page.getByTestId("mes-row-cover-apply").click(),
+      );
+
+      await expect(page.getByTestId("mes-row-cover-note")).toHaveText(
+        "Cover updated.",
+      );
+      // Immediate, not staged: the save bar never noticed.
+      await expect(page.getByTestId("me-save")).toBeDisabled();
+      // And the sidebar follows the write without a reload — the revert
+      // affordance appears because the book now carries a cover override.
+      await expect(page.getByTestId("cover-remove-override")).toBeVisible();
+      await expect(page.getByTestId("cover-hint")).toHaveText("custom upload");
+    });
+
+    test("surfaces a refused cover without changing anything", async ({
+      page,
+      request,
+    }) => {
+      const uuid = await fetchBookIdByTitle(request, TARGET.title);
+      await openPicker(page, uuid);
+      await page.route(COVER_FROM_URL, (route) =>
+        route.request().method() === "POST"
+          ? route.fulfill({
+              status: 400,
+              contentType: "text/plain",
+              body: "host is not an allowed source: evil.example",
+            })
+          : route.continue(),
+      );
+      await mockSearch(page, FOUND);
+      await runSearch(page);
+      await page.getByTestId("mes-candidate-1").click();
+
+      await expectMutation(
+        page,
+        {
+          method: "POST",
+          url: new RegExp(`/api/ebooks/${uuid}/cover/from-url$`),
+          expectedStatus: 400,
+        },
+        async () => page.getByTestId("mes-row-cover-apply").click(),
+      );
+
+      await expect(page.getByTestId("mes-row-cover-note")).toContainText(
+        "Couldn't apply that cover",
+      );
+      // Nothing changed: no override, no staged edit.
+      await expect(page.getByTestId("cover-remove-override")).toHaveCount(0);
+      await expect(page.getByTestId("me-save")).toBeDisabled();
+    });
+  });

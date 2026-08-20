@@ -469,12 +469,13 @@ fn search_router(limiter: Arc<RateLimiter>) -> Router<AppState> {
 /// Per-IP rate-limited router for the binary-upload endpoints. Mirrors
 /// [`search_router`]: a dedicated sub-router carrying its own
 /// `Arc<RateLimiter>` via `from_fn_with_state` (state that doesn't propagate
-/// to the handlers), merged into [`super::rest_router`]. The three routes —
-/// cover `POST`, author-photo `PUT`, author-photo-URL `PUT` — each accept a
-/// multi-MiB payload and drive disk I/O, WebP transcoding, and SQLite
-/// writes, so they share a per-IP budget. The `GET`/`DELETE` author-photo
-/// routes carry no upload body (DELETE mutates but cheaply), so they stay
-/// in `rest_router`, outside this limiter.
+/// to the handlers), merged into [`super::rest_router`]. Its routes — cover
+/// `POST`, cover from-URL `POST`, journal image, avatar, author-photo `PUT`,
+/// author-photo-URL `PUT` — each accept a multi-MiB payload or drive an
+/// outbound fetch, on top of disk I/O, WebP transcoding, and SQLite writes,
+/// so they share a per-IP budget. The `GET`/`DELETE` author-photo routes
+/// carry no upload body (DELETE mutates but cheaply), so they stay in
+/// `rest_router`, outside this limiter.
 fn upload_router() -> Router<AppState> {
     let limiter = Arc::new(RateLimiter::with_policy(
         super::UPLOAD_RATE_LIMIT_WINDOW,
@@ -484,6 +485,12 @@ fn upload_router() -> Router<AppState> {
         .route(
             "/api/ebooks/{uuid}/cover",
             post(overrides::post_ebook_cover),
+        )
+        // No upload body, but the only override route that spends an
+        // *outbound* fetch — which is the cost this limiter is really for.
+        .route(
+            "/api/ebooks/{uuid}/cover/from-url",
+            post(overrides::post_ebook_cover_from_url),
         )
         .route("/api/journals/images", post(journals::post_journal_image))
         .route("/api/account/avatar", post(profile::post_avatar))

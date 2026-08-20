@@ -6733,6 +6733,36 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   color: var(--ink-0);
 }
 .mes-compare-apply[disabled] { opacity: 0.35; cursor: not-allowed; }
+/* The cover row: the one row that writes on click, so it carries its own
+   note and spans the grid's four columns with a fifth line beneath. */
+.mes-cover-row {
+  grid-template-areas:
+    "label yours arrow theirs"
+    "note note note note";
+  align-items: center;
+  padding: 10px 0;
+}
+.mes-cover-row .mes-compare-label { grid-area: label; }
+.mes-cover-row .mes-cover-cell:first-of-type { grid-area: yours; }
+.mes-cover-row .mes-compare-apply { grid-area: arrow; }
+.mes-cover-row .mes-cover-cell:last-of-type { grid-area: theirs; }
+.mes-cover-note {
+  grid-area: note;
+  font-size: 11px;
+  color: var(--ink-3);
+  padding-top: 6px;
+}
+.mes-cover-cell { display: flex; }
+.mes-cover-thumb { width: 52px; }
+.mes-cover-img,
+.mes-cover-thumb :is(img, .cover-plate) {
+  width: 52px;
+  height: 78px;
+  object-fit: cover;
+  display: block;
+  background: var(--bg-2);
+}
+
 .mes-compare-row-matched .mes-compare-apply {
   border-color: color-mix(in oklch, var(--accent) 45%, transparent);
   color: var(--accent);

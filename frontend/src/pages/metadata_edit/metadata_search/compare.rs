@@ -5,12 +5,15 @@
 //! Every row comes from iterating [`MetadataField::ALL`] — see
 //! [`super::field`] for why that matters. Applying only *stages* into the
 //! edit form's own signals; the page's save bar stays the single writer, so
-//! dirty tracking and validation keep working untouched.
+//! dirty tracking and validation keep working untouched. The **cover is the
+//! one exception** — it cannot stage, so it writes immediately and says so;
+//! see [`super::cover_row`].
 
 use dioxus::prelude::*;
-use omnibus_shared::metadata_lookup::ProviderEdition;
+use omnibus_shared::{metadata_lookup::ProviderEdition, EbookMetadata};
 
 use super::super::form_grid::FormFields;
+use super::cover_row::CoverRow;
 use super::field::MetadataField;
 use super::sources::provider_slug;
 
@@ -23,8 +26,11 @@ const EMPTY: &str = "\u{2014}";
 pub(super) fn ComparePanel(
     edition: ProviderEdition,
     fields: FormFields,
+    uuid: String,
+    book: EbookMetadata,
     hydrating: bool,
     on_back: EventHandler<()>,
+    on_cover_applied: EventHandler<EbookMetadata>,
 ) -> Element {
     rsx! {
         div { class: "mes-compare", "data-testid": "mes-compare",
@@ -49,7 +55,14 @@ pub(super) fn ComparePanel(
                 }
             }
             TakeAll { edition: edition.clone(), fields, hydrating }
-            CompareRows { edition: edition.clone(), fields, hydrating }
+            CompareRows {
+                edition: edition.clone(),
+                fields,
+                uuid,
+                book,
+                hydrating,
+                on_cover_applied,
+            }
         }
     }
 }
@@ -92,7 +105,14 @@ fn TakeAll(edition: ProviderEdition, fields: FormFields, hydrating: bool) -> Ele
 
 /// The header row plus one [`CompareRow`] per field.
 #[component]
-fn CompareRows(edition: ProviderEdition, fields: FormFields, hydrating: bool) -> Element {
+fn CompareRows(
+    edition: ProviderEdition,
+    fields: FormFields,
+    uuid: String,
+    book: EbookMetadata,
+    hydrating: bool,
+    on_cover_applied: EventHandler<EbookMetadata>,
+) -> Element {
     let source_name = edition.source.display_name();
     rsx! {
         div { class: "mes-compare-grid", "data-testid": "mes-compare-grid",
@@ -101,6 +121,15 @@ fn CompareRows(edition: ProviderEdition, fields: FormFields, hydrating: bool) ->
                 span { class: "mes-compare-col", "Yours" }
                 span { class: "mes-compare-col", "" }
                 span { class: "mes-compare-col", "{source_name}" }
+            }
+            // First, and set apart: it is the only row that writes.
+            CoverRow {
+                uuid,
+                book,
+                edition: edition.clone(),
+                source_name,
+                hydrating,
+                on_applied: on_cover_applied,
             }
             for field in MetadataField::ALL.iter().copied() {
                 CompareRow {

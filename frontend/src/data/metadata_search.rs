@@ -6,6 +6,7 @@
 use omnibus_shared::metadata_lookup::{
     EditionSearchResponse, MetadataProvider, ProviderEdition, ProviderInfo,
 };
+use omnibus_shared::EbookMetadata;
 
 #[cfg(not(feature = "mobile"))]
 use super::note_server_fn_err;
@@ -70,4 +71,57 @@ pub async fn hydrate_edition(
     _isbn13: &str,
 ) -> Result<Option<ProviderEdition>, DataError> {
     Err(DataError::Other("edition search is web-only".into()))
+}
+
+/// Web: apply a provider's cover by URL — `POST /api/ebooks/{uuid}/cover/from-url`.
+///
+/// Straight to REST via `gloo-net`, like the neighbouring cover calls in
+/// `data::books::manage`, rather than through a server function: the write
+/// path (fetch → sniff → `persist_cover` → thumbnail invalidation) lives in
+/// the REST handler, and a server-fn analogue would have to repeat it.
+///
+/// `Ok(None)` when the book is gone; every refusal is an `Err` carrying the
+/// server's own message, because each one names a different thing the reader
+/// or the source did wrong.
+#[cfg(feature = "web")]
+pub async fn apply_cover_from_url(
+    _server_url: &str,
+    uuid: &str,
+    url: &str,
+) -> Result<Option<EbookMetadata>, DataError> {
+    use gloo_net::http::Request;
+
+    let res = Request::post(&format!("/api/ebooks/{uuid}/cover/from-url"))
+        .json(&serde_json::json!({ "url": url }))
+        .map_err(|e| DataError::Other(e.to_string()))?
+        .send()
+        .await
+        .map_err(|e| DataError::Other(e.to_string()))?;
+    if res.status() == 401 {
+        crate::data::web_auth_state::notify_unauthorized();
+        return Err(DataError::Unauthorized);
+    }
+    if res.status() == 404 {
+        return Ok(None);
+    }
+    if !res.ok() {
+        let status = res.status();
+        let body = res.text().await.unwrap_or_default();
+        return Err(DataError::Http { status, body });
+    }
+    res.json::<EbookMetadata>()
+        .await
+        .map(Some)
+        .map_err(|e| DataError::Other(e.to_string()))
+}
+
+/// Non-web stub. The compare view's cover row is a web-only surface, and its
+/// apply only fires from a click that never happens under SSR or on mobile.
+#[cfg(not(feature = "web"))]
+pub async fn apply_cover_from_url(
+    _server_url: &str,
+    _uuid: &str,
+    _url: &str,
+) -> Result<Option<EbookMetadata>, DataError> {
+    Err(DataError::Other("applying a cover is web-only".into()))
 }

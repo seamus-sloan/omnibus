@@ -49,11 +49,23 @@ pub(super) fn FormGrid(
     fields: FormFields,
     suggestions: FormSuggestions,
     uuid: String,
+    /// The book as the server last reported it — the compare view's cover
+    /// row needs the current cover to show beside the source's.
+    book: EbookMetadata,
+    /// Fires with the merged book after the cover row writes one, so the
+    /// sidebar's preview and its "revert" affordance stay in step without a
+    /// reload.
+    on_cover_applied: EventHandler<EbookMetadata>,
 ) -> Element {
     rsx! {
         div { class: "me-form",
             HardcoverFetchPanel { uuid: uuid.clone(), fields }
-            MetadataSearchPanel { fields }
+            MetadataSearchPanel {
+                fields,
+                uuid: uuid.clone(),
+                book,
+                on_cover_applied,
+            }
             FieldGrid { orig, fields, suggestions, uuid }
             TagsSection { tags: fields.tags, tag_suggestions: suggestions.tags }
             GenresSection { genres: fields.genres, genre_suggestions: suggestions.genres }

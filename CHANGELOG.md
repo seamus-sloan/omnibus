@@ -37,6 +37,14 @@ recent releases are recorded below; everything earlier is available via the
   the form's own Save is still what writes them — and a field the source has
   no value for cannot be applied, so a provider that doesn't know a field can
   never blank out one you already have (#1662)
+- The compare view's cover row applies the source's cover art. Unlike every
+  other row it writes immediately — the browser can't fetch a provider's image
+  cross-origin, so the server does — and says so; the new cover appears on the
+  edit page, the detail page, and the grid without a reload, and "revert to
+  scanned cover" still works afterwards. The server only fetches from hosts
+  the provider catalog publishes, over HTTPS, re-checking every redirect hop,
+  with a size cap and an image-format check before anything is written
+  (#1663)
 
 ### Fixed
 

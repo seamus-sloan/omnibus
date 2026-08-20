@@ -9,12 +9,14 @@
 
 use dioxus::prelude::*;
 use omnibus_shared::metadata_lookup::{EditionSearchResponse, ProviderEdition};
+use omnibus_shared::EbookMetadata;
 
 use super::form_grid::FormFields;
 use crate::{data, use_server_url};
 
 mod candidates;
 mod compare;
+mod cover_row;
 mod field;
 mod sources;
 
@@ -88,7 +90,12 @@ fn compose_query(title: &str, author: Option<&str>) -> String {
 /// source is usable — offering a search that could only fail is worse than
 /// not offering one.
 #[component]
-pub(super) fn MetadataSearchPanel(fields: FormFields) -> Element {
+pub(super) fn MetadataSearchPanel(
+    fields: FormFields,
+    uuid: String,
+    book: EbookMetadata,
+    on_cover_applied: EventHandler<EbookMetadata>,
+) -> Element {
     let server_url = use_server_url();
     let mut available = use_signal(|| false);
     // Declared ahead of the availability gate, unconditionally: a hook count
@@ -119,7 +126,7 @@ pub(super) fn MetadataSearchPanel(fields: FormFields) -> Element {
         div { class: "mes-panel", "data-testid": "metadata-search",
             OpenButton { state }
             if (state.open)() {
-                PickerBody { state, fields, server_url }
+                PickerBody { state, fields, uuid, book, server_url, on_cover_applied }
             }
         }
     }
@@ -145,7 +152,14 @@ fn OpenButton(state: PickerState) -> Element {
 /// The opened panel: the query row, then either the compare view for a
 /// selected candidate or the results for the last search.
 #[component]
-fn PickerBody(state: PickerState, fields: FormFields, server_url: String) -> Element {
+fn PickerBody(
+    state: PickerState,
+    fields: FormFields,
+    uuid: String,
+    book: EbookMetadata,
+    server_url: String,
+    on_cover_applied: EventHandler<EbookMetadata>,
+) -> Element {
     let on_search = search_handler(state, server_url.clone());
     let on_select = select_handler(state, server_url);
     let mut selected = state.selected;
@@ -157,8 +171,11 @@ fn PickerBody(state: PickerState, fields: FormFields, server_url: String) -> Ele
                 ComparePanel {
                     edition,
                     fields,
+                    uuid,
+                    book,
                     hydrating: (state.hydrating)(),
                     on_back: move |()| selected.set(None),
+                    on_cover_applied,
                 }
             } else {
                 Results { state, on_select }

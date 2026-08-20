@@ -81,6 +81,11 @@ pub fn MetadataEditPage(uuid: String) -> Element {
 fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
     let server_url = use_server_url();
     let form = state::use_metadata_edit_form_state(&book, &uuid, &server_url);
+    // The book as the server last reported it. Distinct from `form.orig`,
+    // which is the frozen dirty-tracking baseline: this one moves when a
+    // write lands outside the save bar — today only a cover, which is the one
+    // edit on this page that doesn't wait for Save.
+    let mut live_book = use_signal(|| book.clone());
 
     rsx! {
         div { class: "me-root", style: "{form.accent_style}",
@@ -101,9 +106,11 @@ fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
                     fields: form.fields,
                     suggestions: form.suggestions,
                     uuid: uuid.clone(),
+                    book: live_book(),
+                    on_cover_applied: move |updated| live_book.set(updated),
                 }
                 Sidebar {
-                    book: book.clone(),
+                    book: live_book(),
                     saving: form.status.saving,
                     on_revert: form.on_revert,
                 }
