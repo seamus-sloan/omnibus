@@ -152,6 +152,14 @@ async fn upsert_link_returns_book_not_found_for_unknown_uuid() {
 }
 
 #[tokio::test]
+async fn get_link_propagates_db_error_when_pool_is_closed() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    pool.close().await;
+    let err = get_link(&pool, 1, "some-uuid").await;
+    assert!(matches!(err, Err(CrossFormatError::Sqlx(_))));
+}
+
+#[tokio::test]
 async fn link_is_stale_flips_when_the_audio_file_set_changes() {
     let pool = init_db("sqlite::memory:").await.unwrap();
     let user = seed_user(&pool, "alice").await;

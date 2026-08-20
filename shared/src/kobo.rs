@@ -28,3 +28,43 @@ pub fn kobo_device_name_invalid(name: &str) -> bool {
     let trimmed = name.trim();
     trimmed.is_empty() || trimmed.len() > KOBO_DEVICE_NAME_MAX_LEN
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kobo_device_name_invalid_accepts_a_reasonable_label() {
+        assert!(!kobo_device_name_invalid("Kobo Clara"));
+    }
+
+    #[test]
+    fn kobo_device_name_invalid_rejects_an_empty_name() {
+        assert!(kobo_device_name_invalid(""));
+    }
+
+    #[test]
+    fn kobo_device_name_invalid_rejects_a_whitespace_only_name() {
+        assert!(kobo_device_name_invalid("   \t\n  "));
+    }
+
+    #[test]
+    fn kobo_device_name_invalid_rejects_a_name_over_the_max_length() {
+        let name = "x".repeat(KOBO_DEVICE_NAME_MAX_LEN + 1);
+        assert!(kobo_device_name_invalid(&name));
+    }
+
+    #[test]
+    fn kobo_device_name_invalid_accepts_a_name_exactly_at_the_max_length() {
+        let name = "x".repeat(KOBO_DEVICE_NAME_MAX_LEN);
+        assert!(!kobo_device_name_invalid(&name));
+    }
+
+    #[test]
+    fn kobo_device_name_invalid_trims_surrounding_whitespace_before_checking_length() {
+        // Padding that would push the raw length over the cap should not
+        // matter once trimmed.
+        let padded = format!("  {}  ", "x".repeat(KOBO_DEVICE_NAME_MAX_LEN));
+        assert!(!kobo_device_name_invalid(&padded));
+    }
+}
