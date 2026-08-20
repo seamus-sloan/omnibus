@@ -1,9 +1,8 @@
 //! The catalog's capability flags checked against what the parsers actually
-//! do. A flag is a promise the picker builds columns from, so a provider that
-//! advertises a field it never fills would render a permanently blank column —
-//! and one that fills a field it doesn't advertise would have that column
-//! hidden. Both directions are asserted here, per provider, off one fan-out
-//! against fixtures that carry every field.
+//! do, both directions: a flag that outruns its parser renders a permanently
+//! blank column in the picker, and a parser that outruns its flag has its
+//! column hidden. Asserted per provider, off one fan-out against fixtures
+//! that carry every field.
 
 use omnibus_shared::metadata_lookup::MetadataProvider;
 use serde_json::json;
