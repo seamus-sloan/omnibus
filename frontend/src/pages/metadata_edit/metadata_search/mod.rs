@@ -15,6 +15,7 @@ use crate::{data, use_server_url};
 
 mod candidates;
 mod compare;
+mod field;
 mod sources;
 
 use candidates::CandidateList;
@@ -118,7 +119,7 @@ pub(super) fn MetadataSearchPanel(fields: FormFields) -> Element {
         div { class: "mes-panel", "data-testid": "metadata-search",
             OpenButton { state }
             if (state.open)() {
-                PickerBody { state, server_url }
+                PickerBody { state, fields, server_url }
             }
         }
     }
@@ -144,7 +145,7 @@ fn OpenButton(state: PickerState) -> Element {
 /// The opened panel: the query row, then either the compare view for a
 /// selected candidate or the results for the last search.
 #[component]
-fn PickerBody(state: PickerState, server_url: String) -> Element {
+fn PickerBody(state: PickerState, fields: FormFields, server_url: String) -> Element {
     let on_search = search_handler(state, server_url.clone());
     let on_select = select_handler(state, server_url);
     let mut selected = state.selected;
@@ -155,6 +156,7 @@ fn PickerBody(state: PickerState, server_url: String) -> Element {
             if let Some(edition) = selected() {
                 ComparePanel {
                     edition,
+                    fields,
                     hydrating: (state.hydrating)(),
                     on_back: move |()| selected.set(None),
                 }

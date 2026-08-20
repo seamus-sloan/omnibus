@@ -31,6 +31,12 @@ recent releases are recorded below; everything earlier is available via the
   status line so a provider being unreachable never reads as "no results".
   Selecting an edition opens it in a compare view, re-fetched in full from the
   source it came from (#1661)
+- Side-by-side compare on the metadata edit page: your value and the source's,
+  one row per field, with an arrow on each row that copies that field into the
+  form and a "take everything from this source" shortcut. Copies are staged —
+  the form's own Save is still what writes them — and a field the source has
+  no value for cannot be applied, so a provider that doesn't know a field can
+  never blank out one you already have (#1662)
 
 ### Fixed
 
