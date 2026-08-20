@@ -1,7 +1,13 @@
-//! SSRF-guarded remote image fetch for admin "paste URL" uploads. Resolves
-//! the target host, blocks private/loopback/cloud-metadata address ranges
-//! before any TCP connect, then pins `reqwest` to the validated addresses so
-//! DNS rebinding cannot substitute a blocked IP after the check.
+//! The SSRF-guarded remote image fetch — the **only** one in this workspace.
+//! Resolves the target host, blocks private/loopback/cloud-metadata address
+//! ranges before any TCP connect, then pins `reqwest` to the validated
+//! addresses so DNS rebinding cannot substitute a blocked IP after the check.
+//!
+//! Two callers with different terms, one implementation: the admin "paste
+//! URL" photo upload takes it as-is, and the provider-cover apply tightens it
+//! through [`RemoteImageConfig`] (host allowlist, HTTPS-only, a bounded
+//! redirect follow). A second fetcher for the second caller is the thing this
+//! module exists to prevent.
 
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
@@ -351,7 +357,11 @@ async fn send_one(
 
 /// The next URL to fetch, from a 3xx response — re-parsed, re-gated, and
 /// resolved relative to the hop it came from.
-fn next_hop(
+///
+/// `pub(super)` so the sibling test module can drive it directly: the per-hop
+/// scheme recheck cannot be reached end-to-end from a `wiremock` origin,
+/// which is plaintext, so hop 1 would be refused before hop 2 existed.
+pub(super) fn next_hop(
     from: &reqwest::Url,
     resp: &reqwest::Response,
     config: &RemoteImageConfig,

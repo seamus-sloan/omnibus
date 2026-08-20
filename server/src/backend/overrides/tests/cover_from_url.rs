@@ -292,10 +292,10 @@ async fn api_post_cover_from_url_refuses_a_response_over_the_size_cap() {
         .is_none());
 }
 
-// ── AC7: a 5xx from the origin is the origin's fault ─────────────
+// ── AC7: what the origin did vs. what we refused ─────────────────
 
 #[tokio::test]
-async fn api_post_cover_from_url_reports_an_upstream_failure_as_a_bad_gateway() {
+async fn api_post_cover_from_url_refuses_a_5xx_from_the_origin_as_a_client_error() {
     let _covers = CoversDirGuard::new("cover_from_url_5xx");
     let (app, _state, pool) = fixture_loopback_remote_image().await;
     let (_id, uuid) = seed_book_with_uuid(&pool, "/lib", "UpstreamBook").await;
@@ -318,10 +318,47 @@ async fn api_post_cover_from_url_reports_an_upstream_failure_as_a_bad_gateway() 
         .await
         .unwrap();
     // A status we *received* is a refusal we make (400), not a transport
-    // failure — the distinction the handler draws.
+    // failure — the distinction the handler draws, and the reason this is
+    // not the 502 case below.
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
     let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
     assert!(String::from_utf8_lossy(&body).contains("503"));
+    assert!(db::get_metadata_overrides(&pool, &uuid)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn api_post_cover_from_url_reports_an_unreachable_origin_as_a_bad_gateway() {
+    // The other half of the distinction: nothing answered at all, which is
+    // not the caller's fault and must not read as one. `reqwest` returns a
+    // transport error, which the handler maps to 502.
+    let _covers = CoversDirGuard::new("cover_from_url_502");
+    let (app, _state, pool) = fixture_loopback_remote_image().await;
+    let (_id, uuid) = seed_book_with_uuid(&pool, "/lib", "UnreachableBook").await;
+    let admin = auth_test_support::create_admin(&pool, "admin").await;
+    let token = auth_test_support::bearer_token(&pool, admin.id).await;
+
+    // Bind and immediately drop, so the port is one nothing is listening on
+    // — a hard-coded port could collide with something a developer is
+    // running.
+    let dead_port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+
+    let res = app
+        .oneshot(from_url_request(
+            &uuid,
+            &token,
+            &format!("http://127.0.0.1:{dead_port}/cover.png"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+    let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    assert!(String::from_utf8_lossy(&body).contains("could not fetch"));
     assert!(db::get_metadata_overrides(&pool, &uuid)
         .await
         .unwrap()

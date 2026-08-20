@@ -782,13 +782,21 @@ test.describe
       await openPicker(page, uuid);
       await page.route(COVER_FROM_URL, async (route) => {
         if (route.request().method() !== "POST") return route.continue();
-        // Echo the book back with the override flag the real handler sets.
+        // Echo the book back with **both** flags the real handler sets: a
+        // cover override is an override row, so `has_override` flips too —
+        // and it is what the sidebar's "Override active" card reads. A stub
+        // that sets only `has_cover_override` would quietly test a weaker
+        // contract than the endpoint's.
         const resp = await request.get(`/api/ebooks/${uuid}`);
         const book = (await resp.json()) as Record<string, unknown>;
         return route.fulfill({
           status: 200,
           contentType: "application/json",
-          body: JSON.stringify({ ...book, has_cover_override: true }),
+          body: JSON.stringify({
+            ...book,
+            has_cover_override: true,
+            has_override: true,
+          }),
         });
       });
       await mockSearch(page, FOUND);
@@ -815,6 +823,9 @@ test.describe
       // affordance appears because the book now carries a cover override.
       await expect(page.getByTestId("cover-remove-override")).toBeVisible();
       await expect(page.getByTestId("cover-hint")).toHaveText("custom upload");
+      // The "Override active" card too — a different component from the cover
+      // controls above it, and the one that seeded once and never followed.
+      await expect(page.getByTestId("revert-overrides")).toBeVisible();
     });
 
     test("surfaces a refused cover without changing anything", async ({
