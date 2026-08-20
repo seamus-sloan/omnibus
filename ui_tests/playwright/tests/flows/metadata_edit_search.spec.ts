@@ -6,40 +6,36 @@ import { fetchBookIdByTitle } from "../utils/ebooks";
 import { gotoReady } from "../utils/nav";
 import { fixturesDir, seedLibrary } from "../utils/seed";
 
-// Edition picker on the metadata-edit page (#1661) and the side-by-side
-// compare view a selected candidate opens into (#1662): a search that fans
-// out to every configured provider and lists the editions they found, with a
-// per-source status area so a short list can't be mistaken for a complete
-// one. Each compare row carries an arrow that stages that field into the
-// edit form; the form's own Save is still the only thing that writes.
+// The edition picker on the metadata-edit page: a two-screen overlay that
+// searches every configured provider (#1661), shows what one source would
+// change (#1662), and applies its cover (#1663).
+//
+// The flow searches as it opens — the query is the book's own title and
+// author, so there is nothing to ask first — which is why every test installs
+// its provider mocks *before* clicking the trigger.
 //
 // Every provider response is stubbed via `page.route`. The suite must never
 // depend on a live provider or a configured key — the same reasoning
-// `metadata_edit_hardcover_fetch.spec.ts` gives, and doubly so here, since
-// the fan-out would otherwise spend three real API calls per test.
+// `metadata_edit_hardcover_fetch.spec.ts` gives, and doubly so here, since a
+// fan-out would otherwise spend three real API calls per test.
 //
 // `mathematica-minor-2` ("Minor Lemmas II", Sophie Germain) is read by no
 // other spec — see the fixture-isolation note in
-// `.claude/rules/04-playwright.md`. That reservation is load-bearing here:
-// one test below saves a real override on it and reverts it, and an
-// `afterAll` clears any override a failure left behind, so a red run can't
-// hand the next one — or the developer's own library — a mutated fixture.
-// (`author_delete.spec.ts` opens a modal on this book's author, but only
-// regex-matches a book count and cancels, so a publisher override can't
-// disturb it.)
+// `.claude/rules/04-playwright.md`. That reservation is load-bearing: one
+// test saves a real override on it and reverts it, and an `afterAll` clears
+// any override a failure left behind. (`author_delete.spec.ts` opens a modal
+// on this book's author, but only regex-matches a book count and cancels.)
 
 test.beforeAll(async ({ request }) => {
   await seedLibrary(request, fixturesDir(), FIXTURE_BOOKS.length);
 });
 
 // Unconditional: the save test reverts on its happy path, but a failure
-// between the save and the revert would otherwise leave a persistent
-// override on a shared fixture for every later run.
+// between the save and the revert would otherwise leave a persistent override
+// on a shared fixture for every later run.
 test.afterAll(async ({ request }) => {
   const uuid = await fetchBookIdByTitle(request, TARGET.title);
-  await request.post("/api/rpc/ebook/overrides/delete", {
-    data: { uuid },
-  });
+  await request.post("/api/rpc/ebook/overrides/delete", { data: { uuid } });
 });
 
 const TARGET = FIXTURE_BOOKS.find((b) => b.slug === "mathematica-minor-2")!;
@@ -47,6 +43,7 @@ const TARGET = FIXTURE_BOOKS.find((b) => b.slug === "mathematica-minor-2")!;
 const PROVIDERS_URL = "**/api/rpc/metadata/providers";
 const SEARCH_URL = "**/api/rpc/metadata/editions/search";
 const HYDRATE_URL = "**/api/rpc/metadata/editions/hydrate";
+const COVER_FROM_URL = "**/api/ebooks/*/cover/from-url";
 
 // A 1x1 transparent GIF, so a candidate row's cover renders without the
 // browser reaching a real provider host during the test.
@@ -79,28 +76,14 @@ const ALL_CONFIGURED = [
   provider("hardcover", "Hardcover", false),
 ];
 
-async function mockProviders(
-  page: Page,
-  catalog: ReturnType<typeof provider>[],
-): Promise<void> {
-  await page.route(PROVIDERS_URL, (route) =>
-    route.request().method() === "GET"
-      ? route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify(catalog),
-        })
-      : route.continue(),
-  );
-}
-
-// One candidate per source, deliberately sharing an ISBN across two of them:
-// the picker's job is to keep two sources' takes on one edition apart.
+// Two candidates sharing an ISBN across two sources: the picker's job is to
+// keep two sources' takes on one edition apart. `title` decides their order,
+// so "Aardvark…" sorts above "Zebra…" whichever provider answered first.
 const OL_CANDIDATE = {
   source: "open_library",
   provider_ref: "/works/OL42W",
   isbn13: "9781234567897",
-  title: "Minor Lemmas II (Open Library)",
+  title: "Aardvark Lemmas (Open Library)",
   authors: ["Sophie Germain"],
   year: "1815",
   pages: 212,
@@ -116,7 +99,7 @@ const GB_CANDIDATE = {
   source: "google_books",
   provider_ref: "gb-volume-7",
   isbn13: "9781234567897",
-  title: "Minor Lemmas II (Google Books)",
+  title: "Zebra Lemmas (Google Books)",
   authors: ["Sophie Germain", "Emmy Noether"],
   year: "1816",
   pages: 220,
@@ -128,26 +111,43 @@ const GB_CANDIDATE = {
   genres: [],
 };
 
-const FOUND = {
-  editions: [OL_CANDIDATE, GB_CANDIDATE],
-  sources: [
-    {
-      provider: "open_library",
-      display_name: "Open Library",
-      status: { kind: "answered", count: 1 },
-    },
-    {
-      provider: "google_books",
-      display_name: "Google Books",
-      status: { kind: "answered", count: 1 },
-    },
-    {
-      provider: "hardcover",
-      display_name: "Hardcover",
-      status: { kind: "not_configured" },
-    },
-  ],
-};
+const SOURCES = [
+  {
+    provider: "open_library",
+    display_name: "Open Library",
+    status: { kind: "answered", count: 1 },
+  },
+  {
+    provider: "google_books",
+    display_name: "Google Books",
+    status: { kind: "answered", count: 1 },
+  },
+  {
+    provider: "hardcover",
+    display_name: "Hardcover",
+    status: { kind: "not_configured" },
+  },
+];
+
+// Deliberately provider-first order, the shape the fan-out actually returns —
+// so a test asserting row order is asserting the client's sort, not the
+// server's concatenation.
+const FOUND = { editions: [GB_CANDIDATE, OL_CANDIDATE], sources: SOURCES };
+
+async function mockProviders(
+  page: Page,
+  catalog: ReturnType<typeof provider>[],
+): Promise<void> {
+  await page.route(PROVIDERS_URL, (route) =>
+    route.request().method() === "GET"
+      ? route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(catalog),
+        })
+      : route.continue(),
+  );
+}
 
 async function mockSearch(page: Page, body: unknown): Promise<void> {
   await page.route(SEARCH_URL, (route) =>
@@ -173,8 +173,8 @@ async function failSearch(page: Page): Promise<void> {
   );
 }
 
-/** Hydrate answers `null` unless a test says otherwise — the picker keeps
- * the candidate it already has, which is the behaviour most tests want. */
+/** Hydrate answers `null` unless a test says otherwise — the picker keeps the
+ * candidate it already has, which is what most tests want. */
 async function mockHydrate(page: Page, body: unknown = null): Promise<void> {
   await page.route(HYDRATE_URL, (route) =>
     route.request().method() === "POST"
@@ -187,74 +187,104 @@ async function mockHydrate(page: Page, body: unknown = null): Promise<void> {
   );
 }
 
-/** Open the picker on `uuid`'s edit page with the given provider catalog. */
-async function openPicker(
-  page: Page,
-  uuid: string,
-  catalog = ALL_CONFIGURED,
-): Promise<void> {
-  await mockProviders(page, catalog);
-  await mockHydrate(page);
+/** Open the overlay and wait out the search it fires on open. */
+async function openPicker(page: Page, uuid: string): Promise<void> {
   await gotoReady(page, `/books/${uuid}/edit`);
-  await page.getByTestId("metadata-search-btn").click();
-}
-
-/** Run the search and await its response, so DOM assertions don't race the
- * network (per `.claude/rules/04-playwright.md`). */
-async function runSearch(page: Page): Promise<void> {
   const searched = page.waitForResponse(
     (r) =>
       r.url().includes("/api/rpc/metadata/editions/search") &&
       r.request().method() === "POST",
   );
-  await page.getByTestId("mes-search").click();
+  await page.getByTestId("metadata-search-btn").click();
   await searched;
 }
 
-// One test below saves an override on the fixture book and reverts it; every
-// other test looks the book up by its original title. `describe.serial` pins
-// them to one worker (the same reasoning `metadata_edit.spec.ts` gives) so a
-// save can never be mid-flight while another test reads the book.
+/** Open the overlay on the results screen with every provider configured. */
+async function openResults(page: Page, uuid: string): Promise<void> {
+  await mockProviders(page, ALL_CONFIGURED);
+  await mockHydrate(page);
+  await mockSearch(page, FOUND);
+  await openPicker(page, uuid);
+  await expect(page.getByTestId("mes-candidates")).toBeVisible();
+}
+
+/** Open the compare screen for the Google Books candidate, which answers for
+ * a description and a publisher but has no series. */
+async function openCompare(page: Page, uuid: string): Promise<void> {
+  await openResults(page, uuid);
+  // Sorted by title, so Google Books' "Zebra…" is the second row whichever
+  // order the fan-out returned them in.
+  await page.getByTestId("mes-candidate-1").click();
+  await expect(page.getByTestId("mes-compare")).toBeVisible();
+}
+
 test.describe
   .serial("metadata edit edition picker", () => {
-    // ---------------------------------------------------------------------------
-    // AC1 — layout: the entry point exists and the panel opens prefilled
-    // ---------------------------------------------------------------------------
+    // -------------------------------------------------------------------------
+    // Layout — the trigger, and an overlay that arrives at answers
+    // -------------------------------------------------------------------------
 
-    test("renders the edition-search entry point and opens prefilled from the book", async ({
+    test("opens an overlay that has already searched for this book", async ({
       page,
       request,
     }) => {
       const uuid = await fetchBookIdByTitle(request, TARGET.title);
       await mockProviders(page, ALL_CONFIGURED);
+      await mockHydrate(page);
+      await mockSearch(page, FOUND);
       await gotoReady(page, `/books/${uuid}/edit`);
 
-      const open = page.getByTestId("metadata-search-btn");
-      await expect(open).toBeVisible();
-      await expect(open).toHaveAttribute("aria-expanded", "false");
+      const trigger = page.getByTestId("metadata-search-btn");
+      await expect(trigger).toBeVisible();
+      await expect(page.getByTestId("metadata-search")).toHaveCount(0);
 
-      await open.click();
-      await expect(open).toHaveAttribute("aria-expanded", "true");
+      const searched = page.waitForResponse(
+        (r) =>
+          r.url().includes("/api/rpc/metadata/editions/search") &&
+          r.request().method() === "POST",
+      );
+      await trigger.click();
+      await searched;
+
+      // Prefilled from the book, and already run — the reader lands on results,
+      // not on a form asking the question they just asked.
+      await expect(page.getByTestId("metadata-search")).toBeVisible();
       await expect(page.getByTestId("mes-query")).toHaveValue(
         `${TARGET.title} ${TARGET.authors[0]}`,
       );
-      await expect(page.getByTestId("mes-search")).toBeEnabled();
+      await expect(page.getByTestId("mes-candidates")).toBeVisible();
     });
 
-    // ---------------------------------------------------------------------------
-    // AC2 — candidates from multiple sources, each carrying its own attribution
-    // ---------------------------------------------------------------------------
-
-    test("lists a candidate per source with cover, title, authors, imprint, and origin", async ({
+    test("closes on the close button and on a click outside", async ({
       page,
       request,
     }) => {
       const uuid = await fetchBookIdByTitle(request, TARGET.title);
-      await openPicker(page, uuid);
-      await mockSearch(page, FOUND);
-      await runSearch(page);
+      await openResults(page, uuid);
 
-      await expect(page.getByTestId("mes-candidates")).toBeVisible();
+      await page.getByTestId("mes-close").click();
+      await expect(page.getByTestId("metadata-search")).toHaveCount(0);
+
+      await page.getByTestId("metadata-search-btn").click();
+      await expect(page.getByTestId("metadata-search")).toBeVisible();
+      // The scrim, not the panel — clicking the card itself must not dismiss.
+      await page
+        .getByTestId("metadata-search-scrim")
+        .click({ position: { x: 5, y: 5 } });
+      await expect(page.getByTestId("metadata-search")).toHaveCount(0);
+    });
+
+    // -------------------------------------------------------------------------
+    // Results — attributed candidates in an order the providers don't decide
+    // -------------------------------------------------------------------------
+
+    test("lists a candidate per source with cover, title, authors, and origin", async ({
+      page,
+      request,
+    }) => {
+      const uuid = await fetchBookIdByTitle(request, TARGET.title);
+      await openResults(page, uuid);
+
       await expect(page.getByTestId("mes-candidate-0-title")).toHaveText(
         OL_CANDIDATE.title,
       );
@@ -275,32 +305,39 @@ test.describe
       await expect(page.getByTestId("mes-candidate-1-title")).toHaveText(
         GB_CANDIDATE.title,
       );
-      await expect(page.getByTestId("mes-candidate-1-authors")).toHaveText(
-        "Sophie Germain, Emmy Noether",
+      await expect(page.getByTestId("mes-candidate-1-source")).toHaveText(
+        "Google Books",
+      );
+    });
+
+    test("orders candidates by the editions themselves, not by who answered", async ({
+      page,
+      request,
+    }) => {
+      const uuid = await fetchBookIdByTitle(request, TARGET.title);
+      // The stub returns Google Books first; the list must still lead with the
+      // title that sorts first, so a provider being slow or newly configured
+      // can't reshuffle the rows under the reader.
+      await openResults(page, uuid);
+      await expect(page.getByTestId("mes-candidate-0-source")).toHaveText(
+        "Open Library",
       );
       await expect(page.getByTestId("mes-candidate-1-source")).toHaveText(
         "Google Books",
       );
     });
 
-    // ---------------------------------------------------------------------------
-    // AC3 — the four per-source outcomes read differently
-    // ---------------------------------------------------------------------------
-
-    test("distinguishes answered, empty, not-configured, and failed sources", async ({
+    test("says what every source contributed, including the ones that didn't", async ({
       page,
       request,
     }) => {
       const uuid = await fetchBookIdByTitle(request, TARGET.title);
-      await openPicker(page, uuid);
+      await mockProviders(page, ALL_CONFIGURED);
+      await mockHydrate(page);
       await mockSearch(page, {
         editions: [OL_CANDIDATE],
         sources: [
-          {
-            provider: "open_library",
-            display_name: "Open Library",
-            status: { kind: "answered", count: 1 },
-          },
+          SOURCES[0],
           {
             provider: "google_books",
             display_name: "Google Books",
@@ -313,132 +350,51 @@ test.describe
           },
         ],
       });
-      await runSearch(page);
+      await openPicker(page, uuid);
 
+      // Four outcomes, four distinct reads — a short list has several causes
+      // and they are not interchangeable.
       await expect(page.getByTestId("mes-source-open-library")).toHaveText(
-        "Open Library—1 edition",
+        "Open Library 1",
       );
       await expect(page.getByTestId("mes-source-google-books")).toHaveText(
-        "Google Books—no matches",
+        "Google Books nothing",
       );
       const failed = page.getByTestId("mes-source-hardcover");
-      await expect(failed).toHaveText("Hardcover—unavailable");
-      // The provider's own message is available without turning the list into an
+      await expect(failed).toHaveText("Hardcover unavailable");
+      // The provider's own message is available without the line becoming an
       // error log.
       await expect(failed).toHaveAttribute("title", "request timed out");
     });
 
-    test("reports a provider this instance has no key for as not configured", async ({
+    test("reports a provider this instance has no key for as not set up", async ({
       page,
       request,
     }) => {
       const uuid = await fetchBookIdByTitle(request, TARGET.title);
-      await openPicker(page, uuid);
-      await mockSearch(page, FOUND);
-      await runSearch(page);
-
-      // Distinct from both "no matches" and "unavailable" above.
+      await openResults(page, uuid);
       await expect(page.getByTestId("mes-source-hardcover")).toHaveText(
-        "Hardcover—not configured",
+        "Hardcover not set up",
       );
     });
-
-    // ---------------------------------------------------------------------------
-    // AC4 — error path: the search fails, the form is untouched
-    // ---------------------------------------------------------------------------
 
     test("surfaces a search failure and leaves the form values alone", async ({
       page,
       request,
     }) => {
       const uuid = await fetchBookIdByTitle(request, TARGET.title);
-      await openPicker(page, uuid);
+      await mockProviders(page, ALL_CONFIGURED);
       await failSearch(page);
-      await runSearch(page);
+      await openPicker(page, uuid);
 
       await expect(page.getByTestId("mes-error")).toBeVisible();
       await expect(page.getByTestId("mes-candidates")).toHaveCount(0);
-      // The edit form never moved: same title, nothing staged, save bar clean.
+
+      // The edit form never moved.
+      await page.getByTestId("mes-close").click();
       await expect(page.locator("#me-title")).toHaveValue(TARGET.title);
       await expect(page.getByTestId("me-save")).toBeDisabled();
     });
-
-    // ---------------------------------------------------------------------------
-    // AC5 — selecting a candidate opens the compare view for that edition
-    // ---------------------------------------------------------------------------
-
-    test("opens the compare view for the selected candidate and returns to the list", async ({
-      page,
-      request,
-    }) => {
-      const uuid = await fetchBookIdByTitle(request, TARGET.title);
-      await openPicker(page, uuid);
-      await mockSearch(page, FOUND);
-      await runSearch(page);
-
-      await page.getByTestId("mes-candidate-1").click();
-
-      const compare = page.getByTestId("mes-compare");
-      await expect(compare).toBeVisible();
-      await expect(page.getByTestId("mes-compare-source")).toHaveText(
-        "Google Books",
-      );
-      await expect(page.getByTestId("mes-row-title-source")).toHaveText(
-        GB_CANDIDATE.title,
-      );
-      await expect(page.getByTestId("mes-row-publisher-source")).toHaveText(
-        "Editions Gauss",
-      );
-      // A field this source has no value for renders as an em dash rather than
-      // vanishing — the reader can tell "Google Books has no series" from "this
-      // screen forgot to show one".
-      await expect(page.getByTestId("mes-row-series-source")).toHaveText("—");
-      // Selecting stages nothing: the form and its save bar are untouched.
-      await expect(page.locator("#me-title")).toHaveValue(TARGET.title);
-      await expect(page.getByTestId("me-save")).toBeDisabled();
-
-      await page.getByTestId("mes-compare-back").click();
-      await expect(page.getByTestId("mes-candidates")).toBeVisible();
-      await expect(compare).toHaveCount(0);
-    });
-
-    test("fills a field the search hit lacked from the selected edition's own record", async ({
-      page,
-      request,
-    }) => {
-      const uuid = await fetchBookIdByTitle(request, TARGET.title);
-      await mockProviders(page, ALL_CONFIGURED);
-      // Open Library's search docs carry no description; its record does. The
-      // merge must add that without taking the row's publisher away.
-      await mockHydrate(page, {
-        ...OL_CANDIDATE,
-        description: "The record's own description.",
-        publisher: null,
-      });
-      await gotoReady(page, `/books/${uuid}/edit`);
-      await page.getByTestId("metadata-search-btn").click();
-      await mockSearch(page, FOUND);
-      await runSearch(page);
-
-      const hydrated = page.waitForResponse(
-        (r) =>
-          r.url().includes("/api/rpc/metadata/editions/hydrate") &&
-          r.request().method() === "POST",
-      );
-      await page.getByTestId("mes-candidate-0").click();
-      await hydrated;
-
-      await expect(page.getByTestId("mes-row-description-source")).toHaveText(
-        "The record's own description.",
-      );
-      await expect(page.getByTestId("mes-row-publisher-source")).toHaveText(
-        "Klein Mathematik",
-      );
-    });
-
-    // ---------------------------------------------------------------------------
-    // AC6 — no usable provider, no entry point
-    // ---------------------------------------------------------------------------
 
     test("hides the entry point when no provider is configured", async ({
       page,
@@ -451,68 +407,97 @@ test.describe
         provider("hardcover", "Hardcover", false),
       ]);
       await gotoReady(page, `/books/${uuid}/edit`);
-
       await expect(page.getByTestId("metadata-search-btn")).toHaveCount(0);
     });
 
-    // ---------------------------------------------------------------------------
-    // #1662 AC1/AC2 — one row, one arrow, staged into the form and nowhere else
-    // ---------------------------------------------------------------------------
+    // -------------------------------------------------------------------------
+    // Compare — only what differs
+    // -------------------------------------------------------------------------
 
-    /** Open the compare view for the Google Books candidate, which answers for a
-     * description and a publisher but has no series. */
-    async function openCompare(page: Page, uuid: string): Promise<void> {
-      await openPicker(page, uuid);
-      await mockSearch(page, FOUND);
-      await runSearch(page);
-      await page.getByTestId("mes-candidate-1").click();
-      await expect(page.getByTestId("mes-compare")).toBeVisible();
-    }
-
-    test("copies one field into the form and leaves every other field alone", async ({
+    test("shows only the fields the source would change", async ({
       page,
       request,
     }) => {
       const uuid = await fetchBookIdByTitle(request, TARGET.title);
       await openCompare(page, uuid);
 
-      // Yours-vs-theirs, before.
-      await expect(page.getByTestId("mes-row-publisher-current")).toHaveText(
-        TARGET.publisher!,
+      await expect(page.getByTestId("mes-compare-source")).toHaveText(
+        "Google Books",
+      );
+      await expect(page.getByTestId("mes-row-title-source")).toHaveText(
+        GB_CANDIDATE.title,
       );
       await expect(page.getByTestId("mes-row-publisher-source")).toHaveText(
         "Editions Gauss",
       );
+      // Absent, not an em-dash row: this source has no series, so it can't
+      // change one, and a row that can't be applied is only noise.
+      await expect(page.getByTestId("mes-row-series")).toHaveCount(0);
+      await expect(page.getByTestId("mes-row-genres")).toHaveCount(0);
+      // Language matches the book, so it isn't a change either.
+      await expect(page.getByTestId("mes-change-count")).toContainText(
+        "differ from your book",
+      );
+
+      // Nothing staged by looking.
+      await expect(page.getByTestId("me-save")).toBeDisabled();
+    });
+
+    test("reveals the untouched fields on request and hides them again", async ({
+      page,
+      request,
+    }) => {
+      const uuid = await fetchBookIdByTitle(request, TARGET.title);
+      await openCompare(page, uuid);
+      await expect(page.getByTestId("mes-row-series")).toHaveCount(0);
+
+      await page.getByTestId("mes-show-all").click();
+      // Now visible with an em dash and a dead arrow: the source has nothing to
+      // offer, and a provider not knowing a field must never blank out a value
+      // you already have.
+      await expect(page.getByTestId("mes-row-series-source")).toHaveText("—");
+      await expect(page.getByTestId("mes-row-series-apply")).toBeDisabled();
+      await expect(page.getByTestId("mes-row-series-current")).toHaveText(
+        TARGET.series!,
+      );
+
+      await page.getByTestId("mes-show-all").click();
+      await expect(page.getByTestId("mes-row-series")).toHaveCount(0);
+    });
+
+    test("copies one field into the form and keeps its row in place", async ({
+      page,
+      request,
+    }) => {
+      const uuid = await fetchBookIdByTitle(request, TARGET.title);
+      await openCompare(page, uuid);
+      await expect(page.getByTestId("mes-row-publisher-current")).toHaveText(
+        TARGET.publisher!,
+      );
 
       await page.getByTestId("mes-row-publisher-apply").click();
 
-      // The form moved; nothing else did.
       await expect(page.locator("#me-publisher")).toHaveValue("Editions Gauss");
       await expect(page.locator("#me-title")).toHaveValue(TARGET.title);
-      await expect(page.locator("#me-description")).toHaveValue("");
-      // And the row now reads as taken, without the control going away.
-      await expect(page.getByTestId("mes-row-publisher-current")).toHaveText(
-        "Editions Gauss",
-      );
+      // The row stays and reads as taken — applying it must not make it vanish
+      // out from under the cursor just because it stopped differing.
       await expect(page.getByTestId("mes-row-publisher")).toHaveAttribute(
         "data-applied",
         "true",
       );
-      await expect(page.getByTestId("mes-row-publisher-apply")).toBeEnabled();
+      await expect(page.getByTestId("mes-row-publisher-current")).toHaveText(
+        "Editions Gauss",
+      );
 
       // Staged only — the save bar counts it, and no write went out.
       await expect(page.getByTestId("me-save")).toBeEnabled();
       await expect(page.getByText("1 field edited")).toBeVisible();
-      await expect(page).toHaveURL(new RegExp(`/books/${uuid}/edit$`));
 
+      await page.getByTestId("mes-close").click();
       await page.getByTestId("me-discard").click();
     });
 
-    // ---------------------------------------------------------------------------
-    // #1662 AC3 — take everything, skipping what the source lacks
-    // ---------------------------------------------------------------------------
-
-    test("take-all applies every field the source has and skips the ones it lacks", async ({
+    test("takes every change at once and skips what the source lacks", async ({
       page,
       request,
     }) => {
@@ -532,61 +517,39 @@ test.describe
       await expect(
         page.locator(".me-chip-item").getByText("Emmy Noether"),
       ).toBeVisible();
-      // Google Books offered no series for this edition, so the book's own value
-      // survives — take-all skips what the source lacks rather than blanking it
-      // "successfully", which is the most damaging thing this screen could do.
+      // Google Books offered no series, so the book's own value survives —
+      // take-all skips what the source lacks rather than blanking it.
       await expect(page.locator("#me-series")).toHaveValue(TARGET.series!);
+      // Nothing is left to take.
+      await expect(page.getByTestId("mes-change-count")).toHaveText(
+        "Nothing here differs from your book.",
+      );
+      await expect(page.getByTestId("mes-take-all")).toBeDisabled();
 
+      await page.getByTestId("mes-close").click();
       await page.getByTestId("me-discard").click();
     });
 
-    // ---------------------------------------------------------------------------
-    // #1662 AC4 — a field the source lacks cannot be applied
-    // ---------------------------------------------------------------------------
-
-    test("cannot apply a field the source has no value for", async ({
-      page,
-      request,
-    }) => {
-      const uuid = await fetchBookIdByTitle(request, TARGET.title);
-      await openCompare(page, uuid);
-
-      // The em dash is the tell, and the control is dead: the most damaging thing
-      // this screen could do is blank a value you already have — and this book
-      // does have a series, which this source doesn't know.
-      await expect(page.getByTestId("mes-row-series-current")).toHaveText(
-        TARGET.series!,
-      );
-      await expect(page.getByTestId("mes-row-series-source")).toHaveText("—");
-      await expect(page.getByTestId("mes-row-series-apply")).toBeDisabled();
-
-      // Genres too — this source returned an empty list, which is not a value.
-      await expect(page.getByTestId("mes-row-genres-source")).toHaveText("—");
-      await expect(page.getByTestId("mes-row-genres-apply")).toBeDisabled();
-
-      await expect(page.getByTestId("me-save")).toBeDisabled();
-    });
-
-    // ---------------------------------------------------------------------------
-    // #1662 — staged edits survive the trip back to the results
-    // ---------------------------------------------------------------------------
-
-    test("keeps a staged apply when returning to the candidate list", async ({
+    test("keeps a staged apply across a trip back to the results", async ({
       page,
       request,
     }) => {
       const uuid = await fetchBookIdByTitle(request, TARGET.title);
       await openCompare(page, uuid);
       await page.getByTestId("mes-row-publisher-apply").click();
-      await expect(page.locator("#me-publisher")).toHaveValue("Editions Gauss");
 
       await page.getByTestId("mes-compare-back").click();
       await expect(page.getByTestId("mes-candidates")).toBeVisible();
+      await expect(page.getByTestId("mes-compare")).toHaveCount(0);
 
-      // Still staged: the compare view writes into the page's form signals, which
-      // outlive the panel.
+      // Still staged: the compare screen writes into the page's form signals,
+      // which outlive the overlay.
       await expect(page.locator("#me-publisher")).toHaveValue("Editions Gauss");
       await expect(page.getByText("1 field edited")).toBeVisible();
+
+      // And closing the overlay doesn't discard them either.
+      await page.getByTestId("mes-close").click();
+      await expect(page.locator("#me-publisher")).toHaveValue("Editions Gauss");
 
       await page.getByTestId("me-discard").click();
     });
@@ -598,7 +561,8 @@ test.describe
       const uuid = await fetchBookIdByTitle(request, TARGET.title);
       await openCompare(page, uuid);
       await page.getByTestId("mes-row-publisher-apply").click();
-      await expect(page.locator("#me-publisher")).toHaveValue("Editions Gauss");
+      await page.getByTestId("mes-done").click();
+      await expect(page.getByTestId("metadata-search")).toHaveCount(0);
 
       await page.getByTestId("me-discard").click();
       await expect(page).toHaveURL(new RegExp(`/books/${uuid}$`));
@@ -610,10 +574,6 @@ test.describe
       await expect(page.getByTestId("me-save")).toBeDisabled();
     });
 
-    // ---------------------------------------------------------------------------
-    // #1662 AC5 — saving after an apply persists exactly the applied values
-    // ---------------------------------------------------------------------------
-
     test("saving after an apply persists exactly the applied values", async ({
       page,
       request,
@@ -621,9 +581,10 @@ test.describe
       const uuid = await fetchBookIdByTitle(request, TARGET.title);
       await openCompare(page, uuid);
       await page.getByTestId("mes-row-publisher-apply").click();
+      await page.getByTestId("mes-done").click();
 
-      // Through the page's existing save path — the compare view never talks to
-      // the overrides endpoint itself.
+      // Through the page's existing save path — the compare screen never talks
+      // to the overrides endpoint itself.
       await expectMutation(
         page,
         {
@@ -652,12 +613,11 @@ test.describe
         },
         async () => page.getByTestId("revert-overrides").click(),
       );
-      await expect(page).toHaveURL(new RegExp(`/books/${uuid}$`));
     });
 
-    // ---------------------------------------------------------------------------
-    // #1662 — nothing is actionable while the record is still being replaced
-    // ---------------------------------------------------------------------------
+    // -------------------------------------------------------------------------
+    // Nothing is actionable while the record is still being replaced
+    // -------------------------------------------------------------------------
 
     test("holds the apply controls inert until the detail re-fetch lands", async ({
       page,
@@ -665,9 +625,10 @@ test.describe
     }) => {
       const uuid = await fetchBookIdByTitle(request, TARGET.title);
       await mockProviders(page, ALL_CONFIGURED);
+      await mockSearch(page, FOUND);
 
-      // A hydrate that never answers until we let it: the compare view is open
-      // and painted against the thin search hit for the whole of this window.
+      // A hydrate that never answers until we let it: the compare screen is
+      // painted against the thin search hit for the whole of this window.
       let releaseHydrate: (() => void) | undefined;
       const hydrateHeld = new Promise<void>((resolve) => {
         releaseHydrate = resolve;
@@ -685,24 +646,21 @@ test.describe
         });
       });
 
-      await gotoReady(page, `/books/${uuid}/edit`);
-      await page.getByTestId("metadata-search-btn").click();
-      await mockSearch(page, FOUND);
-      await runSearch(page);
+      await openPicker(page, uuid);
       await page.getByTestId("mes-candidate-0").click();
 
-      // In flight: the busy line is up and nothing can be taken. Otherwise
-      // "take everything" would mean a different set of fields depending on how
-      // fast the network answered — the Open Library search hit has no
-      // description, its record does.
-      await expect(page.getByTestId("mes-compare-busy")).toBeVisible();
+      // In flight: nothing can be taken. Otherwise "take all" would mean a
+      // different set of fields depending on how fast the network answered —
+      // the Open Library search hit has no description, its record does.
+      await expect(page.getByTestId("mes-change-count")).toHaveText(
+        "Loading the full record…",
+      );
       await expect(page.getByTestId("mes-take-all")).toBeDisabled();
       await expect(page.getByTestId("mes-row-title-apply")).toBeDisabled();
 
       releaseHydrate?.();
 
       // Settled: the description arrived and every control is live again.
-      await expect(page.getByTestId("mes-compare-busy")).toHaveCount(0);
       await expect(page.getByTestId("mes-row-description-source")).toHaveText(
         "Only the detail record has this.",
       );
@@ -713,43 +671,28 @@ test.describe
         "Only the detail record has this.",
       );
 
+      await page.getByTestId("mes-close").click();
       await page.getByTestId("me-discard").click();
     });
-  }); // test.describe.serial
 
-// ---------------------------------------------------------------------------
-// #1663 — the cover row: the one field that writes immediately
-// ---------------------------------------------------------------------------
-//
-// The apply is stubbed at `/cover/from-url` rather than let through: the real
-// route fetches the provider URL server-side, and this suite must never reach
-// a live provider host. The gates it applies (host allowlist, https-only,
-// redirect re-checking, size cap, magic bytes) are covered where they live,
-// in `server/src/backend/overrides/tests/cover_from_url.rs`.
+    // -------------------------------------------------------------------------
+    // The cover row — the one field that writes immediately
+    // -------------------------------------------------------------------------
 
-const COVER_FROM_URL = "**/api/ebooks/*/cover/from-url";
-
-test.describe
-  .serial("metadata edit cover row", () => {
     test("offers the source's cover with an arrow labelled as an immediate change", async ({
       page,
       request,
     }) => {
       const uuid = await fetchBookIdByTitle(request, TARGET.title);
-      await openPicker(page, uuid);
-      await mockSearch(page, FOUND);
-      await runSearch(page);
-      await page.getByTestId("mes-candidate-1").click();
+      await openCompare(page, uuid);
 
-      const row = page.getByTestId("mes-row-cover");
-      await expect(row).toBeVisible();
+      await expect(page.getByTestId("mes-row-cover")).toBeVisible();
       await expect(
         page.getByTestId("mes-row-cover-source").locator("img"),
       ).toBeVisible();
-      // The row says so in words, not only in behaviour: this one doesn't wait
-      // for Save the way every other row does.
+      // The row says so in words, not only in behaviour.
       await expect(page.getByTestId("mes-row-cover-note")).toHaveText(
-        "applies immediately · not staged with the rest",
+        "applies immediately · not staged",
       );
       await expect(page.getByTestId("mes-row-cover-apply")).toHaveAttribute(
         "aria-label",
@@ -757,20 +700,23 @@ test.describe
       );
     });
 
-    test("cannot apply a cover the source does not have", async ({
+    test("hides the cover row when the source has no cover to offer", async ({
       page,
       request,
     }) => {
       const uuid = await fetchBookIdByTitle(request, TARGET.title);
-      await openPicker(page, uuid);
+      await mockProviders(page, ALL_CONFIGURED);
+      await mockHydrate(page);
       await mockSearch(page, {
         ...FOUND,
         editions: [{ ...OL_CANDIDATE, cover_url: null }],
       });
-      await runSearch(page);
+      await openPicker(page, uuid);
       await page.getByTestId("mes-candidate-0").click();
 
-      await expect(page.getByTestId("mes-row-cover-source")).toHaveText("—");
+      await expect(page.getByTestId("mes-row-cover")).toHaveCount(0);
+      // Held to the same rule as every field row, so "show all" brings it back.
+      await page.getByTestId("mes-show-all").click();
       await expect(page.getByTestId("mes-row-cover-apply")).toBeDisabled();
     });
 
@@ -779,14 +725,11 @@ test.describe
       request,
     }) => {
       const uuid = await fetchBookIdByTitle(request, TARGET.title);
-      await openPicker(page, uuid);
       await page.route(COVER_FROM_URL, async (route) => {
         if (route.request().method() !== "POST") return route.continue();
-        // Echo the book back with **both** flags the real handler sets: a
-        // cover override is an override row, so `has_override` flips too —
-        // and it is what the sidebar's "Override active" card reads. A stub
-        // that sets only `has_cover_override` would quietly test a weaker
-        // contract than the endpoint's.
+        // Echo the book back with **both** flags the real handler sets: a cover
+        // override is an override row, so `has_override` flips too — and it is
+        // what the sidebar's "Override active" card reads.
         const resp = await request.get(`/api/ebooks/${uuid}`);
         const book = (await resp.json()) as Record<string, unknown>;
         return route.fulfill({
@@ -799,9 +742,7 @@ test.describe
           }),
         });
       });
-      await mockSearch(page, FOUND);
-      await runSearch(page);
-      await page.getByTestId("mes-candidate-1").click();
+      await openCompare(page, uuid);
 
       await expectMutation(
         page,
@@ -819,12 +760,13 @@ test.describe
       );
       // Immediate, not staged: the save bar never noticed.
       await expect(page.getByTestId("me-save")).toBeDisabled();
-      // And the sidebar follows the write without a reload — the revert
-      // affordance appears because the book now carries a cover override.
+
+      // And the sidebar follows the write without a reload — both its cover
+      // controls and its "Override active" card, which live in two different
+      // components behind the overlay.
+      await page.getByTestId("mes-close").click();
       await expect(page.getByTestId("cover-remove-override")).toBeVisible();
       await expect(page.getByTestId("cover-hint")).toHaveText("custom upload");
-      // The "Override active" card too — a different component from the cover
-      // controls above it, and the one that seeded once and never followed.
       await expect(page.getByTestId("revert-overrides")).toBeVisible();
     });
 
@@ -833,7 +775,6 @@ test.describe
       request,
     }) => {
       const uuid = await fetchBookIdByTitle(request, TARGET.title);
-      await openPicker(page, uuid);
       await page.route(COVER_FROM_URL, (route) =>
         route.request().method() === "POST"
           ? route.fulfill({
@@ -843,9 +784,7 @@ test.describe
             })
           : route.continue(),
       );
-      await mockSearch(page, FOUND);
-      await runSearch(page);
-      await page.getByTestId("mes-candidate-1").click();
+      await openCompare(page, uuid);
 
       await expectMutation(
         page,
@@ -860,7 +799,7 @@ test.describe
       await expect(page.getByTestId("mes-row-cover-note")).toContainText(
         "Couldn't apply that cover",
       );
-      // Nothing changed: no override, no staged edit.
+      await page.getByTestId("mes-close").click();
       await expect(page.getByTestId("cover-remove-override")).toHaveCount(0);
       await expect(page.getByTestId("me-save")).toBeDisabled();
     });

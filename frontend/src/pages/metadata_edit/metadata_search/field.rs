@@ -134,6 +134,18 @@ impl MetadataField {
         !self.source_value(edition).trim().is_empty()
     }
 
+    /// Whether the source would actually change this field.
+    ///
+    /// What the compare screen filters on: a row that says the same thing on
+    /// both sides is a row the reader has to read and then dismiss, and there
+    /// are usually more of those than of the ones that matter. A field the
+    /// source has no value for is *not* a difference — it can't be applied,
+    /// so showing it would only be showing an em dash beside a dead control.
+    pub(super) fn differs(self, fields: FormFields, edition: &ProviderEdition) -> bool {
+        let source = self.source_value(edition);
+        !source.trim().is_empty() && source != self.current(fields)
+    }
+
     /// Stage the source's value into the form's own signal.
     ///
     /// Staging only: the page's save bar and `on_save` stay the single writer,

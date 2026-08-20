@@ -73,34 +73,39 @@ pub(super) fn CoverRow(
     };
 
     rsx! {
-        div { class: "mes-compare-row mes-cover-row", "data-testid": "mes-row-cover",
-            span { class: "mes-compare-label", "Cover" }
-            span { class: "mes-cover-cell", "data-testid": "mes-row-cover-current",
-                CoverThumb { book: book.clone(), bust: (global_bust.read().get(&uuid).copied()).unwrap_or(0) }
-            }
-            button {
-                r#type: "button",
-                class: "mes-compare-apply",
-                "data-testid": "mes-row-cover-apply",
-                aria_label: "Replace the cover with {source_name}'s \u{2014} saves immediately",
-                disabled: !available || hydrating || busy(),
-                onclick: on_apply,
-                "\u{2192}"
-            }
-            span { class: "mes-cover-cell", "data-testid": "mes-row-cover-source",
-                if let Some(url) = source_url {
-                    img { class: "mes-cover-img", src: "{url}", alt: "", loading: "lazy" }
-                } else {
-                    span { class: "mes-compare-empty", "{EMPTY}" }
+        div { class: "mes-cover", "data-testid": "mes-row-cover",
+            span { class: "mes-field-label", "Cover" }
+            span { class: "mes-cover-pair",
+                span { class: "mes-cover-cell", "data-testid": "mes-row-cover-current",
+                    CoverThumb {
+                        book: book.clone(),
+                        bust: (global_bust.read().get(&uuid).copied()).unwrap_or(0),
+                    }
+                }
+                button {
+                    r#type: "button",
+                    class: "mes-apply",
+                    "data-testid": "mes-row-cover-apply",
+                    aria_label: "Replace the cover with {source_name}'s \u{2014} saves immediately",
+                    disabled: !available || hydrating || busy(),
+                    onclick: on_apply,
+                    "\u{2192}"
+                }
+                span { class: "mes-cover-cell", "data-testid": "mes-row-cover-source",
+                    if let Some(url) = source_url {
+                        img { class: "mes-cover-img", src: "{url}", alt: "", loading: "lazy" }
+                    } else {
+                        span { class: "mes-empty", "{EMPTY}" }
+                    }
                 }
             }
-            // Spans the row under the three cells; the wording is the
-            // contract, since this is the one row that doesn't wait for Save.
+            // The wording is the contract: this is the one row that doesn't
+            // wait for Save.
             span { class: "mono mes-cover-note", role: "status", "data-testid": "mes-row-cover-note",
                 if let Some(msg) = status() {
                     "{msg}"
                 } else {
-                    "applies immediately \u{b7} not staged with the rest"
+                    "applies immediately \u{b7} not staged"
                 }
             }
         }

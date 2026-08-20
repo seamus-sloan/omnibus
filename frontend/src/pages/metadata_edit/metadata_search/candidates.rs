@@ -1,21 +1,39 @@
-//! The candidate list: one row per edition a provider returned.
-//!
-//! A search commonly answers with several printings of one book across
-//! several sources, so a row carries exactly what tells two of them apart at
-//! a glance — cover, title, authors, year, publisher, and which source it
-//! came from — and nothing more. Provider cover URLs render straight from
-//! the provider; nothing is stored until something is applied.
+//! One candidate row, and the order the rows come in.
 
 use dioxus::prelude::*;
 use omnibus_shared::metadata_lookup::ProviderEdition;
 
 use super::sources::provider_slug;
 
-/// An em dash for a field this candidate has no value for, so the row's
-/// shape stays the same whether or not a provider filled it in.
+/// Shown for a field this candidate has no value for.
 const EMPTY: &str = "\u{2014}";
 
-/// Human summary of one candidate's authors, or the em dash.
+/// Put candidates in an order derived from the editions themselves.
+///
+/// The fan-out answers provider by provider, so the raw list is "everything
+/// Open Library found, then everything Google Books found" — which means a
+/// provider being slow, newly configured, or briefly down reshuffles the
+/// whole list under the reader. Sorting on the candidate's own fields makes
+/// that impossible: a source dropping out removes its rows and moves nothing
+/// else.
+///
+/// Title first, so a book's editions sit together and two sources' takes on
+/// one printing land next to each other — the comparison the picker exists
+/// for, without merging rows to get it. `(isbn13, source, provider_ref)`
+/// finishes the key so no two candidates can tie and the order is total.
+pub(super) fn in_stable_order(mut editions: Vec<ProviderEdition>) -> Vec<ProviderEdition> {
+    editions.sort_by_cached_key(|e| {
+        (
+            e.title.trim().to_lowercase(),
+            e.isbn13.clone(),
+            provider_slug(e.source),
+            e.provider_ref.clone(),
+        )
+    });
+    editions
+}
+
+/// The row's second line: authors, or an em dash when the source named none.
 fn authors_line(edition: &ProviderEdition) -> String {
     if edition.authors.is_empty() {
         EMPTY.to_string()
@@ -24,8 +42,8 @@ fn authors_line(edition: &ProviderEdition) -> String {
     }
 }
 
-/// The row's second line: year, publisher, and ISBN-13, in one string with
-/// the parts the provider left empty dropped rather than rendered as gaps.
+/// The row's third line: year, publisher, ISBN — with the parts the provider
+/// left empty dropped rather than rendered as gaps.
 fn imprint_line(edition: &ProviderEdition) -> String {
     let mut parts: Vec<String> = Vec::new();
     if let Some(year) = edition.year.as_deref().filter(|v| !v.trim().is_empty()) {
@@ -42,75 +60,44 @@ fn imprint_line(edition: &ProviderEdition) -> String {
     parts.join(" \u{b7} ")
 }
 
-/// The list of candidates, or the empty-result note when every source came
-/// back with nothing.
+/// One candidate. Selecting it is the row's only action, so the whole row is
+/// the control.
 #[component]
-pub(super) fn CandidateList(
-    editions: Vec<ProviderEdition>,
-    on_select: EventHandler<ProviderEdition>,
-) -> Element {
-    if editions.is_empty() {
-        return rsx! {
-            p { class: "mes-note", role: "status", "data-testid": "mes-empty",
-                "No editions matched. Try a shorter title, or add the author."
-            }
-        };
-    }
-    rsx! {
-        ul { class: "mes-candidates", "data-testid": "mes-candidates",
-            for (index , edition) in editions.into_iter().enumerate() {
-                CandidateRow { index, edition, on_select }
-            }
-        }
-    }
-}
-
-/// One candidate. The whole row is the control — selecting it is the only
-/// action a row has, so a button wrapping the content beats a button beside
-/// it.
-#[component]
-fn CandidateRow(
+pub(super) fn CandidateRow(
     index: usize,
     edition: ProviderEdition,
     on_select: EventHandler<ProviderEdition>,
 ) -> Element {
     let picked = edition.clone();
-    // Explicit rather than inherited from the row's text: the accessible
-    // name is otherwise the whole card, which reads as a paragraph and makes
-    // two printings of one book indistinguishable by name.
+    // Explicit rather than inherited from the row's text: the accessible name
+    // is otherwise the whole card, which reads as a paragraph and makes two
+    // printings of one book indistinguishable by name.
     let label = format!(
         "Compare {} from {}",
         edition.title,
         edition.source.display_name()
     );
     rsx! {
-        li { class: "mes-candidate-item",
+        li { class: "mes-row-item",
             button {
                 r#type: "button",
-                class: "mes-candidate",
+                class: "mes-row",
                 "data-testid": "mes-candidate-{index}",
                 aria_label: "{label}",
                 onclick: move |_| on_select.call(picked.clone()),
-                div { class: "mes-candidate-cover",
-                    if let Some(url) = edition.cover_url.clone() {
-                        img {
-                            class: "mes-candidate-img",
-                            src: "{url}",
-                            alt: "",
-                            loading: "lazy",
-                        }
-                    } else {
-                        span { class: "mes-candidate-plate", aria_hidden: "true", "{EMPTY}" }
-                    }
+                if let Some(url) = edition.cover_url.clone() {
+                    img { class: "mes-row-cover", src: "{url}", alt: "", loading: "lazy" }
+                } else {
+                    span { class: "mes-row-cover mes-row-plate", aria_hidden: "true", "{EMPTY}" }
                 }
-                div { class: "mes-candidate-body",
-                    div { class: "mes-candidate-title", "data-testid": "mes-candidate-{index}-title",
+                span { class: "mes-row-body",
+                    span { class: "mes-row-title", "data-testid": "mes-candidate-{index}-title",
                         "{edition.title}"
                     }
-                    div { class: "mes-candidate-authors", "data-testid": "mes-candidate-{index}-authors",
+                    span { class: "mes-row-authors", "data-testid": "mes-candidate-{index}-authors",
                         "{authors_line(&edition)}"
                     }
-                    div { class: "mono mes-candidate-imprint", "data-testid": "mes-candidate-{index}-imprint",
+                    span { class: "mono mes-row-imprint", "data-testid": "mes-candidate-{index}-imprint",
                         "{imprint_line(&edition)}"
                     }
                 }
@@ -131,13 +118,13 @@ mod tests {
 
     use super::*;
 
-    fn edition() -> ProviderEdition {
+    fn edition(title: &str, isbn13: &str, source: MetadataProvider) -> ProviderEdition {
         ProviderEdition {
-            source: MetadataProvider::OpenLibrary,
-            provider_ref: "/works/OL1W".into(),
-            isbn13: "9780134685991".into(),
+            source,
+            provider_ref: format!("{source:?}-{isbn13}"),
+            isbn13: isbn13.into(),
             isbn10: None,
-            title: "Effective Java".into(),
+            title: title.into(),
             authors: vec!["Joshua Bloch".into()],
             year: Some("2018".into()),
             pages: Some(416),
@@ -151,26 +138,104 @@ mod tests {
     }
 
     #[test]
+    fn in_stable_order_is_independent_of_the_order_providers_answered_in() {
+        // The property that matters: the same set sorts the same way however
+        // the fan-out happened to concatenate it.
+        let a = edition(
+            "Effective Java",
+            "9780134685991",
+            MetadataProvider::OpenLibrary,
+        );
+        let b = edition(
+            "Effective Java",
+            "9780134685991",
+            MetadataProvider::GoogleBooks,
+        );
+        let c = edition("Dune", "9780441013593", MetadataProvider::Hardcover);
+
+        let one = in_stable_order(vec![a.clone(), b.clone(), c.clone()]);
+        let two = in_stable_order(vec![c.clone(), b.clone(), a.clone()]);
+        let three = in_stable_order(vec![b, a, c]);
+        assert_eq!(one, two);
+        assert_eq!(two, three);
+    }
+
+    #[test]
+    fn in_stable_order_leaves_the_rest_in_place_when_a_provider_drops_out() {
+        // A source going down must remove its rows and move nothing else —
+        // the whole reason the key comes from the edition rather than from
+        // who answered.
+        let ol = edition(
+            "Effective Java",
+            "9780134685991",
+            MetadataProvider::OpenLibrary,
+        );
+        let gb = edition("Dune", "9780441013593", MetadataProvider::GoogleBooks);
+        let hc = edition("Neuromancer", "9780441569595", MetadataProvider::Hardcover);
+
+        let full = in_stable_order(vec![ol.clone(), gb.clone(), hc.clone()]);
+        let without_gb = in_stable_order(vec![ol, hc]);
+        let expected: Vec<_> = full.into_iter().filter(|e| e.title != "Dune").collect();
+        assert_eq!(without_gb, expected);
+    }
+
+    #[test]
+    fn in_stable_order_groups_one_titles_editions_together() {
+        let mixed = in_stable_order(vec![
+            edition("Dune", "9780441013593", MetadataProvider::GoogleBooks),
+            edition(
+                "Effective Java",
+                "9780134685991",
+                MetadataProvider::OpenLibrary,
+            ),
+            edition("Dune", "9780441172719", MetadataProvider::OpenLibrary),
+        ]);
+        let titles: Vec<&str> = mixed.iter().map(|e| e.title.as_str()).collect();
+        assert_eq!(titles, vec!["Dune", "Dune", "Effective Java"]);
+    }
+
+    #[test]
+    fn in_stable_order_is_case_insensitive_on_the_title() {
+        let sorted = in_stable_order(vec![
+            edition("dune", "9780441013593", MetadataProvider::GoogleBooks),
+            edition("Alpha", "9780441172719", MetadataProvider::OpenLibrary),
+        ]);
+        assert_eq!(sorted[0].title, "Alpha");
+    }
+
+    #[test]
     fn authors_line_falls_back_to_an_em_dash_when_the_provider_named_none() {
-        let mut e = edition();
+        let mut e = edition(
+            "Effective Java",
+            "9780134685991",
+            MetadataProvider::OpenLibrary,
+        );
         e.authors.clear();
         assert_eq!(authors_line(&e), EMPTY);
     }
 
     #[test]
     fn imprint_line_drops_the_parts_the_provider_left_empty() {
-        let mut e = edition();
+        let mut e = edition(
+            "Effective Java",
+            "9780134685991",
+            MetadataProvider::OpenLibrary,
+        );
         e.year = None;
         e.publisher = Some("   ".into());
-        // Only the ISBN survives — and it is never dropped, since it is the
-        // one field every candidate is required to carry.
+        // The ISBN is never dropped — it is the one field every candidate is
+        // required to carry.
         assert_eq!(imprint_line(&e), "9780134685991");
     }
 
     #[test]
     fn imprint_line_joins_year_publisher_and_isbn_when_all_are_present() {
         assert_eq!(
-            imprint_line(&edition()),
+            imprint_line(&edition(
+                "Effective Java",
+                "9780134685991",
+                MetadataProvider::OpenLibrary
+            )),
             "2018 \u{b7} Addison-Wesley \u{b7} 9780134685991"
         );
     }

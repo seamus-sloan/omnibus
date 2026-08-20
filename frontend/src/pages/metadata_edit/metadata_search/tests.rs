@@ -71,16 +71,14 @@ mod gate {
     }
 
     /// Mirrors `MetadataSearchPanel`'s fixed shape: the gate signal, then
-    /// every picker signal declared unconditionally, then the early-return
-    /// gate. Declaring any of them *after* the gate would make an ungated
-    /// render call fewer hooks than a revealed one.
+    /// the overlay's own `open` signal declared unconditionally, then the
+    /// early-return gate. Declaring `open` *after* the gate would make an
+    /// ungated render call fewer hooks than a revealed one. (Every other
+    /// signal moved inside `SearchOverlay`, which is mounted only while open
+    /// — a component that never renders ungated can't mismatch.)
     #[component]
     fn GateHarness(available: Signal<bool>) -> Element {
         let open = use_signal(|| false);
-        let query = use_signal(String::new);
-        let phase = use_signal(|| 0u32);
-        let selected = use_signal(|| Option::<u32>::None);
-        let hydrating = use_signal(|| false);
 
         if !available() {
             return rsx! {
@@ -88,9 +86,7 @@ mod gate {
             };
         }
         rsx! {
-            div { "data-testid": "revealed",
-                "{open()}-{query()}-{phase()}-{selected().is_some()}-{hydrating()}"
-            }
+            div { "data-testid": "revealed", "{open()}" }
         }
     }
 

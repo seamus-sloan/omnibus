@@ -25,18 +25,18 @@ recent releases are recorded below; everything earlier is available via the
 
 ### Added
 
-- Edition search on the metadata edit page: one search asks every configured
-  provider at once and lists the editions each returned — cover, title,
-  authors, year, publisher, and which source it came from — with a per-source
-  status line so a provider being unreachable never reads as "no results".
-  Selecting an edition opens it in a compare view, re-fetched in full from the
-  source it came from (#1661)
-- Side-by-side compare on the metadata edit page: your value and the source's,
-  one row per field, with an arrow on each row that copies that field into the
-  form and a "take everything from this source" shortcut. Copies are staged —
-  the form's own Save is still what writes them — and a field the source has
-  no value for cannot be applied, so a provider that doesn't know a field can
-  never blank out one you already have (#1662)
+- **Find this edition** on the metadata edit page: one button opens a search
+  that has already asked every configured provider for this book, and lists
+  what each returned — cover, title, authors, year, publisher, and which
+  source it came from — in an order the providers don't decide, so one being
+  slow or unreachable never reshuffles the list. A footer says what each
+  source contributed, so "unreachable" never reads as "no results" (#1661)
+- Picking an edition shows **only the fields it would change** — usually two
+  or three rather than a full record — each with an arrow that copies it into
+  the form, plus take-all and a "show all fields" toggle. Copies are staged,
+  so the form's own Save is still what writes them, and a field the source has
+  no value for cannot be applied at all: a provider that doesn't know a field
+  can never blank out one you already have (#1662)
 - The compare view's cover row applies the source's cover art. Unlike every
   other row it writes immediately — the browser can't fetch a provider's image
   cross-origin, so the server does — and says so; the new cover appears on the
