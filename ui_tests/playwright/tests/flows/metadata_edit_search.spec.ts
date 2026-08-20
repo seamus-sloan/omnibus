@@ -77,13 +77,14 @@ const ALL_CONFIGURED = [
 ];
 
 // Two candidates sharing an ISBN across two sources: the picker's job is to
-// keep two sources' takes on one edition apart. `title` decides their order,
-// so "Aardvark…" sorts above "Zebra…" whichever provider answered first.
+// keep two sources' takes on one edition apart. Both titles account for every
+// word of the seeded query, so the shorter one leads — whichever provider
+// answered first, and whether or not the other answered at all.
 const OL_CANDIDATE = {
   source: "open_library",
   provider_ref: "/works/OL42W",
   isbn13: "9781234567897",
-  title: "Aardvark Lemmas (Open Library)",
+  title: "Minor Lemmas II (Open Library)",
   authors: ["Sophie Germain"],
   year: "1815",
   pages: 212,
@@ -99,7 +100,7 @@ const GB_CANDIDATE = {
   source: "google_books",
   provider_ref: "gb-volume-7",
   isbn13: "9781234567897",
-  title: "Zebra Lemmas (Google Books)",
+  title: "Minor Lemmas II: A Longer Google Books Title",
   authors: ["Sophie Germain", "Emmy Noether"],
   year: "1816",
   pages: 220,

@@ -28,7 +28,8 @@ recent releases are recorded below; everything earlier is available via the
 - **Find this edition** on the metadata edit page: one button opens a search
   that has already asked every configured provider for this book, and lists
   what each returned — cover, title, authors, year, publisher, and which
-  source it came from — in an order the providers don't decide, so one being
+  source it came from — with the editions that actually match what you asked
+  for at the top, and in an order the providers don't decide, so one being
   slow or unreachable never reshuffles the list. A footer says what each
   source contributed, so "unreachable" never reads as "no results" (#1661)
 - Picking an edition shows **only the fields it would change** — usually two

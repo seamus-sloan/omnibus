@@ -242,7 +242,7 @@ fn search_handler(state: PickerState, server_url: String) -> EventHandler<()> {
         spawn(async move {
             match data::search_editions(&url, &q).await {
                 Ok(found) => {
-                    editions.set(candidates::in_stable_order(found.editions));
+                    editions.set(candidates::in_stable_order(found.editions, &q));
                     sources.set(found.sources);
                     stage.set(Stage::Results);
                 }
