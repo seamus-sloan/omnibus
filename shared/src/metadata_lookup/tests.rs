@@ -130,6 +130,7 @@ fn edition() -> ProviderEdition {
         source: MetadataProvider::GoogleBooks,
         provider_ref: "gb-volume-1".into(),
         isbn13: "9780141439518".into(),
+        isbn10: Some("0141439513".into()),
         title: "Pride and Prejudice".into(),
         authors: vec!["Jane Austen".into()],
         year: Some("1813".into()),
@@ -139,6 +140,7 @@ fn edition() -> ProviderEdition {
         cover_url: Some("https://example.com/cover.jpg".into()),
         series: Some("Penguin English Library".into()),
         first_publish_year: Some(1813),
+        genres: vec!["Fiction".into(), "Classics".into()],
     }
 }
 
@@ -154,6 +156,30 @@ fn provider_edition_narrows_to_external_book_meta_carrying_every_shared_field() 
             ..valid_meta()
         }
     );
+}
+
+#[test]
+fn provider_edition_deserializes_without_the_picker_only_fields() {
+    // Both are `#[serde(default)]`, so a candidate serialized before they
+    // existed — or by a provider that carries neither — still parses.
+    let json = serde_json::json!({
+        "source": "google_books",
+        "provider_ref": "gb-volume-1",
+        "isbn13": "9780141439518",
+        "title": "Pride and Prejudice",
+        "authors": ["Jane Austen"],
+        "year": null,
+        "pages": null,
+        "publisher": null,
+        "description": null,
+        "cover_url": null,
+        "series": null,
+        "first_publish_year": null,
+    });
+    let parsed: ProviderEdition =
+        serde_json::from_value(json).expect("the new fields must be optional on the wire");
+    assert_eq!(parsed.isbn10, None);
+    assert!(parsed.genres.is_empty());
 }
 
 #[test]

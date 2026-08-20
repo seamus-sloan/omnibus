@@ -14,7 +14,9 @@ use omnibus_shared::metadata_lookup::{MetadataProvider, ProviderEdition};
 use serde::Deserialize;
 
 use super::super::{MetadataLookupConfig, SEARCH_LIMIT};
-use super::http::{base_url, client, publication_year, strip_url, upgrade_to_https};
+use super::http::{
+    base_url, client, paired_isbn10, publication_year, sanitize_genres, strip_url, upgrade_to_https,
+};
 
 /// Backoff between retries. Length + 1 is the attempt count. Deliberately
 /// short: a check-in scan is waiting on a spinner, and the failures this
@@ -54,10 +56,17 @@ struct GbVolumeInfo {
     image_links: Option<GbImageLinks>,
     #[serde(rename = "industryIdentifiers", default)]
     industry_identifiers: Vec<GbIndustryId>,
+    /// Google's own subject labels ("Fiction / Fantasy / Epic"), the closest
+    /// thing it publishes to a genre list.
+    #[serde(default)]
+    categories: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct GbIndustryId {
+    /// `ISBN_10`, `ISBN_13`, `ISSN`, or `OTHER`.
+    #[serde(rename = "type", default)]
+    kind: Option<String>,
     #[serde(default)]
     identifier: Option<String>,
 }
@@ -236,6 +245,17 @@ fn map_volume(
         .and_then(|l| l.thumbnail.or(l.small_thumbnail))
         .map(|u| upgrade_to_https(&u));
 
+    // Pair-checked against the ISBN-13 we are answering with: on the ISBN
+    // path that is the *scanned* barcode, and the bare-text fallback can
+    // surface a sibling edition whose ISBN-10 would name a different printing.
+    let isbn10 = paired_isbn10(
+        info.industry_identifiers
+            .iter()
+            .filter(|i| i.kind.as_deref() == Some("ISBN_10"))
+            .filter_map(|i| i.identifier.as_deref()),
+        &isbn13,
+    );
+
     Some(ProviderEdition {
         source: MetadataProvider::GoogleBooks,
         // Google always ids its volumes; the `isbn:` fallback is a guard
@@ -244,6 +264,7 @@ fn map_volume(
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| format!("isbn:{isbn13}")),
         isbn13,
+        isbn10,
         title,
         authors: info.authors,
         year: info.published_date.as_deref().and_then(publication_year),
@@ -255,6 +276,7 @@ fn map_volume(
         cover_url,
         series: None,
         first_publish_year: None,
+        genres: sanitize_genres(info.categories),
     })
 }
 

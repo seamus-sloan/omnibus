@@ -31,8 +31,12 @@ impl MetadataProvider {
 /// What one provider can be asked and what it can return, independent of
 /// whether it is currently configured.
 ///
-/// `carries_ratings`/`carries_genres` are `false` for every provider today —
-/// flip one only in the same change that adds the field to [`ExternalBookMeta`].
+/// A flag is a claim about the provider's API, not about one book: a source
+/// that can answer for genres advertises `carries_genres` even when a given
+/// edition has none. Flip one only in the same change that teaches the
+/// provider module to parse the field onto [`ProviderEdition`] — the two are
+/// cross-checked against a fixture, so a flag that outruns its parser fails
+/// the suite.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderCapabilities {
     pub search_by_title: bool,
@@ -194,10 +198,25 @@ pub struct ProviderEdition {
     /// hyphens). Required, exactly as on the check-in path: a candidate a
     /// provider can't put an ISBN on isn't an edition anyone can act on.
     pub isbn13: String,
+    /// ISBN-10 for the **same** printing as [`Self::isbn13`], when the
+    /// provider carries one.
+    ///
+    /// Only set when the two demonstrably name one edition — providers list
+    /// identifiers per *work* as readily as per edition, and a search hit's
+    /// ISBN-13 and ISBN-10 can otherwise come from different printings. A
+    /// 979-prefixed ISBN-13 has no ISBN-10 at all, so `None` is the normal
+    /// answer for a modern edition, not a parse failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isbn10: Option<String>,
     pub title: String,
     pub authors: Vec<String>,
     /// Publication year or date as the provider reports it (free text).
     pub year: Option<String>,
+    /// The edition's **printed** length, which is what the `print_pages`
+    /// override stores — never `books.page_count`, which is a comic's image
+    /// count. `None` when the provider doesn't say; a provider reporting `0`
+    /// for "unknown" is normalized to `None` rather than staged over a real
+    /// page count.
     pub pages: Option<i64>,
     pub publisher: Option<String>,
     pub description: Option<String>,
@@ -206,11 +225,32 @@ pub struct ProviderEdition {
     /// Year the *work* was first published, across all editions — distinct
     /// from `year`, which is this edition's own date.
     pub first_publish_year: Option<i64>,
+    /// Genres as this provider labels them, already sanitized and capped at
+    /// [`Self::MAX_GENRES`].
+    ///
+    /// Empty means "this provider has none for this book"; whether a source
+    /// can answer for genres *at all* is
+    /// [`ProviderCapabilities::carries_genres`], so the picker can leave out
+    /// a column no source could ever fill.
+    #[serde(default)]
+    pub genres: Vec<String>,
+}
+
+impl ProviderEdition {
+    /// Maximum genres one candidate contributes.
+    ///
+    /// Far below `MetadataOverrides::MAX_GENRES` (64) on purpose: that bounds
+    /// what a book may *store*, this bounds what one source may *propose*.
+    /// Open Library's subject lists run to dozens of entries — genre, setting,
+    /// and character names mixed together — and a chip editor handed all of
+    /// them is unusable.
+    pub const MAX_GENRES: usize = 10;
 }
 
 impl From<ProviderEdition> for ExternalBookMeta {
-    /// Narrow a search candidate to the check-in payload, dropping the
-    /// `provider_ref` the scan flow has no use for.
+    /// Narrow a search candidate to the check-in payload, dropping the fields
+    /// that type doesn't carry — `provider_ref`, `isbn10`, and `genres`. The
+    /// check-in wire contract stays frozen; the picker keeps the rest.
     fn from(e: ProviderEdition) -> Self {
         Self {
             isbn13: e.isbn13,
