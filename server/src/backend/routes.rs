@@ -10,13 +10,14 @@ use axum::{
     Router,
 };
 
+use crate::rate_limit::{rate_limit_by_ip, RateLimiter};
+
 use super::{
     account, admin_health, admin_sessions, audiobooks, author_photos, authors, bookmarks, covers,
     cross_format, ebooks, genres, highlights, journals, kindle, metadata, overrides, physical,
     profile, progress, ratings, read_status, scan, search, series, settings, shelves, stats,
     suggestions, summary, tags, uploads, users, AppState,
 };
-use crate::rate_limit::{rate_limit_by_ip, RateLimiter};
 
 /// Health check, settings, ebooks, and audiobook playback routes.
 pub(super) fn content_routes() -> Router<AppState> {

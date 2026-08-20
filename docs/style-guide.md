@@ -314,12 +314,12 @@ find.
 like `search_books_finds_by_title_and_ranks_by_bm25`,
 `list_books_populates_formats_from_book_files`.
 
-**Anti-pattern.** [db/src/journals/markdown/tests.rs](../db/src/journals/markdown/tests.rs)
-has a name like `strips_event_handler_attributes` that elides the
-function-under-test convention entirely — it tests `render`, the
-function whose behavior it's checking, but the name doesn't say so.
-Compare `render_emits_del_for_strikethrough` a few lines above in the
-same file, which correctly prefixes with the function it tests.
+**Anti-pattern.** A name like `strips_event_handler_attributes` elides
+the function-under-test convention entirely — it says what happened but
+not what did it. `render_strips_event_handler_attributes` is the same
+test named as a spec. Every test in
+[db/src/journals/markdown/tests.rs](../db/src/journals/markdown/tests.rs)
+now leads with the function it exercises.
 
 ---
 

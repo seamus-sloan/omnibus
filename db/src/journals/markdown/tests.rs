@@ -26,13 +26,13 @@ fn render_strips_script_tags() {
 }
 
 #[test]
-fn strips_event_handler_attributes() {
+fn render_strips_event_handler_attributes() {
     let html = render("<a href=\"#\" onclick=\"steal()\">link</a>");
     assert!(!html.contains("onclick"), "handlers stripped: {html}");
 }
 
 #[test]
-fn wraps_spoiler_markers_in_keyboard_reachable_buttons() {
+fn render_wraps_spoiler_markers_in_keyboard_reachable_buttons() {
     // The spoiler wrapper is a real button so keyboard/screen-reader users
     // can reveal it. `type="button"` keeps it out of any surrounding form
     // (composer submits happen via a distinct Publish button), and
@@ -46,14 +46,14 @@ fn wraps_spoiler_markers_in_keyboard_reachable_buttons() {
 }
 
 #[test]
-fn spoiler_inner_text_is_markdown_processed() {
+fn render_processes_markdown_inside_spoiler_text() {
     let html = render("||the **butler** did it||");
     assert!(html.contains("class=\"spoiler\""), "got: {html}");
     assert!(html.contains("<strong>butler</strong>"), "got: {html}");
 }
 
 #[test]
-fn unterminated_spoiler_marker_is_left_literal() {
+fn render_leaves_unterminated_spoiler_marker_literal() {
     let html = render("a lone ||marker here");
     assert!(!html.contains("class=\"spoiler\""), "got: {html}");
     assert!(!html.contains("<button"), "no button emitted: {html}");
@@ -61,7 +61,7 @@ fn unterminated_spoiler_marker_is_left_literal() {
 }
 
 #[test]
-fn renders_task_list_checkboxes() {
+fn render_emits_task_list_checkboxes() {
     let html = render("- [x] done\n- [ ] todo");
     // A checked + an unchecked disabled checkbox survive sanitization.
     assert!(html.contains("type=\"checkbox\""), "got: {html}");
@@ -70,7 +70,7 @@ fn renders_task_list_checkboxes() {
 }
 
 #[test]
-fn strips_non_checkbox_input_element_entirely() {
+fn render_strips_non_checkbox_input_element_entirely() {
     // ammonia would keep the allowlisted `input` tag while stripping its
     // disallowed attributes, leaving a bare `<input>` (a text field by
     // default). The whole element — not just its attributes — must go.
@@ -81,7 +81,7 @@ fn strips_non_checkbox_input_element_entirely() {
 }
 
 #[test]
-fn strips_button_and_bare_inputs_entirely() {
+fn render_strips_button_and_bare_inputs_entirely() {
     // Non-checkbox inputs of any flavour, including an attribute-less one and
     // an *interactive* (non-disabled) checkbox, must not survive — each
     // degrades to a bare/enabled `<input>` under ammonia. Only the disabled
@@ -118,7 +118,7 @@ fn drop_non_checkbox_inputs_matches_real_attribute_tokens() {
 }
 
 #[test]
-fn renders_lone_image_as_captioned_figure() {
+fn render_wraps_lone_image_as_captioned_figure() {
     let html = render("![A sunset over the bay](/api/journals/images/abc.png)");
     assert!(
         html.contains("<figure class=\"journal-figure\">"),
@@ -135,14 +135,14 @@ fn renders_lone_image_as_captioned_figure() {
 }
 
 #[test]
-fn lone_image_without_alt_gets_no_figcaption() {
+fn render_omits_figcaption_for_lone_image_without_alt() {
     let html = render("![](/api/journals/images/abc.png)");
     assert!(html.contains("<figure"), "got: {html}");
     assert!(!html.contains("<figcaption>"), "got: {html}");
 }
 
 #[test]
-fn inline_image_amid_text_stays_unwrapped() {
+fn render_leaves_inline_image_amid_text_unwrapped() {
     let html = render("before ![tiny](/api/journals/images/abc.png) after");
     assert!(html.contains("<img"), "got: {html}");
     assert!(
@@ -152,7 +152,7 @@ fn inline_image_amid_text_stays_unwrapped() {
 }
 
 #[test]
-fn strips_images_with_offsite_or_off_prefix_src() {
+fn render_strips_images_with_offsite_or_off_prefix_src() {
     for md in [
         "![x](https://evil.example/track.png)",
         "![x](/covers/1.png)",
@@ -168,7 +168,7 @@ fn strips_images_with_offsite_or_off_prefix_src() {
 }
 
 #[test]
-fn hand_authored_figure_cannot_carry_the_journal_figure_class() {
+fn render_strips_journal_figure_class_from_hand_authored_figure() {
     // ammonia's defaults keep bare `<figure>`/`<figcaption>` (harmless
     // semantic markup), but the styled class only comes from our own
     // `wrap_figures` pass — a hand-authored one is stripped.
@@ -177,7 +177,7 @@ fn hand_authored_figure_cannot_carry_the_journal_figure_class() {
 }
 
 #[test]
-fn disallows_arbitrary_span_classes() {
+fn render_disallows_arbitrary_span_classes() {
     // Since spoilers no longer use `<span>`, the sanitizer no longer
     // allowlists any class on it: `<span>` itself remains under ammonia's
     // default tag list, but its `class` attribute (and thus a hand-authored
@@ -188,7 +188,7 @@ fn disallows_arbitrary_span_classes() {
 }
 
 #[test]
-fn disallows_arbitrary_button_classes_and_attrs() {
+fn render_disallows_arbitrary_button_classes_and_attrs() {
     // Only the spoiler wrapper's exact shape (`class="spoiler"`,
     // `type="button"`, `aria-expanded` ∈ {true,false}) is allowlisted; any
     // other class, an off-list `type`, or a spoofed `aria-expanded` value
