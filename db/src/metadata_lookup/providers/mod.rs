@@ -141,14 +141,18 @@ pub fn ladder(config: &MetadataLookupConfig) -> Vec<Rung> {
     rungs
 }
 
-/// Every provider a search *can* be run against, `by_isbn`/`by_title`,
-/// carrying a cover image. Common to all three providers today.
-const SEARCH_AND_COVER_CAPABILITIES: ProviderCapabilities = ProviderCapabilities {
+/// What all three providers can do today: both searches, a cover image, and a
+/// genre list — Google Books' `categories`, Open Library's `subjects`, and
+/// Hardcover's `cached_tags`. Ratings are nobody's yet.
+///
+/// One shared constant only holds while the catalog agrees; the moment a
+/// provider differs, give it its own value rather than widening this one.
+const COMMON_CAPABILITIES: ProviderCapabilities = ProviderCapabilities {
     search_by_title: true,
     search_by_isbn: true,
     carries_cover: true,
     carries_ratings: false,
-    carries_genres: false,
+    carries_genres: true,
 };
 
 /// The full provider catalog: identity, usability, and capabilities for
@@ -168,21 +172,21 @@ pub fn catalog(config: &MetadataLookupConfig) -> Vec<ProviderInfo> {
             display_name: MetadataProvider::OpenLibrary.display_name().to_string(),
             configured: true,
             requires_key: false,
-            capabilities: SEARCH_AND_COVER_CAPABILITIES,
+            capabilities: COMMON_CAPABILITIES,
         },
         ProviderInfo {
             id: MetadataProvider::GoogleBooks,
             display_name: MetadataProvider::GoogleBooks.display_name().to_string(),
             configured: true,
             requires_key: false,
-            capabilities: SEARCH_AND_COVER_CAPABILITIES,
+            capabilities: COMMON_CAPABILITIES,
         },
         ProviderInfo {
             id: MetadataProvider::Hardcover,
             display_name: MetadataProvider::Hardcover.display_name().to_string(),
             configured: config.keys.hardcover.is_some(),
             requires_key: true,
-            capabilities: SEARCH_AND_COVER_CAPABILITIES,
+            capabilities: COMMON_CAPABILITIES,
         },
     ]
 }

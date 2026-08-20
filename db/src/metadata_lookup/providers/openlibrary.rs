@@ -10,7 +10,7 @@ use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider, Provid
 use serde::Deserialize;
 
 use super::super::{MetadataLookupConfig, SEARCH_LIMIT};
-use super::http::{base_url, client, get_json_best_effort};
+use super::http::{base_url, client, get_json_best_effort, paired_isbn10, sanitize_genres};
 
 /// The `jscmd=data` response is a map keyed `"ISBN:<isbn>"`; a missing key means
 /// the ISBN isn't known.
@@ -32,6 +32,21 @@ struct OlBook {
     publishers: Vec<OlNamed>,
     #[serde(default)]
     cover: Option<OlCover>,
+    /// `jscmd=data` returns subjects as `{name, url}` objects, not strings.
+    /// Long and mixed — genre, setting, and character names together — which
+    /// is why they go through `sanitize_genres`' cap.
+    #[serde(default)]
+    subjects: Vec<OlNamed>,
+    #[serde(default)]
+    identifiers: OlIdentifiers,
+}
+
+/// The edition's identifier bag. Only the ISBN-10 list is read: the ISBN-13
+/// is the caller's own, already normalized.
+#[derive(Debug, Default, Deserialize)]
+struct OlIdentifiers {
+    #[serde(default)]
+    isbn_10: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,15 +105,20 @@ pub async fn by_isbn(
         source: MetadataProvider::OpenLibrary,
         provider_ref: provider_ref(book.key, isbn13),
         isbn13: isbn13.to_string(),
+        isbn10: paired_isbn10(&book.identifiers.isbn_10, isbn13),
         title,
         authors: book.authors.into_iter().filter_map(|a| a.name).collect(),
         year: book.publish_date,
-        pages: book.number_of_pages,
+        // A record that reports 0 pages is one whose length Open Library
+        // doesn't know, not a zero-page book — and staging that over a real
+        // count is the failure this guards.
+        pages: book.number_of_pages.filter(|p| *p > 0),
         publisher: book.publishers.into_iter().find_map(|p| p.name),
         description: None,
         cover_url,
         series: None,
         first_publish_year: None,
+        genres: sanitize_genres(book.subjects.into_iter().flat_map(|s| s.name)),
     }))
 }
 
@@ -138,6 +158,10 @@ struct OlSearchDoc {
     cover_i: Option<i64>,
     #[serde(default)]
     number_of_pages_median: Option<i64>,
+    /// Work-level subject list — the same mixed bag as the edition record's,
+    /// and the longest of the three providers'.
+    #[serde(default)]
+    subject: Vec<String>,
 }
 
 /// Build the title-search URL. The query is user text, so it goes through
@@ -151,7 +175,7 @@ pub(in crate::metadata_lookup) fn search_url(
         .append_pair("title", query)
         .append_pair(
             "fields",
-            "key,title,author_name,first_publish_year,isbn,cover_i,number_of_pages_median",
+            "key,title,author_name,first_publish_year,isbn,cover_i,number_of_pages_median,subject",
         )
         .append_pair("limit", &SEARCH_LIMIT.to_string());
     Ok(url.into())
@@ -186,10 +210,15 @@ pub async fn by_title(
 fn map_search_doc(doc: OlSearchDoc) -> Option<ProviderEdition> {
     let title = doc.title.filter(|t| !t.trim().is_empty())?;
     let isbn13 = doc.isbn.iter().find_map(|v| normalize_isbn(v).ok())?;
+    // `search.json` answers *works*: one `isbn` list spans every edition, so
+    // only the entry that re-derives the ISBN-13 above is known to name the
+    // same printing.
+    let isbn10 = paired_isbn10(&doc.isbn, &isbn13);
     Some(ProviderEdition {
         source: MetadataProvider::OpenLibrary,
         provider_ref: provider_ref(doc.key, &isbn13),
         isbn13,
+        isbn10,
         title,
         authors: doc.author_name,
         year: None,
@@ -203,6 +232,7 @@ fn map_search_doc(doc: OlSearchDoc) -> Option<ProviderEdition> {
             .map(|id| format!("https://covers.openlibrary.org/b/id/{id}-L.jpg")),
         series: None,
         first_publish_year: doc.first_publish_year,
+        genres: sanitize_genres(doc.subject),
     })
 }
 

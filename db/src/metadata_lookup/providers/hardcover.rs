@@ -18,18 +18,23 @@ use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider, Provid
 use serde::Deserialize;
 
 use super::super::{MetadataLookupConfig, SEARCH_LIMIT};
+use super::http::{paired_isbn10, sanitize_genres};
 use crate::suggestions::hardcover::{post_graphql, HardcoverConfig};
 
-/// One query's worth of fields — the book plus a representative edition's
-/// ISBN-13, nested so a candidate list costs one round trip rather than one
-/// per row. Ordering editions by `users_count` mirrors `resolve_book`'s
-/// preference for the canonical edition over knockoffs.
-const BOOK_FIELDS: &str = "id title description \
+/// One query's worth of fields — the book plus a representative edition,
+/// nested so a candidate list costs one round trip rather than one per row.
+/// Ordering editions by `users_count` mirrors `resolve_book`'s preference for
+/// the canonical edition over knockoffs.
+///
+/// `cached_tags` is Hardcover's denormalized tag bag, whose `Genre` bucket is
+/// the closest thing it publishes to a genre list; `pages` and `isbn_10` are
+/// edition-level, which is where Hardcover models publication.
+const BOOK_FIELDS: &str = "id title description cached_tags \
      contributions { author { name } } \
      book_series { series { name } } \
      image { url } \
      editions(where: {isbn_13: {_is_null: false}}, order_by: {users_count: desc}, limit: 1) \
-       { isbn_13 }";
+       { isbn_13 isbn_10 pages }";
 
 #[derive(Debug, Deserialize)]
 struct BooksData {
@@ -43,6 +48,11 @@ struct BookRow {
     /// by; already requested by [`BOOK_FIELDS`].
     #[serde(default)]
     id: Option<i64>,
+    /// Hardcover's denormalized tag bag, kept untyped: it is a jsonb column
+    /// whose buckets (`Genre`, `Mood`, `Tag`, …) are data rather than schema.
+    /// [`genre_tags`] does the reading.
+    #[serde(default)]
+    cached_tags: Option<serde_json::Value>,
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
@@ -81,10 +91,16 @@ struct Image {
     url: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct Edition {
     #[serde(default)]
     isbn_13: Option<String>,
+    #[serde(default)]
+    isbn_10: Option<String>,
+    /// Printed length. Hardcover models publication on the edition, not the
+    /// work, so this is the only place a page count exists here.
+    #[serde(default)]
+    pages: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -175,6 +191,36 @@ pub async fn by_title(
         .collect())
 }
 
+/// Read the `Genre` bucket out of Hardcover's `cached_tags` blob.
+///
+/// The column is jsonb and its buckets are data, so this reads defensively
+/// rather than deriving a type. The live shape is
+/// `{"Tag": [...], "Mood": [...], "Genre": [{"tag": "Programming", "count": 1,
+/// "tagSlug": …}], "Content Warning": [...]}`; a bare array of tags (or of
+/// strings) is accepted too, and anything else yields no genres instead of an
+/// error — a tag bag is never worth failing a lookup over.
+fn genre_tags(cached: Option<serde_json::Value>) -> Vec<String> {
+    let bucket = match cached {
+        Some(serde_json::Value::Object(mut map)) => map.remove("Genre").unwrap_or_default(),
+        Some(array @ serde_json::Value::Array(_)) => array,
+        _ => return Vec::new(),
+    };
+    let serde_json::Value::Array(entries) = bucket else {
+        return Vec::new();
+    };
+    entries
+        .into_iter()
+        .filter_map(|entry| match entry {
+            serde_json::Value::String(tag) => Some(tag),
+            serde_json::Value::Object(mut fields) => match fields.remove("tag") {
+                Some(serde_json::Value::String(tag)) => Some(tag),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
 /// Map a book row into `ProviderEdition`. `isbn13` overrides the row's own
 /// when the caller has an authoritative one (the ISBN path). A row with no
 /// title, or no ISBN to fall back on, maps to `None` — the check-in flow keys
@@ -182,18 +228,32 @@ pub async fn by_title(
 fn map_book(b: BookRow, isbn13: Option<&str>) -> Option<ProviderEdition> {
     let title = b.title.filter(|t| !t.trim().is_empty())?;
     let book_id = b.id;
+    // At most one row: the nested selection asks for `limit: 1`.
+    let edition = b.editions.into_iter().next().unwrap_or_default();
+    let edition_isbn13 = edition
+        .isbn_13
+        .as_deref()
+        .and_then(|v| normalize_isbn(v).ok());
     let isbn13 = match isbn13 {
         Some(scanned) => scanned.to_string(),
-        None => b
-            .editions
-            .into_iter()
-            .find_map(|e| e.isbn_13.and_then(|v| normalize_isbn(&v).ok()))?,
+        None => edition_isbn13.clone()?,
+    };
+    // Hardcover's `pages` is per *edition*, and on the ISBN path the scanned
+    // barcode — not the most-read printing this row carries — is what we are
+    // describing. Reporting that printing's length for a different one is the
+    // wrong-value-that-looks-right this guards; `isbn10` is held to the same
+    // rule by `paired_isbn10`.
+    let pages = if edition_isbn13.as_deref() == Some(isbn13.as_str()) {
+        edition.pages.filter(|p| *p > 0)
+    } else {
+        None
     };
     Some(ProviderEdition {
         source: MetadataProvider::Hardcover,
         provider_ref: book_id
             .map(|id| id.to_string())
             .unwrap_or_else(|| format!("isbn:{isbn13}")),
+        isbn10: paired_isbn10(edition.isbn_10.as_deref(), &isbn13),
         isbn13,
         title,
         authors: b
@@ -201,10 +261,11 @@ fn map_book(b: BookRow, isbn13: Option<&str>) -> Option<ProviderEdition> {
             .into_iter()
             .filter_map(|c| c.author.and_then(|a| a.name))
             .collect(),
-        // Hardcover models publication on the edition, not the work, and this
-        // ladder only reads the work — so no year, pages, or publisher.
+        // Hardcover models publication on the edition, not the work, and the
+        // only edition field this ladder reads is the representative one's —
+        // so no year or publisher.
         year: None,
-        pages: None,
+        pages,
         publisher: None,
         description: b
             .description
@@ -220,6 +281,7 @@ fn map_book(b: BookRow, isbn13: Option<&str>) -> Option<ProviderEdition> {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty() && s.chars().count() <= ExternalBookMeta::NAME_MAX_LEN),
         first_publish_year: None,
+        genres: sanitize_genres(genre_tags(b.cached_tags)),
     })
 }
 

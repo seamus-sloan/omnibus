@@ -9,23 +9,10 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::super::*;
-use super::{config_for, with_check_digit, GB_PATH, ISBN13, OL_SEARCH_PATH, QUERY};
-
-/// Hardcover's GraphQL endpoint is the config's base URL itself, so it lands
-/// on the mock server's root path.
-const HC_PATH: &str = "/";
-
-/// Both optional keys set, so every provider in the catalog is `configured`
-/// and the fan-out asks all three.
-fn all_keyed_config_for(server: &MockServer) -> MetadataLookupConfig {
-    MetadataLookupConfig {
-        keys: ProviderKeys {
-            googlebooks: Some("gb-key".into()),
-            hardcover: Some("hc-key".into()),
-        },
-        ..config_for(server)
-    }
-}
+use super::{
+    all_keyed_config_for, config_for, with_check_digit, GB_PATH, HC_PATH, ISBN13, OL_SEARCH_PATH,
+    QUERY,
+};
 
 // The three providers deliberately answer with the *same* ISBN under
 // different titles: AC1's "two sources, one ISBN, two candidates".

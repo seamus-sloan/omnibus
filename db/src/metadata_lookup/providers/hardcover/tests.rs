@@ -12,6 +12,7 @@ fn book_row(title: &str, edition_isbn_13: Option<&str>) -> BookRow {
         title: Some(title.to_string()),
         editions: vec![Edition {
             isbn_13: edition_isbn_13.map(|s| s.to_string()),
+            ..Edition::default()
         }],
         ..BookRow::default()
     }
