@@ -94,5 +94,15 @@ impl ExternalRating {
     }
 }
 
+/// Body for `POST /api/ebooks/{uuid}/external-ratings` — refresh a book's
+/// community ratings from every configured provider.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefreshRatingsRequest {
+    /// The applied candidate's ISBN-13 — the edition the providers are asked
+    /// about. Normalized (and rejected) at the handler boundary, since it is
+    /// interpolated into provider queries.
+    pub isbn13: String,
+}
+
 #[cfg(test)]
 mod tests;

@@ -31,6 +31,7 @@ mod cleanup;
 // not a mobile surface, same shape as `logs`.
 #[cfg(not(feature = "mobile"))]
 mod errors;
+mod external_ratings;
 mod genres;
 mod hardcover_fetch;
 mod highlights;
@@ -92,6 +93,7 @@ pub use cleanup::*;
 pub use cross_format::*;
 #[cfg(not(feature = "mobile"))]
 pub use errors::*;
+pub use external_ratings::*;
 pub use genres::*;
 pub use hardcover_fetch::*;
 pub use highlights::*;

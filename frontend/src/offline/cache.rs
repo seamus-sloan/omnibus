@@ -85,6 +85,11 @@ pub mod keys {
     pub fn ratings_others(uuid: &str) -> String {
         format!("ratings_others:{uuid}")
     }
+    /// `GET /api/ebooks/{uuid}/external-ratings`. Library-wide, not
+    /// user-scoped, so it survives an account switch.
+    pub fn external_ratings(uuid: &str) -> String {
+        format!("external_ratings:{uuid}")
+    }
     /// `GET /api/shelves`.
     pub fn shelves() -> String {
         "shelves".into()

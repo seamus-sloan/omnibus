@@ -6,6 +6,7 @@
 //! value clears it (un-rate).
 
 use dioxus::prelude::*;
+use omnibus_shared::external_ratings::ExternalRating;
 use omnibus_shared::{AttributedRating, RatingRecord, RatingUpdate};
 
 use crate::components::user_avatar::UserAvatar;
@@ -22,6 +23,7 @@ struct RatingState {
     failed: Signal<bool>,
     op_seq: Signal<u64>,
     other_ratings: Signal<Vec<AttributedRating>>,
+    community: Signal<Vec<ExternalRating>>,
 }
 
 /// Clickable 0.5–5.0 star rating bound to the current user and `uuid`.
@@ -38,12 +40,14 @@ pub(super) fn BdRatingWidget(uuid: String) -> Element {
     // latest, so an out-of-order (slow) response can't clobber a newer click.
     let op_seq = use_signal(|| 0u64);
     let other_ratings = use_signal(Vec::<AttributedRating>::new);
+    let community = use_signal(Vec::<ExternalRating>::new);
     let state = RatingState {
         current,
         hover,
         failed,
         op_seq,
         other_ratings,
+        community,
     };
 
     use_rating_hydration(uuid.clone(), server_url.clone(), state);
@@ -81,6 +85,9 @@ pub(super) fn BdRatingWidget(uuid: String) -> Element {
         if !other_ratings().is_empty() {
             BdOtherRatingsList { ratings: other_ratings() }
         }
+        if !community().is_empty() {
+            BdCommunityRatings { ratings: community() }
+        }
     }
 }
 
@@ -99,6 +106,7 @@ fn use_rating_hydration(uuid: String, load_url: String, mut state: RatingState) 
         state.op_seq.set(next_op);
         state.current.set(None);
         state.other_ratings.set(Vec::new());
+        state.community.set(Vec::new());
         state.failed.set(false);
         let load_url = load_url.clone();
         let uuid = uuid.clone();
@@ -112,6 +120,11 @@ fn use_rating_hydration(uuid: String, load_url: String, mut state: RatingState) 
             if let Ok(ratings) = data::list_other_ratings(&load_url, &uuid).await {
                 if *load_seq.peek() == my_load {
                     state.other_ratings.set(ratings);
+                }
+            }
+            if let Ok(ratings) = data::list_external_ratings(&load_url, &uuid).await {
+                if *load_seq.peek() == my_load {
+                    state.community.set(ratings);
                 }
             }
         });
@@ -189,6 +202,87 @@ fn BdOtherRatingsList(ratings: Vec<AttributedRating>) -> Element {
             }
         }
     }
+}
+
+/// The community ratings the metadata providers publish, one row per source.
+///
+/// Shown **beside** the reader's own stars, never merged into them: these are
+/// what the internet gave the book, on each source's own scale, and averaging
+/// three strangers' scales into one number would answer neither question.
+#[component]
+fn BdCommunityRatings(ratings: Vec<ExternalRating>) -> Element {
+    rsx! {
+        div {
+            class: "bd-community-ratings",
+            "data-testid": "community-ratings",
+            div { class: "label", "Community ratings" }
+            for rating in ratings {
+                BdCommunityRatingRow { key: "{rating.provider.as_str()}", rating }
+            }
+        }
+    }
+}
+
+/// One source's score: `4.2/5 (1,840) · Google Books`, linking out to the
+/// provider's own page when it gave one.
+#[component]
+fn BdCommunityRatingRow(rating: ExternalRating) -> Element {
+    let score = format!(
+        "{}/{}",
+        fmt_score(rating.rating),
+        fmt_score(rating.rating_max)
+    );
+    // Absent is not zero, so a source that reported no count shows none —
+    // rather than "(0)", which would read as nobody having rated it.
+    let count = rating
+        .ratings_count
+        .map(|n| format!(" ({})", fmt_count(n)))
+        .unwrap_or_default();
+    rsx! {
+        div {
+            class: "bd-community-rating-row mono",
+            "data-testid": "community-rating-row",
+            span { class: "bd-community-rating-score", "{score}{count}" }
+            span { class: "bd-community-rating-sep", " · " }
+            if let Some(url) = rating.source_url.clone() {
+                a {
+                    class: "bd-community-rating-source",
+                    href: "{url}",
+                    target: "_blank",
+                    rel: "noopener noreferrer",
+                    "{rating.display_name}"
+                }
+            } else {
+                span { class: "bd-community-rating-source", "{rating.display_name}" }
+            }
+        }
+    }
+}
+
+/// One decimal, dropping a trailing `.0` so `5.0` renders as `5`.
+fn fmt_score(v: f64) -> String {
+    let rounded = (v * 10.0).round() / 10.0;
+    if (rounded.fract()).abs() < 0.05 {
+        format!("{rounded:.0}")
+    } else {
+        format!("{rounded:.1}")
+    }
+}
+
+/// Thousands-separated rating count (`1840` → `1,840`).
+fn fmt_count(n: i64) -> String {
+    let digits = n.abs().to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3 + 1);
+    if n < 0 {
+        out.push('-');
+    }
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// One half-star click target. `value` is the rating it selects (`x.5` for the
@@ -386,7 +480,26 @@ fn rated_ago(now: i64, updated_at: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::rated_ago;
+    use super::{fmt_count, fmt_score, rated_ago};
+
+    #[test]
+    fn fmt_score_drops_a_trailing_zero_decimal() {
+        assert_eq!(fmt_score(5.0), "5");
+        assert_eq!(fmt_score(4.0), "4");
+    }
+
+    #[test]
+    fn fmt_score_keeps_one_decimal_and_rounds_to_it() {
+        assert_eq!(fmt_score(4.2), "4.2");
+        assert_eq!(fmt_score(3.75), "3.8");
+    }
+
+    #[test]
+    fn fmt_count_groups_thousands() {
+        assert_eq!(fmt_count(1_840), "1,840");
+        assert_eq!(fmt_count(999), "999");
+        assert_eq!(fmt_count(1_000_000), "1,000,000");
+    }
 
     #[test]
     fn rated_ago_shows_just_now_for_sub_minute_gap() {
@@ -419,6 +532,8 @@ mod tests {
 // above run under any target.
 #[cfg(all(test, feature = "server"))]
 mod render_tests {
+    use omnibus_shared::metadata_lookup::MetadataProvider;
+
     use super::*;
     use crate::test_support::render;
 
@@ -438,5 +553,64 @@ mod render_tests {
         // Half-star click targets carry accessible labels.
         assert!(html.contains("aria-label=\"Rate 1 star\""));
         assert!(html.contains("aria-label=\"Rate 0.5 stars\""));
+    }
+
+    /// One provider's stored rating, for the community-list render tests.
+    fn community(
+        provider: MetadataProvider,
+        score: f64,
+        count: Option<i64>,
+        url: Option<&str>,
+    ) -> ExternalRating {
+        ExternalRating::new(
+            provider,
+            omnibus_shared::external_ratings::ProviderRating::new(
+                Some(score),
+                5.0,
+                count,
+                url.map(str::to_string),
+            )
+            .expect("fixture score is real"),
+            0,
+        )
+    }
+
+    #[test]
+    fn community_ratings_render_each_source_with_its_scale_and_count() {
+        let html = render(rsx! {
+            BdCommunityRatings {
+                ratings: vec![
+                    community(MetadataProvider::GoogleBooks, 4.2, Some(1_840), Some("https://books.google.com/x")),
+                    community(MetadataProvider::OpenLibrary, 3.75, Some(42), None),
+                ],
+            }
+        });
+
+        assert!(html.contains("data-testid=\"community-ratings\""));
+        assert!(html.contains("Community ratings"));
+        assert!(html.contains("4.2/5 (1,840)"));
+        assert!(html.contains("Google Books"));
+        assert!(html.contains("3.8/5 (42)"));
+        assert!(html.contains("Open Library"));
+        // The source link opens out of the app, so it carries the same
+        // hardening the suggestion cards do.
+        assert!(html.contains("rel=\"noopener noreferrer\""));
+    }
+
+    #[test]
+    fn community_rating_renders_no_count_when_the_provider_reported_none() {
+        // Absent is not zero: "(0)" would read as nobody having rated it.
+        let html = render(rsx! {
+            BdCommunityRatings {
+                ratings: vec![community(MetadataProvider::Hardcover, 4.0, None, None)],
+            }
+        });
+
+        assert!(html.contains("4/5"));
+        assert!(!html.contains("(0)"));
+        assert!(
+            !html.contains("href"),
+            "no source url means no outbound link"
+        );
     }
 }

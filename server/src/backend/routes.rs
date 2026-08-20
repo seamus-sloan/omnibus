@@ -12,9 +12,9 @@ use axum::{
 
 use super::{
     account, admin_health, admin_sessions, audiobooks, author_photos, authors, bookmarks, covers,
-    cross_format, ebooks, genres, highlights, journals, kindle, metadata, overrides, physical,
-    profile, progress, ratings, read_status, scan, search, series, settings, shelves, stats,
-    suggestions, summary, tags, uploads, users, AppState,
+    cross_format, ebooks, external_ratings, genres, highlights, journals, kindle, metadata,
+    overrides, physical, profile, progress, ratings, read_status, scan, search, series, settings,
+    shelves, stats, suggestions, summary, tags, uploads, users, AppState,
 };
 use crate::rate_limit::{rate_limit_by_ip, RateLimiter};
 
@@ -403,15 +403,21 @@ fn summary_routes() -> Router<AppState> {
         .route("/api/summary/sources", get(summary::get_summary_sources))
 }
 
-/// The metadata-provider surface — mobile- and web-facing REST, no RPC
-/// analogue yet. The catalog is read-only for any authenticated user; the
-/// edition search is `can_edit`-gated inside its handler.
+/// The metadata-provider surface — mobile- and web-facing REST. The catalog
+/// is read-only for any authenticated user; the edition search and the
+/// community-rating refresh are `can_edit`-gated inside their handlers,
+/// since both spend outbound provider calls.
 fn metadata_routes() -> Router<AppState> {
     Router::new()
         .route("/api/metadata/providers", get(metadata::get_providers))
         .route(
             "/api/metadata/editions/search",
             post(metadata::post_edition_search),
+        )
+        .route(
+            "/api/ebooks/{uuid}/external-ratings",
+            get(external_ratings::get_external_ratings)
+                .post(external_ratings::post_external_ratings),
         )
 }
 

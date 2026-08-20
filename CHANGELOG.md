@@ -23,6 +23,13 @@ recent releases are recorded below; everything earlier is available via the
 
 ## [Unreleased]
 
+### Added
+
+- Community ratings from the external metadata providers now render on the book
+  detail page, each attributed to its source with that source's own scale and
+  rating count — beside the reader's own star rating, never merged into it
+  (#1660)
+
 ## [0.22.10] - 2026-08-18
 
 ### Fixed

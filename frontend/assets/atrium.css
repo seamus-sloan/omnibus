@@ -1052,6 +1052,26 @@ html, body { overscroll-behavior: none; }
 .bd-other-rating-star-slot {
   position: relative; display: inline-block; width: 1em; height: 1em;
 }
+.bd-community-ratings {
+  display: flex; flex-direction: column; gap: 6px;
+  margin-top: 14px; padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.bd-community-ratings .label { margin-bottom: 2px; }
+.bd-community-rating-row {
+  /* Font and size come from the shared `.mono` class the row also carries;
+     `.atrium .mono` outranks this rule, so don't restate them here. */
+  display: flex; align-items: baseline; gap: 0; min-width: 0;
+}
+.bd-community-rating-score { color: var(--ink-0); font-weight: 600; }
+.bd-community-rating-sep { color: var(--ink-3); }
+/* Element-qualified so the source link outranks `.atrium a { color: inherit }`,
+   which would otherwise leave it the same weight as the score. */
+a.bd-community-rating-source, span.bd-community-rating-source {
+  color: var(--ink-2); text-decoration: none;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+a.bd-community-rating-source:hover { color: var(--accent); text-decoration: underline; }
 .bd-readstatus-head, .bd-wishlist-head, .bd-shelves-head { margin-bottom: 8px; }
 .bd-shelves { display: flex; gap: 6px; flex-wrap: wrap; }
 

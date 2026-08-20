@@ -33,6 +33,7 @@ mod conditional;
 mod covers;
 mod cross_format;
 mod ebooks;
+mod external_ratings;
 mod genres;
 mod health;
 mod highlights;
