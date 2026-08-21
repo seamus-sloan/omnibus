@@ -2046,6 +2046,12 @@ a.idx-letter-on:focus-visible {
  */
 
 .me-root { width: 100%; padding-bottom: 80px; }
+/* Reserve room at the end of the page for the fixed phone tab bar, so the
+   last field can still be scrolled clear of it. The save bar's matching lift
+   is declared beside `.me-save-bar` itself — see the note there. */
+@media (max-width: 720px) {
+  .me-root { padding-bottom: calc(80px + 68px + env(safe-area-inset-bottom)); }
+}
 .me-crumb { padding: 0 clamp(20px, 4vw, 56px); margin-bottom: 8px; }
 
 .me-page-header {
@@ -2053,7 +2059,10 @@ a.idx-letter-on:focus-visible {
 }
 .me-page-title {
   font-family: var(--serif);
-  font-size: 38px;
+  /* Fluid rather than fixed: at 38px a two-word title plus its author breaks
+     across three ragged lines on a phone, with the author landing alone under
+     the title at a size that reads as a second heading. */
+  font-size: clamp(26px, 6.5vw, 38px);
   line-height: 1.05;
   margin-top: 4px;
 }
@@ -2065,6 +2074,16 @@ a.idx-letter-on:focus-visible {
   font-size: 17px;
   margin-left: 14px;
   font-weight: 400;
+}
+/* On its own line under the title once the two can't share one, rather than
+   trailing off the end of it with a stray left margin. */
+@media (max-width: 560px) {
+  .me-page-title-author {
+    display: block;
+    margin-left: 0;
+    margin-top: 4px;
+    font-size: 15px;
+  }
 }
 .me-page-hint {
   margin-top: 8px;
@@ -2090,18 +2109,42 @@ a.idx-letter-on:focus-visible {
   grid-template-columns: 1fr 1fr 1fr 1fr;
   gap: 18px;
 }
+/* The band where the sidebar is present but the viewport isn't wide enough to
+   carry four columns beside it: the form column lands near 130px per column,
+   which wraps "PRINT PAGES" mid-word. Below 900px the sidebar stacks and the
+   form gets the full width back, so four fit again until the 768px break —
+   which is why this has a lower bound rather than being another `max-width`. */
+@media (min-width: 769px) and (max-width: 1180px) {
+  .me-field-grid { grid-template-columns: 1fr 1fr; }
+}
+@media (min-width: 769px) and (max-width: 900px) {
+  .me-field-grid { grid-template-columns: 1fr 1fr 1fr 1fr; }
+}
 @media (max-width: 768px) {
   .me-field-grid { grid-template-columns: 1fr 1fr; }
 }
 
+
 .me-field { min-width: 0; }
 .me-field-w2 { grid-column: span 2; }
 .me-field-full { grid-column: 1 / -1; }
+/* Declared after the base rule on purpose: same specificity, so the later one
+   wins. Below 560px the grid is a single column (see the phone block further
+   down) and a `span 2` child would silently create a second implicit column,
+   which is what made the phone layout two ragged columns instead of one. */
+@media (max-width: 560px) {
+  .me-field-w2 { grid-column: span 1; }
+}
 
 /* Label row */
 .me-label {
   display: flex;
   align-items: center;
+  /* The hint (`margin-left: auto`) shares this row with the label text. In a
+     narrow column the two collide and the label breaks mid-word — "ISBN-/13".
+     Wrapping drops the hint to its own line instead, which costs one line and
+     keeps every label readable at any column width. */
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 6px;
   font-family: var(--mono);
@@ -2120,6 +2163,8 @@ a.idx-letter-on:focus-visible {
   color: var(--ink-3);
   font-size: 9px;
   margin-left: auto;
+  /* Never the reason the row wraps: the label text has to break first. */
+  white-space: nowrap;
   text-transform: none;
   letter-spacing: 0;
 }
@@ -2367,6 +2412,9 @@ a.idx-letter-on:focus-visible {
   gap: 14px;
   margin-top: 10px;
 }
+@media (max-width: 480px) {
+  .me-series-grid { grid-template-columns: 1fr; }
+}
 
 /* Sidebar */
 .me-sidebar {
@@ -2463,6 +2511,16 @@ a.idx-letter-on:focus-visible {
   align-items: center;
   gap: 14px;
   z-index: 10;
+}
+/* Declared after the base rule, not beside the other phone breakpoints: same
+   specificity, so the later one wins. Below 720px `.m-tabbar` is fixed over
+   the bottom of the viewport, and this bar is `sticky; bottom: 0` — so Save
+   and Discard land behind it and can't be pressed. 68px is the tab bar's own
+   chrome (8px padding + 24px glyph + label + 8px); it adds the
+   home-indicator inset to its padding, so that is added here rather than
+   assumed. */
+@media (max-width: 720px) {
+  .me-save-bar { bottom: calc(68px + env(safe-area-inset-bottom)); }
 }
 .me-dirty-dot {
   width: 7px;
@@ -6554,12 +6612,21 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
    overlay behind it. Shares the check-in overlay's shell — scrim, centred
    card, one screen at a time — because it answers the same question that
    flow does and shouldn't feel like a different app for asking it. */
+/* Matches `.fs-fetch-btn`, the "Fetch Summary" action it stands beside on the
+   detail page — same accent tint, same accent-drawn sparkle. */
 .mes-open-btn {
   gap: 9px;
   background: color-mix(in oklch, var(--accent) 16%, var(--bg-1));
   border-color: color-mix(in oklch, var(--accent) 55%, transparent);
   color: var(--ink-0);
 }
+@media (hover: hover) {
+  .mes-open-btn:hover {
+    background: color-mix(in oklch, var(--accent) 24%, var(--bg-1));
+    border-color: color-mix(in oklch, var(--accent) 70%, transparent);
+  }
+}
+.mes-open-mark { display: inline-flex; color: var(--accent); }
 
 .mes-scrim {
   position: fixed;
@@ -6812,13 +6879,19 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   .mes-scrim { padding: 0; align-items: stretch; }
   .mes-panel {
     width: 100%;
-    max-height: 100vh;
+    max-height: 100dvh;
     border-radius: 0;
     border: none;
-    padding: 22px 18px 18px;
+    padding: 22px 18px calc(18px + env(safe-area-inset-bottom));
   }
+  /* The panel is already full-height here and scrolls itself, so the desktop
+     cap would only strand the list above a screenful of empty card. */
+  .mes-list { max-height: none; overflow-y: visible; }
   .mes-field { grid-template-columns: 1fr 30px 1fr; }
   .mes-field-label { grid-column: 1 / -1; padding-top: 0; }
+  /* Two columns of metadata in ~170px each is unreadable; stack them and let
+     the arrow sit between, so the row still reads yours-then-theirs. */
+  .mes-cover-pair { justify-content: flex-start; }
 }
 
 .bd-suggest-connect { display: flex; align-items: center; justify-content: space-between;

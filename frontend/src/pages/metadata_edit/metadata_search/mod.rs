@@ -16,6 +16,7 @@ use omnibus_shared::metadata_lookup::{ProviderEdition, ProviderSearchSource};
 use omnibus_shared::EbookMetadata;
 
 use super::form_grid::FormFields;
+use crate::components::glyphs::sparkle_glyph;
 use crate::{data, use_server_url};
 
 mod candidates;
@@ -137,7 +138,8 @@ pub(super) fn MetadataSearchPanel(
             class: "btn mes-open-btn",
             "data-testid": "metadata-search-btn",
             onclick: move |_| open.set(true),
-            "Find this edition"
+            span { class: "mes-open-mark", aria_hidden: "true", {sparkle_glyph(16)} }
+            "Fetch metadata"
         }
         // Mounted only while open, so every fresh open starts a fresh search
         // rather than showing the last one's results.

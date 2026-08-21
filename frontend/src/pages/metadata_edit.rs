@@ -13,7 +13,6 @@ use crate::{data, use_server_url, Route};
 mod cover_editor;
 mod fields;
 mod form_grid;
-mod hardcover_fetch;
 mod header;
 mod metadata_search;
 mod save_bar;
