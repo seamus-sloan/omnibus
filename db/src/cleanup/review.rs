@@ -199,6 +199,12 @@ async fn hydrate_card(
     row: &SuggestionRow,
 ) -> Result<SuggestionCard, CleanupStoreError> {
     let (primary_name, secondary_name) = card_names(&row.payload);
+    // Only a Delete targets exactly one entity the UI may redirect ("this
+    // is a duplicate of…"); the other payloads leave it None.
+    let entity_id = match &row.payload {
+        CleanupPayload::Delete { entity_id, .. } => Some(*entity_id),
+        _ => None,
+    };
     Ok(SuggestionCard {
         id: row.id,
         kind: row.kind,
@@ -209,6 +215,7 @@ async fn hydrate_card(
         book_count: affected_book_count(pool, row).await?,
         photo_url: card_photo_url(pool, row).await?,
         created_at: row.created_at,
+        entity_id,
     })
 }
 

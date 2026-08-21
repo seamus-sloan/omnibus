@@ -31,6 +31,8 @@ interface SuggestionCard {
   book_count: number;
   photo_url: string | null;
   created_at: number;
+  /** Present only on a junk-author Delete card (#2077). */
+  entity_id?: number;
 }
 
 const AUTHOR_MERGE_CARD: SuggestionCard = {
@@ -279,5 +281,226 @@ test("surfaces an error and keeps the card when the decide request fails", async
   // The failed decision must not advance the queue.
   await expect(page.getByTestId("cleanup-card-primary")).toHaveText(
     "Mary Shelley",
+  );
+});
+
+// --- Duplicate-of redirect on a junk-author Delete card (#2077) -----------
+
+const JUNK_DELETE_CARD: SuggestionCard = {
+  id: 5252,
+  kind: "author",
+  action: "delete",
+  decision: "pending",
+  primary_name: "Weir, Andy",
+  secondary_name: null,
+  book_count: 1,
+  photo_url: null,
+  created_at: 1_700_000_000,
+  entity_id: 424_242,
+};
+
+const MERGE_ENTITY_RPC = "**/api/rpc/cleanup/merge-entity";
+const AUTHORS_RPC = "**/api/rpc/authors";
+
+// A canned author list for the picker, so these tests never depend on which
+// parallel spec seeded the shared library first.
+const CANNED_CANONICAL = { id: 999_001, name: "Ada Lovelace" };
+
+async function mockAuthors(page: Page): Promise<void> {
+  await page.route(AUTHORS_RPC, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify([
+        { ...CANNED_CANONICAL, sort: null, book_count: 1 },
+      ]),
+    });
+  });
+}
+
+test("resolves a delete card as a duplicate via the picker (merge + reject)", async ({
+  page,
+}) => {
+  await mockAuthors(page);
+  await mockQueue(page, [JUNK_DELETE_CARD]);
+  // The canned card's ids name no real rows, so both writes are fulfilled —
+  // what's under assertion is the wire contract the pick produces.
+  await page.route(MERGE_ENTITY_RPC, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: "77",
+    });
+  });
+  await page.route(DECIDE_RPC, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: "null",
+    });
+  });
+  await openAuthorReview(page);
+
+  await page.getByTestId("cleanup-duplicate-toggle").click();
+  await expect(page.getByTestId("cleanup-duplicate")).toBeVisible();
+  await page.getByTestId("cleanup-duplicate-picker-input").fill("Ada Love");
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/cleanup/decide",
+      expectedBody: { id: JUNK_DELETE_CARD.id, decision: "rejected" },
+      expectedStatus: 200,
+    },
+    async () =>
+      expectMutation(
+        page,
+        {
+          method: "POST",
+          url: "/api/rpc/cleanup/merge-entity",
+          expectedBody: {
+            kind: "author",
+            source_id: JUNK_DELETE_CARD.entity_id,
+            canonical_id: CANNED_CANONICAL.id,
+          },
+          expectedStatus: 200,
+        },
+        async () =>
+          page
+            .getByTestId("cleanup-duplicate-picker-matches")
+            .getByRole("button", { name: "Ada Lovelace" })
+            .click(),
+      ),
+  );
+
+  // The resolved card is gone and the picker closed with it.
+  await expect(page.getByTestId("cleanup-review-empty")).toBeVisible();
+  await expect(page.getByTestId("cleanup-duplicate")).toHaveCount(0);
+});
+
+test("a merge card offers no duplicate redirect", async ({ page }) => {
+  await mockQueue(page, [AUTHOR_MERGE_CARD]);
+  await openAuthorReview(page);
+
+  await expect(page.getByTestId("cleanup-card")).toBeVisible();
+  await expect(page.getByTestId("cleanup-duplicate-toggle")).toHaveCount(0);
+});
+
+// --- Ignored-authors blocklist manager (#2077) ----------------------------
+
+const IGNORED_RPC = "**/api/rpc/cleanup/ignored-authors";
+const ALIAS_IGNORED_RPC = "**/api/rpc/cleanup/alias-ignored";
+const REMOVE_IGNORED_RPC = "**/api/rpc/cleanup/remove-ignored";
+
+/** Serve a canned blocklist for every `cleanup/ignored-authors` call. */
+async function mockIgnored(
+  page: Page,
+  entries: { name: string; ignored_at: number }[],
+): Promise<void> {
+  await page.route(IGNORED_RPC, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(entries),
+    });
+  });
+}
+
+test("lists ignored authors and converts one into an alias", async ({
+  page,
+}) => {
+  await mockAuthors(page);
+  await mockIgnored(page, [{ name: "Weir, Andy", ignored_at: 1_700_000_000 }]);
+  await page.route(ALIAS_IGNORED_RPC, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: "78",
+    });
+  });
+  await gotoReady(page, SETTINGS_CLEANUP);
+
+  const row = page.getByTestId("cleanup-ignored-row");
+  await expect(row).toHaveCount(1);
+  await expect(row).toContainText("Weir, Andy");
+
+  await row.getByTestId("cleanup-ignored-alias-btn").click();
+  await expect(page.getByTestId("cleanup-ignored-picker")).toBeVisible();
+  await page.getByTestId("cleanup-ignored-author-picker-input").fill("Ada");
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/cleanup/alias-ignored",
+      expectedBody: { name: "Weir, Andy", canonical_id: CANNED_CANONICAL.id },
+      expectedStatus: 200,
+    },
+    async () =>
+      page
+        .getByTestId("cleanup-ignored-author-picker-matches")
+        .getByRole("button", { name: "Ada Lovelace" })
+        .click(),
+  );
+
+  await expect(page.getByTestId("cleanup-ignored-status")).toContainText(
+    "Converted to alias.",
+  );
+});
+
+test("removes an ignored author and surfaces a forced failure", async ({
+  page,
+}) => {
+  await mockIgnored(page, [
+    { name: "Smashwords, Inc.", ignored_at: 1_700_000_000 },
+  ]);
+  await page.route(REMOVE_IGNORED_RPC, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: "null",
+    });
+  });
+  await gotoReady(page, SETTINGS_CLEANUP);
+
+  const row = page.getByTestId("cleanup-ignored-row");
+  await expect(row).toHaveCount(1);
+
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/cleanup/remove-ignored",
+      expectedBody: { name: "Smashwords, Inc." },
+      expectedStatus: 200,
+    },
+    async () => row.getByTestId("cleanup-ignored-remove-btn").click(),
+  );
+  await expect(page.getByTestId("cleanup-ignored-status")).toContainText(
+    "Removed.",
+  );
+
+  // Error path: force the next remove to fail and assert it surfaces.
+  await page.unroute(REMOVE_IGNORED_RPC);
+  await page.route(REMOVE_IGNORED_RPC, async (route) => {
+    await route.fulfill({
+      status: 500,
+      contentType: "text/plain",
+      body: "internal server error",
+    });
+  });
+  await expectMutation(
+    page,
+    {
+      method: "POST",
+      url: "/api/rpc/cleanup/remove-ignored",
+      expectedBody: { name: "Smashwords, Inc." },
+      expectedStatus: 500,
+    },
+    async () => row.getByTestId("cleanup-ignored-remove-btn").click(),
+  );
+  await expect(page.getByTestId("cleanup-ignored-status")).not.toContainText(
+    "Removed.",
   );
 });

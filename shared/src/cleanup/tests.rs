@@ -94,6 +94,7 @@ fn suggestion_card_round_trips_through_json_with_optional_fields_present_and_abs
         book_count: 12,
         photo_url: Some("/api/authors/1/photo".into()),
         created_at: 1_700_000_000,
+        entity_id: Some(7),
     };
     let json = serde_json::to_string(&with_optionals).unwrap();
     let back: SuggestionCard = serde_json::from_str(&json).unwrap();
@@ -102,6 +103,7 @@ fn suggestion_card_round_trips_through_json_with_optional_fields_present_and_abs
     let without_optionals = SuggestionCard {
         secondary_name: None,
         photo_url: None,
+        entity_id: None,
         ..with_optionals
     };
     let json = serde_json::to_string(&without_optionals).unwrap();

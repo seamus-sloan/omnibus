@@ -218,3 +218,98 @@ test("surfaces an error and stays on the page when delete fails", async ({
   await page.unroute("**/api/rpc/author/delete");
   await page.getByTestId("author-delete-cancel").click();
 });
+
+test("picking a duplicate merges into the canonical author instead of deleting", async ({
+  page,
+  request,
+}) => {
+  // Both authors are fixture-only and read by no other spec. The merge is
+  // reversed via the cleanup undo log on the way out, so the shared DB and
+  // the `entity_aliases` ledger end the test exactly as they started.
+  const sourceName = "Haskell Curry";
+  const canonicalName = "Alonzo Church";
+  const id = await fetchAuthorIdByName(request, sourceName);
+  await gotoReady(page, `/authors/${id}`);
+
+  await page.getByTestId("author-delete-btn").click();
+  await expect(page.getByTestId("author-delete-modal")).toBeVisible();
+
+  // Arm the duplicate mode: filter, pick, and the danger button flips to a
+  // merge. No `ignored_authors` write may happen on this path.
+  await page.getByTestId("author-delete-duplicate-picker-input").fill("Alonzo");
+  await page
+    .getByTestId("author-delete-duplicate-picker-matches")
+    .getByRole("button", { name: canonicalName })
+    .click();
+  await expect(page.getByTestId("author-delete-confirm")).toContainText(
+    "Merge into",
+  );
+  await expect(page.getByTestId("author-delete-copy")).toContainText(
+    "will resolve",
+  );
+
+  let logId: number | null = null;
+  try {
+    const { response } = await expectMutation(
+      page,
+      {
+        method: "POST",
+        url: /\/api\/rpc\/cleanup\/merge-entity$/,
+        expectedStatus: 200,
+      },
+      async () => page.getByTestId("author-delete-confirm").click(),
+    );
+    logId = (await response.json()) as number;
+
+    await expect(page).toHaveURL(/\/authors\/?$/);
+
+    // The source's book now lists the canonical author; the source spelling
+    // is gone but NOT blocklisted (a delete would have orphaned the book).
+    const after = await request.get("/api/rpc/ebooks");
+    const body = (await after.json()) as {
+      books: { title: string; creators: { name: string }[] }[];
+    };
+    const sourceBookTitles = FIXTURE_BOOKS.filter((b) =>
+      b.authors.includes(sourceName),
+    ).map((b) => b.title);
+    for (const title of sourceBookTitles) {
+      const book = body.books.find((b) => b.title === title);
+      expect(book, `book ${JSON.stringify(title)} missing`).toBeDefined();
+      expect(
+        book?.creators.some((c) => c.name === canonicalName),
+        `${title} should list ${canonicalName} after the merge`,
+      ).toBe(true);
+    }
+    for (const book of body.books) {
+      expect(book.creators.find((c) => c.name === sourceName)).toBeUndefined();
+    }
+  } finally {
+    // Reverse the merge through the same undo path the UI offers, so the
+    // source author, its links, and the alias ledger are restored exactly.
+    if (logId !== null) {
+      const undo = await request.post("/api/rpc/cleanup/undo", {
+        data: { log_id: logId },
+      });
+      expect(undo.status(), "cleanup undo failed").toBe(200);
+      await expect
+        .poll(
+          async () => {
+            const r = await request.get("/api/rpc/ebooks");
+            if (r.status() !== 200) return false;
+            const body = (await r.json()) as {
+              books: { creators: { name: string }[] }[];
+            };
+            return body.books.some((b) =>
+              b.creators.some((c) => c.name === sourceName),
+            );
+          },
+          {
+            message: `author ${JSON.stringify(sourceName)} should be restored via undo`,
+            timeout: 10_000,
+            intervals: [100, 200, 500, 1_000],
+          },
+        )
+        .toBe(true);
+    }
+  }
+});

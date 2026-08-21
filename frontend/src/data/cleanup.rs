@@ -5,7 +5,7 @@
 //! twin. No mobile UI ships yet — the transport exists so the data layer keeps
 //! compiling under the mobile gate.
 
-use omnibus_shared::{CleanupCounts, CleanupKind, Decision, SuggestionCard};
+use omnibus_shared::{CleanupCounts, CleanupKind, Decision, IgnoredAuthor, SuggestionCard};
 
 #[cfg(not(feature = "mobile"))]
 use super::note_server_fn_err;
@@ -175,6 +175,98 @@ pub async fn delete_cleanup_entity(
         server_url,
         "delete-entity",
         serde_json::json!({ "kind": kind, "entity_id": entity_id }),
+    )
+    .await
+}
+
+/// Web/SSR: merge one entity into a canonical survivor — the "this is a
+/// duplicate of…" alternative to deleting an author. Returns the
+/// `cleanup_log` id an undo would replay from.
+#[cfg(not(feature = "mobile"))]
+pub async fn merge_cleanup_entity(
+    _server_url: &str,
+    kind: CleanupKind,
+    source_id: i64,
+    canonical_id: i64,
+) -> Result<i64, DataError> {
+    crate::rpc::rpc_cleanup_merge_entity(kind, source_id, canonical_id)
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Mobile: POST `/api/rpc/cleanup/merge-entity`.
+#[cfg(feature = "mobile")]
+pub async fn merge_cleanup_entity(
+    server_url: &str,
+    kind: CleanupKind,
+    source_id: i64,
+    canonical_id: i64,
+) -> Result<i64, DataError> {
+    post_cleanup(
+        server_url,
+        "merge-entity",
+        serde_json::json!({ "kind": kind, "source_id": source_id, "canonical_id": canonical_id }),
+    )
+    .await
+}
+
+/// Web/SSR: the `ignored_authors` blocklist entries.
+#[cfg(not(feature = "mobile"))]
+pub async fn get_ignored_authors(_server_url: &str) -> Result<Vec<IgnoredAuthor>, DataError> {
+    crate::rpc::rpc_cleanup_ignored_authors()
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Mobile: POST `/api/rpc/cleanup/ignored-authors`.
+#[cfg(feature = "mobile")]
+pub async fn get_ignored_authors(server_url: &str) -> Result<Vec<IgnoredAuthor>, DataError> {
+    post_cleanup(server_url, "ignored-authors", serde_json::json!({})).await
+}
+
+/// Web/SSR: convert a blocklist entry into an alias onto `canonical_id` and
+/// queue the relink pass. Returns the `cleanup_log` id.
+#[cfg(not(feature = "mobile"))]
+pub async fn alias_ignored_author(
+    _server_url: &str,
+    name: String,
+    canonical_id: i64,
+) -> Result<i64, DataError> {
+    crate::rpc::rpc_cleanup_alias_ignored_author(name, canonical_id)
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Mobile: POST `/api/rpc/cleanup/alias-ignored`.
+#[cfg(feature = "mobile")]
+pub async fn alias_ignored_author(
+    server_url: &str,
+    name: String,
+    canonical_id: i64,
+) -> Result<i64, DataError> {
+    post_cleanup(
+        server_url,
+        "alias-ignored",
+        serde_json::json!({ "name": name, "canonical_id": canonical_id }),
+    )
+    .await
+}
+
+/// Web/SSR: remove a blocklist entry outright and queue the relink pass.
+#[cfg(not(feature = "mobile"))]
+pub async fn remove_ignored_author(_server_url: &str, name: String) -> Result<(), DataError> {
+    crate::rpc::rpc_cleanup_remove_ignored_author(name)
+        .await
+        .map_err(note_server_fn_err)
+}
+
+/// Mobile: POST `/api/rpc/cleanup/remove-ignored`.
+#[cfg(feature = "mobile")]
+pub async fn remove_ignored_author(server_url: &str, name: String) -> Result<(), DataError> {
+    post_cleanup(
+        server_url,
+        "remove-ignored",
+        serde_json::json!({ "name": name }),
     )
     .await
 }

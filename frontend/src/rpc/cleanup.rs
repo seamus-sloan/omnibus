@@ -4,7 +4,7 @@
 
 use dioxus::fullstack::post;
 use dioxus::prelude::*;
-use omnibus_shared::{CleanupCounts, CleanupKind, Decision, SuggestionCard};
+use omnibus_shared::{CleanupCounts, CleanupKind, Decision, IgnoredAuthor, SuggestionCard};
 
 #[cfg(feature = "server")]
 use omnibus_db as db;
@@ -71,6 +71,95 @@ pub async fn rpc_cleanup_delete_entity(kind: CleanupKind, entity_id: i64) -> Res
             .await
             .map_err(|e| map_apply_error("cleanup delete entity", e))?,
     )
+}
+
+/// Admin-only: merge one entity into a canonical survivor outside the
+/// suggestion queue — the "this is a duplicate of…" alternative to deleting
+/// an author, routed through the same `apply_merge_authors` primitive an
+/// accepted merge suggestion runs (moves links, records the
+/// `entity_aliases` mapping, no `ignored_authors` write). Returns the
+/// `cleanup_log` id so the caller can offer an undo. Author-only, mirroring
+/// the delete-entity escape hatch.
+#[post("/api/rpc/cleanup/merge-entity", pool: PoolExt, admin: AdminUser)]
+pub async fn rpc_cleanup_merge_entity(
+    kind: CleanupKind,
+    source_id: i64,
+    canonical_id: i64,
+) -> Result<i64> {
+    if kind != CleanupKind::Author {
+        return Err(ServerFnError::new("only authors can be merged here").into());
+    }
+    Ok(db::cleanup::apply_merge_authors(
+        &pool.0,
+        &[source_id],
+        canonical_id,
+        None,
+        Some(admin.0.id),
+    )
+    .await
+    .map_err(|e| map_apply_error("cleanup merge entity", e))?)
+}
+
+/// Admin-only: every `ignored_authors` blocklist entry, for the Settings
+/// blocklist management list.
+#[post("/api/rpc/cleanup/ignored-authors", pool: PoolExt, _admin: AdminUser)]
+pub async fn rpc_cleanup_ignored_authors() -> Result<Vec<IgnoredAuthor>> {
+    Ok(db::cleanup::list_ignored_authors(&pool.0)
+        .await
+        .map_err(|e| map_apply_error("cleanup ignored authors", e))?)
+}
+
+/// Admin-only: convert an `ignored_authors` entry into an author alias onto
+/// `canonical_id`, then queue the authorless relink pass on both libraries
+/// so books orphaned while the name was blocklisted regain their author
+/// link. Returns the `cleanup_log` id for undo.
+#[post("/api/rpc/cleanup/alias-ignored", pool: PoolExt, worker: WorkerExt, admin: AdminUser)]
+pub async fn rpc_cleanup_alias_ignored_author(name: String, canonical_id: i64) -> Result<i64> {
+    let log_id =
+        db::cleanup::apply_alias_ignored_author(&pool.0, &name, canonical_id, Some(admin.0.id))
+            .await
+            .map_err(|e| map_apply_error("cleanup alias ignored author", e))?;
+    post_relink_tasks(&pool.0, &worker.0).await?;
+    Ok(log_id)
+}
+
+/// Admin-only: remove an `ignored_authors` entry outright, then queue the
+/// authorless relink pass so orphaned books can re-create the author from
+/// their file metadata again.
+#[post("/api/rpc/cleanup/remove-ignored", pool: PoolExt, worker: WorkerExt, _admin: AdminUser)]
+pub async fn rpc_cleanup_remove_ignored_author(name: String) -> Result<()> {
+    db::cleanup::remove_ignored_author(&pool.0, &name)
+        .await
+        .map_err(|e| map_apply_error("cleanup remove ignored author", e))?;
+    post_relink_tasks(&pool.0, &worker.0).await?;
+    Ok(())
+}
+
+/// Post `Task::RelinkAuthorless` for each configured library root. Shared
+/// tail of the alias/remove routes — the blocklist change only affects
+/// future parses, so the repair pass must be queued for the healing to
+/// reach already-orphaned books.
+#[cfg(feature = "server")]
+async fn post_relink_tasks(
+    pool: &sqlx::SqlitePool,
+    worker: &std::sync::Arc<db::worker::Worker>,
+) -> Result<(), ServerFnError> {
+    let settings = db::get_settings(pool)
+        .await
+        .map_err(|e| internal_rpc_error("cleanup relink settings", e))?;
+    if let Some(library_path) = settings.ebook_library_path {
+        worker.post(db::worker::Task::RelinkAuthorless {
+            library_path,
+            audiobooks: false,
+        });
+    }
+    if let Some(library_path) = settings.audiobook_library_path {
+        worker.post(db::worker::Task::RelinkAuthorless {
+            library_path,
+            audiobooks: true,
+        });
+    }
+    Ok(())
 }
 
 /// Map a `CleanupStoreError` to a client-facing error. The internal faults

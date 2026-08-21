@@ -23,6 +23,10 @@ recent releases are recorded below; everything earlier is available via the
 
 ## [Unreleased]
 
+### Added
+
+- Deleting an author now offers "this is a duplicate of…": books move to the picked canonical author and future scans resolve the spelling to it, instead of blocklisting the name and orphaning its books. The Library Cleanup settings section also lists the ignored-author blocklist, where an entry can be converted into an alias or removed — either way a background relink pass re-parses author-less books so they get their authors back. (#2077)
+
 ## [0.22.10] - 2026-08-18
 
 ### Fixed

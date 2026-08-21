@@ -5,7 +5,8 @@ use dioxus_router::{Routable, Router};
 use omnibus_shared::{CleanupAction, CleanupKind, SuggestionCard};
 
 use super::{
-    action_sentence, kind_title, review_key_action, secondary_label, ReviewKey, SuggestionCardView,
+    action_sentence, kind_title, review_key_action, secondary_label, CleanupReviewBody, QueueState,
+    ReviewKey, SuggestionCardView,
 };
 use crate::test_support::{render, render_in_vdom};
 
@@ -20,6 +21,7 @@ fn card(kind: CleanupKind, action: CleanupAction) -> SuggestionCard {
         book_count: 3,
         photo_url: None,
         created_at: 0,
+        entity_id: None,
     }
 }
 
@@ -121,6 +123,54 @@ fn suggestion_card_view_singularizes_a_one_book_suggestion() {
     let html = render(rsx! { SuggestionCardView { card: only_one } });
     assert!(html.contains("1 book affected"));
     assert!(!html.contains("Merging away"));
+}
+
+// Body hosts for the "Duplicate of…" affordance: a junk-author Delete card
+// (carries its entity id) vs. a merge card (no redirect target).
+#[derive(Clone, Debug, PartialEq, Routable)]
+enum DeleteBodyRoute {
+    #[route("/")]
+    DeleteBodyHost {},
+}
+
+#[component]
+fn DeleteBodyHost() -> Element {
+    let mut delete_card = card(CleanupKind::Author, CleanupAction::Delete);
+    delete_card.entity_id = Some(7);
+    body_host(delete_card)
+}
+
+#[derive(Clone, Debug, PartialEq, Routable)]
+enum MergeBodyRoute {
+    #[route("/")]
+    MergeBodyHost {},
+}
+
+#[component]
+fn MergeBodyHost() -> Element {
+    body_host(card(CleanupKind::Author, CleanupAction::Merge))
+}
+
+fn body_host(card: SuggestionCard) -> Element {
+    let state = QueueState {
+        cards: use_signal(move || Some(vec![card.clone()])),
+        cursor: use_signal(|| 0usize),
+        error: use_signal(|| None),
+        in_flight: use_signal(|| false),
+        dup_open: use_signal(|| false),
+    };
+    rsx! {
+        CleanupReviewBody { kind: Some(CleanupKind::Author), state }
+    }
+}
+
+#[test]
+fn review_body_offers_the_duplicate_redirect_only_on_a_delete_card_with_an_entity_id() {
+    let delete_html = render_in_vdom(|| rsx! { Router::<DeleteBodyRoute> {} });
+    assert!(delete_html.contains("cleanup-duplicate-toggle"));
+
+    let merge_html = render_in_vdom(|| rsx! { Router::<MergeBodyRoute> {} });
+    assert!(!merge_html.contains("cleanup-duplicate-toggle"));
 }
 
 #[test]

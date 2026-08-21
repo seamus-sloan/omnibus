@@ -98,6 +98,13 @@ pub mod confirm_modal;
 pub mod sync_glyph;
 pub use confirm_modal::{confirm_modal_body, ConfirmModal, ConfirmModalAction, ConfirmModalTone};
 
+// Inline canonical-author picker shared by the delete-as-duplicate flows
+// (author page modal, cleanup review Delete card) and the ignored-author
+// blocklist conversion list. Web-only, like the cleanup surfaces.
+pub mod author_picker;
+#[cfg(not(feature = "mobile"))]
+pub use author_picker::{AuthorPick, AuthorPicker};
+
 // Shareable quote-card editor (preview + presets + PNG export), shared by
 // the reader's quote drawer and the book-detail saved-passages modal.
 pub mod quote_card;

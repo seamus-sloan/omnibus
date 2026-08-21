@@ -163,6 +163,12 @@ pub struct SuggestionCard {
     pub photo_url: Option<String>,
     /// Unix seconds the suggestion was detected.
     pub created_at: i64,
+    /// The acted-on entity's own id, when the suggestion targets exactly
+    /// one (a junk-author Delete) — the "duplicate of…" redirect merges
+    /// that entity instead of deleting it. `None` for merges, splits, and
+    /// renames.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entity_id: Option<i64>,
 }
 
 /// One `ignored_authors` blocklist entry, for the Settings blocklist

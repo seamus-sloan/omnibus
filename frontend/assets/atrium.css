@@ -9607,3 +9607,57 @@ html {
 .cleanup-card-primary { font-size: 20px; font-weight: 600; margin: 0; }
 .cleanup-card-secondary { font-size: 13px; color: var(--ink-1); margin: 6px 0 0; }
 .cleanup-card-books { font-size: 12px; color: var(--ink-1); margin: 12px 0 0; }
+
+/* Duplicate-of redirect panel under a junk-author Delete card (#2077). */
+.cleanup-duplicate {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px dashed var(--line-2);
+  border-radius: 12px;
+}
+
+/* Shared canonical-author picker (delete modal, review card, blocklist). */
+.author-picker { display: flex; flex-direction: column; gap: 8px; }
+.author-picker-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: var(--bg-0);
+  color: var(--ink-0);
+  font-size: 14px;
+}
+.author-picker-matches {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.author-picker-match { width: 100%; text-align: left; }
+
+/* Ignored-authors blocklist manager in the settings section (#2077). */
+.cleanup-ignored { margin-top: 22px; }
+.cleanup-ignored h3 { margin: 0 0 4px; font-size: 15px; }
+.cleanup-ignored-list { list-style: none; margin: 10px 0 0; padding: 0; }
+.cleanup-ignored-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line-2);
+}
+.cleanup-ignored-row:last-child { border-bottom: none; }
+.cleanup-ignored-name { flex: 1; font-weight: 500; min-width: 140px; }
+.cleanup-ignored-picker { flex-basis: 100%; margin-top: 6px; }
+
+/* Duplicate-of section inside the author delete modal (#2077). */
+.author-delete-duplicate {
+  padding: 14px;
+  border: 1px dashed var(--line-2);
+  border-radius: 12px;
+}
+.author-delete-duplicate .del-copy { margin: 0 0 8px; }
+.author-delete-duplicate .del-copy .btn { margin-left: 10px; }

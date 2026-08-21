@@ -7,8 +7,9 @@
 
 use dioxus::prelude::*;
 use dioxus_router::Link;
-use omnibus_shared::{CleanupCounts, CleanupKind};
+use omnibus_shared::{CleanupCounts, CleanupKind, IgnoredAuthor};
 
+use crate::components::AuthorPicker;
 use crate::data::{self, server_error_message};
 use crate::{use_server_url, Route};
 
@@ -51,6 +52,7 @@ pub fn CleanupSection() -> Element {
                         "{message}"
                     }
                 }
+                IgnoredAuthorsList {}
             } else {
                 p { class: "settings-status error", "data-testid": "cleanup-forbidden",
                     "Administrator access is required to run library cleanup."
@@ -172,6 +174,190 @@ fn CleanupKindRow(kind: CleanupKind, count: CleanupCounts) -> Element {
     }
 }
 
+/// Signals the ignored-authors list threads through its handlers, grouped
+/// so the row renderer takes one argument instead of five.
+#[derive(Clone, Copy, PartialEq)]
+struct IgnoredListState {
+    entries: Signal<Option<Vec<IgnoredAuthor>>>,
+    /// Name whose "alias to…" picker is open, if any.
+    converting: Signal<Option<String>>,
+    status: Signal<Option<String>>,
+    busy: Signal<bool>,
+    /// Bumped after a convert/remove so the entries effect refetches.
+    generation: Signal<u32>,
+}
+
+/// The `ignored_authors` blocklist manager: a name deleted as junk stays
+/// here and is silently skipped on every scan, so a duplicate spelling
+/// deleted by mistake permanently orphans its books. Each entry can be
+/// converted into an alias onto a canonical author (the recovery path) or
+/// removed outright; both queue the authorless relink pass server-side.
+#[component]
+fn IgnoredAuthorsList() -> Element {
+    let server_url = use_server_url();
+    let state = IgnoredListState {
+        entries: use_signal(|| None),
+        converting: use_signal(|| None),
+        status: use_signal(|| None),
+        busy: use_signal(|| false),
+        generation: use_signal(|| 0u32),
+    };
+
+    let mut entries = state.entries;
+    let generation = state.generation;
+    let url_for_fetch = server_url.clone();
+    use_effect(move || {
+        let _ = generation();
+        let server_url = url_for_fetch.clone();
+        spawn(async move {
+            match data::get_ignored_authors(&server_url).await {
+                Ok(list) => entries.set(Some(list)),
+                Err(_) => entries.set(Some(Vec::new())),
+            }
+        });
+    });
+
+    let rows = entries();
+    rsx! {
+        div { class: "cleanup-ignored", "data-testid": "cleanup-ignored",
+            h3 { "Ignored authors" }
+            p { class: "subtitle",
+                "Names skipped on every library scan (written by \"Delete author\"). \
+                 Convert an entry to point a duplicate spelling at the real author, \
+                 or remove it to let scans re-create the name."
+            }
+            match rows {
+                None => rsx! {
+                    p { class: "settings-status", role: "status", "data-testid": "cleanup-ignored-loading",
+                        "Loading\u{2026}"
+                    }
+                },
+                Some(list) if list.is_empty() => rsx! {
+                    p { class: "settings-status", "data-testid": "cleanup-ignored-empty",
+                        "No ignored authors."
+                    }
+                },
+                Some(list) => rsx! {
+                    ul { class: "cleanup-ignored-list", "data-testid": "cleanup-ignored-list",
+                        for entry in list {
+                            {ignored_author_row(server_url.clone(), entry.name.clone(), state)}
+                        }
+                    }
+                },
+            }
+            if let Some(message) = (state.status)() {
+                p { class: "settings-status", role: "status", "data-testid": "cleanup-ignored-status",
+                    "{message}"
+                }
+            }
+        }
+    }
+}
+
+/// One blocklist row: the name, the Convert/Remove actions, and (when this
+/// row's convert is armed) the canonical-author picker.
+fn ignored_author_row(server_url: String, name: String, state: IgnoredListState) -> Element {
+    let mut converting = state.converting;
+    let busy = (state.busy)();
+    let picker_open = converting().as_deref() == Some(name.as_str());
+    let toggle_name = name.clone();
+    let remove_name = name.clone();
+    let pick_name = name.clone();
+    let remove_url = server_url.clone();
+    rsx! {
+        li { key: "{name}", class: "cleanup-ignored-row", "data-testid": "cleanup-ignored-row",
+            span { class: "cleanup-ignored-name", "{name}" }
+            button {
+                class: "btn",
+                "data-testid": "cleanup-ignored-alias-btn",
+                disabled: busy,
+                onclick: move |_| {
+                    let armed = converting().as_deref() == Some(toggle_name.as_str());
+                    converting.set(if armed { None } else { Some(toggle_name.clone()) });
+                },
+                "Convert to alias\u{2026}"
+            }
+            button {
+                class: "btn",
+                "data-testid": "cleanup-ignored-remove-btn",
+                disabled: busy,
+                onclick: move |_| remove_ignored(remove_url.clone(), remove_name.clone(), state),
+                "Remove"
+            }
+            if picker_open {
+                div { class: "cleanup-ignored-picker", "data-testid": "cleanup-ignored-picker",
+                    p { class: "subtitle", "Pick the author this spelling should resolve to:" }
+                    AuthorPicker {
+                        testid: "cleanup-ignored-author-picker".to_string(),
+                        on_pick: {
+                            let server_url = server_url.clone();
+                            move |pick: crate::components::AuthorPick| {
+                                convert_ignored(server_url.clone(), pick_name.clone(), pick.id, state)
+                            }
+                        },
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Convert `name` into an alias onto `canonical_id`, report, and refetch.
+fn convert_ignored(server_url: String, name: String, canonical_id: i64, state: IgnoredListState) {
+    let IgnoredListState {
+        mut converting,
+        mut status,
+        mut busy,
+        mut generation,
+        ..
+    } = state;
+    if busy() {
+        return;
+    }
+    busy.set(true);
+    status.set(None);
+    spawn(async move {
+        match data::alias_ignored_author(&server_url, name, canonical_id).await {
+            Ok(_) => {
+                status.set(Some(
+                    "Converted to alias. Relinking affected books in the background.".to_string(),
+                ));
+                converting.set(None);
+                generation.set(generation() + 1);
+            }
+            Err(e) => status.set(Some(server_error_message(&e))),
+        }
+        busy.set(false);
+    });
+}
+
+/// Remove `name` from the blocklist outright, report, and refetch.
+fn remove_ignored(server_url: String, name: String, state: IgnoredListState) {
+    let IgnoredListState {
+        mut status,
+        mut busy,
+        mut generation,
+        ..
+    } = state;
+    if busy() {
+        return;
+    }
+    busy.set(true);
+    status.set(None);
+    spawn(async move {
+        match data::remove_ignored_author(&server_url, name).await {
+            Ok(()) => {
+                status.set(Some(
+                    "Removed. Relinking affected books in the background.".to_string(),
+                ));
+                generation.set(generation() + 1);
+            }
+            Err(e) => status.set(Some(server_error_message(&e))),
+        }
+        busy.set(false);
+    });
+}
+
 /// Human-readable name for a cleanup kind.
 fn kind_label(kind: CleanupKind) -> &'static str {
     match kind {
@@ -242,5 +428,14 @@ mod tests {
     fn cleanup_counts_list_renders_the_loading_state_before_counts_arrive() {
         let html = render_in_vdom(|| rsx! { Router::<LoadingRoute> {} });
         assert!(html.contains("cleanup-counts-loading"));
+    }
+
+    #[test]
+    fn ignored_authors_list_renders_its_heading_and_loading_state_before_entries_arrive() {
+        // SSR / first paint: effects never run, so the entries are still
+        // `None` — hydration-parity contract of rule 07.
+        let html = render_in_vdom(|| rsx! { super::IgnoredAuthorsList {} });
+        assert!(html.contains("Ignored authors"));
+        assert!(html.contains("cleanup-ignored-loading"));
     }
 }

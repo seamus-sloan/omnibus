@@ -10,9 +10,9 @@ use omnibus_shared::{AuthorDetail, EbookMetadata};
 
 use crate::components::atrium::Cover;
 use crate::components::author_photo_edit::AuthorPhotoEditOverlay;
-#[cfg(not(feature = "mobile"))]
-use crate::components::{confirm_modal_body, ConfirmModal, ConfirmModalAction, ConfirmModalTone};
 use crate::components::{disc_back_link, PageError, PageLoading, PageNotFound};
+#[cfg(not(feature = "mobile"))]
+use crate::components::{AuthorPick, AuthorPicker, ConfirmModal};
 use crate::{data, use_server_url, Route};
 
 /// Renders the author discovery page.
@@ -110,6 +110,8 @@ fn render_author(
     let deleting = use_signal(|| false);
     #[cfg(not(feature = "mobile"))]
     let delete_error: Signal<Option<String>> = use_signal(|| None);
+    #[cfg(not(feature = "mobile"))]
+    let duplicate_of: Signal<Option<AuthorPick>> = use_signal(|| None);
 
     // F5.9-lite admin Delete affordance is web-only — the matching
     // `data::delete_author` server fn is gated `not(feature = "mobile")`
@@ -153,6 +155,7 @@ fn render_author(
                         show_confirm,
                         deleting,
                         delete_error,
+                        duplicate_of,
                     },
                 }
             }
@@ -414,9 +417,10 @@ fn group_books_by_series(books: Vec<EbookMetadata>) -> (SeriesGroups, Vec<EbookM
 }
 
 /// Transient state for the delete-author modal: whether the confirm
-/// pane is open, whether a delete RPC is in flight, and the most
-/// recent error message (if any). Grouped because all three change
-/// together across the confirm/run/error lifecycle, and keep the
+/// pane is open, whether a delete/merge RPC is in flight, the most
+/// recent error message (if any), and the canonical author a
+/// "this is a duplicate of…" pick resolved to. Grouped because all four
+/// change together across the confirm/run/error lifecycle, and keep the
 /// modal's signature focused on the stable identity props.
 #[cfg(not(feature = "mobile"))]
 #[derive(Clone, Copy, PartialEq)]
@@ -424,17 +428,22 @@ struct AuthorDeleteState {
     show_confirm: Signal<bool>,
     deleting: Signal<bool>,
     delete_error: Signal<Option<String>>,
+    duplicate_of: Signal<Option<AuthorPick>>,
 }
 
-/// Confirmation modal for the admin "Delete author" action. On confirm,
-/// hits the `rpc_delete_author` server fn (which un-links every book,
-/// inserts the name into `ignored_authors`, and refreshes FTS) then
-/// navigates back to `/authors`. The blocklist insert is what makes the
-/// delete durable across reindexes — without it the next `Task::Scan`
-/// would silently recreate the row from the OPF metadata. Web-only;
-/// mobile admins fall back to the per-book metadata edit page. Built on
-/// the shared `ConfirmModal` shell (see `components::confirm_modal`)
-/// rather than hand-rolling its own backdrop/busy-gate markup.
+/// Confirmation modal for the admin "Delete author" action, with a
+/// "this is a duplicate of…" escape hatch. A plain confirm hits the
+/// `rpc_delete_author` server fn (un-links every book, inserts the name
+/// into `ignored_authors` so the next `Task::Scan` can't silently recreate
+/// the row, refreshes FTS). Picking a canonical author instead routes
+/// through `rpc_cleanup_merge_entity` — the merge primitive moves the book
+/// links onto the survivor and records an `entity_aliases` mapping, and
+/// writes **no** blocklist entry, so a duplicate spelling never orphans its
+/// books on later reindexes. Both paths navigate back to `/authors`.
+/// Web-only; mobile admins fall back to the per-book metadata edit page.
+/// Built on the shared `ConfirmModal` shell (see
+/// `components::confirm_modal`) rather than hand-rolling its own
+/// backdrop/busy-gate markup.
 #[cfg(not(feature = "mobile"))]
 #[component]
 fn AuthorDeleteModal(
@@ -448,35 +457,67 @@ fn AuthorDeleteModal(
         mut show_confirm,
         mut deleting,
         mut delete_error,
+        mut duplicate_of,
     } = state;
     let nav = use_navigator();
     let busy = deleting();
+    let picked = duplicate_of();
     let book_count_label = if book_count == 1 { "book" } else { "books" };
     let title = format!("Delete \"{author_name}\"?");
-    let body = format!(
-        "This will un-link the author from {book_count} {book_count_label} \
-         and prevent the name from being re-added on future library scans. \
-         The books themselves are not deleted."
-    );
-
-    let confirm_delete = move |_| {
-        let server_url = server_url.clone();
-        spawn(async move {
-            deleting.set(true);
-            delete_error.set(None);
-            match data::delete_author(&server_url, author_id).await {
-                Ok(_) => {
-                    show_confirm.set(false);
-                    nav.push(Route::AuthorsIndex {});
-                }
-                Err(e) => {
-                    delete_error.set(Some(e.to_string()));
-                }
-            }
-            deleting.set(false);
-        });
+    let body = match &picked {
+        None => format!(
+            "This will un-link the author from {book_count} {book_count_label} \
+             and prevent the name from being re-added on future library scans. \
+             The books themselves are not deleted."
+        ),
+        Some(pick) => format!(
+            "The {book_count} {book_count_label} will move to \"{}\", and future \
+             library scans will resolve \"{author_name}\" to that author instead \
+             of re-creating it.",
+            pick.name
+        ),
     };
 
+    let confirm = {
+        let server_url = server_url.clone();
+        move |_| {
+            let server_url = server_url.clone();
+            let picked = duplicate_of.peek().clone();
+            spawn(async move {
+                deleting.set(true);
+                delete_error.set(None);
+                let result = match &picked {
+                    Some(pick) => data::merge_cleanup_entity(
+                        &server_url,
+                        omnibus_shared::CleanupKind::Author,
+                        author_id,
+                        pick.id,
+                    )
+                    .await
+                    .map(|_| ()),
+                    None => data::delete_author(&server_url, author_id)
+                        .await
+                        .map(|_| ()),
+                };
+                match result {
+                    Ok(()) => {
+                        show_confirm.set(false);
+                        nav.push(Route::AuthorsIndex {});
+                    }
+                    Err(e) => {
+                        delete_error.set(Some(e.to_string()));
+                    }
+                }
+                deleting.set(false);
+            });
+        }
+    };
+
+    let confirm_label = match (&picked, busy) {
+        (_, true) => "Working\u{2026}".to_string(),
+        (Some(pick), false) => format!("Merge into \"{}\"", pick.name),
+        (None, false) => "Delete".to_string(),
+    };
     rsx! {
         ConfirmModal {
             testid: "author-delete-modal".to_string(),
@@ -487,26 +528,49 @@ fn AuthorDeleteModal(
             if let Some(msg) = delete_error() {
                 p { role: "alert", class: "error author-delete-modal__error", "⚠ {msg}" }
             }
-            {confirm_modal_body(
-                &title,
-                &body,
-                vec![
-                    ConfirmModalAction {
-                        testid: "author-delete-cancel".to_string(),
-                        label: "Cancel".to_string(),
-                        tone: ConfirmModalTone::Ghost,
-                        disabled: busy,
-                        on_click: EventHandler::new(move |_| show_confirm.set(false)),
-                    },
-                    ConfirmModalAction {
-                        testid: "author-delete-confirm".to_string(),
-                        label: if busy { "Deleting\u{2026}".to_string() } else { "Delete".to_string() },
-                        tone: ConfirmModalTone::Danger,
-                        disabled: busy,
-                        on_click: EventHandler::new(confirm_delete),
-                    },
-                ],
-            )}
+            h3 { class: "del-title", "{title}" }
+            p { class: "del-copy", "data-testid": "author-delete-copy", "{body}" }
+            div { class: "author-delete-duplicate", "data-testid": "author-delete-duplicate",
+                if let Some(pick) = picked.clone() {
+                    p { class: "del-copy",
+                        "Duplicate of: "
+                        strong { "{pick.name}" }
+                        button {
+                            class: "btn",
+                            "data-testid": "author-delete-duplicate-clear",
+                            disabled: busy,
+                            onclick: move |_| duplicate_of.set(None),
+                            "Clear"
+                        }
+                    }
+                } else {
+                    p { class: "del-copy", "Or, if this is a duplicate spelling of another author, pick the one to keep:" }
+                    AuthorPicker {
+                        exclude_id: Some(author_id),
+                        testid: "author-delete-duplicate-picker".to_string(),
+                        on_pick: move |pick| duplicate_of.set(Some(pick)),
+                    }
+                }
+            }
+            div { class: "del-actions",
+                button {
+                    class: "del-btn-ghost",
+                    "data-testid": "author-delete-cancel",
+                    disabled: busy,
+                    onclick: move |_| show_confirm.set(false),
+                    "Cancel"
+                }
+                button {
+                    class: "del-btn-danger",
+                    "data-testid": "author-delete-confirm",
+                    disabled: busy,
+                    onclick: confirm,
+                    "{confirm_label}"
+                }
+            }
         }
     }
 }
+
+#[cfg(all(test, feature = "server"))]
+mod tests;

@@ -8,6 +8,7 @@
 use dioxus::prelude::*;
 use omnibus_shared::{CleanupAction, CleanupKind, Decision, SuggestionCard};
 
+use crate::components::{AuthorPick, AuthorPicker};
 use crate::data::{self, CLEANUP_QUEUE_PAGE};
 use crate::{use_is_admin, use_server_url};
 
@@ -22,6 +23,9 @@ struct QueueState {
     cursor: Signal<usize>,
     error: Signal<Option<String>>,
     in_flight: Signal<bool>,
+    /// Whether the current Delete card's "duplicate of…" picker is open.
+    /// Lives in the queue state so [`advance`] can close it per card.
+    dup_open: Signal<bool>,
 }
 
 /// The `/settings/cleanup/:kind` review surface. An unrecognized `kind` slug
@@ -36,6 +40,7 @@ pub fn CleanupReviewPage(kind: String) -> Element {
         cursor: use_signal(|| 0usize),
         error: use_signal(|| None),
         in_flight: use_signal(|| false),
+        dup_open: use_signal(|| false),
     };
 
     spawn_queue_fetch(is_admin, server_url.clone(), parsed, state);
@@ -141,10 +146,53 @@ fn review_key_action(key: &Key) -> Option<ReviewKey> {
 }
 
 /// Move to the next card without deciding — Skip leaves the suggestion pending
-/// so it comes back on the next pass.
+/// so it comes back on the next pass. Closes the duplicate picker so it
+/// never carries over onto the next card.
 fn advance(state: QueueState) {
     let mut cursor = state.cursor;
+    let mut dup_open = state.dup_open;
     cursor.set(cursor() + 1);
+    dup_open.set(false);
+}
+
+/// Resolve a junk-author Delete card as "duplicate of `pick`" instead:
+/// merge the entity into the picked canonical author (moving links and
+/// recording the `entity_aliases` mapping, no blocklist write), then mark
+/// the suggestion Rejected so its delete proposal doesn't come back, and
+/// advance. Guarded on `in_flight` like [`decide`].
+fn resolve_duplicate(server_url: String, state: QueueState, pick: AuthorPick) {
+    let QueueState {
+        cards,
+        cursor,
+        mut error,
+        mut in_flight,
+        ..
+    } = state;
+    if in_flight() {
+        return;
+    }
+    let Some(card) = current_card(&cards.read(), cursor()) else {
+        return;
+    };
+    let Some(source_id) = card.entity_id else {
+        return;
+    };
+    let id = card.id;
+    in_flight.set(true);
+    error.set(None);
+    spawn(async move {
+        let merged =
+            data::merge_cleanup_entity(&server_url, CleanupKind::Author, source_id, pick.id).await;
+        let result = match merged {
+            Ok(_) => data::decide_cleanup_suggestion(&server_url, id, Decision::Rejected).await,
+            Err(e) => Err(e),
+        };
+        match result {
+            Ok(()) => advance(state),
+            Err(e) => error.set(Some(crate::data::server_error_message(&e))),
+        }
+        in_flight.set(false);
+    });
 }
 
 /// Send one Accept / Reject through `cleanup/decide`, then advance. Guarded on
@@ -155,6 +203,7 @@ fn decide(server_url: String, state: QueueState, decision: Decision) {
         cursor,
         mut error,
         mut in_flight,
+        ..
     } = state;
     if in_flight() {
         return;
@@ -213,7 +262,7 @@ fn CleanupReviewBody(kind: Option<CleanupKind>, state: QueueState) -> Element {
                 "Loading\u{2026}"
             }
         } else if let Some(card) = card {
-            SuggestionCardView { card }
+            SuggestionCardView { card: card.clone() }
             div { class: "cleanup-review-actions",
                 button {
                     class: "btn primary",
@@ -240,6 +289,33 @@ fn CleanupReviewBody(kind: Option<CleanupKind>, state: QueueState) -> Element {
                     "data-testid": "cleanup-skip",
                     onclick: move |_| advance(state),
                     "Skip (Space)"
+                }
+                if card.kind == CleanupKind::Author && card.action == CleanupAction::Delete && card.entity_id.is_some() {
+                    button {
+                        class: "btn",
+                        "data-testid": "cleanup-duplicate-toggle",
+                        disabled: (state.in_flight)(),
+                        onclick: {
+                            let mut dup_open = state.dup_open;
+                            move |_| dup_open.set(!dup_open())
+                        },
+                        "Duplicate of\u{2026}"
+                    }
+                }
+            }
+            if (state.dup_open)() && card.entity_id.is_some() {
+                div { class: "cleanup-duplicate", "data-testid": "cleanup-duplicate",
+                    p { class: "subtitle",
+                        "Pick the author to keep — the books move there and future scans resolve this spelling to it."
+                    }
+                    AuthorPicker {
+                        exclude_id: card.entity_id,
+                        testid: "cleanup-duplicate-picker".to_string(),
+                        on_pick: {
+                            let server_url = server_url.clone();
+                            move |pick| resolve_duplicate(server_url.clone(), state, pick)
+                        },
+                    }
                 }
             }
         } else if kind.is_some() {
