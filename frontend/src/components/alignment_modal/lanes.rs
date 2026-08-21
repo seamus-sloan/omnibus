@@ -172,7 +172,12 @@ fn lane_geometry<'v>(
 
 /// Both lanes plus the connector field between them: chapter ticks, fills,
 /// labelled position chips, the anchored mapped preview, and the delta
-/// sentence beneath.
+/// sentence beneath. No hooks anywhere in this tree — it's a plain
+/// data-in/markup-out function, not a `#[component]` — so splitting the rsx
+/// across named helpers below carries none of the hook-order risk rule 07
+/// warns about; each helper is just a sub-tree builder called inline via
+/// `{helper(...)}`, same pattern as `pages/series_index.rs`'s
+/// `render_series_body`.
 pub(super) fn render_lanes(
     view: &AlignmentView,
     order: &[i64],
@@ -209,110 +214,13 @@ pub(super) fn render_lanes(
                     }
                 }
             }
-            div { class: "al-lane al-lane-text",
-                if let Some(f) = reading_frac {
-                    div { class: "al-fill", style: "width: {f * 100.0}%" }
-                }
-                for (i, ch) in ebook_chapters.iter().enumerate() {
-                    if i % text_step == 0 {
-                        div {
-                            key: "{ch.title}-{ch.percent}",
-                            class: "al-tick",
-                            title: "{ch.title}",
-                            style: "left: {ch.percent}%",
-                        }
-                    }
-                }
-                if let Some(f) = reading_frac {
-                    div {
-                        class: "al-marker",
-                        "data-testid": "alignment-reading-marker",
-                        style: "left: {f * 100.0}%",
-                    }
-                }
-            }
+            {render_text_lane(reading_frac, &ebook_chapters, text_step)}
             // The connector field: faint threads join matched anchors; the
             // accent dashed thread is the reading position landing in the
             // audio — the thing the user judges before confirming.
-            div { class: "al-connector", "aria-hidden": "true",
-                svg {
-                    view_box: "0 0 1000 44",
-                    preserve_aspect_ratio: "none",
-                    for (t, a) in view.anchor_pairs.iter() {
-                        line {
-                            key: "{t}-{a}",
-                            x1: "{t * 1000.0}",
-                            y1: "0",
-                            x2: "{a * 1000.0}",
-                            y2: "44",
-                            class: "al-thread",
-                        }
-                    }
-                    if let (Some(f), Some(m)) = (reading_frac, mapped_frac) {
-                        line {
-                            x1: "{f * 1000.0}",
-                            y1: "0",
-                            x2: "{m * 1000.0}",
-                            y2: "44",
-                            class: "al-thread-mapped",
-                        }
-                    }
-                }
-            }
-            div { class: "al-lane al-lane-audio",
-                for f in files.iter() {
-                    div {
-                        key: "{f.book_file_id}",
-                        class: "al-seg",
-                        style: format!(
-                            "flex-grow: {}",
-                            if total > 0.0 { f.duration_seconds.max(1.0) } else { 1.0 },
-                        ),
-                        span { class: "al-seg-label", title: "{f.label}", "{basename(&f.label)}" }
-                        span { class: "al-seg-dur", "{fmt_hm(f.duration_seconds)}" }
-                    }
-                }
-                div { class: "al-lane-overlay",
-                    if let Some(f) = listen_frac {
-                        div { class: "al-fill", style: "width: {f * 100.0}%" }
-                    }
-                    for (i, t) in audio_ticks.iter().enumerate() {
-                        if i % audio_step == 0 {
-                            div { key: "{i}", class: "al-tick", style: "left: {t * 100.0}%" }
-                        }
-                    }
-                    if let Some(f) = listen_frac {
-                        div {
-                            class: "al-marker",
-                            "data-testid": "alignment-listening-marker",
-                            style: "left: {f * 100.0}%",
-                        }
-                    }
-                    if let Some(m) = mapped_frac {
-                        div {
-                            class: "al-marker al-marker-mapped",
-                            "data-testid": "alignment-mapped-marker",
-                            style: "left: {m * 100.0}%",
-                        }
-                    }
-                }
-            }
-            div { class: if stagger { "al-chip-row al-chip-row-tall" } else { "al-chip-row" },
-                if let Some(f) = listen_frac {
-                    span {
-                        class: "al-chip",
-                        style: "left: {f * 100.0}%; transform: translateX({chip_translate(f)});",
-                        "Listening · {fmt_hm(f * total)}"
-                    }
-                }
-                if let Some(m) = mapped_frac {
-                    span {
-                        class: if stagger { "al-chip al-chip-accent al-chip-dashed al-chip-staggered" } else { "al-chip al-chip-accent al-chip-dashed" },
-                        style: "left: {m * 100.0}%; transform: translateX({chip_translate(m)});",
-                        "≈ your reading maps here · {fmt_hm(m * total)}"
-                    }
-                }
-            }
+            {render_connector(&view.anchor_pairs, reading_frac, mapped_frac)}
+            {render_audio_lane(files, total, listen_frac, mapped_frac, audio_ticks, audio_step)}
+            {render_position_chip_row(listen_frac, mapped_frac, total, stagger)}
             p { class: "al-lane-label",
                 "Audiobook · "
                 if files.len() == 1 {
@@ -321,23 +229,187 @@ pub(super) fn render_lanes(
                     "{files.len()} files, played end to end · {fmt_hm(total)}"
                 }
             }
-            if g.no_positions {
-                p { class: "al-mapped-note", "data-testid": "alignment-empty-note",
-                    "Nothing to compare yet — read or listen a little first, and the "
-                    "positions will land on these lanes."
-                }
-            } else if let Some(d) = g.delta {
-                p { class: "al-mapped-note",
-                    if d >= 0.0 {
-                        "Your reading spot sits ≈ {fmt_hm(d.abs())} past the listening position."
-                    } else {
-                        "The listening position is ≈ {fmt_hm(d.abs())} past your reading spot."
+            {render_delta_note(g.no_positions, g.delta, mapped_frac, total)}
+        }
+    }
+}
+
+/// The ebook lane: fill up to the reading position, thinned chapter ticks,
+/// and the reading marker.
+fn render_text_lane(
+    reading_frac: Option<f64>,
+    ebook_chapters: &[omnibus_shared::AlignmentEbookChapter],
+    text_step: usize,
+) -> Element {
+    rsx! {
+        div { class: "al-lane al-lane-text",
+            if let Some(f) = reading_frac {
+                div { class: "al-fill", style: "width: {f * 100.0}%" }
+            }
+            for (i, ch) in ebook_chapters.iter().enumerate() {
+                if i % text_step == 0 {
+                    div {
+                        key: "{ch.title}-{ch.percent}",
+                        class: "al-tick",
+                        title: "{ch.title}",
+                        style: "left: {ch.percent}%",
                     }
                 }
-            } else if let (Some(m), true) = (mapped_frac, total > 0.0) {
-                p { class: "al-mapped-note",
-                    "≈ your reading maps to {fmt_hm(m * total)}"
+            }
+            if let Some(f) = reading_frac {
+                div {
+                    class: "al-marker",
+                    "data-testid": "alignment-reading-marker",
+                    style: "left: {f * 100.0}%",
                 }
+            }
+        }
+    }
+}
+
+/// The connector field between the two lanes: one thread per matched anchor
+/// pair, plus the dashed accent thread for the reading position's mapped
+/// landing spot.
+fn render_connector(
+    anchor_pairs: &[(f64, f64)],
+    reading_frac: Option<f64>,
+    mapped_frac: Option<f64>,
+) -> Element {
+    rsx! {
+        div { class: "al-connector", "aria-hidden": "true",
+            svg {
+                view_box: "0 0 1000 44",
+                preserve_aspect_ratio: "none",
+                for (t, a) in anchor_pairs.iter() {
+                    line {
+                        key: "{t}-{a}",
+                        x1: "{t * 1000.0}",
+                        y1: "0",
+                        x2: "{a * 1000.0}",
+                        y2: "44",
+                        class: "al-thread",
+                    }
+                }
+                if let (Some(f), Some(m)) = (reading_frac, mapped_frac) {
+                    line {
+                        x1: "{f * 1000.0}",
+                        y1: "0",
+                        x2: "{m * 1000.0}",
+                        y2: "44",
+                        class: "al-thread-mapped",
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The audiobook lane: file segments sized by duration, plus an overlay of
+/// the fill, thinned chapter ticks, and the listening / mapped markers.
+fn render_audio_lane(
+    files: &[&AlignmentAudioFile],
+    total: f64,
+    listen_frac: Option<f64>,
+    mapped_frac: Option<f64>,
+    audio_ticks: &[f64],
+    audio_step: usize,
+) -> Element {
+    rsx! {
+        div { class: "al-lane al-lane-audio",
+            for f in files.iter() {
+                div {
+                    key: "{f.book_file_id}",
+                    class: "al-seg",
+                    style: format!(
+                        "flex-grow: {}",
+                        if total > 0.0 { f.duration_seconds.max(1.0) } else { 1.0 },
+                    ),
+                    span { class: "al-seg-label", title: "{f.label}", "{basename(&f.label)}" }
+                    span { class: "al-seg-dur", "{fmt_hm(f.duration_seconds)}" }
+                }
+            }
+            div { class: "al-lane-overlay",
+                if let Some(f) = listen_frac {
+                    div { class: "al-fill", style: "width: {f * 100.0}%" }
+                }
+                for (i, t) in audio_ticks.iter().enumerate() {
+                    if i % audio_step == 0 {
+                        div { key: "{i}", class: "al-tick", style: "left: {t * 100.0}%" }
+                    }
+                }
+                if let Some(f) = listen_frac {
+                    div {
+                        class: "al-marker",
+                        "data-testid": "alignment-listening-marker",
+                        style: "left: {f * 100.0}%",
+                    }
+                }
+                if let Some(m) = mapped_frac {
+                    div {
+                        class: "al-marker al-marker-mapped",
+                        "data-testid": "alignment-mapped-marker",
+                        style: "left: {m * 100.0}%",
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The listening / mapped position chip row beneath the audio lane,
+/// staggered onto two rows when the two chips would otherwise collide.
+fn render_position_chip_row(
+    listen_frac: Option<f64>,
+    mapped_frac: Option<f64>,
+    total: f64,
+    stagger: bool,
+) -> Element {
+    rsx! {
+        div { class: if stagger { "al-chip-row al-chip-row-tall" } else { "al-chip-row" },
+            if let Some(f) = listen_frac {
+                span {
+                    class: "al-chip",
+                    style: "left: {f * 100.0}%; transform: translateX({chip_translate(f)});",
+                    "Listening · {fmt_hm(f * total)}"
+                }
+            }
+            if let Some(m) = mapped_frac {
+                span {
+                    class: if stagger { "al-chip al-chip-accent al-chip-dashed al-chip-staggered" } else { "al-chip al-chip-accent al-chip-dashed" },
+                    style: "left: {m * 100.0}%; transform: translateX({chip_translate(m)});",
+                    "≈ your reading maps here · {fmt_hm(m * total)}"
+                }
+            }
+        }
+    }
+}
+
+/// The judgement sentence beneath both lanes: no positions yet, the
+/// measured delta between listening and mapped-reading, or (no listening
+/// position at all) the bare mapped landing spot.
+fn render_delta_note(
+    no_positions: bool,
+    delta: Option<f64>,
+    mapped_frac: Option<f64>,
+    total: f64,
+) -> Element {
+    rsx! {
+        if no_positions {
+            p { class: "al-mapped-note", "data-testid": "alignment-empty-note",
+                "Nothing to compare yet — read or listen a little first, and the "
+                "positions will land on these lanes."
+            }
+        } else if let Some(d) = delta {
+            p { class: "al-mapped-note",
+                if d >= 0.0 {
+                    "Your reading spot sits ≈ {fmt_hm(d.abs())} past the listening position."
+                } else {
+                    "The listening position is ≈ {fmt_hm(d.abs())} past your reading spot."
+                }
+            }
+        } else if let (Some(m), true) = (mapped_frac, total > 0.0) {
+            p { class: "al-mapped-note",
+                "≈ your reading maps to {fmt_hm(m * total)}"
             }
         }
     }

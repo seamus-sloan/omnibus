@@ -228,62 +228,17 @@ async fn drain_reader_events(
     } = sigs;
     let mut last_cfi: Option<String> = None;
     crate::js_interop::drain_events(eval, move |event: ReaderEvent| match event {
-        ReaderEvent::Relocate { json } => {
-            if let Ok(mut data) = serde_json::from_str::<RelocateData>(&json) {
-                // Re-derive chapter/total from the TOC's own order rather
-                // than trusting the glue's numbers verbatim — see
-                // `signals::resolve_chapter_position` (issue #1909, AC1).
-                let toc_snapshot = toc.peek().clone();
-                let previous_chapter = loc.peek().chapter;
-                let (chapter, total_chapters) =
-                    resolve_chapter_position(&toc_snapshot, &data, previous_chapter);
-                data.chapter = chapter;
-                data.total_chapters = total_chapters;
-
-                // Echo emissions (restore settle, locations re-emit) re-state
-                // a position the server already holds — persisting one stamps
-                // a fresh clock on an unmoved position and shadows a newer
-                // audiobook spot at the cross-format clock gate. Same rule as
-                // the web interop; render, don't write. `last_cfi` tracks the
-                // last SEEN position (echoes included), so a later non-echo
-                // re-emit of the same CFI (a re-render) stays deduped rather
-                // than re-posting the unmoved position.
-                if let Some(cfi) = data.cfi.clone() {
-                    let moved = last_cfi.as_deref() != Some(cfi.as_str());
-                    last_cfi = Some(cfi.clone());
-                    if !data.echo && moved {
-                        crate::reader_progress::save(&uuid, &cfi);
-                        persist_progress(&uuid, &server_url, cfi, data.pct);
-                    }
-                }
-                // A relocate names the (corrected) current position, so it
-                // also signals that an in-flight chapter jump has finished
-                // rendering — flip a TOC-jump-triggered `Loading` back to
-                // `Ready` (issue #1909, AC3). Guarded so a stray relocate
-                // after a load `Failed` can't resurrect the overlay.
-                if *status.peek() == ReaderStatus::Loading {
-                    status.set(ReaderStatus::Ready);
-                }
-                loc.set(data);
-            }
-        }
+        ReaderEvent::Relocate { json } => handle_relocate(
+            &json,
+            &uuid,
+            &server_url,
+            &mut status,
+            &mut loc,
+            toc,
+            &mut last_cfi,
+        ),
         ReaderEvent::Status { state } => {
-            let st = match state.as_str() {
-                "ready" => ReaderStatus::Ready,
-                "error" => ReaderStatus::Failed,
-                _ => ReaderStatus::Loading,
-            };
-            status.set(st);
-            // Replay saved highlights into the freshly-mounted rendition.
-            if matches!(st, ReaderStatus::Ready) && highlights.peek().is_empty() {
-                for h in &saved_highlights {
-                    // Kobo-origin highlights carry no CFI — nothing to paint.
-                    if let Some(cfi) = &h.epub_cfi_range {
-                        reader_call_json2("addAnnotation", cfi, h.color.as_str());
-                    }
-                }
-                highlights.set(saved_highlights.clone());
-            }
+            handle_status(&state, &mut status, &mut highlights, &saved_highlights)
         }
         ReaderEvent::Selection { json } => {
             if let Ok(data) = serde_json::from_str::<SelectionData>(&json) {
@@ -319,6 +274,84 @@ async fn drain_reader_events(
         ReaderEvent::ToggleChrome => chrome_hidden.toggle(),
     })
     .await;
+}
+
+/// Handle a [`ReaderEvent::Relocate`]: re-derive chapter/total from the TOC,
+/// persist a genuinely-moved non-echo position, and clear a TOC-jump
+/// `Loading` overlay. Split out of [`drain_reader_events`] as its own stage
+/// since it carries the bulk of that loop's logic.
+fn handle_relocate(
+    json: &str,
+    uuid: &str,
+    server_url: &str,
+    status: &mut Signal<ReaderStatus>,
+    loc: &mut Signal<RelocateData>,
+    toc: Signal<Vec<TocEntry>>,
+    last_cfi: &mut Option<String>,
+) {
+    let Ok(mut data) = serde_json::from_str::<RelocateData>(json) else {
+        return;
+    };
+    // Re-derive chapter/total from the TOC's own order rather than trusting
+    // the glue's numbers verbatim — see `signals::resolve_chapter_position`
+    // (issue #1909, AC1).
+    let toc_snapshot = toc.peek().clone();
+    let previous_chapter = loc.peek().chapter;
+    let (chapter, total_chapters) =
+        resolve_chapter_position(&toc_snapshot, &data, previous_chapter);
+    data.chapter = chapter;
+    data.total_chapters = total_chapters;
+
+    // Echo emissions (restore settle, locations re-emit) re-state a position
+    // the server already holds — persisting one stamps a fresh clock on an
+    // unmoved position and shadows a newer audiobook spot at the
+    // cross-format clock gate. Same rule as the web interop; render, don't
+    // write. `last_cfi` tracks the last SEEN position (echoes included), so
+    // a later non-echo re-emit of the same CFI (a re-render) stays deduped
+    // rather than re-posting the unmoved position.
+    if let Some(cfi) = data.cfi.clone() {
+        let moved = last_cfi.as_deref() != Some(cfi.as_str());
+        *last_cfi = Some(cfi.clone());
+        if !data.echo && moved {
+            crate::reader_progress::save(uuid, &cfi);
+            persist_progress(uuid, server_url, cfi, data.pct);
+        }
+    }
+    // A relocate names the (corrected) current position, so it also signals
+    // that an in-flight chapter jump has finished rendering — flip a
+    // TOC-jump-triggered `Loading` back to `Ready` (issue #1909, AC3).
+    // Guarded so a stray relocate after a load `Failed` can't resurrect the
+    // overlay.
+    if *status.peek() == ReaderStatus::Loading {
+        status.set(ReaderStatus::Ready);
+    }
+    loc.set(data);
+}
+
+/// Handle a [`ReaderEvent::Status`]: update the reader status and, on the
+/// first `ready`, replay the saved highlights into the freshly-mounted
+/// rendition.
+fn handle_status(
+    state: &str,
+    status: &mut Signal<ReaderStatus>,
+    highlights: &mut Signal<Vec<Highlight>>,
+    saved_highlights: &[Highlight],
+) {
+    let st = match state {
+        "ready" => ReaderStatus::Ready,
+        "error" => ReaderStatus::Failed,
+        _ => ReaderStatus::Loading,
+    };
+    status.set(st);
+    if matches!(st, ReaderStatus::Ready) && highlights.peek().is_empty() {
+        for h in saved_highlights {
+            // Kobo-origin highlights carry no CFI — nothing to paint.
+            if let Some(cfi) = &h.epub_cfi_range {
+                reader_call_json2("addAnnotation", cfi, h.color.as_str());
+            }
+        }
+        highlights.set(saved_highlights.to_vec());
+    }
 }
 
 /// Persist the latest CFI to the server (fire-and-forget); the local in-memory
