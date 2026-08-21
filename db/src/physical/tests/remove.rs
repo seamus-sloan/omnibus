@@ -77,3 +77,13 @@ async fn delete_fileless_book_returns_book_not_found_for_unknown_uuid() {
     let err = delete_fileless_book(&pool, "nope").await.unwrap_err();
     assert!(matches!(err, PhysicalError::BookNotFound));
 }
+
+#[test]
+fn map_delete_error_returns_other_for_non_db_variants() {
+    let err =
+        crate::physical::remove::map_delete_error(crate::deletion::DeleteError::FileNotFound(7));
+    assert!(
+        matches!(&err, PhysicalError::Other(msg) if msg.contains('7')),
+        "expected Other carrying the source message, got {err:?}"
+    );
+}

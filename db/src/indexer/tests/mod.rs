@@ -97,3 +97,20 @@ async fn seed_ebook_at(pool: &SqlitePool, library_path: &str, filename: &str, ti
     .await
     .unwrap();
 }
+
+#[test]
+fn indexer_error_from_settings_error_returns_other_for_non_db_variants() {
+    let validation =
+        IndexerError::from(crate::settings::SettingsError::Validation("bad key".into()));
+    assert!(
+        matches!(&validation, IndexerError::Other(msg) if msg.contains("bad key")),
+        "expected Other carrying the validation message, got {validation:?}"
+    );
+
+    let json_err = serde_json::from_str::<i32>("nope").unwrap_err();
+    let json = IndexerError::from(crate::settings::SettingsError::Json(json_err));
+    assert!(
+        matches!(json, IndexerError::Other(_)),
+        "expected Other, got {json:?}"
+    );
+}

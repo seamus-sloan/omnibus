@@ -49,8 +49,9 @@ impl From<BooksError> for ShelfError {
         match e {
             BooksError::Db(inner) => Self::Sqlx(inner),
             // The only `BooksError`-returning call here is the uuid resolver,
-            // which never decodes overrides JSON — fold defensively.
+            // which never reads overrides — fold defensively.
             BooksError::OverridesJson(inner) => Self::Sqlx(sqlx::Error::Decode(Box::new(inner))),
+            BooksError::Other(msg) => Self::Sqlx(sqlx::Error::Decode(msg.into())),
         }
     }
 }

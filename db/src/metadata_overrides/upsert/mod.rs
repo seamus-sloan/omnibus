@@ -55,6 +55,11 @@ impl From<crate::books::BooksError> for MetadataOverridesError {
             crate::books::BooksError::OverridesJson(inner) => {
                 MetadataOverridesError::Serialization(inner)
             }
+            // A `BooksError` this module can receive never carries one: the
+            // variant exists for the overrides *read* path's fold-through.
+            crate::books::BooksError::Other(msg) => {
+                MetadataOverridesError::Db(sqlx::Error::Decode(msg.into()))
+            }
         }
     }
 }

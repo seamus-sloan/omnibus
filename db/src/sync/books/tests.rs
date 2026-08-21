@@ -10,7 +10,7 @@ use sqlx::SqlitePool;
 use super::shared::{insert_book_row, insert_metadata_links};
 use super::{
     collect_entity_alias_maps, sync_books, sync_changed, sync_new, sync_removed,
-    wipe_per_book_link_rows, EntityAliasMaps, SyncPlan,
+    wipe_per_book_link_rows, EntityAliasMaps, SyncError, SyncPlan,
 };
 use crate::cleanup::{apply_merge_authors, apply_merge_series, apply_merge_tags};
 use crate::ebook::IndexedBook;
@@ -2132,5 +2132,21 @@ async fn try_attach_new_ebook_promotes_a_wishlist_target_off_the_physical_root()
             .iter()
             .any(|x| x.unique_identifier.as_deref() == Some(wishlist_uuid.as_str())),
         "the promoted book must surface in the path-scoped listing"
+    );
+}
+
+#[test]
+fn sync_error_from_settings_error_returns_other_for_non_db_variants() {
+    let validation = SyncError::from(crate::settings::SettingsError::Validation("bad key".into()));
+    assert!(
+        matches!(&validation, SyncError::Other(msg) if msg.contains("bad key")),
+        "expected Other carrying the validation message, got {validation:?}"
+    );
+
+    let json_err = serde_json::from_str::<i32>("nope").unwrap_err();
+    let json = SyncError::from(crate::settings::SettingsError::Json(json_err));
+    assert!(
+        matches!(json, SyncError::Other(_)),
+        "expected Other, got {json:?}"
     );
 }

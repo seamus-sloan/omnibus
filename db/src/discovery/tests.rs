@@ -1243,3 +1243,14 @@ async fn get_genre_cloud_propagates_db_error_when_pool_is_closed() {
     let err = get_genre_cloud(&pool).await.unwrap_err();
     assert!(matches!(err, DiscoveryError::Db(_)));
 }
+
+#[test]
+fn discovery_error_from_metadata_overrides_error_returns_other_for_bulk_write_variants() {
+    let err = DiscoveryError::from(
+        crate::metadata_overrides::MetadataOverridesError::BookNotFound("abc".into()),
+    );
+    assert!(
+        matches!(&err, DiscoveryError::Other(msg) if msg.contains("abc")),
+        "expected Other carrying the source message, got {err:?}"
+    );
+}

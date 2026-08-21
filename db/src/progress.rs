@@ -49,12 +49,15 @@ impl From<crate::books::BooksError> for ProgressError {
         match e {
             crate::books::BooksError::Db(inner) => ProgressError::Sqlx(inner),
             // `resolve_book_id_by_uuid` is the only `BooksError`-returning
-            // call this module makes, and it never decodes JSON, so the
-            // `OverridesJson` variant is unreachable here in practice. Fold
-            // it into a generic decode error rather than panicking so a
-            // future caller can't introduce an unhandled path silently.
+            // call this module makes, and it never reads overrides, so neither
+            // remaining variant is reachable here in practice. Fold them into a
+            // generic decode error rather than panicking so a future caller
+            // can't introduce an unhandled path silently.
             crate::books::BooksError::OverridesJson(inner) => {
                 ProgressError::Sqlx(sqlx::Error::Decode(Box::new(inner)))
+            }
+            crate::books::BooksError::Other(msg) => {
+                ProgressError::Sqlx(sqlx::Error::Decode(msg.into()))
             }
         }
     }
