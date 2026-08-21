@@ -38,9 +38,8 @@ fn field_slug_matches_the_forms_own_label_slugging_without_its_prefix() {
     assert_eq!(field_slug("Print Pages"), "print-pages");
 }
 
-// Hook-order regression for the availability gate, mirroring
-// a structural stand-in, not the real panel,
-// which needs a live server context a unit test doesn't have.
+// Hook-order regression for the availability gate: a structural stand-in for
+// the overlay, which needs a live server context a unit test doesn't have.
 #[cfg(all(test, feature = "server"))]
 mod gate {
     use std::cell::RefCell;

@@ -137,6 +137,53 @@ const SOURCES = [
 // server's concatenation.
 const FOUND = { editions: [GB_CANDIDATE, OL_CANDIDATE], sources: SOURCES };
 
+// The AC2 fixture: a Hardcover candidate, the only source that publishes a
+// series position. Kept apart from FOUND because every other test in this
+// file runs with Hardcover unconfigured.
+const HC_CANDIDATE = {
+  source: "hardcover",
+  provider_ref: "hc-book-31",
+  isbn13: "9789999888877",
+  title: "Minor Lemmas II (Hardcover)",
+  authors: ["Sophie Germain", "Sofya Kovalevskaya"],
+  year: "1817",
+  pages: 244,
+  publisher: "Hardcover Press",
+  description: "A Hardcover description.",
+  cover_url: PIXEL,
+  series: "Mathematica Majora",
+  series_index: "7",
+  first_publish_year: 1815,
+  genres: ["Mathematics"],
+};
+
+const HC_CONFIGURED = [
+  provider("open_library", "Open Library", true),
+  provider("google_books", "Google Books", true),
+  provider("hardcover", "Hardcover", true),
+];
+
+const HC_FOUND = {
+  editions: [HC_CANDIDATE],
+  sources: [
+    {
+      provider: "open_library",
+      display_name: "Open Library",
+      status: { kind: "answered", count: 0 },
+    },
+    {
+      provider: "google_books",
+      display_name: "Google Books",
+      status: { kind: "answered", count: 0 },
+    },
+    {
+      provider: "hardcover",
+      display_name: "Hardcover",
+      status: { kind: "answered", count: 1 },
+    },
+  ],
+};
+
 async function mockProviders(
   page: Page,
   catalog: ReturnType<typeof provider>[],
@@ -525,48 +572,49 @@ test.describe
     });
 
     test("offers every field the retired Hardcover panel could apply", async ({
-    page,
-    request,
-  }) => {
-    // AC2 of #1665: retiring the one-provider panel must not lose a field.
-    // It could apply title, authors, description, series, book # and
-    // ISBN-13 — so all six have to be reachable through the fan-out before
-    // it goes. Hardcover is the only provider that models a book number, so
-    // this stubs a hydrate carrying one.
-    const uuid = await fetchBookIdByTitle(request, TARGET.title);
-    await mockProviders(page, ALL_CONFIGURED);
-    await mockSearch(page, FOUND);
-    await mockHydrate(page, {
-      ...GB_CANDIDATE,
-      series: "Mathematica Majora",
-      series_index: "7",
+      page,
+      request,
+    }) => {
+      // AC2 of #1665: retiring the one-provider panel must not lose a field.
+      // It could apply title, authors, description, series, book # and
+      // ISBN-13, so all six have to be reachable through the fan-out before
+      // it goes — and reachable *from Hardcover*, since that is the provider
+      // the panel spoke to and the only one that publishes a book number.
+      const uuid = await fetchBookIdByTitle(request, TARGET.title);
+      await mockProviders(page, HC_CONFIGURED);
+      await mockSearch(page, HC_FOUND);
+      await mockHydrate(page);
+      await openPicker(page, uuid);
+
+      // Hardcover is a source in its own right, not a "not set up" row.
+      await expect(page.getByTestId("mes-source-hardcover")).toHaveText(
+        /Hardcover/,
+      );
+      await page.getByTestId("mes-candidate-0").click();
+      await expect(page.getByTestId("mes-compare")).toBeVisible();
+
+      for (const slug of [
+        "title",
+        "author-s-",
+        "description",
+        "series",
+        "book--",
+        "isbn-13",
+      ]) {
+        await expect(page.getByTestId(`mes-row-${slug}`)).toBeVisible();
+        await expect(page.getByTestId(`mes-row-${slug}-apply`)).toBeEnabled();
+      }
+
+      // Book # is the arm the retirement had to add: the panel could set one
+      // and the picker had no field for it.
+      await page.getByTestId("mes-row-book---apply").click();
+      await expect(page.locator("#me-book--")).toHaveValue("7");
+
+      await page.getByTestId("mes-close").click();
+      await page.getByTestId("me-discard").click();
     });
-    await openPicker(page, uuid);
-    await page.getByTestId("mes-candidate-1").click();
-    await expect(page.getByTestId("mes-compare")).toBeVisible();
 
-    for (const slug of [
-      "title",
-      "author-s-",
-      "description",
-      "series",
-      "book--",
-      "isbn-13",
-    ]) {
-      await expect(page.getByTestId(`mes-row-${slug}`)).toBeVisible();
-      await expect(page.getByTestId(`mes-row-${slug}-apply`)).toBeEnabled();
-    }
-
-    // And the one the fan-out had to learn: a book number, which only
-    // Hardcover models and the picker previously had no field for.
-    await page.getByTestId("mes-row-book---apply").click();
-    await expect(page.locator("#me-book--")).toHaveValue("7");
-
-    await page.getByTestId("mes-close").click();
-    await page.getByTestId("me-discard").click();
-  });
-
-  test("takes every change at once and skips what the source lacks", async ({
+    test("takes every change at once and skips what the source lacks", async ({
       page,
       request,
     }) => {

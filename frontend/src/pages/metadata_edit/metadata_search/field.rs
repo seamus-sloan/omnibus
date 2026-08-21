@@ -49,7 +49,8 @@ impl MetadataField {
     /// `genres` in this codebase (#1659); `subjects` is whatever the EPUB's
     /// own `<dc:subject>` entries were, and overwriting that with a provider's
     /// vocabulary would destroy the one field that describes *this file*.
-    /// Series position is absent for a plainer reason: no provider carries it.
+    /// Series position *is* here, but only Hardcover ever fills it — the
+    /// catalogs carry no book number to copy.
     pub(super) const ALL: &'static [MetadataField] = &[
         MetadataField::Title,
         MetadataField::Authors,

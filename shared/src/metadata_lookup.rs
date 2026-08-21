@@ -238,8 +238,8 @@ pub struct ProviderEdition {
     /// This book's position in [`Self::series`], formatted for display
     /// (`"1"`, `"2.5"`), or `None` when the provider doesn't say.
     ///
-    /// Only Hardcover models a series position, so this is `None` from the
-    /// catalogs — the same asymmetry `series` itself has.
+    /// Only Hardcover models a series position, so the *other* providers
+    /// always leave this `None` — the same asymmetry `series` itself has.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub series_index: Option<String>,
     /// Year the *work* was first published, across all editions — distinct
