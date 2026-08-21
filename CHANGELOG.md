@@ -64,6 +64,11 @@ recent releases are recorded below; everything earlier is available via the
   policy: the `img-src` allowlist is now derived from the provider catalog and
   includes the redirect hops Open Library's cover CDN and Hardcover's asset
   host actually serve bytes from (#1661)
+- Rotating the device and back in the iOS EPUB reader no longer drifts off
+  the page the reader was actually on: a rotation's re-pagination now goes
+  through the same correction (and echo tagging) a boot restore does, so it
+  writes no position and never moves the restore anchor. Added an explicit
+  single/two-page reader setting on iOS, matching web (#2081)
 
 ## [0.22.10] - 2026-08-18
 

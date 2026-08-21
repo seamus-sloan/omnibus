@@ -319,79 +319,99 @@ pub async fn reading_state_for(
         return Ok(out);
     }
     for chunk in uuids.chunks(450) {
-        let placeholders = std::iter::repeat_n("?", chunk.len())
-            .collect::<Vec<_>>()
-            .join(",");
-        // FULL OUTER JOIN isn't available in older SQLite, and a book can have
-        // either row independently, so union the two key sets and left-join
-        // both sides onto it.
-        let sql = format!(
-            "WITH keys(book_uuid) AS (
-                 SELECT book_uuid FROM book_read_status
-                  WHERE user_id = ? AND book_uuid IN ({placeholders})
-                 UNION
-                 SELECT book_uuid FROM reading_progress
-                  WHERE user_id = ? AND format = 'epub' AND book_uuid IN ({placeholders})
-             )
-             SELECT k.book_uuid,
-                    rs.status AS status,
-                    rp.progress_percent AS progress_percent,
-                    rp.kobo_location AS kobo_location,
-                    rp.epub_cfi AS epub_cfi,
-                    rp.kobo_spent_reading_minutes AS kobo_spent_reading_minutes,
-                    rp.kobo_remaining_time_minutes AS kobo_remaining_time_minutes,
-                    rp.kobo_statistics_updated_at AS kobo_statistics_updated_at,
-                    COALESCE(rp.client_updated_at, rp.updated_at, 0)
-                        AS progress_updated_at,
-                    COALESCE(rs.updated_at, 0) AS status_updated_at,
-                    MAX(
-                        COALESCE(rs.updated_at, 0),
-                        COALESCE(rp.client_updated_at, rp.updated_at, 0)
-                    ) AS state_updated_at
-               FROM keys k
-               LEFT JOIN book_read_status rs
-                      ON rs.book_uuid = k.book_uuid AND rs.user_id = ?
-               LEFT JOIN reading_progress rp
-                      ON rp.book_uuid = k.book_uuid AND rp.user_id = ? AND rp.format = 'epub'"
-        );
-        let mut q = sqlx::query(&sql).bind(user_id);
-        for uuid in chunk {
-            q = q.bind(uuid);
-        }
-        q = q.bind(user_id);
-        for uuid in chunk {
-            q = q.bind(uuid);
-        }
-        q = q.bind(user_id).bind(user_id);
-        for row in q.fetch_all(pool).await? {
-            let uuid: String = row.try_get("book_uuid")?;
-            let status = row
-                .try_get::<Option<String>, _>("status")?
-                .map(|s| ReadStatus::from_db(&s))
-                .unwrap_or_default();
-            let statistics = crate::progress::KoboStatistics {
-                spent_reading_minutes: row.try_get("kobo_spent_reading_minutes")?,
-                remaining_time_minutes: row.try_get("kobo_remaining_time_minutes")?,
-                updated_at: row.try_get("kobo_statistics_updated_at")?,
-            };
-            out.insert(
-                uuid,
-                KoboBookState {
-                    status,
-                    // A row of NULLs is "no device ever reported": collapse it
-                    // so sync-out omits the block rather than emitting empties.
-                    statistics: (!statistics.is_empty()).then_some(statistics),
-                    percent: row.try_get::<Option<i64>, _>("progress_percent")?,
-                    kobo_location: row.try_get::<Option<String>, _>("kobo_location")?,
-                    epub_cfi: row.try_get::<Option<String>, _>("epub_cfi")?,
-                    state_updated_at: row.try_get::<i64, _>("state_updated_at")?,
-                    progress_updated_at: row.try_get::<i64, _>("progress_updated_at")?,
-                    status_updated_at: row.try_get::<i64, _>("status_updated_at")?,
-                },
-            );
+        for row in fetch_reading_state_chunk(pool, user_id, chunk).await? {
+            let (uuid, state) = row_to_kobo_state(&row)?;
+            out.insert(uuid, state);
         }
     }
     Ok(out)
+}
+
+/// The per-chunk union-and-join query text: `book_read_status` and
+/// `reading_progress` can each have a row independently, so the two key
+/// sets are unioned and both sides are left-joined onto it (SQLite has no
+/// `FULL OUTER JOIN`). `placeholders` is shared by the two `IN (...)`
+/// clauses that scope the union to this chunk's uuids.
+fn reading_state_sql(placeholders: &str) -> String {
+    format!(
+        "WITH keys(book_uuid) AS (
+             SELECT book_uuid FROM book_read_status
+              WHERE user_id = ? AND book_uuid IN ({placeholders})
+             UNION
+             SELECT book_uuid FROM reading_progress
+              WHERE user_id = ? AND format = 'epub' AND book_uuid IN ({placeholders})
+         )
+         SELECT k.book_uuid,
+                rs.status AS status,
+                rp.progress_percent AS progress_percent,
+                rp.kobo_location AS kobo_location,
+                rp.epub_cfi AS epub_cfi,
+                rp.kobo_spent_reading_minutes AS kobo_spent_reading_minutes,
+                rp.kobo_remaining_time_minutes AS kobo_remaining_time_minutes,
+                rp.kobo_statistics_updated_at AS kobo_statistics_updated_at,
+                COALESCE(rp.client_updated_at, rp.updated_at, 0)
+                    AS progress_updated_at,
+                COALESCE(rs.updated_at, 0) AS status_updated_at,
+                MAX(
+                    COALESCE(rs.updated_at, 0),
+                    COALESCE(rp.client_updated_at, rp.updated_at, 0)
+                ) AS state_updated_at
+           FROM keys k
+           LEFT JOIN book_read_status rs
+                  ON rs.book_uuid = k.book_uuid AND rs.user_id = ?
+           LEFT JOIN reading_progress rp
+                  ON rp.book_uuid = k.book_uuid AND rp.user_id = ? AND rp.format = 'epub'"
+    )
+}
+
+/// Run [`reading_state_sql`] for one chunk of uuids, binding `user_id` and
+/// the chunk into each of the query's four parameter slots.
+async fn fetch_reading_state_chunk(
+    pool: &SqlitePool,
+    user_id: i64,
+    chunk: &[String],
+) -> Result<Vec<sqlx::sqlite::SqliteRow>, KoboError> {
+    let placeholders = std::iter::repeat_n("?", chunk.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = reading_state_sql(&placeholders);
+    let mut q = sqlx::query(&sql).bind(user_id);
+    for uuid in chunk {
+        q = q.bind(uuid);
+    }
+    q = q.bind(user_id);
+    for uuid in chunk {
+        q = q.bind(uuid);
+    }
+    q = q.bind(user_id).bind(user_id);
+    Ok(q.fetch_all(pool).await?)
+}
+
+/// Parse one joined row into its `(uuid, state)` pair.
+fn row_to_kobo_state(row: &sqlx::sqlite::SqliteRow) -> Result<(String, KoboBookState), KoboError> {
+    let uuid: String = row.try_get("book_uuid")?;
+    let status = row
+        .try_get::<Option<String>, _>("status")?
+        .map(|s| ReadStatus::from_db(&s))
+        .unwrap_or_default();
+    let statistics = crate::progress::KoboStatistics {
+        spent_reading_minutes: row.try_get("kobo_spent_reading_minutes")?,
+        remaining_time_minutes: row.try_get("kobo_remaining_time_minutes")?,
+        updated_at: row.try_get("kobo_statistics_updated_at")?,
+    };
+    let state = KoboBookState {
+        status,
+        // A row of NULLs is "no device ever reported": collapse it so
+        // sync-out omits the block rather than emitting empties.
+        statistics: (!statistics.is_empty()).then_some(statistics),
+        percent: row.try_get::<Option<i64>, _>("progress_percent")?,
+        kobo_location: row.try_get::<Option<String>, _>("kobo_location")?,
+        epub_cfi: row.try_get::<Option<String>, _>("epub_cfi")?,
+        state_updated_at: row.try_get::<i64, _>("state_updated_at")?,
+        progress_updated_at: row.try_get::<i64, _>("progress_updated_at")?,
+        status_updated_at: row.try_get::<i64, _>("status_updated_at")?,
+    };
+    Ok((uuid, state))
 }
 
 #[cfg(test)]

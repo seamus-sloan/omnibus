@@ -66,6 +66,12 @@ struct ReaderSettingsSheet: View {
                             selection: $controller.settings.margins
                         )
 
+                        PillSelector(
+                            options: ReaderSpread.allCases,
+                            label: \.label,
+                            selection: $controller.settings.spread
+                        )
+
                         Plate {
                             PlateRow(label: "Justify text", isFirst: true) {
                                 Toggle("", isOn: $controller.settings.justify)
