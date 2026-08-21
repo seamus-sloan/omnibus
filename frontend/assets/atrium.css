@@ -6940,6 +6940,39 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
    scroll container, so sticky holds them against its edge while the fields
    pass underneath. It carries the panel's bottom padding — the panel's own is
    zero — so nothing shows through beneath it. */
+/* The placeholder the compare screen shows while the record arrives: the
+   table's shape, so the real rows land where the eye already is. Mirrors
+   `.mes-cover` + `.mes-field`'s geometry. */
+.mes-skeleton { display: flex; flex-direction: column; gap: 14px; }
+.mes-skel-cover {
+  width: 62px;
+  height: 93px;
+  align-self: center;
+  border-radius: 4px;
+  background: var(--bg-2);
+}
+.mes-skel-row {
+  display: grid;
+  grid-template-columns: minmax(72px, 96px) 1fr 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 9px 0;
+  border-bottom: 1px solid color-mix(in oklch, var(--line-2) 55%, transparent);
+}
+.mes-skel-bar {
+  height: 11px;
+  border-radius: 3px;
+  background: var(--bg-2);
+  animation: lp-buffering-pulse 1.4s ease-in-out infinite;
+}
+/* Staggered so the row reads as one object settling rather than three bars
+   blinking in lockstep. */
+.mes-skel-row:nth-child(even) .mes-skel-bar { animation-delay: 0.2s; }
+.mes-skel-label { opacity: 0.6; }
+@media (prefers-reduced-motion: reduce) {
+  .mes-skel-bar { animation: none; }
+}
+
 .mes-footbar {
   position: sticky;
   bottom: 0;
@@ -6954,6 +6987,10 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   border-top: 1px solid var(--line-2);
 }
 .mes-done { margin-left: auto; }
+/* There is no global disabled-button style (only `.bd-cta-row`'s), and
+   "Take all" stays fully lit while the record loads without one — an
+   inviting button that does nothing. */
+.mes-footbar .btn[disabled] { opacity: 0.5; cursor: not-allowed; }
 /* Its own line under the buttons, full width. */
 .mes-footbar .mes-foot { flex: 1 0 100%; margin: 0; }
 

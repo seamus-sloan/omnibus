@@ -89,35 +89,42 @@ pub(super) fn CompareScreen(
                     "{source_name}"
                 }
             }
+            // Nothing real is shown until the record has settled. The search
+            // hit this screen opens with is a partial answer — it carries
+            // fewer fields than the provider's own record — so rendering it
+            // means rows appearing and rearranging under the reader a moment
+            // later. A placeholder for that moment is calmer than a wrong
+            // answer corrected in view.
             if hydrating {
                 p { class: "mes-subtitle", role: "status", "data-testid": "mes-hydrating",
                     "Loading the full record\u{2026}"
                 }
-            }
-
-            // Held to the same rule as every other row: a source with no
-            // cover has nothing to offer here, so the row is only noise.
-            if has_source_cover || show_all() {
-                CoverRow {
-                    uuid,
-                    book,
-                    edition: edition.clone(),
-                    source_name,
-                    hydrating,
-                    on_applied: on_cover_applied,
-                }
-            }
-
-            div { class: "mes-fields", "data-testid": "mes-compare-fields",
-                for field in shown {
-                    CompareRow {
-                        key: "{field.slug()}",
-                        field,
+                CompareSkeleton {}
+            } else {
+                // Held to the same rule as every other row: a source with no
+                // cover has nothing to offer here, so the row is only noise.
+                if has_source_cover || show_all() {
+                    CoverRow {
+                        uuid,
+                        book,
                         edition: edition.clone(),
-                        fields,
-                        orig,
                         source_name,
                         hydrating,
+                        on_applied: on_cover_applied,
+                    }
+                }
+
+                div { class: "mes-fields", "data-testid": "mes-compare-fields",
+                    for field in shown {
+                        CompareRow {
+                            key: "{field.slug()}",
+                            field,
+                            edition: edition.clone(),
+                            fields,
+                            orig,
+                            source_name,
+                            hydrating,
+                        }
                     }
                 }
             }
@@ -152,6 +159,28 @@ pub(super) fn CompareScreen(
                 }
                 p { class: "mono mes-foot", "data-testid": "mes-staged-hint",
                     "Fields aren't saved until you press Save on the form."
+                }
+            }
+        }
+    }
+}
+
+/// What the compare screen shows while the record is still arriving: the
+/// shape of the answer, without any of its content.
+///
+/// Deliberately not a spinner. The reader is about to read a table, and a
+/// placeholder in that table's shape means the real rows land where the eye
+/// is already looking instead of shifting it.
+#[component]
+fn CompareSkeleton() -> Element {
+    rsx! {
+        div { class: "mes-skeleton", "data-testid": "mes-compare-skeleton", aria_hidden: "true",
+            div { class: "mes-skel-cover" }
+            for i in 0..5 {
+                div { key: "{i}", class: "mes-skel-row",
+                    span { class: "mes-skel-bar mes-skel-label" }
+                    span { class: "mes-skel-bar" }
+                    span { class: "mes-skel-bar" }
                 }
             }
         }

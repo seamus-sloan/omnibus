@@ -671,12 +671,16 @@ test.describe
       await openPicker(page, uuid);
       await page.getByTestId("mes-candidate-0").click();
 
-      // In flight: nothing can be taken. Otherwise "take all" would mean a
-      // different set of fields depending on how fast the network answered —
-      // the Open Library search hit has no description, its record does.
+      // In flight: a placeholder in the table's shape, and no field rows at
+      // all. The search hit this screen opens with is a partial answer — the
+      // Open Library hit has no description and its record does — so showing
+      // it would mean rows appearing and rearranging a moment later, and
+      // "take all" would mean a different set of fields depending on how fast
+      // the network answered.
       await expect(page.getByTestId("mes-hydrating")).toBeVisible();
+      await expect(page.getByTestId("mes-compare-skeleton")).toBeVisible();
+      await expect(page.getByTestId("mes-compare-fields")).toHaveCount(0);
       await expect(page.getByTestId("mes-take-all")).toBeDisabled();
-      await expect(page.getByTestId("mes-row-title-apply")).toBeDisabled();
 
       releaseHydrate?.();
 
