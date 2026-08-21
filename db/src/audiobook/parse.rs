@@ -447,7 +447,7 @@ fn path_fallback(group_path: &str, single_file: bool) -> (String, Option<String>
 
 /// Strip a leading `"<creator> - "` from a filename-derived title so
 /// `Author - Title.m4b` shapes don't duplicate the author into the title.
-/// Case-insensitive on the creator; a title that is *only* the prefix is
+/// ASCII-case-insensitive on the creator; a title that is *only* the prefix is
 /// left untouched rather than emptied.
 fn strip_creator_prefix(title: &str, creator: &str) -> String {
     title
