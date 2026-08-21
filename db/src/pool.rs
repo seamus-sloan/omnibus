@@ -112,11 +112,8 @@ async fn run_boot_backfills(pool: &SqlitePool) -> Result<(), InitDbError> {
     // F5b `series_sort` keyset column for rows indexed before migration 0028,
     // reconstructed from the existing series link.
     crate::sort_keys::backfill_series_sort(pool).await?;
-    // Wishlist/check-in books that acquired real files before the attach-time
-    // promotion guard existed are stranded under the Physical pseudo-root —
-    // invisible to every path-scoped read. Move them into their files' library.
-    // Runs before the missing-files pass so a promoted (file-bearing) row is
-    // never eligible for a fileless flag.
+    // Wishlist/check-in books that gained real files before the attach-time
+    // guard existed sit invisible under the Physical pseudo-root — promote them.
     crate::physical::promote_filed_physical_books(pool).await?;
     // F10 missing-files flags for rows already fileless before migration 0029,
     // starting their GC clock at boot time.

@@ -186,10 +186,7 @@ pub(super) async fn attach_audiobook_file(
     // the group's relative path, the F2 diff key for repoint survival.
     let merged_key = stable_uuid(library_path, &b.group_path);
     attach::record_attachment(tx, &merged_key, book_id, format, library_path, &b.scan_key).await?;
-    // A check-in/wishlist target lives under the Physical pseudo-root, which
-    // no path-scoped read lists — now that a real file backs it, move it into
-    // the file's library so All Books and search surface it (mirrors the
-    // ebook attach path).
+    // A book left under the Physical pseudo-root is invisible to All Books/search.
     crate::physical::promote_filed_physical_book(&mut *tx, book_id).await?;
     // Refresh the target's FTS row so this format's contribution to the
     // searchable text lands immediately (mirrors the ebook attach path).
