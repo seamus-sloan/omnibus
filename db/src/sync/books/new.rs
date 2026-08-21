@@ -13,7 +13,7 @@ use super::super::fts::upsert_fts;
 use super::shared::{
     insert_book_row, insert_metadata_links, rewrite_book_in_place, try_attach_new_ebook,
 };
-use super::EntityAliasMaps;
+use super::{EntityAliasMaps, SyncError};
 
 /// Insert a batch of New entries: canonical `books` + `book_files` row,
 /// metadata link rows, FTS row. Returns the post-commit cover triples.
@@ -31,7 +31,7 @@ pub(super) async fn sync_new(
     removed_uuids: &[String],
     alias_maps: &EntityAliasMaps,
     mut on_book_written: impl FnMut(&str),
-) -> Result<Vec<(String, String, Vec<u8>)>, sqlx::Error> {
+) -> Result<Vec<(String, String, Vec<u8>)>, SyncError> {
     if new_books.is_empty() {
         return Ok(Vec::new());
     }

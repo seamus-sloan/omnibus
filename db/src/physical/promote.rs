@@ -6,7 +6,7 @@
 
 use sqlx::{SqliteConnection, SqlitePool};
 
-use super::PHYSICAL_LIBRARY_PATH;
+use super::{PhysicalError, PHYSICAL_LIBRARY_PATH};
 
 /// The promotion UPDATE. A book under the Physical pseudo-root (`?1`) that
 /// has at least one `book_files` row rooted in a *real* scan root is moved
@@ -51,7 +51,7 @@ fn promote_sql(single_book: bool) -> String {
 pub(crate) async fn promote_filed_physical_book(
     conn: &mut SqliteConnection,
     book_id: i64,
-) -> Result<bool, sqlx::Error> {
+) -> Result<bool, PhysicalError> {
     let result = sqlx::query(&promote_sql(true))
         .bind(PHYSICAL_LIBRARY_PATH)
         .bind(book_id)
@@ -63,7 +63,7 @@ pub(crate) async fn promote_filed_physical_book(
 /// Boot backfill: promote every stranded Physical-root book that already
 /// has real files — rows written before the attach-time guard existed.
 /// Idempotent; a no-op once caught up.
-pub(crate) async fn promote_filed_physical_books(pool: &SqlitePool) -> Result<u64, sqlx::Error> {
+pub(crate) async fn promote_filed_physical_books(pool: &SqlitePool) -> Result<u64, PhysicalError> {
     let promoted = sqlx::query(&promote_sql(false))
         .bind(PHYSICAL_LIBRARY_PATH)
         .execute(pool)

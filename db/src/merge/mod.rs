@@ -30,6 +30,8 @@ pub enum MergeError {
     Db(#[from] sqlx::Error),
     #[error("merge snapshot encode/decode failed: {0}")]
     Snapshot(#[from] serde_json::Error),
+    #[error(transparent)]
+    Physical(#[from] crate::physical::PhysicalError),
 }
 
 /// What [`merge_books`] hands back to the caller: the audit-log id (the
