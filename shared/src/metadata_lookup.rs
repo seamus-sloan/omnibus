@@ -296,7 +296,19 @@ impl ProviderEdition {
         fill(&mut self.description, &thinner.description);
         fill(&mut self.cover_url, &thinner.cover_url);
         fill(&mut self.series, &thinner.series);
-        fill(&mut self.series_index, &thinner.series_index);
+        // A book number is a position *in* a series, so it may only cross
+        // over when both records name the same one. A provider that files a
+        // book under two series can answer two queries in two row orders, and
+        // pairing one series' name with another's number is worse than
+        // reporting no number at all — the invariant Hardcover's
+        // `series_statement` protects within a single response.
+        let same = |a: &Option<String>, b: &Option<String>| {
+            let key = |v: &Option<String>| v.as_deref().unwrap_or_default().trim().to_string();
+            key(a) == key(b)
+        };
+        if same(&self.series, &thinner.series) {
+            fill(&mut self.series_index, &thinner.series_index);
+        }
         if self.title.trim().is_empty() {
             self.title.clone_from(&thinner.title);
         }
@@ -317,8 +329,9 @@ impl ProviderEdition {
 
 impl From<ProviderEdition> for ExternalBookMeta {
     /// Narrow a search candidate to the check-in payload, dropping the fields
-    /// that type doesn't carry — `provider_ref`, `isbn10`, and `genres`. The
-    /// check-in wire contract stays frozen; the picker keeps the rest.
+    /// that type doesn't carry — `provider_ref`, `isbn10`, `series_index`,
+    /// and `genres`. The check-in wire contract stays frozen; the picker
+    /// keeps the rest.
     fn from(e: ProviderEdition) -> Self {
         Self {
             isbn13: e.isbn13,
