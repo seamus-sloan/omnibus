@@ -175,6 +175,37 @@ fn collect_contributors_filters_by_key_and_skips_blank_names() {
     assert!(contributors[0].file_as.is_none());
 }
 
+#[test]
+fn collect_contributors_drops_bkp_role_conversion_tool_stamp() {
+    // Calibre stamps its generator string as a `bkp` (book producer)
+    // contributor; it must never surface as an author. Legacy EPUB2
+    // attribute form, the shape Calibre actually writes.
+    let doc = doc_from_opf(&opf_package(
+        "2.0",
+        r#"    <dc:contributor opf:role="bkp">calibre (2.80.0) [https://calibre-ebook.com]</dc:contributor>
+<dc:contributor opf:role="trl">Ken Liu</dc:contributor>"#,
+    ));
+    let contributors = collect_contributors(&doc, "contributor");
+    assert_eq!(contributors.len(), 1);
+    assert_eq!(contributors[0].name, "Ken Liu");
+    assert_eq!(contributors[0].role.as_deref(), Some("trl"));
+}
+
+#[test]
+fn collect_contributors_drops_bkp_role_from_epub3_refinement() {
+    let doc = doc_from_opf(&opf_package(
+        "3.0",
+        r##"    <dc:creator>Cixin Liu</dc:creator>
+<dc:contributor id="bkp">calibre (7.3.0) [https://calibre-ebook.com]</dc:contributor>
+<meta refines="#bkp" property="role">bkp</meta>"##,
+    ));
+    assert_eq!(collect_contributors(&doc, "contributor").len(), 0);
+    // The real creator is untouched by the filter.
+    let creators = collect_contributors(&doc, "creator");
+    assert_eq!(creators.len(), 1);
+    assert_eq!(creators[0].name, "Cixin Liu");
+}
+
 // --- collect_series ----------------------------------------------------
 
 #[test]

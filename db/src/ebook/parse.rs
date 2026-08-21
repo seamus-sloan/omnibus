@@ -203,6 +203,16 @@ fn collect_contributors<R: std::io::Read + std::io::Seek>(
                 .refinement("role")
                 .map(|r| r.value.clone())
                 .or_else(|| lookup_refinement(&m.refined, "role"));
+            // Conversion tools mark their generator string with the `bkp`
+            // (MARC "book producer") role (Calibre: `calibre (X.Y.Z) [http…]`).
+            // It names production tooling, not a person — drop it here so the
+            // stamp never reaches `books_authors_link` (#2072).
+            if role
+                .as_deref()
+                .is_some_and(|r| r.eq_ignore_ascii_case("bkp"))
+            {
+                return None;
+            }
             let file_as = m
                 .refinement("file-as")
                 .map(|r| r.value.clone())
