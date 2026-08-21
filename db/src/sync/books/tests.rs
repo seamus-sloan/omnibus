@@ -2067,3 +2067,70 @@ async fn sync_books_issues_one_entity_alias_query_per_kind_not_per_book() {
          {queries} for a {BOOK_COUNT}-book batch"
     );
 }
+
+/// The wishlist-then-acquired regression: a fileless check-in/wishlist book
+/// lives under the `physical://local` pseudo-root, and the title+author
+/// attach used to leave `books.library_id` there — fully indexed but
+/// invisible to every path-scoped read. The attach must promote it into the
+/// file's library.
+#[tokio::test]
+async fn try_attach_new_ebook_promotes_a_wishlist_target_off_the_physical_root() {
+    let _covers = CoversTempDir::new("attach_promotes_wishlist");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let wishlist_uuid = crate::physical::create_fileless_book(
+        &pool,
+        crate::physical::FilelessBook {
+            title: "Dream by the Shadows".into(),
+            authors: vec!["Karlie Logan".into()],
+            isbn: None,
+            pubdate: None,
+            description: None,
+            cover: None,
+        },
+    )
+    .await
+    .unwrap();
+    let lib_id = seed_scan_root(&pool).await;
+
+    let b = indexed(
+        "Logan/dream.epub",
+        Some("Dream by the Shadows"),
+        &["Karlie Logan"],
+        &[],
+        None,
+        None,
+    );
+    let mut covers = Vec::new();
+    let mut tx = pool.begin().await.unwrap();
+    let attached = super::shared::try_attach_new_ebook(
+        &mut tx,
+        "/lib",
+        &b,
+        &std::collections::HashSet::new(),
+        &EntityAliasMaps::default(),
+        &mut covers,
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    assert!(attached, "the file must attach to the wishlist book");
+    let library_id: i64 = sqlx::query_scalar("SELECT library_id FROM books WHERE uuid = ?")
+        .bind(&wishlist_uuid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        library_id, lib_id,
+        "attach must promote off the pseudo-root"
+    );
+    let listed = crate::books::list_books_for_paths(&pool, &["/lib"])
+        .await
+        .unwrap();
+    assert!(
+        listed
+            .iter()
+            .any(|x| x.unique_identifier.as_deref() == Some(wishlist_uuid.as_str())),
+        "the promoted book must surface in the path-scoped listing"
+    );
+}

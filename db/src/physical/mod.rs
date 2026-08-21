@@ -6,6 +6,7 @@
 
 mod copies;
 mod fileless;
+mod promote;
 mod remove;
 mod wishlist;
 
@@ -17,11 +18,20 @@ pub use copies::{
     list_physical_copies_by_canonical_uuid_exec, update_physical_copy_note,
 };
 pub use fileless::{create_fileless_book, FilelessBook, FilelessCover};
+pub(crate) use promote::{promote_filed_physical_book, promote_filed_physical_books};
 pub use remove::delete_fileless_book;
 pub use wishlist::{
     add_wishlist_entry, get_wishlist_entry, list_wishlist, remove_wishlist_entry,
     LIST_WISHLIST_LIMIT,
 };
+
+/// Sentinel scan-root path that owns every fileless (physical-only) book. It is
+/// never a scan target, so ebook/audiobook reindex diffs never touch these
+/// rows; the never-prune guard keeps the row alive while any physical book
+/// references it. [`promote_filed_physical_book`] moves a book off it the
+/// moment a real library file attaches — a book left here is invisible to
+/// every path-scoped read (All Books, search) unless a physical copy backs it.
+pub(crate) const PHYSICAL_LIBRARY_PATH: &str = "physical://local";
 
 /// Errors from the physical ownership data layer.
 #[derive(Debug, thiserror::Error)]
