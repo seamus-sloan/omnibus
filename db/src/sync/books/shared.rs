@@ -177,6 +177,8 @@ pub(super) async fn attach_ebook_file(
     .await?;
     insert_identifier_links(tx, book_id, &b.metadata).await?;
     attach::record_attachment(tx, uuid, book_id, format, library_path, &scan_key).await?;
+    // A book left under the Physical pseudo-root is invisible to All Books/search.
+    crate::physical::promote_filed_physical_book(&mut *tx, book_id).await?;
     // The unioned identifiers (incl. a new ISBN from this format) just
     // changed the target's searchable text — refresh its FTS row.
     upsert_fts(tx, book_id).await?;
