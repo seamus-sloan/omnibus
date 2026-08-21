@@ -12,6 +12,19 @@ import MediaPlayer
 import Observation
 import SwiftUI
 
+/// Sleep-timer state, mirroring the web mobile player's `SleepState` so the
+/// two clients' sleep sheets offer the same contract.
+enum SleepTimer: Equatable {
+    case off
+    /// Wall-clock countdown: `remaining` seconds tick down once per second;
+    /// `preset` is the option (in seconds) that armed it, for the sheet
+    /// highlight.
+    case countdown(remaining: Int, preset: Int)
+    /// Pause when playback reaches `atSeconds` (the current chapter's end at
+    /// arm time).
+    case endOfChapter(atSeconds: Double)
+}
+
 @Observable
 @MainActor
 final class AudioPlayer {
@@ -65,8 +78,8 @@ final class AudioPlayer {
     /// set on another device to 1.0 the moment the device reconnected.
     private var isAdoptingRate = false
 
-    /// Minutes remaining on the sleep timer, `nil` when off.
-    private(set) var sleepMinutesRemaining: Int?
+    /// Sleep-timer state; `.off` when disarmed.
+    private(set) var sleepTimer: SleepTimer = .off
 
     /// A further position another device reached, waiting on the listener to
     /// accept it. Never applied on its own.
@@ -616,27 +629,59 @@ final class AudioPlayer {
 
     // MARK: - Sleep timer
 
-    func startSleepTimer(minutes: Int) {
+    /// Arm a wall-clock countdown; `seconds <= 0` disarms.
+    func startSleepTimer(seconds: Int) {
         sleepTask?.cancel()
-        sleepMinutesRemaining = minutes
+        sleepTask = nil
+        guard seconds > 0 else {
+            sleepTimer = .off
+            return
+        }
+        sleepTimer = .countdown(remaining: seconds, preset: seconds)
         sleepTask = Task { [weak self] in
-            for remaining in stride(from: minutes, through: 1, by: -1) {
-                try? await Task.sleep(for: .seconds(60))
+            for remaining in stride(from: seconds - 1, through: 0, by: -1) {
+                try? await Task.sleep(for: .seconds(1))
                 if Task.isCancelled { return }
-                await MainActor.run { self?.sleepMinutesRemaining = remaining - 1 }
+                await MainActor.run {
+                    self?.sleepTimer = .countdown(remaining: remaining, preset: seconds)
+                }
             }
             await MainActor.run {
                 self?.pause()
-                self?.sleepMinutesRemaining = nil
+                self?.sleepTimer = .off
             }
         }
+    }
+
+    /// Arm the timer to pause at `atSeconds` — the current chapter's end,
+    /// frozen at arm time. The periodic observer enforces the boundary.
+    func startSleepTimer(endOfChapterAt atSeconds: Double) {
+        sleepTask?.cancel()
+        sleepTask = nil
+        sleepTimer = .endOfChapter(atSeconds: atSeconds)
     }
 
     func cancelSleepTimer() {
         sleepTask?.cancel()
         sleepTask = nil
-        sleepMinutesRemaining = nil
+        sleepTimer = .off
     }
+
+    /// Seconds left on the sleep timer for display, deriving the
+    /// end-of-chapter variant from the playback position. `nil` when off.
+    /// Mirrors the web sheet's `sleep_remaining`.
+    nonisolated static func sleepRemaining(_ timer: SleepTimer, position: Double) -> Int? {
+        switch timer {
+        case .off:
+            return nil
+        case .countdown(let remaining, _):
+            return max(0, remaining)
+        case .endOfChapter(let atSeconds):
+            return Int(max(0, atSeconds - position).rounded(.up))
+        }
+    }
+
+    var sleepRemainingSeconds: Int? { Self.sleepRemaining(sleepTimer, position: position) }
 
     // MARK: - Lifecycle
 
@@ -754,6 +799,14 @@ final class AudioPlayer {
                 // back to stale for as long as the seek takes to settle.
                 guard self.pendingSeekCount == 0 else { return }
                 self.position = time.seconds
+                // An armed end-of-chapter sleep timer fires the moment
+                // playback crosses the boundary it was armed against.
+                if case .endOfChapter(let atSeconds) = self.sleepTimer,
+                    self.position >= atSeconds
+                {
+                    self.pause()
+                    self.sleepTimer = .off
+                }
                 // The periodic observer ticks every 0.5 *media* seconds — at
                 // 2x that's twice per wall second — so each tick is converted
                 // to wall-clock before it accrues. Listening stats count the
