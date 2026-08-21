@@ -258,15 +258,9 @@ async fn load_manifest(
     }
 }
 
-/// Fetch metadata + manifest for `uuid`, seed the context, install the audio
-/// control surface for direct-play books (or flag HLS as unsupported), then
-/// drain its events until superseded.
-async fn load_and_drain(
-    ctx: MobilePlayback,
-    uuid: String,
-    selected_file_id: Option<i64>,
-    server_url: String,
-) {
+/// Reset every signal a fresh load owns back to its pre-playback default,
+/// before the metadata/manifest fetch repopulates them.
+fn reset_playback_state_for_load(ctx: MobilePlayback) {
     let MobilePlayback {
         mut view,
         mut loading,
@@ -286,6 +280,25 @@ async fn load_and_drain(
     rate_error.set(None);
     sleep.set(SleepState::Off);
     rate.set(1.0);
+}
+
+/// Fetch metadata + manifest for `uuid`, seed the context, install the audio
+/// control surface for direct-play books (or flag HLS as unsupported), then
+/// drain its events until superseded.
+async fn load_and_drain(
+    ctx: MobilePlayback,
+    uuid: String,
+    selected_file_id: Option<i64>,
+    server_url: String,
+) {
+    reset_playback_state_for_load(ctx);
+    let MobilePlayback {
+        mut loading,
+        mut error,
+        mut unsupported,
+        mut view,
+        ..
+    } = ctx;
 
     let Some(book) = load_book_metadata(&server_url, &uuid, error, loading).await else {
         return;

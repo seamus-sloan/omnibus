@@ -196,14 +196,62 @@ pub(super) async fn anchor_map_from_marks(
     timeline: &AudioTimeline,
     audio: &[AudioMark],
 ) -> Result<Option<AnchorMap>, CrossFormatError> {
-    let stats = crate::epub_structure::get_spine_stats(pool, ebook_file_id).await?;
-    let total_chars: i64 = stats
-        .iter()
-        .fold(0i64, |acc, s| acc.saturating_add(s.visible_chars.max(0)));
+    let total_chars = compute_spine_char_totals(pool, ebook_file_id).await?;
     if total_chars <= 0 || timeline.total_seconds <= 0.0 {
         return Ok(None);
     }
-    let text: Vec<TextMark> = crate::epub_structure::get_chapters(pool, ebook_file_id)
+    let text = build_text_marks(pool, ebook_file_id, total_chars).await?;
+    if text.is_empty() || audio.is_empty() {
+        return Ok(None);
+    }
+
+    // The match bar scores against the *smaller* mark list: a nav padded
+    // with front matter (Cover, Copyright, Contents…) must not raise the
+    // bar past what the audio side could ever supply (#1894).
+    let usable_audio = usable_audio_mark_count(audio) as usize;
+    let denom = text.len().min(usable_audio.max(1));
+    let passes = |a: &[Anchor]| {
+        a.len() >= MIN_ANCHORS && (a.len() as f64) >= MIN_MATCH_FRACTION * denom as f64
+    };
+
+    // Rungs, most exact first; then positional count-alignment as a last
+    // resort. Junk encoder labels ("STORMLIGHT0501P01") clear none of them
+    // and fall through to an honest refusal.
+    let anchors = match try_match_rungs(&text, audio, passes) {
+        Some(a) => a,
+        None => match positional_fallback(&text, audio, passes) {
+            Some(a) => a,
+            None => return Ok(None),
+        },
+    };
+    Ok(Some(AnchorMap {
+        matched: anchors.len() as i64,
+        anchors,
+        ebook_chapters: text.len() as i64,
+    }))
+}
+
+/// Stage 1: total visible characters across the ebook's spine — the
+/// denominator for every text-side fraction. `0` (or an empty spine) is the
+/// caller's signal to refuse anchoring rather than divide by zero.
+async fn compute_spine_char_totals(
+    pool: &SqlitePool,
+    ebook_file_id: i64,
+) -> Result<i64, CrossFormatError> {
+    let stats = crate::epub_structure::get_spine_stats(pool, ebook_file_id).await?;
+    Ok(stats
+        .iter()
+        .fold(0i64, |acc, s| acc.saturating_add(s.visible_chars.max(0))))
+}
+
+/// Stage 2: the ebook-side anchor candidates, keyed and fractioned against
+/// the already-computed spine character total.
+async fn build_text_marks(
+    pool: &SqlitePool,
+    ebook_file_id: i64,
+    total_chars: i64,
+) -> Result<Vec<TextMark>, CrossFormatError> {
+    Ok(crate::epub_structure::get_chapters(pool, ebook_file_id)
         .await?
         .into_iter()
         .map(|c| TextMark {
@@ -211,69 +259,48 @@ pub(super) async fn anchor_map_from_marks(
             chapter_no: chapter_number(&c.title),
             frac: (c.start_chars.max(0) as f64 / total_chars as f64).clamp(0.0, 1.0),
         })
-        .collect();
-    if text.is_empty() {
-        return Ok(None);
-    }
+        .collect())
+}
 
-    if audio.is_empty() {
-        return Ok(None);
-    }
+/// Stage 4: try each matching rung, most exact first, filtered to a
+/// strictly-monotonic subsequence. Returns the first rung whose anchors
+/// clear `passes`.
+fn try_match_rungs(
+    text: &[TextMark],
+    audio: &[AudioMark],
+    passes: impl Fn(&[Anchor]) -> bool,
+) -> Option<Vec<Anchor>> {
+    [
+        match_by_title(text, audio),
+        match_by_chapter_number(text, audio),
+        match_by_title_prefix(text, audio),
+    ]
+    .into_iter()
+    .map(monotonic)
+    .find(|m| passes(m))
+}
 
-    // The match bar scores against the *smaller* mark list: a nav padded
-    // with front matter (Cover, Copyright, Contents…) must not raise the
-    // bar past what the audio side could ever supply (#1894).
-    let usable_audio = audio
-        .iter()
-        .filter(|a| !a.synthetic && a.key.is_some())
-        .count();
-    let denom = text.len().min(usable_audio.max(1));
-    let passes = |a: &[Anchor]| {
-        a.len() >= MIN_ANCHORS && (a.len() as f64) >= MIN_MATCH_FRACTION * denom as f64
-    };
-
-    // Rungs, most exact first; the first that clears the bar (after the
-    // monotonic filter, so the count reflects anchors the interpolation
-    // actually uses) wins. Junk encoder labels ("STORMLIGHT0501P01")
-    // clear none of them and fall through to an honest refusal.
-    let mut chosen: Option<Vec<Anchor>> = None;
-    for rung in [
-        match_by_title(&text, audio),
-        match_by_chapter_number(&text, audio),
-        match_by_title_prefix(&text, audio),
-    ] {
-        let m = monotonic(rung);
-        if passes(&m) {
-            chosen = Some(m);
-            break;
-        }
+/// Stage 5: positional count-alignment, when every rung above missed — the
+/// shape of a per-chapter MP3 folder, or two editions wording titles
+/// differently. Only engages when the two mark lists are the same length.
+fn positional_fallback(
+    text: &[TextMark],
+    audio: &[AudioMark],
+    passes: impl Fn(&[Anchor]) -> bool,
+) -> Option<Vec<Anchor>> {
+    if text.len() != audio.len() {
+        return None;
     }
-    // Count alignment last: one-to-one lists pair positionally (the
-    // per-chapter MP3 folder, or two editions wording titles differently).
-    let anchors = match chosen {
-        Some(a) => a,
-        None if text.len() == audio.len() => {
-            let m = monotonic(
-                text.iter()
-                    .zip(audio.iter())
-                    .map(|(t, a)| Anchor {
-                        text_frac: t.frac,
-                        audio_frac: a.frac,
-                    })
-                    .collect(),
-            );
-            if !passes(&m) {
-                return Ok(None);
-            }
-            m
-        }
-        None => return Ok(None),
-    };
-    Ok(Some(AnchorMap {
-        matched: anchors.len() as i64,
-        anchors,
-        ebook_chapters: text.len() as i64,
-    }))
+    let m = monotonic(
+        text.iter()
+            .zip(audio.iter())
+            .map(|(t, a)| Anchor {
+                text_frac: t.frac,
+                audio_frac: a.frac,
+            })
+            .collect(),
+    );
+    passes(&m).then_some(m)
 }
 
 /// Ordered pairing on parsed chapter numbers — the rung that survives
