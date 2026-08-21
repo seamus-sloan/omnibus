@@ -25,7 +25,7 @@ pub(super) fn ResultsScreen(
     let searching = stage == Stage::Searching;
 
     rsx! {
-        div { class: "mes-screen", "data-testid": "mes-results",
+        div { class: "mes-screen mes-screen-results", "data-testid": "mes-results",
             h2 { class: "mes-title", "Find this edition" }
             form {
                 class: "mes-query",

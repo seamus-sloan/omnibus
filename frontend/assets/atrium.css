@@ -6687,6 +6687,11 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .mes-close:hover { background: var(--bg-2); color: var(--ink-0); }
 
 .mes-screen { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+/* The panel's own bottom padding is zero so the compare screen's sticky
+   action bar can sit flush against its edge (see `.mes-footbar`). The results
+   screen has no such bar, so its last line — the per-source counts — would
+   otherwise end hard against the panel edge. It carries the padding itself. */
+.mes-screen-results { padding-bottom: 22px; }
 .mes-title {
   margin: 0;
   font-family: var(--serif, inherit);
@@ -6954,6 +6959,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 
 @media (max-width: 640px) {
   .mes-scrim { padding: 0; align-items: stretch; }
+  .mes-screen-results { padding-bottom: calc(22px + env(safe-area-inset-bottom)); }
   .mes-panel {
     width: 100%;
     max-height: 100dvh;
