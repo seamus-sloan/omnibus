@@ -37,6 +37,8 @@ pub enum InitDbError {
     Shelves(#[from] crate::shelves::ShelfError),
     #[error(transparent)]
     Overrides(#[from] crate::metadata_overrides::MetadataOverridesError),
+    #[error(transparent)]
+    Physical(#[from] crate::physical::PhysicalError),
 }
 
 /// Initialize or open the SQLite pool at `database_url`, apply per-connection PRAGMAs, run pending
