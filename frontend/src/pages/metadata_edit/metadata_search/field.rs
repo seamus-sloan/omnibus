@@ -9,6 +9,7 @@
 
 use dioxus::prelude::*;
 use omnibus_shared::metadata_lookup::ProviderEdition;
+use omnibus_shared::EbookMetadata;
 
 use super::super::form_grid::FormFields;
 
@@ -83,14 +84,14 @@ impl MetadataField {
     pub(super) fn current(self, fields: FormFields) -> String {
         match self {
             MetadataField::Title => fields.title.read().clone(),
-            MetadataField::Authors => fields.authors.read().join(", "),
+            MetadataField::Authors => list(&fields.authors.read()),
             MetadataField::Publisher => fields.publisher.read().clone(),
             MetadataField::Published => fields.published.read().clone(),
             MetadataField::Series => fields.series.read().clone(),
             MetadataField::Isbn13 => fields.isbn13.read().clone(),
             MetadataField::Isbn10 => fields.isbn10.read().clone(),
             MetadataField::PrintPages => fields.print_pages.read().clone(),
-            MetadataField::Genres => fields.genres.read().join(", "),
+            MetadataField::Genres => list(&fields.genres.read()),
             MetadataField::Description => fields.description.read().clone(),
         }
     }
@@ -103,16 +104,6 @@ impl MetadataField {
     /// a value the reader already has.
     pub(super) fn source_value(self, edition: &ProviderEdition) -> String {
         let text = |v: &Option<String>| v.as_deref().unwrap_or_default().trim().to_string();
-        // Blank entries are dropped before joining, so a list of them reads
-        // as absent rather than as the separator string — `["", ""]` would
-        // otherwise render and stage as ", ".
-        let list = |v: &[String]| {
-            v.iter()
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
         match self {
             MetadataField::Title => edition.title.trim().to_string(),
             MetadataField::Authors => list(&edition.authors),
@@ -132,6 +123,65 @@ impl MetadataField {
     /// Whether this source has anything to offer for this field.
     pub(super) fn is_available(self, edition: &ProviderEdition) -> bool {
         !self.source_value(edition).trim().is_empty()
+    }
+
+    /// What the book held before this editing session — the same frozen
+    /// baseline the save bar counts against.
+    ///
+    /// Formatted exactly like [`Self::current`] so the two can be compared as
+    /// strings; a mismatch in formatting here would report a field as edited
+    /// for the shape of its rendering rather than its value.
+    pub(super) fn original(self, orig: &EbookMetadata) -> String {
+        let text = |v: &Option<String>| v.clone().unwrap_or_default();
+        match self {
+            MetadataField::Title => text(&orig.title),
+            MetadataField::Authors => list(
+                &orig
+                    .creators
+                    .iter()
+                    .map(|c| c.name.clone())
+                    .collect::<Vec<_>>(),
+            ),
+            MetadataField::Publisher => text(&orig.publisher),
+            MetadataField::Published => text(&orig.published),
+            MetadataField::Series => text(&orig.series),
+            MetadataField::Isbn13 => text(&orig.isbn13),
+            MetadataField::Isbn10 => text(&orig.isbn10),
+            MetadataField::PrintPages => {
+                orig.print_pages.map(|p| p.to_string()).unwrap_or_default()
+            }
+            MetadataField::Genres => list(&orig.genres),
+            MetadataField::Description => text(&orig.description),
+        }
+    }
+
+    /// Whether this field is currently carrying an unsaved change.
+    ///
+    /// Defined against the *baseline*, not against what the compare screen
+    /// happened to do — so it is true for a field edited directly in the form
+    /// too, it survives leaving and re-entering the screen, and it can never
+    /// disagree with the save bar's own count, which asks the same question.
+    pub(super) fn is_staged(self, fields: FormFields, orig: &EbookMetadata) -> bool {
+        self.current(fields) != self.original(orig)
+    }
+
+    /// Put this field back the way the book had it.
+    pub(super) fn undo(self, fields: FormFields, orig: &EbookMetadata) {
+        let mut fields = fields;
+        match self {
+            MetadataField::Title => fields.title.set(self.original(orig)),
+            MetadataField::Authors => fields
+                .authors
+                .set(orig.creators.iter().map(|c| c.name.clone()).collect()),
+            MetadataField::Publisher => fields.publisher.set(self.original(orig)),
+            MetadataField::Published => fields.published.set(self.original(orig)),
+            MetadataField::Series => fields.series.set(self.original(orig)),
+            MetadataField::Isbn13 => fields.isbn13.set(self.original(orig)),
+            MetadataField::Isbn10 => fields.isbn10.set(self.original(orig)),
+            MetadataField::PrintPages => fields.print_pages.set(self.original(orig)),
+            MetadataField::Genres => fields.genres.set(orig.genres.clone()),
+            MetadataField::Description => fields.description.set(self.original(orig)),
+        }
     }
 
     /// Whether the source would actually change this field.
@@ -178,6 +228,21 @@ impl MetadataField {
     pub(super) fn slug(self) -> String {
         super::field_slug(self.label())
     }
+}
+
+/// How a list-valued field renders on one side of a compare row.
+///
+/// Blank entries are dropped before joining, so a list of them reads as
+/// absent rather than as the separator string — `["", ""]` would otherwise
+/// render, and stage, as ", ". Used by both sides so a value and its baseline
+/// are compared on equal terms.
+fn list(values: &[String]) -> String {
+    values
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The list a list-valued field actually stages: trimmed, with blank entries

@@ -28,6 +28,7 @@ const EMPTY: &str = "\u{2014}";
 pub(super) fn CompareScreen(
     edition: ProviderEdition,
     fields: FormFields,
+    orig: Signal<EbookMetadata>,
     uuid: String,
     book: EbookMetadata,
     hydrating: bool,
@@ -36,21 +37,29 @@ pub(super) fn CompareScreen(
     on_done: EventHandler<()>,
 ) -> Element {
     let mut show_all = use_signal(|| false);
-    // Fields taken during this visit. Without it a row vanishes the instant
-    // you press its arrow — applying makes it stop differing — so the list
-    // shuffles under the cursor and you lose sight of what you just did.
-    // They stay, marked as taken, until the screen is left.
-    let mut taken: Signal<Vec<MetadataField>> = use_signal(Vec::new);
     let source_name = edition.source.display_name();
+    let baseline = orig();
+    // Staged is measured against the book's frozen baseline, not against what
+    // this screen happened to do — so a row stays marked after a trip back to
+    // the results, a field edited directly in the form is marked too, and the
+    // count here can never disagree with the save bar's.
+    let staged: Vec<MetadataField> = MetadataField::ALL
+        .iter()
+        .copied()
+        .filter(|f| f.is_staged(fields, &baseline))
+        .collect();
     let has_source_cover = edition
         .cover_url
         .as_deref()
         .is_some_and(|u| !u.trim().is_empty());
 
+    // A staged row stays on screen even once it stops differing: applying a
+    // field makes the two sides agree, and a row that vanished the instant
+    // you pressed it would take the evidence of what you did with it.
     let shown: Vec<MetadataField> = MetadataField::ALL
         .iter()
         .copied()
-        .filter(|f| show_all() || f.differs(fields, &edition) || taken.read().contains(f))
+        .filter(|f| show_all() || f.differs(fields, &edition) || staged.contains(f))
         .collect();
     let changes = MetadataField::ALL
         .iter()
@@ -80,15 +89,9 @@ pub(super) fn CompareScreen(
                     "{source_name}"
                 }
             }
-            p { class: "mes-subtitle", "data-testid": "mes-change-count",
-                if hydrating {
+            if hydrating {
+                p { class: "mes-subtitle", role: "status", "data-testid": "mes-hydrating",
                     "Loading the full record\u{2026}"
-                } else if changes == 0 {
-                    "Nothing here differs from your book."
-                } else if changes == 1 {
-                    "1 field differs from your book."
-                } else {
-                    "{changes} fields differ from your book."
                 }
             }
 
@@ -112,9 +115,9 @@ pub(super) fn CompareScreen(
                         field,
                         edition: edition.clone(),
                         fields,
+                        orig,
                         source_name,
                         hydrating,
-                        on_take: move |f: MetadataField| taken.write().push(f),
                     }
                 }
             }
@@ -127,10 +130,7 @@ pub(super) fn CompareScreen(
                     disabled: hydrating || changes == 0,
                     onclick: move |_| {
                         for field in MetadataField::ALL {
-                            if field.differs(fields, &edition) {
-                                field.apply(fields, &edition);
-                                taken.write().push(*field);
-                            }
+                            field.apply(fields, &edition);
                         }
                     },
                     "{take_all_label}"
@@ -152,7 +152,7 @@ pub(super) fn CompareScreen(
                 }
             }
             p { class: "mono mes-foot", "data-testid": "mes-staged-hint",
-                "Changes are staged \u{2014} press Save on the form to keep them."
+                "Fields aren't saved until you press Save on the form."
             }
         }
     }
@@ -170,25 +170,23 @@ fn CompareRow(
     field: MetadataField,
     edition: ProviderEdition,
     fields: FormFields,
+    orig: Signal<EbookMetadata>,
     source_name: &'static str,
     hydrating: bool,
-    on_take: EventHandler<MetadataField>,
 ) -> Element {
     let label = field.label();
     let slug = field.slug();
+    let baseline = orig();
     let source_value = field.source_value(&edition);
     let available = !source_value.trim().is_empty();
     let current = field.current(fields);
-    // Not a disabled state: re-applying is harmless, and greying out the
-    // control the moment it worked is how a reader loses track of whether
-    // they pressed it.
-    let matched = available && current == source_value;
+    let staged = field.is_staged(fields, &baseline);
 
     rsx! {
         div {
-            class: if matched { "mes-field mes-field-matched" } else { "mes-field" },
+            class: "mes-field",
             "data-testid": "mes-row-{slug}",
-            "data-applied": if matched { "true" } else { "false" },
+            "data-staged": if staged { "true" } else { "false" },
             span { class: "mes-field-label", "{label}" }
             span { class: "mes-field-mine", "data-testid": "mes-row-{slug}-current",
                 if current.trim().is_empty() {
@@ -197,23 +195,36 @@ fn CompareRow(
                     "{current}"
                 }
             }
-            button {
-                r#type: "button",
-                class: "mes-apply",
-                "data-testid": "mes-row-{slug}-apply",
-                // Named rather than inheriting the arrow glyph: a screenful of
-                // controls all called "→" is a screenful of identical controls.
-                aria_label: "Copy {label} from {source_name}",
-                // Two guards. A provider not knowing a field must never blank
-                // out a value you have — and neither must a row that is about
-                // to be replaced: while the detail re-fetch is in flight this
-                // record is the thin search hit, not the answer.
-                disabled: !available || hydrating,
-                onclick: move |_| {
-                    field.apply(fields, &edition);
-                    on_take.call(field);
-                },
-                "\u{2192}"
+            // One control, two meanings, so a row's state is readable from it
+            // alone: an arrow to take the source's value, and — once the field
+            // carries a change — the way back to what the book had.
+            if staged {
+                button {
+                    r#type: "button",
+                    class: "mes-apply mes-undo",
+                    "data-testid": "mes-row-{slug}-undo",
+                    aria_label: "Undo the change to {label}",
+                    disabled: hydrating,
+                    onclick: move |_| field.undo(fields, &orig()),
+                    "\u{21a9}"
+                }
+            } else {
+                button {
+                    r#type: "button",
+                    class: "mes-apply",
+                    "data-testid": "mes-row-{slug}-apply",
+                    // Named rather than inheriting the arrow glyph: a screenful
+                    // of controls all called "→" is a screenful of identical
+                    // controls.
+                    aria_label: "Copy {label} from {source_name}",
+                    // Two guards. A provider not knowing a field must never
+                    // blank out a value you have — and neither must a row about
+                    // to be replaced: while the detail re-fetch is in flight
+                    // this record is the thin search hit, not the answer.
+                    disabled: !available || hydrating,
+                    onclick: move |_| field.apply(fields, &edition),
+                    "\u{2192}"
+                }
             }
             span {
                 class: if available { "mes-field-theirs" } else { "mes-field-theirs mes-empty" },

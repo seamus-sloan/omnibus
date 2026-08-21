@@ -105,7 +105,7 @@ pub(super) fn CoverRow(
                 if let Some(msg) = status() {
                     "{msg}"
                 } else {
-                    "applies immediately \u{b7} not staged"
+                    "The cover applies immediately \u{b7} it isn\u{2019}t staged with the fields"
                 }
             }
         }

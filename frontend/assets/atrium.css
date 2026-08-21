@@ -6639,6 +6639,13 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   background: color-mix(in oklch, var(--bg-0) 70%, transparent);
   backdrop-filter: blur(6px);
   animation: sp-fade-in 0.12s ease-out;
+  /* A wheel over the scrim would otherwise scroll the page behind it, and
+     reaching the end of the panel's own scroll would hand the rest of the
+     gesture to the page ("scroll chaining"). Making the scrim a scroll
+     container that contains its overscroll stops both — the page stays
+     exactly where the reader left it. */
+  overflow: hidden;
+  overscroll-behavior: contain;
 }
 .mes-panel {
   position: relative;
@@ -6647,6 +6654,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--bg-1);
   border: 1px solid var(--line-2);
   border-radius: 16px;
@@ -6720,6 +6728,7 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   gap: 6px;
   max-height: min(52vh, 460px);
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .mes-row-item { margin: 0; }
 .mes-row {
@@ -6867,7 +6876,11 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   color: var(--ink-0);
 }
 .mes-apply[disabled] { opacity: 0.3; cursor: not-allowed; }
-.mes-field-matched .mes-apply {
+
+/* The one mark a row carrying an unsaved change gets: its control becomes the
+   way back rather than the way across. Accent-drawn so it reads as "you did
+   this" without tinting the whole row. */
+.mes-undo {
   border-color: color-mix(in oklch, var(--accent) 45%, transparent);
   color: var(--accent);
 }

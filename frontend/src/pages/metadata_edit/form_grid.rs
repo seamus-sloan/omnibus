@@ -242,7 +242,7 @@ fn field_grid_authors_and_description(
         // it most often fills, and the last thing a reader wants help with
         // before saving.
         div { class: "me-field-full",
-            MetadataSearchPanel { fields, uuid, book, on_cover_applied }
+            MetadataSearchPanel { fields, orig, uuid, book, on_cover_applied }
         }
     }
 }

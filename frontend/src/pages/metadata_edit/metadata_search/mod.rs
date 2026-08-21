@@ -108,6 +108,9 @@ fn compose_query(title: &str, author: Option<&str>) -> String {
 #[component]
 pub(super) fn MetadataSearchPanel(
     fields: FormFields,
+    /// The book as loaded — the baseline the save bar counts against, and so
+    /// the only honest answer to "is this field carrying a change?".
+    orig: Signal<EbookMetadata>,
     uuid: String,
     book: EbookMetadata,
     on_cover_applied: EventHandler<EbookMetadata>,
@@ -146,6 +149,7 @@ pub(super) fn MetadataSearchPanel(
         if open() {
             SearchOverlay {
                 fields,
+                orig,
                 uuid,
                 book,
                 on_cover_applied,
@@ -160,6 +164,7 @@ pub(super) fn MetadataSearchPanel(
 #[component]
 fn SearchOverlay(
     fields: FormFields,
+    orig: Signal<EbookMetadata>,
     uuid: String,
     book: EbookMetadata,
     on_cover_applied: EventHandler<EbookMetadata>,
@@ -210,6 +215,7 @@ fn SearchOverlay(
                         CompareScreen {
                             edition: *edition,
                             fields,
+                            orig,
                             uuid,
                             book,
                             hydrating: (state.hydrating)(),

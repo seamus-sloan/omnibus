@@ -435,10 +435,6 @@ test.describe
       // change one, and a row that can't be applied is only noise.
       await expect(page.getByTestId("mes-row-series")).toHaveCount(0);
       await expect(page.getByTestId("mes-row-genres")).toHaveCount(0);
-      // Language matches the book, so it isn't a change either.
-      await expect(page.getByTestId("mes-change-count")).toContainText(
-        "differ from your book",
-      );
 
       // Nothing staged by looking.
       await expect(page.getByTestId("me-save")).toBeDisabled();
@@ -480,12 +476,15 @@ test.describe
 
       await expect(page.locator("#me-publisher")).toHaveValue("Editions Gauss");
       await expect(page.locator("#me-title")).toHaveValue(TARGET.title);
-      // The row stays and reads as taken — applying it must not make it vanish
-      // out from under the cursor just because it stopped differing.
+      // The row stays and its control becomes the way back — applying must
+      // not make a row vanish out from under the cursor just because it
+      // stopped differing.
       await expect(page.getByTestId("mes-row-publisher")).toHaveAttribute(
-        "data-applied",
+        "data-staged",
         "true",
       );
+      await expect(page.getByTestId("mes-row-publisher-apply")).toHaveCount(0);
+      await expect(page.getByTestId("mes-row-publisher-undo")).toBeVisible();
       await expect(page.getByTestId("mes-row-publisher-current")).toHaveText(
         "Editions Gauss",
       );
@@ -496,6 +495,31 @@ test.describe
 
       await page.getByTestId("mes-close").click();
       await page.getByTestId("me-discard").click();
+    });
+
+    test("undoes a staged field back to what the book had", async ({
+      page,
+      request,
+    }) => {
+      const uuid = await fetchBookIdByTitle(request, TARGET.title);
+      await openCompare(page, uuid);
+      await page.getByTestId("mes-row-publisher-apply").click();
+      await expect(page.locator("#me-publisher")).toHaveValue("Editions Gauss");
+
+      await page.getByTestId("mes-row-publisher-undo").click();
+
+      // Back to the book's own value, and the row offers to take it again —
+      // the control is what says which state the row is in.
+      await expect(page.locator("#me-publisher")).toHaveValue(
+        TARGET.publisher!,
+      );
+      await expect(page.getByTestId("mes-row-publisher")).toHaveAttribute(
+        "data-staged",
+        "false",
+      );
+      await expect(page.getByTestId("mes-row-publisher-apply")).toBeVisible();
+      // And the save bar agrees there is nothing to save.
+      await expect(page.getByTestId("me-save")).toBeDisabled();
     });
 
     test("takes every change at once and skips what the source lacks", async ({
@@ -522,9 +546,6 @@ test.describe
       // take-all skips what the source lacks rather than blanking it.
       await expect(page.locator("#me-series")).toHaveValue(TARGET.series!);
       // Nothing is left to take.
-      await expect(page.getByTestId("mes-change-count")).toHaveText(
-        "Nothing here differs from your book.",
-      );
       await expect(page.getByTestId("mes-take-all")).toBeDisabled();
 
       await page.getByTestId("mes-close").click();
@@ -653,9 +674,7 @@ test.describe
       // In flight: nothing can be taken. Otherwise "take all" would mean a
       // different set of fields depending on how fast the network answered —
       // the Open Library search hit has no description, its record does.
-      await expect(page.getByTestId("mes-change-count")).toHaveText(
-        "Loading the full record…",
-      );
+      await expect(page.getByTestId("mes-hydrating")).toBeVisible();
       await expect(page.getByTestId("mes-take-all")).toBeDisabled();
       await expect(page.getByTestId("mes-row-title-apply")).toBeDisabled();
 
@@ -693,7 +712,7 @@ test.describe
       ).toBeVisible();
       // The row says so in words, not only in behaviour.
       await expect(page.getByTestId("mes-row-cover-note")).toHaveText(
-        "applies immediately · not staged",
+        "The cover applies immediately · it isn’t staged with the fields",
       );
       await expect(page.getByTestId("mes-row-cover-apply")).toHaveAttribute(
         "aria-label",
