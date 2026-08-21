@@ -57,8 +57,14 @@ struct SpeedSheet: View {
                 .font(.ui(11))
                 .foregroundStyle(palette.ink3Color)
 
-                Slider(value: rateBinding, in: PlaybackSpeed.minRate...PlaybackSpeed.maxRate, step: PlaybackSpeed.step)
-                    .tint(palette.accentColor)
+                Slider(
+                    value: rateBinding,
+                    in: PlaybackSpeed.minRate...PlaybackSpeed.maxRate,
+                    step: PlaybackSpeed.step
+                ) { editing in
+                    if !editing { player.commitRate() }
+                }
+                .tint(palette.accentColor)
             }
 
             HStack(spacing: Spacing.md) {
@@ -82,10 +88,12 @@ struct SpeedSheet: View {
         .sheetFrame()
     }
 
+    // Live-only during the drag; the slider's onEditingChanged persists once
+    // on release rather than once per 0.05 tick.
     private var rateBinding: Binding<Double> {
         Binding(
             get: { player.rate },
-            set: { player.rate = PlaybackSpeed.snap($0) }
+            set: { player.setRateLive(PlaybackSpeed.snap($0)) }
         )
     }
 

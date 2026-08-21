@@ -310,6 +310,21 @@ final class AudioPlayer {
         isAdoptingRate = false
     }
 
+    /// Apply a rate audibly without persisting it — the speed slider's live
+    /// drag path, where per-tick writes would spam the server. Pair with
+    /// [`commitRate`] on drag end.
+    func setRateLive(_ value: Double) {
+        isAdoptingRate = true
+        rate = value
+        isAdoptingRate = false
+        if isPlaying { player?.rate = Float(value) }
+    }
+
+    /// Persist the current rate — the drag-end commit for [`setRateLive`].
+    func commitRate() {
+        Task { await persistRate() }
+    }
+
     /// The manifest for the resolved file, falling back to the server's
     /// default when a remembered id has gone stale — `book_files` rows churn
     /// on reindex, so a position saved before one can name a file the book
