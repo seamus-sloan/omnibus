@@ -259,9 +259,7 @@ async fn load_manifest(
 }
 
 /// Reset every signal a fresh load owns back to its pre-playback default,
-/// before the metadata/manifest fetch below repopulates them. Split out of
-/// [`load_and_drain`] as its own step since it's pure state reset with no
-/// control flow of its own.
+/// before the metadata/manifest fetch repopulates them.
 fn reset_playback_state_for_load(ctx: MobilePlayback) {
     let MobilePlayback {
         mut view,

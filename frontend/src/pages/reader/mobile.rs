@@ -278,8 +278,7 @@ async fn drain_reader_events(
 
 /// Handle a [`ReaderEvent::Relocate`]: re-derive chapter/total from the TOC,
 /// persist a genuinely-moved non-echo position, and clear a TOC-jump
-/// `Loading` overlay. Split out of [`drain_reader_events`] as its own stage
-/// since it carries the bulk of that loop's logic.
+/// `Loading` overlay.
 fn handle_relocate(
     json: &str,
     uuid: &str,

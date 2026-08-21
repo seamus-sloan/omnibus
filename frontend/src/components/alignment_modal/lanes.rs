@@ -172,12 +172,7 @@ fn lane_geometry<'v>(
 
 /// Both lanes plus the connector field between them: chapter ticks, fills,
 /// labelled position chips, the anchored mapped preview, and the delta
-/// sentence beneath. No hooks anywhere in this tree — it's a plain
-/// data-in/markup-out function, not a `#[component]` — so splitting the rsx
-/// across named helpers below carries none of the hook-order risk rule 07
-/// warns about; each helper is just a sub-tree builder called inline via
-/// `{helper(...)}`, same pattern as `pages/series_index.rs`'s
-/// `render_series_body`.
+/// sentence beneath.
 pub(super) fn render_lanes(
     view: &AlignmentView,
     order: &[i64],
