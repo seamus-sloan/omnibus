@@ -30,18 +30,26 @@ fn status_text(status: &ProviderSearchStatus) -> (String, bool) {
         ProviderSearchStatus::Answered { count } => (count.to_string(), false),
         ProviderSearchStatus::NotConfigured => ("not set up".to_string(), false),
         ProviderSearchStatus::Failed { .. } => ("unavailable".to_string(), true),
-        // Worded as a wait rather than a failure, because it is one: nothing
-        // is broken, this source asked us to come back later and we did not
-        // spend a request finding that out again.
+        // Worded as what *we* are doing, not as a promise about the source.
+        // "retry in 10m" reads as advice — wait and it will work — and for the
+        // commonest case that is false: a keyless Google Books answers 429 for
+        // a quota metric of "Queries per day", so it refuses until midnight
+        // Pacific however long anyone waits. What is true either way is that
+        // this source sits the next few minutes out, and no request is being
+        // spent to rediscover that.
         ProviderSearchStatus::Throttled { retry_after_secs } => (
-            format!("rate limited, retry in {}", human_wait(*retry_after_secs)),
+            format!(
+                "rate limited, skipping for {}",
+                human_wait(*retry_after_secs)
+            ),
             true,
         ),
     }
 }
 
 /// A cooldown as a reader would say it. Rounded up, and never "0s" — the
-/// point of the number is roughly when to try again, not its precision.
+/// point of the number is roughly how long this source sits out, not its
+/// precision.
 fn human_wait(secs: u64) -> String {
     match secs {
         0..=90 => format!("{}s", secs.max(1)),

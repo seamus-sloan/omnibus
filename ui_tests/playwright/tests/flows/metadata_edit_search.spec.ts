@@ -442,7 +442,7 @@ test.describe
 
       const throttled = page.getByTestId("mes-source-hardcover");
       await expect(throttled).toHaveText(
-        "Hardcover rate limited, retry in 10m",
+        "Hardcover rate limited, skipping for 10m",
       );
       await expect(throttled).toHaveAttribute(
         "title",

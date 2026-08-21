@@ -65,7 +65,7 @@ recent releases are recorded below; everything earlier is available via the
   candidates discarded silently, with nothing on screen to say so. They are
   listed now, and selecting one still fetches its full record
 - **A source that rate-limits us is left alone until it recovers.** Its row
-  says "rate limited, retry in 10m" rather than "unavailable", and the search
+  says "rate limited, skipping for 10m" rather than "unavailable", and the search
   no longer spends a request re-asking a source that has already refused —
   which on Google Books' free tier could otherwise keep failing for hours
 - The metadata edit page now has one fetch-from-outside action instead of
