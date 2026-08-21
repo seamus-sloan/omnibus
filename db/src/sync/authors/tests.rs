@@ -113,3 +113,46 @@ async fn insert_author_links_resolves_a_merged_away_name_to_its_canonical_id() {
         "AC1: the book must link to the surviving canonical author"
     );
 }
+
+#[tokio::test]
+async fn insert_author_links_skips_a_name_that_is_both_blocklisted_and_aliased() {
+    // Precedence contract: the `ignored_authors` filter runs before alias
+    // resolution, so a name carrying both a blocklist entry and an alias is
+    // skipped outright. The blocklist recovery flow relies on this — a
+    // convert-to-alias must *remove* the blocklist row, not merely add the
+    // alias, or nothing changes at reindex time.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let book_id = seed_book(&pool).await;
+
+    let canonical_id: i64 =
+        sqlx::query_scalar("INSERT INTO authors (name) VALUES ('Andy Weir') RETURNING id")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    sqlx::query(
+        "INSERT INTO entity_aliases (kind, alias_name, canonical_id) \
+         VALUES ('author', 'Weir, Andy', ?)",
+    )
+    .bind(canonical_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO ignored_authors (name) VALUES ('Weir, Andy')")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let m = metadata_with_creator("Weir, Andy");
+    let author_aliases = HashMap::from([("Weir, Andy".to_string(), canonical_id)]);
+    let mut tx = pool.begin().await.unwrap();
+    insert_author_links(&mut tx, book_id, &m, &author_aliases)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    assert_eq!(
+        linked_author_ids(&pool, book_id).await,
+        Vec::<i64>::new(),
+        "the blocklist must win over the alias while both exist"
+    );
+}

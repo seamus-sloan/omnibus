@@ -15,12 +15,14 @@ mod backfill;
 mod ebooks;
 mod progress;
 
-pub use audiobooks::{reindex_audiobooks, reindex_audiobooks_with_progress};
+pub use audiobooks::{
+    reindex_audiobooks, reindex_audiobooks_with_options, reindex_audiobooks_with_progress,
+};
 pub(crate) use backfill::{
     backfill_chapters, backfill_epub_structure, backfill_page_counts, backfill_thumbs,
     backfill_word_counts,
 };
-pub use ebooks::{reindex, reindex_with_progress};
+pub use ebooks::{reindex, reindex_with_options, reindex_with_progress};
 pub(crate) use progress::{
     diff_tallies, display_item, report_parse_progress, report_sync_progress, root_display_name,
 };
@@ -231,6 +233,95 @@ pub async fn is_stale(pool: &SqlitePool, library_path: &str) -> Result<bool, Ind
 /// unit-testable without depending on a readable wall clock.
 fn is_stale_decision(last: i64, now: i64) -> bool {
     now - last >= REFRESH_AFTER_SECS
+}
+
+/// Behavior switches for a reindex pass beyond the default incremental diff.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ReindexOptions {
+    /// Re-parse Unchanged files whose book has no author link left. The
+    /// repair pass for books orphaned while their author's name sat on the
+    /// `ignored_authors` blocklist: the normal diff never re-parses an
+    /// Unchanged file, so removing a blocklist entry (or aliasing it) can
+    /// only take effect on books whose files happen to change — this
+    /// promotes the orphaned ones through the ordinary Changed path instead.
+    pub relink_authorless: bool,
+}
+
+/// Move every Unchanged entry whose book has no `books_authors_link` row
+/// into Changed, so Phase B re-parses it and the writer re-derives its
+/// author links against the current blocklist + `entity_aliases` state.
+/// Only primary rows (`books.uuid`) are promoted — a merged/attached file's
+/// metadata is owned by its primary book, and the attached-file Changed path
+/// never rewrites book metadata.
+async fn promote_authorless_unchanged(
+    pool: &SqlitePool,
+    diff: &mut ReindexDiff,
+    disk: &[ebook::StatEntry],
+    db_rows: &[books::IndexedRow],
+    library_root: &Path,
+) -> Result<(), sqlx::Error> {
+    if diff.unchanged.is_empty() {
+        return Ok(());
+    }
+    let authorless = authorless_uuids(pool, &diff.unchanged).await?;
+    if authorless.is_empty() {
+        return Ok(());
+    }
+
+    let row_by_uuid: std::collections::HashMap<&str, &books::IndexedRow> =
+        db_rows.iter().map(|r| (r.uuid.as_str(), r)).collect();
+    let entry_by_scan_key: std::collections::HashMap<&str, &ebook::StatEntry> =
+        disk.iter().map(|e| (e.scan_key.as_str(), e)).collect();
+
+    let mut kept = Vec::with_capacity(diff.unchanged.len());
+    let mut promoted = Vec::new();
+    for uuid in diff.unchanged.drain(..) {
+        let entry = authorless.contains(&uuid).then(|| {
+            row_by_uuid
+                .get(uuid.as_str())
+                .and_then(|row| entry_by_scan_key.get(row.scan_key.as_str()))
+        });
+        match entry.flatten() {
+            Some(entry) => promoted.push(parse_target(entry, library_root)),
+            None => kept.push(uuid),
+        }
+    }
+    if !promoted.is_empty() {
+        tracing::info!(
+            promoted = promoted.len(),
+            "reindex: re-parsing unchanged files for authorless books (relink pass)"
+        );
+    }
+    diff.unchanged = kept;
+    diff.changed.extend(promoted);
+    // Restore the deterministic order sort_buckets established.
+    diff.changed.sort_by(|a, b| a.filename.cmp(&b.filename));
+    Ok(())
+}
+
+/// The subset of `uuids` naming a `books` row with no author link. Merged
+/// uuids (attach-ledger stand-ins) never match, by design. Chunked at 500 to
+/// stay under SQLite's bound-parameter cap.
+async fn authorless_uuids(
+    pool: &SqlitePool,
+    uuids: &[String],
+) -> Result<std::collections::HashSet<String>, sqlx::Error> {
+    let mut out = std::collections::HashSet::new();
+    for chunk in uuids.chunks(500) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT b.uuid FROM books b WHERE b.uuid IN ({placeholders})
+               AND NOT EXISTS (SELECT 1 FROM books_authors_link l WHERE l.book = b.id)"
+        );
+        let mut q = sqlx::query_scalar::<_, String>(&sql);
+        for uuid in chunk {
+            q = q.bind(uuid);
+        }
+        out.extend(q.fetch_all(pool).await?);
+    }
+    Ok(out)
 }
 
 /// Result of [`diff_library`]. Each bucket is what the writer should do

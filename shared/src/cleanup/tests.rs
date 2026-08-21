@@ -34,6 +34,7 @@ fn cleanup_action_round_trips_through_str_tokens() {
         CleanupAction::Split,
         CleanupAction::Rename,
         CleanupAction::Delete,
+        CleanupAction::Alias,
     ] {
         assert_eq!(CleanupAction::from_str(a.as_str()), Some(a));
     }
@@ -106,4 +107,15 @@ fn suggestion_card_round_trips_through_json_with_optional_fields_present_and_abs
     let json = serde_json::to_string(&without_optionals).unwrap();
     let back: SuggestionCard = serde_json::from_str(&json).unwrap();
     assert_eq!(back, without_optionals);
+}
+
+#[test]
+fn ignored_author_round_trips_through_json() {
+    let entry = IgnoredAuthor {
+        name: "Weir, Andy".into(),
+        ignored_at: 1_700_000_000,
+    };
+    let json = serde_json::to_string(&entry).unwrap();
+    let back: IgnoredAuthor = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, entry);
 }

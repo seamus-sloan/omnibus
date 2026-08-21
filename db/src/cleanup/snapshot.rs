@@ -122,3 +122,14 @@ pub(super) struct DeleteAuthorSnapshot {
     pub links: Vec<BookLink>,
     pub photo: Option<PhotoSnapshot>,
 }
+
+/// Pre-conversion state for `apply_alias_ignored_author`: the blocklist row
+/// it removed and whatever `entity_aliases` row its write overwrote.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct AliasIgnoredSnapshot {
+    pub name: String,
+    /// The removed row's original `ignored_at`, restored verbatim on undo.
+    pub ignored_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_alias: Option<AliasSnapshot>,
+}

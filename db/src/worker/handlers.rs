@@ -205,6 +205,13 @@ impl Worker {
                 "cleanup detection",
                 run_cleanup_detection(&self.pool, kind).await,
             ),
+            Task::RelinkAuthorless {
+                library_path,
+                audiobooks,
+            } => {
+                self.handle_relink_authorless(library_path, audiobooks, id)
+                    .await
+            }
             Task::GenerateThumbs {
                 book_id,
                 last_modified_epoch,
@@ -500,6 +507,60 @@ impl Worker {
                 TaskOutcome::Ok(warning.map(TaskSuccessDetail::GhostFiles))
             }
             Err(e) => sanitized_err("library scan", e),
+        }
+    }
+
+    /// `Task::RelinkAuthorless`: rerun one library's reindex with the
+    /// authorless relink pass on, so books orphaned by a blocklisted author
+    /// name re-parse and re-link against the current blocklist +
+    /// `entity_aliases` state. Posts the same follow-up backfills as the
+    /// corresponding scan handler — the promoted books go through the
+    /// ordinary Changed path, which cascades the same derived rows a real
+    /// file change would.
+    async fn handle_relink_authorless(
+        self: &Arc<Self>,
+        library_path: String,
+        audiobooks: bool,
+        id: TaskId,
+    ) -> TaskOutcome {
+        let worker = self.clone();
+        let on_progress = move |u: crate::indexer::ScanUpdate| {
+            worker.report_progress_update(id, u.processed, u.total, u.detail);
+        };
+        let options = crate::indexer::ReindexOptions {
+            relink_authorless: true,
+        };
+        let result = if audiobooks {
+            crate::indexer::reindex_audiobooks_with_options(
+                &self.pool,
+                &library_path,
+                options,
+                on_progress,
+            )
+            .await
+        } else {
+            crate::indexer::reindex_with_options(&self.pool, &library_path, options, on_progress)
+                .await
+        };
+        match result {
+            Ok(_) => {
+                if audiobooks {
+                    self.post(Task::BackfillChapters { library_path });
+                } else {
+                    self.post(Task::BackfillWordCounts {
+                        library_path: library_path.clone(),
+                    });
+                    self.post(Task::BackfillPageCounts {
+                        library_path: library_path.clone(),
+                    });
+                    self.post(Task::BackfillEpubStructure {
+                        library_path: library_path.clone(),
+                    });
+                    self.post(Task::BackfillThumbs { library_path });
+                }
+                TaskOutcome::Ok(None)
+            }
+            Err(e) => sanitized_err("author relink pass", e),
         }
     }
 

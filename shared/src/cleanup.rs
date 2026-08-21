@@ -62,6 +62,9 @@ pub enum CleanupAction {
     Rename,
     /// Remove an entity outright (e.g. an orphaned tag).
     Delete,
+    /// Convert an `ignored_authors` blocklist entry into an
+    /// `entity_aliases` mapping onto a canonical entity.
+    Alias,
 }
 
 impl CleanupAction {
@@ -72,6 +75,7 @@ impl CleanupAction {
             Self::Split => "split",
             Self::Rename => "rename",
             Self::Delete => "delete",
+            Self::Alias => "alias",
         }
     }
 
@@ -83,6 +87,7 @@ impl CleanupAction {
             "split" => Self::Split,
             "rename" => Self::Rename,
             "delete" => Self::Delete,
+            "alias" => Self::Alias,
             _ => return None,
         })
     }
@@ -158,4 +163,14 @@ pub struct SuggestionCard {
     pub photo_url: Option<String>,
     /// Unix seconds the suggestion was detected.
     pub created_at: i64,
+}
+
+/// One `ignored_authors` blocklist entry, for the Settings blocklist
+/// management list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IgnoredAuthor {
+    /// The blocklisted name, exactly as stored.
+    pub name: String,
+    /// Unix seconds the name was blocklisted.
+    pub ignored_at: i64,
 }

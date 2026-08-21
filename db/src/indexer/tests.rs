@@ -2780,3 +2780,176 @@ async fn reindex_surfaces_a_malformed_cbz_as_an_error_row_without_aborting() {
 
     let _ = std::fs::remove_dir_all(&lib);
 }
+
+// ---------------------------------------------------------------------------
+// Authorless relink pass (`ReindexOptions::relink_authorless`)
+// ---------------------------------------------------------------------------
+
+/// A real, parseable EPUB whose OPF names `creator`, written at
+/// `library_path/filename` so a reindex both stats and parses it.
+fn write_epub_with_creator(library_path: &str, filename: &str, title: &str, creator: &str) {
+    let container: &[u8] = br#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+    let chapter = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>c1</title></head><body><p>Hello.</p></body></html>"#;
+    let opf = format!(
+        r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="pub-id">relink-test</dc:identifier>
+    <dc:title>{title}</dc:title>
+    <dc:creator>{creator}</dc:creator>
+  </metadata>
+  <manifest><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/></manifest>
+  <spine><itemref idref="c1"/></spine>
+</package>"#
+    );
+    let zip = build_stored_zip(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", container),
+        ("content.opf", opf.as_bytes()),
+        ("c1.xhtml", chapter.as_bytes()),
+    ]);
+    let abs = std::path::Path::new(library_path).join(filename);
+    if let Some(parent) = abs.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::write(&abs, zip).unwrap();
+}
+
+async fn author_links_for_scan_key(pool: &SqlitePool, scan_key: &str) -> Vec<(i64, String)> {
+    sqlx::query_as(
+        "SELECT a.id, a.name FROM books b
+           JOIN books_authors_link l ON l.book = b.id
+           JOIN authors a ON a.id = l.author
+          WHERE b.scan_key = ? ORDER BY l.position",
+    )
+    .bind(scan_key)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+/// End-to-end blocklist recovery: a book indexed while its author's spelling
+/// sat on `ignored_authors` has no author link, a plain rescan never
+/// re-parses its Unchanged file, and the relink pass promotes it through
+/// Changed — where the `entity_aliases` row written by the blocklist
+/// conversion resolves the spelling to the canonical author instead of
+/// resurrecting it.
+#[tokio::test]
+async fn relink_pass_relinks_authorless_book_to_canonical_via_alias() {
+    let _covers = CoversTempDir::new("relink-alias");
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib = make_test_dir("relink-alias-lib");
+    let lib_path = lib.to_string_lossy().into_owned();
+
+    write_epub_with_creator(
+        &lib_path,
+        "hail-mary.epub",
+        "Project Hail Mary",
+        "Weir, Andy",
+    );
+    sqlx::query("INSERT INTO ignored_authors (name) VALUES ('Weir, Andy')")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    reindex(&pool, &lib_path).await.unwrap();
+    assert_eq!(
+        author_links_for_scan_key(&pool, "hail-mary.epub").await,
+        vec![],
+        "the blocklisted creator must be skipped on first index"
+    );
+
+    let canonical: i64 =
+        sqlx::query_scalar("INSERT INTO authors (name) VALUES ('Andy Weir') RETURNING id")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    crate::cleanup::apply_alias_ignored_author(&pool, "Weir, Andy", canonical, None)
+        .await
+        .unwrap();
+
+    // A plain rescan classifies the file Unchanged and heals nothing.
+    reindex(&pool, &lib_path).await.unwrap();
+    assert_eq!(
+        author_links_for_scan_key(&pool, "hail-mary.epub").await,
+        vec![],
+        "a plain rescan must not re-parse an Unchanged file"
+    );
+
+    reindex_with_options(
+        &pool,
+        &lib_path,
+        ReindexOptions {
+            relink_authorless: true,
+        },
+        |_| {},
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        author_links_for_scan_key(&pool, "hail-mary.epub").await,
+        vec![(canonical, "Andy Weir".to_string())],
+        "the relink pass must resolve the aliased spelling to the canonical author"
+    );
+    let weir_rows = count_rows(
+        &pool,
+        "SELECT COUNT(*) FROM authors WHERE name = 'Weir, Andy'",
+    )
+    .await;
+    assert_eq!(weir_rows, 0, "the aliased spelling must not be resurrected");
+
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+/// The promotion itself is surgical: only an authorless book's Unchanged
+/// entry moves to Changed; a book that still has its author links stays put.
+#[tokio::test]
+async fn promote_authorless_unchanged_moves_only_authorless_books() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let lib_path = "/relink-lib";
+
+    let authored = indexed(
+        "authored.epub",
+        Some("Authored"),
+        &["Kept Author"],
+        &[],
+        None,
+        None,
+    );
+    let orphaned = indexed("orphaned.epub", Some("Orphaned"), &[], &[], None, None);
+    sync_books(
+        &pool,
+        lib_path,
+        SyncPlan {
+            new_books: vec![authored, orphaned],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let db_rows = list_indexed_rows_for_formats(&pool, lib_path, crate::ebook::EBOOK_FORMATS)
+        .await
+        .unwrap();
+    let disk: Vec<StatEntry> = db_rows
+        .iter()
+        .map(|r| entry(&r.scan_key, &r.scan_key, r.mtime_epoch, r.size_bytes))
+        .collect();
+    let mut diff = ReindexDiff {
+        unchanged: db_rows.iter().map(|r| r.uuid.clone()).collect(),
+        ..Default::default()
+    };
+
+    promote_authorless_unchanged(&pool, &mut diff, &disk, &db_rows, Path::new(lib_path))
+        .await
+        .unwrap();
+
+    let authored_uuid = uuid_by_scan_key(&pool, "authored.epub").await;
+    assert_eq!(diff.unchanged, vec![authored_uuid]);
+    let changed: Vec<&str> = diff.changed.iter().map(|t| t.filename.as_str()).collect();
+    assert_eq!(changed, ["orphaned.epub"]);
+}

@@ -17,7 +17,9 @@ use super::entity_ops::{
     insert_links_bulk, lookup_tag_ids, recreate_entity, restore_canonical_photo,
     restore_entity_alias, write_photo,
 };
-use super::snapshot::{DeleteAuthorSnapshot, MergeSnapshot, RenameSnapshot, SplitSnapshot};
+use super::snapshot::{
+    AliasIgnoredSnapshot, DeleteAuthorSnapshot, MergeSnapshot, RenameSnapshot, SplitSnapshot,
+};
 use super::MergeEntity;
 
 /// Reverse a previously-applied cleanup log entry, restoring the
@@ -78,6 +80,9 @@ pub async fn undo(pool: &SqlitePool, log_id: i64) -> Result<(), CleanupApplyErro
         (CleanupKind::Tag, CleanupAction::Split) => undo_split(&mut tx, &row.snapshot_json).await?,
         (CleanupKind::Author, CleanupAction::Delete) => {
             undo_delete_author(&mut tx, &row.snapshot_json).await?
+        }
+        (CleanupKind::Author, CleanupAction::Alias) => {
+            undo_alias_ignored_author(&mut tx, &row.snapshot_json).await?
         }
         (CleanupKind::BookTitle, CleanupAction::Rename) => {
             fts_rebuild_uuid = undo_rename(&mut tx, &row.snapshot_json, row.applied_by).await?;
@@ -279,5 +284,37 @@ async fn undo_delete_author(
 
     let book_ids: Vec<i64> = snap.links.iter().map(|link| link.book_id).collect();
     upsert_fts_batch(tx, &book_ids).await?;
+    Ok(())
+}
+
+/// Undo `apply_alias_ignored_author`: put the `ignored_authors` row back
+/// with its original `ignored_at`, and restore the `entity_aliases` row to
+/// whatever it held before the conversion — or delete it, if nothing did.
+async fn undo_alias_ignored_author(
+    tx: &mut Transaction<'_, Sqlite>,
+    snapshot_json: &str,
+) -> Result<(), CleanupApplyError> {
+    let snap: AliasIgnoredSnapshot = serde_json::from_str(snapshot_json)?;
+
+    // OR REPLACE: a delete-author of the same name run since the conversion
+    // may have re-blocklisted it; the restored original timestamp wins.
+    sqlx::query("INSERT OR REPLACE INTO ignored_authors (name, ignored_at) VALUES (?, ?)")
+        .bind(&snap.name)
+        .bind(snap.ignored_at)
+        .execute(&mut **tx)
+        .await?;
+    match &snap.previous_alias {
+        Some(prev) => {
+            restore_entity_alias(
+                tx,
+                CleanupKind::Author,
+                &snap.name,
+                prev.canonical_id,
+                prev.created_at,
+            )
+            .await?
+        }
+        None => delete_entity_alias(tx, CleanupKind::Author, &snap.name).await?,
+    }
     Ok(())
 }

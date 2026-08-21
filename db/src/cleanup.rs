@@ -15,6 +15,7 @@ use sqlx::SqlitePool;
 use crate::normalize::normalize_author;
 
 mod apply;
+mod blocklist;
 mod entity_ops;
 mod review;
 mod snapshot;
@@ -27,6 +28,7 @@ pub use apply::{
     apply_book_title_override, apply_delete_author, apply_merge_authors, apply_merge_series,
     apply_merge_tags, apply_tag_split, CleanupApplyError,
 };
+pub use blocklist::{apply_alias_ignored_author, list_ignored_authors, remove_ignored_author};
 pub use review::{
     decide_suggestion, review_counts, review_queue, CleanupStoreError, REVIEW_QUEUE_MAX,
 };

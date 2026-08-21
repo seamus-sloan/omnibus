@@ -10,8 +10,9 @@ use crate::{audiobook, books, sync};
 
 use super::{
     check_mass_missing, diff_library, diff_tallies, enumeration_is_trustworthy,
-    gc_missing_files_best_effort, report_parse_progress, report_sync_progress, root_display_name,
-    ReindexDiff, ReindexStats, ScanUpdate, PHASE_WALKING,
+    gc_missing_files_best_effort, promote_authorless_unchanged, report_parse_progress,
+    report_sync_progress, root_display_name, ReindexDiff, ReindexOptions, ReindexStats, ScanUpdate,
+    PHASE_WALKING,
 };
 
 /// Audiobook-library sibling of [`super::reindex`]. Groups audio files by
@@ -101,6 +102,7 @@ struct AudiobookDiffPhase {
 async fn diff_audiobook_library_for_reindex(
     pool: &SqlitePool,
     library_path: &str,
+    options: ReindexOptions,
 ) -> anyhow::Result<AudiobookDiffPhase> {
     let (groups, signals) = stat_and_group_audiobooks(library_path).await?;
 
@@ -132,7 +134,11 @@ async fn diff_audiobook_library_for_reindex(
              skipping the removal pass; no books marked missing (issue #819)"
         );
     }
-    let diff = diff_library(&groups_as_stat, &db_rows, &library_root, trustworthy);
+    let mut diff = diff_library(&groups_as_stat, &db_rows, &library_root, trustworthy);
+    if options.relink_authorless {
+        promote_authorless_unchanged(pool, &mut diff, &groups_as_stat, &db_rows, &library_root)
+            .await?;
+    }
     let removed_count = diff.removed.len();
     let moved_count = diff.moved.len();
     check_mass_missing(removed_count, db_file_backed)?;
@@ -201,10 +207,23 @@ pub async fn reindex_audiobooks_with_progress(
     library_path: &str,
     on_progress: impl FnMut(ScanUpdate) + Send + 'static,
 ) -> anyhow::Result<ReindexStats> {
+    reindex_audiobooks_with_options(pool, library_path, ReindexOptions::default(), on_progress)
+        .await
+}
+
+/// [`reindex_audiobooks_with_progress`] variant taking [`ReindexOptions`] —
+/// currently just the authorless relink pass posted by the blocklist
+/// recovery flow.
+pub async fn reindex_audiobooks_with_options(
+    pool: &SqlitePool,
+    library_path: &str,
+    options: ReindexOptions,
+    on_progress: impl FnMut(ScanUpdate) + Send + 'static,
+) -> anyhow::Result<ReindexStats> {
     let mut on_progress = on_progress;
     on_progress(ScanUpdate::phase(PHASE_WALKING));
 
-    let phase_a = diff_audiobook_library_for_reindex(pool, library_path).await?;
+    let phase_a = diff_audiobook_library_for_reindex(pool, library_path, options).await?;
 
     // Phase B: parse only the New and Changed groups.
     let (new_groups, changed_groups) = select_parse_groups(phase_a.groups, &phase_a.diff);

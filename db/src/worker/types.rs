@@ -169,6 +169,19 @@ pub enum Task {
     /// reads a handful of already-indexed tables, it doesn't walk the
     /// filesystem).
     DetectCleanup { kind: Option<CleanupKind> },
+    /// Author-relink repair pass: rerun the library reindex with
+    /// `ReindexOptions::relink_authorless`, so Unchanged files whose book
+    /// lost every author link (a name deleted onto the `ignored_authors`
+    /// blocklist) are re-parsed and re-linked against the current blocklist
+    /// and `entity_aliases` state. Posted by the blocklist recovery flow after
+    /// a convert/remove. `audiobooks` picks which pipeline runs; the
+    /// resource key matches the corresponding scan's so a relink and a scan
+    /// of the same library serialize, and it consumes the scan semaphore
+    /// like the scans it wraps.
+    RelinkAuthorless {
+        library_path: String,
+        audiobooks: bool,
+    },
     /// Test-only synthetic task: sleeps `latency_ms` and invokes the
     /// optional `on_run` / `on_done` hooks, with `resource` and
     /// `route_through_scan_sem` letting a test exercise the keyed mutex and
@@ -211,6 +224,14 @@ impl Task {
             Task::SendToKindle { .. } => Some("smtp".into()),
             Task::RewriteAllEpubs => Some("rewrite-all-epubs".into()),
             Task::DetectCleanup { .. } => Some("cleanup".into()),
+            Task::RelinkAuthorless {
+                library_path,
+                audiobooks,
+            } => Some(if *audiobooks {
+                format!("audiobooks:{library_path}")
+            } else {
+                library_path.clone()
+            }),
             #[cfg(test)]
             Task::Test { resource, .. } => resource.clone(),
         }
@@ -236,6 +257,7 @@ impl Task {
             Task::SendToKindle { .. } => false,
             Task::RewriteAllEpubs => false,
             Task::DetectCleanup { .. } => false,
+            Task::RelinkAuthorless { .. } => true,
             #[cfg(test)]
             Task::Test {
                 route_through_scan_sem,
@@ -281,6 +303,7 @@ impl Task {
             Task::SendToKindle { .. } => "send_to_kindle",
             Task::RewriteAllEpubs => "rewrite_all_epubs",
             Task::DetectCleanup { .. } => "detect_cleanup",
+            Task::RelinkAuthorless { .. } => "relink_authorless",
             #[cfg(test)]
             Task::Test { .. } => "test",
         }
@@ -333,6 +356,8 @@ impl Task {
             // dedicated progress widget, mirroring BackfillWordCounts/
             // BackfillPageCounts above.
             Task::DetectCleanup { .. } => TaskKind::Scan,
+            // A relink is a scoped rescan — reuse the scan progress widget.
+            Task::RelinkAuthorless { .. } => TaskKind::Scan,
             #[cfg(test)]
             Task::Test { .. } => TaskKind::Scan,
         }
