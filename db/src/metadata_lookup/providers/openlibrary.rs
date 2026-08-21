@@ -313,3 +313,135 @@ async fn work_first_publish_year(config: &MetadataLookupConfig, isbn13: &str) ->
         .next()
         .and_then(|d| d.first_publish_year)
 }
+
+// ── Detail record (hydrate-on-select) ────────────────────────────
+
+/// Open Library's description, which is `"text"` on some records and
+/// `{"type": "/type/text", "value": "text"}` on others. Untagged so both
+/// parse into one shape.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum OlDescription {
+    Text(String),
+    Typed { value: String },
+}
+
+impl OlDescription {
+    fn into_text(self) -> String {
+        match self {
+            OlDescription::Text(v) => v,
+            OlDescription::Typed { value } => value,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct OlRecord {
+    #[serde(default)]
+    description: Option<OlDescription>,
+}
+
+/// Whether `key` is shaped like an Open Library record path this crate is
+/// willing to address.
+///
+/// `key` reaches here from the client, which is echoing back a `provider_ref`
+/// the search handed out — but "echoing back" is a claim, not a guarantee, so
+/// the shape is checked rather than trusted. Anything else (a bare `isbn:`
+/// fallback ref, a path with a `..` segment, an absolute URL) is refused, so
+/// the request can only ever address a record under the configured base.
+fn is_record_key(key: &str) -> bool {
+    (key.starts_with("/works/") || key.starts_with("/books/"))
+        && key.len() <= 64
+        && !key.contains("..")
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-'))
+}
+
+/// The description behind one selected candidate, fetched best-effort from
+/// its own record.
+///
+/// This is the field hydrate-on-select exists for: neither `search.json` nor
+/// `api/books?jscmd=data` carries a description, so without this call Open
+/// Library can never fill the compare view's largest row.
+pub async fn describe(config: &MetadataLookupConfig, key: &str) -> Option<String> {
+    if !is_record_key(key) {
+        return None;
+    }
+    let url = base_url(
+        &config.openlibrary_base,
+        &format!("{key}.json"),
+        "open library",
+    )
+    .ok()?;
+    let record: OlRecord = get_json_best_effort(config, url.as_str()).await?;
+    // Dropped rather than truncated when oversized: this value is staged into
+    // the edit form and posted back to a write path, where
+    // `MetadataOverrides::validate` would reject a mangled one.
+    record
+        .description
+        .map(OlDescription::into_text)
+        .map(|d| d.trim().to_string())
+        .filter(|d| !d.is_empty() && d.chars().count() <= ExternalBookMeta::DESCRIPTION_MAX_LEN)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_record_key;
+
+    // `base_url` concatenates rather than joining, so what reaches `Url::parse`
+    // is `{base}{key}.json`. That makes `is_record_key` the only thing standing
+    // between a client-supplied `provider_ref` and a request of its choosing —
+    // these cases are the ones that would otherwise get through.
+
+    #[test]
+    fn is_record_key_accepts_the_two_record_paths_open_library_actually_mints() {
+        assert!(is_record_key("/works/OL893414W"));
+        assert!(is_record_key("/books/OL7353617M"));
+        assert!(is_record_key("/works/OL_1-2W"));
+    }
+
+    #[test]
+    fn is_record_key_rejects_the_isbn_fallback_ref_every_provider_shares() {
+        // Not a path at all: concatenated onto the base it addresses
+        // `https://openlibrary.orgisbn:978….json`, which is not a record.
+        assert!(!is_record_key("isbn:9780134685991"));
+    }
+
+    #[test]
+    fn is_record_key_rejects_a_traversal_segment() {
+        // `/works/../../../some/other/path.json` parses to `/some/other/path.json`
+        // — a different endpoint on the same host.
+        assert!(!is_record_key("/works/../../../some/other/path"));
+        assert!(!is_record_key("/books/OL1M/.."));
+    }
+
+    #[test]
+    fn is_record_key_rejects_a_ref_that_rewrites_the_host() {
+        // The dangerous shape: `{base}@evil.example/x.json` parses with
+        // `openlibrary.org…` as *userinfo* and `evil.example` as the host, so a
+        // ref carrying `@`, a scheme, or `//` must never reach the URL.
+        assert!(!is_record_key("@evil.example/x"));
+        assert!(!is_record_key("/works/OL1W@evil.example/x"));
+        assert!(!is_record_key("https://evil.example/x"));
+        assert!(!is_record_key("//evil.example/x"));
+        assert!(!is_record_key("/works/OL1W?x=y"));
+        assert!(!is_record_key("/works/OL1W#frag"));
+    }
+
+    #[test]
+    fn is_record_key_rejects_an_over_long_ref() {
+        // `EditionHydrateRequest::validate` caps at 256 bytes, four times this
+        // guard's own limit, so the length check has to hold on its own.
+        let long = format!("/works/{}", "O".repeat(64));
+        assert!(long.len() > 64);
+        assert!(!is_record_key(&long));
+    }
+
+    #[test]
+    fn is_record_key_rejects_a_path_outside_the_two_record_prefixes() {
+        assert!(!is_record_key("/search.json"));
+        assert!(!is_record_key("/authors/OL1A"));
+        assert!(!is_record_key(""));
+    }
+}

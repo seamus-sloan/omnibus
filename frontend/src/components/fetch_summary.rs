@@ -9,27 +9,16 @@
 use dioxus::prelude::*;
 use omnibus_shared::summary::SummarySource;
 
+use crate::components::glyphs::sparkle_glyph;
 use crate::{data, use_server_url};
 
-/// The sparkle glyph on the Fetch Summary button, drawn in the accent colour
-/// (mirrors `book_detail::immersive`'s mark treatment). An SVG icon, not an
-/// emoji, so it inherits `currentColor` and stays crisp at any size.
+/// The sparkle mark, drawn in the accent colour (mirrors
+/// `book_detail::immersive`'s treatment). Shared with the edit page's "Fetch
+/// metadata" action through [`crate::components::glyphs`], so the two
+/// fetch-from-outside actions can't drift into different icons.
 fn fetch_summary_mark() -> Element {
     rsx! {
-        span { class: "fs-fetch-mark", aria_hidden: "true",
-            svg {
-                width: "16",
-                height: "16",
-                view_box: "0 0 24 24",
-                fill: "none",
-                stroke: "currentColor",
-                "stroke-width": "1.7",
-                "stroke-linecap": "round",
-                "stroke-linejoin": "round",
-                path { d: "M12 3l1.7 4.8L18.5 9.5l-4.8 1.7L12 16l-1.7-4.8L5.5 9.5l4.8-1.7z" }
-                path { d: "M18.5 14.5l.85 2.15L21.5 17.5l-2.15.85L18.5 20.5l-.85-2.15L15.5 17.5l2.15-.85z" }
-            }
-        }
+        span { class: "fs-fetch-mark", aria_hidden: "true", {sparkle_glyph(16)} }
     }
 }
 

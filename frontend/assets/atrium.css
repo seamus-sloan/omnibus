@@ -2046,6 +2046,12 @@ a.idx-letter-on:focus-visible {
  */
 
 .me-root { width: 100%; padding-bottom: 80px; }
+/* Reserve room at the end of the page for the fixed phone tab bar, so the
+   last field can still be scrolled clear of it. The save bar's matching lift
+   is declared beside `.me-save-bar` itself — see the note there. */
+@media (max-width: 720px) {
+  .me-root { padding-bottom: calc(80px + 68px + env(safe-area-inset-bottom)); }
+}
 .me-crumb { padding: 0 clamp(20px, 4vw, 56px); margin-bottom: 8px; }
 
 .me-page-header {
@@ -2053,7 +2059,10 @@ a.idx-letter-on:focus-visible {
 }
 .me-page-title {
   font-family: var(--serif);
-  font-size: 38px;
+  /* Fluid rather than fixed: at 38px a two-word title plus its author breaks
+     across three ragged lines on a phone, with the author landing alone under
+     the title at a size that reads as a second heading. */
+  font-size: clamp(26px, 6.5vw, 38px);
   line-height: 1.05;
   margin-top: 4px;
 }
@@ -2065,6 +2074,16 @@ a.idx-letter-on:focus-visible {
   font-size: 17px;
   margin-left: 14px;
   font-weight: 400;
+}
+/* On its own line under the title once the two can't share one, rather than
+   trailing off the end of it with a stray left margin. */
+@media (max-width: 560px) {
+  .me-page-title-author {
+    display: block;
+    margin-left: 0;
+    margin-top: 4px;
+    font-size: 15px;
+  }
 }
 .me-page-hint {
   margin-top: 8px;
@@ -2090,18 +2109,42 @@ a.idx-letter-on:focus-visible {
   grid-template-columns: 1fr 1fr 1fr 1fr;
   gap: 18px;
 }
+/* The band where the sidebar is present but the viewport isn't wide enough to
+   carry four columns beside it: the form column lands near 130px per column,
+   which wraps "PRINT PAGES" mid-word. Below 900px the sidebar stacks and the
+   form gets the full width back, so four fit again until the 768px break —
+   which is why this has a lower bound rather than being another `max-width`. */
+@media (min-width: 769px) and (max-width: 1180px) {
+  .me-field-grid { grid-template-columns: 1fr 1fr; }
+}
+@media (min-width: 769px) and (max-width: 900px) {
+  .me-field-grid { grid-template-columns: 1fr 1fr 1fr 1fr; }
+}
 @media (max-width: 768px) {
   .me-field-grid { grid-template-columns: 1fr 1fr; }
 }
 
+
 .me-field { min-width: 0; }
 .me-field-w2 { grid-column: span 2; }
 .me-field-full { grid-column: 1 / -1; }
+/* Declared after the base rule on purpose: same specificity, so the later one
+   wins. Below 560px the grid is a single column (see the phone block further
+   down) and a `span 2` child would silently create a second implicit column,
+   which is what made the phone layout two ragged columns instead of one. */
+@media (max-width: 560px) {
+  .me-field-w2 { grid-column: span 1; }
+}
 
 /* Label row */
 .me-label {
   display: flex;
   align-items: center;
+  /* The hint (`margin-left: auto`) shares this row with the label text. In a
+     narrow column the two collide and the label breaks mid-word — "ISBN-/13".
+     Wrapping drops the hint to its own line instead, which costs one line and
+     keeps every label readable at any column width. */
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 6px;
   font-family: var(--mono);
@@ -2120,6 +2163,8 @@ a.idx-letter-on:focus-visible {
   color: var(--ink-3);
   font-size: 9px;
   margin-left: auto;
+  /* Never the reason the row wraps: the label text has to break first. */
+  white-space: nowrap;
   text-transform: none;
   letter-spacing: 0;
 }
@@ -2367,6 +2412,9 @@ a.idx-letter-on:focus-visible {
   gap: 14px;
   margin-top: 10px;
 }
+@media (max-width: 480px) {
+  .me-series-grid { grid-template-columns: 1fr; }
+}
 
 /* Sidebar */
 .me-sidebar {
@@ -2463,6 +2511,16 @@ a.idx-letter-on:focus-visible {
   align-items: center;
   gap: 14px;
   z-index: 10;
+}
+/* Declared after the base rule, not beside the other phone breakpoints: same
+   specificity, so the later one wins. Below 720px `.m-tabbar` is fixed over
+   the bottom of the viewport, and this bar is `sticky; bottom: 0` — so Save
+   and Discard land behind it and can't be pressed. 68px is the tab bar's own
+   chrome (8px padding + 24px glyph + label + 8px); it adds the
+   home-indicator inset to its padding, so that is added here rather than
+   assumed. */
+@media (max-width: 720px) {
+  .me-save-bar { bottom: calc(68px + env(safe-area-inset-bottom)); }
 }
 .me-dirty-dot {
   width: 7px;
@@ -6549,6 +6607,414 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .hcf-row-arrow { color: var(--ink-3); }
 .hcf-row-fetched { color: var(--ink-0); font-weight: 500; }
 .hcf-actions { display: flex; gap: 10px; margin-top: 8px; }
+
+/* Edition picker (metadata-edit page): the trigger, and the two-screen
+   overlay behind it. Shares the check-in overlay's shell — scrim, centred
+   card, one screen at a time — because it answers the same question that
+   flow does and shouldn't feel like a different app for asking it. */
+/* Matches `.fs-fetch-btn`, the "Fetch Summary" action it stands beside on the
+   detail page — same accent tint, same accent-drawn sparkle. */
+.mes-open-btn {
+  gap: 9px;
+  background: color-mix(in oklch, var(--accent) 16%, var(--bg-1));
+  border-color: color-mix(in oklch, var(--accent) 55%, transparent);
+  color: var(--ink-0);
+}
+@media (hover: hover) {
+  .mes-open-btn:hover {
+    background: color-mix(in oklch, var(--accent) 24%, var(--bg-1));
+    border-color: color-mix(in oklch, var(--accent) 70%, transparent);
+  }
+}
+.mes-open-mark { display: inline-flex; color: var(--accent); }
+
+.mes-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: color-mix(in oklch, var(--bg-0) 70%, transparent);
+  backdrop-filter: blur(6px);
+  animation: sp-fade-in 0.12s ease-out;
+  /* A wheel over the scrim would otherwise scroll the page behind it, and
+     reaching the end of the panel's own scroll would hand the rest of the
+     gesture to the page ("scroll chaining"). Making the scrim a scroll
+     container that contains its overscroll stops both — the page stays
+     exactly where the reader left it. */
+  overflow: hidden;
+  overscroll-behavior: contain;
+}
+.mes-panel {
+  position: relative;
+  width: min(680px, 100%);
+  max-height: calc(100dvh - 48px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  background: var(--bg-1);
+  border: 1px solid var(--line-2);
+  border-radius: 16px;
+  padding: 26px 26px 0;
+  box-shadow: 0 24px 60px color-mix(in oklch, black 55%, transparent);
+  animation: mes-panel-in 0.16s ease-out;
+}
+@keyframes mes-panel-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.mes-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 1;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.mes-close:hover { background: var(--bg-2); color: var(--ink-0); }
+
+.mes-screen { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+/* The panel's own bottom padding is zero so the compare screen's sticky
+   action bar can sit flush against its edge (see `.mes-footbar`). The results
+   screen has no such bar, so its last line — the per-source counts — would
+   otherwise end hard against the panel edge. It carries the padding itself. */
+.mes-screen-results { padding-bottom: 22px; }
+.mes-title {
+  margin: 0;
+  font-family: var(--serif, inherit);
+  font-size: 21px;
+  line-height: 1.25;
+  color: var(--ink-0);
+  overflow-wrap: anywhere;
+}
+.mes-subtitle { margin: -8px 0 0; font-size: 13px; color: var(--ink-2); }
+.mes-note { margin: 0; font-size: 13px; color: var(--ink-2); }
+.mes-error { margin: 0; font-size: 13px; color: var(--bad); }
+.mes-foot { margin: 0; font-size: 11px; color: var(--ink-3); }
+.mes-empty { color: var(--ink-3); }
+
+/* Screen one — query + results */
+.mes-query { display: flex; gap: 8px; align-items: stretch; }
+.mes-query-input {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+  padding: 0 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  color: var(--ink-0);
+  font-size: 14px;
+}
+.mes-query-input:focus-visible {
+  outline: none;
+  border-color: color-mix(in oklch, var(--accent) 70%, transparent);
+}
+.mes-query-btn { height: 38px; }
+
+.mes-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: min(52vh, 460px);
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.mes-row-item { margin: 0; }
+.mes-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  color: inherit;
+  cursor: pointer;
+}
+.mes-row:hover,
+.mes-row:focus-visible {
+  background: var(--bg-2);
+  border-color: color-mix(in oklch, var(--accent) 45%, transparent);
+  outline: none;
+}
+.mes-row-cover {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 60px;
+  object-fit: cover;
+  border-radius: 4px;
+  background: var(--bg-2);
+}
+.mes-row-plate { display: grid; place-items: center; color: var(--ink-3); }
+.mes-row-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.mes-row-title {
+  font-size: 14.5px;
+  color: var(--ink-0);
+  overflow-wrap: anywhere;
+}
+.mes-row-authors { font-size: 12.5px; color: var(--ink-2); overflow-wrap: anywhere; }
+.mes-row-imprint { font-size: 11px; color: var(--ink-3); }
+.mes-badge {
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
+.mes-sources {
+  margin: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.mes-source-problem { color: var(--bad); }
+
+/* Screen two — compare */
+.mes-back {
+  align-self: flex-start;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--ink-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+.mes-back:hover { color: var(--ink-0); }
+.mes-compare-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.mes-compare-head .mes-title { flex: 1; min-width: 0; }
+
+.mes-cover {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line-2);
+}
+.mes-cover-pair {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+.mes-cover-cell { display: flex; }
+.mes-cover-thumb { width: 62px; }
+.mes-cover-img,
+.mes-cover-thumb :is(img, .cover-plate) {
+  width: 62px;
+  height: 93px;
+  object-fit: cover;
+  border-radius: 4px;
+  display: block;
+  background: var(--bg-2);
+}
+.mes-cover-note { font-size: 11px; color: var(--ink-3); }
+
+.mes-fields { display: flex; flex-direction: column; }
+.mes-field {
+  display: grid;
+  grid-template-columns: minmax(72px, 96px) 1fr 30px 1fr;
+  gap: 12px;
+  align-items: start;
+  padding: 9px 0;
+  border-bottom: 1px solid color-mix(in oklch, var(--line-2) 55%, transparent);
+}
+.mes-field:last-child { border-bottom: none; }
+.mes-field-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding-top: 3px;
+}
+.mes-field-mine,
+.mes-field-theirs {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  max-height: 5.5em;
+  /* Explicitly `hidden` across, not just `auto` down: setting one axis to
+     `auto` computes the other from `visible` to `auto` as well, and the
+     browser then reserves a horizontal scrollbar track under every cell —
+     15px of grey bar under a value that has nothing to scroll. Wrapping is
+     `anywhere`, so there is never anything to scroll sideways to. */
+  overflow: hidden auto;
+  scrollbar-width: thin;
+}
+
+/* A row whose values run long. Two columns of ~200px turn a description into
+   a column of two-word lines behind its own scrollbar, so it takes the
+   panel's full width instead and reads down: yours, the control, theirs. */
+/* Doubled-up selector for specificity, not for style: the phone breakpoint
+   further down re-declares `.mes-field`'s columns, and at equal specificity
+   the later rule would win — so a long row would go back to two narrow
+   columns at exactly the width where it needs the space most. */
+.mes-field.mes-field-long {
+  grid-template-columns: 1fr;
+  grid-template-areas:
+    "label"
+    "mine"
+    "act"
+    "theirs";
+  gap: 8px;
+  padding: 12px 0;
+}
+.mes-field-long .mes-field-label { grid-area: label; padding-top: 0; }
+.mes-field-long .mes-field-mine { grid-area: mine; }
+.mes-field-long .mes-apply { grid-area: act; justify-self: center; }
+.mes-field-long .mes-field-theirs { grid-area: theirs; }
+.mes-field.mes-field-long :is(.mes-field-mine, .mes-field-theirs) {
+  max-height: 12em;
+  padding: 9px 11px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: var(--bg-2);
+  line-height: 1.5;
+}
+.mes-field-mine { color: var(--ink-2); }
+.mes-field-theirs { color: var(--ink-0); }
+.mes-apply {
+  justify-self: center;
+  width: 26px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  background: var(--bg-2);
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  color: var(--ink-1);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+.mes-apply:hover:not([disabled]),
+.mes-apply:focus-visible:not([disabled]) {
+  border-color: color-mix(in oklch, var(--accent) 70%, transparent);
+  background: color-mix(in oklch, var(--accent) 20%, var(--bg-2));
+  color: var(--ink-0);
+}
+.mes-apply[disabled] { opacity: 0.3; cursor: not-allowed; }
+
+/* The one mark a row carrying an unsaved change gets: its control becomes the
+   way back rather than the way across. Accent-drawn so it reads as "you did
+   this" without tinting the whole row. */
+.mes-undo {
+  border-color: color-mix(in oklch, var(--accent) 45%, transparent);
+  color: var(--accent);
+}
+
+/* Pinned to the bottom of the panel: the actions are how you leave this
+   screen, and a long record used to scroll them off the end. The panel is the
+   scroll container, so sticky holds them against its edge while the fields
+   pass underneath. It carries the panel's bottom padding — the panel's own is
+   zero — so nothing shows through beneath it. */
+/* The placeholder the compare screen shows while the record arrives: the
+   table's shape, so the real rows land where the eye already is. Mirrors
+   `.mes-cover` + `.mes-field`'s geometry. */
+.mes-skeleton { display: flex; flex-direction: column; gap: 14px; }
+.mes-skel-cover {
+  width: 62px;
+  height: 93px;
+  align-self: center;
+  border-radius: 4px;
+  background: var(--bg-2);
+}
+.mes-skel-row {
+  display: grid;
+  grid-template-columns: minmax(72px, 96px) 1fr 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 9px 0;
+  border-bottom: 1px solid color-mix(in oklch, var(--line-2) 55%, transparent);
+}
+.mes-skel-bar {
+  height: 11px;
+  border-radius: 3px;
+  background: var(--bg-2);
+  animation: lp-buffering-pulse 1.4s ease-in-out infinite;
+}
+/* Staggered so the row reads as one object settling rather than three bars
+   blinking in lockstep. */
+.mes-skel-row:nth-child(even) .mes-skel-bar { animation-delay: 0.2s; }
+.mes-skel-label { opacity: 0.6; }
+@media (prefers-reduced-motion: reduce) {
+  .mes-skel-bar { animation: none; }
+}
+
+.mes-footbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: auto;
+  padding: 12px 0 22px;
+  background: var(--bg-1);
+  border-top: 1px solid var(--line-2);
+}
+.mes-done { margin-left: auto; }
+/* There is no global disabled-button style (only `.bd-cta-row`'s), and
+   "Take all" stays fully lit while the record loads without one — an
+   inviting button that does nothing. */
+.mes-footbar .btn[disabled] { opacity: 0.5; cursor: not-allowed; }
+/* Its own line under the buttons, full width. */
+.mes-footbar .mes-foot { flex: 1 0 100%; margin: 0; }
+
+@media (max-width: 640px) {
+  .mes-scrim { padding: 0; align-items: stretch; }
+  .mes-screen-results { padding-bottom: calc(22px + env(safe-area-inset-bottom)); }
+  .mes-panel {
+    width: 100%;
+    max-height: 100dvh;
+    border-radius: 0;
+    border: none;
+    /* Bottom padding stays zero here for the same reason it is zero on
+       desktop: the action bar is sticky against the panel's *padding* box, so
+       any padding beneath it becomes a strip the rows scroll through under
+       the buttons. The bar carries the inset instead. */
+    padding: 22px 18px 0;
+  }
+  .mes-footbar { padding-bottom: calc(22px + env(safe-area-inset-bottom)); }
+  /* The panel is already full-height here and scrolls itself, so the desktop
+     cap would only strand the list above a screenful of empty card. */
+  .mes-list { max-height: none; overflow-y: visible; }
+  .mes-field { grid-template-columns: 1fr 30px 1fr; }
+  .mes-field-label { grid-column: 1 / -1; padding-top: 0; }
+}
 
 .bd-suggest-connect { display: flex; align-items: center; justify-content: space-between;
   gap: 22px; padding: 22px 24px; border: 1px dashed var(--line-2); }
