@@ -195,6 +195,7 @@ mod tests {
             description: None,
             cover_url: None,
             series: None,
+            series_index: None,
             first_publish_year: None,
             genres: Vec::new(),
         }

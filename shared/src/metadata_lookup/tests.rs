@@ -139,6 +139,7 @@ fn edition() -> ProviderEdition {
         description: Some("A classic novel.".into()),
         cover_url: Some("https://example.com/cover.jpg".into()),
         series: Some("Penguin English Library".into()),
+        series_index: Some("1".into()),
         first_publish_year: Some(1813),
         genres: vec!["Fiction".into(), "Classics".into()],
     }
@@ -265,6 +266,7 @@ fn candidate() -> ProviderEdition {
         description: None,
         cover_url: Some("https://covers.openlibrary.org/b/id/1-L.jpg".into()),
         series: None,
+        series_index: None,
         first_publish_year: Some(1813),
         genres: vec!["Fiction".into()],
     }

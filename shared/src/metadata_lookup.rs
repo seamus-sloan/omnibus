@@ -235,6 +235,13 @@ pub struct ProviderEdition {
     pub description: Option<String>,
     pub cover_url: Option<String>,
     pub series: Option<String>,
+    /// This book's position in [`Self::series`], formatted for display
+    /// (`"1"`, `"2.5"`), or `None` when the provider doesn't say.
+    ///
+    /// Only Hardcover models a series position, so this is `None` from the
+    /// catalogs — the same asymmetry `series` itself has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series_index: Option<String>,
     /// Year the *work* was first published, across all editions — distinct
     /// from `year`, which is this edition's own date.
     pub first_publish_year: Option<i64>,
@@ -289,6 +296,7 @@ impl ProviderEdition {
         fill(&mut self.description, &thinner.description);
         fill(&mut self.cover_url, &thinner.cover_url);
         fill(&mut self.series, &thinner.series);
+        fill(&mut self.series_index, &thinner.series_index);
         if self.title.trim().is_empty() {
             self.title.clone_from(&thinner.title);
         }

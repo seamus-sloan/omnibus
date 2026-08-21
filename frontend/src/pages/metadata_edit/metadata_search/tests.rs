@@ -39,7 +39,7 @@ fn field_slug_matches_the_forms_own_label_slugging_without_its_prefix() {
 }
 
 // Hook-order regression for the availability gate, mirroring
-// `hardcover_fetch`'s harness: a structural stand-in, not the real panel,
+// a structural stand-in, not the real panel,
 // which needs a live server context a unit test doesn't have.
 #[cfg(all(test, feature = "server"))]
 mod gate {

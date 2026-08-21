@@ -38,6 +38,9 @@ recent releases are recorded below; everything earlier is available via the
   so the form's own Save is still what writes them, and a field the source has
   no value for cannot be applied at all: a provider that doesn't know a field
   can never blank out one you already have (#1662)
+- **Book #** is now one of the fields the compare view can copy. Hardcover is
+  the only source that publishes a book's position in its series, so a book
+  numbered there can be numbered here in one click (#1665)
 
 ### Changed
 
