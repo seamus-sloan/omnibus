@@ -119,7 +119,9 @@ pub fn baseline_layers() -> [SetResponseHeaderLayer<HeaderValue>; 4] {
             // give up `frame-ancestors 'none'`, `base-uri`, and
             // `form-action`, which is looser, not tighter.
             HeaderValue::from_str(&DEFAULT_CSP).unwrap_or_else(|_| {
-                tracing::error!("provider cover hosts are not header-safe; serving img-src 'self'");
+                tracing::error!(
+                    "provider cover hosts are not header-safe; serving the CSP without them"
+                );
                 HeaderValue::from_static(NO_PROVIDER_HOSTS_CSP)
             }),
         ),

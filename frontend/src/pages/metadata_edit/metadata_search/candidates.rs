@@ -82,6 +82,19 @@ fn covers_every_word(haystack: &str, words: &[String]) -> bool {
     !words.is_empty() && words.iter().all(|w| haystack.contains(w.as_str()))
 }
 
+/// The candidate's cover URL, or `None` when the provider gave nothing
+/// usable. Blank-but-present is the case worth catching: rendered as an
+/// `<img src>` it resolves against the current page and pulls the HTML
+/// document down as an image.
+fn cover_src(edition: &ProviderEdition) -> Option<String> {
+    edition
+        .cover_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+        .map(str::to_string)
+}
+
 /// The row's second line: authors, or an em dash when the source named none.
 fn authors_line(edition: &ProviderEdition) -> String {
     if edition.authors.is_empty() {
@@ -134,7 +147,10 @@ pub(super) fn CandidateRow(
                 "data-testid": "mes-candidate-{index}",
                 aria_label: "{label}",
                 onclick: move |_| on_select.call(picked.clone()),
-                if let Some(url) = edition.cover_url.clone() {
+                // Trimmed, not just `Some`: providers don't consistently trim
+                // this, and `src="   "` resolves against the current page —
+                // a request that fetches the HTML document as an image.
+                if let Some(url) = cover_src(&edition) {
                     img { class: "mes-row-cover", src: "{url}", alt: "", loading: "lazy" }
                 } else {
                     span { class: "mes-row-cover mes-row-plate", aria_hidden: "true", "{EMPTY}" }
@@ -334,6 +350,26 @@ mod tests {
             &haystack(&e),
             &query_words("The Left Hand of Darkness Ursula K. Le Guin")
         ));
+    }
+
+    #[test]
+    fn cover_src_treats_a_blank_provider_url_as_absent() {
+        // `src="   "` resolves against the current page, so the row would
+        // fetch the HTML document and render it as a broken image.
+        let mut e = edition(
+            "Effective Java",
+            "9780134685991",
+            MetadataProvider::OpenLibrary,
+        );
+        e.cover_url = Some("   ".into());
+        assert_eq!(cover_src(&e), None);
+        e.cover_url = None;
+        assert_eq!(cover_src(&e), None);
+        e.cover_url = Some("  https://covers.example/1.jpg  ".into());
+        assert_eq!(
+            cover_src(&e).as_deref(),
+            Some("https://covers.example/1.jpg")
+        );
     }
 
     #[test]

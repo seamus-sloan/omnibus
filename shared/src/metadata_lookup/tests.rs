@@ -363,3 +363,23 @@ fn fill_missing_from_never_blanks_a_value_the_thinner_record_lacks() {
         Some("A detail-record description.")
     );
 }
+
+#[test]
+fn fill_missing_from_does_not_fill_an_absent_field_with_a_blank_one() {
+    // Providers don't consistently trim these — Hardcover passes its image
+    // URL straight through — and filling `None` with `Some("   ")` turns
+    // "this source didn't say" into a present-but-empty value downstream.
+    let mut detail = ProviderEdition {
+        publisher: None,
+        cover_url: None,
+        ..candidate()
+    };
+    let blank = ProviderEdition {
+        publisher: Some("   ".into()),
+        cover_url: Some(" ".into()),
+        ..candidate()
+    };
+    detail.fill_missing_from(&blank);
+    assert_eq!(detail.publisher, None);
+    assert_eq!(detail.cover_url, None);
+}

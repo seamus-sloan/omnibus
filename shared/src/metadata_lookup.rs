@@ -260,8 +260,13 @@ impl ProviderEdition {
     /// `self` wins every conflict: it is the record fetched *for this
     /// edition*, where the search hit may describe the work.
     pub fn fill_missing_from(&mut self, thinner: &ProviderEdition) {
+        // Both sides are checked for content, not just presence. Providers
+        // don't consistently trim these, and filling an absent field with a
+        // blank one turns "this source didn't say" into "this source said
+        // nothing", which renders as a present-but-empty value.
         let fill = |slot: &mut Option<String>, from: &Option<String>| {
-            if slot.as_ref().is_none_or(|v| v.trim().is_empty()) {
+            let blank = |v: &Option<String>| v.as_ref().is_none_or(|s| s.trim().is_empty());
+            if blank(slot) && !blank(from) {
                 slot.clone_from(from);
             }
         };

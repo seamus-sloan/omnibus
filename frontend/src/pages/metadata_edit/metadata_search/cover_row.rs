@@ -86,7 +86,7 @@ pub(super) fn CoverRow(
                     r#type: "button",
                     class: "mes-apply",
                     "data-testid": "mes-row-cover-apply",
-                    aria_label: "Replace the cover with {source_name}'s \u{2014} saves immediately",
+                    aria_label: "Use the cover from {source_name} \u{2014} saves immediately",
                     disabled: !available || hydrating || busy(),
                     onclick: on_apply,
                     "\u{2192}"
