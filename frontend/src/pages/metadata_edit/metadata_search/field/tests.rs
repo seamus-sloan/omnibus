@@ -26,6 +26,7 @@ fn full_edition() -> ProviderEdition {
         description: Some("The definitive guide.".into()),
         cover_url: Some("https://books.google.com/x.jpg".into()),
         series: Some("The Java Series".into()),
+        series_index: Some("3".into()),
         first_publish_year: Some(2001),
         genres: vec!["Computers".into(), "Java".into()],
     }
@@ -42,6 +43,7 @@ fn bare_edition() -> ProviderEdition {
         publisher: None,
         description: None,
         series: None,
+        series_index: None,
         genres: Vec::new(),
         ..full_edition()
     }
@@ -272,6 +274,7 @@ fn apply_stages_every_available_field_when_each_is_taken_in_turn() {
     assert_eq!(*fields.publisher.read(), "Addison-Wesley");
     assert_eq!(*fields.published.read(), "2018");
     assert_eq!(*fields.series.read(), "The Java Series");
+    assert_eq!(*fields.series_index.read(), "3");
     assert_eq!(*fields.isbn13.read(), "9780134685991");
     assert_eq!(*fields.isbn10.read(), "0134685997");
     assert_eq!(*fields.print_pages.read(), "416");

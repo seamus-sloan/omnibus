@@ -17,9 +17,11 @@ use omnibus_shared::isbn::normalize_isbn;
 use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider, ProviderEdition};
 use serde::Deserialize;
 
+use crate::helpers::format_series_index;
+use crate::suggestions::hardcover::{post_graphql, HardcoverConfig};
+
 use super::super::{MetadataLookupConfig, SEARCH_LIMIT};
 use super::http::{paired_isbn10, sanitize_genres};
-use crate::suggestions::hardcover::{post_graphql, HardcoverConfig};
 
 /// One query's worth of fields — the book plus a representative edition,
 /// nested so a candidate list costs one round trip rather than one per row.
@@ -31,7 +33,7 @@ use crate::suggestions::hardcover::{post_graphql, HardcoverConfig};
 /// edition-level, which is where Hardcover models publication.
 const BOOK_FIELDS: &str = "id title description cached_tags \
      contributions { author { name } } \
-     book_series { series { name } } \
+     book_series { position series { name } } \
      image { url } \
      editions(where: {isbn_13: {_is_null: false}}, order_by: {users_count: desc}, limit: 1) \
        { isbn_13 isbn_10 pages }";
@@ -81,6 +83,10 @@ struct Named {
 
 #[derive(Debug, Deserialize)]
 struct BookSeries {
+    /// This book's position in the series, as Hardcover stores it — a float,
+    /// because a novella sits at 2.5.
+    #[serde(default)]
+    position: Option<f64>,
     #[serde(default)]
     series: Option<Named>,
 }
@@ -221,6 +227,23 @@ fn genre_tags(cached: Option<serde_json::Value>) -> Vec<String> {
         .collect()
 }
 
+/// The first usable `(series name, book number)` pair, read off one row.
+///
+/// Returned as a pair rather than two lookups because a book can belong to
+/// more than one series: taking the name from whichever row happens to have
+/// one and the position from whichever happens to have that would report a
+/// number from a series the book isn't being filed under.
+fn series_statement(rows: Vec<BookSeries>) -> Option<(String, Option<String>)> {
+    rows.into_iter().find_map(|bs| {
+        let name = bs
+            .series
+            .and_then(|s| s.name)
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty() && s.chars().count() <= ExternalBookMeta::NAME_MAX_LEN)?;
+        Some((name, bs.position.map(format_series_index)))
+    })
+}
+
 /// Map a book row into `ProviderEdition`. `isbn13` overrides the row's own
 /// when the caller has an authoritative one (the ISBN path). A row with no
 /// title, or no ISBN to fall back on, maps to `None` — the check-in flow keys
@@ -228,6 +251,7 @@ fn genre_tags(cached: Option<serde_json::Value>) -> Vec<String> {
 fn map_book(b: BookRow, isbn13: Option<&str>) -> Option<ProviderEdition> {
     let title = b.title.filter(|t| !t.trim().is_empty())?;
     let book_id = b.id;
+    let series_row = series_statement(b.book_series);
     // At most one row: the nested selection asks for `limit: 1`.
     let edition = b.editions.into_iter().next().unwrap_or_default();
     let edition_isbn13 = edition
@@ -274,12 +298,11 @@ fn map_book(b: BookRow, isbn13: Option<&str>) -> Option<ProviderEdition> {
         cover_url: b.image.and_then(|i| i.url),
         // The reason this provider is worth a rung: the only one that answers
         // with a series statement rather than needing the enrichment lookup.
-        series: b
-            .book_series
-            .into_iter()
-            .find_map(|bs| bs.series.and_then(|s| s.name))
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty() && s.chars().count() <= ExternalBookMeta::NAME_MAX_LEN),
+        // Name and position are read off the *same* row — a book can belong
+        // to more than one series, and pairing one series' name with
+        // another's position would be worse than reporting neither.
+        series: series_row.as_ref().map(|(name, _)| name.clone()),
+        series_index: series_row.and_then(|(_, index)| index),
         first_publish_year: None,
         genres: sanitize_genres(genre_tags(b.cached_tags)),
     })

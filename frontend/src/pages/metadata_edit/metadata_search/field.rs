@@ -32,6 +32,7 @@ pub(super) enum MetadataField {
     Publisher,
     Published,
     Series,
+    SeriesIndex,
     Isbn13,
     Isbn10,
     PrintPages,
@@ -48,13 +49,15 @@ impl MetadataField {
     /// `genres` in this codebase (#1659); `subjects` is whatever the EPUB's
     /// own `<dc:subject>` entries were, and overwriting that with a provider's
     /// vocabulary would destroy the one field that describes *this file*.
-    /// Series position is absent for a plainer reason: no provider carries it.
+    /// Series position *is* here, but only Hardcover ever fills it — the
+    /// catalogs carry no book number to copy.
     pub(super) const ALL: &'static [MetadataField] = &[
         MetadataField::Title,
         MetadataField::Authors,
         MetadataField::Publisher,
         MetadataField::Published,
         MetadataField::Series,
+        MetadataField::SeriesIndex,
         MetadataField::Isbn13,
         MetadataField::Isbn10,
         MetadataField::PrintPages,
@@ -71,6 +74,7 @@ impl MetadataField {
             MetadataField::Publisher => "Publisher",
             MetadataField::Published => "Published",
             MetadataField::Series => "Series",
+            MetadataField::SeriesIndex => "Book #",
             MetadataField::Isbn13 => "ISBN-13",
             MetadataField::Isbn10 => "ISBN-10",
             MetadataField::PrintPages => "Print Pages",
@@ -88,6 +92,7 @@ impl MetadataField {
             MetadataField::Publisher => fields.publisher.read().clone(),
             MetadataField::Published => fields.published.read().clone(),
             MetadataField::Series => fields.series.read().clone(),
+            MetadataField::SeriesIndex => fields.series_index.read().clone(),
             MetadataField::Isbn13 => fields.isbn13.read().clone(),
             MetadataField::Isbn10 => fields.isbn10.read().clone(),
             MetadataField::PrintPages => fields.print_pages.read().clone(),
@@ -110,6 +115,7 @@ impl MetadataField {
             MetadataField::Publisher => text(&edition.publisher),
             MetadataField::Published => text(&edition.year),
             MetadataField::Series => text(&edition.series),
+            MetadataField::SeriesIndex => text(&edition.series_index),
             MetadataField::Isbn13 => edition.isbn13.trim().to_string(),
             MetadataField::Isbn10 => text(&edition.isbn10),
             // A provider reporting 0 pages is normalized to `None` upstream,
@@ -145,6 +151,7 @@ impl MetadataField {
             MetadataField::Publisher => text(&orig.publisher),
             MetadataField::Published => text(&orig.published),
             MetadataField::Series => text(&orig.series),
+            MetadataField::SeriesIndex => text(&orig.series_index),
             MetadataField::Isbn13 => text(&orig.isbn13),
             MetadataField::Isbn10 => text(&orig.isbn10),
             MetadataField::PrintPages => {
@@ -176,6 +183,7 @@ impl MetadataField {
             MetadataField::Publisher => fields.publisher.set(self.original(orig)),
             MetadataField::Published => fields.published.set(self.original(orig)),
             MetadataField::Series => fields.series.set(self.original(orig)),
+            MetadataField::SeriesIndex => fields.series_index.set(self.original(orig)),
             MetadataField::Isbn13 => fields.isbn13.set(self.original(orig)),
             MetadataField::Isbn10 => fields.isbn10.set(self.original(orig)),
             MetadataField::PrintPages => fields.print_pages.set(self.original(orig)),
@@ -215,6 +223,7 @@ impl MetadataField {
             MetadataField::Publisher => fields.publisher.set(self.source_value(edition)),
             MetadataField::Published => fields.published.set(self.source_value(edition)),
             MetadataField::Series => fields.series.set(self.source_value(edition)),
+            MetadataField::SeriesIndex => fields.series_index.set(self.source_value(edition)),
             MetadataField::Isbn13 => fields.isbn13.set(self.source_value(edition)),
             MetadataField::Isbn10 => fields.isbn10.set(self.source_value(edition)),
             MetadataField::PrintPages => fields.print_pages.set(self.source_value(edition)),

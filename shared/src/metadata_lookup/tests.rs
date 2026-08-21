@@ -139,6 +139,7 @@ fn edition() -> ProviderEdition {
         description: Some("A classic novel.".into()),
         cover_url: Some("https://example.com/cover.jpg".into()),
         series: Some("Penguin English Library".into()),
+        series_index: Some("1".into()),
         first_publish_year: Some(1813),
         genres: vec!["Fiction".into(), "Classics".into()],
     }
@@ -265,6 +266,7 @@ fn candidate() -> ProviderEdition {
         description: None,
         cover_url: Some("https://covers.openlibrary.org/b/id/1-L.jpg".into()),
         series: None,
+        series_index: None,
         first_publish_year: Some(1813),
         genres: vec!["Fiction".into()],
     }
@@ -333,6 +335,68 @@ fn fill_missing_from_takes_only_the_fields_the_detail_record_lacks() {
         detail.cover_url.as_deref(),
         Some("https://covers.openlibrary.org/b/id/1-L.jpg")
     );
+}
+
+#[test]
+fn fill_missing_from_refuses_a_book_number_from_a_different_series() {
+    // A provider that files a book under two series can return the rows in
+    // one order for the search and the other for the detail lookup. Each
+    // answer is internally consistent; carrying the number across is what
+    // invents a pairing neither answer made.
+    let search_hit = ProviderEdition {
+        series: Some("Alpha Cycle".into()),
+        series_index: Some("3".into()),
+        ..candidate()
+    };
+    let mut detail = ProviderEdition {
+        series: Some("Beta Cycle".into()),
+        series_index: None,
+        ..candidate()
+    };
+    detail.fill_missing_from(&search_hit);
+
+    assert_eq!(detail.series.as_deref(), Some("Beta Cycle"));
+    assert_eq!(
+        detail.series_index, None,
+        "a position from Alpha Cycle must not be filed under Beta Cycle"
+    );
+}
+
+#[test]
+fn fill_missing_from_takes_the_book_number_when_both_name_one_series() {
+    let search_hit = ProviderEdition {
+        series: Some("Alpha Cycle".into()),
+        series_index: Some("3".into()),
+        ..candidate()
+    };
+    // The detail record knows the series but not the position, which is the
+    // ordinary Hardcover case the merge exists to repair.
+    let mut detail = ProviderEdition {
+        series: Some("  Alpha Cycle ".into()),
+        series_index: None,
+        ..candidate()
+    };
+    detail.fill_missing_from(&search_hit);
+
+    assert_eq!(detail.series_index.as_deref(), Some("3"));
+}
+
+#[test]
+fn fill_missing_from_takes_series_and_book_number_together_when_the_detail_has_neither() {
+    let search_hit = ProviderEdition {
+        series: Some("Alpha Cycle".into()),
+        series_index: Some("3".into()),
+        ..candidate()
+    };
+    let mut detail = ProviderEdition {
+        series: None,
+        series_index: None,
+        ..candidate()
+    };
+    detail.fill_missing_from(&search_hit);
+
+    assert_eq!(detail.series.as_deref(), Some("Alpha Cycle"));
+    assert_eq!(detail.series_index.as_deref(), Some("3"));
 }
 
 #[test]

@@ -275,6 +275,7 @@ fn map_volume(
         description: info.description,
         cover_url,
         series: None,
+        series_index: None,
         first_publish_year: None,
         genres: sanitize_genres(info.categories),
     })

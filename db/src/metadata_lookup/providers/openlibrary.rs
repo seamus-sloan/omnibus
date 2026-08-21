@@ -117,6 +117,7 @@ pub async fn by_isbn(
         description: None,
         cover_url,
         series: None,
+        series_index: None,
         first_publish_year: None,
         genres: sanitize_genres(book.subjects.into_iter().flat_map(|s| s.name)),
     }))
@@ -231,6 +232,7 @@ fn map_search_doc(doc: OlSearchDoc) -> Option<ProviderEdition> {
             .cover_i
             .map(|id| format!("https://covers.openlibrary.org/b/id/{id}-L.jpg")),
         series: None,
+        series_index: None,
         first_publish_year: doc.first_publish_year,
         genres: sanitize_genres(doc.subject),
     })

@@ -1,7 +1,7 @@
 //! Edition-picker client wrappers for the metadata-edit page: the provider
 //! catalog, the fan-out search, and the detail fetch for a selected
 //! candidate. Web/SSR only — mobile has no metadata-edit surface (same split
-//! as `hardcover_fetch`).
+//! as the other web-only data wrappers).
 
 use omnibus_shared::metadata_lookup::{
     EditionSearchResponse, MetadataProvider, ProviderEdition, ProviderInfo,
