@@ -45,6 +45,31 @@ enum ReaderMargins: String, Codable, CaseIterable {
     }
 }
 
+/// Single vs two-page layout. `OmnibusReader.init`'s `spread` option and
+/// `setSpread` take this literally: "none" forces a single column, "auto"
+/// lets epub.js pair columns once the stage crosses its `minSpreadWidth` —
+/// which a landscape phone or an iPad routinely does. Without an explicit
+/// value the reader silently inherited "auto" (issue #2081, finding 3);
+/// mirrors the web reader's `Spread` in
+/// `frontend/src/pages/reader/typography.rs`.
+enum ReaderSpread: String, Codable, CaseIterable {
+    case single, double
+
+    var css: String {
+        switch self {
+        case .single: "none"
+        case .double: "auto"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .single: "Single Page"
+        case .double: "Two Page"
+        }
+    }
+}
+
 struct ReaderSettings: Codable, Equatable {
     var fontSize: Int = 19
     var fontFamily: String = "serif"
@@ -53,6 +78,9 @@ struct ReaderSettings: Codable, Equatable {
     var justify: Bool = true
     /// epub.js theme token — matches the four `themes.register` names.
     var theme: String = "dark"
+    /// Matches epub.js's own default ("auto") so a reader upgrading from a
+    /// build that never sent `spread` sees no change in behavior.
+    var spread: ReaderSpread = .double
 
     static let storageKey = "omnibus.readerSettings"
 
@@ -98,6 +126,15 @@ struct RelocateData: Codable {
     /// Pages between here and the end of the current chapter; 0 when unknown
     /// (locations still generating) or already on the chapter's last page.
     var chapterPagesLeft: Int = 0
+    /// True when the glue is re-stating a position it already reported — a
+    /// boot restore settling, or a rotation/resize's corrected re-pagination
+    /// — rather than reporting real reading movement (issue #2081). Render
+    /// it like any relocate, but never persist it or move `restoreCFI`: an
+    /// echo write stamps a fresh clock on an unmoved position, which
+    /// out-orders a newer counterpart-format position at the cross-format
+    /// clock gate (the same #1972 class the web reader suppresses the same
+    /// way — `!data.echo` in `frontend/src/pages/reader/interop.rs`).
+    var echo: Bool = false
 
     /// `0...1` for the progress bar. Page numbers only exist once epub.js has
     /// finished its whole-book locations pass, so this is the reliable one.
@@ -106,6 +143,10 @@ struct RelocateData: Codable {
     var hasPageNumbers: Bool { totalPages > 0 }
 
     var chapterName: String? { chapterTitle.nilIfBlank }
+
+    /// Whether this position is worth persisting or worth moving the
+    /// restore anchor for — real reading movement, not an echo.
+    var isMovement: Bool { !echo }
 }
 
 /// A box on the page, in web-view coordinates — the same space the reader's
@@ -435,6 +476,9 @@ final class ReaderController: NSObject {
         if settings.justify != old.justify {
             run("OmnibusReader.setJustify(\(settings.justify))")
         }
+        if settings.spread != old.spread {
+            run("OmnibusReader.setSpread(\(settings.spread.css.jsQuoted))")
+        }
     }
 
     fileprivate func run(_ script: String) {
@@ -458,6 +502,7 @@ final class ReaderController: NSObject {
             "lineHeight": settings.lineHeight,
             "maxWidth": settings.margins.css,
             "justify": settings.justify,
+            "spread": settings.spread.css,
             // Without allow-scripts on the section iframe WebKit dispatches no
             // events into it — selection and gestures are dead on iOS.
             "allowScriptedContent": true,
@@ -514,8 +559,12 @@ final class ReaderController: NSObject {
             location = decoded
             // Where a reboot of the page picks up. Relocates are muted until a
             // restore has settled, so this only ever moves to a position the
-            // reader was actually shown.
-            if let cfi = decoded.cfi?.nilIfBlank { restoreCFI = cfi }
+            // reader was actually shown. An echo (a rotation's corrected
+            // re-pagination, or the restore settling) doesn't count: moving
+            // the anchor for one would reboot the page onto a position that
+            // is, for a rotation, a spread short of the page the reader was
+            // actually shown (issue #2081, AC3).
+            if decoded.isMovement, let cfi = decoded.cfi?.nilIfBlank { restoreCFI = cfi }
 
         case "toc":
             guard let payload, let data = payload.data(using: .utf8),

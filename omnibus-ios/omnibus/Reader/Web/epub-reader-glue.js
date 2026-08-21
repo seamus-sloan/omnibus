@@ -18,7 +18,7 @@
  * Public surface: window.OmnibusReader
  *   init(elementId, fileUrl, opts)  opts = { cfi?, fontSize?, theme?,
  *                                           fontFamily?, lineHeight?,
- *                                           maxWidth?, justify?,
+ *                                           maxWidth?, justify?, spread?,
  *                                           allowScriptedContent?,
  *                                           locationsKey? }
  *   next()
@@ -29,6 +29,9 @@
  *   setLineHeight(value)
  *   setMargins(maxWidth)
  *   setJustify(on)
+ *   setSpread(mode)                 "none" (single column) or "auto"
+ *                                   (epub.js pairs columns once the stage
+ *                                   crosses its minSpreadWidth)
  *   addAnnotation(cfiRange, color)
  *   removeAnnotation(cfiRange)
  *   clearAnnotations()
@@ -79,6 +82,23 @@
   // so the first-pass landing (a page or two off until fonts/theme reflow) is
   // never persisted as reading progress.
   var restoreSettled = true;
+  // True from a CFI restore until its first post-settle emission — that
+  // emission re-states the restored position and is tagged `echo` so the
+  // host renders it without persisting it or moving `restoreCFI` (see
+  // emitRelocate; mirrors frontend/assets/vendor/epub-reader-glue.js).
+  var restoreEchoPending = false;
+  // True from the first resize-driven "resized" event of a rotation/resize
+  // burst until the corrected redisplay that follows it has been reported —
+  // mutes every relocate in between (issue #2081). A rotation re-paginates
+  // but is not reading movement: epub.js's own window-resize handler and
+  // installStageResizeWatch's ResizeObserver each re-display the pre-resize
+  // CFI through a plain, uncorrected `rendition.display()`, so left unmuted
+  // the host would see relocates that both land off the actual page (no
+  // nudgeToTarget correction) and both look like real movement (no echo).
+  var resizeSettling = false;
+  var resizeCorrectionTimer = null;
+  var resizeCorrectionTarget = null;
+  var RESIZE_CORRECTION_DEBOUNCE_MS = 200;
   var tocFlat = [];
   var currentTheme = "dark";
   // Reading typography, tracked because the highlight geometry depends on it
@@ -121,6 +141,12 @@
       clearTimeout(stageResizeTimer);
       stageResizeTimer = null;
     }
+    if (resizeCorrectionTimer) {
+      clearTimeout(resizeCorrectionTimer);
+      resizeCorrectionTimer = null;
+    }
+    resizeSettling = false;
+    resizeCorrectionTarget = null;
     if (stageResizeObserver) {
       try {
         stageResizeObserver.disconnect();
@@ -380,9 +406,10 @@
         // Re-emit now that each entry can carry its page and percent.
         emitToc();
         // Re-emit current location now that locations are resolved so the
-        // Rust side gets real page numbers on first load.
+        // Rust side gets real page numbers on first load. An echo: it
+        // re-states the position, it doesn't report movement.
         if (rendition && rendition.location) {
-          emitRelocate(rendition.location);
+          emitRelocate(rendition.location, true);
         }
       })
       .catch(function () {
@@ -401,6 +428,7 @@
     // saved progress paint (and report ready) immediately.
     var initialCfi = opts.cfi || null;
     restoreSettled = !initialCfi;
+    restoreEchoPending = !!initialCfi;
     rendition.display(initialCfi || undefined).then(
       function () {
         if (!initialCfi) {
@@ -462,6 +490,20 @@
       }, 400);
     });
 
+    // epub.js's Rendition.onResized emits this, then immediately issues its
+    // own plain, uncorrected `display(e || this.location.start.cfi)` — the
+    // pre-resize position, at the moment this fires, since `location` isn't
+    // re-measured until that display resolves. Anchor the correction on the
+    // same fallback so it targets the same pre-resize page epub.js does.
+    rendition.on("resized", function (size, cfiOverride) {
+      var target =
+        cfiOverride ||
+        (rendition && rendition.location && rendition.location.start
+          ? rendition.location.start.cfi
+          : null);
+      scheduleResizeCorrection(target);
+    });
+
     // A new section means new text nodes, so every block flattened off the
     // old ones is dead weight.
     rendition.on("rendered", dropFlatCache);
@@ -499,9 +541,24 @@
     });
   }
 
-  function emitRelocate(location) {
-    if (!restoreSettled) return;
+  // `isEcho` marks an emission that re-states a position the host already
+  // knows (the restore settle, a resize/rotation's corrected landing)
+  // rather than reporting movement. The host renders echoes but must not
+  // persist them or move `restoreCFI`: an echo write stamps a fresh clock
+  // on an unmoved position, which out-orders a newer counterpart-format
+  // position at the cross-format clock gate (see `RelocateData.isMovement`
+  // in ReaderWebView.swift). The first emission after a CFI restore is an
+  // echo even when it arrives through the debounced relocated handler, so
+  // the flag is consumed here rather than trusted to the call sites.
+  function emitRelocate(location, isEcho) {
+    if (!restoreSettled || resizeSettling) return;
+    var echo = !!isEcho;
+    if (restoreEchoPending) {
+      restoreEchoPending = false;
+      echo = true;
+    }
     var data = buildRelocateData(location);
+    data.echo = echo;
     if (data.cfi && typeof window.__omnibusOnRelocate === "function") {
       window.__omnibusOnRelocate(JSON.stringify(data));
     }
@@ -2290,6 +2347,76 @@
       /* CFI compare is best effort */
     }
     return Promise.resolve();
+  }
+
+  // The corrected, echo-tagged counterpart to epub.js's own resize-driven
+  // re-display (issue #2081). `resizeSettling` mutes every relocate —
+  // including the raw, uncorrected ones epub.js's own onResized fires
+  // straight through `rendition.display()` — from the first "resized"
+  // event of a burst until this fires once, reporting the settled, nudged
+  // landing as a single echo. `RelocateData.isMovement` in
+  // ReaderWebView.swift is what keeps the host from persisting it or
+  // moving `restoreCFI`.
+  function finishResizeCorrection(r) {
+    resizeSettling = false;
+    if (rendition !== r) return;
+    var loc = null;
+    try {
+      loc = rendition.currentLocation();
+    } catch (e) {
+      /* not ready */
+    }
+    if (loc && loc.start) {
+      emitRelocate(loc, true);
+    } else if (rendition.location) {
+      emitRelocate(rendition.location, true);
+    }
+  }
+
+  // Re-display the pre-resize target through the same settle-then-redisplay
+  // and nudgeToTarget correction the boot restore gets, rather than trusting
+  // epub.js's own plain `display()`. Mirrors the boot-restore chain in
+  // init() rather than calling displaySettled(), which does not nudge.
+  function runResizeCorrection() {
+    resizeCorrectionTimer = null;
+    var target = resizeCorrectionTarget;
+    resizeCorrectionTarget = null;
+    var r = rendition;
+    if (!target || !r) {
+      resizeSettling = false;
+      return;
+    }
+    var reveal = beginSettleFade();
+    r.display(target)
+      .then(function () {
+        return redisplayWhenSettled(target);
+      })
+      .then(function () {
+        return nudgeToTarget(target);
+      })
+      .catch(function () {
+        /* keep whatever landed */
+      })
+      .then(function () {
+        reveal();
+        finishResizeCorrection(r);
+      });
+  }
+
+  // Coalesce the two racing resize paths (epub.js's own window-resize
+  // listener and installStageResizeWatch's container ResizeObserver) into
+  // one corrected redisplay per burst. Anchored to the FIRST target seen —
+  // not whichever raw, uncorrected redisplay happens to land last — so a
+  // mid-burst measurement can't walk the anchor away from the page the
+  // reader was actually on, and repeated rotations can't accumulate drift.
+  function scheduleResizeCorrection(target) {
+    if (!target || !rendition) return;
+    if (!resizeSettling) {
+      resizeSettling = true;
+      resizeCorrectionTarget = target;
+    }
+    if (resizeCorrectionTimer) clearTimeout(resizeCorrectionTimer);
+    resizeCorrectionTimer = setTimeout(runResizeCorrection, RESIZE_CORRECTION_DEBOUNCE_MS);
   }
 
   function display(target) {
