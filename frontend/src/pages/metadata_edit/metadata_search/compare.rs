@@ -18,9 +18,7 @@ use super::super::form_grid::FormFields;
 use super::cover_row::CoverRow;
 use super::field::MetadataField;
 use super::sources::provider_slug;
-
-/// Rendered for a field the source has no value for.
-const EMPTY: &str = "\u{2014}";
+use super::EMPTY;
 
 /// Above this many characters on either side, a row stops being readable in
 /// two narrow columns and is laid out down the panel's full width instead.

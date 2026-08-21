@@ -29,6 +29,11 @@ mod sources;
 use compare::CompareScreen;
 use results::ResultsScreen;
 
+/// Rendered wherever a field has no value — on either side of a compare row,
+/// or in a candidate row the provider left thin. One owner, so the three
+/// screens can't drift onto different dashes.
+pub(super) const EMPTY: &str = "\u{2014}";
+
 /// Which screen the overlay is showing.
 ///
 /// Two, plus their in-between states. More than that and the reader is

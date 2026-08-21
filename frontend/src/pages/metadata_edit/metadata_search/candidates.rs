@@ -4,9 +4,7 @@ use dioxus::prelude::*;
 use omnibus_shared::metadata_lookup::ProviderEdition;
 
 use super::sources::provider_slug;
-
-/// Shown for a field this candidate has no value for.
-const EMPTY: &str = "\u{2014}";
+use super::EMPTY;
 
 /// Put candidates in an order derived from the candidates themselves.
 ///

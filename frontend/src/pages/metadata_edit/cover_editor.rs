@@ -7,6 +7,7 @@
 use dioxus::prelude::*;
 use omnibus_shared::EbookMetadata;
 
+use super::bust_query;
 use crate::components::atrium::Cover;
 use crate::contexts::{bump_cover_cache_bust, use_cover_cache_bust};
 use crate::{data, media_url, use_server_url};
@@ -152,14 +153,6 @@ fn cover_preview(book: &EbookMetadata, server_url: &str, state: CoverState) -> E
     }
 }
 
-/// Append a cache-busting `v=` query param to `url`, using `&` when `url`
-/// already carries a query string (mobile's [`media_url`] appends
-/// `?token=…`).
-fn bust_query(url: &str, bust: u32) -> String {
-    let sep = if url.contains('?') { '&' } else { '?' };
-    format!("{url}{sep}v={bust}")
-}
-
 /// File-upload input plus the "revert to scanned cover" button (shown only
 /// while a cover override is active).
 fn cover_controls(
@@ -248,23 +241,5 @@ fn cover_controls(
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bust_query_appends_with_question_mark_when_url_has_no_query_string() {
-        assert_eq!(bust_query("/covers/abc.jpg", 3), "/covers/abc.jpg?v=3");
-    }
-
-    #[test]
-    fn bust_query_appends_with_ampersand_when_url_already_has_a_query_string() {
-        assert_eq!(
-            bust_query("/covers/abc.jpg?token=xyz", 3),
-            "/covers/abc.jpg?token=xyz&v=3"
-        );
     }
 }

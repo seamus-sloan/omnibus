@@ -18,6 +18,19 @@ pub enum MetadataProvider {
 }
 
 impl MetadataProvider {
+    /// Every provider, in catalog order.
+    ///
+    /// The one hand-written roster in the workspace. Anything that has to
+    /// visit every provider — the catalog, the cover-host union, their tests —
+    /// reads it rather than repeating the list, because a second copy compiles
+    /// perfectly well while silently missing a variant: the failure shows up
+    /// as a blocked cover image or a 400, never as a build error.
+    pub const ALL: &'static [MetadataProvider] = &[
+        MetadataProvider::OpenLibrary,
+        MetadataProvider::GoogleBooks,
+        MetadataProvider::Hardcover,
+    ];
+
     /// Human-readable provider name for display (check-in note, settings panel, provider catalog).
     pub fn display_name(self) -> &'static str {
         match self {

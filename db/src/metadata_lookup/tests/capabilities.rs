@@ -143,11 +143,7 @@ fn all_cover_hosts_is_the_deduplicated_union_of_every_providers_hosts() {
     sorted.dedup();
     assert_eq!(sorted.len(), all.len(), "no host may appear twice: {all:?}");
 
-    for provider in [
-        MetadataProvider::OpenLibrary,
-        MetadataProvider::GoogleBooks,
-        MetadataProvider::Hardcover,
-    ] {
+    for provider in MetadataProvider::ALL.iter().copied() {
         for host in cover_hosts(provider) {
             assert!(all.contains(host), "{host} missing from the union");
         }

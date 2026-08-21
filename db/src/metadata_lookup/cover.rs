@@ -45,11 +45,7 @@ mod tests {
     #[test]
     fn provider_cover_config_allows_every_host_the_catalog_publishes() {
         let config = provider_cover_image_config(false);
-        for provider in [
-            MetadataProvider::OpenLibrary,
-            MetadataProvider::GoogleBooks,
-            MetadataProvider::Hardcover,
-        ] {
+        for provider in MetadataProvider::ALL.iter().copied() {
             for host in cover_hosts(provider) {
                 assert!(
                     config.host_allowlist.iter().any(|h| h == host),

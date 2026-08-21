@@ -10,12 +10,11 @@
 use dioxus::prelude::*;
 use omnibus_shared::{metadata_lookup::ProviderEdition, EbookMetadata};
 
+use super::super::bust_query;
+use super::EMPTY;
 use crate::components::atrium::Cover;
 use crate::contexts::{bump_cover_cache_bust, use_cover_cache_bust};
 use crate::{data, media_url, use_server_url};
-
-/// Rendered when neither side has a cover.
-const EMPTY: &str = "\u{2014}";
 
 /// Yours-vs-theirs for the cover, with the same arrow affordance as every
 /// other row and a status line that says the change is immediate.
@@ -132,30 +131,5 @@ fn CoverThumb(book: EbookMetadata, bust: u32) -> Element {
         div { class: "mes-cover-thumb",
             Cover { book, src_override }
         }
-    }
-}
-
-/// Append a cache-busting `v=` param, using `&` when the URL already carries
-/// a query string. Mirrors `cover_editor::bust_query`.
-fn bust_query(url: &str, bust: u32) -> String {
-    let sep = if url.contains('?') { '&' } else { '?' };
-    format!("{url}{sep}v={bust}")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bust_query_appends_with_question_mark_when_url_has_no_query_string() {
-        assert_eq!(bust_query("/covers/abc.jpg", 3), "/covers/abc.jpg?v=3");
-    }
-
-    #[test]
-    fn bust_query_appends_with_ampersand_when_url_already_has_a_query_string() {
-        assert_eq!(
-            bust_query("/covers/abc.jpg?token=xyz", 3),
-            "/covers/abc.jpg?token=xyz&v=3"
-        );
     }
 }

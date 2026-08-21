@@ -189,11 +189,7 @@ pub fn cover_hosts(provider: MetadataProvider) -> &'static [&'static str] {
 /// would be a debugging trap.
 pub fn all_cover_hosts() -> Vec<&'static str> {
     let mut hosts: Vec<&'static str> = Vec::new();
-    for provider in [
-        MetadataProvider::OpenLibrary,
-        MetadataProvider::GoogleBooks,
-        MetadataProvider::Hardcover,
-    ] {
+    for provider in MetadataProvider::ALL.iter().copied() {
         for host in cover_hosts(provider) {
             if !hosts.contains(host) {
                 hosts.push(host);
@@ -214,27 +210,24 @@ pub fn all_cover_hosts() -> Vec<&'static str> {
 /// keyless too, just not as the ladder's primary rung — see [`ladder`]'s
 /// docs), and Hardcover only when `config.keys.hardcover` is set.
 pub fn catalog(config: &MetadataLookupConfig) -> Vec<ProviderInfo> {
-    vec![
-        ProviderInfo {
-            id: MetadataProvider::OpenLibrary,
-            display_name: MetadataProvider::OpenLibrary.display_name().to_string(),
-            configured: true,
-            requires_key: false,
-            capabilities: COMMON_CAPABILITIES,
-        },
-        ProviderInfo {
-            id: MetadataProvider::GoogleBooks,
-            display_name: MetadataProvider::GoogleBooks.display_name().to_string(),
-            configured: true,
-            requires_key: false,
-            capabilities: COMMON_CAPABILITIES,
-        },
-        ProviderInfo {
-            id: MetadataProvider::Hardcover,
-            display_name: MetadataProvider::Hardcover.display_name().to_string(),
-            configured: config.keys.hardcover.is_some(),
-            requires_key: true,
-            capabilities: COMMON_CAPABILITIES,
-        },
-    ]
+    MetadataProvider::ALL
+        .iter()
+        .copied()
+        .map(|id| {
+            // The roster comes from `ALL`; whether a provider needs a key, and
+            // whether it has one, stays an exhaustive match so a new variant
+            // has to answer both rather than inheriting someone else's answer.
+            let (configured, requires_key) = match id {
+                MetadataProvider::OpenLibrary | MetadataProvider::GoogleBooks => (true, false),
+                MetadataProvider::Hardcover => (config.keys.hardcover.is_some(), true),
+            };
+            ProviderInfo {
+                id,
+                display_name: id.display_name().to_string(),
+                configured,
+                requires_key,
+                capabilities: COMMON_CAPABILITIES,
+            }
+        })
+        .collect()
 }
