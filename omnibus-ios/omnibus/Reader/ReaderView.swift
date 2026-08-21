@@ -201,13 +201,18 @@ struct ReaderView: View {
             }
         }
         .onChange(of: controller.location?.cfi) { old, _ in
-            // The boot restore's nil→CFI transition is an echo of the
-            // position the server already holds — persisting it stamps a
-            // fresh clock on an unmoved row and shadows a newer audiobook
-            // spot at the cross-format clock gate (the same #1972 class
-            // the web reader suppresses via echo-tagged relocates). Only
-            // CFI→CFI transitions are movement worth recording.
-            guard old != nil else { return }
+            // The boot restore's nil→CFI transition, and a rotation or
+            // resize's corrected re-pagination, are echoes of a position the
+            // reader already reported — persisting one stamps a fresh clock
+            // on an unmoved row and shadows a newer audiobook spot at the
+            // cross-format clock gate (the same #1972 class the web reader
+            // suppresses via echo-tagged relocates; issue #2081, AC2). `old
+            // != nil` alone only catches the boot case — a rotation is a
+            // genuine CFI→CFI transition — so `isMovement` (decoded from the
+            // glue's `echo` flag) is the one that actually matters; `old !=
+            // nil` stays as a defensive belt for a relocate that somehow
+            // arrives untagged.
+            guard old != nil, controller.location?.isMovement == true else { return }
             Task { await persist(force: false) }
         }
         .onChange(of: controller.location?.atEnd) { _, atEnd in
