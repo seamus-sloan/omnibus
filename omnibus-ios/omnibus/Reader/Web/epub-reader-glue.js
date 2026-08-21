@@ -98,6 +98,13 @@
   var resizeSettling = false;
   var resizeCorrectionTimer = null;
   var resizeCorrectionTarget = null;
+  // Bumped by cancelResizeCorrection() and by each runResizeCorrection()
+  // invocation, so a superseded correction chain (a user turn mid-burst, or
+  // a second resize burst starting before the first settled) can tell it's
+  // stale and skip its landing rather than stomping a newer relocate with a
+  // stale echo. iOS's glue has no shared displayToken to reuse for this the
+  // way the web copy does.
+  var resizeCorrectionGen = 0;
   var RESIZE_CORRECTION_DEBOUNCE_MS = 200;
   var tocFlat = [];
   var currentTheme = "dark";
@@ -566,11 +573,13 @@
 
   function next() {
     if (!rendition) return;
+    cancelResizeCorrection();
     return rendition.next();
   }
 
   function prev() {
     if (!rendition) return;
+    cancelResizeCorrection();
     return rendition.prev();
   }
 
@@ -663,6 +672,7 @@
     if (!rendition || !rendition.manager) return false;
     var manager = rendition.manager;
     if (!hasAdjacentSection(manager, dir)) return false;
+    cancelResizeCorrection();
     var release = beginSectionTurn();
     var runTurn = function () {
       return dir > 0 ? manager.next() : manager.prev();
@@ -2349,6 +2359,26 @@
     return Promise.resolve();
   }
 
+  // Drop any pending or in-flight resize correction and resume relocates
+  // immediately. A user-initiated turn (next/prev, a swipe across a
+  // section) mid-burst is real reading movement: muting through the
+  // correction — or worse, letting a correction already in flight land
+  // afterward and stomp the turn's own relocate with a stale echo of the
+  // pre-resize target — leaves the page indicator, restore anchor, and
+  // persist trigger out of step with where the reader actually turned to
+  // (review finding on #2081). Bumping the generation is what lets a
+  // correction chain already past this point (mid `display()`/settle)
+  // notice it's stale and skip its landing instead.
+  function cancelResizeCorrection() {
+    resizeCorrectionGen++;
+    if (resizeCorrectionTimer) {
+      clearTimeout(resizeCorrectionTimer);
+      resizeCorrectionTimer = null;
+    }
+    resizeSettling = false;
+    resizeCorrectionTarget = null;
+  }
+
   // The corrected, echo-tagged counterpart to epub.js's own resize-driven
   // re-display (issue #2081). `resizeSettling` mutes every relocate —
   // including the raw, uncorrected ones epub.js's own onResized fires
@@ -2357,7 +2387,11 @@
   // landing as a single echo. `RelocateData.isMovement` in
   // ReaderWebView.swift is what keeps the host from persisting it or
   // moving `restoreCFI`.
-  function finishResizeCorrection(r) {
+  function finishResizeCorrection(r, gen) {
+    // Superseded by a user turn (cancelResizeCorrection) or a newer resize
+    // burst — that path already resumed relocates (or will report its own
+    // landing); this one has nothing current to say.
+    if (gen !== resizeCorrectionGen) return;
     resizeSettling = false;
     if (rendition !== r) return;
     var loc = null;
@@ -2386,20 +2420,22 @@
       resizeSettling = false;
       return;
     }
+    resizeCorrectionGen++;
+    var gen = resizeCorrectionGen;
     var reveal = beginSettleFade();
     r.display(target)
       .then(function () {
         return redisplayWhenSettled(target);
       })
       .then(function () {
-        return nudgeToTarget(target);
+        if (gen === resizeCorrectionGen) return nudgeToTarget(target);
       })
       .catch(function () {
         /* keep whatever landed */
       })
       .then(function () {
         reveal();
-        finishResizeCorrection(r);
+        finishResizeCorrection(r, gen);
       });
   }
 

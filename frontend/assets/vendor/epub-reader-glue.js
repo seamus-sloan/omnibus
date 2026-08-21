@@ -768,6 +768,7 @@
     pendingJumpCfi = null;
     restoreEchoPending = false;
     displayToken++;
+    cancelResizeCorrection();
     if (turnInFlight) {
       turnPendingDir = dir;
       return;
@@ -872,6 +873,7 @@
     if (!rendition || !rendition.manager) return false;
     var manager = rendition.manager;
     if (!hasAdjacentSection(manager, dir)) return false;
+    cancelResizeCorrection();
     var release = beginSectionTurn();
     var runTurn = function () {
       return dir > 0 ? manager.next() : manager.prev();
@@ -1975,6 +1977,26 @@
     return Promise.resolve();
   }
 
+  // Drop any pending or in-flight resize correction and resume relocates
+  // immediately. A user-initiated turn (queueTurn, a swipe across a
+  // section) mid-burst is real reading movement: muting through the
+  // correction — or worse, letting a correction already in flight land
+  // afterward and stomp the turn's own relocate with a stale echo of the
+  // pre-resize target — leaves the page indicator, restore anchor, and
+  // persist trigger out of step with where the reader actually turned to
+  // (review finding on #2081). Bumping displayToken is what lets a
+  // correction chain already past this point (mid `display()`/settle,
+  // inside `current()`) notice it's stale and skip its landing.
+  function cancelResizeCorrection() {
+    displayToken++;
+    if (resizeCorrectionTimer) {
+      clearTimeout(resizeCorrectionTimer);
+      resizeCorrectionTimer = null;
+    }
+    resizeSettling = false;
+    resizeCorrectionTarget = null;
+  }
+
   // The corrected, echo-tagged counterpart to epub.js's own resize-driven
   // re-display (issue #2081, findings 1 & 2). `resizeSettling` mutes every
   // relocate — including the raw, uncorrected ones epub.js's own onResized
@@ -1983,7 +2005,11 @@
   // landing as a single echo. A rotation re-paginates but is not reading
   // movement: `!data.echo` is what already keeps `build_relocate_callback`
   // (frontend/src/pages/reader/interop.rs) from persisting it.
-  function finishResizeCorrection(r) {
+  function finishResizeCorrection(r, current) {
+    // Superseded by a user turn (cancelResizeCorrection) or a newer resize
+    // burst — that path already resumed relocates (or will report its own
+    // landing); this one has nothing current to say.
+    if (current && !current()) return;
     resizeSettling = false;
     if (rendition !== r) return;
     var loc = null;
@@ -2030,7 +2056,7 @@
       })
       .then(function () {
         reveal();
-        finishResizeCorrection(r);
+        finishResizeCorrection(r, current);
       });
   }
 

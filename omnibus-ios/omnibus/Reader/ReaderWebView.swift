@@ -65,7 +65,7 @@ enum ReaderSpread: String, Codable, CaseIterable {
     var label: String {
         switch self {
         case .single: "Single Page"
-        case .double: "Two Page"
+        case .double: "Two Pages"
         }
     }
 }
