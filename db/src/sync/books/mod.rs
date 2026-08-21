@@ -39,11 +39,13 @@ use changed::sync_changed;
 use new::sync_new;
 use removed::sync_removed;
 
-/// Crate-internal error wrapping `sqlx::Error` so `?` propagates cleanly in the audiobook sync helpers.
+/// Crate-internal error wrapping `sqlx::Error` so `?` propagates cleanly in the ebook and audiobook sync helpers.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SyncError {
     #[error(transparent)]
     Db(#[from] sqlx::Error),
+    #[error(transparent)]
+    Physical(#[from] crate::physical::PhysicalError),
 }
 
 impl From<crate::settings::SettingsError> for SyncError {

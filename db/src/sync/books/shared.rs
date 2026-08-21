@@ -23,7 +23,7 @@ use crate::taxonomy::{
 use super::super::attach;
 use super::super::authors::insert_author_links;
 use super::super::fts::upsert_fts;
-use super::{wipe_per_book_link_rows, EntityAliasMaps};
+use super::{wipe_per_book_link_rows, EntityAliasMaps, SyncError};
 
 /// Rewrite an existing book in place from a freshly-parsed entry: refresh
 /// the `books` scalars, wipe + re-insert this format's `book_files` and the
@@ -70,7 +70,7 @@ pub(super) async fn try_attach_new_ebook(
     removed_this_scan: &HashSet<&str>,
     alias_maps: &EntityAliasMaps,
     covers: &mut Vec<(String, String, Vec<u8>)>,
-) -> Result<bool, sqlx::Error> {
+) -> Result<bool, SyncError> {
     if b.metadata.error.is_some() {
         return Ok(false);
     }
@@ -145,7 +145,7 @@ pub(super) async fn attach_ebook_file(
     uuid: &str,
     b: &crate::ebook::IndexedBook,
     covers: &mut Vec<(String, String, Vec<u8>)>,
-) -> Result<bool, sqlx::Error> {
+) -> Result<bool, SyncError> {
     // The attached file's own relative path is its diff key (F2), so a repoint
     // of the file's scan root re-matches it instead of resurfacing it as a
     // duplicate; it's also the ledger key written below.
