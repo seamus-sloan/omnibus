@@ -155,6 +155,49 @@ fn parse_groups_emits_one_book_per_m4b_even_when_stems_share_a_base() {
 }
 
 #[test]
+fn parse_groups_untagged_m4b_derives_title_from_parent_dir_and_creator_from_grandparent() {
+    // #2073 repro: an untagged single-file m4b under the standard
+    // `<Author>/<Title>/<file>` layout. Junk bytes drive the tag read to
+    // its warn-and-default path, so the path fallback decides everything —
+    // it must read the title from the parent dir and the creator from the
+    // grandparent, not (as before) the stem and the title dir.
+    let dir = make_test_dir("m4b_nested_fallback");
+    let book_dir = dir.join("Logan Karlie").join("Dream by the Shadows");
+    fs::create_dir_all(&book_dir).unwrap();
+    fs::write(
+        book_dir.join("Logan Karlie - Dream by the Shadows.m4b"),
+        b"junk",
+    )
+    .unwrap();
+    let stat = stat_audiobook_library(dir.to_str(), dir.to_str().unwrap());
+    let groups = group_into_books(stat.entries, dir.to_str().unwrap());
+    let books = parse_groups(groups, &dir);
+    fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(books.len(), 1);
+    assert_eq!(books[0].title, "Dream by the Shadows");
+    assert_eq!(books[0].creator_name.as_deref(), Some("Logan Karlie"));
+}
+
+#[test]
+fn parse_groups_untagged_m4b_at_depth_two_takes_parent_as_creator_and_strips_title_prefix() {
+    let dir = make_test_dir("m4b_depth2_fallback");
+    let author_dir = dir.join("Andy Weir");
+    fs::create_dir_all(&author_dir).unwrap();
+    fs::write(
+        author_dir.join("Andy Weir - Project Hail Mary.m4b"),
+        b"junk",
+    )
+    .unwrap();
+    let stat = stat_audiobook_library(dir.to_str(), dir.to_str().unwrap());
+    let groups = group_into_books(stat.entries, dir.to_str().unwrap());
+    let books = parse_groups(groups, &dir);
+    fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(books.len(), 1);
+    assert_eq!(books[0].title, "Project Hail Mary");
+    assert_eq!(books[0].creator_name.as_deref(), Some("Andy Weir"));
+}
+
+#[test]
 fn build_indexed_book_surfaces_error_for_undecodable_audio() {
     // `build_indexed_book` propagates the lofty decode/container failure as
     // an `anyhow::Error` — the direct-propagation counterpart to
