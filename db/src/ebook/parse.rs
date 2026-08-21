@@ -203,8 +203,8 @@ fn collect_contributors<R: std::io::Read + std::io::Seek>(
                 .refinement("role")
                 .map(|r| r.value.clone())
                 .or_else(|| lookup_refinement(&m.refined, "role"));
-            // `bkp` (MARC "book producer") is the role conversion tools stamp
-            // their generator string with (Calibre: `calibre (X.Y.Z) [http…]`).
+            // Conversion tools mark their generator string with the `bkp`
+            // (MARC "book producer") role (Calibre: `calibre (X.Y.Z) [http…]`).
             // It names production tooling, not a person — drop it here so the
             // stamp never reaches `books_authors_link` (#2072).
             if role
