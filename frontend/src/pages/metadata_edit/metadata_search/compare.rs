@@ -22,6 +22,11 @@ use super::sources::provider_slug;
 /// Rendered for a field the source has no value for.
 const EMPTY: &str = "\u{2014}";
 
+/// Above this many characters on either side, a row stops being readable in
+/// two narrow columns and is laid out down the panel's full width instead.
+/// Sized to roughly three lines of a compare column at desktop width.
+const LONG_VALUE_CHARS: usize = 90;
+
 /// The selected edition beside the book, and the controls that move fields
 /// across.
 #[component]
@@ -65,11 +70,6 @@ pub(super) fn CompareScreen(
         .iter()
         .filter(|f| f.differs(fields, &edition))
         .count();
-    let take_all_label = if changes == 1 {
-        "Take the change".to_string()
-    } else {
-        format!("Take all {changes}")
-    };
 
     rsx! {
         div { class: "mes-screen", "data-testid": "mes-compare",
@@ -122,7 +122,7 @@ pub(super) fn CompareScreen(
                 }
             }
 
-            div { class: "mes-actions",
+            div { class: "mes-footbar",
                 button {
                     r#type: "button",
                     class: "btn primary",
@@ -133,7 +133,7 @@ pub(super) fn CompareScreen(
                             field.apply(fields, &edition);
                         }
                     },
-                    "{take_all_label}"
+                    "Take all"
                 }
                 button {
                     r#type: "button",
@@ -150,9 +150,9 @@ pub(super) fn CompareScreen(
                     onclick: move |_| on_done.call(()),
                     "Done"
                 }
-            }
-            p { class: "mono mes-foot", "data-testid": "mes-staged-hint",
-                "Fields aren't saved until you press Save on the form."
+                p { class: "mono mes-foot", "data-testid": "mes-staged-hint",
+                    "Fields aren't saved until you press Save on the form."
+                }
             }
         }
     }
@@ -181,10 +181,15 @@ fn CompareRow(
     let available = !source_value.trim().is_empty();
     let current = field.current(fields);
     let staged = field.is_staged(fields, &baseline);
+    // Driven by the value, not the field: a description is the usual reason a
+    // row needs the room, but a long title or a long publisher imprint is the
+    // same problem, and neither is worth its own case.
+    let long = current.chars().count() > LONG_VALUE_CHARS
+        || source_value.chars().count() > LONG_VALUE_CHARS;
 
     rsx! {
         div {
-            class: "mes-field",
+            class: if long { "mes-field mes-field-long" } else { "mes-field" },
             "data-testid": "mes-row-{slug}",
             "data-staged": if staged { "true" } else { "false" },
             span { class: "mes-field-label", "{label}" }

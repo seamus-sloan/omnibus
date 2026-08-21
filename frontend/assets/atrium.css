@@ -6650,15 +6650,16 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .mes-panel {
   position: relative;
   width: min(680px, 100%);
-  max-height: calc(100vh - 48px);
+  max-height: calc(100dvh - 48px);
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
+  overflow: hidden auto;
   overscroll-behavior: contain;
+  scrollbar-width: thin;
   background: var(--bg-1);
   border: 1px solid var(--line-2);
   border-radius: 16px;
-  padding: 26px 26px 22px;
+  padding: 26px 26px 0;
   box-shadow: 0 24px 60px color-mix(in oklch, black 55%, transparent);
   animation: mes-panel-in 0.16s ease-out;
 }
@@ -6727,8 +6728,9 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   flex-direction: column;
   gap: 6px;
   max-height: min(52vh, 460px);
-  overflow-y: auto;
+  overflow: hidden auto;
   overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 .mes-row-item { margin: 0; }
 .mes-row {
@@ -6810,11 +6812,18 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
 .mes-cover {
   display: flex;
   flex-direction: column;
+  align-items: center;
+  text-align: center;
   gap: 8px;
   padding-bottom: 14px;
   border-bottom: 1px solid var(--line-2);
 }
-.mes-cover-pair { display: flex; align-items: center; gap: 14px; }
+.mes-cover-pair {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
 .mes-cover-cell { display: flex; }
 .mes-cover-thumb { width: 62px; }
 .mes-cover-img,
@@ -6851,7 +6860,43 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   font-size: 13px;
   overflow-wrap: anywhere;
   max-height: 5.5em;
-  overflow-y: auto;
+  /* Explicitly `hidden` across, not just `auto` down: setting one axis to
+     `auto` computes the other from `visible` to `auto` as well, and the
+     browser then reserves a horizontal scrollbar track under every cell —
+     15px of grey bar under a value that has nothing to scroll. Wrapping is
+     `anywhere`, so there is never anything to scroll sideways to. */
+  overflow: hidden auto;
+  scrollbar-width: thin;
+}
+
+/* A row whose values run long. Two columns of ~200px turn a description into
+   a column of two-word lines behind its own scrollbar, so it takes the
+   panel's full width instead and reads down: yours, the control, theirs. */
+/* Doubled-up selector for specificity, not for style: the phone breakpoint
+   further down re-declares `.mes-field`'s columns, and at equal specificity
+   the later rule would win — so a long row would go back to two narrow
+   columns at exactly the width where it needs the space most. */
+.mes-field.mes-field-long {
+  grid-template-columns: 1fr;
+  grid-template-areas:
+    "label"
+    "mine"
+    "act"
+    "theirs";
+  gap: 8px;
+  padding: 12px 0;
+}
+.mes-field-long .mes-field-label { grid-area: label; padding-top: 0; }
+.mes-field-long .mes-field-mine { grid-area: mine; }
+.mes-field-long .mes-apply { grid-area: act; justify-self: center; }
+.mes-field-long .mes-field-theirs { grid-area: theirs; }
+.mes-field.mes-field-long :is(.mes-field-mine, .mes-field-theirs) {
+  max-height: 12em;
+  padding: 9px 11px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: var(--bg-2);
+  line-height: 1.5;
 }
 .mes-field-mine { color: var(--ink-2); }
 .mes-field-theirs { color: var(--ink-0); }
@@ -6885,8 +6930,27 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
   color: var(--accent);
 }
 
-.mes-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* Pinned to the bottom of the panel: the actions are how you leave this
+   screen, and a long record used to scroll them off the end. The panel is the
+   scroll container, so sticky holds them against its edge while the fields
+   pass underneath. It carries the panel's bottom padding — the panel's own is
+   zero — so nothing shows through beneath it. */
+.mes-footbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: auto;
+  padding: 12px 0 22px;
+  background: var(--bg-1);
+  border-top: 1px solid var(--line-2);
+}
 .mes-done { margin-left: auto; }
+/* Its own line under the buttons, full width. */
+.mes-footbar .mes-foot { flex: 1 0 100%; margin: 0; }
 
 @media (max-width: 640px) {
   .mes-scrim { padding: 0; align-items: stretch; }
@@ -6895,16 +6959,18 @@ h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
     max-height: 100dvh;
     border-radius: 0;
     border: none;
-    padding: 22px 18px calc(18px + env(safe-area-inset-bottom));
+    /* Bottom padding stays zero here for the same reason it is zero on
+       desktop: the action bar is sticky against the panel's *padding* box, so
+       any padding beneath it becomes a strip the rows scroll through under
+       the buttons. The bar carries the inset instead. */
+    padding: 22px 18px 0;
   }
+  .mes-footbar { padding-bottom: calc(22px + env(safe-area-inset-bottom)); }
   /* The panel is already full-height here and scrolls itself, so the desktop
      cap would only strand the list above a screenful of empty card. */
   .mes-list { max-height: none; overflow-y: visible; }
   .mes-field { grid-template-columns: 1fr 30px 1fr; }
   .mes-field-label { grid-column: 1 / -1; padding-top: 0; }
-  /* Two columns of metadata in ~170px each is unreadable; stack them and let
-     the arrow sit between, so the row still reads yours-then-theirs. */
-  .mes-cover-pair { justify-content: flex-start; }
 }
 
 .bd-suggest-connect { display: flex; align-items: center; justify-content: space-between;
