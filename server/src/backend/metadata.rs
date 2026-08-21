@@ -62,8 +62,39 @@ pub(super) async fn post_edition_search(
         Ok(c) => c,
         Err(e) => return internal("edition_search_provider_keys", e),
     };
-    let found = db::search_all_providers(&config, req.query.trim(), req.providers.as_deref()).await;
+    let found =
+        db::search_all_providers(&config, &search_query(&req), req.providers.as_deref()).await;
     Json(found).into_response()
+}
+
+/// Turn a request into the query the providers are actually asked.
+///
+/// The structured fields win when the caller sent them; free text falls back
+/// to a title-only query, which is the only honest reading of a string a
+/// reader typed. Mirrors `omnibus_frontend::rpc::metadata_search`'s own
+/// helper — the two front doors must agree on what a request means.
+fn search_query(req: &EditionSearchRequest) -> db::SearchQuery {
+    // Built first, then checked for content — the structured fields are
+    // *cleaned* (blanks trimmed to absent, an unusable ISBN discarded), so
+    // branching on `is_some()` alone would let `{"query":"Dune","title":"  "}`
+    // throw the reader's query away and search for nothing.
+    let structured = db::SearchQuery::new(
+        req.title.as_deref(),
+        req.author.as_deref(),
+        req.isbn.as_deref(),
+    );
+    if structured.is_empty() {
+        return db::SearchQuery::from_text(&req.query);
+    }
+    // An ISBN or an author with no title still needs something to rank
+    // against, and the free text is what the reader actually sees in the box.
+    db::SearchQuery {
+        title: structured
+            .title
+            .clone()
+            .or_else(|| db::SearchQuery::from_text(&req.query).title),
+        ..structured
+    }
 }
 
 #[cfg(test)]

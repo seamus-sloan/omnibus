@@ -12,7 +12,9 @@
 //! paint agree, and the reveal happens once, after hydration.
 
 use dioxus::prelude::*;
-use omnibus_shared::metadata_lookup::{ProviderEdition, ProviderSearchSource};
+use omnibus_shared::metadata_lookup::{
+    EditionSearchRequest, ProviderEdition, ProviderSearchSource,
+};
 use omnibus_shared::EbookMetadata;
 
 use super::form_grid::FormFields;
@@ -65,6 +67,52 @@ pub(super) struct PickerState {
     /// lands the compare screen is showing the thinner search hit, so nothing
     /// on it may be applied.
     pub(super) hydrating: Signal<bool>,
+    /// The book's own title, author, and ISBN, captured when the overlay
+    /// opened.
+    ///
+    /// Kept so an untouched query box can be sent as three fields rather than
+    /// one phrase. The box shows the composed text either way — this is not a
+    /// second UI, it is the structure behind the one that is already there.
+    pub(super) seed: Signal<Seed>,
+}
+
+/// What the book itself says, for seeding a search.
+#[derive(Clone, Default, PartialEq)]
+pub(super) struct Seed {
+    /// Absent when the book has no title yet — which must not be sent as a
+    /// blank one, since the server would then have a structured query with
+    /// nothing in it.
+    pub(super) title: Option<String>,
+    pub(super) author: Option<String>,
+    pub(super) isbn13: Option<String>,
+}
+
+impl Seed {
+    /// The text the query box is prefilled with.
+    fn composed(&self) -> String {
+        compose_query(
+            self.title.as_deref().unwrap_or_default(),
+            self.author.as_deref(),
+        )
+    }
+
+    /// The request for `text`.
+    ///
+    /// The structured fields are sent only while the box still holds exactly
+    /// what we put in it. The moment a reader edits it they are asking for
+    /// something specific, and free text cannot honestly be split back into a
+    /// title and an author — guessing a split would silently search for
+    /// something they did not type.
+    fn request(&self, text: &str) -> EditionSearchRequest {
+        let untouched = text.trim() == self.composed().trim();
+        EditionSearchRequest {
+            query: text.to_string(),
+            title: untouched.then(|| self.title.clone()).flatten(),
+            author: untouched.then(|| self.author.clone()).flatten(),
+            isbn: untouched.then(|| self.isbn13.clone()).flatten(),
+            providers: None,
+        }
+    }
 }
 
 impl PartialEq for PickerState {
@@ -83,13 +131,20 @@ fn field_slug(label: &str) -> String {
         .collect()
 }
 
-/// The search a freshly-opened overlay runs: the book's own title and primary
-/// author, which is the query the reader wanted in the overwhelmingly common
+/// What a freshly-opened overlay searches with: the book's own title, primary
+/// author, and ISBN — the query the reader wanted in the overwhelmingly common
 /// case.
-fn seed_query(fields: FormFields) -> String {
-    let title = fields.title.peek().clone();
-    let author = fields.authors.peek().first().cloned();
-    compose_query(&title, author.as_deref())
+///
+/// The ISBN is read from the form for the same reason the author is. It was
+/// sitting in a field the whole time, it is the strongest signal any provider
+/// accepts, and the flattened query threw it away.
+fn seed_from(fields: FormFields) -> Seed {
+    let blank = |v: String| Some(v.trim().to_string()).filter(|v| !v.is_empty());
+    Seed {
+        title: blank(fields.title.peek().clone()),
+        author: fields.authors.peek().first().cloned().and_then(blank),
+        isbn13: blank(fields.isbn13.peek().clone()),
+    }
 }
 
 /// The seeded query itself, split from the signal reads so the rule it
@@ -176,12 +231,14 @@ fn SearchOverlay(
     on_close: EventHandler<()>,
 ) -> Element {
     let server_url = use_server_url();
+    let seed = seed_from(fields);
     let state = PickerState {
         stage: use_signal(|| Stage::Searching),
-        query: use_signal(|| seed_query(fields)),
+        query: use_signal(|| seed.composed()),
         editions: use_signal(Vec::new),
         sources: use_signal(Vec::new),
         hydrating: use_signal(|| false),
+        seed: use_signal(|| seed.clone()),
     };
     let run_search = search_handler(state, server_url.clone());
     let on_select = select_handler(state, server_url);
@@ -244,16 +301,18 @@ fn search_handler(state: PickerState, server_url: String) -> EventHandler<()> {
     let mut editions = state.editions;
     let mut sources = state.sources;
     let query = state.query;
+    let seed = state.seed;
     EventHandler::new(move |()| {
         let q = query.peek().trim().to_string();
         if q.is_empty() {
             stage.set(Stage::Results);
             return;
         }
+        let req = seed.peek().request(&q);
         let url = server_url.clone();
         stage.set(Stage::Searching);
         spawn(async move {
-            match data::search_editions(&url, &q).await {
+            match data::search_editions(&url, req).await {
                 Ok(found) => {
                     editions.set(candidates::in_stable_order(found.editions, &q));
                     sources.set(found.sources);
@@ -279,9 +338,13 @@ fn select_handler(state: PickerState, server_url: String) -> EventHandler<Provid
         hydrating.set(true);
         let url = server_url.clone();
         spawn(async move {
-            let fetched =
-                data::hydrate_edition(&url, edition.source, &edition.provider_ref, &edition.isbn13)
-                    .await;
+            let fetched = data::hydrate_edition(
+                &url,
+                edition.source,
+                &edition.provider_ref,
+                edition.isbn13.as_deref(),
+            )
+            .await;
             // A slow hydrate must not overwrite a candidate the reader has
             // since replaced, or reappear after they went back to the list.
             let showing_ours = matches!(

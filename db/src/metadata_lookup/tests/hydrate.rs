@@ -39,7 +39,7 @@ async fn hydrate_edition_fills_open_librarys_description_from_the_selected_recor
         &config_for(&server),
         MetadataProvider::OpenLibrary,
         WORK_KEY,
-        ISBN13,
+        Some(ISBN13),
     )
     .await
     .unwrap()
@@ -66,7 +66,7 @@ async fn hydrate_edition_reads_open_librarys_bare_string_description_form() {
         &config_for(&server),
         MetadataProvider::OpenLibrary,
         WORK_KEY,
-        ISBN13,
+        Some(ISBN13),
     )
     .await
     .unwrap()
@@ -96,7 +96,7 @@ async fn hydrate_edition_skips_the_record_fetch_for_a_ref_that_is_not_a_record_p
         &config_for(&server),
         MetadataProvider::OpenLibrary,
         &format!("isbn:{ISBN13}"),
-        ISBN13,
+        Some(ISBN13),
     )
     .await
     .unwrap()
@@ -124,7 +124,7 @@ async fn hydrate_edition_never_fetches_a_record_for_a_ref_that_would_rewrite_the
             &config_for(&server),
             MetadataProvider::OpenLibrary,
             hostile,
-            ISBN13,
+            Some(ISBN13),
         )
         .await
         .unwrap()
@@ -154,7 +154,7 @@ async fn hydrate_edition_returns_the_providers_own_record_for_google_books() {
         &config_for(&server),
         MetadataProvider::GoogleBooks,
         "gb-volume-1",
-        ISBN13,
+        Some(ISBN13),
     )
     .await
     .unwrap()
@@ -177,7 +177,7 @@ async fn hydrate_edition_is_none_when_the_provider_no_longer_knows_the_isbn() {
         &config_for(&server),
         MetadataProvider::OpenLibrary,
         WORK_KEY,
-        ISBN13,
+        Some(ISBN13),
     )
     .await
     .unwrap();
@@ -185,17 +185,59 @@ async fn hydrate_edition_is_none_when_the_provider_no_longer_knows_the_isbn() {
 }
 
 #[tokio::test]
-async fn hydrate_edition_rejects_a_malformed_isbn_before_asking_any_provider() {
+async fn hydrate_edition_falls_back_to_the_handle_when_the_isbn_is_malformed() {
+    // A bad ISBN is a bad *hint*, not a bad request: the handle is what
+    // identifies the candidate, so the re-fetch goes ahead by record key
+    // rather than stranding a row the reader can see on screen.
     let server = MockServer::start().await;
-    let err = hydrate_edition(
+    Mock::given(method("GET"))
+        .and(path(format!("{WORK_KEY}.json")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "title": "Effective Java",
+            "description": "From the work record.",
+        })))
+        .mount(&server)
+        .await;
+
+    let hydrated = hydrate_edition(
         &config_for(&server),
         MetadataProvider::OpenLibrary,
         WORK_KEY,
-        "not-an-isbn",
+        Some("not-an-isbn"),
     )
     .await
-    .expect_err("a malformed ISBN is an input error, not a miss");
-    assert!(matches!(err, MetadataLookupError::Isbn(_)));
+    .expect("a malformed hint must not fail the re-fetch")
+    .expect("the work record answers");
+    assert_eq!(hydrated.title, "Effective Java");
+    assert_eq!(hydrated.isbn13, None);
+}
+
+#[tokio::test]
+async fn hydrate_edition_re_fetches_by_handle_for_a_candidate_with_no_isbn() {
+    // The routine case now: a Hardcover search document describes a work whose
+    // `isbns` span every edition, so the candidate carries none at all.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path(format!("{WORK_KEY}.json")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "title": "Effective Java",
+            "subjects": ["Java (Computer program language)"],
+        })))
+        .mount(&server)
+        .await;
+
+    let hydrated = hydrate_edition(
+        &config_for(&server),
+        MetadataProvider::OpenLibrary,
+        WORK_KEY,
+        None,
+    )
+    .await
+    .expect("the handle is enough")
+    .expect("the work record answers");
+    assert_eq!(hydrated.title, "Effective Java");
+    assert_eq!(hydrated.provider_ref, WORK_KEY);
+    assert_eq!(hydrated.genres, vec!["Java (Computer program language)"]);
 }
 
 #[tokio::test]
@@ -211,7 +253,7 @@ async fn hydrate_edition_surfaces_a_provider_failure_rather_than_reporting_a_mis
         &config_for(&server),
         MetadataProvider::OpenLibrary,
         WORK_KEY,
-        ISBN13,
+        Some(ISBN13),
     )
     .await
     .expect_err("a 500 from the provider is not the same as an unknown ISBN");

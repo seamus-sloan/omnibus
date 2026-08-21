@@ -15,9 +15,12 @@ use super::EMPTY;
 /// whatever it felt like, which for a well-known title is reliably four study
 /// guides above the novel.
 ///
-/// So: candidates whose title accounts for every word of the query first,
-/// shortest title first within that, then the edition's own fields to finish
-/// the key. Nothing here reads *who* answered until the final tiebreak, so a
+/// The **server's relevance score leads**, when it sent one: it is computed
+/// from the candidate and the query alone — never from which provider answered
+/// — so it has the property this ordering has always needed. The
+/// word-coverage key below it is retained as the tiebreak, and as the whole
+/// order for a response that carries no scores (an older server, or a test
+/// fixture). Nothing here reads *who* answered until the final tiebreak, so a
 /// provider dropping out removes its rows and moves nothing else — and
 /// nothing is merged or discarded.
 pub(super) fn in_stable_order(
@@ -28,6 +31,12 @@ pub(super) fn in_stable_order(
     editions.sort_by_cached_key(|e| {
         let title = e.title.trim().to_lowercase();
         (
+            // Negated so the *highest* score sorts first. A candidate with no
+            // score sorts below every scored one rather than above them,
+            // which `Option`'s own ordering would do. Saturating because this
+            // value came off the wire: a plain `-r` on `i32::MIN` panics in a
+            // debug build, and no score is worth taking the whole page down.
+            e.relevance.map(|r| r.saturating_neg()).unwrap_or(i32::MAX),
             // `false` sorts first, so this reads "not a full match" — the
             // rows that account for the whole query lead.
             !covers_every_word(&haystack(e), &words),
@@ -35,7 +44,9 @@ pub(super) fn in_stable_order(
             // "A Study Guide for …".
             title.chars().count(),
             title.clone(),
-            e.isbn13.clone(),
+            // A candidate with no ISBN is not "lower" than one with — the
+            // empty string just gives the key a stable value to compare.
+            e.isbn13.clone().unwrap_or_default(),
             provider_slug(e.source),
             e.provider_ref.clone(),
         )
@@ -104,6 +115,12 @@ fn authors_line(edition: &ProviderEdition) -> String {
 
 /// The row's third line: year, publisher, ISBN — with the parts the provider
 /// left empty dropped rather than rendered as gaps.
+///
+/// All three can be absent at once. A Hardcover search hit describes a *work*,
+/// so it names no printing, no publisher, and no edition ISBN; the row is
+/// still worth showing (its title, authors, and cover are exactly what the
+/// reader is choosing between) and hydrate-on-select fills the rest in. An em
+/// dash keeps the row three lines tall rather than letting it jump.
 fn imprint_line(edition: &ProviderEdition) -> String {
     let mut parts: Vec<String> = Vec::new();
     if let Some(year) = edition.year.as_deref().filter(|v| !v.trim().is_empty()) {
@@ -116,7 +133,12 @@ fn imprint_line(edition: &ProviderEdition) -> String {
     {
         parts.push(publisher.to_string());
     }
-    parts.push(edition.isbn13.clone());
+    if let Some(isbn13) = edition.isbn13.as_deref().filter(|v| !v.trim().is_empty()) {
+        parts.push(isbn13.to_string());
+    }
+    if parts.is_empty() {
+        return EMPTY.to_string();
+    }
     parts.join(" \u{b7} ")
 }
 
@@ -185,7 +207,7 @@ mod tests {
         ProviderEdition {
             source,
             provider_ref: format!("{source:?}-{isbn13}"),
-            isbn13: isbn13.into(),
+            isbn13: Some(isbn13.into()),
             isbn10: None,
             title: title.into(),
             authors: vec!["Joshua Bloch".into()],
@@ -198,6 +220,7 @@ mod tests {
             series_index: None,
             first_publish_year: None,
             genres: Vec::new(),
+            relevance: None,
         }
     }
 
@@ -394,6 +417,72 @@ mod tests {
         // The ISBN is never dropped — it is the one field every candidate is
         // required to carry.
         assert_eq!(imprint_line(&e), "9780134685991");
+    }
+
+    #[test]
+    fn in_stable_order_leads_with_the_servers_relevance_score() {
+        // The score is derived from the candidate and the query alone, so it
+        // is safe to lead with: a provider dropping out removes its rows and
+        // reorders nothing.
+        let mut weak = edition("Dune", "9780000000001", MetadataProvider::OpenLibrary);
+        weak.relevance = Some(320);
+        let mut strong = edition(
+            "A Study Guide",
+            "9780000000002",
+            MetadataProvider::GoogleBooks,
+        );
+        strong.relevance = Some(1000);
+
+        let ordered = in_stable_order(vec![weak, strong], "dune");
+        assert_eq!(
+            ordered[0].relevance,
+            Some(1000),
+            "the higher score must lead even against a better word-coverage match"
+        );
+    }
+
+    #[test]
+    fn in_stable_order_sorts_an_unscored_candidate_below_every_scored_one() {
+        let unscored = edition("Dune", "9780000000001", MetadataProvider::OpenLibrary);
+        let mut scored = edition(
+            "Dune Messiah",
+            "9780000000002",
+            MetadataProvider::GoogleBooks,
+        );
+        scored.relevance = Some(100);
+
+        let ordered = in_stable_order(vec![unscored, scored], "dune");
+        assert_eq!(ordered[0].relevance, Some(100));
+        assert_eq!(ordered[1].relevance, None);
+    }
+
+    #[test]
+    fn in_stable_order_keeps_the_word_coverage_key_when_nothing_is_scored() {
+        // An older server, or a hand-written fixture, sends no scores at all —
+        // the ordering must still be the deterministic one it always was.
+        let ordered = in_stable_order(
+            vec![
+                edition(
+                    "A Study Guide for Dune",
+                    "9780000000001",
+                    MetadataProvider::OpenLibrary,
+                ),
+                edition("Dune", "9780000000002", MetadataProvider::GoogleBooks),
+            ],
+            "dune",
+        );
+        assert_eq!(ordered[0].title, "Dune");
+    }
+
+    #[test]
+    fn imprint_line_falls_back_to_an_em_dash_when_the_candidate_names_no_printing() {
+        // A Hardcover search hit describes a work: no year, no publisher, and
+        // no edition ISBN. The row is still worth showing.
+        let mut e = edition("Dune", "9780134685991", MetadataProvider::Hardcover);
+        e.year = None;
+        e.publisher = None;
+        e.isbn13 = None;
+        assert_eq!(imprint_line(&e), EMPTY);
     }
 
     #[test]

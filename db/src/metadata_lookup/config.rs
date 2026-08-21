@@ -60,6 +60,14 @@ pub struct MetadataLookupConfig {
     pub hardcover_base: String,
     /// Never logged; see `providers::http::strip_url`.
     pub keys: ProviderKeys,
+    /// Which providers are currently in a rate-limit cooldown.
+    ///
+    /// Carried on the config rather than on the server's `AppState` because
+    /// the two halves of this feature build their configs independently — the
+    /// REST handler from `AppState`, the web server function from a bare pool
+    /// — and neither can see the other's router state. A tracker hung off the
+    /// router would quietly exempt every web request from throttling.
+    pub throttle: super::throttle::ThrottleTracker,
     /// Per-request timeout applied to each provider HTTP call.
     pub timeout: Duration,
 }
@@ -74,6 +82,9 @@ impl MetadataLookupConfig {
             googlebooks_base: "https://www.googleapis.com".to_string(),
             hardcover_base: "https://api.hardcover.app/v1/graphql".to_string(),
             keys,
+            // The process-wide tracker: a cooldown learned while serving one
+            // request has to be known to the next, which is the entire point.
+            throttle: super::throttle::ThrottleTracker::shared(),
             timeout: LOOKUP_TIMEOUT,
         }
     }

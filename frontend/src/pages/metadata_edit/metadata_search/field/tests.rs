@@ -16,7 +16,7 @@ fn full_edition() -> ProviderEdition {
     ProviderEdition {
         source: MetadataProvider::GoogleBooks,
         provider_ref: "gb-1".into(),
-        isbn13: "9780134685991".into(),
+        isbn13: Some("9780134685991".into()),
         isbn10: Some("0134685997".into()),
         title: "Effective Java".into(),
         authors: vec!["Joshua Bloch".into()],
@@ -29,6 +29,7 @@ fn full_edition() -> ProviderEdition {
         series_index: Some("3".into()),
         first_publish_year: Some(2001),
         genres: vec!["Computers".into(), "Java".into()],
+        relevance: None,
     }
 }
 

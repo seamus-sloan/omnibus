@@ -116,7 +116,7 @@ impl MetadataField {
             MetadataField::Published => text(&edition.year),
             MetadataField::Series => text(&edition.series),
             MetadataField::SeriesIndex => text(&edition.series_index),
-            MetadataField::Isbn13 => edition.isbn13.trim().to_string(),
+            MetadataField::Isbn13 => text(&edition.isbn13),
             MetadataField::Isbn10 => text(&edition.isbn10),
             // A provider reporting 0 pages is normalized to `None` upstream,
             // so anything here is a real count.

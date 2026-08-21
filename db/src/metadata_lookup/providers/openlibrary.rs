@@ -9,8 +9,11 @@ use omnibus_shared::isbn::normalize_isbn;
 use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider, ProviderEdition};
 use serde::Deserialize;
 
+use super::super::query::SearchQuery;
 use super::super::{MetadataLookupConfig, SEARCH_LIMIT};
-use super::http::{base_url, client, get_json_best_effort, paired_isbn10, sanitize_genres};
+use super::http::{
+    base_url, client, get_json_best_effort, paired_isbn10, publication_year, sanitize_genres,
+};
 
 /// The `jscmd=data` response is a map keyed `"ISBN:<isbn>"`; a missing key means
 /// the ISBN isn't known.
@@ -103,8 +106,10 @@ pub async fn by_isbn(
 
     Ok(Some(ProviderEdition {
         source: MetadataProvider::OpenLibrary,
-        provider_ref: provider_ref(book.key, isbn13),
-        isbn13: isbn13.to_string(),
+        // The ISBN path always has an ISBN, so the handle always resolves.
+        provider_ref: provider_ref(book.key, Some(isbn13))
+            .unwrap_or_else(|| format!("isbn:{isbn13}")),
+        isbn13: Some(isbn13.to_string()),
         isbn10: paired_isbn10(&book.identifiers.isbn_10, isbn13),
         title,
         authors: book.authors.into_iter().filter_map(|a| a.name).collect(),
@@ -120,15 +125,17 @@ pub async fn by_isbn(
         series_index: None,
         first_publish_year: None,
         genres: sanitize_genres(book.subjects.into_iter().flat_map(|s| s.name)),
+        relevance: None,
     }))
 }
 
 /// The provider handle for one candidate: Open Library's own record key when
 /// the row carries one, else the uniform `isbn:` fallback every provider
-/// shares.
-fn provider_ref(key: Option<String>, isbn13: &str) -> String {
+/// shares. `None` when the row has neither, which leaves nothing to re-fetch
+/// the candidate by and so nothing worth showing.
+fn provider_ref(key: Option<String>, isbn13: Option<&str>) -> Option<String> {
     key.filter(|k| !k.trim().is_empty())
-        .unwrap_or_else(|| format!("isbn:{isbn13}"))
+        .or_else(|| isbn13.map(|isbn| format!("isbn:{isbn}")))
 }
 
 // ── Title search ─────────────────────────────────────────────────
@@ -167,13 +174,30 @@ struct OlSearchDoc {
 
 /// Build the title-search URL. The query is user text, so it goes through
 /// `Url`'s percent-encoding rather than string interpolation.
+/// Build the search URL for a structured query.
+///
+/// `title` and `author` are **separate parameters**, which is the whole point:
+/// Open Library matches `title=` against the title field alone, so handing it
+/// "Dune Frank Herbert" asks for a book whose *title* contains the author's
+/// name — and duly returns "The secrets of Frank Herbert's Dune" and four
+/// more books about the novel, with the novel itself nowhere in the page.
 pub(in crate::metadata_lookup) fn search_url(
     config: &MetadataLookupConfig,
-    query: &str,
+    query: &SearchQuery,
 ) -> anyhow::Result<String> {
     let mut url = base_url(&config.openlibrary_base, "/search.json", "open library")?;
+    // An ISBN identifies the edition outright, so it is asked on its own —
+    // pairing it with a title can only narrow an already-exact answer.
+    if let Some(isbn13) = query.isbn13.as_deref() {
+        url.query_pairs_mut().append_pair("isbn", isbn13);
+    } else {
+        url.query_pairs_mut()
+            .append_pair("title", query.title.as_deref().unwrap_or_default());
+        if let Some(author) = query.author.as_deref() {
+            url.query_pairs_mut().append_pair("author", author);
+        }
+    }
     url.query_pairs_mut()
-        .append_pair("title", query)
         .append_pair(
             "fields",
             "key,title,author_name,first_publish_year,isbn,cover_i,number_of_pages_median,subject",
@@ -182,11 +206,10 @@ pub(in crate::metadata_lookup) fn search_url(
     Ok(url.into())
 }
 
-/// Search by title text. `Ok(empty)` on no matches; `Err` on transport/parse
-/// failure.
-pub async fn by_title(
+/// Search. `Ok(empty)` on no matches; `Err` on transport/parse failure.
+pub async fn search(
     config: &MetadataLookupConfig,
-    query: &str,
+    query: &SearchQuery,
 ) -> anyhow::Result<Vec<ProviderEdition>> {
     let url = search_url(config, query)?;
     let resp = client()?
@@ -204,20 +227,26 @@ pub async fn by_title(
     Ok(body.docs.into_iter().filter_map(map_search_doc).collect())
 }
 
-/// Map one search doc into `ProviderEdition`. A doc without a title or a
-/// valid ISBN maps to `None` — the whole check-in flow keys on the ISBN
-/// downstream (stored per copy, printed on the confirm screens), so a
-/// candidate that can't supply one isn't actionable.
+/// Map one search doc into `ProviderEdition`. A doc without a title, or with
+/// no handle to re-fetch it by, maps to `None`.
+///
+/// An ISBN is **not** required. `search.json` answers with *works*, and a work
+/// that predates the ISBN — or whose editions Open Library has not catalogued
+/// with one — is still a book a reader is editing; requiring one here dropped
+/// those rows silently. What is required is the work key, which is what the
+/// hydrate step re-asks by.
 fn map_search_doc(doc: OlSearchDoc) -> Option<ProviderEdition> {
     let title = doc.title.filter(|t| !t.trim().is_empty())?;
-    let isbn13 = doc.isbn.iter().find_map(|v| normalize_isbn(v).ok())?;
+    let isbn13 = doc.isbn.iter().find_map(|v| normalize_isbn(v).ok());
     // `search.json` answers *works*: one `isbn` list spans every edition, so
     // only the entry that re-derives the ISBN-13 above is known to name the
     // same printing.
-    let isbn10 = paired_isbn10(&doc.isbn, &isbn13);
+    let isbn10 = isbn13
+        .as_deref()
+        .and_then(|i13| paired_isbn10(&doc.isbn, i13));
     Some(ProviderEdition {
         source: MetadataProvider::OpenLibrary,
-        provider_ref: provider_ref(doc.key, &isbn13),
+        provider_ref: provider_ref(doc.key, isbn13.as_deref())?,
         isbn13,
         isbn10,
         title,
@@ -235,6 +264,7 @@ fn map_search_doc(doc: OlSearchDoc) -> Option<ProviderEdition> {
         series_index: None,
         first_publish_year: doc.first_publish_year,
         genres: sanitize_genres(doc.subject),
+        relevance: None,
     })
 }
 
@@ -343,6 +373,22 @@ struct OlRecord {
     description: Option<OlDescription>,
 }
 
+/// An Open Library work record, as `by_ref` reads it. Authors are absent by
+/// design — the record carries only `/authors/OL…A` references.
+#[derive(Debug, Deserialize)]
+struct OlWork {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    description: Option<OlDescription>,
+    #[serde(default)]
+    subjects: Vec<String>,
+    #[serde(default)]
+    covers: Vec<i64>,
+    #[serde(default)]
+    first_publish_date: Option<String>,
+}
+
 /// Whether `key` is shaped like an Open Library record path this crate is
 /// willing to address.
 ///
@@ -358,6 +404,68 @@ fn is_record_key(key: &str) -> bool {
         && key
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-'))
+}
+
+/// Re-fetch one candidate by its Open Library record key.
+///
+/// The hydrate path for a candidate with no ISBN. `Ok(None)` when the key
+/// isn't a record path this crate will address (see [`is_record_key`], which
+/// is the SSRF guard — the key is a claim from the client, not a fact) or the
+/// record has no title.
+///
+/// A work record carries no authors, only author *references*, and resolving
+/// those would be one extra request each for a field the search hit already
+/// has — so they are left empty and `fill_missing_from` restores them.
+pub async fn by_ref(
+    config: &MetadataLookupConfig,
+    key: &str,
+) -> anyhow::Result<Option<ProviderEdition>> {
+    if !is_record_key(key) {
+        return Ok(None);
+    }
+    let url = base_url(
+        &config.openlibrary_base,
+        &format!("{key}.json"),
+        "open library",
+    )?;
+    let Some(record) = get_json_best_effort::<OlWork>(config, url.as_str()).await else {
+        return Ok(None);
+    };
+    let Some(title) = record.title.filter(|t| !t.trim().is_empty()) else {
+        return Ok(None);
+    };
+    Ok(Some(ProviderEdition {
+        source: MetadataProvider::OpenLibrary,
+        provider_ref: key.to_string(),
+        isbn13: None,
+        isbn10: None,
+        title,
+        authors: Vec::new(),
+        year: None,
+        pages: None,
+        publisher: None,
+        description: record
+            .description
+            .map(OlDescription::into_text)
+            .map(|d| d.trim().to_string())
+            .filter(|d| {
+                !d.is_empty() && d.chars().count() <= ExternalBookMeta::DESCRIPTION_MAX_LEN
+            }),
+        cover_url: record
+            .covers
+            .into_iter()
+            .find(|id| *id > 0)
+            .map(|id| format!("https://covers.openlibrary.org/b/id/{id}-L.jpg")),
+        series: None,
+        series_index: None,
+        first_publish_year: record
+            .first_publish_date
+            .as_deref()
+            .and_then(publication_year)
+            .and_then(|y| y.parse().ok()),
+        genres: sanitize_genres(record.subjects),
+        relevance: None,
+    }))
 }
 
 /// The description behind one selected candidate, fetched best-effort from

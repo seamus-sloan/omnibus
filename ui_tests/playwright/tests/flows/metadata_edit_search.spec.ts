@@ -417,6 +417,70 @@ test.describe
       await expect(failed).toHaveAttribute("title", "request timed out");
     });
 
+    test("reports a rate-limited provider as a wait, not a failure", async ({
+      page,
+      request,
+    }) => {
+      const uuid = await fetchBookIdByTitle(request, TARGET.title);
+      await mockProviders(page, ALL_CONFIGURED);
+      await mockHydrate(page);
+      await mockSearch(page, {
+        editions: [OL_CANDIDATE],
+        sources: [
+          SOURCES[0],
+          SOURCES[1],
+          {
+            provider: "hardcover",
+            display_name: "Hardcover",
+            // Nothing is broken: this source asked us to come back later, and
+            // we did not spend a request finding that out again.
+            status: { kind: "throttled", retry_after_secs: 600 },
+          },
+        ],
+      });
+      await openPicker(page, uuid);
+
+      const throttled = page.getByTestId("mes-source-hardcover");
+      await expect(throttled).toHaveText(
+        "Hardcover rate limited, retry in 10m",
+      );
+      await expect(throttled).toHaveAttribute(
+        "title",
+        /rate-limited us recently/,
+      );
+    });
+
+    test("renders a candidate that names no printing without collapsing its row", async ({
+      page,
+      request,
+    }) => {
+      // A work-level search hit — Hardcover's `search` endpoint answers with
+      // these — has no year, no publisher, and no edition ISBN. It is still a
+      // candidate, and its row still has three lines.
+      const uuid = await fetchBookIdByTitle(request, TARGET.title);
+      await mockProviders(page, ALL_CONFIGURED);
+      await mockHydrate(page);
+      await mockSearch(page, {
+        editions: [
+          {
+            ...OL_CANDIDATE,
+            isbn13: null,
+            year: null,
+            publisher: null,
+          },
+        ],
+        sources: SOURCES,
+      });
+      await openPicker(page, uuid);
+
+      await expect(page.getByTestId("mes-candidate-0-title")).toHaveText(
+        OL_CANDIDATE.title,
+      );
+      await expect(page.getByTestId("mes-candidate-0-imprint")).toHaveText(
+        "\u2014",
+      );
+    });
+
     test("reports a provider this instance has no key for as not set up", async ({
       page,
       request,

@@ -11,7 +11,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::super::providers::catalog;
 use super::super::*;
-use super::{all_keyed_config_for, GB_PATH, HC_PATH, ISBN13, OL_SEARCH_PATH, QUERY};
+use super::{all_keyed_config_for, title_query, GB_PATH, HC_PATH, ISBN13, OL_SEARCH_PATH, QUERY};
 
 /// Every provider answering with a genre list, so "the flag says yes" can be
 /// held against "and here it is".
@@ -38,12 +38,14 @@ async fn mount_genre_bearing(server: &MockServer) {
         (
             "POST",
             HC_PATH,
-            json!({ "data": { "books": [{
-                "id": 42,
+            // The fan-out reaches Hardcover through its `search` endpoint, so
+            // the genre-bearing shape here is the hit document's `genres`
+            // array, not a `books` row's `cached_tags` bucket.
+            json!({ "data": { "search": { "results": { "hits": [{ "document": {
+                "id": "42",
                 "title": "Effective Java",
-                "cached_tags": { "Genre": [{ "tag": "Programming" }] },
-                "editions": [{ "isbn_13": ISBN13 }],
-            }]}}),
+                "genres": ["Programming"],
+            }}]}}}}),
         ),
     ];
     for (verb, at, body) in bodies {
@@ -61,7 +63,7 @@ async fn every_provider_carrying_genres_actually_returns_them() {
     mount_genre_bearing(&server).await;
     let config = all_keyed_config_for(&server);
 
-    let response = search_all_providers(&config, QUERY, None).await;
+    let response = search_all_providers(&config, &title_query(QUERY), None).await;
     for info in catalog(&config) {
         let returned_genres = response
             .editions
@@ -106,8 +108,12 @@ async fn a_provider_with_no_genres_for_a_book_still_advertises_the_capability() 
         .await;
     let config = all_keyed_config_for(&server);
 
-    let response =
-        search_all_providers(&config, QUERY, Some(&[MetadataProvider::OpenLibrary])).await;
+    let response = search_all_providers(
+        &config,
+        &title_query(QUERY),
+        Some(&[MetadataProvider::OpenLibrary]),
+    )
+    .await;
     assert!(response.editions.iter().all(|e| e.genres.is_empty()));
     let info = catalog(&config)
         .into_iter()

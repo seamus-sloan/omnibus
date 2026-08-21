@@ -44,6 +44,30 @@ recent releases are recorded below; everything earlier is available via the
 
 ### Changed
 
+- **Fetch metadata now asks each source in its own terms.** The search used to
+  flatten the book's title and author into one phrase and hand that to every
+  provider, which meant Open Library searched the author's name *inside the
+  title field* — asking for "Dune Frank Herbert" returned five books written
+  **about** Dune and not the novel — and Hardcover, whose title filter is
+  exact-match only, matched nothing at all for any book that has an author.
+  Title, author, and the ISBN already sitting in the edit form now travel
+  separately, Hardcover goes through its own full-text search endpoint, and an
+  ISBN routes every source straight to the exact edition
+- **Results are filtered, not just ordered.** Study guides, summaries, and
+  "analysis of" editions are dropped rather than ranked below the book, a
+  mistyped title still finds its match, and coincidental matches no longer
+  fill the list. Each candidate is scored from the candidate and your query
+  alone — never from which source answered — so a source being slow or
+  unreachable removes its rows and reorders nothing else
+- **Editions without an ISBN now show up.** A source that describes a *work*
+  rather than one printing — which is most of what Hardcover's search returns,
+  and how Open Library files older or uncatalogued books — used to have its
+  candidates discarded silently, with nothing on screen to say so. They are
+  listed now, and selecting one still fetches its full record
+- **A source that rate-limits us is left alone until it recovers.** Its row
+  says "rate limited, retry in 10m" rather than "unavailable", and the search
+  no longer spends a request re-asking a source that has already refused —
+  which on Google Books' free tier could otherwise keep failing for hours
 - The metadata edit page now has one fetch-from-outside action instead of
   three: "Fetch metadata" replaces both the "Fetch from Hardcover" panel
   (one provider, one field at a time) and that page's "Fetch Summary" button

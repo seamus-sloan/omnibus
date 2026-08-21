@@ -30,6 +30,22 @@ fn status_text(status: &ProviderSearchStatus) -> (String, bool) {
         ProviderSearchStatus::Answered { count } => (count.to_string(), false),
         ProviderSearchStatus::NotConfigured => ("not set up".to_string(), false),
         ProviderSearchStatus::Failed { .. } => ("unavailable".to_string(), true),
+        // Worded as a wait rather than a failure, because it is one: nothing
+        // is broken, this source asked us to come back later and we did not
+        // spend a request finding that out again.
+        ProviderSearchStatus::Throttled { retry_after_secs } => (
+            format!("rate limited, retry in {}", human_wait(*retry_after_secs)),
+            true,
+        ),
+    }
+}
+
+/// A cooldown as a reader would say it. Rounded up, and never "0s" — the
+/// point of the number is roughly when to try again, not its precision.
+fn human_wait(secs: u64) -> String {
+    match secs {
+        0..=90 => format!("{}s", secs.max(1)),
+        _ => format!("{}m", secs.div_ceil(60)),
     }
 }
 
@@ -57,6 +73,10 @@ fn SourceItem(source: ProviderSearchSource) -> Element {
     let (text, is_problem) = status_text(&source.status);
     let detail = match &source.status {
         ProviderSearchStatus::Failed { message } => message.clone(),
+        ProviderSearchStatus::Throttled { .. } => {
+            "This source rate-limited us recently; it is being left alone until the cooldown ends."
+                .to_string()
+        }
         _ => String::new(),
     };
     let class = if is_problem {

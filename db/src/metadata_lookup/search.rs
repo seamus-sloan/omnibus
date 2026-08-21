@@ -4,6 +4,12 @@
 //!
 //! The sibling of [`super::climb`], not a replacement — check-in still wants
 //! one answer; the metadata editor's picker wants all of them.
+//!
+//! Each provider's answer is scored against the query before it is returned
+//! (see [`super::relevance`]), so a source that ranks a study guide first
+//! doesn't put one on screen — and so the candidates carry a number the client
+//! can order by that depends on the candidate and the query alone, never on
+//! which provider happened to answer.
 
 use futures::future::join_all;
 use omnibus_shared::metadata_lookup::{
@@ -11,7 +17,9 @@ use omnibus_shared::metadata_lookup::{
     ProviderSearchStatus,
 };
 
-use super::providers::{self, Query};
+use super::providers;
+use super::query::SearchQuery;
+use super::throttle;
 use super::MetadataLookupConfig;
 
 /// Max provider calls in flight at once, mirroring the bounded-concurrency
@@ -41,7 +49,7 @@ pub const FANOUT_PROVIDER_LIMIT: usize = 10;
 /// others found.
 pub async fn search_all_providers(
     config: &MetadataLookupConfig,
-    query: &str,
+    query: &SearchQuery,
     providers: Option<&[MetadataProvider]>,
 ) -> EditionSearchResponse {
     let selected: Vec<ProviderInfo> = providers::catalog(config)
@@ -62,6 +70,9 @@ pub async fn search_all_providers(
         let status = match answer {
             Answer::Found(found) => {
                 let before = editions.len();
+                // `run_with_fallbacks` already capped at this limit; the take
+                // is the backstop for a provider that answers with more than
+                // it was asked for.
                 editions.extend(found.into_iter().take(FANOUT_PROVIDER_LIMIT));
                 ProviderSearchStatus::Answered {
                     count: editions.len() - before,
@@ -69,12 +80,26 @@ pub async fn search_all_providers(
             }
             Answer::NotConfigured => ProviderSearchStatus::NotConfigured,
             Answer::Failed(message) => ProviderSearchStatus::Failed { message },
+            Answer::Throttled(retry_after_secs) => {
+                ProviderSearchStatus::Throttled { retry_after_secs }
+            }
         };
         sources.push(ProviderSearchSource {
             provider,
             display_name: provider.display_name().to_string(),
             status,
         });
+    }
+    // Ordered before it goes out, so every client gets a sensible list rather
+    // than "everything Open Library found, then everything Google Books
+    // found". The key is the score, which is derived from the candidate and
+    // the query alone — so a provider being slow, newly configured, or down
+    // removes its rows and reorders nothing else. The sort is **stable**, so
+    // candidates that tie keep the order their provider returned them in, and
+    // an unscored candidate (an ISBN-only query, which has nothing to rank
+    // against) keeps its place rather than being flung to one end.
+    if editions.iter().any(|e| e.relevance.is_some()) {
+        editions.sort_by_key(|e| std::cmp::Reverse(e.relevance.unwrap_or(i32::MIN)));
     }
     EditionSearchResponse { editions, sources }
 }
@@ -85,6 +110,8 @@ enum Answer {
     Found(Vec<ProviderEdition>),
     NotConfigured,
     Failed(String),
+    /// Skipped: still inside a cooldown from an earlier 429.
+    Throttled(u64),
 }
 
 /// Ask one provider, tagging the answer with who gave it. An unconfigured
@@ -94,12 +121,21 @@ enum Answer {
 async fn ask_one(
     info: &ProviderInfo,
     config: &MetadataLookupConfig,
-    query: &str,
+    query: &SearchQuery,
 ) -> (MetadataProvider, Answer) {
     if !info.configured {
         return (info.id, Answer::NotConfigured);
     }
-    match providers::run(info.id, config, Query::Title(query)).await {
+    // Checked before the request, not after: a provider that told us to go
+    // away is not made more willing by asking again, and every one of those
+    // asks costs the reader a slower search for a row that cannot appear.
+    if let Some(remaining) = config.throttle.remaining(info.id) {
+        return (
+            info.id,
+            Answer::Throttled(throttle::retry_after_secs(remaining)),
+        );
+    }
+    match providers::run_with_fallbacks(info.id, config, query, FANOUT_PROVIDER_LIMIT).await {
         Ok(found) => (info.id, Answer::Found(found)),
         Err(e) => {
             tracing::warn!(provider = ?info.id, "edition search failed: {e:#}");

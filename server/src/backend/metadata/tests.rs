@@ -250,13 +250,75 @@ async fn api_post_edition_search_requires_auth() {
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 }
 
+#[test]
+fn search_query_prefers_the_structured_fields_when_the_caller_sent_them() {
+    // The whole point of the structured request: Open Library gets a
+    // `title=`/`author=` pair rather than one flattened phrase searched
+    // inside the title field.
+    let req = EditionSearchRequest {
+        query: "Dune Frank Herbert".to_string(),
+        title: Some("Dune".to_string()),
+        author: Some("Frank Herbert".to_string()),
+        isbn: Some("9780441013593".to_string()),
+        providers: None,
+    };
+    let query = super::search_query(&req);
+    assert_eq!(query.title.as_deref(), Some("Dune"));
+    assert_eq!(query.author.as_deref(), Some("Frank Herbert"));
+    assert_eq!(query.isbn13.as_deref(), Some("9780441013593"));
+}
+
+#[test]
+fn search_query_reads_free_text_as_a_title_only() {
+    // A reader who retyped the box is asking for something specific, and free
+    // text cannot honestly be split back into a title and an author.
+    let req = EditionSearchRequest {
+        query: "dune messiah".to_string(),
+        ..EditionSearchRequest::default()
+    };
+    let query = super::search_query(&req);
+    assert_eq!(query.title.as_deref(), Some("dune messiah"));
+    assert_eq!(query.author, None);
+    assert_eq!(query.isbn13, None);
+}
+
+#[test]
+fn search_query_falls_back_to_free_text_when_the_structured_fields_are_blank() {
+    // The structured fields are *cleaned*, so branching on presence alone
+    // would let a client with an empty title field search for nothing at all.
+    let req = EditionSearchRequest {
+        query: "Dune".to_string(),
+        title: Some("   ".to_string()),
+        author: Some(String::new()),
+        isbn: Some("not-an-isbn".to_string()),
+        providers: None,
+    };
+    let query = super::search_query(&req);
+    assert_eq!(query.title.as_deref(), Some("Dune"));
+    assert_eq!(query.isbn13, None, "an unusable ISBN is discarded");
+}
+
+#[test]
+fn search_query_gives_an_isbn_only_request_the_free_text_to_rank_against() {
+    // Without a title there is nothing to score candidates by, and the box's
+    // text is what the reader actually asked for.
+    let req = EditionSearchRequest {
+        query: "Dune".to_string(),
+        isbn: Some("9780441013593".to_string()),
+        ..EditionSearchRequest::default()
+    };
+    let query = super::search_query(&req);
+    assert_eq!(query.isbn13.as_deref(), Some("9780441013593"));
+    assert_eq!(query.title.as_deref(), Some("Dune"));
+}
+
 #[tokio::test]
 async fn api_post_edition_search_returns_500_when_db_unavailable() {
     let (_app, state, pool) = fixture().await;
     pool.close().await;
     let req = EditionSearchRequest {
         query: "dune".to_string(),
-        providers: None,
+        ..EditionSearchRequest::default()
     };
     let res = post_edition_search(fake_editor(1), State(state), Json(req)).await;
     assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);

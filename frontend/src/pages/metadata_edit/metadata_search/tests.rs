@@ -30,6 +30,70 @@ fn compose_query_is_empty_when_the_book_has_neither() {
     assert_eq!(compose_query("   ", None), "");
 }
 
+fn seed() -> Seed {
+    Seed {
+        title: Some("Dune".into()),
+        author: Some("Frank Herbert".into()),
+        isbn13: Some("9780441013593".into()),
+    }
+}
+
+#[test]
+fn request_sends_the_structured_fields_while_the_box_is_untouched() {
+    // The overwhelmingly common case, and the one the flattened query got
+    // wrong: Open Library must receive `title=Dune&author=Frank+Herbert`, not
+    // one phrase searched inside the title field.
+    let seed = seed();
+    let req = seed.request(&seed.composed());
+    assert_eq!(req.title.as_deref(), Some("Dune"));
+    assert_eq!(req.author.as_deref(), Some("Frank Herbert"));
+    assert_eq!(req.isbn.as_deref(), Some("9780441013593"));
+    assert_eq!(req.query, "Dune Frank Herbert");
+}
+
+#[test]
+fn request_tolerates_surrounding_whitespace_in_an_untouched_box() {
+    let seed = seed();
+    let req = seed.request(&format!("  {}  ", seed.composed()));
+    assert_eq!(req.title.as_deref(), Some("Dune"));
+}
+
+#[test]
+fn request_falls_back_to_free_text_once_the_reader_edits_the_box() {
+    // A reader who retyped it is asking for something specific, and free text
+    // cannot honestly be split back into a title and an author — guessing a
+    // split would search for something they did not type.
+    let req = seed().request("dune messiah");
+    assert_eq!(req.query, "dune messiah");
+    assert_eq!(req.title, None);
+    assert_eq!(req.author, None);
+    assert_eq!(req.isbn, None);
+}
+
+#[test]
+fn request_carries_no_isbn_when_the_form_has_none() {
+    let seed = Seed {
+        isbn13: None,
+        ..seed()
+    };
+    let req = seed.request(&seed.composed());
+    assert_eq!(req.isbn, None);
+    assert_eq!(req.title.as_deref(), Some("Dune"));
+}
+
+#[test]
+fn request_omits_a_title_the_book_does_not_have() {
+    // Sent as `Some("")` the server would take the structured branch and then
+    // clean it away, searching with nothing.
+    let seed = Seed {
+        title: None,
+        ..seed()
+    };
+    let req = seed.request(&seed.composed());
+    assert_eq!(req.title, None);
+    assert_eq!(req.query, "Frank Herbert");
+}
+
 #[test]
 fn field_slug_matches_the_forms_own_label_slugging_without_its_prefix() {
     assert_eq!(field_slug("Title"), "title");
