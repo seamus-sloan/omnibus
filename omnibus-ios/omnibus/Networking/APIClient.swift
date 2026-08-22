@@ -84,6 +84,11 @@ actor APIClient {
     private static let maxBackoff: TimeInterval = 60
 
     private let session: URLSession
+    /// Separate session for uploads. `timeoutIntervalForResource` is a *total*
+    /// budget and it is configured per-session, not per-task, so the 120s the
+    /// read session wants would abandon a large audiobook mid-transfer no
+    /// matter what a request's own `timeoutInterval` says.
+    private let uploadSession: URLSession
     private let encoder: JSONEncoder = {
         let e = JSONEncoder()
         return e
@@ -103,6 +108,13 @@ actor APIClient {
         config.timeoutIntervalForResource = 120
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         session = URLSession(configuration: config)
+
+        let uploadConfig = URLSessionConfiguration.default
+        uploadConfig.waitsForConnectivity = false
+        uploadConfig.timeoutIntervalForRequest = 300
+        uploadConfig.timeoutIntervalForResource = 3600
+        uploadConfig.requestCachePolicy = .reloadIgnoringLocalCacheData
+        uploadSession = URLSession(configuration: uploadConfig)
         baseURL = ServerURLStore.load()
         token = TokenStore.load()
     }
@@ -217,41 +229,51 @@ actor APIClient {
         }
     }
 
-    /// Multipart upload used by the cover, photo, and book-upload endpoints.
+    /// Multipart upload of a single file — the cover, photo, and avatar
+    /// endpoints, which take one part and no text fields.
     func upload<T: Decodable>(
         _ path: String,
         fileData: Data,
         fileName: String,
         fieldName: String = "file",
-        mimeType: String = "application/octet-stream",
-        fields: [String: String] = [:]
+        mimeType: String = "application/octet-stream"
+    ) async throws -> T {
+        try await upload(
+            path,
+            files: [
+                MultipartFile(
+                    fieldName: fieldName, fileName: fileName, mimeType: mimeType, data: fileData
+                )
+            ]
+        )
+    }
+
+    /// Multipart upload of one or more file parts plus ordered text fields.
+    ///
+    /// The book-upload commit endpoints read `title`/`author` out of the same
+    /// body as the file, and the audiobook one takes a whole set of `.mp3`
+    /// parts under repeated `file` fields — both of which a single-file,
+    /// fields-free upload cannot express.
+    func upload<T: Decodable>(
+        _ path: String,
+        files: [MultipartFile],
+        fields: [(name: String, value: String)] = []
     ) async throws -> T {
         guard let url = absoluteURL(path) else { throw APIError.notConfigured }
         try failFastWhenUnreachable()
-        let boundary = "omnibus.\(UUID().uuidString)"
-        var body = Data()
-        for (key, value) in fields {
-            body.append("--\(boundary)\r\n")
-            body.append("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n")
-            body.append("\(value)\r\n")
-        }
-        body.append("--\(boundary)\r\n")
-        body.append(
-            "Content-Disposition: form-data; name=\"\(fieldName)\"; filename=\"\(fileName)\"\r\n"
-        )
-        body.append("Content-Type: \(mimeType)\r\n\r\n")
-        body.append(fileData)
-        body.append("\r\n--\(boundary)--\r\n")
+        let boundary = MultipartBody.makeBoundary()
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.setValue(
+            "multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type"
+        )
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-        request.httpBody = body
-        request.timeoutInterval = 300
-
+        request.httpBody = MultipartBody.encode(
+            boundary: boundary, fields: fields, files: files
+        )
         do {
-            let (data, response) = try await session.data(for: request)
+            let (data, response) = try await uploadSession.data(for: request)
             noteOutcome(reachable: true)
             try validate(response, data: data)
             return try decode(data)
@@ -475,9 +497,3 @@ actor APIClient {
 
 /// Stand-in for endpoints that answer with no meaningful body.
 struct Empty: Codable, Sendable {}
-
-private extension Data {
-    mutating func append(_ string: String) {
-        append(Data(string.utf8))
-    }
-}

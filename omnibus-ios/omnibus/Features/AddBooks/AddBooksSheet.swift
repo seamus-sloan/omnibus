@@ -1,9 +1,13 @@
 //  AddBooksSheet.swift
 //  Entry point for adding books: upload a file from this device, or check in a
 //  physical copy by scanning its barcode.
+//
+//  An upload is the server's two-step ingest — inspect the file for its
+//  embedded metadata, let the reader correct it, then commit — because the
+//  commit endpoints file the book into a folder named from the confirmed
+//  title and author and reject a body that carries neither.
 
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct AddBooksSheet: View {
     @Environment(\.palette) private var palette
@@ -13,6 +17,14 @@ struct AddBooksSheet: View {
     @State private var showFileImporter = false
     @State private var showCheckIn = false
     @State private var uploads: [UploadTask] = []
+    /// Inspected uploads waiting for their confirm sheet, shown one at a time
+    /// so a multi-file pick doesn't stack sheets.
+    @State private var pending: [UploadDraft] = []
+    @State private var activeDraft: UploadDraft?
+    /// Names the picker allowed through that neither endpoint accepts.
+    @State private var unsupported: [String] = []
+
+    private var isOnline: Bool { Connectivity.shared.isOnline }
 
     var body: some View {
         NavigationStack {
@@ -22,8 +34,15 @@ struct AddBooksSheet: View {
                         actionCard(
                             icon: "arrow.up.doc",
                             title: "Upload a file",
-                            subtitle: "Add an EPUB or audiobook from this device or iCloud Drive."
+                            subtitle: isOnline
+                                ? "Add an EPUB or audiobook from this device or iCloud Drive."
+                                : "Unavailable offline — uploads go straight to your library."
                         ) { showFileImporter = true }
+                        // An upload is a command against a shared library, so
+                        // it is never queued (rule 08) — the control stands
+                        // down instead of failing after the fact.
+                        .disabled(!isOnline)
+                        .opacity(isOnline ? 1 : 0.4)
                     }
 
                     actionCard(
@@ -32,18 +51,8 @@ struct AddBooksSheet: View {
                         subtitle: "Check in a physical copy you own on paper."
                     ) { showCheckIn = true }
 
-                    if !uploads.isEmpty {
-                        VStack(alignment: .leading, spacing: Spacing.sm) {
-                            Text("Uploads")
-                                .font(.ui(13, weight: .semibold))
-                                .foregroundStyle(palette.ink2Color)
-                            ForEach(uploads) { task in
-                                UploadRow(task: task)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, Spacing.md)
-                    }
+                    if !unsupported.isEmpty { unsupportedNotice }
+                    if !uploads.isEmpty { uploadList }
                 }
                 .screenPadding()
                 .padding(.top, Spacing.md)
@@ -59,20 +68,45 @@ struct AddBooksSheet: View {
         }
         .presentationDetents([.medium, .large])
         .sheet(isPresented: $showCheckIn) { CheckInView() }
+        .sheet(item: $activeDraft, onDismiss: presentNextDraft) { draft in
+            UploadConfirmSheet(
+                draft: draft,
+                onCommit: { commit(draft, as: $0) },
+                onCancel: { cancel(draft) }
+            )
+        }
         .fileImporter(
             isPresented: $showFileImporter,
-            allowedContentTypes: Self.acceptedTypes,
+            allowedContentTypes: UploadFlow.pickerTypes,
             allowsMultipleSelection: true
         ) { result in
             guard case let .success(urls) = result else { return }
-            for url in urls { upload(url) }
+            stage(urls)
         }
     }
 
-    private static var acceptedTypes: [UTType] {
-        var types: [UTType] = [.epub, .audio, .mpeg4Audio, .mp3, .data]
-        if let m4b = UTType(filenameExtension: "m4b") { types.append(m4b) }
-        return types
+    private var uploadList: some View {
+        VStack(alignment: .leading, spacing: Spacing.sm) {
+            Text("Uploads")
+                .font(.ui(13, weight: .semibold))
+                .foregroundStyle(palette.ink2Color)
+            ForEach(uploads) { task in
+                UploadRow(task: task)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, Spacing.md)
+    }
+
+    private var unsupportedNotice: some View {
+        Text(
+            "Can't add \(unsupported.joined(separator: ", ")) — books must be an EPUB, "
+                + "and audiobooks an M4B, M4A, or MP3."
+        )
+        .font(.ui(12.5))
+        .foregroundStyle(palette.ink3Color)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, Spacing.sm)
     }
 
     private func actionCard(
@@ -114,56 +148,98 @@ struct AddBooksSheet: View {
         .buttonStyle(PressableStyle())
     }
 
-    private func upload(_ url: URL) {
-        let task = UploadTask(name: url.lastPathComponent)
+    // MARK: - Upload pipeline
+
+    /// Group the pick into one batch per book, then inspect each.
+    private func stage(_ urls: [URL]) {
+        let selection = UploadFlow.selection(for: urls)
+        unsupported = selection.unsupported
+        for batch in selection.batches { inspect(batch) }
+    }
+
+    private func inspect(_ batch: UploadBatch) {
+        let task = UploadTask(name: batch.displayName)
         uploads.append(task)
-
         Task {
-            // Security-scoped access is required for anything the picker
-            // returns from outside the app container.
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-
-            guard let data = try? Data(contentsOf: url) else {
-                task.finish(error: "Couldn't read that file.")
-                return
-            }
-
-            let isAudio = Book.audioFormats.contains(url.pathExtension.lowercased())
-            let endpoint = isAudio ? "/api/uploads/audiobooks" : "/api/uploads/ebooks"
             do {
-                let _: Empty = try await APIClient.shared.upload(
-                    endpoint,
-                    fileData: data,
-                    fileName: url.lastPathComponent,
-                    mimeType: isAudio ? "audio/mp4" : "application/epub+zip"
+                let (staged, directory) = try await UploadService.stage(batch)
+                let confirmation = try await UploadService.inspect(staged)
+                task.state = .needsDetails
+                pending.append(
+                    UploadDraft(
+                        batch: staged, directory: directory, confirmation: confirmation, task: task
+                    )
                 )
-                task.finish(error: nil)
-                Haptics.success()
+                presentNextDraft()
             } catch {
-                task.finish(
-                    error: (error as? APIError)?.errorDescription ?? error.localizedDescription
-                )
+                task.state = .failed(Self.message(for: error))
             }
         }
     }
+
+    /// Show the next inspected upload's confirm sheet, if one isn't already up.
+    private func presentNextDraft() {
+        guard activeDraft == nil, !pending.isEmpty else { return }
+        activeDraft = pending.removeFirst()
+    }
+
+    private func commit(_ draft: UploadDraft, as confirmation: UploadConfirmation) {
+        draft.task.state = .uploading
+        activeDraft = nil
+        Task {
+            do {
+                _ = try await UploadService.commit(draft.batch, as: confirmation)
+                draft.task.state = .finished
+                Haptics.success()
+            } catch {
+                draft.task.state = .failed(Self.message(for: error))
+            }
+            UploadService.discard(draft.directory)
+            presentNextDraft()
+        }
+    }
+
+    /// Drop an upload the reader backed out of: no row is left behind, and the
+    /// staged copy goes with it.
+    private func cancel(_ draft: UploadDraft) {
+        uploads.removeAll { $0.id == draft.task.id }
+        UploadService.discard(draft.directory)
+        activeDraft = nil
+    }
+
+    private static func message(for error: Error) -> String {
+        (error as? APIError)?.errorDescription ?? error.localizedDescription
+    }
+}
+
+/// One inspected upload awaiting confirmation: the staged files, where they
+/// live, and the metadata the server read out of them.
+struct UploadDraft: Identifiable {
+    let id = UUID()
+    var batch: UploadBatch
+    var directory: URL
+    var confirmation: UploadConfirmation
+    /// The progress row this draft reports into.
+    var task: UploadTask
 }
 
 @Observable
 @MainActor
 final class UploadTask: Identifiable {
+    enum State: Equatable {
+        case inspecting
+        case needsDetails
+        case uploading
+        case finished
+        case failed(String)
+    }
+
     let id = UUID()
     let name: String
-    var isFinished = false
-    var error: String?
+    var state: State = .inspecting
 
     init(name: String) {
         self.name = name
-    }
-
-    func finish(error: String?) {
-        self.error = error
-        isFinished = true
     }
 }
 
@@ -173,26 +249,50 @@ private struct UploadRow: View {
 
     var body: some View {
         HStack(spacing: Spacing.sm) {
-            if !task.isFinished {
+            switch task.state {
+            case .inspecting, .uploading:
                 ProgressView().controlSize(.small)
-            } else {
-                Image(systemName: task.error == nil ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                    .foregroundStyle(task.error == nil ? palette.okColor : palette.badColor)
+            case .needsDetails:
+                Image(systemName: "square.and.pencil")
+                    .foregroundStyle(palette.ink2Color)
+            case .finished:
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(palette.okColor)
+            case .failed:
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(palette.badColor)
             }
             VStack(alignment: .leading, spacing: 1) {
                 Text(task.name)
                     .font(.ui(13))
                     .foregroundStyle(palette.ink1Color)
                     .lineLimit(1)
-                if let error = task.error {
-                    Text(error)
+                if let detail {
+                    Text(detail)
                         .font(.ui(11))
-                        .foregroundStyle(palette.badColor)
+                        .foregroundStyle(
+                            isFailed ? palette.badColor : palette.ink3Color
+                        )
                         .lineLimit(2)
                 }
             }
             Spacer(minLength: 0)
         }
         .padding(.vertical, 6)
+    }
+
+    private var isFailed: Bool {
+        if case .failed = task.state { return true }
+        return false
+    }
+
+    private var detail: String? {
+        switch task.state {
+        case .inspecting: "Reading details…"
+        case .needsDetails: "Waiting for you to confirm the details"
+        case .uploading: "Adding to your library…"
+        case .finished: nil
+        case let .failed(message): message
+        }
     }
 }
