@@ -18,7 +18,7 @@ fn main() {
     // iOS/desktop/Android this persists in every build (0o600 file under the
     // sandboxed app data dir), so users stay signed in across a cold start.
     //
-    // TODO: harden at-rest storage with iOS Keychain / Android Keystore.
+    // TODO(#1620): harden at-rest storage with iOS Keychain / Android Keystore.
     // Current protection is the iOS sandbox / Android per-app UID sandbox +
     // 0o600 — see the module docs on `omnibus_frontend::data::token_store` /
     // `app_dirs`.

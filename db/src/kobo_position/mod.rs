@@ -198,6 +198,37 @@ fn annotation_location(
     Some(annotation_location_json(&k_href, start, end))
 }
 
+/// Visible-character count of one spine document — the same walk and
+/// normalization every position derivation uses, exposed for the spine-stats
+/// extraction so stored stats and live offsets share one coordinate system.
+pub(crate) fn visible_chars(xhtml: &[u8]) -> anyhow::Result<u64> {
+    Ok(walk::index_file(xhtml)?.visible_char_count())
+}
+
+/// Spine index + normalized visible-text offset of a CFI within its own
+/// spine document — the single-file half of a percent derivation, for
+/// callers holding whole-book spine stats (`epub_spine_stats`), who then
+/// finish with O(1) arithmetic instead of the full-book walk. `Ok(None)`
+/// for every underivable case.
+pub(crate) fn cfi_spine_offset(
+    source_epub: &Path,
+    cfi: &str,
+) -> anyhow::Result<Option<(usize, u64)>> {
+    let Some(parsed) = parse_cfi(cfi) else {
+        return Ok(None);
+    };
+    let mut sdoc = book::open_doc(source_epub)?;
+    if parsed.spine_index >= sdoc.spine.len() {
+        return Ok(None);
+    }
+    let bytes = book::read_spine_entry(&mut sdoc, parsed.spine_index)?;
+    let index = walk::index_file(&bytes)?;
+    let Some(anchor) = index.offset_at(&parsed.tail) else {
+        return Ok(None);
+    };
+    Ok(Some((parsed.spine_index, anchor.norm_offset)))
+}
+
 /// Read + index spine entry `idx`, memoized per batch so a book with many
 /// annotations in one chapter parses that chapter once.
 fn cached_index<'c>(
@@ -247,6 +278,64 @@ pub fn cfi_to_span(
         location_json,
         percent: Some(percent),
     })
+}
+
+/// Derive a KoboSpan location for a raw spine position — the follow-mode
+/// down-sync lane, where the position comes from an audio mapping (via
+/// spine stats) rather than a CFI. Same snippet-equality proof as
+/// [`cfi_to_span`]; every failure degrades to `None`, never a wrong span.
+pub fn span_at_spine_offset(
+    kepub: &Path,
+    source_epub: &Path,
+    spine_index: usize,
+    offset_in_file: u64,
+) -> anyhow::Result<Option<String>> {
+    let mut sdoc = book::open_doc(source_epub)?;
+    if spine_index >= sdoc.spine.len() {
+        return Ok(None);
+    }
+    let Some(href) = book::spine_href(&sdoc, spine_index) else {
+        return Ok(None);
+    };
+    let s_bytes = book::read_spine_entry(&mut sdoc, spine_index)?;
+    let s_index = walk::index_file(&s_bytes)?;
+    let count = s_index.visible_char_count();
+    if count == 0 {
+        return Ok(None);
+    }
+    let norm_offset = offset_in_file.min(count - 1);
+    let anchor = walk::Anchor {
+        norm_offset,
+        snippet: s_index.snippet_at(norm_offset),
+    };
+    derive_span_half(kepub, &href, &anchor)
+}
+
+/// Derive a point CFI at a visible-character offset inside one spine item
+/// of the source EPUB — the cross-format jump-target derivation. No kepub
+/// half: the web reader consumes the CFI directly, so there is nothing to
+/// prove alignment against; an out-of-range offset clamps to the item's
+/// last character rather than failing.
+pub fn cfi_at_spine_offset(
+    source_epub: &Path,
+    spine_index: usize,
+    offset_in_file: u64,
+) -> anyhow::Result<Option<String>> {
+    let mut sdoc = book::open_doc(source_epub)?;
+    if spine_index >= sdoc.spine.len() {
+        return Ok(None);
+    }
+    let s_bytes = book::read_spine_entry(&mut sdoc, spine_index)?;
+    let s_index = walk::index_file(&s_bytes)?;
+    let count = s_index.visible_char_count();
+    if count == 0 {
+        return Ok(None);
+    }
+    let norm_offset = offset_in_file.min(count - 1);
+    let Some((tail, _)) = s_index.tail_at(norm_offset) else {
+        return Ok(None);
+    };
+    Ok(Some(cfi::format_cfi(spine_index, &tail)))
 }
 
 /// The kepub half of [`cfi_to_span`]: find the span covering the source

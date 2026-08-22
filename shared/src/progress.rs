@@ -48,7 +48,7 @@ pub fn parse_comic_page_anchor(anchor: &str) -> Option<usize> {
 /// Discriminator for the format-specific payload variant in [`ProgressUpdate`]
 /// / [`ProgressRecord`] / [`SessionReport`]. Serializes as a plain
 /// lowercase string (`"epub"` / `"audio"`) so the wire shape stays compact.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum ProgressFormat {
     Epub,
@@ -207,6 +207,14 @@ pub struct ProgressRecord {
 pub struct ResumePoint {
     pub record: ProgressRecord,
     pub book: EbookMetadata,
+    /// Whether the user has confirmed a cross-format link for this book —
+    /// linked books collapse to one card carrying both resume affordances.
+    #[serde(default)]
+    pub linked: bool,
+    /// For linked books: the mapped "resume in the other format" candidate
+    /// (absent when the other side is newer or unmappable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cross_format: Option<crate::cross_format::CrossFormatCandidate>,
     /// Whole-book audio duration (sum of parts). `None` for epub rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_duration_seconds: Option<f64>,

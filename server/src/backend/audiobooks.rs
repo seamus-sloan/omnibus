@@ -125,7 +125,7 @@ pub(super) async fn get_audiobook_playlist(
 /// top-level `book_files.format` is one of `M4B` / `M4A` / `MP3`, so
 /// pure-AAC or pure-FLAC sources never reach direct mode today.
 pub(super) async fn get_audiobook_manifest(
-    _user: AuthUser,
+    user: AuthUser,
     State(state): State<AppState>,
     Path(uuid): Path<String>,
     Query(query): Query<ManifestQuery>,
@@ -152,6 +152,23 @@ pub(super) async fn get_audiobook_manifest(
     let audio_file_count = match hls::count_audio_files(&state.pool, resolved.book_id).await {
         Ok(count) => count,
         Err(e) => return internal("count_audio_files", e),
+    };
+
+    // The next file in ordinal order (sequence playback's auto-advance
+    // target). Absent on the last file — and suppressed entirely when the
+    // requesting user's link says the files are separate narrations, where
+    // "next" would replay the same book in another voice.
+    let next_file_id = match next_sequence_file_id(
+        &state.pool,
+        user.id,
+        &uuid,
+        resolved.book_id,
+        resolved.book_file_id,
+    )
+    .await
+    {
+        Ok(next) => next,
+        Err(e) => return internal("next_sequence_file_id", e),
     };
 
     let filenames: Vec<&str> = parts.iter().map(|p| p.filename.as_str()).collect();
@@ -181,6 +198,7 @@ pub(super) async fn get_audiobook_manifest(
             AudiobookManifest::Direct {
                 book_file_id: resolved.book_file_id,
                 audio_file_count,
+                next_file_id,
                 parts: manifest_parts,
                 total_duration_seconds,
                 chapters,
@@ -189,11 +207,41 @@ pub(super) async fn get_audiobook_manifest(
         PlaybackMode::Hls => AudiobookManifest::Hls {
             book_file_id: resolved.book_file_id,
             audio_file_count,
+            next_file_id,
             playlist_url: format!("/api/audiobooks/{uuid}/playlist.m3u8"),
         },
     };
 
     Json(manifest).into_response()
+}
+
+/// The next audio file in ordinal order after `book_file_id`, or `None`
+/// on the last file — and `None` when this user's cross-format link says
+/// the files are separate narrations (each file IS the whole book, so
+/// auto-advancing would replay it in another voice).
+async fn next_sequence_file_id(
+    pool: &sqlx::SqlitePool,
+    user_id: i64,
+    book_uuid: &str,
+    book_id: i64,
+    book_file_id: i64,
+) -> anyhow::Result<Option<i64>> {
+    if let Some(link) = omnibus_db::cross_format::get_link(pool, user_id, book_uuid).await? {
+        if link.mode == omnibus_shared::CrossFormatLinkMode::Narrations {
+            return Ok(None);
+        }
+    }
+    Ok(sqlx::query_scalar(
+        "SELECT id FROM book_files
+         WHERE book_id = ? AND format IN ('M4B', 'M4A', 'MP3')
+           AND ordinal > (SELECT ordinal FROM book_files WHERE id = ?)
+         ORDER BY ordinal LIMIT 1",
+    )
+    .bind(book_id)
+    .bind(book_file_id)
+    .fetch_optional(pool)
+    .await
+    .map(|row: Option<i64>| row)?)
 }
 
 /// Query parameters for `GET /api/audiobooks/{uuid}/parts/{ordinal}`.

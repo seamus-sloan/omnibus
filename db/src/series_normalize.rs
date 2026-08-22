@@ -93,6 +93,9 @@ async fn merge_series_row(
     // is never touched. Scoped to `source_book_ids` (not "every book on
     // `target_id`") so a canonical row with pre-existing, unrelated books
     // that happen to have no index of their own is never stamped.
+    //
+    // Left per-book rather than batched into an `id IN (...)`: boot-only and
+    // idempotent (one `backfill_embedded_series_index` pass at `init_db`).
     if let Some(idx_val) = parse_series_index(embedded_idx) {
         for book_id in source_book_ids {
             sqlx::query("UPDATE books SET series_index = ? WHERE id = ? AND series_index IS NULL")

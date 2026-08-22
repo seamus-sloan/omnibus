@@ -76,16 +76,28 @@ fn file_picker_item_meta(file: &BookFileInfo, kind: FilePickerKind) -> Option<St
     }
 }
 
+/// How the picker's trigger presents itself: its label, the button classes it
+/// wears, and the testid the single-file (plain link) form carries.
+#[derive(Clone, PartialEq)]
+pub(super) struct FilePickerChrome {
+    pub label: String,
+    pub button_class: String,
+    pub single_testid: String,
+}
+
 /// Read/listen action that expands into a file picker when multiple files match.
 #[component]
 pub(super) fn BdFilePickerMenu(
     uuid: String,
     kind: FilePickerKind,
     files: Vec<BookFileInfo>,
-    label: String,
-    button_class: String,
-    single_testid: String,
+    chrome: FilePickerChrome,
 ) -> Element {
+    let FilePickerChrome {
+        label,
+        button_class,
+        single_testid,
+    } = chrome;
     let prefix = kind.route_prefix();
     if files.len() < 2 {
         let href = format!("/{prefix}/{uuid}");
@@ -263,9 +275,11 @@ mod tests {
                 uuid: "book-a".to_string(),
                 kind: FilePickerKind::Listen,
                 files: vec![file("MP3", 1, 0), file("MP3", 2, 1)],
-                label: "Start listening".to_string(),
-                button_class: "btn primary lg".to_string(),
-                single_testid: "start-listening".to_string(),
+                chrome: FilePickerChrome {
+                    label: "Start listening".to_string(),
+                    button_class: "btn primary lg".to_string(),
+                    single_testid: "start-listening".to_string(),
+                },
             }
         });
 

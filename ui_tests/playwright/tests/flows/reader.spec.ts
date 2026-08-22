@@ -561,28 +561,48 @@ test("restores the exact reading position when the reader is reopened", async ({
   // Leave the reader (explicit navigation — equivalent to the reader-back
   // button, which routes to the book's detail page), then
   // reopen: it must land on the exact page we left, not a page drifted by
-  // the first-pass display's pre-webfont layout. The restore POST is
-  // page-load triggered (hydration + epub render + settle + debounce), so
-  // give the mutation waiter more room than a click gets.
+  // the first-pass display's pre-webfont layout. The restore settle is an
+  // ECHO — it re-states a position the server already holds — so the
+  // reopen must issue NO progress write at all: an echo write stamps a
+  // fresh clock on an unmoved position, which shadows a newer audiobook
+  // position at the cross-format clock gate.
+  const progressPosts: string[] = [];
+  page.on("request", (req) => {
+    if (
+      req.method() === "POST" &&
+      /\/api\/rpc\/progress(?:\?|$)/.test(req.url())
+    ) {
+      progressPosts.push(req.postData() ?? "");
+    }
+  });
   await gotoReady(page, `/books/${uuid}`);
-  await expectMutation(page, { ...PROGRESS_POST, timeout: 20_000 }, async () =>
-    gotoReady(page, `/read/${uuid}`),
-  );
-  await expect.poll(storedCfi, { timeout: 10_000 }).toBe(leftCfi);
+  await gotoReady(page, `/read/${uuid}`);
   await expect
     .poll(async () => footerPageLabel(page), { timeout: 20_000 })
     .toBe(leftAt);
+  await expect.poll(storedCfi, { timeout: 10_000 }).toBe(leftCfi);
+  // Asserted last in the phase: the slower polls above outlast the glue's
+  // relocate debounce + async POST spawn, so a straggler echo write would
+  // have landed in the collector by now.
+  expect(progressPosts, "a reopen must not write progress").toEqual([]);
 
-  // And again: the first reopen must not have rewritten the stored position,
-  // so a second reopen still lands on the same page (no cumulative drift).
-  await gotoReady(page, `/books/${uuid}`);
-  await expectMutation(page, { ...PROGRESS_POST, timeout: 20_000 }, async () =>
-    gotoReady(page, `/read/${uuid}`),
+  // A real page turn after the restore still persists — the echo skip
+  // must not mute genuine movement.
+  const turned = await expectMutation(page, PROGRESS_POST, async () =>
+    page.getByTestId("reader-next").click(),
   );
-  await expect.poll(storedCfi, { timeout: 10_000 }).toBe(leftCfi);
+  const turnedCfi = turned.request.postDataJSON().update.epub_cfi as string;
+  const turnedAt = await footerPageLabel(page);
+  progressPosts.length = 0;
+
+  // And again: the reopen lands on the turned page, still without writing.
+  await gotoReady(page, `/books/${uuid}`);
+  await gotoReady(page, `/read/${uuid}`);
   await expect
     .poll(async () => footerPageLabel(page), { timeout: 20_000 })
-    .toBe(leftAt);
+    .toBe(turnedAt);
+  await expect.poll(storedCfi, { timeout: 10_000 }).toBe(turnedCfi);
+  expect(progressPosts, "a reopen must not write progress").toEqual([]);
 });
 
 test("a ?cfi= deep link opens the reader at that passage, not the resume point", async ({

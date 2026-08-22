@@ -21,7 +21,8 @@ pub use fs::{
 };
 pub use manifest::{build_manifest, ffmpeg_progress_fraction, parse_ffmpeg_progress_us};
 pub use query::{
-    count_audio_files, get_chapters, get_parts, resolve_audiobook, resolve_audiobook_file,
+    count_audio_files, get_chapters, get_chapters_bulk, get_parts, get_parts_bulk,
+    resolve_audiobook, resolve_audiobook_file,
 };
 pub use transcode::{evict_if_over_cap, transcode_book, used_bytes};
 

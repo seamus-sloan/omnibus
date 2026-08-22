@@ -13,8 +13,9 @@ struct ContinueHero: View {
     /// Runs after the long-press editor saves, so the card can pick up a title
     /// or cover that it is still drawing from the old metadata.
     var onEdited: () -> Void = {}
-    /// Pushes the book's detail screen. A tap resumes the book, so this is the
-    /// card's only way through to everything else about it.
+    /// Pushes the book's detail screen — reached by tapping the cover or the
+    /// title (matching the web hero) or via the long-press menu; the card's
+    /// main tap resumes the book.
     var onOpenDetail: (Book) -> Void = { _ in }
 
     @Environment(\.palette) private var palette
@@ -132,63 +133,77 @@ private struct HeroCard: View {
     }
 
     var body: some View {
-        Button {
-            Haptics.tap()
-            if isAudio {
-                // Reopen the file the position was taken in, not the book's
-                // first one — two narrations don't share a timeline.
-                Presentation.shared.openPlayer(book, fileID: point.record.bookFileID)
-            } else {
-                Presentation.shared.openReader(book)
-            }
-        } label: {
-            HStack(alignment: .top, spacing: 16) {
+        // The cover and the title each open the detail screen — matching the
+        // web hero, where both are links and only the Play/Read pill resumes.
+        // The targets are siblings, not buttons nested in a card-wide button:
+        // SwiftUI doesn't guarantee tap routing for nested controls, so the
+        // card's own resume tap rides the container's gesture instead, which
+        // every real button reliably wins.
+        HStack(alignment: .top, spacing: 16) {
+            Button {
+                Haptics.tap()
+                onOpenDetail(book)
+            } label: {
                 BookCover(identity: CoverIdentity(book), size: .md, cornerRadius: 6)
                     .frame(width: 96)
                     .coverShadow(1.2)
+            }
+            .buttonStyle(BookPressStyle())
+            .accessibilityLabel(book.displayTitle)
+            .accessibilityHint("Opens book details")
 
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(isAudio ? "Continue listening" : "Continue reading")
-                        .font(.ui(10.5, weight: .semibold))
-                        .tracking(0.6)
-                        .textCase(.uppercase)
-                        .foregroundStyle(rule)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(isAudio ? "Continue listening" : "Continue reading")
+                    .font(.ui(10.5, weight: .semibold))
+                    .tracking(0.6)
+                    .textCase(.uppercase)
+                    .foregroundStyle(rule)
 
+                Button {
+                    Haptics.tap()
+                    onOpenDetail(book)
+                } label: {
                     Text(book.displayTitle)
                         .font(.display(21))
                         .foregroundStyle(palette.ink0Color)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens book details")
 
-                    Text(book.authorDisplay)
-                        .font(.ui(12.5))
+                Text(book.authorDisplay)
+                    .font(.ui(12.5))
+                    .foregroundStyle(palette.ink2Color)
+                    .lineLimit(1)
+
+                Spacer(minLength: 4)
+
+                // A CFI-only EPUB resume point has no honest percentage,
+                // so there is no bar to draw for one. The band the bar
+                // would occupy goes to when you left off instead of sitting
+                // empty — which is what made the card read as underfilled.
+                if let fraction {
+                    ProgressBar(fraction: fraction, tint: rule)
+                } else {
+                    // Sentence case, quietly: the eyebrow above is already
+                    // set in caps, and two shouting lines in one card read
+                    // as a warning rather than as a detail.
+                    Text(lastOpenedLabel)
+                        .font(.ui(11.5))
+                        .foregroundStyle(palette.ink3Color)
+                }
+
+                HStack(spacing: 8) {
+                    Text(positionLabel)
+                        .font(.ui(11.5, weight: .medium))
                         .foregroundStyle(palette.ink2Color)
-                        .lineLimit(1)
 
-                    Spacer(minLength: 4)
+                    Spacer(minLength: 0)
 
-                    // A CFI-only EPUB resume point has no honest percentage,
-                    // so there is no bar to draw for one. The band the bar
-                    // would occupy goes to when you left off instead of sitting
-                    // empty — which is what made the card read as underfilled.
-                    if let fraction {
-                        ProgressBar(fraction: fraction, tint: rule)
-                    } else {
-                        // Sentence case, quietly: the eyebrow above is already
-                        // set in caps, and two shouting lines in one card read
-                        // as a warning rather than as a detail.
-                        Text(lastOpenedLabel)
-                            .font(.ui(11.5))
-                            .foregroundStyle(palette.ink3Color)
-                    }
-
-                    HStack(spacing: 8) {
-                        Text(positionLabel)
-                            .font(.ui(11.5, weight: .medium))
-                            .foregroundStyle(palette.ink2Color)
-
-                        Spacer(minLength: 0)
-
+                    Button {
+                        resume()
+                    } label: {
                         HStack(spacing: 5) {
                             Image(systemName: isAudio ? "play.fill" : "book.fill")
                                 .font(.system(size: 10, weight: .bold))
@@ -200,32 +215,50 @@ private struct HeroCard: View {
                         .padding(.vertical, 7)
                         .background(Capsule().fill(palette.accentColor))
                     }
+                    .buttonStyle(PressableStyle())
                 }
             }
-            .padding(16)
-            // Fills the carousel's fixed height, so a one-line title and a
-            // two-line one produce the same card rather than two page sizes.
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .background(cardGround)
-            .overlay(
-                RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
-                    .strokeBorder(
-                        LinearGradient(
-                            colors: [.white.opacity(0.16), .white.opacity(0.04)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        ),
-                        lineWidth: 0.5
-                    )
-            )
-            // Grounds the card against the page instead of letting it float as
-            // a flat panel of colour.
-            .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
         }
-        .buttonStyle(BookPressStyle())
+        .padding(16)
+        // Fills the carousel's fixed height, so a one-line title and a
+        // two-line one produce the same card rather than two page sizes.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .background(cardGround)
+        .overlay(
+            RoundedRectangle(cornerRadius: Radius.lg, style: .continuous)
+                .strokeBorder(
+                    LinearGradient(
+                        colors: [.white.opacity(0.16), .white.opacity(0.04)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ),
+                    lineWidth: 0.5
+                )
+        )
+        // Grounds the card against the page instead of letting it float as
+        // a flat panel of colour.
+        .shadow(color: .black.opacity(0.35), radius: 18, y: 8)
+        // The rest of the card keeps the old whole-card behavior: a tap
+        // anywhere that isn't the cover, the title, or the pill resumes.
+        .contentShape(RoundedRectangle(cornerRadius: Radius.lg, style: .continuous))
+        .onTapGesture { resume() }
         // The same held-down menu as a grid cell, plus the way through to the
-        // detail screen the tap spends on resuming the book.
+        // detail screen the card's main tap spends on resuming the book —
+        // kept even though the cover and title now go there, so the menu
+        // behaves the same on every card.
         .bookContextMenu(book, onEdited: onEdited, onOpenDetail: { onOpenDetail(book) })
+    }
+
+    /// The card's main tap: back into the book where you left off.
+    private func resume() {
+        Haptics.tap()
+        if isAudio {
+            // Reopen the file the position was taken in, not the book's
+            // first one — two narrations don't share a timeline.
+            Presentation.shared.openPlayer(book, fileID: point.record.bookFileID)
+        } else {
+            Presentation.shared.openReader(book)
+        }
     }
 
     /// A lit alcove rather than a filled rectangle: the wash graded top-to-

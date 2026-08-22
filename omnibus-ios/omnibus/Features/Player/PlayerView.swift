@@ -22,9 +22,8 @@ struct PlayerView: View {
     @State private var showSleepTimer = false
     @State private var showSpeed = false
     @State private var showBookmarks = false
+    @State private var syncedHere = false
     @State private var showCarMode = false
-
-    private static let rates: [Double] = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
 
     /// Share of the band between the two insets the artwork may take.
     ///
@@ -55,6 +54,17 @@ struct PlayerView: View {
                     onDismiss: { player.dismissSyncOffer() }
                 )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if let cross = player.crossFormatOffer,
+                      let seconds = cross.audioPositionSeconds {
+                SyncOfferBanner(
+                    title: cross.sourceAhead == false
+                        ? "Re-reading earlier in the ebook"
+                        : "Read further in the ebook",
+                    detail: "Your reading maps to about \(Format.duration(seconds)).",
+                    onGo: { Task { await player.acceptCrossFormatOffer() } },
+                    onDismiss: { Task { await player.dismissCrossFormatOffer() } }
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         // `containerRelativeFrame` pins these rows to a definite width. Without
@@ -80,21 +90,8 @@ struct PlayerView: View {
         .sheet(isPresented: $showChapters) { ChapterSheet() }
         .sheet(isPresented: $showBookmarks) { BookmarksSheet(book: book, isAudio: true) }
         .fullScreenCover(isPresented: $showCarMode) { CarModeView(book: book) }
-        .confirmationDialog("Playback speed", isPresented: $showSpeed, titleVisibility: .visible) {
-            ForEach(Self.rates, id: \.self) { value in
-                Button(Self.rateLabel(value)) { player.rate = value }
-            }
-            Button("Cancel", role: .cancel) {}
-        }
-        .confirmationDialog("Sleep timer", isPresented: $showSleepTimer, titleVisibility: .visible) {
-            ForEach([5, 10, 15, 30, 45, 60], id: \.self) { minutes in
-                Button("\(minutes) minutes") { player.startSleepTimer(minutes: minutes) }
-            }
-            if player.sleepMinutesRemaining != nil {
-                Button("Turn off", role: .destructive) { player.cancelSleepTimer() }
-            }
-            Button("Cancel", role: .cancel) {}
-        }
+        .sheet(isPresented: $showSpeed) { SpeedSheet() }
+        .sheet(isPresented: $showSleepTimer) { SleepSheet() }
     }
 
     /// A blurred, saturated wash of the cover behind the controls.
@@ -176,8 +173,11 @@ struct PlayerView: View {
 
             Spacer()
 
-            if let minutes = player.sleepMinutesRemaining {
-                Label("\(minutes)m", systemImage: "moon.zzz.fill")
+            // Countdown only while time actually remains, mirroring the web
+            // pill — an end-of-chapter timer armed at the boundary shows
+            // nothing rather than a frozen 0:00.
+            if let remaining = player.sleepRemainingSeconds, remaining > 0 {
+                Label(Format.duration(Double(remaining)), systemImage: "moon.zzz.fill")
                     .font(.ui(12, weight: .medium))
                     .foregroundStyle(palette.accentColor)
                     .padding(.horizontal, 10)
@@ -378,8 +378,8 @@ struct PlayerView: View {
     }
 
     /// Speed · Car Mode · Sleep · Bookmark. Every entry is a plain `Button`
-    /// driving a confirmation dialog or a cover — a `Menu` here silently dropped
-    /// out of the row.
+    /// driving a sheet or a cover — a `Menu` here silently dropped out of
+    /// the row.
     private var utilityRow: some View {
         HStack(spacing: 0) {
             utilityCell("Speed") { showSpeed = true } glyph: {
@@ -395,6 +395,18 @@ struct PlayerView: View {
             }
             utilityCell("Bookmark") { addBookmark() } glyph: {
                 Image(systemName: "bookmark").font(.system(size: 22))
+            }
+            // "Synced here" (rule 08: direct call, disabled offline) —
+            // dual-format books only; others have nothing to pair with.
+            if book.hasEbook {
+                utilityCell(syncedHere ? "Synced ✓" : "Sync here") {
+                    guard Connectivity.shared.isOnline else { return }
+                    Task { syncedHere = await player.declareSyncPoint() }
+                } glyph: {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 22))
+                }
+                .opacity(Connectivity.shared.isOnline ? 1 : 0.4)
             }
         }
     }

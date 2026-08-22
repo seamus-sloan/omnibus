@@ -448,6 +448,72 @@ async fn downsync_all_kobo_annotations_continues_past_a_failing_book_and_reports
 }
 
 #[tokio::test]
+async fn apply_derived_locations_applies_only_rows_that_pass_the_concurrency_guard_in_one_batch() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let user = seed_user(&pool, "carol").await;
+
+    // Three rows in one batch: one already claimed by a concurrent writer
+    // (kobo_location already set), one whose CFI drifted since the snapshot
+    // was taken, and one genuinely open. A single `apply_derived_locations`
+    // call must land only the third.
+    let insert_row = |cfi: &'static str, kobo_location: Option<&'static str>| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "INSERT INTO annotations (user_id, book_uuid, epub_cfi_range, kobo_location)
+                 VALUES (?, 'book-uuid', ?, ?) RETURNING id",
+            )
+            .bind(user)
+            .bind(cfi)
+            .bind(kobo_location)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let taken_id = insert_row("cfi-taken", Some("already-claimed")).await;
+    let stale_id = insert_row("cfi-drifted", None).await;
+    let ok_id = insert_row("cfi-ok", None).await;
+
+    // The stale row's snapshot CFI ("cfi-snapshot") no longer matches what's
+    // stored ("cfi-drifted"), so the guard must reject it.
+    let candidates = vec![
+        (taken_id, "cfi-taken".to_string(), "loc-taken".to_string()),
+        (
+            stale_id,
+            "cfi-snapshot".to_string(),
+            "loc-stale".to_string(),
+        ),
+        (ok_id, "cfi-ok".to_string(), "loc-ok".to_string()),
+    ];
+
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+    let derived = apply_derived_locations(&mut tx, &candidates).await.unwrap();
+    tx.commit().await.unwrap();
+
+    assert_eq!(derived, 1, "only the open row should have been applied");
+
+    let rows: Vec<(i64, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT id, kobo_location, client_id FROM annotations WHERE id IN (?, ?, ?)",
+    )
+    .bind(taken_id)
+    .bind(stale_id)
+    .bind(ok_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let find = |id: i64| rows.iter().find(|r| r.0 == id).unwrap();
+
+    // Already-claimed: untouched, not overwritten with the batch's derivation.
+    assert_eq!(find(taken_id).1.as_deref(), Some("already-claimed"));
+    // Stale CFI: guard rejected it, so it stays unresolved.
+    assert_eq!(find(stale_id).1, None);
+    // Open row: applied, and a client_id was minted for it.
+    assert_eq!(find(ok_id).1.as_deref(), Some("loc-ok"));
+    assert!(find(ok_id).2.is_some());
+}
+
+#[tokio::test]
 async fn downsync_book_annotations_propagates_db_error_when_pool_is_closed() {
     let (pool, user, _book_id, uuid, _dir) = fixture("dberr").await;
     pool.close().await;

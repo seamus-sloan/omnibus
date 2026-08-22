@@ -18,12 +18,12 @@ pub(crate) use audiobooks::insert_chapters;
 pub use audiobooks::{sync_audiobooks, sync_audiobooks_with_progress, AudiobookSyncPlan};
 pub use books::{replace_books, sync_books, sync_books_with_progress, MovedFile, SyncPlan};
 
-// The single `books_fts` door. `upsert_fts` / `delete_fts` are
-// `pub(crate)` for the in-tx write sites (sync / merge / undo /
-// metadata_overrides); `rebuild_all_fts` is `pub` for the worker task +
-// admin endpoint that repair the whole index.
+// The single `books_fts` door. `upsert_fts` / `upsert_fts_batch` /
+// `delete_fts` are `pub(crate)` for the in-tx write sites (sync / merge /
+// undo / metadata_overrides); `rebuild_all_fts` is `pub` for the worker
+// task + admin endpoint that repair the whole index.
 pub use fts::rebuild_all_fts;
-pub(crate) use fts::{delete_fts, upsert_fts};
+pub(crate) use fts::{delete_fts, upsert_fts, upsert_fts_batch};
 
 /// Push a post-commit cover triple onto `covers`, allocating only when the book actually has a cover.
 pub(crate) fn push_cover(

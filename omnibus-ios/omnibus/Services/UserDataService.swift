@@ -787,11 +787,44 @@ enum UserDataService {
     // MARK: - Wishlist
 
     /// The caller's wishlist entry for a book, or `nil` when not tracked.
-    /// Read-only here: wishlist writes fail rule 08's test 3 (the payload
-    /// comes from the server's lookup), so they never queue offline.
+    /// Adds happen elsewhere (the scan flow) and fail rule 08's test 3 — the
+    /// payload comes from the server's lookup — so they never queue offline.
     static func wishlistEntry(uuid: String) -> AsyncThrowingStream<CacheRead<WishlistEntry?>, Error> {
         Cache.live(CacheKey.wishlistEntry(uuid)) {
             try await APIClient.shared.get("/api/physical/\(uuid)/wishlist")
+        }
+    }
+
+    /// Stop tracking a book on the caller's wishlist. Direct call, never
+    /// queued — the caller surfaces the failure.
+    ///
+    /// A removal names its target with a uuid it already holds, so on its own
+    /// it would pass rule 08's four tests. Its other half wouldn't: the add is
+    /// what fails test 3, and a queue that accepts one direction of a toggle
+    /// but not the other is a worse contract than an online-only pair — you
+    /// could clear the wishlist on a plane and not put anything back. The
+    /// control is disabled while offline, per the rule's corollary.
+    static func removeWishlistEntry(uuid: String) async throws {
+        let _: Empty = try await APIClient.shared.delete("/api/physical/\(uuid)/wishlist")
+        // Record "not tracked" rather than dropping the key: an absent replica
+        // makes the next read throw offline, and the answer is now known.
+        await Cache.write(CacheKey.wishlistEntry(uuid), WishlistEntry?.none)
+        // The wishlist is a real shelf whose membership derives from these
+        // entries, so its page still lists the book and the shelf lists still
+        // count it. Drop the page before invalidating the lists — the shelf id
+        // this route doesn't carry is read off the cached list.
+        await dropCachedWishlistPages()
+        await invalidateShelves()
+    }
+
+    /// Forget any cached wishlist shelf page, so the shelf doesn't keep showing
+    /// a book that is no longer on it. Deliberately over-broad on an admin's
+    /// device, whose cached list carries other accounts' wishlist shelves too:
+    /// a needless drop there costs one refetch, and this only ever runs online.
+    private static func dropCachedWishlistPages() async {
+        guard let shelves: [ShelfSummary] = await Cache.cachedOnly(CacheKey.shelves) else { return }
+        for shelf in shelves where shelf.kind == .wishlist {
+            await OfflineStore.shared.cacheDelete(CacheKey.shelfPage(shelf.id))
         }
     }
 
@@ -828,5 +861,64 @@ enum UserDataService {
             group.addTask { for await _ in journals(uuid: uuid).values() {} }
             group.addTask { for await _ in readStatus(uuid: uuid).values() {} }
         }
+    }
+}
+
+// MARK: - Cross-format sync (rule 08: configuration-shaped — never queued)
+
+extension UserDataService {
+    /// The mapped "resume in the other format" candidate. A plain network
+    /// read — no cache, no offline fallback: a prompt that can't be
+    /// fetched is a prompt that doesn't appear.
+    static func crossFormatResume(
+        uuid: String,
+        target: ProgressFormat
+    ) async throws -> CrossFormatResume {
+        try await APIClient.shared.get(
+            "/api/books/\(uuid)/cross-format-resume",
+            query: ["target": target.rawValue]
+        )
+    }
+
+    /// Alignment payload for the sheet — network-only, like the resume read.
+    static func alignment(uuid: String) async throws -> AlignmentView {
+        try await APIClient.shared.get("/api/books/\(uuid)/alignment")
+    }
+
+    /// Confirm (or re-confirm) the cross-format link. Rule 08 test 1: this
+    /// is per-user configuration — a deliberate declaration versioned by
+    /// the server-side audio snapshot — so it calls the API directly and
+    /// fails visibly offline; it must never queue.
+    static func confirmCrossFormatLink(
+        uuid: String,
+        mode: CrossFormatLinkMode,
+        primaryBookFileID: Int64?
+    ) async throws {
+        let body = ConfirmCrossFormatLink(
+            bookUUID: uuid,
+            mode: mode,
+            primaryBookFileID: primaryBookFileID,
+            audioOrder: nil
+        )
+        let _: Empty = try await APIClient.shared.post(
+            "/api/books/\(uuid)/cross-format-link",
+            body: body
+        )
+    }
+
+    /// Turn sync off. Same never-queued contract as the confirm.
+    static func unlinkCrossFormat(uuid: String) async throws {
+        let _: Empty = try await APIClient.shared.delete("/api/books/\(uuid)/cross-format-link")
+    }
+
+    /// A "synced here" declaration: records the declaring surface's own
+    /// position as a user anchor and turns follow mode on. Rule 08: a
+    /// deferred declaration would calibrate positions that no longer
+    /// correspond — direct call only, disabled offline at the control.
+    static func declareSyncPoint(_ decl: DeclareSyncPoint) async throws {
+        let _: Empty = try await APIClient.shared.post(
+            "/api/books/\(decl.bookUUID)/sync-point",
+            body: decl
+        )
     }
 }

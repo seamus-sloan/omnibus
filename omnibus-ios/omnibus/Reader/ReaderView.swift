@@ -48,6 +48,7 @@ struct ReaderView: View {
     /// Live position while the Contents row is being scrubbed, driving the
     /// chapter/page readout above it.
     @State private var scrubFraction: Double?
+    @State private var syncHereLabel = "Synced here"
     /// Flips the ribbon solid for a beat after saving a bookmark — the only
     /// confirmation that an instant, invisible action actually happened.
     @State private var justBookmarked = false
@@ -70,6 +71,9 @@ struct ReaderView: View {
     /// A further position another device reached, waiting on the reader to
     /// accept it. Never applied on its own.
     @State private var syncOffer: String?
+    /// The cross-format candidate ("you listened further"), offered the
+    /// same way — never applied on its own.
+    @State private var crossOffer: CrossFormatCandidate?
     @State private var didConfigure = false
     /// When the current stretch of reading began, or `nil` while the app is in
     /// the background. Cleared and restarted across a backgrounding rather than
@@ -132,6 +136,22 @@ struct ReaderView: View {
                     onDismiss: dismissSyncOffer
                 )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if let cross = crossOffer, let pct = cross.percent {
+                SyncOfferBanner(
+                    title: cross.sourceAhead == false
+                        ? "Audiobook is earlier in the book"
+                        : "Listened further in the audiobook",
+                    detail: cross.sourceAhead == false
+                        ? "Your listening maps to about \(pct)% — before this page."
+                        : "Your listening maps to about \(pct)% through.",
+                    onGo: {
+                        // Full-precision jump; the integer pct is display copy.
+                        controller.seek(toFraction: cross.fraction ?? Double(pct) / 100.0)
+                        dismissCrossOffer(cross)
+                    },
+                    onDismiss: { dismissCrossOffer(cross) }
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
             // Sits under the chrome so the menu's own rows stay tappable, and
@@ -180,7 +200,19 @@ struct ReaderView: View {
                 if !chromeVisible { showMenu = false }
             }
         }
-        .onChange(of: controller.location?.cfi) { _, _ in
+        .onChange(of: controller.location?.cfi) { old, _ in
+            // The boot restore's nil→CFI transition, and a rotation or
+            // resize's corrected re-pagination, are echoes of a position the
+            // reader already reported — persisting one stamps a fresh clock
+            // on an unmoved row and shadows a newer audiobook spot at the
+            // cross-format clock gate (the same #1972 class the web reader
+            // suppresses via echo-tagged relocates; issue #2081, AC2). `old
+            // != nil` alone only catches the boot case — a rotation is a
+            // genuine CFI→CFI transition — so `isMovement` (decoded from the
+            // glue's `echo` flag) is the one that actually matters; `old !=
+            // nil` stays as a defensive belt for a relocate that somehow
+            // arrives untagged.
+            guard old != nil, controller.location?.isMovement == true else { return }
             Task { await persist(force: false) }
         }
         .onChange(of: controller.location?.atEnd) { _, atEnd in
@@ -588,6 +620,38 @@ struct ReaderView: View {
             showSettings = true
         }
         .transition(.opacity.combined(with: .move(edge: .bottom)))
+
+        // "Synced here": declare the current spot as a cross-format sync
+        // point (rule 08 — direct call, disabled offline). Dual-format
+        // books only; others have nothing to pair with.
+        if book.hasAudiobook, book.hasEbook {
+            ReaderMenuRow(
+                title: syncHereLabel,
+                icon: "arrow.triangle.2.circlepath",
+                ink: barInk
+            ) {
+                guard Connectivity.shared.isOnline else { return }
+                let frac = controller.location?.fraction ?? 0
+                Task {
+                    syncHereLabel = "Syncing…"
+                    let decl = DeclareSyncPoint(
+                        bookUUID: book.uuid,
+                        format: .epub,
+                        ebookFraction: min(max(frac, 0.0), 1.0),
+                        audioBookFileID: nil,
+                        audioSeconds: nil
+                    )
+                    do {
+                        try await UserDataService.declareSyncPoint(decl)
+                        syncHereLabel = "Synced ✓"
+                    } catch {
+                        syncHereLabel = "Sync failed"
+                    }
+                }
+            }
+            .opacity(Connectivity.shared.isOnline ? 1 : 0.4)
+            .transition(.opacity.combined(with: .move(edge: .bottom)))
+        }
     }
 
     private var quickActions: some View {
@@ -724,7 +788,47 @@ struct ReaderView: View {
                 guard let settled = await remote.value, settled != startCFI else { return }
                 withAnimation(Motion.settle) { syncOffer = settled }
             }
+            group.addTask { @MainActor in
+                // Cross-format: reading resumes where listening got to.
+                // Best-effort network read (rule 08 — never queued); the
+                // same-format offer wins the banner slot when both fire.
+                guard let resume = try? await UserDataService.crossFormatResume(
+                    uuid: book.uuid,
+                    target: .epub
+                ),
+                    resume.state == .candidate,
+                    let candidate = resume.candidate,
+                    candidate.percent != nil
+                else { return }
+                if resume.follow == true {
+                    // Follow mode: resolve-at-open — move the text to the
+                    // mapped spot silently, full precision, no banner.
+                    let frac = candidate.fraction
+                        ?? Double(candidate.percent ?? 0) / 100.0
+                    controller.seek(toFraction: min(max(frac, 0.0), 1.0))
+                    return
+                }
+                let seen = await SyncPromptStore.dismissedClock(uuid: book.uuid, target: .epub)
+                guard SyncPromptStore.shouldOffer(
+                    sourceClock: candidate.sourceClientUpdatedAt,
+                    dismissed: seen
+                ) else { return }
+                withAnimation(Motion.settle) { crossOffer = candidate }
+            }
         }
+    }
+
+    /// Declining (or taking) the cross-format offer stores the source clock
+    /// so it re-arms only after the listening position advances.
+    private func dismissCrossOffer(_ candidate: CrossFormatCandidate) {
+        Task {
+            await SyncPromptStore.storeDismissedClock(
+                candidate.sourceClientUpdatedAt,
+                uuid: book.uuid,
+                target: .epub
+            )
+        }
+        withAnimation(Motion.settle) { crossOffer = nil }
     }
 
     /// Record where the reader is. The write into the replica and the outbox

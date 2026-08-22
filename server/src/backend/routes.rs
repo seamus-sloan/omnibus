@@ -10,13 +10,14 @@ use axum::{
     Router,
 };
 
+use crate::rate_limit::{rate_limit_by_ip, RateLimiter};
+
 use super::{
     account, admin_health, admin_sessions, audiobooks, author_photos, authors, bookmarks, covers,
-    ebooks, genres, highlights, journals, kindle, overrides, physical, profile, progress, ratings,
-    read_status, scan, search, series, settings, shelves, stats, suggestions, summary, tags,
-    uploads, users, AppState,
+    cross_format, ebooks, genres, highlights, journals, kindle, metadata, overrides, physical,
+    profile, progress, ratings, read_status, scan, search, series, settings, shelves, stats,
+    suggestions, summary, tags, uploads, users, AppState,
 };
-use crate::rate_limit::{rate_limit_by_ip, RateLimiter};
 
 /// Health check, settings, ebooks, and audiobook playback routes.
 pub(super) fn content_routes() -> Router<AppState> {
@@ -131,6 +132,7 @@ pub(super) fn data_routes(search_limiter: Arc<RateLimiter>) -> Router<AppState> 
         .merge(discovery_routes())
         .merge(suggestion_routes())
         .merge(summary_routes())
+        .merge(metadata_routes())
         .merge(kindle_routes())
 }
 
@@ -164,6 +166,27 @@ fn progress_routes() -> Router<AppState> {
         .route("/api/progress/sessions", post(progress::post_sessions))
         .route("/api/progress/recent", get(progress::get_recent_progress))
         .route("/api/progress/{uuid}", get(progress::get_progress))
+        .route(
+            "/api/books/{uuid}/cross-format-resume",
+            get(cross_format::get_cross_format_resume),
+        )
+        .route(
+            "/api/books/{uuid}/alignment",
+            get(cross_format::get_alignment),
+        )
+        .route(
+            "/api/books/{uuid}/cross-format-link",
+            post(cross_format::post_cross_format_link)
+                .delete(cross_format::delete_cross_format_link),
+        )
+        .route(
+            "/api/books/{uuid}/sync-point",
+            post(cross_format::post_sync_point),
+        )
+        .route(
+            "/api/books/{uuid}/cross-format-follow",
+            post(cross_format::post_cross_format_follow),
+        )
 }
 
 /// F2.4b highlight annotations — mobile-facing REST. Web hits the analogous
@@ -381,6 +404,21 @@ fn summary_routes() -> Router<AppState> {
         .route("/api/summary/sources", get(summary::get_summary_sources))
 }
 
+/// The metadata-provider surface — mobile-facing REST. Web hits the analogous
+/// `/api/rpc/metadata/*` server fns in `omnibus_frontend::rpc::metadata_search`,
+/// which repeat these handlers' gates: the catalog is read-only for any
+/// authenticated user, and the edition search is `can_edit`-gated inside its
+/// handler. Change one side's gate or response shape and the other needs the
+/// same edit — there is no shared helper between the two crates.
+fn metadata_routes() -> Router<AppState> {
+    Router::new()
+        .route("/api/metadata/providers", get(metadata::get_providers))
+        .route(
+            "/api/metadata/editions/search",
+            post(metadata::post_edition_search),
+        )
+}
+
 /// F4.3 Send-to-Kindle — mobile-facing REST. Web hits the analogous
 /// `/api/rpc/kindle/send`, `/api/rpc/account/kindle-email`, and
 /// `/api/rpc/smtp*` server fns.
@@ -431,12 +469,13 @@ fn search_router(limiter: Arc<RateLimiter>) -> Router<AppState> {
 /// Per-IP rate-limited router for the binary-upload endpoints. Mirrors
 /// [`search_router`]: a dedicated sub-router carrying its own
 /// `Arc<RateLimiter>` via `from_fn_with_state` (state that doesn't propagate
-/// to the handlers), merged into [`super::rest_router`]. The three routes —
-/// cover `POST`, author-photo `PUT`, author-photo-URL `PUT` — each accept a
-/// multi-MiB payload and drive disk I/O, WebP transcoding, and SQLite
-/// writes, so they share a per-IP budget. The `GET`/`DELETE` author-photo
-/// routes carry no upload body (DELETE mutates but cheaply), so they stay
-/// in `rest_router`, outside this limiter.
+/// to the handlers), merged into [`super::rest_router`]. Its routes — cover
+/// `POST`, cover from-URL `POST`, journal image, avatar, author-photo `PUT`,
+/// author-photo-URL `PUT` — each accept a multi-MiB payload or drive an
+/// outbound fetch, on top of disk I/O, WebP transcoding, and SQLite writes,
+/// so they share a per-IP budget. The `GET`/`DELETE` author-photo routes
+/// carry no upload body (DELETE mutates but cheaply), so they stay in
+/// `rest_router`, outside this limiter.
 fn upload_router() -> Router<AppState> {
     let limiter = Arc::new(RateLimiter::with_policy(
         super::UPLOAD_RATE_LIMIT_WINDOW,
@@ -446,6 +485,12 @@ fn upload_router() -> Router<AppState> {
         .route(
             "/api/ebooks/{uuid}/cover",
             post(overrides::post_ebook_cover),
+        )
+        // No upload body, but the only override route that spends an
+        // *outbound* fetch — which is the cost this limiter is really for.
+        .route(
+            "/api/ebooks/{uuid}/cover/from-url",
+            post(overrides::post_ebook_cover_from_url),
         )
         .route("/api/journals/images", post(journals::post_journal_image))
         .route("/api/account/avatar", post(profile::post_avatar))

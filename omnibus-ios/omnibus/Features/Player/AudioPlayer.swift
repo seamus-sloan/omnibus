@@ -12,10 +12,27 @@ import MediaPlayer
 import Observation
 import SwiftUI
 
+/// Sleep-timer state, mirroring the web mobile player's `SleepState` so the
+/// two clients' sleep sheets offer the same contract.
+enum SleepTimer: Equatable {
+    case off
+    /// Wall-clock countdown: `remaining` seconds tick down once per second;
+    /// `preset` is the option (in seconds) that armed it, for the sheet
+    /// highlight.
+    case countdown(remaining: Int, preset: Int)
+    /// Pause when playback reaches `atSeconds` (the current chapter's end at
+    /// arm time).
+    case endOfChapter(atSeconds: Double)
+}
+
 @Observable
 @MainActor
 final class AudioPlayer {
     static let shared = AudioPlayer()
+
+    /// The cross-format candidate on offer ("you read further"), shown by
+    /// the same banner slot as [`syncOffer`].
+    private(set) var crossFormatOffer: CrossFormatCandidate?
 
     private(set) var book: Book?
     private(set) var manifest: AudiobookManifest?
@@ -61,8 +78,8 @@ final class AudioPlayer {
     /// set on another device to 1.0 the moment the device reconnected.
     private var isAdoptingRate = false
 
-    /// Minutes remaining on the sleep timer, `nil` when off.
-    private(set) var sleepMinutesRemaining: Int?
+    /// Sleep-timer state; `.off` when disarmed.
+    private(set) var sleepTimer: SleepTimer = .off
 
     /// A further position another device reached, waiting on the listener to
     /// accept it. Never applied on its own.
@@ -278,6 +295,7 @@ final class AudioPlayer {
             // than being behind — but it is offered, the same way the reader
             // offers it.
             offerLatePosition(from: remote, uuid: book.uuid)
+            offerCrossFormat()
         } catch {
             isLoading = false
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
@@ -290,6 +308,21 @@ final class AudioPlayer {
         isAdoptingRate = true
         rate = value
         isAdoptingRate = false
+    }
+
+    /// Apply a rate audibly without persisting it — the speed slider's live
+    /// drag path, where per-tick writes would spam the server. Pair with
+    /// [`commitRate`] on drag end.
+    func setRateLive(_ value: Double) {
+        isAdoptingRate = true
+        rate = value
+        isAdoptingRate = false
+        if isPlaying { player?.rate = Float(value) }
+    }
+
+    /// Persist the current rate — the drag-end commit for [`setRateLive`].
+    func commitRate() {
+        Task { await persistRate() }
     }
 
     /// The manifest for the resolved file, falling back to the server's
@@ -356,6 +389,84 @@ final class AudioPlayer {
     /// nag through the whole chapter.
     func dismissSyncOffer() {
         withAnimation(Motion.settle) { syncOffer = nil }
+    }
+
+    /// Fetch the cross-format candidate for the loaded book (best-effort
+    /// network read; rule 08 — nothing here ever queues). Offered with the
+    /// same banner mechanics as the same-format late-position offer, and
+    /// only when the mapped file is the one playing — the candidate's
+    /// seconds are within that file alone.
+    func offerCrossFormat() {
+        guard let uuid = book?.uuid else { return }
+        Task { @MainActor in
+            guard let resume = try? await UserDataService.crossFormatResume(uuid: uuid, target: .audio),
+                  resume.state == .candidate,
+                  let candidate = resume.candidate,
+                  book?.uuid == uuid,
+                  syncOffer == nil,
+                  SyncPromptStore.fileMatches(
+                      selected: fileID,
+                      defaultID: book?.audioFiles.first?.id,
+                      candidate: candidate.bookFileID
+                  )
+            else { return }
+            if resume.follow == true, let seconds = candidate.audioPositionSeconds {
+                // Follow mode: resolve-at-open — apply the mapped position
+                // silently, no banner, no dismissal bookkeeping.
+                await seek(to: seconds)
+                return
+            }
+            let seen = await SyncPromptStore.dismissedClock(uuid: uuid, target: .audio)
+            guard SyncPromptStore.shouldOffer(
+                sourceClock: candidate.sourceClientUpdatedAt,
+                dismissed: seen
+            ) else { return }
+            withAnimation(Motion.settle) { crossFormatOffer = candidate }
+        }
+    }
+
+    /// "Synced here": declare the current listening position as a sync
+    /// point (rule 08 — direct call, never queued; the control is disabled
+    /// offline). Returns whether the declaration was accepted.
+    func declareSyncPoint() async -> Bool {
+        guard let uuid = book?.uuid else { return false }
+        let decl = DeclareSyncPoint(
+            bookUUID: uuid,
+            format: .audio,
+            ebookFraction: nil,
+            audioBookFileID: fileID ?? book?.audioFiles.first?.id,
+            audioSeconds: position
+        )
+        do {
+            try await UserDataService.declareSyncPoint(decl)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Take the cross-format offer: seek, then force a write so the jump
+    /// carries this device's clock (the normal position path).
+    func acceptCrossFormatOffer() async {
+        guard let candidate = crossFormatOffer,
+              let seconds = candidate.audioPositionSeconds
+        else { return }
+        await dismissCrossFormatOffer()
+        await seek(to: seconds)
+        await persistPosition(force: true)
+    }
+
+    /// Declining stores the source clock so the prompt re-arms only after
+    /// the reading position advances. Never a progress write.
+    func dismissCrossFormatOffer() async {
+        if let candidate = crossFormatOffer, let uuid = book?.uuid {
+            await SyncPromptStore.storeDismissedClock(
+                candidate.sourceClientUpdatedAt,
+                uuid: uuid,
+                target: .audio
+            )
+        }
+        withAnimation(Motion.settle) { crossFormatOffer = nil }
     }
 
     /// The saved playback rate, from the replica when the server can't be
@@ -533,27 +644,59 @@ final class AudioPlayer {
 
     // MARK: - Sleep timer
 
-    func startSleepTimer(minutes: Int) {
+    /// Arm a wall-clock countdown; `seconds <= 0` disarms.
+    func startSleepTimer(seconds: Int) {
         sleepTask?.cancel()
-        sleepMinutesRemaining = minutes
+        sleepTask = nil
+        guard seconds > 0 else {
+            sleepTimer = .off
+            return
+        }
+        sleepTimer = .countdown(remaining: seconds, preset: seconds)
         sleepTask = Task { [weak self] in
-            for remaining in stride(from: minutes, through: 1, by: -1) {
-                try? await Task.sleep(for: .seconds(60))
+            for remaining in stride(from: seconds - 1, through: 0, by: -1) {
+                try? await Task.sleep(for: .seconds(1))
                 if Task.isCancelled { return }
-                await MainActor.run { self?.sleepMinutesRemaining = remaining - 1 }
+                await MainActor.run {
+                    self?.sleepTimer = .countdown(remaining: remaining, preset: seconds)
+                }
             }
             await MainActor.run {
                 self?.pause()
-                self?.sleepMinutesRemaining = nil
+                self?.sleepTimer = .off
             }
         }
+    }
+
+    /// Arm the timer to pause at `atSeconds` — the current chapter's end,
+    /// frozen at arm time. The periodic observer enforces the boundary.
+    func startSleepTimer(endOfChapterAt atSeconds: Double) {
+        sleepTask?.cancel()
+        sleepTask = nil
+        sleepTimer = .endOfChapter(atSeconds: atSeconds)
     }
 
     func cancelSleepTimer() {
         sleepTask?.cancel()
         sleepTask = nil
-        sleepMinutesRemaining = nil
+        sleepTimer = .off
     }
+
+    /// Seconds left on the sleep timer for display, deriving the
+    /// end-of-chapter variant from the playback position. `nil` when off.
+    /// Mirrors the web sheet's `sleep_remaining`.
+    nonisolated static func sleepRemaining(_ timer: SleepTimer, position: Double) -> Int? {
+        switch timer {
+        case .off:
+            return nil
+        case .countdown(let remaining, _):
+            return max(0, remaining)
+        case .endOfChapter(let atSeconds):
+            return Int(max(0, atSeconds - position).rounded(.up))
+        }
+    }
+
+    var sleepRemainingSeconds: Int? { Self.sleepRemaining(sleepTimer, position: position) }
 
     // MARK: - Lifecycle
 
@@ -671,6 +814,14 @@ final class AudioPlayer {
                 // back to stale for as long as the seek takes to settle.
                 guard self.pendingSeekCount == 0 else { return }
                 self.position = time.seconds
+                // An armed end-of-chapter sleep timer fires the moment
+                // playback crosses the boundary it was armed against.
+                if case .endOfChapter(let atSeconds) = self.sleepTimer,
+                    self.position >= atSeconds
+                {
+                    self.pause()
+                    self.sleepTimer = .off
+                }
                 // The periodic observer ticks every 0.5 *media* seconds — at
                 // 2x that's twice per wall second — so each tick is converted
                 // to wall-clock before it accrues. Listening stats count the

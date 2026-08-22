@@ -191,16 +191,23 @@ pub(super) fn LibraryPickOption(
     }
 }
 
+/// What the 3c chooser's four buttons ask [`super::CheckInPage`] to do, each
+/// carrying exactly the payload its transport needs.
+#[derive(Clone, PartialEq)]
+pub(super) enum ChooseAction {
+    OwnIt(ExternalBookMeta),
+    Wishlist(WishlistAddRequest),
+    Link,
+    Restart,
+}
+
 /// 3c — resolved online but absent from the library: own it, link it to a
 /// book already on the shelf, wishlist it, or start over.
 #[component]
 pub(super) fn ChooseScreen(
     online: ExternalBookMeta,
     state: FlowState,
-    on_own_it: EventHandler<ExternalBookMeta>,
-    on_wishlist: EventHandler<WishlistAddRequest>,
-    on_link: EventHandler<()>,
-    on_restart: EventHandler<()>,
+    on_action: EventHandler<ChooseAction>,
 ) -> Element {
     let busy = state.busy;
     let own_meta = online.clone();
@@ -216,7 +223,7 @@ pub(super) fn ChooseScreen(
                     class: "btn primary",
                     disabled: busy(),
                     "data-testid": "check-in-own-it",
-                    onclick: move |_| on_own_it.call(own_meta.clone()),
+                    onclick: move |_| on_action.call(ChooseAction::OwnIt(own_meta.clone())),
                     "I own it \u{2014} add to my collection"
                 }
                 // A provider record can carry a placeholder title that shares
@@ -228,7 +235,7 @@ pub(super) fn ChooseScreen(
                     class: "btn ghost",
                     disabled: busy(),
                     "data-testid": "check-in-link-existing",
-                    onclick: move |_| on_link.call(()),
+                    onclick: move |_| on_action.call(ChooseAction::Link),
                     "I already have this book"
                 }
                 button {
@@ -236,7 +243,7 @@ pub(super) fn ChooseScreen(
                     class: "btn ghost",
                     disabled: busy(),
                     "data-testid": "check-in-wishlist",
-                    onclick: move |_| on_wishlist.call(wishlist_request_for(&wish_meta)),
+                    onclick: move |_| on_action.call(ChooseAction::Wishlist(wishlist_request_for(&wish_meta))),
                     "Add to my wishlist"
                 }
                 button {
@@ -244,7 +251,7 @@ pub(super) fn ChooseScreen(
                     class: "btn ghost",
                     disabled: busy(),
                     "data-testid": "check-in-restart",
-                    onclick: move |_| on_restart.call(()),
+                    onclick: move |_| on_action.call(ChooseAction::Restart),
                     "Not the right book?"
                 }
             }

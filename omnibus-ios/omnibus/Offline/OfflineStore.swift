@@ -986,7 +986,7 @@ actor OfflineStore {
         "me", "progress:", "recent_progress", "rate:", "highlights:", "bookmarks:",
         "journals:", "rating:", "ratings_others:", "shelves", "shelf:", "shelf_page:",
         "shelf_previews", "stats:", "reader_cfi:", "audio_pos:", "audio_rate:",
-        "read_status:", "shelves_with:",
+        "read_status:", "shelves_with:", "syncprompt:",
     ]
 
     /// Record which account this device's replica belongs to; when a different

@@ -213,6 +213,7 @@ pub(super) fn ReadyPlayer(
                 },
             }
 
+
             PlayerOverlays {
                 panes,
                 speed: SpeedPanelData { rate, rate_error, user_id, uuid: uuid.clone() },

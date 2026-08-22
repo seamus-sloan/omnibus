@@ -20,7 +20,7 @@ mod cover;
 mod merge;
 
 pub(crate) use cover::apply_overrides;
-pub use cover::{clear_cover_override, delete_override_cover, get_book_uuid, write_override_cover};
+pub use cover::{clear_cover_override, delete_override_cover, write_override_cover};
 pub use merge::{bulk_merge_metadata_overrides, merge_metadata_overrides};
 
 /// Errors returned by the metadata overrides data layer.
@@ -54,6 +54,11 @@ impl From<crate::books::BooksError> for MetadataOverridesError {
             crate::books::BooksError::Db(inner) => MetadataOverridesError::Db(inner),
             crate::books::BooksError::OverridesJson(inner) => {
                 MetadataOverridesError::Serialization(inner)
+            }
+            // A `BooksError` this module can receive never carries one: the
+            // variant exists for the overrides *read* path's fold-through.
+            crate::books::BooksError::Other(msg) => {
+                MetadataOverridesError::Db(sqlx::Error::Decode(msg.into()))
             }
         }
     }
@@ -242,16 +247,39 @@ pub async fn upsert_metadata_overrides(
     has_cover_override: bool,
     user_id: i64,
 ) -> Result<(), MetadataOverridesError> {
-    let json = serde_json::to_string(overrides)?;
-
     // `begin_with("BEGIN IMMEDIATE")` matches `merge_metadata_overrides` — the
     // RESERVED lock at start makes this writer wait for any in-flight writer
     // (SQLite is single-writer at the database level), and the returned
     // `sqlx::Transaction` issues a structured ROLLBACK on any `?` early-return
     // below.
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    upsert_one_in_tx(&mut tx, book_uuid, overrides, has_cover_override, user_id).await?;
+    tx.commit().await?;
+
+    if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
+        tracing::warn!(book_uuid, error = %e, "books_fts rebuild after override upsert failed");
+    }
+    Ok(())
+}
+
+/// Tx-scoped body of [`upsert_metadata_overrides`]: the override row write,
+/// series/tag/genre materialization, `last_modified` touch, and orphan reap
+/// — everything but the transaction's own begin/commit and the post-commit
+/// best-effort FTS rebuild, both left to the caller. `pub(crate)` so a
+/// caller that already holds an open transaction (the library-cleanup
+/// apply/undo primitives in [`crate::cleanup`]) can join it instead of
+/// nesting a second `BEGIN IMMEDIATE`, which SQLite's single-writer model
+/// would otherwise serialize behind the caller's own lock.
+pub(crate) async fn upsert_one_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    book_uuid: &str,
+    overrides: &MetadataOverrides,
+    has_cover_override: bool,
+    user_id: i64,
+) -> Result<(), MetadataOverridesError> {
+    let json = serde_json::to_string(overrides)?;
     upsert_overrides_row(
-        &mut *tx,
+        &mut **tx,
         book_uuid,
         overrides,
         &json,
@@ -259,19 +287,14 @@ pub async fn upsert_metadata_overrides(
         user_id,
     )
     .await?;
-    materialize_series_link(&mut tx, book_uuid, overrides).await?;
-    materialize_tag_rows(&mut tx, overrides).await?;
-    materialize_genre_rows(&mut tx, overrides).await?;
-    touch_book_last_modified(&mut tx, book_uuid).await?;
+    materialize_series_link(tx, book_uuid, overrides).await?;
+    materialize_tag_rows(tx, overrides).await?;
+    materialize_genre_rows(tx, overrides).await?;
+    touch_book_last_modified(tx, book_uuid).await?;
     // A subjects replacement may have dropped a tag's last membership — reap
     // orphans in the same tx so no surface ever serves a bookless tag.
-    crate::taxonomy::delete_orphan_tags(&mut tx).await?;
-    crate::taxonomy::delete_orphan_genres(&mut tx).await?;
-    tx.commit().await?;
-
-    if let Err(e) = rebuild_fts_for_book(pool, book_uuid).await {
-        tracing::warn!(book_uuid, error = %e, "books_fts rebuild after override upsert failed");
-    }
+    crate::taxonomy::delete_orphan_tags(tx).await?;
+    crate::taxonomy::delete_orphan_genres(tx).await?;
     Ok(())
 }
 
@@ -281,11 +304,26 @@ pub async fn get_metadata_overrides(
     pool: &SqlitePool,
     book_uuid: &str,
 ) -> Result<Option<(MetadataOverrides, bool)>, MetadataOverridesError> {
+    get_metadata_overrides_exec(pool, book_uuid).await
+}
+
+/// Executor-generic body of [`get_metadata_overrides`], so a caller that
+/// already holds an open transaction (e.g. [`crate::cleanup::apply::apply_book_title_override`])
+/// can read the current overrides through that same transaction instead of
+/// racing it against a separate pool-level read taken before the
+/// transaction started.
+pub(crate) async fn get_metadata_overrides_exec<'e, E>(
+    executor: E,
+    book_uuid: &str,
+) -> Result<Option<(MetadataOverrides, bool)>, MetadataOverridesError>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     let row: Option<(String, i64)> = sqlx::query_as(
         "SELECT overrides, has_cover_override FROM metadata_overrides WHERE book_uuid = ?",
     )
     .bind(book_uuid)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
 
     match row {
@@ -317,21 +355,7 @@ pub async fn delete_metadata_overrides(
     book_uuid: &str,
 ) -> Result<(), MetadataOverridesError> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-    sqlx::query("DELETE FROM metadata_overrides WHERE book_uuid = ?")
-        .bind(book_uuid)
-        .execute(&mut *tx)
-        .await?;
-    // Resolve inside the transaction so the id read agrees with the DELETE.
-    // A uuid with no live book has no FTS row to restore.
-    let book_id = resolve_book_id_by_uuid_exec(&mut *tx, book_uuid).await?;
-    if let Some(id) = book_id {
-        upsert_fts(&mut tx, id).await?;
-    }
-    touch_book_last_modified(&mut tx, book_uuid).await?;
-    // Reverting to scanned drops every override membership this row held —
-    // tags that existed only through it are now orphans.
-    crate::taxonomy::delete_orphan_tags(&mut tx).await?;
-    crate::taxonomy::delete_orphan_genres(&mut tx).await?;
+    let book_id = delete_one_in_tx(&mut tx, book_uuid).await?;
     tx.commit().await?;
 
     // The override state is now fully cleared, so any cached rewritten
@@ -339,6 +363,37 @@ pub async fn delete_metadata_overrides(
     // it orphaned on disk (#1395).
     invalidate_export_epub_cache_for(book_id).await;
     Ok(())
+}
+
+/// Tx-scoped body of [`delete_metadata_overrides`]: the row DELETE, the
+/// `books_fts` restore, the `last_modified` touch, and orphan reap — all on
+/// the caller's transaction, mirroring [`upsert_one_in_tx`]. Returns the
+/// resolved book id (`None` if the uuid had no live book row) so a
+/// pool-level caller can still run the post-commit export-EPUB cache
+/// invalidation; a caller joining an existing transaction (the
+/// library-cleanup undo primitive) is free to ignore it, since that
+/// eviction is a disk-space nicety rather than a correctness requirement —
+/// the cache is keyed on `books.last_modified`, already bumped here.
+pub(crate) async fn delete_one_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    book_uuid: &str,
+) -> Result<Option<i64>, MetadataOverridesError> {
+    sqlx::query("DELETE FROM metadata_overrides WHERE book_uuid = ?")
+        .bind(book_uuid)
+        .execute(&mut **tx)
+        .await?;
+    // Resolve inside the transaction so the id read agrees with the DELETE.
+    // A uuid with no live book has no FTS row to restore.
+    let book_id = resolve_book_id_by_uuid_exec(&mut **tx, book_uuid).await?;
+    if let Some(id) = book_id {
+        upsert_fts(tx, id).await?;
+    }
+    touch_book_last_modified(tx, book_uuid).await?;
+    // Reverting to scanned drops every override membership this row held —
+    // tags that existed only through it are now orphans.
+    crate::taxonomy::delete_orphan_tags(tx).await?;
+    crate::taxonomy::delete_orphan_genres(tx).await?;
+    Ok(book_id)
 }
 
 /// Bulk-load overrides for a set of UUIDs. Returns a map from UUID to

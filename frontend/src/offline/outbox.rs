@@ -283,6 +283,13 @@ pub(crate) async fn remap_queued(temp_id: i64, real_id: i64) {
 /// Queue a reading/listening position write.
 pub(crate) async fn queue_save_progress(update: &ProgressUpdate) -> Option<ProgressRecord> {
     let now = store::now_secs();
+    // Stamp capture time into the queued op itself, not just the optimistic
+    // record — a drained op with no client event time is arbitrated as
+    // "drain-time" by the server, which un-ages every position written
+    // offline (#1864).
+    let mut update = update.clone();
+    let client_updated_at = update.client_updated_at.unwrap_or(now);
+    update.client_updated_at = Some(client_updated_at);
     let record = ProgressRecord {
         book_uuid: update.book_uuid.clone(),
         format: update.format,
@@ -295,7 +302,7 @@ pub(crate) async fn queue_save_progress(update: &ProgressUpdate) -> Option<Progr
         // Optimistic local record: mirrors the server's own COALESCE (issue
         // #1362) — the update's own client event time when it sent one,
         // else "now".
-        client_updated_at: update.client_updated_at.unwrap_or(now),
+        client_updated_at,
     };
     let queued = enqueue(Op::SaveProgress {
         update: update.clone(),

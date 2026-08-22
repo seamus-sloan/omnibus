@@ -217,9 +217,11 @@ pub(super) fn LandingContent(props: LandingContentProps) -> Element {
                     books,
                     prefs,
                     ctx,
-                    on_sort: EventHandler::new(on_sort),
-                    on_load_more,
-                    on_clear_filters,
+                    handlers: LandingBooksHandlers {
+                        on_sort: EventHandler::new(on_sort),
+                        on_load_more,
+                        on_clear_filters,
+                    },
                 }
             }
         }
@@ -244,6 +246,15 @@ fn build_sort_handler(
     }
 }
 
+/// Handlers the book area dispatches: a sort-column click, the load-more
+/// sentinel, and the filtered-empty "clear filters" escape.
+#[derive(Clone, PartialEq)]
+pub(super) struct LandingBooksHandlers {
+    pub on_sort: EventHandler<SortKey>,
+    pub on_load_more: EventHandler<()>,
+    pub on_clear_filters: EventHandler<()>,
+}
+
 /// The loading / table-or-grid / empty / filtered-empty states for the main
 /// book area, and the load-more pagination sentinel.
 #[component]
@@ -251,10 +262,13 @@ fn LandingBooksArea(
     books: BooksView,
     prefs: ViewPrefs,
     ctx: BookTableContext,
-    on_sort: EventHandler<SortKey>,
-    on_load_more: EventHandler<()>,
-    on_clear_filters: EventHandler<()>,
+    handlers: LandingBooksHandlers,
 ) -> Element {
+    let LandingBooksHandlers {
+        on_sort,
+        on_load_more,
+        on_clear_filters,
+    } = handlers;
     let BooksView {
         is_loading,
         visible_books,

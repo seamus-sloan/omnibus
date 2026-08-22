@@ -15,13 +15,15 @@ use omnibus_shared::{EbookMetadata, SuggestionsResponse};
 use crate::Route;
 
 #[cfg(not(feature = "mobile"))]
-use super::body::{BdAuthorCluster, BdBodyMain, BdPageCtx, BdRailSection};
+use super::body::{BdAuthorCluster, BdBodyBook, BdBodyMain, BdPageCtx, BdRailFacts, BdRailSection};
 #[cfg(not(feature = "mobile"))]
 use super::hero::{self, BdHeroSection};
 #[cfg(feature = "mobile")]
 use super::mobile;
 #[cfg(not(feature = "mobile"))]
 use super::physical;
+#[cfg(not(feature = "mobile"))]
+use super::sync_link;
 use super::{BdCrumbItem, DescriptionSignals, PhysSignals};
 
 fn kicker_label(year: &str) -> String {
@@ -123,10 +125,14 @@ pub(super) fn derive_loaded_view(b: &EbookMetadata) -> LoadedBookView {
         .as_deref()
         .map(|a| format!("--accent: {a};"))
         .unwrap_or_default();
-    let has_audio = b
-        .formats
-        .iter()
-        .any(|f| f.eq_ignore_ascii_case("m4b") || f.eq_ignore_ascii_case("mp3"));
+    // M4A is a first-class indexed audio format (`db::audiobook`); leaving
+    // it out here made the landing hero's link invite dead-end on a detail
+    // page with no sync affordance for EPUB+M4A books.
+    let has_audio = b.formats.iter().any(|f| {
+        f.eq_ignore_ascii_case("m4b")
+            || f.eq_ignore_ascii_case("m4a")
+            || f.eq_ignore_ascii_case("mp3")
+    });
     let has_ebook = b
         .formats
         .iter()
@@ -167,6 +173,9 @@ pub(super) struct LoadedCtx {
     pub(super) is_admin: bool,
     pub(super) refresh: Signal<u32>,
     pub(super) phys: PhysSignals,
+    /// One-shot flag from the merge dialog: a merge that just produced a
+    /// dual-format book auto-opens the alignment modal.
+    pub(super) after_merge: Signal<bool>,
 }
 
 /// Render the fully-loaded book detail view — mobile re-flow into a single
@@ -187,9 +196,10 @@ pub(super) fn render_loaded(
         is_admin,
         refresh,
         phys,
+        after_merge,
     } = ctx;
     let _ = rail;
-    let _ = (refresh, phys);
+    let _ = (refresh, phys, after_merge);
     mobile::render_loaded_mobile(mobile::MobileBookView {
         b,
         author_books,
@@ -216,6 +226,7 @@ pub(super) fn render_loaded(
         is_admin,
         refresh,
         phys,
+        after_merge,
     } = ctx;
     // Web keeps its own local copy inside `BdTitleCol` (hero.rs), a real
     // `#[component]` that gets a fresh scope per mount — no hook-order risk
@@ -243,18 +254,31 @@ pub(super) fn render_loaded(
     // Extract the physical-panel inputs before `b` is moved into the rail.
     let is_fileless = b.formats.is_empty();
     let accent = b.accent.clone();
+    // The "Your progress" block lives inside the hero's title column (below
+    // the CTA row); it only exists for dual-format books.
+    let sync_panel = if has_ebook && has_audio {
+        rsx! {
+            sync_link::BdSyncPanel {
+                uuid: uuid.clone(),
+                refresh,
+                after_merge,
+            }
+        }
+    } else {
+        rsx! {}
+    };
     rsx! {
         div { class: "bd-root", style: "{accent_style}",
             BdHeroSection {
                 b: b.clone(),
-                title: title.clone(),
-                chrome: hero::BdHeroChrome { kicker, crumbs },
+                chrome: hero::BdHeroChrome { kicker, crumbs, title: title.clone() },
                 avail: hero::Availability {
                     has_ebook,
                     has_audio,
                     has_comic,
                 },
                 phys,
+                sync_panel,
             }
             physical::BdPhysicalPanel {
                 uuid: uuid.clone(),
@@ -264,18 +288,14 @@ pub(super) fn render_loaded(
             }
             section { class: "bd-body-grid",
                 BdBodyMain {
-                    uuid: uuid.clone(),
-                    title: title.clone(),
+                    book: BdBodyBook { uuid: uuid.clone(), title: title.clone(), accent },
                     author: BdAuthorCluster { primary_author, author_id, author_books },
-                    accent,
                     suggestions,
                     ctx: BdPageCtx { server_url, is_admin },
                 }
                 BdRailSection {
                     b,
-                    title,
-                    authors_line,
-                    series,
+                    facts: BdRailFacts { title, authors_line, series },
                     merge_button,
                     delete_button,
                 }

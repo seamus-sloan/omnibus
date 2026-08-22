@@ -13,8 +13,8 @@ use crate::{data, use_server_url, Route};
 mod cover_editor;
 mod fields;
 mod form_grid;
-mod hardcover_fetch;
 mod header;
+mod metadata_search;
 mod save_bar;
 mod sidebar;
 mod state;
@@ -80,6 +80,11 @@ pub fn MetadataEditPage(uuid: String) -> Element {
 fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
     let server_url = use_server_url();
     let form = state::use_metadata_edit_form_state(&book, &uuid, &server_url);
+    // The book as the server last reported it. Distinct from `form.orig`,
+    // which is the frozen dirty-tracking baseline: this one moves when a
+    // write lands outside the save bar — today only a cover, which is the one
+    // edit on this page that doesn't wait for Save.
+    let mut live_book = use_signal(|| book.clone());
 
     rsx! {
         div { class: "me-root", style: "{form.accent_style}",
@@ -100,9 +105,11 @@ fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
                     fields: form.fields,
                     suggestions: form.suggestions,
                     uuid: uuid.clone(),
+                    book: live_book(),
+                    on_cover_applied: move |updated| live_book.set(updated),
                 }
                 Sidebar {
-                    book: book.clone(),
+                    book: live_book(),
                     saving: form.status.saving,
                     on_revert: form.on_revert,
                 }
@@ -123,6 +130,20 @@ fn MetadataEditForm(book: EbookMetadata, uuid: String) -> Element {
 // loaded book (which already has any prior overrides merged in); server-side
 // merge then preserves prior overrides on untouched fields.
 
+/// Append a cache-busting `v=` query param to `url`, using `&` when `url`
+/// already carries a query string (mobile's [`crate::media_url`] appends
+/// `?token=…`).
+///
+/// Lives on the page module because both cover surfaces need it — the
+/// sidebar's `CoverEditor` and the edition picker's cover row — and they
+/// bust the same `/api/covers/:uuid` URL for the same reason: the route
+/// caches for a day, so nothing short of a changed query string gets the new
+/// bytes.
+fn bust_query(url: &str, bust: u32) -> String {
+    let sep = if url.contains('?') { '&' } else { '?' };
+    format!("{url}{sep}v={bust}")
+}
+
 /// Edited scalar and list fields collected from the form signals before a save.
 struct EditedFields<'a> {
     title: &'a str,
@@ -133,6 +154,13 @@ struct EditedFields<'a> {
     series: &'a str,
     series_index: &'a str,
     isbn13: &'a str,
+    isbn10: &'a str,
+    /// Pre-parsed by the caller (`state::build_on_save`), which rejects a
+    /// non-numeric entry client-side before this function ever runs — unlike
+    /// every other field here, this one can't be diffed as a raw string
+    /// since `MetadataOverrides::print_pages` is `Option<i64>`, not
+    /// `Option<String>`.
+    print_pages: Option<i64>,
     authors: &'a [String],
     tags: &'a [String],
     genres: &'a [String],
@@ -179,6 +207,12 @@ fn build_overrides(orig: &EbookMetadata, edited: EditedFields<'_>) -> MetadataOv
         None
     };
 
+    // Unlike the string fields above, `print_pages` has no empty-clears
+    // sentinel to fall back on (there is no "empty" `i64`) — a blank form
+    // field is `None` from the caller and is treated as "leave the override
+    // untouched", not "clear it". Only an actually-changed value is sent.
+    let print_pages = edited.print_pages.filter(|&v| Some(v) != orig.print_pages);
+
     MetadataOverrides {
         title: opt(edited.title, orig.title.as_deref()),
         description: opt(edited.description, orig.description.as_deref()),
@@ -188,11 +222,33 @@ fn build_overrides(orig: &EbookMetadata, edited: EditedFields<'_>) -> MetadataOv
         series: opt(edited.series, orig.series.as_deref()),
         series_index: opt(edited.series_index, orig.series_index.as_deref()),
         isbn13: opt(edited.isbn13, orig.isbn13.as_deref()),
+        isbn10: opt(edited.isbn10, orig.isbn10.as_deref()),
         creators,
         subjects,
         genres,
+        print_pages,
     }
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod bust_query_tests {
+    use super::bust_query;
+
+    #[test]
+    fn bust_query_appends_with_question_mark_when_url_has_no_query_string() {
+        assert_eq!(bust_query("/covers/abc.jpg", 3), "/covers/abc.jpg?v=3");
+    }
+
+    #[test]
+    fn bust_query_appends_with_ampersand_when_url_already_has_a_query_string() {
+        // Mobile's `media_url` appends `?token=…`, so the separator has to be
+        // chosen rather than assumed.
+        assert_eq!(
+            bust_query("/covers/abc.jpg?token=xyz", 3),
+            "/covers/abc.jpg?token=xyz&v=3"
+        );
+    }
+}

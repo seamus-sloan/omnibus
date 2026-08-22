@@ -108,11 +108,11 @@ pub(super) async fn by_letter(
 
 /// `GET /opds/v2/author/{id}` — publication feed of one author's books.
 pub(super) async fn acquisition_feed(
-    _user: OpdsAuthUser,
+    user: OpdsAuthUser,
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Response {
-    let author = match load_author(&state, id).await {
+    let author = match load_author(&state, &user, id).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(resp) => return resp,

@@ -73,18 +73,6 @@ pub async fn clear_cover_override(
     Ok(())
 }
 
-/// Look up the UUID for a given `books.id`. Used by the override-save
-/// endpoints to bridge the id-based API with the uuid-keyed overrides table.
-pub async fn get_book_uuid(
-    pool: &SqlitePool,
-    book_id: i64,
-) -> Result<Option<String>, MetadataOverridesError> {
-    Ok(sqlx::query_scalar("SELECT uuid FROM books WHERE id = ?")
-        .bind(book_id)
-        .fetch_optional(pool)
-        .await?)
-}
-
 /// Apply a `MetadataOverrides` to an `EbookMetadata`, mutating it in place,
 /// gated by whether `precedence` (the owning scan root's configured
 /// metadata-source order) ranks `OmnibusOverrides` above
@@ -130,6 +118,10 @@ pub(crate) fn apply_overrides(
         // as "no ISBN", not as a literal empty string.
         book.isbn13 = if i.is_empty() { None } else { Some(i.clone()) };
     }
+    if let Some(ref i) = ov.isbn10 {
+        // Same empty-string-clears convention as `isbn13` above.
+        book.isbn10 = if i.is_empty() { None } else { Some(i.clone()) };
+    }
     if let Some(ref c) = ov.creators {
         book.creators = c.clone();
     }
@@ -138,6 +130,9 @@ pub(crate) fn apply_overrides(
     }
     if let Some(ref g) = ov.genres {
         book.genres = g.clone();
+    }
+    if let Some(p) = ov.print_pages {
+        book.print_pages = Some(p);
     }
     book.has_cover_override = has_cover_override;
     if has_cover_override {

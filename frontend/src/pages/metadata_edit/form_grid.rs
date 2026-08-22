@@ -6,9 +6,9 @@ use dioxus::prelude::*;
 use omnibus_shared::EbookMetadata;
 
 use super::fields::{label_to_id, MeArea, MeField, MeLabel};
-use super::hardcover_fetch::HardcoverFetchPanel;
+use super::metadata_search::MetadataSearchPanel;
 use crate::components::chip_editor::{ChipEditor, ChipEditorOptions, SuggestionItem};
-use crate::components::{FetchSummaryButton, SuggestField, SuggestFieldOptions};
+use crate::components::{SuggestField, SuggestFieldOptions};
 
 /// Per-field editable signals threaded through the form rows from `MetadataEditForm`.
 #[derive(Clone, Copy, PartialEq)]
@@ -21,6 +21,8 @@ pub(super) struct FormFields {
     pub series: Signal<String>,
     pub series_index: Signal<String>,
     pub isbn13: Signal<String>,
+    pub isbn10: Signal<String>,
+    pub print_pages: Signal<String>,
     pub authors: Signal<Vec<String>>,
     pub tags: Signal<Vec<String>>,
     pub genres: Signal<Vec<String>>,
@@ -46,11 +48,17 @@ pub(super) fn FormGrid(
     fields: FormFields,
     suggestions: FormSuggestions,
     uuid: String,
+    /// The book as the server last reported it — the compare view's cover
+    /// row needs the current cover to show beside the source's.
+    book: EbookMetadata,
+    /// Fires with the merged book after the cover row writes one, so the
+    /// sidebar's preview and its "revert" affordance stay in step without a
+    /// reload.
+    on_cover_applied: EventHandler<EbookMetadata>,
 ) -> Element {
     rsx! {
         div { class: "me-form",
-            HardcoverFetchPanel { uuid: uuid.clone(), fields }
-            FieldGrid { orig, fields, suggestions, uuid }
+            FieldGrid { orig, fields, suggestions, uuid, book, on_cover_applied }
             TagsSection { tags: fields.tags, tag_suggestions: suggestions.tags }
             GenresSection { genres: fields.genres, genre_suggestions: suggestions.genres }
             SeriesSection {
@@ -142,6 +150,41 @@ fn field_grid_identity_rows(orig: Signal<EbookMetadata>, fields: FormFields) -> 
             hint: "13 digits",
             placeholder: "e.g. 9780134685991",
         }
+        {identity_row_isbn_and_pages(orig, fields)}
+    }
+}
+
+/// ISBN-10 and print-page-count rows, the tail of the identity/publication
+/// half of [`FieldGrid`]. Split out of [`field_grid_identity_rows`] to keep
+/// that function under the soft line cap.
+fn identity_row_isbn_and_pages(orig: Signal<EbookMetadata>, fields: FormFields) -> Element {
+    let mut isbn10 = fields.isbn10;
+    let mut print_pages = fields.print_pages;
+
+    rsx! {
+        // ISBN-10 — 10 characters (digits + optional trailing X), enforced
+        // server-side on save; an empty value clears it, same as ISBN-13.
+        MeField {
+            label: "ISBN-10",
+            value: isbn10,
+            on_change: move |v: String| isbn10.set(v),
+            mono: true,
+            edited: isbn10() != orig().isbn10.clone().unwrap_or_default(),
+            hint: "10 characters",
+            placeholder: "e.g. 0134685997",
+        }
+
+        // Print page count — plain integer text entry; parsed and bound-
+        // checked (`MetadataOverrides::validate`) when the form saves.
+        MeField {
+            label: "Print Pages",
+            value: print_pages,
+            on_change: move |v: String| print_pages.set(v),
+            mono: true,
+            edited: print_pages().trim() != orig().print_pages.map(|p| p.to_string()).unwrap_or_default(),
+            hint: "whole number",
+            placeholder: "e.g. 320",
+        }
     }
 }
 
@@ -152,6 +195,8 @@ fn field_grid_authors_and_description(
     fields: FormFields,
     author_suggestions: Signal<Vec<SuggestionItem>>,
     uuid: String,
+    book: EbookMetadata,
+    on_cover_applied: EventHandler<EbookMetadata>,
 ) -> Element {
     let authors = fields.authors;
     let mut description = fields.description;
@@ -193,13 +238,11 @@ fn field_grid_authors_and_description(
             hint: "plain text or HTML",
         }
 
-        // Always-present "Fetch Summary" button that fills the description
-        // above from Hardcover/OpenLibrary; the user still saves.
+        // Sits where "Fetch Summary" did, below the description: the field
+        // it most often fills, and the last thing a reader wants help with
+        // before saving.
         div { class: "me-field-full",
-            FetchSummaryButton {
-                uuid,
-                on_fetched: move |text: String| description.set(text),
-            }
+            MetadataSearchPanel { fields, orig, uuid, book, on_cover_applied }
         }
     }
 }
@@ -212,11 +255,20 @@ fn FieldGrid(
     fields: FormFields,
     suggestions: FormSuggestions,
     uuid: String,
+    book: EbookMetadata,
+    on_cover_applied: EventHandler<EbookMetadata>,
 ) -> Element {
     rsx! {
         div { class: "me-field-grid",
             {field_grid_identity_rows(orig, fields)}
-            {field_grid_authors_and_description(orig, fields, suggestions.authors, uuid)}
+            {field_grid_authors_and_description(
+                orig,
+                fields,
+                suggestions.authors,
+                uuid,
+                book,
+                on_cover_applied,
+            )}
         }
     }
 }

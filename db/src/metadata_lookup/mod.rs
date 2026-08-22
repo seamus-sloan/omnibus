@@ -1,20 +1,26 @@
-//! Server-side book-metadata resolution for scans that miss the library.
+//! Server-side book-metadata resolution against the external providers.
 //!
-//! Two entry points, one per question a caller can ask —
-//! [`search_provider_by_isbn`] and [`search_provider_by_title`]. Each walks the
-//! same ladder of providers (Open Library, Google Books, Hardcover) so callers
-//! never name a provider or know which are configured; see
-//! [`providers`][self::providers] for the per-provider contract and
-//! [`providers::ladder`] for the order.
+//! Two shapes, for two different questions. The **ladder**
+//! ([`search_provider_by_isbn`], [`search_provider_by_title`]) walks providers
+//! in order and returns the first good answer — right for a check-in scan
+//! resolving one physical book. The **fan-out** ([`search_all_providers`])
+//! asks every configured provider at once and keeps the answers attributed and
+//! un-collapsed — right for the metadata editor's edition picker.
 
 mod config;
+mod cover;
+mod hydrate;
 mod providers;
+mod search;
 
 #[cfg(test)]
 mod tests;
 
 pub use config::{MetadataLookupConfig, ProviderKeys};
-pub use providers::{openlibrary_enrich, OlEnrichment};
+pub use cover::{provider_cover_image_config, MAX_COVER_REDIRECTS};
+pub use hydrate::hydrate_edition;
+pub use providers::{all_cover_hosts, catalog, cover_hosts, openlibrary_enrich, OlEnrichment};
+pub use search::{search_all_providers, FANOUT_PROVIDER_LIMIT};
 
 use omnibus_shared::isbn::{normalize_isbn, IsbnError};
 use omnibus_shared::metadata_lookup::ExternalBookMeta;
@@ -98,7 +104,13 @@ async fn climb(
 
     for rung in providers::ladder(config) {
         match providers::run(rung.provider, config, query).await {
-            Ok(found) if !found.is_empty() => return Ok(dedupe_by_isbn(found)),
+            // The ladder hands callers the frozen check-in payload, not the
+            // picker's richer candidate.
+            Ok(found) if !found.is_empty() => {
+                return Ok(dedupe_by_isbn(
+                    found.into_iter().map(ExternalBookMeta::from).collect(),
+                ))
+            }
             Ok(_) => {}
             Err(e) => {
                 tracing::warn!("{:?} lookup failed, trying next: {e:#}", rung.provider);

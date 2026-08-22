@@ -82,6 +82,19 @@ const EXPECTED: &[Expected] = &[
         series_index: None,
         has_cover: true,
     },
+    // Second dual-format pair, reserved for cross_format_prompts.spec.ts —
+    // see the reservation comment in the Playwright fixtures table.
+    Expected {
+        filename: "parallel-latitudes.epub",
+        title: "Parallel Latitudes",
+        authors: &["Vera Molnar"],
+        publisher: Some("Omnibus Test Press"),
+        published: Some("1968-05-01"),
+        language: "en",
+        series: None,
+        series_index: None,
+        has_cover: true,
+    },
     // Reserved for the bulk-edit Playwright spec — see the matching entries
     // (and reservation comment) in `ui_tests/playwright/tests/fixtures/epubs.ts`.
     Expected {

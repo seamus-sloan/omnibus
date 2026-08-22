@@ -12,6 +12,7 @@ pub mod client_store;
 pub mod components;
 pub mod contexts;
 pub mod data;
+pub mod date_fmt;
 pub mod focus_after_paint;
 pub mod format;
 pub mod index_prefs;

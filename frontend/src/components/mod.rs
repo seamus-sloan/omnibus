@@ -93,7 +93,9 @@ pub mod author_photo_edit;
 // Shared backdrop/panel modal shell (dismiss-on-click, click-through-safe)
 // used by the merge, delete, author-photo, and physical-copy dialogs, plus
 // a title/body/action-row body for the common single-confirm case.
+pub mod alignment_modal;
 pub mod confirm_modal;
+pub mod sync_glyph;
 pub use confirm_modal::{confirm_modal_body, ConfirmModal, ConfirmModalAction, ConfirmModalTone};
 
 // Shareable quote-card editor (preview + presets + PNG export), shared by
@@ -131,9 +133,12 @@ pub mod search_palette;
 #[cfg(not(feature = "mobile"))]
 pub mod worker_status;
 
-// Play / open-book marks shared by the two web "continue reading" surfaces:
-// the user-menu resume row and the landing hero CTA.
-#[cfg(not(feature = "mobile"))]
+// Inline SVG marks shared across surfaces: the play / open-book / headphones
+// "continue reading" glyphs (user-menu resume row, landing hero CTA,
+// book-detail "Your progress"), and the sparkle both fetch-from-outside
+// actions draw. Ungated — it is rsx and path data with no platform
+// dependency, and `FetchSummaryButton` reaches it from the mobile
+// book-detail screen.
 pub mod glyphs;
 
 #[cfg(not(feature = "mobile"))]

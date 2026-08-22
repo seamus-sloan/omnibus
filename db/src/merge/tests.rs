@@ -946,3 +946,64 @@ async fn merge_retargets_kobo_annotation_sync_state_preferring_the_targets_row()
         "a source-only device's adoption must follow the merge"
     );
 }
+
+/// Merging a file-bearing book into a fileless check-in/wishlist target must
+/// promote the target off the `physical://local` pseudo-root — otherwise the
+/// surviving book holds real files but stays invisible to every path-scoped
+/// read (All Books, search).
+#[tokio::test]
+async fn merge_books_promotes_a_physical_root_target_that_gains_files() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let target = crate::physical::create_fileless_book(
+        &pool,
+        crate::physical::FilelessBook {
+            title: "Paper Only".into(),
+            authors: vec!["Print Author".into()],
+            isbn: None,
+            pubdate: None,
+            description: None,
+            cover: None,
+        },
+    )
+    .await
+    .unwrap();
+    // Distinct title so seeding doesn't auto-attach to the target first.
+    let source = seed_ebook(
+        &pool,
+        "Print/digital.epub",
+        "Paper Only Digital",
+        "Print Author",
+    )
+    .await;
+
+    merge_books(&pool, &source, &target, None).await.unwrap();
+
+    let library_path: String = sqlx::query_scalar(
+        "SELECT l.path FROM books b JOIN scan_roots l ON l.id = b.library_id WHERE b.uuid = ?",
+    )
+    .bind(&target)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        library_path, "/ebooks",
+        "merge must promote off the pseudo-root"
+    );
+}
+
+#[test]
+fn map_settings_error_returns_other_for_non_db_variants() {
+    let validation =
+        super::undo::map_settings_error(crate::settings::SettingsError::Validation("bad".into()));
+    assert!(
+        matches!(&validation, MergeError::Other(msg) if msg.contains("bad")),
+        "expected Other carrying the validation message, got {validation:?}"
+    );
+
+    let json_err = serde_json::from_str::<i32>("nope").unwrap_err();
+    let json = super::undo::map_settings_error(crate::settings::SettingsError::Json(json_err));
+    assert!(
+        matches!(json, MergeError::Other(_)),
+        "expected Other, got {json:?}"
+    );
+}

@@ -5,9 +5,63 @@
 
 use std::path::PathBuf;
 
-use sqlx::SqlitePool;
+use sqlx::{SqlitePool, Transaction};
 
 use crate::{audiobook, covers, ebook, sync, thumbs};
+
+/// Rows per chunk for [`batch_update_books_column`]. Each row costs three
+/// binds (two in the `CASE`, one in the `IN` list), so 200 keeps a chunk
+/// comfortably under SQLite's 999-parameter cap — mirrors `ORDINAL_CHUNK` in
+/// `db/src/merge/transaction.rs`.
+const BACKFILL_CHUNK: usize = 200;
+
+/// The `books` columns [`batch_update_books_column`] can write. A closed
+/// enum rather than a bare column-name `&str`, so the SQL-interpolation
+/// site can never be handed an arbitrary or user-controlled string.
+enum BooksColumn {
+    WordCount,
+    PageCount,
+}
+
+impl BooksColumn {
+    fn as_sql(&self) -> &'static str {
+        match self {
+            BooksColumn::WordCount => "word_count",
+            BooksColumn::PageCount => "page_count",
+        }
+    }
+}
+
+/// Write `updates` (`book id -> new value`) into `books.<column>` via one
+/// `CASE`-based UPDATE per chunk, replacing what would otherwise be one
+/// `UPDATE ... WHERE id = ?` per row. A no-op on an empty `updates` slice,
+/// so callers don't need their own guard.
+async fn batch_update_books_column(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    column: BooksColumn,
+    updates: &[(i64, i64)],
+) -> Result<(), sqlx::Error> {
+    let column = column.as_sql();
+    for chunk in updates.chunks(BACKFILL_CHUNK) {
+        let cases = std::iter::repeat_n("WHEN ? THEN ?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql =
+            format!("UPDATE books SET {column} = CASE id {cases} END WHERE id IN ({placeholders})");
+        let mut q = sqlx::query(&sql);
+        for (id, value) in chunk {
+            q = q.bind(id).bind(value);
+        }
+        for (id, _) in chunk {
+            q = q.bind(id);
+        }
+        q.execute(&mut **tx).await?;
+    }
+    Ok(())
+}
 
 /// Query the first-part filename (ordinal=0) and format for every book
 /// under `library_path` that needs chapter backfill (no `file_chapters`
@@ -192,6 +246,7 @@ pub(crate) async fn backfill_word_counts(
     let mut processed = 0u32;
     for chunk in candidates.chunks(250) {
         let mut tx = pool.begin().await?;
+        let mut updates = Vec::with_capacity(chunk.len());
         for (id, title) in chunk {
             let id = *id;
             processed = processed.saturating_add(1);
@@ -217,12 +272,12 @@ pub(crate) async fn backfill_word_counts(
             });
 
             let Some(words) = words else { continue };
-            sqlx::query("UPDATE books SET word_count = ? WHERE id = ?")
-                .bind(words)
-                .bind(id)
-                .execute(&mut *tx)
-                .await?;
+            updates.push((id, words));
         }
+        // One CASE-based UPDATE for the whole 250-row chunk instead of one
+        // UPDATE per book, keeping the existing tx boundary that bounds WAL
+        // flushes.
+        batch_update_books_column(&mut tx, BooksColumn::WordCount, &updates).await?;
         tx.commit().await?;
     }
 
@@ -286,6 +341,7 @@ pub(crate) async fn backfill_page_counts(
     let mut processed = 0u32;
     for chunk in candidates.chunks(250) {
         let mut tx = pool.begin().await?;
+        let mut updates = Vec::with_capacity(chunk.len());
         for (id, title) in chunk {
             let id = *id;
             processed = processed.saturating_add(1);
@@ -311,12 +367,12 @@ pub(crate) async fn backfill_page_counts(
             });
 
             let Some(count) = count else { continue };
-            sqlx::query("UPDATE books SET page_count = ? WHERE id = ?")
-                .bind(count)
-                .bind(id)
-                .execute(&mut *tx)
-                .await?;
+            updates.push((id, count));
         }
+        // One CASE-based UPDATE for the whole 250-row chunk instead of one
+        // UPDATE per book, keeping the existing tx boundary that bounds WAL
+        // flushes.
+        batch_update_books_column(&mut tx, BooksColumn::PageCount, &updates).await?;
         tx.commit().await?;
     }
 
@@ -487,4 +543,164 @@ async fn fetch_thumb_candidates(
     .fetch_all(pool)
     .await?;
     Ok(rows)
+}
+
+/// Every EPUB `book_files` row under `library_path` with no
+/// `epub_spine_stats` yet, carrying the resolved on-disk path — the same
+/// path shape `book_file_path` builds, inlined so one query serves the
+/// whole candidate set with per-file (not per-book lowest-ordinal) paths.
+async fn fetch_epub_structure_candidates(
+    pool: &SqlitePool,
+    library_path: &str,
+) -> anyhow::Result<Vec<(i64, String, PathBuf)>> {
+    let rows: Vec<(i64, String, String, String, String, String)> = sqlx::query_as(
+        "SELECT bf.id, COALESCE(NULLIF(b.title, ''), b.scan_key), \
+                COALESCE(bf.library_path, l.path), COALESCE(bf.path, b.path), \
+                bf.filename, bf.format \
+         FROM book_files bf \
+         JOIN books b ON bf.book_id = b.id \
+         JOIN scan_roots l ON b.library_id = l.id \
+         WHERE l.path = ? \
+           AND bf.format = 'EPUB' COLLATE NOCASE \
+           AND NOT EXISTS (SELECT 1 FROM epub_spine_stats s WHERE s.book_file_id = bf.id) \
+         ORDER BY bf.id",
+    )
+    .bind(library_path)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, title, lib, dir, stem, fmt)| {
+            let path = std::path::Path::new(&lib)
+                .join(&dir)
+                .join(format!("{stem}.{}", fmt.to_lowercase()));
+            (id, title, path)
+        })
+        .collect())
+}
+
+/// Fill `epub_spine_stats` + `ebook_chapters` for every EPUB file that has
+/// none. The NOT EXISTS predicate keys on the stats table, which extraction
+/// always writes for a readable book — so an honestly TOC-less book stores
+/// stats plus zero chapters and is done, while an unreadable file stores
+/// nothing and is retried on the next scan (the `backfill_word_counts`
+/// NULL semantics).
+pub(crate) async fn backfill_epub_structure(
+    pool: &SqlitePool,
+    library_path: &str,
+    mut on_progress: impl FnMut(u32, u32, &str),
+) -> anyhow::Result<()> {
+    let candidates = fetch_epub_structure_candidates(pool, library_path).await?;
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    let total = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
+    tracing::info!(
+        count = total,
+        "backfilling epub structure for existing ebooks"
+    );
+
+    let mut processed = 0u32;
+    for (book_file_id, title, path) in candidates {
+        processed = processed.saturating_add(1);
+        on_progress(processed, total, &title);
+        let structure = tokio::task::spawn_blocking(move || {
+            epub::doc::EpubDoc::new(&path)
+                .ok()
+                .and_then(|mut doc| ebook::toc::extract_structure(&mut doc))
+        })
+        .await
+        .unwrap_or_else(|join_err| {
+            tracing::warn!(
+                book_file_id,
+                %join_err,
+                is_panic = join_err.is_panic(),
+                "epub structure task failed; leaving unextracted"
+            );
+            None
+        });
+        let Some(structure) = structure else { continue };
+        crate::epub_structure::replace_structure(pool, book_file_id, &structure)
+            .await
+            .map_err(|e| anyhow::anyhow!("store epub structure for file {book_file_id}: {e}"))?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pool::init_db;
+    use crate::test_support::seed_minimal_books;
+
+    /// Empty `updates` must not build any SQL at all — `chunks()` over an
+    /// empty slice yields zero chunks, so this is really asserting the
+    /// no-op holds rather than that some degenerate `CASE`/`IN ()` executes.
+    #[tokio::test]
+    async fn batch_update_books_column_is_a_noop_for_empty_updates() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        seed_minimal_books(&pool, 1).await;
+
+        let mut tx = pool.begin().await.unwrap();
+        batch_update_books_column(&mut tx, BooksColumn::WordCount, &[])
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let word_count: Option<i64> =
+            sqlx::query_scalar("SELECT word_count FROM books WHERE id = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(word_count, None);
+    }
+
+    /// A single-row update must produce valid `CASE id WHEN ? THEN ? END`
+    /// and `IN (?)` clauses, not just the multi-row shape.
+    #[tokio::test]
+    async fn batch_update_books_column_writes_a_single_row() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        seed_minimal_books(&pool, 1).await;
+
+        let mut tx = pool.begin().await.unwrap();
+        batch_update_books_column(&mut tx, BooksColumn::WordCount, &[(1, 42)])
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let word_count: Option<i64> =
+            sqlx::query_scalar("SELECT word_count FROM books WHERE id = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(word_count, Some(42));
+    }
+
+    /// A multi-row update must resolve each id to its own value via the
+    /// `CASE` branches, not clobber every matched row with one value.
+    #[tokio::test]
+    async fn batch_update_books_column_writes_distinct_values_per_row() {
+        let pool = init_db("sqlite::memory:").await.unwrap();
+        seed_minimal_books(&pool, 3).await;
+
+        let mut tx = pool.begin().await.unwrap();
+        batch_update_books_column(
+            &mut tx,
+            BooksColumn::PageCount,
+            &[(1, 10), (2, 20), (3, 30)],
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        for (id, expected) in [(1, 10), (2, 20), (3, 30)] {
+            let page_count: Option<i64> =
+                sqlx::query_scalar("SELECT page_count FROM books WHERE id = ?")
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(page_count, Some(expected));
+        }
+    }
 }

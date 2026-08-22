@@ -4,6 +4,8 @@
 //! and `delete_orphan_genres` each get drop/keep/override-aware/case-fold
 //! tests, plus a purge-path regression test for genres.
 
+use std::collections::HashMap;
+
 use omnibus_shared::MetadataOverrides;
 
 use super::*;
@@ -77,6 +79,85 @@ async fn resolve_or_insert_series_collapses_case_variants_to_one_row() {
         .await
         .unwrap();
     assert_eq!(stored, "Fantasy");
+}
+
+#[tokio::test]
+async fn resolve_or_insert_series_returns_the_canonical_id_for_a_merged_away_name() {
+    // #964: a name a completed library-cleanup merge absorbed must resolve
+    // straight to the surviving canonical id, not mint a fresh row.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    let canonical_id = resolve_or_insert_series(&mut tx, "Wheel of Time")
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    sqlx::query(
+        "INSERT INTO entity_aliases (kind, alias_name, canonical_id) VALUES ('series', ?, ?)",
+    )
+    .bind("The Wheel of Time")
+    .bind(canonical_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let mut tx = pool.begin().await.unwrap();
+    let resolved = resolve_or_insert_series(&mut tx, "The Wheel of Time")
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    assert_eq!(resolved, canonical_id);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM series WHERE name = ?")
+        .bind("The Wheel of Time")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0, "the merged-away name must not be recreated");
+}
+
+#[tokio::test]
+async fn resolve_or_insert_series_with_aliases_mints_a_fresh_row_when_the_map_has_no_hit() {
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    let id = resolve_or_insert_series_with_aliases(&mut tx, "Dune Chronicles", &HashMap::new())
+        .await
+        .unwrap();
+    assert!(id > 0, "expected a positive row id, got {id}");
+    tx.commit().await.unwrap();
+
+    let stored: String = sqlx::query_scalar("SELECT name FROM series WHERE id = ?")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stored, "Dune Chronicles");
+}
+
+#[tokio::test]
+async fn resolve_or_insert_series_with_aliases_returns_the_mapped_id_without_querying_entity_aliases(
+) {
+    // #1985: the caller pre-resolves the whole reindex batch's alias map
+    // once, so this resolver must trust it outright rather than issuing its
+    // own `resolve_entity_aliases` lookup for a name the map already
+    // answers — proven here by a canonical id that isn't backed by any real
+    // `entity_aliases` row.
+    let pool = init_db("sqlite::memory:").await.unwrap();
+    let aliases = HashMap::from([("The Wheel of Time".to_string(), 999_i64)]);
+
+    let mut tx = pool.begin().await.unwrap();
+    let resolved = resolve_or_insert_series_with_aliases(&mut tx, "The Wheel of Time", &aliases)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    assert_eq!(resolved, 999, "the pre-resolved map's id wins outright");
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM series WHERE name = ?")
+        .bind("The Wheel of Time")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0, "a mapped name must not mint a fresh row either");
 }
 
 #[tokio::test]

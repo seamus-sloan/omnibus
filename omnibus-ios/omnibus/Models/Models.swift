@@ -1464,3 +1464,220 @@ extension String {
         return trimmed.isEmpty ? nil : trimmed
     }
 }
+
+// MARK: - Cross-format sync
+
+enum CrossFormatResumeState: String, Codable, Sendable {
+    case notLinked = "not_linked"
+    case linkStale = "link_stale"
+    case nothingNewer = "nothing_newer"
+    case candidate
+    /// Both formats already sit within the server's equivalence tolerance:
+    /// the candidate rides along for navigation affordances, but prompt
+    /// surfaces stay quiet.
+    case aligned
+}
+
+enum MappingConfidence: String, Codable, Sendable {
+    case linear
+    case chapterAnchored = "chapter_anchored"
+    case userAnchored = "user_anchored"
+}
+
+enum CrossFormatLinkMode: String, Codable, Sendable {
+    case sequence
+    case narrations
+}
+
+struct CrossFormatCandidate: Codable, Hashable, Sendable {
+    var target: ProgressFormat
+    var sourceFormat: ProgressFormat
+    var sourceClientUpdatedAt: Int64
+    var confidence: MappingConfidence
+    var bookFileID: Int64?
+    var audioPositionSeconds: Double?
+    var totalDurationSeconds: Double?
+    var percent: Int64?
+    /// Full-precision jump fraction (0...1) on epub targets; `percent` is
+    /// its floored display twin.
+    var fraction: Double?
+    /// `false` marks a backward offer (the source regressed) — copy must
+    /// not claim "further". Absent means ahead.
+    var sourceAhead: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case target
+        case sourceFormat = "source_format"
+        case sourceClientUpdatedAt = "source_client_updated_at"
+        case confidence
+        case bookFileID = "book_file_id"
+        case audioPositionSeconds = "audio_position_seconds"
+        case totalDurationSeconds = "total_duration_seconds"
+        case percent
+        case fraction
+        case sourceAhead = "source_ahead"
+    }
+}
+
+struct CrossFormatResume: Codable, Hashable, Sendable {
+    var state: CrossFormatResumeState
+    var candidate: CrossFormatCandidate?
+    /// Follow mode: apply a candidate silently instead of offering.
+    var follow: Bool?
+}
+
+struct AlignmentLink: Codable, Hashable, Sendable {
+    var mode: CrossFormatLinkMode
+    var primaryBookFileID: Int64?
+    var stale: Bool
+    var confirmedAt: Int64
+    var follow: Bool?
+    var userAnchors: Int64?
+
+    enum CodingKeys: String, CodingKey {
+        case mode
+        case primaryBookFileID = "primary_book_file_id"
+        case stale
+        case confirmedAt = "confirmed_at"
+        case follow
+        case userAnchors = "user_anchors"
+    }
+}
+
+/// Body of `POST /api/books/{uuid}/sync-point` — the declaring surface
+/// names its own position; the counterpart comes from the server's row.
+struct DeclareSyncPoint: Codable, Sendable {
+    var bookUUID: String
+    var format: ProgressFormat
+    var ebookFraction: Double?
+    var audioBookFileID: Int64?
+    var audioSeconds: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case bookUUID = "book_uuid"
+        case format
+        case ebookFraction = "ebook_fraction"
+        case audioBookFileID = "audio_book_file_id"
+        case audioSeconds = "audio_seconds"
+    }
+}
+
+struct AlignmentMatch: Codable, Hashable, Sendable {
+    var matched: Int64
+    var ebookChapters: Int64
+    var confidence: MappingConfidence
+
+    enum CodingKeys: String, CodingKey {
+        case matched
+        case ebookChapters = "ebook_chapters"
+        case confidence
+    }
+}
+
+struct AlignmentEbookChapter: Codable, Hashable, Sendable {
+    var title: String
+    var percent: Double
+}
+
+struct AlignmentEbook: Codable, Hashable, Sendable {
+    var totalChars: Int64
+    var chapters: [AlignmentEbookChapter]
+
+    enum CodingKeys: String, CodingKey {
+        case totalChars = "total_chars"
+        case chapters
+    }
+}
+
+struct AlignmentAudioFile: Codable, Hashable, Sendable, Identifiable {
+    var bookFileID: Int64
+    var label: String
+    var durationSeconds: Double
+    var chapterStarts: [Double]
+
+    var id: Int64 { bookFileID }
+
+    enum CodingKeys: String, CodingKey {
+        case bookFileID = "book_file_id"
+        case label
+        case durationSeconds = "duration_seconds"
+        case chapterStarts = "chapter_starts"
+    }
+}
+
+struct AlignmentPosition: Codable, Hashable, Sendable {
+    var percent: Int64?
+    var clientUpdatedAt: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case percent
+        case clientUpdatedAt = "client_updated_at"
+    }
+}
+
+struct AlignmentAudioPosition: Codable, Hashable, Sendable {
+    var bookFileID: Int64?
+    var seconds: Double
+    var clientUpdatedAt: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case bookFileID = "book_file_id"
+        case seconds
+        case clientUpdatedAt = "client_updated_at"
+    }
+}
+
+struct AlignmentView: Codable, Hashable, Sendable {
+    var link: AlignmentLink?
+    var anchorMatch: AlignmentMatch?
+    var ebook: AlignmentEbook?
+    var audioFiles: [AlignmentAudioFile]
+    var reading: AlignmentPosition?
+    var listening: AlignmentAudioPosition?
+    /// Usable audio chapter marks: with no anchor match, zero means "no
+    /// marks" and nonzero means "marks exist but couldn't be aligned".
+    var audioChapterMarks: Int64?
+    /// Matched anchor pairs (text_frac, audio_frac) — the mapped-preview
+    /// interpolation, identical to the pairs the jump uses. Decoded via
+    /// `decodeIfPresent`: synthesized Codable ignores the `= []` default
+    /// and throws `keyNotFound` on an absent key, and older servers omit
+    /// the key for linear-tier books.
+    var anchorPairs: [[Double]] = []
+
+    enum CodingKeys: String, CodingKey {
+        case link
+        case anchorMatch = "anchor_match"
+        case ebook
+        case audioFiles = "audio_files"
+        case reading
+        case listening
+        case audioChapterMarks = "audio_chapter_marks"
+        case anchorPairs = "anchor_pairs"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        link = try c.decodeIfPresent(AlignmentLink.self, forKey: .link)
+        anchorMatch = try c.decodeIfPresent(AlignmentMatch.self, forKey: .anchorMatch)
+        ebook = try c.decodeIfPresent(AlignmentEbook.self, forKey: .ebook)
+        audioFiles = try c.decode([AlignmentAudioFile].self, forKey: .audioFiles)
+        reading = try c.decodeIfPresent(AlignmentPosition.self, forKey: .reading)
+        listening = try c.decodeIfPresent(AlignmentAudioPosition.self, forKey: .listening)
+        audioChapterMarks = try c.decodeIfPresent(Int64.self, forKey: .audioChapterMarks)
+        anchorPairs = try c.decodeIfPresent([[Double]].self, forKey: .anchorPairs) ?? []
+    }
+}
+
+struct ConfirmCrossFormatLink: Codable, Sendable {
+    var bookUUID: String
+    var mode: CrossFormatLinkMode
+    var primaryBookFileID: Int64?
+    var audioOrder: [Int64]?
+
+    enum CodingKeys: String, CodingKey {
+        case bookUUID = "book_uuid"
+        case mode
+        case primaryBookFileID = "primary_book_file_id"
+        case audioOrder = "audio_order"
+    }
+}

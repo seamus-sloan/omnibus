@@ -8,6 +8,18 @@ use dioxus::prelude::*;
 use crate::offline::downloads::{self, DlFormat, DownloadStatus};
 use crate::use_server_url;
 
+/// One offline-download row's identity + current state — grouped to keep
+/// [`DlRow`] under the 5-prop threshold.
+#[derive(Clone, PartialEq)]
+struct DlRowData {
+    uuid: String,
+    title: String,
+    format_label: &'static str,
+    format: DlFormat,
+    status: DownloadStatus,
+    stale: bool,
+}
+
 /// The "Available offline" section. Rendered only on books with at least
 /// one downloadable format and only for users whose `can_download` bit is
 /// set (the default).
@@ -45,10 +57,11 @@ pub(super) fn BdOfflineSection(
         return rsx! {};
     }
     // Read the generation so registry bumps re-render this section. The
-    // per-row `status` is computed HERE and passed down as a prop: `DlRow`'s
-    // other props never change, so without a changing prop Dioxus would
-    // memoize the row and skip re-rendering it — the Download/Remove tap
-    // would appear to do nothing until the page remounted.
+    // per-row `status` is computed HERE and passed down inside `DlRowData`:
+    // `DlRow`'s other fields never change, so without a changing field
+    // Dioxus would memoize the row and skip re-rendering it — the
+    // Download/Remove tap would appear to do nothing until the page
+    // remounted.
     let _generation = generation();
 
     rsx! {
@@ -57,22 +70,26 @@ pub(super) fn BdOfflineSection(
             div { class: "m-dl-rows",
                 if has_ebook {
                     DlRow {
-                        uuid: uuid.clone(),
-                        title: title.clone(),
-                        format_label: "Ebook",
-                        format: DlFormat::Epub,
-                        status: downloads::status(&uuid, DlFormat::Epub),
-                        stale: downloads::is_marked_stale(&uuid, DlFormat::Epub),
+                        data: DlRowData {
+                            uuid: uuid.clone(),
+                            title: title.clone(),
+                            format_label: "Ebook",
+                            format: DlFormat::Epub,
+                            status: downloads::status(&uuid, DlFormat::Epub),
+                            stale: downloads::is_marked_stale(&uuid, DlFormat::Epub),
+                        },
                     }
                 }
                 if has_audio {
                     DlRow {
-                        uuid: uuid.clone(),
-                        title,
-                        format_label: "Audiobook",
-                        format: DlFormat::Audio,
-                        status: downloads::status(&uuid, DlFormat::Audio),
-                        stale: downloads::is_marked_stale(&uuid, DlFormat::Audio),
+                        data: DlRowData {
+                            uuid: uuid.clone(),
+                            title,
+                            format_label: "Audiobook",
+                            format: DlFormat::Audio,
+                            status: downloads::status(&uuid, DlFormat::Audio),
+                            stale: downloads::is_marked_stale(&uuid, DlFormat::Audio),
+                        },
                     }
                 }
             }
@@ -81,18 +98,19 @@ pub(super) fn BdOfflineSection(
 }
 
 /// One per-format row: status line on the left, the state's action on the
-/// right. `status` and `stale` arrive as props (not read from the registry
-/// here) so the row re-renders on every registry transition — see the
-/// memoization note in [`BdOfflineSection`].
+/// right. `status` and `stale` arrive inside `data` (not read from the
+/// registry here) so the row re-renders on every registry transition — see
+/// the memoization note in [`BdOfflineSection`].
 #[component]
-fn DlRow(
-    uuid: String,
-    title: String,
-    format_label: &'static str,
-    format: DlFormat,
-    status: DownloadStatus,
-    stale: bool,
-) -> Element {
+fn DlRow(data: DlRowData) -> Element {
+    let DlRowData {
+        uuid,
+        title,
+        format_label,
+        format,
+        status,
+        stale,
+    } = data;
     let server_url = use_server_url();
 
     let start = {

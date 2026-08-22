@@ -16,6 +16,9 @@ final class BookDetailModel {
     var bookmarks: [Bookmark] = []
     var shelvesContaining: Set<Int64> = []
     var wishlistEntry: WishlistEntry?
+    /// Cross-format sync state for the entry row; `nil` while unknown
+    /// (offline, or the fetch hasn't landed). Network-only read.
+    var syncState: CrossFormatResumeState?
     var isLoading = true
     var error: String?
 
@@ -40,6 +43,11 @@ final class BookDetailModel {
                     }
                 }
                 self.isLoading = false
+            }
+            group.addTask { @MainActor in
+                self.syncState =
+                    (try? await UserDataService.crossFormatResume(uuid: uuid, target: .audio))?
+                        .state
             }
             group.addTask { @MainActor in
                 for await record in UserDataService.rating(uuid: uuid).values() {
@@ -108,13 +116,13 @@ struct BookDetailView: View {
     }
 
     @Environment(\.palette) private var palette
-    @Environment(\.openURL) private var openURL
     @Environment(AppState.self) private var app
     @Environment(AudioPlayer.self) private var player
     @Environment(\.bookZoomNamespace) private var bookZoom
     @State private var model = BookDetailModel()
     @State private var showJournalComposer = false
     @State private var showShelfPicker = false
+    @State private var showAlignment = false
     @State private var showBookmarks = false
     @State private var showAudioFilePicker = false
     /// The file chosen in the picker, opened from the sheet's `onDismiss` —
@@ -162,6 +170,13 @@ struct BookDetailView: View {
         .bookZoomDestination(uuid, in: bookZoom)
         .task { await model.load(uuid: uuid) }
         .refreshTask { await model.load(uuid: uuid) }
+        .sheet(isPresented: $showAlignment) {
+            if let book = model.book {
+                AlignmentSheet(book: book) {
+                    Task { await model.load(uuid: uuid) }
+                }
+            }
+        }
         .sheet(isPresented: $showJournalComposer) {
             if let book = model.book {
                 JournalComposer(book: book, editing: editingJournal) {
@@ -233,10 +248,11 @@ struct BookDetailView: View {
                         // page, so the two rating surfaces read as one topic.
                         if !model.otherRatings.isEmpty { otherRatingsSection }
                         statusSection(book)
-                        if isWishlistOnly(book) {
-                            findAStoreSection(book)
-                        } else {
-                            librarySection(book)
+                        if !isWishlistOnly(book) { librarySection(book) }
+                        if let entry = model.wishlistEntry {
+                            WishlistSection(book: book, entry: entry) {
+                                model.wishlistEntry = nil
+                            }
                         }
                         metadataSection(book)
                         if !model.highlights.isEmpty { highlightsSection(book) }
@@ -473,52 +489,25 @@ struct BookDetailView: View {
     }
 
     /// A wishlisted book the library holds no files for: the shelving and
-    /// offline rows would describe files that don't exist, so the library
-    /// section gives way to a store link. A wishlisted book that *does* have
-    /// files keeps the library section — its downloads are still real.
+    /// offline rows would describe files that don't exist, so `WishlistSection`
+    /// stands in their place. A wishlisted book that *does* have files keeps
+    /// the library section — its downloads are still real — and carries the
+    /// wishlist card underneath, the way the web page's rail does.
     private func isWishlistOnly(_ book: Book) -> Bool {
         model.wishlistEntry != nil && !book.hasEbook && !book.hasAudiobook
     }
 
-    /// Store link shown in place of the library section for a wishlist-only
-    /// book — an Amazon search like the web page's "Find a copy".
-    private func findAStoreSection(_ book: Book) -> some View {
-        VStack(alignment: .leading, spacing: Spacing.md) {
-            SectionLabel("Wishlist")
-
-            Button {
-                Haptics.tap()
-                openStore(for: book)
-            } label: {
-                Label("Find a store", systemImage: "storefront")
-            }
-            .buttonStyle(FilledButtonStyle(prominent: false))
-
-            Text("Opens an Amazon search for this book.")
-                .font(.ui(12.5))
-                .foregroundStyle(palette.ink3Color)
-        }
-    }
-
-    /// Open the store search in the Amazon app when it's installed, else the
-    /// browser. The app's URL scheme is tried first because an https link only
-    /// reaches the app when Amazon's universal-link registration covers the
-    /// path — the scheme is the deterministic door.
-    private func openStore(for book: Book) {
-        guard let web = StoreLink.searchURL(
-            isbn: book.isbn13, title: book.displayTitle, author: book.authorDisplay
-        ) else { return }
-
-        guard let app = StoreLink.appURL(for: web) else {
-            openURL(web)
-            return
-        }
-        openURL(app) { accepted in
-            if !accepted { openURL(web) }
-        }
-    }
-
     /// Shelving and offline state.
+    /// Entry-row copy for the sync state; unknown states read as unlinked
+    /// (the sheet is the source of truth once opened).
+    private var syncStateLabel: String {
+        switch model.syncState {
+        case .linkStale: "Needs re-confirm"
+        case .notLinked, nil: "Off"
+        default: "On"
+        }
+    }
+
     private func librarySection(_ book: Book) -> some View {
         VStack(alignment: .leading, spacing: Spacing.sm) {
             SectionLabel("In your library")
@@ -542,6 +531,25 @@ struct BookDetailView: View {
 
                 RecordRow(label: "Offline") {
                     downloadControl(book)
+                }
+
+                if book.hasEbook && book.hasAudiobook {
+                    RecordRow(label: "Position sync") {
+                        Button {
+                            Haptics.tap()
+                            showAlignment = true
+                        } label: {
+                            HStack(spacing: 5) {
+                                Text(syncStateLabel)
+                                    .font(.ui(14.5, weight: .medium))
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 11, weight: .semibold))
+                            }
+                            .foregroundStyle(palette.accentColor)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("position-sync-row")
+                    }
                 }
 
                 RecordRule()

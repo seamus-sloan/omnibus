@@ -22,13 +22,19 @@ use super::{internal_rpc_error, AuthUser, PoolExt};
 /// `server::backend::progress`. POST because Dioxus `#[get]` server
 /// functions can't carry an argument body — same rationale as
 /// `rpc_get_ebook`; the next two endpoints follow the same pattern.
+/// An accepted epub CFI write that carries no percent gets one derived and
+/// attached asynchronously (`spawn_epub_percent_derivation`), so the
+/// returned record may predate the percent by one read.
 #[post("/api/rpc/progress", pool: PoolExt, user: AuthUser)]
 pub async fn rpc_save_progress(update: ProgressUpdate) -> Result<ProgressRecord> {
     if let Err(msg) = update.validate() {
         return Err(ServerFnError::new(msg).into());
     }
     match db::progress::upsert_progress(&pool.0, user.id, &update).await {
-        Ok(rec) => Ok(rec),
+        Ok(rec) => {
+            db::progress::spawn_epub_percent_derivation(pool.0.clone(), user.id, &rec);
+            Ok(rec)
+        }
         Err(db::progress::ProgressError::BookNotFound) => {
             Err(ServerFnError::new("book not found").into())
         }

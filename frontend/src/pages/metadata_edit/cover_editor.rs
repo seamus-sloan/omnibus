@@ -7,6 +7,7 @@
 use dioxus::prelude::*;
 use omnibus_shared::EbookMetadata;
 
+use super::bust_query;
 use crate::components::atrium::Cover;
 use crate::contexts::{bump_cover_cache_bust, use_cover_cache_bust};
 use crate::{data, media_url, use_server_url};
@@ -22,21 +23,34 @@ pub(super) fn CoverEditor(
     on_change: EventHandler<EbookMetadata>,
 ) -> Element {
     let server_url = use_server_url();
-    let state = CoverState {
+    let global_bust = use_cover_cache_bust().0;
+    let bust_key = uuid.clone();
+    let mut state = CoverState {
         busy: use_signal(|| false),
         status: use_signal(|| None),
         cover_url: use_signal(|| book.cover_url.clone()),
         has_cover_override: use_signal(|| book.has_cover_override),
-        // Bumped after a successful upload/revert so the `src_override`
-        // query string changes — the cover route caches for a day
-        // (`Cache-Control: private, max-age=86400`), and this same preview
-        // already fetched the pre-change image once on mount, so the
-        // browser would otherwise keep serving it from cache for the
-        // unchanged `/api/covers/:uuid` URL.
-        cover_bust: use_signal(|| 0u32),
-        // App-wide registry (survives navigation) — see `apply` below.
-        global_bust: use_cover_cache_bust().0,
+        // Read from the app-wide registry rather than counted locally, so a
+        // cover applied *elsewhere on this page* — the compare view's cover
+        // row — busts this preview too. The cover route caches for a day
+        // (`Cache-Control: private, max-age=86400`) and this preview already
+        // fetched the pre-change image, so without a changing query string
+        // the browser keeps serving the old bytes for an unchanged URL.
+        //
+        // Starts at 0 on a fresh registry, so SSR and the first WASM paint
+        // both render no `src_override` (rule 07).
+        cover_bust: use_memo(move || global_bust.read().get(&bust_key).copied().unwrap_or(0)),
+        global_bust,
     };
+
+    // Re-seed when the page hands down a book the server has since changed —
+    // the compare view's cover row writes one without this component being
+    // remounted, and its status line would otherwise still read
+    // "extracted from file" over the new image.
+    use_effect(use_reactive!(|book| {
+        state.cover_url.set(book.cover_url.clone());
+        state.has_cover_override.set(book.has_cover_override);
+    }));
 
     rsx! {
         div { class: "card me-sidebar-card",
@@ -75,7 +89,9 @@ struct CoverState {
     status: Signal<Option<String>>,
     cover_url: Signal<Option<String>>,
     has_cover_override: Signal<bool>,
-    cover_bust: Signal<u32>,
+    /// This book's entry in the app-wide registry — a memo, not a counter,
+    /// so any writer of a cover for this book moves it.
+    cover_bust: Memo<u32>,
     global_bust: Signal<std::collections::HashMap<String, u32>>,
 }
 
@@ -87,9 +103,10 @@ impl CoverState {
     }
 
     /// Fold a successful server response into the local preview state,
-    /// bump the app-wide cache-bust counter for `uuid` so other views of
-    /// this book pick up the change too (issue #1087), and bubble the
-    /// merged book up to the parent sidebar.
+    /// bump the app-wide cache-bust counter for `uuid` — which this
+    /// component's own preview reads back, alongside every other view of the
+    /// book (issue #1087) — and bubble the merged book up to the parent
+    /// sidebar.
     fn apply(
         &mut self,
         uuid: &str,
@@ -99,7 +116,8 @@ impl CoverState {
     ) {
         self.cover_url.set(updated.cover_url.clone());
         self.has_cover_override.set(updated.has_cover_override);
-        self.cover_bust.set((self.cover_bust)() + 1);
+        // One bump, which `cover_bust` reads back — no separate local
+        // counter to keep in step.
         bump_cover_cache_bust(self.global_bust, uuid);
         self.status.set(Some(msg.to_string()));
         on_change.call(updated);
@@ -133,14 +151,6 @@ fn cover_preview(book: &EbookMetadata, server_url: &str, state: CoverState) -> E
             Cover { book: display_book, src_override }
         }
     }
-}
-
-/// Append a cache-busting `v=` query param to `url`, using `&` when `url`
-/// already carries a query string (mobile's [`media_url`] appends
-/// `?token=…`).
-fn bust_query(url: &str, bust: u32) -> String {
-    let sep = if url.contains('?') { '&' } else { '?' };
-    format!("{url}{sep}v={bust}")
 }
 
 /// File-upload input plus the "revert to scanned cover" button (shown only
@@ -231,23 +241,5 @@ fn cover_controls(
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bust_query_appends_with_question_mark_when_url_has_no_query_string() {
-        assert_eq!(bust_query("/covers/abc.jpg", 3), "/covers/abc.jpg?v=3");
-    }
-
-    #[test]
-    fn bust_query_appends_with_ampersand_when_url_already_has_a_query_string() {
-        assert_eq!(
-            bust_query("/covers/abc.jpg?token=xyz", 3),
-            "/covers/abc.jpg?token=xyz&v=3"
-        );
     }
 }

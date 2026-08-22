@@ -18,7 +18,7 @@
  * Public surface: window.OmnibusReader
  *   init(elementId, fileUrl, opts)  opts = { cfi?, fontSize?, theme?,
  *                                           fontFamily?, lineHeight?,
- *                                           maxWidth?, justify?,
+ *                                           maxWidth?, justify?, spread?,
  *                                           allowScriptedContent?,
  *                                           locationsKey? }
  *   next()                          queued/coalesced — see the paging-turn
@@ -33,6 +33,9 @@
  *   setLineHeight(value)
  *   setMargins(maxWidth)
  *   setJustify(on)
+ *   setSpread(mode)                 "none" (single column) or "auto"
+ *                                   (epub.js pairs columns once the stage
+ *                                   crosses its minSpreadWidth)
  *   addAnnotation(cfiRange, color)
  *   removeAnnotation(cfiRange)
  *   clearAnnotations()
@@ -82,6 +85,30 @@
   // so the first-pass landing (a page or two off until fonts/theme reflow) is
   // never persisted as reading progress.
   var restoreSettled = true;
+  // Monotonic navigation generation: bumped by every explicit display
+  // (jumps, TOC/link nav, page turns). The restore settle chain and each
+  // displaySettled capture the value at start and skip their corrective
+  // redisplay when a later navigation has superseded them — without this
+  // the restore's re-display(initialCfi) yanks the view back off a
+  // follow-mode jump that landed while it was settling.
+  var displayToken = 0;
+  // True from a CFI restore until its first post-settle emission — that
+  // emission re-states the restored position and is tagged `echo` so the
+  // host renders it without persisting it (see emitRelocate).
+  var restoreEchoPending = false;
+  // True from the first resize-driven "resized" event of a rotation/resize
+  // burst until the corrected redisplay that follows it has been reported —
+  // mutes every relocate in between (issue #2081, finding 1 & 2). A
+  // rotation re-paginates but is not reading movement: epub.js's own
+  // window-resize handler and installStageResizeWatch's ResizeObserver
+  // each re-display the pre-resize CFI through a plain, uncorrected
+  // `rendition.display()`, so left unmuted the host would see one or two
+  // relocates that both land off the actual page (no nudgeToTarget
+  // correction) and both look like real movement (no echo tag).
+  var resizeSettling = false;
+  var resizeCorrectionTimer = null;
+  var resizeCorrectionTarget = null;
+  var RESIZE_CORRECTION_DEBOUNCE_MS = 200;
   var tocFlat = [];
   var currentTheme = "dark";
   // Whether the section iframe runs scripts. Only then can we await the
@@ -101,6 +128,19 @@
   // flush adds that raced it.
   var pendingAnnotations = [];
   var annotationRepaintTimer = null;
+  // A displayPercentage call that arrived before the book/locations were
+  // ready — the follow-mode auto-jump fires ~50ms after mount, racing both
+  // init() (book still null) and the locations pass (seconds on a first
+  // open). Applied by init()'s locations .then; cancelled by any user
+  // navigation (their own movement outranks a stale auto-jump). Like
+  // pendingAnnotations, NOT cleared in teardown() — init() tears down
+  // first and must still honor a jump that raced it; destroy() clears it.
+  var pendingJumpPct = null;
+  // CFI twin of pendingJumpPct: a displayCfi that raced init. Applied
+  // from the same locations hook (a CFI jump needs only the rendition,
+  // but one known safe point keeps the two paths in step); at most one
+  // of the two slots is ever set.
+  var pendingJumpCfi = null;
 
   function emitStatus(state) {
     if (typeof window.__omnibusOnStatus === "function") {
@@ -121,6 +161,12 @@
       clearTimeout(stageResizeTimer);
       stageResizeTimer = null;
     }
+    if (resizeCorrectionTimer) {
+      clearTimeout(resizeCorrectionTimer);
+      resizeCorrectionTimer = null;
+    }
+    resizeSettling = false;
+    resizeCorrectionTarget = null;
     if (annotationRepaintTimer) {
       clearTimeout(annotationRepaintTimer);
       annotationRepaintTimer = null;
@@ -208,6 +254,9 @@
     // rather than rendering a frozen 0% (issue #1896).
     var pct = 0;
     var pctApprox = false;
+    // Full-precision twin of `pct` for the "synced here" declaration —
+    // an anchor pair is only as good as the fraction it records.
+    var frac = 0;
     if (location && location.start) {
       if (locationsReady) {
         // `start.percentage` is a snapshot taken when the relocate fired;
@@ -223,9 +272,11 @@
           }
         }
         pct = Math.round(p * 100);
+        frac = p;
       } else {
         pct = spineApproxPct(location.start);
         pctApprox = true;
+        frac = pct / 100;
       }
     }
     // `displayed` is the visual column epub.js just rendered in the current
@@ -247,6 +298,7 @@
       page: page,
       totalPages: totalPages,
       pct: pct,
+      frac: frac,
       pctApprox: pctApprox,
       // epub.js sets `atEnd` when the displayed range reaches the last page
       // of the last spine item — `pct` alone tops out below 100 because it
@@ -445,8 +497,32 @@
         // Re-emit current location now that locations are resolved so the
         // Rust side gets a real whole-book `pct` on first load (page/total
         // are already live off the current render — see buildRelocateData).
+        // An echo: it re-states the position, it doesn't report movement.
         if (book === locBook && rendition && rendition.location) {
-          emitRelocate(rendition.location);
+          emitRelocate(rendition.location, true);
+        }
+        // A follow-mode auto-jump that raced this pass now has a rendition
+        // (and locations) to resolve against — apply it unless navigation
+        // cancelled it (or the book was swapped mid-chain). The CFI slot
+        // wins: it is the server-derived precise target, the percentage its
+        // locations-scale fallback.
+        if (book === locBook && pendingJumpCfi !== null) {
+          var jumpCfi = pendingJumpCfi;
+          pendingJumpCfi = null;
+          pendingJumpPct = null;
+          // Same-position guard as displayCfi: a parked jump that resolves
+          // to the page already on screen is a restatement — skipping it
+          // keeps the restore's echo tag pending so nothing writes (#1972).
+          if (!jumpIsCurrent(jumpCfi)) {
+            restoreEchoPending = false;
+            displaySettled(jumpCfi);
+          }
+        } else if (book === locBook && pendingJumpPct !== null && book && book.locations) {
+          var pct = pendingJumpPct;
+          pendingJumpPct = null;
+          // `applyPercentage` clears the echo tag only when its
+          // same-position guard passes (#1972).
+          applyPercentage(pct);
         }
       })
       .catch(function () {
@@ -471,6 +547,13 @@
     // saved progress paint (and report ready) immediately.
     var initialCfi = opts.cfi || null;
     restoreSettled = !initialCfi;
+    restoreEchoPending = !!initialCfi;
+    // A jump or turn during the settle supersedes the restore — its
+    // corrective redisplay must not pull the view back (see displayToken).
+    var restoreToken = displayToken;
+    var restoreCurrent = function () {
+      return displayToken === restoreToken;
+    };
     rendition.display(initialCfi || undefined).then(
       function () {
         if (!initialCfi) {
@@ -505,8 +588,9 @@
             emitRelocate(rendition.location);
           }
         };
-        redisplayWhenSettled(initialCfi)
+        redisplayWhenSettled(initialCfi, restoreCurrent)
           .then(function () {
+            if (!restoreCurrent()) return;
             return nudgeToTarget(initialCfi);
           })
           .catch(function () {
@@ -532,6 +616,20 @@
         relocateTimer = null;
         emitRelocate(location);
       }, 400);
+    });
+
+    // epub.js's Rendition.onResized emits this, then immediately issues its
+    // own plain, uncorrected `display(e || this.location.start.cfi)` — the
+    // pre-resize position, at the moment this fires, since `location` isn't
+    // re-measured until that display resolves. Anchor the correction on the
+    // same fallback so it targets the same pre-resize page epub.js does.
+    rendition.on("resized", function (size, cfiOverride) {
+      var target =
+        cfiOverride ||
+        (rendition && rendition.location && rendition.location.start
+          ? rendition.location.start.cfi
+          : null);
+      scheduleResizeCorrection(target);
     });
 
     rendition.on("selected", function (cfiRange, contents) {
@@ -582,9 +680,23 @@
     });
   }
 
-  function emitRelocate(location) {
-    if (!restoreSettled) return;
+  // `isEcho` marks an emission that re-states a position the host already
+  // knows (the restore settle, the locations-resolved re-emit) rather than
+  // reporting movement. The host renders echoes but must not persist them:
+  // an echo write stamps a fresh clock on an unmoved position, which
+  // out-orders a newer counterpart-format position at the cross-format
+  // clock gate. The first emission after a CFI restore is an echo even
+  // when it arrives through the debounced relocated handler, so the flag
+  // is consumed here rather than trusted to the call sites.
+  function emitRelocate(location, isEcho) {
+    if (!restoreSettled || resizeSettling) return;
+    var echo = !!isEcho;
+    if (restoreEchoPending) {
+      restoreEchoPending = false;
+      echo = true;
+    }
     var data = buildRelocateData(location);
+    data.echo = echo;
     if (data.cfi && typeof window.__omnibusOnRelocate === "function") {
       window.__omnibusOnRelocate(JSON.stringify(data));
     }
@@ -650,6 +762,13 @@
 
   function queueTurn(dir) {
     if (!rendition) return;
+    // A user turn cancels any pending follow-jump or restore echo — the
+    // reader is navigating away from the target position.
+    pendingJumpPct = null;
+    pendingJumpCfi = null;
+    restoreEchoPending = false;
+    displayToken++;
+    cancelResizeCorrection();
     if (turnInFlight) {
       turnPendingDir = dir;
       return;
@@ -754,6 +873,7 @@
     if (!rendition || !rendition.manager) return false;
     var manager = rendition.manager;
     if (!hasAdjacentSection(manager, dir)) return false;
+    cancelResizeCorrection();
     var release = beginSectionTurn();
     var runTurn = function () {
       return dir > 0 ? manager.next() : manager.prev();
@@ -1648,6 +1768,8 @@
 
   function destroy() {
     if (!rendition) return;
+    pendingJumpPct = null;
+    pendingJumpCfi = null;
     teardown();
   }
 
@@ -1729,7 +1851,7 @@
   // Wait for the active section's webfonts to settle, then re-display
   // `target` against the final layout. Returns a promise resolving once the
   // corrective redisplay completes, so callers can sequence on it.
-  function redisplayWhenSettled(target) {
+  function redisplayWhenSettled(target, stillCurrent) {
     var doc = null;
     try {
       var contents = rendition.getContents();
@@ -1759,6 +1881,7 @@
         });
       })
       .then(function () {
+        if (stillCurrent && !stillCurrent()) return;
         if (rendition) return rendition.display(target);
       });
   }
@@ -1815,11 +1938,16 @@
 
   function displaySettled(target) {
     if (!rendition) return;
+    displayToken++;
+    var myToken = displayToken;
+    var current = function () {
+      return displayToken === myToken;
+    };
     var reveal = beginSettleFade();
     rendition
       .display(target)
       .then(function () {
-        return redisplayWhenSettled(target);
+        return redisplayWhenSettled(target, current);
       })
       .then(reveal, function () {
         /* target may be gone after a teardown */
@@ -1849,8 +1977,110 @@
     return Promise.resolve();
   }
 
+  // Drop any pending or in-flight resize correction and resume relocates
+  // immediately. A user-initiated turn (queueTurn, a swipe across a
+  // section) mid-burst is real reading movement: muting through the
+  // correction — or worse, letting a correction already in flight land
+  // afterward and stomp the turn's own relocate with a stale echo of the
+  // pre-resize target — leaves the page indicator, restore anchor, and
+  // persist trigger out of step with where the reader actually turned to
+  // (review finding on #2081). Bumping displayToken is what lets a
+  // correction chain already past this point (mid `display()`/settle,
+  // inside `current()`) notice it's stale and skip its landing.
+  function cancelResizeCorrection() {
+    displayToken++;
+    if (resizeCorrectionTimer) {
+      clearTimeout(resizeCorrectionTimer);
+      resizeCorrectionTimer = null;
+    }
+    resizeSettling = false;
+    resizeCorrectionTarget = null;
+  }
+
+  // The corrected, echo-tagged counterpart to epub.js's own resize-driven
+  // re-display (issue #2081, findings 1 & 2). `resizeSettling` mutes every
+  // relocate — including the raw, uncorrected ones epub.js's own onResized
+  // fires straight through `rendition.display()` — from the first "resized"
+  // event of a burst until this fires once, reporting the settled, nudged
+  // landing as a single echo. A rotation re-paginates but is not reading
+  // movement: `!data.echo` is what already keeps `build_relocate_callback`
+  // (frontend/src/pages/reader/interop.rs) from persisting it.
+  function finishResizeCorrection(r, current) {
+    // Superseded by a user turn (cancelResizeCorrection) or a newer resize
+    // burst — that path already resumed relocates (or will report its own
+    // landing); this one has nothing current to say.
+    if (current && !current()) return;
+    resizeSettling = false;
+    if (rendition !== r) return;
+    var loc = null;
+    try {
+      loc = rendition.currentLocation();
+    } catch (e) {
+      /* not ready */
+    }
+    if (loc && loc.start) {
+      emitRelocate(loc, true);
+    } else if (rendition.location) {
+      emitRelocate(rendition.location, true);
+    }
+  }
+
+  // Re-display the pre-resize target through the same settle-then-redisplay
+  // and nudgeToTarget correction the boot restore gets, rather than trusting
+  // epub.js's own plain `display()`. Mirrors the boot-restore chain in
+  // init() rather than calling displaySettled(), which does not nudge.
+  function runResizeCorrection() {
+    resizeCorrectionTimer = null;
+    var target = resizeCorrectionTarget;
+    resizeCorrectionTarget = null;
+    var r = rendition;
+    if (!target || !r) {
+      resizeSettling = false;
+      return;
+    }
+    displayToken++;
+    var myToken = displayToken;
+    var current = function () {
+      return displayToken === myToken;
+    };
+    var reveal = beginSettleFade();
+    r.display(target)
+      .then(function () {
+        return redisplayWhenSettled(target, current);
+      })
+      .then(function () {
+        if (current()) return nudgeToTarget(target);
+      })
+      .catch(function () {
+        /* keep whatever landed */
+      })
+      .then(function () {
+        reveal();
+        finishResizeCorrection(r, current);
+      });
+  }
+
+  // Coalesce the two racing resize paths (epub.js's own window-resize
+  // listener and installStageResizeWatch's container ResizeObserver) into
+  // one corrected redisplay per burst (AC4). Anchored to the FIRST target
+  // seen — not whichever raw, uncorrected redisplay happens to land last —
+  // so a mid-burst measurement can't walk the anchor away from the page the
+  // reader was actually on, and repeated rotations can't accumulate drift.
+  function scheduleResizeCorrection(target) {
+    if (!target || !rendition) return;
+    if (!resizeSettling) {
+      resizeSettling = true;
+      resizeCorrectionTarget = target;
+    }
+    if (resizeCorrectionTimer) clearTimeout(resizeCorrectionTimer);
+    resizeCorrectionTimer = setTimeout(runResizeCorrection, RESIZE_CORRECTION_DEBOUNCE_MS);
+  }
+
   function display(target) {
     if (!rendition || !target) return;
+    pendingJumpPct = null;
+    pendingJumpCfi = null;
+    restoreEchoPending = false;
     var t = String(target);
     var hash = t.indexOf("#");
     // CFIs and bare hrefs pass straight through. Fragment hrefs resolve to
@@ -1961,6 +2191,90 @@
     });
   }
 
+  // A jump target that is already on screen (at the visible range's start
+  // or inside it) is a restatement, not movement — applying it lands a
+  // non-echo relocate that stamps a fresh clock on an unmoved row and
+  // shadows the counterpart at the cross-format clock gate (#1972). The
+  // observed loop: the reader restores at the row's CFI, the follow-jump
+  // derives that same CFI from the stale counterpart, and the "jump"
+  // re-clocks a position nobody moved.
+  function jumpIsCurrent(cfi) {
+    try {
+      if (!rendition || !rendition.location || !rendition.location.start) return false;
+      var c = new ePub.CFI();
+      var s = rendition.location.start.cfi;
+      if (c.compare(cfi, s) === 0) return true;
+      var e = rendition.location.end ? rendition.location.end.cfi : null;
+      return !!e && c.compare(cfi, s) >= 0 && c.compare(cfi, e) < 0;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  function applyPercentage(pct) {
+    var frac = Math.min(Math.max(Number(pct) / 100, 0), 1);
+    var cfi = book.locations.cfiFromPercentage(frac);
+    // locations store RANGE CFIs; rendition.display() rejects them (and
+    // displaySettled swallows the rejection), so collapse to the start.
+    if (cfi && cfi.indexOf(",") !== -1) {
+      try {
+        var collapsed = new ePub.CFI(cfi);
+        collapsed.collapse(true);
+        cfi = collapsed.toString();
+      } catch (e) {
+        /* leave the range CFI; display may still handle it */
+      }
+    }
+    if (!cfi) return;
+    // Same-position guard (#1972): leave the restore's echo tag pending
+    // when nothing would move; clear it only for a real jump, whose
+    // landing must persist.
+    if (jumpIsCurrent(cfi)) return;
+    restoreEchoPending = false;
+    displaySettled(cfi);
+  }
+
+  // Jump to a whole-book percentage (0..100) via the generated locations
+  // map — the cross-format sync banner's entry point. Locations resolve
+  // seconds after a first open, so a call that arrives early (the follow-
+  // mode auto-jump fires right after mount) is parked and applied by the
+  // locations .then in init() rather than silently dropped.
+  function displayPercentage(pct) {
+    // A percentage jump that actually moves the view is real movement and
+    // must persist — `applyPercentage` clears the pending echo tag once
+    // its same-position guard passes (#1972). Parking must NOT clear it:
+    // on a locations cache miss the pct path always parks (generation
+    // waits on first paint), and an eagerly-cleared tag let the restore's
+    // own settle emission post the unmoved position with a fresh clock.
+    pendingJumpCfi = null;
+    if (!book || !book.locations || !book.locations.length()) {
+      pendingJumpPct = pct;
+      return;
+    }
+    applyPercentage(pct);
+  }
+
+  // Jump straight to a server-derived point CFI — the cross-format sync
+  // surfaces' precise entry point (displayPercentage is their fallback).
+  // Parked until init builds the rendition, like a pre-locations
+  // percentage jump.
+  function displayCfi(cfi) {
+    if (!cfi) return;
+    pendingJumpPct = null;
+    if (!rendition) {
+      restoreEchoPending = false;
+      pendingJumpCfi = cfi;
+      return;
+    }
+    pendingJumpCfi = null;
+    // Already on screen: skip the jump entirely, and leave the restore's
+    // echo tag pending — nothing user-visible moved, so nothing may write
+    // (#1972).
+    if (jumpIsCurrent(cfi)) return;
+    restoreEchoPending = false;
+    displaySettled(cfi);
+  }
+
   window.OmnibusReader = {
     init: init,
     next: next,
@@ -1977,6 +2291,8 @@
     clearAnnotations: clearAnnotations,
     requestToc: requestToc,
     display: display,
+    displayPercentage: displayPercentage,
+    displayCfi: displayCfi,
     copyText: copyText,
     shareText: shareText,
     search: search,

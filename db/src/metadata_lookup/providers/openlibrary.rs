@@ -6,16 +6,20 @@
 
 use anyhow::Context;
 use omnibus_shared::isbn::normalize_isbn;
-use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider};
+use omnibus_shared::metadata_lookup::{ExternalBookMeta, MetadataProvider, ProviderEdition};
 use serde::Deserialize;
 
 use super::super::{MetadataLookupConfig, SEARCH_LIMIT};
-use super::http::{base_url, client, get_json_best_effort};
+use super::http::{base_url, client, get_json_best_effort, paired_isbn10, sanitize_genres};
 
 /// The `jscmd=data` response is a map keyed `"ISBN:<isbn>"`; a missing key means
 /// the ISBN isn't known.
 #[derive(Debug, Deserialize)]
 struct OlBook {
+    /// The edition's own record key (`/books/OL…M`) — the handle a selected
+    /// candidate is re-fetched by.
+    #[serde(default)]
+    key: Option<String>,
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
@@ -28,6 +32,21 @@ struct OlBook {
     publishers: Vec<OlNamed>,
     #[serde(default)]
     cover: Option<OlCover>,
+    /// `jscmd=data` returns subjects as `{name, url}` objects, not strings.
+    /// Long and mixed — genre, setting, and character names together — which
+    /// is why they go through `sanitize_genres`' cap.
+    #[serde(default)]
+    subjects: Vec<OlNamed>,
+    #[serde(default)]
+    identifiers: OlIdentifiers,
+}
+
+/// The edition's identifier bag. Only the ISBN-10 list is read: the ISBN-13
+/// is the caller's own, already normalized.
+#[derive(Debug, Default, Deserialize)]
+struct OlIdentifiers {
+    #[serde(default)]
+    isbn_10: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -51,7 +70,7 @@ struct OlCover {
 pub async fn by_isbn(
     config: &MetadataLookupConfig,
     isbn13: &str,
-) -> anyhow::Result<Option<ExternalBookMeta>> {
+) -> anyhow::Result<Option<ProviderEdition>> {
     let key = format!("ISBN:{isbn13}");
     // isbn13 is digit-only (post-normalization), so no query-value encoding is
     // needed; the `:` in the bibkey is a legal query char.
@@ -82,19 +101,34 @@ pub async fn by_isbn(
     };
     let cover_url = book.cover.and_then(|c| c.large.or(c.medium).or(c.small));
 
-    Ok(Some(ExternalBookMeta {
+    Ok(Some(ProviderEdition {
+        source: MetadataProvider::OpenLibrary,
+        provider_ref: provider_ref(book.key, isbn13),
         isbn13: isbn13.to_string(),
+        isbn10: paired_isbn10(&book.identifiers.isbn_10, isbn13),
         title,
         authors: book.authors.into_iter().filter_map(|a| a.name).collect(),
         year: book.publish_date,
-        pages: book.number_of_pages,
+        // A record that reports 0 pages is one whose length Open Library
+        // doesn't know, not a zero-page book — and staging that over a real
+        // count is the failure this guards.
+        pages: book.number_of_pages.filter(|p| *p > 0),
         publisher: book.publishers.into_iter().find_map(|p| p.name),
         description: None,
         cover_url,
         series: None,
+        series_index: None,
         first_publish_year: None,
-        source: MetadataProvider::OpenLibrary,
+        genres: sanitize_genres(book.subjects.into_iter().flat_map(|s| s.name)),
     }))
+}
+
+/// The provider handle for one candidate: Open Library's own record key when
+/// the row carries one, else the uniform `isbn:` fallback every provider
+/// shares.
+fn provider_ref(key: Option<String>, isbn13: &str) -> String {
+    key.filter(|k| !k.trim().is_empty())
+        .unwrap_or_else(|| format!("isbn:{isbn13}"))
 }
 
 // ── Title search ─────────────────────────────────────────────────
@@ -109,6 +143,10 @@ struct OlSearchResponse {
 
 #[derive(Debug, Deserialize)]
 struct OlSearchDoc {
+    /// The work key (`/works/OL…W`) — `search.json` answers works, so this is
+    /// the coarsest handle of the three providers'.
+    #[serde(default)]
+    key: Option<String>,
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
@@ -121,6 +159,10 @@ struct OlSearchDoc {
     cover_i: Option<i64>,
     #[serde(default)]
     number_of_pages_median: Option<i64>,
+    /// Work-level subject list — the same mixed bag as the edition record's,
+    /// and the longest of the three providers'.
+    #[serde(default)]
+    subject: Vec<String>,
 }
 
 /// Build the title-search URL. The query is user text, so it goes through
@@ -134,7 +176,7 @@ pub(in crate::metadata_lookup) fn search_url(
         .append_pair("title", query)
         .append_pair(
             "fields",
-            "title,author_name,first_publish_year,isbn,cover_i,number_of_pages_median",
+            "key,title,author_name,first_publish_year,isbn,cover_i,number_of_pages_median,subject",
         )
         .append_pair("limit", &SEARCH_LIMIT.to_string());
     Ok(url.into())
@@ -145,7 +187,7 @@ pub(in crate::metadata_lookup) fn search_url(
 pub async fn by_title(
     config: &MetadataLookupConfig,
     query: &str,
-) -> anyhow::Result<Vec<ExternalBookMeta>> {
+) -> anyhow::Result<Vec<ProviderEdition>> {
     let url = search_url(config, query)?;
     let resp = client()?
         .get(&url)
@@ -162,15 +204,22 @@ pub async fn by_title(
     Ok(body.docs.into_iter().filter_map(map_search_doc).collect())
 }
 
-/// Map one search doc into `ExternalBookMeta`. A doc without a title or a
+/// Map one search doc into `ProviderEdition`. A doc without a title or a
 /// valid ISBN maps to `None` — the whole check-in flow keys on the ISBN
 /// downstream (stored per copy, printed on the confirm screens), so a
 /// candidate that can't supply one isn't actionable.
-fn map_search_doc(doc: OlSearchDoc) -> Option<ExternalBookMeta> {
+fn map_search_doc(doc: OlSearchDoc) -> Option<ProviderEdition> {
     let title = doc.title.filter(|t| !t.trim().is_empty())?;
     let isbn13 = doc.isbn.iter().find_map(|v| normalize_isbn(v).ok())?;
-    Some(ExternalBookMeta {
+    // `search.json` answers *works*: one `isbn` list spans every edition, so
+    // only the entry that re-derives the ISBN-13 above is known to name the
+    // same printing.
+    let isbn10 = paired_isbn10(&doc.isbn, &isbn13);
+    Some(ProviderEdition {
+        source: MetadataProvider::OpenLibrary,
+        provider_ref: provider_ref(doc.key, &isbn13),
         isbn13,
+        isbn10,
         title,
         authors: doc.author_name,
         year: None,
@@ -183,8 +232,9 @@ fn map_search_doc(doc: OlSearchDoc) -> Option<ExternalBookMeta> {
             .cover_i
             .map(|id| format!("https://covers.openlibrary.org/b/id/{id}-L.jpg")),
         series: None,
+        series_index: None,
         first_publish_year: doc.first_publish_year,
-        source: MetadataProvider::OpenLibrary,
+        genres: sanitize_genres(doc.subject),
     })
 }
 
@@ -264,4 +314,136 @@ async fn work_first_publish_year(config: &MetadataLookupConfig, isbn13: &str) ->
         .into_iter()
         .next()
         .and_then(|d| d.first_publish_year)
+}
+
+// ── Detail record (hydrate-on-select) ────────────────────────────
+
+/// Open Library's description, which is `"text"` on some records and
+/// `{"type": "/type/text", "value": "text"}` on others. Untagged so both
+/// parse into one shape.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum OlDescription {
+    Text(String),
+    Typed { value: String },
+}
+
+impl OlDescription {
+    fn into_text(self) -> String {
+        match self {
+            OlDescription::Text(v) => v,
+            OlDescription::Typed { value } => value,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct OlRecord {
+    #[serde(default)]
+    description: Option<OlDescription>,
+}
+
+/// Whether `key` is shaped like an Open Library record path this crate is
+/// willing to address.
+///
+/// `key` reaches here from the client, which is echoing back a `provider_ref`
+/// the search handed out — but "echoing back" is a claim, not a guarantee, so
+/// the shape is checked rather than trusted. Anything else (a bare `isbn:`
+/// fallback ref, a path with a `..` segment, an absolute URL) is refused, so
+/// the request can only ever address a record under the configured base.
+fn is_record_key(key: &str) -> bool {
+    (key.starts_with("/works/") || key.starts_with("/books/"))
+        && key.len() <= 64
+        && !key.contains("..")
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-'))
+}
+
+/// The description behind one selected candidate, fetched best-effort from
+/// its own record.
+///
+/// This is the field hydrate-on-select exists for: neither `search.json` nor
+/// `api/books?jscmd=data` carries a description, so without this call Open
+/// Library can never fill the compare view's largest row.
+pub async fn describe(config: &MetadataLookupConfig, key: &str) -> Option<String> {
+    if !is_record_key(key) {
+        return None;
+    }
+    let url = base_url(
+        &config.openlibrary_base,
+        &format!("{key}.json"),
+        "open library",
+    )
+    .ok()?;
+    let record: OlRecord = get_json_best_effort(config, url.as_str()).await?;
+    // Dropped rather than truncated when oversized: this value is staged into
+    // the edit form and posted back to a write path, where
+    // `MetadataOverrides::validate` would reject a mangled one.
+    record
+        .description
+        .map(OlDescription::into_text)
+        .map(|d| d.trim().to_string())
+        .filter(|d| !d.is_empty() && d.chars().count() <= ExternalBookMeta::DESCRIPTION_MAX_LEN)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_record_key;
+
+    // `base_url` concatenates rather than joining, so what reaches `Url::parse`
+    // is `{base}{key}.json`. That makes `is_record_key` the only thing standing
+    // between a client-supplied `provider_ref` and a request of its choosing —
+    // these cases are the ones that would otherwise get through.
+
+    #[test]
+    fn is_record_key_accepts_the_two_record_paths_open_library_actually_mints() {
+        assert!(is_record_key("/works/OL893414W"));
+        assert!(is_record_key("/books/OL7353617M"));
+        assert!(is_record_key("/works/OL_1-2W"));
+    }
+
+    #[test]
+    fn is_record_key_rejects_the_isbn_fallback_ref_every_provider_shares() {
+        // Not a path at all: concatenated onto the base it addresses
+        // `https://openlibrary.orgisbn:978….json`, which is not a record.
+        assert!(!is_record_key("isbn:9780134685991"));
+    }
+
+    #[test]
+    fn is_record_key_rejects_a_traversal_segment() {
+        // `/works/../../../some/other/path.json` parses to `/some/other/path.json`
+        // — a different endpoint on the same host.
+        assert!(!is_record_key("/works/../../../some/other/path"));
+        assert!(!is_record_key("/books/OL1M/.."));
+    }
+
+    #[test]
+    fn is_record_key_rejects_a_ref_that_rewrites_the_host() {
+        // The dangerous shape: `{base}@evil.example/x.json` parses with
+        // `openlibrary.org…` as *userinfo* and `evil.example` as the host, so a
+        // ref carrying `@`, a scheme, or `//` must never reach the URL.
+        assert!(!is_record_key("@evil.example/x"));
+        assert!(!is_record_key("/works/OL1W@evil.example/x"));
+        assert!(!is_record_key("https://evil.example/x"));
+        assert!(!is_record_key("//evil.example/x"));
+        assert!(!is_record_key("/works/OL1W?x=y"));
+        assert!(!is_record_key("/works/OL1W#frag"));
+    }
+
+    #[test]
+    fn is_record_key_rejects_an_over_long_ref() {
+        // `EditionHydrateRequest::validate` caps at 256 bytes, four times this
+        // guard's own limit, so the length check has to hold on its own.
+        let long = format!("/works/{}", "O".repeat(64));
+        assert!(long.len() > 64);
+        assert!(!is_record_key(&long));
+    }
+
+    #[test]
+    fn is_record_key_rejects_a_path_outside_the_two_record_prefixes() {
+        assert!(!is_record_key("/search.json"));
+        assert!(!is_record_key("/authors/OL1A"));
+        assert!(!is_record_key(""));
+    }
 }
