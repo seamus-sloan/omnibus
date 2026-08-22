@@ -304,12 +304,14 @@ Features/           — one directory per surface: Account, AddBooks, Auth,
                       commit carries) and `UploadConfirmSheet` is the editable
                       confirm step the commit endpoints require
 Models/             — Codable mirrors of the `shared/` wire DTOs
-Networking/         — APIClient (plus a separate upload session: a
-                      whole-transfer budget, kept near the server's own 30s
-                      request timeout rather than far past it, and one that
-                      never claims the probe slot), MultipartBody (the
-                      form-data encoder, split out so a request's wire
-                      shape is unit-testable), keychain-backed TokenStore
+Networking/         — APIClient (plus a separate upload session, whose
+                      whole-transfer budget is sized for bytes rather than for
+                      server think time, and which neither claims the
+                      reachability probe slot nor is allowed to declare an
+                      outage — a transfer times out for reasons that say
+                      nothing about the server), MultipartBody (the form-data
+                      encoder, split out so a request's wire shape is
+                      unit-testable), keychain-backed TokenStore
 Offline/            — Cache (read-through policies), OfflineStore (SQLite
                       replica; `downloads.source_etag` snapshots the file's
                       content validator per rule 09), DownloadManager (which
@@ -338,7 +340,12 @@ Services/           — AuthService, LibraryService, UserDataService,
                       UploadService (the two-step book ingest: inspect a
                       picked file, then commit it under the confirmed
                       metadata — never queued, per rule 08 test 1:
-                      an upload is library-wide, not per-user, state)
+                      an upload is library-wide, not per-user, state),
+                      UploadManager (owns the queue, the staged copies and the
+                      transfers, because all three outlive the sheet that
+                      starts them: one worker, one cancellable handle, and a
+                      registry of live staging directories so the sweep cannot
+                      delete an upload still reading from one)
 ```
 
 **TestFlight release:** the manually-triggered

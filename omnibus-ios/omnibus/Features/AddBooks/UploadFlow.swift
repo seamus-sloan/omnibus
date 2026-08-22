@@ -39,11 +39,18 @@ struct UploadBatch: Equatable, Sendable {
     var urls: [URL]
 
     /// What the progress row and the confirm sheet call this upload.
+    ///
+    /// A multi-part set is named for its folder, not just its part count:
+    /// grouping is keyed on that folder, so two picked sets would otherwise
+    /// produce two rows and two confirm sheets both reading "3 parts" — on the
+    /// one screen whose job is telling you which book you are correcting.
     var displayName: String {
         guard let first = urls.first else { return "" }
-        return urls.count == 1
-            ? first.lastPathComponent
-            : "\(urls.count) parts"
+        if urls.count == 1 { return first.lastPathComponent }
+        let folder = first.deletingLastPathComponent().lastPathComponent
+        return folder.isEmpty
+            ? "\(urls.count) parts"
+            : "\(folder) (\(urls.count) parts)"
     }
 }
 
@@ -76,6 +83,25 @@ enum UploadFlow {
 
     /// Longest author/series value, mirroring `MetadataOverrides::NAME_MAX_LEN`.
     static let nameMaxLength = 250
+
+    /// Length as the server counts it.
+    ///
+    /// The commit multipart also caps each text field at 8 KiB while streaming
+    /// (`MAX_TEXT_FIELD_BYTES`), but that is unreachable from here and so goes
+    /// unmodelled: UTF-8 is at most 4 bytes per scalar, so the 500-scalar title
+    /// cap below bounds a field at 2 KiB.
+    ///
+    /// `MetadataOverrides::validate` uses `chars().count()` — Unicode scalars —
+    /// while Swift's `String.count` counts grapheme clusters, which is never
+    /// larger. Measuring the wrong unit made the gate strictly looser than the
+    /// server's, so a decomposed or emoji-heavy title sailed past it and hit
+    /// the post-filing 400 the gate exists to prevent.
+    static func serverLength(of value: String) -> Int { value.unicodeScalars.count }
+
+    /// Whether a field fits the cap the server will apply to it.
+    static func fits(_ value: String, scalarCap: Int) -> Bool {
+        serverLength(of: value) <= scalarCap
+    }
 
     /// Which ingest a filename targets, or `nil` when neither accepts it.
     static func kind(for filename: String) -> UploadKind? {
@@ -151,8 +177,8 @@ enum UploadFlow {
         kind: UploadKind, title: String, author: String, series: String, seriesIndex: String
     ) -> [(name: String, value: String)] {
         var fields: [(name: String, value: String)] = [
-            ("title", title.trimmingCharacters(in: .whitespacesAndNewlines)),
-            ("author", author.trimmingCharacters(in: .whitespacesAndNewlines)),
+            ("title", title.nilIfBlank ?? ""),
+            ("author", author.nilIfBlank ?? ""),
         ]
         guard kind.acceptsSeries else { return fields }
         if let series = series.nilIfBlank { fields.append(("series", series)) }
@@ -168,14 +194,19 @@ enum UploadFlow {
     /// cap the server enforces only *after* the book is filed and indexed — so
     /// an over-long title would land a book on disk, answer 400, and file a
     /// second copy on the retry. The button stands down instead.
-    static func canCommit(title: String, author: String) -> Bool {
+    /// Takes the same fields as [`commitFields`] so the two cannot disagree
+    /// about which values are actually sent — a cap that forgets a field is how
+    /// one lands a book on disk before the 400.
+    static func canCommit(
+        kind: UploadKind, title: String, author: String, series: String, seriesIndex: String
+    ) -> Bool {
         guard let title = title.nilIfBlank, let author = author.nilIfBlank else { return false }
-        return title.count <= titleMaxLength && author.count <= nameMaxLength
-    }
-
-    /// Whether an optional confirm-sheet field is short enough to commit.
-    static func isWithinNameCap(_ value: String) -> Bool {
-        (value.nilIfBlank?.count ?? 0) <= nameMaxLength
+        guard fits(title, scalarCap: titleMaxLength), fits(author, scalarCap: nameMaxLength)
+        else { return false }
+        guard kind.acceptsSeries else { return true }
+        return [series, seriesIndex]
+            .compactMap(\.nilIfBlank)
+            .allSatisfy { fits($0, scalarCap: nameMaxLength) }
     }
 
     /// Content types the file importer offers, derived from the accepted

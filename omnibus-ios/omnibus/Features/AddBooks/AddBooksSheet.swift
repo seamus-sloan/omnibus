@@ -6,6 +6,10 @@
 //  embedded metadata, let the reader correct it, then commit — because the
 //  commit endpoints file the book into a folder named from the confirmed
 //  title and author and reject a body that carries neither.
+//
+//  The queue, the staged copies and the transfers belong to `UploadManager`,
+//  not to this sheet: they outlive a dismissal, and when the view owned them
+//  every exit path had to remember to clean up.
 
 import SwiftUI
 
@@ -16,18 +20,18 @@ struct AddBooksSheet: View {
 
     @State private var showFileImporter = false
     @State private var showCheckIn = false
-    @State private var uploads: [UploadTask] = []
-    /// Inspected uploads waiting for their confirm sheet, shown one at a time
-    /// so a multi-file pick doesn't stack sheets.
-    @State private var pending: [UploadDraft] = []
-    @State private var activeDraft: UploadDraft?
-    /// Names the picker allowed through that neither endpoint accepts.
-    @State private var unsupported: [String] = []
-    /// The in-flight inspect pipeline, held so dismissal can cancel it rather
-    /// than let it write into torn-down `@State`.
-    @State private var pipeline: Task<Void, Never>?
 
+    private var manager: UploadManager { UploadManager.shared }
     private var isOnline: Bool { Connectivity.shared.isOnline }
+
+    /// Presentation is driven by the manager; the setter only reports the
+    /// dismissal back, so the next draft is never armed mid-animation.
+    private var activeDraft: Binding<UploadDraft?> {
+        Binding(
+            get: { manager.activeDraft },
+            set: { if $0 == nil { manager.sheetDidDismiss() } }
+        )
+    }
 
     var body: some View {
         NavigationStack {
@@ -41,9 +45,9 @@ struct AddBooksSheet: View {
                                 ? "Add an EPUB or audiobook from this device or iCloud Drive."
                                 : "Unavailable offline — uploads go straight to your library."
                         ) { showFileImporter = true }
-                        // An upload is a command against a shared library, so
-                        // it is never queued (rule 08) — the control stands
-                        // down instead of failing after the fact.
+                        // An upload is library-wide state, not per-user, so
+                        // it is never queued (rule 08, test 1) — the control
+                        // stands down instead of failing after the fact.
                         .disabled(!isOnline)
                         .opacity(isOnline ? 1 : 0.4)
                     }
@@ -54,8 +58,8 @@ struct AddBooksSheet: View {
                         subtitle: "Check in a physical copy you own on paper."
                     ) { showCheckIn = true }
 
-                    if !unsupported.isEmpty { unsupportedNotice }
-                    if !uploads.isEmpty { uploadList }
+                    if !manager.unsupported.isEmpty { unsupportedNotice }
+                    if !manager.uploads.isEmpty { uploadList }
                 }
                 .screenPadding()
                 .padding(.top, Spacing.md)
@@ -70,18 +74,13 @@ struct AddBooksSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
-        // Anything still staged belongs to a run that is over — a crash, or a
-        // dismissal that outran its own cleanup. iOS does not purge tmp while
-        // the app runs, so nothing else would ever reclaim it.
-        .onAppear { UploadService.sweepStaleStaging() }
-        .onDisappear(perform: tearDown)
+        // Staging from runs that are over — a crash, or a kill mid-confirm.
+        // iOS does not purge tmp while the app runs, so nothing else reclaims
+        // it; the manager excludes anything it still owns.
+        .onAppear { manager.sweepAbandonedStaging() }
         .sheet(isPresented: $showCheckIn) { CheckInView() }
-        .sheet(item: $activeDraft, onDismiss: presentNextDraft) { draft in
-            UploadConfirmSheet(
-                draft: draft,
-                onCommit: { commit(draft, as: $0) },
-                onCancel: { cancel(draft) }
-            )
+        .sheet(item: activeDraft) { draft in
+            UploadConfirmSheet(draft: draft)
         }
         .fileImporter(
             isPresented: $showFileImporter,
@@ -89,7 +88,7 @@ struct AddBooksSheet: View {
             allowsMultipleSelection: true
         ) { result in
             guard case let .success(urls) = result else { return }
-            stage(urls)
+            manager.enqueue(urls)
         }
     }
 
@@ -98,7 +97,7 @@ struct AddBooksSheet: View {
             Text("Uploads")
                 .font(.ui(13, weight: .semibold))
                 .foregroundStyle(palette.ink2Color)
-            ForEach(uploads) { task in
+            ForEach(manager.uploads) { task in
                 UploadRow(task: task)
             }
         }
@@ -108,8 +107,9 @@ struct AddBooksSheet: View {
 
     private var unsupportedNotice: some View {
         Text(
-            "Can't add \(unsupported.joined(separator: ", ")) — books must be an EPUB, "
-                + "and audiobooks an M4B, M4A, or MP3."
+            "Can't add \(manager.unsupported.joined(separator: ", ")) — books must be an "
+                + "EPUB, and audiobooks an M4B, M4A, or MP3. An MP3 saved as .mpga needs "
+                + "renaming first."
         )
         .font(.ui(12.5))
         .foregroundStyle(palette.ink3Color)
@@ -154,108 +154,6 @@ struct AddBooksSheet: View {
             )
         }
         .buttonStyle(PressableStyle())
-    }
-
-    // MARK: - Upload pipeline
-
-    /// Group the pick into one batch per book, then inspect them in turn.
-    ///
-    /// Sequentially, not concurrently: the confirm sheets are shown one at a
-    /// time anyway, so a fan-out only front-loads a whole file's worth of
-    /// memory per batch that the reader cannot act on yet.
-    private func stage(_ urls: [URL]) {
-        let selection = UploadFlow.selection(for: urls)
-        unsupported = selection.unsupported
-        guard !selection.batches.isEmpty else { return }
-
-        let queued = selection.batches.map { batch in
-            let task = UploadTask(name: batch.displayName)
-            uploads.append(task)
-            return (batch, task)
-        }
-        let previous = pipeline
-        pipeline = Task {
-            await previous?.value
-            for (batch, task) in queued {
-                if Task.isCancelled {
-                    task.state = .failed("Cancelled.")
-                    continue
-                }
-                await inspect(batch, into: task)
-            }
-        }
-    }
-
-    private func inspect(_ batch: UploadBatch, into task: UploadTask) async {
-        var staging: URL?
-        do {
-            let (staged, directory) = try await UploadService.stage(batch)
-            staging = directory
-            let confirmation = try await UploadService.inspect(staged)
-            task.state = .needsDetails
-            pending.append(
-                UploadDraft(
-                    batch: staged, directory: directory, confirmation: confirmation, task: task
-                )
-            )
-            presentNextDraft()
-        } catch {
-            task.state = .failed(Self.message(for: error))
-            // The copy is already on disk by the time inspect can fail, and
-            // only commit/cancel discard — without this it is unreachable.
-            if let staging { UploadService.discard(staging) }
-        }
-    }
-
-    /// Cancel in-flight work and release every staged copy the sheet still
-    /// owns. Tapping Done drops `pending` and `activeDraft` on the floor, so
-    /// the bytes they point at have to go with them.
-    private func tearDown() {
-        pipeline?.cancel()
-        pipeline = nil
-        for draft in pending { UploadService.discard(draft.directory) }
-        pending.removeAll()
-        if let activeDraft {
-            UploadService.discard(activeDraft.directory)
-            self.activeDraft = nil
-        }
-    }
-
-    /// Show the next inspected upload's confirm sheet, if one isn't already up.
-    private func presentNextDraft() {
-        guard activeDraft == nil, !pending.isEmpty else { return }
-        activeDraft = pending.removeFirst()
-    }
-
-    private func commit(_ draft: UploadDraft, as confirmation: UploadConfirmation) {
-        draft.task.state = .uploading
-        activeDraft = nil
-        Task {
-            do {
-                _ = try await UploadService.commit(draft.batch, as: confirmation)
-                draft.task.state = .finished
-                Haptics.success()
-            } catch {
-                draft.task.state = .failed(Self.message(for: error))
-            }
-            UploadService.discard(draft.directory)
-            // No presentNextDraft here: `onDismiss` already drains the queue on
-            // both exit paths, and re-arming `activeDraft` mid-dismissal is
-            // silently dropped by `sheet(item:)` — which then wedges the queue
-            // forever behind the `activeDraft == nil` guard.
-        }
-    }
-
-    /// Drop an upload the reader backed out of: no row is left behind, and the
-    /// staged copy goes with it.
-    private func cancel(_ draft: UploadDraft) {
-        uploads.removeAll { $0.id == draft.task.id }
-        UploadService.discard(draft.directory)
-        activeDraft = nil
-    }
-
-    private static func message(for error: Error) -> String {
-        (error as? APIError)?.errorDescription ?? error.localizedDescription
     }
 }
 

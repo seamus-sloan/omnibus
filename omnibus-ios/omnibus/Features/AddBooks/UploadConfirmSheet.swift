@@ -10,8 +10,6 @@ import SwiftUI
 
 struct UploadConfirmSheet: View {
     let draft: UploadDraft
-    var onCommit: (UploadConfirmation) -> Void
-    var onCancel: () -> Void
 
     @Environment(\.palette) private var palette
 
@@ -22,23 +20,27 @@ struct UploadConfirmSheet: View {
     /// Seeded once from the inspection — re-seeding on every render would
     /// stomp the reader's edits.
     @State private var seeded = false
-    /// Set on the first Add. The sheet stays on screen and hit-testable for the
-    /// whole dismissal animation, so without this a second tap commits the same
-    /// draft again — two transfers, and two copies of the book in the library.
-    @State private var isSubmitting = false
-
+    private var manager: UploadManager { UploadManager.shared }
     private var isOnline: Bool { Connectivity.shared.isOnline }
+
+    /// The sheet stays on screen and hit-testable for the whole dismissal
+    /// animation, so both buttons have to stand down once Add is tapped: a
+    /// second Add commits the draft twice, and a Cancel deletes the staged
+    /// bytes out from under the commit that is already reading them.
+    private var isSubmitting: Bool { manager.isSubmitting }
 
     /// An upload is never queued (rule 08), so the write itself is gated, not
     /// just the flow's entry: the confirm step puts an unbounded human pause
     /// between picking a file and committing it, and the reader can lose
     /// connectivity inside that window.
     private var canCommit: Bool {
-        UploadFlow.canCommit(title: title, author: author)
-            && UploadFlow.isWithinNameCap(series)
-            && UploadFlow.isWithinNameCap(seriesIndex)
-            && isOnline
-            && !isSubmitting
+        UploadFlow.canCommit(
+            kind: draft.batch.kind,
+            title: title,
+            author: author,
+            series: series,
+            seriesIndex: seriesIndex
+        ) && isOnline && !isSubmitting
     }
 
     var body: some View {
@@ -65,14 +67,13 @@ struct UploadConfirmSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { onCancel() }
+                    Button("Cancel") { manager.cancelActive() }
+                        .disabled(isSubmitting)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") {
-                        guard !isSubmitting else { return }
-                        isSubmitting = true
                         Haptics.tap()
-                        onCommit(
+                        manager.confirm(
                             UploadConfirmation(
                                 title: title,
                                 author: author,

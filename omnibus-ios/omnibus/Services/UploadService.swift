@@ -25,35 +25,43 @@ enum UploadService {
             .appendingPathComponent("omnibus-uploads", isDirectory: true)
     }
 
-    /// Copy a batch's picked file(s) into this app's temporary directory,
-    /// returning the batch rebased onto the copies plus the directory holding
-    /// them.
+    /// Allocate (but do not create) a staging directory for one batch.
+    ///
+    /// Handed out before any copying so the caller can register it as live
+    /// first: a `stage` that throws part-way has already written the parts it
+    /// got through, and a directory nobody holds is a directory nobody frees.
+    static func makeStagingDirectory() -> URL {
+        stagingRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    }
+
+    /// Copy a batch's picked file(s) into `directory`, returning the batch
+    /// rebased onto the copies.
     ///
     /// Two reasons, both about the confirm step: the picker's URLs are
     /// security-scoped and that access must be released promptly, while the
-    /// human pause before the user hits Add is unbounded.
+    /// human pause before the reader hits Add is unbounded.
     ///
     /// The copy runs detached because this target builds with approachable
     /// concurrency, under which a `nonisolated async` function runs on its
-    /// *caller's* actor — here, the view. A multi-hundred-megabyte audiobook
-    /// copied on the main thread freezes the UI for the length of the copy.
-    static func stage(_ batch: UploadBatch) async throws -> (batch: UploadBatch, directory: URL) {
-        try await Task.detached(priority: .userInitiated) { try stageOnDisk(batch) }.value
+    /// *caller's* actor. A multi-hundred-megabyte audiobook copied on the main
+    /// thread freezes the UI for the length of the copy.
+    static func stage(_ batch: UploadBatch, into directory: URL) async throws -> UploadBatch {
+        try await Task.detached(priority: .userInitiated) {
+            try stageOnDisk(batch, into: directory)
+        }.value
     }
 
     private static func stageOnDisk(
-        _ batch: UploadBatch
-    ) throws -> (batch: UploadBatch, directory: URL) {
-        let directory = stagingRoot
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        _ batch: UploadBatch, into directory: URL
+    ) throws -> UploadBatch {
         var staged: [URL] = []
         for (index, source) in batch.urls.enumerated() {
-            // Each part gets its own numbered subdirectory so a copy can never
-            // collide, which lets the *original* filename go out on the wire.
-            // Renaming client-side to dodge a collision was worse than useless:
-            // the server already dedupes with `dedupe_part_name`, and a `-N`
-            // suffix sorts before the bare stem ('-' < '.'), which is the
-            // tiebreak `build_parts_list` uses — so it reordered two-disc books.
+            try Task.checkCancellation()
+            // Each part gets its own numbered slot so a copy can never collide,
+            // which lets the *original* filename go out on the wire. Renaming
+            // client-side to dodge a collision was worse than useless: the
+            // server already dedupes, and a `-N` suffix sorts before the bare
+            // stem ('-' < '.'), which is the tiebreak it orders parts by.
             let slot = directory.appendingPathComponent("\(index)", isDirectory: true)
             try FileManager.default.createDirectory(at: slot, withIntermediateDirectories: true)
 
@@ -63,12 +71,10 @@ enum UploadService {
             try FileManager.default.copyItem(at: source, to: destination)
             staged.append(destination)
         }
-        return (UploadBatch(kind: batch.kind, urls: staged), directory)
+        return UploadBatch(kind: batch.kind, urls: staged)
     }
 
-    /// Delete a staged copy once its upload has finished, succeeded or not.
-    /// Detached for the same reason [`stage`] is — removing a multi-part book
-    /// is N unlinks, and the callers are all on the main actor.
+    /// Delete one staged copy once its upload has finished, succeeded or not.
     static func discard(_ directory: URL) {
         Task.detached(priority: .utility) { discardNow(directory) }
     }
@@ -79,14 +85,30 @@ enum UploadService {
         try? FileManager.default.removeItem(at: directory)
     }
 
-    /// Delete every staged copy left behind by a previous run.
+    /// Delete staged copies except those in `keeping`.
     ///
-    /// Staging outlives its owner in the cases cleanup can't reach — a crash, a
-    /// kill mid-confirm — and iOS does not purge `tmp` while the app runs, so
-    /// without this a failed upload's copy is unreachable disk forever.
-    static func sweepStaleStaging() {
-        Task.detached(priority: .utility) {
-            try? FileManager.default.removeItem(at: stagingRoot)
+    /// Staging outlives its owner when cleanup cannot run — a crash, a kill
+    /// mid-confirm — and iOS does not purge `tmp` while the app runs. But a
+    /// blind sweep of the root is worse than the leak: an upload that outlived
+    /// its sheet is still reading from one of these directories.
+    /// `root` is a seam for tests: the sweep is destructive over a whole
+    /// directory, so a test that swept the real root would delete staging that
+    /// a concurrently-running test still owns.
+    static func sweepStaging(keeping live: Set<URL>, in root: URL? = nil) {
+        let root = root ?? stagingRoot
+        let fm = FileManager.default
+        // Compared by directory name, not by URL: `temporaryDirectory` and the
+        // paths `contentsOfDirectory` returns differ by the /var -> /private/var
+        // symlink, and neither `standardizedFileURL` nor string equality sees
+        // through that — which would have swept every live directory.
+        let keep = Set(live.map(\.lastPathComponent))
+        guard
+            let entries = try? fm.contentsOfDirectory(
+                at: root, includingPropertiesForKeys: nil
+            )
+        else { return }
+        for entry in entries where !keep.contains(entry.lastPathComponent) {
+            try? fm.removeItem(at: entry)
         }
     }
 
@@ -129,11 +151,9 @@ enum UploadService {
             seriesIndex: confirmation.seriesIndex
         )
         let (body, boundary) = try await encodedBody(for: batch, fields: fields)
-        // Invalidate whatever the outcome: the server files and indexes the
-        // book *before* it validates the overrides, and its 30s request timeout
-        // can fire after the same point — so a thrown error does not mean the
-        // library is unchanged.
-        defer { Task { await invalidateLibrary() } }
+        // Invalidation is the caller's: `UploadManager` decides from the
+        // outcome whether the library can have changed, and coalesces one
+        // resync per pick rather than one per book.
         return try await APIClient.shared.upload(
             batch.kind.commitPath, body: body, boundary: boundary
         )
@@ -141,7 +161,9 @@ enum UploadService {
 
     /// Drop every cached read a new book invalidates, and resync the offline
     /// mirror. Named rather than inlined so the next write that adds a book has
-    /// one place to call — `CheckInView` open-codes a different, disjoint set.
+    /// one place to call. `CheckInView` clears an overlapping but narrower
+    /// set for its own book-creating writes; folding it in here is worth
+    /// doing and is tracked separately.
     static func invalidateLibrary() async {
         let store = OfflineStore.shared
         // The paged listing is the real library cache; `CacheKey.library`
@@ -149,8 +171,15 @@ enum UploadService {
         await store.cacheDeletePrefix(CacheKey.libraryPagePrefix)
         await store.cacheDelete(CacheKey.authors)
         await store.cacheDelete(CacheKey.series)
+        // A new book's subjects feed both of these.
+        await store.cacheDelete(CacheKey.tags)
+        await store.cacheDelete(CacheKey.genres)
+        // Shelf counts and preview covers move, and so does the membership the
+        // shelf page itself lists — a rule-matching upload joins smart shelves.
         await store.cacheDelete(CacheKey.shelves)
         await store.cacheDelete(CacheKey.shelfPreviews)
+        await store.cacheDeletePrefix("shelf:")
+        await store.cacheDeletePrefix("shelf_page:")
         // The SQLite mirror is not a cache key — it backs offline paging and
         // search, and its own sync self-throttles to once per five minutes.
         await LibraryIndex.shared.sync(force: true)

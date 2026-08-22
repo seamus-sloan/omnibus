@@ -10,6 +10,15 @@ import UniformTypeIdentifiers
 
 @testable import omnibus
 
+private func commits(
+    title: String, author: String, series: String = "", index: String = "",
+    kind: UploadKind = .ebook
+) -> Bool {
+    UploadFlow.canCommit(
+        kind: kind, title: title, author: author, series: series, seriesIndex: index
+    )
+}
+
 private func url(_ name: String, in folder: String = "picked") -> URL {
     URL(fileURLWithPath: "/tmp/\(folder)/\(name)")
 }
@@ -52,11 +61,16 @@ struct UploadFlowTests {
         #expect(extensions.subtracting(accepted) == ["mpga"])
     }
 
-    @Test func acceptedAudioSetIsTheSharedNarrowOne() {
-        // Same three members as the player/downloader set, by construction
-        // rather than by coincidence, so a format addition cannot land in one
-        // and not the other.
-        #expect(UploadFlow.audiobookExtensions == Book.selectableAudioFormats)
+    @Test func acceptedAudioSetIsExactlyWhatTheUploadEndpointTakes() {
+        // Pinned against the server's own list, not against the constant this
+        // is defined from — asserting `audiobookExtensions == the set it is
+        // assigned from` cannot fail, and the guards it replaced (no flac, no
+        // wav) were the only thing catching a widening.
+        #expect(UploadFlow.audiobookExtensions == ["m4b", "m4a", "mp3"])
+        #expect(UploadFlow.ebookExtensions == ["epub"])
+        for playableButNotUploadable in ["flac", "wav", "ogg", "opus", "aac"] {
+            #expect(!UploadFlow.audiobookExtensions.contains(playableButNotUploadable))
+        }
     }
 
     // MARK: - Length caps
@@ -67,22 +81,52 @@ struct UploadFlowTests {
         // answers 400, and duplicates it on the retry.
         let longTitle = String(repeating: "a", count: UploadFlow.titleMaxLength + 1)
         let longName = String(repeating: "a", count: UploadFlow.nameMaxLength + 1)
-        #expect(!UploadFlow.canCommit(title: longTitle, author: "Herbert"))
-        #expect(!UploadFlow.canCommit(title: "Dune", author: longName))
+        #expect(!commits(title: longTitle, author: "Herbert"))
+        #expect(!commits(title: "Dune", author: longName))
         #expect(
-            UploadFlow.canCommit(
+            commits(
                 title: String(repeating: "a", count: UploadFlow.titleMaxLength),
                 author: String(repeating: "a", count: UploadFlow.nameMaxLength)
             )
         )
     }
 
-    @Test func optionalFieldsAreCappedToo() {
-        #expect(UploadFlow.isWithinNameCap(""))
-        #expect(UploadFlow.isWithinNameCap(String(repeating: "a", count: UploadFlow.nameMaxLength)))
+    @Test func capsCountScalarsTheWayTheServerDoes() {
+        // `MetadataOverrides::validate` counts `chars()` — Unicode scalars —
+        // while Swift's `String.count` counts grapheme clusters, which is never
+        // larger. Measuring the wrong unit made the gate strictly looser than
+        // the server's, so this exact title slipped through and 400'd *after*
+        // the book was filed.
+        let decomposed = String(repeating: "e\u{0301}", count: 300)
+        #expect(decomposed.count == 300)
+        #expect(UploadFlow.serverLength(of: decomposed) == 600)
+        #expect(!commits(title: decomposed, author: "Herbert"))
+
+        let author = String(repeating: "e\u{0301}", count: 130)
+        #expect(author.count == 130)
+        #expect(!commits(title: "Dune", author: author))
+    }
+
+    @Test func theMultipartByteCapIsUnreachableBehindTheScalarCap() {
+        // Documents why no byte check is modelled: UTF-8 is at most 4 bytes per
+        // scalar, so a title at the 500-scalar cap cannot exceed 2 KiB and the
+        // server's 8 KiB per-field cap can never be the binding one.
+        let widest = String(repeating: "\u{1F468}", count: UploadFlow.titleMaxLength)
+        #expect(UploadFlow.serverLength(of: widest) == UploadFlow.titleMaxLength)
+        #expect(widest.utf8.count == UploadFlow.titleMaxLength * 4)
+        #expect(widest.utf8.count < 8 * 1024)
+        #expect(commits(title: widest, author: "Herbert"))
+    }
+
+    @Test func optionalFieldsAreCappedOnlyWhereTheyAreSent() {
+        let longName = String(repeating: "a", count: UploadFlow.nameMaxLength + 1)
+        #expect(!commits(title: "Dune", author: "Herbert", series: longName))
+        #expect(!commits(title: "Dune", author: "Herbert", index: longName))
+        // The audiobook commit sends neither, so neither can block it.
         #expect(
-            !UploadFlow.isWithinNameCap(
-                String(repeating: "a", count: UploadFlow.nameMaxLength + 1)
+            commits(
+                title: "Dune", author: "Herbert", series: longName, index: longName,
+                kind: .audiobook
             )
         )
     }
@@ -165,12 +209,18 @@ struct UploadFlowTests {
         #expect(selection.unsupported == ["song.flac"])
     }
 
-    @Test func displayNameIsTheFilenameForOneFileAndAPartCountForMany() {
+    @Test func displayNameNamesAMultiPartSetForItsFolder() {
         #expect(UploadBatch(kind: .ebook, urls: [url("Dune.epub")]).displayName == "Dune.epub")
-        #expect(
-            UploadBatch(kind: .audiobook, urls: [url("01.mp3"), url("02.mp3")]).displayName
-                == "2 parts"
+        // Two picked sets rendered as "2 parts" apiece were indistinguishable
+        // in both the row list and the confirm sheet's title.
+        let dune = UploadBatch(
+            kind: .audiobook, urls: [url("01.mp3", in: "Dune"), url("02.mp3", in: "Dune")]
         )
+        #expect(dune.displayName == "Dune (2 parts)")
+        let other = UploadBatch(
+            kind: .audiobook, urls: [url("01.mp3", in: "Emma"), url("02.mp3", in: "Emma")]
+        )
+        #expect(other.displayName != dune.displayName)
     }
 
     // MARK: - Commit fields
@@ -205,9 +255,9 @@ struct UploadFlowTests {
     }
 
     @Test func canCommitRequiresBothFields() {
-        #expect(UploadFlow.canCommit(title: "Dune", author: "Herbert"))
-        #expect(!UploadFlow.canCommit(title: "", author: "Herbert"))
-        #expect(!UploadFlow.canCommit(title: "Dune", author: "   "))
+        #expect(commits(title: "Dune", author: "Herbert"))
+        #expect(!commits(title: "", author: "Herbert"))
+        #expect(!commits(title: "Dune", author: "   "))
     }
 
     // MARK: - Endpoints

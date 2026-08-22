@@ -88,10 +88,12 @@ actor APIClient {
     /// budget configured per-session, not per-task, so a book transfer cannot
     /// borrow one from the read session's 120s.
     ///
-    /// The ceiling is deliberately modest rather than generous: the server
-    /// wraps every route in a 30s `TimeoutLayer`, so a transfer that runs long
-    /// is already doomed, and a budget far past that only holds the probe slot
-    /// (see `failFastWhenUnreachable`) while nothing can come of it.
+    /// `timeoutIntervalForResource` is a *whole-transfer* budget, not a
+    /// think-time one, so it has to be sized for the bytes rather than for the
+    /// server's own request timeout — a 300 MB audiobook on a phone uplink is
+    /// minutes of legitimate progress. (The server currently caps every route
+    /// at 30s, which bounds real-world uploads well below this; that is a
+    /// server-side limit, not a reason to cut the client's budget to match.)
     private let uploadSession: URLSession
     private let encoder: JSONEncoder = {
         let e = JSONEncoder()
@@ -115,8 +117,8 @@ actor APIClient {
 
         let uploadConfig = URLSessionConfiguration.default
         uploadConfig.waitsForConnectivity = false
-        uploadConfig.timeoutIntervalForRequest = 60
-        uploadConfig.timeoutIntervalForResource = 120
+        uploadConfig.timeoutIntervalForRequest = 120
+        uploadConfig.timeoutIntervalForResource = 3600
         uploadConfig.requestCachePolicy = .reloadIgnoringLocalCacheData
         uploadSession = URLSession(configuration: uploadConfig)
         baseURL = ServerURLStore.load()
@@ -295,6 +297,10 @@ actor APIClient {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         request.httpBody = body
+        // Sending a body is not a read: the read session's 10s idle timeout is
+        // sized for "how long before we give up on a dead server", and applying
+        // it to an upload cuts off a transfer that is progressing fine.
+        request.timeoutInterval = 300
 
         do {
             let (data, response) = try await session.data(for: request)
@@ -305,7 +311,9 @@ actor APIClient {
             throw error
         } catch {
             try rethrowIfCancelled(error, releaseProbe: ownsProbe)
-            noteOutcome(reachable: false, releaseProbe: ownsProbe)
+            noteOutcome(
+                reachable: false, releaseProbe: ownsProbe, publishFailure: ownsProbe
+            )
             throw APIError.transport(error.localizedDescription)
         }
     }
@@ -493,10 +501,19 @@ actor APIClient {
     ///
     /// Only these move the back-off — `setOnline` echoes must not, or the
     /// notification round trip would double the window on its own.
-    private func noteOutcome(reachable: Bool, releaseProbe: Bool = true) {
-        // A request that declined to claim the slot must not release one a
-        // concurrent read is holding.
+    /// `publishFailure: false` lets a request report success without being
+    /// allowed to declare an outage.
+    ///
+    /// A long upload is the request *least* qualified to judge reachability: it
+    /// times out on its own budget, on the server's, or on the app being
+    /// backgrounded, none of which mean the server is gone. Letting it arm the
+    /// back-off failed every read in the app — and, since the upload controls
+    /// are gated on `isOnline`, disabled the retry it was asking for.
+    private func noteOutcome(
+        reachable: Bool, releaseProbe: Bool = true, publishFailure: Bool = true
+    ) {
         if releaseProbe { probing = false }
+        guard reachable || publishFailure else { return }
         if reachable {
             unreachableUntil = nil
             backoff = 0

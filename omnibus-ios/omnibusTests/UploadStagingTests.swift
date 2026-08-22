@@ -33,8 +33,9 @@ struct UploadStagingTests {
             urls: ["01.mp3", "02.mp3"].map { source.appendingPathComponent($0) }
         )
 
-        let (staged, directory) = try await UploadService.stage(batch)
-        defer { UploadService.discard(directory) }
+        let directory = UploadService.makeStagingDirectory()
+        defer { UploadService.discardNow(directory) }
+        let staged = try await UploadService.stage(batch, into: directory)
 
         #expect(staged.kind == .audiobook)
         #expect(staged.urls.count == 2)
@@ -60,75 +61,29 @@ struct UploadStagingTests {
             urls: ["01.mp3", "02.mp3"].map { source.appendingPathComponent($0) }
         )
 
-        let (staged, directory) = try await UploadService.stage(batch)
-        defer { UploadService.discard(directory) }
+        let directory = UploadService.makeStagingDirectory()
+        defer { UploadService.discardNow(directory) }
+        let staged = try await UploadService.stage(batch, into: directory)
 
         #expect(try Data(contentsOf: staged.urls[0]) == Data("PK:01.mp3".utf8))
         #expect(try Data(contentsOf: staged.urls[1]) == Data("PK:02.mp3".utf8))
     }
 
-    @Test func stagePreservesFilenamesWhenTwoPartsCollide() async throws {
-        // Two folders, same filename — legitimate for a multi-part audiobook
-        // split across discs. Each part gets its own numbered slot, so the
-        // ORIGINAL name goes out on the wire and the server's own
-        // `dedupe_part_name` resolves the clash.
-        //
-        // The previous scheme renamed client-side to `track01-1.mp3`, which was
-        // worse than useless: '-' (0x2D) sorts before '.' (0x2E), and
-        // `build_parts_list` breaks ties on filename, so two discs both tagged
-        // 1..N interleaved on playback.
-        let discOne = try makeSourceDir(["track01.mp3"], contents: "ONE")
-        let discTwo = try makeSourceDir(["track01.mp3"], contents: "TWO")
-        defer {
-            try? FileManager.default.removeItem(at: discOne)
-            try? FileManager.default.removeItem(at: discTwo)
-        }
+    @Test func stageKeepsPickedFilenamesForTheWire() async throws {
+        // Per-part slots mean the ORIGINAL name is what the server sees, so no
+        // client-side rename can reorder what `build_parts_list` sorts.
+        let source = try makeSourceDir(["01.mp3", "02.mp3"])
+        defer { try? FileManager.default.removeItem(at: source) }
         let batch = UploadBatch(
             kind: .audiobook,
-            urls: [
-                discOne.appendingPathComponent("track01.mp3"),
-                discTwo.appendingPathComponent("track01.mp3"),
-            ]
+            urls: ["01.mp3", "02.mp3"].map { source.appendingPathComponent($0) }
         )
+        let directory = UploadService.makeStagingDirectory()
+        defer { UploadService.discardNow(directory) }
 
-        let (staged, directory) = try await UploadService.stage(batch)
-        defer { UploadService.discard(directory) }
-
-        #expect(staged.urls.count == 2)
-        // Both keep the name the reader picked; no client-side rename can
-        // reorder what the server sorts.
-        #expect(staged.urls.map(\.lastPathComponent) == ["track01.mp3", "track01.mp3"])
-        #expect(Set(staged.urls.map(\.path)).count == 2, "distinct paths, same filename")
-        #expect(try Data(contentsOf: staged.urls[0]) == Data("ONE:track01.mp3".utf8))
-        #expect(try Data(contentsOf: staged.urls[1]) == Data("TWO:track01.mp3".utf8))
-    }
-
-    @Test func stageSurvivesAThirdPartCollidingWithADisambiguatedName() async throws {
-        // The old single-shot rename produced "track-2.mp3" for the third part
-        // and threw, because the second part was already called that.
-        let one = try makeSourceDir(["track.mp3", "track-2.mp3"], contents: "ONE")
-        let two = try makeSourceDir(["track.mp3"], contents: "TWO")
-        defer {
-            try? FileManager.default.removeItem(at: one)
-            try? FileManager.default.removeItem(at: two)
-        }
-        let batch = UploadBatch(
-            kind: .audiobook,
-            urls: [
-                one.appendingPathComponent("track.mp3"),
-                one.appendingPathComponent("track-2.mp3"),
-                two.appendingPathComponent("track.mp3"),
-            ]
-        )
-
-        let (staged, directory) = try await UploadService.stage(batch)
-        defer { UploadService.discard(directory) }
-
-        #expect(staged.urls.count == 3)
-        #expect(
-            staged.urls.map(\.lastPathComponent) == ["track.mp3", "track-2.mp3", "track.mp3"]
-        )
-        #expect(Set(staged.urls.map(\.path)).count == 3)
+        let staged = try await UploadService.stage(batch, into: directory)
+        #expect(staged.urls.map(\.lastPathComponent) == ["01.mp3", "02.mp3"])
+        #expect(Set(staged.urls.map(\.path)).count == 2)
     }
 
     @Test func stageGivesEachBatchItsOwnDirectory() async throws {
@@ -136,12 +91,14 @@ struct UploadStagingTests {
         defer { try? FileManager.default.removeItem(at: source) }
         let batch = UploadBatch(kind: .ebook, urls: [source.appendingPathComponent("a.epub")])
 
-        let (_, first) = try await UploadService.stage(batch)
-        let (_, second) = try await UploadService.stage(batch)
+        let first = UploadService.makeStagingDirectory()
+        let second = UploadService.makeStagingDirectory()
         defer {
-            UploadService.discard(first)
-            UploadService.discard(second)
+            UploadService.discardNow(first)
+            UploadService.discardNow(second)
         }
+        _ = try await UploadService.stage(batch, into: first)
+        _ = try await UploadService.stage(batch, into: second)
 
         // Per-batch, so discarding one finished upload cannot delete the files
         // of another still waiting on its confirm sheet.
@@ -153,7 +110,8 @@ struct UploadStagingTests {
         defer { try? FileManager.default.removeItem(at: source) }
         let batch = UploadBatch(kind: .ebook, urls: [source.appendingPathComponent("a.epub")])
 
-        let (staged, directory) = try await UploadService.stage(batch)
+        let directory = UploadService.makeStagingDirectory()
+        let staged = try await UploadService.stage(batch, into: directory)
         // The synchronous core, so the assertion does not race the detached
         // task `discard` normally fires.
         UploadService.discardNow(directory)
@@ -173,8 +131,111 @@ struct UploadStagingTests {
             kind: .ebook, urls: [source.appendingPathComponent("missing.epub")]
         )
 
+        let directory = UploadService.makeStagingDirectory()
+        defer { UploadService.discardNow(directory) }
         await #expect(throws: (any Error).self) {
-            try await UploadService.stage(batch)
+            try await UploadService.stage(batch, into: directory)
         }
+    }
+}
+
+/// The sweep's ownership filter, and the partial-copy cleanup it backstops.
+///
+/// These are the paths that kept regressing: cleanup that fired at the wrong
+/// moment, or not at all. Each test sweeps its OWN root — the sweep is
+/// destructive over a whole directory, and Swift Testing runs in parallel, so a
+/// test pointed at the real staging root would delete another test's files.
+struct UploadSweepTests {
+    private func makeRoot() throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("upload-sweep-tests/\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+
+    private func makeStaged(_ name: String, under root: URL) throws -> URL {
+        let dir = root.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: dir.appendingPathComponent("part.mp3"))
+        return dir
+    }
+
+    @Test func sweepRemovesAbandonedStagingButKeepsLiveDirectories() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let live = try makeStaged(UUID().uuidString, under: root)
+        let abandoned = try makeStaged(UUID().uuidString, under: root)
+
+        UploadService.sweepStaging(keeping: [live], in: root)
+
+        // The regression this pins: a blind sweep of the root deleted the parts
+        // of an upload that outlived its sheet and was still reading them.
+        #expect(FileManager.default.fileExists(atPath: live.path))
+        #expect(!FileManager.default.fileExists(atPath: abandoned.path))
+    }
+
+    @Test func sweepMatchesLiveDirectoriesThroughAPathSymlink() throws {
+        // `temporaryDirectory` hands back /var/... while `contentsOfDirectory`
+        // returns /private/var/... . Comparing URLs (even standardized) misses
+        // that and swept every live directory.
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let live = try makeStaged(UUID().uuidString, under: root)
+        let aliased = URL(fileURLWithPath: "/private" + live.path)
+
+        UploadService.sweepStaging(keeping: [aliased], in: root)
+        #expect(FileManager.default.fileExists(atPath: live.path))
+    }
+
+    @Test func sweepWithNothingLiveClearsEverything() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let a = try makeStaged(UUID().uuidString, under: root)
+        let b = try makeStaged(UUID().uuidString, under: root)
+
+        UploadService.sweepStaging(keeping: [], in: root)
+
+        #expect(!FileManager.default.fileExists(atPath: a.path))
+        #expect(!FileManager.default.fileExists(atPath: b.path))
+    }
+
+    @Test func sweepReclaimsAPartiallyStagedDirectory() async throws {
+        // A copy that throws part-way has already written the parts it got
+        // through. The directory is allocated before the copy starts precisely
+        // so it stays reclaimable — previously the handle existed only on
+        // success, so a disk-full upload leaked what it had already written.
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try makeStaged("source", under: root)
+        try Data("ok".utf8).write(to: source.appendingPathComponent("01.mp3"))
+
+        let directory = root.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let batch = UploadBatch(
+            kind: .audiobook,
+            urls: [
+                source.appendingPathComponent("01.mp3"),
+                source.appendingPathComponent("missing.mp3"),
+            ]
+        )
+        await #expect(throws: (any Error).self) {
+            try await UploadService.stage(batch, into: directory)
+        }
+        #expect(FileManager.default.fileExists(atPath: directory.path), "part 0 landed")
+
+        UploadService.sweepStaging(keeping: [source], in: root)
+        #expect(!FileManager.default.fileExists(atPath: directory.path))
+    }
+
+    @Test func staleErrorsAreNotTreatedAsReachingTheServer() {
+        // A transport failure means the request never landed, so invalidating
+        // the library — which deletes cached reads — would blank the shelf for
+        // a reader who is now offline and cannot refill it.
+        #expect(!UploadManager.mayHaveReachedTheServer(APIError.offline))
+        #expect(!UploadManager.mayHaveReachedTheServer(APIError.transport("lost")))
+        #expect(!UploadManager.mayHaveReachedTheServer(APIError.notConfigured))
+        // A status code is proof the server processed the request — and it may
+        // have filed the book before failing validation.
+        #expect(UploadManager.mayHaveReachedTheServer(APIError.http(status: 400, message: "no")))
+        #expect(UploadManager.mayHaveReachedTheServer(APIError.http(status: 408, message: "")))
     }
 }
