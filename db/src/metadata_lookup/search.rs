@@ -95,9 +95,13 @@ pub async fn search_all_providers(
     // found". The key is the score, which is derived from the candidate and
     // the query alone — so a provider being slow, newly configured, or down
     // removes its rows and reorders nothing else. The sort is **stable**, so
-    // candidates that tie keep the order their provider returned them in, and
-    // an unscored candidate (an ISBN-only query, which has nothing to rank
-    // against) keeps its place rather than being flung to one end.
+    // candidates that tie keep the order their provider returned them in.
+    //
+    // The guard is what handles a query with nothing to rank against — an
+    // ISBN-only one scores no row at all, and skipping the sort outright is
+    // what leaves those rows in the order their providers gave them. It is
+    // not a claim about a *mixed* list: there, `i32::MIN` deliberately sorts
+    // an unscored row last, which is the same thing the client does.
     if editions.iter().any(|e| e.relevance.is_some()) {
         editions.sort_by_key(|e| std::cmp::Reverse(e.relevance.unwrap_or(i32::MIN)));
     }

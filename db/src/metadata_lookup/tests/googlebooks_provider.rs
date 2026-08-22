@@ -404,7 +404,7 @@ async fn a_swallowed_bare_text_failure_still_leaves_the_cooldown_it_recorded() {
     let found = providers::run(
         MetadataProvider::GoogleBooks,
         &config,
-        &super::title_query_isbn(ISBN13),
+        &title_query_isbn(ISBN13),
     )
     .await
     .expect("the fallback's failure degrades to a miss");

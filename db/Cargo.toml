@@ -166,7 +166,7 @@ regex = "1"
 # Metadata-search relevance scoring: candidates are folded to a comparable
 # form before they are matched, and that fold has to survive a non-Latin
 # title. NFKD decomposition is what lets the combining-mark strip turn
-# "Soseki" and "Soseki" into one string without transliterating away the
+# "Sōseki" and "Soseki" into one string without transliterating away the
 # scripts that carry meaning in their own characters -- which is why this is
 # `unicode-normalization` and not `deunicode` (already a dependency, but it
 # romanizes: "Dong Jing" for a Japanese title, so two providers reporting the

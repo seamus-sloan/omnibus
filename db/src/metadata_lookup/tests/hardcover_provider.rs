@@ -48,11 +48,14 @@ async fn mount_hc_edition(server: &MockServer, book_id: Option<i64>) {
         .await;
 }
 
-/// Substrings unique to each of the two `books` queries, so a mock can answer
-/// them differently. Held as constants because an unbalanced brace inside a
-/// string literal is exactly the kind of thing a naive parser trips over.
+/// Substring unique to the `books(where: {id:` query, so a mock can tell it
+/// from the edition lookup and the `search` endpoint that share this URL.
+/// Held as a constant because an unbalanced brace inside a string literal is
+/// exactly the kind of thing a naive parser trips over.
+///
+/// Its `{title:` sibling went with the exact-title filter this provider used
+/// to send; text search now goes through `search` (see `SEARCH_QUERY_MARKER`).
 const ID_QUERY_MARKER: &str = "books(where: {id:";
-const TITLE_QUERY_MARKER: &str = "books(where: {title:";
 
 /// A Hardcover `books` row, as both the id lookup and the title search return.
 fn hc_book() -> serde_json::Value {
