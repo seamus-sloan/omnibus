@@ -5,6 +5,7 @@
 //! site derives the cache path from its output instead.
 
 use std::path::PathBuf;
+use std::time::UNIX_EPOCH;
 
 use super::execute::ConvertError;
 
@@ -68,4 +69,15 @@ pub(super) fn validate_format_pair(
 pub fn convert_path(book_id: i64, target_format: &str) -> Result<PathBuf, ConvertError> {
     validate_format_token("target_format", target_format)?;
     Ok(convert_dir().join(format!("{book_id}.{}", target_format.to_lowercase())))
+}
+
+/// `mtime` of `meta` as epoch seconds, or `0` if unavailable. Mirrors
+/// `crate::kepub::fs::mtime_epoch` — same "never observed" sentinel the
+/// scanner uses for `book_files.mtime_epoch` (migration 0009).
+pub(super) fn mtime_epoch(meta: &std::fs::Metadata) -> i64 {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .and_then(|d| i64::try_from(d.as_secs()).ok())
+        .unwrap_or(0)
 }
