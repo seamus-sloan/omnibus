@@ -420,6 +420,16 @@ const FIXTURES: EpubInput[] = [
     language: "en",
     withCover: true,
   },
+  {
+    filename: "standalone-glacier.epub",
+    id: "urn:omnibus-test:standalone-glacier",
+    title: "Glacier Notation",
+    authors: ["Adele Goldberg"],
+    publisher: "Omnibus Test Press",
+    published: "1973-03-05",
+    language: "en",
+    withCover: true,
+  },
 
   // --- Dual-format book: this EPUB shares a normalized (title, author) with
   // the "Immersive Voyage" audiobook in `make_audiobook.ts`, so the indexer

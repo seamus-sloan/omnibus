@@ -431,6 +431,22 @@ export const FIXTURE_BOOKS: readonly ExpectedBook[] = [
     language: "en",
     hasCover: true,
   },
+  // Reserved for book_detail_chips.spec.ts — its hero "+ genres" / "+ tags"
+  // editors write genre AND subjects overrides on this book (globally
+  // visible, flips `has_override`), so `tags` stays undefined (unasserted)
+  // and no other spec may read or write it. "Adele Goldberg" is unique
+  // across ALL fixtures — shelves.spec.ts asserts exact author-scoped
+  // match counts.
+  {
+    slug: "standalone-glacier",
+    filename: "standalone-glacier.epub",
+    title: "Glacier Notation",
+    authors: ["Adele Goldberg"],
+    publisher: "Omnibus Test Press",
+    published: "1973-03-05",
+    language: "en",
+    hasCover: true,
+  },
 
   // Dual-format book: shares a normalized (title, author) with the
   // "Immersive Voyage" audiobook (`fixtures/audiobooks.ts`), so the indexer

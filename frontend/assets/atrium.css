@@ -995,6 +995,27 @@ html, body { overscroll-behavior: none; }
 }
 /* Under the cover, tags sit tight against the format badges. */
 .bd-cover-col .bd-tag-list { margin-top: 12px; }
+/* Admin-only "+ genres" / "+ tags" pill at the end of a hero chip list —
+   dashed to read as an affordance rather than a value, matching the landing
+   cell's edit hint. */
+.bd-add-chip {
+  border-style: dashed;
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 12px;
+}
+@media (hover: hover) {
+  .bd-add-chip:hover { color: var(--ink-0); border-color: var(--accent); }
+}
+/* Editing mode: the ChipEditor's chips + input + dropdown flow as flex items
+   of the chip list itself (`.chip-editor-root` is display:contents). */
+.bd-chips-editor-host {
+  align-items: center;
+}
+.bd-chips-editor-host .chip-editor-input-wrap {
+  min-width: 90px;
+}
 
 /* Rating + actions card */
 .bd-rating-card {
