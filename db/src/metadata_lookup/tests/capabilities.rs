@@ -115,3 +115,49 @@ async fn a_provider_with_no_genres_for_a_book_still_advertises_the_capability() 
         .expect("catalog should list Open Library");
     assert!(info.capabilities.carries_genres);
 }
+
+// ── Cover hosts ──────────────────────────────────────────────────
+
+#[test]
+fn every_provider_in_the_catalog_declares_at_least_one_cover_host() {
+    // A provider whose covers the picker renders but the CSP doesn't name is
+    // a cover that silently fails to load, with the only symptom in a browser
+    // console. Every catalog entry advertising `carries_cover` must be here.
+    let config = MetadataLookupConfig::live(ProviderKeys::default());
+    for info in catalog(&config) {
+        if info.capabilities.carries_cover {
+            assert!(
+                !cover_hosts(info.id).is_empty(),
+                "{:?} carries covers but declares no host",
+                info.id
+            );
+        }
+    }
+}
+
+#[test]
+fn all_cover_hosts_is_the_deduplicated_union_of_every_providers_hosts() {
+    let all = all_cover_hosts();
+    let mut sorted = all.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), all.len(), "no host may appear twice: {all:?}");
+
+    for provider in MetadataProvider::ALL.iter().copied() {
+        for host in cover_hosts(provider) {
+            assert!(all.contains(host), "{host} missing from the union");
+        }
+    }
+}
+
+#[test]
+fn open_librarys_cover_hosts_include_the_redirect_target_it_serves_bytes_from() {
+    // `covers.openlibrary.org` 302s to `archive.org`, and both the browser's
+    // `img-src` check and a server-side fetch follow that hop — so an
+    // origin-only list blocks every Open Library cover.
+    let hosts = cover_hosts(MetadataProvider::OpenLibrary);
+    assert!(hosts.contains(&"covers.openlibrary.org"));
+    assert!(hosts.contains(&"archive.org"));
+    // And the second hop, to a rotating node name only a wildcard can cover.
+    assert!(hosts.contains(&"*.archive.org"));
+}

@@ -32,7 +32,6 @@ mod cleanup;
 #[cfg(not(feature = "mobile"))]
 mod errors;
 mod genres;
-mod hardcover_fetch;
 mod highlights;
 // Per-book Started/Time-read/Sessions insights (#1904) — the book-detail
 // rail section that renders them doesn't compile on mobile, so there's no
@@ -48,6 +47,7 @@ mod cross_format;
 mod kobo;
 #[cfg(not(feature = "mobile"))]
 mod logs;
+mod metadata_search;
 mod physical;
 mod profile;
 mod progress;
@@ -93,7 +93,6 @@ pub use cross_format::*;
 #[cfg(not(feature = "mobile"))]
 pub use errors::*;
 pub use genres::*;
-pub use hardcover_fetch::*;
 pub use highlights::*;
 #[cfg(not(feature = "mobile"))]
 pub use insights::*;
@@ -103,6 +102,7 @@ pub use kindle::*;
 pub use kobo::*;
 #[cfg(not(feature = "mobile"))]
 pub use logs::*;
+pub use metadata_search::*;
 pub use physical::*;
 pub use profile::*;
 pub use progress::*;

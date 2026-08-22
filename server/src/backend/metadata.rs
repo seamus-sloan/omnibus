@@ -1,4 +1,5 @@
-//! Metadata-provider REST handlers — mobile- and web-facing. The catalog
+//! Metadata-provider REST handlers — mobile-facing; web hits the analogous
+//! `/api/rpc/metadata/*` server fns, which mirror these gates. The catalog
 //! (`GET /api/metadata/providers`) is readable by any authenticated user and
 //! carries no key material, only `configured: bool`; the fan-out edition
 //! search (`POST /api/metadata/editions/search`) is `can_edit`-gated, since it

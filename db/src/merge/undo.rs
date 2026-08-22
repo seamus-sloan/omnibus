@@ -123,6 +123,22 @@ async fn rebuild_target_fts_best_effort(
     Ok(())
 }
 
+/// Fold a `settings::SettingsError` from [`upsert_library`] into `MergeError`.
+/// `upsert_library` only ever emits `Db`; `Validation`/`Json` exist on
+/// `SettingsError` for `set_hardcover_api_key` / the F5.1 metadata-precedence
+/// JSON column, so they collapse defensively onto `Other`.
+pub(super) fn map_settings_error(e: crate::settings::SettingsError) -> MergeError {
+    match e {
+        crate::settings::SettingsError::Db(inner) => MergeError::Db(inner),
+        crate::settings::SettingsError::Validation(msg) => {
+            MergeError::Other(format!("unexpected settings validation error: {msg}"))
+        }
+        crate::settings::SettingsError::Json(inner) => {
+            MergeError::Other(format!("unexpected settings JSON error: {inner}"))
+        }
+    }
+}
+
 /// Recreate the source `books` row from the snapshot. The original uuid
 /// is free to reuse — the `merged_uuids` guard kept reindexes from
 /// resurrecting it. `scan_key` is restored too so the next reindex matches
@@ -133,19 +149,7 @@ async fn recreate_source_row(
 ) -> Result<i64, MergeError> {
     let library_id = upsert_library(tx, &snap.library_path)
         .await
-        .map_err(|e| match e {
-            crate::settings::SettingsError::Db(inner) => MergeError::Db(inner),
-            // `upsert_library` never returns `Validation`/`Json` — those arms
-            // exist only to keep the match exhaustive after `SettingsError`
-            // grew variants for `set_hardcover_api_key` / the F5.1 metadata
-            // precedence JSON column.
-            crate::settings::SettingsError::Validation(msg) => MergeError::Db(
-                sqlx::Error::Protocol(format!("unexpected settings validation error: {msg}")),
-            ),
-            crate::settings::SettingsError::Json(inner) => MergeError::Db(sqlx::Error::Protocol(
-                format!("unexpected settings JSON error: {inner}"),
-            )),
-        })?;
+        .map_err(map_settings_error)?;
     // `timestamp` is restored from the snapshot, falling back to now when a
     // pre-0038 snapshot's timestamp couldn't be parsed to an epoch
     // (`de_epoch_flexible` -> None) — the `books` column is nullable since the

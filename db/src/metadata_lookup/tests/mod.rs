@@ -8,6 +8,7 @@ mod capabilities;
 mod fanout;
 mod googlebooks_provider;
 mod hardcover_provider;
+mod hydrate;
 mod openlibrary_provider;
 
 use std::time::Duration;

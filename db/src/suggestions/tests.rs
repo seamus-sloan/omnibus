@@ -613,6 +613,7 @@ async fn resolve_with_caches_filtered_survivors_end_to_end() {
     let cfg = config_for(&server);
     let image_cfg = RemoteImageConfig {
         allow_private_addresses: true,
+        ..RemoteImageConfig::default()
     };
     resolve_with(&pool, &uuid, &cfg, &image_cfg).await.unwrap();
 
@@ -722,6 +723,7 @@ async fn resolve_with_hydrates_covers_across_multiple_concurrency_chunks_with_pa
     let cfg = config_for(&server);
     let image_cfg = RemoteImageConfig {
         allow_private_addresses: true,
+        ..RemoteImageConfig::default()
     };
     resolve_with(&pool, &uuid, &cfg, &image_cfg).await.unwrap();
 

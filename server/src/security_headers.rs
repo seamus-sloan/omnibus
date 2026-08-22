@@ -4,6 +4,8 @@
 //! depending on each handler to remember. See [`DEFAULT_CSP`],
 //! [`baseline_layers`], and [`hsts_layer`] for the per-header rationale.
 
+use std::sync::LazyLock;
+
 use axum::http::{header, HeaderName, HeaderValue};
 use tower_http::set_header::SetResponseHeaderLayer;
 
@@ -46,24 +48,55 @@ use tower_http::set_header::SetResponseHeaderLayer;
 /// - `font-src 'self' data: https://fonts.gstatic.com` — Google serves the
 ///   actual WOFF2 files from `fonts.gstatic.com`; without it the `@import`ed
 ///   stylesheet resolves but the glyphs fall back to system fonts.
-/// - `img-src 'self' data: blob: https://covers.openlibrary.org
-///   https://books.google.com` — `data:` / `blob:` cover thumbnails and
-///   base64-embedded images, plus the two metadata providers' cover CDNs so
-///   the scan/check-in result page can preview a provider cover before the
-///   book is created (once created, the cover is fetched server-side and
-///   served same-origin from `/api/covers/:uuid`).
+/// - `img-src 'self' data: blob:` plus every host in
+///   [`db::all_cover_hosts`] — `data:` / `blob:` cover thumbnails and
+///   base64-embedded images, plus each metadata provider's cover CDN so the
+///   check-in result page and the metadata editor's edition picker can
+///   preview a provider cover before anything is written (once applied, the
+///   cover is fetched server-side and served same-origin from
+///   `/api/covers/:uuid`). Derived from the provider catalog rather than
+///   written out here, so adding a provider can't leave its covers silently
+///   blocked.
 ///
 /// Tighten incrementally as the asset surface stabilizes.
-const DEFAULT_CSP: &str = "default-src 'self'; \
+static DEFAULT_CSP: LazyLock<String> = LazyLock::new(build_csp);
+
+/// [`DEFAULT_CSP`] with no provider cover hosts — every other directive
+/// identical, so falling back to it can only ever tighten the policy. Serving
+/// a shorter policy instead would drop the framing and base-uri guards along
+/// with the image hosts.
+const NO_PROVIDER_HOSTS_CSP: &str = "default-src 'self'; \
 script-src 'self' 'unsafe-inline' 'unsafe-eval'; \
 style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
-img-src 'self' data: blob: https://covers.openlibrary.org https://books.google.com; \
+img-src 'self' data: blob:; \
 font-src 'self' data: https://fonts.gstatic.com; \
 connect-src 'self'; \
 object-src 'none'; \
 base-uri 'self'; \
 form-action 'self'; \
 frame-ancestors 'none'";
+
+/// Assemble [`DEFAULT_CSP`], splicing the provider cover hosts into
+/// `img-src`. Built once behind a `LazyLock` because the host list is a
+/// runtime value; every other directive is fixed text.
+fn build_csp() -> String {
+    let cover_hosts = omnibus_db::all_cover_hosts()
+        .into_iter()
+        .map(|host| format!(" https://{host}"))
+        .collect::<String>();
+    format!(
+        "default-src 'self'; \
+script-src 'self' 'unsafe-inline' 'unsafe-eval'; \
+style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
+img-src 'self' data: blob:{cover_hosts}; \
+font-src 'self' data: https://fonts.gstatic.com; \
+connect-src 'self'; \
+object-src 'none'; \
+base-uri 'self'; \
+form-action 'self'; \
+frame-ancestors 'none'"
+    )
+}
 
 /// One year, `includeSubDomains`. Standard production HSTS recommendation;
 /// preload is intentionally omitted (operator opt-in only).
@@ -79,7 +112,18 @@ pub fn baseline_layers() -> [SetResponseHeaderLayer<HeaderValue>; 4] {
     [
         SetResponseHeaderLayer::overriding(
             header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static(DEFAULT_CSP),
+            // Infallible in practice — every host in the catalog is ASCII —
+            // but a bad one must degrade to a *strictly stricter* policy, so
+            // the fallback is the same directive list minus the provider
+            // hosts. Dropping to `default-src 'self'` alone would silently
+            // give up `frame-ancestors 'none'`, `base-uri`, and
+            // `form-action`, which is looser, not tighter.
+            HeaderValue::from_str(&DEFAULT_CSP).unwrap_or_else(|_| {
+                tracing::error!(
+                    "provider cover hosts are not header-safe; serving the CSP without them"
+                );
+                HeaderValue::from_static(NO_PROVIDER_HOSTS_CSP)
+            }),
         ),
         // Legacy clickjacking guard — `frame-ancestors 'none'` in the CSP
         // supersedes this on modern browsers; both ship for coverage on

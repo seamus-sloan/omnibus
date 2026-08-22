@@ -15,7 +15,7 @@ use super::super::fts::upsert_fts;
 use super::shared::{
     attach_ebook_file, insert_book_row, insert_metadata_links, rewrite_book_in_place,
 };
-use super::EntityAliasMaps;
+use super::{EntityAliasMaps, SyncError};
 
 /// Apply Changed entries: wipe-and-rewrite the per-book link rows for each,
 /// UPDATE the `books` row in place (preserving id), and re-insert the FTS
@@ -35,7 +35,7 @@ pub(super) async fn sync_changed(
     changed_books: &[crate::ebook::IndexedBook],
     alias_maps: &EntityAliasMaps,
     mut on_book_written: impl FnMut(&str),
-) -> Result<Vec<(String, String, Vec<u8>)>, sqlx::Error> {
+) -> Result<Vec<(String, String, Vec<u8>)>, SyncError> {
     if changed_books.is_empty() {
         return Ok(Vec::new());
     }
@@ -101,7 +101,7 @@ async fn sync_changed_one(
     id_map: &HashMap<String, (i64, String)>,
     alias_maps: &EntityAliasMaps,
     changed_covers: &mut Vec<(String, String, Vec<u8>)>,
-) -> Result<(), sqlx::Error> {
+) -> Result<(), SyncError> {
     let Some((book_id, uuid)) = id_map.get(scan_key).map(|(id, u)| (*id, u.clone())) else {
         // No primary `books` row with this scan_key. Either the file is an
         // attachment on another book (recorded in merged_uuids, matched by

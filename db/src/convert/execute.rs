@@ -1,8 +1,8 @@
 //! `convert_book` — shells out to Calibre's `ebook-convert` to convert one
-//! book's `source_format` file to `target_format`, writing the result into
-//! the conversion cache ([`super::fs::convert_path`]) via an atomic
-//! temp-then-rename, mirroring `crate::kepub::convert::convert_book`. Driven
-//! by `Task::ConvertFormat` (`crate::worker`).
+//! book's `source_format` file to `target_format`, caching the result via an
+//! atomic temp-then-rename ([`super::fs::convert_path`]), then persists it
+//! as a `book_files` row ([`super::persist::persist_converted_file`]).
+//! Driven by `Task::ConvertFormat` (`crate::worker`).
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -12,6 +12,7 @@ use sqlx::SqlitePool;
 
 use super::detect::is_runnable;
 use super::fs::{convert_dir, convert_path, validate_format_pair};
+use super::persist::persist_converted_file;
 use crate::settings::effective_ebook_convert_path;
 
 /// Default per-job watchdog when `OMNIBUS_CONVERT_TIMEOUT_SECS` is unset.
@@ -120,6 +121,13 @@ pub async fn convert_book(
     tokio::fs::rename(&tmp, &out_path)
         .await
         .context("move converted file into cache")?;
+    // Make the converted file a real, listed format of the book, rather
+    // than a file only the conversion cache knows about. Runs after the
+    // rename, so a failure here still leaves a usable cache file behind
+    // for the next request to retry against.
+    persist_converted_file(pool, book_id, target_format, &out_path)
+        .await
+        .context("persist converted book_files row")?;
     tracing::info!(target: "omnibus::convert", book_id, target_format, "conversion complete");
 
     Ok(out_path)
