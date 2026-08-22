@@ -12,6 +12,8 @@ import Observation
 /// Why a download could not even be planned — a failure that happens before
 /// any bytes move, so nothing on the device is at risk.
 enum DownloadPlanError: LocalizedError {
+    /// The book plays only through the server's on-the-fly transcode, so its
+    /// source files are not something this device could decode anyway.
     case unsupportedAudioFormat
     case notConfigured
 
@@ -23,16 +25,6 @@ enum DownloadPlanError: LocalizedError {
             "No server configured."
         }
     }
-}
-
-extension DownloadFile {
-    /// Where this file's transfer lands while the download is still running.
-    ///
-    /// A download is installed all at once, at the very end. The parts of an
-    /// audiobook arrive at different times, and moving each into place as it
-    /// lands would assemble a half-replaced book — the new part 1 beside the
-    /// old part 2 — over a copy the reader still has and can still play.
-    var incomingName: String { "incoming.\(name)" }
 }
 
 @Observable
@@ -99,6 +91,15 @@ final class DownloadManager: NSObject {
     /// only stranded when nothing is behind it any more — checking that rather
     /// than assuming it is what keeps a download that is still going from being
     /// reported as interrupted the moment the app comes back.
+    ///
+    /// Merged onto what this process already holds rather than replacing it.
+    /// Every step here suspends, and the background session delivers its
+    /// completions on the main actor in exactly those gaps — a wholesale
+    /// `records = map` would put back the snapshot read before them and lose
+    /// the per-part `done` flags they had just set. A single lost flag is not
+    /// cosmetic: `install` fires only when every file reports done, so the
+    /// download would wedge at 99% forever and the next launch would sweep its
+    /// staged parts away as stranded.
     func hydrate() async {
         let all = await OfflineStore.shared.allDownloads()
         let live = Set(
@@ -107,8 +108,11 @@ final class DownloadManager: NSObject {
                 .map(DownloadRecord.recordID(fromTaskKey:))
         )
 
-        var map: [String: DownloadRecord] = [:]
         for var record in all {
+            // Already tracked here means this process has touched it since the
+            // read above, and memory is written before the store is mirrored —
+            // so the in-memory copy is the newer of the two by construction.
+            if records[record.id] != nil { continue }
             if record.state == .running || record.state == .queued, !live.contains(record.id) {
                 record.state = .failed
                 record.error = "Interrupted"
@@ -120,9 +124,49 @@ final class DownloadManager: NSObject {
                 for index in record.files.indices { record.files[index].done = false }
                 await OfflineStore.shared.upsertDownload(record)
             }
-            map[record.id] = record
+            records[record.id] = record
         }
-        records = map
+        await healPartialAudiobooks()
+    }
+
+    /// Retire a completed audiobook record that only ever held part 1.
+    ///
+    /// The build this replaces stored one part of a multi-part audiobook and
+    /// called the download complete. Those records survive the upgrade and go
+    /// on claiming the book is on the device, while the player — which now
+    /// checks that a local copy covers every part — refuses to use them. Left
+    /// alone that is a book the shelf says is downloaded, the offline gate
+    /// lets you open, and the player then cannot play. Marking it failed puts
+    /// a Retry in front of the reader instead, which is the only thing that
+    /// actually gets them the rest of the book.
+    ///
+    /// Only decided against a manifest the device already holds; a book whose
+    /// manifest was never cached is left exactly as it is rather than guessed
+    /// at.
+    private func healPartialAudiobooks() async {
+        for record in records.values
+        where record.kind == .audio && record.state == .complete && record.isLegacyShape {
+            guard let manifest: AudiobookManifest = await Cache.cachedOnly(
+                CacheKey.manifest(record.bookUUID)
+            ) else { continue }
+            guard !AudioPlayer.localCovers(
+                manifest: manifest, localFileCount: record.files.count
+            ) else { continue }
+            await update(key: record.id) { record in
+                record.state = .failed
+                record.error = "Only part of this audiobook was downloaded — download it again."
+            }
+        }
+    }
+
+    /// Drop everything this process is tracking, for a wipe that has already
+    /// emptied the store — `hydrate` merges rather than replaces, so it can no
+    /// longer be the thing that clears the registry.
+    func forgetAll() {
+        records = [:]
+        replacing = [:]
+        abandoned = []
+        installing = []
     }
 
     // MARK: - Reads
@@ -142,8 +186,17 @@ final class DownloadManager: NSObject {
 
     /// Whether any format of this book is on the device — what a shelf badge
     /// means, as opposed to what the player needs to know.
+    ///
+    /// Answered from the registry alone, with no filesystem check. This runs
+    /// in the badge body of every visible grid tile, re-evaluated on every
+    /// `records` mutation — which during a download is several times a second
+    /// — so stat-ing each file of each format here would put N syscalls per
+    /// tile per frame on the main actor. A badge that is briefly optimistic
+    /// about a file deleted underneath us is a fair trade; the paths where
+    /// being wrong actually costs something ([`isDownloaded`],
+    /// [`localFiles`]) still check.
     func isAnyDownloaded(_ uuid: String) -> Bool {
-        DownloadKind.allCases.contains { isDownloaded(uuid, kind: $0) }
+        DownloadKind.allCases.contains { record(for: uuid, kind: $0)?.state == .complete }
     }
 
     /// Every local file of one format, in play order — one for an ebook or a
@@ -369,7 +422,9 @@ final class DownloadManager: NSObject {
         // untouched.
         let plan: [DownloadFile]
         do {
-            plan = try Self.plan(book: book, kind: kind, manifest: await Self.manifest(for: book, kind: kind))
+            plan = try Self.plan(
+                book: book, kind: kind, manifest: try await Self.manifest(for: book, kind: kind)
+            )
         } catch {
             // A replacement that never got started leaves the reader with the
             // book they already had, the same rule the delegate's failure
@@ -449,9 +504,17 @@ final class DownloadManager: NSObject {
     /// its own and the one `targetFile` snapshots the validator of — so the
     /// plan, the bytes, and the staleness check all describe the same file.
     /// It also warms the cache row the offline player reads.
-    private static func manifest(for book: Book, kind: DownloadKind) async -> AudiobookManifest? {
+    ///
+    /// The error is propagated rather than swallowed. A manifest that could
+    /// not be *fetched* and a book that genuinely cannot be stored are
+    /// different answers, and collapsing them told a reader in a tunnel that
+    /// a perfectly ordinary MP3 audiobook "has to be converted by the server"
+    /// — a permanent-sounding verdict on a transient failure.
+    private static func manifest(
+        for book: Book, kind: DownloadKind
+    ) async throws -> AudiobookManifest? {
         guard kind == .audio else { return nil }
-        return try? await LibraryService.audiobookManifest(uuid: book.uuid)
+        return try await LibraryService.audiobookManifest(uuid: book.uuid)
     }
 
     /// The badge a download row shows, and the extension a single-file
@@ -466,8 +529,18 @@ final class DownloadManager: NSObject {
             ?? "m4b"
     }
 
+    /// What the reader is told about a download that never started.
+    ///
+    /// A failure to reach the server says so in the terms the reader can act
+    /// on. An audiobook has to be planned from its manifest before the first
+    /// byte is asked for, so unlike an ebook it cannot be handed to the
+    /// background session to complete whenever connectivity returns — the same
+    /// trade the web engine makes with its known-offline fast fail.
     private static func message(for error: Error) -> String {
-        (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        if let api = error as? APIError, api.isRecoverableOffline {
+            return "You're offline — connect to download."
+        }
+        return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
 
     /// Record a download that never started, so the reader sees why rather

@@ -175,18 +175,95 @@ struct MultipartDownloadTests {
         )
         #expect(partial.receivedBytes == 150)
         #expect(partial.totalBytes == 300)
-        #expect(partial.fraction == 0.5)
     }
 
-    /// A file the server has not sized yet still counts what has landed, so
-    /// the bar never reports more downloaded than there is to download.
-    @Test("an unsized file counts its own received bytes toward the total")
-    func unsizedFileCountsItself() {
-        let running = record(
-            files: [file(0, name: "a.mp3", received: 70, total: 0)], state: .running
+    /// Progress may not walk backwards. Summing bytes does exactly that: a
+    /// part the system hasn't started contributes no size, so the denominator
+    /// grows as parts begin and the bar repeatedly climbs to full and drops.
+    @Test("progress only ever rises as parts start and finish")
+    func fractionIsMonotonic() {
+        // Four parts planned; only the first has been sized and half-fetched.
+        let planned = record(
+            files: [
+                file(0, name: "a.mp3", received: 50, total: 100),
+                file(1, name: "b.mp3"),
+                file(2, name: "c.mp3"),
+                file(3, name: "d.mp3"),
+            ],
+            state: .running
         )
-        #expect(running.totalBytes == 70)
-        #expect(running.fraction == 1)
+        #expect(planned.fraction == 0.125)
+
+        // The second part starts and is sized. Summing bytes would have read
+        // 100% a moment ago and 25% now.
+        let started = record(
+            files: [
+                file(0, name: "a.mp3", received: 100, total: 100, done: true),
+                file(1, name: "b.mp3", received: 50, total: 100),
+                file(2, name: "c.mp3"),
+                file(3, name: "d.mp3"),
+            ],
+            state: .running
+        )
+        #expect(started.fraction > planned.fraction)
+        #expect(started.fraction == 0.375)
+    }
+
+    // MARK: - Records written by the build this replaces
+
+    /// The previous build filled `local_path` only on completion, so a
+    /// download still in flight when the app updated has neither column. Its
+    /// name is still derivable, and has to be: without a file to attribute it
+    /// to, the completion the background session was still carrying is thrown
+    /// away as a failure on a perfectly good 200.
+    @Test("an in-flight legacy row still names the file it is fetching")
+    func legacyInFlightRowIsNameable() {
+        // The pre-upgrade row: no `files` JSON, and no `local_path` either,
+        // because that build only wrote one on completion.
+        let files = OfflineStore.readFiles(
+            json: nil, legacyPath: nil, uuid: "u-1", kind: .audio, format: "m4b",
+            totalBytes: 900, receivedBytes: 400, state: .running
+        )
+        #expect(files.count == 1)
+        #expect(files[0].name == "u-1.audio.m4b")
+        #expect(files[0].done == false)
+        #expect(files[0].receivedBytes == 400)
+    }
+
+    /// A completed row keeps naming the file already on disk, and a path
+    /// stored under a container UUID iOS has since reassigned still resolves.
+    @Test("a completed legacy row resolves to the file it left on disk")
+    func legacyCompleteRowResolves() {
+        let files = OfflineStore.readFiles(
+            json: nil, legacyPath: "/old/container/u-1.ebook.epub",
+            uuid: "u-1", kind: .ebook, format: "epub",
+            totalBytes: 500, receivedBytes: 500, state: .complete
+        )
+        #expect(files.count == 1)
+        #expect(files[0].name == "u-1.ebook.epub")
+        #expect(files[0].done)
+    }
+
+    /// A completed row reconstructed from `local_path` is the shape the
+    /// partial-download heal keys on, and a row planned by this build is not.
+    @Test("only a reconstructed record reads as the legacy shape")
+    func legacyShapeIsDetectable() {
+        #expect(record(files: [
+            DownloadFile(ordinal: 0, urlPath: "", name: "u-1.audio.m4b", done: true)
+        ]).isLegacyShape)
+        #expect(!record(files: [file(0, name: "u-1.audio.m4b", done: true)]).isLegacyShape)
+    }
+
+    /// The incident in #2103 is a record exactly like this one: a completed
+    /// download holding part 1 of a four-part book. It must not read as a
+    /// usable copy.
+    @Test("a legacy record holding one part of a multi-part book is not coverage")
+    func legacyPartialIsNotCoverage() {
+        let legacy = record(files: [
+            DownloadFile(ordinal: 0, urlPath: "", name: "u-1.audio.mp3", done: true)
+        ])
+        #expect(legacy.isLegacyShape)
+        #expect(!AudioPlayer.localCovers(manifest: direct([0, 1, 2, 3]), localFileCount: legacy.files.count))
     }
 
     @Test("a task key names the record and the part it is fetching")

@@ -65,6 +65,22 @@ struct DownloadFile: Codable, Sendable, Equatable {
     /// The size the server reported for this file; `0` until it has.
     var totalBytes: Int64 = 0
     var done: Bool = false
+
+    /// Where this file's transfer lands while the download is still running.
+    ///
+    /// A download is installed all at once, at the very end. The parts of an
+    /// audiobook arrive at different times, and moving each into place as it
+    /// lands would assemble a half-replaced book — the new part 1 beside the
+    /// old part 2 — over a copy the reader still has and can still play.
+    var incomingName: String { "incoming.\(name)" }
+
+    /// How far along this one file is. Monotonic: it only ever rises, and a
+    /// file whose size the server hasn't stated yet reads 0 rather than 1.
+    var fraction: Double {
+        if done { return 1 }
+        guard totalBytes > 0 else { return 0 }
+        return min(1, Double(receivedBytes) / Double(totalBytes))
+    }
 }
 
 /// A book whose files have been pulled down for offline use.
@@ -155,13 +171,30 @@ struct DownloadRecord: Sendable, Identifiable {
     /// part 1 as though it were all of it.
     var localPath: String? { files.count == 1 ? files[0].name : nil }
 
+    /// Whether this record's file list was reconstructed from the pre-list
+    /// columns rather than stored as one — a download taken by a build that
+    /// could only hold a single file per book. Those carry no URL, because
+    /// the row never recorded one.
+    var isLegacyShape: Bool { files.contains { $0.urlPath.isEmpty } }
+
     var receivedBytes: Int64 { files.reduce(0) { $0 + $1.receivedBytes } }
 
     var totalBytes: Int64 { files.reduce(0) { $0 + max($1.totalBytes, $1.receivedBytes) } }
 
+    /// Progress across the whole download, as the mean of its files' own
+    /// progress.
+    ///
+    /// Deliberately not `receivedBytes / totalBytes`: a part the system has
+    /// not started yet contributes no size, so that denominator *grows* as
+    /// parts begin and the bar walks up to 100% and falls back repeatedly
+    /// through a multi-part book. The file count is known from the moment the
+    /// download is planned, so averaging over it only ever rises. It weights
+    /// a short part like a long one, which is the price of a bar that doesn't
+    /// lie about direction.
     var fraction: Double {
-        guard totalBytes > 0 else { return state == .complete ? 1 : 0 }
-        return min(1, Double(receivedBytes) / Double(totalBytes))
+        if state == .complete { return 1 }
+        guard !files.isEmpty else { return 0 }
+        return min(1, files.reduce(0.0) { $0 + $1.fraction } / Double(files.count))
     }
 }
 
@@ -1024,14 +1057,20 @@ actor OfflineStore {
         return orphans.map(\.id)
     }
 
-    /// Delete every file a record points at. A multi-part audiobook holds one
-    /// per part, so deleting `localPath` alone would leave the rest on disk
-    /// counting against "Storage used" with no row left to remove them from.
-    private static func removeFiles(of record: DownloadRecord) {
+    /// Delete every file a record points at, staged and installed alike.
+    ///
+    /// A multi-part audiobook holds one file per part, so deleting `localPath`
+    /// alone would leave the rest on disk counting against nothing, with no
+    /// row left to remove them from. The staged `incoming.` copies go the same
+    /// way: these sweeps drop the row that names them, and no other path could
+    /// ever find them again.
+    static func removeFiles(of record: DownloadRecord) {
         for file in record.files {
-            try? FileManager.default.removeItem(
-                at: downloadsDirectory.appendingPathComponent(file.name)
-            )
+            for name in [file.name, file.incomingName] {
+                try? FileManager.default.removeItem(
+                    at: downloadsDirectory.appendingPathComponent(name)
+                )
+            }
         }
     }
 
@@ -1039,15 +1078,19 @@ actor OfflineStore {
         guard let uuid = text(stmt, 0) else { return nil }
         let format = text(stmt, 2) ?? ""
         let state = DownloadRecord.State(rawValue: text(stmt, 3) ?? "") ?? .failed
+        let kind = DownloadKind(rawValue: text(stmt, 1) ?? "")
+            ?? DownloadKind.inferred(fromFormat: format)
         return DownloadRecord(
             bookUUID: uuid,
-            kind: DownloadKind(rawValue: text(stmt, 1) ?? "")
-                ?? DownloadKind.inferred(fromFormat: format),
+            kind: kind,
             format: format,
             state: state,
             files: Self.readFiles(
                 json: text(stmt, 10),
                 legacyPath: text(stmt, 4),
+                uuid: uuid,
+                kind: kind,
+                format: format,
                 totalBytes: sqlite3_column_int64(stmt, 5),
                 receivedBytes: sqlite3_column_int64(stmt, 6),
                 state: state
@@ -1062,9 +1105,19 @@ actor OfflineStore {
     /// columns for a record written before downloads could hold more than one
     /// file. Those are all single-file by construction, so the legacy path and
     /// the row's byte counters describe it completely.
-    private static func readFiles(
+    ///
+    /// `local_path` may be null even so: the build that wrote these rows only
+    /// filled it *on completion*, so a download still in flight when the app
+    /// updated has neither column. Its name is still derivable — it is the one
+    /// that build would have installed it under — and deriving it is what lets
+    /// the transfer the background session is still carrying land instead of
+    /// being discarded as a failure on a perfectly good 200.
+    nonisolated static func readFiles(
         json: String?,
         legacyPath: String?,
+        uuid: String,
+        kind: DownloadKind,
+        format: String,
         totalBytes: Int64,
         receivedBytes: Int64,
         state: DownloadRecord.State
@@ -1074,15 +1127,19 @@ actor OfflineStore {
            !decoded.isEmpty {
             return decoded
         }
-        guard let legacyPath else { return [] }
+        // Rows written before `name` became container-relative hold a path
+        // under a container UUID iOS has since reassigned. The file is still
+        // there under its own name.
+        let name = legacyPath.map { ($0 as NSString).lastPathComponent }
+            ?? (format.isEmpty ? nil : "\(uuid).\(kind.rawValue).\(format)")
+        guard let name else { return [] }
         return [
             DownloadFile(
                 ordinal: 0,
+                // Empty on purpose — this row never recorded a URL, and
+                // `isLegacyShape` reads that back as "reconstructed".
                 urlPath: "",
-                // Rows written before `name` became container-relative hold a
-                // path under a container UUID iOS has since reassigned. The
-                // file is still there under its own name.
-                name: (legacyPath as NSString).lastPathComponent,
+                name: name,
                 receivedBytes: receivedBytes,
                 totalBytes: totalBytes,
                 done: state == .complete
@@ -1142,10 +1199,7 @@ actor OfflineStore {
     func resetForServerChange() {
         guard isOpen else { return }
         for record in allDownloads() {
-            guard let name = record.localPath else { continue }
-            try? FileManager.default.removeItem(
-                at: Self.downloadsDirectory.appendingPathComponent(name)
-            )
+            Self.removeFiles(of: record)
         }
         exec("BEGIN IMMEDIATE")
         exec("DELETE FROM kv")
