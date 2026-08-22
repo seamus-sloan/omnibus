@@ -86,14 +86,15 @@ struct UploadFlowTests {
         #expect(selection.batches.allSatisfy { $0.urls.count == 1 })
     }
 
-    @Test func selectionSplitsAMixedPickAndKeepsPickOrder() {
+    @Test func selectionSplitsAMixedPickAndPutsTheMp3SetLast() {
         let selection = UploadFlow.selection(
             for: [url("a.epub"), url("01.mp3"), url("b.epub"), url("02.mp3")]
         )
         #expect(selection.batches.count == 3)
         #expect(selection.batches[0].urls == [url("a.epub")])
         #expect(selection.batches[1].urls == [url("b.epub")])
-        // The MP3 set lands last, as one book carrying both parts.
+        // The MP3 set lands last however early its first part was picked — it
+        // isn't complete until the whole selection has been walked.
         #expect(selection.batches[2].urls == [url("01.mp3"), url("02.mp3")])
     }
 

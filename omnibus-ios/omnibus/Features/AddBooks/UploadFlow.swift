@@ -93,7 +93,10 @@ enum UploadFlow {
     /// the only grouping `classify_audio_set` accepts; each EPUB and each
     /// `.m4a`/`.m4b` container is its own book, so they get a batch apiece
     /// rather than the 400 that sending two containers in one request earns.
-    /// Order is preserved so the confirm sheets arrive in the order picked.
+    ///
+    /// Batches follow the pick order, except that the MP3 set lands last: it
+    /// isn't complete until the whole selection has been walked, so it cannot
+    /// take the position of the first part it collected.
     static func selection(for urls: [URL]) -> UploadSelection {
         var result = UploadSelection()
         var mp3s: [URL] = []

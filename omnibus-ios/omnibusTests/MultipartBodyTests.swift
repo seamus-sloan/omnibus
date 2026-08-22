@@ -110,6 +110,70 @@ struct MultipartBodyTests {
         #expect(first == second)
     }
 
+    @Test func escapesAQuoteThatWouldCloseTheHeaderEarly() {
+        // `"` is legal in a POSIX filename; raw, it ends the quoted string and
+        // corrupts every header after it.
+        let body = decoded(
+            MultipartBody.encode(
+                boundary: "B", fields: [],
+                files: [
+                    MultipartFile(
+                        fileName: #"He said "hi".epub"#,
+                        mimeType: "application/epub+zip", data: Data("PK".utf8)
+                    )
+                ]
+            )
+        )
+        #expect(body.contains(#"filename="He said %22hi%22.epub""#))
+        // Exactly two quotes around the value, so the parameter is still one
+        // well-formed quoted string.
+        let header = body.components(separatedBy: "\r\n").first { $0.contains("filename=") }
+        #expect(header?.filter { $0 == "\"" }.count == 4)
+    }
+
+    @Test func escapesNewlinesThatWouldEndTheHeaderLine() {
+        let body = decoded(
+            MultipartBody.encode(
+                boundary: "B", fields: [],
+                files: [
+                    MultipartFile(
+                        fileName: "two\r\nlines.epub",
+                        mimeType: "application/epub+zip", data: Data("PK".utf8)
+                    )
+                ]
+            )
+        )
+        #expect(body.contains(#"filename="two%0D%0Alines.epub""#))
+        // One header line for the disposition, not three.
+        #expect(body.components(separatedBy: "Content-Disposition").count == 2)
+    }
+
+    @Test func leavesAPercentAloneSoOrdinaryFilenamesArentMangled() {
+        // The server slugifies rather than percent-decoding — a probe upload of
+        // `50%25 off.mp3` landed as `50-25-off.mp3` — so pre-encoding `%` would
+        // stamp a literal `25` into a book legitimately called "50% off".
+        let body = decoded(
+            MultipartBody.encode(
+                boundary: "B", fields: [],
+                files: [
+                    MultipartFile(
+                        fileName: "50% off.mp3", mimeType: "audio/mpeg", data: Data("ID3".utf8)
+                    )
+                ]
+            )
+        )
+        #expect(body.contains(#"filename="50% off.mp3""#))
+    }
+
+    @Test func escapesTheFieldNameOnTheSameTerms() {
+        let body = decoded(
+            MultipartBody.encode(
+                boundary: "B", fields: [(#"od"d"#, "v")], files: []
+            )
+        )
+        #expect(body.contains(#"name="od%22d""#))
+    }
+
     @Test func boundariesAreUniquePerBody() {
         #expect(MultipartBody.makeBoundary() != MultipartBody.makeBoundary())
         #expect(MultipartBody.makeBoundary().hasPrefix("omnibus."))
