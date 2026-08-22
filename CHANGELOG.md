@@ -72,6 +72,9 @@ recent releases are recorded below; everything earlier is available via the
   through the same correction (and echo tagging) a boot restore does, so it
   writes no position and never moves the restore anchor. Added an explicit
   single/two-page reader setting on iOS, matching web (#2081)
+- Raising the keyboard on iOS no longer drags the tab bar up with it: the
+  keyboard now covers the bar instead of stacking on top of it, while fields
+  inside a tab keep their keyboard avoidance (#2102)
 
 ## [0.22.10] - 2026-08-18
 

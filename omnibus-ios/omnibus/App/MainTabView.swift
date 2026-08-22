@@ -63,6 +63,12 @@ struct MainTabView: View {
             }
             .animation(Motion.glide, value: player.isActive)
         }
+        // Chrome, not content: the keyboard belongs over the tab bar, not
+        // under it. Without this its bottom safe-area inset lifts the whole
+        // `safeAreaInset` block and parks the tabs on top of the keyboard
+        // (#2102). The tabs' own scroll views still avoid the keyboard —
+        // this pins the shell, not what's inside it.
+        .ignoresSafeArea(.keyboard, edges: .bottom)
         .environment(reselect)
         .sheet(isPresented: $addSheetPresented) {
             AddBooksSheet()
