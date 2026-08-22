@@ -10,25 +10,11 @@ use dioxus::prelude::*;
 /// render-smoke tests: pass `rsx! { SomeComponent { ..props } }` and assert on
 /// substrings of the returned markup.
 ///
-/// # Testing `#[cfg(feature = "mobile")]`-only markup
-///
-/// That needs both cfgs at once — `mobile` to compile the gated component,
-/// `server` for this module's `dioxus::ssr` backing — so those tests run under
-/// `cargo test -p omnibus-frontend --features mobile,server`, a combination
-/// neither CI feature-matrix leg exercises on its own. Which `#[cfg(...)]` to
-/// write depends on whether the *file* is already mobile-only:
-///
-/// - A file whose module root already sits behind `#![cfg(feature = "mobile")]`
-///   (e.g. `pages::listen::mobile` and its submodules) needs only `server`
-///   spelled out on the test module; the file-level gate supplies the other
-///   half. Worked example: `pages::listen::mobile::sheets`.
-/// - A shared file, where only some items are `#[cfg(feature = "mobile")]`,
-///   needs both spelled out — `#[cfg(all(test, feature = "mobile", feature =
-///   "server"))]` — since nothing upstream implies `mobile`. Worked example:
-///   `components::format_switcher::kindle`.
-///
-/// Either way: build a zero-prop harness component (or a bare `Element` for a
-/// hookless function), render it, and assert on substrings of the HTML.
+/// Testing `#[cfg(feature = "mobile")]`-only markup needs both features at
+/// once (`cargo test -p omnibus-frontend --features mobile,server` — a combo
+/// neither CI matrix leg runs alone): gate the test module
+/// `#[cfg(all(test, feature = "mobile", feature = "server"))]`, dropping the
+/// `mobile` half when the file's module root already sits behind it.
 pub fn render(element: Element) -> String {
     dioxus::ssr::render_element(element)
 }

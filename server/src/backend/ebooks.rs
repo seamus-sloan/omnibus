@@ -22,8 +22,9 @@ use super::{internal, with_pagination_headers, AppState};
 use crate::auth::{AuthUser, MediaAuthUser};
 
 /// Default keyset page size for the paginated `GET /api/ebooks` form. A grid
-/// renders ~30–60 cards above the fold and the table more; 100 covers both without an oversized first paint. An explicit
-/// `?limit=` overrides it (the db layer caps it at `MAX_BOOKS_RETURNED`).
+/// renders ~30–60 cards above the fold and the table more; 100 covers both
+/// without an oversized first paint. An explicit `?limit=` overrides it (the
+/// db layer caps it at `MAX_BOOKS_RETURNED`).
 const DEFAULT_PAGE_LIMIT: i64 = 100;
 
 /// Query params for the paginated form of `GET /api/ebooks`. When none are
