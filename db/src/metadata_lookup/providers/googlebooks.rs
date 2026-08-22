@@ -117,6 +117,13 @@ async fn get(config: &MetadataLookupConfig, url: &str) -> anyhow::Result<reqwest
             ));
         }
         if !is_retryable(resp.status()) {
+            // A 429 already seen in this call is recorded even though the
+            // *terminal* status is something else: Google answers an exhausted
+            // quota as 429 on one request and `403 dailyLimitExceeded` on the
+            // next, and returning early on the 403 used to drop the refusal
+            // entirely — `note_throttle` then sees 403, not 429, and records
+            // nothing either.
+            record_throttle(config, throttled.take());
             return resp
                 .error_for_status()
                 .map_err(strip_url)
@@ -132,11 +139,7 @@ async fn get(config: &MetadataLookupConfig, url: &str) -> anyhow::Result<reqwest
     // loop *consumes* the status, bailing with a plain string that carries no
     // `reqwest::Error` — so unlike the other two providers, nothing
     // downstream could infer the refusal from the error chain.
-    if let Some(retry_after) = throttled {
-        config
-            .throttle
-            .record(MetadataProvider::GoogleBooks, retry_after);
-    }
+    record_throttle(config, throttled);
     // Status only — never the URL, which carries the API key.
     anyhow::bail!(
         "google books unavailable after {} attempts (last status {})",
@@ -352,6 +355,16 @@ fn volumes_url_checked(config: &MetadataLookupConfig, query: &str) -> anyhow::Re
         url.query_pairs_mut().append_pair("key", key);
     }
     Ok(url.into())
+}
+
+/// Write a seen-in-this-call 429 to the tracker. `None` means no refusal was
+/// observed, and the inner `None` means the provider sent no `Retry-After`.
+fn record_throttle(config: &MetadataLookupConfig, seen: Option<Option<Duration>>) {
+    if let Some(retry_after) = seen {
+        config
+            .throttle
+            .record(MetadataProvider::GoogleBooks, retry_after);
+    }
 }
 
 /// Whether this failure was the given HTTP status.

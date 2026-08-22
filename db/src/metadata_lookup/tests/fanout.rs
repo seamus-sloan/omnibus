@@ -471,14 +471,16 @@ async fn search_all_providers_reports_a_throttled_provider_without_asking_it() {
     mount_all(&server).await;
     let config = all_keyed_config_for(&server);
     // Stand in for an earlier 429 from Open Library.
-    config
-        .throttle
-        .record(MetadataProvider::OpenLibrary, Some(Duration::from_secs(90)));
+    // Above the schedule's first step, since `Retry-After` is a floor.
+    config.throttle.record(
+        MetadataProvider::OpenLibrary,
+        Some(Duration::from_secs(600)),
+    );
 
     let found = search_all_providers(&config, &title_query(QUERY), None).await;
     assert!(matches!(
         status_of(&found, MetadataProvider::OpenLibrary),
-        Some(ProviderSearchStatus::Throttled { retry_after_secs }) if *retry_after_secs == 90
+        Some(ProviderSearchStatus::Throttled { retry_after_secs }) if *retry_after_secs == 600
     ));
     assert!(
         !found

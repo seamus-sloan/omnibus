@@ -95,19 +95,23 @@ fn field_slug(label: &str) -> String {
         .collect()
 }
 
-/// What a freshly-opened overlay searches with: the book's own title,
-/// primary author, and ISBN — the query the reader wanted in the
-/// overwhelmingly common case.
+/// What a freshly-opened overlay searches with: the book's own title and
+/// primary author — the query the reader wanted in the overwhelmingly common
+/// case.
 ///
-/// The ISBN is read from the form for the same reason the author is. It was
-/// sitting in a field the whole time, it is the strongest signal any provider
-/// accepts, and one flattened phrase had nowhere to put it.
+/// **The ISBN field is deliberately left empty.** An ISBN routes every provider
+/// to its exact-identifier lookup, and a rung that answers suppresses the
+/// widened ones — so seeding it collapsed the picker to one row per source,
+/// each describing the printing the book already claims. That is the opposite
+/// of what a picker is for, and it bit hardest on the books carrying the most
+/// metadata. The field stays available as something the reader *asks* for,
+/// which is when narrowing to a single edition is the point.
 fn seed_from(fields: FormFields) -> (String, String, String) {
     let author = fields.authors.peek().first().cloned().unwrap_or_default();
     (
         fields.title.peek().trim().to_string(),
         author.trim().to_string(),
-        fields.isbn13.peek().trim().to_string(),
+        String::new(),
     )
 }
 

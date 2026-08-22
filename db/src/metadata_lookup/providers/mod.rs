@@ -51,20 +51,17 @@ pub async fn run(
     query: &SearchQuery,
 ) -> anyhow::Result<Vec<ProviderEdition>> {
     let found = dispatch(provider, config, query).await;
-    // Records a refusal, and deliberately does **not** clear on success.
-    //
-    // A provider can swallow its own failure and still answer `Ok`:
-    // `googlebooks::by_isbn` degrades a failed bare-text fallback to a clean
-    // miss, so a 429 can be recorded and the call still return `Ok(None)`.
-    // Clearing here would erase the refusal we had just learned about, and the
-    // next search would walk straight back into it.
-    //
-    // Nothing is lost by not clearing: every caller gates on
-    // `throttle::remaining` before asking, so a cooldown is never live at this
-    // point, and the escalation level resets on its own when the cooldown
-    // lapses (`ThrottleTracker::remaining_at` prunes it).
-    if let Err(e) = &found {
-        note_throttle(config, provider, e);
+    match &found {
+        // Cleared only when this call recorded no refusal of its own. A
+        // provider client can swallow its own failure and still answer `Ok`:
+        // `googlebooks::by_isbn` degrades a refused bare-text fallback to a
+        // clean miss, so a 429 can be written while the call returns
+        // `Ok(None)`. A blanket clear there would erase the refusal we had
+        // just learned about. Callers gate before asking, so anything present
+        // afterwards is necessarily fresh.
+        Ok(_) if config.throttle.remaining(provider).is_none() => config.throttle.clear(provider),
+        Ok(_) => {}
+        Err(e) => note_throttle(config, provider, e),
     }
     found
 }
@@ -164,30 +161,30 @@ pub async fn run_with_fallbacks(
     query: &SearchQuery,
     limit: usize,
 ) -> anyhow::Result<Vec<ProviderEdition>> {
-    let primary = relevance::filter_and_rank(run(provider, config, query).await?, query, limit);
-    if !primary.is_empty() {
-        return Ok(primary);
+    let mut rungs = vec![query.clone()];
+    if query.isbn13.is_some() && (query.title.is_some() || query.author.is_some()) {
+        rungs.push(query.without_isbn());
+    }
+    if query.title.is_some() && query.author.is_some() {
+        rungs.push(query.without_author());
     }
 
-    if query.isbn13.is_some() && (query.title.is_some() || query.author.is_some()) {
-        let widened = query.without_isbn();
-        let found =
-            relevance::filter_and_rank(run(provider, config, &widened).await?, &widened, limit);
+    let mut found = Vec::new();
+    for rung in &rungs {
+        // Re-checked before *every* rung, not once by the caller. A rung can
+        // record a cooldown and still answer `Ok` — `googlebooks::by_isbn`
+        // swallows a refused fallback — and the next rung would then walk
+        // straight back into the same 429, escalating the cooldown it just
+        // caused inside a single search.
+        if config.throttle.remaining(provider).is_some() {
+            break;
+        }
+        found = relevance::filter_and_rank(run(provider, config, rung).await?, rung, limit);
         if !found.is_empty() {
-            return Ok(found);
+            break;
         }
     }
-
-    if query.title.is_some() && query.author.is_some() {
-        let widened = query.without_author();
-        return Ok(relevance::filter_and_rank(
-            run(provider, config, &widened).await?,
-            &widened,
-            limit,
-        ));
-    }
-
-    Ok(Vec::new())
+    Ok(found)
 }
 
 /// One rung of the ladder.

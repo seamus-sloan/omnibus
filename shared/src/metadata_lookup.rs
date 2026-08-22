@@ -486,13 +486,23 @@ impl EditionSearchRequest {
     /// an unbounded blob through to `normalize_isbn`.
     pub const ISBN_MAX_LEN: usize = 32;
 
-    /// Reject a blank or oversized `query`, and an explicitly-empty provider
-    /// list — which would otherwise search nothing and look like an outage.
-    /// Handlers translate `Err(_)` into 400. Mirrors
-    /// [`crate::scan::ScanSearchRequest::validate`], including its cap.
+    /// Reject a request that asks *nothing*, an oversized field, and an
+    /// explicitly-empty provider list — which would otherwise search nothing
+    /// and look like an outage. Handlers translate `Err(_)` into 400.
+    ///
+    /// "Asks nothing" means every field is blank, not that `query` is blank: a
+    /// structured request carries its question in `title`/`author`/`isbn`, and
+    /// an ISBN-only search — the strongest question any provider takes — has
+    /// no free text to compose a `query` from at all. Requiring `query` here
+    /// made that search impossible to express.
     pub fn validate(&self) -> Result<(), String> {
-        if self.query.trim().is_empty() {
-            return Err("query is required".into());
+        let blank = |v: &Option<String>| v.as_deref().is_none_or(|s| s.trim().is_empty());
+        if self.query.trim().is_empty()
+            && blank(&self.title)
+            && blank(&self.author)
+            && blank(&self.isbn)
+        {
+            return Err("a title, author, or ISBN is required".into());
         }
         if self.query.chars().count() > SEARCH_QUERY_MAX_LEN {
             return Err(format!("query exceeds {SEARCH_QUERY_MAX_LEN} characters"));

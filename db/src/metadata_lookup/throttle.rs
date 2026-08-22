@@ -94,6 +94,12 @@ impl ThrottleTracker {
 
     /// Note that `provider` answered normally, clearing any cooldown and
     /// resetting its escalation.
+    ///
+    /// This is the only thing that resets the level, which is why it must be
+    /// called on evidence the provider actually served a request — not merely
+    /// because a call returned `Ok`, since a provider client can swallow its
+    /// own failure (`googlebooks::by_isbn` degrades a refused fallback to a
+    /// clean miss) and answer `Ok` with a cooldown freshly recorded.
     pub fn clear(&self, provider: MetadataProvider) {
         self.with(|map| {
             map.remove(&provider);
@@ -105,13 +111,7 @@ impl ThrottleTracker {
     pub fn remaining_at(&self, provider: MetadataProvider, now: Instant) -> Option<Duration> {
         self.with(|map| {
             let cooldown = *map.get(&provider)?;
-            if cooldown.until <= now {
-                // Lapsed: forget it entirely, so the next 429 starts the
-                // schedule over rather than escalating from a stale level.
-                map.remove(&provider);
-                return None;
-            }
-            Some(cooldown.until - now)
+            (cooldown.until > now).then(|| cooldown.until - now)
         })
     }
 
@@ -123,11 +123,15 @@ impl ThrottleTracker {
         now: Instant,
     ) {
         self.with(|map| {
-            let level = match map.get(&provider) {
-                // Still cooling down when another 429 landed — escalate.
-                Some(c) if c.until > now => c.level + 1,
-                _ => 0,
-            };
+            // Escalates from the level already recorded, whether or not that
+            // cooldown has lapsed. Pruning the level on lapse made every
+            // schedule one step long: the gates mean a provider is never asked
+            // *during* a cooldown, so a second 429 can only ever arrive after
+            // one expired — and a level reset at that moment could never
+            // advance. The level is cleared by [`Self::clear`], on evidence
+            // that the provider is answering again.
+            let previous = map.get(&provider).copied();
+            let level = previous.map_or(0, |c| c.level + 1);
             let schedule = schedule_for(provider);
             let step = schedule[level.min(schedule.len() - 1)];
             // Capped: `Retry-After` is a provider-supplied number, and
@@ -136,16 +140,19 @@ impl ThrottleTracker {
             // parking the provider for thirty-one years. Beyond a day a
             // cooldown is indistinguishable from "disabled" anyway, and a
             // restart clears it.
+            // `Retry-After` is a floor, not a replacement. Taken verbatim it
+            // made the escalation inert whenever a provider sent one, and a
+            // provider that answers "try again in 1s" on its fifth refusal
+            // would reset an hour-long cooldown to a second.
             let wait = retry_after
-                .unwrap_or_else(|| Duration::from_secs(step))
+                .unwrap_or_default()
+                .max(Duration::from_secs(step))
                 .min(MAX_COOLDOWN);
-            map.insert(
-                provider,
-                Cooldown {
-                    until: now + wait,
-                    level,
-                },
-            );
+            // Never shortens a cooldown that is still running.
+            let until = previous
+                .map(|c| c.until.max(now + wait))
+                .unwrap_or(now + wait);
+            map.insert(provider, Cooldown { until, level });
         });
     }
 

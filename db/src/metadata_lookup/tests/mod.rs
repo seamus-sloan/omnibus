@@ -520,11 +520,37 @@ async fn search_by_title_surfaces_provider_error_when_fallback_fails() {
 }
 
 #[tokio::test]
+async fn search_by_title_drops_a_rung_whose_answer_does_not_match_the_query() {
+    // Hardcover's title search went from an exact-match filter to full-text,
+    // so an unscored ladder would hand check-in whatever a fuzzy engine ranked
+    // first as its one confident answer.
+    let server = MockServer::start().await;
+    mount_ol_search(
+        &server,
+        json!({ "docs": [{
+            "key": "/works/OL1W",
+            "title": "Something Else Entirely",
+            "isbn": [ISBN13],
+        }]}),
+    )
+    .await;
+    mount_gb_search(&server, json!({ "totalItems": 0 })).await;
+
+    let results = search_provider_by_title(&config_for(&server), QUERY)
+        .await
+        .unwrap();
+    assert!(results.is_empty(), "got {results:?}");
+}
+
+#[tokio::test]
 async fn search_by_title_caps_the_candidate_list() {
+    // Titles that actually answer QUERY — the ladder scores each rung now, so
+    // a fixture of unrelated titles would be filtered out and prove nothing
+    // about the cap.
     let docs: Vec<serde_json::Value> = (0..20)
         .map(|i| {
             json!({
-                "title": format!("Book {i}"),
+                "title": format!("Effective Java, Printing {i}"),
                 // Distinct valid ISBN-13s: vary the payload, recompute the check digit.
                 "isbn": [with_check_digit(&format!("9780000000{i:02}"))],
             })
@@ -614,4 +640,17 @@ fn google_books_scopes_the_query_to_the_isbn_when_it_has_one() {
     )
     .unwrap();
     assert!(url.contains(&format!("q=isbn%3A{ISBN13}")), "got: {url}");
+}
+
+#[test]
+fn open_library_omits_a_term_it_has_no_value_for() {
+    // An empty `title=` is a 500 from Open Library, not an unconstrained
+    // search — so an author-only query must leave the pair out entirely.
+    let url = openlibrary::search_url(
+        &offline_config(None),
+        &SearchQuery::new(None, Some("Frank Herbert"), None),
+    )
+    .unwrap();
+    assert!(url.contains("author=Frank+Herbert"), "got: {url}");
+    assert!(!url.contains("title="), "got: {url}");
 }

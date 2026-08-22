@@ -197,7 +197,7 @@ fn edition_search_request_validate_accepts_a_query_with_no_provider_filter() {
 }
 
 #[test]
-fn edition_search_request_validate_rejects_a_blank_query() {
+fn edition_search_request_validate_rejects_a_request_that_asks_nothing() {
     let req = EditionSearchRequest {
         query: "   ".into(),
         title: None,
@@ -205,8 +205,33 @@ fn edition_search_request_validate_rejects_a_blank_query() {
         isbn: None,
         providers: None,
     };
-    let err = req.validate().expect_err("a blank query must be rejected");
-    assert!(err.contains("query is required"), "got: {err}");
+    assert_eq!(
+        req.validate(),
+        Err("a title, author, or ISBN is required".to_string())
+    );
+}
+
+#[test]
+fn edition_search_request_validate_accepts_an_isbn_with_no_free_text() {
+    // The strongest question any provider takes. The picker composes `query`
+    // from title and author, so an ISBN-only search has no free text at all —
+    // requiring one made this search impossible to express.
+    let req = EditionSearchRequest {
+        query: String::new(),
+        isbn: Some("9780441013593".into()),
+        ..EditionSearchRequest::default()
+    };
+    assert_eq!(req.validate(), Ok(()));
+}
+
+#[test]
+fn edition_search_request_validate_accepts_an_author_with_no_free_text() {
+    let req = EditionSearchRequest {
+        query: String::new(),
+        author: Some("Frank Herbert".into()),
+        ..EditionSearchRequest::default()
+    };
+    assert_eq!(req.validate(), Ok(()));
 }
 
 #[test]

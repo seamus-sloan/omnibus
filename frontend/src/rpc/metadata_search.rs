@@ -85,15 +85,14 @@ fn search_query(req: &EditionSearchRequest) -> db::SearchQuery {
     if structured.is_empty() {
         return db::SearchQuery::from_text(&req.query);
     }
-    // An ISBN or an author with no title still needs something to rank
-    // against, and the free text is what the reader actually sees in the box.
-    db::SearchQuery {
-        title: structured
-            .title
-            .clone()
-            .or_else(|| db::SearchQuery::from_text(&req.query).title),
-        ..structured
-    }
+    // Returned as-is. An earlier version backfilled an absent `title` from the
+    // free text, which for an author-only search copied the author's name into
+    // the title slot — asking Open Library for a book whose *title* contains
+    // "Frank Herbert" and scoring every candidate against that, which is the
+    // precise bug this whole path exists to remove. A query with no title is
+    // handled honestly downstream: `relevance::filter_and_rank` has nothing to
+    // rank against and returns the providers' own results unscored.
+    structured
 }
 
 /// Re-fetch one selected candidate from the provider that offered it.

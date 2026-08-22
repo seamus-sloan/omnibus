@@ -191,10 +191,14 @@ pub(in crate::metadata_lookup) fn search_url(
     if let Some(isbn13) = query.isbn13.as_deref() {
         url.query_pairs_mut().append_pair("isbn", isbn13);
     } else {
-        url.query_pairs_mut()
-            .append_pair("title", query.title.as_deref().unwrap_or_default());
-        if let Some(author) = query.author.as_deref() {
-            url.query_pairs_mut().append_pair("author", author);
+        // Each term only when it has a value: an empty `title=` is not an
+        // unconstrained search to Open Library, it is a 500 (verified against
+        // the live API), so an author-only query must omit the pair entirely
+        // rather than send it blank.
+        for (name, value) in [("title", &query.title), ("author", &query.author)] {
+            if let Some(value) = value.as_deref() {
+                url.query_pairs_mut().append_pair(name, value);
+            }
         }
     }
     url.query_pairs_mut()

@@ -69,6 +69,11 @@ recent releases are recorded below; everything earlier is available via the
   and how Open Library files older or uncatalogued books — used to have its
   candidates discarded silently, with nothing on screen to say so. They are
   listed now, and selecting one still fetches its full record
+- Searching by **ISBN alone**, or by **author alone**, now works — both were
+  rejected or silently mangled before. The ISBN box starts empty on purpose: an
+  ISBN narrows every source to one exact edition, which is right when you ask
+  for it and wrong as a default for a screen whose job is showing you the
+  alternatives
 - **A source that rate-limits us is left alone until it recovers.** Its row
   says "rate limited, skipping for 10m" rather than "unavailable", and the search
   no longer spends a request re-asking a source that has already refused —

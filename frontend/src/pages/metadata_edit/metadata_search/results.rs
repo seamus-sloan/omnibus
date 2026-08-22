@@ -37,7 +37,10 @@ fn QueryField(
                 "data-testid": "mes-query-{slug}",
                 r#type: if slug == "isbn" { "text" } else { "search" },
                 value: "{value}",
-                placeholder: "{label.to_lowercase()}",
+                // The ISBN starts empty on purpose (see `seed_from`), so its
+                // placeholder says what it is for rather than naming the field
+                // a second time.
+                placeholder: if slug == "isbn" { "narrow to one edition" } else { label },
                 // The overlay opens having already searched, so focus lands on
                 // the field a reader is most likely to correct.
                 onmounted: move |e| {

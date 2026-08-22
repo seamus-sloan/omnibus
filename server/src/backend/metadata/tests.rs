@@ -172,7 +172,7 @@ async fn api_post_edition_search_returns_a_status_row_for_an_unconfigured_provid
 }
 
 #[tokio::test]
-async fn api_post_edition_search_rejects_a_blank_query() {
+async fn api_post_edition_search_rejects_a_request_that_asks_nothing() {
     let (app, _state, pool) = fixture().await;
     let admin = auth_test_support::create_admin(&pool, "editor").await;
     let token = auth_test_support::bearer_token(&pool, admin.id).await;
@@ -182,7 +182,9 @@ async fn api_post_edition_search_rejects_a_blank_query() {
         .await
         .expect("request should succeed");
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
-    assert!(body_string(res).await.contains("query is required"));
+    assert!(body_string(res)
+        .await
+        .contains("a title, author, or ISBN is required"));
 }
 
 #[tokio::test]
@@ -299,17 +301,33 @@ fn search_query_falls_back_to_free_text_when_the_structured_fields_are_blank() {
 }
 
 #[test]
-fn search_query_gives_an_isbn_only_request_the_free_text_to_rank_against() {
-    // Without a title there is nothing to score candidates by, and the box's
-    // text is what the reader actually asked for.
+fn search_query_never_copies_free_text_into_the_title_slot() {
+    // An author-only search used to backfill `title` from the composed free
+    // text, which asked Open Library for a book whose *title* contains the
+    // author's name — the precise bug this path exists to remove.
     let req = EditionSearchRequest {
-        query: "Dune".to_string(),
+        query: "Frank Herbert".to_string(),
+        author: Some("Frank Herbert".to_string()),
+        ..EditionSearchRequest::default()
+    };
+    let query = super::search_query(&req);
+    assert_eq!(query.author.as_deref(), Some("Frank Herbert"));
+    assert_eq!(query.title, None, "the author must not become the title");
+}
+
+#[test]
+fn search_query_keeps_an_isbn_only_request_title_less() {
+    // Nothing to rank against is handled downstream by `filter_and_rank`,
+    // which returns the providers' own results unscored rather than inventing
+    // a title to score them by.
+    let req = EditionSearchRequest {
+        query: String::new(),
         isbn: Some("9780441013593".to_string()),
         ..EditionSearchRequest::default()
     };
     let query = super::search_query(&req);
     assert_eq!(query.isbn13.as_deref(), Some("9780441013593"));
-    assert_eq!(query.title.as_deref(), Some("Dune"));
+    assert_eq!(query.title, None);
 }
 
 #[tokio::test]

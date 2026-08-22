@@ -36,17 +36,37 @@ fn record_escalates_only_while_the_previous_cooldown_is_still_running() {
 }
 
 #[test]
-fn record_starts_over_once_a_cooldown_has_lapsed() {
+fn record_keeps_escalating_across_a_lapsed_cooldown() {
+    // The gates mean a provider is never asked *during* a cooldown, so a
+    // second 429 can only arrive after one expired. Resetting the level at
+    // that moment made every schedule exactly one step long.
     let tracker = ThrottleTracker::fresh();
     let now = Instant::now();
     tracker.record_at(OL, None, now);
-    // Long after the first step expired: the provider evidently let us back
-    // in, so the next refusal is a fresh one rather than an escalation.
     let later = now + Duration::from_secs(DEFAULT_SCHEDULE[0] + 1);
-    assert!(tracker.remaining_at(OL, later).is_none());
+    assert!(
+        tracker.remaining_at(OL, later).is_none(),
+        "the first step lapsed"
+    );
     tracker.record_at(OL, None, later);
     assert_eq!(
         tracker.remaining_at(OL, later).expect("cooling down"),
+        Duration::from_secs(DEFAULT_SCHEDULE[1]),
+        "the second refusal takes the second step, not the first again"
+    );
+}
+
+#[test]
+fn clear_is_what_puts_a_provider_back_on_the_first_step() {
+    // Evidence the provider is answering again, which a lapse alone is not.
+    let tracker = ThrottleTracker::fresh();
+    let now = Instant::now();
+    tracker.record_at(OL, None, now);
+    tracker.record_at(OL, None, now);
+    tracker.clear(OL);
+    tracker.record_at(OL, None, now);
+    assert_eq!(
+        tracker.remaining_at(OL, now).expect("cooling down"),
         Duration::from_secs(DEFAULT_SCHEDULE[0])
     );
 }
@@ -66,13 +86,47 @@ fn record_saturates_at_the_last_step_rather_than_running_off_the_schedule() {
 }
 
 #[test]
-fn record_prefers_the_providers_own_retry_after_over_the_schedule() {
+fn record_treats_retry_after_as_a_floor_not_a_replacement() {
+    // Taken verbatim it made the escalation inert whenever a provider sent
+    // one, and let a provider shrink its own cooldown by asking nicely.
     let tracker = ThrottleTracker::fresh();
     let now = Instant::now();
     tracker.record_at(OL, Some(Duration::from_secs(7)), now);
     assert_eq!(
         tracker.remaining_at(OL, now).expect("cooling down"),
-        Duration::from_secs(7)
+        Duration::from_secs(DEFAULT_SCHEDULE[0]),
+        "a shorter Retry-After must not undercut the schedule"
+    );
+}
+
+#[test]
+fn record_honours_a_retry_after_longer_than_the_schedule() {
+    let tracker = ThrottleTracker::fresh();
+    let now = Instant::now();
+    let long = Duration::from_secs(DEFAULT_SCHEDULE[0] * 3);
+    tracker.record_at(OL, Some(long), now);
+    assert_eq!(tracker.remaining_at(OL, now).expect("cooling down"), long);
+}
+
+#[test]
+fn record_never_shortens_a_cooldown_that_is_still_running() {
+    // A later refusal carrying a tiny Retry-After must not nearly erase a
+    // long cooldown that is still ticking.
+    let tracker = ThrottleTracker::fresh();
+    let now = Instant::now();
+    let long = Duration::from_secs(3_600);
+    tracker.record_at(OL, Some(long), now);
+    tracker.record_at(
+        OL,
+        Some(Duration::from_secs(1)),
+        now + Duration::from_secs(1),
+    );
+    let left = tracker
+        .remaining_at(OL, now + Duration::from_secs(1))
+        .expect("cooling down");
+    assert!(
+        left >= long - Duration::from_secs(2),
+        "the running cooldown must survive; got {left:?}"
     );
 }
 

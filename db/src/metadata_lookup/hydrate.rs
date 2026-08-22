@@ -38,6 +38,17 @@ pub async fn hydrate_edition(
     provider_ref: &str,
     raw_isbn: Option<&str>,
 ) -> Result<Option<ProviderEdition>, MetadataLookupError> {
+    // Gated like every other caller. `providers::run` only clears a cooldown
+    // when the call recorded none of its own, which relies on nothing asking a
+    // provider that is already cooling down — and without this, clicking a
+    // candidate fired requests at the very source the search had just rendered
+    // as "rate limited, skipping for 10m".
+    if let Some(remaining) = config.throttle.remaining(source) {
+        return Err(MetadataLookupError::Provider(anyhow::anyhow!(
+            "{source:?} is rate-limited; retry in {}s",
+            super::throttle::retry_after_secs(remaining)
+        )));
+    }
     let isbn13 = raw_isbn.and_then(|raw| normalize_isbn(raw).ok());
 
     let detail = match isbn13.as_deref() {
@@ -57,14 +68,19 @@ pub async fn hydrate_edition(
         return Ok(None);
     };
 
+    // Only on the ISBN path, and concurrently. `by_isbn` answers from
+    // `jscmd=data`, which carries no description, so the record has to be
+    // fetched separately — but `by_ref` already GETs that exact
+    // `{provider_ref}.json` document and reads the description out of it, so
+    // calling `describe` on the handle path re-fetched the same body only to
+    // throw the result away.
     if source == MetadataProvider::OpenLibrary {
-        // Both enrichments key on the ISBN, so they only run when there is
-        // one; a work-key hydrate already carries the subjects and the
-        // first-publish year the search doc had.
-        let description = openlibrary::describe(config, provider_ref).await;
-        detail.description = detail.description.or(description);
         if let Some(isbn) = isbn13.as_deref() {
-            let enrichment = openlibrary::enrich(config, isbn).await;
+            let (description, enrichment) = tokio::join!(
+                openlibrary::describe(config, provider_ref),
+                openlibrary::enrich(config, isbn)
+            );
+            detail.description = detail.description.or(description);
             detail.series = detail.series.or(enrichment.series);
             detail.first_publish_year = detail.first_publish_year.or(enrichment.first_publish_year);
         }

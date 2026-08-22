@@ -107,6 +107,12 @@ pub async fn search_provider_by_title(
 /// A rung in a rate-limit cooldown is skipped **without a request**, and
 /// counts as a failure for the terminal rule above: we did not get an answer,
 /// so "not found" would be just as much of a lie as it is after a 500.
+///
+/// Each rung's answer is scored before it is accepted. That matters more than
+/// it used to: Hardcover's title search was an exact-match filter that could
+/// only return the book you named, and is now full-text, so without a floor
+/// this walk would take whatever a fuzzy engine ranked first and hand it back
+/// as the one confident answer a reader files a physical copy against.
 async fn climb(
     config: &MetadataLookupConfig,
     query: &SearchQuery,
@@ -128,7 +134,10 @@ async fn climb(
             }
             continue;
         }
-        match providers::run(rung.provider, config, query).await {
+        match providers::run(rung.provider, config, query)
+            .await
+            .map(|found| relevance::filter_and_rank(found, query, SEARCH_LIMIT))
+        {
             // The ladder hands callers the frozen check-in payload, not the
             // picker's richer candidate — and a candidate with no ISBN is not
             // something check-in can act on, so it is dropped here rather than

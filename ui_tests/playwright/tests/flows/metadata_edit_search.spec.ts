@@ -307,7 +307,9 @@ test.describe
       await expect(page.getByTestId("mes-query-author")).toHaveValue(
         TARGET.authors[0]!,
       );
-      await expect(page.getByTestId("mes-query-isbn")).toBeVisible();
+      // Left empty on purpose: a seeded ISBN routes every provider to its
+      // exact lookup and collapses the picker to one row per source.
+      await expect(page.getByTestId("mes-query-isbn")).toHaveValue("");
       await expect(page.getByTestId("mes-candidates")).toBeVisible();
     });
 
