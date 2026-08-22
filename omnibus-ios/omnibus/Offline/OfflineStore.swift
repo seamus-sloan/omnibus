@@ -74,6 +74,16 @@ struct DownloadFile: Codable, Sendable, Equatable {
     /// old part 2 — over a copy the reader still has and can still play.
     var incomingName: String { "incoming.\(name)" }
 
+    /// Where the copy this file supersedes is set aside for the length of an
+    /// install, so a swap that fails half way through can put every file back
+    /// exactly as it was.
+    var supersededName: String { "superseded.\(name)" }
+
+    /// Every name this file may occupy on disk. What a removal has to sweep:
+    /// a crash mid-install can leave any of the three behind, and only the
+    /// record knows they exist.
+    var onDiskNames: [String] { [name, incomingName, supersededName] }
+
     /// How far along this one file is. Monotonic: it only ever rises, and a
     /// file whose size the server hasn't stated yet reads 0 rather than 1.
     var fraction: Double {
@@ -1066,7 +1076,7 @@ actor OfflineStore {
     /// ever find them again.
     static func removeFiles(of record: DownloadRecord) {
         for file in record.files {
-            for name in [file.name, file.incomingName] {
+            for name in file.onDiskNames {
                 try? FileManager.default.removeItem(
                     at: downloadsDirectory.appendingPathComponent(name)
                 )

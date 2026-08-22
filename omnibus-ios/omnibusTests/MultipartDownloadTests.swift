@@ -295,11 +295,17 @@ struct MultipartDownloadTests {
         #expect(multi.index(ofOrdinal: 9) == nil)
     }
 
-    @Test("nothing is installed under the name it will finally take")
-    func incomingNamesAreDistinct() {
+    /// Three distinct names, and a removal has to know all of them: a crash
+    /// mid-install can leave any one of them on disk, and only the record
+    /// says they exist.
+    @Test("a file's staged and superseded names are distinct and all sweepable")
+    func onDiskNamesAreDistinct() {
         let file = file(1, name: "u-1.audio.1.mp3")
         #expect(file.incomingName != file.name)
-        #expect(file.incomingName.hasSuffix(file.name))
+        #expect(file.supersededName != file.name)
+        #expect(file.incomingName != file.supersededName)
+        #expect(Set(file.onDiskNames).count == 3)
+        #expect(file.onDiskNames.allSatisfy { $0.hasSuffix(file.name) })
     }
 
     // MARK: - What the player will play from disk

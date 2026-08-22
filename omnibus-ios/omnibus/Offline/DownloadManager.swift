@@ -698,6 +698,17 @@ final class DownloadManager: NSObject {
         await install(key: key)
     }
 
+    /// One file's part in an install: where its bytes are, where they go, and
+    /// where the copy they supersede waits until the whole set has landed.
+    private struct Swap {
+        let incoming: URL
+        let destination: URL
+        let superseded: URL
+        /// Whether a previous copy was actually moved aside, so a rollback
+        /// knows whether there is one to put back.
+        var replaced = false
+    }
+
     /// Move every fetched file into place at once and mark the record
     /// complete.
     ///
@@ -712,43 +723,88 @@ final class DownloadManager: NSObject {
         else { return }
         installing.insert(key)
         defer { installing.remove(key) }
-        let fm = FileManager.default
         let directory = OfflineStore.downloadsDirectory
-        let moves = record.files.map {
-            (
+        let plan = record.files.map {
+            Swap(
                 incoming: directory.appendingPathComponent($0.incomingName),
-                destination: directory.appendingPathComponent($0.name)
+                destination: directory.appendingPathComponent($0.name),
+                superseded: directory.appendingPathComponent($0.supersededName)
             )
         }
         // Checked before the first destination is touched — a half-installed
         // set is the one outcome this ordering exists to rule out.
-        guard moves.allSatisfy({ fm.fileExists(atPath: $0.incoming.path) }) else {
+        guard plan.allSatisfy({ FileManager.default.fileExists(atPath: $0.incoming.path) }) else {
             await abandon(key: key, message: "The download is missing some of its files.")
             return
         }
-        for move in moves {
-            try? fm.removeItem(at: move.destination)
-            do {
-                try fm.moveItem(at: move.incoming, to: move.destination)
-            } catch {
-                await abandon(key: key, message: error.localizedDescription)
-                return
-            }
+        let placed: [Swap]
+        do {
+            placed = try Self.swapIntoPlace(plan)
+        } catch {
+            await abandon(key: key, message: error.localizedDescription)
+            return
         }
+
         // Files the copy this one replaces held and this one doesn't — a book
         // that lost a part between downloads would otherwise leave it on disk
         // forever, counted under "Storage used" with no row pointing at it.
         if let previous = replacing[key] {
             let installed = Set(record.files.map(\.name))
             for file in previous.files where !installed.contains(file.name) {
-                try? fm.removeItem(at: directory.appendingPathComponent(file.name))
+                for name in file.onDiskNames {
+                    try? FileManager.default.removeItem(
+                        at: directory.appendingPathComponent(name)
+                    )
+                }
             }
+        }
+        // Only now, with every file in place, is the copy they replaced
+        // genuinely superseded.
+        for step in placed where step.replaced {
+            try? FileManager.default.removeItem(at: step.superseded)
         }
         forgetReplaced(key: key)
         await update(key: key) { record in
             record.state = .complete
             record.error = nil
         }
+    }
+
+    /// Move each file into place, setting aside whatever it supersedes, and
+    /// undo the whole set if any single move fails.
+    ///
+    /// The copy being replaced is moved aside rather than deleted. Deleting it
+    /// first makes the failure unrecoverable: the rollback would restore a
+    /// record naming files that are no longer on disk, which is a book the
+    /// reader had a moment ago and now doesn't. Reaching this at all takes a
+    /// full disk or a permissions fault — but the whole staging scheme exists
+    /// to rule out a half-swapped book, and a swap that can't be undone
+    /// doesn't rule it out.
+    private static func swapIntoPlace(_ plan: [Swap]) throws -> [Swap] {
+        let fm = FileManager.default
+        var placed: [Swap] = []
+        for var step in plan {
+            // A leftover from an install killed mid-swap; it belongs to no
+            // copy anyone can still reach.
+            try? fm.removeItem(at: step.superseded)
+            step.replaced = (try? fm.moveItem(at: step.destination, to: step.superseded)) != nil
+            do {
+                try fm.moveItem(at: step.incoming, to: step.destination)
+                placed.append(step)
+            } catch {
+                if step.replaced {
+                    try? fm.moveItem(at: step.superseded, to: step.destination)
+                }
+                for done in placed.reversed() {
+                    try? fm.moveItem(at: done.destination, to: done.incoming)
+                    if done.replaced {
+                        try? fm.moveItem(at: done.superseded, to: done.destination)
+                    }
+                }
+                throw error
+            }
+        }
+        return placed
     }
 
     /// Give up on a record: stop whatever else is still in flight for it,
