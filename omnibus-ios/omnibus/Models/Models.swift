@@ -1681,3 +1681,50 @@ struct ConfirmCrossFormatLink: Codable, Sendable {
         case audioOrder = "audio_order"
     }
 }
+
+// MARK: - Book upload
+
+/// Metadata the server read out of an uploaded EPUB, for the editable confirm
+/// step. Mirrors `omnibus_shared::UploadInspection`.
+struct UploadInspection: Codable, Hashable, Sendable {
+    var title: String?
+    var author: String?
+    var series: String?
+    var seriesIndex: String?
+    var language: String?
+    var hasCover: Bool
+    /// Lowercased extension the server settled on (`"epub"`).
+    var ext: String
+
+    enum CodingKeys: String, CodingKey {
+        case title, author, series, language, ext
+        case seriesIndex = "series_index"
+        case hasCover = "has_cover"
+    }
+}
+
+/// Tag-derived metadata for an uploaded audiobook — the audiobook sibling of
+/// [`UploadInspection`]. Mirrors `omnibus_shared::AudiobookInspection`.
+struct AudiobookInspection: Codable, Hashable, Sendable {
+    var title: String?
+    var author: String?
+    var hasCover: Bool
+    /// Lowercased format the server settled on (`"m4b"`, `"m4a"`, `"mp3"`).
+    var format: String
+    /// Files in the upload — 1 for a container, N for a multi-part MP3 book.
+    var partCount: Int
+    var durationSeconds: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case title, author, format
+        case hasCover = "has_cover"
+        case partCount = "part_count"
+        case durationSeconds = "duration_seconds"
+    }
+}
+
+/// The uuid of a freshly filed book, so the client can link straight to it.
+/// Mirrors `omnibus_shared::UploadCommitResult`.
+struct UploadCommitResult: Codable, Hashable, Sendable {
+    var uuid: String
+}

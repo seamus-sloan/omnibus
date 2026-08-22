@@ -43,7 +43,12 @@ enum CacheKey {
     static func manifest(_ uuid: String, fileID: Int64? = nil) -> String {
         fileID.map { "manifest:\(uuid):\($0)" } ?? "manifest:\(uuid)"
     }
-    static func libraryPage(_ signature: String) -> String { "books_page:\(signature)" }
+    /// Prefix every paged-library key carries, so an invalidation can drop
+    /// the whole set without restating the literal.
+    static let libraryPagePrefix = "books_page:"
+    static func libraryPage(_ signature: String) -> String {
+        "\(libraryPagePrefix)\(signature)"
+    }
     static func playbackRate(_ uuid: String) -> String { "audio_rate:\(uuid)" }
     static func suggestions(_ uuid: String) -> String { "suggestions:\(uuid)" }
     static func shelvesContaining(_ uuid: String) -> String { "shelves_with:\(uuid)" }

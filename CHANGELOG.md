@@ -108,6 +108,15 @@ recent releases are recorded below; everything earlier is available via the
   through the same correction (and echo tagging) a boot restore does, so it
   writes no position and never moves the restore anchor. Added an explicit
   single/two-page reader setting on iOS, matching web (#2081)
+- Uploading a book from the iOS app works. Every upload previously failed with
+  "title and author are required to file the book", because the app posted the
+  file straight to the commit endpoint and skipped the confirm step those
+  fields come from. It now reads the file's embedded metadata, shows it for you
+  to correct, and files the book under what you confirmed. The file picker is
+  narrowed to the formats the server accepts, and anything else it still lets
+  through is refused before a byte is sent rather than after. Picking several
+  MP3s from one folder adds a single audiobook with all its parts, instead of
+  one book per file (#2100)
 
 ## [0.22.10] - 2026-08-18
 

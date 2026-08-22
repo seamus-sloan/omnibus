@@ -297,9 +297,21 @@ Features/           — one directory per surface: Account, AddBooks, Auth,
                       `WishlistSection` is the native twin of the web page's
                       rail tracking card (tracked-since line, store search,
                       remove): same never-queued contract, plus a confirmation
-                      the web button doesn't ask for
+                      the web button doesn't ask for. AddBooks mirrors the web
+                      `/add-books` two-step ingest — `UploadFlow` holds the
+                      testable request shaping (which endpoint a format targets,
+                      how a multi-file pick groups into commits, which fields a
+                      commit carries) and `UploadConfirmSheet` is the editable
+                      confirm step the commit endpoints require
 Models/             — Codable mirrors of the `shared/` wire DTOs
-Networking/         — APIClient, keychain-backed TokenStore
+Networking/         — APIClient (plus a separate upload session, whose
+                      whole-transfer budget is sized for bytes rather than for
+                      server think time, and which neither claims the
+                      reachability probe slot nor is allowed to declare an
+                      outage — a transfer times out for reasons that say
+                      nothing about the server), MultipartBody (the form-data
+                      encoder, split out so a request's wire shape is
+                      unit-testable), keychain-backed TokenStore
 Offline/            — Cache (read-through policies), OfflineStore (SQLite
                       replica; `downloads.source_etag` snapshots the file's
                       content validator per rule 09), DownloadManager (which
@@ -324,7 +336,16 @@ Comic/              — the native CBZ pager: ComicReaderView (paged TabView +
                       reads online, ZIPFoundation over the downloaded archive
                       offline), ComicPosition (the `comic-page:N` anchor ↔
                       progress-record mapping shared with the web pager)
-Services/           — AuthService, LibraryService, UserDataService
+Services/           — AuthService, LibraryService, UserDataService,
+                      UploadService (the two-step book ingest: inspect a
+                      picked file, then commit it under the confirmed
+                      metadata — never queued, per rule 08 test 1:
+                      an upload is library-wide, not per-user, state),
+                      UploadManager (owns the queue, the staged copies and the
+                      transfers, because all three outlive the sheet that
+                      starts them: one worker, one cancellable handle, and a
+                      registry of live staging directories so the sweep cannot
+                      delete an upload still reading from one)
 ```
 
 **TestFlight release:** the manually-triggered

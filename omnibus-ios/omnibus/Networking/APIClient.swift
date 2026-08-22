@@ -84,6 +84,17 @@ actor APIClient {
     private static let maxBackoff: TimeInterval = 60
 
     private let session: URLSession
+    /// Separate session for uploads. `timeoutIntervalForResource` is a *total*
+    /// budget configured per-session, not per-task, so a book transfer cannot
+    /// borrow one from the read session's 120s.
+    ///
+    /// `timeoutIntervalForResource` is a *whole-transfer* budget, not a
+    /// think-time one, so it has to be sized for the bytes rather than for the
+    /// server's own request timeout — a 300 MB audiobook on a phone uplink is
+    /// minutes of legitimate progress. (The server currently caps every route
+    /// at 30s, which bounds real-world uploads well below this; that is a
+    /// server-side limit, not a reason to cut the client's budget to match.)
+    private let uploadSession: URLSession
     private let encoder: JSONEncoder = {
         let e = JSONEncoder()
         return e
@@ -103,6 +114,13 @@ actor APIClient {
         config.timeoutIntervalForResource = 120
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         session = URLSession(configuration: config)
+
+        let uploadConfig = URLSessionConfiguration.default
+        uploadConfig.waitsForConnectivity = false
+        uploadConfig.timeoutIntervalForRequest = 120
+        uploadConfig.timeoutIntervalForResource = 3600
+        uploadConfig.requestCachePolicy = .reloadIgnoringLocalCacheData
+        uploadSession = URLSession(configuration: uploadConfig)
         baseURL = ServerURLStore.load()
         token = TokenStore.load()
     }
@@ -217,49 +235,85 @@ actor APIClient {
         }
     }
 
-    /// Multipart upload used by the cover, photo, and book-upload endpoints.
+    /// Multipart upload of a single file, for the avatar endpoint.
+    ///
+    /// Deliberately on the ordinary `session`: this is a small image, so it
+    /// wants the read session's tighter timeouts and its probe-slot semantics,
+    /// not the book path's long-transfer budget.
     func upload<T: Decodable>(
         _ path: String,
         fileData: Data,
         fileName: String,
         fieldName: String = "file",
-        mimeType: String = "application/octet-stream",
-        fields: [String: String] = [:]
+        mimeType: String = "application/octet-stream"
     ) async throws -> T {
         guard let url = absoluteURL(path) else { throw APIError.notConfigured }
         try failFastWhenUnreachable()
-        let boundary = "omnibus.\(UUID().uuidString)"
-        var body = Data()
-        for (key, value) in fields {
-            body.append("--\(boundary)\r\n")
-            body.append("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n")
-            body.append("\(value)\r\n")
-        }
-        body.append("--\(boundary)\r\n")
-        body.append(
-            "Content-Disposition: form-data; name=\"\(fieldName)\"; filename=\"\(fileName)\"\r\n"
+        let boundary = MultipartBody.makeBoundary()
+        let body = MultipartBody.encode(
+            boundary: boundary,
+            fields: [],
+            files: [
+                MultipartFile(
+                    fieldName: fieldName, fileName: fileName, mimeType: mimeType, data: fileData
+                )
+            ]
         )
-        body.append("Content-Type: \(mimeType)\r\n\r\n")
-        body.append(fileData)
-        body.append("\r\n--\(boundary)--\r\n")
+        return try await send(multipart: body, boundary: boundary, to: url, session: session)
+    }
 
+    /// Upload an already-encoded multipart body — the book-upload steps.
+    ///
+    /// The body arrives pre-built because encoding a multi-hundred-megabyte
+    /// payload inside this actor would hold it for the length of the memcpy,
+    /// stalling every other request in the app behind one upload.
+    func upload<T: Decodable>(
+        _ path: String,
+        body: Data,
+        boundary: String
+    ) async throws -> T {
+        guard let url = absoluteURL(path) else { throw APIError.notConfigured }
+        // Never claims the probe slot: a book transfer can outlast a read by
+        // orders of magnitude, and holding the slot fails everything else fast.
+        try failFastWhenUnreachable(claimProbe: false)
+        return try await send(
+            multipart: body, boundary: boundary, to: url,
+            session: uploadSession, ownsProbe: false
+        )
+    }
+
+    private func send<T: Decodable>(
+        multipart body: Data,
+        boundary: String,
+        to url: URL,
+        session: URLSession,
+        ownsProbe: Bool = true
+    ) async throws -> T {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.setValue(
+            "multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type"
+        )
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         request.httpBody = body
+        // Sending a body is not a read: the read session's 10s idle timeout is
+        // sized for "how long before we give up on a dead server", and applying
+        // it to an upload cuts off a transfer that is progressing fine.
         request.timeoutInterval = 300
 
         do {
             let (data, response) = try await session.data(for: request)
-            noteOutcome(reachable: true)
+            noteOutcome(reachable: true, releaseProbe: ownsProbe)
             try validate(response, data: data)
             return try decode(data)
         } catch let error as APIError {
             throw error
         } catch {
-            try rethrowIfCancelled(error)
-            noteOutcome(reachable: false)
+            try rethrowIfCancelled(error, releaseProbe: ownsProbe)
+            noteOutcome(
+                reachable: false, releaseProbe: ownsProbe, publishFailure: ownsProbe
+            )
             throw APIError.transport(error.localizedDescription)
         }
     }
@@ -411,10 +465,18 @@ actor APIClient {
     ///
     /// Must be the last thing a request path does before hitting the wire —
     /// passing it claims the probe slot, and only `noteOutcome` releases it.
-    private func failFastWhenUnreachable() throws {
+    /// Throw immediately while the server is known unreachable, and otherwise
+    /// claim the single probe slot for this request.
+    ///
+    /// `claimProbe: false` is for a request that may run far longer than a read
+    /// — an upload. It still refuses to dial a server just proved unreachable,
+    /// but it must not *become* the probe: holding the slot for the length of a
+    /// book transfer fails every other request in the app fast for that whole
+    /// window, which is the stall this mechanism exists to prevent.
+    private func failFastWhenUnreachable(claimProbe: Bool = true) throws {
         guard let until = unreachableUntil else { return }
         if Date() < until || probing { throw APIError.offline }
-        probing = true
+        if claimProbe { probing = true }
     }
 
     /// Unwind a cancelled request without letting it speak for the server.
@@ -425,9 +487,9 @@ actor APIClient {
     /// only other thing that releases it, and it is precisely what must not run
     /// here, so a cancelled probe would otherwise strand the slot and every
     /// later request would fail fast against a server that was never asked.
-    private func rethrowIfCancelled(_ error: Error) throws {
+    private func rethrowIfCancelled(_ error: Error, releaseProbe: Bool = true) throws {
         guard isCancellation(error) else { return }
-        probing = false
+        if releaseProbe { probing = false }
         throw CancellationError()
     }
 
@@ -439,8 +501,19 @@ actor APIClient {
     ///
     /// Only these move the back-off — `setOnline` echoes must not, or the
     /// notification round trip would double the window on its own.
-    private func noteOutcome(reachable: Bool) {
-        probing = false
+    /// `publishFailure: false` lets a request report success without being
+    /// allowed to declare an outage.
+    ///
+    /// A long upload is the request *least* qualified to judge reachability: it
+    /// times out on its own budget, on the server's, or on the app being
+    /// backgrounded, none of which mean the server is gone. Letting it arm the
+    /// back-off failed every read in the app — and, since the upload controls
+    /// are gated on `isOnline`, disabled the retry it was asking for.
+    private func noteOutcome(
+        reachable: Bool, releaseProbe: Bool = true, publishFailure: Bool = true
+    ) {
+        if releaseProbe { probing = false }
+        guard reachable || publishFailure else { return }
         if reachable {
             unreachableUntil = nil
             backoff = 0
@@ -475,9 +548,3 @@ actor APIClient {
 
 /// Stand-in for endpoints that answer with no meaningful body.
 struct Empty: Codable, Sendable {}
-
-private extension Data {
-    mutating func append(_ string: String) {
-        append(Data(string.utf8))
-    }
-}
